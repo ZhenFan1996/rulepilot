@@ -17,6 +17,50 @@ describe('DocumentsView recoverable lesson handoff', () => {
     vi.unstubAllGlobals()
   })
 
+  it.each([
+    ['session identity before route resources', true],
+    ['route resources before session identity', false],
+  ])('recovers once after %s and keeps AppShell as the only session owner', async (_label, identityFirst) => {
+    rememberPendingRulebookLesson(localStorage, 'player', { versionId: 'version-1' })
+    let releaseIdentity!: () => void
+    let releaseResources!: () => void
+    const identityGate = new Promise<void>((resolve) => { releaseIdentity = resolve })
+    const resourceGate = new Promise<void>((resolve) => { releaseResources = resolve })
+    const resourceStarts = new Set<string>()
+    let sessionReads = 0
+    const applicationFetch = mockApplicationFetch(() => 'READY')
+    const fetchMock = vi.fn(async (input: string | URL | Request, options?: RequestInit) => {
+      const path = String(input)
+      if (path === '/api/auth/session') {
+        sessionReads += 1
+        await identityGate
+      }
+      if (path === '/api/v1/games' || path === '/api/v1/model-configuration' || path === '/api/v1/documents') {
+        resourceStarts.add(path)
+        await resourceGate
+      }
+      return applicationFetch(input, options)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('EventSource', FakeEventSource)
+
+    const { wrapper } = await mountDocuments()
+    await vi.waitFor(() => expect(resourceStarts.size).toBe(3))
+    if (identityFirst) releaseIdentity()
+    else releaseResources()
+    await flushPromises()
+    expect(fetchMock.mock.calls.filter(([input, options]) =>
+      String(input).endsWith('/document-versions/version-1/teaching-plans') && options?.method === 'POST')).toHaveLength(0)
+
+    if (identityFirst) releaseResources()
+    else releaseIdentity()
+    await vi.waitFor(() => expect(fetchMock.mock.calls.filter(([input, options]) =>
+      String(input).endsWith('/document-versions/version-1/teaching-plans') && options?.method === 'POST')).toHaveLength(1))
+
+    expect(sessionReads).toBe(1)
+    wrapper.unmount()
+  })
+
   it('resumes a ready upload into the same persisted background guide flow', async () => {
     rememberPendingRulebookLesson(localStorage, 'player', {
       versionId: 'version-1',
@@ -42,6 +86,7 @@ describe('DocumentsView recoverable lesson handoff', () => {
   })
 
   it('shows the selected game and edition handed off from discovery', async () => {
+    vi.useFakeTimers()
     const openSource = vi.fn()
     vi.stubGlobal('open', openSource)
     const fetchMock = mockApplicationFetch(
@@ -113,6 +158,8 @@ describe('DocumentsView recoverable lesson handoff', () => {
     expect(JSON.parse(String(importRequest?.[1]?.body))).toMatchObject({
       editionId: 'edition-1', startTeaching: true,
     })
+    await vi.advanceTimersByTimeAsync(1_000)
+    await flushPromises()
     expect(readPendingRulebookLessons(localStorage, 'player')).toEqual([])
     expect(wrapper.text()).toContain('已进入“我的讲解”')
     wrapper.unmount()
@@ -710,6 +757,7 @@ describe('DocumentsView recoverable lesson handoff', () => {
   })
 
   it('requires a direct URL and explicit rights confirmation before importing an official PDF', async () => {
+    vi.useFakeTimers()
     let importOptions: RequestInit | undefined
     const fetchMock = mockApplicationFetch(
       () => 'READY',
@@ -745,6 +793,9 @@ describe('DocumentsView recoverable lesson handoff', () => {
     await importButton.trigger('click')
     await flushPromises()
 
+    expect(fetchMock.mock.calls.filter(([input, options]) =>
+      String(input).includes('/api/v1/documents/official-imports/') && options?.method !== 'POST')).toHaveLength(0)
+
     expect(JSON.parse(String(importOptions?.body))).toEqual({
       editionId: null,
       title: 'wingspan rules',
@@ -758,12 +809,20 @@ describe('DocumentsView recoverable lesson handoff', () => {
       'Content-Type': 'application/json',
       'X-CSRF-TOKEN': 'csrf',
     })
+    await vi.advanceTimersByTimeAsync(1_000)
+    await flushPromises()
     expect(wrapper.text()).toContain('已进入“我的讲解”')
     expect(readPendingRulebookLessons(localStorage, 'player')).toEqual([])
+    expect(fetchMock.mock.calls.filter(([input, options]) =>
+      String(input).includes('/api/v1/documents/official-imports/') && options?.method !== 'POST')).toHaveLength(1)
+    expect(fetchMock.mock.calls.filter(([input]) => String(input) === '/api/v1/documents')).toHaveLength(2)
+    expect(fetchMock.mock.calls.filter(([input]) => String(input) === '/api/auth/session')).toHaveLength(1)
+    expect(fetchMock.mock.calls.some(([input]) => /cancel|cancellation/i.test(String(input)))).toBe(false)
     wrapper.unmount()
   })
 
   it('keeps a recovered import visible until its persisted teaching handoff really launches', async () => {
+    vi.useFakeTimers()
     let importReads = 0
     let releaseLaunch!: (value: Response) => void
     const launched = new Promise<Response>((resolve) => { releaseLaunch = resolve })
@@ -791,6 +850,7 @@ describe('DocumentsView recoverable lesson handoff', () => {
     expect(wrapper.text()).toContain('规则书已可阅读，正在启动讲解')
     expect(wrapper.text()).not.toContain('已进入“我的讲解”')
 
+    await vi.advanceTimersByTimeAsync(1_000)
     releaseLaunch(response(job('LAUNCHED')))
     await flushPromises()
     await flushPromises()
@@ -798,6 +858,85 @@ describe('DocumentsView recoverable lesson handoff', () => {
     expect(router.currentRoute.value.query.importJob).toBeUndefined()
     expect(wrapper.text()).toContain('已进入“我的讲解”')
     wrapper.unmount()
+  })
+
+  it('aborts only the recovered import read on unmount and ignores its late settlement', async () => {
+    let releaseImport!: (value: Response) => void
+    const importResponse = new Promise<Response>((resolve) => { releaseImport = resolve })
+    let importSignal: AbortSignal | undefined
+    const fetchMock = mockApplicationFetch(
+      () => 'READY', 'COMPLETED', [], undefined, undefined,
+      (options) => {
+        importSignal = options?.signal ?? undefined
+        return importResponse
+      },
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('EventSource', FakeEventSource)
+    const { wrapper } = await mountDocuments('/teach?importJob=job-late')
+    await vi.waitFor(() => expect(importSignal).toBeDefined())
+    const callsBeforeUnmount = fetchMock.mock.calls.length
+
+    wrapper.unmount()
+    expect(importSignal?.aborted).toBe(true)
+    releaseImport(response({
+      id: 'job-late', title: 'Late rules', sourceDomain: 'publisher.example', stage: 'COMPLETED',
+      downloadedBytes: 1024, totalBytes: 1024, documentVersionId: 'version-1', duplicate: false,
+      errorCode: null, reused: false, teachingHandoffState: 'LAUNCHED',
+      teachingPreparationRunId: 'prep-late', teachingErrorCode: null,
+    }))
+    await flushPromises()
+
+    expect(fetchMock.mock.calls).toHaveLength(callsBeforeUnmount)
+    expect(fetchMock.mock.calls.some(([input]) => /cancel|cancellation/i.test(String(input)))).toBe(false)
+  })
+
+  it('rejects a preparation run whose subject is another document version', async () => {
+    rememberPendingRulebookLesson(localStorage, 'player', { versionId: 'version-1' })
+    const applicationFetch = mockApplicationFetch(() => 'READY')
+    const fetchMock = vi.fn(async (input: string | URL | Request, options?: RequestInit) => {
+      if (String(input).includes('/api/v1/assistant-runs/prep-run-1')) {
+        return response({
+          run: { id: 'prep-run-1', subjectId: 'version-other', state: 'COMPLETED', lastErrorCode: null },
+          activities: [],
+        })
+      }
+      return applicationFetch(input, options)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('EventSource', FakeEventSource)
+    const { wrapper, router } = await mountDocuments()
+
+    await vi.waitFor(() => expect(wrapper.text()).toContain('暂时无法处理规则书'))
+    expect(router.currentRoute.value.path).toBe('/teach')
+    expect(fetchMock.mock.calls.some(([input]) =>
+      String(input).endsWith('/document-versions/version-1/teaching-plans/latest'))).toBe(false)
+    expect(fetchMock.mock.calls.some(([input, options]) =>
+      String(input).includes('/illustrated-lessons') && options?.method === 'POST')).toBe(false)
+    expect(readPendingRulebookLessons(localStorage, 'player')).toEqual([{ versionId: 'version-1' }])
+    wrapper.unmount()
+  })
+
+  it('closes document progress on unmount and ignores a buffered terminal event', async () => {
+    rememberPendingRulebookLesson(localStorage, 'player', { versionId: 'version-1' })
+    const fetchMock = mockApplicationFetch(() => 'EXTRACTING')
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('EventSource', FakeEventSource)
+    const { wrapper } = await mountDocuments()
+    await vi.waitFor(() => expect(FakeEventSource.instances).toHaveLength(1))
+    const callsBeforeUnmount = fetchMock.mock.calls.length
+    const progressSource = FakeEventSource.instances[0]!
+
+    wrapper.unmount()
+    expect(progressSource.closed).toBe(true)
+    progressSource.emitProgress({
+      stage: 'READY', percentage: 100, processedPages: 12, totalPages: 12, complete: true,
+    })
+    await flushPromises()
+
+    expect(fetchMock.mock.calls).toHaveLength(callsBeforeUnmount)
+    expect(fetchMock.mock.calls.some(([input]) => /cancel|cancellation/i.test(String(input)))).toBe(false)
+    expect(readPendingRulebookLessons(localStorage, 'player')).toEqual([{ versionId: 'version-1' }])
   })
 
   it('keeps manual upload available after a safe official-import failure', async () => {
@@ -1019,6 +1158,7 @@ async function mountDocuments(path = '/teach', attachToBody = false) {
     history: createMemoryHistory(),
     routes: [
       { path: '/', name: 'home', component: { template: '<div />' } },
+      { path: '/discover', name: 'game-recommendations', component: { template: '<div />' } },
       { path: '/library', name: 'public-library', component: { template: '<div />' } },
       { path: '/catalog', name: 'catalog', component: { template: '<div />' } },
       { path: '/teach', name: 'teach', component: DocumentsView },
@@ -1084,11 +1224,15 @@ function mockApplicationFetch(
     if (path.includes('/api/v1/assistant-runs/latest')) return new Response(null, { status: 404 })
     if (path.includes('/api/v1/assistant-runs/prep-run-1')) {
       return response({
-        run: { id: 'prep-run-1', state: preparationState, lastErrorCode: null },
+        run: {
+          id: 'prep-run-1', subjectId: 'version-1', state: preparationState, lastErrorCode: null,
+        },
         activities: preparationActivities,
       })
     }
-    if (path.endsWith('/document-versions/version-1/teaching-plans/latest')) return response({ id: 'plan-1' })
+    if (path.endsWith('/document-versions/version-1/teaching-plans/latest')) {
+      return response({ id: 'plan-1', documentVersionId: 'version-1' })
+    }
     if (path.endsWith('/document-versions/version-1/teaching-plans') && options?.method === 'POST') {
       return response({ assistantRunId: 'prep-run-1', state: 'RECEIVED', reused: false }, 202)
     }
@@ -1102,6 +1246,7 @@ function mockApplicationFetch(
 class FakeEventSource {
   static instances: FakeEventSource[] = []
   onerror: ((event: Event) => void) | null = null
+  closed = false
   private progressListener: ((event: MessageEvent<string>) => void) | null = null
 
   constructor(public readonly url: string) {
@@ -1116,7 +1261,7 @@ class FakeEventSource {
     this.progressListener?.(new MessageEvent('progress', { data: JSON.stringify(snapshot) }))
   }
 
-  close() {}
+  close() { this.closed = true }
 }
 
 function response(body: unknown, status = 200) {

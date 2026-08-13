@@ -2,6 +2,8 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import { LOGIN_REQUIRED_EVENT } from '@/lib/authSession'
+
 import LessonsView from './LessonsView.vue'
 
 describe('LessonsView', () => {
@@ -177,7 +179,7 @@ describe('LessonsView', () => {
       }
       if (path.includes('/api/v1/assistant-runs/latest')) {
         return Response.json({
-          run: { id: 'run-1', state: 'RETRIEVING', createdAt: '2026-07-20T10:00:00Z', updatedAt: '2026-07-20T10:02:00Z', completedAt: null, lastErrorCode: null },
+          run: { id: 'run-1', subjectId: 'plan-1', state: 'RETRIEVING', createdAt: '2026-07-20T10:00:00Z', updatedAt: '2026-07-20T10:02:00Z', completedAt: null, lastErrorCode: null },
           budget: { usedModelCalls: 2, maxModelCalls: 144 },
           activities: [
             {
@@ -196,7 +198,7 @@ describe('LessonsView', () => {
         lessonReads += 1
         if (lessonReads > 1) return new Response(null, { status: 404 })
         return Response.json({
-          id: 'lesson-1', status: 'DRAFT_READY',
+          id: 'lesson-1', teachingPlanId: 'plan-1', status: 'DRAFT_READY',
           sections: [{ evidenceStatus: 'CITED_DRAFT' }],
         })
       }
@@ -248,19 +250,19 @@ describe('LessonsView', () => {
     let runReads = 0
     const snapshots = [
       {
-        run: { id: 'run-1', state: 'RETRIEVING', createdAt: '2026-07-20T10:00:00Z', updatedAt: '2026-07-20T10:00:00Z', completedAt: null, lastErrorCode: null },
+        run: { id: 'run-1', subjectId: 'plan-1', state: 'RETRIEVING', createdAt: '2026-07-20T10:00:00Z', updatedAt: '2026-07-20T10:00:00Z', completedAt: null, lastErrorCode: null },
         budget: { usedModelCalls: 1, maxModelCalls: 144 }, activities: [],
       },
       {
-        run: { id: 'run-1', state: 'FAILED', createdAt: '2026-07-20T10:00:00Z', updatedAt: '2026-07-20T10:01:00Z', completedAt: '2026-07-20T10:01:00Z', lastErrorCode: 'MODEL_FAILED' },
+        run: { id: 'run-1', subjectId: 'plan-1', state: 'FAILED', createdAt: '2026-07-20T10:00:00Z', updatedAt: '2026-07-20T10:01:00Z', completedAt: '2026-07-20T10:01:00Z', lastErrorCode: 'MODEL_FAILED' },
         budget: { usedModelCalls: 1, maxModelCalls: 144 }, activities: [],
       },
       {
-        run: { id: 'run-2', state: 'RETRIEVING', createdAt: '2026-07-20T10:02:00Z', updatedAt: '2026-07-20T10:02:00Z', completedAt: null, lastErrorCode: null },
+        run: { id: 'run-2', subjectId: 'plan-1', state: 'RETRIEVING', createdAt: '2026-07-20T10:02:00Z', updatedAt: '2026-07-20T10:02:00Z', completedAt: null, lastErrorCode: null },
         budget: { usedModelCalls: 1, maxModelCalls: 144 }, activities: [],
       },
       {
-        run: { id: 'run-2', state: 'RETRIEVING', createdAt: '2026-07-20T10:02:00Z', updatedAt: '2026-07-20T10:02:01Z', completedAt: null, lastErrorCode: null },
+        run: { id: 'run-2', subjectId: 'plan-1', state: 'RETRIEVING', createdAt: '2026-07-20T10:02:00Z', updatedAt: '2026-07-20T10:02:01Z', completedAt: null, lastErrorCode: null },
         budget: { usedModelCalls: 2, maxModelCalls: 144 }, activities: [],
       },
     ]
@@ -324,7 +326,7 @@ describe('LessonsView', () => {
         runReads++
         if (runReads === 2) throw new TypeError('temporary network failure')
         return Response.json({
-          run: { id: 'run-1', state: 'RETRIEVING', createdAt: '2026-07-20T10:00:00Z', updatedAt: '2026-07-20T10:02:00Z', completedAt: null, lastErrorCode: null },
+          run: { id: 'run-1', subjectId: 'plan-1', state: 'RETRIEVING', createdAt: '2026-07-20T10:00:00Z', updatedAt: '2026-07-20T10:02:00Z', completedAt: null, lastErrorCode: null },
           budget: { usedModelCalls: runReads >= 3 ? 2 : 1, maxModelCalls: 144 }, activities: [],
         })
       }
@@ -371,13 +373,13 @@ describe('LessonsView', () => {
       }
       if (path.includes('/api/v1/assistant-runs/latest') && path.includes('readable-plan')) {
         return Response.json({
-          run: { id: 'run-1', state: 'COMPLETED', createdAt: '2026-07-23T10:00:00Z', updatedAt: '2026-07-23T10:01:00Z', completedAt: '2026-07-23T10:01:00Z', lastErrorCode: null },
+          run: { id: 'run-1', subjectId: 'readable-plan', state: 'COMPLETED', createdAt: '2026-07-23T10:00:00Z', updatedAt: '2026-07-23T10:01:00Z', completedAt: '2026-07-23T10:01:00Z', lastErrorCode: null },
           budget: { usedModelCalls: 3, maxModelCalls: 144 }, activities: [],
         })
       }
       if (path.includes('/api/v1/assistant-runs/latest')) return new Response(null, { status: 404 })
       if (path.includes('/illustrated-lessons/latest') && path.includes('readable-plan')) {
-        return Response.json({ id: 'lesson-1', status: 'COMPLETE', sections: [{ evidenceStatus: 'SUPPORTED' }] })
+        return Response.json({ id: 'lesson-1', teachingPlanId: 'readable-plan', status: 'COMPLETE', sections: [{ evidenceStatus: 'SUPPORTED' }] })
       }
       if (path.includes('/illustrated-lessons/latest')) return new Response(null, { status: 404 })
       if (path.includes('/api/auth/session')) return Response.json({ username: 'alice', roles: ['USER'] })
@@ -406,6 +408,224 @@ describe('LessonsView', () => {
     expect(wrapper.findAll('h2').filter((heading) => heading.text() === 'Ahoy').length).toBe(2)
     expect(wrapper.findAll('h2').filter((heading) => heading.text() === 'Root').length).toBe(1)
     expect(wrapper.text()).toContain('收起历史版本')
+    wrapper.unmount()
+  })
+
+  it('publishes plan cards before their independent progress reads settle', async () => {
+    let releaseRun!: (value: Response) => void
+    let releaseLesson!: (value: Response) => void
+    const runResponse = new Promise<Response>((resolve) => { releaseRun = resolve })
+    const lessonResponse = new Promise<Response>((resolve) => { releaseLesson = resolve })
+    const progressSignals: AbortSignal[] = []
+    let sessionReads = 0
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, options?: RequestInit) => {
+      const path = String(input)
+      if (path === '/api/auth/session') {
+        sessionReads += 1
+        return Response.json({ username: 'alice', roles: ['USER'] })
+      }
+      if (path === '/api/v1/teaching-plans') return Response.json([plan('plan-early', '先展示的讲解')])
+      if (path.includes('/api/v1/assistant-runs/latest')) {
+        progressSignals.push(options?.signal as AbortSignal)
+        return runResponse
+      }
+      if (path.includes('/illustrated-lessons/latest')) {
+        progressSignals.push(options?.signal as AbortSignal)
+        return lessonResponse
+      }
+      if (isGuideListPath(path)) return Response.json([])
+      return new Response(null, { status: 404 })
+    }))
+    const router = createMemoryRouter()
+    await router.push('/lessons')
+    await router.isReady()
+    const wrapper = mount(LessonsView, {
+      global: { plugins: [router], stubs: { BackgroundWorkCenter: true } },
+    })
+
+    await vi.waitFor(() => expect(progressSignals).toHaveLength(2))
+    expect(wrapper.text()).toContain('先展示的讲解')
+    expect(wrapper.text()).not.toContain('正在加载讲解计划')
+    expect(wrapper.find('a[href="/lesson/plan-early"]').exists()).toBe(false)
+    expect(sessionReads).toBe(1)
+
+    releaseRun(Response.json({
+      run: {
+        id: 'run-early', subjectId: 'plan-early', state: 'COMPLETED', createdAt: '2026-08-13T00:00:00Z',
+        updatedAt: '2026-08-13T00:01:00Z', completedAt: '2026-08-13T00:01:00Z', lastErrorCode: null,
+      },
+      budget: { usedModelCalls: 1, maxModelCalls: 144 }, activities: [],
+    }))
+    releaseLesson(Response.json({
+      id: 'lesson-early', teachingPlanId: 'plan-early', status: 'COMPLETE',
+      sections: [{ evidenceStatus: 'SUPPORTED' }],
+    }))
+    await vi.waitFor(() => expect(wrapper.find('a[href="/lesson/plan-early"]').exists()).toBe(true))
+    wrapper.unmount()
+  })
+
+  it('aborts all six list reads on unmount without cancelling durable background work', async () => {
+    let releaseLists!: () => void
+    const listGate = new Promise<void>((resolve) => { releaseLists = resolve })
+    const listSignals: AbortSignal[] = []
+    const fetchMock = vi.fn(async (input: string | URL | Request, options?: RequestInit) => {
+      const path = String(input)
+      if (path === '/api/auth/session') return Response.json({ username: 'alice', roles: ['USER'] })
+      if (path === '/api/v1/teaching-plans' || isGuideListPath(path)) {
+        listSignals.push(options?.signal as AbortSignal)
+        await listGate
+        return Response.json(path === '/api/v1/teaching-plans' ? [plan('stale-plan', '晚到的讲解')] : [])
+      }
+      return new Response(null, { status: 404 })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const router = createMemoryRouter()
+    await router.push('/lessons')
+    await router.isReady()
+    const wrapper = mount(LessonsView, {
+      global: { plugins: [router], stubs: { BackgroundWorkCenter: true } },
+    })
+    await vi.waitFor(() => expect(listSignals).toHaveLength(6))
+
+    wrapper.unmount()
+    expect(listSignals.every(signal => signal.aborted)).toBe(true)
+    releaseLists()
+    await flushPromises()
+
+    expect(fetchMock.mock.calls).toHaveLength(7)
+    expect(fetchMock.mock.calls.some(([input]) => /cancel|cancellation/i.test(String(input)))).toBe(false)
+    expect(fetchMock.mock.calls.every(([, options]) => !options?.method || options.method === 'GET')).toBe(true)
+  })
+
+  it('replaces account progress reads and ignores their late settlement', async () => {
+    let releaseOldRun!: (value: Response) => void
+    let releaseOldLesson!: (value: Response) => void
+    const oldRun = new Promise<Response>((resolve) => { releaseOldRun = resolve })
+    const oldLesson = new Promise<Response>((resolve) => { releaseOldLesson = resolve })
+    const oldSignals: AbortSignal[] = []
+    let planReads = 0
+    let sessionReads = 0
+    const fetchMock = vi.fn(async (input: string | URL | Request, options?: RequestInit) => {
+      const path = String(input)
+      if (path === '/api/auth/session') {
+        sessionReads += 1
+        return Response.json({ username: 'alice', roles: ['USER'] })
+      }
+      if (path === '/api/v1/teaching-plans') {
+        planReads += 1
+        return Response.json([plan(planReads === 1 ? 'plan-old' : 'plan-current',
+          planReads === 1 ? '旧账户讲解' : '当前账户讲解')])
+      }
+      if (path.includes('/assistant-runs/latest') && path.includes('plan-old')) {
+        oldSignals.push(options?.signal as AbortSignal)
+        return oldRun
+      }
+      if (path.includes('/plan-old/illustrated-lessons/latest')) {
+        oldSignals.push(options?.signal as AbortSignal)
+        return oldLesson
+      }
+      if (path.includes('/assistant-runs/latest') && path.includes('plan-current')) {
+        return Response.json({
+          run: {
+            id: 'run-current', subjectId: 'plan-current', state: 'COMPLETED', createdAt: '2026-08-13T00:00:00Z',
+            updatedAt: '2026-08-13T00:01:00Z', completedAt: '2026-08-13T00:01:00Z', lastErrorCode: null,
+          }, budget: { usedModelCalls: 1, maxModelCalls: 144 }, activities: [],
+        })
+      }
+      if (path.includes('/plan-current/illustrated-lessons/latest')) {
+        return Response.json({
+          id: 'lesson-current', teachingPlanId: 'plan-current', status: 'COMPLETE', sections: [],
+        })
+      }
+      if (isGuideListPath(path)) return Response.json([])
+      return new Response(null, { status: 404 })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const router = createMemoryRouter()
+    await router.push('/lessons')
+    await router.isReady()
+    const wrapper = mount(LessonsView, {
+      global: { plugins: [router], stubs: { BackgroundWorkCenter: true } },
+    })
+    await vi.waitFor(() => expect(oldSignals).toHaveLength(2))
+    expect(wrapper.text()).toContain('旧账户讲解')
+
+    window.dispatchEvent(new Event(LOGIN_REQUIRED_EVENT))
+    await vi.waitFor(() => expect(wrapper.text()).toContain('当前账户讲解'))
+    expect(oldSignals.every(signal => signal.aborted)).toBe(true)
+    expect(wrapper.text()).not.toContain('旧账户讲解')
+    expect(sessionReads).toBe(1)
+
+    releaseOldRun(Response.json({
+      run: {
+        id: 'run-old', subjectId: 'plan-old', state: 'FAILED', createdAt: '2026-08-13T00:00:00Z',
+        updatedAt: '2026-08-13T00:01:00Z', completedAt: '2026-08-13T00:01:00Z', lastErrorCode: 'STALE',
+      }, budget: { usedModelCalls: 1, maxModelCalls: 144 }, activities: [],
+    }))
+    releaseOldLesson(Response.json({
+      id: 'lesson-old', teachingPlanId: 'plan-old', status: 'COMPLETE', sections: [],
+    }))
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('当前账户讲解')
+    expect(wrapper.text()).not.toContain('旧账户讲解')
+    expect(wrapper.text()).not.toContain('正在自动重试')
+    expect(fetchMock.mock.calls.some(([input]) => /cancel|cancellation/i.test(String(input)))).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('rejects mismatched known-run and lesson identities before merging progress', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const path = String(input)
+      if (path === '/api/auth/session') return Response.json({ username: 'alice', roles: ['USER'] })
+      if (path === '/api/v1/teaching-plans') {
+        return Response.json([
+          plan('plan-run-mismatch', '错误任务对象'),
+          plan('plan-lesson-mismatch', '错误讲解对象'),
+        ])
+      }
+      if (path === '/api/v1/assistant-runs/run-expected') {
+        return Response.json({
+          run: {
+            id: 'run-other', subjectId: 'plan-run-mismatch', state: 'COMPLETED', createdAt: '2026-08-13T00:00:00Z',
+            updatedAt: '2026-08-13T00:01:00Z', completedAt: '2026-08-13T00:01:00Z', lastErrorCode: null,
+          }, budget: { usedModelCalls: 1, maxModelCalls: 144 }, activities: [],
+        })
+      }
+      if (path.includes('/assistant-runs/latest') && path.includes('plan-lesson-mismatch')) {
+        return Response.json({
+          run: {
+            id: 'run-lesson', subjectId: 'plan-lesson-mismatch', state: 'COMPLETED', createdAt: '2026-08-13T00:00:00Z',
+            updatedAt: '2026-08-13T00:01:00Z', completedAt: '2026-08-13T00:01:00Z', lastErrorCode: null,
+          }, budget: { usedModelCalls: 1, maxModelCalls: 144 }, activities: [],
+        })
+      }
+      if (path.includes('/plan-run-mismatch/illustrated-lessons/latest')) {
+        return Response.json({
+          id: 'lesson-run', teachingPlanId: 'plan-run-mismatch', status: 'COMPLETE', sections: [],
+        })
+      }
+      if (path.includes('/plan-lesson-mismatch/illustrated-lessons/latest')) {
+        return Response.json({
+          id: 'lesson-other', teachingPlanId: 'plan-other', status: 'COMPLETE', sections: [],
+        })
+      }
+      if (isGuideListPath(path)) return Response.json([])
+      return new Response(null, { status: 404 })
+    }))
+    const router = createMemoryRouter()
+    await router.push('/lessons?started=plan-run-mismatch&run=run-expected')
+    await router.isReady()
+    const wrapper = mount(LessonsView, {
+      global: { plugins: [router], stubs: { BackgroundWorkCenter: true } },
+    })
+
+    await vi.waitFor(() => expect(
+      (wrapper.text().match(/暂时没拿到最新进度/g) ?? []).length,
+    ).toBe(2))
+    expect(wrapper.find('a[href="/lesson/plan-run-mismatch"]').exists()).toBe(false)
+    expect(wrapper.find('a[href="/lesson/plan-lesson-mismatch"]').exists()).toBe(false)
+    expect(wrapper.findAll('button').filter(button => button.text() === '开始生成')).toHaveLength(2)
     wrapper.unmount()
   })
 
@@ -513,11 +733,21 @@ function plan(id: string, gameTitle: string) {
   }
 }
 
+function isGuideListPath(path: string) {
+  return path === '/api/v1/documents/official-imports'
+    || path === '/api/v1/documents/upload-teaching-handoffs'
+    || path === '/api/v1/assistant-runs/active?mode=TEACHING_PREPARATION'
+    || path === '/api/v1/documents'
+    || path === '/api/v1/games'
+}
+
 function createMemoryRouter() {
   return createRouter({
     history: createMemoryHistory(),
     routes: [
       { path: '/', name: 'home', component: { template: '<div />' } },
+      { path: '/discover', name: 'game-recommendations', component: { template: '<div />' } },
+      { path: '/library', name: 'public-library', component: { template: '<div />' } },
       { path: '/catalog', name: 'catalog', component: { template: '<div />' } },
       { path: '/lessons', name: 'lessons', component: LessonsView },
       { path: '/teach', name: 'teach', component: { template: '<div />' } },

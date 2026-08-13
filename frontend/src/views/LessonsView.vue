@@ -89,11 +89,16 @@ const rememberedPlanId = localStorage.getItem('rulepilot:last-plan-id')
 const terminalStates = new Set(['COMPLETED', 'INSUFFICIENT_EVIDENCE', 'DEGRADED', 'FAILED'])
 const knownRunIds = new Map<string, string>()
 const requestVersions = new Map<string, number>()
+const progressControllers = new Map<string, AbortController>()
 const terminalSettlingReads = new Map<string, number>()
 let pollTimer: ReturnType<typeof setTimeout> | undefined
 let journeyTimer: ReturnType<typeof setTimeout> | undefined
 let clockTimer: ReturnType<typeof setInterval> | undefined
 let disposed = false
+let latestListRequest = 0
+let activeListController: AbortController | null = null
+let shellIdentityResolved = false
+let shellUsername = ''
 
 const startedPlanId = computed(() => typeof route.query.started === 'string' ? route.query.started : '')
 const startedRunId = computed(() => typeof route.query.run === 'string' ? route.query.run : '')
@@ -287,8 +292,8 @@ async function checkedFetch(path: string, options?: Parameters<typeof fetch>[1])
   return response
 }
 
-async function optionalList<T>(path: string): Promise<T[]> {
-  const response = await checkedFetch(path)
+async function optionalList<T>(path: string, signal: AbortSignal): Promise<T[]> {
+  const response = await checkedFetch(path, { signal })
   if (response.status === 404) return []
   if (!response.ok) throw new Error(t('lessons.error.load'))
   const payload = await response.json() as unknown
@@ -300,22 +305,32 @@ async function handoffPreparationRuns(
   imports: PendingGuideImport[],
   uploads: PendingGuideUploadHandoff[],
   active: PendingGuidePreparationRun[],
+  signal: AbortSignal,
 ) {
-  const byId = new Map(active.map(run => [run.id, run]))
-  const missingIds = [...new Set([
-    ...imports.map(job => job.teachingPreparationRunId),
-    ...uploads.map(handoff => handoff.preparationRunId),
-  ]
-    .filter((id): id is string => typeof id === 'string' && id.length > 0)
-    .filter(id => !byId.has(id)))]
+  const expectedSubjects = new Map<string, string>()
+  for (const job of imports) {
+    if (job.teachingPreparationRunId && job.documentVersionId) {
+      expectedSubjects.set(job.teachingPreparationRunId, job.documentVersionId)
+    }
+  }
+  for (const handoff of uploads) {
+    if (handoff.preparationRunId) expectedSubjects.set(handoff.preparationRunId, handoff.documentVersionId)
+  }
+  const byId = new Map(active
+    .filter(run => !expectedSubjects.has(run.id) || expectedSubjects.get(run.id) === run.subjectId)
+    .map(run => [run.id, run]))
+  const missingIds = [...expectedSubjects.keys()].filter(id => !byId.has(id))
   const snapshots = await Promise.all(missingIds.map(async (runId) => {
     try {
-      const response = await checkedFetch(`/api/v1/assistant-runs/${encodeURIComponent(runId)}`)
+      const response = await checkedFetch(`/api/v1/assistant-runs/${encodeURIComponent(runId)}`, { signal })
       if (response.status === 404) return null
       if (!response.ok) throw new Error(t('lessons.error.load'))
       const details = await response.json() as { run?: PendingGuidePreparationRun }
-      return details.run ?? null
+      return details.run?.id === runId && details.run.subjectId === expectedSubjects.get(runId)
+        ? details.run
+        : null
     } catch {
+      if (signal.aborted) throw new DOMException('Aborted', 'AbortError')
       return null
     }
   }))
@@ -325,9 +340,12 @@ async function handoffPreparationRuns(
   return [...byId.values()]
 }
 
-async function loadProgress(plan: TeachingPlan) {
+async function loadProgress(plan: TeachingPlan, listRequest = latestListRequest) {
   const requestVersion = (requestVersions.get(plan.id) ?? 0) + 1
   requestVersions.set(plan.id, requestVersion)
+  progressControllers.get(plan.id)?.abort()
+  const controller = new AbortController()
+  progressControllers.set(plan.id, controller)
   try {
     const previousRun = progress.value[plan.id]?.run
     const expectedRunId = knownRunIds.get(plan.id)
@@ -336,14 +354,22 @@ async function loadProgress(plan: TeachingPlan) {
       ? `/api/v1/assistant-runs/${encodeURIComponent(expectedRunId)}`
       : `/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=${encodeURIComponent(plan.id)}${activityCursor}`
     const [runResponse, lessonResponse] = await Promise.all([
-      checkedFetch(runPath),
-      checkedFetch(`/api/v1/teaching-plans/${plan.id}/illustrated-lessons/latest`),
+      checkedFetch(runPath, { signal: controller.signal }),
+      checkedFetch(`/api/v1/teaching-plans/${plan.id}/illustrated-lessons/latest`, { signal: controller.signal }),
     ])
+    if (!isCurrentProgressRead(plan.id, listRequest, requestVersion, controller)) return
     if (!runResponse.ok && runResponse.status !== 404) throw new Error(t('lessons.error.runProgress'))
     if (!lessonResponse.ok && lessonResponse.status !== 404) throw new Error(t('lessons.error.contentProgress'))
     const incomingRun = runResponse.ok ? await runResponse.json() as TeachingRunProgress : null
     const incomingLesson = lessonResponse.ok ? await lessonResponse.json() as LessonProgressSummary : null
-    if (requestVersions.get(plan.id) !== requestVersion) return
+    if (!isCurrentProgressRead(plan.id, listRequest, requestVersion, controller)) return
+    if (incomingRun && (incomingRun.run.subjectId !== plan.id
+      || expectedRunId && incomingRun.run.id !== expectedRunId)) {
+      throw new Error(t('lessons.error.runProgress'))
+    }
+    if (incomingLesson && incomingLesson.teachingPlanId !== plan.id) {
+      throw new Error(t('lessons.error.contentProgress'))
+    }
     const run = mergeTeachingRunProgress(previousRun ?? null, incomingRun)
     const lesson = mergeLessonProgress(progress.value[plan.id]?.lesson ?? null, incomingLesson)
     progress.value = {
@@ -368,11 +394,36 @@ async function loadProgress(plan: TeachingPlan) {
       progressErrors.value = next
     }
   } catch (error) {
+    if (!isCurrentProgressRead(plan.id, listRequest, requestVersion, controller) || controller.signal.aborted) return
     progressErrors.value = {
       ...progressErrors.value,
       [plan.id]: error instanceof Error ? error.message : t('lessons.error.latestProgress'),
     }
     throw error
+  } finally {
+    controller.abort()
+    if (progressControllers.get(plan.id) === controller) progressControllers.delete(plan.id)
+  }
+}
+
+function isCurrentProgressRead(
+  planId: string,
+  listRequest: number,
+  requestVersion: number,
+  controller: AbortController,
+) {
+  return !disposed
+    && listRequest === latestListRequest
+    && requestVersions.get(planId) === requestVersion
+    && progressControllers.get(planId) === controller
+    && plans.value.some(plan => plan.id === planId)
+}
+
+function cancelProgressReads() {
+  for (const controller of progressControllers.values()) controller.abort()
+  progressControllers.clear()
+  for (const planId of requestVersions.keys()) {
+    requestVersions.set(planId, (requestVersions.get(planId) ?? 0) + 1)
   }
 }
 
@@ -396,8 +447,10 @@ function scheduleProgressRefresh(delay = 1500) {
   }, delay)
 }
 
-async function refreshProgress(targetPlans = plans.value) {
-  await Promise.allSettled(targetPlans.map(loadProgress))
+async function refreshProgress(targetPlans = plans.value, listRequest = latestListRequest) {
+  if (disposed || listRequest !== latestListRequest) return
+  await Promise.allSettled(targetPlans.map(plan => loadProgress(plan, listRequest)))
+  if (disposed || listRequest !== latestListRequest) return
   scheduleProgressRefresh()
 }
 
@@ -413,36 +466,64 @@ function scheduleJourneyRefresh() {
 }
 
 async function loadPlans(background = false) {
+  const request = ++latestListRequest
+  activeListController?.abort()
+  cancelProgressReads()
+  clearProgressTimer()
+  clearJourneyTimer()
+  const controller = new AbortController()
+  activeListController = controller
   if (!background) {
     loading.value = true
     errorMessage.value = ''
   }
   try {
     const [response, imports, uploads, activePreparation, documents, catalog] = await Promise.all([
-      checkedFetch('/api/v1/teaching-plans'),
-      optionalList<PendingGuideImport>('/api/v1/documents/official-imports'),
-      optionalList<PendingGuideUploadHandoff>('/api/v1/documents/upload-teaching-handoffs'),
-      optionalList<PendingGuidePreparationRun>('/api/v1/assistant-runs/active?mode=TEACHING_PREPARATION'),
-      optionalList<PendingGuideDocument>('/api/v1/documents'),
-      optionalList<PendingGuideCatalogGame>('/api/v1/games'),
+      checkedFetch('/api/v1/teaching-plans', { signal: controller.signal }),
+      optionalList<PendingGuideImport>('/api/v1/documents/official-imports', controller.signal),
+      optionalList<PendingGuideUploadHandoff>('/api/v1/documents/upload-teaching-handoffs', controller.signal),
+      optionalList<PendingGuidePreparationRun>('/api/v1/assistant-runs/active?mode=TEACHING_PREPARATION', controller.signal),
+      optionalList<PendingGuideDocument>('/api/v1/documents', controller.signal),
+      optionalList<PendingGuideCatalogGame>('/api/v1/games', controller.signal),
     ])
+    if (!isCurrentListRequest(request, controller)) return
     if (!response.ok) throw new Error(t('lessons.error.load'))
-    plans.value = (await response.json()) as TeachingPlan[]
+    const receivedPlans = await response.json() as unknown
+    if (!Array.isArray(receivedPlans)) throw new Error(t('lessons.error.load'))
+    const receivedPreparationRuns = await handoffPreparationRuns(imports, uploads, activePreparation, controller.signal)
+    if (!isCurrentListRequest(request, controller)) return
+    const nextPlans = receivedPlans as TeachingPlan[]
+    plans.value = nextPlans
     guideImports.value = imports
     guideUploadHandoffs.value = uploads
-    preparationRuns.value = await handoffPreparationRuns(imports, uploads, activePreparation)
+    preparationRuns.value = receivedPreparationRuns
     guideDocuments.value = documents
     guideCatalog.value = catalog
-    if (startedPlanId.value && startedRunId.value && plans.value.some((plan) => plan.id === startedPlanId.value)) {
+    const currentPlanIds = new Set(nextPlans.map(plan => plan.id))
+    progress.value = Object.fromEntries(Object.entries(progress.value).filter(([planId]) => currentPlanIds.has(planId)))
+    progressErrors.value = Object.fromEntries(Object.entries(progressErrors.value).filter(([planId]) => currentPlanIds.has(planId)))
+    for (const planId of [...knownRunIds.keys()]) if (!currentPlanIds.has(planId)) knownRunIds.delete(planId)
+    if (startedPlanId.value && startedRunId.value && currentPlanIds.has(startedPlanId.value)) {
       knownRunIds.set(startedPlanId.value, startedRunId.value)
     }
-    await refreshProgress()
-  } catch (error) {
-    if (!background) errorMessage.value = error instanceof Error ? error.message : t('lessons.error.loadShort')
-  } finally {
     if (!background) loading.value = false
     scheduleJourneyRefresh()
+    void refreshProgress(nextPlans, request)
+  } catch (error) {
+    if (!isCurrentListRequest(request, controller) || controller.signal.aborted) return
+    if (!background) errorMessage.value = error instanceof Error ? error.message : t('lessons.error.loadShort')
+  } finally {
+    if (isCurrentListRequest(request, controller)) {
+      activeListController = null
+      if (!background) loading.value = false
+      scheduleJourneyRefresh()
+    }
+    controller.abort()
   }
+}
+
+function isCurrentListRequest(request: number, controller: AbortController) {
+  return !disposed && request === latestListRequest && activeListController === controller
 }
 
 async function launch(planId: string) {
@@ -464,7 +545,7 @@ async function launch(planId: string) {
     const plan = plans.value.find((candidate) => candidate.id === planId)!
     notifyTeachingLaunched({ planId, runId: launch.assistantRunId, gameTitle: displayPlanTitle(plan) })
     localStorage.setItem('rulepilot:last-plan-id', planId)
-    await loadProgress(plan).catch(() => undefined)
+    await loadProgress(plan, latestListRequest).catch(() => undefined)
     scheduleProgressRefresh(1000)
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : t('lessons.error.launchShort')
@@ -616,6 +697,32 @@ function confirmDestructiveAction() {
   else void confirmCleanDuplicates()
 }
 
+function updateSessionIdentity(username: string) {
+  if (disposed) return
+  const normalizedUsername = username.trim()
+  if (!shellIdentityResolved) {
+    shellIdentityResolved = true
+    shellUsername = normalizedUsername
+    return
+  }
+  if (normalizedUsername === shellUsername) return
+  shellUsername = normalizedUsername
+  plans.value = []
+  guideImports.value = []
+  guideUploadHandoffs.value = []
+  preparationRuns.value = []
+  guideDocuments.value = []
+  guideCatalog.value = []
+  progress.value = {}
+  progressErrors.value = {}
+  knownRunIds.clear()
+  requestVersions.clear()
+  terminalSettlingReads.clear()
+  showingAllVersions.value = false
+  planFilter.value = 'READABLE'
+  void loadPlans()
+}
+
 onMounted(() => {
   disposed = false
   clockTimer = setInterval(() => { now.value = Date.now() }, 1000)
@@ -623,6 +730,10 @@ onMounted(() => {
 })
 onBeforeUnmount(() => {
   disposed = true
+  latestListRequest++
+  activeListController?.abort()
+  activeListController = null
+  cancelProgressReads()
   clearProgressTimer()
   clearJourneyTimer()
   if (clockTimer) clearInterval(clockTimer)
@@ -630,7 +741,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <AppShell>
+  <AppShell @session-identity="updateSessionIdentity">
     <section class="tabletop-page max-w-6xl">
       <p class="tabletop-kicker">{{ t('lessons.eyebrow') }}</p>
       <div class="mt-4 flex flex-col justify-between gap-4 sm:flex-row sm:items-end">

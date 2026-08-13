@@ -1,5 +1,6 @@
 export interface LessonProgressSummary {
   id: string
+  teachingPlanId: string
   status: 'COMPLETE' | 'DRAFT_READY' | 'INCOMPLETE'
   sections: Array<{ evidenceStatus: 'SUPPORTED' | 'CITED_DRAFT' | 'INSUFFICIENT_EVIDENCE' }>
 }

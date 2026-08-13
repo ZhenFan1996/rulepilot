@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 
 import AppShell from '@/components/AppShell.vue'
@@ -74,10 +74,10 @@ interface OfficialRulebookImportJob {
   teachingErrorCode: string | null
   reused: boolean
 }
-interface TeachingPlanResponse { id: string }
+interface TeachingPlanResponse { id: string; documentVersionId: string }
 interface TeachingPreparationLaunch { assistantRunId: string; state: string; reused: boolean }
 interface TeachingPreparationRun {
-  run: { id: string; state: string; lastErrorCode: string | null }
+  run: { id: string; subjectId: string; state: string; lastErrorCode: string | null }
   activities?: Array<{
     sequence: number
     operation: string
@@ -186,7 +186,25 @@ const progressRetryTimers = new Map<string, ReturnType<typeof setTimeout>>()
 const progressRetryAttempts = new Map<string, number>()
 const terminalHandoffs = new Set<string>()
 const serverTeachingVersions = new Set<string>()
+const progressGenerations = new Map<string, number>()
+const progressReconcileControllers = new Map<string, AbortController>()
 let disposed = false
+let shellIdentityResolved = false
+let identityGeneration = 0
+let latestInitialLoad = 0
+let activeInitialController: AbortController | null = null
+let initialResourcesReady = false
+let recoveredContextKey = ''
+let officialImportPollGeneration = 0
+let officialImportScopeJobId = ''
+let routeImportTransitionJobId = ''
+let activeOfficialImportController: AbortController | null = null
+let officialImportPollTimer: ReturnType<typeof setTimeout> | null = null
+let resolveOfficialImportDelay: ((current: boolean) => void) | null = null
+let preparationPollGeneration = 0
+let activePreparationController: AbortController | null = null
+let preparationPollTimer: ReturnType<typeof setTimeout> | null = null
+let resolvePreparationDelay: ((current: boolean) => void) | null = null
 let preparationClock: ReturnType<typeof setInterval> | null = null
 let photographedPageSequence = 0
 
@@ -194,6 +212,7 @@ const editionOptions = computed(() => games.value.flatMap((entry) => entry.editi
   id: edition.id,
   label: `${entry.game.name} · ${edition.name}${edition.language ? ` · ${edition.language}` : ''}`,
 }))))
+const routeImportJobId = computed(() => typeof route.query.importJob === 'string' ? route.query.importJob : '')
 const selectedEditionContext = computed(() => {
   for (const entry of games.value) {
     const edition = entry.editions.find(candidate => candidate.id === editionId.value)
@@ -247,7 +266,8 @@ const canUpload = computed(() => Boolean(
   && !uploading.value
   && !importingOfficial.value
   && !officialImportJob.value
-  && !preparingVersionId.value,
+  && !preparingVersionId.value
+  && intakeReady.value,
 ))
 const canImportOfficial = computed(() => Boolean(
   officialSourceUrl.value.trim()
@@ -255,7 +275,8 @@ const canImportOfficial = computed(() => Boolean(
   && !uploading.value
   && !importingOfficial.value
   && !officialImportJob.value
-  && !preparingVersionId.value,
+  && !preparingVersionId.value
+  && intakeReady.value,
 ))
 function currentIntakeSnapshot(): RulebookIntakeSnapshot {
   return {
@@ -293,7 +314,7 @@ const intakeMutationPending = computed(() => (
   preparingPhotos.value || uploading.value || importingOfficial.value || launchingTeaching.value
 ))
 const intakeControlsDisabled = computed(() => Boolean(
-  loading.value || intakeMutationPending.value || officialImportJob.value || preparingVersionId.value,
+  loading.value || !intakeReady.value || intakeMutationPending.value || officialImportJob.value || preparingVersionId.value,
 ))
 const protectsIntakeNavigation = computed(() => hasUnsavedIntake.value || intakeMutationPending.value)
 const navigationCopy = computed(() => intakeMutationPending.value ? {
@@ -432,16 +453,25 @@ async function checkedFetch(path: string, options?: Parameters<typeof fetch>[1])
   return response
 }
 
-async function csrfToken() {
-  const response = await checkedFetch('/api/auth/csrf')
+async function csrfToken(signal?: AbortSignal) {
+  const response = await checkedFetch('/api/auth/csrf', { signal })
   if (!response.ok) throw new Error(t('documents.error'))
   return await response.json() as CsrfResponse
 }
 
-async function loadDocuments() {
-  const response = await checkedFetch('/api/v1/documents')
+async function fetchDocuments(signal?: AbortSignal) {
+  const response = await checkedFetch('/api/v1/documents', { signal })
   if (!response.ok) throw new Error(t('documents.error'))
-  documents.value = await response.json() as DocumentResponse[]
+  const payload = await response.json() as unknown
+  if (!Array.isArray(payload)) throw new Error(t('documents.error'))
+  return payload as DocumentResponse[]
+}
+
+async function loadDocuments(signal?: AbortSignal) {
+  const received = await fetchDocuments(signal)
+  if (disposed || signal?.aborted) return received
+  documents.value = received
+  return received
 }
 
 async function discoverOfficialRulebooks() {
@@ -477,31 +507,107 @@ function chooseRulebookCandidate(candidate: RulebookCandidate) {
 }
 
 async function load() {
+  const request = ++latestInitialLoad
+  activeInitialController?.abort()
+  const controller = new AbortController()
+  activeInitialController = controller
   loading.value = true
   errorMessage.value = ''
+  initialResourcesReady = false
+  intakeReady.value = false
+  recoveredContextKey = ''
   try {
-    const [sessionResponse, catalogResponse, modelResponse] = await Promise.all([
-      checkedFetch('/api/auth/session'),
-      checkedFetch('/api/v1/games'),
-      checkedFetch('/api/v1/model-configuration'),
+    const [catalogResponse, modelResponse, receivedDocuments] = await Promise.all([
+      checkedFetch('/api/v1/games', { signal: controller.signal }),
+      checkedFetch('/api/v1/model-configuration', { signal: controller.signal }),
+      fetchDocuments(controller.signal),
     ])
-    if (!sessionResponse.ok) throw new Error(t('documents.error'))
     if (!catalogResponse.ok) throw new Error(t('documents.error'))
-    username.value = ((await sessionResponse.json()) as { username: string }).username
-    games.value = await catalogResponse.json() as GameResponse[]
-    if (modelResponse.ok) modelConfiguration.value = await modelResponse.json() as ModelConfigurationResponse
+    const receivedGames = await catalogResponse.json() as unknown
+    if (!Array.isArray(receivedGames)) throw new Error(t('documents.error'))
+    const receivedModel = modelResponse.ok ? await modelResponse.json() as ModelConfigurationResponse : null
+    if (!isCurrentInitialLoad(request, controller)) return
+    games.value = receivedGames as GameResponse[]
+    documents.value = receivedDocuments
+    modelConfiguration.value = receivedModel
     const requestedEdition = typeof route.query.editionId === 'string' ? route.query.editionId : ''
     editionId.value = editionOptions.value.some((item) => item.id === requestedEdition) ? requestedEdition : ''
-    await loadDocuments()
-    await recoverOfficialImportFromRoute()
-    if (!officialImportJob.value) await recoverPendingHandoff()
-    resetIntakeBaseline()
+    initialResourcesReady = true
+    void recoverCurrentContext(request)
   } catch (error) {
+    if (!isCurrentInitialLoad(request, controller) || controller.signal.aborted) return
     errorMessage.value = error instanceof Error ? error.message : t('documents.error')
   } finally {
-    if (!intakeReady.value) resetIntakeBaseline()
-    loading.value = false
+    if (isCurrentInitialLoad(request, controller)) {
+      activeInitialController = null
+      loading.value = false
+      if (errorMessage.value && !intakeReady.value) resetIntakeBaseline()
+    }
   }
+}
+
+function isCurrentInitialLoad(request: number, controller: AbortController) {
+  return !disposed && request === latestInitialLoad && activeInitialController === controller
+}
+
+function updateSessionIdentity(nextUsername: string) {
+  if (disposed) return
+  const normalizedUsername = nextUsername.trim()
+  const identityChanged = shellIdentityResolved && normalizedUsername !== username.value
+  shellIdentityResolved = true
+  if (!identityChanged && normalizedUsername === username.value) {
+    void recoverCurrentContext(latestInitialLoad)
+    return
+  }
+
+  identityGeneration++
+  username.value = normalizedUsername
+  recoveredContextKey = ''
+  cancelOfficialImportPolling()
+  cancelPreparationPolling()
+  endPreparation()
+  launchingTeaching.value = false
+  cancelAllProgressWatches()
+  progress.value = {}
+  progressRetryAttempts.clear()
+  terminalHandoffs.clear()
+  serverTeachingVersions.clear()
+  officialImportJob.value = null
+  processingVersionId.value = ''
+  if (identityChanged) {
+    documents.value = []
+    games.value = []
+    modelConfiguration.value = null
+    void load()
+    return
+  }
+  void recoverCurrentContext(latestInitialLoad)
+}
+
+async function recoverCurrentContext(initialRequest: number) {
+  if (disposed || !shellIdentityResolved || !initialResourcesReady || initialRequest !== latestInitialLoad) return
+  const contextGeneration = identityGeneration
+  const importJobId = routeImportJobId.value
+  const contextKey = `${contextGeneration}:${initialRequest}:${username.value}:${importJobId}`
+  if (recoveredContextKey === contextKey) return
+  recoveredContextKey = contextKey
+  try {
+    if (username.value && importJobId) await recoverOfficialImport(importJobId, contextGeneration)
+    if (isCurrentRecoveryContext(contextGeneration, initialRequest)
+      && !officialImportJob.value && !importJobId && username.value) {
+      await recoverPendingHandoff()
+    }
+  } finally {
+    if (isCurrentRecoveryContext(contextGeneration, initialRequest) && !intakeReady.value) resetIntakeBaseline()
+  }
+}
+
+function isCurrentRecoveryContext(contextGeneration: number, initialRequest = latestInitialLoad) {
+  return !disposed
+    && contextGeneration === identityGeneration
+    && initialRequest === latestInitialLoad
+    && initialResourcesReady
+    && shellIdentityResolved
 }
 
 function selectFile(event: Event) {
@@ -687,10 +793,17 @@ function currentPreferences(versionId: string): PendingRulebookLesson {
 
 async function startLesson(versionId: string, preferences = currentPreferences(versionId)) {
   let accepted = false
+  const requestIdentityGeneration = identityGeneration
   launchingTeaching.value = true
-  beginPreparation(versionId, 'RECEIVED')
+  const preparationGeneration = beginPreparation(versionId, 'RECEIVED')
   try {
-    const csrf = await csrfToken()
+    const csrfController = new AbortController()
+    activePreparationController = csrfController
+    const csrf = await csrfToken(csrfController.signal)
+    if (!isCurrentPreparation(
+      preparationGeneration, versionId, requestIdentityGeneration, csrfController,
+    )) return
+    activePreparationController = null
     const planResponse = await checkedFetch(`/api/v1/document-versions/${versionId}/teaching-plans`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', [csrf.headerName]: csrf.token },
@@ -698,31 +811,42 @@ async function startLesson(versionId: string, preferences = currentPreferences(v
         learningGoal: preferences.learningGoal ?? null,
       }),
     })
+    if (!isCurrentPreparation(preparationGeneration, versionId, requestIdentityGeneration)) return
     if (!planResponse.ok) throw new Error(t('documents.error'))
     const launch = await planResponse.json() as TeachingPreparationLaunch
+    if (!isCurrentPreparation(preparationGeneration, versionId, requestIdentityGeneration)
+      || typeof launch.assistantRunId !== 'string' || !launch.assistantRunId) return
     accepted = true
     intakeBaseline.value = { ...intakeBaseline.value, learningGoal: learningGoal.value }
     const leavingAfterAcceptance = navigationDialogOpen.value && !hasUnsavedIntake.value
     launchingTeaching.value = false
     settlePendingNavigation(true)
     if (leavingAfterAcceptance) return
-    await waitForTeachingPreparation(launch.assistantRunId, preferences, csrf)
+    await waitForTeachingPreparation(
+      launch.assistantRunId, preferences, csrf, preparationGeneration, requestIdentityGeneration,
+    )
   } finally {
-    if (preparingVersionId.value === versionId) endPreparation()
-    launchingTeaching.value = false
-    settlePendingNavigation(accepted)
+    if (isCurrentPreparation(preparationGeneration, versionId, requestIdentityGeneration)) {
+      endPreparation()
+      launchingTeaching.value = false
+      settlePendingNavigation(accepted)
+    }
   }
 }
 
 function beginPreparation(versionId: string, state: string) {
+  cancelPreparationPolling()
+  const generation = preparationPollGeneration
   preparingVersionId.value = versionId
   preparationElapsedSeconds.value = 0
   updatePreparationMessage(state)
   if (preparationClock) clearInterval(preparationClock)
   preparationClock = setInterval(() => preparationElapsedSeconds.value += 1, 1000)
+  return generation
 }
 
 function endPreparation() {
+  cancelPreparationPolling()
   preparingVersionId.value = ''
   preparationElapsedSeconds.value = 0
   if (preparationClock) clearInterval(preparationClock)
@@ -766,19 +890,33 @@ async function waitForTeachingPreparation(
   runId: string,
   preferences: PendingRulebookLesson,
   csrf: CsrfResponse,
+  generation: number,
+  requestIdentityGeneration: number,
   initial?: TeachingPreparationRun,
 ) {
   let snapshot = initial
-  while (!disposed && preparingVersionId.value === preferences.versionId) {
+  while (isCurrentPreparation(generation, preferences.versionId, requestIdentityGeneration)) {
     try {
       if (!snapshot) {
-        const response = await checkedFetch(`/api/v1/assistant-runs/${runId}`)
+        const controller = new AbortController()
+        activePreparationController = controller
+        const response = await checkedFetch(`/api/v1/assistant-runs/${encodeURIComponent(runId)}`, {
+          signal: controller.signal,
+        })
+        if (!isCurrentPreparation(generation, preferences.versionId, requestIdentityGeneration, controller)) return
         if (!response.ok) throw new Error(t('documents.error'))
         snapshot = await response.json() as TeachingPreparationRun
+        if (!isCurrentPreparation(generation, preferences.versionId, requestIdentityGeneration, controller)) return
+        activePreparationController = null
+      }
+      if (snapshot.run.id !== runId || snapshot.run.subjectId !== preferences.versionId) {
+        throw new PreparationFailedError(t('documents.error'))
       }
       updatePreparationMessage(snapshot.run.state, snapshot.activities)
       if (snapshot.run.state === 'COMPLETED') {
-        await openPreparedLesson(preferences, csrf)
+        await openPreparedLesson(
+          preferences, csrf, generation, requestIdentityGeneration,
+        )
         return
       }
       if (snapshot.run.state === 'FAILED' || snapshot.run.state === 'DEGRADED') {
@@ -786,29 +924,84 @@ async function waitForTeachingPreparation(
       }
     } catch (error) {
       if (error instanceof PreparationFailedError) throw error
+      if (!isCurrentPreparation(generation, preferences.versionId, requestIdentityGeneration)) return
       message.value = t('documents.prepare.reconnect')
     }
     snapshot = undefined
-    await new Promise((resolve) => setTimeout(resolve, 1200))
+    if (!await waitForPreparationDelay(generation, preferences.versionId, requestIdentityGeneration)) return
   }
 }
 
-async function openPreparedLesson(preferences: PendingRulebookLesson, csrf: CsrfResponse) {
+async function openPreparedLesson(
+  preferences: PendingRulebookLesson,
+  csrf: CsrfResponse,
+  generation: number,
+  requestIdentityGeneration: number,
+) {
+  const controller = new AbortController()
+  activePreparationController = controller
   const latestResponse = await checkedFetch(
     `/api/v1/document-versions/${preferences.versionId}/teaching-plans/latest`,
+    { signal: controller.signal },
   )
+  if (!isCurrentPreparation(generation, preferences.versionId, requestIdentityGeneration, controller)) return
   if (!latestResponse.ok) throw new Error(t('documents.prepare.openLater'))
   const plan = await latestResponse.json() as TeachingPlanResponse
+  if (!isCurrentPreparation(generation, preferences.versionId, requestIdentityGeneration, controller)) return
+  if (!plan.id || plan.documentVersionId !== preferences.versionId) throw new PreparationFailedError(t('documents.error'))
+  activePreparationController = null
   message.value = t('documents.prepare.started')
   const lessonResponse = await checkedFetch(`/api/v1/teaching-plans/${plan.id}/illustrated-lessons`, {
     method: 'POST', headers: { [csrf.headerName]: csrf.token },
   })
+  if (!isCurrentPreparation(generation, preferences.versionId, requestIdentityGeneration)) return
   if (!lessonResponse.ok) throw new Error(t('documents.error'))
   const launch = await lessonResponse.json() as TeachingLaunch
+  if (!isCurrentPreparation(generation, preferences.versionId, requestIdentityGeneration)
+    || typeof launch.assistantRunId !== 'string' || !launch.assistantRunId) return
   notifyTeachingLaunched({ planId: plan.id, runId: launch.assistantRunId })
   if (username.value) forgetPendingRulebookLesson(localStorage, username.value, preferences.versionId)
   localStorage.setItem('rulepilot:last-plan-id', plan.id)
   await router.push({ name: 'lessons', query: { started: plan.id, run: launch.assistantRunId } })
+}
+
+function isCurrentPreparation(
+  generation: number,
+  versionId: string,
+  requestIdentityGeneration: number,
+  controller?: AbortController,
+) {
+  return !disposed
+    && generation === preparationPollGeneration
+    && versionId === preparingVersionId.value
+    && requestIdentityGeneration === identityGeneration
+    && (!controller || activePreparationController === controller)
+}
+
+function waitForPreparationDelay(
+  generation: number,
+  versionId: string,
+  requestIdentityGeneration: number,
+) {
+  return new Promise<boolean>((resolve) => {
+    resolvePreparationDelay?.(false)
+    resolvePreparationDelay = resolve
+    preparationPollTimer = setTimeout(() => {
+      preparationPollTimer = null
+      resolvePreparationDelay = null
+      resolve(isCurrentPreparation(generation, versionId, requestIdentityGeneration))
+    }, 1200)
+  })
+}
+
+function cancelPreparationPolling() {
+  preparationPollGeneration++
+  activePreparationController?.abort()
+  activePreparationController = null
+  if (preparationPollTimer) clearTimeout(preparationPollTimer)
+  preparationPollTimer = null
+  resolvePreparationDelay?.(false)
+  resolvePreparationDelay = null
 }
 
 function closeProgressConnection(versionId: string) {
@@ -819,19 +1012,38 @@ function closeProgressConnection(versionId: string) {
   progressRetryTimers.delete(versionId)
 }
 
+function cancelProgressWatch(versionId: string) {
+  progressGenerations.set(versionId, (progressGenerations.get(versionId) ?? 0) + 1)
+  progressReconcileControllers.get(versionId)?.abort()
+  progressReconcileControllers.delete(versionId)
+  closeProgressConnection(versionId)
+}
+
+function cancelAllProgressWatches() {
+  for (const versionId of new Set([
+    ...progressConnections.keys(),
+    ...progressRetryTimers.keys(),
+    ...progressReconcileControllers.keys(),
+    ...progressGenerations.keys(),
+  ])) cancelProgressWatch(versionId)
+}
+
 function watchProgress(pending: PendingRulebookLesson) {
   const versionId = pending.versionId
-  closeProgressConnection(versionId)
+  cancelProgressWatch(versionId)
   if (disposed) return
+  const generation = progressGenerations.get(versionId) ?? 0
+  const requestIdentityGeneration = identityGeneration
   processingVersionId.value = versionId
   const events = new EventSource(`/api/v1/document-versions/${versionId}/progress`, { withCredentials: true })
   progressConnections.set(versionId, events)
   events.addEventListener('progress', (event) => {
+    if (!isCurrentProgressWatch(versionId, generation, requestIdentityGeneration, events)) return
     const snapshot = parseProgressSnapshot((event as MessageEvent<string>).data)
     if (!snapshot) {
       events.close()
       progressConnections.delete(versionId)
-      void reconcileProgressAfterDisconnect(pending)
+      void reconcileProgressAfterDisconnect(pending, generation, requestIdentityGeneration)
       return
     }
     progressRetryAttempts.set(versionId, 0)
@@ -839,23 +1051,64 @@ function watchProgress(pending: PendingRulebookLesson) {
     progress.value = { ...progress.value, [versionId]: mergedSnapshot }
     message.value = progressMessage(mergedSnapshot)
     if (mergedSnapshot.complete) {
-      void handleTerminalProgress(pending, mergedSnapshot.stage)
+      void handleTerminalProgress(pending, mergedSnapshot.stage, generation, requestIdentityGeneration)
     }
   })
   events.onerror = () => {
+    if (!isCurrentProgressWatch(versionId, generation, requestIdentityGeneration, events)) return
     events.close()
     progressConnections.delete(versionId)
-    if (!disposed) void reconcileProgressAfterDisconnect(pending)
+    void reconcileProgressAfterDisconnect(pending, generation, requestIdentityGeneration)
   }
 }
 
-async function handleTerminalProgress(pending: PendingRulebookLesson, stage: string) {
+function isCurrentProgressWatch(
+  versionId: string,
+  generation: number,
+  requestIdentityGeneration: number,
+  events?: EventSource,
+) {
+  return !disposed
+    && generation === (progressGenerations.get(versionId) ?? 0)
+    && requestIdentityGeneration === identityGeneration
+    && (!events || progressConnections.get(versionId) === events)
+}
+
+async function handleTerminalProgress(
+  pending: PendingRulebookLesson,
+  stage: string,
+  generation = progressGenerations.get(pending.versionId) ?? 0,
+  requestIdentityGeneration = identityGeneration,
+  reconciledDocuments?: DocumentResponse[],
+) {
+  if (!isCurrentProgressWatch(pending.versionId, generation, requestIdentityGeneration)) return
   if (terminalHandoffs.has(pending.versionId)) return
   terminalHandoffs.add(pending.versionId)
   closeProgressConnection(pending.versionId)
   progressRetryAttempts.delete(pending.versionId)
   processingVersionId.value = ''
-  await loadDocuments().catch(() => undefined)
+  if (reconciledDocuments) {
+    documents.value = reconciledDocuments
+  } else {
+    const controller = new AbortController()
+    progressReconcileControllers.set(pending.versionId, controller)
+    try {
+      const receivedDocuments = await fetchDocuments(controller.signal)
+      if (!isCurrentProgressReconciliation(
+        pending.versionId, generation, requestIdentityGeneration, controller,
+      )) return
+      documents.value = receivedDocuments
+    } catch {
+      if (!isCurrentProgressReconciliation(
+        pending.versionId, generation, requestIdentityGeneration, controller,
+      ) || controller.signal.aborted) return
+    } finally {
+      if (progressReconcileControllers.get(pending.versionId) === controller) {
+        progressReconcileControllers.delete(pending.versionId)
+      }
+    }
+  }
+  if (!isCurrentProgressWatch(pending.versionId, generation, requestIdentityGeneration)) return
   if (stage === 'READY') {
     if (serverTeachingVersions.delete(pending.versionId)) {
       if (username.value) forgetPendingRulebookLesson(localStorage, username.value, pending.versionId)
@@ -866,6 +1119,7 @@ async function handleTerminalProgress(pending: PendingRulebookLesson, stage: str
     try {
       await startLesson(pending.versionId, pending)
     } catch (error) {
+      if (!isCurrentProgressWatch(pending.versionId, generation, requestIdentityGeneration)) return
       terminalHandoffs.delete(pending.versionId)
       errorMessage.value = error instanceof Error ? error.message : t('documents.error')
     }
@@ -875,12 +1129,37 @@ async function handleTerminalProgress(pending: PendingRulebookLesson, stage: str
   errorMessage.value = t('documents.progress.failed')
 }
 
-async function reconcileProgressAfterDisconnect(pending: PendingRulebookLesson) {
+function isCurrentProgressReconciliation(
+  versionId: string,
+  generation: number,
+  requestIdentityGeneration: number,
+  controller: AbortController,
+) {
+  return isCurrentProgressWatch(versionId, generation, requestIdentityGeneration)
+    && progressReconcileControllers.get(versionId) === controller
+}
+
+async function reconcileProgressAfterDisconnect(
+  pending: PendingRulebookLesson,
+  generation: number,
+  requestIdentityGeneration: number,
+) {
+  if (!isCurrentProgressWatch(pending.versionId, generation, requestIdentityGeneration)) return
+  progressReconcileControllers.get(pending.versionId)?.abort()
+  const controller = new AbortController()
+  progressReconcileControllers.set(pending.versionId, controller)
   try {
-    await loadDocuments()
-    const status = documents.value.find((entry) => entry.latestVersion.id === pending.versionId)?.latestVersion.status
+    const receivedDocuments = await fetchDocuments(controller.signal)
+    if (!isCurrentProgressReconciliation(
+      pending.versionId, generation, requestIdentityGeneration, controller,
+    )) return
+    documents.value = receivedDocuments
+    const status = receivedDocuments.find((entry) => entry.latestVersion.id === pending.versionId)?.latestVersion.status
     if (status === 'READY' || status === 'FAILED') {
-      await handleTerminalProgress(pending, status)
+      progressReconcileControllers.delete(pending.versionId)
+      await handleTerminalProgress(
+        pending, status, generation, requestIdentityGeneration, receivedDocuments,
+      )
       return
     }
     if (!status) {
@@ -891,18 +1170,31 @@ async function reconcileProgressAfterDisconnect(pending: PendingRulebookLesson) 
     }
     message.value = t('documents.progress.reconnect')
   } catch {
+    if (!isCurrentProgressReconciliation(
+      pending.versionId, generation, requestIdentityGeneration, controller,
+    ) || controller.signal.aborted) return
     message.value = t('documents.progress.reconnect')
+  } finally {
+    if (progressReconcileControllers.get(pending.versionId) === controller) {
+      progressReconcileControllers.delete(pending.versionId)
+    }
   }
-  scheduleProgressReconnect(pending)
+  scheduleProgressReconnect(pending, generation, requestIdentityGeneration)
 }
 
-function scheduleProgressReconnect(pending: PendingRulebookLesson) {
-  if (disposed || progressRetryTimers.has(pending.versionId)) return
+function scheduleProgressReconnect(
+  pending: PendingRulebookLesson,
+  generation: number,
+  requestIdentityGeneration: number,
+) {
+  if (!isCurrentProgressWatch(pending.versionId, generation, requestIdentityGeneration)
+    || progressRetryTimers.has(pending.versionId)) return
   const attempt = Math.min((progressRetryAttempts.get(pending.versionId) ?? 0) + 1, 4)
   progressRetryAttempts.set(pending.versionId, attempt)
   const delay = [1000, 2000, 5000, 10000][attempt - 1]!
   progressRetryTimers.set(pending.versionId, setTimeout(() => {
     progressRetryTimers.delete(pending.versionId)
+    if (!isCurrentProgressWatch(pending.versionId, generation, requestIdentityGeneration)) return
     watchProgress(pending)
   }, delay))
 }
@@ -999,14 +1291,18 @@ async function uploadRulebook() {
 async function continueUploadedRulebook(
   result: { duplicate: boolean; version: { id: string; status: string } },
   serverTeaching = true,
+  receivedDocuments?: DocumentResponse[],
 ) {
   const pending = currentPreferences(result.version.id)
-  await loadDocuments()
+  const currentDocuments = receivedDocuments ?? await loadDocuments()
+  if (receivedDocuments) documents.value = receivedDocuments
   if (result.version.status === 'READY') {
     if (username.value) forgetPendingRulebookLesson(localStorage, username.value, result.version.id)
     message.value = serverTeaching ? t('documents.background') : t('documents.readyToRead')
   } else if (result.version.status === 'FAILED') {
-    await handleTerminalProgress(pending, 'FAILED')
+    await handleTerminalProgress(
+      pending, 'FAILED', undefined, undefined, currentDocuments,
+    )
   } else {
     message.value = result.duplicate ? t('documents.uploadedExisting') : t('documents.uploadedReading')
     if (serverTeaching) {
@@ -1048,7 +1344,9 @@ async function importOfficialRulebook() {
       }),
     })
     if (!response.ok) throw new Error(t('documents.officialImport.error'))
-    officialImportJob.value = await response.json() as OfficialRulebookImportJob
+    const acceptedJob = await response.json() as OfficialRulebookImportJob
+    if (!acceptedJob.id) throw new Error(t('documents.officialImport.error'))
+    officialImportJob.value = acceptedJob
     title.value = ''
     officialSourceUrl.value = ''
     officialImportRightsConfirmed.value = false
@@ -1056,12 +1354,19 @@ async function importOfficialRulebook() {
     const navigationWasRequested = navigationDialogOpen.value
     const leavingAfterAcceptance = navigationWasRequested && !hasUnsavedIntake.value
     if (!navigationWasRequested) {
-      await router.replace({ query: { ...route.query, importJob: officialImportJob.value.id } })
+      routeImportTransitionJobId = acceptedJob.id
+      try {
+        await router.replace({ query: { ...route.query, importJob: acceptedJob.id } })
+      } finally {
+        routeImportTransitionJobId = ''
+      }
     }
     accepted = true
     importingOfficial.value = false
     settlePendingNavigation(true)
-    if (!leavingAfterAcceptance) void waitForOfficialImport(officialImportJob.value.id)
+    if (!leavingAfterAcceptance) {
+      startOfficialImportPolling(acceptedJob, identityGeneration)
+    }
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : t('documents.officialImport.error')
   } finally {
@@ -1070,42 +1375,134 @@ async function importOfficialRulebook() {
   }
 }
 
-async function recoverOfficialImportFromRoute() {
-  const jobId = typeof route.query.importJob === 'string' ? route.query.importJob : ''
-  if (!jobId) return
+async function recoverOfficialImport(jobId: string, requestIdentityGeneration: number) {
+  cancelOfficialImportPolling()
+  const generation = officialImportPollGeneration
+  officialImportScopeJobId = jobId
+  const controller = new AbortController()
+  activeOfficialImportController = controller
   try {
-    officialImportJob.value = await fetchOfficialImport(jobId)
-    if (officialImportSettled(officialImportJob.value)) await finishOfficialImport(officialImportJob.value)
-    else if (officialImportJob.value.stage !== 'FAILED') void waitForOfficialImport(jobId)
+    const job = await fetchOfficialImport(jobId, controller.signal)
+    if (!isCurrentOfficialImport(generation, jobId, requestIdentityGeneration, controller)) return
+    activeOfficialImportController = null
+    officialImportJob.value = job
+    if (officialImportSettled(job)) {
+      const finished = await finishOfficialImport(job, generation, requestIdentityGeneration)
+      if (!finished && isCurrentOfficialImport(generation, jobId, requestIdentityGeneration)) {
+        void waitForOfficialImport(jobId, generation, requestIdentityGeneration)
+      }
+    }
+    else if (job.stage === 'FAILED') errorMessage.value = t('documents.officialImport.error')
+    else void waitForOfficialImport(jobId, generation, requestIdentityGeneration)
   } catch {
-    officialImportJob.value = null
+    if (!isCurrentOfficialImport(generation, jobId, requestIdentityGeneration)
+      || controller.signal.aborted) return
+    message.value = t('documents.progress.reconnect')
+    void waitForOfficialImport(jobId, generation, requestIdentityGeneration)
+  } finally {
+    if (activeOfficialImportController === controller) activeOfficialImportController = null
   }
 }
 
-async function fetchOfficialImport(jobId: string) {
-  const response = await checkedFetch(`/api/v1/documents/official-imports/${encodeURIComponent(jobId)}`)
-  if (!response.ok) throw new Error(t('documents.officialImport.error'))
-  return await response.json() as OfficialRulebookImportJob
+function startOfficialImportPolling(
+  job: OfficialRulebookImportJob,
+  requestIdentityGeneration: number,
+) {
+  cancelOfficialImportPolling()
+  const generation = officialImportPollGeneration
+  officialImportScopeJobId = job.id
+  officialImportJob.value = job
+  if (officialImportSettled(job)) {
+    void finishOfficialImport(job, generation, requestIdentityGeneration).then((finished) => {
+      if (!finished && isCurrentOfficialImport(generation, job.id, requestIdentityGeneration)) {
+        void waitForOfficialImport(job.id, generation, requestIdentityGeneration)
+      }
+    })
+    return
+  }
+  if (job.stage === 'FAILED') {
+    errorMessage.value = t('documents.officialImport.error')
+    return
+  }
+  void waitForOfficialImport(job.id, generation, requestIdentityGeneration)
 }
 
-async function waitForOfficialImport(jobId: string) {
-  while (!disposed && officialImportJob.value?.id === jobId) {
+async function fetchOfficialImport(jobId: string, signal?: AbortSignal) {
+  const response = await checkedFetch(`/api/v1/documents/official-imports/${encodeURIComponent(jobId)}`, { signal })
+  if (!response.ok) throw new Error(t('documents.officialImport.error'))
+  const job = await response.json() as OfficialRulebookImportJob
+  if (job.id !== jobId) throw new Error(t('documents.officialImport.error'))
+  return job
+}
+
+async function waitForOfficialImport(
+  jobId: string,
+  generation: number,
+  requestIdentityGeneration: number,
+) {
+  while (isCurrentOfficialImport(generation, jobId, requestIdentityGeneration)) {
+    if (!await waitForOfficialImportDelay(generation, jobId, requestIdentityGeneration)) return
     try {
-      const job = await fetchOfficialImport(jobId)
+      const controller = new AbortController()
+      activeOfficialImportController = controller
+      const job = await fetchOfficialImport(jobId, controller.signal)
+      if (!isCurrentOfficialImport(generation, jobId, requestIdentityGeneration, controller)) return
+      activeOfficialImportController = null
       officialImportJob.value = job
       if (officialImportSettled(job)) {
-        await finishOfficialImport(job)
-        return
+        if (await finishOfficialImport(job, generation, requestIdentityGeneration)) return
+        if (!isCurrentOfficialImport(generation, jobId, requestIdentityGeneration)) return
+        continue
       }
       if (job.stage === 'FAILED') {
         errorMessage.value = t('documents.officialImport.error')
         return
       }
     } catch {
+      if (!isCurrentOfficialImport(generation, jobId, requestIdentityGeneration)) return
       message.value = t('documents.progress.reconnect')
     }
-    await new Promise(resolve => setTimeout(resolve, 1000))
   }
+}
+
+function isCurrentOfficialImport(
+  generation: number,
+  jobId: string,
+  requestIdentityGeneration: number,
+  controller?: AbortController,
+) {
+  return !disposed
+    && generation === officialImportPollGeneration
+    && requestIdentityGeneration === identityGeneration
+    && officialImportScopeJobId === jobId
+    && (!controller || activeOfficialImportController === controller)
+}
+
+function waitForOfficialImportDelay(
+  generation: number,
+  jobId: string,
+  requestIdentityGeneration: number,
+) {
+  return new Promise<boolean>((resolve) => {
+    resolveOfficialImportDelay?.(false)
+    resolveOfficialImportDelay = resolve
+    officialImportPollTimer = setTimeout(() => {
+      officialImportPollTimer = null
+      resolveOfficialImportDelay = null
+      resolve(isCurrentOfficialImport(generation, jobId, requestIdentityGeneration))
+    }, 1000)
+  })
+}
+
+function cancelOfficialImportPolling() {
+  officialImportPollGeneration++
+  officialImportScopeJobId = ''
+  activeOfficialImportController?.abort()
+  activeOfficialImportController = null
+  if (officialImportPollTimer) clearTimeout(officialImportPollTimer)
+  officialImportPollTimer = null
+  resolveOfficialImportDelay?.(false)
+  resolveOfficialImportDelay = null
 }
 
 function officialImportSettled(job: OfficialRulebookImportJob) {
@@ -1113,14 +1510,38 @@ function officialImportSettled(job: OfficialRulebookImportJob) {
     && ['LAUNCHED', 'FAILED', 'NOT_REQUESTED'].includes(job.teachingHandoffState)
 }
 
-async function finishOfficialImport(job: OfficialRulebookImportJob) {
-  if (!job.documentVersionId) throw new Error(t('documents.officialImport.error'))
-  await loadDocuments()
-  const entry = documents.value.find(candidate => candidate.latestVersion.id === job.documentVersionId)
+async function finishOfficialImport(
+  job: OfficialRulebookImportJob,
+  generation: number,
+  requestIdentityGeneration: number,
+) {
+  if (!isCurrentOfficialImport(generation, job.id, requestIdentityGeneration)) return false
+  if (!job.documentVersionId) {
+    errorMessage.value = t('documents.officialImport.error')
+    return false
+  }
+  const controller = new AbortController()
+  activeOfficialImportController = controller
+  let receivedDocuments: DocumentResponse[]
+  try {
+    receivedDocuments = await fetchDocuments(controller.signal)
+    if (!isCurrentOfficialImport(generation, job.id, requestIdentityGeneration, controller)) return false
+  } catch {
+    if (isCurrentOfficialImport(generation, job.id, requestIdentityGeneration, controller)
+      && !controller.signal.aborted) {
+      message.value = t('documents.progress.reconnect')
+    }
+    return false
+  } finally {
+    if (activeOfficialImportController === controller) activeOfficialImportController = null
+  }
+  if (!isCurrentOfficialImport(generation, job.id, requestIdentityGeneration)) return false
+  const entry = receivedDocuments.find(candidate => candidate.latestVersion.id === job.documentVersionId)
   await continueUploadedRulebook({
     duplicate: job.duplicate,
     version: { id: job.documentVersionId, status: entry?.latestVersion.status ?? 'UPLOADED' },
-  }, false)
+  }, false, receivedDocuments)
+  if (!isCurrentOfficialImport(generation, job.id, requestIdentityGeneration)) return false
   message.value = job.teachingHandoffState === 'LAUNCHED'
     ? (locale.value === 'zh-CN'
         ? `《${job.title}》已进入“我的讲解”，规则书现在可以先读。`
@@ -1131,9 +1552,11 @@ async function finishOfficialImport(job: OfficialRulebookImportJob) {
         : officialImportCopy.value.TEACHING_FAILED
       : message.value
   officialImportJob.value = null
+  cancelOfficialImportPolling()
   const query = { ...route.query }
   delete query.importJob
   await router.replace({ query })
+  return true
 }
 
 function officialImportProgress() {
@@ -1201,7 +1624,7 @@ async function confirmDeleteRulebook() {
     documents.value = documents.value.filter(item => item.document.id !== documentId)
     if (username.value) forgetPendingRulebookLesson(localStorage, username.value, versionId)
     if (processingVersionId.value === versionId) {
-      closeProgressConnection(versionId)
+      cancelProgressWatch(versionId)
       processingVersionId.value = ''
     }
     restoreAfterDocumentDelete.value = true
@@ -1219,22 +1642,32 @@ onMounted(() => {
   window.addEventListener('beforeunload', protectBrowserUnload)
   void load()
 })
+watch(routeImportJobId, () => {
+  if (routeImportJobId.value && routeImportJobId.value === routeImportTransitionJobId) return
+  recoveredContextKey = ''
+  cancelOfficialImportPolling()
+  officialImportJob.value = null
+  void recoverCurrentContext(latestInitialLoad)
+})
 onBeforeUnmount(() => {
   disposed = true
+  latestInitialLoad++
+  activeInitialController?.abort()
+  activeInitialController = null
+  cancelOfficialImportPolling()
+  cancelPreparationPolling()
   window.removeEventListener('beforeunload', protectBrowserUnload)
   removeNavigationGuard()
   takePendingNavigationResolution()?.(false)
   if (preparationClock) clearInterval(preparationClock)
   preparationClock = null
   clearPhotographedPages()
-  for (const versionId of new Set([...progressConnections.keys(), ...progressRetryTimers.keys()])) {
-    closeProgressConnection(versionId)
-  }
+  cancelAllProgressWatches()
 })
 </script>
 
 <template>
-  <AppShell>
+  <AppShell @session-identity="updateSessionIdentity">
     <div class="tabletop-page max-w-6xl">
       <section class="mx-auto max-w-5xl">
         <div class="tabletop-illustrated-hero player-board grid lg:grid-cols-[1.08fr_0.92fr]">
