@@ -4,8 +4,13 @@ import com.rulepilot.assistant.AssistantRunMode;
 import com.rulepilot.assistant.AssistantRunState;
 import com.rulepilot.assistant.AssistantRuns;
 import com.rulepilot.assistant.AssistantRuns.RunSnapshot;
+import com.rulepilot.teaching.domain.TeachingPlan;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
 import java.util.Objects;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
+import java.util.function.Supplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -18,23 +23,27 @@ import org.springframework.stereotype.Service;
 @Profile("!test")
 public class TeachingPlanLauncher {
 
+    static final String STARTUP_PHASE_DURATION_METRIC = "rulepilot.teaching.preparation.phase.duration";
     private static final Logger LOGGER = LoggerFactory.getLogger(TeachingPlanLauncher.class);
 
     private final TeachingPlanService plans;
     private final IllustratedLessonLauncher lessons;
     private final AssistantRuns runs;
     private final TaskExecutor executor;
+    private final MeterRegistry metrics;
 
     @Autowired
     public TeachingPlanLauncher(
             TeachingPlanService plans,
             IllustratedLessonLauncher lessons,
             AssistantRuns runs,
-            @Qualifier("teachingStartupExecutor") TaskExecutor executor) {
+            @Qualifier("teachingStartupExecutor") TaskExecutor executor,
+            MeterRegistry metrics) {
         this.plans = plans;
         this.lessons = lessons;
         this.runs = runs;
         this.executor = executor;
+        this.metrics = metrics;
     }
 
     public synchronized PlanLaunch launch(
@@ -85,16 +94,32 @@ public class TeachingPlanLauncher {
                     current.id(), current.revision(), AssistantRunState.LESSON_PLANNING,
                     "Reading rulebook pages and organizing the lesson");
             RunSnapshot planningRun = current;
-            var plan = plans.latest(documentVersionId, ownerUsername)
+            long planResolutionStartedAt = System.nanoTime();
+            var planResolution = recordPhase("plan-resolution", planResolutionStartedAt, () -> plans.latest(
+                            documentVersionId, ownerUsername)
                     .filter(existingPlan -> Objects.equals(existingPlan.learningGoal(), learningGoal))
-                    .orElseGet(() -> plans.create(
+                    .map(existingPlan -> new PlanResolution(existingPlan, true))
+                    .orElseGet(() -> new PlanResolution(plans.create(
                             documentVersionId,
                             learningGoal,
                             ownerUsername,
-                            planningRun.id()));
+                            planningRun.id()), false)));
+            long planResolutionNanos = System.nanoTime() - planResolutionStartedAt;
+            TeachingPlan plan = planResolution.plan();
             // Preparation already owns the startup lane. Generate and persist the first cited section here before
             // handing the remaining chapters to the continuation lane, so old long-tail work cannot delay usefulness.
-            lessons.launchImmediately(plan.id(), ownerUsername);
+            long firstSectionStartedAt = System.nanoTime();
+            var lessonLaunch = recordPhase(
+                    "first-section-startup",
+                    firstSectionStartedAt,
+                    () -> lessons.launchImmediately(plan, ownerUsername));
+            long firstSectionNanos = System.nanoTime() - firstSectionStartedAt;
+            LOGGER.info(
+                    "Teaching startup lane finished: planResolutionMs={}, firstSectionStartupMs={}, planReused={}, lessonRunReused={}",
+                    milliseconds(planResolutionNanos),
+                    milliseconds(firstSectionNanos),
+                    planResolution.reused(),
+                    lessonLaunch.reused());
             current = runs.advance(
                     current.id(), current.revision(), AssistantRunState.COMPLETED,
                     "Teaching plan is ready");
@@ -133,6 +158,24 @@ public class TeachingPlanLauncher {
         }
         return normalized;
     }
+
+    private <T> T recordPhase(String phase, long startedAt, Supplier<T> work) {
+        try {
+            return work.get();
+        } finally {
+            Timer.builder(STARTUP_PHASE_DURATION_METRIC)
+                    .description("Teaching preparation phase duration")
+                    .tag("phase", phase)
+                    .register(metrics)
+                    .record(System.nanoTime() - startedAt, TimeUnit.NANOSECONDS);
+        }
+    }
+
+    private long milliseconds(long duration) {
+        return TimeUnit.NANOSECONDS.toMillis(duration);
+    }
+
+    private record PlanResolution(TeachingPlan plan, boolean reused) {}
 
     public record PlanLaunch(UUID assistantRunId, AssistantRunState state, boolean reused) {}
 }

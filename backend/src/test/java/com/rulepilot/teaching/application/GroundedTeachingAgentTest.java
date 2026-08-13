@@ -1,6 +1,7 @@
 package com.rulepilot.teaching.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.rulepilot.assistant.AssistantReadTools;
 import com.rulepilot.assistant.AssistantReadTools.RuleEvidence;
@@ -732,6 +733,40 @@ class GroundedTeachingAgentTest {
 
         assertThat(compositions).hasValue(3);
         assertThat(complete.sections()).hasSize(3);
+    }
+
+    @Test
+    void recordsPublicationOnlyAfterTheCitedSectionIsDurable() {
+        UUID versionId = UUID.randomUUID();
+        UUID chunkId = UUID.randomUUID();
+        RecordingInvocations invocations = new RecordingInvocations();
+        TeachingLessonModel model = request -> new SectionDraft(
+                request.title(),
+                VisualKind.REFERENCE_CARD,
+                "按引用完成这一节。",
+                List.of(chunkId),
+                List.of(new StepDraft("照着做", TeachingMove.DO, "按引用完成这一节。", List.of(chunkId))));
+        GroundedTeachingAgent agent = new GroundedTeachingAgent(
+                request -> List.of(evidence(chunkId, versionId)),
+                model,
+                new PolicyEvidenceVerifier(),
+                acceptedCritic(),
+                invocations,
+                12,
+                1);
+
+        assertThatThrownBy(() -> agent.startBase(
+                        continuityPlan(versionId),
+                        UUID.randomUUID(),
+                        null,
+                        lesson -> {
+                            throw new IllegalStateException("database unavailable");
+                        }))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("database unavailable");
+
+        assertThat(invocations.diagnostics)
+                .noneMatch(diagnostic -> diagnostic.operation().startsWith("publishTeachingSection|"));
     }
 
     @Test
