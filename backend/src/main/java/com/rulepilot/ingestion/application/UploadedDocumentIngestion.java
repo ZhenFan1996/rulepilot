@@ -11,11 +11,13 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.TimeUnit;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 
 @Service
 @Profile("!test")
+@ConditionalOnProperty(name = "rulepilot.runtime.worker-enabled", havingValue = "true", matchIfMissing = true)
 public class UploadedDocumentIngestion {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(UploadedDocumentIngestion.class);
@@ -27,6 +29,7 @@ public class UploadedDocumentIngestion {
     private final DocumentProcessing documents;
     private final PdfRulebookPreparation pdfPreparation;
     private final DocumentPageImageStore pageImages;
+    private final BoundedPageImageStoragePipeline pageImageStorage;
     private final ProcessingProgressTracker progress;
     private final RuleStructureService structures;
     private final RuleChunkEmbeddingService embeddings;
@@ -36,6 +39,7 @@ public class UploadedDocumentIngestion {
             DocumentProcessing documents,
             PdfRulebookPreparation pdfPreparation,
             DocumentPageImageStore pageImages,
+            BoundedPageImageStoragePipeline pageImageStorage,
             ProcessingProgressTracker progress,
             RuleStructureService structures,
             RuleChunkEmbeddingService embeddings,
@@ -43,6 +47,7 @@ public class UploadedDocumentIngestion {
         this.documents = documents;
         this.pdfPreparation = pdfPreparation;
         this.pageImages = pageImages;
+        this.pageImageStorage = pageImageStorage;
         this.progress = progress;
         this.structures = structures;
         this.embeddings = embeddings;
@@ -81,41 +86,55 @@ public class UploadedDocumentIngestion {
         AtomicLong renderingStartedAt = new AtomicLong();
         AtomicInteger renderedPageCount = new AtomicInteger();
         AtomicLong pageStorageNanos = new AtomicLong();
-        pdfPreparation.prepare(
-                documents.open(documentVersionId),
-                pages -> {
-                    extractionNanos.set(recordParsePhase("extraction", extractionStartedAt));
-                    documents.replacePages(documentVersionId, pages);
-                    int totalPages = pages.size();
-                    totalPageCount.set(totalPages);
-                    // The positioned extraction can be very large for illustrated rulebooks. Persist every derived
-                    // structure before image rendering so neither this lambda nor the PDF adapter must retain the
-                    // full page/block graph while PDFBox decodes artwork.
-                    long structuringStartedAt = System.nanoTime();
-                    structures.organize(documentVersionId, pages);
-                    structuringNanos.set(recordParsePhase("structuring", structuringStartedAt));
-                    progress.update(documentVersionId, "RENDERING", RENDERING_START_PERCENTAGE, 0, totalPages, false);
-                    renderingStartedAt.set(System.nanoTime());
-                },
-                image -> {
-                    int totalPages = totalPageCount.get();
-                    if (totalPages < 1) {
-                        throw new IllegalStateException("PDF images must follow extracted pages");
-                    }
-                    long pageStorageStartedAt = System.nanoTime();
-                    pageImages.store(documentVersionId, image);
-                    pageStorageNanos.addAndGet(recordParsePhase("page-storage", pageStorageStartedAt));
-                    int completedPages = renderedPageCount.incrementAndGet();
-                    if (completedPages % renderingUpdateInterval(totalPages) == 0 || completedPages == totalPages) {
+        var storageBatch = pageImageStorage.openBatch(image -> {
+            int totalPages = totalPageCount.get();
+            if (totalPages < 1) {
+                throw new IllegalStateException("PDF images must follow extracted pages");
+            }
+            long pageStorageStartedAt = System.nanoTime();
+            pageImages.store(documentVersionId, image);
+            pageStorageNanos.addAndGet(recordParsePhase("page-storage", pageStorageStartedAt));
+            // Storage can finish out of page order. Publish the completion count while holding the same tiny critical
+            // section that advances it so a later percentage can never overtake an earlier listener/store update.
+            synchronized (renderedPageCount) {
+                int completedPages = renderedPageCount.incrementAndGet();
+                if (completedPages % renderingUpdateInterval(totalPages) == 0 || completedPages == totalPages) {
+                    progress.update(
+                            documentVersionId,
+                            "RENDERING",
+                            renderingPercentage(completedPages, totalPages),
+                            completedPages,
+                            totalPages,
+                            false);
+                }
+            }
+        });
+        try {
+            pdfPreparation.prepare(
+                    documents.open(documentVersionId),
+                    pages -> {
+                        extractionNanos.set(recordParsePhase("extraction", extractionStartedAt));
+                        documents.replacePages(documentVersionId, pages);
+                        int totalPages = pages.size();
+                        totalPageCount.set(totalPages);
+                        // The positioned extraction can be very large for illustrated rulebooks. Persist every derived
+                        // structure before image rendering so neither this lambda nor the PDF adapter must retain the
+                        // full page/block graph while PDFBox decodes artwork.
+                        long structuringStartedAt = System.nanoTime();
+                        structures.organize(documentVersionId, pages);
+                        structuringNanos.set(recordParsePhase("structuring", structuringStartedAt));
                         progress.update(
-                                documentVersionId,
-                                "RENDERING",
-                                renderingPercentage(completedPages, totalPages),
-                                completedPages,
-                                totalPages,
-                                false);
-                    }
-                });
+                                documentVersionId, "RENDERING", RENDERING_START_PERCENTAGE, 0, totalPages, false);
+                        renderingStartedAt.set(System.nanoTime());
+                    },
+                    storageBatch::submit);
+        } catch (RuntimeException preparationFailure) {
+            awaitAcceptedPageImages(storageBatch, preparationFailure);
+            throw preparationFailure;
+        }
+        long finalStorageDrainStartedAt = System.nanoTime();
+        storageBatch.awaitCompletion();
+        long finalStorageDrainNanos = recordParsePhase("page-storage-final-drain", finalStorageDrainStartedAt);
         int totalPages = totalPageCount.get();
         if (totalPages < 1) {
             throw new IllegalStateException("PDF preparation completed without extracted pages");
@@ -129,12 +148,25 @@ public class UploadedDocumentIngestion {
         documents.markStructuring(documentVersionId);
         progress.update(documentVersionId, "STRUCTURING", 75, totalPages, totalPages, false);
         LOGGER.info(
-                "Document parse completed: pages={}, extractionMs={}, renderAndStoreMs={}, pageStorageMs={}, structuringMs={}",
+                "Document parse completed: pages={}, extractionMs={}, renderAndStoreMs={}, pageStorageWorkMs={}, "
+                        + "pageStorageFinalDrainMs={}, structuringMs={}",
                 totalPages,
                 milliseconds(extractionNanos.get()),
                 milliseconds(renderingAndStoreNanos),
                 milliseconds(pageStorageNanos.get()),
+                milliseconds(finalStorageDrainNanos),
                 milliseconds(structuringNanos.get()));
+    }
+
+    private void awaitAcceptedPageImages(
+            BoundedPageImageStoragePipeline.Batch storageBatch, RuntimeException preparationFailure) {
+        try {
+            storageBatch.awaitCompletion();
+        } catch (RuntimeException storageFailure) {
+            if (storageFailure != preparationFailure) {
+                preparationFailure.addSuppressed(storageFailure);
+            }
+        }
     }
 
     private void chunk(UUID documentVersionId) {

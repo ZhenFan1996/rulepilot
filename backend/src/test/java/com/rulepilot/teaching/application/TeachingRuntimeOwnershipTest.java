@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.rulepilot.document.adapter.out.messaging.RabbitDocumentReadyNotificationPublisher;
 import com.rulepilot.ingestion.adapter.in.messaging.DocumentProcessingWorker;
+import com.rulepilot.ingestion.application.BoundedPageImageStoragePipeline;
+import com.rulepilot.ingestion.application.UploadedDocumentIngestion;
 import com.rulepilot.teaching.adapter.in.messaging.DocumentReadyTeachingHandoffListener;
 import java.lang.reflect.Method;
 import org.junit.jupiter.api.Test;
@@ -24,6 +26,8 @@ class TeachingRuntimeOwnershipTest {
     void readyWakeupsArePublishedOnlyByThePdfWorkerRuntime() {
         assertWorkerOwned(DocumentProcessingWorker.class);
         assertWorkerOwned(RabbitDocumentReadyNotificationPublisher.class);
+        assertWorkerOwned(UploadedDocumentIngestion.class);
+        assertWorkerOwned(BoundedPageImageStoragePipeline.class);
     }
 
     @Test
