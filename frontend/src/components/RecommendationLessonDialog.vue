@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 
 import LessonChapterList from '@/components/LessonChapterList.vue'
 import { useModalFocus } from '@/composables/useModalFocus'
@@ -48,6 +48,7 @@ interface LessonSection {
 
 interface IllustratedLesson {
   id: string
+  teachingPlanId: string
   status: 'COMPLETE' | 'DRAFT_READY' | 'INCOMPLETE'
   sections: LessonSection[]
 }
@@ -68,6 +69,8 @@ const refreshWarning = ref(false)
 const dialog = ref<HTMLElement | null>(null)
 let requestSequence = 0
 let timer: ReturnType<typeof setTimeout> | null = null
+let disposed = false
+let activeController: AbortController | null = null
 
 useModalFocus({
   dialog,
@@ -120,8 +123,35 @@ function focusedPageImageUrl(focus: VisualFocus) {
   return `/api/v1/document-versions/${encodeURIComponent(plan.value.documentVersionId)}/pages/${focus.pageNumber}/image/crop?${query}`
 }
 
-async function optionalJson<T>(path: string): Promise<T | null> {
-  const response = await fetch(path, { credentials: 'include' })
+function isAbortError(error: unknown) {
+  return (error as { name?: unknown } | null)?.name === 'AbortError'
+}
+
+function isCurrentGeneration(request: number, planId: string) {
+  return !disposed
+    && props.open
+    && request === requestSequence
+    && props.planId === planId
+}
+
+function isCurrentRequest(request: number, planId: string, controller: AbortController) {
+  return isCurrentGeneration(request, planId)
+    && activeController === controller
+}
+
+function responseMatchesPlan(
+  planId: string,
+  incomingPlan: TeachingPlan | null,
+  incomingLesson: IllustratedLesson | null,
+  incomingRun: TeachingRunProgress | null,
+) {
+  return (!incomingPlan || incomingPlan.id === planId)
+    && (!incomingLesson || incomingLesson.teachingPlanId === planId)
+    && (!incomingRun || incomingRun.run.subjectId === planId)
+}
+
+async function optionalJson<T>(path: string, signal: AbortSignal): Promise<T | null> {
+  const response = await fetch(path, { credentials: 'include', signal })
   if (response.status === 404) return null
   if (!response.ok) throw new Error('request failed')
   return await response.json() as T
@@ -129,53 +159,86 @@ async function optionalJson<T>(path: string): Promise<T | null> {
 
 async function load() {
   if (!props.open || !props.planId) return
+  const planId = props.planId
   const request = ++requestSequence
+  if (plan.value?.id !== planId) {
+    plan.value = null
+    lesson.value = null
+    run.value = null
+  }
   clearTimer()
+  activeController?.abort()
+  const controller = new AbortController()
+  activeController = controller
   loading.value = true
   error.value = false
   refreshWarning.value = false
+  let loaded = false
   try {
     const [incomingPlan, incomingLesson, incomingRun] = await Promise.all([
-      optionalJson<TeachingPlan>(`/api/v1/teaching-plans/${encodeURIComponent(props.planId)}`),
-      optionalJson<IllustratedLesson>(`/api/v1/teaching-plans/${encodeURIComponent(props.planId)}/illustrated-lessons/latest`),
-      optionalJson<TeachingRunProgress>(`/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=${encodeURIComponent(props.planId)}`),
+      optionalJson<TeachingPlan>(`/api/v1/teaching-plans/${encodeURIComponent(planId)}`, controller.signal),
+      optionalJson<IllustratedLesson>(`/api/v1/teaching-plans/${encodeURIComponent(planId)}/illustrated-lessons/latest`, controller.signal),
+      optionalJson<TeachingRunProgress>(`/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=${encodeURIComponent(planId)}`, controller.signal),
     ])
-    if (request !== requestSequence || !incomingPlan || !incomingLesson) return
+    if (!isCurrentRequest(request, planId, controller)) return
+    if (!incomingPlan || !incomingLesson || !responseMatchesPlan(planId, incomingPlan, incomingLesson, incomingRun)) {
+      throw new Error('guide response identity mismatch')
+    }
     plan.value = incomingPlan
     lesson.value = acceptProgressiveLesson(lesson.value?.id === incomingLesson.id ? lesson.value : null, incomingLesson)
-    run.value = mergeTeachingRunProgress(run.value, incomingRun)
-  } catch {
-    if (request === requestSequence) error.value = true
+    run.value = incomingRun
+      ? mergeTeachingRunProgress(run.value?.run.id === incomingRun.run.id ? run.value : null, incomingRun)
+      : null
+    loaded = true
+  } catch (caught) {
+    if (!isAbortError(caught) && isCurrentRequest(request, planId, controller)) {
+      error.value = true
+      controller.abort()
+    }
   } finally {
-    if (request === requestSequence) {
+    if (isCurrentRequest(request, planId, controller)) {
+      activeController = null
       loading.value = false
-      scheduleRefresh()
+      if (loaded) scheduleRefresh(request, planId)
     }
   }
 }
 
-async function refresh() {
-  if (!props.open || !props.planId) return
-  const request = requestSequence
+async function refresh(request: number, planId: string) {
+  if (!isCurrentGeneration(request, planId)) return
+  const controller = new AbortController()
+  activeController = controller
   try {
     const [incomingLesson, incomingRun] = await Promise.all([
-      optionalJson<IllustratedLesson>(`/api/v1/teaching-plans/${encodeURIComponent(props.planId)}/illustrated-lessons/latest`),
-      optionalJson<TeachingRunProgress>(`/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=${encodeURIComponent(props.planId)}`),
+      optionalJson<IllustratedLesson>(`/api/v1/teaching-plans/${encodeURIComponent(planId)}/illustrated-lessons/latest`, controller.signal),
+      optionalJson<TeachingRunProgress>(`/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=${encodeURIComponent(planId)}`, controller.signal),
     ])
-    if (request !== requestSequence) return
+    if (!isCurrentRequest(request, planId, controller)) return
+    if (!responseMatchesPlan(planId, null, incomingLesson, incomingRun)) throw new Error('guide response identity mismatch')
     if (incomingLesson) lesson.value = acceptProgressiveLesson(lesson.value, incomingLesson)
     run.value = mergeTeachingRunProgress(run.value, incomingRun)
     refreshWarning.value = false
-  } catch {
-    if (request === requestSequence) refreshWarning.value = true
+  } catch (caught) {
+    if (!isAbortError(caught) && isCurrentRequest(request, planId, controller)) {
+      refreshWarning.value = true
+      controller.abort()
+    }
   } finally {
-    if (request === requestSequence) scheduleRefresh(refreshWarning.value ? 4_000 : 1_500)
+    if (isCurrentRequest(request, planId, controller)) {
+      activeController = null
+      scheduleRefresh(request, planId, refreshWarning.value ? 4_000 : 1_500)
+    }
   }
 }
 
-function scheduleRefresh(delay = 1_500) {
+function scheduleRefresh(request: number, planId: string, delay = 1_500) {
   clearTimer()
-  if (props.open && (!run.value || active.value)) timer = setTimeout(() => { void refresh() }, delay)
+  if (isCurrentGeneration(request, planId) && (!run.value || active.value)) {
+    timer = setTimeout(() => {
+      timer = null
+      void refresh(request, planId)
+    }, delay)
+  }
 }
 
 function clearTimer() {
@@ -183,13 +246,22 @@ function clearTimer() {
   timer = null
 }
 
+function cancelRequests() {
+  requestSequence += 1
+  clearTimer()
+  activeController?.abort()
+  activeController = null
+  loading.value = false
+}
+
 watch(() => [props.open, props.planId] as const, ([open]) => {
   if (open) void load()
-  else {
-    requestSequence += 1
-    clearTimer()
-  }
+  else cancelRequests()
 }, { immediate: true })
+onBeforeUnmount(() => {
+  disposed = true
+  cancelRequests()
+})
 </script>
 
 <template>

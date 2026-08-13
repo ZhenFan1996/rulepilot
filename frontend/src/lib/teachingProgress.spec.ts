@@ -88,7 +88,7 @@ describe('teaching progress', () => {
 function run(id: string, activities: TeachingActivity[]): TeachingRunProgress {
   return {
     run: {
-      id, state: 'RETRIEVING', createdAt: '2026-07-21T00:00:00Z', updatedAt: '2026-07-21T00:01:00Z',
+      id, subjectId: 'plan-1', state: 'RETRIEVING', createdAt: '2026-07-21T00:00:00Z', updatedAt: '2026-07-21T00:01:00Z',
       completedAt: null, lastErrorCode: null,
     },
     budget: { usedModelCalls: 1, maxModelCalls: 144 },

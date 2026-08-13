@@ -72,12 +72,12 @@ function lessonSection(position: number, title: string, text: string) {
 }
 
 const draftLesson = {
-  id: 'lesson-1', status: 'DRAFT_READY',
+  id: 'lesson-1', teachingPlanId: 'plan-1', status: 'DRAFT_READY',
   sections: [lessonSection(1, '游戏目标', '通过鸟类、奖励牌和蛋获得分数。')],
 }
 
 const completeLesson = {
-  id: 'lesson-1', status: 'COMPLETE',
+  id: 'lesson-1', teachingPlanId: 'plan-1', status: 'COMPLETE',
   sections: [
     ...draftLesson.sections,
     lessonSection(2, '回合行动', '选择一个栖息地行动并依次结算。'),
@@ -432,6 +432,153 @@ test('keeps a corrected reference title in conversational context on mobile', as
   expect(replyBox!.y + replyBox!.height).toBeLessThanOrEqual(composerBox!.y)
 })
 
+test('stops closed reader transport while the durable guide remains reopenable', async ({ page }) => {
+  await mockPublicDiscovery(page, true)
+  await page.goto('/discover')
+
+  await page.getByLabel('和推荐 Agent 聊聊').fill('4 个人，90 分钟内，想要中等策略')
+  await page.getByRole('button', { name: '发送', exact: true }).click()
+  await expect(page.getByText('支持 4 人游玩')).toBeVisible()
+  await page.getByRole('button', { name: '选这款，找规则书' }).click()
+
+  const journey = page.getByTestId('player-journey-surface')
+  await expect(journey.getByText('Wingspan Rulebook')).toBeVisible()
+  await journey.getByRole('button', { name: '选择这份' }).click()
+  await journey.getByRole('checkbox', { name: /我确认该链接来自有权提供/ }).check()
+  await journey.getByRole('button', { name: '下载规则书并生成讲解' }).click()
+  await expect(journey.getByText('讲解已经完整生成并通过后台收尾。')).toBeVisible({ timeout: 8_000 })
+
+  const failedReaderRequests: string[] = []
+  let cancellationRequests = 0
+  page.on('request', request => {
+    if (request.url().includes('/cancellation')) cancellationRequests += 1
+  })
+  page.on('requestfailed', request => {
+    const url = request.url()
+    if (url.includes('/document-versions/version-1/pages')
+      || url.includes('/teaching-plans/plan-1')
+      || url.includes('/assistant-runs/latest') && url.includes('subjectId=plan-1')) {
+      failedReaderRequests.push(url)
+    }
+  })
+
+  let releasePages!: () => void
+  const pagesGate = new Promise<void>(resolve => { releasePages = resolve })
+  let pageRequests = 0
+  let blockedPageHandlerSettled = false
+  await page.route('**/api/v1/document-versions/version-1/pages', async route => {
+    pageRequests += 1
+    if (pageRequests === 1) {
+      await pagesGate
+      await route.fulfill({ json: [
+        { pageNumber: 1, text: 'Setup', characterCount: 1200 },
+        { pageNumber: 7, text: 'Turn order', characterCount: 1100 },
+      ] }).catch(() => undefined)
+      blockedPageHandlerSettled = true
+      return
+    }
+    return route.fulfill({ json: [
+      { pageNumber: 1, text: 'Setup', characterCount: 1200 },
+      { pageNumber: 7, text: 'Turn order', characterCount: 1100 },
+    ] })
+  })
+
+  await journey.getByRole('button', { name: '先阅读原规则书' }).click()
+  let rulebook = page.getByRole('dialog', { name: '原规则书阅读器' })
+  await expect(rulebook.getByText('正在打开规则书页面…')).toBeVisible()
+  await rulebook.getByRole('button', { name: '关闭规则书' }).click()
+  await expect(rulebook).toHaveCount(0)
+  await expect.poll(() => failedReaderRequests.filter(url => url.includes('/document-versions/version-1/pages')).length).toBe(1)
+
+  releasePages()
+  await expect.poll(() => blockedPageHandlerSettled).toBe(true)
+  await page.getByTestId('player-journey-dock').click()
+  await journey.getByRole('button', { name: '先阅读原规则书' }).click()
+  rulebook = page.getByRole('dialog', { name: '原规则书阅读器' })
+  await expect(rulebook.getByRole('button', { name: /第 7 页/ })).toBeVisible()
+  expect(pageRequests).toBe(2)
+  await rulebook.getByRole('button', { name: '关闭规则书' }).click()
+
+  type GuidePhase = 'initial-blocked' | 'fresh-active' | 'poll-blocked' | 'completed'
+  let guidePhase: GuidePhase = 'initial-blocked'
+  let releaseInitialGuide!: () => void
+  const initialGuideGate = new Promise<void>(resolve => { releaseInitialGuide = resolve })
+  let releaseGuidePoll!: () => void
+  const guidePollGate = new Promise<void>(resolve => { releaseGuidePoll = resolve })
+  let initialGuideStarted = 0
+  let initialGuideSettled = 0
+  let freshInitialReads = 0
+  let pollReads = 0
+  let pollSettled = 0
+  let allGuideReads = 0
+
+  const guideHandler = async (route: import('@playwright/test').Route) => {
+    const url = new URL(route.request().url())
+    const requestPhase = guidePhase
+    allGuideReads += 1
+    if (requestPhase === 'initial-blocked') {
+      initialGuideStarted += 1
+      await initialGuideGate
+      await fulfillGuide(route, url, false).catch(() => undefined)
+      initialGuideSettled += 1
+      return
+    }
+    if (requestPhase === 'fresh-active') {
+      freshInitialReads += 1
+      await fulfillGuide(route, url, false)
+      if (freshInitialReads === 3) guidePhase = 'poll-blocked'
+      return
+    }
+    if (requestPhase === 'poll-blocked') {
+      pollReads += 1
+      await guidePollGate
+      await fulfillGuide(route, url, false).catch(() => undefined)
+      pollSettled += 1
+      return
+    }
+    await fulfillGuide(route, url, true)
+  }
+  await page.route('**/api/v1/teaching-plans/plan-1', guideHandler)
+  await page.route('**/api/v1/teaching-plans/plan-1/illustrated-lessons/latest', guideHandler)
+  await page.route('**/api/v1/assistant-runs/latest?*', guideHandler)
+
+  await page.getByTestId('player-journey-dock').click()
+  await journey.getByRole('button', { name: '打开已生成的讲解' }).click()
+  let guide = page.getByRole('dialog', { name: '生成讲解阅读器' })
+  await expect(guide.getByText('正在打开已生成的讲解…')).toBeVisible()
+  await expect.poll(() => initialGuideStarted).toBe(3)
+  await guide.getByRole('button', { name: '关闭讲解' }).click()
+  await expect(guide).toHaveCount(0)
+  await expect.poll(() => failedReaderRequests.filter(isGuideRead).length).toBe(3)
+
+  releaseInitialGuide()
+  await expect.poll(() => initialGuideSettled).toBe(3)
+  guidePhase = 'fresh-active'
+  await page.getByTestId('player-journey-dock').click()
+  await journey.getByRole('button', { name: '打开已生成的讲解' }).click()
+  guide = page.getByRole('dialog', { name: '生成讲解阅读器' })
+  await expect(guide.getByText('通过鸟类、奖励牌和蛋获得分数。')).toBeVisible()
+  await expect.poll(() => guidePhase).toBe('poll-blocked')
+  await expect.poll(() => pollReads).toBe(2)
+
+  await guide.getByRole('button', { name: '关闭讲解' }).click()
+  await expect(guide).toHaveCount(0)
+  await expect.poll(() => failedReaderRequests.filter(isGuideRead).length).toBe(5)
+  releaseGuidePoll()
+  await expect.poll(() => pollSettled).toBe(2)
+  const readsAfterClose = allGuideReads
+  await page.waitForTimeout(1_700)
+  expect(allGuideReads).toBe(readsAfterClose)
+
+  guidePhase = 'completed'
+  await page.getByTestId('player-journey-dock').click()
+  await journey.getByRole('button', { name: '打开已生成的讲解' }).click()
+  guide = page.getByRole('dialog', { name: '生成讲解阅读器' })
+  await expect(guide.getByText('完整讲解已经生成。')).toBeVisible()
+  await expect(guide.getByText('选择一个栖息地行动并依次结算。')).toBeVisible()
+  expect(cancellationRequests).toBe(0)
+})
+
 test('keeps recommendation, rulebook reading, progressive teaching, and grounded Q&A in one recoverable workspace', async ({ page }) => {
   await mockPublicDiscovery(page, true)
   await page.goto('/discover')
@@ -549,4 +696,19 @@ async function expectOpaqueSurface(locator: import('@playwright/test').Locator) 
   expect(appearance.opacity).toBe(1)
   expect(appearance.width).toBeGreaterThan(0)
   expect(appearance.height).toBeGreaterThan(0)
+}
+
+function isGuideRead(url: string) {
+  return url.includes('/teaching-plans/plan-1')
+    || url.includes('/assistant-runs/latest') && url.includes('subjectId=plan-1')
+}
+
+function fulfillGuide(route: import('@playwright/test').Route, url: URL, completed: boolean) {
+  if (url.pathname === '/api/v1/teaching-plans/plan-1') return route.fulfill({ json: teachingPlan })
+  if (url.pathname.endsWith('/illustrated-lessons/latest')) return route.fulfill({ json: {
+    ...(completed ? completeLesson : draftLesson),
+    teachingPlanId: 'plan-1',
+  } })
+  const progress = assistantRun('teaching-run-1', completed ? 'COMPLETED' : 'RUNNING', completed ? 4 : 2)
+  return route.fulfill({ json: progress })
 }

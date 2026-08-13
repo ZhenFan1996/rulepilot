@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 
 import { useModalFocus } from '@/composables/useModalFocus'
 import { useLocale } from '@/lib/locale'
@@ -25,6 +25,8 @@ const error = ref(false)
 const readerTop = ref<HTMLElement | null>(null)
 const dialog = ref<HTMLElement | null>(null)
 let requestSequence = 0
+let disposed = false
+let activeController: AbortController | null = null
 
 useModalFocus({
   dialog,
@@ -41,22 +43,54 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   waiting: 'Read the original rulebook now while the guide continues in the background. Closing this does not interrupt it.', page: (value: number) => `Page ${value}`, pages: (value: number) => `${value} pages`, image: (value: number) => `Rulebook page ${value}`, extracted: (value: number) => `${value} characters indexed`,
 })
 
+function isAbortError(error: unknown) {
+  return (error as { name?: unknown } | null)?.name === 'AbortError'
+}
+
+function isCurrentRequest(request: number, versionId: string, controller: AbortController) {
+  return !disposed
+    && props.open
+    && request === requestSequence
+    && activeController === controller
+    && props.versionId === versionId
+}
+
+function cancelRequest() {
+  requestSequence += 1
+  activeController?.abort()
+  activeController = null
+  loading.value = false
+}
+
 async function load() {
   if (!props.open || !props.versionId) return
+  const versionId = props.versionId
   const request = ++requestSequence
+  activeController?.abort()
+  const controller = new AbortController()
+  activeController = controller
   loading.value = true
   error.value = false
+  pages.value = []
+  selectedPage.value = 1
   try {
-    const response = await fetch(`/api/v1/document-versions/${encodeURIComponent(props.versionId)}/pages`, { credentials: 'include' })
+    const response = await fetch(`/api/v1/document-versions/${encodeURIComponent(versionId)}/pages`, {
+      credentials: 'include',
+      signal: controller.signal,
+    })
     if (!response.ok) throw new Error('pages unavailable')
     const incoming = await response.json() as RulebookPage[]
-    if (request !== requestSequence || !incoming.length) return
+    if (!isCurrentRequest(request, versionId, controller)) return
+    if (!incoming.length) throw new Error('pages unavailable')
     pages.value = incoming
     selectedPage.value = Math.min(Math.max(selectedPage.value, 1), incoming.length)
-  } catch {
-    if (request === requestSequence) error.value = true
+  } catch (caught) {
+    if (!isAbortError(caught) && isCurrentRequest(request, versionId, controller)) error.value = true
   } finally {
-    if (request === requestSequence) loading.value = false
+    if (isCurrentRequest(request, versionId, controller)) {
+      loading.value = false
+      activeController = null
+    }
   }
 }
 
@@ -68,8 +102,12 @@ async function selectPage(pageNumber: number) {
 
 watch(() => [props.open, props.versionId] as const, ([open]) => {
   if (open) void load()
-  else requestSequence += 1
+  else cancelRequest()
 }, { immediate: true })
+onBeforeUnmount(() => {
+  disposed = true
+  cancelRequest()
+})
 </script>
 
 <template>

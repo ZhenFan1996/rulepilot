@@ -7,7 +7,7 @@ import type { TeachingRunProgress } from '@/lib/teachingProgress'
 
 function run(state: string, activities: TeachingRunProgress['activities']): TeachingRunProgress {
   return {
-    run: { id: 'run-1', state, createdAt: '2026-07-24T00:00:00Z', updatedAt: '2026-07-24T00:01:00Z', completedAt: null, lastErrorCode: null },
+    run: { id: 'run-1', subjectId: 'plan-1', state, createdAt: '2026-07-24T00:00:00Z', updatedAt: '2026-07-24T00:01:00Z', completedAt: null, lastErrorCode: null },
     budget: { usedModelCalls: 3, maxModelCalls: 48 },
     activities,
   }
