@@ -3,6 +3,7 @@ import { createMemoryHistory, createRouter } from 'vue-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { readPendingRulebookLessons } from '@/lib/pendingRulebookLesson'
+import { BACKGROUND_WORK_CHANGED_EVENT } from '@/lib/backgroundWorkRefresh'
 
 import RecommendationRulebookHandoff from './RecommendationRulebookHandoff.vue'
 
@@ -83,6 +84,8 @@ describe('RecommendationRulebookHandoff', () => {
 
   it('keeps selection, candidate review, consent, download, and teaching recovery in one flow', async () => {
     const openSource = vi.fn()
+    const backgroundWorkChanged = vi.fn()
+    window.addEventListener(BACKGROUND_WORK_CHANGED_EVENT, backgroundWorkChanged)
     vi.stubGlobal('open', openSource)
     const requests: Array<{ path: string; options?: RequestInit }> = []
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, options?: RequestInit) => {
@@ -181,11 +184,13 @@ describe('RecommendationRulebookHandoff', () => {
       learningGoal: null,
     })
     expect(readPendingRulebookLessons(localStorage, 'player')).toEqual([])
+    expect(backgroundWorkChanged).toHaveBeenCalledTimes(1)
     expect(router.currentRoute.value.name).toBe('home')
     await vi.waitFor(() => expect(wrapper.text()).toContain('完整讲解已经生成'))
     expect(wrapper.text()).toContain('打开已生成的讲解')
     expect(wrapper.text()).toContain('切换为规则答疑')
     expect(wrapper.get('a[href="/catalog"]').text()).toContain('我的桌游')
+    window.removeEventListener(BACKGROUND_WORK_CHANGED_EVENT, backgroundWorkChanged)
   })
 
   it('imports an ordered community page-image rulebook as part of the same teaching handoff', async () => {

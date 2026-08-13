@@ -12,6 +12,7 @@ import {
   type BackgroundTeachingItem,
   type BackgroundWorkStorageKeys,
 } from '@/lib/backgroundTeachingStatus'
+import { BACKGROUND_WORK_CHANGED_EVENT } from '@/lib/backgroundWorkRefresh'
 import {
   parseActiveTeachingRuns,
   parseDocumentProgress,
@@ -622,6 +623,12 @@ function handleTeachingLaunched(event: Event) {
   void refresh()
 }
 
+function handleBackgroundWorkChanged() {
+  if (!account) return
+  invalidateRefresh()
+  void refresh()
+}
+
 function openCenter(trigger?: HTMLElement | null) {
   requestedRestoreTarget.value = trigger ?? null
   open.value = true
@@ -633,6 +640,7 @@ watch([activeCount, finishedCount], ([active, finished]) => emit('status', activ
 
 onMounted(() => {
   document.addEventListener('visibilitychange', handleVisibility)
+  window.addEventListener(BACKGROUND_WORK_CHANGED_EVENT, handleBackgroundWorkChanged)
   window.addEventListener(TEACHING_LAUNCHED_EVENT, handleTeachingLaunched)
   switchAccount(props.username)
 })
@@ -641,6 +649,7 @@ onBeforeUnmount(() => {
   disposed = true
   invalidateRefresh()
   document.removeEventListener('visibilitychange', handleVisibility)
+  window.removeEventListener(BACKGROUND_WORK_CHANGED_EVENT, handleBackgroundWorkChanged)
   window.removeEventListener(TEACHING_LAUNCHED_EVENT, handleTeachingLaunched)
 })
 

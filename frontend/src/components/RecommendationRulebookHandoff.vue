@@ -4,8 +4,10 @@ import { RouterLink } from 'vue-router'
 
 import type { RecommendationGame, RecommendationProfile } from '@/components/gameRecommendationTypes'
 import { notifyLoginRequired } from '@/lib/authSession'
+import { notifyBackgroundWorkChanged } from '@/lib/backgroundWorkRefresh'
 import { acceptProgressiveLesson, teachingRunIsActive } from '@/lib/liveLesson'
 import { useLocale } from '@/lib/locale'
+import { notifyTeachingLaunched } from '@/lib/teachingLaunch'
 import {
   acceptImportJob,
   acceptJourneyRun,
@@ -397,6 +399,7 @@ async function enqueueImport() {
     consent.value = true
     pollingWarning.value = false
     persistJourney()
+    notifyBackgroundWorkChanged()
     scheduleJourney(0)
   } catch {
     if (request === sequence) {
@@ -525,6 +528,7 @@ async function retryJourney() {
       preparationRun.value = null
       teachingRun.value = null
       teachingRunId.value = null
+      notifyBackgroundWorkChanged()
       scheduleJourney(0)
       return
     }
@@ -551,6 +555,7 @@ async function launchLesson(planId: string, clearFailedRun: boolean) {
   if (!response.ok) throw new Error('lesson launch failed')
   const launch = await response.json() as LaunchResponse
   teachingRunId.value = launch.assistantRunId
+  notifyTeachingLaunched({ planId, runId: launch.assistantRunId, gameTitle: props.game.name })
   if (clearFailedRun) teachingRun.value = null
 }
 

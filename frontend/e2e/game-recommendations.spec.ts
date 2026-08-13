@@ -87,9 +87,11 @@ const completeLesson = {
 
 function assistantRun(id: string, state: string, revision: number) {
   const updatedAt = `2026-08-10T08:00:0${revision}Z`
+  const preparation = id === 'preparation-run-1'
   return {
     run: {
-      id, state, revision, subjectId: id === 'teaching-run-1' ? 'plan-1' : 'version-1',
+      id, state, revision, mode: preparation ? 'TEACHING_PREPARATION' : 'TEACHING',
+      subjectId: preparation ? 'version-1' : 'plan-1', ownerUsername: 'player',
       createdAt: '2026-08-10T08:00:00Z', updatedAt,
       completedAt: state === 'COMPLETED' ? updatedAt : null, lastErrorCode: null,
     },
@@ -98,6 +100,18 @@ function assistantRun(id: string, state: string, revision: number) {
       sequence: 1, type: 'VALIDATION', operation: 'publishTeachingSection|1', summary: 'CITED_BASE_SECTION_PUBLISHED',
       outcome: 'SUCCEEDED', latencyMs: 12, occurredAt: updatedAt,
     }] : [],
+  }
+}
+
+function officialImportJob() {
+  const updatedAt = new Date().toISOString()
+  return {
+    id: 'import-job-1', title: '展翅翱翔', rulebookTitle: 'Wingspan Rulebook',
+    sourceDomain: 'publisher.example', stage: 'COMPLETED',
+    downloadedBytes: 4096, totalBytes: 4096, documentVersionId: 'version-1',
+    duplicate: false, errorCode: null, reused: false,
+    teachingHandoffState: 'LAUNCHED', teachingPreparationRunId: 'preparation-run-1', teachingErrorCode: null,
+    downloadCompletedAt: updatedAt, importCompletedAt: updatedAt, teachingHandoffUpdatedAt: updatedAt, updatedAt,
   }
 }
 
@@ -113,7 +127,11 @@ const ruleAnswer = {
   confirmedRulingId: null, confirmedRulingVersion: null, clarification: null, warnings: [],
 }
 
-async function mockPublicDiscovery(page: import('@playwright/test').Page, authenticated = false) {
+async function mockPublicDiscovery(
+  page: import('@playwright/test').Page,
+  authenticated = false,
+  holdPreparation = false,
+) {
   let teachingPoll = 0
   let lessonPoll = 0
   let journeyImported = false
@@ -121,7 +139,17 @@ async function mockPublicDiscovery(page: import('@playwright/test').Page, authen
     ? route.fulfill({ json: { username: 'player', roles: ['USER'] } })
     : route.fulfill({ status: 401 }))
   await page.route('**/api/auth/csrf', route => route.fulfill({ json: { headerName: 'X-CSRF-TOKEN', token: 'csrf' } }))
-  await page.route('**/api/v1/assistant-runs/active?*', route => route.fulfill({ json: [] }))
+  await page.route('**/api/v1/assistant-runs/active?*', route => {
+    const mode = new URL(route.request().url()).searchParams.get('mode')
+    if (!journeyImported) return route.fulfill({ json: [] })
+    if (mode === 'TEACHING_PREPARATION' && holdPreparation) {
+      return route.fulfill({ json: [assistantRun('preparation-run-1', 'LESSON_PLANNING', 1).run] })
+    }
+    if (mode === 'TEACHING' && !holdPreparation) {
+      return route.fulfill({ json: [assistantRun('teaching-run-1', 'LESSON_COMPOSITION', 2).run] })
+    }
+    return route.fulfill({ json: [] })
+  })
   await page.route('**/api/v1/bgg/recommendation-agent**', async route => {
     const body = route.request().postDataJSON() as {
       profile: { players: number | null; maxMinutes: number | null; maxWeight: number | null }
@@ -251,14 +279,9 @@ async function mockPublicDiscovery(page: import('@playwright/test').Page, authen
   await page.route('**/api/v1/documents/official-imports', route => {
     if (route.request().method() === 'POST') {
       journeyImported = true
-      return route.fulfill({ status: 202, json: {
-        id: 'import-job-1', title: '展翅翱翔', rulebookTitle: 'Wingspan Rulebook', sourceDomain: 'publisher.example', stage: 'COMPLETED',
-        downloadedBytes: 4096, totalBytes: 4096, documentVersionId: 'version-1',
-        duplicate: false, errorCode: null, reused: false,
-        teachingHandoffState: 'LAUNCHED', teachingPreparationRunId: 'preparation-run-1', teachingErrorCode: null,
-      } })
+      return route.fulfill({ status: 202, json: officialImportJob() })
     }
-    return route.fulfill({ json: [] })
+    return route.fulfill({ json: journeyImported ? [officialImportJob()] : [] })
   })
   await page.route('**/api/v1/documents/upload-teaching-handoffs', route => route.fulfill({ json: [] }))
   await page.route('**/api/v1/games', route => route.fulfill({ json: [{
@@ -266,7 +289,7 @@ async function mockPublicDiscovery(page: import('@playwright/test').Page, authen
     editions: [{ id: 'edition-1', gameId: 'game-1', name: 'BGG 基础版', language: 'und', publicationYear: 2024 }],
     expansions: [],
   }] }))
-  await page.route('**/api/v1/teaching-plans', route => route.fulfill({ json: journeyImported ? [{
+  await page.route('**/api/v1/teaching-plans', route => route.fulfill({ json: journeyImported && !holdPreparation ? [{
     ...teachingPlan, createdAt: '2026-08-10T08:00:01Z',
   }] : [] }))
   await page.route('**/api/v1/model-configuration', route => route.fulfill({ json: {
@@ -288,7 +311,9 @@ async function mockPublicDiscovery(page: import('@playwright/test').Page, authen
     { pageNumber: 2, text: 'Goal', characterCount: 960 },
     { pageNumber: 7, text: 'Gain food, then activate brown powers.', characterCount: 1100 },
   ] }))
-  await page.route('**/api/v1/assistant-runs/preparation-run-1', route => route.fulfill({ json: assistantRun('preparation-run-1', 'COMPLETED', 1) }))
+  await page.route('**/api/v1/assistant-runs/preparation-run-1', route => route.fulfill({
+    json: assistantRun('preparation-run-1', holdPreparation ? 'LESSON_PLANNING' : 'COMPLETED', 1),
+  }))
   await page.route('**/api/v1/document-versions/version-1/teaching-plans/latest', route => route.fulfill({ json: teachingPlan }))
   await page.route('**/api/v1/teaching-plans/plan-1', route => route.fulfill({ json: teachingPlan }))
   await page.route('**/api/v1/assistant-runs/latest?*', route => {
@@ -676,6 +701,41 @@ test('keeps recommendation, rulebook reading, progressive teaching, and grounded
   await page.goto('/lessons')
   await expect(page.getByRole('heading', { name: '展翅翱翔', exact: true })).toBeVisible()
   await expect(page.getByText('Wingspan Rulebook')).toHaveCount(0)
+})
+
+test('hands persisted recommendation work to global guides before the preparation run finishes', async ({ page }) => {
+  let lessonLaunchRequests = 0
+  page.on('request', (request) => {
+    if (request.method() === 'POST' && request.url().endsWith('/illustrated-lessons')) {
+      lessonLaunchRequests += 1
+    }
+  })
+  await mockPublicDiscovery(page, true, true)
+  await page.goto('/discover')
+
+  await page.getByLabel('和推荐 Agent 聊聊').fill('4 个人，90 分钟内，想要中等策略')
+  await page.getByRole('button', { name: '发送', exact: true }).click()
+  await expect(page.getByText('支持 4 人游玩')).toBeVisible()
+  await page.getByRole('button', { name: '选这款，找规则书' }).click()
+  const journey = page.getByTestId('player-journey-surface')
+  await journey.getByRole('button', { name: '选择这份' }).click()
+  await journey.getByRole('checkbox', { name: /我确认该链接来自有权提供/ }).check()
+  await journey.getByRole('button', { name: '下载规则书并生成讲解' }).click()
+
+  const workTrigger = page.getByTestId('background-work-trigger-desktop')
+  await expect(workTrigger.locator('span').filter({ hasText: '1' })).toBeVisible()
+  await journey.getByRole('button', { name: '关闭小窗' }).click()
+  await workTrigger.click()
+  const workCenter = page.getByRole('dialog', { name: '后台任务' })
+  await expect(workCenter.getByText('展翅翱翔')).toBeVisible()
+  await expect(workCenter.getByText('正在读取规则并建立讲解结构')).toBeVisible()
+
+  await workCenter.getByRole('link', { name: /打开讲解中心/ }).click()
+  await expect(page).toHaveURL(/\/lessons$/)
+  const pending = page.getByTestId('pending-guide-journey')
+  await expect(pending.getByRole('heading', { name: '展翅翱翔' })).toBeVisible()
+  await expect(pending.getByText('规则书已可用，正在建立讲解计划并启动逐章生成')).toBeVisible()
+  expect(lessonLaunchRequests).toBe(0)
 })
 
 test('keeps the readable-guide continuation legible and focus-safe at 320 and 390 px', async ({ page }) => {

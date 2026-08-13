@@ -16,6 +16,7 @@ import com.rulepilot.assistant.AssistantRunState;
 import com.rulepilot.assistant.AssistantRuns;
 import com.rulepilot.assistant.AssistantRuns.RunDetails;
 import com.rulepilot.assistant.AssistantRuns.RunSnapshot;
+import com.rulepilot.teaching.application.IllustratedLessonLauncher.LessonLaunch;
 import com.rulepilot.teaching.domain.TeachingPlan;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Instant;
@@ -53,6 +54,8 @@ class TeachingPlanLauncherTest {
                         "Reading rulebook pages and organizing the lesson"))
                 .thenReturn(planning);
         when(plans.create(documentVersionId, null, "alice", received.id())).thenReturn(plan);
+        when(lessons.launchImmediately(plan, "alice"))
+                .thenReturn(new LessonLaunch(UUID.randomUUID(), AssistantRunState.RECEIVED, false));
         when(runs.advance(received.id(), 3, AssistantRunState.COMPLETED, "Teaching plan is ready"))
                 .thenReturn(completed);
         var launcher = launcher();
@@ -63,6 +66,7 @@ class TeachingPlanLauncherTest {
         assertThat(launch.state()).isEqualTo(AssistantRunState.RECEIVED);
         assertThat(launch.reused()).isFalse();
         verify(lessons).launchImmediately(plan, "alice");
+        verify(runs).advance(received.id(), 3, AssistantRunState.COMPLETED, "Teaching plan is ready");
         assertThat(metrics.find(TeachingPlanLauncher.STARTUP_PHASE_DURATION_METRIC)
                         .tag("phase", "plan-resolution")
                         .timer().count())
@@ -169,6 +173,8 @@ class TeachingPlanLauncherTest {
                         "Reading rulebook pages and organizing the lesson"))
                 .thenReturn(planning);
         when(plans.latest(documentVersionId, "alice")).thenReturn(Optional.of(existingPlan));
+        when(lessons.launchImmediately(existingPlan, "alice"))
+                .thenReturn(new LessonLaunch(UUID.randomUUID(), AssistantRunState.RECEIVED, false));
         when(runs.advance(received.id(), 3, AssistantRunState.COMPLETED, "Teaching plan is ready"))
                 .thenReturn(completed);
         var launcher = launcher();
@@ -178,6 +184,7 @@ class TeachingPlanLauncherTest {
         verify(plans, never()).create(
                 documentVersionId, learningGoal, "alice", received.id());
         verify(lessons).launchImmediately(existingPlan, "alice");
+        verify(runs).advance(received.id(), 3, AssistantRunState.COMPLETED, "Teaching plan is ready");
     }
 
     @Test
@@ -259,6 +266,8 @@ class TeachingPlanLauncherTest {
                         "alice",
                         received.id()))
                 .thenReturn(plan);
+        when(lessons.launchImmediately(plan, "alice"))
+                .thenReturn(new LessonLaunch(UUID.randomUUID(), AssistantRunState.RECEIVED, false));
         when(runs.advance(received.id(), 3, AssistantRunState.COMPLETED, "Teaching plan is ready"))
                 .thenReturn(completed);
         var launcher = launcher();

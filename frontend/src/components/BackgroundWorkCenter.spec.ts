@@ -3,6 +3,7 @@ import { createMemoryHistory, createRouter } from 'vue-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { backgroundWorkStorageKeys } from '@/lib/backgroundTeachingStatus'
+import { notifyBackgroundWorkChanged } from '@/lib/backgroundWorkRefresh'
 import { notifyTeachingLaunched } from '@/lib/teachingLaunch'
 import BackgroundWorkCenter from './BackgroundWorkCenter.vue'
 
@@ -67,6 +68,47 @@ describe('BackgroundWorkCenter request lifecycle', () => {
     expect(wrapper.text()).not.toContain('旧讲解')
     expect(sessionStorage.getItem(backgroundWorkStorageKeys('player').activeTeaching)).not.toContain('run-old')
     expect(fetchMock.mock.calls.every(([, init]) => !init?.method || init.method === 'GET')).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('refreshes immediately when durable background work changes instead of waiting for the idle timer', async () => {
+    vi.useFakeTimers()
+    let activeReads = 0
+    let importReads = 0
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const path = String(input)
+      if (path.includes('/api/v1/assistant-runs/active')) {
+        activeReads += 1
+        return response([])
+      }
+      if (path.endsWith('/api/v1/documents/official-imports')) {
+        importReads += 1
+        return response(importReads === 1 ? [] : [{
+          id: 'import-immediate', title: '刚保存的讲解', sourceDomain: 'publisher.example', stage: 'QUEUED',
+          downloadedBytes: 0, totalBytes: null, documentVersionId: null, errorCode: null,
+          teachingHandoffState: 'WAITING_FOR_DOCUMENT', teachingPreparationRunId: null,
+          teachingErrorCode: null, downloadCompletedAt: null, importCompletedAt: null,
+          teachingHandoffUpdatedAt: null, updatedAt: '2026-08-14T05:00:00Z',
+        }])
+      }
+      if (path.endsWith('/api/v1/documents/upload-teaching-handoffs')
+        || path.endsWith('/api/v1/documents')) return response([])
+      return new Response(null, { status: 404 })
+    }))
+    const wrapper = await mountCenter('player')
+    await flushPromises()
+    await openCenter(wrapper)
+    expect(wrapper.text()).toContain('当前没有后台任务')
+    expect(activeReads).toBe(1)
+    expect(importReads).toBe(1)
+
+    notifyBackgroundWorkChanged()
+    await flushPromises()
+
+    expect(activeReads).toBe(2)
+    expect(importReads).toBe(2)
+    expect(wrapper.text()).toContain('刚保存的讲解')
+    expect(wrapper.text()).toContain('等待下载')
     wrapper.unmount()
   })
 
