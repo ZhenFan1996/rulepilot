@@ -27,6 +27,17 @@ import org.junit.jupiter.api.Test;
 class PdfBoxRulebookPreparationTest {
 
     @Test
+    void rejectsUnboundedEvidenceRenderSessions() {
+        assertThatThrownBy(() -> new PdfBoxRulebookPreparation(10, 10_000, 0))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("PDF extraction limits must be positive and render session size must be 1-8");
+        assertThatThrownBy(() -> new PdfBoxRulebookPreparation(
+                        10, 10_000, PdfBoxRulebookPreparation.MAX_RENDER_SESSION_PAGES + 1))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("PDF extraction limits must be positive and render session size must be 1-8");
+    }
+
+    @Test
     void rejectsDocumentsOverThePageLimitBeforeCallingConsumers() throws IOException {
         var preparation = preparation(1, 10_000);
 

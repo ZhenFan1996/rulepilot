@@ -101,6 +101,8 @@ rulepilot:
     max-pdf-pages: ${MAX_PDF_PAGES:500}
     max-extracted-characters: ${MAX_PDF_EXTRACTED_CHARACTERS:5000000}
     visual-renderer: ${RULEBOOK_VISUAL_RENDERER:poppler}
+    # Two-page Poppler groups expose completed evidence to the bounded storage lane sooner without parallel rendering.
+    render-session-pages: ${DOCUMENT_RENDER_SESSION_PAGES:2}
     # Rendered JPEGs are large. Keep this lane deliberately small: it overlaps object storage with the next page's
     # rendering, while the producer-side bound prevents a full rulebook from accumulating in Worker memory.
     page-image-storage-parallelism: ${DOCUMENT_PAGE_IMAGE_STORAGE_PARALLELISM:2}

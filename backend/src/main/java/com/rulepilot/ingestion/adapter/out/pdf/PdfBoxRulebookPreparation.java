@@ -66,6 +66,7 @@ public class PdfBoxRulebookPreparation implements PdfRulebookPreparation {
     // on compact publisher page sizes, which makes both visual models and reader crops unreliable.
     private static final float RENDER_DPI = 200;
     private static final float JPEG_QUALITY = 0.90f;
+    static final int MAX_RENDER_SESSION_PAGES = 8;
 
     private final int maxPages;
     private final int maxExtractedCharacters;
@@ -76,10 +77,12 @@ public class PdfBoxRulebookPreparation implements PdfRulebookPreparation {
     public PdfBoxRulebookPreparation(
             @Value("${rulepilot.document.max-pdf-pages:500}") int maxPages,
             @Value("${rulepilot.document.max-extracted-characters:5000000}") int maxExtractedCharacters,
-            @Value("${rulepilot.document.render-session-pages:4}") int renderSessionPages,
+            @Value("${rulepilot.document.render-session-pages:2}") int renderSessionPages,
             @Value("${rulepilot.document.visual-renderer:poppler}") String visualRenderer) {
-        if (maxPages < 1 || maxExtractedCharacters < 1 || renderSessionPages < 1) {
-            throw new IllegalArgumentException("PDF extraction limits and render session size must be positive");
+        if (maxPages < 1 || maxExtractedCharacters < 1
+                || renderSessionPages < 1 || renderSessionPages > MAX_RENDER_SESSION_PAGES) {
+            throw new IllegalArgumentException(
+                    "PDF extraction limits must be positive and render session size must be 1-8");
         }
         this.maxPages = maxPages;
         this.maxExtractedCharacters = maxExtractedCharacters;
