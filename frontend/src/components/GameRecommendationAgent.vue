@@ -37,7 +37,7 @@ const copy = {
     starters: ['想找和我喜欢的一款机制相近的', '先聊聊最近流行什么', '朋友聚会，想热闹但不要尴尬', '我不确定，先问我一个问题吧'],
     type: '类型：{value}', interaction: '互动：{value}',
     journeyWorking: '正在为《{game}》获取规则书并生成讲解 · {progress}%', journeyReady: '《{game}》的讲解已经可以阅读',
-    journeyFailed: '《{game}》的准备流程需要处理', journeyOpen: '打开进度', journeyDialog: '规则书与讲解进度',
+    journeyFailed: '《{game}》的准备流程需要处理', journeyOpen: '打开进度', journeyRead: '打开讲解', journeyProgress: '查看进度', journeyDialog: '规则书与讲解进度',
     recommendationRole: '继续推荐', answerRole: '规则答疑', roleLabel: '切换 Agent 任务',
   },
   en: {
@@ -55,7 +55,7 @@ const copy = {
     starters: ['Find something mechanically similar to a game I like', 'Let’s chat about what is popular', 'Lively with friends, but not awkward', 'I am not sure—ask me one useful question'],
     type: 'Type: {value}', interaction: 'Interaction: {value}',
     journeyWorking: 'Getting the rulebook and building a guide for {game} · {progress}%', journeyReady: 'The guide for {game} is ready to read',
-    journeyFailed: 'The preparation flow for {game} needs attention', journeyOpen: 'Open progress', journeyDialog: 'Rulebook and guide progress',
+    journeyFailed: 'The preparation flow for {game} needs attention', journeyOpen: 'Open progress', journeyRead: 'Open guide', journeyProgress: 'View progress', journeyDialog: 'Rulebook and guide progress',
     recommendationRole: 'Recommendations', answerRole: 'Rules Q&A', roleLabel: 'Switch Agent task',
   },
 } as const
@@ -336,6 +336,15 @@ function openLesson(value: RecommendationJourneyStatus) {
   if (value.plan?.id) openSurface.value = 'lesson'
 }
 
+function openJourneyDock() {
+  const status = journeyStatus.value
+  if (status?.projection.canReadLesson && status.plan?.id) {
+    openLesson(status)
+    return
+  }
+  openSurface.value = 'journey'
+}
+
 function journeyReturnTarget() {
   if (!returnToAnswerWorkspace.value) return null
   returnToAnswerWorkspace.value = false
@@ -512,11 +521,14 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <button v-if="selectedGame && openSurface !== 'journey'" ref="journeyDock" data-testid="player-journey-dock" type="button" class="mt-4 flex min-h-16 w-full items-center gap-3 rounded-2xl border border-copper/25 bg-paper px-4 py-3 text-left elevation-sm hover:border-copper/45" @click="openSurface = 'journey'">
-      <span class="grid size-9 shrink-0 place-items-center rounded-full bg-copper/10 font-mono text-xs font-bold text-copper">{{ journeyStatus?.projection.progress ?? 5 }}%</span>
-      <span class="min-w-0 flex-1 text-sm font-semibold text-ink">{{ compactJourneyText }}</span>
-      <span class="shrink-0 text-sm font-semibold text-indigo underline">{{ t('journeyOpen') }}</span>
-    </button>
+    <div v-if="selectedGame && openSurface !== 'journey'" class="mt-4 flex overflow-hidden rounded-2xl border border-copper/25 bg-paper elevation-sm hover:border-copper/45">
+      <button ref="journeyDock" data-testid="player-journey-dock" type="button" class="flex min-h-16 min-w-0 flex-1 items-center gap-3 px-4 py-3 text-left" @click="openJourneyDock">
+        <span class="grid size-9 shrink-0 place-items-center rounded-full bg-copper/10 font-mono text-xs font-bold text-copper">{{ journeyStatus?.projection.progress ?? 5 }}%</span>
+        <span class="min-w-0 flex-1 text-sm font-semibold text-ink">{{ compactJourneyText }}</span>
+        <span class="shrink-0 text-sm font-semibold text-indigo underline">{{ t(journeyStatus?.projection.canReadLesson && journeyStatus.plan?.id ? 'journeyRead' : 'journeyOpen') }}</span>
+      </button>
+      <button v-if="journeyStatus?.projection.canReadLesson && journeyStatus.plan?.id" data-testid="player-journey-progress-button" type="button" class="min-h-11 shrink-0 border-l border-copper/20 px-4 text-sm font-semibold text-ink/55 underline" @click="openSurface = 'journey'">{{ t('journeyProgress') }}</button>
+    </div>
 
     <Teleport to="body">
       <div v-if="selectedGame" v-show="openSurface === 'journey'" data-testid="player-journey-backdrop" class="fixed inset-0 z-[100] overflow-y-auto bg-ink/45 px-3 py-6 backdrop-blur-[2px] sm:px-6" @click.self="openSurface = 'none'">

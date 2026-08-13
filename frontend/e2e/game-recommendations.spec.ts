@@ -496,7 +496,7 @@ test('stops closed reader transport while the durable guide remains reopenable',
 
   releasePages()
   await expect.poll(() => blockedPageHandlerSettled).toBe(true)
-  await page.getByTestId('player-journey-dock').click()
+  await page.getByTestId('player-journey-progress-button').click()
   await journey.getByRole('button', { name: '先阅读原规则书' }).click()
   rulebook = page.getByRole('dialog', { name: '原规则书阅读器' })
   await expect(rulebook.getByRole('button', { name: /第 7 页/ })).toBeVisible()
@@ -547,7 +547,6 @@ test('stops closed reader transport while the durable guide remains reopenable',
   await page.route('**/api/v1/assistant-runs/latest?*', guideHandler)
 
   await page.getByTestId('player-journey-dock').click()
-  await journey.getByRole('button', { name: '打开已生成的讲解' }).click()
   let guide = page.getByRole('dialog', { name: '生成讲解阅读器' })
   await expect(guide.getByText('正在打开已生成的讲解…')).toBeVisible()
   await expect.poll(() => initialGuideStarted).toBe(3)
@@ -559,7 +558,6 @@ test('stops closed reader transport while the durable guide remains reopenable',
   await expect.poll(() => initialGuideSettled).toBe(3)
   guidePhase = 'fresh-active'
   await page.getByTestId('player-journey-dock').click()
-  await journey.getByRole('button', { name: '打开已生成的讲解' }).click()
   guide = page.getByRole('dialog', { name: '生成讲解阅读器' })
   await expect(guide.getByText('通过鸟类、奖励牌和蛋获得分数。')).toBeVisible()
   await expect.poll(() => guidePhase).toBe('poll-blocked')
@@ -576,7 +574,6 @@ test('stops closed reader transport while the durable guide remains reopenable',
 
   guidePhase = 'completed'
   await page.getByTestId('player-journey-dock').click()
-  await journey.getByRole('button', { name: '打开已生成的讲解' }).click()
   guide = page.getByRole('dialog', { name: '生成讲解阅读器' })
   await expect(guide.getByText('完整讲解已经生成。')).toBeVisible()
   await expect(guide.getByText('选择一个栖息地行动并依次结算。')).toBeVisible()
@@ -639,7 +636,6 @@ test('keeps recommendation, rulebook reading, progressive teaching, and grounded
   const journeyDock = page.getByTestId('player-journey-dock')
   await expect(journeyDock).toContainText('讲解已经可以阅读', { timeout: 8_000 })
   await journeyDock.click()
-  await page.getByRole('button', { name: '打开已生成的讲解' }).click()
   const lesson = page.getByRole('dialog', { name: '生成讲解阅读器' })
   await expectOpaqueSurface(page.getByTestId('recommendation-lesson-surface'))
   await expect(page.getByTestId('recommendation-lesson-backdrop')).toBeVisible()
