@@ -738,6 +738,37 @@ test('hands persisted recommendation work to global guides before the preparatio
   expect(lessonLaunchRequests).toBe(0)
 })
 
+test('recovers persisted recommendation work after a full refresh without journey storage', async ({ page }) => {
+  await mockPublicDiscovery(page, true, true)
+  await page.goto('/discover')
+
+  await page.getByLabel('和推荐 Agent 聊聊').fill('4 个人，90 分钟内，想要中等策略')
+  await page.getByRole('button', { name: '发送', exact: true }).click()
+  await expect(page.getByText('支持 4 人游玩')).toBeVisible()
+  await page.getByRole('button', { name: '选这款，找规则书' }).click()
+  const journey = page.getByTestId('player-journey-surface')
+  await journey.getByRole('button', { name: '选择这份' }).click()
+  await journey.getByRole('checkbox', { name: /我确认该链接来自有权提供/ }).check()
+  await journey.getByRole('button', { name: '下载规则书并生成讲解' }).click()
+  await expect(page.getByTestId('background-work-trigger-desktop').locator('span').filter({ hasText: '1' })).toBeVisible()
+
+  await page.evaluate(() => sessionStorage.clear())
+  await page.reload()
+
+  const workTrigger = page.getByTestId('background-work-trigger-desktop')
+  await expect(workTrigger.locator('span').filter({ hasText: '1' })).toBeVisible()
+  await workTrigger.click()
+  const workCenter = page.getByRole('dialog', { name: '后台任务' })
+  await expect(workCenter.getByText('展翅翱翔')).toBeVisible()
+  await expect(workCenter.getByText('正在读取规则并建立讲解结构')).toBeVisible()
+  await workCenter.getByRole('link', { name: /打开讲解中心/ }).click()
+
+  await expect(page).toHaveURL(/\/lessons$/)
+  const pending = page.getByTestId('pending-guide-journey')
+  await expect(pending.getByRole('heading', { name: '展翅翱翔' })).toBeVisible()
+  await expect(pending.getByText('规则书已可用，正在建立讲解计划并启动逐章生成')).toBeVisible()
+})
+
 test('keeps the readable-guide continuation legible and focus-safe at 320 and 390 px', async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 844 })
   await mockPublicDiscovery(page, true)
