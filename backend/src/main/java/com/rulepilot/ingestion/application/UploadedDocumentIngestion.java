@@ -147,6 +147,10 @@ public class UploadedDocumentIngestion {
         // next queue stage adds substantial work on a small worker and can only reproduce these same source blocks.
         documents.markStructuring(documentVersionId);
         progress.update(documentVersionId, "STRUCTURING", 75, totalPages, totalPages, false);
+        // RuleStructureService.organize already persisted every retrieval chunk before rendering began. Record that
+        // completed business state here so the Worker can publish EMBED directly without a status-only broker hop.
+        documents.markChunking(documentVersionId);
+        progress.update(documentVersionId, "CHUNKING", 85, totalPages, false);
         LOGGER.info(
                 "Document parse completed: pages={}, extractionMs={}, renderAndStoreMs={}, pageStorageWorkMs={}, "
                         + "pageStorageFinalDrainMs={}, structuringMs={}",
@@ -170,6 +174,7 @@ public class UploadedDocumentIngestion {
     }
 
     private void chunk(UUID documentVersionId) {
+        // Compatibility bridge for CHUNK messages published by a pre-P27-23 Worker during a rolling deployment.
         int storedPageCount = documents.pages(documentVersionId).size();
         documents.markChunking(documentVersionId);
         progress.update(documentVersionId, "CHUNKING", 85, storedPageCount, false);

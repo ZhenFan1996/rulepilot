@@ -77,7 +77,12 @@ class UploadedDocumentIngestionTest {
         verify(progress).update(versionId, "RENDERING", 57, 2, 3, false);
         verify(progress).update(versionId, "RENDERING", 65, 3, 3, false);
         verify(progress).update(versionId, "STRUCTURING", 75, 3, 3, false);
+        verify(progress).update(versionId, "CHUNKING", 85, 3, false);
         verify(documents).markStructuring(versionId);
+        verify(documents).markChunking(versionId);
+        InOrder statusOrder = inOrder(documents);
+        statusOrder.verify(documents).markStructuring(versionId);
+        statusOrder.verify(documents).markChunking(versionId);
         verify(documents).open(versionId);
         verify(structures).organize(versionId, pages);
         InOrder persistenceBeforeImages = inOrder(structures, pageImages);
@@ -236,6 +241,7 @@ class UploadedDocumentIngestionTest {
             progressOrder.verify(progress).update(versionId, "RENDERING", 53, 1, 2, false);
             progressOrder.verify(progress).update(versionId, "RENDERING", 65, 2, 2, false);
             progressOrder.verify(progress).update(versionId, "STRUCTURING", 75, 2, 2, false);
+            progressOrder.verify(progress).update(versionId, "CHUNKING", 85, 2, false);
         } finally {
             storageLane.shutdownNow();
         }
@@ -347,7 +353,7 @@ class UploadedDocumentIngestionTest {
     }
 
     @Test
-    void completesChunkingWithoutReopeningTheAlreadyStructuredPdf() {
+    void bridgesLegacyChunkingWithoutReopeningTheAlreadyStructuredPdf() {
         DocumentProcessing documents = Mockito.mock(DocumentProcessing.class);
         PdfRulebookPreparation pdfPreparation = Mockito.mock(PdfRulebookPreparation.class);
         DocumentPageImageStore pageImages = Mockito.mock(DocumentPageImageStore.class);

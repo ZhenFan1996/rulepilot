@@ -16,6 +16,7 @@ import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import java.io.IOException;
 import java.time.Instant;
+import java.util.Set;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -34,6 +35,8 @@ import org.springframework.stereotype.Component;
 public class DocumentProcessingWorker {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(DocumentProcessingWorker.class);
+    private static final Set<String> LEGACY_CHUNK_OBSOLETE_STATUSES =
+            Set.of("EMBEDDING", "INDEXING", "READY", "FAILED");
 
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final UploadedDocumentIngestion ingestion;
@@ -107,7 +110,8 @@ public class DocumentProcessingWorker {
     }
 
     private void execute(DocumentProcessingCommand command, UUID eventId, int attempt) {
-        if (versions.findVersion(command.documentVersionId()).isEmpty()) {
+        var version = versions.findVersion(command.documentVersionId());
+        if (version.isEmpty()) {
             metrics.counter(
                             "rulepilot.document.processing.orphaned",
                             "stage",
@@ -130,6 +134,20 @@ public class DocumentProcessingWorker {
                     command.documentVersionId(),
                     command.stage(),
                     command.pipelineVersion());
+            return;
+        }
+        if (command.stage() == DocumentProcessingStage.CHUNK
+                && LEGACY_CHUNK_OBSOLETE_STATUSES.contains(version.orElseThrow().processingStatus())) {
+            idempotency.complete(command);
+            metrics.counter(
+                            "rulepilot.document.processing.obsolete",
+                            "stage",
+                            command.stage().name().toLowerCase())
+                    .increment();
+            LOGGER.info(
+                    "Acknowledging obsolete legacy CHUNK delivery for documentVersionId={}, processingStatus={}",
+                    command.documentVersionId(),
+                    version.orElseThrow().processingStatus());
             return;
         }
         Timer.Sample duration = Timer.start(metrics);
