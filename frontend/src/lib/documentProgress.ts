@@ -8,11 +8,15 @@ export interface DocumentProcessingSnapshot {
 
 const stageRanks: Record<string, number> = {
   UPLOADED: 0,
-  EXTRACTING: 1,
-  RENDERING: 2,
-  STRUCTURING: 3,
-  READY: 4,
-  FAILED: 4,
+  VALIDATING: 1,
+  EXTRACTING: 2,
+  RENDERING: 3,
+  STRUCTURING: 4,
+  CHUNKING: 5,
+  EMBEDDING: 6,
+  INDEXING: 7,
+  READY: 8,
+  FAILED: 8,
 }
 
 export function mergeDocumentProgress(

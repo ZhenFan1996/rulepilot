@@ -16,4 +16,14 @@ describe('document progress continuity', () => {
     const ready = { stage: 'READY', percentage: 100, processedPages: 20, totalPages: 20, complete: true }
     expect(mergeDocumentProgress(ready, next)).toEqual(ready)
   })
+
+  it('keeps every ingestion phase monotonic through indexing', () => {
+    const indexed = { stage: 'INDEXING', percentage: 95, processedPages: 20, totalPages: 20, complete: false }
+    const delayedEmbedding = { stage: 'EMBEDDING', percentage: 90, processedPages: 20, totalPages: 20, complete: false }
+    const validating = { stage: 'VALIDATING', percentage: 15, processedPages: 0, totalPages: 0, complete: false }
+    const chunking = { stage: 'CHUNKING', percentage: 85, processedPages: 20, totalPages: 20, complete: false }
+
+    expect(mergeDocumentProgress(indexed, delayedEmbedding)).toEqual(indexed)
+    expect(mergeDocumentProgress(validating, chunking)).toEqual(chunking)
+  })
 })

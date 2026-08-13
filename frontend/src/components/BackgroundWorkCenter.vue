@@ -5,10 +5,29 @@ import { RouterLink } from 'vue-router'
 import TabletopGlyph from '@/components/TabletopGlyph.vue'
 import { useModalFocus } from '@/composables/useModalFocus'
 import {
+  backgroundWorkStorageKeys,
+  clearLegacyBackgroundWorkStorage,
   parseBackgroundTeachingItems,
   reconcileBackgroundTeaching,
   type BackgroundTeachingItem,
+  type BackgroundWorkStorageKeys,
 } from '@/lib/backgroundTeachingStatus'
+import {
+  parseActiveTeachingRuns,
+  parseDocumentProgress,
+  parseExpectedAssistantRun,
+  parseOwnedDocuments,
+  parseRulebookImports,
+  parseTeachingPlans,
+  parseUploadedHandoffs,
+  terminalAssistantRunStates,
+  validateDocumentRelationships,
+  type DocumentProgress,
+  type DocumentSummary,
+  type RulebookImportJob,
+  type UploadedTeachingHandoff,
+} from '@/lib/backgroundWorkSnapshot'
+import { mergeDocumentProgress } from '@/lib/documentProgress'
 import { playerFacingTitle } from '@/lib/lessonPresentation'
 import { useLocale } from '@/lib/locale'
 import { TEACHING_LAUNCHED_EVENT, teachingLaunchDetail } from '@/lib/teachingLaunch'
@@ -20,45 +39,6 @@ const emit = defineEmits<{
 
 const dialog = ref<HTMLElement | null>(null)
 const requestedRestoreTarget = ref<HTMLElement | null>(null)
-
-interface TeachingPlanSummary { id: string; gameTitle: string }
-interface ActiveTeachingRun { id: string; subjectId: string; state: string; updatedAt: string }
-interface TeachingRunDetails { run: { id: string; state: string } }
-interface RulebookImportJob {
-  id: string
-  title: string
-  sourceDomain: string
-  stage: 'QUEUED' | 'CONNECTING' | 'DOWNLOADING' | 'COMPRESSING' | 'VERIFYING_FILE' | 'SAVING' | 'COMPLETED' | 'FAILED'
-  downloadedBytes: number
-  totalBytes: number | null
-  documentVersionId: string | null
-  errorCode: string | null
-  teachingHandoffState?: 'NOT_REQUESTED' | 'WAITING_FOR_DOCUMENT' | 'LAUNCHING' | 'LAUNCHED' | 'FAILED'
-  teachingPreparationRunId?: string | null
-  teachingErrorCode?: string | null
-  updatedAt: string
-}
-interface UploadedTeachingHandoff {
-  id: string
-  documentVersionId: string
-  title: string
-  rulebookTitle: string
-  state: 'WAITING_FOR_DOCUMENT' | 'LAUNCHING' | 'LAUNCHED' | 'FAILED'
-  preparationRunId: string | null
-  errorCode: string | null
-  updatedAt: string
-}
-interface DocumentSummary {
-  document: { id: string; title: string }
-  latestVersion: { id: string; status: string }
-}
-interface DocumentProgress {
-  stage: string
-  percentage: number
-  processedPages: number
-  totalPages: number
-  complete: boolean
-}
 
 type WorkState = 'active' | 'complete' | 'failed'
 interface WorkItem {
@@ -85,16 +65,16 @@ const uploadedTeachingHandoffs = ref<UploadedTeachingHandoff[]>([])
 const documents = ref<DocumentSummary[]>([])
 const documentProgress = ref<Record<string, DocumentProgress>>({})
 const preparationStates = ref<Record<string, string>>({})
+const preparationSubjects = ref<Record<string, string>>({})
 const dismissedImportIds = ref<Set<string>>(new Set())
 const dismissedUploadedHandoffIds = ref<Set<string>>(new Set())
 const titles = new Map<string, string>()
-const ACTIVE_TEACHING_KEY = 'rulepilot:active-teaching-runs'
-const COMPLETED_TEACHING_KEY = 'rulepilot:completed-teaching-runs'
-const DISMISSED_IMPORTS_KEY = 'rulepilot:dismissed-official-imports'
-const DISMISSED_UPLOAD_HANDOFFS_KEY = 'rulepilot:dismissed-upload-teaching-handoffs'
-const terminalTeachingStates = new Set(['COMPLETED', 'INSUFFICIENT_EVIDENCE', 'DEGRADED', 'FAILED'])
+const terminalTeachingStates = terminalAssistantRunStates
 let timer: ReturnType<typeof setTimeout> | undefined
 let disposed = false
+let account = ''
+let refreshGeneration = 0
+let activeRefreshController: AbortController | null = null
 
 useModalFocus({
   dialog,
@@ -109,7 +89,8 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   download: '获取规则书', rulebook: '读取规则书', lesson: '生成讲解', done: '已完成', failed: '需要处理',
   queued: '等待下载', connecting: '正在连接规则书来源', downloading: '正在下载规则书内容', compressing: '文件较大，正在压缩 PDF', verifying: '正在核验 PDF',
   saving: '正在保存并交给规则书读取', uploaded: '等待开始读取', extracting: '正在提取规则文字',
-  rendering: '正在生成规则书页面', structuring: '正在整理章节与图例', teaching: '正在组织讲解',
+  validating: '正在核验规则书文件', rendering: '正在生成规则书页面', structuring: '正在整理章节与图例',
+  chunking: '正在建立可检索规则段落', embedding: '正在建立规则语义索引', indexing: '正在完成规则索引', teaching: '正在组织讲解',
   rulebookFailed: '规则书读取失败，讲解无法开始',
   waitingForTeaching: '规则书已保存，读取完成后会自动开始讲解', launchingTeaching: '规则书已就绪，正在启动讲解任务',
   teachingLaunched: '规则书已保存，讲解任务已交给后台', teachingLaunchFailed: '规则书已保存，但自动讲解没有启动',
@@ -124,7 +105,8 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   download: 'Get rulebook', rulebook: 'Read rulebook', lesson: 'Generate lesson', done: 'Complete', failed: 'Needs attention',
   queued: 'Waiting to download', connecting: 'Connecting to rulebook source', downloading: 'Downloading rulebook content', compressing: 'Compressing the oversized PDF', verifying: 'Verifying PDF',
   saving: 'Saving and handing off for reading', uploaded: 'Waiting to read', extracting: 'Extracting searchable rules',
-  rendering: 'Rendering rulebook pages', structuring: 'Organizing chapters and visual references', teaching: 'Organizing the lesson',
+  validating: 'Validating the rulebook file', rendering: 'Rendering rulebook pages', structuring: 'Organizing chapters and visual references',
+  chunking: 'Building searchable rule passages', embedding: 'Building the rule meaning index', indexing: 'Finishing the rule index', teaching: 'Organizing the lesson',
   rulebookFailed: 'Rulebook reading failed, so the guide could not start',
   waitingForTeaching: 'Rulebook saved; the guide will start automatically when reading completes', launchingTeaching: 'Rulebook ready; starting the guide task',
   teachingLaunched: 'Rulebook saved; guide work was handed to the background', teachingLaunchFailed: 'Rulebook saved, but the automatic guide did not start',
@@ -222,9 +204,13 @@ function documentStage(progress: DocumentProgress | undefined, status: string) {
   const stage = progress?.stage ?? status
   return {
     UPLOADED: copy.value.uploaded,
+    VALIDATING: copy.value.validating,
     EXTRACTING: copy.value.extracting,
     RENDERING: copy.value.rendering,
     STRUCTURING: copy.value.structuring,
+    CHUNKING: copy.value.chunking,
+    EMBEDDING: copy.value.embedding,
+    INDEXING: copy.value.indexing,
     READY: copy.value.done,
     FAILED: copy.value.failed,
   }[stage] ?? copy.value.rulebook
@@ -362,122 +348,251 @@ function clearTimer() {
   timer = undefined
 }
 
-function schedule() {
+function schedule(generation: number, scheduledAccount: string) {
   clearTimer()
-  if (disposed || document.visibilityState === 'hidden') return
-  timer = setTimeout(refresh, activeCount.value || unavailable.value ? 4_000 : 15_000)
+  if (!isCurrentRefresh(generation, scheduledAccount) || document.visibilityState === 'hidden') return
+  timer = setTimeout(() => {
+    if (isCurrentRefresh(generation, scheduledAccount)) void refresh()
+  }, activeCount.value || unavailable.value ? 4_000 : 15_000)
 }
 
-async function responseJson<T>(path: string): Promise<T> {
-  const response = await fetch(path, { credentials: 'include' })
+async function responseJson<T>(path: string, signal: AbortSignal): Promise<T> {
+  const response = await fetch(path, { credentials: 'include', signal })
   if (!response.ok) throw new Error('background work unavailable')
   return await response.json() as T
 }
 
-async function refreshTeaching() {
-  const runPayload = await responseJson<unknown>('/api/v1/assistant-runs/active?mode=TEACHING')
-  if (!Array.isArray(runPayload)) throw new Error('background teaching status is invalid')
-  const runs = runPayload as ActiveTeachingRun[]
-  if (runs.some(run => !titles.has(run.subjectId))) {
-    const planPayload = await responseJson<unknown>('/api/v1/teaching-plans')
-    if (!Array.isArray(planPayload)) throw new Error('background teaching plans are invalid')
-    const plans = planPayload as TeachingPlanSummary[]
-    for (const plan of plans) titles.set(plan.id, playerFacingTitle(plan.gameTitle))
+interface TeachingRefreshSnapshot {
+  active: BackgroundTeachingItem[]
+  completed: BackgroundTeachingItem[]
+  states: Record<string, string>
+  resolvedTitles: Map<string, string>
+  degraded: boolean
+}
+
+interface DocumentRefreshSnapshot {
+  imports: RulebookImportJob[]
+  uploadedHandoffs: UploadedTeachingHandoff[]
+  documents: DocumentSummary[]
+  progress: Record<string, DocumentProgress>
+  preparationStates: Record<string, string>
+  preparationSubjects: Record<string, string>
+  degraded: boolean
+}
+
+async function loadTeachingSnapshot(
+  targetAccount: string,
+  signal: AbortSignal,
+): Promise<TeachingRefreshSnapshot> {
+  const runPayload = await responseJson<unknown>('/api/v1/assistant-runs/active?mode=TEACHING', signal)
+  const runs = parseActiveTeachingRuns(runPayload, targetAccount)
+  const resolvedTitles = new Map(titles)
+  if (runs.some(run => !resolvedTitles.has(run.subjectId))) {
+    const planPayload = await responseJson<unknown>('/api/v1/teaching-plans', signal)
+    for (const plan of parseTeachingPlans(planPayload)) {
+      resolvedTitles.set(plan.id, playerFacingTitle(plan.gameTitle))
+    }
   }
-  teachingStates.value = Object.fromEntries(runs.map(run => [run.id, run.state]))
+  const states = Object.fromEntries(runs.map(run => [run.id, run.state]))
   const active = runs.map(run => ({
-    runId: run.id, planId: run.subjectId,
-    gameTitle: titles.get(run.subjectId) ?? (locale.value === 'zh-CN' ? '一份讲解' : 'A lesson'),
+    runId: run.id,
+    planId: run.subjectId,
+    gameTitle: resolvedTitles.get(run.subjectId) ?? (locale.value === 'zh-CN' ? '一份讲解' : 'A lesson'),
   }))
-  const previous = parseBackgroundTeachingItems(sessionStorage.getItem(ACTIVE_TEACHING_KEY))
+  const previous = activeTeaching.value
   const activePlanIds = new Set(active.map(item => item.planId))
   const missing = previous.filter(item => !activePlanIds.has(item.planId))
+  let degraded = false
   const confirmations = await Promise.all(missing.map(async (item) => {
     try {
-      const details = await responseJson<TeachingRunDetails>(`/api/v1/assistant-runs/${encodeURIComponent(item.runId)}`)
-      return terminalTeachingStates.has(details.run.state) ? null : item
+      const details = await responseJson<unknown>(`/api/v1/assistant-runs/${encodeURIComponent(item.runId)}`, signal)
+      const run = parseExpectedAssistantRun(details, {
+        id: item.runId, mode: 'TEACHING', subjectId: item.planId, ownerUsername: targetAccount,
+      })
+      states[item.runId] = run.state
+      return terminalTeachingStates.has(run.state) ? null : item
     } catch {
+      if (signal.aborted) throw new DOMException('Aborted', 'AbortError')
+      degraded = true
+      const previousState = teachingStates.value[item.runId]
+      if (previousState) states[item.runId] = previousState
       return item
     }
   }))
   const retained = confirmations.filter((item): item is BackgroundTeachingItem => item !== null)
   const transition = reconcileBackgroundTeaching(previous, [...active, ...retained])
-  activeTeaching.value = transition.active
-  sessionStorage.setItem(ACTIVE_TEACHING_KEY, JSON.stringify(transition.active))
-  if (transition.finished.length) {
-    const notices = new Map(completedTeaching.value.map(item => [item.planId, item]))
-    for (const item of transition.finished) notices.set(item.planId, item)
-    completedTeaching.value = [...notices.values()]
-    sessionStorage.setItem(COMPLETED_TEACHING_KEY, JSON.stringify(completedTeaching.value))
+  const notices = new Map(completedTeaching.value.map(item => [item.planId, item]))
+  for (const item of transition.finished) notices.set(item.planId, item)
+  return {
+    active: transition.active,
+    completed: [...notices.values()],
+    states,
+    resolvedTitles,
+    degraded,
   }
 }
 
-async function refreshDocuments() {
+async function loadDocumentSnapshot(
+  targetAccount: string,
+  signal: AbortSignal,
+): Promise<DocumentRefreshSnapshot> {
   const [importPayload, uploadedHandoffPayload, documentPayload] = await Promise.all([
-    responseJson<unknown>('/api/v1/documents/official-imports'),
-    responseJson<unknown>('/api/v1/documents/upload-teaching-handoffs'),
-    responseJson<unknown>('/api/v1/documents'),
+    responseJson<unknown>('/api/v1/documents/official-imports', signal),
+    responseJson<unknown>('/api/v1/documents/upload-teaching-handoffs', signal),
+    responseJson<unknown>('/api/v1/documents', signal),
   ])
-  if (!Array.isArray(importPayload) || !Array.isArray(uploadedHandoffPayload) || !Array.isArray(documentPayload)) {
-    throw new Error('background rulebook status is invalid')
+  const recentImports = parseRulebookImports(importPayload)
+  const recentUploadedHandoffs = parseUploadedHandoffs(uploadedHandoffPayload)
+  const documentList = parseOwnedDocuments(documentPayload, targetAccount)
+  validateDocumentRelationships(recentImports, recentUploadedHandoffs, documentList)
+  const expectedPreparationSubjects = new Map<string, string>()
+  for (const [runId, versionId] of [
+    ...recentImports.map(job => [job.teachingPreparationRunId, job.documentVersionId] as const),
+    ...recentUploadedHandoffs.map(handoff => [handoff.preparationRunId, handoff.documentVersionId] as const),
+  ]) {
+    if (!runId || !versionId) continue
+    const existing = expectedPreparationSubjects.get(runId)
+    if (existing && existing !== versionId) throw new Error('background preparation relationship is invalid')
+    expectedPreparationSubjects.set(runId, versionId)
   }
-  const recentImports = importPayload as RulebookImportJob[]
-  const recentUploadedHandoffs = uploadedHandoffPayload as UploadedTeachingHandoff[]
-  const documentList = documentPayload as DocumentSummary[]
-  imports.value = recentImports
-  uploadedTeachingHandoffs.value = recentUploadedHandoffs
-  documents.value = documentList
-  const recentPreparationRunIds = new Set([
-    ...recentImports.map(job => job.teachingPreparationRunId),
-    ...recentUploadedHandoffs.map(handoff => handoff.preparationRunId),
-  ]
-    .filter((runId): runId is string => Boolean(runId)))
-  const preparationSnapshots = await Promise.all([...recentPreparationRunIds].flatMap(runId => {
-    if (!runId || terminalTeachingStates.has(preparationStates.value[runId] ?? '')) return []
-    return [responseJson<TeachingRunDetails>(`/api/v1/assistant-runs/${encodeURIComponent(runId)}`)
-      .then(details => [runId, details.run.state] as const)
-      .catch(() => preparationStates.value[runId]
-        ? [runId, preparationStates.value[runId]] as const
-        : null)]
-  }))
-  preparationStates.value = Object.fromEntries([
-    ...Object.entries(preparationStates.value).filter(([runId]) => recentPreparationRunIds.has(runId)),
-    ...preparationSnapshots.filter((entry): entry is readonly [string, string] => entry !== null),
-  ])
-  const active = documentList.filter(entry => !['READY', 'FAILED'].includes(entry.latestVersion.status))
-  const snapshots = await Promise.all(active.map(async (entry) => {
+  let degraded = false
+  const nextPreparationStates: Record<string, string> = {}
+  const nextPreparationSubjects: Record<string, string> = {}
+  await Promise.all([...expectedPreparationSubjects].map(async ([runId, versionId]) => {
+    const previousState = preparationSubjects.value[runId] === versionId
+      ? preparationStates.value[runId]
+      : undefined
+    if (previousState && terminalTeachingStates.has(previousState)) {
+      nextPreparationStates[runId] = previousState
+      nextPreparationSubjects[runId] = versionId
+      return
+    }
     try {
-      return [entry.latestVersion.id, await responseJson<DocumentProgress>(
-        `/api/v1/document-versions/${encodeURIComponent(entry.latestVersion.id)}/progress/snapshot`,
-      )] as const
+      const details = await responseJson<unknown>(`/api/v1/assistant-runs/${encodeURIComponent(runId)}`, signal)
+      const run = parseExpectedAssistantRun(details, {
+        id: runId, mode: 'TEACHING_PREPARATION', subjectId: versionId, ownerUsername: targetAccount,
+      })
+      nextPreparationStates[runId] = run.state
+      nextPreparationSubjects[runId] = run.subjectId
     } catch {
-      return null
+      if (signal.aborted) throw new DOMException('Aborted', 'AbortError')
+      degraded = true
+      if (previousState) {
+        nextPreparationStates[runId] = previousState
+        nextPreparationSubjects[runId] = versionId
+      }
     }
   }))
-  documentProgress.value = Object.fromEntries(snapshots.filter((entry): entry is readonly [string, DocumentProgress] => entry !== null))
+  const active = documentList.filter(entry => !['READY', 'FAILED'].includes(entry.latestVersion.status))
+  const activeVersionIds = new Set(active.map(entry => entry.latestVersion.id))
+  const nextProgress = Object.fromEntries(Object.entries(documentProgress.value)
+    .filter(([versionId]) => activeVersionIds.has(versionId)))
+  await Promise.all(active.map(async (entry) => {
+    try {
+      const payload = await responseJson<unknown>(
+        `/api/v1/document-versions/${encodeURIComponent(entry.latestVersion.id)}/progress/snapshot`,
+        signal,
+      )
+      const snapshot = parseDocumentProgress(payload)
+      nextProgress[entry.latestVersion.id] = mergeDocumentProgress(
+        nextProgress[entry.latestVersion.id],
+        snapshot,
+      )
+    } catch {
+      if (signal.aborted) throw new DOMException('Aborted', 'AbortError')
+      degraded = true
+    }
+  }))
+  return {
+    imports: recentImports,
+    uploadedHandoffs: recentUploadedHandoffs,
+    documents: documentList,
+    progress: nextProgress,
+    preparationStates: nextPreparationStates,
+    preparationSubjects: nextPreparationSubjects,
+    degraded,
+  }
 }
 
 async function refresh() {
-  if (disposed || !props.username || document.visibilityState === 'hidden') return
+  const targetAccount = account
+  if (disposed || !targetAccount || document.visibilityState === 'hidden') return
+  clearTimer()
+  activeRefreshController?.abort()
+  const controller = new AbortController()
+  activeRefreshController = controller
+  const generation = ++refreshGeneration
+  const keys = backgroundWorkStorageKeys(targetAccount)
   try {
-    await Promise.all([refreshTeaching(), refreshDocuments()])
-    unavailable.value = false
+    const [teaching, rulebooks] = await Promise.all([
+      loadTeachingSnapshot(targetAccount, controller.signal),
+      loadDocumentSnapshot(targetAccount, controller.signal),
+    ])
+    if (!isCurrentRefresh(generation, targetAccount, controller)) return
+    commitRefresh(teaching, rulebooks, keys)
+    unavailable.value = teaching.degraded || rulebooks.degraded
   } catch {
-    unavailable.value = true
+    if (isCurrentRefresh(generation, targetAccount, controller) && !controller.signal.aborted) {
+      unavailable.value = true
+      controller.abort()
+    }
   } finally {
-    loading.value = false
-    schedule()
+    if (isCurrentRefresh(generation, targetAccount, controller)) {
+      activeRefreshController = null
+      loading.value = false
+      schedule(generation, targetAccount)
+    }
   }
 }
 
+function commitRefresh(
+  teaching: TeachingRefreshSnapshot,
+  rulebooks: DocumentRefreshSnapshot,
+  keys: BackgroundWorkStorageKeys,
+) {
+  activeTeaching.value = teaching.active
+  completedTeaching.value = teaching.completed
+  teachingStates.value = teaching.states
+  titles.clear()
+  for (const [planId, title] of teaching.resolvedTitles) titles.set(planId, title)
+  imports.value = rulebooks.imports
+  uploadedTeachingHandoffs.value = rulebooks.uploadedHandoffs
+  documents.value = rulebooks.documents
+  documentProgress.value = rulebooks.progress
+  preparationStates.value = rulebooks.preparationStates
+  preparationSubjects.value = rulebooks.preparationSubjects
+  safelyStore(keys.activeTeaching, teaching.active)
+  safelyStore(keys.completedTeaching, teaching.completed)
+}
+
+function isCurrentRefresh(
+  generation: number,
+  targetAccount: string,
+  controller?: AbortController,
+) {
+  return !disposed
+    && generation === refreshGeneration
+    && targetAccount === account
+    && (!controller || activeRefreshController === controller)
+}
+
+function invalidateRefresh() {
+  refreshGeneration += 1
+  clearTimer()
+  activeRefreshController?.abort()
+  activeRefreshController = null
+}
+
 function dismissFinished() {
+  invalidateRefresh()
   completedTeaching.value = []
-  sessionStorage.removeItem(COMPLETED_TEACHING_KEY)
+  const keys = backgroundWorkStorageKeys(account)
+  sessionStorage.removeItem(keys.completedTeaching)
   const finishedImports = imports.value
     .filter(officialImportFinished)
     .map(job => job.id)
   dismissedImportIds.value = new Set([...dismissedImportIds.value, ...finishedImports])
-  sessionStorage.setItem(DISMISSED_IMPORTS_KEY, JSON.stringify([...dismissedImportIds.value]))
+  safelyStore(keys.dismissedImports, [...dismissedImportIds.value])
   const finishedUploadHandoffs = uploadedTeachingHandoffs.value
     .filter(uploadedTeachingHandoffFinished)
     .map(handoff => handoff.id)
@@ -485,26 +600,25 @@ function dismissFinished() {
     ...dismissedUploadedHandoffIds.value,
     ...finishedUploadHandoffs,
   ])
-  sessionStorage.setItem(
-    DISMISSED_UPLOAD_HANDOFFS_KEY,
-    JSON.stringify([...dismissedUploadedHandoffIds.value]),
-  )
+  safelyStore(keys.dismissedUploadHandoffs, [...dismissedUploadedHandoffIds.value])
+  schedule(refreshGeneration, account)
 }
 
 function handleVisibility() {
-  if (document.visibilityState === 'hidden') clearTimer()
+  if (document.visibilityState === 'hidden') invalidateRefresh()
   else void refresh()
 }
 
 function handleTeachingLaunched(event: Event) {
   const detail = teachingLaunchDetail(event)
-  if (!detail) return
+  if (!detail || !account) return
+  invalidateRefresh()
   const gameTitle = detail.gameTitle ?? titles.get(detail.planId) ?? (locale.value === 'zh-CN' ? '一份讲解' : 'A lesson')
   if (detail.gameTitle) titles.set(detail.planId, detail.gameTitle)
   const items = new Map(activeTeaching.value.map(item => [item.planId, item]))
   items.set(detail.planId, { runId: detail.runId, planId: detail.planId, gameTitle })
   activeTeaching.value = [...items.values()]
-  sessionStorage.setItem(ACTIVE_TEACHING_KEY, JSON.stringify(activeTeaching.value))
+  safelyStore(backgroundWorkStorageKeys(account).activeTeaching, activeTeaching.value)
   void refresh()
 }
 
@@ -518,32 +632,72 @@ defineExpose({ openCenter })
 watch([activeCount, finishedCount], ([active, finished]) => emit('status', active, finished), { immediate: true })
 
 onMounted(() => {
-  completedTeaching.value = parseBackgroundTeachingItems(sessionStorage.getItem(COMPLETED_TEACHING_KEY))
-  try {
-    const stored = JSON.parse(sessionStorage.getItem(DISMISSED_IMPORTS_KEY) ?? '[]')
-    dismissedImportIds.value = new Set(Array.isArray(stored) ? stored.filter(value => typeof value === 'string') : [])
-  } catch {
-    dismissedImportIds.value = new Set()
-  }
-  try {
-    const stored = JSON.parse(sessionStorage.getItem(DISMISSED_UPLOAD_HANDOFFS_KEY) ?? '[]')
-    dismissedUploadedHandoffIds.value = new Set(Array.isArray(stored)
-      ? stored.filter(value => typeof value === 'string')
-      : [])
-  } catch {
-    dismissedUploadedHandoffIds.value = new Set()
-  }
   document.addEventListener('visibilitychange', handleVisibility)
   window.addEventListener(TEACHING_LAUNCHED_EVENT, handleTeachingLaunched)
-  void refresh()
+  switchAccount(props.username)
 })
-watch(() => props.username, refresh)
+watch(() => props.username, switchAccount)
 onBeforeUnmount(() => {
   disposed = true
-  clearTimer()
+  invalidateRefresh()
   document.removeEventListener('visibilitychange', handleVisibility)
   window.removeEventListener(TEACHING_LAUNCHED_EVENT, handleTeachingLaunched)
 })
+
+function switchAccount(nextUsername: string) {
+  const nextAccount = nextUsername.trim()
+  if (nextAccount === account) return
+  invalidateRefresh()
+  account = nextAccount
+  open.value = false
+  unavailable.value = false
+  activeTeaching.value = []
+  completedTeaching.value = []
+  teachingStates.value = {}
+  imports.value = []
+  uploadedTeachingHandoffs.value = []
+  documents.value = []
+  documentProgress.value = {}
+  preparationStates.value = {}
+  preparationSubjects.value = {}
+  dismissedImportIds.value = new Set()
+  dismissedUploadedHandoffIds.value = new Set()
+  titles.clear()
+  clearLegacyBackgroundWorkStorage(sessionStorage)
+  if (!account) {
+    loading.value = false
+    return
+  }
+  const keys = backgroundWorkStorageKeys(account)
+  activeTeaching.value = parseBackgroundTeachingItems(sessionStorage.getItem(keys.activeTeaching))
+  completedTeaching.value = parseBackgroundTeachingItems(sessionStorage.getItem(keys.completedTeaching))
+  dismissedImportIds.value = readStoredIds(keys.dismissedImports)
+  dismissedUploadedHandoffIds.value = readStoredIds(keys.dismissedUploadHandoffs)
+  for (const item of [...activeTeaching.value, ...completedTeaching.value]) {
+    titles.set(item.planId, item.gameTitle)
+  }
+  loading.value = activeTeaching.value.length === 0 && completedTeaching.value.length === 0
+  void refresh()
+}
+
+function readStoredIds(key: string) {
+  try {
+    const stored = JSON.parse(sessionStorage.getItem(key) ?? '[]') as unknown
+    if (!Array.isArray(stored)) return new Set<string>()
+    return new Set(stored.slice(0, 100)
+      .filter((value): value is string => typeof value === 'string' && value.trim().length > 0 && value.length <= 128))
+  } catch {
+    return new Set<string>()
+  }
+}
+
+function safelyStore(key: string, value: unknown) {
+  try {
+    sessionStorage.setItem(key, JSON.stringify(value))
+  } catch {
+    // The server remains authoritative when tab storage is unavailable or full.
+  }
+}
 </script>
 
 <template>

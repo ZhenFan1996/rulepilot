@@ -3,8 +3,23 @@ import { createMemoryHistory, createRouter } from 'vue-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { SESSION_CLEARED_EVENT, notifyLoginRequired } from '@/lib/authSession'
+import { backgroundWorkStorageKeys } from '@/lib/backgroundTeachingStatus'
 import { notifyTeachingLaunched } from '@/lib/teachingLaunch'
 import AppShell from './AppShell.vue'
+
+const playerStorageKeys = backgroundWorkStorageKeys('player')
+
+function teachingRun(id: string, subjectId: string, state: string) {
+  return { id, mode: 'TEACHING', subjectId, ownerUsername: 'player', state }
+}
+
+function preparationRun(id: string, subjectId: string, state: string) {
+  return { id, mode: 'TEACHING_PREPARATION', subjectId, ownerUsername: 'player', state }
+}
+
+function ownedDocument(id: string, title: string) {
+  return { id, title, createdBy: 'player' }
+}
 
 describe('AppShell', () => {
   afterEach(() => {
@@ -25,10 +40,10 @@ describe('AppShell', () => {
       }
       if (path.includes('/api/v1/assistant-runs/active')) {
         activeReads += 1
-        return response(activeReads === 1 ? [{ id: 'run-1', subjectId: 'plan-1', state: 'LESSON_COMPOSITION' }] : [])
+        return response(activeReads === 1 ? [teachingRun('run-1', 'plan-1', 'LESSON_COMPOSITION')] : [])
       }
       if (path.includes('/api/v1/assistant-runs/run-1')) {
-        return response({ run: { id: 'run-1', state: 'COMPLETED' } })
+        return response({ run: teachingRun('run-1', 'plan-1', 'COMPLETED') })
       }
       if (path.includes('/api/v1/teaching-plans')) {
         return response([{ id: 'plan-1', gameTitle: '星际探索' }])
@@ -145,7 +160,7 @@ describe('AppShell', () => {
 
   it('does not announce completion from a transient empty active-run response', async () => {
     vi.useFakeTimers()
-    sessionStorage.setItem('rulepilot:active-teaching-runs', JSON.stringify([
+    sessionStorage.setItem(playerStorageKeys.activeTeaching, JSON.stringify([
       { runId: 'run-1', planId: 'plan-1', gameTitle: '星际探索' },
     ]))
     let exactReads = 0
@@ -157,7 +172,7 @@ describe('AppShell', () => {
         exactReads += 1
         return exactReads === 1
           ? new Response(null, { status: 503 })
-          : response({ run: { id: 'run-1', state: 'COMPLETED' } })
+          : response({ run: teachingRun('run-1', 'plan-1', 'COMPLETED') })
       }
       if (path.endsWith('/api/v1/documents/official-imports')
         || path.endsWith('/api/v1/documents/upload-teaching-handoffs')
@@ -187,7 +202,7 @@ describe('AppShell', () => {
       if (path.includes('/api/auth/session')) return response({ username: 'player' })
       if (path.includes('/api/v1/assistant-runs/active')) return response([])
       if (path.includes('/api/v1/assistant-runs/run-2')) {
-        return response({ run: { id: 'run-2', state: 'RECEIVED' } })
+        return response({ run: teachingRun('run-2', 'plan-2', 'RECEIVED') })
       }
       if (path.endsWith('/api/v1/documents/official-imports')
         || path.endsWith('/api/v1/documents/upload-teaching-handoffs')
@@ -206,7 +221,7 @@ describe('AppShell', () => {
 
     await wrapper.get('[data-testid="background-work-trigger-desktop"]').trigger('click')
     expect(wrapper.text()).toContain('卡坦岛')
-    expect(sessionStorage.getItem('rulepilot:active-teaching-runs')).toContain('run-2')
+    expect(sessionStorage.getItem(playerStorageKeys.activeTeaching)).toContain('run-2')
     wrapper.unmount()
   })
 
@@ -216,7 +231,7 @@ describe('AppShell', () => {
       const path = String(input)
       if (path.includes('/api/auth/session')) return response({ username: 'player' })
       if (path.includes('/api/v1/assistant-runs/preparation-run-1')) {
-        return response({ run: { id: 'preparation-run-1', state: 'LESSON_PLANNING' } })
+        return response({ run: preparationRun('preparation-run-1', 'version-launched', 'LESSON_PLANNING') })
       }
       if (path.includes('/api/v1/assistant-runs/active')) return response([])
       if (path.endsWith('/api/v1/documents/official-imports')) return response([{
@@ -234,10 +249,10 @@ describe('AppShell', () => {
       }])
       if (path.endsWith('/api/v1/documents/upload-teaching-handoffs')) return response([])
       if (path.endsWith('/api/v1/documents')) return response([{
-        document: { id: 'document-waiting', title: '卡坦岛规则书' },
+        document: ownedDocument('document-waiting', '卡坦岛规则书'),
         latestVersion: { id: 'version-waiting', status: 'READY' },
       }, {
-        document: { id: 'document-launched', title: '展翅翱翔规则书' },
+        document: ownedDocument('document-launched', '展翅翱翔规则书'),
         latestVersion: { id: 'version-launched', status: 'READY' },
       }])
       return new Response(null, { status: 404 })
@@ -272,7 +287,7 @@ describe('AppShell', () => {
         preparationRunId: null, errorCode: null, updatedAt: new Date().toISOString(),
       }])
       if (path.endsWith('/api/v1/documents')) return response([{
-        document: { id: 'document-1', title: 'rules_v4_final.pdf' },
+        document: ownedDocument('document-1', 'rules_v4_final.pdf'),
         latestVersion: { id: 'version-1', status: 'EXTRACTING' },
       }])
       if (path.includes('/document-versions/version-1/progress/snapshot')) return response({
@@ -305,7 +320,7 @@ describe('AppShell', () => {
       const path = String(input)
       if (path.includes('/api/auth/session')) return response({ username: 'player' })
       if (path.includes('/api/v1/assistant-runs/preparation-failed')) {
-        return response({ run: { id: 'preparation-failed', state: 'FAILED' } })
+        return response({ run: preparationRun('preparation-failed', 'version-import-failed', 'FAILED') })
       }
       if (path.includes('/api/v1/assistant-runs/active')) return response([])
       if (path.endsWith('/api/v1/documents/official-imports')) return response([{
@@ -317,7 +332,7 @@ describe('AppShell', () => {
       }])
       if (path.endsWith('/api/v1/documents/upload-teaching-handoffs')) return response([])
       if (path.endsWith('/api/v1/documents')) return response([{
-        document: { id: 'document-import-failed', title: 'official-rules.pdf' },
+        document: ownedDocument('document-import-failed', 'official-rules.pdf'),
         latestVersion: { id: 'version-import-failed', status: 'READY' },
       }])
       return new Response(null, { status: 404 })
@@ -336,7 +351,7 @@ describe('AppShell', () => {
 
     await wrapper.findAll('button').find(button => button.text() === '清除已结束任务')!.trigger('click')
     expect(wrapper.text()).not.toContain('失败的官方讲解')
-    expect(sessionStorage.getItem('rulepilot:dismissed-official-imports')).toContain('import-failed-preparation')
+    expect(sessionStorage.getItem(playerStorageKeys.dismissedImports)).toContain('import-failed-preparation')
 
     await vi.advanceTimersByTimeAsync(15_000)
     await flushPromises()
@@ -354,10 +369,11 @@ describe('AppShell', () => {
       if (path.includes('/api/v1/assistant-runs/preparation-active')) {
         activePreparationReads += 1
         return response({
-          run: {
-            id: 'preparation-active',
-            state: activePreparationReads === 1 ? 'LESSON_PLANNING' : 'FAILED',
-          },
+          run: preparationRun(
+            'preparation-active',
+            'version-active',
+            activePreparationReads === 1 ? 'LESSON_PLANNING' : 'FAILED',
+          ),
         })
       }
       if (path.includes('/api/v1/assistant-runs/active')) return response([])
@@ -376,7 +392,7 @@ describe('AppShell', () => {
       }])
       if (path.endsWith('/api/v1/documents/upload-teaching-handoffs')) return response([])
       if (path.endsWith('/api/v1/documents')) return response([{
-        document: { id: 'document-active', title: 'active-rules.pdf' },
+        document: ownedDocument('document-active', 'active-rules.pdf'),
         latestVersion: { id: 'version-active', status: 'READY' },
       }])
       return new Response(null, { status: 404 })
@@ -395,7 +411,7 @@ describe('AppShell', () => {
     await wrapper.findAll('button').find(button => button.text() === '清除已结束任务')!.trigger('click')
     expect(wrapper.text()).toContain('仍在准备的讲解')
     expect(wrapper.text()).not.toContain('下载失败的规则书')
-    expect(sessionStorage.getItem('rulepilot:dismissed-official-imports'))
+    expect(sessionStorage.getItem(playerStorageKeys.dismissedImports))
       .not.toContain('import-active-preparation')
 
     await vi.advanceTimersByTimeAsync(4000)
@@ -418,7 +434,7 @@ describe('AppShell', () => {
         preparationRunId: null, errorCode: 'DOCUMENT_PROCESSING_FAILED', updatedAt,
       }])
       if (path.endsWith('/api/v1/documents')) return response([{
-        document: { id: 'document-upload-failed', title: 'broken-rules.pdf' },
+        document: ownedDocument('document-upload-failed', 'broken-rules.pdf'),
         latestVersion: { id: 'version-upload-failed', status: 'FAILED' },
       }])
       return new Response(null, { status: 404 })
@@ -437,7 +453,7 @@ describe('AppShell', () => {
     expect(wrapper.text()).toContain('规则书读取失败')
     await wrapper.findAll('button').find(button => button.text() === '清除已结束任务')!.trigger('click')
     expect(wrapper.text()).not.toContain('失败的上传讲解')
-    expect(sessionStorage.getItem('rulepilot:dismissed-upload-teaching-handoffs'))
+    expect(sessionStorage.getItem(playerStorageKeys.dismissedUploadHandoffs))
       .toContain('upload-handoff-failed-document')
     wrapper.unmount()
 
@@ -487,7 +503,7 @@ describe('AppShell', () => {
       if (path.includes('/api/auth/session')) return response({ username: 'player' })
       if (path.includes('/api/v1/assistant-runs/active')) {
         activeReads += 1
-        return response(activeReads === 1 ? [] : [{ id: 'run-other-tab', subjectId: 'plan-other-tab' }])
+        return response(activeReads === 1 ? [] : [teachingRun('run-other-tab', 'plan-other-tab', 'RECEIVED')])
       }
       if (path.includes('/api/v1/teaching-plans')) {
         return response([{ id: 'plan-other-tab', gameTitle: '跨标签页规则书' }])
@@ -509,7 +525,7 @@ describe('AppShell', () => {
     expect(activeReads).toBe(2)
     await wrapper.get('[data-testid="background-work-trigger-desktop"]').trigger('click')
     expect(wrapper.text()).toContain('跨标签页规则书')
-    expect(sessionStorage.getItem('rulepilot:active-teaching-runs')).toContain('run-other-tab')
+    expect(sessionStorage.getItem(playerStorageKeys.activeTeaching)).toContain('run-other-tab')
     wrapper.unmount()
   })
 
@@ -549,11 +565,11 @@ describe('AppShell', () => {
   it('clears account-owned notices and the active route state after logout succeeds', async () => {
     const sessionCleared = vi.fn()
     window.addEventListener(SESSION_CLEARED_EVENT, sessionCleared)
-    sessionStorage.setItem('rulepilot:active-teaching-runs', JSON.stringify([
+    sessionStorage.setItem(playerStorageKeys.activeTeaching, JSON.stringify([
       { runId: 'run-1', planId: 'plan-1', gameTitle: 'Private lesson' },
     ]))
-    sessionStorage.setItem('rulepilot:dismissed-official-imports', JSON.stringify(['private-import']))
-    sessionStorage.setItem('rulepilot:dismissed-upload-teaching-handoffs', JSON.stringify(['private-handoff']))
+    sessionStorage.setItem(playerStorageKeys.dismissedImports, JSON.stringify(['private-import']))
+    sessionStorage.setItem(playerStorageKeys.dismissedUploadHandoffs, JSON.stringify(['private-handoff']))
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
       const path = String(input)
       if (path.includes('/api/auth/session')) return response({ username: 'player' })
@@ -583,9 +599,9 @@ describe('AppShell', () => {
     await flushPromises()
 
     expect(sessionCleared).toHaveBeenCalledOnce()
-    expect(sessionStorage.getItem('rulepilot:active-teaching-runs')).toBeNull()
-    expect(sessionStorage.getItem('rulepilot:dismissed-official-imports')).toBeNull()
-    expect(sessionStorage.getItem('rulepilot:dismissed-upload-teaching-handoffs')).toBeNull()
+    expect(sessionStorage.getItem(playerStorageKeys.activeTeaching)).toBeNull()
+    expect(sessionStorage.getItem(playerStorageKeys.dismissedImports)).toBeNull()
+    expect(sessionStorage.getItem(playerStorageKeys.dismissedUploadHandoffs)).toBeNull()
     expect(wrapper.text()).not.toContain('player')
     window.removeEventListener(SESSION_CLEARED_EVENT, sessionCleared)
     wrapper.unmount()

@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  backgroundWorkStorageKeys,
+  clearBackgroundWorkStorage,
   parseBackgroundTeachingItems,
   reconcileBackgroundTeaching,
   type BackgroundTeachingItem,
@@ -29,5 +31,20 @@ describe('background teaching status', () => {
     expect(parseBackgroundTeachingItems(JSON.stringify([{ ...first, gameTitle: 'x'.repeat(161) }]))).toEqual([])
     expect(parseBackgroundTeachingItems(JSON.stringify(Array.from({ length: 25 }, () => first)))).toHaveLength(20)
     expect(parseBackgroundTeachingItems(JSON.stringify([first]))).toEqual([first])
+  })
+
+  it('isolates persisted background work by normalized account and clears only that account', () => {
+    const player = backgroundWorkStorageKeys(' player@example.com ')
+    const other = backgroundWorkStorageKeys('other@example.com')
+    expect(player.activeTeaching).toBe('rulepilot:active-teaching-runs:player%40example.com')
+    sessionStorage.setItem(player.activeTeaching, 'player')
+    sessionStorage.setItem(other.activeTeaching, 'other')
+    sessionStorage.setItem('rulepilot:active-teaching-runs', 'legacy')
+
+    clearBackgroundWorkStorage(sessionStorage, 'player@example.com')
+
+    expect(sessionStorage.getItem(player.activeTeaching)).toBeNull()
+    expect(sessionStorage.getItem(other.activeTeaching)).toBe('other')
+    expect(sessionStorage.getItem('rulepilot:active-teaching-runs')).toBeNull()
   })
 })

@@ -9,6 +9,31 @@ export interface BackgroundTeachingTransition {
   finished: BackgroundTeachingItem[]
 }
 
+const STORAGE_KEY_PREFIXES = {
+  activeTeaching: 'rulepilot:active-teaching-runs',
+  completedTeaching: 'rulepilot:completed-teaching-runs',
+  dismissedImports: 'rulepilot:dismissed-official-imports',
+  dismissedUploadHandoffs: 'rulepilot:dismissed-upload-teaching-handoffs',
+} as const
+
+export type BackgroundWorkStorageKeys = Record<keyof typeof STORAGE_KEY_PREFIXES, string>
+
+export function backgroundWorkStorageKeys(username: string): BackgroundWorkStorageKeys {
+  const account = username.trim()
+  const suffix = encodeURIComponent(account)
+  return Object.fromEntries(Object.entries(STORAGE_KEY_PREFIXES)
+    .map(([name, prefix]) => [name, `${prefix}:${suffix}`])) as BackgroundWorkStorageKeys
+}
+
+export function clearBackgroundWorkStorage(storage: Storage, username: string) {
+  for (const key of Object.values(backgroundWorkStorageKeys(username))) storage.removeItem(key)
+  clearLegacyBackgroundWorkStorage(storage)
+}
+
+export function clearLegacyBackgroundWorkStorage(storage: Storage) {
+  for (const key of Object.values(STORAGE_KEY_PREFIXES)) storage.removeItem(key)
+}
+
 export function reconcileBackgroundTeaching(
   previous: BackgroundTeachingItem[],
   active: BackgroundTeachingItem[],

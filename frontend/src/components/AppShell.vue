@@ -7,6 +7,7 @@ import TabletopGlyph from '@/components/TabletopGlyph.vue'
 import LanguageSwitcher from '@/components/LanguageSwitcher.vue'
 import BackgroundWorkCenter from '@/components/BackgroundWorkCenter.vue'
 import { LOGIN_REQUIRED_EVENT, notifySessionCleared } from '@/lib/authSession'
+import { clearBackgroundWorkStorage } from '@/lib/backgroundTeachingStatus'
 import { useLocale } from '@/lib/locale'
 
 withDefaults(defineProps<{ immersive?: boolean }>(), { immersive: false })
@@ -114,6 +115,7 @@ function openBackgroundWork(event: MouseEvent) {
 }
 
 async function logout() {
+  const signedOutUsername = username.value
   const csrfResponse = await fetch('/api/auth/csrf', { credentials: 'include' })
   if (!csrfResponse.ok) return
   const csrf = (await csrfResponse.json()) as { headerName: string; token: string }
@@ -122,10 +124,7 @@ async function logout() {
   username.value = ''
   roles.value = []
   emit('sessionIdentity', '')
-  sessionStorage.removeItem('rulepilot:active-teaching-runs')
-  sessionStorage.removeItem('rulepilot:completed-teaching-runs')
-  sessionStorage.removeItem('rulepilot:dismissed-official-imports')
-  sessionStorage.removeItem('rulepilot:dismissed-upload-teaching-handoffs')
+  clearBackgroundWorkStorage(sessionStorage, signedOutUsername)
   notifySessionCleared()
 }
 
