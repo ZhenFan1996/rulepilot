@@ -6,7 +6,6 @@ import com.rulepilot.assistant.AgentExecutionStoppedException;
 import com.rulepilot.assistant.AuditedAgentInvocations;
 import com.rulepilot.assistant.GeneratedContentCritic;
 import com.rulepilot.assistant.GeneratedContentCritic.ReviewRisk;
-import com.rulepilot.teaching.TeachingLessonModel;
 import com.rulepilot.teaching.TeachingLessonModel.SectionDraft;
 import com.rulepilot.teaching.domain.IllustratedLesson.EvidenceStatus;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonSection;
@@ -26,19 +25,16 @@ final class TeachingPublishedLessonReviewer {
     private static final Logger log = LoggerFactory.getLogger(TeachingPublishedLessonReviewer.class);
     private static final int MAX_POST_PUBLICATION_REVIEW_PASSES = 4;
 
-    private final TeachingLessonModel model;
     private final GeneratedContentCritic critic;
     private final AuditedAgentInvocations invocations;
     private final TeachingSectionDraftComposer sectionDraftComposer;
     private final TeachingReviewCorrectionPolicy reviewCorrectionPolicy;
 
     TeachingPublishedLessonReviewer(
-            TeachingLessonModel model,
             GeneratedContentCritic critic,
             AuditedAgentInvocations invocations,
             TeachingSectionDraftComposer sectionDraftComposer,
             TeachingReviewCorrectionPolicy reviewCorrectionPolicy) {
-        this.model = model;
         this.critic = critic;
         this.invocations = invocations;
         this.sectionDraftComposer = sectionDraftComposer;
@@ -198,16 +194,15 @@ final class TeachingPublishedLessonReviewer {
             CorrectionBudget correctionBudget,
             UUID assistantRunId) {
         List<String> feedback = reviewCorrectionPolicy.correctionFeedback(issues);
-        SectionDraft corrected = invocations.invoke(
+        SectionDraft corrected = sectionDraftComposer.reviseModelDraft(
                 assistantRunId,
-                ActivityType.MODEL,
-                operationName("correctTeachingSection", candidate.planned().position()),
-                estimateTokens(candidate.modelRequest().toString())
-                        + estimateTokens(candidate.draft().toString())
-                        + estimateTokens(feedback.toString()),
-                "Published teaching section corrected from whole-lesson review",
-                () -> model.revise(candidate.modelRequest(), candidate.draft(), feedback),
-                result -> estimateTokens(result.toString()));
+                candidate.planned(),
+                candidate.modelRequest(),
+                candidate.draft(),
+                feedback,
+                "correctTeachingSection",
+                "repairTeachingSectionCorrectionContract",
+                "Published teaching section corrected from whole-lesson review");
         corrected = sectionDraftComposer.normalizeDraft(corrected, candidate.modelRequest(), candidate.evidence());
         EvidenceStatus correctionStatus = EvidenceStatus.CITED_DRAFT;
         LessonSection correctedSection;
@@ -229,16 +224,15 @@ final class TeachingPublishedLessonReviewer {
             SectionDraft invalidDraft = corrected;
             List<String> structuralRepair = reviewCorrectionPolicy.structuralRepairFeedback(
                     feedback, TeachingDraftRejectionCategory.from(invalidCorrection));
-            corrected = invocations.invoke(
+            corrected = sectionDraftComposer.reviseModelDraft(
                     assistantRunId,
-                    ActivityType.MODEL,
-                    operationName("repairCorrectedTeachingSection", candidate.planned().position()),
-                    estimateTokens(candidate.modelRequest().toString())
-                            + estimateTokens(invalidDraft.toString())
-                            + estimateTokens(structuralRepair.toString()),
-                    "Published teaching correction repaired to the section contract",
-                    () -> model.revise(candidate.modelRequest(), invalidDraft, structuralRepair),
-                    result -> estimateTokens(result.toString()));
+                    candidate.planned(),
+                    candidate.modelRequest(),
+                    invalidDraft,
+                    structuralRepair,
+                    "repairCorrectedTeachingSection",
+                    "repairCorrectedTeachingSectionContract",
+                    "Published teaching correction repaired to the section contract");
             corrected = sectionDraftComposer.normalizeDraft(corrected, candidate.modelRequest(), candidate.evidence());
             validateFlaggedClaimsChanged(candidate.draft(), corrected, issues, firstClaimPosition);
             correctionStatus = EvidenceStatus.CITED_DRAFT;
@@ -314,15 +308,7 @@ final class TeachingPublishedLessonReviewer {
                 "Teaching section " + (outcome == ActivityOutcome.SUCCEEDED ? "published: " : "withheld: ") + category);
     }
 
-    private int estimateTokens(String value) {
-        return value == null ? 0 : Math.max(1, (value.length() + 3) / 4);
-    }
-
-    private String operationName(String operation, int sectionPosition) {
-        return operation + "|" + sectionPosition;
-    }
-
-    /** Counts every correction model invocation, including repair attempts, across all review passes. */
+    /** Counts semantic correction attempts; every provider request also consumes the shared audited model budget. */
     private static final class CorrectionBudget {
 
         private int factualCorrectionsStarted;

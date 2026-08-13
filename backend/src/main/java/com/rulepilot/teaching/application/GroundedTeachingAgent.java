@@ -81,7 +81,6 @@ public class GroundedTeachingAgent {
         this.sectionDraftComposer = new TeachingSectionDraftComposer(
                 model, evidenceVerifier, invocations, visualFacts);
         this.publishedLessonReviewer = new TeachingPublishedLessonReviewer(
-                model,
                 critic,
                 invocations,
                 sectionDraftComposer,

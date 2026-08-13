@@ -7,6 +7,7 @@ import com.rulepilot.assistant.AgentExecutionStoppedException;
 import com.rulepilot.assistant.AuditedAgentInvocations;
 import com.rulepilot.assistant.EvidenceVerifier;
 import com.rulepilot.teaching.TeachingLessonModel;
+import com.rulepilot.teaching.TeachingLessonModel.InvalidOutputException;
 import com.rulepilot.teaching.TeachingLessonModel.PriorSectionContext;
 import com.rulepilot.teaching.TeachingLessonModel.SectionDraft;
 import com.rulepilot.teaching.VisualRulebookPageFacts;
@@ -71,14 +72,7 @@ final class TeachingSectionDraftComposer {
         }
         SectionDraft draft;
         try {
-            draft = invocations.invoke(
-                    assistantRunId,
-                    ActivityType.MODEL,
-                    operationName("composeTeachingSection", planned.position()),
-                    estimateTokens(modelRequest.toString()),
-                    "Teaching section model output received",
-                    () -> model.compose(modelRequest),
-                    result -> estimateTokens(result.toString()));
+            draft = composeModelDraft(assistantRunId, planned, modelRequest);
         } catch (AgentExecutionStoppedException stopped) {
             throw stopped;
         } catch (RuntimeException visualCompositionFailure) {
@@ -144,15 +138,15 @@ final class TeachingSectionDraftComposer {
                         feedback.getFirst());
                 SectionDraft draftToRevise = draft;
                 try {
-                    draft = invocations.invoke(
+                    draft = reviseModelDraft(
                             assistantRunId,
-                            ActivityType.MODEL,
-                            operationName("reviseTeachingSection", planned.position()),
-                            estimateTokens(modelRequest.toString()) + estimateTokens(draftToRevise.toString())
-                                    + estimateTokens(feedback.toString()),
-                            "Teaching section revised from validation feedback",
-                            () -> model.revise(modelRequest, draftToRevise, feedback),
-                            result -> estimateTokens(result.toString()));
+                            planned,
+                            modelRequest,
+                            draftToRevise,
+                            feedback,
+                            "reviseTeachingSection",
+                            "repairTeachingSectionRevisionContract",
+                            "Teaching section revised from validation feedback");
                 } catch (AgentExecutionStoppedException stopped) {
                     throw stopped;
                 } catch (RuntimeException visualRepairFailure) {
@@ -181,14 +175,13 @@ final class TeachingSectionDraftComposer {
             int sectionIndex,
             int validationAttempt) {
         TeachingLessonModel.SectionRequest textOnlyRequest = draftRecoveryPolicy.withoutPageImages(visualRequest);
-        SectionDraft textOnlyDraft = invocations.invoke(
+        SectionDraft textOnlyDraft = composeModelDraft(
                 assistantRunId,
-                ActivityType.MODEL,
-                operationName("fallbackToTextTeachingSection", planned.position()),
-                estimateTokens(textOnlyRequest.toString()),
-                "Visual teaching section recomposed as complete grounded text",
-                () -> model.compose(textOnlyRequest),
-                result -> estimateTokens(result.toString()));
+                planned,
+                textOnlyRequest,
+                "fallbackToTextTeachingSection",
+                "repairTextTeachingSectionContract",
+                "Visual teaching section recomposed as complete grounded text");
         textOnlyDraft = normalizeDraft(textOnlyDraft, textOnlyRequest, evidence);
         for (int repair = 0; ; repair++) {
             try {
@@ -215,17 +208,101 @@ final class TeachingSectionDraftComposer {
                                 ? "The previous fallback failed lesson validation."
                                 : rejectedFallback.getMessage());
                 SectionDraft draftToRevise = textOnlyDraft;
-                textOnlyDraft = invocations.invoke(
+                textOnlyDraft = reviseModelDraft(
                         assistantRunId,
-                        ActivityType.MODEL,
-                        operationName("reviseTextTeachingSection", planned.position()),
-                        estimateTokens(textOnlyRequest.toString()) + estimateTokens(draftToRevise.toString())
-                                + estimateTokens(repairFeedback.toString()),
-                        "Text fallback revised from validation feedback",
-                        () -> model.revise(textOnlyRequest, draftToRevise, repairFeedback),
-                        result -> estimateTokens(result.toString()));
+                        planned,
+                        textOnlyRequest,
+                        draftToRevise,
+                        repairFeedback,
+                        "reviseTextTeachingSection",
+                        "repairTextTeachingSectionRevisionContract",
+                        "Text fallback revised from validation feedback");
                 textOnlyDraft = normalizeDraft(textOnlyDraft, textOnlyRequest, evidence);
                 textOnlyDraft = draftRecoveryPolicy.preserveTextOnlyPresentationMetadata(draftToRevise, textOnlyDraft);
+            }
+        }
+    }
+
+    private SectionDraft composeModelDraft(
+            UUID runId,
+            TeachingPlan.PlannedSection planned,
+            TeachingLessonModel.SectionRequest request) {
+        return composeModelDraft(
+                runId,
+                planned,
+                request,
+                "composeTeachingSection",
+                "repairTeachingSectionContract",
+                "Teaching section model output received");
+    }
+
+    private SectionDraft composeModelDraft(
+            UUID runId,
+            TeachingPlan.PlannedSection planned,
+            TeachingLessonModel.SectionRequest request,
+            String primaryOperation,
+            String repairOperation,
+            String successSummary) {
+        try {
+            return invocations.invoke(
+                    runId,
+                    ActivityType.MODEL,
+                    operationName(primaryOperation, planned.position()),
+                    estimateTokens(request.toString()),
+                    successSummary,
+                    () -> model.compose(request),
+                    result -> estimateTokens(result.toString()));
+        } catch (InvalidOutputException firstFailure) {
+            try {
+                return invocations.invoke(
+                        runId,
+                        ActivityType.MODEL,
+                        operationName(repairOperation, planned.position()),
+                        estimateTokens(request.toString()),
+                        "Teaching section structured output repaired",
+                        () -> model.repairCompositionContract(request),
+                        result -> estimateTokens(result.toString()));
+            } catch (RuntimeException repairFailure) {
+                repairFailure.addSuppressed(firstFailure);
+                throw repairFailure;
+            }
+        }
+    }
+
+    SectionDraft reviseModelDraft(
+            UUID runId,
+            TeachingPlan.PlannedSection planned,
+            TeachingLessonModel.SectionRequest request,
+            SectionDraft previousDraft,
+            List<String> feedback,
+            String primaryOperation,
+            String repairOperation,
+            String successSummary) {
+        int estimatedInputTokens = estimateTokens(request.toString())
+                + estimateTokens(previousDraft.toString())
+                + estimateTokens(feedback.toString());
+        try {
+            return invocations.invoke(
+                    runId,
+                    ActivityType.MODEL,
+                    operationName(primaryOperation, planned.position()),
+                    estimatedInputTokens,
+                    successSummary,
+                    () -> model.revise(request, previousDraft, feedback),
+                    result -> estimateTokens(result.toString()));
+        } catch (InvalidOutputException firstFailure) {
+            try {
+                return invocations.invoke(
+                        runId,
+                        ActivityType.MODEL,
+                        operationName(repairOperation, planned.position()),
+                        estimatedInputTokens,
+                        "Teaching section revision structured output repaired",
+                        () -> model.repairRevisionContract(request, previousDraft, feedback),
+                        result -> estimateTokens(result.toString()));
+            } catch (RuntimeException repairFailure) {
+                repairFailure.addSuppressed(firstFailure);
+                throw repairFailure;
             }
         }
     }

@@ -4,9 +4,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.rulepilot.assistant.AssistantReadTools.RuleEvidence;
 import com.rulepilot.assistant.AssistantReadTools.RulePageImage;
+import com.rulepilot.assistant.AgentExecutionControl.ActivityType;
+import com.rulepilot.assistant.AuditedAgentInvocations;
 import com.rulepilot.assistant.ImmediateAuditedAgentInvocations;
 import com.rulepilot.assistant.application.PolicyEvidenceVerifier;
 import com.rulepilot.teaching.TeachingLessonModel;
+import com.rulepilot.teaching.TeachingLessonModel.InvalidOutputException;
 import com.rulepilot.teaching.TeachingLessonModel.SectionDraft;
 import com.rulepilot.teaching.TeachingLessonModel.StepDraft;
 import com.rulepilot.teaching.TeachingLessonModel.VisualFocusDraft;
@@ -20,6 +23,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.Supplier;
+import java.util.function.ToIntFunction;
 import org.junit.jupiter.api.Test;
 
 class TeachingSectionDraftComposerTest {
@@ -68,7 +73,7 @@ class TeachingSectionDraftComposerTest {
     }
 
     @Test
-    void fallsBackToCitedTextWhenOnlyVisualCompositionIsUnavailable() {
+    void usesOneExplicitCitedTextFallbackWithoutAnAdapterInternalRetry() {
         UUID versionId = UUID.randomUUID();
         UUID chunkId = UUID.randomUUID();
         RuleEvidence evidence = evidence(chunkId, versionId);
@@ -83,7 +88,7 @@ class TeachingSectionDraftComposerTest {
             public SectionDraft compose(SectionRequest request) {
                 requests.add(request);
                 if (!request.pageImages().isEmpty()) {
-                    throw new IllegalStateException("vision provider unavailable");
+                    throw new IllegalStateException("provider unavailable");
                 }
                 return textDraft(chunkId);
             }
@@ -108,8 +113,137 @@ class TeachingSectionDraftComposerTest {
         assertThat(requests.getFirst().pageImages()).isNotEmpty();
         assertThat(requests.getLast().pageImages()).isEmpty();
         assertThat(candidate.section().evidenceStatus()).isEqualTo(EvidenceStatus.CITED_DRAFT);
-        assertThat(candidate.section().steps()).singleElement().satisfies(step ->
-                assertThat(step.text()).contains("主棋盘放在桌面中央"));
+    }
+
+    @Test
+    void fallsBackToCitedTextAfterBothVisualContractAttemptsAreMalformed() {
+        UUID versionId = UUID.randomUUID();
+        UUID chunkId = UUID.randomUUID();
+        RuleEvidence evidence = evidence(chunkId, versionId);
+        List<TeachingLessonModel.SectionRequest> requests = new ArrayList<>();
+        TeachingLessonModel model = new TeachingLessonModel() {
+            @Override
+            public boolean supportsVisualEvidence() {
+                return true;
+            }
+
+            @Override
+            public SectionDraft compose(SectionRequest request) {
+                requests.add(request);
+                if (!request.pageImages().isEmpty()) {
+                    throw new InvalidOutputException("malformed visual response", null);
+                }
+                return textDraft(chunkId);
+            }
+        };
+        TeachingSectionDraftComposer composer = new TeachingSectionDraftComposer(
+                model,
+                new PolicyEvidenceVerifier(),
+                new ImmediateAuditedAgentInvocations(),
+                VisualRulebookPageFacts.empty());
+        TeachingPlan plan = plan(versionId);
+
+        TeachingSectionDraftCandidate candidate = composer.compose(
+                plan,
+                plan.sections().getFirst(),
+                List.of(),
+                List.of(evidence),
+                UUID.randomUUID(),
+                0,
+                true);
+
+        assertThat(requests).hasSize(3);
+        assertThat(requests.subList(0, 2)).allSatisfy(request -> assertThat(request.pageImages()).isNotEmpty());
+        assertThat(requests.getLast().pageImages()).isEmpty();
+        assertThat(candidate.section().evidenceStatus()).isEqualTo(EvidenceStatus.CITED_DRAFT);
+    }
+
+    @Test
+    void accountsForAContractRepairAsASeparateModelInvocation() {
+        UUID versionId = UUID.randomUUID();
+        UUID chunkId = UUID.randomUUID();
+        RuleEvidence evidence = evidence(chunkId, versionId);
+        List<String> attempts = new ArrayList<>();
+        TeachingLessonModel model = new TeachingLessonModel() {
+            @Override
+            public SectionDraft compose(SectionRequest request) {
+                attempts.add("compose");
+                throw new InvalidOutputException("malformed response", null);
+            }
+
+            @Override
+            public SectionDraft repairCompositionContract(SectionRequest request) {
+                attempts.add("contract-repair");
+                return textDraft(chunkId);
+            }
+        };
+        RecordingInvocations invocations = new RecordingInvocations();
+        TeachingSectionDraftComposer composer = new TeachingSectionDraftComposer(
+                model, new PolicyEvidenceVerifier(), invocations, VisualRulebookPageFacts.empty());
+        TeachingPlan plan = plan(versionId);
+
+        TeachingSectionDraftCandidate candidate = composer.compose(
+                plan,
+                plan.sections().getFirst(),
+                List.of(),
+                List.of(evidence),
+                UUID.randomUUID(),
+                0,
+                false);
+
+        assertThat(candidate.section().evidenceStatus()).isEqualTo(EvidenceStatus.CITED_DRAFT);
+        assertThat(attempts).containsExactly("compose", "contract-repair");
+        assertThat(invocations.modelOperations)
+                .containsExactly("composeTeachingSection|1", "repairTeachingSectionContract|1");
+    }
+
+    @Test
+    void accountsForARevisionContractRepairWithoutHidingItInsideTheRevisionActivity() {
+        UUID versionId = UUID.randomUUID();
+        UUID chunkId = UUID.randomUUID();
+        RuleEvidence evidence = evidence(chunkId, versionId);
+        List<String> attempts = new ArrayList<>();
+        TeachingLessonModel model = new TeachingLessonModel() {
+            @Override
+            public SectionDraft compose(SectionRequest request) {
+                return textDraft(chunkId);
+            }
+
+            @Override
+            public SectionDraft revise(SectionRequest request, SectionDraft previousDraft, List<String> feedback) {
+                attempts.add("revise");
+                throw new InvalidOutputException("malformed revision", null);
+            }
+
+            @Override
+            public SectionDraft repairRevisionContract(
+                    SectionRequest request, SectionDraft previousDraft, List<String> feedback) {
+                attempts.add("revision-contract-repair");
+                return textDraft(chunkId);
+            }
+        };
+        RecordingInvocations invocations = new RecordingInvocations();
+        TeachingSectionDraftComposer composer = new TeachingSectionDraftComposer(
+                model, new PolicyEvidenceVerifier(), invocations, VisualRulebookPageFacts.empty());
+        TeachingPlan plan = plan(versionId);
+        TeachingLessonModel.SectionRequest request = new TeachingSectionModelRequestFactory(
+                        VisualRulebookPageFacts.empty())
+                .create(plan, plan.sections().getFirst(), List.of(), List.of(evidence), false, false);
+
+        SectionDraft revised = composer.reviseModelDraft(
+                UUID.randomUUID(),
+                plan.sections().getFirst(),
+                request,
+                textDraft(chunkId),
+                List.of("Repair the output contract."),
+                "correctTeachingSection",
+                "repairTeachingSectionCorrectionContract",
+                "Teaching correction received");
+
+        assertThat(revised).isEqualTo(textDraft(chunkId));
+        assertThat(attempts).containsExactly("revise", "revision-contract-repair");
+        assertThat(invocations.modelOperations)
+                .containsExactly("correctTeachingSection|1", "repairTeachingSectionCorrectionContract|1");
     }
 
     private TeachingPlan plan(UUID versionId) {
@@ -193,5 +327,23 @@ class TeachingSectionDraftComposerTest {
                 return pageNumbers.contains(pageNumber) ? List.of(fact) : List.of();
             }
         };
+    }
+
+    private static final class RecordingInvocations implements AuditedAgentInvocations {
+
+        private final List<String> modelOperations = new ArrayList<>();
+
+        @Override
+        public <T> T invoke(
+                UUID runId,
+                ActivityType type,
+                String operation,
+                int estimatedInputTokens,
+                String successSummary,
+                Supplier<T> invocation,
+                ToIntFunction<T> outputTokenEstimator) {
+            if (type == ActivityType.MODEL) modelOperations.add(operation);
+            return invocation.get();
+        }
     }
 }

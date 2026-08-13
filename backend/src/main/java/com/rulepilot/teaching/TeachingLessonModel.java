@@ -31,8 +31,31 @@ public interface TeachingLessonModel {
 
     SectionDraft compose(SectionRequest request);
 
+    /**
+     * Performs one explicit provider attempt to repair a malformed composition response.
+     *
+     * <p>The application calls this separately so the repair consumes its own model budget and audit activity.</p>
+     */
+    default SectionDraft repairCompositionContract(SectionRequest request) {
+        return compose(request);
+    }
+
     default SectionDraft revise(SectionRequest request, SectionDraft previousDraft, List<String> feedback) {
         return compose(request);
+    }
+
+    /** Performs one explicit provider attempt to repair a malformed revision response. */
+    default SectionDraft repairRevisionContract(
+            SectionRequest request, SectionDraft previousDraft, List<String> feedback) {
+        return revise(request, previousDraft, feedback);
+    }
+
+    /** Identifies an untrusted provider response that could not satisfy the section output contract. */
+    final class InvalidOutputException extends RuntimeException {
+
+        public InvalidOutputException(String message, Throwable cause) {
+            super(message, cause);
+        }
     }
 
     record SectionRequest(

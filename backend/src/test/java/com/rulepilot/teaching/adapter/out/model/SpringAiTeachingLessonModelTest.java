@@ -11,6 +11,7 @@ import com.rulepilot.modelconfig.RuntimeModelConfiguration;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration.Role;
 import com.rulepilot.modelconfig.VersionedAgentPrompts;
 import com.rulepilot.teaching.TeachingLessonModel.EvidenceInput;
+import com.rulepilot.teaching.TeachingLessonModel.InvalidOutputException;
 import com.rulepilot.teaching.TeachingLessonModel.PageImageInput;
 import com.rulepilot.teaching.TeachingLessonModel.SectionRequest;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -18,6 +19,7 @@ import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.mockito.Mockito;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
@@ -142,6 +144,76 @@ class SpringAiTeachingLessonModelTest {
         assertThat(properties.path("title").path("minLength").asInt()).isEqualTo(1);
         assertThat(properties.path("visualCaption").path("minLength").asInt()).isEqualTo(1);
         assertThat(properties.path("visualCitationIds").path("minItems").asInt()).isEqualTo(1);
+    }
+
+    @Test
+    void leavesContractRepairAsAnExplicitSecondProviderAttempt() {
+        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        VersionedAgentPrompts prompts = mock(VersionedAgentPrompts.class);
+        ChatModel chatModel = mock(ChatModel.class);
+        when(configuration.usesFake(Role.TEACHING)).thenReturn(false);
+        when(configuration.providerFor(Role.TEACHING)).thenReturn("qwen");
+        when(configuration.modelNameFor(Role.TEACHING, null)).thenReturn("qwen3.7-plus");
+        when(configuration.modelFor(Role.TEACHING, null)).thenReturn(chatModel);
+        OpenAiChatOptions defaults = OpenAiChatOptions.builder()
+                .apiKey("test-key")
+                .baseUrl("https://provider.example/v1")
+                .model("qwen3.7-plus")
+                .build();
+        when(chatModel.getDefaultOptions()).thenReturn(defaults);
+        when(chatModel.getOptions()).thenReturn(defaults);
+        when(prompts.teachingRuntimeSystem()).thenReturn("Teach only from evidence.");
+        when(prompts.teachingUser()).thenReturn("{section}\n{objective}\n{evidence}\n{repair}");
+        when(prompts.structuredOutputRepair()).thenReturn("Return one schema-valid object only.");
+        when(chatModel.call(any(Prompt.class)))
+                .thenReturn(response("not-json"))
+                .thenReturn(response("""
+                        {"title":"Setup","visualKind":"REFERENCE_CARD","visualCaption":"Source",
+                         "visualCitationIds":["E1"],"steps":[{"heading":"Do this","kind":"DO",
+                         "text":"Place the board.","citationIds":["E1"]}]}
+                        """));
+        SpringAiTeachingLessonModel model = new SpringAiTeachingLessonModel(
+                configuration, new FakeTeachingLessonModel(), prompts);
+        SectionRequest request = request(List.of());
+
+        assertThatThrownBy(() -> model.compose(request)).isInstanceOf(InvalidOutputException.class);
+        assertThat(model.repairCompositionContract(request).steps()).hasSize(1);
+
+        ArgumentCaptor<Prompt> promptsSent = ArgumentCaptor.forClass(Prompt.class);
+        verify(chatModel, Mockito.times(2)).call(promptsSent.capture());
+        assertThat(promptsSent.getAllValues().getFirst().getContents()).doesNotContain("schema-valid object only");
+        assertThat(promptsSent.getAllValues().getLast().getContents()).contains("schema-valid object only");
+    }
+
+    @Test
+    void doesNotRetryAnInfrastructureFailureInsideTheModelAdapter() {
+        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        VersionedAgentPrompts prompts = mock(VersionedAgentPrompts.class);
+        ChatModel chatModel = mock(ChatModel.class);
+        when(configuration.usesFake(Role.TEACHING)).thenReturn(false);
+        when(configuration.providerFor(Role.TEACHING)).thenReturn("deepseek");
+        when(configuration.modelFor(Role.TEACHING, null)).thenReturn(chatModel);
+        OpenAiChatOptions defaults = OpenAiChatOptions.builder()
+                .apiKey("test-key")
+                .baseUrl("https://provider.example/v1")
+                .model("deepseek-chat")
+                .build();
+        when(chatModel.getDefaultOptions()).thenReturn(defaults);
+        when(chatModel.getOptions()).thenReturn(defaults);
+        when(prompts.teachingRuntimeSystem()).thenReturn("Teach only from evidence.");
+        when(prompts.teachingUser()).thenReturn("{section}\n{objective}\n{evidence}\n{repair}");
+        when(chatModel.call(any(Prompt.class))).thenThrow(new IllegalStateException("provider unavailable"));
+        SpringAiTeachingLessonModel model = new SpringAiTeachingLessonModel(
+                configuration, new FakeTeachingLessonModel(), prompts);
+
+        assertThatThrownBy(() -> model.compose(request(List.of())))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("provider unavailable");
+        verify(chatModel).call(any(Prompt.class));
+    }
+
+    private ChatResponse response(String content) {
+        return new ChatResponse(List.of(new Generation(new AssistantMessage(content))));
     }
 
     private SectionRequest request(List<PageImageInput> pageImages) {

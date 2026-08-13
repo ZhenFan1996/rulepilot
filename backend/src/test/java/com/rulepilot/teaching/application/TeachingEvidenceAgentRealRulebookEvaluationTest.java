@@ -239,7 +239,6 @@ class TeachingEvidenceAgentRealRulebookEvaluationTest {
             TeachingSectionDraftCandidate reviewCandidate = withTools;
             List<LessonSection> reviewedSections = new ArrayList<>(List.of(reviewCandidate.section()));
             new TeachingPublishedLessonReviewer(
-                            toolModel,
                             contentCritic(criticProvider, criticRawResponses, reviewAudit),
                             reviewAudit,
                             toolComposer,
