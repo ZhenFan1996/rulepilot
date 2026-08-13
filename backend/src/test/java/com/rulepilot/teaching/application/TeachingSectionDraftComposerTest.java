@@ -11,6 +11,7 @@ import com.rulepilot.assistant.application.PolicyEvidenceVerifier;
 import com.rulepilot.teaching.TeachingLessonModel;
 import com.rulepilot.teaching.TeachingLessonModel.InputTokenProfile;
 import com.rulepilot.teaching.TeachingLessonModel.InvalidOutputException;
+import com.rulepilot.teaching.TeachingLessonModel.ModelInvocation;
 import com.rulepilot.teaching.TeachingLessonModel.SectionDraft;
 import com.rulepilot.teaching.TeachingLessonModel.StepDraft;
 import com.rulepilot.teaching.TeachingLessonModel.VisualFocusDraft;
@@ -26,6 +27,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.function.Supplier;
 import java.util.function.ToIntFunction;
+import java.util.function.Function;
 import org.junit.jupiter.api.Test;
 
 class TeachingSectionDraftComposerTest {
@@ -310,6 +312,45 @@ class TeachingSectionDraftComposerTest {
                         "x=14");
     }
 
+    @Test
+    void auditsProviderReportedCompletionTokensInsteadOfAnEstimate() {
+        UUID versionId = UUID.randomUUID();
+        UUID chunkId = UUID.randomUUID();
+        RuleEvidence evidence = evidence(chunkId, versionId);
+        TeachingLessonModel model = new TeachingLessonModel() {
+            @Override
+            public SectionDraft compose(SectionRequest request) {
+                return textDraft(chunkId);
+            }
+
+            @Override
+            public ModelInvocation composeInvocation(SectionRequest request) {
+                return new ModelInvocation(textDraft(chunkId), 211, 19, 128);
+            }
+
+            @Override
+            public int estimatedOutputTokens(SectionRequest request, SectionDraft draft) {
+                return 37;
+            }
+        };
+        RecordingInvocations invocations = new RecordingInvocations();
+        TeachingSectionDraftComposer composer = new TeachingSectionDraftComposer(
+                model, new PolicyEvidenceVerifier(), invocations, VisualRulebookPageFacts.empty());
+        TeachingPlan plan = plan(versionId);
+
+        composer.compose(
+                plan,
+                plan.sections().getFirst(),
+                List.of(),
+                List.of(evidence),
+                UUID.randomUUID(),
+                0,
+                false);
+
+        assertThat(invocations.outputTokens).containsExactly(19);
+        assertThat(invocations.summaries).singleElement().asString().contains("u=i:211,o:19,h:128");
+    }
+
     private TeachingPlan plan(UUID versionId) {
         return new TeachingPlan(
                 UUID.randomUUID(),
@@ -413,6 +454,24 @@ class TeachingSectionDraftComposerTest {
             inputTokens.add(estimatedInputTokens);
             summaries.add(successSummary);
             T result = invocation.get();
+            outputTokens.add(outputTokenEstimator.applyAsInt(result));
+            return result;
+        }
+
+        @Override
+        public <T> T invoke(
+                UUID runId,
+                ActivityType type,
+                String operation,
+                int estimatedInputTokens,
+                String fallbackSuccessSummary,
+                Supplier<T> invocation,
+                ToIntFunction<T> outputTokenEstimator,
+                Function<T, String> successSummary) {
+            if (type == ActivityType.MODEL) modelOperations.add(operation);
+            inputTokens.add(estimatedInputTokens);
+            T result = invocation.get();
+            summaries.add(successSummary.apply(result));
             outputTokens.add(outputTokenEstimator.applyAsInt(result));
             return result;
         }

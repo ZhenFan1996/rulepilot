@@ -61,6 +61,28 @@ public interface TeachingLessonModel {
         return estimateTokens(draft.toString());
     }
 
+    default ModelInvocation composeInvocation(SectionRequest request) {
+        SectionDraft draft = compose(request);
+        return estimatedInvocation(request, draft);
+    }
+
+    default ModelInvocation repairCompositionContractInvocation(SectionRequest request) {
+        SectionDraft draft = repairCompositionContract(request);
+        return estimatedInvocation(request, draft);
+    }
+
+    default ModelInvocation reviseInvocation(
+            SectionRequest request, SectionDraft previousDraft, List<String> feedback) {
+        SectionDraft draft = revise(request, previousDraft, feedback);
+        return estimatedInvocation(request, draft);
+    }
+
+    default ModelInvocation repairRevisionContractInvocation(
+            SectionRequest request, SectionDraft previousDraft, List<String> feedback) {
+        SectionDraft draft = repairRevisionContract(request, previousDraft, feedback);
+        return estimatedInvocation(request, draft);
+    }
+
     SectionDraft compose(SectionRequest request);
 
     /**
@@ -133,6 +155,20 @@ public interface TeachingLessonModel {
                 throw new IllegalArgumentException("teaching input token profile total is inconsistent");
             }
             providerId = providerId.strip();
+        }
+    }
+
+    /** Provider usage returned with one section attempt; zero means that the adapter did not expose that field. */
+    record ModelInvocation(
+            SectionDraft draft,
+            int promptTokens,
+            int completionTokens,
+            long cacheReadInputTokens) {
+
+        public ModelInvocation {
+            if (draft == null || promptTokens < 0 || completionTokens < 0 || cacheReadInputTokens < 0) {
+                throw new IllegalArgumentException("teaching model invocation metadata is invalid");
+            }
         }
     }
 
@@ -340,5 +376,9 @@ public interface TeachingLessonModel {
 
     private static int estimateTokens(String value) {
         return value == null || value.isEmpty() ? 0 : Math.max(1, (value.length() + 3) / 4);
+    }
+
+    private ModelInvocation estimatedInvocation(SectionRequest request, SectionDraft draft) {
+        return new ModelInvocation(draft, 0, 0, 0);
     }
 }

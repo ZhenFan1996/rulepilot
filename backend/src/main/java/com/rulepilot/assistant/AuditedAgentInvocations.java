@@ -1,6 +1,7 @@
 package com.rulepilot.assistant;
 
 import java.util.UUID;
+import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.function.ToIntFunction;
 
@@ -14,6 +15,31 @@ public interface AuditedAgentInvocations {
             String successSummary,
             Supplier<T> invocation,
             ToIntFunction<T> outputTokenEstimator);
+
+    /**
+     * Uses content-free result metadata in the completed activity without requiring it before the invocation starts.
+     *
+     * <p>The fallback summary keeps lightweight adapters source-compatible. The production budget adapter overrides
+     * this method so the derived summary is persisted atomically with the matching invocation.</p>
+     */
+    default <T> T invoke(
+            UUID runId,
+            AgentExecutionControl.ActivityType type,
+            String operation,
+            int estimatedInputTokens,
+            String fallbackSuccessSummary,
+            Supplier<T> invocation,
+            ToIntFunction<T> outputTokenEstimator,
+            Function<T, String> successSummary) {
+        return invoke(
+                runId,
+                type,
+                operation,
+                estimatedInputTokens,
+                fallbackSuccessSummary,
+                invocation,
+                outputTokenEstimator);
+    }
 
     default void record(
             UUID runId,

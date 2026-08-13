@@ -7,15 +7,18 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.openai.core.JsonValue;
+import com.openai.models.completions.CompletionUsage;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration.Role;
 import com.rulepilot.modelconfig.VersionedAgentPrompts;
 import com.rulepilot.teaching.TeachingLessonModel.EvidenceInput;
 import com.rulepilot.teaching.TeachingLessonModel.InputTokenProfile;
 import com.rulepilot.teaching.TeachingLessonModel.InvalidOutputException;
+import com.rulepilot.teaching.TeachingLessonModel.ModelInvocation;
 import com.rulepilot.teaching.TeachingLessonModel.PageImageInput;
-import com.rulepilot.teaching.TeachingLessonModel.SectionRequest;
 import com.rulepilot.teaching.TeachingLessonModel.SectionDraft;
+import com.rulepilot.teaching.TeachingLessonModel.SectionRequest;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.List;
 import java.util.UUID;
@@ -23,6 +26,8 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mockito;
 import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.metadata.ChatResponseMetadata;
+import org.springframework.ai.chat.metadata.DefaultUsage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
@@ -158,12 +163,14 @@ class SpringAiTeachingLessonModelTest {
     }
 
     @Test
-    void retainsTextualOutputContractWhenTheProviderHasNoNativeTeachingSchema() {
+    void sendsDeepSeekACompactStableSchemaAndNativeJsonMode() {
         RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
         VersionedAgentPrompts prompts = mock(VersionedAgentPrompts.class);
         ChatModel chatModel = mock(ChatModel.class);
         when(configuration.usesFake(Role.TEACHING)).thenReturn(false);
         when(configuration.providerFor(Role.TEACHING)).thenReturn("deepseek");
+        when(configuration.usesDeepSeekNonThinkingGeneration(Role.TEACHING, null)).thenReturn(true);
+        when(configuration.modelNameFor(Role.TEACHING, null)).thenReturn("deepseek-v4-flash");
         when(configuration.modelFor(Role.TEACHING, null)).thenReturn(chatModel);
         OpenAiChatOptions defaults = OpenAiChatOptions.builder()
                 .apiKey("test-key")
@@ -186,7 +193,91 @@ class SpringAiTeachingLessonModelTest {
 
         ArgumentCaptor<Prompt> sent = ArgumentCaptor.forClass(Prompt.class);
         verify(chatModel).call(sent.capture());
-        assertThat(sent.getValue().getContents()).contains("Your response should be in JSON format", "```json");
+        assertThat(sent.getValue().getSystemMessage().getText())
+                .contains("Return one JSON object matching this schema exactly", "\"properties\"")
+                .doesNotContain("Your response should be in JSON format", "```json");
+        assertThat(sent.getValue().getUserMessage().getText())
+                .doesNotContain("Return one JSON object matching this schema exactly", "\"properties\"", "```json");
+        OpenAiChatOptions options = (OpenAiChatOptions) sent.getValue().getOptions();
+        assertThat(options.getResponseFormat().getType()).isEqualTo(Type.JSON_OBJECT);
+        assertThat(SpringAiTeachingLessonModel.teachingTextOutputContract().length())
+                .isLessThan(SpringAiTeachingLessonModel.teachingOutputFormat().length());
+    }
+
+    @Test
+    void exposesProviderUsageFromTheSameCompositionResponse() {
+        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        VersionedAgentPrompts prompts = mock(VersionedAgentPrompts.class);
+        ChatModel chatModel = mock(ChatModel.class);
+        when(configuration.usesFake(Role.TEACHING)).thenReturn(false);
+        when(configuration.providerFor(Role.TEACHING)).thenReturn("deepseek");
+        when(configuration.usesDeepSeekNonThinkingGeneration(Role.TEACHING, null)).thenReturn(true);
+        when(configuration.modelNameFor(Role.TEACHING, null)).thenReturn("deepseek-v4-flash");
+        when(configuration.modelFor(Role.TEACHING, null)).thenReturn(chatModel);
+        OpenAiChatOptions defaults = OpenAiChatOptions.builder()
+                .apiKey("test-key")
+                .baseUrl("https://provider.example/v1")
+                .model("deepseek-v4-flash")
+                .build();
+        when(chatModel.getDefaultOptions()).thenReturn(defaults);
+        when(chatModel.getOptions()).thenReturn(defaults);
+        when(prompts.teachingRuntimeSystem()).thenReturn("Teach only from evidence.");
+        when(prompts.teachingUser()).thenReturn("{section}\n{objective}\n{evidence}\n{repair}");
+        when(chatModel.call(any(Prompt.class))).thenReturn(response(
+                """
+                {"title":"Setup","visualKind":"REFERENCE_CARD","visualCaption":"Source",
+                 "visualCitationIds":["E1"],"steps":[{"heading":"Do this","kind":"DO",
+                 "text":"Place the board.","citationIds":["E1"]}]}
+                """,
+                new DefaultUsage(321, 87, 408, null, 256L, 0L)));
+        SpringAiTeachingLessonModel model = new SpringAiTeachingLessonModel(
+                configuration, new FakeTeachingLessonModel(), prompts);
+
+        ModelInvocation invocation = model.composeInvocation(request(List.of()));
+
+        assertThat(invocation.promptTokens()).isEqualTo(321);
+        assertThat(invocation.completionTokens()).isEqualTo(87);
+        assertThat(invocation.cacheReadInputTokens()).isEqualTo(256);
+    }
+
+    @Test
+    void exposesDeepSeekTopLevelPromptCacheHits() {
+        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        VersionedAgentPrompts prompts = mock(VersionedAgentPrompts.class);
+        ChatModel chatModel = mock(ChatModel.class);
+        when(configuration.usesFake(Role.TEACHING)).thenReturn(false);
+        when(configuration.providerFor(Role.TEACHING)).thenReturn("deepseek");
+        when(configuration.usesDeepSeekNonThinkingGeneration(Role.TEACHING, null)).thenReturn(true);
+        when(configuration.modelNameFor(Role.TEACHING, null)).thenReturn("deepseek-v4-flash");
+        when(configuration.modelFor(Role.TEACHING, null)).thenReturn(chatModel);
+        OpenAiChatOptions defaults = OpenAiChatOptions.builder()
+                .apiKey("test-key")
+                .baseUrl("https://provider.example/v1")
+                .model("deepseek-v4-flash")
+                .build();
+        when(chatModel.getDefaultOptions()).thenReturn(defaults);
+        when(chatModel.getOptions()).thenReturn(defaults);
+        when(prompts.teachingRuntimeSystem()).thenReturn("Teach only from evidence.");
+        when(prompts.teachingUser()).thenReturn("{section}\n{objective}\n{evidence}\n{repair}");
+        CompletionUsage nativeUsage = CompletionUsage.builder()
+                .promptTokens(321)
+                .completionTokens(87)
+                .totalTokens(408)
+                .putAdditionalProperty("prompt_cache_hit_tokens", JsonValue.from(192L))
+                .build();
+        when(chatModel.call(any(Prompt.class))).thenReturn(response(
+                """
+                {"title":"Setup","visualKind":"REFERENCE_CARD","visualCaption":"Source",
+                 "visualCitationIds":["E1"],"steps":[{"heading":"Do this","kind":"DO",
+                 "text":"Place the board.","citationIds":["E1"]}]}
+                """,
+                new DefaultUsage(321, 87, 408, nativeUsage)));
+        SpringAiTeachingLessonModel model = new SpringAiTeachingLessonModel(
+                configuration, new FakeTeachingLessonModel(), prompts);
+
+        ModelInvocation invocation = model.composeInvocation(request(List.of()));
+
+        assertThat(invocation.cacheReadInputTokens()).isEqualTo(192);
     }
 
     @Test
@@ -324,6 +415,12 @@ class SpringAiTeachingLessonModelTest {
 
     private ChatResponse response(String content) {
         return new ChatResponse(List.of(new Generation(new AssistantMessage(content))));
+    }
+
+    private ChatResponse response(String content, DefaultUsage usage) {
+        return new ChatResponse(
+                List.of(new Generation(new AssistantMessage(content))),
+                ChatResponseMetadata.builder().usage(usage).build());
     }
 
     private SectionRequest request(List<PageImageInput> pageImages) {

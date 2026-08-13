@@ -2,12 +2,15 @@ package com.rulepilot.teaching.adapter.out.model;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.openai.core.JsonValue;
+import com.openai.models.completions.CompletionUsage;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration.Role;
 import com.rulepilot.modelconfig.VersionedAgentPrompts;
 import com.rulepilot.teaching.TeachingLessonModel;
 import com.rulepilot.teaching.TeachingLessonModel.InputTokenProfile;
 import com.rulepilot.teaching.TeachingLessonModel.InvalidOutputException;
+import com.rulepilot.teaching.TeachingLessonModel.ModelInvocation;
 import com.rulepilot.teaching.TeachingLessonModel.VisualFocusDraft;
 import com.rulepilot.teaching.domain.IllustratedLesson.VisualKind;
 import com.rulepilot.teaching.domain.IllustratedLesson.TeachingMove;
@@ -19,6 +22,8 @@ import java.util.stream.IntStream;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.metadata.Usage;
+import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.converter.BeanOutputConverter;
 import org.springframework.ai.openai.OpenAiChatModel.ResponseFormat;
@@ -40,6 +45,9 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
             new BeanOutputConverter<>(ModelSectionDraft.class);
     private static final String TEACHING_OUTPUT_FORMAT = TEACHING_OUTPUT_CONVERTER.getFormat();
     private static final String QWEN_TEACHING_SCHEMA = buildQwenTeachingSchema();
+    private static final String TEACHING_TEXT_OUTPUT_CONTRACT =
+            "Return one JSON object matching this schema exactly; return no markdown or extra text:\n"
+                    + QWEN_TEACHING_SCHEMA;
     private final RuntimeModelConfiguration models;
     private final FakeTeachingLessonModel fakeModel;
     private final VersionedAgentPrompts prompts;
@@ -142,27 +150,43 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
 
     @Override
     public SectionDraft compose(SectionRequest request) {
+        return composeInvocation(request).draft();
+    }
+
+    @Override
+    public ModelInvocation composeInvocation(SectionRequest request) {
         Role role = roleFor(request);
         if (usesFake(role, request.modelConfigurationOwner())) {
-            return fakeModel.compose(request);
+            return fakeModel.composeInvocation(request);
         }
         return composeOnce(request, "");
     }
 
     @Override
     public SectionDraft repairCompositionContract(SectionRequest request) {
+        return repairCompositionContractInvocation(request).draft();
+    }
+
+    @Override
+    public ModelInvocation repairCompositionContractInvocation(SectionRequest request) {
         Role role = roleFor(request);
         if (usesFake(role, request.modelConfigurationOwner())) {
-            return fakeModel.compose(request);
+            return fakeModel.repairCompositionContractInvocation(request);
         }
         return composeOnce(request, prompts.structuredOutputRepair());
     }
 
     @Override
     public SectionDraft revise(SectionRequest request, SectionDraft previousDraft, List<String> feedback) {
+        return reviseInvocation(request, previousDraft, feedback).draft();
+    }
+
+    @Override
+    public ModelInvocation reviseInvocation(
+            SectionRequest request, SectionDraft previousDraft, List<String> feedback) {
         Role role = roleFor(request);
         if (usesFake(role, request.modelConfigurationOwner())) {
-            return fakeModel.revise(request, previousDraft, feedback);
+            return fakeModel.reviseInvocation(request, previousDraft, feedback);
         }
         return composeOnce(request, revisionInstruction(request, previousDraft, feedback));
     }
@@ -170,9 +194,15 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
     @Override
     public SectionDraft repairRevisionContract(
             SectionRequest request, SectionDraft previousDraft, List<String> feedback) {
+        return repairRevisionContractInvocation(request, previousDraft, feedback).draft();
+    }
+
+    @Override
+    public ModelInvocation repairRevisionContractInvocation(
+            SectionRequest request, SectionDraft previousDraft, List<String> feedback) {
         Role role = roleFor(request);
         if (usesFake(role, request.modelConfigurationOwner())) {
-            return fakeModel.revise(request, previousDraft, feedback);
+            return fakeModel.repairRevisionContractInvocation(request, previousDraft, feedback);
         }
         return composeOnce(
                 request,
@@ -204,9 +234,9 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
         Role role = roleFor(request);
         String owner = request.modelConfigurationOwner();
         boolean qwen = usesQwen(role, owner);
-        int fixedContractTokens = estimateTokens(prompts.teachingRuntimeSystem())
+        int fixedContractTokens = estimateTokens(systemPrompt(qwen))
                 + estimateTokens(promptWithoutParameters(prompts.teachingUser()))
-                + estimateTokens(qwen ? QWEN_TEACHING_SCHEMA : TEACHING_OUTPUT_FORMAT);
+                + (qwen ? estimateTokens(QWEN_TEACHING_SCHEMA) : 0);
         int objectiveTokens = estimateTokens(request.objective());
         int requiredRuleTokens = request.requiredRuleIntents().isEmpty()
                 ? 0
@@ -269,11 +299,17 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
         return result;
     }
 
+    private String systemPrompt(boolean qwen) {
+        return qwen
+                ? prompts.teachingRuntimeSystem()
+                : prompts.teachingRuntimeSystem() + "\n\n" + TEACHING_TEXT_OUTPUT_CONTRACT;
+    }
+
     private int estimateTokens(String value) {
         return value == null || value.isEmpty() ? 0 : Math.max(1, (value.length() + 3) / 4);
     }
 
-    private SectionDraft composeOnce(SectionRequest request, String repairInstruction) {
+    private ModelInvocation composeOnce(SectionRequest request, String repairInstruction) {
         Role role = roleFor(request);
         String owner = request.modelConfigurationOwner();
         Map<String, UUID> evidenceIds = evidenceIds(request);
@@ -289,6 +325,10 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
                         .type(ResponseFormat.Type.JSON_SCHEMA)
                         .jsonSchema(qwenTeachingSchema())
                         .build());
+            } else if (models.usesDeepSeekNonThinkingGeneration(role, owner)) {
+                options.responseFormat(ResponseFormat.builder()
+                        .type(ResponseFormat.Type.JSON_OBJECT)
+                        .build());
             }
             prompt = prompt.options(options);
         } else {
@@ -296,9 +336,10 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
                     .temperature(temperature));
         }
         ModelSectionDraft draft;
+        Usage usage;
         try {
             ChatClient.ChatClientRequestSpec requestSpec = prompt
-                    .system(prompts.teachingRuntimeSystem())
+                    .system(systemPrompt(usesQwen(role, owner)))
                     .user(user -> {
                         user.text(prompts.teachingUser())
                                 .param("section", request.title())
@@ -319,12 +360,13 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
                                     new ByteArrayResource(image.content())));
                         }
                     });
-            if (usesQwen(role, owner)) {
-                String responseContent = requestSpec.call().content();
-                draft = responseContent == null ? null : TEACHING_OUTPUT_CONVERTER.convert(responseContent);
-            } else {
-                draft = requestSpec.call().entity(TEACHING_OUTPUT_CONVERTER);
+            ChatResponse response = requestSpec.call().chatResponse();
+            if (response == null || response.getResult() == null || response.getResult().getOutput() == null) {
+                throw new InvalidOutputException("teaching model returned no response", null);
             }
+            String responseContent = response.getResult().getOutput().getText();
+            draft = responseContent == null ? null : TEACHING_OUTPUT_CONVERTER.convert(responseContent);
+            usage = response.getMetadata() == null ? null : response.getMetadata().getUsage();
         } catch (JacksonException invalidJson) {
             throw new InvalidOutputException("teaching model returned malformed structured output", invalidJson);
         }
@@ -350,9 +392,43 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
                                     .anyMatch(focus -> !focus.visibleDescription().isBlank()));
         }
         try {
-            return toSectionDraft(draft, evidenceIds);
+            SectionDraft sectionDraft = toSectionDraft(draft, evidenceIds);
+            int promptTokens = usageValue(usage == null ? null : usage.getPromptTokens());
+            int completionTokens = usageValue(usage == null ? null : usage.getCompletionTokens());
+            long cacheReadTokens = cacheReadTokens(usage);
+            log.info(
+                    "Teaching model usage: provider={}, model={}, promptTokens={}, completionTokens={}, cacheReadInputTokens={}",
+                    resolvedProvider(role, owner),
+                    models.modelNameFor(role, owner),
+                    promptTokens,
+                    completionTokens,
+                    cacheReadTokens);
+            return new ModelInvocation(sectionDraft, promptTokens, completionTokens, cacheReadTokens);
         } catch (IllegalArgumentException invalidContract) {
             throw new InvalidOutputException("teaching model returned an invalid section contract", invalidContract);
+        }
+    }
+
+    private int usageValue(Integer value) {
+        return value == null ? 0 : Math.max(0, value);
+    }
+
+    private long cacheReadTokens(Usage usage) {
+        if (usage == null) return 0;
+        Long standardCacheReadTokens = usage.getCacheReadInputTokens();
+        if (standardCacheReadTokens != null && standardCacheReadTokens > 0) {
+            return standardCacheReadTokens;
+        }
+        if (!(usage.getNativeUsage() instanceof CompletionUsage nativeUsage)) return 0;
+        JsonValue deepSeekCacheHitTokens =
+                nativeUsage._additionalProperties().get("prompt_cache_hit_tokens");
+        if (deepSeekCacheHitTokens == null) return 0;
+        try {
+            Long value = deepSeekCacheHitTokens.convert(Long.class);
+            return value == null ? 0 : Math.max(0, value);
+        } catch (RuntimeException invalidOptionalUsage) {
+            log.debug("Teaching model returned unreadable optional cache usage metadata", invalidOptionalUsage);
+            return 0;
         }
     }
 
@@ -377,6 +453,10 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
 
     static String teachingOutputFormat() {
         return TEACHING_OUTPUT_FORMAT;
+    }
+
+    static String teachingTextOutputContract() {
+        return TEACHING_TEXT_OUTPUT_CONTRACT;
     }
 
     private static String buildQwenTeachingSchema() {

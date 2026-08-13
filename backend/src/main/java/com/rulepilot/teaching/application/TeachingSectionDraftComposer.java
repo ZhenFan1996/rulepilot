@@ -9,6 +9,7 @@ import com.rulepilot.assistant.EvidenceVerifier;
 import com.rulepilot.teaching.TeachingLessonModel;
 import com.rulepilot.teaching.TeachingLessonModel.InputTokenProfile;
 import com.rulepilot.teaching.TeachingLessonModel.InvalidOutputException;
+import com.rulepilot.teaching.TeachingLessonModel.ModelInvocation;
 import com.rulepilot.teaching.TeachingLessonModel.PriorSectionContext;
 import com.rulepilot.teaching.TeachingLessonModel.SectionDraft;
 import com.rulepilot.teaching.VisualRulebookPageFacts;
@@ -252,8 +253,10 @@ final class TeachingSectionDraftComposer {
                     operationName(primaryOperation, planned.position()),
                     primaryProfile.totalTokens(),
                     profiledSummary(successSummary, primaryProfile),
-                    () -> model.compose(request),
-                    result -> model.estimatedOutputTokens(request, result));
+                    () -> model.composeInvocation(request),
+                    result -> outputTokens(request, result),
+                    result -> profiledSummary(successSummary, primaryProfile, result))
+                    .draft();
         } catch (InvalidOutputException firstFailure) {
             InputTokenProfile repairProfile = model.compositionRepairInputProfile(request);
             try {
@@ -263,8 +266,11 @@ final class TeachingSectionDraftComposer {
                         operationName(repairOperation, planned.position()),
                         repairProfile.totalTokens(),
                         profiledSummary("Teaching section structured output repaired", repairProfile),
-                        () -> model.repairCompositionContract(request),
-                        result -> model.estimatedOutputTokens(request, result));
+                        () -> model.repairCompositionContractInvocation(request),
+                        result -> outputTokens(request, result),
+                        result -> profiledSummary(
+                                "Teaching section structured output repaired", repairProfile, result))
+                        .draft();
             } catch (RuntimeException repairFailure) {
                 repairFailure.addSuppressed(firstFailure);
                 throw repairFailure;
@@ -289,8 +295,10 @@ final class TeachingSectionDraftComposer {
                     operationName(primaryOperation, planned.position()),
                     primaryProfile.totalTokens(),
                     profiledSummary(successSummary, primaryProfile),
-                    () -> model.revise(request, previousDraft, feedback),
-                    result -> model.estimatedOutputTokens(request, result));
+                    () -> model.reviseInvocation(request, previousDraft, feedback),
+                    result -> outputTokens(request, result),
+                    result -> profiledSummary(successSummary, primaryProfile, result))
+                    .draft();
         } catch (InvalidOutputException firstFailure) {
             InputTokenProfile repairProfile = model.revisionRepairInputProfile(request, previousDraft, feedback);
             try {
@@ -300,8 +308,11 @@ final class TeachingSectionDraftComposer {
                         operationName(repairOperation, planned.position()),
                         repairProfile.totalTokens(),
                         profiledSummary("Teaching section revision structured output repaired", repairProfile),
-                        () -> model.repairRevisionContract(request, previousDraft, feedback),
-                        result -> model.estimatedOutputTokens(request, result));
+                        () -> model.repairRevisionContractInvocation(request, previousDraft, feedback),
+                        result -> outputTokens(request, result),
+                        result -> profiledSummary(
+                                "Teaching section revision structured output repaired", repairProfile, result))
+                        .draft();
             } catch (RuntimeException repairFailure) {
                 repairFailure.addSuppressed(firstFailure);
                 throw repairFailure;
@@ -373,6 +384,19 @@ final class TeachingSectionDraftComposer {
                         profile.continuityTokens(),
                         profile.revisionTokens(),
                         profile.otherRequestTokens());
+    }
+
+    private int outputTokens(TeachingLessonModel.SectionRequest request, ModelInvocation invocation) {
+        return invocation.completionTokens() > 0
+                ? invocation.completionTokens()
+                : model.estimatedOutputTokens(request, invocation.draft());
+    }
+
+    private String profiledSummary(String summary, InputTokenProfile profile, ModelInvocation invocation) {
+        return profiledSummary(summary, profile) + " u=i:%d,o:%d,h:%d".formatted(
+                invocation.promptTokens(),
+                invocation.completionTokens(),
+                invocation.cacheReadInputTokens());
     }
 
     private String operationName(String operation, int sectionPosition) {
