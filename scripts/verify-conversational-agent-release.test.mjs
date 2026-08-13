@@ -173,6 +173,9 @@ function input() {
       schemaVersion: 1,
       generatedAt,
       results: [
+        { caseId: 'rr-a', provider: 'application', citationAccepted: true, expectedCoverageAdded: true, withinLatencyBudget: true },
+      ],
+      semanticResults: [
         { caseId: 'rr-a', provider: 'deepseek', citationAccepted: true, expectedCoverageAdded: true, withinLatencyBudget: true },
         { caseId: 'rr-b', provider: 'qwen', citationAccepted: true, expectedCoverageAdded: true, withinLatencyBudget: true },
       ],

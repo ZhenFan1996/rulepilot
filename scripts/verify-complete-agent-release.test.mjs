@@ -26,6 +26,8 @@ test('requires five player needs, five families, and two concrete providers', ()
         { provider: 'qwen', citationPublished: true },
       ] },
       { results: [
+        { provider: 'application', citationAccepted: true },
+      ], semanticResults: [
         { provider: 'deepseek', citationAccepted: true },
         { provider: 'qwen', citationAccepted: true },
       ] },
@@ -38,10 +40,10 @@ test('requires five player needs, five families, and two concrete providers', ()
   input.baseline.cases[1].baseline.citationCount = 1
   assert.equal(verifyRealRelease(input).status, 'PASSED')
 
-  input.providerReports[1].results = input.providerReports[1].results
+  input.providerReports[1].semanticResults = input.providerReports[1].semanticResults
     .map((result) => ({ ...result, citationAccepted: false }))
   assert.throws(() => verifyRealRelease(input), /Teaching evidence/)
-  input.providerReports[1].results = [
+  input.providerReports[1].semanticResults = [
     { provider: 'deepseek', citationAccepted: true },
     { provider: 'qwen', citationAccepted: true },
   ]
@@ -69,6 +71,8 @@ test('requires every report to be generated during the current release invocatio
         { provider: 'qwen', citationPublished: true },
       ] },
       { generatedAt, results: [
+        { provider: 'application', citationAccepted: true },
+      ], semanticResults: [
         { provider: 'deepseek', citationAccepted: true },
         { provider: 'qwen', citationAccepted: true },
       ] },

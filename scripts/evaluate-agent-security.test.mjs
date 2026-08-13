@@ -33,7 +33,7 @@ function fixture() {
       })) },
       answer: { schemaVersion: 1, results: [{ ...bounded(cases[4].caseId), citationPublished: true,
         directAdditionalModelCalls: 0 }], crossRulebookNegative: { crossScopeEvidence: false } },
-      teaching: { schemaVersion: 1, results: [{ ...bounded(cases[1].caseId), citationAccepted: true,
+      teaching: { schemaVersion: 1, results: [{ ...bounded(cases[1].caseId), modelCalls: 0, citationAccepted: true,
         expectedCoverageAdded: true, directAdditionalModelCalls: 0 }],
         crossRulebookNegative: { crossScopeEvidence: false } },
       visual: { schemaVersion: 1, results: cases.slice(2, 4).map((case_) => ({

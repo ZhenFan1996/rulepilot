@@ -9,7 +9,6 @@ import static org.mockito.Mockito.when;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.json.JsonMapper;
-import com.rulepilot.assistant.AgentExecutionControl;
 import com.rulepilot.assistant.AgentExecutionControl.ActivityOutcome;
 import com.rulepilot.assistant.AgentExecutionControl.ActivityType;
 import com.rulepilot.assistant.AssistantReadTools;
@@ -17,19 +16,11 @@ import com.rulepilot.assistant.AssistantReadTools.RuleEvidence;
 import com.rulepilot.assistant.AuditedAgentInvocations;
 import com.rulepilot.assistant.GeneratedContentCritic;
 import com.rulepilot.assistant.NativeAgentTool.ToolScope;
-import com.rulepilot.assistant.NativeAgentTool.ToolObservation;
-import com.rulepilot.assistant.NativeToolModel;
 import com.rulepilot.assistant.NativeToolScopes;
 import com.rulepilot.assistant.adapter.out.model.FakeContentCriticModel;
 import com.rulepilot.assistant.adapter.out.model.SpringAiContentCriticModel;
-import com.rulepilot.assistant.adapter.out.model.SpringAiNativeToolModel;
-import com.rulepilot.assistant.application.BoundedNativeToolAgent;
 import com.rulepilot.assistant.application.ConditionalGeneratedContentCritic;
-import com.rulepilot.assistant.application.ExpandRuleEvidenceContextNativeTool;
-import com.rulepilot.assistant.application.NativeAgentToolRegistry;
 import com.rulepilot.assistant.application.PolicyEvidenceVerifier;
-import com.rulepilot.assistant.application.ReadRulePagesNativeTool;
-import com.rulepilot.assistant.application.SearchRuleEvidenceNativeTool;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration;
 import com.rulepilot.modelconfig.VersionedAgentPrompts;
 import com.rulepilot.modelconfig.adapter.out.ChatModelFactory;
@@ -94,7 +85,7 @@ class TeachingEvidenceAgentRealRulebookEvaluationTest {
                     manifest,
                     inventory,
                     caseNode,
-                    provider("TEXT_LAYER".equals(caseNode.path("family").asText()) ? "deepseek" : "qwen")));
+                    new ProviderConfiguration("application", "", "", "")));
         }
 
         List<Map<String, Object>> results = new ArrayList<>();
@@ -112,8 +103,11 @@ class TeachingEvidenceAgentRealRulebookEvaluationTest {
             assertThat((Integer) result.get("toolCalls")).isGreaterThan(0);
             assertThat(result).containsEntry("expectedCoverageAdded", true)
                     .containsEntry("citationAccepted", true)
+                    .containsEntry("modelCalls", 0)
                     .containsEntry("directAdditionalModelCalls", 0)
                     .containsEntry("withinLatencyBudget", true);
+            assertThat(result.get("toolOperations"))
+                    .isEqualTo(List.of("readTeachingSourcePages|1"));
         });
         assertThat(negative).containsEntry("state", "EMPTY")
                 .containsEntry("evidenceCount", 0)
@@ -144,6 +138,7 @@ class TeachingEvidenceAgentRealRulebookEvaluationTest {
                     "generatedAt", Instant.now().toString(),
                     "results", List.copyOf(results))) + "\n", StandardCharsets.UTF_8);
         }
+        publishReleaseSummary(root, results);
 
         int expectedCaseCount = selectedCase == null || selectedCase.isBlank()
                 ? evaluation.path("cases").size()
@@ -211,7 +206,7 @@ class TeachingEvidenceAgentRealRulebookEvaluationTest {
         long baselineLatencyMs = Duration.ofNanos(System.nanoTime() - baselineStarted).toMillis();
 
         DirectAuditedInvocations toolAudit = new DirectAuditedInvocations();
-        TeachingEvidenceAgent evidenceAgent = agent(case_.provider(), corpus, toolAudit, versionId, runId);
+        TeachingSourcePageEvidenceRefiner evidenceAgent = refiner(corpus, toolAudit, versionId, runId);
         long toolStarted = System.nanoTime();
         var refined = evidenceAgent.refine(plan, planned, runId, deterministic);
         int evidenceToolModelCalls = toolAudit.modelCalls.get();
@@ -320,6 +315,34 @@ class TeachingEvidenceAgentRealRulebookEvaluationTest {
         }
     }
 
+    private void publishReleaseSummary(Path root, List<Map<String, Object>> semanticResults) throws IOException {
+        Path output = root.resolve(".local/agent-evaluation/teaching-agent-real-rulebooks.json");
+        JsonNode acquisition = mapper.readTree(output.toFile());
+        List<Map<String, Object>> summaries = semanticResults.stream()
+                .map(result -> Map.<String, Object>of(
+                        "caseId", result.get("caseId"),
+                        "provider", result.get("provider"),
+                        "expectedCoverageAdded", result.get("toolSectionUsesExpectedPage"),
+                        "citationAccepted", Boolean.TRUE.equals(result.get("publishableSectionProduced"))
+                                && Boolean.TRUE.equals(result.get("sourceCitationsPresent"))
+                                && Boolean.TRUE.equals(result.get("toolSectionUsesExpectedPage")),
+                        "withinLatencyBudget", result.get("withinLatencyBudget"),
+                        "modelCalls", (Integer) result.get("toolSectionModelCalls")
+                                + (Integer) result.get("reviewCorrectionModelCalls"),
+                        "toolCalls", result.get("toolCalls")))
+                .toList();
+        Map<String, Object> report = new LinkedHashMap<>();
+        report.put("schemaVersion", 1);
+        report.put("generatedAt", Instant.now().toString());
+        report.put("results", acquisition.path("results"));
+        report.put("crossRulebookNegative", acquisition.path("crossRulebookNegative"));
+        report.put("semanticResults", summaries);
+        Files.writeString(
+                output,
+                mapper.writerWithDefaultPrettyPrinter().writeValueAsString(report) + "\n",
+                StandardCharsets.UTF_8);
+    }
+
     private List<Map<String, Object>> visibleEvidence(List<RuleEvidence> evidence) {
         return evidence.stream()
                 .map(item -> Map.<String, Object>of(
@@ -396,7 +419,7 @@ class TeachingEvidenceAgentRealRulebookEvaluationTest {
         UUID runId = UUID.randomUUID();
         PdfTeachingEvidence corpus = new PdfTeachingEvidence(case_.pdf(), versionId);
         DirectAuditedInvocations audited = new DirectAuditedInvocations();
-        TeachingEvidenceAgent agent = agent(case_.provider(), corpus, audited, versionId, runId);
+        TeachingSourcePageEvidenceRefiner agent = refiner(corpus, audited, versionId, runId);
         TeachingPlan plan = plan(versionId, case_.caseNode(), case_.sourcePages());
         RuleEvidence initial = corpus.first(case_.initialPage());
         var deterministic = new TeachingSectionEvidenceRetriever.Result(
@@ -421,12 +444,7 @@ class TeachingEvidenceAgentRealRulebookEvaluationTest {
                 Map.entry("caseId", case_.caseId()),
                 Map.entry("provider", case_.provider().provider()),
                 Map.entry("toolCalls", audited.toolCalls.get()),
-                Map.entry("toolObservationCodes", audited.observations.stream()
-                        .map(ToolObservation::code)
-                        .toList()),
-                Map.entry("toolEvidenceCounts", audited.observations.stream()
-                        .map(ToolObservation::evidenceCount)
-                        .toList()),
+                Map.entry("toolOperations", List.copyOf(audited.toolOperations)),
                 Map.entry("searchDiagnostics", corpus.searchDiagnostics(case_.expectedTerms())),
                 Map.entry("modelCalls", modelCallsBeforeDirect),
                 Map.entry("expectedCoverageAdded", expected != null),
@@ -476,7 +494,7 @@ class TeachingEvidenceAgentRealRulebookEvaluationTest {
         UUID runId = UUID.randomUUID();
         PdfTeachingEvidence corpus = new PdfTeachingEvidence(case_.pdf(), versionId);
         DirectAuditedInvocations audited = new DirectAuditedInvocations();
-        TeachingEvidenceAgent agent = agent(case_.provider(), corpus, audited, versionId, runId);
+        TeachingSourcePageEvidenceRefiner agent = refiner(corpus, audited, versionId, runId);
         TeachingPlan plan = plan(versionId, node, List.of());
         var empty = new TeachingSectionEvidenceRetriever.Result(
                 List.of(), 1, TeachingSectionEvidenceRetriever.State.EMPTY);
@@ -492,27 +510,17 @@ class TeachingEvidenceAgentRealRulebookEvaluationTest {
                         .anyMatch(source -> !versionId.equals(source.documentVersionId())));
     }
 
-    private TeachingEvidenceAgent agent(
-            ProviderConfiguration provider,
+    private TeachingSourcePageEvidenceRefiner refiner(
             PdfTeachingEvidence corpus,
             DirectAuditedInvocations audited,
             UUID versionId,
             UUID runId) {
         ToolScope scope = new ToolScope("agent-evaluation", versionId, runId, Instant.now().plusSeconds(90));
-        NativeAgentToolRegistry registry = new NativeAgentToolRegistry(
-                List.of(
-                        new SearchRuleEvidenceNativeTool(corpus, mapper),
-                        new ExpandRuleEvidenceContextNativeTool(corpus, mapper),
-                        new ReadRulePagesNativeTool(corpus, mapper)),
-                mapper,
-                candidate -> candidate.ownerUsername().equals(scope.ownerUsername())
-                        && candidate.documentVersionId().equals(scope.documentVersionId()));
-        BoundedNativeToolAgent loop = new BoundedNativeToolAgent(
-                springModel(provider), registry, mock(AgentExecutionControl.class), audited, mapper);
         NativeToolScopes scopes = mock(NativeToolScopes.class);
         when(scopes.create(scope.ownerUsername(), scope.documentVersionId(), scope.runId()))
                 .thenReturn(java.util.Optional.of(scope));
-        return new TeachingEvidenceAgent(loop, scopes, corpus, new PolicyEvidenceVerifier());
+        return new TeachingSourcePageEvidenceRefiner(
+                scopes, corpus, new PolicyEvidenceVerifier(), audited);
     }
 
     private TeachingPlan plan(UUID versionId, JsonNode node, List<Integer> sourcePages) {
@@ -535,19 +543,6 @@ class TeachingEvidenceAgentRealRulebookEvaluationTest {
                         sourcePages)),
                 "agent-evaluation",
                 Instant.now());
-    }
-
-    private NativeToolModel springModel(ProviderConfiguration provider) {
-        ChatModel chatModel = new ChatModelFactory(ObservationRegistry.NOOP, Duration.ofSeconds(45))
-                .create(provider.provider(), provider.apiKey(), provider.baseUrl(), provider.model());
-        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
-        when(configuration.modelFor(any(RuntimeModelConfiguration.Role.class), any(String.class))).thenReturn(chatModel);
-        when(configuration.providerFor(any(RuntimeModelConfiguration.Role.class), any(String.class)))
-                .thenReturn(provider.provider());
-        when(configuration.usesDeepSeekNonThinkingGeneration(
-                        any(RuntimeModelConfiguration.Role.class), any(String.class)))
-                .thenReturn("deepseek".equals(provider.provider()));
-        return new SpringAiNativeToolModel(configuration);
     }
 
     private SpringAiTeachingLessonModel teachingModel(
@@ -744,7 +739,7 @@ class TeachingEvidenceAgentRealRulebookEvaluationTest {
         private final AtomicInteger toolCalls = new AtomicInteger();
         private final AtomicInteger criticCalls = new AtomicInteger();
         private final List<String> criticOperations = new ArrayList<>();
-        private final List<ToolObservation> observations = new ArrayList<>();
+        private final List<String> toolOperations = new ArrayList<>();
 
         @Override
         public <T> T invoke(
@@ -756,16 +751,15 @@ class TeachingEvidenceAgentRealRulebookEvaluationTest {
                 Supplier<T> invocation,
                 ToIntFunction<T> outputTokenEstimator) {
             if (type == ActivityType.MODEL) modelCalls.incrementAndGet();
-            if (type == ActivityType.TOOL) toolCalls.incrementAndGet();
+            if (type == ActivityType.TOOL) {
+                toolCalls.incrementAndGet();
+                toolOperations.add(operation);
+            }
             if (type == ActivityType.CRITIC) {
                 criticCalls.incrementAndGet();
                 criticOperations.add(operation);
             }
-            T result = invocation.get();
-            if (result instanceof NativeAgentToolRegistry.ToolExecution execution) {
-                observations.add(execution.observation());
-            }
-            return result;
+            return invocation.get();
         }
 
         @Override

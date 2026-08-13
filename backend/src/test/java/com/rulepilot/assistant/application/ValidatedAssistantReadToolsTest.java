@@ -176,6 +176,52 @@ class ValidatedAssistantReadToolsTest {
     }
 
     @Test
+    void rejectsCrossVersionExactPageEvidenceInsteadOfLeakingIt() {
+        UUID versionId = UUID.randomUUID();
+        RuleEvidenceHit foreign = evidence(UUID.randomUUID(), UUID.randomUUID(), "Foreign page text.", 5);
+        RuleEvidenceLookup lookup = new RuleEvidenceLookup() {
+            @Override
+            public List<RuleEvidenceHit> findByChunkIds(UUID documentVersionId, Set<UUID> chunkIds) {
+                return List.of();
+            }
+
+            @Override
+            public List<RuleEvidenceHit> findByPageNumbers(UUID documentVersionId, Set<Integer> pageNumbers) {
+                return List.of(foreign);
+            }
+        };
+        var tools = new ValidatedAssistantReadTools(
+                (requestedVersion, query, options) -> List.of(), lookup, (documentVersionId, pageNumbers) -> List.of());
+
+        assertThatThrownBy(() -> tools.readRuleEvidencePages(versionId, Set.of(5), false))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("escaped document scope");
+    }
+
+    @Test
+    void rejectsSameVersionEvidenceOutsideTheExactRequestedPages() {
+        UUID versionId = UUID.randomUUID();
+        RuleEvidenceHit unrelated = evidence(UUID.randomUUID(), versionId, "Different page text.", 9);
+        RuleEvidenceLookup lookup = new RuleEvidenceLookup() {
+            @Override
+            public List<RuleEvidenceHit> findByChunkIds(UUID documentVersionId, Set<UUID> chunkIds) {
+                return List.of();
+            }
+
+            @Override
+            public List<RuleEvidenceHit> findByPageNumbers(UUID documentVersionId, Set<Integer> pageNumbers) {
+                return List.of(unrelated);
+            }
+        };
+        var tools = new ValidatedAssistantReadTools(
+                (requestedVersion, query, options) -> List.of(), lookup, (documentVersionId, pageNumbers) -> List.of());
+
+        assertThatThrownBy(() -> tools.readRuleEvidencePages(versionId, Set.of(5), false))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("requested page scope");
+    }
+
+    @Test
     void rehydratesOnlyBoundedVersionScopedEvidenceHandles() {
         UUID versionId = UUID.randomUUID();
         RuleEvidenceHit source = evidence(UUID.randomUUID(), versionId, "Canonical source text.", 6);

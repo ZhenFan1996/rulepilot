@@ -63,7 +63,7 @@ export function verifyRealRelease({ security, baseline, providerReports, notBefo
       `player journey evidence missing: ${need}`)
   }
   const providers = new Set(providerReports.flatMap((report) =>
-    (report?.results ?? []).map((result) => result.provider).filter(Boolean)))
+    (report?.semanticResults ?? report?.results ?? []).map((result) => result.provider).filter(Boolean)))
   requireInvariant(providers.size >= 2, 'at least two paid providers are required')
   const answerProviders = new Set(providerReports.flatMap((report) =>
     (report?.results ?? [])
@@ -72,7 +72,7 @@ export function verifyRealRelease({ security, baseline, providerReports, notBefo
       .filter(Boolean)))
   requireInvariant(answerProviders.size >= 2, 'product Answer evidence must publish citations with two paid providers')
   const teachingProviders = new Set(providerReports.flatMap((report) =>
-    (report?.results ?? [])
+    (report?.semanticResults ?? report?.results ?? [])
       .filter((result) => result.citationAccepted === true)
       .map((result) => result.provider)
       .filter(Boolean)))

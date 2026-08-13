@@ -108,17 +108,31 @@ public class ValidatedAssistantReadTools implements AssistantReadTools {
                                 image -> new RulePageImage(
                                         image.pageNumber(), image.mediaType(), image.content(), image.width(), image.height())))
                 : Map.of();
-        return evidence.stream().map(source -> new RuleEvidence(
-                source.chunkId(),
-                source.documentVersionId(),
-                source.sectionType(),
-                source.heading(),
-                source.excerpt(),
-                source.pageFrom(),
-                source.pageTo(),
-                visuals.values().stream()
-                        .filter(image -> image.pageNumber() >= source.pageFrom() && image.pageNumber() <= source.pageTo())
-                        .toList())).toList();
+        return evidence.stream()
+                .peek(source -> {
+                    if (!documentVersionId.equals(source.documentVersionId())) {
+                        throw new IllegalStateException("page evidence escaped document scope");
+                    }
+                    boolean intersectsRequestedPage = java.util.stream.IntStream
+                            .rangeClosed(source.pageFrom(), source.pageTo())
+                            .anyMatch(pageNumbers::contains);
+                    if (!intersectsRequestedPage) {
+                        throw new IllegalStateException("page evidence escaped the requested page scope");
+                    }
+                })
+                .map(source -> new RuleEvidence(
+                        source.chunkId(),
+                        source.documentVersionId(),
+                        source.sectionType(),
+                        source.heading(),
+                        source.excerpt(),
+                        source.pageFrom(),
+                        source.pageTo(),
+                        visuals.values().stream()
+                                .filter(image -> image.pageNumber() >= source.pageFrom()
+                                        && image.pageNumber() <= source.pageTo())
+                                .toList()))
+                .toList();
     }
 
     @Override

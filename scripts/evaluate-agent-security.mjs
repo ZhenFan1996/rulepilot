@@ -62,6 +62,7 @@ export function evaluateAgentSecurity({ manifest, protocol, reports, adversarial
     requireInvariant(result.citationAccepted === true && result.expectedCoverageAdded === true,
       `${result.caseId} teaching evidence failed`)
     requireInvariant(result.directAdditionalModelCalls === 0, `${result.caseId} direct teaching amplified calls`)
+    requireInvariant(result.modelCalls === 0, `${result.caseId} deterministic teaching page recovery called a model`)
   })
   requireInvariant(reports.teaching.crossRulebookNegative?.crossScopeEvidence === false,
     'teaching cross-rulebook evidence escaped scope')
