@@ -32,7 +32,7 @@ async function mockSharedApis(page: Page) {
     json: catalogPresentation,
   }))
   await page.route('**/api/v1/teaching-plans/plan-1/illustrated-lessons/latest', route => route.fulfill({
-    json: { id: 'lesson-1', status: 'COMPLETE', sections },
+    json: { id: 'lesson-1', teachingPlanId: 'plan-1', status: 'COMPLETE', sections },
   }))
   await page.route('**/api/v1/teaching-plans/plan-1/comprehension', route => route.fulfill({ status: 404 }))
 }
@@ -47,7 +47,7 @@ test('uses one tabletop reading language for private and public guides without r
     json: {
       teachingPlanId: 'plan-1', documentVersionId: 'version-1', rulebookTitle: 'Lantern Relay Rules',
       officialSourceUrl: 'https://example.com/rules.pdf', gameCover: null,
-      lesson: { id: 'lesson-1', status: 'COMPLETE', sections },
+      lesson: { id: 'lesson-1', teachingPlanId: 'plan-1', status: 'COMPLETE', sections },
     },
   }))
   await page.route('**/api/public/lessons/plan-1/cover', route => route.fulfill({ status: 404 }))
@@ -151,7 +151,7 @@ test('confirms browser-only Q&A reset and preserves the unsent question with sta
     json: {
       teachingPlanId: 'plan-1', documentVersionId: 'version-1', rulebookTitle: 'Lantern Relay Rules',
       officialSourceUrl: null, gameCover: null,
-      lesson: { id: 'lesson-1', status: 'COMPLETE', sections },
+      lesson: { id: 'lesson-1', teachingPlanId: 'plan-1', status: 'COMPLETE', sections },
     },
   }))
   await page.route('**/api/public/lessons/plan-1/cover', route => route.fulfill({ status: 404 }))

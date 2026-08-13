@@ -6,13 +6,14 @@ import type { AppLocale } from '@/lib/locale'
 
 interface LessonFixture {
   id: string
+  teachingPlanId: string
   title: string
 }
 
 function createLocalization() {
   const locale = ref<AppLocale>('en')
   const planId = ref('plan-1')
-  const sourceLesson = ref<LessonFixture | null>({ id: 'source', title: 'Source guide' })
+  const sourceLesson = ref<LessonFixture | null>({ id: 'source', teachingPlanId: 'plan-1', title: 'Source guide' })
   const displayedLesson = ref<LessonFixture | null>(sourceLesson.value)
   const request = ref(1)
   const requestLogin = vi.fn(async () => undefined)
@@ -24,6 +25,8 @@ function createLocalization() {
     displayedLesson,
     currentRequest: () => request.value,
     isCurrent: (candidate, targetPlanId) => candidate === request.value && targetPlanId === planId.value,
+    isLessonForPlan: (lesson, targetPlanId) => lesson.teachingPlanId === targetPlanId,
+    canRead: () => true,
     requestLogin,
     csrfToken,
   })
@@ -39,8 +42,8 @@ describe('useLessonLocalization', () => {
 
   it('keeps the source guide visible while English preparation is pending and refreshes to the ready guide', async () => {
     vi.useFakeTimers()
-    const source = { id: 'source', title: 'Source guide' }
-    const localized = { id: 'english', title: 'English guide' }
+    const source = { id: 'source', teachingPlanId: 'plan-1', title: 'Source guide' }
+    const localized = { id: 'english', teachingPlanId: 'plan-1', title: 'English guide' }
     let reads = 0
     vi.stubGlobal('fetch', vi.fn(async () => {
       reads++
@@ -71,6 +74,7 @@ describe('useLessonLocalization', () => {
         credentials: 'include',
         headers: { 'X-CSRF-TOKEN': 'csrf' },
       })
+      expect(init?.signal).toBeUndefined()
       return Response.json({ language: 'EN', status: 'RUNNING', lesson: null, failureCode: null })
     })
     vi.stubGlobal('fetch', fetchMock)
@@ -95,6 +99,52 @@ describe('useLessonLocalization', () => {
 
     expect(fixture.requestLogin).toHaveBeenCalledOnce()
     expect(fixture.localization.status.value).toBeNull()
-    expect(fixture.displayedLesson.value).toEqual({ id: 'source', title: 'Source guide' })
+    expect(fixture.displayedLesson.value).toEqual({
+      id: 'source', teachingPlanId: 'plan-1', title: 'Source guide',
+    })
   })
+
+  it('aborts a superseded English read and ignores its late response', async () => {
+    let resolveFirst: ((response: Response) => void) | undefined
+    const signals: AbortSignal[] = []
+    let reads = 0
+    vi.stubGlobal('fetch', vi.fn((_input: string, init?: RequestInit) => {
+      signals.push(init!.signal!)
+      reads++
+      if (reads === 1) return new Promise<Response>((resolve) => { resolveFirst = resolve })
+      return Promise.resolve(Response.json({
+        language: 'EN', status: 'READY',
+        lesson: { id: 'english-2', teachingPlanId: 'plan-1', title: 'Current guide' }, failureCode: null,
+      }))
+    }))
+    const fixture = createLocalization()
+
+    const first = fixture.localization.applySelectedLocale()
+    await fixture.localization.applySelectedLocale()
+
+    expect(signals[0]?.aborted).toBe(true)
+    expect(signals[1]?.aborted).toBe(false)
+    expect(fixture.displayedLesson.value?.title).toBe('Current guide')
+
+    resolveFirst!(Response.json({
+      language: 'EN', status: 'READY',
+      lesson: { id: 'english-1', teachingPlanId: 'plan-1', title: 'Stale guide' }, failureCode: null,
+    }))
+    await first
+    expect(fixture.displayedLesson.value?.title).toBe('Current guide')
+  })
+
+  it('rejects a ready localization that belongs to another plan', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({
+      language: 'EN', status: 'READY',
+      lesson: { id: 'wrong', teachingPlanId: 'plan-2', title: 'Wrong guide' }, failureCode: null,
+    })))
+    const fixture = createLocalization()
+
+    await fixture.localization.applySelectedLocale()
+
+    expect(fixture.localization.status.value).toBe('FAILED')
+    expect(fixture.displayedLesson.value?.title).toBe('Source guide')
+  })
+
 })
