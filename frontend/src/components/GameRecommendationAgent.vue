@@ -521,13 +521,13 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <div v-if="selectedGame && openSurface !== 'journey'" class="mt-4 flex overflow-hidden rounded-2xl border border-copper/25 bg-paper elevation-sm hover:border-copper/45">
+    <div v-if="selectedGame && openSurface !== 'journey'" data-testid="player-journey-continuation" class="mt-4 flex flex-col overflow-hidden rounded-2xl border border-copper/25 bg-paper elevation-sm hover:border-copper/45 sm:flex-row">
       <button ref="journeyDock" data-testid="player-journey-dock" type="button" class="flex min-h-16 min-w-0 flex-1 items-center gap-3 px-4 py-3 text-left" @click="openJourneyDock">
         <span class="grid size-9 shrink-0 place-items-center rounded-full bg-copper/10 font-mono text-xs font-bold text-copper">{{ journeyStatus?.projection.progress ?? 5 }}%</span>
         <span class="min-w-0 flex-1 text-sm font-semibold text-ink">{{ compactJourneyText }}</span>
         <span class="shrink-0 text-sm font-semibold text-indigo underline">{{ t(journeyStatus?.projection.canReadLesson && journeyStatus.plan?.id ? 'journeyRead' : 'journeyOpen') }}</span>
       </button>
-      <button v-if="journeyStatus?.projection.canReadLesson && journeyStatus.plan?.id" data-testid="player-journey-progress-button" type="button" class="min-h-11 shrink-0 border-l border-copper/20 px-4 text-sm font-semibold text-ink/55 underline" @click="openSurface = 'journey'">{{ t('journeyProgress') }}</button>
+      <button v-if="journeyStatus?.projection.canReadLesson && journeyStatus.plan?.id" data-testid="player-journey-progress-button" type="button" class="min-h-11 w-full shrink-0 border-t border-copper/20 px-4 text-sm font-semibold text-ink/55 underline sm:w-auto sm:border-l sm:border-t-0" @click="openSurface = 'journey'">{{ t('journeyProgress') }}</button>
     </div>
 
     <Teleport to="body">

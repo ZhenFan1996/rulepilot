@@ -677,6 +677,59 @@ test('keeps recommendation, rulebook reading, progressive teaching, and grounded
   await expect(page.getByText('Wingspan Rulebook')).toHaveCount(0)
 })
 
+test('keeps the readable-guide continuation legible and focus-safe at 320 and 390 px', async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 844 })
+  await mockPublicDiscovery(page, true)
+  await page.goto('/discover')
+
+  await page.getByLabel('和推荐 Agent 聊聊').fill('4 个人，90 分钟内，想要中等策略')
+  await page.getByRole('button', { name: '发送', exact: true }).click()
+  await expect(page.getByText('支持 4 人游玩')).toBeVisible()
+  await page.getByRole('button', { name: '选这款，找规则书' }).click()
+  const journey = page.getByTestId('player-journey-surface')
+  await journey.getByRole('button', { name: '选择这份' }).click()
+  await journey.getByRole('checkbox', { name: /我确认该链接来自有权提供/ }).check()
+  await journey.getByRole('button', { name: '下载规则书并生成讲解' }).click()
+  await journey.getByRole('button', { name: '关闭小窗' }).click()
+
+  const continuation = page.getByTestId('player-journey-continuation')
+  const readGuide = page.getByTestId('player-journey-dock')
+  const viewProgress = page.getByTestId('player-journey-progress-button')
+  await expect(readGuide).toContainText('讲解已经可以阅读', { timeout: 8_000 })
+  await expect(readGuide).toContainText('打开讲解')
+  await expect(viewProgress).toHaveText('查看进度')
+
+  for (const width of [320, 390]) {
+    await page.setViewportSize({ width, height: 844 })
+    const [containerBox, readBox, progressBox, overflow] = await Promise.all([
+      continuation.boundingBox(),
+      readGuide.boundingBox(),
+      viewProgress.boundingBox(),
+      page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth),
+    ])
+    expect(containerBox).not.toBeNull()
+    expect(readBox).not.toBeNull()
+    expect(progressBox).not.toBeNull()
+    expect(overflow).toBe(false)
+    expect(readBox!.height).toBeGreaterThanOrEqual(44)
+    expect(progressBox!.height).toBeGreaterThanOrEqual(44)
+    expect(Math.abs(readBox!.x - containerBox!.x)).toBeLessThanOrEqual(1)
+    expect(Math.abs(progressBox!.x - containerBox!.x)).toBeLessThanOrEqual(1)
+    expect(Math.abs(readBox!.width - containerBox!.width)).toBeLessThanOrEqual(2)
+    expect(Math.abs(progressBox!.width - containerBox!.width)).toBeLessThanOrEqual(2)
+    expect(progressBox!.y).toBeGreaterThanOrEqual(readBox!.y + readBox!.height - 1)
+  }
+
+  await readGuide.click()
+  const lesson = page.getByRole('dialog', { name: '生成讲解阅读器' })
+  await expect(lesson).toBeVisible()
+  await lesson.getByRole('button', { name: '关闭讲解' }).click()
+  await expect(readGuide).toBeFocused()
+
+  await viewProgress.click()
+  await expect(page.getByTestId('player-journey-backdrop')).toBeVisible()
+})
+
 async function expectOpaqueSurface(locator: import('@playwright/test').Locator) {
   await expect(locator).toBeVisible()
   const appearance = await locator.evaluate((element) => {
