@@ -7,6 +7,7 @@ import com.rulepilot.assistant.AgentExecutionStoppedException;
 import com.rulepilot.assistant.AuditedAgentInvocations;
 import com.rulepilot.assistant.EvidenceVerifier;
 import com.rulepilot.teaching.TeachingLessonModel;
+import com.rulepilot.teaching.TeachingLessonModel.InputTokenProfile;
 import com.rulepilot.teaching.TeachingLessonModel.InvalidOutputException;
 import com.rulepilot.teaching.TeachingLessonModel.PriorSectionContext;
 import com.rulepilot.teaching.TeachingLessonModel.SectionDraft;
@@ -243,25 +244,27 @@ final class TeachingSectionDraftComposer {
             String primaryOperation,
             String repairOperation,
             String successSummary) {
+        InputTokenProfile primaryProfile = model.compositionInputProfile(request);
         try {
             return invocations.invoke(
                     runId,
                     ActivityType.MODEL,
                     operationName(primaryOperation, planned.position()),
-                    estimateTokens(request.toString()),
-                    successSummary,
+                    primaryProfile.totalTokens(),
+                    profiledSummary(successSummary, primaryProfile),
                     () -> model.compose(request),
-                    result -> estimateTokens(result.toString()));
+                    result -> model.estimatedOutputTokens(request, result));
         } catch (InvalidOutputException firstFailure) {
+            InputTokenProfile repairProfile = model.compositionRepairInputProfile(request);
             try {
                 return invocations.invoke(
                         runId,
                         ActivityType.MODEL,
                         operationName(repairOperation, planned.position()),
-                        estimateTokens(request.toString()),
-                        "Teaching section structured output repaired",
+                        repairProfile.totalTokens(),
+                        profiledSummary("Teaching section structured output repaired", repairProfile),
                         () -> model.repairCompositionContract(request),
-                        result -> estimateTokens(result.toString()));
+                        result -> model.estimatedOutputTokens(request, result));
             } catch (RuntimeException repairFailure) {
                 repairFailure.addSuppressed(firstFailure);
                 throw repairFailure;
@@ -278,28 +281,27 @@ final class TeachingSectionDraftComposer {
             String primaryOperation,
             String repairOperation,
             String successSummary) {
-        int estimatedInputTokens = estimateTokens(request.toString())
-                + estimateTokens(previousDraft.toString())
-                + estimateTokens(feedback.toString());
+        InputTokenProfile primaryProfile = model.revisionInputProfile(request, previousDraft, feedback);
         try {
             return invocations.invoke(
                     runId,
                     ActivityType.MODEL,
                     operationName(primaryOperation, planned.position()),
-                    estimatedInputTokens,
-                    successSummary,
+                    primaryProfile.totalTokens(),
+                    profiledSummary(successSummary, primaryProfile),
                     () -> model.revise(request, previousDraft, feedback),
-                    result -> estimateTokens(result.toString()));
+                    result -> model.estimatedOutputTokens(request, result));
         } catch (InvalidOutputException firstFailure) {
+            InputTokenProfile repairProfile = model.revisionRepairInputProfile(request, previousDraft, feedback);
             try {
                 return invocations.invoke(
                         runId,
                         ActivityType.MODEL,
                         operationName(repairOperation, planned.position()),
-                        estimatedInputTokens,
-                        "Teaching section revision structured output repaired",
+                        repairProfile.totalTokens(),
+                        profiledSummary("Teaching section revision structured output repaired", repairProfile),
                         () -> model.repairRevisionContract(request, previousDraft, feedback),
-                        result -> estimateTokens(result.toString()));
+                        result -> model.estimatedOutputTokens(request, result));
             } catch (RuntimeException repairFailure) {
                 repairFailure.addSuppressed(firstFailure);
                 throw repairFailure;
@@ -358,8 +360,19 @@ final class TeachingSectionDraftComposer {
                 "Visual composition unavailable; continuing with cited text");
     }
 
-    private int estimateTokens(String value) {
-        return value == null ? 0 : Math.max(1, (value.length() + 3) / 4);
+    private String profiledSummary(String summary, InputTokenProfile profile) {
+        return "%s [p=%s;f=%d;o=%d;r=%d;e=%d;s=%d;c=%d;v=%d;x=%d]"
+                .formatted(
+                        summary,
+                        profile.providerId(),
+                        profile.fixedContractTokens(),
+                        profile.objectiveTokens(),
+                        profile.requiredRuleTokens(),
+                        profile.evidenceTokens(),
+                        profile.chapterScopeTokens(),
+                        profile.continuityTokens(),
+                        profile.revisionTokens(),
+                        profile.otherRequestTokens());
     }
 
     private String operationName(String operation, int sectionPosition) {

@@ -29,6 +29,38 @@ public interface TeachingLessonModel {
         return Integer.MAX_VALUE;
     }
 
+    /**
+     * Estimates the complete provider input for one composition attempt.
+     *
+     * <p>The default keeps test and local adapters lightweight. Provider adapters should override this boundary when
+     * they add system prompts, output schemas, or other request material that the application cannot see.</p>
+     */
+    default InputTokenProfile compositionInputProfile(SectionRequest request) {
+        return approximateInputProfile(request, "", providerId());
+    }
+
+    /** Estimates a separately budgeted malformed-output repair request. */
+    default InputTokenProfile compositionRepairInputProfile(SectionRequest request) {
+        return compositionInputProfile(request);
+    }
+
+    /** Estimates the complete provider input for one application-requested revision. */
+    default InputTokenProfile revisionInputProfile(
+            SectionRequest request, SectionDraft previousDraft, List<String> feedback) {
+        return approximateInputProfile(request, previousDraft + " " + feedback, providerId());
+    }
+
+    /** Estimates a separately budgeted malformed revision-output repair request. */
+    default InputTokenProfile revisionRepairInputProfile(
+            SectionRequest request, SectionDraft previousDraft, List<String> feedback) {
+        return revisionInputProfile(request, previousDraft, feedback);
+    }
+
+    /** Estimates the provider's structured response representation rather than internal UUID-bearing values. */
+    default int estimatedOutputTokens(SectionRequest request, SectionDraft draft) {
+        return estimateTokens(draft.toString());
+    }
+
     SectionDraft compose(SectionRequest request);
 
     /**
@@ -55,6 +87,52 @@ public interface TeachingLessonModel {
 
         public InvalidOutputException(String message, Throwable cause) {
             super(message, cause);
+        }
+    }
+
+    /**
+     * Content-free request-size attribution persisted with the matching audited model activity.
+     *
+     * <p>Components are estimates rather than provider billing values. They deliberately contain only bounded route
+     * and size metadata, never prompt, rulebook, user, or model-response content.</p>
+     */
+    record InputTokenProfile(
+            String providerId,
+            int totalTokens,
+            int fixedContractTokens,
+            int objectiveTokens,
+            int requiredRuleTokens,
+            int evidenceTokens,
+            int chapterScopeTokens,
+            int continuityTokens,
+            int revisionTokens,
+            int otherRequestTokens) {
+
+        public InputTokenProfile {
+            if (providerId == null || providerId.isBlank() || providerId.length() > 40
+                    || totalTokens < 1
+                    || fixedContractTokens < 0
+                    || objectiveTokens < 0
+                    || requiredRuleTokens < 0
+                    || evidenceTokens < 0
+                    || chapterScopeTokens < 0
+                    || continuityTokens < 0
+                    || revisionTokens < 0
+                    || otherRequestTokens < 0) {
+                throw new IllegalArgumentException("teaching input token profile is invalid");
+            }
+            long componentTotal = (long) fixedContractTokens
+                    + objectiveTokens
+                    + requiredRuleTokens
+                    + evidenceTokens
+                    + chapterScopeTokens
+                    + continuityTokens
+                    + revisionTokens
+                    + otherRequestTokens;
+            if (componentTotal != totalTokens) {
+                throw new IllegalArgumentException("teaching input token profile total is inconsistent");
+            }
+            providerId = providerId.strip();
         }
     }
 
@@ -224,5 +302,43 @@ public interface TeachingLessonModel {
                 int height) {
             this(pageNumber, label, "", x, y, width, height);
         }
+    }
+
+    private static InputTokenProfile approximateInputProfile(
+            SectionRequest request, String revision, String providerId) {
+        int objectiveTokens = estimateTokens(request.objective());
+        int requiredRuleTokens = request.requiredRuleIntents().isEmpty()
+                ? 0
+                : estimateTokens(request.requiredRuleIntents().toString());
+        int evidenceTokens = estimateTokens(request.evidence().toString());
+        int chapterScopeTokens = estimateTokens(request.chapterScope());
+        int continuityTokens = request.priorSections().isEmpty()
+                ? 0
+                : estimateTokens(request.priorSections().toString());
+        int revisionTokens = estimateTokens(revision);
+        int otherRequestTokens = estimateTokens(
+                request.title() + " " + request.coverageTags() + " " + request.pageImages().size());
+        int totalTokens = objectiveTokens
+                + requiredRuleTokens
+                + evidenceTokens
+                + chapterScopeTokens
+                + continuityTokens
+                + revisionTokens
+                + otherRequestTokens;
+        return new InputTokenProfile(
+                providerId,
+                totalTokens,
+                0,
+                objectiveTokens,
+                requiredRuleTokens,
+                evidenceTokens,
+                chapterScopeTokens,
+                continuityTokens,
+                revisionTokens,
+                otherRequestTokens);
+    }
+
+    private static int estimateTokens(String value) {
+        return value == null || value.isEmpty() ? 0 : Math.max(1, (value.length() + 3) / 4);
     }
 }

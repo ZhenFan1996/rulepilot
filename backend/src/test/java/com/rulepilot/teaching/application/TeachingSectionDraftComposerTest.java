@@ -9,6 +9,7 @@ import com.rulepilot.assistant.AuditedAgentInvocations;
 import com.rulepilot.assistant.ImmediateAuditedAgentInvocations;
 import com.rulepilot.assistant.application.PolicyEvidenceVerifier;
 import com.rulepilot.teaching.TeachingLessonModel;
+import com.rulepilot.teaching.TeachingLessonModel.InputTokenProfile;
 import com.rulepilot.teaching.TeachingLessonModel.InvalidOutputException;
 import com.rulepilot.teaching.TeachingLessonModel.SectionDraft;
 import com.rulepilot.teaching.TeachingLessonModel.StepDraft;
@@ -246,6 +247,69 @@ class TeachingSectionDraftComposerTest {
                 .containsExactly("correctTeachingSection|1", "repairTeachingSectionCorrectionContract|1");
     }
 
+    @Test
+    void budgetsAndAuditsTheCompleteProviderRequestProfile() {
+        UUID versionId = UUID.randomUUID();
+        UUID chunkId = UUID.randomUUID();
+        RuleEvidence evidence = evidence(chunkId, versionId);
+        InputTokenProfile profile = new InputTokenProfile(
+                "qwen",
+                148,
+                80,
+                10,
+                9,
+                24,
+                11,
+                0,
+                0,
+                14);
+        TeachingLessonModel model = new TeachingLessonModel() {
+            @Override
+            public InputTokenProfile compositionInputProfile(SectionRequest request) {
+                return profile;
+            }
+
+            @Override
+            public SectionDraft compose(SectionRequest request) {
+                return textDraft(chunkId);
+            }
+
+            @Override
+            public int estimatedOutputTokens(SectionRequest request, SectionDraft draft) {
+                return 37;
+            }
+        };
+        RecordingInvocations invocations = new RecordingInvocations();
+        TeachingSectionDraftComposer composer = new TeachingSectionDraftComposer(
+                model, new PolicyEvidenceVerifier(), invocations, VisualRulebookPageFacts.empty());
+        TeachingPlan plan = plan(versionId);
+
+        composer.compose(
+                plan,
+                plan.sections().getFirst(),
+                List.of(),
+                List.of(evidence),
+                UUID.randomUUID(),
+                0,
+                false);
+
+        assertThat(invocations.inputTokens).containsExactly(148);
+        assertThat(invocations.outputTokens).containsExactly(37);
+        assertThat(invocations.summaries)
+                .singleElement()
+                .asString()
+                .contains(
+                        "p=qwen",
+                        "f=80",
+                        "o=10",
+                        "r=9",
+                        "e=24",
+                        "s=11",
+                        "c=0",
+                        "v=0",
+                        "x=14");
+    }
+
     private TeachingPlan plan(UUID versionId) {
         return new TeachingPlan(
                 UUID.randomUUID(),
@@ -332,6 +396,9 @@ class TeachingSectionDraftComposerTest {
     private static final class RecordingInvocations implements AuditedAgentInvocations {
 
         private final List<String> modelOperations = new ArrayList<>();
+        private final List<Integer> inputTokens = new ArrayList<>();
+        private final List<String> summaries = new ArrayList<>();
+        private final List<Integer> outputTokens = new ArrayList<>();
 
         @Override
         public <T> T invoke(
@@ -343,7 +410,11 @@ class TeachingSectionDraftComposerTest {
                 Supplier<T> invocation,
                 ToIntFunction<T> outputTokenEstimator) {
             if (type == ActivityType.MODEL) modelOperations.add(operation);
-            return invocation.get();
+            inputTokens.add(estimatedInputTokens);
+            summaries.add(successSummary);
+            T result = invocation.get();
+            outputTokens.add(outputTokenEstimator.applyAsInt(result));
+            return result;
         }
     }
 }

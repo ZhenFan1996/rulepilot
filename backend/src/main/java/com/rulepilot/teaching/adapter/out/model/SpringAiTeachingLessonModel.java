@@ -6,6 +6,7 @@ import com.rulepilot.modelconfig.RuntimeModelConfiguration;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration.Role;
 import com.rulepilot.modelconfig.VersionedAgentPrompts;
 import com.rulepilot.teaching.TeachingLessonModel;
+import com.rulepilot.teaching.TeachingLessonModel.InputTokenProfile;
 import com.rulepilot.teaching.TeachingLessonModel.InvalidOutputException;
 import com.rulepilot.teaching.TeachingLessonModel.VisualFocusDraft;
 import com.rulepilot.teaching.domain.IllustratedLesson.VisualKind;
@@ -35,6 +36,10 @@ import tools.jackson.core.JacksonException;
 public class SpringAiTeachingLessonModel implements TeachingLessonModel {
 
     private static final Logger log = LoggerFactory.getLogger(SpringAiTeachingLessonModel.class);
+    private static final BeanOutputConverter<ModelSectionDraft> TEACHING_OUTPUT_CONVERTER =
+            new BeanOutputConverter<>(ModelSectionDraft.class);
+    private static final String TEACHING_OUTPUT_FORMAT = TEACHING_OUTPUT_CONVERTER.getFormat();
+    private static final String QWEN_TEACHING_SCHEMA = buildQwenTeachingSchema();
     private final RuntimeModelConfiguration models;
     private final FakeTeachingLessonModel fakeModel;
     private final VersionedAgentPrompts prompts;
@@ -89,6 +94,50 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
         String teaching = models.providerFor(Role.TEACHING, modelConfigurationOwner);
         String visual = models.providerFor(Role.VISUAL, modelConfigurationOwner);
         return "qwen".equals(teaching) || "qwen".equals(visual) ? 1 : Integer.MAX_VALUE;
+    }
+
+    @Override
+    public InputTokenProfile compositionInputProfile(SectionRequest request) {
+        if (usesFake(roleFor(request), request.modelConfigurationOwner())) {
+            return fakeModel.compositionInputProfile(request);
+        }
+        return inputProfile(request, "");
+    }
+
+    @Override
+    public InputTokenProfile compositionRepairInputProfile(SectionRequest request) {
+        if (usesFake(roleFor(request), request.modelConfigurationOwner())) {
+            return fakeModel.compositionRepairInputProfile(request);
+        }
+        return inputProfile(request, prompts.structuredOutputRepair());
+    }
+
+    @Override
+    public InputTokenProfile revisionInputProfile(
+            SectionRequest request, SectionDraft previousDraft, List<String> feedback) {
+        if (usesFake(roleFor(request), request.modelConfigurationOwner())) {
+            return fakeModel.revisionInputProfile(request, previousDraft, feedback);
+        }
+        return inputProfile(request, revisionInstruction(request, previousDraft, feedback));
+    }
+
+    @Override
+    public InputTokenProfile revisionRepairInputProfile(
+            SectionRequest request, SectionDraft previousDraft, List<String> feedback) {
+        if (usesFake(roleFor(request), request.modelConfigurationOwner())) {
+            return fakeModel.revisionRepairInputProfile(request, previousDraft, feedback);
+        }
+        return inputProfile(
+                request,
+                revisionInstruction(request, previousDraft, feedback) + "\n" + prompts.structuredOutputRepair());
+    }
+
+    @Override
+    public int estimatedOutputTokens(SectionRequest request, SectionDraft draft) {
+        if (usesFake(roleFor(request), request.modelConfigurationOwner())) {
+            return fakeModel.estimatedOutputTokens(request, draft);
+        }
+        return estimateTokens(toModelDraft(request, draft).toString());
     }
 
     @Override
@@ -151,6 +200,79 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
                 """.formatted(toModelDraft(request, previousDraft), modelFeedback(request, feedback));
     }
 
+    private InputTokenProfile inputProfile(SectionRequest request, String revisionInstruction) {
+        Role role = roleFor(request);
+        String owner = request.modelConfigurationOwner();
+        boolean qwen = usesQwen(role, owner);
+        int fixedContractTokens = estimateTokens(prompts.teachingRuntimeSystem())
+                + estimateTokens(promptWithoutParameters(prompts.teachingUser()))
+                + estimateTokens(qwen ? QWEN_TEACHING_SCHEMA : TEACHING_OUTPUT_FORMAT);
+        int objectiveTokens = estimateTokens(request.objective());
+        int requiredRuleTokens = request.requiredRuleIntents().isEmpty()
+                ? 0
+                : estimateTokens(request.requiredRuleIntents().toString());
+        int evidenceTokens = estimateTokens(modelEvidence(request).toString());
+        int chapterScopeTokens = estimateTokens(request.chapterScope());
+        int continuityTokens = request.priorSections().isEmpty()
+                ? 0
+                : estimateTokens(request.priorSections().toString());
+        int revisionTokens = estimateTokens(revisionInstruction);
+        int otherRequestTokens = estimateTokens(request.title())
+                + estimateTokens(request.coverageTags().toString())
+                + estimateTokens(Boolean.toString(!request.pageImages().isEmpty()))
+                + (request.pageImages().isEmpty()
+                        ? 0
+                        : estimateTokens(request.pageImages().stream()
+                                .map(TeachingLessonModel.PageImageInput::pageNumber)
+                                .toList()
+                                .toString()));
+        int totalTokens = fixedContractTokens
+                + objectiveTokens
+                + requiredRuleTokens
+                + evidenceTokens
+                + chapterScopeTokens
+                + continuityTokens
+                + revisionTokens
+                + otherRequestTokens;
+        return new InputTokenProfile(
+                resolvedProvider(role, owner),
+                totalTokens,
+                fixedContractTokens,
+                objectiveTokens,
+                requiredRuleTokens,
+                evidenceTokens,
+                chapterScopeTokens,
+                continuityTokens,
+                revisionTokens,
+                otherRequestTokens);
+    }
+
+    private String resolvedProvider(Role role, String owner) {
+        return owner == null || owner.isBlank() ? models.providerFor(role) : models.providerFor(role, owner);
+    }
+
+    private String promptWithoutParameters(String template) {
+        String result = template;
+        for (String parameter : List.of(
+                "section",
+                "objective",
+                "coverage",
+                "requiredRules",
+                "continuity",
+                "chapterScope",
+                "evidence",
+                "visualEvidenceAvailable",
+                "visualPages",
+                "repair")) {
+            result = result.replace("{" + parameter + "}", "");
+        }
+        return result;
+    }
+
+    private int estimateTokens(String value) {
+        return value == null || value.isEmpty() ? 0 : Math.max(1, (value.length() + 3) / 4);
+    }
+
     private SectionDraft composeOnce(SectionRequest request, String repairInstruction) {
         Role role = roleFor(request);
         String owner = request.modelConfigurationOwner();
@@ -175,7 +297,7 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
         }
         ModelSectionDraft draft;
         try {
-            draft = prompt
+            ChatClient.ChatClientRequestSpec requestSpec = prompt
                     .system(prompts.teachingRuntimeSystem())
                     .user(user -> {
                         user.text(prompts.teachingUser())
@@ -196,9 +318,13 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
                                     MimeTypeUtils.parseMimeType(image.mediaType()),
                                     new ByteArrayResource(image.content())));
                         }
-                    })
-                    .call()
-                    .entity(ModelSectionDraft.class);
+                    });
+            if (usesQwen(role, owner)) {
+                String responseContent = requestSpec.call().content();
+                draft = responseContent == null ? null : TEACHING_OUTPUT_CONVERTER.convert(responseContent);
+            } else {
+                draft = requestSpec.call().entity(TEACHING_OUTPUT_CONVERTER);
+            }
         } catch (JacksonException invalidJson) {
             throw new InvalidOutputException("teaching model returned malformed structured output", invalidJson);
         }
@@ -246,6 +372,14 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
     }
 
     static String qwenTeachingSchema() {
+        return QWEN_TEACHING_SCHEMA;
+    }
+
+    static String teachingOutputFormat() {
+        return TEACHING_OUTPUT_FORMAT;
+    }
+
+    private static String buildQwenTeachingSchema() {
         try {
             ObjectMapper mapper = new ObjectMapper();
             ObjectNode schema = (ObjectNode) mapper.readTree(
@@ -265,10 +399,7 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
     }
 
     private boolean usesQwen(Role role, String modelConfigurationOwner) {
-        String provider = modelConfigurationOwner == null || modelConfigurationOwner.isBlank()
-                ? models.providerFor(role)
-                : models.providerFor(role, modelConfigurationOwner);
-        return "qwen".equals(provider);
+        return "qwen".equals(resolvedProvider(role, modelConfigurationOwner));
     }
 
     boolean usesFake(Role role, String modelConfigurationOwner) {

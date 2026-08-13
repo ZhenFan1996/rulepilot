@@ -11,9 +11,11 @@ import com.rulepilot.modelconfig.RuntimeModelConfiguration;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration.Role;
 import com.rulepilot.modelconfig.VersionedAgentPrompts;
 import com.rulepilot.teaching.TeachingLessonModel.EvidenceInput;
+import com.rulepilot.teaching.TeachingLessonModel.InputTokenProfile;
 import com.rulepilot.teaching.TeachingLessonModel.InvalidOutputException;
 import com.rulepilot.teaching.TeachingLessonModel.PageImageInput;
 import com.rulepilot.teaching.TeachingLessonModel.SectionRequest;
+import com.rulepilot.teaching.TeachingLessonModel.SectionDraft;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.List;
 import java.util.UUID;
@@ -79,6 +81,22 @@ class SpringAiTeachingLessonModelTest {
     }
 
     @Test
+    void doesNotBudgetRealProviderPromptMaterialForTheFakeAdapter() {
+        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        VersionedAgentPrompts prompts = mock(VersionedAgentPrompts.class);
+        when(configuration.usesFake(Role.TEACHING)).thenReturn(true);
+        when(configuration.providerFor(Role.TEACHING)).thenReturn("fake");
+        when(prompts.teachingRuntimeSystem()).thenReturn("A real-provider-only system contract.");
+        SpringAiTeachingLessonModel model = new SpringAiTeachingLessonModel(
+                configuration, new FakeTeachingLessonModel(), prompts);
+
+        InputTokenProfile profile = model.compositionInputProfile(request(List.of()));
+
+        assertThat(profile.providerId()).isEqualTo("fake");
+        assertThat(profile.fixedContractTokens()).isZero();
+    }
+
+    @Test
     void serializesSectionRequestsWhenEitherAssignedRoleUsesQwen() {
         RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
         when(configuration.providerFor(Role.TEACHING, "player")).thenReturn("deepseek");
@@ -123,6 +141,10 @@ class SpringAiTeachingLessonModelTest {
         OpenAiChatOptions options = (OpenAiChatOptions) prompt.getValue().getOptions();
         assertThat(options.getTemperature()).isEqualTo(0.28);
         assertThat(options.getResponseFormat().getType()).isEqualTo(Type.JSON_SCHEMA);
+        assertThat(prompt.getValue().getContents())
+                .doesNotContain("Your response should be in JSON format", "```json");
+        assertThat(model.compositionInputProfile(request(List.of())).totalTokens())
+                .isGreaterThanOrEqualTo(estimatedTokens(prompt.getValue().getContents()));
     }
 
     @Test
@@ -133,6 +155,38 @@ class SpringAiTeachingLessonModelTest {
                         mock(VersionedAgentPrompts.class),
                         2.01))
                 .hasMessageContaining("teaching model temperature");
+    }
+
+    @Test
+    void retainsTextualOutputContractWhenTheProviderHasNoNativeTeachingSchema() {
+        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        VersionedAgentPrompts prompts = mock(VersionedAgentPrompts.class);
+        ChatModel chatModel = mock(ChatModel.class);
+        when(configuration.usesFake(Role.TEACHING)).thenReturn(false);
+        when(configuration.providerFor(Role.TEACHING)).thenReturn("deepseek");
+        when(configuration.modelFor(Role.TEACHING, null)).thenReturn(chatModel);
+        OpenAiChatOptions defaults = OpenAiChatOptions.builder()
+                .apiKey("test-key")
+                .baseUrl("https://provider.example/v1")
+                .model("deepseek-chat")
+                .build();
+        when(chatModel.getDefaultOptions()).thenReturn(defaults);
+        when(chatModel.getOptions()).thenReturn(defaults);
+        when(prompts.teachingRuntimeSystem()).thenReturn("Teach only from evidence.");
+        when(prompts.teachingUser()).thenReturn("{section}\n{objective}\n{evidence}\n{repair}");
+        when(chatModel.call(any(Prompt.class))).thenReturn(response("""
+                {"title":"Setup","visualKind":"REFERENCE_CARD","visualCaption":"Source",
+                 "visualCitationIds":["E1"],"steps":[{"heading":"Do this","kind":"DO",
+                 "text":"Place the board.","citationIds":["E1"]}]}
+                """));
+        SpringAiTeachingLessonModel model = new SpringAiTeachingLessonModel(
+                configuration, new FakeTeachingLessonModel(), prompts);
+
+        assertThat(model.compose(request(List.of())).steps()).hasSize(1);
+
+        ArgumentCaptor<Prompt> sent = ArgumentCaptor.forClass(Prompt.class);
+        verify(chatModel).call(sent.capture());
+        assertThat(sent.getValue().getContents()).contains("Your response should be in JSON format", "```json");
     }
 
     @Test
@@ -210,6 +264,62 @@ class SpringAiTeachingLessonModelTest {
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("provider unavailable");
         verify(chatModel).call(any(Prompt.class));
+    }
+
+    @Test
+    void attributesTheCompleteQwenRequestWithoutPersistingPromptContent() {
+        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        VersionedAgentPrompts prompts = mock(VersionedAgentPrompts.class);
+        when(configuration.providerFor(Role.TEACHING)).thenReturn("qwen");
+        when(configuration.providerFor(Role.TEACHING, "player")).thenReturn("qwen");
+        when(prompts.teachingRuntimeSystem()).thenReturn("System contract with private instructions.");
+        when(prompts.teachingUser()).thenReturn(
+                "Section={section}; objective={objective}; rules={requiredRules}; evidence={evidence}; "
+                        + "scope={chapterScope}; continuity={continuity}; repair={repair}; "
+                        + "coverage={coverage}; visual={visualEvidenceAvailable}; pages={visualPages}");
+        SpringAiTeachingLessonModel model = new SpringAiTeachingLessonModel(
+                configuration, new FakeTeachingLessonModel(), prompts);
+        SectionRequest request = new SectionRequest(
+                "setup",
+                "摆放游戏",
+                "让玩家完成开局摆放",
+                List.of("setup"),
+                List.of(),
+                List.of(new EvidenceInput(UUID.randomUUID(), "SETUP", "Setup", "Place the board.", 4, 4)),
+                List.of(),
+                List.of("central board setup"),
+                "player",
+                "1. 摆放游戏 — 完成开局摆放");
+
+        InputTokenProfile profile = model.compositionInputProfile(request);
+
+        assertThat(profile.providerId()).isEqualTo("qwen");
+        assertThat(profile.fixedContractTokens()).isGreaterThanOrEqualTo(
+                estimatedTokens("System contract with private instructions.")
+                        + estimatedTokens(SpringAiTeachingLessonModel.qwenTeachingSchema()));
+        assertThat(profile.objectiveTokens()).isPositive();
+        assertThat(profile.requiredRuleTokens()).isPositive();
+        assertThat(profile.evidenceTokens()).isPositive();
+        assertThat(profile.chapterScopeTokens()).isPositive();
+        assertThat(profile.continuityTokens()).isZero();
+        assertThat(profile.revisionTokens()).isZero();
+        assertThat(profile.totalTokens()).isEqualTo(
+                profile.fixedContractTokens()
+                        + profile.objectiveTokens()
+                        + profile.requiredRuleTokens()
+                        + profile.evidenceTokens()
+                        + profile.chapterScopeTokens()
+                        + profile.continuityTokens()
+                        + profile.revisionTokens()
+                        + profile.otherRequestTokens());
+
+        SectionDraft draft = new FakeTeachingLessonModel().compose(request);
+        assertThat(model.estimatedOutputTokens(request, draft))
+                .isLessThan(estimatedTokens(draft.toString()));
+    }
+
+    private int estimatedTokens(String value) {
+        return Math.max(1, (value.length() + 3) / 4);
     }
 
     private ChatResponse response(String content) {
