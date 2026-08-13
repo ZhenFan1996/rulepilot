@@ -12,12 +12,12 @@ import static org.mockito.Mockito.when;
 
 import com.rulepilot.assistant.AuditedAgentInvocations;
 import com.rulepilot.catalog.CatalogEditionLookup;
-import com.rulepilot.document.DocumentPageImages;
 import com.rulepilot.document.DocumentProcessing;
 import com.rulepilot.document.DocumentProcessing.PageView;
 import com.rulepilot.document.DocumentVersionScopeLookup;
 import com.rulepilot.document.DocumentVersionScopeLookup.VersionScope;
 import com.rulepilot.teaching.TeachingOutlineModel.OutlineDraft;
+import com.rulepilot.teaching.TeachingOutlineModel.OutlineRequest;
 import com.rulepilot.teaching.TeachingOutlineModel.PageInput;
 import com.rulepilot.teaching.TeachingOutlineModel.TopicDraft;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel;
@@ -35,6 +35,7 @@ import java.util.UUID;
 import java.util.concurrent.FutureTask;
 import java.util.stream.IntStream;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
 class TeachingPlanServiceTest {
 
@@ -46,7 +47,6 @@ class TeachingPlanServiceTest {
                 .mapToObj(page -> new PageView(page, "", 0))
                 .toList();
         DocumentProcessing documents = mock(DocumentProcessing.class);
-        DocumentPageImages pageImages = mock(DocumentPageImages.class);
         DocumentVersionScopeLookup scopes = mock(DocumentVersionScopeLookup.class);
         CatalogEditionLookup catalog = mock(CatalogEditionLookup.class);
         VisualRulebookCataloger visualCataloger = mock(VisualRulebookCataloger.class);
@@ -67,7 +67,6 @@ class TeachingPlanServiceTest {
                 .thenAnswer(invocation -> invocation.getArgument(0));
         TeachingPlanService service = new TeachingPlanService(
                 documents,
-                pageImages,
                 scopes,
                 catalog,
                 visualCataloger,
@@ -85,7 +84,7 @@ class TeachingPlanServiceTest {
         assertThat(plan.sections()).allMatch(section ->
                 section.topicKey().startsWith("progressive-visual-page-"));
         verify(publication).publish(any(TeachingPlan.class), eq("Example Game"));
-        verifyNoInteractions(outlines, pageImages);
+        verifyNoInteractions(outlines);
     }
 
     @Test
@@ -93,7 +92,6 @@ class TeachingPlanServiceTest {
         UUID documentVersionId = UUID.randomUUID();
         List<PageView> visualPages = List.of(new PageView(1, "", 0));
         DocumentProcessing documents = mock(DocumentProcessing.class);
-        DocumentPageImages pageImages = mock(DocumentPageImages.class);
         DocumentVersionScopeLookup scopes = mock(DocumentVersionScopeLookup.class);
         CatalogEditionLookup catalog = mock(CatalogEditionLookup.class);
         VisualRulebookCataloger visualCataloger = mock(VisualRulebookCataloger.class);
@@ -112,7 +110,6 @@ class TeachingPlanServiceTest {
                         1,
                         "VISIBLE TERM",
                         "A complete page-scoped factual observation supports the requested lesson.")));
-        when(pageImages.read(documentVersionId, Set.of(1))).thenReturn(List.of());
         when(outlines.organize(any())).thenReturn(new OutlineDraft(
                 "Example Game",
                 "Follow the player's requested teaching emphasis.",
@@ -129,7 +126,6 @@ class TeachingPlanServiceTest {
                 .thenAnswer(invocation -> invocation.getArgument(0));
         TeachingPlanService service = new TeachingPlanService(
                 documents,
-                pageImages,
                 scopes,
                 catalog,
                 visualCataloger,
@@ -143,7 +139,9 @@ class TeachingPlanServiceTest {
 
         assertThat(plan.learningGoal()).isEqualTo(learningGoal);
         verify(visualCataloger, never()).progressiveTeachingStart(any(), any(), any(), any(), any());
-        verify(outlines).organize(any());
+        ArgumentCaptor<OutlineRequest> request = ArgumentCaptor.forClass(OutlineRequest.class);
+        verify(outlines).organize(request.capture());
+        assertThat(request.getValue().pageImages()).isEmpty();
     }
 
     @Test

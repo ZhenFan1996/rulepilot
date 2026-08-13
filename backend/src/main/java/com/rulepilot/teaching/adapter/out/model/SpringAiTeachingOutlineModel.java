@@ -244,8 +244,8 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
     }
 
     private Role roleFor(OutlineRequest request) {
-        // The visual role has already converted rendered pages into a bounded factual catalog.
-        // Organizing that catalog is a text-planning task and should not repeat the image upload.
+        // VisualRulebookCataloger converts required rendered pages into a bounded factual catalog before this boundary.
+        // Organizing page text or that catalog is a text-planning task and must not repeat raw page-image uploads.
         return Role.TEACHING;
     }
 
