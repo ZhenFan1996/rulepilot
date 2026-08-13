@@ -107,8 +107,13 @@ const readerScope = ref<string | null>(null)
 const readerScopeReady = ref(false)
 const coverUnavailable = ref(false)
 let latestLoadRequest = 0
+let activeLessonController: AbortController | null = null
+let loadedLessonPlanId = ''
+let loadedLessonLocale = ''
 let latestPublicAnswerRequest = 0
 let activePublicAnswerController: AbortController | null = null
+let readerScopeGeneration = 0
+let disposed = false
 const planId = computed(() => typeof route.params.planId === 'string' ? route.params.planId : '')
 const displayTitle = computed(() => publicLesson.value ? publicLessonTitle(publicLesson.value) : '')
 const questionMode = computed(() => route.name === 'public-lesson-questions')
@@ -120,9 +125,13 @@ const heroDescription = computed(() => questionMode.value ? t('public.question.d
 const englishGuidePending = computed(() => locale.value === 'en' && publicLesson.value?.contentLanguage !== 'en')
 const englishGuideFailed = computed(() => englishGuidePending.value && publicLesson.value?.localizationStatus === 'FAILED')
 
-function answerThreadStorageKey() {
-  if (!readerScope.value || !planId.value) return null
-  return `${PUBLIC_ANSWER_STORAGE_PREFIX}${readerScope.value}:${planId.value}:${locale.value}`
+function answerThreadStorageKey(
+  scope: string | null = readerScope.value,
+  targetPlanId: string = planId.value,
+  targetLocale: string = locale.value,
+) {
+  if (!scope || !targetPlanId) return null
+  return `${PUBLIC_ANSWER_STORAGE_PREFIX}${scope}:${targetPlanId}:${targetLocale}`
 }
 
 function anonymousReaderScope() {
@@ -138,28 +147,55 @@ function anonymousReaderScope() {
   }
 }
 
-async function initializeReaderScope() {
-  let resolvedScope = anonymousReaderScope()
-  try {
-    const response = await fetch('/api/auth/session', { credentials: 'include' })
-    if (response.ok) {
-      const session = await response.json() as { username?: unknown }
-      if (typeof session.username === 'string' && session.username.trim()) {
-        resolvedScope = `account:${encodeURIComponent(session.username.trim().toLowerCase())}`
-        sessionStorage.removeItem(PUBLIC_ANSWER_READER_KEY)
-      }
+function updateSessionIdentity(username: string) {
+  if (disposed) return
+  const normalizedUsername = username.trim().toLowerCase()
+  let resolvedScope: string | null
+  if (normalizedUsername) {
+    resolvedScope = `account:${encodeURIComponent(normalizedUsername)}`
+    try {
+      sessionStorage.removeItem(PUBLIC_ANSWER_READER_KEY)
+    } catch {
+      // Account-scoped history remains safe even when browser storage is unavailable.
     }
-  } catch {
-    // Public readers can still ask without an account; their browser-session scope remains in use.
-  } finally {
-    readerScope.value = resolvedScope
-    readerScopeReady.value = true
-    restorePublicAnswerTurns()
+  } else {
+    resolvedScope = anonymousReaderScope()
   }
+  if (readerScopeReady.value && resolvedScope === readerScope.value) return
+
+  publicResetDialogOpen.value = false
+  restorePublicQuestionAfterReset.value = false
+  abandonPublicAnswer()
+  publicAnswerTurns.value = []
+  readerScopeGeneration++
+  readerScope.value = resolvedScope
+  readerScopeReady.value = true
+  restoreCurrentPublicAnswerThread()
 }
 
-function restorePublicAnswerTurns() {
-  const storageKey = answerThreadStorageKey()
+function canRestorePublicAnswerThread(targetPlanId = planId.value, targetLocale = locale.value) {
+  return !disposed
+    && questionMode.value
+    && readerScopeReady.value
+    && targetPlanId === planId.value
+    && targetLocale === locale.value
+    && loadedLessonPlanId === targetPlanId
+    && loadedLessonLocale === targetLocale
+    && publicLesson.value?.teachingPlanId === targetPlanId
+}
+
+function restoreCurrentPublicAnswerThread() {
+  publicAnswerTurns.value = []
+  if (!canRestorePublicAnswerThread()) return
+  restorePublicAnswerTurns(readerScope.value, planId.value, locale.value)
+}
+
+function restorePublicAnswerTurns(
+  scope: string | null,
+  targetPlanId: string,
+  targetLocale: string,
+) {
+  const storageKey = answerThreadStorageKey(scope, targetPlanId, targetLocale)
   if (!storageKey) {
     publicAnswerTurns.value = []
     return
@@ -175,11 +211,16 @@ function restorePublicAnswerTurns() {
   }
 }
 
-function rememberPublicAnswerTurns() {
-  const storageKey = answerThreadStorageKey()
+function rememberPublicAnswerTurns(
+  turns = publicAnswerTurns.value,
+  scope = readerScope.value,
+  targetPlanId = planId.value,
+  targetLocale = locale.value,
+) {
+  const storageKey = answerThreadStorageKey(scope, targetPlanId, targetLocale)
   if (!storageKey) return
   try {
-    sessionStorage.setItem(storageKey, JSON.stringify(publicAnswerTurns.value))
+    sessionStorage.setItem(storageKey, JSON.stringify(turns))
   } catch {
     // A private browser mode may not expose storage; the current on-page thread remains usable.
   }
@@ -386,23 +427,53 @@ async function load() {
   const requestedPlanId = planId.value
   const requestedLocale = locale.value
   const request = ++latestLoadRequest
+  activeLessonController?.abort()
+  const controller = new AbortController()
+  activeLessonController = controller
   loading.value = true
   errorMessage.value = ''
+  publicLesson.value = null
+  loadedLessonPlanId = ''
+  loadedLessonLocale = ''
+  coverUnavailable.value = false
   try {
     if (!requestedPlanId) throw new Error(t('public.error.missing'))
-    const response = await fetch(`/api/public/lessons/${encodeURIComponent(requestedPlanId)}?language=${encodeURIComponent(requestedLocale)}`)
+    const response = await fetch(
+      `/api/public/lessons/${encodeURIComponent(requestedPlanId)}?language=${encodeURIComponent(requestedLocale)}`,
+      { signal: controller.signal },
+    )
+    if (!isCurrentLessonLoad(request, requestedPlanId, requestedLocale, controller)) return
     if (response.status === 404) throw new Error(t('public.error.unpublished'))
     if (!response.ok) throw new Error(t('public.error.open'))
     const received = await response.json() as PublicLessonResponse
-    if (request !== latestLoadRequest) return
+    if (!isCurrentLessonLoad(request, requestedPlanId, requestedLocale, controller)) return
+    if (received.teachingPlanId !== requestedPlanId) throw new Error(t('public.error.open'))
     publicLesson.value = received
-    coverUnavailable.value = false
+    loadedLessonPlanId = requestedPlanId
+    loadedLessonLocale = requestedLocale
+    restoreCurrentPublicAnswerThread()
   } catch (error) {
-    if (request !== latestLoadRequest) return
+    if (!isCurrentLessonLoad(request, requestedPlanId, requestedLocale, controller) || controller.signal.aborted) return
     errorMessage.value = error instanceof Error ? error.message : t('public.error.open')
   } finally {
-    if (request === latestLoadRequest) loading.value = false
+    if (isCurrentLessonLoad(request, requestedPlanId, requestedLocale, controller)) {
+      activeLessonController = null
+      loading.value = false
+    }
   }
+}
+
+function isCurrentLessonLoad(
+  request: number,
+  requestedPlanId: string,
+  requestedLocale: string,
+  controller: AbortController,
+) {
+  return !disposed
+    && request === latestLoadRequest
+    && activeLessonController === controller
+    && requestedPlanId === planId.value
+    && requestedLocale === locale.value
 }
 
 function confidenceLabel(confidence: PublicAnswer['answer']['confidence']) {
@@ -472,9 +543,13 @@ async function submitPublicQuestion() {
 }
 
 async function sendPublicQuestion(question: string, learningIntent: LearningIntent | null) {
-  if (!question || publicAnswerLoading.value || !planId.value || !readerScopeReady.value) return
+  if (!question || publicAnswerLoading.value || !planId.value || !readerScopeReady.value
+    || !questionMode.value || publicLesson.value?.teachingPlanId !== planId.value
+    || loadedLessonLocale !== locale.value) return
   const requestedPlanId = planId.value
   const requestedLocale = locale.value
+  const requestedReaderScope = readerScope.value
+  const requestedReaderScopeGeneration = readerScopeGeneration
   const answerRequest = ++latestPublicAnswerRequest
   const controller = new AbortController()
   activePublicAnswerController = controller
@@ -483,35 +558,48 @@ async function sendPublicQuestion(question: string, learningIntent: LearningInte
   publicAnswerNotice.value = ''
   try {
     const previousTurn = publicAnswerTurns.value.at(-1)
-    const response = await fetch(`/api/public/lessons/${encodeURIComponent(planId.value)}/answers`, {
+    const response = await fetch(`/api/public/lessons/${encodeURIComponent(requestedPlanId)}/answers`, {
       method: 'POST',
       signal: controller.signal,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         question,
         previousQuestion: previousTurn?.question ?? null,
-        language: locale.value,
+        language: requestedLocale,
         learningIntent,
       }),
     })
-    if (!isCurrentPublicAnswerRequest(answerRequest, requestedPlanId, requestedLocale)) return
+    if (!isCurrentPublicAnswerRequest(
+      answerRequest, requestedPlanId, requestedLocale, requestedReaderScopeGeneration, requestedReaderScope, controller,
+    )) return
     if (response.status === 404) throw new Error(t('public.answer.missing'))
     if (!response.ok) throw new Error(t('public.answer.failed'))
     const received = await response.json() as PublicAnswer
-    if (!isCurrentPublicAnswerRequest(answerRequest, requestedPlanId, requestedLocale)) return
-    publicAnswerTurns.value = [...publicAnswerTurns.value, { question, answer: received, learningIntent }].slice(-PUBLIC_ANSWER_HISTORY_LIMIT)
-    rememberPublicAnswerTurns()
+    if (!isCurrentPublicAnswerRequest(
+      answerRequest, requestedPlanId, requestedLocale, requestedReaderScopeGeneration, requestedReaderScope, controller,
+    )) return
+    const nextTurns = [...publicAnswerTurns.value, { question, answer: received, learningIntent }].slice(-PUBLIC_ANSWER_HISTORY_LIMIT)
+    publicAnswerTurns.value = nextTurns
+    rememberPublicAnswerTurns(nextTurns, requestedReaderScope, requestedPlanId, requestedLocale)
     publicQuestion.value = ''
     await nextTick()
+    if (!isCurrentPublicAnswerRequest(
+      answerRequest, requestedPlanId, requestedLocale, requestedReaderScopeGeneration, requestedReaderScope, controller,
+    )) return
     const answerElement = document.getElementById(`public-answer-${publicAnswerTurns.value.length - 1}`)
     answerElement?.focus({ preventScroll: true })
     answerElement?.scrollIntoView?.({ behavior: 'smooth', block: 'start' })
   } catch (error) {
-    if (!isCurrentPublicAnswerRequest(answerRequest, requestedPlanId, requestedLocale)) return
+    if (!isCurrentPublicAnswerRequest(
+      answerRequest, requestedPlanId, requestedLocale, requestedReaderScopeGeneration, requestedReaderScope, controller,
+    ) || controller.signal.aborted) return
     publicAnswerError.value = error instanceof Error ? error.message : t('public.answer.fallback')
   } finally {
+    const requestStillCurrent = isCurrentPublicAnswerRequest(
+      answerRequest, requestedPlanId, requestedLocale, requestedReaderScopeGeneration, requestedReaderScope, controller,
+    )
     if (activePublicAnswerController === controller) activePublicAnswerController = null
-    if (isCurrentPublicAnswerRequest(answerRequest, requestedPlanId, requestedLocale)) {
+    if (requestStillCurrent) {
       publicAnswerLoading.value = false
     }
   }
@@ -531,10 +619,24 @@ async function requestPublicLearningHelp(intent: LearningIntent) {
   await sendPublicQuestion(prompt, intent)
 }
 
-function isCurrentPublicAnswerRequest(request: number, requestedPlanId: string, requestedLocale: string) {
-  return request === latestPublicAnswerRequest
+function isCurrentPublicAnswerRequest(
+  request: number,
+  requestedPlanId: string,
+  requestedLocale: string,
+  requestedReaderScopeGeneration: number,
+  requestedReaderScope: string | null,
+  controller: AbortController,
+) {
+  return !disposed
+    && questionMode.value
+    && request === latestPublicAnswerRequest
+    && activePublicAnswerController === controller
     && requestedPlanId === planId.value
     && requestedLocale === locale.value
+    && requestedReaderScopeGeneration === readerScopeGeneration
+    && requestedReaderScope === readerScope.value
+    && publicLesson.value?.teachingPlanId === requestedPlanId
+    && loadedLessonLocale === requestedLocale
 }
 
 function abandonPublicAnswer(showNotice = false) {
@@ -548,16 +650,15 @@ function abandonPublicAnswer(showNotice = false) {
 }
 
 onMounted(() => {
+  disposed = false
   void load()
-  if (questionMode.value) void initializeReaderScope()
 })
 
 watch([locale, planId], ([, currentPlanId], [, previousPlanId]) => {
   publicResetDialogOpen.value = false
   restorePublicQuestionAfterReset.value = false
   abandonPublicAnswer()
-  if (readerScopeReady.value) restorePublicAnswerTurns()
-  else publicAnswerTurns.value = []
+  publicAnswerTurns.value = []
   if (currentPlanId !== previousPlanId) publicQuestion.value = ''
   publicAnswerError.value = ''
   publicAnswerNotice.value = ''
@@ -566,8 +667,7 @@ watch([locale, planId], ([, currentPlanId], [, previousPlanId]) => {
 
 watch(questionMode, (questionsVisible) => {
   if (questionsVisible) {
-    if (readerScopeReady.value) restorePublicAnswerTurns()
-    else void initializeReaderScope()
+    restoreCurrentPublicAnswerThread()
     return
   }
   publicResetDialogOpen.value = false
@@ -575,11 +675,17 @@ watch(questionMode, (questionsVisible) => {
   abandonPublicAnswer()
 })
 
-onUnmounted(() => abandonPublicAnswer())
+onUnmounted(() => {
+  disposed = true
+  latestLoadRequest++
+  activeLessonController?.abort()
+  activeLessonController = null
+  abandonPublicAnswer()
+})
 </script>
 
 <template>
-  <AppShell>
+  <AppShell @session-identity="updateSessionIdentity">
     <div class="min-h-screen bg-canvas text-ink">
       <header class="app-sticky-top sticky z-20 border-b border-ink/10 bg-canvas/90 backdrop-blur">
         <div class="mx-auto flex max-w-6xl items-center justify-between gap-3 px-5 py-3 sm:px-8">
@@ -598,7 +704,7 @@ onUnmounted(() => abandonPublicAnswer())
         <p class="mt-3 text-ink/55">{{ heroDescription }}</p>
       </section>
 
-      <section v-else-if="errorMessage" class="mx-auto max-w-2xl px-5 py-20 text-center sm:px-8">
+      <section v-else-if="errorMessage" class="mx-auto max-w-2xl px-5 py-20 text-center sm:px-8" role="alert">
         <p class="font-display text-2xl font-semibold">{{ t('public.error.title') }}</p>
         <p class="mt-3 text-ink/60">{{ errorMessage }}</p>
         <button type="button" class="mt-6 rounded-lg bg-ink px-4 py-2.5 font-semibold text-paper" @click="load">{{ t('public.error.retry') }}</button>

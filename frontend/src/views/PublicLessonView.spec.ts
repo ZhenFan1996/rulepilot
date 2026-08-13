@@ -6,6 +6,7 @@ import { setLocale } from '@/lib/locale'
 import PublicLessonView from './PublicLessonView.vue'
 
 const shellRoutes = [
+  { path: '/discover', name: 'game-recommendations', component: { template: '<div />' } },
   { path: '/teach', name: 'teach', component: { template: '<div />' } },
   { path: '/lessons', name: 'lessons', component: { template: '<div />' } },
   { path: '/catalog', name: 'catalog', component: { template: '<div />' } },
@@ -19,6 +20,40 @@ function publicLessonRoutes() {
     { path: '/read/:planId', name: 'public-lesson', component: PublicLessonView },
     { path: '/read/:planId/questions', name: 'public-lesson-questions', component: PublicLessonView },
   ]
+}
+
+function createPublicLessonRouter() {
+  return createRouter({
+    history: createMemoryHistory(),
+    routes: [
+      { path: '/', name: 'home', component: { template: '<div />' } },
+      { path: '/library', name: 'public-library', component: { template: '<div />' } },
+      ...publicLessonRoutes(),
+      ...shellRoutes,
+    ],
+  })
+}
+
+function publicLessonPayload(plan: string, title: string, contentLanguage: 'zh-CN' | 'en' = 'zh-CN') {
+  return {
+    teachingPlanId: plan,
+    documentVersionId: `version-${plan}`,
+    rulebookTitle: title,
+    officialSourceUrl: null,
+    gameCover: null,
+    contentLanguage,
+    lesson: { id: `lesson-${plan}`, status: 'COMPLETE' as const, sections: [] },
+  }
+}
+
+function publicAnswerPayload(verdict: string) {
+  return {
+    answer: {
+      status: 'ANSWERED', shortVerdict: verdict, explanation: null, warnings: [],
+      citations: [], exceptions: [], confidence: 'HIGH', clarification: null,
+    },
+    visualAids: [], examples: [],
+  }
 }
 
 describe('PublicLessonView', () => {
@@ -352,10 +387,11 @@ describe('PublicLessonView', () => {
     sessionStorage.setItem(bobKey, JSON.stringify([storedTurn('Bob 的问题', 'Bob 的答复')]))
 
     let username = 'alice'
-    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
       if (String(input).includes('/api/auth/session')) return Response.json({ username, roles: ['USER'] })
       return Response.json(lesson)
-    }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
     const router = createRouter({
       history: createMemoryHistory(),
       routes: [
@@ -373,6 +409,7 @@ describe('PublicLessonView', () => {
 
     expect(alice.text()).toContain('Alice 的问题')
     expect(alice.text()).not.toContain('Bob 的问题')
+    expect(fetchMock.mock.calls.filter(([input]) => String(input).includes('/api/auth/session'))).toHaveLength(1)
     await alice.get('#public-question').setValue('尚未发送的问题')
     await alice.get('button[aria-label="清空本次答疑"]').trigger('click')
     await flushPromises()
@@ -396,6 +433,7 @@ describe('PublicLessonView', () => {
 
     expect(bob.text()).toContain('Bob 的问题')
     expect(bob.text()).not.toContain('Alice 的问题')
+    expect(fetchMock.mock.calls.filter(([input]) => String(input).includes('/api/auth/session'))).toHaveLength(2)
     bob.unmount()
   })
 
@@ -478,8 +516,256 @@ describe('PublicLessonView', () => {
       .toBe('Keep this draft across languages')
   })
 
-  it('keeps the latest public guide when an earlier navigation resolves late', async () => {
+  it('waits for both the shell identity and exact lesson before restoring an account thread', async () => {
+    const storedTurn = {
+      question: 'Alice 的已保存问题',
+      answer: publicAnswerPayload('Alice 的已保存答案'),
+    }
+    sessionStorage.setItem(
+      'rulepilot:public-answer-thread:account:alice:plan-1:zh-CN',
+      JSON.stringify([storedTurn]),
+    )
+
+    let resolveSession: ((response: Response) => void) | undefined
+    const resourceFirstFetch = vi.fn((input: string | URL | Request) => {
+      if (String(input).includes('/api/auth/session')) {
+        return new Promise<Response>((resolve) => { resolveSession = resolve })
+      }
+      return Promise.resolve(Response.json(publicLessonPayload('plan-1', 'Resource First Rules')))
+    })
+    vi.stubGlobal('fetch', resourceFirstFetch)
+    const resourceFirstRouter = createPublicLessonRouter()
+    await resourceFirstRouter.push('/read/plan-1/questions')
+    await resourceFirstRouter.isReady()
+    const resourceFirst = mount(PublicLessonView, { global: { plugins: [resourceFirstRouter] } })
+    await flushPromises()
+
+    expect(resourceFirst.text()).not.toContain('Alice 的已保存问题')
+    expect(resourceFirst.get('#public-question').attributes()).toHaveProperty('disabled')
+    resolveSession!(Response.json({ username: ' Alice ', roles: ['USER'] }))
+    await flushPromises()
+    expect(resourceFirst.text()).toContain('Alice 的已保存问题')
+    expect(resourceFirst.get('#public-question').attributes()).not.toHaveProperty('disabled')
+    expect(resourceFirstFetch.mock.calls.filter(([input]) => String(input).includes('/api/auth/session'))).toHaveLength(1)
+    resourceFirst.unmount()
+
+    let resolveLesson: ((response: Response) => void) | undefined
+    const identityFirstFetch = vi.fn((input: string | URL | Request) => {
+      const path = String(input)
+      if (path.includes('/api/auth/session')) {
+        return Promise.resolve(Response.json({ username: 'ALICE', roles: ['USER'] }))
+      }
+      if (path.includes('/api/public/lessons/plan-1?')) {
+        return new Promise<Response>((resolve) => { resolveLesson = resolve })
+      }
+      return Promise.resolve(new Response(null, { status: 404 }))
+    })
+    vi.stubGlobal('fetch', identityFirstFetch)
+    const identityFirstRouter = createPublicLessonRouter()
+    await identityFirstRouter.push('/read/plan-1/questions')
+    await identityFirstRouter.isReady()
+    const identityFirst = mount(PublicLessonView, { global: { plugins: [identityFirstRouter] } })
+    await flushPromises()
+
+    expect(identityFirst.text()).not.toContain('Alice 的已保存问题')
+    resolveLesson!(Response.json(publicLessonPayload('plan-1', 'Identity First Rules')))
+    await flushPromises()
+    expect(identityFirst.text()).toContain('Alice 的已保存问题')
+    expect(identityFirstFetch.mock.calls.filter(([input]) => String(input).includes('/api/auth/session'))).toHaveLength(1)
+    identityFirst.unmount()
+  })
+
+  it('rejects a mismatched public lesson identity and retries with a fresh request', async () => {
+    const lessonSignals: AbortSignal[] = []
+    let lessonRequest = 0
+    const fetchMock = vi.fn((input: string | URL | Request, init?: RequestInit) => {
+      if (String(input).includes('/api/auth/session')) return Promise.resolve(new Response(null, { status: 401 }))
+      lessonRequest++
+      if (init?.signal) lessonSignals.push(init.signal)
+      return Promise.resolve(Response.json(lessonRequest === 1
+        ? publicLessonPayload('wrong-plan', 'Wrong Rules')
+        : publicLessonPayload('plan-1', 'Recovered Rules')))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const router = createPublicLessonRouter()
+    await router.push('/read/plan-1')
+    await router.isReady()
+    const wrapper = mount(PublicLessonView, { global: { plugins: [router] } })
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="public-lesson-reader"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('Wrong Rules')
+    expect(wrapper.find('[role="alert"]').exists()).toBe(true)
+    await wrapper.get('section button').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Recovered Rules')
+    expect(lessonSignals).toHaveLength(2)
+    expect(lessonSignals[1]).not.toBe(lessonSignals[0])
+    wrapper.unmount()
+  })
+
+  it('cancels a replaced locale read and ignores its late settlement', async () => {
+    let resolveChineseLesson: ((response: Response) => void) | undefined
+    let chineseSignal: AbortSignal | undefined
+    const fetchMock = vi.fn((input: string | URL | Request, init?: RequestInit) => {
+      const path = String(input)
+      if (path.includes('/api/auth/session')) return Promise.resolve(new Response(null, { status: 401 }))
+      if (path.includes('language=zh-CN')) {
+        chineseSignal = init?.signal ?? undefined
+        return new Promise<Response>((resolve) => { resolveChineseLesson = resolve })
+      }
+      return Promise.resolve(Response.json(publicLessonPayload('plan-1', 'English Rules', 'en')))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const router = createPublicLessonRouter()
+    await router.push('/read/plan-1')
+    await router.isReady()
+    const wrapper = mount(PublicLessonView, { global: { plugins: [router] } })
+    await flushPromises()
+
+    await wrapper.findAll('button').find(button => button.text() === 'EN')!.trigger('click')
+    await vi.waitFor(() => expect(chineseSignal?.aborted).toBe(true))
+    await flushPromises()
+    expect(wrapper.text()).toContain('English Rules')
+
+    resolveChineseLesson!(Response.json(publicLessonPayload('plan-1', '迟到的中文规则')))
+    await flushPromises()
+    expect(wrapper.text()).toContain('English Rules')
+    expect(wrapper.text()).not.toContain('迟到的中文规则')
+    wrapper.unmount()
+  })
+
+  it('preserves a completed Q&A thread across modes and cancels an unfinished answer on exit', async () => {
+    let answerRequest = 0
+    let resolveLateAnswer: ((response: Response) => void) | undefined
+    let lateAnswerSignal: AbortSignal | undefined
+    let lateAnswerUrl = ''
+    let lateAnswerBody = ''
+    const fetchMock = vi.fn((input: string | URL | Request, init?: RequestInit) => {
+      const path = String(input)
+      if (path.includes('/api/auth/session')) return Promise.resolve(new Response(null, { status: 401 }))
+      if (path.endsWith('/answers') && init?.method === 'POST') {
+        answerRequest++
+        if (answerRequest === 1) return Promise.resolve(Response.json(publicAnswerPayload('第一条已保存答案')))
+        lateAnswerSignal = init.signal ?? undefined
+        lateAnswerUrl = path
+        lateAnswerBody = String(init.body)
+        return new Promise<Response>((resolve) => { resolveLateAnswer = resolve })
+      }
+      return Promise.resolve(Response.json(publicLessonPayload('plan-1', 'Question Mode Rules')))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const router = createPublicLessonRouter()
+    await router.push('/read/plan-1/questions')
+    await router.isReady()
+    const wrapper = mount(PublicLessonView, { global: { plugins: [router] } })
+    await flushPromises()
+
+    await wrapper.get('#public-question').setValue('第一条问题')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    expect(wrapper.text()).toContain('第一条已保存答案')
+
+    await router.push('/read/plan-1')
+    await flushPromises()
+    expect(wrapper.find('#public-question').exists()).toBe(false)
+    await router.push('/read/plan-1/questions')
+    await flushPromises()
+    expect(wrapper.text()).toContain('第一条问题')
+    expect(wrapper.text()).toContain('第一条已保存答案')
+
+    await wrapper.get('#public-question').setValue('第二条尚未完成的问题')
+    await wrapper.get('form').trigger('submit')
+    await vi.waitFor(() => expect(lateAnswerSignal).toBeDefined())
+    await router.push('/read/plan-1')
+    await vi.waitFor(() => expect(lateAnswerSignal?.aborted).toBe(true))
+
+    expect(lateAnswerUrl).toBe('/api/public/lessons/plan-1/answers')
+    expect(JSON.parse(lateAnswerBody)).toMatchObject({
+      question: '第二条尚未完成的问题',
+      language: 'zh-CN',
+      previousQuestion: '第一条问题',
+    })
+    resolveLateAnswer!(Response.json(publicAnswerPayload('不应出现的迟到答案')))
+    await flushPromises()
+    await router.push('/read/plan-1/questions')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('第一条已保存答案')
+    expect(wrapper.text()).not.toContain('不应出现的迟到答案')
+    expect(fetchMock.mock.calls.filter(([input]) => String(input).includes('/api/auth/session'))).toHaveLength(1)
+    wrapper.unmount()
+  })
+
+  it('binds an answer request to its captured locale and ignores settlement after localization changes', async () => {
+    let resolveChineseAnswer: ((response: Response) => void) | undefined
+    let chineseAnswerSignal: AbortSignal | undefined
+    let chineseAnswerUrl = ''
+    let chineseAnswerBody = ''
+    const fetchMock = vi.fn((input: string | URL | Request, init?: RequestInit) => {
+      const path = String(input)
+      if (path.includes('/api/auth/session')) return Promise.resolve(new Response(null, { status: 401 }))
+      if (path.endsWith('/answers') && init?.method === 'POST') {
+        chineseAnswerSignal = init.signal ?? undefined
+        chineseAnswerUrl = path
+        chineseAnswerBody = String(init.body)
+        return new Promise<Response>((resolve) => { resolveChineseAnswer = resolve })
+      }
+      return Promise.resolve(Response.json(path.includes('language=en')
+        ? publicLessonPayload('plan-1', 'English Question Rules', 'en')
+        : publicLessonPayload('plan-1', '中文问答规则')))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const router = createPublicLessonRouter()
+    await router.push('/read/plan-1/questions')
+    await router.isReady()
+    const wrapper = mount(PublicLessonView, { global: { plugins: [router] } })
+    await flushPromises()
+
+    await wrapper.get('#public-question').setValue('这个动作何时发生？')
+    await wrapper.get('form').trigger('submit')
+    await vi.waitFor(() => expect(chineseAnswerSignal).toBeDefined())
+    await wrapper.findAll('button').find(button => button.text() === 'EN')!.trigger('click')
+    await vi.waitFor(() => expect(chineseAnswerSignal?.aborted).toBe(true))
+    await flushPromises()
+
+    expect(chineseAnswerUrl).toBe('/api/public/lessons/plan-1/answers')
+    expect(JSON.parse(chineseAnswerBody)).toMatchObject({
+      question: '这个动作何时发生？',
+      language: 'zh-CN',
+    })
+    expect(wrapper.text()).toContain('English Question Rules')
+    resolveChineseAnswer!(Response.json(publicAnswerPayload('不应写入英文线程的中文答案')))
+    await flushPromises()
+    expect(wrapper.text()).not.toContain('不应写入英文线程的中文答案')
+    expect(fetchMock.mock.calls.filter(([input]) => String(input).includes('/api/auth/session'))).toHaveLength(1)
+    wrapper.unmount()
+  })
+
+  it('aborts an in-flight public lesson read when the route instance unmounts', async () => {
+    let resolveLesson: ((response: Response) => void) | undefined
+    let lessonSignal: AbortSignal | undefined
+    vi.stubGlobal('fetch', vi.fn((input: string | URL | Request, init?: RequestInit) => {
+      if (String(input).includes('/api/auth/session')) return Promise.resolve(new Response(null, { status: 401 }))
+      lessonSignal = init?.signal ?? undefined
+      return new Promise<Response>((resolve) => { resolveLesson = resolve })
+    }))
+    const router = createPublicLessonRouter()
+    await router.push('/read/plan-1')
+    await router.isReady()
+    const wrapper = mount(PublicLessonView, { global: { plugins: [router] } })
+    await vi.waitFor(() => expect(lessonSignal).toBeDefined())
+
+    wrapper.unmount()
+    expect(lessonSignal?.aborted).toBe(true)
+    resolveLesson!(Response.json(publicLessonPayload('plan-1', 'Late Unmounted Rules')))
+    await flushPromises()
+  })
+
+  it('keeps the latest public guide when an aborted navigation resolves late', async () => {
     let resolveFirstLesson: ((response: Response) => void) | undefined
+    let firstLessonSignal: AbortSignal | undefined
     const firstLesson = {
       teachingPlanId: 'plan-1', documentVersionId: 'version-1', rulebookTitle: 'First Rules', officialSourceUrl: null, gameCover: null,
       lesson: { id: 'lesson-1', status: 'COMPLETE', sections: [] },
@@ -488,10 +774,13 @@ describe('PublicLessonView', () => {
       teachingPlanId: 'plan-2', documentVersionId: 'version-2', rulebookTitle: 'Second Rules', officialSourceUrl: null, gameCover: null,
       lesson: { id: 'lesson-2', status: 'COMPLETE', sections: [] },
     }
-    vi.stubGlobal('fetch', vi.fn((input: string | URL | Request) => {
+    vi.stubGlobal('fetch', vi.fn((input: string | URL | Request, init?: RequestInit) => {
       const path = String(input)
       if (path.includes('/api/auth/session')) return Promise.resolve(new Response(null, { status: 401 }))
-      if (path.includes('/plan-1')) return new Promise<Response>((resolve) => { resolveFirstLesson = resolve })
+      if (path.includes('/plan-1')) {
+        firstLessonSignal = init?.signal ?? undefined
+        return new Promise<Response>((resolve) => { resolveFirstLesson = resolve })
+      }
       return Promise.resolve(Response.json(secondLesson))
     }))
     const router = createRouter({
@@ -510,6 +799,7 @@ describe('PublicLessonView', () => {
 
     await router.push('/read/plan-2')
     await flushPromises()
+    expect(firstLessonSignal?.aborted).toBe(true)
     expect(wrapper.text()).toContain('Second Rules')
 
     resolveFirstLesson!(Response.json(firstLesson))
