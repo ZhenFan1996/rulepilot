@@ -186,22 +186,80 @@ describe('LessonsView', () => {
     wrapper.unmount()
   })
 
+  it('retries a failed local-upload guide through its durable upload handoff', async () => {
+    let retried = false
+    let retryBody: unknown = null
+    let directPreparationStarts = 0
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, options?: RequestInit) => {
+      const path = String(input)
+      if (path === '/api/v1/teaching-plans') return Response.json([])
+      if (path === '/api/v1/documents/official-imports') return Response.json([])
+      if (path === '/api/v1/documents/upload-teaching-handoffs') return Response.json([{
+        id: 'handoff-1', documentVersionId: 'version-1', editionId: 'edition-1',
+        title: '星际探险', rulebookTitle: 'rules_v4_final.pdf',
+        state: retried ? 'WAITING_FOR_DOCUMENT' : 'LAUNCHED',
+        preparationRunId: retried ? null : 'prep-upload-failed', errorCode: null,
+        updatedAt: retried ? '2026-08-12T00:01:00Z' : '2026-08-10T10:00:00Z',
+      }])
+      if (path === '/api/v1/assistant-runs/active?mode=TEACHING_PREPARATION') return Response.json([])
+      if (path === '/api/v1/assistant-runs/prep-upload-failed') return Response.json({ run: {
+        id: 'prep-upload-failed', subjectId: 'version-1', state: 'FAILED',
+        lastErrorCode: 'TEACHING_PREPARATION_FAILED', updatedAt: '2026-08-10T10:01:00Z',
+      } })
+      if (path === '/api/v1/documents') return Response.json([{
+        document: { gameEditionId: 'edition-1', title: 'rules_v4_final.pdf' },
+        latestVersion: { id: 'version-1', status: 'READY' },
+      }])
+      if (path === '/api/v1/games') return Response.json([{
+        game: { name: '星际探险' }, editions: [{ id: 'edition-1' }],
+      }])
+      if (path === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      if (path === '/api/v1/documents/upload-teaching-handoffs/handoff-1/retry' && options?.method === 'POST') {
+        retryBody = JSON.parse(String(options.body))
+        retried = true
+        return Response.json({ id: 'handoff-1', state: 'WAITING_FOR_DOCUMENT', preparationRunId: null }, { status: 202 })
+      }
+      if (path === '/api/v1/document-versions/version-1/teaching-plans' && options?.method === 'POST') {
+        directPreparationStarts += 1
+        return Response.json({ assistantRunId: 'duplicate-preparation', state: 'RECEIVED' }, { status: 202 })
+      }
+      if (path.includes('/api/v1/assistant-runs/active?mode=TEACHING')) return Response.json([])
+      if (path.includes('/api/auth/session')) return Response.json({ username: 'alice', roles: ['USER'] })
+      return new Response(null, { status: 404 })
+    }))
+    const router = createMemoryRouter()
+    await router.push('/lessons')
+    await router.isReady()
+    const wrapper = mount(LessonsView, { global: { plugins: [router], stubs: { BackgroundWorkCenter: true } } })
+    await flushPromises()
+
+    const retry = wrapper.get('[data-testid="pending-guide-journey"]')
+      .findAll('button').find(button => button.text().includes('重新准备讲解'))
+    await retry!.trigger('click')
+    await flushPromises()
+
+    expect(retryBody).toEqual({ expectedPreparationRunId: 'prep-upload-failed' })
+    expect(directPreparationStarts).toBe(0)
+    expect(wrapper.get('[data-testid="pending-guide-journey"]').text())
+      .toContain('规则书已保存，正在读取页面与建立检索')
+    wrapper.unmount()
+  })
+
   it('shows a persisted preparation failure instead of an endlessly active guide', async () => {
     let retried = false
     let retryBody: unknown = null
+    let directPreparationStarts = 0
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, options?: RequestInit) => {
       const path = String(input)
       if (path === '/api/v1/teaching-plans') return Response.json([])
       if (path === '/api/v1/documents/official-imports') return Response.json([{
         id: 'import-1', title: '花砖物语', rulebookTitle: 'azul_rules_cn_final.pdf', stage: 'COMPLETED',
         downloadedBytes: 4096, totalBytes: 4096, documentVersionId: 'version-1', errorCode: null,
-        teachingHandoffState: 'LAUNCHED', teachingPreparationRunId: 'prep-1', teachingErrorCode: null,
-        updatedAt: '2026-08-10T10:00:00Z',
+        teachingHandoffState: retried ? 'WAITING_FOR_DOCUMENT' : 'LAUNCHED',
+        teachingPreparationRunId: retried ? null : 'prep-1', teachingErrorCode: null,
+        updatedAt: retried ? '2026-08-12T00:01:00Z' : '2026-08-10T10:00:00Z',
       }])
-      if (path === '/api/v1/assistant-runs/active?mode=TEACHING_PREPARATION') return Response.json(retried ? [{
-        id: 'prep-retry', subjectId: 'version-1', state: 'LESSON_PLANNING', lastErrorCode: null,
-        updatedAt: '2026-08-12T00:01:00Z',
-      }] : [])
+      if (path === '/api/v1/assistant-runs/active?mode=TEACHING_PREPARATION') return Response.json([])
       if (path === '/api/v1/assistant-runs/prep-1') return Response.json({
         run: {
           id: 'prep-1', subjectId: 'version-1', state: 'FAILED',
@@ -215,10 +273,19 @@ describe('LessonsView', () => {
         game: { name: '花砖物语' }, editions: [{ id: 'edition-1' }],
       }])
       if (path === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
-      if (path === '/api/v1/document-versions/version-1/teaching-plans' && options?.method === 'POST') {
+      if (path === '/api/v1/documents/official-imports/import-1/teaching-retry' && options?.method === 'POST') {
         retryBody = JSON.parse(String(options.body))
         retried = true
-        return Response.json({ assistantRunId: 'prep-retry', state: 'RECEIVED', reused: false }, { status: 202 })
+        return Response.json({
+          id: 'import-1', title: '花砖物语', rulebookTitle: 'azul_rules_cn_final.pdf', stage: 'COMPLETED',
+          downloadedBytes: 4096, totalBytes: 4096, documentVersionId: 'version-1', errorCode: null,
+          teachingHandoffState: 'WAITING_FOR_DOCUMENT', teachingPreparationRunId: null, teachingErrorCode: null,
+          updatedAt: '2026-08-12T00:01:00Z',
+        }, { status: 202 })
+      }
+      if (path === '/api/v1/document-versions/version-1/teaching-plans' && options?.method === 'POST') {
+        directPreparationStarts += 1
+        return Response.json({ assistantRunId: 'duplicate-preparation', state: 'RECEIVED', reused: false }, { status: 202 })
       }
       if (path.includes('/api/v1/assistant-runs/active?mode=TEACHING')) return Response.json([])
       if (path.includes('/api/auth/session')) return Response.json({ username: 'alice', roles: ['USER'] })
@@ -240,9 +307,10 @@ describe('LessonsView', () => {
     await retry!.trigger('click')
     await flushPromises()
 
-    expect(retryBody).toEqual({ learningGoal: null })
+    expect(retryBody).toEqual({ expectedPreparationRunId: 'prep-1' })
+    expect(directPreparationStarts).toBe(0)
     const restarted = wrapper.get('[data-testid="pending-guide-journey"]')
-    expect(restarted.text()).toContain('正在建立讲解计划')
+    expect(restarted.text()).toContain('规则书已保存，正在读取页面与建立检索')
     expect(restarted.text()).not.toContain('任务需要处理')
     expect(restarted.find('.animate-pulse').exists()).toBe(true)
     wrapper.unmount()

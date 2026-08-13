@@ -87,7 +87,7 @@ const completeLesson = {
 
 function assistantRun(id: string, state: string, revision: number) {
   const updatedAt = `2026-08-10T08:00:0${revision}Z`
-  const preparation = id === 'preparation-run-1'
+  const preparation = id.startsWith('preparation-run-')
   return {
     run: {
       id, state, revision, mode: preparation ? 'TEACHING_PREPARATION' : 'TEACHING',
@@ -103,14 +103,14 @@ function assistantRun(id: string, state: string, revision: number) {
   }
 }
 
-function officialImportJob() {
+function officialImportJob(preparationRunId = 'preparation-run-1') {
   const updatedAt = new Date().toISOString()
   return {
     id: 'import-job-1', title: '展翅翱翔', rulebookTitle: 'Wingspan Rulebook',
     sourceDomain: 'publisher.example', stage: 'COMPLETED',
     downloadedBytes: 4096, totalBytes: 4096, documentVersionId: 'version-1',
     duplicate: false, errorCode: null, reused: false,
-    teachingHandoffState: 'LAUNCHED', teachingPreparationRunId: 'preparation-run-1', teachingErrorCode: null,
+    teachingHandoffState: 'LAUNCHED', teachingPreparationRunId: preparationRunId, teachingErrorCode: null,
     downloadCompletedAt: updatedAt, importCompletedAt: updatedAt, teachingHandoffUpdatedAt: updatedAt, updatedAt,
   }
 }
@@ -131,6 +131,7 @@ async function mockPublicDiscovery(
   page: import('@playwright/test').Page,
   authenticated = false,
   holdPreparation = false,
+  failPreparation = false,
 ) {
   let teachingPoll = 0
   let lessonPoll = 0
@@ -139,6 +140,9 @@ async function mockPublicDiscovery(
   let planPublished = !holdPreparation
   let firstLessonPublished = !holdPreparation
   let preparationCompleted = !holdPreparation
+  let preparationRetryAccepted = false
+  let importStarts = 0
+  let preparationRetryRequests = 0
   await page.route('**/api/auth/session', route => authenticated
     ? route.fulfill({ json: { username: 'player', roles: ['USER'] } })
     : route.fulfill({ status: 401 }))
@@ -282,10 +286,18 @@ async function mockPublicDiscovery(
   } }))
   await page.route('**/api/v1/documents/official-imports', route => {
     if (route.request().method() === 'POST') {
+      importStarts += 1
       journeyImported = true
       return route.fulfill({ status: 202, json: officialImportJob() })
     }
-    return route.fulfill({ json: journeyImported ? [officialImportJob()] : [] })
+    return route.fulfill({ json: journeyImported
+      ? [officialImportJob(preparationRetryAccepted ? 'preparation-run-retry' : 'preparation-run-1')]
+      : [] })
+  })
+  await page.route('**/api/v1/documents/official-imports/import-job-1/teaching-retry', route => {
+    preparationRetryRequests += 1
+    preparationRetryAccepted = true
+    return route.fulfill({ status: 202, json: officialImportJob('preparation-run-retry') })
   })
   await page.route('**/api/v1/documents/upload-teaching-handoffs', route => route.fulfill({ json: [] }))
   await page.route('**/api/v1/games', route => route.fulfill({ json: [{
@@ -318,8 +330,17 @@ async function mockPublicDiscovery(
     { pageNumber: 2, text: 'Goal', characterCount: 960 },
     { pageNumber: 7, text: 'Gain food, then activate brown powers.', characterCount: 1100 },
   ] }))
-  await page.route('**/api/v1/assistant-runs/preparation-run-1', route => route.fulfill({
-    json: assistantRun('preparation-run-1', preparationCompleted ? 'COMPLETED' : 'LESSON_PLANNING', 1),
+  await page.route('**/api/v1/assistant-runs/preparation-run-1', route => {
+    const snapshot = assistantRun(
+      'preparation-run-1',
+      failPreparation ? 'FAILED' : preparationCompleted ? 'COMPLETED' : 'LESSON_PLANNING',
+      1,
+    )
+    if (failPreparation) snapshot.run.lastErrorCode = 'TEACHING_PREPARATION_FAILED'
+    return route.fulfill({ json: snapshot })
+  })
+  await page.route('**/api/v1/assistant-runs/preparation-run-retry', route => route.fulfill({
+    json: assistantRun('preparation-run-retry', 'COMPLETED', 2),
   }))
   await page.route('**/api/v1/document-versions/version-1/teaching-plans/latest', route => route.fulfill({ json: teachingPlan }))
   await page.route('**/api/v1/teaching-plans/plan-1', route => route.fulfill({ json: teachingPlan }))
@@ -365,6 +386,8 @@ async function mockPublicDiscovery(
     publishFirstLesson: () => { firstLessonPublished = true },
     completePreparation: () => { preparationCompleted = true },
     planReads: () => planReads,
+    importStarts: () => importStarts,
+    preparationRetryRequests: () => preparationRetryRequests,
   }
 }
 
@@ -879,6 +902,33 @@ test('recovers the preparation-to-Teaching bridge after a storage-free browser r
   await expect(workCenter.getByText('正在组织讲解')).toBeVisible({ timeout: 6_000 })
   await expect(workCenter.getByText('展翅翱翔')).toHaveCount(1)
   await expect(workTrigger.locator('span').filter({ hasText: '1' })).toBeVisible()
+})
+
+test('retries failed preparation through the original import without downloading again', async ({ page }) => {
+  const recovery = await mockPublicDiscovery(page, true, true, true)
+  await page.goto('/discover')
+
+  await page.getByLabel('和推荐 Agent 聊聊').fill('4 个人，90 分钟内，想要中等策略')
+  await page.getByRole('button', { name: '发送', exact: true }).click()
+  await expect(page.getByText('支持 4 人游玩')).toBeVisible()
+  await page.getByRole('button', { name: '选这款，找规则书' }).click()
+  const journey = page.getByTestId('player-journey-surface')
+  await journey.getByRole('button', { name: '选择这份' }).click()
+  await journey.getByRole('checkbox', { name: /我确认该链接来自有权提供/ }).check()
+  await journey.getByRole('button', { name: '下载规则书并生成讲解' }).click()
+  await expect(journey.getByText('TEACHING_PREPARATION_FAILED')).toBeVisible()
+
+  recovery.publishPlan()
+  recovery.publishFirstLesson()
+  const retryRequest = page.waitForRequest(request =>
+    request.url().endsWith('/api/v1/documents/official-imports/import-job-1/teaching-retry'))
+  await journey.getByRole('button', { name: '重试当前步骤' }).click()
+  const retry = await retryRequest
+
+  expect(retry.postDataJSON()).toEqual({ expectedPreparationRunId: 'preparation-run-1' })
+  await expect(journey.getByText('讲解已有可读内容；后台仍可能继续核对和补全。')).toBeVisible({ timeout: 6_000 })
+  expect(recovery.importStarts()).toBe(1)
+  expect(recovery.preparationRetryRequests()).toBe(1)
 })
 
 test('keeps the readable-guide continuation legible and focus-safe at 320 and 390 px', async ({ page }) => {

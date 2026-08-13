@@ -346,8 +346,11 @@ describe('RecommendationRulebookHandoff', () => {
         const failed = { ...snapshot, run: { ...snapshot.run, lastErrorCode: 'TEACHING_PREPARATION_FAILED' } }
         return Response.json(failed)
       }
-      if (path === '/api/v1/document-versions/version-1/teaching-plans' && options?.method === 'POST') {
-        return Response.json({ assistantRunId: 'preparation-retry', state: 'QUEUED', reused: false }, { status: 202 })
+      if (path === '/api/v1/documents/official-imports/import-1/teaching-retry' && options?.method === 'POST') {
+        return Response.json({
+          id: 'import-1', stage: 'COMPLETED', documentVersionId: 'version-1', duplicate: false, errorCode: null,
+          teachingHandoffState: 'LAUNCHED', teachingPreparationRunId: 'preparation-retry',
+        }, { status: 202 })
       }
       if (path === '/api/v1/assistant-runs/preparation-retry') return Response.json(runSnapshot('preparation-retry', 'COMPLETED'))
       if (path === '/api/v1/document-versions/version-1/teaching-plans/latest') return Response.json(planFixture('plan-1', 'version-1'))
@@ -370,8 +373,9 @@ describe('RecommendationRulebookHandoff', () => {
 
     expect(requests.filter(request => request.path === '/api/v1/bgg/games/266192/import')).toHaveLength(1)
     expect(requests.filter(request => request.path === '/api/v1/documents/official-imports')).toHaveLength(1)
-    const retry = requests.find(request => request.path === '/api/v1/document-versions/version-1/teaching-plans')
-    expect(JSON.parse(String(retry?.options?.body))).toEqual({ learningGoal: null })
+    const retry = requests.find(request => request.path === '/api/v1/documents/official-imports/import-1/teaching-retry')
+    expect(JSON.parse(String(retry?.options?.body))).toEqual({ expectedPreparationRunId: 'preparation-failed' })
+    expect(requests.filter(request => request.path === '/api/v1/document-versions/version-1/teaching-plans')).toHaveLength(0)
   })
 
   it('keeps a published draft readable and exposes a safe retry when later teaching review degrades', async () => {

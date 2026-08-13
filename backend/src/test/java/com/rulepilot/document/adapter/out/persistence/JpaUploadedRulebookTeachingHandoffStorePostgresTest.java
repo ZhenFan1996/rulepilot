@@ -188,6 +188,31 @@ class JpaUploadedRulebookTeachingHandoffStorePostgresTest {
                 .containsEntry("error_code", "DOCUMENT_PROCESSING_FAILED");
     }
 
+    @Test
+    void retryResetsTheObservedUploadPreparationButCannotReplaceANewerRun() {
+        Instant now = Instant.parse("2026-08-10T11:00:00Z");
+        UUID versionId = insertDocument("READY");
+        UUID handoffId = UUID.randomUUID();
+        UUID failedRunId = UUID.randomUUID();
+        UUID newerRunId = UUID.randomUUID();
+        inTransactionReturning(store -> store.request(
+                handoffId, versionId, "upload-handoff-player", null, now));
+        inTransaction(store -> store.claimReadyForDocument(versionId, 1, now.plusSeconds(1)));
+        inTransaction(store -> store.completeLaunch(handoffId, failedRunId, now.plusSeconds(2)));
+
+        var retried = inTransactionReturning(store -> store.retry(
+                handoffId, failedRunId, "upload-handoff-player", now.plusSeconds(3)));
+        inTransaction(store -> store.claimReadyForDocument(versionId, 1, now.plusSeconds(4)));
+        inTransaction(store -> store.completeLaunch(handoffId, newerRunId, now.plusSeconds(5)));
+        var unchanged = inTransactionReturning(store -> store.retry(
+                handoffId, failedRunId, "upload-handoff-player", now.plusSeconds(6)));
+
+        assertThat(retried.state())
+                .isEqualTo(UploadedRulebookTeachingHandoffStore.State.WAITING_FOR_DOCUMENT);
+        assertThat(unchanged.state()).isEqualTo(UploadedRulebookTeachingHandoffStore.State.LAUNCHED);
+        assertThat(unchanged.preparationRunId()).isEqualTo(newerRunId);
+    }
+
     private static UUID insertDocument(String status) {
         UUID documentId = UUID.randomUUID();
         UUID versionId = UUID.randomUUID();

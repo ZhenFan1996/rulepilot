@@ -19,4 +19,14 @@ class JpaOfficialRulebookImportJobRepositoryTransactionTest {
         assertThat(transactional).isNotNull();
         assertThat(transactional.propagation()).isEqualTo(Propagation.REQUIRES_NEW);
     }
+
+    @Test
+    void optimisticTeachingRetryCommitsIndependentlyFromTheRequestTransaction() throws Exception {
+        Transactional transactional = JpaOfficialRulebookImportJobRepository.class
+                .getDeclaredMethod("retryTeaching", UUID.class, UUID.class, Instant.class)
+                .getAnnotation(Transactional.class);
+
+        assertThat(transactional).isNotNull();
+        assertThat(transactional.propagation()).isEqualTo(Propagation.REQUIRES_NEW);
+    }
 }

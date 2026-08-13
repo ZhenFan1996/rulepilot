@@ -1,6 +1,7 @@
 package com.rulepilot.document.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -203,6 +204,72 @@ class OfficialRulebookImportJobServiceTest {
         assertThat(launch.job().errorCode()).isEqualTo("IMPORT_QUEUE_FULL");
     }
 
+    @Test
+    void retriesTheExistingDurableTeachingHandoffWithoutDownloadingTheRulebookAgain() {
+        FakeJobs jobs = new FakeJobs();
+        UUID versionId = UUID.randomUUID();
+        UUID failedRunId = UUID.randomUUID();
+        var job = OfficialRulebookImportJob.queued(
+                UUID.randomUUID(), "alice", automaticTeachingCommand().editionId(), "Example Rules",
+                DocumentSourceType.BASE_RULEBOOK, SOURCE, true, null, NOW);
+        jobs.insert(job);
+        jobs.complete(job.id(), versionId, false, NOW);
+        jobs.claimReadyTeachingForDocument(versionId, 1, NOW);
+        jobs.completeTeachingLaunch(job.id(), failedRunId, NOW);
+        OfficialRulebookImportService imports = mock(OfficialRulebookImportService.class);
+        TaskExecutor executor = mock(TaskExecutor.class);
+        var service = service(jobs, imports, executor);
+
+        var retried = service.retryTeaching(job.id(), failedRunId, "alice");
+
+        assertThat(retried.documentVersionId()).isEqualTo(versionId);
+        assertThat(retried.teachingHandoff().state()).isEqualTo(TeachingHandoffState.WAITING_FOR_DOCUMENT);
+        assertThat(retried.teachingHandoff().preparationRunId()).isNull();
+        verifyNoInteractions(executor, imports);
+    }
+
+    @Test
+    void aStaleDuplicateRetryCannotReplaceTheNewerPreparationRun() {
+        FakeJobs jobs = new FakeJobs();
+        UUID versionId = UUID.randomUUID();
+        UUID oldRunId = UUID.randomUUID();
+        UUID newerRunId = UUID.randomUUID();
+        var job = OfficialRulebookImportJob.queued(
+                UUID.randomUUID(), "alice", automaticTeachingCommand().editionId(), "Example Rules",
+                DocumentSourceType.BASE_RULEBOOK, SOURCE, true, null, NOW);
+        jobs.insert(job);
+        jobs.complete(job.id(), versionId, false, NOW);
+        jobs.claimReadyTeachingForDocument(versionId, 1, NOW);
+        jobs.completeTeachingLaunch(job.id(), oldRunId, NOW);
+        var service = service(jobs, mock(OfficialRulebookImportService.class), mock(TaskExecutor.class));
+        service.retryTeaching(job.id(), oldRunId, "alice");
+        jobs.claimReadyTeachingForDocument(versionId, 1, NOW);
+        jobs.completeTeachingLaunch(job.id(), newerRunId, NOW);
+
+        var unchanged = service.retryTeaching(job.id(), oldRunId, "alice");
+
+        assertThat(unchanged.teachingHandoff().state()).isEqualTo(TeachingHandoffState.LAUNCHED);
+        assertThat(unchanged.teachingHandoff().preparationRunId()).isEqualTo(newerRunId);
+    }
+
+    @Test
+    void doesNotRetryTeachingWhenThePersistedRulebookProcessingFailed() {
+        FakeJobs jobs = new FakeJobs();
+        UUID versionId = UUID.randomUUID();
+        var job = OfficialRulebookImportJob.queued(
+                UUID.randomUUID(), "alice", automaticTeachingCommand().editionId(), "Example Rules",
+                DocumentSourceType.BASE_RULEBOOK, SOURCE, true, null, NOW);
+        jobs.insert(job);
+        jobs.complete(job.id(), versionId, false, NOW);
+        jobs.claimReadyTeachingForDocument(versionId, 1, NOW);
+        jobs.failTeachingLaunch(job.id(), "DOCUMENT_PROCESSING_FAILED", NOW);
+        var service = service(jobs, mock(OfficialRulebookImportService.class), mock(TaskExecutor.class));
+
+        assertThatThrownBy(() -> service.retryTeaching(job.id(), null, "alice"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("rulebook processing failed");
+    }
+
     private OfficialRulebookImportJobService service(
             FakeJobs jobs, OfficialRulebookImportService imports, TaskExecutor executor) {
         return new OfficialRulebookImportJobService(
@@ -277,6 +344,21 @@ class OfficialRulebookImportJobServiceTest {
             values.put(jobId, copy(job, job.stage(), job.downloadedBytes(), job.totalBytes(),
                     job.documentVersionId(), job.duplicate(), job.errorCode(),
                     TeachingHandoff.requested(learningGoal, now), now, job.completedAt()));
+        }
+
+        @Override
+        public boolean retryTeaching(UUID jobId, UUID expectedPreparationRunId, Instant now) {
+            var job = values.get(jobId);
+            boolean eligible = job.teachingHandoff().state() == TeachingHandoffState.FAILED
+                    || job.teachingHandoff().state() == TeachingHandoffState.LAUNCHED
+                            && java.util.Objects.equals(
+                                    job.teachingHandoff().preparationRunId(), expectedPreparationRunId);
+            if (!eligible) return false;
+            values.put(jobId, copy(job, job.stage(), job.downloadedBytes(), job.totalBytes(),
+                    job.documentVersionId(), job.duplicate(), job.errorCode(),
+                    TeachingHandoff.requested(job.teachingHandoff().learningGoal(), now),
+                    now, job.completedAt()));
+            return true;
         }
 
         @Override

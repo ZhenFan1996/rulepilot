@@ -44,6 +44,18 @@ public class UploadedRulebookTeachingHandoffService implements UploadedRulebookT
         return view(snapshot);
     }
 
+    @Transactional
+    public HandoffView retry(UUID handoffId, UUID expectedPreparationRunId, String ownerUsername) {
+        String owner = checkedOwner(ownerUsername);
+        var existing = handoffs.findOwned(handoffId, owner)
+                .orElseThrow(() -> new IllegalArgumentException("uploaded teaching handoff does not exist"));
+        if (existing.state() == UploadedRulebookTeachingHandoffStore.State.FAILED
+                && "DOCUMENT_PROCESSING_FAILED".equals(existing.errorCode())) {
+            throw new IllegalStateException("uploaded rulebook processing failed");
+        }
+        return view(handoffs.retry(handoffId, expectedPreparationRunId, owner, Instant.now(clock)));
+    }
+
     @Transactional(readOnly = true)
     public List<HandoffView> recentOwned(String ownerUsername) {
         String owner = checkedOwner(ownerUsername);

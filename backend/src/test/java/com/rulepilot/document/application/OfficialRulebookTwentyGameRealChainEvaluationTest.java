@@ -617,6 +617,11 @@ class OfficialRulebookTwentyGameRealChainEvaluationTest {
         }
 
         @Override
+        public boolean retryTeaching(UUID jobId, UUID expectedPreparationRunId, Instant now) {
+            throw new UnsupportedOperationException("not used by real-chain evaluation");
+        }
+
+        @Override
         public List<OfficialRulebookImportJob> claimReadyTeaching(int limit, Instant now) {
             return claimReadyTeaching(null, limit, now);
         }

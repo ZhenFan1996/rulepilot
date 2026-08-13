@@ -181,6 +181,72 @@ class UserRuleDocumentControllerTest {
     }
 
     @Test
+    void retriesOfficialTeachingThroughTheOwnedDurableImportHandoff() {
+        OfficialRulebookImportJobService imports = mock(OfficialRulebookImportJobService.class);
+        UserRuleDocumentController controller = new UserRuleDocumentController(
+                mock(UploadRuleDocumentService.class),
+                mock(PhotographedRulebookUploadService.class),
+                mock(RuleDocumentRemovalService.class),
+                mock(RuleDocumentMetadataSuggestionService.class),
+                mock(RuleDocumentMetadataConfirmationService.class),
+                imports,
+                mock(UploadedRulebookTeachingHandoffService.class),
+                mock(CatalogEditionLookup.class));
+        UUID jobId = UUID.randomUUID();
+        UUID failedRunId = UUID.randomUUID();
+        Instant now = Instant.parse("2026-08-14T00:00:00Z");
+        var job = OfficialRulebookImportJob.queued(
+                jobId, "alice", null, "Example Rules", DocumentSourceType.BASE_RULEBOOK,
+                "https://publisher.example/rules.pdf", true, null, now);
+        when(imports.retryTeaching(jobId, failedRunId, "alice")).thenReturn(job);
+
+        var response = controller.retryOfficialRulebookTeaching(
+                jobId,
+                new UserRuleDocumentController.TeachingHandoffRetryRequest(failedRunId),
+                () -> "alice");
+
+        assertThat(response.id()).isEqualTo(jobId);
+        verify(imports).retryTeaching(jobId, failedRunId, "alice");
+    }
+
+    @Test
+    void retriesUploadedTeachingThroughTheOwnedDurableUploadHandoff() {
+        UploadedRulebookTeachingHandoffService handoffs = mock(UploadedRulebookTeachingHandoffService.class);
+        UserRuleDocumentController controller = new UserRuleDocumentController(
+                mock(UploadRuleDocumentService.class),
+                mock(PhotographedRulebookUploadService.class),
+                mock(RuleDocumentRemovalService.class),
+                mock(RuleDocumentMetadataSuggestionService.class),
+                mock(RuleDocumentMetadataConfirmationService.class),
+                mock(OfficialRulebookImportJobService.class),
+                handoffs,
+                mock(CatalogEditionLookup.class));
+        UUID handoffId = UUID.randomUUID();
+        UUID versionId = UUID.randomUUID();
+        UUID failedRunId = UUID.randomUUID();
+        Instant now = Instant.parse("2026-08-14T00:00:00Z");
+        var view = new UploadedRulebookTeachingHandoffService.HandoffView(
+                handoffId,
+                versionId,
+                null,
+                "rules.pdf",
+                com.rulepilot.document.application.UploadedRulebookTeachingHandoffStore.State.WAITING_FOR_DOCUMENT,
+                null,
+                null,
+                now,
+                now);
+        when(handoffs.retry(handoffId, failedRunId, "alice")).thenReturn(view);
+
+        var response = controller.retryUploadedRulebookTeaching(
+                handoffId,
+                new UserRuleDocumentController.TeachingHandoffRetryRequest(failedRunId),
+                () -> "alice");
+
+        assertThat(response.id()).isEqualTo(handoffId);
+        verify(handoffs).retry(handoffId, failedRunId, "alice");
+    }
+
+    @Test
     void exposesOwnerScopedAttributedSuggestions() {
         RuleDocumentMetadataSuggestionService suggestions = mock(RuleDocumentMetadataSuggestionService.class);
         UserRuleDocumentController controller = new UserRuleDocumentController(

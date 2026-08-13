@@ -195,6 +195,35 @@ class JpaOfficialRulebookImportJobRepositoryPostgresTest {
                 .containsEntry("teaching_error_code", "DOCUMENT_PROCESSING_FAILED");
     }
 
+    @Test
+    void retryResetsTheObservedPreparationButCannotReplaceANewerRun() {
+        Instant now = Instant.parse("2026-08-10T02:30:00Z");
+        UUID versionId = insertDocument("retry", "READY", now);
+        UUID jobId = insertCompletedTeachingJob(versionId, now);
+        UUID failedRunId = UUID.randomUUID();
+        UUID newerRunId = UUID.randomUUID();
+        inTransaction(repository -> repository.claimReadyTeachingForDocument(versionId, 1, now.plusSeconds(1)));
+        inTransaction(repository -> repository.completeTeachingLaunch(jobId, failedRunId, now.plusSeconds(2)));
+
+        boolean retried = inTransactionReturning(repository ->
+                repository.retryTeaching(jobId, failedRunId, now.plusSeconds(3)));
+        inTransaction(repository -> repository.claimReadyTeachingForDocument(versionId, 1, now.plusSeconds(4)));
+        inTransaction(repository -> repository.completeTeachingLaunch(jobId, newerRunId, now.plusSeconds(5)));
+        boolean staleRetry = inTransactionReturning(repository ->
+                repository.retryTeaching(jobId, failedRunId, now.plusSeconds(6)));
+
+        assertThat(retried).isTrue();
+        assertThat(staleRetry).isFalse();
+        assertThat(jdbc.queryForMap(
+                        """
+                        SELECT teaching_handoff_state, teaching_preparation_run_id
+                        FROM official_rulebook_import_job WHERE id = ?
+                        """,
+                        jobId))
+                .containsEntry("teaching_handoff_state", "LAUNCHED")
+                .containsEntry("teaching_preparation_run_id", newerRunId);
+    }
+
     private static UUID insertFailedDocument(Instant now) {
         return insertDocument("unusable", "FAILED", now);
     }

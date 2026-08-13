@@ -10,6 +10,7 @@ import jakarta.persistence.PersistenceContext;
 import jakarta.persistence.Table;
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Repository;
@@ -65,6 +66,60 @@ class JpaUploadedRulebookTeachingHandoffStore implements UploadedRulebookTeachin
             throw new IllegalStateException("uploaded rulebook teaching handoff could not be retried");
         }
         return existing;
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Optional<Snapshot> findOwned(UUID handoffId, String ownerUsername) {
+        return entityManager
+                .createQuery(
+                        """
+                        select handoff from UploadedRulebookTeachingHandoffEntity handoff
+                        where handoff.id = :handoffId and handoff.ownerUsername = :owner
+                        """,
+                        UploadedRulebookTeachingHandoffEntity.class)
+                .setParameter("handoffId", handoffId)
+                .setParameter("owner", ownerUsername)
+                .getResultStream()
+                .findFirst()
+                .map(UploadedRulebookTeachingHandoffEntity::toSnapshot);
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public Snapshot retry(
+            UUID handoffId, UUID expectedPreparationRunId, String ownerUsername, Instant now) {
+        String eligibleState = expectedPreparationRunId == null
+                ? "handoff.state = 'FAILED'"
+                : "(handoff.state = 'FAILED' or (handoff.state = 'LAUNCHED' and handoff.preparationRunId = :expectedRunId))";
+        var update = entityManager.createQuery(
+                """
+                update UploadedRulebookTeachingHandoffEntity handoff
+                set handoff.state = 'WAITING_FOR_DOCUMENT',
+                    handoff.preparationRunId = null,
+                    handoff.errorCode = null,
+                    handoff.updatedAt = :now
+                where handoff.id = :handoffId
+                  and handoff.ownerUsername = :owner
+                  and (handoff.state <> 'FAILED'
+                       or coalesce(handoff.errorCode, '') <> 'DOCUMENT_PROCESSING_FAILED')
+                  and """ + eligibleState);
+        update.setParameter("handoffId", handoffId)
+                .setParameter("owner", ownerUsername)
+                .setParameter("now", now);
+        if (expectedPreparationRunId != null) update.setParameter("expectedRunId", expectedPreparationRunId);
+        int changed = update.executeUpdate();
+        entityManager.flush();
+        Snapshot current = findOwned(handoffId, ownerUsername)
+                .orElseThrow(() -> new IllegalArgumentException("uploaded teaching handoff does not exist"));
+        if (changed == 1
+                || current.state() == State.WAITING_FOR_DOCUMENT
+                || current.state() == State.LAUNCHING
+                || current.state() == State.LAUNCHED
+                        && !java.util.Objects.equals(current.preparationRunId(), expectedPreparationRunId)) {
+            return current;
+        }
+        throw new IllegalStateException("uploaded rulebook teaching handoff could not be retried");
     }
 
     @Override

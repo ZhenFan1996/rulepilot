@@ -81,6 +81,38 @@ public class OfficialRulebookImportJobService implements RulebookTeachingHandoff
         return jobs.findRecentOwned(checkedOwner(ownerUsername), 12);
     }
 
+    public OfficialRulebookImportJob retryTeaching(
+            UUID jobId, UUID expectedPreparationRunId, String ownerUsername) {
+        var job = requireOwned(jobId, ownerUsername);
+        if (job.stage() != OfficialRulebookImportJob.Stage.COMPLETED || job.documentVersionId() == null) {
+            throw new IllegalStateException("official rulebook import is not ready for teaching");
+        }
+        var handoff = job.teachingHandoff();
+        if (handoff.state() == TeachingHandoffState.WAITING_FOR_DOCUMENT
+                || handoff.state() == TeachingHandoffState.LAUNCHING) {
+            return job;
+        }
+        if (handoff.state() == TeachingHandoffState.FAILED
+                && "DOCUMENT_PROCESSING_FAILED".equals(handoff.errorCode())) {
+            throw new IllegalStateException("official rulebook processing failed");
+        }
+        if (handoff.state() != TeachingHandoffState.FAILED
+                && handoff.state() != TeachingHandoffState.LAUNCHED) {
+            throw new IllegalStateException("official rulebook teaching handoff cannot be retried");
+        }
+        boolean changed = jobs.retryTeaching(job.id(), expectedPreparationRunId, Instant.now(clock));
+        var current = requireOwned(job.id(), job.ownerUsername());
+        if (changed
+                || current.teachingHandoff().state() == TeachingHandoffState.WAITING_FOR_DOCUMENT
+                || current.teachingHandoff().state() == TeachingHandoffState.LAUNCHING
+                || current.teachingHandoff().state() == TeachingHandoffState.LAUNCHED
+                        && !java.util.Objects.equals(
+                                current.teachingHandoff().preparationRunId(), expectedPreparationRunId)) {
+            return current;
+        }
+        throw new IllegalStateException("official rulebook teaching handoff could not be retried");
+    }
+
     public int failInterrupted() {
         return jobs.failInterrupted(Instant.now(clock));
     }

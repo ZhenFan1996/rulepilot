@@ -5,6 +5,7 @@ import { RouterLink, useRoute } from 'vue-router'
 import AppShell from '@/components/AppShell.vue'
 import DestructiveActionDialog from '@/components/DestructiveActionDialog.vue'
 import { notifyLoginRequired } from '@/lib/authSession'
+import { notifyBackgroundWorkChanged } from '@/lib/backgroundWorkRefresh'
 import { hasReadableLesson, mergeLessonProgress, type LessonProgressSummary } from '@/lib/lessonProgressState'
 import { groupPlansForReading, playerFacingTitle } from '@/lib/lessonPresentation'
 import { useLocale } from '@/lib/locale'
@@ -592,26 +593,36 @@ async function retryPendingJourney(journey: (typeof pendingJourneys.value)[numbe
     const csrfResponse = await checkedFetch('/api/auth/csrf')
     if (!csrfResponse.ok) throw new Error(t('lessons.error.secureSession'))
     const csrf = await csrfResponse.json() as CsrfResponse
-    const response = await checkedFetch(
-      `/api/v1/document-versions/${encodeURIComponent(journey.documentVersionId)}/teaching-plans`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', [csrf.headerName]: csrf.token },
-        body: JSON.stringify({ learningGoal: null }),
-      },
-    )
+    const durableRetryPath = journey.importJobId
+      ? `/api/v1/documents/official-imports/${encodeURIComponent(journey.importJobId)}/teaching-retry`
+      : journey.uploadHandoffId
+        ? `/api/v1/documents/upload-teaching-handoffs/${encodeURIComponent(journey.uploadHandoffId)}/retry`
+        : null
+    const response = await checkedFetch(durableRetryPath
+      ?? `/api/v1/document-versions/${encodeURIComponent(journey.documentVersionId)}/teaching-plans`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', [csrf.headerName]: csrf.token },
+      body: JSON.stringify(durableRetryPath
+        ? { expectedPreparationRunId: journey.preparationRunId }
+        : { learningGoal: null }),
+    })
     if (!response.ok) throw new Error(pendingCopy.value.retryFailed)
-    const launch = await response.json() as { assistantRunId: string; state: string }
-    preparationRuns.value = [
-      ...preparationRuns.value.filter(run => run.id !== launch.assistantRunId),
-      {
-        id: launch.assistantRunId,
-        subjectId: journey.documentVersionId,
-        state: launch.state,
-        updatedAt: new Date().toISOString(),
-        lastErrorCode: null,
-      },
-    ]
+    if (durableRetryPath) {
+      await response.json()
+      notifyBackgroundWorkChanged()
+    } else {
+      const launch = await response.json() as { assistantRunId: string; state: string }
+      preparationRuns.value = [
+        ...preparationRuns.value.filter(run => run.id !== launch.assistantRunId),
+        {
+          id: launch.assistantRunId,
+          subjectId: journey.documentVersionId,
+          state: launch.state,
+          updatedAt: new Date().toISOString(),
+          lastErrorCode: null,
+        },
+      ]
+    }
     scheduleJourneyRefresh()
     await loadPlans(true)
   } catch (error) {

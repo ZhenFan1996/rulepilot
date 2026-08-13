@@ -21,6 +21,8 @@ public interface OfficialRulebookImportJobRepository {
 
     void requestTeaching(UUID jobId, String learningGoal, Instant now);
 
+    boolean retryTeaching(UUID jobId, UUID expectedPreparationRunId, Instant now);
+
     List<OfficialRulebookImportJob> claimReadyTeaching(int limit, Instant now);
 
     List<OfficialRulebookImportJob> claimReadyTeachingForDocument(

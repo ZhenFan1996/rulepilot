@@ -513,18 +513,20 @@ async function retryJourney() {
     if (action === 'DISCOVER_RULEBOOK') return await discover()
     if (action === 'IMPORT_RULEBOOK') return await enqueueImport()
     if (action === 'PREPARE_TEACHING') {
-      if (importJob.value?.teachingHandoffState === 'FAILED') return await enqueueImport()
-      const versionId = importJob.value?.documentVersionId
-      if (!versionId) throw new Error('document version unavailable')
+      const currentJob = importJob.value
+      if (!currentJob?.documentVersionId) throw new Error('document version unavailable')
       const token = await csrfToken()
-      const response = await fetch(`/api/v1/document-versions/${encodeURIComponent(versionId)}/teaching-plans`, {
+      const response = await fetch(
+        `/api/v1/documents/official-imports/${encodeURIComponent(currentJob.id)}/teaching-retry`, {
         method: 'POST', credentials: 'include',
         headers: { 'Content-Type': 'application/json', [token.headerName]: token.token },
-        body: JSON.stringify({ learningGoal: null }),
+        body: JSON.stringify({ expectedPreparationRunId: currentJob.teachingPreparationRunId }),
       })
       if (!response.ok) throw new Error('teaching preparation retry failed')
-      const launch = await response.json() as LaunchResponse
-      preparationRunId.value = launch.assistantRunId
+      const retriedJob = normalizeImportJob(await response.json() as OfficialImportJob)
+      if (retriedJob.id !== currentJob.id) throw new Error('teaching preparation retry identity changed')
+      importJob.value = retriedJob
+      preparationRunId.value = retriedJob.teachingPreparationRunId
       preparationRun.value = null
       teachingRun.value = null
       teachingRunId.value = null
