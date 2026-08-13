@@ -88,17 +88,30 @@ class JpaUploadedRulebookTeachingHandoffStore implements UploadedRulebookTeachin
     @Override
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public List<Snapshot> claimReady(int limit, Instant now) {
+        return claimReady(null, limit, now);
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public List<Snapshot> claimReadyForDocument(UUID documentVersionId, int limit, Instant now) {
+        if (documentVersionId == null) throw new IllegalArgumentException("ready document version is required");
+        return claimReady(documentVersionId, limit, now);
+    }
+
+    private List<Snapshot> claimReady(UUID documentVersionId, int limit, Instant now) {
         List<UploadedRulebookTeachingHandoffEntity> claimed = entityManager
                 .createQuery(
                         """
                         select handoff
                         from UploadedRulebookTeachingHandoffEntity handoff, DocumentVersionEntity version
                         where handoff.documentVersionId = version.id
+                          and (:documentVersionId is null or version.id = :documentVersionId)
                           and handoff.state = 'WAITING_FOR_DOCUMENT'
                           and version.processingStatus = 'READY'
                         order by handoff.createdAt
                         """,
                         UploadedRulebookTeachingHandoffEntity.class)
+                .setParameter("documentVersionId", documentVersionId)
                 .setLockMode(LockModeType.PESSIMISTIC_WRITE)
                 .setMaxResults(limit)
                 .getResultList();

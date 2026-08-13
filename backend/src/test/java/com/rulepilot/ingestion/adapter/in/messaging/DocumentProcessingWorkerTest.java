@@ -12,12 +12,14 @@ import com.rulepilot.document.DocumentProcessingCommands;
 import com.rulepilot.document.DocumentProcessingFailures;
 import com.rulepilot.document.DocumentProcessingJobs;
 import com.rulepilot.document.DocumentProcessingIdempotency;
+import com.rulepilot.document.DocumentReadyNotifications;
 import com.rulepilot.document.DocumentProcessingStage;
 import com.rulepilot.document.DocumentVersionScopeLookup;
 import com.rulepilot.document.RetryableDocumentProcessingException;
 import com.rulepilot.ingestion.application.UploadedDocumentIngestion;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -67,6 +69,72 @@ class DocumentProcessingWorkerTest {
                 .isEqualTo(1);
         assertThat(metrics
                         .timer("rulepilot.document.processing.stage.duration", "stage", "parse", "outcome", "completed")
+                        .count())
+                .isEqualTo(1);
+    }
+
+    @Test
+    void publishesAReadyNotificationOnlyAfterTheTerminalStageIsDurable() {
+        UploadedDocumentIngestion ingestion = Mockito.mock(UploadedDocumentIngestion.class);
+        DocumentProcessingCommands commands = Mockito.mock(DocumentProcessingCommands.class);
+        DocumentProcessingJobs jobs = Mockito.mock(DocumentProcessingJobs.class);
+        DocumentProcessingIdempotency idempotency = Mockito.mock(DocumentProcessingIdempotency.class);
+        DocumentProcessingFailures failures = Mockito.mock(DocumentProcessingFailures.class);
+        DocumentReadyNotifications readyNotifications = Mockito.mock(DocumentReadyNotifications.class);
+        UUID documentVersionId = UUID.randomUUID();
+        UUID jobId = UUID.randomUUID();
+        UUID eventId = UUID.randomUUID();
+        var command = new DocumentProcessingCommand(
+                1, documentVersionId, jobId, "v1", DocumentProcessingStage.EMBED);
+        Instant readyAt = Instant.parse("2026-08-13T08:00:00Z");
+        when(idempotency.begin(command, eventId, 1)).thenReturn(true);
+        when(jobs.completed(jobId, DocumentProcessingStage.EMBED)).thenReturn(readyAt);
+        var metrics = new SimpleMeterRegistry();
+
+        worker(ingestion, commands, jobs, idempotency, failures, readyNotifications, metrics)
+                .process(message(payload(documentVersionId, jobId, "EMBED"), eventId, 1));
+
+        var order = Mockito.inOrder(ingestion, jobs, idempotency, readyNotifications);
+        order.verify(ingestion).process(documentVersionId, DocumentProcessingStage.EMBED);
+        order.verify(jobs).completed(jobId, DocumentProcessingStage.EMBED);
+        order.verify(idempotency).complete(command);
+        order.verify(readyNotifications).publish(documentVersionId, readyAt);
+    }
+
+    @Test
+    void keepsReadyNotificationFailureRecoverableByTheDatabaseScan() {
+        UploadedDocumentIngestion ingestion = Mockito.mock(UploadedDocumentIngestion.class);
+        DocumentProcessingCommands commands = Mockito.mock(DocumentProcessingCommands.class);
+        DocumentProcessingJobs jobs = Mockito.mock(DocumentProcessingJobs.class);
+        DocumentProcessingIdempotency idempotency = Mockito.mock(DocumentProcessingIdempotency.class);
+        DocumentProcessingFailures failures = Mockito.mock(DocumentProcessingFailures.class);
+        DocumentReadyNotifications readyNotifications = Mockito.mock(DocumentReadyNotifications.class);
+        UUID documentVersionId = UUID.randomUUID();
+        UUID jobId = UUID.randomUUID();
+        UUID eventId = UUID.randomUUID();
+        var command = new DocumentProcessingCommand(
+                1, documentVersionId, jobId, "v1", DocumentProcessingStage.EMBED);
+        Instant readyAt = Instant.parse("2026-08-13T08:00:00Z");
+        when(idempotency.begin(command, eventId, 1)).thenReturn(true);
+        when(jobs.completed(jobId, DocumentProcessingStage.EMBED)).thenReturn(readyAt);
+        Mockito.doThrow(new IllegalStateException("broker unavailable"))
+                .when(readyNotifications)
+                .publish(documentVersionId, readyAt);
+        var metrics = new SimpleMeterRegistry();
+
+        worker(ingestion, commands, jobs, idempotency, failures, readyNotifications, metrics)
+                .process(message(payload(documentVersionId, jobId, "EMBED"), eventId, 1));
+
+        verify(idempotency).complete(command);
+        verifyNoInteractions(failures);
+        assertThat(metrics.counter("rulepilot.document.ready.notification", "outcome", "failed").count())
+                .isEqualTo(1);
+        assertThat(metrics.counter(
+                                "rulepilot.document.processing.attempts",
+                                "stage",
+                                "embed",
+                                "outcome",
+                                "completed")
                         .count())
                 .isEqualTo(1);
     }
@@ -238,7 +306,38 @@ class DocumentProcessingWorkerTest {
             DocumentVersionScopeLookup versions,
             SimpleMeterRegistry metrics) {
         return new DocumentProcessingWorker(
-                ingestion, commands, jobs, idempotency, failures, versions, metrics, 4);
+                ingestion,
+                commands,
+                jobs,
+                idempotency,
+                failures,
+                Mockito.mock(DocumentReadyNotifications.class),
+                versions,
+                metrics,
+                4);
+    }
+
+    private DocumentProcessingWorker worker(
+            UploadedDocumentIngestion ingestion,
+            DocumentProcessingCommands commands,
+            DocumentProcessingJobs jobs,
+            DocumentProcessingIdempotency idempotency,
+            DocumentProcessingFailures failures,
+            DocumentReadyNotifications readyNotifications,
+            SimpleMeterRegistry metrics) {
+        DocumentVersionScopeLookup versions = Mockito.mock(DocumentVersionScopeLookup.class);
+        when(versions.findVersion(any())).thenAnswer(invocation -> Optional.of(new DocumentVersionScopeLookup.VersionScope(
+                invocation.getArgument(0), UUID.randomUUID(), "UPLOADED", "player")));
+        return new DocumentProcessingWorker(
+                ingestion,
+                commands,
+                jobs,
+                idempotency,
+                failures,
+                readyNotifications,
+                versions,
+                metrics,
+                4);
     }
 
     private String payload(UUID documentVersionId, UUID jobId, String stage) {

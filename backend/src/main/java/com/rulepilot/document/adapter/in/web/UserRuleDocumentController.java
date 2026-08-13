@@ -311,6 +311,9 @@ public class UserRuleDocumentController {
             OfficialRulebookImportJob.TeachingHandoffState teachingHandoffState,
             UUID teachingPreparationRunId,
             String teachingErrorCode,
+            java.time.Instant downloadCompletedAt,
+            java.time.Instant importCompletedAt,
+            java.time.Instant teachingHandoffUpdatedAt,
             java.time.Instant createdAt,
             java.time.Instant updatedAt,
             boolean reused) {
@@ -335,6 +338,9 @@ public class UserRuleDocumentController {
                     job.teachingHandoff().state(),
                     job.teachingHandoff().preparationRunId(),
                     job.teachingHandoff().errorCode(),
+                    job.downloadCompletedAt(),
+                    job.completedAt(),
+                    job.teachingHandoff().updatedAt(),
                     job.createdAt(),
                     job.updatedAt(),
                     reused);

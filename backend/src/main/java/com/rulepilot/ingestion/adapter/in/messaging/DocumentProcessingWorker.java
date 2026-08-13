@@ -4,9 +4,10 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rulepilot.document.DocumentProcessingCommand;
 import com.rulepilot.document.DocumentProcessingCommands;
+import com.rulepilot.document.DocumentProcessingFailures;
 import com.rulepilot.document.DocumentProcessingJobs;
 import com.rulepilot.document.DocumentProcessingIdempotency;
-import com.rulepilot.document.DocumentProcessingFailures;
+import com.rulepilot.document.DocumentReadyNotifications;
 import com.rulepilot.document.DocumentProcessingStage;
 import com.rulepilot.document.DocumentVersionScopeLookup;
 import com.rulepilot.document.RetryableDocumentProcessingException;
@@ -14,6 +15,7 @@ import com.rulepilot.ingestion.application.UploadedDocumentIngestion;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import java.io.IOException;
+import java.time.Instant;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -39,6 +41,7 @@ public class DocumentProcessingWorker {
     private final DocumentProcessingJobs jobs;
     private final DocumentProcessingIdempotency idempotency;
     private final DocumentProcessingFailures failures;
+    private final DocumentReadyNotifications readyNotifications;
     private final DocumentVersionScopeLookup versions;
     private final MeterRegistry metrics;
     private final int maxAttempts;
@@ -49,6 +52,7 @@ public class DocumentProcessingWorker {
             DocumentProcessingJobs jobs,
             DocumentProcessingIdempotency idempotency,
             DocumentProcessingFailures failures,
+            DocumentReadyNotifications readyNotifications,
             DocumentVersionScopeLookup versions,
             MeterRegistry metrics,
             @Value("${rulepilot.document.messaging.max-attempts}") int maxAttempts) {
@@ -57,6 +61,7 @@ public class DocumentProcessingWorker {
         this.jobs = jobs;
         this.idempotency = idempotency;
         this.failures = failures;
+        this.readyNotifications = readyNotifications;
         this.versions = versions;
         this.metrics = metrics;
         this.maxAttempts = maxAttempts;
@@ -133,12 +138,14 @@ public class DocumentProcessingWorker {
             jobs.stageStarted(command.processingJobId(), command.stage());
             ingestion.process(command.documentVersionId(), command.stage());
             var next = command.nextStage();
+            Instant readyAt = null;
             if (next == null) {
-                jobs.completed(command.processingJobId(), command.stage());
+                readyAt = jobs.completed(command.processingJobId(), command.stage());
             } else {
                 commands.publish(next);
             }
             idempotency.complete(command);
+            if (next == null) notifyReady(command.documentVersionId(), readyAt);
             outcome = "completed";
         } catch (RuntimeException exception) {
             LOGGER.error(
@@ -178,6 +185,21 @@ public class DocumentProcessingWorker {
                     .tag("stage", command.stage().name().toLowerCase())
                     .tag("outcome", outcome)
                     .register(metrics));
+        }
+    }
+
+    private void notifyReady(UUID documentVersionId, Instant readyAt) {
+        try {
+            readyNotifications.publish(documentVersionId, readyAt);
+            metrics.counter("rulepilot.document.ready.notification", "outcome", "published").increment();
+        } catch (RuntimeException failure) {
+            // READY and the waiting Teaching intent are already durable. The API reconciliation scan is the retry
+            // mechanism, so a best-effort wake-up must never dead-letter successful document processing.
+            metrics.counter("rulepilot.document.ready.notification", "outcome", "failed").increment();
+            LOGGER.warn(
+                    "Document READY wake-up failed for documentVersionId={}; scheduled reconciliation will recover it",
+                    documentVersionId,
+                    failure);
         }
     }
 

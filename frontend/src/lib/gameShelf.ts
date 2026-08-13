@@ -50,6 +50,9 @@ export interface ShelfImportJob {
   teachingHandoffState: 'NOT_REQUESTED' | 'WAITING_FOR_DOCUMENT' | 'LAUNCHING' | 'LAUNCHED' | 'FAILED'
   teachingPreparationRunId: string | null
   teachingErrorCode: string | null
+  downloadCompletedAt?: string | null
+  importCompletedAt?: string | null
+  teachingHandoffUpdatedAt?: string | null
   updatedAt: string
 }
 

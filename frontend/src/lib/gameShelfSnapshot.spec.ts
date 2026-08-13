@@ -30,6 +30,8 @@ const imports = [{
   editionName: 'First Edition', sourceDomain: 'publisher.example', stage: 'COMPLETED',
   downloadedBytes: 4096, totalBytes: 4096, documentVersionId: 'version-1', errorCode: null,
   teachingHandoffState: 'LAUNCHED', teachingPreparationRunId: 'preparation-1', teachingErrorCode: null,
+  downloadCompletedAt: '2026-08-13T07:59:50Z', importCompletedAt: '2026-08-13T07:59:55Z',
+  teachingHandoffUpdatedAt: '2026-08-13T08:00:00Z',
   updatedAt: '2026-08-13T08:00:00Z',
 }]
 
@@ -59,6 +61,12 @@ describe('personal shelf response boundaries', () => {
     }], documents, imports, 'player')).toThrow()
     expect(() => parsePersonalShelfBase(catalog, documents, [{
       ...imports[0], editionId: 'missing-edition',
+    }], 'player')).toThrow()
+  })
+
+  it('rejects malformed persisted import milestones', () => {
+    expect(() => parsePersonalShelfBase(catalog, documents, [{
+      ...imports[0], teachingHandoffUpdatedAt: 'not-a-time',
     }], 'player')).toThrow()
   })
 

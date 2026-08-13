@@ -14,10 +14,15 @@ import org.springframework.transaction.annotation.Transactional;
 public class DocumentProcessingJobService implements DocumentProcessingJobs {
 
     private final DocumentProcessingJobStore jobs;
-    private final Clock clock = Clock.systemUTC();
+    private final Clock clock;
 
     public DocumentProcessingJobService(DocumentProcessingJobStore jobs) {
+        this(jobs, Clock.systemUTC());
+    }
+
+    DocumentProcessingJobService(DocumentProcessingJobStore jobs, Clock clock) {
         this.jobs = jobs;
+        this.clock = clock;
     }
 
     @Override
@@ -28,8 +33,10 @@ public class DocumentProcessingJobService implements DocumentProcessingJobs {
 
     @Override
     @Transactional
-    public void completed(UUID jobId, DocumentProcessingStage stage) {
-        jobs.update(jobId, stage, "COMPLETED", Instant.now(clock));
+    public Instant completed(UUID jobId, DocumentProcessingStage stage) {
+        Instant completedAt = Instant.now(clock);
+        jobs.update(jobId, stage, "COMPLETED", completedAt);
+        return completedAt;
     }
 
     @Override

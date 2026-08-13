@@ -37,6 +37,10 @@ interface ImportJob {
   teachingHandoffState: 'NOT_REQUESTED' | 'WAITING_FOR_DOCUMENT' | 'LAUNCHING' | 'LAUNCHED' | 'FAILED'
   teachingPreparationRunId: string | null
   teachingErrorCode: string | null
+  downloadCompletedAt: string | null
+  importCompletedAt: string | null
+  teachingHandoffUpdatedAt: string | null
+  createdAt: string
   reused: boolean
 }
 
@@ -77,8 +81,15 @@ interface RuleDocumentResponse {
 interface RunDetailsResponse {
   run: {
     state: string
+    createdAt: string
     lastErrorCode: string | null
   }
+  activities: Array<{
+    operation: string
+    outcome: string
+    summary: string
+    occurredAt: string
+  }>
 }
 
 interface LessonMilestoneResponse {
@@ -97,6 +108,8 @@ interface ImportMilestoneObservation {
 interface FirstCitedLessonObservation {
   teachingPreparationStartedMs: number
   firstCitedLessonMs: number
+  preparationRunCreatedAt: string | null
+  firstCitedPublicationActivityAt: string | null
 }
 
 interface ProductionJourneyReport {
@@ -132,6 +145,17 @@ interface ProductionJourneyReport {
   importDuplicate: boolean | null
   downloadedBytes: number | null
   importMs: number | null
+  downloadCompletedAt: string | null
+  importCompletedAt: string | null
+  teachingHandoffUpdatedAt: string | null
+  persistedDownloadToImportCompleteMs: number | null
+  persistedImportCompleteToHandoffMs: number | null
+  persistedDownloadToHandoffMs: number | null
+  preparationRunCreatedAt: string | null
+  firstCitedPublicationActivityAt: string | null
+  persistedHandoffToPreparationRunMs: number | null
+  persistedPreparationToFirstCitedActivityMs: number | null
+  persistedDownloadToFirstCitedActivityMs: number | null
   pdfDownloadCompleteMs: number | null
   documentReadyMs: number | null
   teachingHandoffLaunchedMs: number | null
@@ -160,6 +184,14 @@ interface ProductionJourneyReport {
 
 function elapsed(startedAt: number) {
   return Math.round(performance.now() - startedAt)
+}
+
+function persistedDuration(from: string | null, to: string | null) {
+  if (!from || !to) return null
+  const startedAt = Date.parse(from)
+  const reachedAt = Date.parse(to)
+  if (!Number.isFinite(startedAt) || !Number.isFinite(reachedAt) || reachedAt < startedAt) return null
+  return Math.round(reachedAt - startedAt)
 }
 
 async function login(page: Page, username: string, password: string) {
@@ -231,17 +263,29 @@ async function waitForFirstCitedLesson(
   const deadline = Date.now() + 20 * 60_000
   let plan: TeachingPlanResponse | null = null
   let teachingPreparationStartedMs: number | null = null
+  let preparationRunCreatedAt: string | null = null
+  let firstCitedPublicationActivityAt: string | null = null
   while (Date.now() < deadline) {
-    if (teachingPreparationStartedMs === null) {
-      const runResponse = await request.get(`/api/v1/assistant-runs/${encodeURIComponent(preparationRunId)}`)
-      expect([200, 404], `Teaching preparation returned HTTP ${runResponse.status()}`)
-        .toContain(runResponse.status())
-      if (runResponse.ok()) {
-        const details = await runResponse.json() as RunDetailsResponse
-        if (details.run.state !== 'RECEIVED') teachingPreparationStartedMs = elapsed(importStartedAt)
-        if (details.run.state === 'FAILED') {
-          throw new Error(`Teaching preparation failed with ${details.run.lastErrorCode ?? 'UNKNOWN_PREPARATION_ERROR'}`)
-        }
+    const runResponse = await request.get(`/api/v1/assistant-runs/${encodeURIComponent(preparationRunId)}`)
+    expect([200, 404], `Teaching preparation returned HTTP ${runResponse.status()}`)
+      .toContain(runResponse.status())
+    if (runResponse.ok()) {
+      const details = await runResponse.json() as RunDetailsResponse
+      preparationRunCreatedAt = details.run.createdAt
+      if (details.run.state !== 'RECEIVED' && teachingPreparationStartedMs === null) {
+        teachingPreparationStartedMs = elapsed(importStartedAt)
+      }
+      const firstPublication = details.activities
+        .filter(activity =>
+        activity.operation.startsWith('publishTeachingSection|')
+        && activity.outcome === 'SUCCEEDED'
+        && (activity.summary.includes('CITED_BASE_SECTION_PUBLISHED')
+          || activity.summary.includes('CITED_DRAFT_PUBLISHED')
+          || activity.summary.includes('REUSED_VERIFIED_SECTION')))
+        .sort((left, right) => Date.parse(left.occurredAt) - Date.parse(right.occurredAt))[0]
+      if (firstPublication) firstCitedPublicationActivityAt = firstPublication.occurredAt
+      if (details.run.state === 'FAILED') {
+        throw new Error(`Teaching preparation failed with ${details.run.lastErrorCode ?? 'UNKNOWN_PREPARATION_ERROR'}`)
       }
     }
     if (!plan) {
@@ -265,6 +309,8 @@ async function waitForFirstCitedLesson(
           return {
             teachingPreparationStartedMs: teachingPreparationStartedMs ?? elapsed(importStartedAt),
             firstCitedLessonMs: elapsed(importStartedAt),
+            preparationRunCreatedAt,
+            firstCitedPublicationActivityAt,
           }
         }
       }
@@ -338,6 +384,12 @@ test('recommendation becomes one readable, taught, and answerable production jou
     planGameTitleMatchesSelection: false, recommendationMs: null, detailsDialogOpenedAndClosed: false,
     discoveryMs: null, sourceDomain: null, sourceUrl: null, sourceMode: null, importRequestCount: 0,
     importReused: null, importDuplicate: null, downloadedBytes: null, importMs: null,
+    downloadCompletedAt: null, importCompletedAt: null, teachingHandoffUpdatedAt: null,
+    persistedDownloadToImportCompleteMs: null, persistedImportCompleteToHandoffMs: null,
+    persistedDownloadToHandoffMs: null,
+    preparationRunCreatedAt: null, firstCitedPublicationActivityAt: null,
+    persistedHandoffToPreparationRunMs: null, persistedPreparationToFirstCitedActivityMs: null,
+    persistedDownloadToFirstCitedActivityMs: null,
     pdfDownloadCompleteMs: null, documentReadyMs: null, teachingHandoffLaunchedMs: null,
     teachingPreparationStartedMs: null, firstCitedLessonMs: null,
     pdfDownloadToTeachingStartMs: null, pdfDownloadToFirstCitedLessonMs: null,
@@ -474,6 +526,23 @@ test('recommendation becomes one readable, taught, and answerable production jou
     report.importDuplicate = completedJob.duplicate
     report.downloadedBytes = completedJob.downloadedBytes
     report.importMs = elapsed(importStartedAt)
+    report.downloadCompletedAt = completedJob.downloadCompletedAt
+    report.importCompletedAt = completedJob.importCompletedAt
+    report.teachingHandoffUpdatedAt = completedJob.teachingHandoffUpdatedAt
+    if (!report.importReused) {
+      report.persistedDownloadToImportCompleteMs = persistedDuration(
+        completedJob.downloadCompletedAt,
+        completedJob.importCompletedAt,
+      )
+      report.persistedImportCompleteToHandoffMs = persistedDuration(
+        completedJob.importCompletedAt,
+        completedJob.teachingHandoffUpdatedAt,
+      )
+      report.persistedDownloadToHandoffMs = persistedDuration(
+        completedJob.downloadCompletedAt,
+        completedJob.teachingHandoffUpdatedAt,
+      )
+    }
     report.pdfDownloadCompleteMs = importObservation.pdfDownloadCompleteMs
     report.documentReadyMs = importObservation.documentReadyMs
     report.teachingHandoffLaunchedMs = importObservation.teachingHandoffLaunchedMs
@@ -483,6 +552,13 @@ test('recommendation becomes one readable, taught, and answerable production jou
       .not.toBeNull()
     expect(report.teachingHandoffLaunchedMs, 'The production probe did not observe teaching handoff launch')
       .not.toBeNull()
+    if (!report.importReused) {
+      expect(report.downloadCompletedAt, 'A fresh import did not persist PDF byte completion').not.toBeNull()
+      expect(report.importCompletedAt, 'A fresh import did not persist import completion').not.toBeNull()
+      expect(report.teachingHandoffUpdatedAt, 'A fresh import did not persist handoff launch').not.toBeNull()
+      expect(report.persistedDownloadToHandoffMs,
+        'Fresh import milestones could not be ordered from PDF completion to handoff').not.toBeNull()
+    }
     report.teachingHandoffState = completedJob.teachingHandoffState
     const progressResponse = await page.request.get(
       `/api/v1/document-versions/${encodeURIComponent(completedJob.documentVersionId!)}/progress/snapshot`,
@@ -509,6 +585,28 @@ test('recommendation becomes one readable, taught, and answerable production jou
     )
     report.teachingPreparationStartedMs = firstCitedLesson.teachingPreparationStartedMs
     report.firstCitedLessonMs = firstCitedLesson.firstCitedLessonMs
+    report.preparationRunCreatedAt = firstCitedLesson.preparationRunCreatedAt
+    report.firstCitedPublicationActivityAt = firstCitedLesson.firstCitedPublicationActivityAt
+    report.persistedHandoffToPreparationRunMs = persistedDuration(
+      report.teachingHandoffUpdatedAt,
+      report.preparationRunCreatedAt,
+    )
+    report.persistedPreparationToFirstCitedActivityMs = persistedDuration(
+      report.preparationRunCreatedAt,
+      report.firstCitedPublicationActivityAt,
+    )
+    if (!report.importReused) {
+      report.persistedDownloadToFirstCitedActivityMs = persistedDuration(
+        report.downloadCompletedAt,
+        report.firstCitedPublicationActivityAt,
+      )
+    }
+    expect(report.preparationRunCreatedAt, 'The production probe did not observe the real preparation Run')
+      .not.toBeNull()
+    expect(report.firstCitedPublicationActivityAt,
+      'The production probe did not observe a persisted source-cited publication activity').not.toBeNull()
+    expect(report.persistedPreparationToFirstCitedActivityMs,
+      'The real preparation-to-first-cited activity duration could not be computed').not.toBeNull()
     if (report.pdfDownloadCompleteMs !== null) {
       report.pdfDownloadToTeachingStartMs = Math.max(
         0,

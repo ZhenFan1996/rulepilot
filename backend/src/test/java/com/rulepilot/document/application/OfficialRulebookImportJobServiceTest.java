@@ -47,6 +47,7 @@ class OfficialRulebookImportJobServiceTest {
             progress.downloadStarted(1_024L);
             progress.downloaded(512, 1_024L);
             progress.downloaded(1_024, 1_024L);
+            progress.downloadCompleted();
             progress.verifying();
             progress.saving();
             return uploadResult(versionId);
@@ -61,6 +62,7 @@ class OfficialRulebookImportJobServiceTest {
         assertThat(completed.stage()).isEqualTo(OfficialRulebookImportJob.Stage.COMPLETED);
         assertThat(completed.downloadedBytes()).isEqualTo(1_024);
         assertThat(completed.totalBytes()).isEqualTo(1_024);
+        assertThat(completed.downloadCompletedAt()).isEqualTo(NOW);
         assertThat(completed.documentVersionId()).isEqualTo(versionId);
         assertThat(jobs.stages).containsExactly(
                 OfficialRulebookImportJob.Stage.CONNECTING,
@@ -134,6 +136,7 @@ class OfficialRulebookImportJobServiceTest {
             OfficialRulebookSourceFetcher.ProgressListener progress = invocation.getArgument(6);
             progress.downloadStarted(60_000_000L);
             progress.downloaded(60_000_000L, 60_000_000L);
+            progress.downloadCompleted();
             progress.compressing();
             progress.verifying();
             progress.saving();
@@ -278,9 +281,21 @@ class OfficialRulebookImportJobServiceTest {
 
         @Override
         public List<OfficialRulebookImportJob> claimReadyTeaching(int limit, Instant now) {
+            return claimReadyTeaching(null, limit, now);
+        }
+
+        @Override
+        public List<OfficialRulebookImportJob> claimReadyTeachingForDocument(
+                UUID documentVersionId, int limit, Instant now) {
+            return claimReadyTeaching(documentVersionId, limit, now);
+        }
+
+        private List<OfficialRulebookImportJob> claimReadyTeaching(
+                UUID documentVersionId, int limit, Instant now) {
             List<OfficialRulebookImportJob> claimed = values.values().stream()
                     .filter(job -> job.stage() == OfficialRulebookImportJob.Stage.COMPLETED)
                     .filter(job -> job.teachingHandoff().state() == TeachingHandoffState.WAITING_FOR_DOCUMENT)
+                    .filter(job -> documentVersionId == null || documentVersionId.equals(job.documentVersionId()))
                     .limit(limit)
                     .toList();
             for (var job : claimed) {
@@ -325,6 +340,15 @@ class OfficialRulebookImportJobServiceTest {
         }
 
         @Override public int failInterruptedTeachingLaunches(Instant now) { return 0; }
+
+        @Override
+        public void markDownloadCompleted(UUID jobId, Instant now) {
+            var job = values.get(jobId);
+            values.put(jobId, new OfficialRulebookImportJob(
+                    job.id(), job.ownerUsername(), job.editionId(), job.title(), job.sourceType(), job.sourceUrl(),
+                    job.stage(), job.downloadedBytes(), job.totalBytes(), job.documentVersionId(), job.duplicate(),
+                    job.errorCode(), now, job.teachingHandoff(), job.createdAt(), now, job.completedAt()));
+        }
 
         @Override
         public void updateProgress(
@@ -376,7 +400,7 @@ class OfficialRulebookImportJobServiceTest {
             return new OfficialRulebookImportJob(
                     job.id(), job.ownerUsername(), job.editionId(), job.title(), job.sourceType(), job.sourceUrl(),
                     stage, downloadedBytes, totalBytes, documentVersionId, duplicate, errorCode,
-                    teachingHandoff, job.createdAt(), updatedAt, completedAt);
+                    job.downloadCompletedAt(), teachingHandoff, job.createdAt(), updatedAt, completedAt);
         }
     }
 }

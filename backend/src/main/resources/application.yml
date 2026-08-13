@@ -114,6 +114,10 @@ rulepilot:
       batch-size: ${OUTBOX_PUBLISH_BATCH_SIZE:20}
       fixed-delay: ${OUTBOX_PUBLISH_FIXED_DELAY:500ms}
       confirm-timeout: ${OUTBOX_PUBLISH_CONFIRM_TIMEOUT:5s}
+    ready-notification:
+      exchange: ${DOCUMENT_READY_EXCHANGE:rulepilot.document.ready}
+      queue: ${DOCUMENT_READY_QUEUE:rulepilot.document.ready.api.v1}
+      routing-key: ${DOCUMENT_READY_ROUTING_KEY:document.ready.v1}
   teaching:
     provider: ${TEACHING_PROVIDER:fake}
     model-provider: ${TEACHING_MODEL_PROVIDER:gemini}
@@ -122,6 +126,8 @@ rulepilot:
     import-handoff:
       batch-size: ${TEACHING_IMPORT_HANDOFF_BATCH_SIZE:4}
       fixed-delay: ${TEACHING_IMPORT_HANDOFF_FIXED_DELAY:500ms}
+      # Claiming persisted READY intents must not wait behind Rabbit publisher confirms or queue metrics.
+      scheduler-pool-size: ${TEACHING_IMPORT_HANDOFF_SCHEDULER_POOL_SIZE:1}
     agent:
       max-tool-calls: ${TEACHING_AGENT_MAX_TOOL_CALLS:72}
       max-model-calls: ${TEACHING_AGENT_MAX_MODEL_CALLS:36}

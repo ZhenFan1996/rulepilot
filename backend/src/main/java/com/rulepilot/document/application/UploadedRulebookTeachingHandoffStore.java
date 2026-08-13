@@ -12,6 +12,8 @@ public interface UploadedRulebookTeachingHandoffStore {
 
     List<Snapshot> claimReady(int limit, Instant now);
 
+    List<Snapshot> claimReadyForDocument(UUID documentVersionId, int limit, Instant now);
+
     int failUnusableDocuments(Instant now);
 
     void completeLaunch(UUID handoffId, UUID preparationRunId, Instant now);

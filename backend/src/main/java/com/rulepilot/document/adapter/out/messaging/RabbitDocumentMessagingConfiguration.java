@@ -49,6 +49,25 @@ public class RabbitDocumentMessagingConfiguration {
     }
 
     @Bean
+    DirectExchange documentReadyExchange(
+            @Value("${rulepilot.document.ready-notification.exchange}") String exchangeName) {
+        return new DirectExchange(exchangeName, true, false);
+    }
+
+    @Bean
+    Queue documentReadyQueue(@Value("${rulepilot.document.ready-notification.queue}") String queueName) {
+        return new Queue(queueName, true);
+    }
+
+    @Bean
+    Binding documentReadyBinding(
+            Queue documentReadyQueue,
+            DirectExchange documentReadyExchange,
+            @Value("${rulepilot.document.ready-notification.routing-key}") String routingKey) {
+        return BindingBuilder.bind(documentReadyQueue).to(documentReadyExchange).with(routingKey);
+    }
+
+    @Bean
     Declarables documentProcessingRetryTopology(
             @Value("${rulepilot.document.messaging.exchange}") String mainExchange,
             @Value("${rulepilot.document.messaging.queue}") String mainQueue,

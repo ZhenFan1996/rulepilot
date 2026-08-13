@@ -23,6 +23,9 @@ public interface OfficialRulebookImportJobRepository {
 
     List<OfficialRulebookImportJob> claimReadyTeaching(int limit, Instant now);
 
+    List<OfficialRulebookImportJob> claimReadyTeachingForDocument(
+            UUID documentVersionId, int limit, Instant now);
+
     int failTeachingForUnusableDocuments(Instant now);
 
     void completeTeachingLaunch(UUID jobId, UUID preparationRunId, Instant now);
@@ -30,6 +33,8 @@ public interface OfficialRulebookImportJobRepository {
     void failTeachingLaunch(UUID jobId, String errorCode, Instant now);
 
     int failInterruptedTeachingLaunches(Instant now);
+
+    void markDownloadCompleted(UUID jobId, Instant now);
 
     void updateProgress(UUID jobId, OfficialRulebookImportJob.Stage stage, long downloadedBytes, Long totalBytes, Instant now);
 

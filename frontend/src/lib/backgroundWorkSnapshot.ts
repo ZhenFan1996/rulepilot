@@ -24,6 +24,9 @@ export interface RulebookImportJob {
   teachingHandoffState?: 'NOT_REQUESTED' | 'WAITING_FOR_DOCUMENT' | 'LAUNCHING' | 'LAUNCHED' | 'FAILED'
   teachingPreparationRunId?: string | null
   teachingErrorCode?: string | null
+  downloadCompletedAt?: string | null
+  importCompletedAt?: string | null
+  teachingHandoffUpdatedAt?: string | null
   updatedAt: string
 }
 
@@ -131,6 +134,9 @@ export function parseRulebookImports(value: unknown): RulebookImportJob[] {
       || !importHandoffStates.has(entry.teachingHandoffState)
       || !nullableBoundedString(entry.teachingPreparationRunId, 128)
       || !nullableBoundedString(entry.teachingErrorCode, 160)
+      || !nullableTimestamp(entry.downloadCompletedAt)
+      || !nullableTimestamp(entry.importCompletedAt)
+      || !nullableTimestamp(entry.teachingHandoffUpdatedAt)
       || !validTimestamp(entry.updatedAt)) {
       throw new Error('background import is invalid')
     }
@@ -275,4 +281,8 @@ function nullableNonNegativeInteger(value: unknown) {
 
 function validTimestamp(value: unknown): value is string {
   return boundedString(value, 64) && Number.isFinite(Date.parse(value))
+}
+
+function nullableTimestamp(value: unknown): value is string | null | undefined {
+  return value === null || value === undefined || validTimestamp(value)
 }

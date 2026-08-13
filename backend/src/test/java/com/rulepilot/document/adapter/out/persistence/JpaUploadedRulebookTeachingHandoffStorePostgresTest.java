@@ -94,12 +94,12 @@ class JpaUploadedRulebookTeachingHandoffStorePostgresTest {
         assertThat(requested.state())
                 .isEqualTo(UploadedRulebookTeachingHandoffStore.State.WAITING_FOR_DOCUMENT);
         List<UploadedRulebookTeachingHandoffStore.Snapshot> notReady =
-                inTransactionReturning(store -> store.claimReady(4, requestedAt.plusSeconds(1)));
+                inTransactionReturning(store -> store.claimReadyForDocument(versionId, 4, requestedAt.plusSeconds(1)));
         assertThat(notReady).isEmpty();
 
         jdbc.update("UPDATE document_version SET processing_status = 'READY' WHERE id = ?", versionId);
         List<UploadedRulebookTeachingHandoffStore.Snapshot> claimed =
-                inTransactionReturning(store -> store.claimReady(4, requestedAt.plusSeconds(2)));
+                inTransactionReturning(store -> store.claimReadyForDocument(versionId, 4, requestedAt.plusSeconds(2)));
 
         assertThat(claimed).singleElement().satisfies(item -> {
             assertThat(item.id()).isEqualTo(handoffId);
@@ -124,6 +124,30 @@ class JpaUploadedRulebookTeachingHandoffStorePostgresTest {
         assertThat(retried.id()).isEqualTo(handoffId);
         assertThat(retried.state())
                 .isEqualTo(UploadedRulebookTeachingHandoffStore.State.WAITING_FOR_DOCUMENT);
+    }
+
+    @Test
+    void promptClaimScopesTheUploadedHandoffToTheReadyDocumentVersion() {
+        Instant requestedAt = Instant.parse("2026-08-10T10:30:00Z");
+        UUID matchingVersionId = insertDocument("READY");
+        UUID otherVersionId = insertDocument("READY");
+        UUID matchingHandoffId = UUID.randomUUID();
+        UUID otherHandoffId = UUID.randomUUID();
+        inTransactionReturning(store -> store.request(
+                matchingHandoffId, matchingVersionId, "upload-handoff-player", null, requestedAt));
+        inTransactionReturning(store -> store.request(
+                otherHandoffId, otherVersionId, "upload-handoff-player", null, requestedAt));
+
+        var claimed = inTransactionReturning(store -> store.claimReadyForDocument(
+                matchingVersionId, 4, requestedAt.plusSeconds(1)));
+
+        assertThat(claimed).extracting(UploadedRulebookTeachingHandoffStore.Snapshot::id)
+                .containsExactly(matchingHandoffId);
+        assertThat(jdbc.queryForObject(
+                        "SELECT state FROM uploaded_rulebook_teaching_handoff WHERE id = ?",
+                        String.class,
+                        otherHandoffId))
+                .isEqualTo("WAITING_FOR_DOCUMENT");
     }
 
     @Test

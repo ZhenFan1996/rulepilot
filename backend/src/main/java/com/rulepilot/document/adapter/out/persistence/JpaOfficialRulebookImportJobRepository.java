@@ -131,17 +131,32 @@ class JpaOfficialRulebookImportJobRepository implements OfficialRulebookImportJo
     @Override
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public List<OfficialRulebookImportJob> claimReadyTeaching(int limit, Instant now) {
+        return claimReadyTeaching(null, limit, now);
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public List<OfficialRulebookImportJob> claimReadyTeachingForDocument(
+            UUID documentVersionId, int limit, Instant now) {
+        if (documentVersionId == null) throw new IllegalArgumentException("ready document version is required");
+        return claimReadyTeaching(documentVersionId, limit, now);
+    }
+
+    private List<OfficialRulebookImportJob> claimReadyTeaching(
+            UUID documentVersionId, int limit, Instant now) {
         List<OfficialRulebookImportJobEntity> claimed = entityManager
                 .createQuery(
                         """
                         select job from OfficialRulebookImportJobEntity job, DocumentVersionEntity version
                         where job.documentVersionId = version.id
+                          and (:documentVersionId is null or version.id = :documentVersionId)
                           and job.stage = 'COMPLETED'
                           and job.teachingHandoffState = 'WAITING_FOR_DOCUMENT'
                           and version.processingStatus = 'READY'
                         order by job.createdAt
                         """,
                         OfficialRulebookImportJobEntity.class)
+                .setParameter("documentVersionId", documentVersionId)
                 .setLockMode(LockModeType.PESSIMISTIC_WRITE)
                 .setMaxResults(limit)
                 .getResultList();
@@ -233,6 +248,23 @@ class JpaOfficialRulebookImportJobRepository implements OfficialRulebookImportJo
                         """)
                 .setParameter("now", now)
                 .executeUpdate();
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void markDownloadCompleted(UUID jobId, Instant now) {
+        int updated = entityManager
+                .createQuery(
+                        """
+                        update OfficialRulebookImportJobEntity job
+                        set job.downloadCompletedAt = coalesce(job.downloadCompletedAt, :now),
+                            job.updatedAt = :now
+                        where job.id = :jobId and job.stage not in ('COMPLETED', 'FAILED')
+                        """)
+                .setParameter("now", now)
+                .setParameter("jobId", jobId)
+                .executeUpdate();
+        if (updated != 1) throw new IllegalStateException("official rulebook import job is no longer active");
     }
 
     @Override
@@ -359,6 +391,7 @@ class OfficialRulebookImportJobEntity {
     @Column(name = "document_version_id") UUID documentVersionId;
     @Column(nullable = false) boolean duplicate;
     @Column(name = "error_code") String errorCode;
+    @Column(name = "download_completed_at") Instant downloadCompletedAt;
     @Column(name = "teaching_handoff_state", nullable = false) String teachingHandoffState;
     @Column(name = "teaching_learning_goal", length = 500) String teachingLearningGoal;
     @Column(name = "teaching_preparation_run_id") UUID teachingPreparationRunId;
@@ -384,6 +417,7 @@ class OfficialRulebookImportJobEntity {
         entity.documentVersionId = job.documentVersionId();
         entity.duplicate = job.duplicate();
         entity.errorCode = job.errorCode();
+        entity.downloadCompletedAt = job.downloadCompletedAt();
         entity.teachingHandoffState = job.teachingHandoff().state().name();
         entity.teachingLearningGoal = job.teachingHandoff().learningGoal();
         entity.teachingPreparationRunId = job.teachingHandoff().preparationRunId();
@@ -400,6 +434,7 @@ class OfficialRulebookImportJobEntity {
                 id, ownerUsername, editionId, title, DocumentSourceType.valueOf(sourceType), sourceUrl,
                 OfficialRulebookImportJob.Stage.valueOf(stage), downloadedBytes, totalBytes,
                 documentVersionId, duplicate, errorCode,
+                downloadCompletedAt,
                 new OfficialRulebookImportJob.TeachingHandoff(
                         OfficialRulebookImportJob.TeachingHandoffState.valueOf(teachingHandoffState),
                         teachingLearningGoal,

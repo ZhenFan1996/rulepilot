@@ -129,6 +129,58 @@ class UserRuleDocumentControllerTest {
     }
 
     @Test
+    void exposesPersistedDownloadImportAndTeachingHandoffMilestones() {
+        OfficialRulebookImportJobService imports = mock(OfficialRulebookImportJobService.class);
+        UserRuleDocumentController controller = new UserRuleDocumentController(
+                mock(UploadRuleDocumentService.class),
+                mock(PhotographedRulebookUploadService.class),
+                mock(RuleDocumentRemovalService.class),
+                mock(RuleDocumentMetadataSuggestionService.class),
+                mock(RuleDocumentMetadataConfirmationService.class),
+                imports,
+                mock(UploadedRulebookTeachingHandoffService.class),
+                mock(CatalogEditionLookup.class));
+        UUID jobId = UUID.randomUUID();
+        UUID versionId = UUID.randomUUID();
+        UUID preparationRunId = UUID.randomUUID();
+        Instant createdAt = Instant.parse("2026-08-13T08:00:00Z");
+        Instant downloadCompletedAt = createdAt.plusSeconds(2);
+        Instant importCompletedAt = createdAt.plusSeconds(4);
+        Instant handoffLaunchedAt = createdAt.plusSeconds(7);
+        var job = new OfficialRulebookImportJob(
+                jobId,
+                "alice",
+                null,
+                "Example Rules",
+                DocumentSourceType.BASE_RULEBOOK,
+                "https://publisher.example/rules.pdf",
+                OfficialRulebookImportJob.Stage.COMPLETED,
+                1_024,
+                1_024L,
+                versionId,
+                false,
+                null,
+                downloadCompletedAt,
+                new OfficialRulebookImportJob.TeachingHandoff(
+                        OfficialRulebookImportJob.TeachingHandoffState.LAUNCHED,
+                        null,
+                        preparationRunId,
+                        null,
+                        handoffLaunchedAt),
+                createdAt,
+                handoffLaunchedAt,
+                importCompletedAt);
+        when(imports.requireOwned(jobId, "alice")).thenReturn(job);
+
+        var response = controller.officialRulebookImport(jobId, () -> "alice");
+
+        assertThat(response.downloadCompletedAt()).isEqualTo(downloadCompletedAt);
+        assertThat(response.importCompletedAt()).isEqualTo(importCompletedAt);
+        assertThat(response.teachingHandoffUpdatedAt()).isEqualTo(handoffLaunchedAt);
+        assertThat(response.teachingPreparationRunId()).isEqualTo(preparationRunId);
+    }
+
+    @Test
     void exposesOwnerScopedAttributedSuggestions() {
         RuleDocumentMetadataSuggestionService suggestions = mock(RuleDocumentMetadataSuggestionService.class);
         UserRuleDocumentController controller = new UserRuleDocumentController(

@@ -76,12 +76,47 @@ class TeachingGenerationConfigurationTest {
     }
 
     @Test
+    void handoffDispatchRunsWhileTheDefaultInfrastructureSchedulerIsOccupied() throws InterruptedException {
+        var configuration = new TeachingGenerationConfiguration();
+        var infrastructure = configuration.taskScheduler();
+        var handoffs = configuration.teachingHandoffScheduler(1);
+        var infrastructureStarted = new CountDownLatch(1);
+        var releaseInfrastructure = new CountDownLatch(1);
+        var handoffCompleted = new CountDownLatch(1);
+        infrastructure.initialize();
+        handoffs.initialize();
+
+        try {
+            infrastructure.execute(() -> {
+                infrastructureStarted.countDown();
+                try {
+                    releaseInfrastructure.await(3, TimeUnit.SECONDS);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                }
+            });
+            assertThat(infrastructureStarted.await(3, TimeUnit.SECONDS)).isTrue();
+
+            handoffs.execute(handoffCompleted::countDown);
+
+            assertThat(handoffCompleted.await(1, TimeUnit.SECONDS)).isTrue();
+            assertThat(infrastructure.getThreadNamePrefix()).isEqualTo("infrastructure-schedule-");
+            assertThat(handoffs.getThreadNamePrefix()).isEqualTo("teaching-handoff-");
+        } finally {
+            releaseInfrastructure.countDown();
+            infrastructure.shutdown();
+            handoffs.shutdown();
+        }
+    }
+
+    @Test
     void doesNotCreateTeachingExecutorsInThePdfWorkerRuntime() {
         contextRunner
                 .withPropertyValues("rulepilot.runtime.api-enabled=false")
                 .run(context -> {
                     assertThat(context).doesNotHaveBean("teachingStartupExecutor");
                     assertThat(context).doesNotHaveBean("teachingGenerationExecutor");
+                    assertThat(context).doesNotHaveBean("teachingHandoffScheduler");
                 });
     }
 
@@ -92,8 +127,12 @@ class TeachingGenerationConfigurationTest {
                 .run(context -> {
                     assertThat(context).hasBean("teachingStartupExecutor");
                     assertThat(context).hasBean("teachingGenerationExecutor");
+                    assertThat(context).hasBean("taskScheduler");
+                    assertThat(context).hasBean("teachingHandoffScheduler");
                     assertThat(context.getBean("teachingStartupExecutor"))
                             .isNotSameAs(context.getBean("teachingGenerationExecutor"));
+                    assertThat(context.getBean("taskScheduler"))
+                            .isNotSameAs(context.getBean("teachingHandoffScheduler"));
                 });
     }
 }

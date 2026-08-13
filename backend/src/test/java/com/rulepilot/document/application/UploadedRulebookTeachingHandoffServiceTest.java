@@ -64,14 +64,14 @@ class UploadedRulebookTeachingHandoffServiceTest {
         RuleDocumentRepository documents = mock(RuleDocumentRepository.class);
         UUID handoffId = UUID.randomUUID();
         UUID versionId = UUID.randomUUID();
-        when(store.claimReady(4, NOW)).thenReturn(List.of(snapshot(
+        when(store.claimReadyForDocument(versionId, 4, NOW)).thenReturn(List.of(snapshot(
                 handoffId,
                 versionId,
                 null,
                 UploadedRulebookTeachingHandoffStore.State.LAUNCHING)));
         var service = service(store, documents);
 
-        assertThat(service.claimReady(4)).containsExactly(
+        assertThat(service.claimReadyForDocument(versionId, 4)).containsExactly(
                 new com.rulepilot.document.UploadedRulebookTeachingHandoffs.ReadyHandoff(
                         handoffId, versionId, "alice", null));
     }

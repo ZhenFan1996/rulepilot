@@ -217,6 +217,9 @@ export function parseShelfImports(value: unknown): ShelfImportJob[] {
       || !teachingHandoffStates.has(rawJob.teachingHandoffState)
       || !nullableBoundedString(rawJob.teachingPreparationRunId, 128)
       || !nullableString(rawJob.teachingErrorCode, 160)
+      || !nullableTimestamp(rawJob.downloadCompletedAt)
+      || !nullableTimestamp(rawJob.importCompletedAt)
+      || !nullableTimestamp(rawJob.teachingHandoffUpdatedAt)
       || !validTimestamp(rawJob.updatedAt)) {
       throw new Error('personal shelf import is invalid')
     }
@@ -417,6 +420,10 @@ function nullableInteger(value: unknown): value is number | null {
 
 function validTimestamp(value: unknown): value is string {
   return boundedString(value, 64) && Number.isFinite(Date.parse(value))
+}
+
+function nullableTimestamp(value: unknown): value is string | null | undefined {
+  return value === null || value === undefined || validTimestamp(value)
 }
 
 function nullableNumberInRange(value: unknown, minimum: number, maximum: number): value is number | null {

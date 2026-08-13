@@ -46,7 +46,8 @@ describe('background work snapshot boundary', () => {
       id: 'import-1', title: 'Rules', sourceDomain: 'publisher.example', stage: 'DOWNLOADING',
       downloadedBytes: 20, totalBytes: 100, documentVersionId: null, errorCode: null,
       teachingHandoffState: 'WAITING_FOR_DOCUMENT', teachingPreparationRunId: null,
-      teachingErrorCode: null, updatedAt: '2026-08-13T00:00:00Z',
+      teachingErrorCode: null, downloadCompletedAt: null, importCompletedAt: null,
+      teachingHandoffUpdatedAt: '2026-08-13T00:00:00Z', updatedAt: '2026-08-13T00:00:00Z',
     }])
     const handoffs = parseUploadedHandoffs([{
       id: 'handoff-1', documentVersionId: 'version-1', title: 'Game', rulebookTitle: 'rules.pdf',
@@ -57,6 +58,7 @@ describe('background work snapshot boundary', () => {
     expect(() => validateDocumentRelationships(imports, [{ ...handoffs[0]!, documentVersionId: 'wrong' }], documentList))
       .toThrow()
     expect(() => parseRulebookImports([{ ...imports[0]!, downloadedBytes: -1 }])).toThrow()
+    expect(() => parseRulebookImports([{ ...imports[0]!, downloadCompletedAt: 'not-a-time' }])).toThrow()
     expect(() => parseUploadedHandoffs([{ ...handoffs[0]!, preparationRunId: 'run-1' }])).toThrow()
   })
 

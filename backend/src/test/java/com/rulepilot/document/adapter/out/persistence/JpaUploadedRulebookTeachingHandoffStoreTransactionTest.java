@@ -13,6 +13,7 @@ class JpaUploadedRulebookTeachingHandoffStoreTransactionTest {
     @Test
     void workerClaimsAndTerminalWritesCommitInIndependentTransactions() throws Exception {
         assertRequiresNew("claimReady", int.class, Instant.class);
+        assertRequiresNew("claimReadyForDocument", UUID.class, int.class, Instant.class);
         assertRequiresNew("failUnusableDocuments", Instant.class);
         assertRequiresNew("completeLaunch", UUID.class, UUID.class, Instant.class);
         assertRequiresNew("failLaunch", UUID.class, String.class, Instant.class);
