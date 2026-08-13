@@ -847,6 +847,40 @@ test('keeps one global task while completed preparation hands off to a Teaching 
   await expect(workTrigger.locator('span').filter({ hasText: '1' })).toBeVisible()
 })
 
+test('recovers the preparation-to-Teaching bridge after a storage-free browser refresh', async ({ page }) => {
+  const preparation = await mockPublicDiscovery(page, true, true)
+  await page.goto('/discover')
+
+  await page.getByLabel('和推荐 Agent 聊聊').fill('4 个人，90 分钟内，想要中等策略')
+  await page.getByRole('button', { name: '发送', exact: true }).click()
+  await expect(page.getByText('支持 4 人游玩')).toBeVisible()
+  await page.getByRole('button', { name: '选这款，找规则书' }).click()
+  const journey = page.getByTestId('player-journey-surface')
+  await journey.getByRole('button', { name: '选择这份' }).click()
+  await journey.getByRole('checkbox', { name: /我确认该链接来自有权提供/ }).check()
+  await journey.getByRole('button', { name: '下载规则书并生成讲解' }).click()
+  await journey.getByRole('button', { name: '关闭小窗' }).click()
+
+  preparation.publishPlan()
+  preparation.completePreparation()
+  await page.evaluate(() => sessionStorage.clear())
+  await page.reload()
+
+  const workTrigger = page.getByTestId('background-work-trigger-desktop')
+  await expect(workTrigger.locator('span').filter({ hasText: '1' })).toBeVisible()
+  await workTrigger.click()
+  const workCenter = page.getByRole('dialog', { name: '后台任务' })
+  await expect(workCenter.getByText('规则书已就绪，正在启动讲解任务')).toBeVisible()
+  await expect(workCenter.getByText('展翅翱翔')).toHaveCount(1)
+  await expect(workCenter.getByText('当前没有后台任务')).toHaveCount(0)
+
+  preparation.publishFirstLesson()
+
+  await expect(workCenter.getByText('正在组织讲解')).toBeVisible({ timeout: 6_000 })
+  await expect(workCenter.getByText('展翅翱翔')).toHaveCount(1)
+  await expect(workTrigger.locator('span').filter({ hasText: '1' })).toBeVisible()
+})
+
 test('keeps the readable-guide continuation legible and focus-safe at 320 and 390 px', async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 844 })
   await mockPublicDiscovery(page, true)
