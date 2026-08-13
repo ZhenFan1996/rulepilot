@@ -590,6 +590,30 @@ describe('AppShell', () => {
     window.removeEventListener(SESSION_CLEARED_EVENT, sessionCleared)
     wrapper.unmount()
   })
+
+  it('exposes the normalized shell-owned session identity without requiring a duplicate read', async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      if (String(input).includes('/api/auth/session')) return response({ username: '  Player  ', roles: ['USER'] })
+      if (String(input).includes('/api/v1/assistant-runs/active')) return response([])
+      if (String(input).endsWith('/api/v1/documents/official-imports')
+        || String(input).endsWith('/api/v1/documents/upload-teaching-handoffs')
+        || String(input).endsWith('/api/v1/documents')) return response([])
+      return new Response(null, { status: 404 })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const router = createAppShellRouter()
+    await router.push('/')
+    await router.isReady()
+    const wrapper = mount(AppShell, {
+      slots: { default: '<p>页面内容</p>' },
+      global: { plugins: [router], stubs: { BackgroundWorkCenter: true } },
+    })
+    await flushPromises()
+
+    expect(wrapper.emitted('sessionIdentity')).toEqual([['Player']])
+    expect(fetchMock.mock.calls.filter(([input]) => String(input).includes('/api/auth/session'))).toHaveLength(1)
+    wrapper.unmount()
+  })
 })
 
 function response(body: unknown) {

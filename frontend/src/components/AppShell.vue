@@ -11,6 +11,9 @@ import { useLocale } from '@/lib/locale'
 
 withDefaults(defineProps<{ immersive?: boolean }>(), { immersive: false })
 defineSlots<{ default(props: { username: string }): unknown }>()
+const emit = defineEmits<{
+  sessionIdentity: [username: string]
+}>()
 
 const route = useRoute()
 const { t } = useLocale()
@@ -83,6 +86,7 @@ async function loadSession() {
     roles.value = Array.isArray(session.roles)
       ? session.roles.filter((role): role is string => typeof role === 'string')
       : []
+    emit('sessionIdentity', username.value)
   } catch {
     if (!disposed) clearSessionIdentity()
   }
@@ -91,6 +95,7 @@ async function loadSession() {
 function clearSessionIdentity() {
   username.value = ''
   roles.value = []
+  emit('sessionIdentity', '')
 }
 
 function showLoginReminder() {
@@ -116,6 +121,7 @@ async function logout() {
   if (!response.ok) return
   username.value = ''
   roles.value = []
+  emit('sessionIdentity', '')
   sessionStorage.removeItem('rulepilot:active-teaching-runs')
   sessionStorage.removeItem('rulepilot:completed-teaching-runs')
   sessionStorage.removeItem('rulepilot:dismissed-official-imports')

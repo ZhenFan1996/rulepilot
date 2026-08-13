@@ -36,6 +36,7 @@ function createSessionAnswers() {
 
 describe('useLessonAnswers', () => {
   afterEach(() => {
+    vi.useRealTimers()
     vi.unstubAllGlobals()
     setLocale('zh-CN')
   })
@@ -245,4 +246,119 @@ describe('useLessonAnswers', () => {
     expect(answers.answerRunId.value).toBe('')
     expect(answers.agentTrace.value).toEqual([])
   })
+
+  it('aborts an active progress read and prevents a late poll from rescheduling after reset', async () => {
+    vi.useFakeTimers()
+    let traceSignal: AbortSignal | undefined
+    let resolveTrace!: (response: Response) => void
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input)
+      if (path === '/api/auth/csrf') {
+        return Promise.resolve(Response.json({ headerName: 'X-CSRF-TOKEN', token: 'token' }))
+      }
+      if (path.includes('/answers')) return new Promise<Response>(() => undefined)
+      return new Promise<Response>((resolve) => {
+        traceSignal = init?.signal ?? undefined
+        resolveTrace = resolve
+      })
+    }))
+    const answers = createAnswers()
+    void answers.submitQuestion('When does this resolve?', null)
+    await vi.advanceTimersByTimeAsync(250)
+    expect(traceSignal).toBeDefined()
+
+    answers.resetConversation(false)
+    expect(traceSignal?.aborted).toBe(true)
+    resolveTrace(Response.json(answerRunDetails('document-1', 'nativeModelTurn|1')))
+    await Promise.resolve()
+    await vi.advanceTimersByTimeAsync(2_000)
+
+    const traceReads = vi.mocked(fetch).mock.calls
+      .filter(([input]) => String(input).includes('/assistant-runs/latest'))
+    expect(traceReads).toHaveLength(1)
+    expect(answers.agentTrace.value).toEqual([])
+    vi.useRealTimers()
+  })
+
+  it('aborts a completed-answer final trace when read transport is cancelled', async () => {
+    let finalSignal: AbortSignal | undefined
+    let resolveFinal!: (response: Response) => void
+    const runId = '11111111-1111-4111-8111-111111111111'
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input)
+      if (path === '/api/auth/csrf') {
+        return Promise.resolve(Response.json({ headerName: 'X-CSRF-TOKEN', token: 'token' }))
+      }
+      if (path.includes('/answers')) {
+        return Promise.resolve(Response.json({
+          assistantRunId: runId,
+          answer: answerFixture('Completed answer.'),
+        }))
+      }
+      finalSignal = init?.signal ?? undefined
+      return new Promise<Response>((resolve) => { resolveFinal = resolve })
+    }))
+    const answers = createAnswers()
+
+    await answers.submitQuestion('When does this resolve?', null)
+    await vi.waitFor(() => expect(finalSignal).toBeDefined())
+    answers.cancelReadTransport()
+    expect(finalSignal?.aborted).toBe(true)
+
+    resolveFinal(Response.json(answerRunDetails('document-1', 'nativeModelTurn|1')))
+    await Promise.resolve()
+    expect(answers.agentTrace.value).toEqual([])
+    expect(answers.answer.value?.shortVerdict).toBe('Completed answer.')
+  })
+
+  it('rejects final trace payloads whose run or document identity does not match', async () => {
+    const runId = '11111111-1111-4111-8111-111111111111'
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input)
+      if (path === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'token' })
+      if (path.includes('/answers')) {
+        return Response.json({ assistantRunId: runId, answer: answerFixture('Verified answer.') })
+      }
+      return Response.json({
+        ...answerRunDetails('another-document', 'nativeModelTurn|1'),
+        run: { id: 'another-run', subjectId: 'another-document', createdAt: '2026-08-03T00:00:00Z' },
+      })
+    }))
+    const answers = createAnswers()
+
+    await answers.submitQuestion('When does this resolve?', null)
+    await vi.waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).includes(runId))).toBe(true))
+
+    expect(answers.agentTrace.value).toEqual([])
+  })
 })
+
+function answerFixture(shortVerdict: string) {
+  return {
+    status: 'ANSWERED' as const,
+    shortVerdict,
+    explanation: 'Supported.',
+    citations: [],
+    exceptions: [],
+    confidence: 'HIGH' as const,
+    official: false,
+    confirmedRulingId: null,
+    confirmedRulingVersion: null,
+    clarification: null,
+    warnings: [],
+  }
+}
+
+function answerRunDetails(subjectId: string, operation: string) {
+  return {
+    run: { id: '11111111-1111-4111-8111-111111111111', subjectId, createdAt: '2026-08-03T00:00:00Z' },
+    activities: [{
+      sequence: 1,
+      type: 'MODEL',
+      operation,
+      outcome: 'SUCCEEDED',
+      latencyMs: 10,
+      occurredAt: '2026-08-03T00:00:00Z',
+    }],
+  }
+}

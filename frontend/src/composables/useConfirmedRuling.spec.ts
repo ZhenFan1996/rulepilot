@@ -32,7 +32,7 @@ function confirmedRuling(overrides = {}) {
   }
 }
 
-function createRuling() {
+function createRuling(contextRef = ref('plan-1:version-1')) {
   const documentVersionId = ref<string | null>('version-1')
   const currentAnswer = ref<StructuredRuleAnswer | null>(answer)
   const answeredQuestion = ref('How is a tie resolved?')
@@ -44,6 +44,8 @@ function createRuling() {
     answeredQuestion,
     csrfToken,
     onApplied,
+    currentReadContext: () => contextRef.value,
+    isCurrentReadContext: (context) => context === contextRef.value,
     messages: {
       createFailed: () => 'Could not confirm ruling.',
       createRequestFailed: () => 'Could not confirm ruling.',
@@ -54,7 +56,7 @@ function createRuling() {
     },
   })
 
-  return { ruling, csrfToken, onApplied }
+  return { ruling, csrfToken, onApplied, contextRef }
 }
 
 describe('useConfirmedRuling', () => {
@@ -107,5 +109,75 @@ describe('useConfirmedRuling', () => {
 
     expect(fixture.ruling.conflict.value).toBe(false)
     expect(fixture.ruling.ruling.value).toMatchObject({ version: 4, shortVerdict: 'Server version.' })
+  })
+
+  it('aborts a superseded reload and ignores its late response', async () => {
+    let resolveReload!: (response: Response) => void
+    let reloadSignal: AbortSignal | undefined
+    vi.stubGlobal('fetch', vi.fn((_input: string, init?: RequestInit) => {
+      reloadSignal = init?.signal ?? undefined
+      return new Promise<Response>((resolve) => { resolveReload = resolve })
+    }))
+    const fixture = createRuling()
+    fixture.ruling.applyRuling(confirmedRuling())
+
+    const pending = fixture.ruling.reloadRuling()
+    await vi.waitFor(() => expect(reloadSignal).toBeDefined())
+    fixture.ruling.cancelReads()
+    expect(reloadSignal?.aborted).toBe(true)
+
+    resolveReload(Response.json(confirmedRuling({ version: 9, shortVerdict: 'Stale server version.' })))
+    await pending
+
+    expect(fixture.ruling.ruling.value).toMatchObject({ version: 3, shortVerdict: 'Resolve the tie with coins.' })
+    expect(fixture.ruling.error.value).toBe('')
+    expect(fixture.ruling.saving.value).toBe(false)
+  })
+
+  it('rejects a reload payload for another ruling identity', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json(confirmedRuling({
+      id: 'ruling-2',
+      version: 8,
+      shortVerdict: 'Another ruling.',
+    }))))
+    const fixture = createRuling()
+    fixture.ruling.applyRuling(confirmedRuling())
+
+    await fixture.ruling.reloadRuling()
+
+    expect(fixture.ruling.ruling.value).toMatchObject({ id: 'ruling-1', version: 3 })
+    expect(fixture.ruling.error.value).toBe('Could not reload ruling.')
+  })
+
+  it('lets an accepted confirmation finish on the server without applying it after workspace replacement', async () => {
+    let resolveCreate!: (response: Response) => void
+    let createSignal: AbortSignal | undefined
+    let resolveCsrf!: (value: { headerName: string; token: string }) => void
+    const csrfToken = vi.fn(() => new Promise<{ headerName: string; token: string }>((resolve) => {
+      resolveCsrf = resolve
+    }))
+    vi.stubGlobal('fetch', vi.fn((_input: string, init?: RequestInit) => {
+      createSignal = init?.signal ?? undefined
+      return new Promise<Response>((resolve) => { resolveCreate = resolve })
+    }))
+    const fixture = createRuling()
+    const originalCsrf = fixture.csrfToken
+    originalCsrf.mockImplementation(csrfToken)
+
+    const pending = fixture.ruling.confirmAnswer()
+    await vi.waitFor(() => expect(resolveCsrf).toBeDefined())
+    resolveCsrf({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+    await vi.waitFor(() => expect(resolveCreate).toBeDefined())
+    fixture.contextRef.value = 'plan-2:version-2'
+    fixture.ruling.reset()
+
+    expect(createSignal).toBeUndefined()
+    resolveCreate(Response.json(confirmedRuling({ version: 7, shortVerdict: 'Late confirmation.' })))
+    await pending
+
+    expect(fixture.ruling.ruling.value).toBeNull()
+    expect(fixture.onApplied).not.toHaveBeenCalled()
+    expect(fixture.ruling.error.value).toBe('')
+    expect(fixture.ruling.saving.value).toBe(false)
   })
 })
