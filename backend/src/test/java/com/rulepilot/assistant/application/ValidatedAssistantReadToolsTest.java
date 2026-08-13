@@ -60,10 +60,6 @@ class ValidatedAssistantReadToolsTest {
         UUID versionId = UUID.randomUUID();
         RuleEvidenceHit first = evidence(UUID.randomUUID(), versionId, "Place the board in the center.", 2);
         RuleEvidenceHit second = evidence(UUID.randomUUID(), versionId, "Shuffle the deck.", 3);
-        RuleEvidenceHit hydratedFirst = evidence(
-                first.chunkId(), versionId, "Full setup paragraph: place the board in the center.", 2);
-        RuleEvidenceHit hydratedSecond = evidence(
-                second.chunkId(), versionId, "Full setup paragraph: shuffle the deck and deal cards.", 3);
         RuleEvidenceHit third = evidence(UUID.randomUUID(), versionId, "Choose a starting player.", 5);
         RuleEvidenceHit adjacent = evidence(UUID.randomUUID(), versionId, "Deal five cards to each player.", 4);
         HybridRuleSearch retrieval = (requestedVersion, query, options) -> List.of(
@@ -71,9 +67,7 @@ class ValidatedAssistantReadToolsTest {
         RuleEvidenceLookup lookup = new RuleEvidenceLookup() {
             @Override
             public List<RuleEvidenceHit> findByChunkIds(UUID documentVersionId, Set<UUID> chunkIds) {
-                assertThat(documentVersionId).isEqualTo(versionId);
-                assertThat(chunkIds).containsExactlyInAnyOrder(first.chunkId(), second.chunkId());
-                return List.of(hydratedFirst, hydratedSecond);
+                throw new AssertionError("hybrid results are already canonical and must not be hydrated twice");
             }
 
             @Override
@@ -94,7 +88,7 @@ class ValidatedAssistantReadToolsTest {
         assertThat(result).extracting(hit -> hit.chunkId())
                 .containsExactly(first.chunkId(), second.chunkId(), adjacent.chunkId(), third.chunkId());
         assertThat(result).extracting(hit -> hit.excerpt())
-                .startsWith(hydratedFirst.excerpt(), hydratedSecond.excerpt());
+                .startsWith(first.excerpt(), second.excerpt());
     }
 
     @Test

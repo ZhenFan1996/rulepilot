@@ -6,10 +6,14 @@ import com.rulepilot.retrieval.RuleEvidenceLookup;
 import com.rulepilot.retrieval.VectorRuleSearch;
 import com.rulepilot.retrieval.evidence.HybridEvidenceHit;
 import com.rulepilot.retrieval.evidence.RuleEvidenceHit;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
+import java.util.function.Supplier;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 
@@ -17,6 +21,7 @@ import org.springframework.stereotype.Service;
 @Profile("!test")
 public class HybridRuleSearchService implements HybridRuleSearch {
 
+    static final String PHASE_DURATION_METRIC = "rulepilot.retrieval.hybrid.phase.duration";
     private static final int RRF_K = 60;
     private static final double CURRENT_SECTION_BOOST = 0.004;
     private static final int MAX_RESULTS = 20;
@@ -25,12 +30,17 @@ public class HybridRuleSearchService implements HybridRuleSearch {
     private final FullTextRuleSearch fullText;
     private final VectorRuleSearch vector;
     private final RuleEvidenceLookup evidenceLookup;
+    private final MeterRegistry metrics;
 
     public HybridRuleSearchService(
-            FullTextRuleSearch fullText, VectorRuleSearch vector, RuleEvidenceLookup evidenceLookup) {
+            FullTextRuleSearch fullText,
+            VectorRuleSearch vector,
+            RuleEvidenceLookup evidenceLookup,
+            MeterRegistry metrics) {
         this.fullText = fullText;
         this.vector = vector;
         this.evidenceLookup = evidenceLookup;
+        this.metrics = metrics;
     }
 
     @Override
@@ -39,8 +49,10 @@ public class HybridRuleSearchService implements HybridRuleSearch {
             throw new IllegalArgumentException("hybrid retrieval query and options are required");
         }
         int limit = Math.max(1, Math.min(options.limit(), MAX_RESULTS));
-        List<RuleEvidenceHit> fullTextHits = fullText.search(documentVersionId, query, MAX_RESULTS);
-        List<RuleEvidenceHit> vectorHits = vector.search(documentVersionId, query, MAX_RESULTS);
+        List<RuleEvidenceHit> fullTextHits = recordPhase(
+                "full-text", () -> fullText.search(documentVersionId, query, MAX_RESULTS));
+        List<RuleEvidenceHit> vectorHits = recordPhase(
+                "vector", () -> vector.search(documentVersionId, query, MAX_RESULTS));
         Map<UUID, Candidate> candidates = new LinkedHashMap<>();
         add(candidates, fullTextHits, true);
         add(candidates, vectorHits, false);
@@ -67,22 +79,44 @@ public class HybridRuleSearchService implements HybridRuleSearch {
         }
         ranked.forEach(hit -> selected.putIfAbsent(hit.evidence().chunkId(), hit));
         List<HybridEvidenceHit> selectedEvidence = selected.values().stream().limit(limit).toList();
-        Map<UUID, RuleEvidenceHit> completeEvidence = evidenceLookup
+        var selectedIds = selectedEvidence.stream()
+                .map(hit -> hit.evidence().chunkId())
+                .collect(java.util.stream.Collectors.toUnmodifiableSet());
+        Map<UUID, RuleEvidenceHit> completeEvidence = recordPhase("canonical-hydration", () -> evidenceLookup
                 .findByChunkIds(
                         documentVersionId,
-                        selectedEvidence.stream()
-                                .map(hit -> hit.evidence().chunkId())
-                                .collect(java.util.stream.Collectors.toUnmodifiableSet()))
+                        selectedIds)
                 .stream()
-                .collect(java.util.stream.Collectors.toUnmodifiableMap(RuleEvidenceHit::chunkId, hit -> hit));
+                .peek(hit -> {
+                    if (!documentVersionId.equals(hit.documentVersionId())) {
+                        throw new IllegalStateException("canonical evidence escaped the requested document scope");
+                    }
+                })
+                .collect(java.util.stream.Collectors.toUnmodifiableMap(RuleEvidenceHit::chunkId, hit -> hit)));
+        if (!completeEvidence.keySet().equals(selectedIds)) {
+            throw new IllegalStateException("ranked evidence could not be canonically hydrated");
+        }
         return selectedEvidence.stream()
                 .map(hit -> new HybridEvidenceHit(
-                        completeEvidence.getOrDefault(hit.evidence().chunkId(), hit.evidence()),
+                        completeEvidence.get(hit.evidence().chunkId()),
                         hit.score(),
                         hit.fullTextRank(),
                         hit.vectorRank(),
                         hit.currentSectionBoosted()))
                 .toList();
+    }
+
+    private <T> T recordPhase(String phase, Supplier<T> work) {
+        long startedAt = System.nanoTime();
+        try {
+            return work.get();
+        } finally {
+            Timer.builder(PHASE_DURATION_METRIC)
+                    .description("Hybrid retrieval phase duration")
+                    .tag("phase", phase)
+                    .register(metrics)
+                    .record(System.nanoTime() - startedAt, TimeUnit.NANOSECONDS);
+        }
     }
 
     private void add(Map<UUID, Candidate> candidates, List<RuleEvidenceHit> hits, boolean fullTextSource) {

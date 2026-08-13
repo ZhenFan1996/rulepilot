@@ -216,17 +216,12 @@ public class ValidatedAssistantReadTools implements AssistantReadTools {
         Set<UUID> anchorIds = anchors.stream()
                 .map(RuleEvidenceHit::chunkId)
                 .collect(java.util.stream.Collectors.toSet());
-        Map<UUID, RuleEvidenceHit> hydratedAnchors = evidenceLookup
-                .findByChunkIds(request.documentVersionId(), anchorIds)
-                .stream()
-                .collect(java.util.stream.Collectors.toMap(RuleEvidenceHit::chunkId, source -> source));
         List<RuleEvidenceHit> adjacent = evidenceLookup.findAdjacent(
                 request.documentVersionId(), anchorIds, 1, sectionTypes);
         Map<UUID, RuleEvidenceHit> merged = new LinkedHashMap<>();
         anchors.forEach(source -> {
-            RuleEvidenceHit hydrated = hydratedAnchors.getOrDefault(source.chunkId(), source);
-            validateExpandedEvidence(request, sectionTypes, hydrated);
-            merged.put(source.chunkId(), hydrated);
+            validateExpandedEvidence(request, sectionTypes, source);
+            merged.put(source.chunkId(), source);
         });
         for (RuleEvidenceHit source : adjacent) {
             validateExpandedEvidence(request, sectionTypes, source);
