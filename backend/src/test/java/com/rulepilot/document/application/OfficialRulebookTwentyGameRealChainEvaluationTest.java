@@ -96,7 +96,8 @@ class OfficialRulebookTwentyGameRealChainEvaluationTest {
                 storage,
                 documents,
                 processingQueue,
-                mock(UploadedRulebookTeachingHandoffService.class));
+                mock(UploadedRulebookTeachingHandoffService.class),
+                event -> {});
         var fetcher = new HttpOfficialRulebookSourceFetcher(
                 storageProperties(),
                 new PdfBoxPhotographedRulebookAssembler(),

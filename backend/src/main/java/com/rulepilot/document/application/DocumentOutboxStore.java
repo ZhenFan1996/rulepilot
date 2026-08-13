@@ -10,5 +10,5 @@ public interface DocumentOutboxStore {
 
     void markPublished(UUID eventId, Instant publishedAt);
 
-    record PendingEvent(UUID id, String eventType, String payload) {}
+    record PendingEvent(UUID id, String eventType, String payload, Instant occurredAt) {}
 }

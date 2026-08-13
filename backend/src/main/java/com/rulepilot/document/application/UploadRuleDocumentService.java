@@ -9,6 +9,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -23,6 +24,7 @@ public class UploadRuleDocumentService {
     private final RuleDocumentRepository repository;
     private final DocumentProcessingQueue processingQueue;
     private final UploadedRulebookTeachingHandoffService teachingHandoffs;
+    private final ApplicationEventPublisher events;
     private final Clock clock = Clock.systemUTC();
 
     public UploadRuleDocumentService(
@@ -31,13 +33,15 @@ public class UploadRuleDocumentService {
             DocumentStorage storage,
             RuleDocumentRepository repository,
             DocumentProcessingQueue processingQueue,
-            UploadedRulebookTeachingHandoffService teachingHandoffs) {
+            UploadedRulebookTeachingHandoffService teachingHandoffs,
+            ApplicationEventPublisher events) {
         this.catalog = catalog;
         this.storageService = storageService;
         this.storage = storage;
         this.repository = repository;
         this.processingQueue = processingQueue;
         this.teachingHandoffs = teachingHandoffs;
+        this.events = events;
     }
 
     @Transactional
@@ -125,7 +129,8 @@ public class UploadRuleDocumentService {
                 now);
         try {
             DocumentVersion saved = repository.save(version);
-            processingQueue.enqueue(saved.id(), now);
+            processingQueue.enqueue(saved.id(), Instant.now(clock));
+            events.publishEvent(new DocumentOutboxQueued());
             if (startTeaching) teachingHandoffs.request(saved.id(), learningGoal, username);
             return new UploadResult(document, saved, false);
         } catch (RuntimeException exception) {
