@@ -1,7 +1,10 @@
 import { expect, test, type Page } from '@playwright/test'
 
 const readyDocument = {
-  document: { id: 'document-1', gameEditionId: 'edition-1', title: 'Example Rulebook' },
+  document: {
+    id: 'document-1', gameEditionId: 'edition-1', title: 'Example Rulebook', officialSourceUrl: null,
+    officialCoverUrl: null, createdBy: 'player',
+  },
   latestVersion: {
     id: 'version-1', originalFilename: 'example-rules.pdf', size: 4096, status: 'READY',
   },
@@ -198,7 +201,7 @@ async function mockOnboardingApis(page: Page, options: {
     if (path === '/api/auth/csrf') return route.fulfill({ json: { headerName: 'X-CSRF-TOKEN', token: 'csrf' } })
     if (path === '/api/v1/assistant-runs/active') return route.fulfill({ json: [] })
     if (path === '/api/v1/teaching-plans') return route.fulfill({ json: options.recommendations === null ? [] : [{
-      id: 'plan-1', documentVersionId: 'version-1', gameTitle: 'Catalog Game', createdAt: '2026-08-06T00:00:00Z',
+      id: 'plan-1', documentVersionId: 'version-1', gameTitle: 'Catalog Game', createdBy: 'player', createdAt: '2026-08-06T00:00:00Z',
     }] })
     if (path === '/api/public/lessons') return route.fulfill({ json: [] })
     if (path === '/api/v1/bgg/recommendations') {
@@ -260,12 +263,16 @@ async function mockOnboardingApis(page: Page, options: {
     }
     if (path === '/api/v1/games') return route.fulfill({ json: options.recommendations === null ? [] : [{
       game: { id: 'game-1', name: 'Catalog Game' },
-      editions: [{ id: 'edition-1', name: 'BGG 基础版', language: 'und' }],
+      editions: [{ id: 'edition-1', gameId: 'game-1', name: 'BGG 基础版', language: 'und', publicationYear: 2024 }],
       expansions: [],
       bggMetadata: {
         bggId: 42,
         thumbnailUrl: hotGame.thumbnailUrl,
         bggUrl: hotGame.bggUrl,
+        minPlayers: 1,
+        maxPlayers: 5,
+        playingTimeMinutes: 60,
+        minimumAge: 10,
       },
     }] })
     if (path === '/api/v1/model-configuration') {

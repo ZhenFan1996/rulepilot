@@ -57,6 +57,7 @@ const similarToMosaicField = {
 
 const teachingPlan = {
   id: 'plan-1', documentVersionId: 'version-1', gameTitle: '展翅翱翔', premise: '先看目标，再按回合顺序练习。',
+  createdBy: 'player',
   sections: [
     { position: 1, title: '游戏目标', visualEvidenceRecommended: false },
     { position: 2, title: '回合行动', visualEvidenceRecommended: false },
@@ -262,7 +263,7 @@ async function mockPublicDiscovery(page: import('@playwright/test').Page, authen
   await page.route('**/api/v1/documents/upload-teaching-handoffs', route => route.fulfill({ json: [] }))
   await page.route('**/api/v1/games', route => route.fulfill({ json: [{
     game: { id: 'game-1', name: '展翅翱翔' },
-    editions: [{ id: 'edition-1', name: 'BGG 基础版', language: 'und' }],
+    editions: [{ id: 'edition-1', gameId: 'game-1', name: 'BGG 基础版', language: 'und', publicationYear: 2024 }],
     expansions: [],
   }] }))
   await page.route('**/api/v1/teaching-plans', route => route.fulfill({ json: journeyImported ? [{
@@ -273,7 +274,10 @@ async function mockPublicDiscovery(page: import('@playwright/test').Page, authen
     assignments: { teaching: 'qwen', visual: 'qwen' },
   } }))
   await page.route('**/api/v1/documents', route => route.fulfill({ json: [{
-    document: { id: 'document-1', gameEditionId: 'edition-1', title: 'Wingspan Rulebook', officialSourceUrl: 'https://publisher.example/wingspan.pdf' },
+    document: {
+      id: 'document-1', gameEditionId: 'edition-1', title: 'Wingspan Rulebook',
+      officialSourceUrl: 'https://publisher.example/wingspan.pdf', officialCoverUrl: null, createdBy: 'player',
+    },
     latestVersion: { id: 'version-1', originalFilename: 'wingspan.pdf', size: 4096, status: 'READY' },
   }] }))
   await page.route('**/api/v1/document-versions/version-1/progress/snapshot', route => route.fulfill({ json: {

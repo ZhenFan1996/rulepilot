@@ -43,11 +43,11 @@ test('replaces route-owned background reads without cancelling durable work or p
     if (url.pathname === '/api/v1/teaching-plans') return route.fulfill({ json: [
       {
         id: 'plan-current', documentVersionId: 'version-current', gameTitle: '跨页面继续的讲解',
-        premise: '路由切换不会丢失后台状态。', createdAt: '2026-08-13T00:00:00Z', sections: [],
+        premise: '路由切换不会丢失后台状态。', createdBy: 'player', createdAt: '2026-08-13T00:00:00Z', sections: [],
       },
       {
         id: 'plan-old', documentVersionId: 'version-old', gameTitle: '过期讲解',
-        premise: '不得覆盖。', createdAt: '2026-08-13T00:00:00Z', sections: [],
+        premise: '不得覆盖。', createdBy: 'player', createdAt: '2026-08-13T00:00:00Z', sections: [],
       },
     ] })
     if (url.pathname === '/api/v1/games') return route.fulfill({ json: [] })
