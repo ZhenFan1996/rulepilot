@@ -548,7 +548,8 @@ test('stops closed reader transport while the durable guide remains reopenable',
 
   await page.getByTestId('player-journey-dock').click()
   let guide = page.getByRole('dialog', { name: '生成讲解阅读器' })
-  await expect(guide.getByText('正在打开已生成的讲解…')).toBeVisible()
+  await expect(guide.getByText('通过鸟类、奖励牌和蛋获得分数。')).toBeVisible()
+  await expect(guide.getByText('正在打开已生成的讲解…')).toHaveCount(0)
   await expect.poll(() => initialGuideStarted).toBe(3)
   await guide.getByRole('button', { name: '关闭讲解' }).click()
   await expect(guide).toHaveCount(0)

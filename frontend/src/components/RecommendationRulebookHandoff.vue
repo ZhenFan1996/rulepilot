@@ -50,6 +50,7 @@ interface OfficialImportJob extends PlayerJourneyImportJob {
 }
 
 interface IllustratedLesson extends PlayerJourneyLesson {
+  teachingPlanId: string
   sections: Array<{
     position: number
     topicKey: string
@@ -468,7 +469,10 @@ async function refreshJourney(request = sequence) {
         teachingRun.value = acceptJourneyRun(teachingRun.value, incomingRun)
         teachingRunId.value = incomingRun.run.id
       }
-      if (incomingLesson) lesson.value = acceptProgressiveLesson(lesson.value, incomingLesson)
+      if (incomingLesson) {
+        if (incomingLesson.teachingPlanId !== targetPlanId) throw new Error('lesson response identity mismatch')
+        lesson.value = acceptProgressiveLesson(lesson.value, incomingLesson)
+      }
       if (!incomingRun && preparationRun.value?.run.state === 'COMPLETED' && !ensuredLessonPlans.has(targetPlanId)) {
         ensuredLessonPlans.add(targetPlanId)
         try {

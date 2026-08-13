@@ -44,7 +44,7 @@ function lesson(title = '目标', planId = 'plan-1') {
   return {
     id: `lesson-${planId}`,
     teachingPlanId: planId,
-    status: 'DRAFT_READY',
+    status: 'DRAFT_READY' as const,
     sections: [section(1, title)],
   }
 }
@@ -66,6 +66,74 @@ describe('RecommendationLessonDialog', () => {
     vi.useRealTimers()
     vi.restoreAllMocks()
     vi.unstubAllGlobals()
+  })
+
+  it('paints a same-plan readable snapshot immediately while authoritative reads are pending', async () => {
+    const pending = new Promise<Response>(() => undefined)
+    const signals: AbortSignal[] = []
+    vi.stubGlobal('fetch', vi.fn((_input: string | URL | Request, options?: RequestInit) => {
+      signals.push(options!.signal!)
+      return pending
+    }))
+    const wrapper = mount(RecommendationLessonDialog, {
+      props: {
+        open: true,
+        planId: 'plan-1',
+        initialPlan: plan,
+        initialLesson: lesson('首节立即可读'),
+      },
+      global: { stubs: { LessonChapterList: ChapterListStub, teleport: true } },
+    })
+    await flushPromises()
+
+    expect(wrapper.text()).not.toContain('正在打开已生成的讲解')
+    expect(wrapper.get('[data-testid="chapter-list-stub"]').text()).toBe('首节立即可读')
+    expect(signals).toHaveLength(3)
+
+    await wrapper.setProps({ open: false })
+    expect(signals.every(signal => signal.aborted)).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('keeps a readable seed and shows refresh warning when initial reconciliation fails', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) =>
+      String(input).endsWith('/plan-1')
+        ? new Response(null, { status: 503 })
+        : new Promise<Response>(() => undefined)))
+    const wrapper = mount(RecommendationLessonDialog, {
+      props: {
+        open: true,
+        planId: 'plan-1',
+        initialPlan: plan,
+        initialLesson: lesson('仍可阅读'),
+      },
+      global: { stubs: { LessonChapterList: ChapterListStub, teleport: true } },
+    })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('暂时无法刷新最新章节')
+    expect(wrapper.text()).not.toContain('讲解暂时无法打开')
+    expect(wrapper.get('[data-testid="chapter-list-stub"]').text()).toBe('仍可阅读')
+    wrapper.unmount()
+  })
+
+  it('rejects a readable seed whose lesson belongs to another plan', async () => {
+    const pending = new Promise<Response>(() => undefined)
+    vi.stubGlobal('fetch', vi.fn(() => pending))
+    const wrapper = mount(RecommendationLessonDialog, {
+      props: {
+        open: true,
+        planId: 'plan-1',
+        initialPlan: plan,
+        initialLesson: lesson('错误首节', 'plan-other'),
+      },
+      global: { stubs: { LessonChapterList: ChapterListStub, teleport: true } },
+    })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('正在打开已生成的讲解')
+    expect(wrapper.text()).not.toContain('错误首节')
+    wrapper.unmount()
   })
 
   it('keeps readable chapters while polling and rejects a stale response with fewer chapters', async () => {

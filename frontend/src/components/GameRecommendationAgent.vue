@@ -561,6 +561,8 @@ onBeforeUnmount(() => {
       v-if="journeyStatus?.plan?.id"
       :open="openSurface === 'lesson'"
       :plan-id="journeyStatus.plan.id"
+      :initial-plan="journeyStatus.plan"
+      :initial-lesson="journeyStatus.lesson"
       :restore-focus="journeySurfaceReturnTarget"
       @close="openSurface = 'none'"
       @ask-questions="switchToQuestions()"

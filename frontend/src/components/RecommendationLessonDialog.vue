@@ -15,6 +15,14 @@ interface TeachingPlan {
   sections: Array<{ position: number; title: string; visualEvidenceRecommended: boolean }>
 }
 
+interface TeachingPlanSeed {
+  id: string
+  documentVersionId: string
+  gameTitle: string
+  premise: string
+  sections: Array<{ position: number; title: string; visualEvidenceRecommended?: boolean }>
+}
+
 interface VisualFocus {
   pageNumber: number
   label: string
@@ -56,6 +64,8 @@ interface IllustratedLesson {
 const props = defineProps<{
   open: boolean
   planId: string
+  initialPlan?: TeachingPlanSeed | null
+  initialLesson?: IllustratedLesson | null
   restoreFocus?: () => HTMLElement | null
 }>()
 const emit = defineEmits<{ close: []; 'ask-questions': [] }>()
@@ -150,6 +160,27 @@ function responseMatchesPlan(
     && (!incomingRun || incomingRun.run.subjectId === planId)
 }
 
+function acceptInitialSnapshot(planId: string) {
+  const incomingPlan = props.initialPlan
+  const incomingLesson = props.initialLesson
+  if (incomingPlan?.id !== planId
+    || incomingLesson?.teachingPlanId !== planId
+    || incomingLesson.sections.length === 0) return false
+  const normalizedPlan: TeachingPlan = {
+    ...incomingPlan,
+    sections: incomingPlan.sections.map(section => ({
+      ...section,
+      visualEvidenceRecommended: section.visualEvidenceRecommended ?? false,
+    })),
+  }
+  plan.value = normalizedPlan
+  lesson.value = acceptProgressiveLesson(
+    lesson.value?.id === incomingLesson.id ? lesson.value : null,
+    incomingLesson,
+  )
+  return true
+}
+
 async function optionalJson<T>(path: string, signal: AbortSignal): Promise<T | null> {
   const response = await fetch(path, { credentials: 'include', signal })
   if (response.status === 404) return null
@@ -166,11 +197,12 @@ async function load() {
     lesson.value = null
     run.value = null
   }
+  const readableSnapshot = acceptInitialSnapshot(planId)
   clearTimer()
   activeController?.abort()
   const controller = new AbortController()
   activeController = controller
-  loading.value = true
+  loading.value = !readableSnapshot
   error.value = false
   refreshWarning.value = false
   let loaded = false
@@ -192,14 +224,17 @@ async function load() {
     loaded = true
   } catch (caught) {
     if (!isAbortError(caught) && isCurrentRequest(request, planId, controller)) {
-      error.value = true
+      if (readableSnapshot) refreshWarning.value = true
+      else error.value = true
       controller.abort()
     }
   } finally {
     if (isCurrentRequest(request, planId, controller)) {
       activeController = null
       loading.value = false
-      if (loaded) scheduleRefresh(request, planId)
+      if (loaded || readableSnapshot) {
+        scheduleRefresh(request, planId, refreshWarning.value ? 4_000 : 1_500)
+      }
     }
   }
 }

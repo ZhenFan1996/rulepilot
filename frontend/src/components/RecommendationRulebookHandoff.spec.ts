@@ -43,9 +43,9 @@ function planFixture(id: string, documentVersionId: string) {
   }
 }
 
-function lessonFixture(id: string) {
+function lessonFixture(id: string, teachingPlanId = 'plan-1') {
   return {
-    id, status: 'COMPLETE', sections: [{ position: 1, title: 'Setup' }],
+    id, teachingPlanId, status: 'COMPLETE', sections: [{ position: 1, title: 'Setup' }],
   }
 }
 
@@ -232,7 +232,7 @@ describe('RecommendationRulebookHandoff', () => {
         return Response.json(runSnapshot('teaching-run-gallery', 'COMPLETED'))
       }
       if (path === '/api/v1/teaching-plans/plan-gallery/illustrated-lessons/latest') {
-        return Response.json(lessonFixture('lesson-gallery'))
+        return Response.json(lessonFixture('lesson-gallery', 'plan-gallery'))
       }
       return new Response(null, { status: 404 })
     }))
@@ -291,7 +291,7 @@ describe('RecommendationRulebookHandoff', () => {
         return Response.json(runSnapshot('teaching-complete', 'COMPLETED'))
       }
       if (path === '/api/v1/teaching-plans/plan-complete/illustrated-lessons/latest') {
-        return Response.json(lessonFixture('lesson-complete'))
+        return Response.json(lessonFixture('lesson-complete', 'plan-complete'))
       }
       return new Response(null, { status: 404 })
     }))
