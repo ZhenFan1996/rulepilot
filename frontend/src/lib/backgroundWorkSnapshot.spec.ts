@@ -4,7 +4,9 @@ import {
   parseActiveTeachingRuns,
   parseDocumentProgress,
   parseExpectedAssistantRun,
+  parseLatestTeachingRun,
   parseOwnedDocuments,
+  parsePreparationTeachingPlans,
   parseRulebookImports,
   parseTeachingPlans,
   parseUploadedHandoffs,
@@ -39,6 +41,18 @@ describe('background work snapshot boundary', () => {
       document: { id: 'document-1', title: 'rules.pdf', createdBy: 'other' },
       latestVersion: { id: 'version-1', status: 'READY' },
     }], 'player')).toThrow()
+    expect(parsePreparationTeachingPlans([{
+      id: 'plan-1', documentVersionId: 'version-1', gameTitle: '可信标题',
+      createdAt: '2026-08-14T00:00:00Z',
+    }])[0]).toEqual({
+      id: 'plan-1', documentVersionId: 'version-1', gameTitle: '可信标题',
+      createdAt: '2026-08-14T00:00:00Z',
+    })
+    expect(() => parsePreparationTeachingPlans([{
+      id: 'plan-1', documentVersionId: '', gameTitle: '可信标题', createdAt: '2026-08-14T00:00:00Z',
+    }])).toThrow()
+    expect(parseLatestTeachingRun({ run }, 'plan-1', 'player')).toEqual(run)
+    expect(() => parseLatestTeachingRun({ run: { ...run, ownerUsername: 'other' } }, 'plan-1', 'player')).toThrow()
   })
 
   it('requires imports and upload handoffs to bind to coherent document versions', () => {

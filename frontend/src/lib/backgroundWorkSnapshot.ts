@@ -3,6 +3,11 @@ export interface TeachingPlanSummary {
   gameTitle: string
 }
 
+export interface PreparationTeachingPlanSummary extends TeachingPlanSummary {
+  documentVersionId: string
+  createdAt: string
+}
+
 export interface AssistantRunSnapshot {
   id: string
   mode: 'TEACHING_PREPARATION' | 'TEACHING' | 'VISUAL_ENRICHMENT' | 'QUESTION_ANSWER'
@@ -99,6 +104,37 @@ export function parseTeachingPlans(value: unknown): TeachingPlanSummary[] {
     seenIds.add(entry.id)
     return { id: entry.id, gameTitle: entry.gameTitle }
   })
+}
+
+export function parsePreparationTeachingPlans(value: unknown): PreparationTeachingPlanSummary[] {
+  if (!Array.isArray(value) || value.length > 500) throw new Error('background preparation plans are invalid')
+  const seenIds = new Set<string>()
+  return value.map((entry) => {
+    if (!isRecord(entry)
+      || !boundedString(entry.id, 128)
+      || !boundedString(entry.documentVersionId, 128)
+      || !boundedString(entry.gameTitle, 160)
+      || !validTimestamp(entry.createdAt)) {
+      throw new Error('background preparation plan is invalid')
+    }
+    if (seenIds.has(entry.id)) throw new Error('background preparation plan is duplicated')
+    seenIds.add(entry.id)
+    return {
+      id: entry.id,
+      documentVersionId: entry.documentVersionId,
+      gameTitle: entry.gameTitle,
+      createdAt: entry.createdAt,
+    }
+  })
+}
+
+export function parseLatestTeachingRun(value: unknown, subjectId: string, ownerUsername: string) {
+  if (!isRecord(value)) throw new Error('background latest run details are invalid')
+  const run = parseAssistantRun(value.run)
+  if (run.mode !== 'TEACHING' || run.subjectId !== subjectId || run.ownerUsername !== ownerUsername) {
+    throw new Error('background latest run identity is invalid')
+  }
+  return run
 }
 
 export function parseExpectedAssistantRun(

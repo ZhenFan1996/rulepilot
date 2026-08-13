@@ -17,7 +17,9 @@ import {
   parseActiveTeachingRuns,
   parseDocumentProgress,
   parseExpectedAssistantRun,
+  parseLatestTeachingRun,
   parseOwnedDocuments,
+  parsePreparationTeachingPlans,
   parseRulebookImports,
   parseTeachingPlans,
   parseUploadedHandoffs,
@@ -67,6 +69,8 @@ const documents = ref<DocumentSummary[]>([])
 const documentProgress = ref<Record<string, DocumentProgress>>({})
 const preparationStates = ref<Record<string, string>>({})
 const preparationSubjects = ref<Record<string, string>>({})
+const preparationTeachingTransitions = ref<PreparationTeachingTransition[]>([])
+const preparationTeachingPlanIds = new Map<string, { documentVersionId: string; planId: string }>()
 const dismissedImportIds = ref<Set<string>>(new Set())
 const dismissedUploadedHandoffIds = ref<Set<string>>(new Set())
 const titles = new Map<string, string>()
@@ -285,7 +289,20 @@ const workItems = computed<WorkItem[]>(() => {
   }))
   const finishedTeachingItems = completedTeaching.value.map((item): WorkItem => ({
     id: `teaching-finished:${item.runId}`, kind: 'lesson', title: item.gameTitle,
-    stage: copy.value.done, detail: '', state: 'complete', progress: 100, target: { name: 'lessons' },
+    stage: item.terminalState && item.terminalState !== 'COMPLETED' ? copy.value.failed : copy.value.done,
+    detail: '', state: item.terminalState && item.terminalState !== 'COMPLETED' ? 'failed' : 'complete',
+    progress: item.terminalState && item.terminalState !== 'COMPLETED' ? null : 100,
+    target: { name: 'lessons' },
+  }))
+  const preparationTransitionItems = preparationTeachingTransitions.value.map((transition): WorkItem => ({
+      id: `teaching-transition:${transition.id}`,
+      kind: 'lesson',
+      title: transition.title,
+      stage: copy.value.launchingTeaching,
+      detail: '',
+      state: 'active',
+      progress: null,
+      target: { name: 'lessons' },
   }))
   const preparationItems = imports.value.flatMap((job): WorkItem[] => {
     const runId = job.teachingPreparationRunId
@@ -338,7 +355,15 @@ const workItems = computed<WorkItem[]>(() => {
         updatedAt: handoff.updatedAt,
       }
     })
-  return [...importItems, ...documentItems, ...preparationItems, ...uploadedTeachingItems, ...teachingItems, ...finishedTeachingItems]
+  return [
+    ...importItems,
+    ...documentItems,
+    ...preparationItems,
+    ...preparationTransitionItems,
+    ...uploadedTeachingItems,
+    ...teachingItems,
+    ...finishedTeachingItems,
+  ]
     .sort((left, right) => (left.state === 'active' ? 0 : 1) - (right.state === 'active' ? 0 : 1))
 })
 const activeCount = computed(() => workItems.value.filter(item => item.state === 'active').length)
@@ -371,6 +396,15 @@ interface TeachingRefreshSnapshot {
   degraded: boolean
 }
 
+interface PreparationTeachingTransition {
+  id: string
+  source: 'import' | 'upload'
+  sourceId: string
+  documentVersionId: string
+  planId: string | null
+  title: string
+}
+
 interface DocumentRefreshSnapshot {
   imports: RulebookImportJob[]
   uploadedHandoffs: UploadedTeachingHandoff[]
@@ -378,6 +412,13 @@ interface DocumentRefreshSnapshot {
   progress: Record<string, DocumentProgress>
   preparationStates: Record<string, string>
   preparationSubjects: Record<string, string>
+  degraded: boolean
+}
+
+interface PreparationBridgeResult {
+  teaching: TeachingRefreshSnapshot
+  transitions: PreparationTeachingTransition[]
+  planIds: Map<string, { documentVersionId: string; planId: string }>
   degraded: boolean
 }
 
@@ -404,6 +445,7 @@ async function loadTeachingSnapshot(
   const activePlanIds = new Set(active.map(item => item.planId))
   const missing = previous.filter(item => !activePlanIds.has(item.planId))
   let degraded = false
+  const confirmedTerminalStates = new Map<string, BackgroundTeachingItem['terminalState']>()
   const confirmations = await Promise.all(missing.map(async (item) => {
     try {
       const details = await responseJson<unknown>(`/api/v1/assistant-runs/${encodeURIComponent(item.runId)}`, signal)
@@ -411,7 +453,11 @@ async function loadTeachingSnapshot(
         id: item.runId, mode: 'TEACHING', subjectId: item.planId, ownerUsername: targetAccount,
       })
       states[item.runId] = run.state
-      return terminalTeachingStates.has(run.state) ? null : item
+      if (terminalTeachingStates.has(run.state)) {
+        confirmedTerminalStates.set(item.planId, run.state as BackgroundTeachingItem['terminalState'])
+        return null
+      }
+      return item
     } catch {
       if (signal.aborted) throw new DOMException('Aborted', 'AbortError')
       degraded = true
@@ -423,7 +469,12 @@ async function loadTeachingSnapshot(
   const retained = confirmations.filter((item): item is BackgroundTeachingItem => item !== null)
   const transition = reconcileBackgroundTeaching(previous, [...active, ...retained])
   const notices = new Map(completedTeaching.value.map(item => [item.planId, item]))
-  for (const item of transition.finished) notices.set(item.planId, item)
+  for (const item of transition.finished) {
+    notices.set(item.planId, {
+      ...item,
+      terminalState: confirmedTerminalStates.get(item.planId) ?? item.terminalState,
+    })
+  }
   return {
     active: transition.active,
     completed: [...notices.values()],
@@ -515,6 +566,143 @@ async function loadDocumentSnapshot(
   }
 }
 
+async function bridgeCompletedPreparations(
+  teaching: TeachingRefreshSnapshot,
+  rulebooks: DocumentRefreshSnapshot,
+  targetAccount: string,
+  signal: AbortSignal,
+): Promise<PreparationBridgeResult> {
+  const nextPlanIds = new Map(preparationTeachingPlanIds)
+  const candidatesByVersion = new Map<string, Omit<PreparationTeachingTransition, 'planId'>>()
+  for (const job of rulebooks.imports) {
+    const runId = job.teachingPreparationRunId
+    const versionId = job.documentVersionId
+    if (!runId || !versionId
+      || rulebooks.preparationStates[runId] !== 'COMPLETED'
+      || dismissedImportIds.value.has(job.id)) continue
+    candidatesByVersion.set(versionId, {
+      id: `import:${job.id}`,
+      source: 'import',
+      sourceId: job.id,
+      documentVersionId: versionId,
+      title: job.title,
+    })
+  }
+  for (const handoff of rulebooks.uploadedHandoffs) {
+    const runId = handoff.preparationRunId
+    if (!runId
+      || rulebooks.preparationStates[runId] !== 'COMPLETED'
+      || dismissedUploadedHandoffIds.value.has(handoff.id)
+      || candidatesByVersion.has(handoff.documentVersionId)) continue
+    candidatesByVersion.set(handoff.documentVersionId, {
+      id: `upload:${handoff.id}`,
+      source: 'upload',
+      sourceId: handoff.id,
+      documentVersionId: handoff.documentVersionId,
+      title: handoff.title,
+    })
+  }
+  if (candidatesByVersion.size === 0) {
+    nextPlanIds.clear()
+    return { teaching, transitions: [], planIds: nextPlanIds, degraded: false }
+  }
+
+  const candidateIds = new Set([...candidatesByVersion.values()].map(candidate => candidate.id))
+  for (const id of nextPlanIds.keys()) {
+    if (!candidateIds.has(id)) nextPlanIds.delete(id)
+  }
+  const transitions = [...candidatesByVersion.values()].map(candidate => ({
+    ...candidate,
+    planId: nextPlanIds.get(candidate.id)?.documentVersionId === candidate.documentVersionId
+      ? nextPlanIds.get(candidate.id)?.planId ?? null
+      : null,
+  }))
+  const unresolved = transitions.filter(transition => !transition.planId)
+  let plans: ReturnType<typeof parsePreparationTeachingPlans> = []
+  if (unresolved.length > 0) {
+    try {
+      plans = parsePreparationTeachingPlans(
+        await responseJson<unknown>('/api/v1/teaching-plans', signal),
+      )
+    } catch {
+      if (signal.aborted) throw new DOMException('Aborted', 'AbortError')
+      return { teaching, transitions, planIds: nextPlanIds, degraded: true }
+    }
+  }
+  const planByVersion = new Map<string, (typeof plans)[number]>()
+  for (const plan of plans) {
+    const candidate = candidatesByVersion.get(plan.documentVersionId)
+    if (!candidate) continue
+    const existing = planByVersion.get(plan.documentVersionId)
+    if (!existing || Date.parse(plan.createdAt) > Date.parse(existing.createdAt)) {
+      planByVersion.set(plan.documentVersionId, plan)
+    }
+  }
+
+  const activeByPlan = new Map(teaching.active.map(item => [item.planId, item]))
+  const completedByPlan = new Map(teaching.completed.map(item => [item.planId, item]))
+  const transitionById = new Map(transitions.map(item => [item.id, item]))
+  let degraded = false
+  await Promise.all(transitions.map(async (transition) => {
+    const plan = planByVersion.get(transition.documentVersionId)
+    if (plan) {
+      transition.planId = plan.id
+      nextPlanIds.set(transition.id, {
+        documentVersionId: transition.documentVersionId,
+        planId: plan.id,
+      })
+    }
+    const planId = transition.planId
+    if (!planId) return
+    const gameTitle = plan ? playerFacingTitle(plan.gameTitle) : transition.title
+    teaching.resolvedTitles.set(planId, gameTitle)
+    if (activeByPlan.has(planId) || completedByPlan.has(planId)) {
+      transitionById.delete(transition.id)
+      return
+    }
+    try {
+      const response = await fetch(
+        `/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=${encodeURIComponent(planId)}`,
+        { credentials: 'include', signal },
+      )
+      if (response.status === 404) return
+      if (!response.ok) throw new Error('background Teaching transition is unavailable')
+      const run = parseLatestTeachingRun(await response.json(), planId, targetAccount)
+      teaching.states[run.id] = run.state
+      transitionById.delete(transition.id)
+      if (terminalTeachingStates.has(run.state)) {
+        completedByPlan.set(planId, {
+          runId: run.id,
+          planId,
+          gameTitle,
+          terminalState: run.state as BackgroundTeachingItem['terminalState'],
+        })
+        return
+      }
+      activeByPlan.set(planId, {
+        runId: run.id,
+        planId,
+        gameTitle,
+      })
+      completedByPlan.delete(planId)
+    } catch {
+      if (signal.aborted) throw new DOMException('Aborted', 'AbortError')
+      degraded = true
+    }
+  }))
+  return {
+    teaching: {
+      ...teaching,
+      active: [...activeByPlan.values()],
+      completed: [...completedByPlan.values()],
+      degraded: teaching.degraded || degraded,
+    },
+    transitions: [...transitionById.values()],
+    planIds: nextPlanIds,
+    degraded,
+  }
+}
+
 async function refresh() {
   const targetAccount = account
   if (disposed || !targetAccount || document.visibilityState === 'hidden') return
@@ -530,8 +718,10 @@ async function refresh() {
       loadDocumentSnapshot(targetAccount, controller.signal),
     ])
     if (!isCurrentRefresh(generation, targetAccount, controller)) return
-    commitRefresh(teaching, rulebooks, keys)
-    unavailable.value = teaching.degraded || rulebooks.degraded
+    const bridge = await bridgeCompletedPreparations(teaching, rulebooks, targetAccount, controller.signal)
+    if (!isCurrentRefresh(generation, targetAccount, controller)) return
+    commitRefresh(bridge.teaching, rulebooks, bridge.transitions, bridge.planIds, keys)
+    unavailable.value = bridge.teaching.degraded || rulebooks.degraded || bridge.degraded
   } catch {
     if (isCurrentRefresh(generation, targetAccount, controller) && !controller.signal.aborted) {
       unavailable.value = true
@@ -549,6 +739,8 @@ async function refresh() {
 function commitRefresh(
   teaching: TeachingRefreshSnapshot,
   rulebooks: DocumentRefreshSnapshot,
+  transitions: PreparationTeachingTransition[],
+  planIds: Map<string, { documentVersionId: string; planId: string }>,
   keys: BackgroundWorkStorageKeys,
 ) {
   activeTeaching.value = teaching.active
@@ -562,6 +754,9 @@ function commitRefresh(
   documentProgress.value = rulebooks.progress
   preparationStates.value = rulebooks.preparationStates
   preparationSubjects.value = rulebooks.preparationSubjects
+  preparationTeachingTransitions.value = transitions
+  preparationTeachingPlanIds.clear()
+  for (const [id, plan] of planIds) preparationTeachingPlanIds.set(id, plan)
   safelyStore(keys.activeTeaching, teaching.active)
   safelyStore(keys.completedTeaching, teaching.completed)
 }
@@ -589,19 +784,29 @@ function dismissFinished() {
   completedTeaching.value = []
   const keys = backgroundWorkStorageKeys(account)
   sessionStorage.removeItem(keys.completedTeaching)
+  const activeTransitionImportIds = new Set(preparationTeachingTransitions.value
+    .filter(transition => transition.source === 'import')
+    .map(transition => transition.sourceId))
+  const activeTransitionUploadIds = new Set(preparationTeachingTransitions.value
+    .filter(transition => transition.source === 'upload')
+    .map(transition => transition.sourceId))
   const finishedImports = imports.value
     .filter(officialImportFinished)
+    .filter(job => !activeTransitionImportIds.has(job.id))
     .map(job => job.id)
   dismissedImportIds.value = new Set([...dismissedImportIds.value, ...finishedImports])
   safelyStore(keys.dismissedImports, [...dismissedImportIds.value])
   const finishedUploadHandoffs = uploadedTeachingHandoffs.value
     .filter(uploadedTeachingHandoffFinished)
+    .filter(handoff => !activeTransitionUploadIds.has(handoff.id))
     .map(handoff => handoff.id)
   dismissedUploadedHandoffIds.value = new Set([
     ...dismissedUploadedHandoffIds.value,
     ...finishedUploadHandoffs,
   ])
   safelyStore(keys.dismissedUploadHandoffs, [...dismissedUploadedHandoffIds.value])
+  for (const importId of finishedImports) preparationTeachingPlanIds.delete(`import:${importId}`)
+  for (const handoffId of finishedUploadHandoffs) preparationTeachingPlanIds.delete(`upload:${handoffId}`)
   schedule(refreshGeneration, account)
 }
 
@@ -669,6 +874,8 @@ function switchAccount(nextUsername: string) {
   documentProgress.value = {}
   preparationStates.value = {}
   preparationSubjects.value = {}
+  preparationTeachingTransitions.value = []
+  preparationTeachingPlanIds.clear()
   dismissedImportIds.value = new Set()
   dismissedUploadedHandoffIds.value = new Set()
   titles.clear()

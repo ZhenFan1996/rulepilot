@@ -112,6 +112,173 @@ describe('BackgroundWorkCenter request lifecycle', () => {
     wrapper.unmount()
   })
 
+  it('does not let an aborted preparation bridge publish its plan relationship into the replacement refresh', async () => {
+    let planReads = 0
+    let staleLatestReads = 0
+    let staleSignal: AbortSignal | undefined
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const path = String(input)
+      if (path.includes('/api/v1/assistant-runs/active')) return response([])
+      if (path.endsWith('/api/v1/documents/official-imports')) return response([{
+        id: 'import-cache-race', title: '缓存竞态讲解', sourceDomain: 'publisher.example', stage: 'COMPLETED',
+        downloadedBytes: 4096, totalBytes: 4096, documentVersionId: 'version-cache', errorCode: null,
+        teachingHandoffState: 'LAUNCHED', teachingPreparationRunId: 'preparation-cache', teachingErrorCode: null,
+        downloadCompletedAt: '2026-08-14T05:00:00Z', importCompletedAt: '2026-08-14T05:00:00Z',
+        teachingHandoffUpdatedAt: '2026-08-14T05:00:00Z', updatedAt: '2026-08-14T05:00:00Z',
+      }])
+      if (path.endsWith('/api/v1/documents/upload-teaching-handoffs')) return response([])
+      if (path.endsWith('/api/v1/documents')) return response([{
+        document: { id: 'document-cache', title: 'rules.pdf', createdBy: 'player' },
+        latestVersion: { id: 'version-cache', status: 'READY' },
+      }])
+      if (path.endsWith('/api/v1/assistant-runs/preparation-cache')) {
+        return response({ run: preparationRun('preparation-cache', 'version-cache', 'player', 'COMPLETED') })
+      }
+      if (path.endsWith('/api/v1/teaching-plans')) {
+        planReads += 1
+        return response([{
+          id: planReads === 1 ? 'plan-stale' : 'plan-current', documentVersionId: 'version-cache',
+          gameTitle: planReads === 1 ? '旧关系' : '当前关系', createdAt: `2026-08-14T05:00:0${planReads}Z`,
+        }])
+      }
+      if (path.includes('subjectId=plan-stale')) {
+        staleLatestReads += 1
+        if (staleLatestReads > 1) {
+          return response({ run: teachingRun('teaching-stale', 'plan-stale', 'player', 'LESSON_COMPOSITION') })
+        }
+        staleSignal = init?.signal ?? undefined
+        return await new Promise<Response>((_resolve, reject) => {
+          staleSignal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')))
+        })
+      }
+      if (path.includes('subjectId=plan-current')) {
+        return response({ run: teachingRun('teaching-current', 'plan-current', 'player', 'LESSON_COMPOSITION') })
+      }
+      return new Response(null, { status: 404 })
+    }))
+    const wrapper = await mountCenter('player')
+    await flushPromises()
+    expect(planReads).toBe(1)
+
+    notifyBackgroundWorkChanged()
+    await flushPromises()
+    await openCenter(wrapper)
+
+    expect(staleSignal?.aborted).toBe(true)
+    expect(planReads).toBe(2)
+    expect(wrapper.text()).toContain('当前关系')
+    expect(wrapper.text()).not.toContain('旧关系')
+    wrapper.unmount()
+  })
+
+  it('bridges completed preparation into its exact Teaching run without an empty idle interval', async () => {
+    vi.useFakeTimers()
+    let refreshes = 0
+    let latestTeachingReads = 0
+    let planReads = 0
+    sessionStorage.setItem(backgroundWorkStorageKeys('player').completedTeaching, JSON.stringify([{
+      runId: 'run-finished', planId: 'plan-finished', gameTitle: '已结束的旧讲解', terminalState: 'COMPLETED',
+    }]))
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const path = String(input)
+      if (path.includes('/api/v1/assistant-runs/active')) return response([])
+      if (path.endsWith('/api/v1/documents/official-imports')) {
+        refreshes += 1
+        return response([{
+          id: 'import-transition', title: '过渡中的讲解', sourceDomain: 'publisher.example', stage: 'COMPLETED',
+          downloadedBytes: 4096, totalBytes: 4096, documentVersionId: 'version-1', errorCode: null,
+          teachingHandoffState: 'LAUNCHED', teachingPreparationRunId: 'preparation-1', teachingErrorCode: null,
+          downloadCompletedAt: '2026-08-14T05:00:00Z', importCompletedAt: '2026-08-14T05:00:00Z',
+          teachingHandoffUpdatedAt: '2026-08-14T05:00:00Z', updatedAt: '2026-08-14T05:00:00Z',
+        }])
+      }
+      if (path.endsWith('/api/v1/documents/upload-teaching-handoffs')) return response([])
+      if (path.endsWith('/api/v1/documents')) return response([{
+        document: { id: 'document-1', title: 'rules.pdf', createdBy: 'player' },
+        latestVersion: { id: 'version-1', status: 'READY' },
+      }])
+      if (path.endsWith('/api/v1/assistant-runs/preparation-1')) {
+        return response({
+          run: preparationRun(
+            'preparation-1', 'version-1', 'player', refreshes === 1 ? 'LESSON_PLANNING' : 'COMPLETED',
+          ),
+        })
+      }
+      if (path.endsWith('/api/v1/teaching-plans')) {
+        planReads += 1
+        return response([{
+          id: 'plan-1', documentVersionId: 'version-1', gameTitle: '过渡中的讲解',
+          createdAt: '2026-08-14T05:00:01Z',
+        }])
+      }
+      if (path.includes('/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=plan-1')) {
+        latestTeachingReads += 1
+        if (latestTeachingReads === 1) return new Response(null, { status: 404 })
+        return response({
+          run: teachingRun('teaching-1', 'plan-1', 'player', 'LESSON_COMPOSITION'),
+        })
+      }
+      if (path.endsWith('/api/v1/assistant-runs/teaching-1')) {
+        return response({ run: teachingRun('teaching-1', 'plan-1', 'player', 'LESSON_COMPOSITION') })
+      }
+      return new Response(null, { status: 404 })
+    }))
+    const wrapper = await mountCenter('player')
+    await flushPromises()
+    await openCenter(wrapper)
+    expect(wrapper.text()).toContain('正在读取规则并建立讲解结构')
+
+    await vi.advanceTimersByTimeAsync(4_000)
+    await flushPromises()
+
+    expect(latestTeachingReads).toBe(1)
+    expect(wrapper.text()).toContain('过渡中的讲解')
+    expect(wrapper.text()).toContain('规则书已就绪，正在启动讲解任务')
+    expect(wrapper.text()).not.toContain('当前没有后台任务')
+
+    await wrapper.findAll('button').find(button => button.text() === '清除已结束任务')!.trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('规则书已就绪，正在启动讲解任务')
+    expect(wrapper.text()).not.toContain('已结束的旧讲解')
+
+    await vi.advanceTimersByTimeAsync(4_000)
+    await flushPromises()
+
+    expect(latestTeachingReads).toBe(2)
+    expect(wrapper.text()).toContain('正在组织讲解')
+    expect(wrapper.text()).not.toContain('当前没有后台任务')
+
+    await vi.advanceTimersByTimeAsync(4_000)
+    await flushPromises()
+    expect(planReads).toBe(1)
+    wrapper.unmount()
+  })
+
+  it('reports a verified failed Teaching run as needing attention instead of complete', async () => {
+    const keys = backgroundWorkStorageKeys('player')
+    sessionStorage.setItem(keys.activeTeaching, JSON.stringify([{
+      runId: 'run-failed', planId: 'plan-failed', gameTitle: '失败的讲解',
+    }]))
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const path = String(input)
+      if (path.includes('/api/v1/assistant-runs/active')) return response([])
+      if (path.endsWith('/api/v1/assistant-runs/run-failed')) {
+        return response({ run: teachingRun('run-failed', 'plan-failed', 'player', 'FAILED') })
+      }
+      if (isBackgroundBaseList(path)) return response([])
+      return new Response(null, { status: 404 })
+    }))
+    const wrapper = await mountCenter('player')
+    await flushPromises()
+    await openCenter(wrapper)
+
+    expect(wrapper.text()).toContain('失败的讲解')
+    expect(wrapper.text()).toContain('需要处理')
+    expect(wrapper.text()).not.toContain('已完成')
+    expect(sessionStorage.getItem(keys.completedTeaching)).toContain('"terminalState":"FAILED"')
+    wrapper.unmount()
+  })
+
   it('retains monotonic document progress through a failed snapshot and a lower recovery snapshot', async () => {
     vi.useFakeTimers()
     let snapshotReads = 0

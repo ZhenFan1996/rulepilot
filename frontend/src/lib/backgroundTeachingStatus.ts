@@ -2,6 +2,7 @@ export interface BackgroundTeachingItem {
   runId: string
   planId: string
   gameTitle: string
+  terminalState?: 'COMPLETED' | 'INSUFFICIENT_EVIDENCE' | 'DEGRADED' | 'FAILED'
 }
 
 export interface BackgroundTeachingTransition {
@@ -56,6 +57,8 @@ export function parseBackgroundTeachingItems(value: string | null) {
       return bounded(candidate.runId, 64)
         && bounded(candidate.planId, 64)
         && bounded(candidate.gameTitle, 160)
+        && (candidate.terminalState === undefined
+          || ['COMPLETED', 'INSUFFICIENT_EVIDENCE', 'DEGRADED', 'FAILED'].includes(candidate.terminalState))
     })
   } catch {
     return []

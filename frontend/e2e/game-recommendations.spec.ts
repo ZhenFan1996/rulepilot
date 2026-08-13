@@ -138,6 +138,7 @@ async function mockPublicDiscovery(
   let journeyImported = false
   let planPublished = !holdPreparation
   let firstLessonPublished = !holdPreparation
+  let preparationCompleted = !holdPreparation
   await page.route('**/api/auth/session', route => authenticated
     ? route.fulfill({ json: { username: 'player', roles: ['USER'] } })
     : route.fulfill({ status: 401 }))
@@ -145,10 +146,10 @@ async function mockPublicDiscovery(
   await page.route('**/api/v1/assistant-runs/active?*', route => {
     const mode = new URL(route.request().url()).searchParams.get('mode')
     if (!journeyImported) return route.fulfill({ json: [] })
-    if (mode === 'TEACHING_PREPARATION' && holdPreparation) {
+    if (mode === 'TEACHING_PREPARATION' && holdPreparation && !preparationCompleted) {
       return route.fulfill({ json: [assistantRun('preparation-run-1', 'LESSON_PLANNING', 1).run] })
     }
-    if (mode === 'TEACHING' && firstLessonPublished) {
+    if (mode === 'TEACHING' && !holdPreparation) {
       return route.fulfill({ json: [assistantRun('teaching-run-1', 'LESSON_COMPOSITION', 2).run] })
     }
     return route.fulfill({ json: [] })
@@ -318,7 +319,7 @@ async function mockPublicDiscovery(
     { pageNumber: 7, text: 'Gain food, then activate brown powers.', characterCount: 1100 },
   ] }))
   await page.route('**/api/v1/assistant-runs/preparation-run-1', route => route.fulfill({
-    json: assistantRun('preparation-run-1', holdPreparation ? 'LESSON_PLANNING' : 'COMPLETED', 1),
+    json: assistantRun('preparation-run-1', preparationCompleted ? 'COMPLETED' : 'LESSON_PLANNING', 1),
   }))
   await page.route('**/api/v1/document-versions/version-1/teaching-plans/latest', route => route.fulfill({ json: teachingPlan }))
   await page.route('**/api/v1/teaching-plans/plan-1', route => route.fulfill({ json: teachingPlan }))
@@ -327,13 +328,13 @@ async function mockPublicDiscovery(
     if (url.includes('mode=QUESTION_ANSWER')) return route.fulfill({ status: 404 })
     if (!firstLessonPublished) return route.fulfill({ status: 404 })
     teachingPoll += 1
-    const completed = teachingPoll >= 3
-    return route.fulfill({ json: assistantRun('teaching-run-1', completed ? 'COMPLETED' : 'RUNNING', teachingPoll) })
+    const completed = !holdPreparation && teachingPoll >= 3
+    return route.fulfill({ json: assistantRun('teaching-run-1', completed ? 'COMPLETED' : 'LESSON_COMPOSITION', teachingPoll) })
   })
   await page.route('**/api/v1/assistant-runs/teaching-run-1', route => {
     teachingPoll += 1
-    const completed = teachingPoll >= 3
-    return route.fulfill({ json: assistantRun('teaching-run-1', completed ? 'COMPLETED' : 'RUNNING', teachingPoll) })
+    const completed = !holdPreparation && teachingPoll >= 3
+    return route.fulfill({ json: assistantRun('teaching-run-1', completed ? 'COMPLETED' : 'LESSON_COMPOSITION', teachingPoll) })
   })
   await page.route('**/api/v1/teaching-plans/plan-1/illustrated-lessons/latest', route => {
     if (!firstLessonPublished) return route.fulfill({ status: 404 })
@@ -362,6 +363,7 @@ async function mockPublicDiscovery(
   return {
     publishPlan: () => { planPublished = true },
     publishFirstLesson: () => { firstLessonPublished = true },
+    completePreparation: () => { preparationCompleted = true },
     planReads: () => planReads,
   }
 }
@@ -813,6 +815,36 @@ test('advances My Guides from plan startup to the first readable chapter without
   await expect(page.getByText('可读，核对中')).toBeVisible({ timeout: 4_000 })
   await expect(page.getByRole('link', { name: '立即阅读完整讲解' })).toBeVisible()
   await expect(pending).toHaveCount(0)
+})
+
+test('keeps one global task while completed preparation hands off to a Teaching run', async ({ page }) => {
+  const preparation = await mockPublicDiscovery(page, true, true)
+  await page.goto('/discover')
+
+  await page.getByLabel('和推荐 Agent 聊聊').fill('4 个人，90 分钟内，想要中等策略')
+  await page.getByRole('button', { name: '发送', exact: true }).click()
+  await expect(page.getByText('支持 4 人游玩')).toBeVisible()
+  await page.getByRole('button', { name: '选这款，找规则书' }).click()
+  const journey = page.getByTestId('player-journey-surface')
+  await journey.getByRole('button', { name: '选择这份' }).click()
+  await journey.getByRole('checkbox', { name: /我确认该链接来自有权提供/ }).check()
+  await journey.getByRole('button', { name: '下载规则书并生成讲解' }).click()
+  await journey.getByRole('button', { name: '关闭小窗' }).click()
+
+  const workTrigger = page.getByTestId('background-work-trigger-desktop')
+  await expect(workTrigger.locator('span').filter({ hasText: '1' })).toBeVisible()
+  await workTrigger.click()
+  const workCenter = page.getByRole('dialog', { name: '后台任务' })
+  await expect(workCenter.getByText('正在读取规则并建立讲解结构')).toBeVisible()
+
+  preparation.publishPlan()
+  preparation.completePreparation()
+  preparation.publishFirstLesson()
+
+  await expect(workCenter.getByText('正在组织讲解')).toBeVisible({ timeout: 6_000 })
+  await expect(workCenter.getByText('展翅翱翔')).toHaveCount(1)
+  await expect(workCenter.getByText('当前没有后台任务')).toHaveCount(0)
+  await expect(workTrigger.locator('span').filter({ hasText: '1' })).toBeVisible()
 })
 
 test('keeps the readable-guide continuation legible and focus-safe at 320 and 390 px', async ({ page }) => {
