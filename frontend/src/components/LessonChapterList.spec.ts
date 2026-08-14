@@ -5,7 +5,31 @@ import LessonChapterList from './LessonChapterList.vue'
 
 const originalScrollIntoView = HTMLElement.prototype.scrollIntoView
 
-const sections = [
+interface TestVisualFocus {
+  pageNumber: number
+  label: string
+  visibleDescription?: string
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+interface TestSection {
+  position: number
+  title: string
+  visualCaption: string
+  steps: Array<{
+    position: number
+    heading: string
+    kind: string
+    text: string
+    sourcePages: number[]
+    visualFocus: TestVisualFocus | null
+  }>
+}
+
+const sections: TestSection[] = [
   {
     position: 1,
     title: '摆好桌面',
@@ -20,12 +44,13 @@ const sections = [
   },
 ]
 
-function mountDirectory() {
+function mountDirectory(lessonSections: TestSection[] = sections) {
   return mount(LessonChapterList, {
     props: {
-      sections,
+      sections: lessonSections,
       idPrefix: 'test-chapter',
       pageImageUrl: (page: number) => `/page/${page}`,
+      pagePreviewImageUrl: (page: number) => `/preview/${page}`,
       focusedPageImageUrl: (focus: { pageNumber: number }) => `/crop/${focus.pageNumber}`,
     },
   })
@@ -101,5 +126,30 @@ describe('LessonChapterList', () => {
 
     expect(wrapper.get('[data-testid="desktop-chapter-link"][aria-current="location"]').attributes('href')).toBe('#test-chapter-2')
     expect(scrollIntoView).toHaveBeenCalledWith({ behavior: 'auto', block: 'start' })
+  })
+
+  it('uses the same context-and-detail evidence storyboard in the shared reader', () => {
+    const wrapper = mountDirectory([{
+      ...sections[0]!,
+      steps: [{
+        ...sections[0]!.steps[0]!,
+        kind: 'VISUAL',
+        visualFocus: {
+          pageNumber: 2,
+          label: '起始区域',
+          visibleDescription: '一张牌位于航线最左侧。',
+          x: 100,
+          y: 150,
+          width: 300,
+          height: 250,
+        },
+      }],
+    }])
+
+    expect(wrapper.get('[data-testid="lesson-visual-storyboard"]')).toBeTruthy()
+    expect(wrapper.get('[data-testid="lesson-visual-context"] img').attributes('src')).toBe('/preview/2')
+    expect(wrapper.get('[data-testid="lesson-visual-detail"] img').attributes('src')).toBe('/crop/2')
+    expect(wrapper.text()).toContain('把主板放在桌面中央。')
+    expect(wrapper.text()).toContain('规则含义以上方有引用的步骤为准')
   })
 })

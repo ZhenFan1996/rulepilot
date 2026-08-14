@@ -53,6 +53,25 @@ class DocumentPageControllerTest {
     }
 
     @Test
+    void servesACompactOwnedPagePreviewForInlineVisualLocation() throws Exception {
+        UUID versionId = UUID.randomUUID();
+        when(versions.findVersion(versionId)).thenReturn(java.util.Optional.of(
+                new DocumentVersionScopeLookup.VersionScope(versionId, null, "READY", "player", "Rules")));
+        BufferedImage source = new BufferedImage(800, 1_200, BufferedImage.TYPE_INT_RGB);
+        ByteArrayOutputStream encoded = new ByteArrayOutputStream();
+        ImageIO.write(source, "jpeg", encoded);
+        when(pageImages.read(versionId, Set.of(2)))
+                .thenReturn(List.of(new PageImage(2, "image/jpeg", encoded.toByteArray(), 800, 1_200)));
+
+        var response = controller.pageImagePreview(versionId, 2, () -> "player");
+
+        assertThat(response.getHeaders().getContentType()).isEqualTo(MediaType.IMAGE_JPEG);
+        BufferedImage preview = ImageIO.read(new ByteArrayInputStream(response.getBody()));
+        assertThat(preview.getWidth()).isEqualTo(453);
+        assertThat(preview.getHeight()).isEqualTo(680);
+    }
+
+    @Test
     void hidesPagesFromAnotherOwner() {
         UUID versionId = UUID.randomUUID();
         when(versions.findVersion(versionId)).thenReturn(java.util.Optional.of(

@@ -125,6 +125,10 @@ function pageImageUrl(page: number) {
   return plan.value ? `/api/v1/document-versions/${encodeURIComponent(plan.value.documentVersionId)}/pages/${page}/image` : ''
 }
 
+function pagePreviewImageUrl(page: number) {
+  return plan.value ? `/api/v1/document-versions/${encodeURIComponent(plan.value.documentVersionId)}/pages/${page}/image/preview` : ''
+}
+
 function focusedPageImageUrl(focus: VisualFocus) {
   if (!plan.value) return ''
   const query = new URLSearchParams({
@@ -321,7 +325,7 @@ onBeforeUnmount(() => {
           <section v-else-if="error || !plan || !lesson" class="rounded-xl border border-red-200 bg-paper p-10 text-center" role="alert"><p>{{ copy.error }}</p><button type="button" class="mt-4 min-h-11 rounded-lg bg-indigo px-5 font-semibold text-white" @click="load">{{ copy.retry }}</button></section>
           <template v-else>
             <p class="rounded-xl border border-indigo/10 bg-indigo/5 px-4 py-3 text-xs leading-5 text-ink/55">{{ copy.source }}</p>
-            <LessonChapterList :sections="lesson.sections" :id-prefix="`journey-lesson-${lesson.id}`" :page-image-url="pageImageUrl" :focused-page-image-url="focusedPageImageUrl" />
+            <LessonChapterList :sections="lesson.sections" :id-prefix="`journey-lesson-${lesson.id}`" :page-image-url="pageImageUrl" :page-preview-image-url="pagePreviewImageUrl" :focused-page-image-url="focusedPageImageUrl" />
           </template>
         </div>
       </section>

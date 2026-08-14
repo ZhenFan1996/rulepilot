@@ -91,6 +91,26 @@ class PublicLessonControllerTest {
     }
 
     @Test
+    void serves_a_lightweight_cited_page_preview_for_inline_location() throws Exception {
+        UUID planId = UUID.randomUUID();
+        UUID documentVersionId = UUID.randomUUID();
+        var lesson = lesson(planId, documentVersionId);
+        var stored = new DocumentPageImages.PageImage(4, "image/png", new byte[] {1}, 800, 1_200);
+        byte[] preview = new byte[] {(byte) 0xff, (byte) 0xd8, (byte) 0xff, (byte) 0xd9};
+        when(lessons.requireCitedPage(planId, 4)).thenReturn(lesson);
+        when(pageImages.read(documentVersionId, Set.of(4))).thenReturn(List.of(stored));
+        when(crops.preview(stored)).thenReturn(preview);
+
+        mockMvc.perform(get("/api/public/lessons/{planId}/pages/{pageNumber}/image/preview", planId, 4))
+                .andExpect(status().isOk())
+                .andExpect(content().contentType(MediaType.IMAGE_JPEG))
+                .andExpect(header().string("Cache-Control", org.hamcrest.Matchers.containsString("no-store")))
+                .andExpect(content().bytes(preview));
+
+        verify(crops).preview(stored);
+    }
+
+    @Test
     void accepts_a_bounded_public_learning_intent() throws Exception {
         UUID planId = UUID.randomUUID();
         when(questions.answer(eq(planId), org.mockito.ArgumentMatchers.any())).thenReturn(Optional.empty());

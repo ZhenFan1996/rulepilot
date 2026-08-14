@@ -124,7 +124,7 @@ describe('PublicLessonView', () => {
     expect(wrapper.text()).toContain('图中看什么')
     expect(wrapper.text()).toContain('玩家板左侧排列资源标记，右侧是行动格。')
     expect(wrapper.get('a[href="/api/public/lessons/plan-1/rulebook"]').text()).toContain('官方原规则书')
-    expect(wrapper.get('img[alt*="玩家板设置"]').attributes('src'))
+    expect(wrapper.get('[data-testid="lesson-visual-detail"] img[alt*="玩家板设置"]').attributes('src'))
       .toContain('/api/public/lessons/plan-1/pages/2/image/crop?x=100&y=200&width=500&height=300')
     expect(wrapper.text()).not.toContain('图标速查表')
     expect(wrapper.find('#public-question').exists()).toBe(false)

@@ -111,6 +111,39 @@ class RulePageImageCropperTest {
     }
 
     @Test
+    void createsACompactWholePageLocatorWithoutUpscalingOrAlpha() throws IOException {
+        BufferedImage source = new BufferedImage(800, 1_200, BufferedImage.TYPE_4BYTE_ABGR);
+        var graphics = source.createGraphics();
+        graphics.setColor(new Color(245, 240, 232, 180));
+        graphics.fillRect(0, 0, source.getWidth(), source.getHeight());
+        graphics.dispose();
+        ByteArrayOutputStream encoded = new ByteArrayOutputStream();
+        ImageIO.write(source, "png", encoded);
+
+        byte[] result = cropper.preview(
+                new PageImage(1, "image/png", encoded.toByteArray(), 800, 1_200));
+
+        BufferedImage preview = ImageIO.read(new ByteArrayInputStream(result));
+        assertThat(preview.getWidth()).isEqualTo(453);
+        assertThat(preview.getHeight()).isEqualTo(680);
+        assertThat(preview.getColorModel().hasAlpha()).isFalse();
+    }
+
+    @Test
+    void keepsASmallLocatorAtItsOriginalDimensions() throws IOException {
+        BufferedImage source = new BufferedImage(240, 320, BufferedImage.TYPE_INT_RGB);
+        ByteArrayOutputStream encoded = new ByteArrayOutputStream();
+        ImageIO.write(source, "jpeg", encoded);
+
+        byte[] result = cropper.preview(
+                new PageImage(1, "image/jpeg", encoded.toByteArray(), 240, 320));
+
+        BufferedImage preview = ImageIO.read(new ByteArrayInputStream(result));
+        assertThat(preview.getWidth()).isEqualTo(240);
+        assertThat(preview.getHeight()).isEqualTo(320);
+    }
+
+    @Test
     void decodesOnlyTheRequestedRegionOfALargeEvidencePage() throws IOException {
         BufferedImage source = new BufferedImage(2_000, 3_000, BufferedImage.TYPE_INT_RGB);
         ByteArrayOutputStream encoded = new ByteArrayOutputStream();

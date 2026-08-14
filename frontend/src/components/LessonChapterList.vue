@@ -1,17 +1,9 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 
+import LessonVisualEvidence from '@/components/LessonVisualEvidence.vue'
+import type { VisualFocus } from '@/composables/lessonSupportingContent'
 import { useLocale } from '@/lib/locale'
-
-interface VisualFocus {
-  pageNumber: number
-  label: string
-  visibleDescription?: string
-  x: number
-  y: number
-  width: number
-  height: number
-}
 
 interface LessonReaderStep {
   position: number
@@ -33,6 +25,7 @@ const props = withDefaults(defineProps<{
   sections: LessonReaderSection[]
   idPrefix: string
   pageImageUrl: (page: number) => string
+  pagePreviewImageUrl: (page: number) => string
   focusedPageImageUrl: (focus: VisualFocus) => string
   stepTestId?: string
 }>(), { stepTestId: '' })
@@ -218,16 +211,13 @@ function stepKindLabel(kind: string) {
                   </div>
                   <p class="mt-3 text-[0.98rem] leading-7 text-ink/75">{{ step.text }}</p>
 
-                  <figure v-if="step.visualFocus" class="mt-5 overflow-hidden rounded-2xl border border-indigo/15 bg-canvas">
-                    <figcaption class="border-b border-indigo/10 bg-indigo/[0.045] px-4 py-3">
-                      <p class="text-xs font-bold uppercase tracking-[0.12em] text-indigo">{{ t('lesson.chapter.visual.observationEyebrow') }}</p>
-                      <p class="mt-1 text-sm leading-6 text-ink/70">{{ step.visualFocus.visibleDescription || step.visualFocus.label }}</p>
-                    </figcaption>
-                    <a :href="props.pageImageUrl(step.visualFocus.pageNumber)" target="_blank" rel="noopener noreferrer" class="block">
-                      <img :src="props.focusedPageImageUrl(step.visualFocus)" :alt="t('public.step.openSource', { label: step.visualFocus.label })" class="max-h-[28rem] w-full object-contain" loading="lazy" decoding="async">
-                      <span class="block border-t border-ink/10 px-4 py-3 text-sm font-semibold text-indigo">{{ t('public.step.openSource', { label: step.visualFocus.label }) }} ↗</span>
-                    </a>
-                  </figure>
+                  <LessonVisualEvidence
+                    v-if="step.visualFocus"
+                    :focus="step.visualFocus"
+                    :page-image-url="props.pageImageUrl"
+                    :page-preview-image-url="props.pagePreviewImageUrl"
+                    :focused-page-image-url="props.focusedPageImageUrl"
+                  />
 
                   <a v-if="step.sourcePages.length" :href="props.pageImageUrl(step.sourcePages[0]!)" target="_blank" rel="noopener noreferrer" class="mt-4 inline-flex min-h-9 items-center rounded-full border border-ink/10 bg-canvas/70 px-3 text-xs font-semibold text-ink/50 transition hover:border-indigo/30 hover:text-indigo">{{ sourceLabel(step.sourcePages) }} ↗</a>
                 </div>

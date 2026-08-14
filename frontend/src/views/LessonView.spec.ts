@@ -137,7 +137,7 @@ describe('LessonView progressive reading', () => {
     expect(wrapper.text()).not.toContain('问这一章')
     expect(wrapper.text()).not.toContain('开始对局')
     expect(wrapper.text()).not.toContain('4 人 ·')
-    expect(wrapper.find('img[alt*="主棋盘区域"]').attributes('src'))
+    expect(wrapper.get('[data-testid="lesson-visual-detail"] img[alt*="主棋盘区域"]').attributes('src'))
       .toContain('/pages/1/image/crop?x=100&y=200&width=500&height=400')
     expect(wrapper.findAll('[data-testid="private-rule-step"]')).toHaveLength(5)
     expect(qualityReads).toBe(0)
@@ -161,7 +161,7 @@ describe('LessonView progressive reading', () => {
     expect(qualityReads).toBe(0)
     expect(wrapper.text()).toContain('逐张看看这些规则书裁剪图')
     expect(wrapper.text()).toContain('焦点图有帮助 1 / 1（100%）')
-    expect(wrapper.find('img[alt*="行动区"]').attributes('src'))
+    expect(wrapper.get('img[alt*="行动区"]').attributes('src'))
       .toContain('/pages/2/image/crop?x=100&y=200&width=500&height=400')
     const helpfulButtons = wrapper.findAll('button').filter((button) => button.text() === '有帮助')
     expect(helpfulButtons).toHaveLength(2)
@@ -644,12 +644,12 @@ describe('LessonView progressive reading', () => {
     })
     await flushPromises()
 
-    expect(wrapper.find('img[alt*="主棋盘区域"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="lesson-visual-detail"] img[alt*="主棋盘区域"]').exists()).toBe(false)
 
     await vi.advanceTimersByTimeAsync(2500)
     await flushPromises()
 
-    expect(wrapper.find('img[alt*="主棋盘区域"]').attributes('src'))
+    expect(wrapper.get('[data-testid="lesson-visual-detail"] img[alt*="主棋盘区域"]').attributes('src'))
       .toContain('/pages/1/image/crop?x=100&y=200&width=500&height=400')
     expect(fetchMock.mock.calls.map(([input]) => String(input))
       .filter((path) => path.endsWith('/illustrated-lessons/latest'))).toHaveLength(2)
