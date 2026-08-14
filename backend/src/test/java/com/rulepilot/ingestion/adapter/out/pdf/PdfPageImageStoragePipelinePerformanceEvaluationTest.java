@@ -144,11 +144,66 @@ class PdfPageImageStoragePipelinePerformanceEvaluationTest {
         assertThat(twoPageSecond.pageCount()).isEqualTo(twoPageFirst.pageCount());
     }
 
+    @Test
+    void comparesStreamedBoundedSessionsWithTheTwoPageBaseline() throws IOException {
+        assumeTrue("true".equalsIgnoreCase(System.getenv("RULEPILOT_REAL_PDF_POPPLER_STREAM_EVAL")));
+        Path rulebook = Path.of(requiredEnvironment("RULEPILOT_REAL_PDF_STORAGE_PIPELINE_PATH"));
+        assumeTrue(Files.isRegularFile(rulebook), "configured PDF does not exist");
+        assumeTrue(popplerAvailable(), "pdftoppm is required for the production renderer measurement");
+        Duration pageStorageDelay = Duration.ofMillis(environmentInteger(
+                "RULEPILOT_REAL_PDF_STORAGE_DELAY_MS", 90, 1, 5_000));
+
+        Measurement twoPageFirst = measureLegacyBatches(rulebook, pageStorageDelay, 2, 2);
+        Measurement streamedFirst = measureWithMode(rulebook, pageStorageDelay, 2, 8, true);
+        Measurement streamedSecond = measureWithMode(rulebook, pageStorageDelay, 2, 8, true);
+        Measurement twoPageSecond = measureLegacyBatches(rulebook, pageStorageDelay, 2, 2);
+        long twoPageAverageNanos = average(twoPageFirst.elapsedNanos(), twoPageSecond.elapsedNanos());
+        long streamedAverageNanos = average(streamedFirst.elapsedNanos(), streamedSecond.elapsedNanos());
+
+        System.out.printf(
+                "PDF Poppler bounded-stream measurement: pages=%d, delayMs=%d, batch2Ms=%d/%d (avg=%d), "
+                        + "stream8Ms=%d/%d (avg=%d), improvement=%.1f%%%n",
+                streamedFirst.pageCount(),
+                pageStorageDelay.toMillis(),
+                milliseconds(twoPageFirst.elapsedNanos()),
+                milliseconds(twoPageSecond.elapsedNanos()),
+                milliseconds(twoPageAverageNanos),
+                milliseconds(streamedFirst.elapsedNanos()),
+                milliseconds(streamedSecond.elapsedNanos()),
+                milliseconds(streamedAverageNanos),
+                (1 - streamedAverageNanos / (double) twoPageAverageNanos) * 100);
+        assertThat(streamedFirst.pageCount()).isEqualTo(twoPageFirst.pageCount());
+        assertThat(streamedSecond.pageCount()).isEqualTo(twoPageFirst.pageCount());
+        assertThat(twoPageSecond.pageCount()).isEqualTo(twoPageFirst.pageCount());
+    }
+
+    @Test
+    void provesStreamedPopplerSessionsMatchTheTwoPageBaseline() throws IOException {
+        assumeTrue("true".equalsIgnoreCase(System.getenv("RULEPILOT_REAL_PDF_POPPLER_STREAM_EVAL")));
+        Path rulebook = Path.of(requiredEnvironment("RULEPILOT_REAL_PDF_STORAGE_PIPELINE_PATH"));
+        assumeTrue(Files.isRegularFile(rulebook), "configured PDF does not exist");
+        assumeTrue(popplerAvailable(), "pdftoppm is required for the production renderer measurement");
+
+        List<RenderedDigest> twoPageBaseline = renderDigests(rulebook, 2, false);
+        List<RenderedDigest> eightPageStream = renderDigests(rulebook, 8, true);
+
+        assertThat(eightPageStream).containsExactlyElementsOf(twoPageBaseline);
+    }
+
     private Measurement measure(
             Path rulebook,
             Duration pageStorageDelay,
             int parallelism,
             int renderSessionPages) throws IOException {
+        return measureWithMode(rulebook, pageStorageDelay, parallelism, renderSessionPages, true);
+    }
+
+    private Measurement measureWithMode(
+            Path rulebook,
+            Duration pageStorageDelay,
+            int parallelism,
+            int renderSessionPages,
+            boolean streamCompletedPages) throws IOException {
         ExecutorService storageLane = Executors.newFixedThreadPool(parallelism);
         try {
             var pipeline = new BoundedPageImageStoragePipeline(storageLane, parallelism);
@@ -159,7 +214,8 @@ class PdfPageImageStoragePipelinePerformanceEvaluationTest {
             });
             long startedAt = System.nanoTime();
             try (InputStream input = Files.newInputStream(rulebook)) {
-                new PdfBoxRulebookPreparation(500, 5_000_000, renderSessionPages, "poppler")
+                new PdfBoxRulebookPreparation(
+                                500, 5_000_000, renderSessionPages, "poppler", streamCompletedPages)
                         .prepare(input, ignored -> {}, batch::submit);
             }
             batch.awaitCompletion();
@@ -169,10 +225,24 @@ class PdfPageImageStoragePipelinePerformanceEvaluationTest {
         }
     }
 
+    private Measurement measureLegacyBatches(
+            Path rulebook,
+            Duration pageStorageDelay,
+            int parallelism,
+            int renderSessionPages) throws IOException {
+        return measureWithMode(rulebook, pageStorageDelay, parallelism, renderSessionPages, false);
+    }
+
     private List<RenderedDigest> renderDigests(Path rulebook, int renderSessionPages) throws IOException {
+        return renderDigests(rulebook, renderSessionPages, true);
+    }
+
+    private List<RenderedDigest> renderDigests(
+            Path rulebook, int renderSessionPages, boolean streamCompletedPages) throws IOException {
         List<RenderedDigest> rendered = new ArrayList<>();
         try (InputStream input = Files.newInputStream(rulebook)) {
-            new PdfBoxRulebookPreparation(500, 5_000_000, renderSessionPages, "poppler")
+            new PdfBoxRulebookPreparation(
+                            500, 5_000_000, renderSessionPages, "poppler", streamCompletedPages)
                     .prepare(input, ignored -> {}, image -> rendered.add(new RenderedDigest(
                             image.pageNumber(), image.width(), image.height(), sha256(image.content()))));
         }
