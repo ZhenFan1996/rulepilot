@@ -6,12 +6,32 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Profile;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 import org.springframework.security.concurrent.DelegatingSecurityContextRunnable;
 
 @Configuration(proxyBeanMethods = false)
 @Profile("!test")
 @ConditionalOnProperty(name = "rulepilot.runtime.api-enabled", havingValue = "true", matchIfMissing = true)
 class TeachingGenerationConfiguration {
+
+    /**
+     * Keeps ordinary scheduled infrastructure on an explicitly named default lane. Rabbit publisher confirms and
+     * queue inspection may legitimately block; neither may consume the durable Teaching handoff lane.
+     */
+    @Bean(name = "taskScheduler")
+    ThreadPoolTaskScheduler taskScheduler() {
+        return scheduler("infrastructure-schedule-", 1);
+    }
+
+    /** Claims persisted READY handoffs independently from document messaging and monitoring schedules. */
+    @Bean(name = "teachingHandoffScheduler")
+    ThreadPoolTaskScheduler teachingHandoffScheduler(
+            @Value("${rulepilot.teaching.import-handoff.scheduler-pool-size:1}") int poolSize) {
+        if (poolSize < 1 || poolSize > 2) {
+            throw new IllegalArgumentException("teaching handoff scheduler pool size must be between one and two");
+        }
+        return scheduler("teaching-handoff-", poolSize);
+    }
 
     @Bean(name = "teachingStartupExecutor")
     ThreadPoolTaskExecutor teachingStartupExecutor(
@@ -92,5 +112,16 @@ class TeachingGenerationConfiguration {
         executor.setThreadNamePrefix("public-cover-warmup-");
         executor.setWaitForTasksToCompleteOnShutdown(false);
         return executor;
+    }
+
+    private ThreadPoolTaskScheduler scheduler(String threadNamePrefix, int poolSize) {
+        var scheduler = new ThreadPoolTaskScheduler();
+        scheduler.setPoolSize(poolSize);
+        scheduler.setThreadNamePrefix(threadNamePrefix);
+        scheduler.setWaitForTasksToCompleteOnShutdown(false);
+        scheduler.setExecuteExistingDelayedTasksAfterShutdownPolicy(false);
+        scheduler.setContinueExistingPeriodicTasksAfterShutdownPolicy(false);
+        scheduler.setRemoveOnCancelPolicy(true);
+        return scheduler;
     }
 }

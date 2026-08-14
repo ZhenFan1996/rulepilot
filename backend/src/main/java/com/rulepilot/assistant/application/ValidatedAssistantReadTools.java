@@ -108,17 +108,31 @@ public class ValidatedAssistantReadTools implements AssistantReadTools {
                                 image -> new RulePageImage(
                                         image.pageNumber(), image.mediaType(), image.content(), image.width(), image.height())))
                 : Map.of();
-        return evidence.stream().map(source -> new RuleEvidence(
-                source.chunkId(),
-                source.documentVersionId(),
-                source.sectionType(),
-                source.heading(),
-                source.excerpt(),
-                source.pageFrom(),
-                source.pageTo(),
-                visuals.values().stream()
-                        .filter(image -> image.pageNumber() >= source.pageFrom() && image.pageNumber() <= source.pageTo())
-                        .toList())).toList();
+        return evidence.stream()
+                .peek(source -> {
+                    if (!documentVersionId.equals(source.documentVersionId())) {
+                        throw new IllegalStateException("page evidence escaped document scope");
+                    }
+                    boolean intersectsRequestedPage = java.util.stream.IntStream
+                            .rangeClosed(source.pageFrom(), source.pageTo())
+                            .anyMatch(pageNumbers::contains);
+                    if (!intersectsRequestedPage) {
+                        throw new IllegalStateException("page evidence escaped the requested page scope");
+                    }
+                })
+                .map(source -> new RuleEvidence(
+                        source.chunkId(),
+                        source.documentVersionId(),
+                        source.sectionType(),
+                        source.heading(),
+                        source.excerpt(),
+                        source.pageFrom(),
+                        source.pageTo(),
+                        visuals.values().stream()
+                                .filter(image -> image.pageNumber() >= source.pageFrom()
+                                        && image.pageNumber() <= source.pageTo())
+                                .toList()))
+                .toList();
     }
 
     @Override
@@ -216,17 +230,12 @@ public class ValidatedAssistantReadTools implements AssistantReadTools {
         Set<UUID> anchorIds = anchors.stream()
                 .map(RuleEvidenceHit::chunkId)
                 .collect(java.util.stream.Collectors.toSet());
-        Map<UUID, RuleEvidenceHit> hydratedAnchors = evidenceLookup
-                .findByChunkIds(request.documentVersionId(), anchorIds)
-                .stream()
-                .collect(java.util.stream.Collectors.toMap(RuleEvidenceHit::chunkId, source -> source));
         List<RuleEvidenceHit> adjacent = evidenceLookup.findAdjacent(
                 request.documentVersionId(), anchorIds, 1, sectionTypes);
         Map<UUID, RuleEvidenceHit> merged = new LinkedHashMap<>();
         anchors.forEach(source -> {
-            RuleEvidenceHit hydrated = hydratedAnchors.getOrDefault(source.chunkId(), source);
-            validateExpandedEvidence(request, sectionTypes, hydrated);
-            merged.put(source.chunkId(), hydrated);
+            validateExpandedEvidence(request, sectionTypes, source);
+            merged.put(source.chunkId(), source);
         });
         for (RuleEvidenceHit source : adjacent) {
             validateExpandedEvidence(request, sectionTypes, source);

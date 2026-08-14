@@ -7,6 +7,10 @@ import java.util.UUID;
 
 public interface HybridRuleSearch {
 
+    /**
+     * Returns ranked hits whose evidence payload is the canonical stored chunk, not a search-index projection.
+     * Downstream context expansion may therefore trust the returned anchors without hydrating them a second time.
+     */
     List<HybridEvidenceHit> search(UUID documentVersionId, String query, RetrievalOptions options);
 
     record RetrievalOptions(int limit, Set<String> sectionTypes, String currentSectionType) {

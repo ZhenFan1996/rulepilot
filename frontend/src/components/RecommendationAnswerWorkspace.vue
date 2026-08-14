@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
+import ConversationResetDialog from '@/components/ConversationResetDialog.vue'
 import LessonAnswerPanel from '@/components/LessonAnswerPanel.vue'
 import { useConfirmedRuling } from '@/composables/useConfirmedRuling'
 import {
@@ -41,6 +42,11 @@ const session = ref<GameSession | null>(null)
 const initializedVersion = ref('')
 const initializing = ref(false)
 const initializationError = ref('')
+const resettingSession = ref(false)
+const resetDialogOpen = ref(false)
+const resetError = ref('')
+const restoreQuestionAfterReset = ref(false)
+const answerPanel = ref<{ focusQuestion?: () => void } | null>(null)
 const cardOcrOpen = ref(false)
 const online = ref(navigator.onLine)
 let workspaceRequest = 0
@@ -133,23 +139,22 @@ async function createSession(versionId: string) {
   return await response.json() as GameSession
 }
 
-async function restoreOrCreateSession(versionId: string, fresh: boolean) {
-  if (!fresh) {
-    const remembered = rememberedSession(versionId)
-    if (remembered) {
-      const response = await fetch(`/api/v1/game-sessions/${encodeURIComponent(remembered)}`, { credentials: 'include' })
-      if (response.status === 401) {
-        notifyLoginRequired()
-        throw new Error(copy.value.login)
-      }
-      if (response.ok) {
-        const restored = await response.json() as GameSession
-        if (restored.documentVersionId === versionId) return restored
-      }
-      forgetSession(versionId)
+async function restoreOrCreateSession(versionId: string) {
+  const remembered = rememberedSession(versionId)
+  if (remembered) {
+    const response = await fetch(`/api/v1/game-sessions/${encodeURIComponent(remembered)}`, { credentials: 'include' })
+    if (response.status === 401) {
+      notifyLoginRequired()
+      throw new Error(copy.value.login)
     }
+    if (response.ok) {
+      const restored = await response.json() as GameSession
+      if (restored.documentVersionId === versionId) return restored
+    }
+    forgetSession(versionId)
   }
   const created = await createSession(versionId)
+  if (created.documentVersionId !== versionId) throw new Error(copy.value.session)
   rememberSession(versionId, created.id)
   return created
 }
@@ -239,18 +244,17 @@ const { askQuestion, requestLearningHelp, useCardText, useVoiceTranscript } = us
   closeCardOcr: () => { cardOcrOpen.value = false },
 })
 
-async function loadWorkspace(fresh = false) {
+async function loadWorkspace() {
   const versionId = props.documentVersionId
   if (!props.active || !versionId || !props.planId) return
-  if (!fresh && initializedVersion.value === versionId && session.value) return
+  if (initializedVersion.value === versionId && session.value) return
   const request = ++workspaceRequest
   initializing.value = true
   initializationError.value = ''
-  if (fresh) forgetSession(versionId)
   resetConversation(true)
   resetRuling()
   try {
-    const restoredSession = await restoreOrCreateSession(versionId, fresh)
+    const restoredSession = await restoreOrCreateSession(versionId)
     const turns = await conversation(versionId, restoredSession.id)
     if (request !== workspaceRequest || versionId !== props.documentVersionId) return
     session.value = restoredSession
@@ -269,8 +273,56 @@ async function loadWorkspace(fresh = false) {
   }
 }
 
-async function clearThread() {
-  await loadWorkspace(true)
+function requestNewSession() {
+  if (initializing.value || resettingSession.value || answerLoading.value || rulingSaving.value || editingRuling.value || !answerTurns.value.length) return
+  resetError.value = ''
+  restoreQuestionAfterReset.value = false
+  resetDialogOpen.value = true
+}
+
+function cancelNewSession() {
+  if (resettingSession.value) return
+  resetDialogOpen.value = false
+  resetError.value = ''
+  restoreQuestionAfterReset.value = false
+}
+
+function newSessionRestoreTarget() {
+  if (!restoreQuestionAfterReset.value) return null
+  restoreQuestionAfterReset.value = false
+  answerPanel.value?.focusQuestion?.()
+  return document.activeElement instanceof HTMLElement ? document.activeElement : null
+}
+
+async function createAndSwitchToNewSession() {
+  const versionId = props.documentVersionId
+  if (!props.active || !versionId || !props.planId || resettingSession.value) return
+  const request = ++workspaceRequest
+  resettingSession.value = true
+  resetError.value = ''
+  try {
+    const created = await createSession(versionId)
+    if (created.documentVersionId !== versionId) throw new Error(copy.value.session)
+    const turns = await conversation(versionId, created.id)
+    if (request !== workspaceRequest || versionId !== props.documentVersionId) return
+
+    rememberSession(versionId, created.id)
+    session.value = created
+    initializedVersion.value = versionId
+    restoreConversation(restoredTurns(turns), false)
+    resetRuling()
+    const confirmed = turns.length ? rulingFrom(turns.at(-1)!.answer) : null
+    if (confirmed) applyRuling(confirmed)
+    resettingSession.value = false
+    restoreQuestionAfterReset.value = true
+    resetDialogOpen.value = false
+  } catch (error) {
+    if (request === workspaceRequest) {
+      resetError.value = error instanceof Error ? error.message : copy.value.error
+    }
+  } finally {
+    if (request === workspaceRequest) resettingSession.value = false
+  }
 }
 
 function updateOnline() {
@@ -283,6 +335,10 @@ watch(() => props.active, active => {
 watch(() => props.documentVersionId, (value, previous) => {
   if (value === previous) return
   workspaceRequest += 1
+  resettingSession.value = false
+  resetDialogOpen.value = false
+  resetError.value = ''
+  restoreQuestionAfterReset.value = false
   session.value = null
   initializedVersion.value = ''
   initializationError.value = ''
@@ -302,7 +358,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <section data-testid="recommendation-answer-workspace" class="max-h-[70vh] min-h-72 overflow-y-auto px-4 py-5 sm:min-h-[31rem] sm:px-6 sm:py-7 lg:max-h-[46rem]" aria-live="polite">
+  <section data-testid="recommendation-answer-workspace" tabindex="-1" class="max-h-[70vh] min-h-72 overflow-y-auto px-4 py-5 outline-none sm:min-h-[31rem] sm:px-6 sm:py-7 lg:max-h-[46rem]" aria-live="polite">
     <header class="rounded-2xl border border-indigo/15 bg-indigo/5 px-4 py-4">
       <div class="flex flex-wrap items-start justify-between gap-3">
         <div class="min-w-0">
@@ -321,18 +377,30 @@ onBeforeUnmount(() => {
     </section>
     <LessonAnswerPanel
       v-else
+      ref="answerPanel"
       :question="question" :answer="answer" :answered-question="answeredQuestion" :answer-turns="answerTurns"
       :active-learning-intent="activeLearningIntent" :answer-loading="answerLoading" :answer-error="answerError"
       :agent-trace="agentTrace" :answer-run-id="answerRunId" :online="online" :ruling="ruling"
-      :ruling-saving="rulingSaving" :ruling-error="rulingError" :ruling-conflict="rulingConflict"
+      :ruling-saving="rulingSaving" :clear-thread-disabled="rulingSaving || editingRuling || resettingSession" :ruling-error="rulingError" :ruling-conflict="rulingConflict"
       :editing-ruling="editingRuling" :edited-verdict="editedVerdict" :edited-explanation="editedExplanation"
       :show-header="false"
       @update:question="question = $event" @update:editing-ruling="editingRuling = $event"
       @update:edited-verdict="editedVerdict = $event" @update:edited-explanation="editedExplanation = $event"
       @ask="askQuestion" @cancel-answer="cancelAnswer" @request-help="requestLearningHelp"
-      @open-card-ocr="cardOcrOpen = true" @voice-transcript="useVoiceTranscript" @clear-thread="clearThread"
+      @open-card-ocr="cardOcrOpen = true" @voice-transcript="useVoiceTranscript" @clear-thread="requestNewSession"
       @confirm-ruling="confirmAnswer" @reload-ruling="reloadRuling" @save-ruling-revision="saveRulingRevision"
     />
     <CardOcrCapture v-if="cardOcrOpen" @close="cardOcrOpen = false" @recognized="useCardText" />
+    <ConversationResetDialog
+      kind="server-session"
+      :open="resetDialogOpen"
+      :pending="resettingSession"
+      :error="resetError"
+      :game-title="gameTitle"
+      :turn-count="answerTurns.length"
+      :restore-focus="newSessionRestoreTarget"
+      @cancel="cancelNewSession"
+      @confirm="createAndSwitchToNewSession"
+    />
   </section>
 </template>

@@ -3,7 +3,9 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 
 import AppShell from '@/components/AppShell.vue'
+import DestructiveActionDialog from '@/components/DestructiveActionDialog.vue'
 import { notifyLoginRequired } from '@/lib/authSession'
+import { notifyBackgroundWorkChanged } from '@/lib/backgroundWorkRefresh'
 import { hasReadableLesson, mergeLessonProgress, type LessonProgressSummary } from '@/lib/lessonProgressState'
 import { groupPlansForReading, playerFacingTitle } from '@/lib/lessonPresentation'
 import { useLocale } from '@/lib/locale'
@@ -44,6 +46,9 @@ interface PlanProgress {
 
 interface CsrfResponse { headerName: string; token: string }
 type PlanFilter = 'READABLE' | 'PENDING' | 'ALL'
+type DestructiveAction =
+  | { kind: 'delete-plan'; plan: TeachingPlan }
+  | { kind: 'cleanup'; duplicateCount: number }
 
 const route = useRoute()
 const { locale, t } = useLocale()
@@ -61,6 +66,21 @@ const launchingPlanId = ref('')
 const deletingPlanId = ref('')
 const cleanupLoading = ref(false)
 const cleanupMessage = ref('')
+const destructiveAction = ref<DestructiveAction | null>(null)
+const destructiveError = ref('')
+const pageHeading = ref<HTMLElement | null>(null)
+const restoreAfterDestructiveSuccess = ref(false)
+const destructiveCopy = computed(() => locale.value === 'zh-CN' ? {
+  deleteTitle: '删除这份讲解？', deleteDescription: (title: string) => `“${title}”的这份讲解和仍在进行的生成任务将被删除。规则书会保留，你之后可以重新生成。`,
+  deleteCancel: '保留讲解', deleteConfirm: '删除讲解', deleteRetry: '重新尝试删除',
+  cleanupTitle: '清理重复讲解？', cleanupDescription: (count: number) => `发现 ${count} 份重复讲解。将保留内容最完整且最新的一份，删除其余重复项并停止它们仍在进行的任务。`,
+  cleanupCancel: '保留全部', cleanupConfirm: '清理重复项', cleanupRetry: '重新尝试清理',
+} : {
+  deleteTitle: 'Delete this guide?', deleteDescription: (title: string) => `The guide for “${title}” and any generation still running for it will be deleted. Its rulebook stays available, and you can generate another guide later.`,
+  deleteCancel: 'Keep guide', deleteConfirm: 'Delete guide', deleteRetry: 'Try deletion again',
+  cleanupTitle: 'Clean up duplicate guides?', cleanupDescription: (count: number) => `${count} duplicate guides were found. The newest, most complete copy will remain; the other duplicates and any work still running for them will be removed.`,
+  cleanupCancel: 'Keep all guides', cleanupConfirm: 'Clean up duplicates', cleanupRetry: 'Try cleanup again',
+})
 const retryingJourneyId = ref('')
 const journeyRetryErrors = ref<Record<string, string>>({})
 const showingAllVersions = ref(false)
@@ -70,11 +90,16 @@ const rememberedPlanId = localStorage.getItem('rulepilot:last-plan-id')
 const terminalStates = new Set(['COMPLETED', 'INSUFFICIENT_EVIDENCE', 'DEGRADED', 'FAILED'])
 const knownRunIds = new Map<string, string>()
 const requestVersions = new Map<string, number>()
+const progressControllers = new Map<string, AbortController>()
 const terminalSettlingReads = new Map<string, number>()
 let pollTimer: ReturnType<typeof setTimeout> | undefined
 let journeyTimer: ReturnType<typeof setTimeout> | undefined
 let clockTimer: ReturnType<typeof setInterval> | undefined
 let disposed = false
+let latestListRequest = 0
+let activeListController: AbortController | null = null
+let shellIdentityResolved = false
+let shellUsername = ''
 
 const startedPlanId = computed(() => typeof route.query.started === 'string' ? route.query.started : '')
 const startedRunId = computed(() => typeof route.query.run === 'string' ? route.query.run : '')
@@ -95,8 +120,35 @@ const pendingCopy = computed(() => locale.value === 'zh-CN' ? {
   retryPreparation: 'Retry guide preparation', retryingPreparation: 'Restarting…',
   retryFailed: 'A new guide-preparation task could not be started. Please try again shortly.',
 })
+const terminalPreparationStates = new Set(['COMPLETED', 'FAILED', 'DEGRADED', 'INSUFFICIENT_EVIDENCE'])
+function preparationForPlan(plan: TeachingPlan) {
+  return preparationRuns.value
+    .filter(run => run.subjectId === plan.documentVersionId)
+    .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))[0]
+}
+function preparationStillOwnsPlanStartup(plan: TeachingPlan) {
+  const preparation = preparationForPlan(plan)
+  return Boolean(preparation
+    && preparation.state !== 'COMPLETED'
+    && !progress.value[plan.id]?.run
+    && !progress.value[plan.id]?.lesson)
+}
+function preparationCanStillStartTeaching(plan: TeachingPlan) {
+  const preparation = preparationForPlan(plan)
+  return Boolean(preparation
+    && !terminalPreparationStates.has(preparation.state)
+    && !progress.value[plan.id]?.run
+    && !progress.value[plan.id]?.lesson)
+}
+const plansReplacingPendingJourneys = computed(() => plans.value.filter((plan) => {
+  const preparation = preparationForPlan(plan)
+  return !preparation
+    || preparation.state === 'COMPLETED'
+    || Boolean(progress.value[plan.id]?.run || progress.value[plan.id]?.lesson)
+}))
+const visiblePlans = computed(() => plans.value.filter(plan => !preparationStillOwnsPlanStartup(plan)))
 const pendingJourneys = computed(() => buildPendingGuideJourneys(
-  plans.value,
+  plansReplacingPendingJourneys.value,
   guideImports.value,
   preparationRuns.value,
   guideDocuments.value,
@@ -156,7 +208,7 @@ function continuationPriority(plan: TeachingPlan) {
   return 200
 }
 
-const planGroups = computed(() => groupPlansForReading(plans.value, continuationPriority))
+const planGroups = computed(() => groupPlansForReading(visiblePlans.value, continuationPriority))
 const planGroupByPlanId = computed(() => {
   const groups = new Map<string, typeof planGroups.value[number]>()
   for (const group of planGroups.value) {
@@ -164,7 +216,7 @@ const planGroupByPlanId = computed(() => {
   }
   return groups
 })
-const selectedPlans = computed(() => showingAllVersions.value ? plans.value : planGroups.value.map((group) => group.plan))
+const selectedPlans = computed(() => showingAllVersions.value ? visiblePlans.value : planGroups.value.map((group) => group.plan))
 const selectedPlanFilter = computed<PlanFilter>(() => planFilter.value === 'READABLE' && readableGroupCount.value === 0
   ? 'PENDING'
   : planFilter.value)
@@ -268,8 +320,8 @@ async function checkedFetch(path: string, options?: Parameters<typeof fetch>[1])
   return response
 }
 
-async function optionalList<T>(path: string): Promise<T[]> {
-  const response = await checkedFetch(path)
+async function optionalList<T>(path: string, signal: AbortSignal): Promise<T[]> {
+  const response = await checkedFetch(path, { signal })
   if (response.status === 404) return []
   if (!response.ok) throw new Error(t('lessons.error.load'))
   const payload = await response.json() as unknown
@@ -281,22 +333,32 @@ async function handoffPreparationRuns(
   imports: PendingGuideImport[],
   uploads: PendingGuideUploadHandoff[],
   active: PendingGuidePreparationRun[],
+  signal: AbortSignal,
 ) {
-  const byId = new Map(active.map(run => [run.id, run]))
-  const missingIds = [...new Set([
-    ...imports.map(job => job.teachingPreparationRunId),
-    ...uploads.map(handoff => handoff.preparationRunId),
-  ]
-    .filter((id): id is string => typeof id === 'string' && id.length > 0)
-    .filter(id => !byId.has(id)))]
+  const expectedSubjects = new Map<string, string>()
+  for (const job of imports) {
+    if (job.teachingPreparationRunId && job.documentVersionId) {
+      expectedSubjects.set(job.teachingPreparationRunId, job.documentVersionId)
+    }
+  }
+  for (const handoff of uploads) {
+    if (handoff.preparationRunId) expectedSubjects.set(handoff.preparationRunId, handoff.documentVersionId)
+  }
+  const byId = new Map(active
+    .filter(run => !expectedSubjects.has(run.id) || expectedSubjects.get(run.id) === run.subjectId)
+    .map(run => [run.id, run]))
+  const missingIds = [...expectedSubjects.keys()].filter(id => !byId.has(id))
   const snapshots = await Promise.all(missingIds.map(async (runId) => {
     try {
-      const response = await checkedFetch(`/api/v1/assistant-runs/${encodeURIComponent(runId)}`)
+      const response = await checkedFetch(`/api/v1/assistant-runs/${encodeURIComponent(runId)}`, { signal })
       if (response.status === 404) return null
       if (!response.ok) throw new Error(t('lessons.error.load'))
       const details = await response.json() as { run?: PendingGuidePreparationRun }
-      return details.run ?? null
+      return details.run?.id === runId && details.run.subjectId === expectedSubjects.get(runId)
+        ? details.run
+        : null
     } catch {
+      if (signal.aborted) throw new DOMException('Aborted', 'AbortError')
       return null
     }
   }))
@@ -306,9 +368,12 @@ async function handoffPreparationRuns(
   return [...byId.values()]
 }
 
-async function loadProgress(plan: TeachingPlan) {
+async function loadProgress(plan: TeachingPlan, listRequest = latestListRequest) {
   const requestVersion = (requestVersions.get(plan.id) ?? 0) + 1
   requestVersions.set(plan.id, requestVersion)
+  progressControllers.get(plan.id)?.abort()
+  const controller = new AbortController()
+  progressControllers.set(plan.id, controller)
   try {
     const previousRun = progress.value[plan.id]?.run
     const expectedRunId = knownRunIds.get(plan.id)
@@ -317,14 +382,22 @@ async function loadProgress(plan: TeachingPlan) {
       ? `/api/v1/assistant-runs/${encodeURIComponent(expectedRunId)}`
       : `/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=${encodeURIComponent(plan.id)}${activityCursor}`
     const [runResponse, lessonResponse] = await Promise.all([
-      checkedFetch(runPath),
-      checkedFetch(`/api/v1/teaching-plans/${plan.id}/illustrated-lessons/latest`),
+      checkedFetch(runPath, { signal: controller.signal }),
+      checkedFetch(`/api/v1/teaching-plans/${plan.id}/illustrated-lessons/latest`, { signal: controller.signal }),
     ])
+    if (!isCurrentProgressRead(plan.id, listRequest, requestVersion, controller)) return
     if (!runResponse.ok && runResponse.status !== 404) throw new Error(t('lessons.error.runProgress'))
     if (!lessonResponse.ok && lessonResponse.status !== 404) throw new Error(t('lessons.error.contentProgress'))
     const incomingRun = runResponse.ok ? await runResponse.json() as TeachingRunProgress : null
     const incomingLesson = lessonResponse.ok ? await lessonResponse.json() as LessonProgressSummary : null
-    if (requestVersions.get(plan.id) !== requestVersion) return
+    if (!isCurrentProgressRead(plan.id, listRequest, requestVersion, controller)) return
+    if (incomingRun && (incomingRun.run.subjectId !== plan.id
+      || expectedRunId && incomingRun.run.id !== expectedRunId)) {
+      throw new Error(t('lessons.error.runProgress'))
+    }
+    if (incomingLesson && incomingLesson.teachingPlanId !== plan.id) {
+      throw new Error(t('lessons.error.contentProgress'))
+    }
     const run = mergeTeachingRunProgress(previousRun ?? null, incomingRun)
     const lesson = mergeLessonProgress(progress.value[plan.id]?.lesson ?? null, incomingLesson)
     progress.value = {
@@ -349,17 +422,43 @@ async function loadProgress(plan: TeachingPlan) {
       progressErrors.value = next
     }
   } catch (error) {
+    if (!isCurrentProgressRead(plan.id, listRequest, requestVersion, controller) || controller.signal.aborted) return
     progressErrors.value = {
       ...progressErrors.value,
       [plan.id]: error instanceof Error ? error.message : t('lessons.error.latestProgress'),
     }
     throw error
+  } finally {
+    controller.abort()
+    if (progressControllers.get(plan.id) === controller) progressControllers.delete(plan.id)
+  }
+}
+
+function isCurrentProgressRead(
+  planId: string,
+  listRequest: number,
+  requestVersion: number,
+  controller: AbortController,
+) {
+  return !disposed
+    && listRequest === latestListRequest
+    && requestVersions.get(planId) === requestVersion
+    && progressControllers.get(planId) === controller
+    && plans.value.some(plan => plan.id === planId)
+}
+
+function cancelProgressReads() {
+  for (const controller of progressControllers.values()) controller.abort()
+  progressControllers.clear()
+  for (const planId of requestVersions.keys()) {
+    requestVersions.set(planId, (requestVersions.get(planId) ?? 0) + 1)
   }
 }
 
 function plansNeedingRefresh() {
   return plans.value.filter((plan) => knownRunIds.has(plan.id)
     || stateOf(plan.id) === 'GENERATING'
+    || preparationCanStillStartTeaching(plan)
     || Boolean(progressErrors.value[plan.id]))
 }
 
@@ -377,8 +476,10 @@ function scheduleProgressRefresh(delay = 1500) {
   }, delay)
 }
 
-async function refreshProgress(targetPlans = plans.value) {
-  await Promise.allSettled(targetPlans.map(loadProgress))
+async function refreshProgress(targetPlans = plans.value, listRequest = latestListRequest) {
+  if (disposed || listRequest !== latestListRequest) return
+  await Promise.allSettled(targetPlans.map(plan => loadProgress(plan, listRequest)))
+  if (disposed || listRequest !== latestListRequest) return
   scheduleProgressRefresh()
 }
 
@@ -389,41 +490,69 @@ function clearJourneyTimer() {
 
 function scheduleJourneyRefresh() {
   clearJourneyTimer()
-  if (disposed || pendingJourneys.value.length === 0) return
+  if (disposed || !pendingJourneys.value.some(journey => journey.state === 'active')) return
   journeyTimer = setTimeout(() => { void loadPlans(true) }, 4_000)
 }
 
 async function loadPlans(background = false) {
+  const request = ++latestListRequest
+  activeListController?.abort()
+  cancelProgressReads()
+  clearProgressTimer()
+  clearJourneyTimer()
+  const controller = new AbortController()
+  activeListController = controller
   if (!background) {
     loading.value = true
     errorMessage.value = ''
   }
   try {
     const [response, imports, uploads, activePreparation, documents, catalog] = await Promise.all([
-      checkedFetch('/api/v1/teaching-plans'),
-      optionalList<PendingGuideImport>('/api/v1/documents/official-imports'),
-      optionalList<PendingGuideUploadHandoff>('/api/v1/documents/upload-teaching-handoffs'),
-      optionalList<PendingGuidePreparationRun>('/api/v1/assistant-runs/active?mode=TEACHING_PREPARATION'),
-      optionalList<PendingGuideDocument>('/api/v1/documents'),
-      optionalList<PendingGuideCatalogGame>('/api/v1/games'),
+      checkedFetch('/api/v1/teaching-plans', { signal: controller.signal }),
+      optionalList<PendingGuideImport>('/api/v1/documents/official-imports', controller.signal),
+      optionalList<PendingGuideUploadHandoff>('/api/v1/documents/upload-teaching-handoffs', controller.signal),
+      optionalList<PendingGuidePreparationRun>('/api/v1/assistant-runs/active?mode=TEACHING_PREPARATION', controller.signal),
+      optionalList<PendingGuideDocument>('/api/v1/documents', controller.signal),
+      optionalList<PendingGuideCatalogGame>('/api/v1/games', controller.signal),
     ])
+    if (!isCurrentListRequest(request, controller)) return
     if (!response.ok) throw new Error(t('lessons.error.load'))
-    plans.value = (await response.json()) as TeachingPlan[]
+    const receivedPlans = await response.json() as unknown
+    if (!Array.isArray(receivedPlans)) throw new Error(t('lessons.error.load'))
+    const receivedPreparationRuns = await handoffPreparationRuns(imports, uploads, activePreparation, controller.signal)
+    if (!isCurrentListRequest(request, controller)) return
+    const nextPlans = receivedPlans as TeachingPlan[]
+    plans.value = nextPlans
     guideImports.value = imports
     guideUploadHandoffs.value = uploads
-    preparationRuns.value = await handoffPreparationRuns(imports, uploads, activePreparation)
+    preparationRuns.value = receivedPreparationRuns
     guideDocuments.value = documents
     guideCatalog.value = catalog
-    if (startedPlanId.value && startedRunId.value && plans.value.some((plan) => plan.id === startedPlanId.value)) {
+    const currentPlanIds = new Set(nextPlans.map(plan => plan.id))
+    progress.value = Object.fromEntries(Object.entries(progress.value).filter(([planId]) => currentPlanIds.has(planId)))
+    progressErrors.value = Object.fromEntries(Object.entries(progressErrors.value).filter(([planId]) => currentPlanIds.has(planId)))
+    for (const planId of [...knownRunIds.keys()]) if (!currentPlanIds.has(planId)) knownRunIds.delete(planId)
+    if (startedPlanId.value && startedRunId.value && currentPlanIds.has(startedPlanId.value)) {
       knownRunIds.set(startedPlanId.value, startedRunId.value)
     }
-    await refreshProgress()
-  } catch (error) {
-    if (!background) errorMessage.value = error instanceof Error ? error.message : t('lessons.error.loadShort')
-  } finally {
     if (!background) loading.value = false
     scheduleJourneyRefresh()
+    void refreshProgress(nextPlans, request)
+  } catch (error) {
+    if (!isCurrentListRequest(request, controller) || controller.signal.aborted) return
+    if (!background) errorMessage.value = error instanceof Error ? error.message : t('lessons.error.loadShort')
+  } finally {
+    if (isCurrentListRequest(request, controller)) {
+      activeListController = null
+      if (!background) loading.value = false
+      scheduleJourneyRefresh()
+    }
+    controller.abort()
   }
+}
+
+function isCurrentListRequest(request: number, controller: AbortController) {
+  return !disposed && request === latestListRequest && activeListController === controller
 }
 
 async function launch(planId: string) {
@@ -445,7 +574,7 @@ async function launch(planId: string) {
     const plan = plans.value.find((candidate) => candidate.id === planId)!
     notifyTeachingLaunched({ planId, runId: launch.assistantRunId, gameTitle: displayPlanTitle(plan) })
     localStorage.setItem('rulepilot:last-plan-id', planId)
-    await loadProgress(plan).catch(() => undefined)
+    await loadProgress(plan, latestListRequest).catch(() => undefined)
     scheduleProgressRefresh(1000)
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : t('lessons.error.launchShort')
@@ -464,26 +593,36 @@ async function retryPendingJourney(journey: (typeof pendingJourneys.value)[numbe
     const csrfResponse = await checkedFetch('/api/auth/csrf')
     if (!csrfResponse.ok) throw new Error(t('lessons.error.secureSession'))
     const csrf = await csrfResponse.json() as CsrfResponse
-    const response = await checkedFetch(
-      `/api/v1/document-versions/${encodeURIComponent(journey.documentVersionId)}/teaching-plans`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', [csrf.headerName]: csrf.token },
-        body: JSON.stringify({ learningGoal: null }),
-      },
-    )
+    const durableRetryPath = journey.importJobId
+      ? `/api/v1/documents/official-imports/${encodeURIComponent(journey.importJobId)}/teaching-retry`
+      : journey.uploadHandoffId
+        ? `/api/v1/documents/upload-teaching-handoffs/${encodeURIComponent(journey.uploadHandoffId)}/retry`
+        : null
+    const response = await checkedFetch(durableRetryPath
+      ?? `/api/v1/document-versions/${encodeURIComponent(journey.documentVersionId)}/teaching-plans`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', [csrf.headerName]: csrf.token },
+      body: JSON.stringify(durableRetryPath
+        ? { expectedPreparationRunId: journey.preparationRunId }
+        : { learningGoal: null }),
+    })
     if (!response.ok) throw new Error(pendingCopy.value.retryFailed)
-    const launch = await response.json() as { assistantRunId: string; state: string }
-    preparationRuns.value = [
-      ...preparationRuns.value.filter(run => run.id !== launch.assistantRunId),
-      {
-        id: launch.assistantRunId,
-        subjectId: journey.documentVersionId,
-        state: launch.state,
-        updatedAt: new Date().toISOString(),
-        lastErrorCode: null,
-      },
-    ]
+    if (durableRetryPath) {
+      await response.json()
+      notifyBackgroundWorkChanged()
+    } else {
+      const launch = await response.json() as { assistantRunId: string; state: string }
+      preparationRuns.value = [
+        ...preparationRuns.value.filter(run => run.id !== launch.assistantRunId),
+        {
+          id: launch.assistantRunId,
+          subjectId: journey.documentVersionId,
+          state: launch.state,
+          updatedAt: new Date().toISOString(),
+          lastErrorCode: null,
+        },
+      ]
+    }
     scheduleJourneyRefresh()
     await loadPlans(true)
   } catch (error) {
@@ -496,11 +635,30 @@ async function retryPendingJourney(journey: (typeof pendingJourneys.value)[numbe
   }
 }
 
-async function deletePlan(plan: TeachingPlan) {
+function requestDeletePlan(plan: TeachingPlan) {
   if (deletingPlanId.value || cleanupLoading.value) return
-  if (!window.confirm(t('lessons.delete.confirm', { title: displayPlanTitle(plan) }))) return
+  destructiveAction.value = { kind: 'delete-plan', plan }
+  destructiveError.value = ''
+  restoreAfterDestructiveSuccess.value = false
+}
+
+function cancelDestructiveAction() {
+  if (deletingPlanId.value || cleanupLoading.value) return
+  destructiveAction.value = null
+  destructiveError.value = ''
+  restoreAfterDestructiveSuccess.value = false
+}
+
+function destructiveRestoreTarget() {
+  if (!restoreAfterDestructiveSuccess.value) return null
+  restoreAfterDestructiveSuccess.value = false
+  return pageHeading.value
+}
+
+async function confirmDeletePlan(plan: TeachingPlan) {
+  if (deletingPlanId.value || cleanupLoading.value) return
   deletingPlanId.value = plan.id
-  errorMessage.value = ''
+  destructiveError.value = ''
   try {
     const csrfResponse = await checkedFetch('/api/auth/csrf')
     if (!csrfResponse.ok) throw new Error(t('lessons.error.secureSession'))
@@ -514,15 +672,17 @@ async function deletePlan(plan: TeachingPlan) {
     const nextProgress = { ...progress.value }
     delete nextProgress[plan.id]
     progress.value = nextProgress
+    restoreAfterDestructiveSuccess.value = true
+    destructiveAction.value = null
     cleanupMessage.value = t('lessons.delete.done')
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : t('lessons.delete.failedShort')
+    destructiveError.value = error instanceof Error ? error.message : t('lessons.delete.failedShort')
   } finally {
     deletingPlanId.value = ''
   }
 }
 
-async function cleanDuplicates() {
+async function requestCleanDuplicates() {
   if (cleanupLoading.value || deletingPlanId.value) return
   cleanupLoading.value = true
   cleanupMessage.value = ''
@@ -535,7 +695,21 @@ async function cleanDuplicates() {
       cleanupMessage.value = t('lessons.cleanup.none')
       return
     }
-    if (!window.confirm(t('lessons.cleanup.confirm', { count: preview.duplicateCount }))) return
+    destructiveAction.value = { kind: 'cleanup', duplicateCount: preview.duplicateCount }
+    destructiveError.value = ''
+    restoreAfterDestructiveSuccess.value = false
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : t('lessons.cleanup.failedShort')
+  } finally {
+    cleanupLoading.value = false
+  }
+}
+
+async function confirmCleanDuplicates() {
+  if (cleanupLoading.value || deletingPlanId.value) return
+  cleanupLoading.value = true
+  destructiveError.value = ''
+  try {
     const csrfResponse = await checkedFetch('/api/auth/csrf')
     if (!csrfResponse.ok) throw new Error(t('lessons.error.secureSession'))
     const csrf = await csrfResponse.json() as CsrfResponse
@@ -545,12 +719,47 @@ async function cleanDuplicates() {
     if (!response.ok) throw new Error(t('lessons.cleanup.failed'))
     const result = await response.json() as { deletedCount: number }
     await loadPlans()
+    restoreAfterDestructiveSuccess.value = true
+    destructiveAction.value = null
     cleanupMessage.value = result.deletedCount ? t('lessons.cleanup.done', { count: result.deletedCount }) : t('lessons.cleanup.nothing')
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : t('lessons.cleanup.failedShort')
+    destructiveError.value = error instanceof Error ? error.message : t('lessons.cleanup.failedShort')
   } finally {
     cleanupLoading.value = false
   }
+}
+
+function confirmDestructiveAction() {
+  const action = destructiveAction.value
+  if (!action) return
+  if (action.kind === 'delete-plan') void confirmDeletePlan(action.plan)
+  else void confirmCleanDuplicates()
+}
+
+function updateSessionIdentity(username: string) {
+  if (disposed) return
+  const normalizedUsername = username.trim()
+  if (!shellIdentityResolved) {
+    shellIdentityResolved = true
+    shellUsername = normalizedUsername
+    return
+  }
+  if (normalizedUsername === shellUsername) return
+  shellUsername = normalizedUsername
+  plans.value = []
+  guideImports.value = []
+  guideUploadHandoffs.value = []
+  preparationRuns.value = []
+  guideDocuments.value = []
+  guideCatalog.value = []
+  progress.value = {}
+  progressErrors.value = {}
+  knownRunIds.clear()
+  requestVersions.clear()
+  terminalSettlingReads.clear()
+  showingAllVersions.value = false
+  planFilter.value = 'READABLE'
+  void loadPlans()
 }
 
 onMounted(() => {
@@ -560,6 +769,10 @@ onMounted(() => {
 })
 onBeforeUnmount(() => {
   disposed = true
+  latestListRequest++
+  activeListController?.abort()
+  activeListController = null
+  cancelProgressReads()
   clearProgressTimer()
   clearJourneyTimer()
   if (clockTimer) clearInterval(clockTimer)
@@ -567,28 +780,28 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <AppShell>
+  <AppShell @session-identity="updateSessionIdentity">
     <section class="tabletop-page max-w-6xl">
       <p class="tabletop-kicker">{{ t('lessons.eyebrow') }}</p>
       <div class="mt-4 flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
         <div>
-          <h1 class="font-display text-4xl font-semibold tracking-tight">{{ t('lessons.title') }}</h1>
+          <h1 ref="pageHeading" tabindex="-1" class="font-display text-4xl font-semibold tracking-tight outline-none">{{ t('lessons.title') }}</h1>
           <p class="mt-4 max-w-2xl leading-7 text-ink/55">{{ t('lessons.description') }}</p>
         </div>
         <div class="flex flex-wrap gap-2">
-          <button v-if="plans.length > 1" type="button" :disabled="cleanupLoading || Boolean(deletingPlanId)" class="inline-flex min-h-11 items-center justify-center rounded-lg border border-ink/15 px-4 text-sm font-semibold hover:border-copper/50 disabled:opacity-40" @click="cleanDuplicates">{{ cleanupLoading ? t('lessons.cleanup.loading') : t('lessons.cleanup.action') }}</button>
+          <button v-if="visiblePlans.length > 1" type="button" :disabled="cleanupLoading || Boolean(deletingPlanId)" class="inline-flex min-h-11 items-center justify-center rounded-lg border border-ink/15 px-4 text-sm font-semibold hover:border-copper/50 disabled:opacity-40" @click="requestCleanDuplicates">{{ cleanupLoading && !destructiveAction ? t('lessons.cleanup.loading') : t('lessons.cleanup.action') }}</button>
           <RouterLink :to="{ name: 'teach' }" class="inline-flex min-h-11 items-center justify-center rounded-lg bg-copper px-4 text-sm font-semibold text-white">{{ t('lessons.upload') }}</RouterLink>
         </div>
       </div>
 
       <p v-if="startedPlanId" class="mt-6 rounded-lg bg-indigo/5 px-4 py-3 text-sm text-indigo" role="status">{{ t('lessons.started') }}</p>
       <p v-if="cleanupMessage" class="mt-6 rounded-lg bg-emerald-50 px-4 py-3 text-sm text-emerald-800" role="status">{{ cleanupMessage }}</p>
-      <div v-if="plans.length" class="mt-6 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-ink/45">
-        <p>{{ t('lessons.summary', { versions: plans.length, rulebooks: planGroups.length, readable: readableGroupCount }) }}</p>
-        <button v-if="plans.length > planGroups.length" type="button" class="font-semibold text-indigo underline decoration-indigo-soft underline-offset-4 " @click="showingAllVersions ? hideAllVersions() : showAllVersions()">{{ showingAllVersions ? t('lessons.history.hide') : t('lessons.history.show', { count: plans.length }) }}</button>
+      <div v-if="visiblePlans.length" class="mt-6 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-ink/45">
+        <p>{{ t('lessons.summary', { versions: visiblePlans.length, rulebooks: planGroups.length, readable: readableGroupCount }) }}</p>
+        <button v-if="visiblePlans.length > planGroups.length" type="button" class="font-semibold text-indigo underline decoration-indigo-soft underline-offset-4 " @click="showingAllVersions ? hideAllVersions() : showAllVersions()">{{ showingAllVersions ? t('lessons.history.hide') : t('lessons.history.show', { count: visiblePlans.length }) }}</button>
       </div>
 
-      <div v-if="plans.length" class="mt-5 flex flex-wrap gap-2" role="group" :aria-label="t('lessons.filter.aria')">
+      <div v-if="visiblePlans.length" class="mt-5 flex flex-wrap gap-2" role="group" :aria-label="t('lessons.filter.aria')">
         <button type="button" class="min-h-10 rounded-full px-4 text-sm font-semibold transition" :class="selectedPlanFilter === 'READABLE' ? 'bg-ink text-paper' : 'border border-ink/15 text-ink/65 hover:border-ink/35'" :aria-pressed="selectedPlanFilter === 'READABLE'" @click="planFilter = 'READABLE'">{{ t('lessons.filter.readable', { count: readableGroupCount }) }}</button>
         <button type="button" class="min-h-10 rounded-full px-4 text-sm font-semibold transition" :class="selectedPlanFilter === 'PENDING' ? 'bg-ink text-paper' : 'border border-ink/15 text-ink/65 hover:border-ink/35'" :aria-pressed="selectedPlanFilter === 'PENDING'" @click="planFilter = 'PENDING'">{{ t('lessons.filter.pending', { count: pendingGroupCount }) }}</button>
         <button type="button" class="min-h-10 rounded-full px-4 text-sm font-semibold transition" :class="selectedPlanFilter === 'ALL' ? 'bg-ink text-paper' : 'border border-ink/15 text-ink/65 hover:border-ink/35'" :aria-pressed="selectedPlanFilter === 'ALL'" @click="planFilter = 'ALL'">{{ t('lessons.filter.all', { count: planGroups.length }) }}</button>
@@ -630,13 +843,13 @@ onBeforeUnmount(() => {
         <button class="mt-4 text-sm font-semibold underline underline-offset-4" @click="loadPlans()">{{ t('lessons.reload') }}</button>
       </div>
 
-      <div v-else-if="plans.length === 0 && pendingJourneys.length === 0" class="mt-8 rounded-xl border border-dashed border-ink/20 px-6 py-14 text-center">
+      <div v-else-if="visiblePlans.length === 0 && pendingJourneys.length === 0" class="mt-8 rounded-xl border border-dashed border-ink/20 px-6 py-14 text-center">
         <h2 class="font-display text-2xl font-semibold">{{ t('lessons.empty.title') }}</h2>
         <p class="mx-auto mt-3 max-w-lg leading-7 text-ink/55">{{ t('lessons.empty.description') }}</p>
         <RouterLink :to="{ name: 'teach' }" class="mt-7 inline-flex rounded-lg bg-copper px-5 py-3 font-semibold text-white">{{ t('lessons.empty.action') }}</RouterLink>
       </div>
 
-      <div v-else-if="plans.length > 0 && displayedPlans.length === 0" class="mt-8 rounded-xl border border-dashed border-ink/20 px-6 py-12 text-center">
+      <div v-else-if="visiblePlans.length > 0 && displayedPlans.length === 0" class="mt-8 rounded-xl border border-dashed border-ink/20 px-6 py-12 text-center">
         <h2 class="font-display text-2xl font-semibold">{{ t('lessons.noReadable.title') }}</h2>
         <p class="mx-auto mt-3 max-w-lg leading-7 text-ink/55">{{ t('lessons.noReadable.description') }}</p>
         <button type="button" class="mt-6 text-sm font-semibold text-indigo underline underline-offset-4" @click="planFilter = 'PENDING'">{{ t('lessons.noReadable.action') }}</button>
@@ -687,11 +900,28 @@ onBeforeUnmount(() => {
               <RouterLink v-if="hasReadableLesson(progress[plan.id]?.lesson)" :to="{ name: 'lesson', params: { planId: plan.id } }" class="rounded-lg bg-indigo px-4 py-2.5 text-sm font-semibold text-white">{{ progress[plan.id]?.lesson?.status === 'DRAFT_READY' ? t('lessons.action.readFull') : stateOf(plan.id) === 'GENERATING' ? t('lessons.action.readPublished') : stateOf(plan.id) === 'INCOMPLETE' ? t('lessons.action.readAndComplete') : t('lessons.action.open') }}</RouterLink>
               <button v-else-if="stateOf(plan.id) !== 'GENERATING'" :disabled="launchingPlanId === plan.id || Boolean(deletingPlanId)" class="rounded-lg bg-indigo px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-40" @click="launch(plan.id)">{{ launchingPlanId === plan.id ? t('lessons.action.launching') : stateOf(plan.id) === 'FAILED' || stateOf(plan.id) === 'NEEDS_ATTENTION' ? t('lessons.action.regenerate') : t('lessons.action.generate') }}</button>
               <span v-else class="inline-flex items-center gap-2 text-sm font-semibold text-indigo"><span class="size-3 animate-spin rounded-full border-2 border-indigo/20 border-t-indigo" />{{ t('lessons.action.background') }}</span>
-              <button type="button" :disabled="Boolean(deletingPlanId) || cleanupLoading" class="min-h-10 rounded-lg px-2 text-sm font-semibold text-ink/40 hover:bg-red-50 hover:text-red-700 disabled:opacity-40" @click="deletePlan(plan)">{{ deletingPlanId === plan.id ? t('lessons.action.deleting') : t('lessons.action.delete') }}</button>
+              <button type="button" :disabled="Boolean(deletingPlanId) || cleanupLoading" class="min-h-10 rounded-lg px-2 text-sm font-semibold text-ink/40 hover:bg-red-50 hover:text-red-700 disabled:opacity-40" @click="requestDeletePlan(plan)">{{ deletingPlanId === plan.id ? t('lessons.action.deleting') : t('lessons.action.delete') }}</button>
             </div>
           </div>
         </li>
       </ol>
+
+      <DestructiveActionDialog
+        :open="Boolean(destructiveAction)"
+        :pending="Boolean(deletingPlanId) || cleanupLoading"
+        :error="destructiveError"
+        :title="destructiveAction?.kind === 'cleanup' ? destructiveCopy.cleanupTitle : destructiveCopy.deleteTitle"
+        :description="destructiveAction?.kind === 'cleanup'
+          ? destructiveCopy.cleanupDescription(destructiveAction.duplicateCount)
+          : destructiveCopy.deleteDescription(destructiveAction?.kind === 'delete-plan' ? displayPlanTitle(destructiveAction.plan) : '')"
+        :cancel-label="destructiveAction?.kind === 'cleanup' ? destructiveCopy.cleanupCancel : destructiveCopy.deleteCancel"
+        :confirm-label="destructiveAction?.kind === 'cleanup' ? destructiveCopy.cleanupConfirm : destructiveCopy.deleteConfirm"
+        :pending-label="destructiveAction?.kind === 'cleanup' ? t('lessons.cleanup.loading') : t('lessons.action.deleting')"
+        :retry-label="destructiveAction?.kind === 'cleanup' ? destructiveCopy.cleanupRetry : destructiveCopy.deleteRetry"
+        :restore-focus="destructiveRestoreTarget"
+        @cancel="cancelDestructiveAction"
+        @confirm="confirmDestructiveAction"
+      />
     </section>
   </AppShell>
 </template>

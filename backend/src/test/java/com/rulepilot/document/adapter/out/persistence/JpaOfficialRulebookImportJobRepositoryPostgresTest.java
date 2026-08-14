@@ -2,6 +2,7 @@ package com.rulepilot.document.adapter.out.persistence;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.rulepilot.document.domain.OfficialRulebookImportJob;
 import jakarta.persistence.EntityManager;
 import java.sql.DriverManager;
 import java.sql.SQLException;
@@ -58,6 +59,7 @@ class JpaOfficialRulebookImportJobRepositoryPostgresTest {
                 .build();
         sessionFactory = new MetadataSources(registry)
                 .addAnnotatedClass(OfficialRulebookImportJobEntity.class)
+                .addAnnotatedClass(DocumentVersionEntity.class)
                 .buildMetadata()
                 .buildSessionFactory();
     }
@@ -71,6 +73,7 @@ class JpaOfficialRulebookImportJobRepositoryPostgresTest {
     @BeforeEach
     void clearImportJobs() {
         jdbc.update("DELETE FROM official_rulebook_import_job");
+        jdbc.update("DELETE FROM assistant_run WHERE owner_username = 'official-handoff-player'");
         jdbc.update("DELETE FROM document_version WHERE object_key LIKE 'official-handoff-test/%'");
         jdbc.update("DELETE FROM rule_document WHERE created_by = 'official-handoff-player'");
     }
@@ -120,6 +123,40 @@ class JpaOfficialRulebookImportJobRepositoryPostgresTest {
     }
 
     @Test
+    void persistsTheFirstExactDownloadCompletionMilestoneIdempotently() {
+        Instant createdAt = Instant.parse("2026-08-10T01:30:00Z");
+        Instant downloadedAt = createdAt.plusSeconds(7);
+        UUID jobId = insertJob("NOT_REQUESTED", null, createdAt);
+
+        inTransaction(repository -> repository.markDownloadCompleted(jobId, downloadedAt));
+        inTransaction(repository -> repository.markDownloadCompleted(jobId, downloadedAt.plusSeconds(3)));
+
+        var persisted = inTransactionReturning(repository -> repository.findOwned(jobId, "postgres-regression-player"))
+                .orElseThrow();
+        assertThat(persisted.downloadCompletedAt()).isEqualTo(downloadedAt);
+        assertThat(persisted.updatedAt()).isEqualTo(downloadedAt.plusSeconds(3));
+    }
+
+    @Test
+    void promptClaimScopesTheOfficialHandoffToTheReadyDocumentVersion() {
+        Instant now = Instant.parse("2026-08-10T01:45:00Z");
+        UUID matchingVersionId = insertDocument("matching", "READY", now);
+        UUID otherVersionId = insertDocument("other", "READY", now);
+        UUID matchingJobId = insertCompletedTeachingJob(matchingVersionId, now);
+        UUID otherJobId = insertCompletedTeachingJob(otherVersionId, now);
+
+        var claimed = inTransactionReturning(repository ->
+                repository.claimReadyTeachingForDocument(matchingVersionId, 4, now.plusSeconds(1)));
+
+        assertThat(claimed).extracting(OfficialRulebookImportJob::id).containsExactly(matchingJobId);
+        assertThat(jdbc.queryForObject(
+                        "SELECT teaching_handoff_state FROM official_rulebook_import_job WHERE id = ?",
+                        String.class,
+                        otherJobId))
+                .isEqualTo("WAITING_FOR_DOCUMENT");
+    }
+
+    @Test
     void terminalizesTeachingWhenTheImportedDocumentCouldNotBeProcessed() {
         Instant now = Instant.parse("2026-08-10T02:00:00Z");
         UUID versionId = insertFailedDocument(now);
@@ -160,7 +197,42 @@ class JpaOfficialRulebookImportJobRepositoryPostgresTest {
                 .containsEntry("teaching_error_code", "DOCUMENT_PROCESSING_FAILED");
     }
 
+    @Test
+    void retryResetsTheObservedPreparationButCannotReplaceANewerRun() {
+        Instant now = Instant.parse("2026-08-10T02:30:00Z");
+        UUID versionId = insertDocument("retry", "READY", now);
+        UUID jobId = insertCompletedTeachingJob(versionId, now);
+        UUID failedRunId = UUID.randomUUID();
+        UUID newerRunId = UUID.randomUUID();
+        insertPreparationRun(failedRunId, versionId, "FAILED", now);
+        insertPreparationRun(newerRunId, versionId, "RECEIVED", now.plusSeconds(4));
+        inTransaction(repository -> repository.claimReadyTeachingForDocument(versionId, 1, now.plusSeconds(1)));
+        inTransaction(repository -> repository.completeTeachingLaunch(jobId, failedRunId, now.plusSeconds(2)));
+
+        boolean retried = inTransactionReturning(repository ->
+                repository.retryTeaching(jobId, failedRunId, now.plusSeconds(3)));
+        inTransaction(repository -> repository.claimReadyTeachingForDocument(versionId, 1, now.plusSeconds(4)));
+        inTransaction(repository -> repository.completeTeachingLaunch(jobId, newerRunId, now.plusSeconds(5)));
+        boolean staleRetry = inTransactionReturning(repository ->
+                repository.retryTeaching(jobId, failedRunId, now.plusSeconds(6)));
+
+        assertThat(retried).isTrue();
+        assertThat(staleRetry).isFalse();
+        assertThat(jdbc.queryForMap(
+                        """
+                        SELECT teaching_handoff_state, teaching_preparation_run_id
+                        FROM official_rulebook_import_job WHERE id = ?
+                        """,
+                        jobId))
+                .containsEntry("teaching_handoff_state", "LAUNCHED")
+                .containsEntry("teaching_preparation_run_id", newerRunId);
+    }
+
     private static UUID insertFailedDocument(Instant now) {
+        return insertDocument("unusable", "FAILED", now);
+    }
+
+    private static UUID insertDocument(String label, String status, Instant now) {
         UUID documentId = UUID.randomUUID();
         UUID versionId = UUID.randomUUID();
         OffsetDateTime timestamp = OffsetDateTime.ofInstant(now, ZoneOffset.UTC);
@@ -170,22 +242,67 @@ class JpaOfficialRulebookImportJobRepositoryPostgresTest {
                 VALUES (?, NULL, ?, 'BASE_RULEBOOK', 'official-handoff-player', ?)
                 """,
                 documentId,
-                "Unusable imported rules",
+                label + " imported rules",
                 timestamp);
         jdbc.update(
                 """
                 INSERT INTO document_version (
                     id, document_id, version_number, original_filename, object_key,
                     checksum, size_bytes, content_type, processing_status, created_at
-                ) VALUES (?, ?, 1, ?, ?, ?, 1024, 'application/pdf', 'FAILED', ?)
+                ) VALUES (?, ?, 1, ?, ?, ?, 1024, 'application/pdf', ?, ?)
                 """,
                 versionId,
                 documentId,
-                "unusable-rules.pdf",
+                label + "-rules.pdf",
                 "official-handoff-test/" + versionId + ".pdf",
                 "b".repeat(64),
+                status,
                 timestamp);
         return versionId;
+    }
+
+    private static UUID insertCompletedTeachingJob(UUID versionId, Instant now) {
+        UUID jobId = UUID.randomUUID();
+        OffsetDateTime timestamp = OffsetDateTime.ofInstant(now, ZoneOffset.UTC);
+        jdbc.update(
+                """
+                INSERT INTO official_rulebook_import_job (
+                    id, owner_username, title, source_type, source_url, stage,
+                    downloaded_bytes, total_bytes, document_version_id, duplicate,
+                    teaching_handoff_state, teaching_handoff_updated_at,
+                    created_at, updated_at, completed_at
+                ) VALUES (?, ?, ?, 'BASE_RULEBOOK', ?, 'COMPLETED', 1024, 1024, ?, FALSE,
+                          'WAITING_FOR_DOCUMENT', ?, ?, ?, ?)
+                """,
+                jobId,
+                "official-handoff-player",
+                "Ready imported rules",
+                "https://publisher.example/" + jobId + ".pdf",
+                versionId,
+                timestamp,
+                timestamp,
+                timestamp,
+                timestamp);
+        return jobId;
+    }
+
+    private static void insertPreparationRun(UUID runId, UUID versionId, String state, Instant now) {
+        boolean failed = "FAILED".equals(state);
+        OffsetDateTime timestamp = OffsetDateTime.ofInstant(now, ZoneOffset.UTC);
+        jdbc.update(
+                """
+                INSERT INTO assistant_run (
+                    id, mode, subject_id, owner_username, state, revision,
+                    created_at, updated_at, completed_at, last_error_code
+                ) VALUES (?, 'TEACHING_PREPARATION', ?, 'official-handoff-player', ?, 1, ?, ?, ?, ?)
+                """,
+                runId,
+                versionId,
+                state,
+                timestamp,
+                timestamp,
+                failed ? timestamp : null,
+                failed ? "TEACHING_PREPARATION_FAILED" : null);
     }
 
     private static UUID insertJob(String teachingState, Instant teachingUpdatedAt, Instant createdAt) {

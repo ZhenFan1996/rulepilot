@@ -62,6 +62,21 @@ class BudgetedAgentInvocationsTest {
     }
 
     @Test
+    void derivesAContentFreeSuccessSummaryFromTheInvocationResult() {
+        RecordingControl control = new RecordingControl();
+        var invocations = new BudgetedAgentInvocations(control);
+
+        String result = invocations.invoke(
+                UUID.randomUUID(), AgentExecutionControl.ActivityType.MODEL, "composeTeachingSection|1", 211,
+                "Teaching section composed", () -> "provider usage", value -> 19,
+                value -> "Teaching section composed u=i:211,o:19,h:128");
+
+        assertThat(result).isEqualTo("provider usage");
+        assertThat(control.outputTokens).isEqualTo(19);
+        assertThat(control.summary).isEqualTo("Teaching section composed u=i:211,o:19,h:128");
+    }
+
+    @Test
     void auditsFailureWithoutReplacingOriginalException() {
         RecordingControl control = new RecordingControl();
         var invocations = new BudgetedAgentInvocations(control);

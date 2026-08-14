@@ -1,6 +1,9 @@
 package com.rulepilot.document.application;
 
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -20,36 +23,91 @@ public class DocumentOutboxPublisher {
 
     private final OutboxEventPublication events;
     private final DocumentProcessingMessagePublisher messages;
+    private final MeterRegistry metrics;
     private final int batchSize;
     private final Clock clock;
+    private boolean publishing;
+    private boolean publishAgain;
 
     @Autowired
     public DocumentOutboxPublisher(
             OutboxEventPublication events,
             DocumentProcessingMessagePublisher messages,
+            MeterRegistry metrics,
             @Value("${rulepilot.document.messaging.batch-size}") int batchSize) {
-        this(events, messages, batchSize, Clock.systemUTC());
+        this(events, messages, metrics, batchSize, Clock.systemUTC());
     }
 
     DocumentOutboxPublisher(
             OutboxEventPublication events,
             DocumentProcessingMessagePublisher messages,
+            MeterRegistry metrics,
             int batchSize,
             Clock clock) {
         this.events = events;
         this.messages = messages;
+        this.metrics = metrics;
         this.batchSize = batchSize;
         this.clock = clock;
     }
 
     @Scheduled(fixedDelayString = "${rulepilot.document.messaging.fixed-delay}")
     public void publishReadyEvents() {
+        requestPublication();
+    }
+
+    /** After-commit latency hint; the scheduled scan remains the durable recovery path. */
+    public void publishCommittedEvents() {
+        requestPublication();
+    }
+
+    private void requestPublication() {
+        synchronized (this) {
+            if (publishing) {
+                publishAgain = true;
+                return;
+            }
+            publishing = true;
+        }
+        try {
+            while (true) {
+                synchronized (this) {
+                    publishAgain = false;
+                }
+                publishBatch();
+                synchronized (this) {
+                    if (!publishAgain) {
+                        publishing = false;
+                        return;
+                    }
+                }
+            }
+        } catch (RuntimeException | Error failure) {
+            synchronized (this) {
+                publishing = false;
+            }
+            throw failure;
+        }
+    }
+
+    private void publishBatch() {
         for (var event : events.readyAt(Instant.now(clock), batchSize)) {
+            String outcome = "failed";
+            Instant attemptedAt = Instant.now(clock);
             try {
                 messages.publish(event.id(), event.eventType(), event.payload());
                 events.markPublished(event.id(), Instant.now(clock));
+                outcome = "published";
             } catch (RuntimeException exception) {
                 LOGGER.warn("Outbox publication failed for eventId={}", event.id(), exception);
+            } finally {
+                Duration queued = Duration.between(event.occurredAt(), attemptedAt);
+                if (queued.isNegative()) queued = Duration.ZERO;
+                Timer.builder("rulepilot.document.outbox.queued_to_publish")
+                        .description("Elapsed time from durable document outbox enqueue to a publication attempt")
+                        .tag("outcome", outcome)
+                        .register(metrics)
+                        .record(queued);
             }
         }
     }

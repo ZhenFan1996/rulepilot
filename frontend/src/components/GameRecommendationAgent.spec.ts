@@ -4,6 +4,7 @@ import { defineComponent, type Component } from 'vue'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { setLocale } from '@/lib/locale'
 import GameRecommendationAgent from './GameRecommendationAgent.vue'
 
 const baseProfile = { players: null, maxMinutes: null, maxWeight: null, type: 'all', interaction: 'any' }
@@ -20,6 +21,7 @@ describe('GameRecommendationAgent', () => {
 
   beforeEach(() => {
     localStorage.setItem('rulepilot:locale', 'zh-CN')
+    setLocale('zh-CN')
     sessionStorage.clear()
   })
   afterEach(() => {
@@ -27,6 +29,7 @@ describe('GameRecommendationAgent', () => {
     vi.useRealTimers()
     vi.restoreAllMocks()
     vi.unstubAllGlobals()
+    setLocale('zh-CN')
   })
 
   async function mountAgent(stubs: Record<string, boolean | Component> = {}) {
@@ -40,7 +43,7 @@ describe('GameRecommendationAgent', () => {
     })
     await router.push('/')
     await router.isReady()
-    const wrapper = mount(GameRecommendationAgent, { global: { plugins: [router], stubs } })
+    const wrapper = mount(GameRecommendationAgent, { attachTo: document.body, global: { plugins: [router], stubs } })
     mountedAgents.push(wrapper)
     return wrapper
   }
@@ -293,6 +296,46 @@ describe('GameRecommendationAgent', () => {
     expect(wrapper.get('[role="alert"] button').text()).toBe('重试')
   })
 
+  it('confirms reset, preserves unsent text, and does not silently clear on locale changes', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      if (String(input) === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      return Response.json({
+        outcome: 'recommendations', mode: 'model_assisted', assistantMessage: '这款可以作为候选。',
+        profile: { ...baseProfile, players: 4 }, clarification: null, sourceCount: 179737,
+        candidatesEvaluated: 1, games: [{ game, matches: [], tradeoffs: [] }],
+      })
+    }))
+    const wrapper = await mountAgent()
+    await wrapper.get('textarea').setValue('想找自然主题的桌游')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    await wrapper.get('textarea').setValue('这句还没有发送')
+
+    setLocale('en')
+    await flushPromises()
+    expect(wrapper.text()).toContain('这款可以作为候选。')
+    expect(wrapper.text()).toContain('Wingspan')
+    expect(wrapper.get('textarea').element).toHaveProperty('value', '这句还没有发送')
+
+    const resetButton = wrapper.findAll('button').find(button => button.text() === 'Clear this conversation')!
+    await resetButton.trigger('click')
+    await flushPromises()
+    expect(document.body.textContent).toContain('server-side Q&A history')
+    expect(document.body.textContent).toContain('rulebook or guide work already running in the background will remain')
+    expect(wrapper.text()).toContain('这款可以作为候选。')
+
+    Array.from(document.body.querySelectorAll('button'))
+      .find(button => button.textContent === 'Start over')!
+      .click()
+    await flushPromises()
+
+    expect(wrapper.text()).not.toContain('这款可以作为候选。')
+    expect(wrapper.text()).not.toContain('Wingspan')
+    expect(wrapper.get('textarea').element).toHaveProperty('value', '这句还没有发送')
+    expect(document.activeElement).toBe(wrapper.get('textarea').element)
+    expect(wrapper.findAll('button').some(button => button.text() === 'Clear this conversation')).toBe(false)
+  })
+
   it('opens the rulebook handoff directly from a recommendation card', async () => {
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
       const path = String(input)
@@ -318,7 +361,9 @@ describe('GameRecommendationAgent', () => {
     await wrapper.get('textarea').setValue('想找自然主题的桌游')
     await wrapper.get('form').trigger('submit')
     await flushPromises()
-    await wrapper.findAll('button').find(button => button.text() === '选这款，找规则书')!.trigger('click')
+    const selectButton = wrapper.findAll('button').find(button => button.text() === '选这款，找规则书')!
+    selectButton.element.focus()
+    await selectButton.trigger('click')
     await flushPromises()
 
     expect(fetchMock).toHaveBeenCalledWith('/api/v1/bgg/games/266192/import', expect.objectContaining({ method: 'POST' }))
@@ -327,9 +372,13 @@ describe('GameRecommendationAgent', () => {
     expect(document.body.querySelector('[data-testid="player-journey-surface"]')?.getAttribute('style'))
       .toContain('opacity: 1')
 
-    document.body.querySelector<HTMLButtonElement>('button[aria-label="关闭小窗"]')!.click()
+    const journeyClose = document.body.querySelector<HTMLButtonElement>('button[aria-label="关闭小窗"]')!
+    expect(document.activeElement).toBe(journeyClose)
+    journeyClose.click()
     await flushPromises()
-    expect(wrapper.get('[data-testid="player-journey-dock"]').text()).toContain('展翅翱翔')
+    const journeyDock = wrapper.get('[data-testid="player-journey-dock"]')
+    expect(journeyDock.text()).toContain('展翅翱翔')
+    expect(document.activeElement).toBe(selectButton.element)
     const bindingCallsBeforeReopen = fetchMock.mock.calls
       .filter(([input]) => String(input) === '/api/v1/bgg/games/266192/import').length
     await wrapper.get('[data-testid="player-journey-dock"]').trigger('click')
@@ -372,7 +421,7 @@ describe('GameRecommendationAgent', () => {
         editionId: { type: String, required: true },
         gameTitle: { type: String, required: true },
       },
-      template: '<div data-testid="answer-workspace-stub">{{ gameTitle }} · {{ documentVersionId }} · {{ planId }}</div>',
+      template: '<div data-testid="recommendation-answer-workspace" tabindex="-1"><div data-testid="answer-workspace-stub">{{ gameTitle }} · {{ documentVersionId }} · {{ planId }}</div></div>',
     })
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
       if (String(input) === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
@@ -399,6 +448,7 @@ describe('GameRecommendationAgent', () => {
     expect(wrapper.get('[data-testid="recommendation-conversation"]').isVisible()).toBe(false)
     expect(wrapper.get('[data-testid="agent-role-switcher"]').text()).toContain('继续推荐')
     expect(wrapper.get('[data-testid="agent-role-switcher"]').text()).toContain('规则答疑')
+    expect(document.activeElement).toBe(wrapper.get('[data-testid="recommendation-answer-workspace"]').element)
 
     const recommendationButton = wrapper.findAll('[data-testid="agent-role-switcher"] button').find(button => button.text() === '继续推荐')!
     await recommendationButton.trigger('click')
@@ -408,6 +458,72 @@ describe('GameRecommendationAgent', () => {
     expect(wrapper.get('[data-testid="recommendation-conversation"]').element.parentElement?.style.display).not.toBe('none')
     expect(wrapper.get('textarea').element.value).toBe('这个尚未发送的推荐条件要保留')
     expect(wrapper.text()).toContain('这款可以继续准备规则书')
+  })
+
+  it('opens a newly readable guide from the background dock without reopening progress first', async () => {
+    const readyStatus = {
+      projection: {
+        state: 'ready', phase: 'LESSON_READABLE', progress: 94, canReadRulebook: true,
+        canReadLesson: true, canAskQuestions: true, retryAction: null, errorCode: null,
+      },
+      game,
+      imported: {
+        game: { id: 'game-1', name: '展翅翱翔' },
+        edition: { id: 'edition-1', name: 'BGG 版本' },
+        alreadyImported: false,
+      },
+      importJob: { id: 'job-1', stage: 'COMPLETED', documentVersionId: 'document-1' },
+      plan: { id: 'plan-1', documentVersionId: 'document-1', sections: [{ position: 1, title: '目标' }] },
+      lesson: { id: 'lesson-1', status: 'DRAFT_READY', sections: [{ position: 1 }] },
+    }
+    const HandoffStub = defineComponent({
+      name: 'RecommendationRulebookHandoff',
+      emits: ['status', 'close'],
+      setup(_props, { emit }) {
+        return {
+          publish: () => emit('status', readyStatus),
+          close: () => emit('close'),
+        }
+      },
+      template: '<div><button data-testid="publish-first-chapter" type="button" @click="publish">发布首章</button><button data-testid="close-journey" type="button" @click="close">关闭进度</button></div>',
+    })
+    const LessonDialogStub = defineComponent({
+      name: 'RecommendationLessonDialog',
+      props: { open: Boolean, planId: { type: String, required: true } },
+      template: '<div v-if="open" data-testid="lesson-dialog-stub">{{ planId }}</div>',
+    })
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      if (String(input) === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      return Response.json({
+        outcome: 'recommendations', mode: 'model_assisted', assistantMessage: '这款可以继续准备规则书。',
+        profile: baseProfile, clarification: null, sourceCount: 179737, candidatesEvaluated: 1,
+        games: [{ game, matches: [], tradeoffs: [] }],
+      })
+    }))
+    const wrapper = await mountAgent({
+      RecommendationRulebookHandoff: HandoffStub,
+      RecommendationLessonDialog: LessonDialogStub,
+    })
+
+    await wrapper.get('textarea').setValue('想找自然主题的桌游')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    await wrapper.findAll('button').find(button => button.text() === '选这款，找规则书')!.trigger('click')
+    document.body.querySelector<HTMLButtonElement>('[data-testid="publish-first-chapter"]')!.click()
+    await flushPromises()
+
+    expect(document.body.querySelector('[data-testid="lesson-dialog-stub"]')).toBeNull()
+    document.body.querySelector<HTMLButtonElement>('[data-testid="close-journey"]')!.click()
+    await flushPromises()
+    const dock = wrapper.get('[data-testid="player-journey-dock"]')
+    expect(dock.text()).toContain('讲解已经可以阅读')
+    expect(dock.text()).toContain('打开讲解')
+    expect(wrapper.get('[data-testid="player-journey-progress-button"]').text()).toBe('查看进度')
+
+    await dock.trigger('click')
+    await flushPromises()
+    expect(document.body.querySelector('[data-testid="player-journey-backdrop"]')?.getAttribute('style')).toContain('display: none')
+    expect(document.body.querySelector('[data-testid="lesson-dialog-stub"]')?.textContent).toBe('plan-1')
   })
 
   it('shows only progress stages actually reported by the recommendation stream', async () => {

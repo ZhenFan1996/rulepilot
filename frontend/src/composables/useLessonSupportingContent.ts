@@ -11,6 +11,7 @@ export type MediaWarningCode =
 
 interface LoadSupportingContentRequest {
   planId: string
+  signal: AbortSignal
   isCurrent: () => boolean
   requestLogin: () => Promise<unknown>
 }
@@ -26,19 +27,22 @@ export function useLessonSupportingContent() {
     comprehensionError.value = ''
   }
 
-  async function optionalFetch(url: string) {
+  async function optionalFetch(url: string, signal: AbortSignal) {
     try {
-      return await fetch(url, { credentials: 'include' })
+      return await fetch(url, { credentials: 'include', signal })
     } catch {
       return null
     }
   }
 
   async function loadSupportingContent(request: LoadSupportingContentRequest) {
-    if (!request.isCurrent()) return
+    if (!request.isCurrent() || request.signal.aborted) return
     clearSupportingContent()
-    const comprehensionResponse = await optionalFetch(`/api/v1/teaching-plans/${request.planId}/comprehension`)
-    if (!request.isCurrent()) return
+    const comprehensionResponse = await optionalFetch(
+      `/api/v1/teaching-plans/${request.planId}/comprehension`,
+      request.signal,
+    )
+    if (!request.isCurrent() || request.signal.aborted) return
     if (comprehensionResponse?.status === 401) {
       await request.requestLogin()
       return
@@ -46,7 +50,7 @@ export function useLessonSupportingContent() {
     const loadedComprehension = comprehensionResponse?.ok
       ? await comprehensionResponse.json() as LessonComprehensionReport
       : null
-    if (!request.isCurrent()) return
+    if (!request.isCurrent() || request.signal.aborted) return
     if (loadedComprehension) comprehension.value = loadedComprehension
     else comprehensionError.value = '学习检查暂时无法读取，不影响继续看讲解。'
   }

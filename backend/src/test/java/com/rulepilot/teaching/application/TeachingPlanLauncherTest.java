@@ -16,7 +16,9 @@ import com.rulepilot.assistant.AssistantRunState;
 import com.rulepilot.assistant.AssistantRuns;
 import com.rulepilot.assistant.AssistantRuns.RunDetails;
 import com.rulepilot.assistant.AssistantRuns.RunSnapshot;
+import com.rulepilot.teaching.application.IllustratedLessonLauncher.LessonLaunch;
 import com.rulepilot.teaching.domain.TeachingPlan;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
@@ -29,6 +31,7 @@ class TeachingPlanLauncherTest {
     private final TeachingPlanService plans = mock(TeachingPlanService.class);
     private final IllustratedLessonLauncher lessons = mock(IllustratedLessonLauncher.class);
     private final AssistantRuns runs = mock(AssistantRuns.class);
+    private final SimpleMeterRegistry metrics = new SimpleMeterRegistry();
     private final UUID documentVersionId = UUID.randomUUID();
 
     @Test
@@ -51,16 +54,27 @@ class TeachingPlanLauncherTest {
                         "Reading rulebook pages and organizing the lesson"))
                 .thenReturn(planning);
         when(plans.create(documentVersionId, null, "alice", received.id())).thenReturn(plan);
+        when(lessons.launchImmediately(plan, "alice"))
+                .thenReturn(new LessonLaunch(UUID.randomUUID(), AssistantRunState.RECEIVED, false));
         when(runs.advance(received.id(), 3, AssistantRunState.COMPLETED, "Teaching plan is ready"))
                 .thenReturn(completed);
-        var launcher = new TeachingPlanLauncher(plans, lessons, runs, new SyncTaskExecutor());
+        var launcher = launcher();
 
         var launch = launcher.launch(documentVersionId, "alice");
 
         assertThat(launch.assistantRunId()).isEqualTo(received.id());
         assertThat(launch.state()).isEqualTo(AssistantRunState.RECEIVED);
         assertThat(launch.reused()).isFalse();
-        verify(lessons).launchImmediately(planId, "alice");
+        verify(lessons).launchImmediately(plan, "alice");
+        verify(runs).advance(received.id(), 3, AssistantRunState.COMPLETED, "Teaching plan is ready");
+        assertThat(metrics.find(TeachingPlanLauncher.STARTUP_PHASE_DURATION_METRIC)
+                        .tag("phase", "plan-resolution")
+                        .timer().count())
+                .isEqualTo(1);
+        assertThat(metrics.find(TeachingPlanLauncher.STARTUP_PHASE_DURATION_METRIC)
+                        .tag("phase", "first-section-startup")
+                        .timer().count())
+                .isEqualTo(1);
     }
 
     @Test
@@ -68,7 +82,7 @@ class TeachingPlanLauncherTest {
         RunSnapshot planning = run(AssistantRunState.LESSON_PLANNING, 3);
         when(runs.findLatestOwned(AssistantRunMode.TEACHING_PREPARATION, documentVersionId, "alice"))
                 .thenReturn(Optional.of(details(planning)));
-        var launcher = new TeachingPlanLauncher(plans, lessons, runs, new SyncTaskExecutor());
+        var launcher = launcher();
 
         var launch = launcher.launch(documentVersionId, "alice");
 
@@ -96,7 +110,7 @@ class TeachingPlanLauncherTest {
         when(plans.create(documentVersionId, null, "alice", received.id()))
                 .thenThrow(new IllegalStateException("model unavailable"));
         when(runs.findOwned(received.id(), "alice")).thenReturn(Optional.of(details(planning)));
-        var launcher = new TeachingPlanLauncher(plans, lessons, runs, new SyncTaskExecutor());
+        var launcher = launcher();
 
         launcher.launch(documentVersionId, "alice");
 
@@ -124,10 +138,10 @@ class TeachingPlanLauncherTest {
                         "Reading rulebook pages and organizing the lesson"))
                 .thenReturn(planning);
         when(plans.create(documentVersionId, null, "alice", received.id())).thenReturn(plan);
-        when(lessons.launchImmediately(planId, "alice"))
+        when(lessons.launchImmediately(plan, "alice"))
                 .thenThrow(new IllegalStateException("teaching queue unavailable"));
         when(runs.findOwned(received.id(), "alice")).thenReturn(Optional.of(details(planning)));
-        var launcher = new TeachingPlanLauncher(plans, lessons, runs, new SyncTaskExecutor());
+        var launcher = launcher();
 
         launcher.launch(documentVersionId, "alice");
 
@@ -159,15 +173,18 @@ class TeachingPlanLauncherTest {
                         "Reading rulebook pages and organizing the lesson"))
                 .thenReturn(planning);
         when(plans.latest(documentVersionId, "alice")).thenReturn(Optional.of(existingPlan));
+        when(lessons.launchImmediately(existingPlan, "alice"))
+                .thenReturn(new LessonLaunch(UUID.randomUUID(), AssistantRunState.RECEIVED, false));
         when(runs.advance(received.id(), 3, AssistantRunState.COMPLETED, "Teaching plan is ready"))
                 .thenReturn(completed);
-        var launcher = new TeachingPlanLauncher(plans, lessons, runs, new SyncTaskExecutor());
+        var launcher = launcher();
 
         launcher.launch(documentVersionId, learningGoal, "alice");
 
         verify(plans, never()).create(
                 documentVersionId, learningGoal, "alice", received.id());
-        verify(lessons).launchImmediately(planId, "alice");
+        verify(lessons).launchImmediately(existingPlan, "alice");
+        verify(runs).advance(received.id(), 3, AssistantRunState.COMPLETED, "Teaching plan is ready");
     }
 
     @Test
@@ -188,7 +205,7 @@ class TeachingPlanLauncherTest {
         when(plans.create(documentVersionId, null, "alice", received.id()))
                 .thenThrow(new IllegalArgumentException("outline omitted scoring"));
         when(runs.findOwned(received.id(), "alice")).thenReturn(Optional.of(details(planning)));
-        var launcher = new TeachingPlanLauncher(plans, lessons, runs, new SyncTaskExecutor());
+        var launcher = launcher();
 
         launcher.launch(documentVersionId, "alice");
 
@@ -214,7 +231,7 @@ class TeachingPlanLauncherTest {
         when(plans.create(documentVersionId, null, "alice", received.id()))
                 .thenThrow(new AssertionError("simulated worker fault"));
         when(runs.findOwned(received.id(), "alice")).thenReturn(Optional.of(details(planning)));
-        var launcher = new TeachingPlanLauncher(plans, lessons, runs, new SyncTaskExecutor());
+        var launcher = launcher();
 
         assertThatThrownBy(() -> launcher.launch(documentVersionId, "alice"))
                 .isInstanceOf(AssertionError.class)
@@ -249,9 +266,11 @@ class TeachingPlanLauncherTest {
                         "alice",
                         received.id()))
                 .thenReturn(plan);
+        when(lessons.launchImmediately(plan, "alice"))
+                .thenReturn(new LessonLaunch(UUID.randomUUID(), AssistantRunState.RECEIVED, false));
         when(runs.advance(received.id(), 3, AssistantRunState.COMPLETED, "Teaching plan is ready"))
                 .thenReturn(completed);
-        var launcher = new TeachingPlanLauncher(plans, lessons, runs, new SyncTaskExecutor());
+        var launcher = launcher();
 
         launcher.launch(
                 documentVersionId,
@@ -267,6 +286,10 @@ class TeachingPlanLauncherTest {
 
     private RunSnapshot run(AssistantRunState state, long revision) {
         return run(UUID.randomUUID(), state, revision);
+    }
+
+    private TeachingPlanLauncher launcher() {
+        return new TeachingPlanLauncher(plans, lessons, runs, new SyncTaskExecutor(), metrics);
     }
 
     private RunSnapshot run(UUID id, AssistantRunState state, long revision) {

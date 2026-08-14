@@ -4,6 +4,7 @@ import com.rulepilot.assistant.AssistantRunMode;
 import com.rulepilot.assistant.AssistantRunState;
 import com.rulepilot.assistant.AssistantRuns;
 import com.rulepilot.assistant.AssistantRuns.RunSnapshot;
+import com.rulepilot.teaching.domain.TeachingPlan;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
@@ -91,19 +92,20 @@ public class IllustratedLessonLauncher {
     }
 
     /** Runs on the dedicated startup lane already occupied by teaching-plan preparation. */
-    LessonLaunch launchImmediately(UUID teachingPlanId, String ownerUsername) {
+    LessonLaunch launchImmediately(TeachingPlan plan, String ownerUsername) {
+        if (plan == null) throw new IllegalArgumentException("teaching plan is required");
         RunSnapshot run;
         synchronized (this) {
-            var existing = runs.findLatestOwned(AssistantRunMode.TEACHING, teachingPlanId, ownerUsername)
+            var existing = runs.findLatestOwned(AssistantRunMode.TEACHING, plan.id(), ownerUsername)
                     .map(AssistantRuns.RunDetails::run)
                     .filter(candidate -> !candidate.state().terminal());
             if (existing.isPresent()) {
                 RunSnapshot active = existing.get();
                 return new LessonLaunch(active.id(), active.state(), true);
             }
-            run = lessons.begin(teachingPlanId, ownerUsername);
+            run = lessons.begin(plan, ownerUsername);
         }
-        startAndScheduleContinuation(teachingPlanId, ownerUsername, run);
+        startAndScheduleContinuation(plan, ownerUsername, run);
         return new LessonLaunch(run.id(), run.state(), false);
     }
 
@@ -112,6 +114,21 @@ public class IllustratedLessonLauncher {
             String ownerUsername,
             RunSnapshot run) {
         var continuation = lessons.startGeneration(teachingPlanId, ownerUsername, run);
+        scheduleContinuation(teachingPlanId, ownerUsername, continuation);
+    }
+
+    private void startAndScheduleContinuation(
+            TeachingPlan plan,
+            String ownerUsername,
+            RunSnapshot run) {
+        var continuation = lessons.startGeneration(plan, ownerUsername, run);
+        scheduleContinuation(plan.id(), ownerUsername, continuation);
+    }
+
+    private void scheduleContinuation(
+            UUID teachingPlanId,
+            String ownerUsername,
+            IllustratedLessonService.GenerationContinuation continuation) {
         if (!continuation.hasRemainingWork()) {
             finishContinuation(teachingPlanId, ownerUsername, continuation);
             return;

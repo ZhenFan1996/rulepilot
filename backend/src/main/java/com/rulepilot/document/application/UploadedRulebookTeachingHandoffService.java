@@ -44,6 +44,18 @@ public class UploadedRulebookTeachingHandoffService implements UploadedRulebookT
         return view(snapshot);
     }
 
+    @Transactional
+    public HandoffView retry(UUID handoffId, UUID expectedPreparationRunId, String ownerUsername) {
+        String owner = checkedOwner(ownerUsername);
+        var existing = handoffs.findOwned(handoffId, owner)
+                .orElseThrow(() -> new IllegalArgumentException("uploaded teaching handoff does not exist"));
+        if (existing.state() == UploadedRulebookTeachingHandoffStore.State.FAILED
+                && "DOCUMENT_PROCESSING_FAILED".equals(existing.errorCode())) {
+            throw new IllegalStateException("uploaded rulebook processing failed");
+        }
+        return view(handoffs.retry(handoffId, expectedPreparationRunId, owner, Instant.now(clock)));
+    }
+
     @Transactional(readOnly = true)
     public List<HandoffView> recentOwned(String ownerUsername) {
         String owner = checkedOwner(ownerUsername);
@@ -59,10 +71,25 @@ public class UploadedRulebookTeachingHandoffService implements UploadedRulebookT
 
     @Override
     public List<ReadyHandoff> claimReady(int limit) {
+        return readyHandoffs(handoffs.claimReady(checkedClaimLimit(limit), Instant.now(clock)));
+    }
+
+    @Override
+    public List<ReadyHandoff> claimReadyForDocument(UUID documentVersionId, int limit) {
+        if (documentVersionId == null) throw new IllegalArgumentException("ready document version is required");
+        return readyHandoffs(handoffs.claimReadyForDocument(
+                documentVersionId, checkedClaimLimit(limit), Instant.now(clock)));
+    }
+
+    private int checkedClaimLimit(int limit) {
         if (limit < 1 || limit > 20) {
             throw new IllegalArgumentException("uploaded teaching handoff claim limit is invalid");
         }
-        return handoffs.claimReady(limit, Instant.now(clock)).stream()
+        return limit;
+    }
+
+    private List<ReadyHandoff> readyHandoffs(List<UploadedRulebookTeachingHandoffStore.Snapshot> claimed) {
+        return claimed.stream()
                 .map(snapshot -> new ReadyHandoff(
                         snapshot.id(),
                         snapshot.documentVersionId(),

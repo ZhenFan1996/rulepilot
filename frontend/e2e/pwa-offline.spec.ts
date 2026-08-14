@@ -65,3 +65,20 @@ test('reloads the app offline and exposes only cached rule knowledge', async ({ 
     await page.screenshot({ path: 'output/playwright/p11-04-offline-desktop.png', fullPage: true })
   }
 })
+
+test('opens the recovery page from a cold unknown route while offline', async ({ context, page }) => {
+  await page.route('**/api/auth/session', route => route.fulfill({ status: 401, json: {} }))
+  await page.route('**/api/v1/bgg/recommendations?*', route => route.fulfill({ json: [] }))
+  await page.goto('/')
+  await page.evaluate(async () => navigator.serviceWorker.ready)
+  await page.reload()
+  await expect.poll(() => page.evaluate(() => Boolean(navigator.serviceWorker.controller))).toBe(true)
+
+  await context.setOffline(true)
+  await page.goto('/an-old-offline-bookmark')
+
+  await expect(page).toHaveTitle('页面不存在 · RulePilot')
+  await expect(page.getByRole('heading', { name: '没找到这个页面' })).toBeVisible()
+  await expect(page.getByRole('main')).toHaveCount(1)
+  await expect(page.getByRole('link', { name: '回到首页' })).toBeVisible()
+})

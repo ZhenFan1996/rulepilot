@@ -13,6 +13,8 @@ import static org.mockito.ArgumentMatchers.anyString;
 import com.rulepilot.catalog.CatalogEditionLookup;
 import com.rulepilot.catalog.CatalogEditionLookup.EditionReference;
 import com.rulepilot.document.domain.DocumentSourceType;
+import com.rulepilot.document.domain.DocumentVersion;
+import com.rulepilot.document.domain.ProcessingStatus;
 import com.rulepilot.document.domain.RuleDocument;
 import java.time.Instant;
 import java.io.InputStream;
@@ -20,6 +22,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
+import org.springframework.context.ApplicationEventPublisher;
 
 class UploadRuleDocumentServiceTest {
 
@@ -30,13 +33,15 @@ class UploadRuleDocumentServiceTest {
     private final DocumentProcessingQueue processingQueue = mock(DocumentProcessingQueue.class);
     private final UploadedRulebookTeachingHandoffService teachingHandoffs =
             mock(UploadedRulebookTeachingHandoffService.class);
+    private final ApplicationEventPublisher events = mock(ApplicationEventPublisher.class);
     private final UploadRuleDocumentService service = new UploadRuleDocumentService(
             catalog,
             storageService,
             storage,
             repository,
             processingQueue,
-            teachingHandoffs);
+            teachingHandoffs,
+            events);
 
     @Test
     void persistsAutomaticTeachingIntentTogetherWithANewPlayerUpload() {
@@ -66,6 +71,7 @@ class UploadRuleDocumentServiceTest {
                 "先讲清开局。 ");
 
         verify(processingQueue).enqueue(org.mockito.ArgumentMatchers.eq(result.version().id()), any(Instant.class));
+        verify(events).publishEvent(any(DocumentOutboxQueued.class));
         verify(teachingHandoffs).request(result.version().id(), "先讲清开局。 ", "alice");
     }
 
@@ -87,6 +93,48 @@ class UploadRuleDocumentServiceTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("teaching goal requires an automatic teaching handoff");
         verify(storageService, never()).storePdf(any(), anyLong(), anyString(), anyString());
+    }
+
+    @Test
+    void aDuplicateVersionDoesNotEmitAnOutboxWakeupWithoutANewOutboxRow() {
+        UUID documentId = UUID.randomUUID();
+        RuleDocument document = document(documentId, null, "alice");
+        String checksum = "b".repeat(64);
+        DocumentVersion existingVersion = new DocumentVersion(
+                UUID.randomUUID(),
+                documentId,
+                1,
+                "seti.pdf",
+                "documents/existing.pdf",
+                checksum,
+                3,
+                "application/pdf",
+                ProcessingStatus.READY,
+                Instant.parse("2026-07-20T10:00:00Z"));
+        when(repository.findUnassignedDocument("alice", "SETI Rules", DocumentSourceType.BASE_RULEBOOK))
+                .thenReturn(Optional.of(document));
+        when(storageService.storePdf(any(), anyLong(), anyString(), anyString()))
+                .thenReturn(new DocumentStorage.StoredDocument(
+                        "documents/duplicate.pdf", 3, "application/pdf", checksum));
+        when(repository.findVersionByChecksum(documentId, checksum)).thenReturn(Optional.of(existingVersion));
+
+        var result = service.upload(
+                null,
+                "SETI Rules",
+                DocumentSourceType.BASE_RULEBOOK,
+                null,
+                null,
+                "seti.pdf",
+                "application/pdf",
+                3,
+                InputStream.nullInputStream(),
+                "alice");
+
+        assertThat(result.duplicate()).isTrue();
+        assertThat(result.version()).isSameAs(existingVersion);
+        verify(storage).delete("documents/duplicate.pdf");
+        verify(processingQueue, never()).enqueue(any(), any(Instant.class));
+        verify(events, never()).publishEvent(any());
     }
 
     @Test

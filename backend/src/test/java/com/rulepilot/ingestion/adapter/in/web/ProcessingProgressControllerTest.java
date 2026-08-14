@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
@@ -33,6 +34,29 @@ class ProcessingProgressControllerTest {
         var emitter = controller.progress(versionId, () -> "player");
 
         assertThat(emitter).isNotNull();
+    }
+
+    @Test
+    void removesAListenerWhenTerminalProgressArrivesDuringSubscriptionRegistration() {
+        ProcessingProgressTracker progress = mock(ProcessingProgressTracker.class);
+        DocumentVersionScopeLookup versions = mock(DocumentVersionScopeLookup.class);
+        ProcessingProgressController controller = new ProcessingProgressController(progress, versions);
+        UUID versionId = UUID.randomUUID();
+        Runnable removeListener = mock(Runnable.class);
+        when(versions.findVersion(versionId))
+                .thenReturn(Optional.of(new VersionScope(versionId, null, "INDEXING", "player")));
+        when(progress.subscribe(eq(versionId), any())).thenAnswer(invocation -> {
+            @SuppressWarnings("unchecked")
+            java.util.function.Consumer<ProcessingProgressTracker.ProgressSnapshot> listener =
+                    invocation.getArgument(1);
+            listener.accept(new ProcessingProgressTracker.ProgressSnapshot("READY", 100, 12, 12, true));
+            return removeListener;
+        });
+
+        var emitter = controller.progress(versionId, () -> "player");
+
+        assertThat(emitter).isNotNull();
+        verify(removeListener).run();
     }
 
     @Test

@@ -3,6 +3,7 @@ import { computed, defineAsyncComponent, onMounted, onUnmounted, ref, watch } fr
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 
 import AppShell from '@/components/AppShell.vue'
+import ConversationResetDialog from '@/components/ConversationResetDialog.vue'
 import LessonAnswerPanel from '@/components/LessonAnswerPanel.vue'
 import LessonGuideHero from '@/components/LessonGuideHero.vue'
 import LessonModeNav from '@/components/LessonModeNav.vue'
@@ -34,6 +35,7 @@ interface TeachingPlan {
 
 interface IllustratedLesson {
   id: string
+  teachingPlanId: string
 }
 
 const CardOcrCapture = defineAsyncComponent(() => import('@/components/CardOcrCapture.vue'))
@@ -52,8 +54,13 @@ const online = ref(navigator.onLine)
 const cardOcrOpen = ref(false)
 const offlineKnowledge = ref<OfflineKnowledgeEntry[]>([])
 const answerThreadUsername = ref('')
+const answerPanel = ref<{ focusQuestion?: () => void } | null>(null)
+const resetDialogOpen = ref(false)
+const restoreAfterReset = ref(false)
 let latestWorkspaceLoad = 0
 let disposed = false
+let shellIdentityResolved = false
+let activeWorkspaceController: AbortController | null = null
 
 function isCurrentWorkspaceLoad(request: number, targetPlanId: string) {
   return !disposed && request === latestWorkspaceLoad && targetPlanId === planId.value
@@ -74,6 +81,7 @@ const {
   agentTrace,
   answerRunId,
   cancelAnswer,
+  cancelReadTransport: cancelAnswerReads,
   clearAnswerFeedback,
   resetConversation,
   restoreConversation,
@@ -89,6 +97,7 @@ const {
   },
   currentLessonRequest: () => latestWorkspaceLoad,
   isCurrentLessonLoad: isCurrentWorkspaceLoad,
+  canRead: () => online.value,
   requestLogin: async () => notifyLoginRequired(),
   onReceived: (context, text, received) => {
     rememberCurrentAnswerThread()
@@ -128,16 +137,36 @@ function rememberCurrentAnswerThread() {
   if (scope) rememberLessonAnswerThread(sessionStorage, scope, answerTurns.value)
 }
 
-function restoreCurrentAnswerThread() {
+function restoreCurrentAnswerThread(clearQuestion = true) {
   const scope = currentAnswerThreadScope()
-  restoreConversation(scope ? readLessonAnswerThread(sessionStorage, scope) : [])
+  restoreConversation(scope ? readLessonAnswerThread(sessionStorage, scope) : [], clearQuestion)
 }
 
-function clearCurrentAnswerThread() {
+function requestClearCurrentAnswerThread() {
+  if (answerLoading.value || rulingSaving.value || editingRuling.value) return
+  resetDialogOpen.value = true
+  restoreAfterReset.value = false
+}
+
+function cancelClearCurrentAnswerThread() {
+  resetDialogOpen.value = false
+  restoreAfterReset.value = false
+}
+
+function resetRestoreTarget() {
+  if (!restoreAfterReset.value) return null
+  restoreAfterReset.value = false
+  answerPanel.value?.focusQuestion?.()
+  return document.activeElement instanceof HTMLElement ? document.activeElement : null
+}
+
+function confirmClearCurrentAnswerThread() {
   const scope = currentAnswerThreadScope()
   if (scope) forgetLessonAnswerThread(sessionStorage, scope)
-  resetConversation(true)
+  resetConversation(false)
   resetRuling()
+  restoreAfterReset.value = true
+  resetDialogOpen.value = false
 }
 
 function learningAnchorQuestion() {
@@ -173,12 +202,17 @@ const {
   confirmAnswer,
   saveRulingRevision,
   reloadRuling,
+  cancelReads: cancelRulingReads,
   reset: resetRuling,
 } = useConfirmedRuling({
   documentVersionId: computed(() => plan.value?.documentVersionId ?? null),
   answer,
   answeredQuestion,
   csrfToken,
+  currentReadContext: () => plan.value
+    ? `${planId.value}:${plan.value.documentVersionId}`
+    : null,
+  isCurrentReadContext: (context) => context === `${planId.value}:${plan.value?.documentVersionId ?? ''}`,
   onApplied: (value, answered) => {
     cacheOfflineRuling(planId.value, answered, value)
     refreshOfflineKnowledge()
@@ -203,14 +237,35 @@ async function csrfToken() {
   return (await response.json()) as CsrfResponse
 }
 
-async function loadCatalogPresentation(targetPlanId: string) {
+function updateSessionIdentity(username: string) {
+  const normalizedUsername = username.trim()
+  const previousUsername = answerThreadUsername.value
+  const identityWasResolved = shellIdentityResolved
+  if (identityWasResolved && normalizedUsername === previousUsername) return
+  shellIdentityResolved = true
+  answerThreadUsername.value = normalizedUsername
+  if (plan.value) {
+    restoreCurrentAnswerThread(identityWasResolved && previousUsername !== normalizedUsername)
+    loading.value = false
+  }
+}
+
+function cancelWorkspaceReads() {
+  activeWorkspaceController?.abort()
+  activeWorkspaceController = null
+  cancelAnswerReads()
+  cancelRulingReads()
+}
+
+async function loadCatalogPresentation(targetPlanId: string, signal: AbortSignal) {
   try {
     const response = await fetch(
       `/api/v1/teaching-plans/${encodeURIComponent(targetPlanId)}/catalog-presentation`,
-      { credentials: 'include' },
+      { credentials: 'include', signal },
     )
     return response.ok ? await response.json() as CatalogGamePresentation : null
   } catch {
+    if (signal.aborted) throw new DOMException('Aborted', 'AbortError')
     return null
   }
 }
@@ -218,13 +273,13 @@ async function loadCatalogPresentation(targetPlanId: string) {
 async function loadWorkspace() {
   const targetPlanId = planId.value
   const request = ++latestWorkspaceLoad
+  cancelWorkspaceReads()
   loading.value = true
   errorMessage.value = ''
   plan.value = null
   lesson.value = null
   catalogPresentation.value = null
   catalogCoverUnavailable.value = false
-  answerThreadUsername.value = ''
   resetConversation(true)
   resetRuling()
   cardOcrOpen.value = false
@@ -234,40 +289,74 @@ async function loadWorkspace() {
     if (isCurrentWorkspaceLoad(request, targetPlanId)) loading.value = false
     return
   }
+  if (!online.value) {
+    loading.value = false
+    return
+  }
+  const controller = new AbortController()
+  activeWorkspaceController = controller
   try {
-    const [planResponse, lessonResponse, sessionResponse, loadedCatalogPresentation] = await Promise.all([
-      fetch(`/api/v1/teaching-plans/${targetPlanId}`, { credentials: 'include' }),
-      fetch(`/api/v1/teaching-plans/${targetPlanId}/illustrated-lessons/latest`, { credentials: 'include' }),
-      fetch('/api/auth/session', { credentials: 'include' }),
-      loadCatalogPresentation(targetPlanId),
+    const [planResponse, lessonResponse, loadedCatalogPresentation] = await Promise.all([
+      fetch(`/api/v1/teaching-plans/${encodeURIComponent(targetPlanId)}`, {
+        credentials: 'include', signal: controller.signal,
+      }),
+      fetch(`/api/v1/teaching-plans/${encodeURIComponent(targetPlanId)}/illustrated-lessons/latest`, {
+        credentials: 'include', signal: controller.signal,
+      }),
+      loadCatalogPresentation(targetPlanId, controller.signal),
     ])
-    if (!isCurrentWorkspaceLoad(request, targetPlanId)) return
+    if (!isCurrentWorkspaceRead(request, targetPlanId, controller)) return
     if (planResponse.status === 401 || lessonResponse.status === 401) {
       notifyLoginRequired()
       errorMessage.value = t('lesson.reader.error.loginRequired')
       return
     }
     if (!planResponse.ok || !lessonResponse.ok) throw new Error(t('questions.error'))
-    plan.value = await planResponse.json() as TeachingPlan
-    lesson.value = await lessonResponse.json() as IllustratedLesson
-    catalogPresentation.value = loadedCatalogPresentation
-    if (sessionResponse.ok) {
-      const session = await sessionResponse.json() as { username?: unknown }
-      if (typeof session.username === 'string') answerThreadUsername.value = session.username.trim()
+    const [loadedPlan, loadedLesson] = await Promise.all([
+      planResponse.json() as Promise<TeachingPlan>,
+      lessonResponse.json() as Promise<IllustratedLesson>,
+    ])
+    if (!isCurrentWorkspaceRead(request, targetPlanId, controller)) return
+    if (loadedPlan.id !== targetPlanId || loadedLesson.teachingPlanId !== targetPlanId) {
+      throw new Error(t('questions.error'))
     }
-    if (!isCurrentWorkspaceLoad(request, targetPlanId)) return
-    restoreCurrentAnswerThread()
+    plan.value = loadedPlan
+    lesson.value = loadedLesson
+    catalogPresentation.value = loadedCatalogPresentation
+    if (shellIdentityResolved) {
+      restoreCurrentAnswerThread()
+      loading.value = false
+    }
   } catch (error) {
-    if (!isCurrentWorkspaceLoad(request, targetPlanId)) return
+    if (!isCurrentWorkspaceRead(request, targetPlanId, controller) || controller.signal.aborted) return
+    controller.abort()
     errorMessage.value = error instanceof Error ? error.message : t('questions.error')
   } finally {
-    if (isCurrentWorkspaceLoad(request, targetPlanId)) loading.value = false
+    if (isCurrentWorkspaceRead(request, targetPlanId, controller)) {
+      activeWorkspaceController = null
+      if (errorMessage.value) loading.value = false
+    }
   }
+}
+
+function isCurrentWorkspaceRead(
+  request: number,
+  targetPlanId: string,
+  controller: AbortController,
+) {
+  return isCurrentWorkspaceLoad(request, targetPlanId)
+    && activeWorkspaceController === controller
 }
 
 function updateOnlineStatus() {
   online.value = navigator.onLine
-  if (!online.value) refreshOfflineKnowledge()
+  if (!online.value) {
+    cancelWorkspaceReads()
+    loading.value = false
+    refreshOfflineKnowledge()
+    return
+  }
+  if (!plan.value || !lesson.value) void loadWorkspace()
 }
 
 onMounted(() => {
@@ -279,22 +368,23 @@ onMounted(() => {
 
 watch(planId, () => { void loadWorkspace() })
 watch(locale, () => {
-  restoreCurrentAnswerThread()
+  restoreCurrentAnswerThread(false)
   resetRuling()
 })
 
 onUnmounted(() => {
   disposed = true
   latestWorkspaceLoad++
+  cancelWorkspaceReads()
   window.removeEventListener('online', updateOnlineStatus)
   window.removeEventListener('offline', updateOnlineStatus)
 })
 </script>
 
 <template>
-  <AppShell>
+  <AppShell @session-identity="updateSessionIdentity">
     <div class="min-h-screen bg-canvas pb-20 text-ink">
-      <header class="sticky top-0 z-20 border-b border-ink/10 bg-canvas/90 backdrop-blur">
+      <header class="app-sticky-top sticky z-20 border-b border-ink/10 bg-canvas/90 backdrop-blur">
         <div class="mx-auto flex max-w-4xl items-center justify-between gap-4 px-5 py-4 sm:px-8">
           <RouterLink :to="{ name: 'lessons' }" class="text-sm font-semibold text-indigo">← {{ t('lesson.reader.back') }}</RouterLink>
           <LessonModeNav
@@ -309,7 +399,7 @@ onUnmounted(() => {
       <p v-if="!online" class="bg-amber-100 px-5 py-3 text-center text-sm font-semibold text-amber-900" role="status">{{ t('questions.offline') }}</p>
       <LessonOfflineKnowledgePanel v-if="!online && offlineKnowledge.length" :entries="offlineKnowledge" />
 
-      <main class="tabletop-page max-w-4xl">
+      <div class="tabletop-page max-w-4xl">
         <div v-if="loading" aria-live="polite">
           <div class="h-4 w-32 animate-pulse rounded bg-ink/10" />
           <div class="mt-4 h-12 w-3/5 animate-pulse rounded bg-ink/10" />
@@ -343,6 +433,7 @@ onUnmounted(() => {
           </LessonGuideHero>
 
           <LessonAnswerPanel
+            ref="answerPanel"
             :question="question"
             :answer="answer"
             :answered-question="answeredQuestion"
@@ -355,6 +446,7 @@ onUnmounted(() => {
             :online="online"
             :ruling="ruling"
             :ruling-saving="rulingSaving"
+            :clear-thread-disabled="rulingSaving || editingRuling"
             :ruling-error="rulingError"
             :ruling-conflict="rulingConflict"
             :editing-ruling="editingRuling"
@@ -370,15 +462,23 @@ onUnmounted(() => {
             @request-help="requestLearningHelp"
             @open-card-ocr="cardOcrOpen = true"
             @voice-transcript="useVoiceTranscript"
-            @clear-thread="clearCurrentAnswerThread"
+            @clear-thread="requestClearCurrentAnswerThread"
             @confirm-ruling="confirmAnswer"
             @reload-ruling="reloadRuling"
             @save-ruling-revision="saveRulingRevision"
           />
         </template>
-      </main>
+      </div>
 
       <CardOcrCapture v-if="cardOcrOpen" @close="cardOcrOpen = false" @recognized="useCardText" />
+      <ConversationResetDialog
+        kind="private-browser"
+        :open="resetDialogOpen"
+        :turn-count="answerTurns.length"
+        :restore-focus="resetRestoreTarget"
+        @cancel="cancelClearCurrentAnswerThread"
+        @confirm="confirmClearCurrentAnswerThread"
+      />
     </div>
   </AppShell>
 </template>

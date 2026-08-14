@@ -54,6 +54,16 @@ class VisualSectionPrioritizerTest {
         assertThat(selected).containsExactly(1);
     }
 
+    @Test
+    void prioritizesOnlySectionsWithUnresolvedExplicitVisualIntentWhenTheLessonProvidesIt() {
+        var selected = new VisualSectionPrioritizer().positions(List.of(
+                section(1, VisualKind.TABLE_LAYOUT, true, EvidenceStatus.SUPPORTED),
+                sectionWithUnresolvedVisualStep(2),
+                section(3, VisualKind.FLOW_DIAGRAM, true, EvidenceStatus.SUPPORTED)), 3, 6);
+
+        assertThat(selected).containsExactly(2);
+    }
+
     private LessonSection section(int position, VisualKind kind, boolean required, EvidenceStatus evidence) {
         return new LessonSection(
                 position, "section-" + position, List.of(), "Section " + position, required, evidence, kind,
@@ -68,9 +78,11 @@ class VisualSectionPrioritizerTest {
                     index + 1,
                     "Look " + index,
                     TeachingMove.VISUAL,
-                    "Read this grounded visual aid.",
-                    List.of(1),
-                    List.of(UUID.randomUUID())));
+                "Read this grounded visual aid.",
+                List.of(1),
+                List.of(UUID.randomUUID()),
+                new IllustratedLesson.VisualFocus(
+                        1, "Resolved visual " + index, 100 + index * 10, 100 + index * 10, 180, 120)));
         }
         steps.add(new LessonStep(
                 visualSteps + 1,
@@ -82,5 +94,26 @@ class VisualSectionPrioritizerTest {
         return new LessonSection(
                 position, "section-" + position, List.of(), "Section " + position, true,
                 EvidenceStatus.SUPPORTED, VisualKind.TABLE_LAYOUT, "caption", List.of(), List.of(), steps);
+    }
+
+    private LessonSection sectionWithUnresolvedVisualStep(int position) {
+        var visual = new LessonStep(
+                1,
+                "Look here",
+                TeachingMove.VISUAL,
+                "Use this cited diagram to understand the rule.",
+                List.of(4),
+                List.of(UUID.randomUUID()));
+        var ordinary = new LessonStep(
+                2,
+                "Then act",
+                TeachingMove.DO,
+                "Follow the cited procedure.",
+                List.of(4),
+                List.of(UUID.randomUUID()));
+        return new LessonSection(
+                position, "section-" + position, List.of(), "Section " + position, true,
+                EvidenceStatus.SUPPORTED, VisualKind.REFERENCE_CARD, "caption", List.of(), List.of(),
+                List.of(visual, ordinary));
     }
 }

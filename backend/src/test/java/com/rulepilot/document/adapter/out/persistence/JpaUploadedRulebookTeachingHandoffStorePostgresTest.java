@@ -74,6 +74,7 @@ class JpaUploadedRulebookTeachingHandoffStorePostgresTest {
     @BeforeEach
     void clearPlayerUploads() {
         jdbc.update("DELETE FROM uploaded_rulebook_teaching_handoff");
+        jdbc.update("DELETE FROM assistant_run WHERE owner_username = 'upload-handoff-player'");
         jdbc.update("DELETE FROM document_version WHERE object_key LIKE 'test-upload/%'");
         jdbc.update("DELETE FROM rule_document WHERE created_by = 'upload-handoff-player'");
     }
@@ -94,12 +95,12 @@ class JpaUploadedRulebookTeachingHandoffStorePostgresTest {
         assertThat(requested.state())
                 .isEqualTo(UploadedRulebookTeachingHandoffStore.State.WAITING_FOR_DOCUMENT);
         List<UploadedRulebookTeachingHandoffStore.Snapshot> notReady =
-                inTransactionReturning(store -> store.claimReady(4, requestedAt.plusSeconds(1)));
+                inTransactionReturning(store -> store.claimReadyForDocument(versionId, 4, requestedAt.plusSeconds(1)));
         assertThat(notReady).isEmpty();
 
         jdbc.update("UPDATE document_version SET processing_status = 'READY' WHERE id = ?", versionId);
         List<UploadedRulebookTeachingHandoffStore.Snapshot> claimed =
-                inTransactionReturning(store -> store.claimReady(4, requestedAt.plusSeconds(2)));
+                inTransactionReturning(store -> store.claimReadyForDocument(versionId, 4, requestedAt.plusSeconds(2)));
 
         assertThat(claimed).singleElement().satisfies(item -> {
             assertThat(item.id()).isEqualTo(handoffId);
@@ -124,6 +125,30 @@ class JpaUploadedRulebookTeachingHandoffStorePostgresTest {
         assertThat(retried.id()).isEqualTo(handoffId);
         assertThat(retried.state())
                 .isEqualTo(UploadedRulebookTeachingHandoffStore.State.WAITING_FOR_DOCUMENT);
+    }
+
+    @Test
+    void promptClaimScopesTheUploadedHandoffToTheReadyDocumentVersion() {
+        Instant requestedAt = Instant.parse("2026-08-10T10:30:00Z");
+        UUID matchingVersionId = insertDocument("READY");
+        UUID otherVersionId = insertDocument("READY");
+        UUID matchingHandoffId = UUID.randomUUID();
+        UUID otherHandoffId = UUID.randomUUID();
+        inTransactionReturning(store -> store.request(
+                matchingHandoffId, matchingVersionId, "upload-handoff-player", null, requestedAt));
+        inTransactionReturning(store -> store.request(
+                otherHandoffId, otherVersionId, "upload-handoff-player", null, requestedAt));
+
+        var claimed = inTransactionReturning(store -> store.claimReadyForDocument(
+                matchingVersionId, 4, requestedAt.plusSeconds(1)));
+
+        assertThat(claimed).extracting(UploadedRulebookTeachingHandoffStore.Snapshot::id)
+                .containsExactly(matchingHandoffId);
+        assertThat(jdbc.queryForObject(
+                        "SELECT state FROM uploaded_rulebook_teaching_handoff WHERE id = ?",
+                        String.class,
+                        otherHandoffId))
+                .isEqualTo("WAITING_FOR_DOCUMENT");
     }
 
     @Test
@@ -164,6 +189,33 @@ class JpaUploadedRulebookTeachingHandoffStorePostgresTest {
                 .containsEntry("error_code", "DOCUMENT_PROCESSING_FAILED");
     }
 
+    @Test
+    void retryResetsTheObservedUploadPreparationButCannotReplaceANewerRun() {
+        Instant now = Instant.parse("2026-08-10T11:00:00Z");
+        UUID versionId = insertDocument("READY");
+        UUID handoffId = UUID.randomUUID();
+        UUID failedRunId = UUID.randomUUID();
+        UUID newerRunId = UUID.randomUUID();
+        insertPreparationRun(failedRunId, versionId, "FAILED", now);
+        insertPreparationRun(newerRunId, versionId, "RECEIVED", now.plusSeconds(4));
+        inTransactionReturning(store -> store.request(
+                handoffId, versionId, "upload-handoff-player", null, now));
+        inTransaction(store -> store.claimReadyForDocument(versionId, 1, now.plusSeconds(1)));
+        inTransaction(store -> store.completeLaunch(handoffId, failedRunId, now.plusSeconds(2)));
+
+        var retried = inTransactionReturning(store -> store.retry(
+                handoffId, failedRunId, "upload-handoff-player", now.plusSeconds(3)));
+        inTransaction(store -> store.claimReadyForDocument(versionId, 1, now.plusSeconds(4)));
+        inTransaction(store -> store.completeLaunch(handoffId, newerRunId, now.plusSeconds(5)));
+        var unchanged = inTransactionReturning(store -> store.retry(
+                handoffId, failedRunId, "upload-handoff-player", now.plusSeconds(6)));
+
+        assertThat(retried.state())
+                .isEqualTo(UploadedRulebookTeachingHandoffStore.State.WAITING_FOR_DOCUMENT);
+        assertThat(unchanged.state()).isEqualTo(UploadedRulebookTeachingHandoffStore.State.LAUNCHED);
+        assertThat(unchanged.preparationRunId()).isEqualTo(newerRunId);
+    }
+
     private static UUID insertDocument(String status) {
         UUID documentId = UUID.randomUUID();
         UUID versionId = UUID.randomUUID();
@@ -175,7 +227,7 @@ class JpaUploadedRulebookTeachingHandoffStorePostgresTest {
                 VALUES (?, NULL, ?, 'BASE_RULEBOOK', 'upload-handoff-player', ?)
                 """,
                 documentId,
-                "Local upload rules",
+                "Local upload rules " + documentId,
                 now);
         jdbc.update(
                 """
@@ -192,6 +244,25 @@ class JpaUploadedRulebookTeachingHandoffStorePostgresTest {
                 status,
                 now);
         return versionId;
+    }
+
+    private static void insertPreparationRun(UUID runId, UUID versionId, String state, Instant now) {
+        boolean failed = "FAILED".equals(state);
+        OffsetDateTime timestamp = OffsetDateTime.ofInstant(now, ZoneOffset.UTC);
+        jdbc.update(
+                """
+                INSERT INTO assistant_run (
+                    id, mode, subject_id, owner_username, state, revision,
+                    created_at, updated_at, completed_at, last_error_code
+                ) VALUES (?, 'TEACHING_PREPARATION', ?, 'upload-handoff-player', ?, 1, ?, ?, ?, ?)
+                """,
+                runId,
+                versionId,
+                state,
+                timestamp,
+                timestamp,
+                failed ? timestamp : null,
+                failed ? "TEACHING_PREPARATION_FAILED" : null);
     }
 
     private static void inTransaction(RepositoryWork work) {

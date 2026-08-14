@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 
 import LessonChapterList from '@/components/LessonChapterList.vue'
+import { useModalFocus } from '@/composables/useModalFocus'
 import { acceptProgressiveLesson, teachingRunIsActive } from '@/lib/liveLesson'
 import { useLocale } from '@/lib/locale'
 import { mergeTeachingRunProgress, teachingActivityText, type TeachingRunProgress } from '@/lib/teachingProgress'
@@ -12,6 +13,14 @@ interface TeachingPlan {
   gameTitle: string
   premise: string
   sections: Array<{ position: number; title: string; visualEvidenceRecommended: boolean }>
+}
+
+interface TeachingPlanSeed {
+  id: string
+  documentVersionId: string
+  gameTitle: string
+  premise: string
+  sections: Array<{ position: number; title: string; visualEvidenceRecommended?: boolean }>
 }
 
 interface VisualFocus {
@@ -47,11 +56,18 @@ interface LessonSection {
 
 interface IllustratedLesson {
   id: string
+  teachingPlanId: string
   status: 'COMPLETE' | 'DRAFT_READY' | 'INCOMPLETE'
   sections: LessonSection[]
 }
 
-const props = defineProps<{ open: boolean; planId: string }>()
+const props = defineProps<{
+  open: boolean
+  planId: string
+  initialPlan?: TeachingPlanSeed | null
+  initialLesson?: IllustratedLesson | null
+  restoreFocus?: () => HTMLElement | null
+}>()
 const emit = defineEmits<{ close: []; 'ask-questions': [] }>()
 const { locale } = useLocale()
 const plan = ref<TeachingPlan | null>(null)
@@ -60,8 +76,18 @@ const run = ref<TeachingRunProgress | null>(null)
 const loading = ref(false)
 const error = ref(false)
 const refreshWarning = ref(false)
+const dialog = ref<HTMLElement | null>(null)
 let requestSequence = 0
 let timer: ReturnType<typeof setTimeout> | null = null
+let disposed = false
+let activeController: AbortController | null = null
+
+useModalFocus({
+  dialog,
+  open: () => props.open,
+  requestClose: () => emit('close'),
+  restoreFocus: props.restoreFocus,
+})
 
 const copy = computed(() => locale.value === 'zh-CN' ? {
   dialog: '生成讲解阅读器', close: '关闭讲解', eyebrow: '规则书讲解', loading: '正在打开已生成的讲解…', error: '讲解暂时无法打开。', retry: '重试',
@@ -99,6 +125,10 @@ function pageImageUrl(page: number) {
   return plan.value ? `/api/v1/document-versions/${encodeURIComponent(plan.value.documentVersionId)}/pages/${page}/image` : ''
 }
 
+function pagePreviewImageUrl(page: number) {
+  return plan.value ? `/api/v1/document-versions/${encodeURIComponent(plan.value.documentVersionId)}/pages/${page}/image/preview` : ''
+}
+
 function focusedPageImageUrl(focus: VisualFocus) {
   if (!plan.value) return ''
   const query = new URLSearchParams({
@@ -107,8 +137,56 @@ function focusedPageImageUrl(focus: VisualFocus) {
   return `/api/v1/document-versions/${encodeURIComponent(plan.value.documentVersionId)}/pages/${focus.pageNumber}/image/crop?${query}`
 }
 
-async function optionalJson<T>(path: string): Promise<T | null> {
-  const response = await fetch(path, { credentials: 'include' })
+function isAbortError(error: unknown) {
+  return (error as { name?: unknown } | null)?.name === 'AbortError'
+}
+
+function isCurrentGeneration(request: number, planId: string) {
+  return !disposed
+    && props.open
+    && request === requestSequence
+    && props.planId === planId
+}
+
+function isCurrentRequest(request: number, planId: string, controller: AbortController) {
+  return isCurrentGeneration(request, planId)
+    && activeController === controller
+}
+
+function responseMatchesPlan(
+  planId: string,
+  incomingPlan: TeachingPlan | null,
+  incomingLesson: IllustratedLesson | null,
+  incomingRun: TeachingRunProgress | null,
+) {
+  return (!incomingPlan || incomingPlan.id === planId)
+    && (!incomingLesson || incomingLesson.teachingPlanId === planId)
+    && (!incomingRun || incomingRun.run.subjectId === planId)
+}
+
+function acceptInitialSnapshot(planId: string) {
+  const incomingPlan = props.initialPlan
+  const incomingLesson = props.initialLesson
+  if (incomingPlan?.id !== planId
+    || incomingLesson?.teachingPlanId !== planId
+    || incomingLesson.sections.length === 0) return false
+  const normalizedPlan: TeachingPlan = {
+    ...incomingPlan,
+    sections: incomingPlan.sections.map(section => ({
+      ...section,
+      visualEvidenceRecommended: section.visualEvidenceRecommended ?? false,
+    })),
+  }
+  plan.value = normalizedPlan
+  lesson.value = acceptProgressiveLesson(
+    lesson.value?.id === incomingLesson.id ? lesson.value : null,
+    incomingLesson,
+  )
+  return true
+}
+
+async function optionalJson<T>(path: string, signal: AbortSignal): Promise<T | null> {
+  const response = await fetch(path, { credentials: 'include', signal })
   if (response.status === 404) return null
   if (!response.ok) throw new Error('request failed')
   return await response.json() as T
@@ -116,53 +194,90 @@ async function optionalJson<T>(path: string): Promise<T | null> {
 
 async function load() {
   if (!props.open || !props.planId) return
+  const planId = props.planId
   const request = ++requestSequence
+  if (plan.value?.id !== planId) {
+    plan.value = null
+    lesson.value = null
+    run.value = null
+  }
+  const readableSnapshot = acceptInitialSnapshot(planId)
   clearTimer()
-  loading.value = true
+  activeController?.abort()
+  const controller = new AbortController()
+  activeController = controller
+  loading.value = !readableSnapshot
   error.value = false
   refreshWarning.value = false
+  let loaded = false
   try {
     const [incomingPlan, incomingLesson, incomingRun] = await Promise.all([
-      optionalJson<TeachingPlan>(`/api/v1/teaching-plans/${encodeURIComponent(props.planId)}`),
-      optionalJson<IllustratedLesson>(`/api/v1/teaching-plans/${encodeURIComponent(props.planId)}/illustrated-lessons/latest`),
-      optionalJson<TeachingRunProgress>(`/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=${encodeURIComponent(props.planId)}`),
+      optionalJson<TeachingPlan>(`/api/v1/teaching-plans/${encodeURIComponent(planId)}`, controller.signal),
+      optionalJson<IllustratedLesson>(`/api/v1/teaching-plans/${encodeURIComponent(planId)}/illustrated-lessons/latest`, controller.signal),
+      optionalJson<TeachingRunProgress>(`/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=${encodeURIComponent(planId)}`, controller.signal),
     ])
-    if (request !== requestSequence || !incomingPlan || !incomingLesson) return
+    if (!isCurrentRequest(request, planId, controller)) return
+    if (!incomingPlan || !incomingLesson || !responseMatchesPlan(planId, incomingPlan, incomingLesson, incomingRun)) {
+      throw new Error('guide response identity mismatch')
+    }
     plan.value = incomingPlan
     lesson.value = acceptProgressiveLesson(lesson.value?.id === incomingLesson.id ? lesson.value : null, incomingLesson)
-    run.value = mergeTeachingRunProgress(run.value, incomingRun)
-  } catch {
-    if (request === requestSequence) error.value = true
+    run.value = incomingRun
+      ? mergeTeachingRunProgress(run.value?.run.id === incomingRun.run.id ? run.value : null, incomingRun)
+      : null
+    loaded = true
+  } catch (caught) {
+    if (!isAbortError(caught) && isCurrentRequest(request, planId, controller)) {
+      if (readableSnapshot) refreshWarning.value = true
+      else error.value = true
+      controller.abort()
+    }
   } finally {
-    if (request === requestSequence) {
+    if (isCurrentRequest(request, planId, controller)) {
+      activeController = null
       loading.value = false
-      scheduleRefresh()
+      if (loaded || readableSnapshot) {
+        scheduleRefresh(request, planId, refreshWarning.value ? 4_000 : 1_500)
+      }
     }
   }
 }
 
-async function refresh() {
-  if (!props.open || !props.planId) return
-  const request = requestSequence
+async function refresh(request: number, planId: string) {
+  if (!isCurrentGeneration(request, planId)) return
+  const controller = new AbortController()
+  activeController = controller
   try {
     const [incomingLesson, incomingRun] = await Promise.all([
-      optionalJson<IllustratedLesson>(`/api/v1/teaching-plans/${encodeURIComponent(props.planId)}/illustrated-lessons/latest`),
-      optionalJson<TeachingRunProgress>(`/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=${encodeURIComponent(props.planId)}`),
+      optionalJson<IllustratedLesson>(`/api/v1/teaching-plans/${encodeURIComponent(planId)}/illustrated-lessons/latest`, controller.signal),
+      optionalJson<TeachingRunProgress>(`/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=${encodeURIComponent(planId)}`, controller.signal),
     ])
-    if (request !== requestSequence) return
+    if (!isCurrentRequest(request, planId, controller)) return
+    if (!responseMatchesPlan(planId, null, incomingLesson, incomingRun)) throw new Error('guide response identity mismatch')
     if (incomingLesson) lesson.value = acceptProgressiveLesson(lesson.value, incomingLesson)
     run.value = mergeTeachingRunProgress(run.value, incomingRun)
     refreshWarning.value = false
-  } catch {
-    if (request === requestSequence) refreshWarning.value = true
+  } catch (caught) {
+    if (!isAbortError(caught) && isCurrentRequest(request, planId, controller)) {
+      refreshWarning.value = true
+      controller.abort()
+    }
   } finally {
-    if (request === requestSequence) scheduleRefresh(refreshWarning.value ? 4_000 : 1_500)
+    if (isCurrentRequest(request, planId, controller)) {
+      activeController = null
+      scheduleRefresh(request, planId, refreshWarning.value ? 4_000 : 1_500)
+    }
   }
 }
 
-function scheduleRefresh(delay = 1_500) {
+function scheduleRefresh(request: number, planId: string, delay = 1_500) {
   clearTimer()
-  if (props.open && (!run.value || active.value)) timer = setTimeout(() => { void refresh() }, delay)
+  if (isCurrentGeneration(request, planId) && (!run.value || active.value)) {
+    timer = setTimeout(() => {
+      timer = null
+      void refresh(request, planId)
+    }, delay)
+  }
 }
 
 function clearTimer() {
@@ -170,23 +285,32 @@ function clearTimer() {
   timer = null
 }
 
+function cancelRequests() {
+  requestSequence += 1
+  clearTimer()
+  activeController?.abort()
+  activeController = null
+  loading.value = false
+}
+
 watch(() => [props.open, props.planId] as const, ([open]) => {
   if (open) void load()
-  else {
-    requestSequence += 1
-    clearTimer()
-  }
+  else cancelRequests()
 }, { immediate: true })
+onBeforeUnmount(() => {
+  disposed = true
+  cancelRequests()
+})
 </script>
 
 <template>
   <Teleport to="body">
     <div v-if="open" data-testid="recommendation-lesson-backdrop" class="fixed inset-0 z-[100] overflow-y-auto bg-ink/45 backdrop-blur-[2px]" @click.self="emit('close')">
-      <section data-testid="recommendation-lesson-surface" class="relative isolate mx-auto min-h-screen w-full max-w-[100rem] text-ink sm:my-5 sm:min-h-0 sm:overflow-hidden sm:rounded-3xl sm:border sm:border-gold/25 sm:shadow-2xl" style="background-color: var(--color-canvas); opacity: 1" role="dialog" aria-modal="true" :aria-label="copy.dialog">
-        <header class="sticky top-0 z-20 border-b border-ink/10 bg-paper/95 px-4 py-4 backdrop-blur sm:px-6">
+      <section ref="dialog" data-testid="recommendation-lesson-surface" tabindex="-1" class="relative isolate mx-auto min-h-screen w-full max-w-[100rem] text-ink outline-none sm:my-5 sm:min-h-0 sm:overflow-hidden sm:rounded-3xl sm:border sm:border-gold/25 sm:shadow-2xl" style="background-color: var(--color-canvas); opacity: 1" role="dialog" aria-modal="true" :aria-label="copy.dialog">
+        <header class="app-sticky-top sticky z-20 border-b border-ink/10 bg-paper/95 px-4 py-4 backdrop-blur sm:px-6">
           <div class="flex items-start justify-between gap-4">
             <div class="min-w-0"><p class="tabletop-kicker">{{ copy.eyebrow }}</p><h2 class="mt-1 truncate font-display text-2xl font-semibold">{{ plan?.gameTitle ?? copy.dialog }}</h2><p v-if="plan?.premise" class="mt-1 max-w-3xl text-xs leading-5 text-ink/50">{{ plan.premise }}</p></div>
-            <div class="flex shrink-0 items-center gap-2"><button v-if="lesson" type="button" class="min-h-11 rounded-lg bg-indigo px-4 text-sm font-semibold text-white" @click="emit('ask-questions')">{{ copy.ask }}</button><button type="button" class="grid min-h-11 min-w-11 place-items-center rounded-lg text-2xl text-ink/45 hover:bg-ink/5" :aria-label="copy.close" @click="emit('close')">×</button></div>
+            <div class="flex shrink-0 items-center gap-2"><button v-if="lesson" type="button" class="min-h-11 rounded-lg bg-indigo px-4 text-sm font-semibold text-white" @click="emit('ask-questions')">{{ copy.ask }}</button><button type="button" data-modal-initial-focus class="grid min-h-11 min-w-11 place-items-center rounded-lg text-2xl text-ink/45 hover:bg-ink/5" :aria-label="copy.close" @click="emit('close')">×</button></div>
           </div>
           <div v-if="plan && lesson" class="mt-3">
             <div class="flex items-center justify-between gap-3 text-xs"><p class="font-semibold" :class="active || !run ? 'text-indigo' : 'text-emerald-700'" role="status">{{ statusText }}</p><span class="font-mono font-semibold text-ink/50">{{ lesson.sections.length }} / {{ plan.sections.length }}</span></div>
@@ -196,14 +320,14 @@ watch(() => [props.open, props.planId] as const, ([open]) => {
           </div>
         </header>
 
-        <main class="mx-auto max-w-7xl px-4 py-5 sm:px-7 sm:py-7">
+        <div class="mx-auto max-w-7xl px-4 py-5 sm:px-7 sm:py-7">
           <p v-if="loading" class="rounded-xl bg-paper p-10 text-center text-sm text-ink/55" role="status">{{ copy.loading }}</p>
           <section v-else-if="error || !plan || !lesson" class="rounded-xl border border-red-200 bg-paper p-10 text-center" role="alert"><p>{{ copy.error }}</p><button type="button" class="mt-4 min-h-11 rounded-lg bg-indigo px-5 font-semibold text-white" @click="load">{{ copy.retry }}</button></section>
           <template v-else>
             <p class="rounded-xl border border-indigo/10 bg-indigo/5 px-4 py-3 text-xs leading-5 text-ink/55">{{ copy.source }}</p>
-            <LessonChapterList :sections="lesson.sections" :id-prefix="`journey-lesson-${lesson.id}`" :page-image-url="pageImageUrl" :focused-page-image-url="focusedPageImageUrl" />
+            <LessonChapterList :sections="lesson.sections" :id-prefix="`journey-lesson-${lesson.id}`" :page-image-url="pageImageUrl" :page-preview-image-url="pagePreviewImageUrl" :focused-page-image-url="focusedPageImageUrl" />
           </template>
-        </main>
+        </div>
       </section>
     </div>
   </Teleport>

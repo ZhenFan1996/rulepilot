@@ -22,6 +22,7 @@
 }
 
 :root {
+  --app-top-inset: 0px;
   color-scheme: light;
   font-family: var(--font-sans);
   font-synthesis: none;
@@ -82,6 +83,33 @@ body {
   margin: 0;
 }
 
+:root.connectivity-status-visible {
+  --app-top-inset: 5.25rem;
+}
+
+.app-root {
+  min-height: 100vh;
+  padding-top: var(--app-top-inset);
+}
+
+.app-root #main-content,
+.app-root .tabletop-app {
+  min-height: calc(100vh - var(--app-top-inset));
+}
+
+.connectivity-status-bar {
+  height: var(--app-top-inset);
+}
+
+.app-fixed-top,
+.app-sticky-top {
+  top: var(--app-top-inset);
+}
+
+.app-sticky-below-mobile-header {
+  top: calc(var(--app-top-inset) + 4rem);
+}
+
 ::selection {
   color: #fffaf0;
   background: #45634f;
@@ -90,6 +118,39 @@ body {
 :focus-visible {
   outline: 2px solid var(--color-gold);
   outline-offset: 3px;
+}
+
+.skip-to-content {
+  position: fixed;
+  top: calc(var(--app-top-inset) + 0.75rem);
+  left: 0.75rem;
+  z-index: 70;
+  min-height: 2.75rem;
+  translate: 0 calc(-100% - 1rem);
+  display: inline-flex;
+  align-items: center;
+  border: 2px solid var(--color-gold);
+  border-radius: 0.75rem;
+  padding-inline: 1rem;
+  color: var(--color-paper);
+  background: var(--color-ink-panel);
+  font-weight: 700;
+  box-shadow: 0 12px 30px -18px rgb(0 0 0 / 70%);
+  transition: translate 140ms ease;
+}
+
+@media (min-width: 640px) {
+  :root.connectivity-status-visible {
+    --app-top-inset: 3.25rem;
+  }
+}
+
+.skip-to-content:focus {
+  translate: 0;
+}
+
+.app-main {
+  scroll-margin-top: calc(5rem + var(--app-top-inset));
 }
 
 button,

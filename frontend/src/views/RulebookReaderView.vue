@@ -3,10 +3,12 @@ import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, ref, 
 import { RouterLink, useRoute } from 'vue-router'
 
 import AppShell from '@/components/AppShell.vue'
+import ConversationResetDialog from '@/components/ConversationResetDialog.vue'
 import LessonAnswerPanel from '@/components/LessonAnswerPanel.vue'
 import { useConfirmedRuling } from '@/composables/useConfirmedRuling'
 import { useLessonAnswers, type CsrfResponse } from '@/composables/useLessonAnswers'
 import { useLessonQuestionInput } from '@/composables/useLessonQuestionInput'
+import { useModalFocus } from '@/composables/useModalFocus'
 import { notifyLoginRequired } from '@/lib/authSession'
 import {
   forgetLessonAnswerThread,
@@ -37,9 +39,19 @@ const username = ref('')
 const online = ref(navigator.onLine)
 const answersOpen = ref(false)
 const cardOcrOpen = ref(false)
+const answerPanel = ref<{ focusQuestion?: () => void } | null>(null)
+const resetDialogOpen = ref(false)
+const restoreAfterReset = ref(false)
 const readerTop = ref<HTMLElement | null>(null)
+const answersDialog = ref<HTMLElement | null>(null)
 let loadSequence = 0
 let disposed = false
+
+useModalFocus({
+  dialog: answersDialog,
+  open: answersOpen,
+  requestClose: () => { answersOpen.value = false },
+})
 
 const copy = computed(() => locale.value === 'zh-CN' ? {
   back: '返回规则书', eyebrow: '原规则书', pages: `${pages.value.length} 页`, page: (value: number) => `第 ${value} 页`,
@@ -127,11 +139,31 @@ const {
   },
 })
 
-function clearThread() {
+function requestClearThread() {
+  if (answerLoading.value || rulingSaving.value || editingRuling.value) return
+  resetDialogOpen.value = true
+  restoreAfterReset.value = false
+}
+
+function cancelClearThread() {
+  resetDialogOpen.value = false
+  restoreAfterReset.value = false
+}
+
+function resetRestoreTarget() {
+  if (!restoreAfterReset.value) return null
+  restoreAfterReset.value = false
+  answerPanel.value?.focusQuestion?.()
+  return document.activeElement instanceof HTMLElement ? document.activeElement : null
+}
+
+function confirmClearThread() {
   const scope = answerThreadScope()
   if (scope) forgetLessonAnswerThread(sessionStorage, scope)
-  resetConversation(true)
+  resetConversation(false)
   resetRuling()
+  restoreAfterReset.value = true
+  resetDialogOpen.value = false
 }
 
 async function loadRulebook() {
@@ -193,7 +225,7 @@ onMounted(() => {
 watch(versionId, () => { void loadRulebook() })
 watch(locale, () => {
   const scope = answerThreadScope()
-  restoreConversation(scope ? readLessonAnswerThread(sessionStorage, scope) : [])
+  restoreConversation(scope ? readLessonAnswerThread(sessionStorage, scope) : [], false)
   resetRuling()
 })
 onUnmounted(() => {
@@ -207,7 +239,7 @@ onUnmounted(() => {
 <template>
   <AppShell>
     <div class="min-h-screen bg-[#ddd8cf] text-ink">
-      <header class="sticky top-0 z-30 border-b border-ink/10 bg-paper/95 backdrop-blur">
+      <header class="app-sticky-top sticky z-30 border-b border-ink/10 bg-paper/95 backdrop-blur">
         <div class="mx-auto flex max-w-[100rem] items-center justify-between gap-4 px-4 py-3 sm:px-6">
           <div class="min-w-0">
             <RouterLink :to="{ name: 'teach' }" class="text-xs font-semibold text-indigo">← {{ copy.back }}</RouterLink>
@@ -220,7 +252,7 @@ onUnmounted(() => {
         </div>
       </header>
 
-      <main ref="readerTop" class="mx-auto grid max-w-[100rem] scroll-mt-20 gap-4 px-3 py-4 sm:px-6 lg:grid-cols-[12rem_minmax(0,1fr)]">
+      <div ref="readerTop" class="mx-auto grid max-w-[100rem] scroll-mt-20 gap-4 px-3 py-4 sm:px-6 lg:grid-cols-[12rem_minmax(0,1fr)]">
         <p v-if="loading" class="col-span-full rounded-xl bg-paper p-8 text-center text-sm text-ink/55" role="status">{{ copy.loading }}</p>
         <section v-else-if="errorMessage" class="col-span-full rounded-xl border border-red-200 bg-paper p-8 text-center" role="alert">
           <p class="font-semibold">{{ errorMessage }}</p>
@@ -246,31 +278,40 @@ onUnmounted(() => {
             <p class="mx-auto mt-3 max-w-5xl text-center text-xs text-ink/50">{{ copy.page(selectedPage) }} · {{ copy.hint }}</p>
           </section>
         </template>
-      </main>
+      </div>
 
       <button v-if="!answersOpen && !loading && !errorMessage" type="button" class="fixed bottom-5 right-4 z-30 min-h-12 rounded-full bg-copper px-5 text-sm font-bold text-white shadow-xl sm:right-6" @click="answersOpen = true">{{ copy.answer }}</button>
 
       <div v-if="answersOpen" class="fixed inset-0 z-50 bg-ink/40 backdrop-blur-[2px]" @click.self="answersOpen = false">
-        <aside class="absolute inset-y-0 right-0 w-full max-w-2xl overflow-y-auto border-l border-ink/10 bg-canvas p-4 shadow-2xl sm:p-6" role="dialog" aria-modal="true" :aria-label="copy.answer">
-          <div class="sticky top-0 z-10 flex items-center justify-between border-b border-ink/10 bg-canvas/95 pb-3 backdrop-blur">
+        <aside ref="answersDialog" tabindex="-1" class="absolute inset-y-0 right-0 w-full max-w-2xl overflow-y-auto border-l border-ink/10 bg-canvas p-4 shadow-2xl outline-none sm:p-6" role="dialog" aria-modal="true" :aria-label="copy.answer">
+          <div class="app-sticky-top sticky z-10 flex items-center justify-between border-b border-ink/10 bg-canvas/95 pb-3 backdrop-blur">
             <div><p class="font-semibold">{{ copy.answer }}</p><p class="mt-1 text-xs text-ink/45">{{ copy.hint }}</p></div>
-            <button type="button" class="grid min-h-11 min-w-11 place-items-center rounded-lg text-2xl text-ink/50 hover:bg-ink/5" :aria-label="copy.close" @click="answersOpen = false">×</button>
+            <button type="button" data-modal-initial-focus class="grid min-h-11 min-w-11 place-items-center rounded-lg text-2xl text-ink/50 hover:bg-ink/5" :aria-label="copy.close" @click="answersOpen = false">×</button>
           </div>
           <LessonAnswerPanel
+            ref="answerPanel"
             :question="question" :answer="answer" :answered-question="answeredQuestion" :answer-turns="answerTurns"
             :active-learning-intent="activeLearningIntent" :answer-loading="answerLoading" :answer-error="answerError"
             :agent-trace="agentTrace" :answer-run-id="answerRunId" :online="online" :ruling="ruling"
-            :ruling-saving="rulingSaving" :ruling-error="rulingError" :ruling-conflict="rulingConflict"
+            :ruling-saving="rulingSaving" :clear-thread-disabled="rulingSaving || editingRuling" :ruling-error="rulingError" :ruling-conflict="rulingConflict"
             :editing-ruling="editingRuling" :edited-verdict="editedVerdict" :edited-explanation="editedExplanation"
             @update:question="question = $event" @update:editing-ruling="editingRuling = $event"
             @update:edited-verdict="editedVerdict = $event" @update:edited-explanation="editedExplanation = $event"
             @ask="askQuestion" @cancel-answer="cancelAnswer" @request-help="requestLearningHelp"
-            @open-card-ocr="cardOcrOpen = true" @voice-transcript="useVoiceTranscript" @clear-thread="clearThread"
+            @open-card-ocr="cardOcrOpen = true" @voice-transcript="useVoiceTranscript" @clear-thread="requestClearThread"
             @confirm-ruling="confirmAnswer" @reload-ruling="reloadRuling" @save-ruling-revision="saveRulingRevision"
           />
         </aside>
       </div>
       <CardOcrCapture v-if="cardOcrOpen" @close="cardOcrOpen = false" @recognized="useCardText" />
+      <ConversationResetDialog
+        kind="private-browser"
+        :open="resetDialogOpen"
+        :turn-count="answerTurns.length"
+        :restore-focus="resetRestoreTarget"
+        @cancel="cancelClearThread"
+        @confirm="confirmClearThread"
+      />
     </div>
   </AppShell>
 </template>

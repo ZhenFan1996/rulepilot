@@ -1,5 +1,5 @@
 import { flushPromises, mount } from '@vue/test-utils'
-import { defineComponent, nextTick } from 'vue'
+import { defineComponent, nextTick, ref } from 'vue'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import LessonAnswerPanel from './LessonAnswerPanel.vue'
@@ -29,7 +29,12 @@ const AnswerPanelStub = defineComponent({
     answerTurns: { type: Array, default: () => [] },
   },
   emits: ['update:question', 'ask', 'clearThread'],
-  template: '<div data-testid="answer-panel-stub"><span>{{ answer?.shortVerdict }}</span><span>{{ answerTurns.length }}</span></div>',
+  setup(_props, { expose }) {
+    const questionInput = ref<HTMLTextAreaElement | null>(null)
+    expose({ focusQuestion: () => questionInput.value?.focus({ preventScroll: true }) })
+    return { questionInput }
+  },
+  template: '<div data-testid="answer-panel-stub"><span>{{ answer?.shortVerdict }}</span><span>{{ answerTurns.length }}</span><textarea ref="questionInput" data-testid="question-input" :value="question" @input="$emit(\'update:question\', $event.target.value)" /><button v-if="answerTurns.length" data-testid="clear-thread" type="button" @click="$emit(\'clearThread\')">Clear Q&amp;A</button></div>',
 })
 
 describe('RecommendationAnswerWorkspace', () => {
@@ -42,6 +47,7 @@ describe('RecommendationAnswerWorkspace', () => {
     setLocale('zh-CN')
     vi.restoreAllMocks()
     vi.unstubAllGlobals()
+    document.body.innerHTML = ''
   })
 
   function mountWorkspace(active = true) {
@@ -148,5 +154,77 @@ describe('RecommendationAnswerWorkspace', () => {
     await flushPromises()
 
     expect(fetchMock).toHaveBeenCalled()
+  })
+
+  it('keeps the current server thread and draft until a replacement session succeeds', async () => {
+    localStorage.setItem('rulepilot:recommendation-answer-session:document-1', 'session-existing')
+    let replacementAttempt = 0
+    const requests: Array<{ path: string; init?: RequestInit }> = []
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const path = String(input)
+      requests.push({ path, init })
+      if (path === '/api/v1/game-sessions/session-existing') return Response.json({
+        id: 'session-existing', editionId: 'edition-1', documentVersionId: 'document-1',
+      })
+      if (path.includes('gameSessionId=session-existing')) return Response.json([{
+        id: 'turn-1', question: 'When does it resolve?', answer, createdAt: '2026-08-10T00:00:00Z',
+      }])
+      if (path === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      if (path === '/api/v1/game-sessions' && init?.method === 'POST') {
+        replacementAttempt += 1
+        if (replacementAttempt === 1) return new Response(null, { status: 503 })
+        return Response.json({ id: 'session-new', editionId: 'edition-1', documentVersionId: 'document-1' })
+      }
+      if (path.includes('gameSessionId=session-new')) return Response.json([])
+      return new Response(null, { status: 404 })
+    }))
+    const wrapper = mount(RecommendationAnswerWorkspace, {
+      attachTo: document.body,
+      props: {
+        active: true,
+        documentVersionId: 'document-1',
+        planId: 'plan-1',
+        editionId: 'edition-1',
+        gameTitle: 'Wingspan',
+      },
+      global: { stubs: { LessonAnswerPanel: AnswerPanelStub, CardOcrCapture: true } },
+    })
+    await flushPromises()
+
+    const panel = wrapper.findComponent(LessonAnswerPanel)
+    panel.vm.$emit('update:question', 'An unsubmitted follow-up')
+    await nextTick()
+    await wrapper.get('[data-testid="clear-thread"]').trigger('click')
+    await flushPromises()
+
+    expect(document.body.textContent).toContain('will not be deleted from the server')
+    expect(wrapper.text()).toContain('Resolve the bird power after gaining food.')
+    expect(localStorage.getItem('rulepilot:recommendation-answer-session:document-1')).toBe('session-existing')
+    expect(replacementAttempt).toBe(0)
+
+    Array.from(document.body.querySelectorAll('button'))
+      .find(button => button.textContent === 'Start new Q&A')!
+      .click()
+    await flushPromises()
+
+    expect(document.body.textContent).toContain('The rules Q&A session could not be created or restored.')
+    expect(document.body.textContent).toContain('Try creating it again')
+    expect(wrapper.text()).toContain('Resolve the bird power after gaining food.')
+    expect(wrapper.get('[data-testid="question-input"]').element).toHaveProperty('value', 'An unsubmitted follow-up')
+    expect(localStorage.getItem('rulepilot:recommendation-answer-session:document-1')).toBe('session-existing')
+
+    Array.from(document.body.querySelectorAll('button'))
+      .find(button => button.textContent === 'Try creating it again')!
+      .click()
+    await flushPromises()
+
+    expect(document.body.textContent).not.toContain('Start a new Q&A for Wingspan?')
+    expect(wrapper.text()).not.toContain('Resolve the bird power after gaining food.')
+    expect(wrapper.get('[data-testid="question-input"]').element).toHaveProperty('value', 'An unsubmitted follow-up')
+    expect(document.activeElement).toBe(wrapper.get('[data-testid="question-input"]').element)
+    expect(localStorage.getItem('rulepilot:recommendation-answer-session:document-1')).toBe('session-new')
+    expect(replacementAttempt).toBe(2)
+    expect(requests.some(request => request.init?.method === 'DELETE')).toBe(false)
+    wrapper.unmount()
   })
 })

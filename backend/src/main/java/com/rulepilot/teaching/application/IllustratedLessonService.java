@@ -57,6 +57,16 @@ public class IllustratedLessonService {
         return runs.start(AssistantRunMode.TEACHING, plan.id(), ownerUsername);
     }
 
+    /**
+     * Starts the lesson from the plan that the preparation lane just created or loaded.
+     * The document READY check remains authoritative, but the same immutable plan and its sections are not reloaded.
+     */
+    @Transactional
+    RunSnapshot begin(TeachingPlan plan, String ownerUsername) {
+        requireReadyPlan(plan, ownerUsername);
+        return runs.start(AssistantRunMode.TEACHING, plan.id(), ownerUsername);
+    }
+
     @Transactional
     public RunSnapshot beginCandidate(UUID teachingPlanId, String ownerUsername) {
         requireReadyPlan(teachingPlanId, ownerUsername);
@@ -79,6 +89,13 @@ public class IllustratedLessonService {
                 .observe(() -> startGenerationObserved(teachingPlanId, ownerUsername, initialRun));
     }
 
+    GenerationContinuation startGeneration(TeachingPlan plan, String ownerUsername, RunSnapshot initialRun) {
+        requirePreparedRun(plan, ownerUsername, initialRun);
+        return Observation.createNotStarted("rulepilot.teaching.startup", observations)
+                .contextualName("teaching-first-section")
+                .observe(() -> startGenerationObserved(plan, initialRun));
+    }
+
     GenerationOutcome continueGeneration(GenerationContinuation continuation) {
         if (continuation == null) throw new IllegalArgumentException("teaching continuation is required");
         return Observation.createNotStarted("rulepilot.teaching.continuation", observations)
@@ -90,14 +107,20 @@ public class IllustratedLessonService {
             UUID teachingPlanId,
             String ownerUsername,
             RunSnapshot initialRun) {
+        var plan = requireReadyPlan(teachingPlanId, ownerUsername);
+        return startGenerationObserved(plan, initialRun);
+    }
+
+    private GenerationContinuation startGenerationObserved(
+            TeachingPlan plan,
+            RunSnapshot initialRun) {
         RunSnapshot run = initialRun;
         try {
-            var plan = requireReadyPlan(teachingPlanId, ownerUsername);
             run = advance(run, AssistantRunState.DOCUMENT_READINESS, "Rule document readiness is checked");
             run = advance(run, AssistantRunState.LESSON_PLANNING, "Teaching plan is loaded");
             run = advance(run, AssistantRunState.RETRIEVAL_PLANNING, "Required lesson evidence is planned");
             run = advance(run, AssistantRunState.RETRIEVING, "Allow-listed rule search is running");
-            IllustratedLesson previousLesson = repository.findLatestByPlan(teachingPlanId).orElse(null);
+            IllustratedLesson previousLesson = repository.findLatestByPlan(plan.id()).orElse(null);
             var base = agent.startBase(
                     plan,
                     run.id(),
@@ -108,7 +131,7 @@ public class IllustratedLessonService {
             failRun(run, "AGENT_" + stopped.reason().name(), "Teaching workflow stopped by execution budget", stopped);
             throw stopped;
         } catch (RuntimeException exception) {
-            log.error("Teaching first-section workflow failed for plan {} and run {}", teachingPlanId, run.id(), exception);
+            log.error("Teaching first-section workflow failed for plan {} and run {}", plan.id(), run.id(), exception);
             failRun(run, "TEACHING_WORKFLOW_FAILED", "Teaching workflow failed safely", exception);
             throw exception;
         }
@@ -243,6 +266,28 @@ public class IllustratedLessonService {
             throw new IllegalArgumentException("rule document is not ready for teaching");
         }
         return plan;
+    }
+
+    private void requireReadyPlan(TeachingPlan plan, String ownerUsername) {
+        if (plan == null || !plan.createdBy().equals(ownerUsername)) {
+            throw new IllegalArgumentException("teaching plan does not exist");
+        }
+        var document = documents.findVersion(plan.documentVersionId())
+                .orElseThrow(() -> new IllegalArgumentException("document version does not exist"));
+        if (!document.createdBy().equals(ownerUsername) || !"READY".equals(document.processingStatus())) {
+            throw new IllegalArgumentException("rule document is not ready for teaching");
+        }
+    }
+
+    private void requirePreparedRun(TeachingPlan plan, String ownerUsername, RunSnapshot run) {
+        if (plan == null
+                || run == null
+                || !plan.createdBy().equals(ownerUsername)
+                || run.mode() != AssistantRunMode.TEACHING
+                || !run.subjectId().equals(plan.id())
+                || !run.ownerUsername().equals(ownerUsername)) {
+            throw new IllegalArgumentException("prepared teaching run does not match the plan");
+        }
     }
 
     public record GenerationOutcome(RunSnapshot run, LessonStatus lessonStatus) {}

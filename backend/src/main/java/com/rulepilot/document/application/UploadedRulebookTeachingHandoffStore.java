@@ -2,15 +2,22 @@ package com.rulepilot.document.application;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 public interface UploadedRulebookTeachingHandoffStore {
 
     Snapshot request(UUID handoffId, UUID documentVersionId, String ownerUsername, String learningGoal, Instant now);
 
+    Optional<Snapshot> findOwned(UUID handoffId, String ownerUsername);
+
+    Snapshot retry(UUID handoffId, UUID expectedPreparationRunId, String ownerUsername, Instant now);
+
     List<Snapshot> findRecentOwned(String ownerUsername, int limit);
 
     List<Snapshot> claimReady(int limit, Instant now);
+
+    List<Snapshot> claimReadyForDocument(UUID documentVersionId, int limit, Instant now);
 
     int failUnusableDocuments(Instant now);
 

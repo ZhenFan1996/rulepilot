@@ -2,6 +2,8 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import { LOGIN_REQUIRED_EVENT } from '@/lib/authSession'
+
 import LessonsView from './LessonsView.vue'
 
 describe('LessonsView', () => {
@@ -63,6 +65,89 @@ describe('LessonsView', () => {
     wrapper.unmount()
   })
 
+  it('keeps observing a new plan while preparation is still starting its first readable chapter', async () => {
+    vi.useFakeTimers()
+    let planReads = 0
+    let runReads = 0
+    let lessonReads = 0
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const path = String(input)
+      if (path === '/api/v1/teaching-plans') {
+        planReads += 1
+        return Response.json(planReads === 1 ? [] : [{
+          id: 'plan-1', documentVersionId: 'version-1', gameTitle: '花砖物语', premise: '先认识目标。',
+          createdAt: '2026-08-10T10:01:00Z', sections: [{
+            position: 1, required: true, topicKey: 'goal', title: '游戏目标', visualEvidenceRecommended: false,
+          }],
+        }])
+      }
+      if (path === '/api/v1/documents/official-imports') return Response.json([{
+        id: 'import-1', title: '花砖物语', stage: 'COMPLETED', downloadedBytes: 4096, totalBytes: 4096,
+        documentVersionId: 'version-1', errorCode: null, teachingHandoffState: 'LAUNCHED',
+        teachingPreparationRunId: 'prep-1', teachingErrorCode: null, updatedAt: '2026-08-10T10:00:00Z',
+      }])
+      if (path === '/api/v1/assistant-runs/active?mode=TEACHING_PREPARATION') return Response.json([{
+        id: 'prep-1', subjectId: 'version-1', state: 'LESSON_PLANNING', lastErrorCode: null,
+        updatedAt: '2026-08-10T10:01:00Z',
+      }])
+      if (path === '/api/v1/documents') return Response.json([{
+        document: { gameEditionId: 'edition-1', title: 'azul.pdf' },
+        latestVersion: { id: 'version-1', status: 'READY' },
+      }])
+      if (path === '/api/v1/games') return Response.json([{
+        game: { name: '花砖物语' }, editions: [{ id: 'edition-1' }],
+      }])
+      if (path.includes('/api/v1/assistant-runs/latest')) {
+        runReads += 1
+        if (runReads === 1) return new Response(null, { status: 404 })
+        return Response.json({
+          run: {
+            id: 'run-1', subjectId: 'plan-1', state: 'LESSON_COMPOSITION', createdAt: '2026-08-10T10:01:00Z',
+            updatedAt: '2026-08-10T10:01:02Z', completedAt: null, lastErrorCode: null,
+          },
+          budget: { usedModelCalls: 1, maxModelCalls: 12 },
+          activities: [{
+            sequence: 1, type: 'VALIDATION', operation: 'publishTeachingSection|1',
+            summary: 'CITED_BASE_SECTION_PUBLISHED', outcome: 'SUCCEEDED', latencyMs: 12,
+            occurredAt: '2026-08-10T10:01:02Z',
+          }],
+        })
+      }
+      if (path.includes('/illustrated-lessons/latest')) {
+        lessonReads += 1
+        if (lessonReads === 1) return new Response(null, { status: 404 })
+        return Response.json({
+          id: 'lesson-1', teachingPlanId: 'plan-1', status: 'DRAFT_READY',
+          sections: [{ evidenceStatus: 'CITED_DRAFT' }],
+        })
+      }
+      if (path.includes('/api/auth/session')) return Response.json({ username: 'alice', roles: ['USER'] })
+      return new Response(null, { status: 404 })
+    }))
+    const router = createMemoryRouter()
+    await router.push('/lessons')
+    await router.isReady()
+    const wrapper = mount(LessonsView, { global: { plugins: [router], stubs: { BackgroundWorkCenter: true } } })
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="pending-guide-journey"]').text()).toContain('正在建立讲解计划')
+
+    await vi.advanceTimersByTimeAsync(4_000)
+    await flushPromises()
+    expect(wrapper.get('[data-testid="pending-guide-journey"]').text()).toContain('正在建立讲解计划')
+    expect(runReads).toBe(1)
+    expect(wrapper.text()).not.toContain('立即阅读完整讲解')
+
+    await vi.advanceTimersByTimeAsync(1_500)
+    await flushPromises()
+    expect(runReads).toBe(2)
+    expect(lessonReads).toBe(2)
+    expect(wrapper.find('[data-testid="pending-guide-journey"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('可读，核对中')
+    expect(wrapper.text()).toContain('立即阅读完整讲解')
+    wrapper.unmount()
+  })
+
   it('shows a persisted local-upload handoff before the browser page can start teaching', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
       const path = String(input)
@@ -101,22 +186,80 @@ describe('LessonsView', () => {
     wrapper.unmount()
   })
 
+  it('retries a failed local-upload guide through its durable upload handoff', async () => {
+    let retried = false
+    let retryBody: unknown = null
+    let directPreparationStarts = 0
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, options?: RequestInit) => {
+      const path = String(input)
+      if (path === '/api/v1/teaching-plans') return Response.json([])
+      if (path === '/api/v1/documents/official-imports') return Response.json([])
+      if (path === '/api/v1/documents/upload-teaching-handoffs') return Response.json([{
+        id: 'handoff-1', documentVersionId: 'version-1', editionId: 'edition-1',
+        title: '星际探险', rulebookTitle: 'rules_v4_final.pdf',
+        state: retried ? 'WAITING_FOR_DOCUMENT' : 'LAUNCHED',
+        preparationRunId: retried ? null : 'prep-upload-failed', errorCode: null,
+        updatedAt: retried ? '2026-08-12T00:01:00Z' : '2026-08-10T10:00:00Z',
+      }])
+      if (path === '/api/v1/assistant-runs/active?mode=TEACHING_PREPARATION') return Response.json([])
+      if (path === '/api/v1/assistant-runs/prep-upload-failed') return Response.json({ run: {
+        id: 'prep-upload-failed', subjectId: 'version-1', state: 'FAILED',
+        lastErrorCode: 'TEACHING_PREPARATION_FAILED', updatedAt: '2026-08-10T10:01:00Z',
+      } })
+      if (path === '/api/v1/documents') return Response.json([{
+        document: { gameEditionId: 'edition-1', title: 'rules_v4_final.pdf' },
+        latestVersion: { id: 'version-1', status: 'READY' },
+      }])
+      if (path === '/api/v1/games') return Response.json([{
+        game: { name: '星际探险' }, editions: [{ id: 'edition-1' }],
+      }])
+      if (path === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      if (path === '/api/v1/documents/upload-teaching-handoffs/handoff-1/retry' && options?.method === 'POST') {
+        retryBody = JSON.parse(String(options.body))
+        retried = true
+        return Response.json({ id: 'handoff-1', state: 'WAITING_FOR_DOCUMENT', preparationRunId: null }, { status: 202 })
+      }
+      if (path === '/api/v1/document-versions/version-1/teaching-plans' && options?.method === 'POST') {
+        directPreparationStarts += 1
+        return Response.json({ assistantRunId: 'duplicate-preparation', state: 'RECEIVED' }, { status: 202 })
+      }
+      if (path.includes('/api/v1/assistant-runs/active?mode=TEACHING')) return Response.json([])
+      if (path.includes('/api/auth/session')) return Response.json({ username: 'alice', roles: ['USER'] })
+      return new Response(null, { status: 404 })
+    }))
+    const router = createMemoryRouter()
+    await router.push('/lessons')
+    await router.isReady()
+    const wrapper = mount(LessonsView, { global: { plugins: [router], stubs: { BackgroundWorkCenter: true } } })
+    await flushPromises()
+
+    const retry = wrapper.get('[data-testid="pending-guide-journey"]')
+      .findAll('button').find(button => button.text().includes('重新准备讲解'))
+    await retry!.trigger('click')
+    await flushPromises()
+
+    expect(retryBody).toEqual({ expectedPreparationRunId: 'prep-upload-failed' })
+    expect(directPreparationStarts).toBe(0)
+    expect(wrapper.get('[data-testid="pending-guide-journey"]').text())
+      .toContain('规则书已保存，正在读取页面与建立检索')
+    wrapper.unmount()
+  })
+
   it('shows a persisted preparation failure instead of an endlessly active guide', async () => {
     let retried = false
     let retryBody: unknown = null
+    let directPreparationStarts = 0
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, options?: RequestInit) => {
       const path = String(input)
       if (path === '/api/v1/teaching-plans') return Response.json([])
       if (path === '/api/v1/documents/official-imports') return Response.json([{
         id: 'import-1', title: '花砖物语', rulebookTitle: 'azul_rules_cn_final.pdf', stage: 'COMPLETED',
         downloadedBytes: 4096, totalBytes: 4096, documentVersionId: 'version-1', errorCode: null,
-        teachingHandoffState: 'LAUNCHED', teachingPreparationRunId: 'prep-1', teachingErrorCode: null,
-        updatedAt: '2026-08-10T10:00:00Z',
+        teachingHandoffState: retried ? 'WAITING_FOR_DOCUMENT' : 'LAUNCHED',
+        teachingPreparationRunId: retried ? null : 'prep-1', teachingErrorCode: null,
+        updatedAt: retried ? '2026-08-12T00:01:00Z' : '2026-08-10T10:00:00Z',
       }])
-      if (path === '/api/v1/assistant-runs/active?mode=TEACHING_PREPARATION') return Response.json(retried ? [{
-        id: 'prep-retry', subjectId: 'version-1', state: 'LESSON_PLANNING', lastErrorCode: null,
-        updatedAt: '2026-08-12T00:01:00Z',
-      }] : [])
+      if (path === '/api/v1/assistant-runs/active?mode=TEACHING_PREPARATION') return Response.json([])
       if (path === '/api/v1/assistant-runs/prep-1') return Response.json({
         run: {
           id: 'prep-1', subjectId: 'version-1', state: 'FAILED',
@@ -130,10 +273,19 @@ describe('LessonsView', () => {
         game: { name: '花砖物语' }, editions: [{ id: 'edition-1' }],
       }])
       if (path === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
-      if (path === '/api/v1/document-versions/version-1/teaching-plans' && options?.method === 'POST') {
+      if (path === '/api/v1/documents/official-imports/import-1/teaching-retry' && options?.method === 'POST') {
         retryBody = JSON.parse(String(options.body))
         retried = true
-        return Response.json({ assistantRunId: 'prep-retry', state: 'RECEIVED', reused: false }, { status: 202 })
+        return Response.json({
+          id: 'import-1', title: '花砖物语', rulebookTitle: 'azul_rules_cn_final.pdf', stage: 'COMPLETED',
+          downloadedBytes: 4096, totalBytes: 4096, documentVersionId: 'version-1', errorCode: null,
+          teachingHandoffState: 'WAITING_FOR_DOCUMENT', teachingPreparationRunId: null, teachingErrorCode: null,
+          updatedAt: '2026-08-12T00:01:00Z',
+        }, { status: 202 })
+      }
+      if (path === '/api/v1/document-versions/version-1/teaching-plans' && options?.method === 'POST') {
+        directPreparationStarts += 1
+        return Response.json({ assistantRunId: 'duplicate-preparation', state: 'RECEIVED', reused: false }, { status: 202 })
       }
       if (path.includes('/api/v1/assistant-runs/active?mode=TEACHING')) return Response.json([])
       if (path.includes('/api/auth/session')) return Response.json({ username: 'alice', roles: ['USER'] })
@@ -155,9 +307,10 @@ describe('LessonsView', () => {
     await retry!.trigger('click')
     await flushPromises()
 
-    expect(retryBody).toEqual({ learningGoal: null })
+    expect(retryBody).toEqual({ expectedPreparationRunId: 'prep-1' })
+    expect(directPreparationStarts).toBe(0)
     const restarted = wrapper.get('[data-testid="pending-guide-journey"]')
-    expect(restarted.text()).toContain('正在建立讲解计划')
+    expect(restarted.text()).toContain('规则书已保存，正在读取页面与建立检索')
     expect(restarted.text()).not.toContain('任务需要处理')
     expect(restarted.find('.animate-pulse').exists()).toBe(true)
     wrapper.unmount()
@@ -177,7 +330,7 @@ describe('LessonsView', () => {
       }
       if (path.includes('/api/v1/assistant-runs/latest')) {
         return Response.json({
-          run: { id: 'run-1', state: 'RETRIEVING', createdAt: '2026-07-20T10:00:00Z', updatedAt: '2026-07-20T10:02:00Z', completedAt: null, lastErrorCode: null },
+          run: { id: 'run-1', subjectId: 'plan-1', state: 'RETRIEVING', createdAt: '2026-07-20T10:00:00Z', updatedAt: '2026-07-20T10:02:00Z', completedAt: null, lastErrorCode: null },
           budget: { usedModelCalls: 2, maxModelCalls: 144 },
           activities: [
             {
@@ -196,7 +349,7 @@ describe('LessonsView', () => {
         lessonReads += 1
         if (lessonReads > 1) return new Response(null, { status: 404 })
         return Response.json({
-          id: 'lesson-1', status: 'DRAFT_READY',
+          id: 'lesson-1', teachingPlanId: 'plan-1', status: 'DRAFT_READY',
           sections: [{ evidenceStatus: 'CITED_DRAFT' }],
         })
       }
@@ -248,19 +401,19 @@ describe('LessonsView', () => {
     let runReads = 0
     const snapshots = [
       {
-        run: { id: 'run-1', state: 'RETRIEVING', createdAt: '2026-07-20T10:00:00Z', updatedAt: '2026-07-20T10:00:00Z', completedAt: null, lastErrorCode: null },
+        run: { id: 'run-1', subjectId: 'plan-1', state: 'RETRIEVING', createdAt: '2026-07-20T10:00:00Z', updatedAt: '2026-07-20T10:00:00Z', completedAt: null, lastErrorCode: null },
         budget: { usedModelCalls: 1, maxModelCalls: 144 }, activities: [],
       },
       {
-        run: { id: 'run-1', state: 'FAILED', createdAt: '2026-07-20T10:00:00Z', updatedAt: '2026-07-20T10:01:00Z', completedAt: '2026-07-20T10:01:00Z', lastErrorCode: 'MODEL_FAILED' },
+        run: { id: 'run-1', subjectId: 'plan-1', state: 'FAILED', createdAt: '2026-07-20T10:00:00Z', updatedAt: '2026-07-20T10:01:00Z', completedAt: '2026-07-20T10:01:00Z', lastErrorCode: 'MODEL_FAILED' },
         budget: { usedModelCalls: 1, maxModelCalls: 144 }, activities: [],
       },
       {
-        run: { id: 'run-2', state: 'RETRIEVING', createdAt: '2026-07-20T10:02:00Z', updatedAt: '2026-07-20T10:02:00Z', completedAt: null, lastErrorCode: null },
+        run: { id: 'run-2', subjectId: 'plan-1', state: 'RETRIEVING', createdAt: '2026-07-20T10:02:00Z', updatedAt: '2026-07-20T10:02:00Z', completedAt: null, lastErrorCode: null },
         budget: { usedModelCalls: 1, maxModelCalls: 144 }, activities: [],
       },
       {
-        run: { id: 'run-2', state: 'RETRIEVING', createdAt: '2026-07-20T10:02:00Z', updatedAt: '2026-07-20T10:02:01Z', completedAt: null, lastErrorCode: null },
+        run: { id: 'run-2', subjectId: 'plan-1', state: 'RETRIEVING', createdAt: '2026-07-20T10:02:00Z', updatedAt: '2026-07-20T10:02:01Z', completedAt: null, lastErrorCode: null },
         budget: { usedModelCalls: 2, maxModelCalls: 144 }, activities: [],
       },
     ]
@@ -324,7 +477,7 @@ describe('LessonsView', () => {
         runReads++
         if (runReads === 2) throw new TypeError('temporary network failure')
         return Response.json({
-          run: { id: 'run-1', state: 'RETRIEVING', createdAt: '2026-07-20T10:00:00Z', updatedAt: '2026-07-20T10:02:00Z', completedAt: null, lastErrorCode: null },
+          run: { id: 'run-1', subjectId: 'plan-1', state: 'RETRIEVING', createdAt: '2026-07-20T10:00:00Z', updatedAt: '2026-07-20T10:02:00Z', completedAt: null, lastErrorCode: null },
           budget: { usedModelCalls: runReads >= 3 ? 2 : 1, maxModelCalls: 144 }, activities: [],
         })
       }
@@ -371,13 +524,13 @@ describe('LessonsView', () => {
       }
       if (path.includes('/api/v1/assistant-runs/latest') && path.includes('readable-plan')) {
         return Response.json({
-          run: { id: 'run-1', state: 'COMPLETED', createdAt: '2026-07-23T10:00:00Z', updatedAt: '2026-07-23T10:01:00Z', completedAt: '2026-07-23T10:01:00Z', lastErrorCode: null },
+          run: { id: 'run-1', subjectId: 'readable-plan', state: 'COMPLETED', createdAt: '2026-07-23T10:00:00Z', updatedAt: '2026-07-23T10:01:00Z', completedAt: '2026-07-23T10:01:00Z', lastErrorCode: null },
           budget: { usedModelCalls: 3, maxModelCalls: 144 }, activities: [],
         })
       }
       if (path.includes('/api/v1/assistant-runs/latest')) return new Response(null, { status: 404 })
       if (path.includes('/illustrated-lessons/latest') && path.includes('readable-plan')) {
-        return Response.json({ id: 'lesson-1', status: 'COMPLETE', sections: [{ evidenceStatus: 'SUPPORTED' }] })
+        return Response.json({ id: 'lesson-1', teachingPlanId: 'readable-plan', status: 'COMPLETE', sections: [{ evidenceStatus: 'SUPPORTED' }] })
       }
       if (path.includes('/illustrated-lessons/latest')) return new Response(null, { status: 404 })
       if (path.includes('/api/auth/session')) return Response.json({ username: 'alice', roles: ['USER'] })
@@ -408,13 +561,344 @@ describe('LessonsView', () => {
     expect(wrapper.text()).toContain('收起历史版本')
     wrapper.unmount()
   })
+
+  it('publishes plan cards before their independent progress reads settle', async () => {
+    let releaseRun!: (value: Response) => void
+    let releaseLesson!: (value: Response) => void
+    const runResponse = new Promise<Response>((resolve) => { releaseRun = resolve })
+    const lessonResponse = new Promise<Response>((resolve) => { releaseLesson = resolve })
+    const progressSignals: AbortSignal[] = []
+    let sessionReads = 0
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, options?: RequestInit) => {
+      const path = String(input)
+      if (path === '/api/auth/session') {
+        sessionReads += 1
+        return Response.json({ username: 'alice', roles: ['USER'] })
+      }
+      if (path === '/api/v1/teaching-plans') return Response.json([plan('plan-early', '先展示的讲解')])
+      if (path.includes('/api/v1/assistant-runs/latest')) {
+        progressSignals.push(options?.signal as AbortSignal)
+        return runResponse
+      }
+      if (path.includes('/illustrated-lessons/latest')) {
+        progressSignals.push(options?.signal as AbortSignal)
+        return lessonResponse
+      }
+      if (isGuideListPath(path)) return Response.json([])
+      return new Response(null, { status: 404 })
+    }))
+    const router = createMemoryRouter()
+    await router.push('/lessons')
+    await router.isReady()
+    const wrapper = mount(LessonsView, {
+      global: { plugins: [router], stubs: { BackgroundWorkCenter: true } },
+    })
+
+    await vi.waitFor(() => expect(progressSignals).toHaveLength(2))
+    expect(wrapper.text()).toContain('先展示的讲解')
+    expect(wrapper.text()).not.toContain('正在加载讲解计划')
+    expect(wrapper.find('a[href="/lesson/plan-early"]').exists()).toBe(false)
+    expect(sessionReads).toBe(1)
+
+    releaseRun(Response.json({
+      run: {
+        id: 'run-early', subjectId: 'plan-early', state: 'COMPLETED', createdAt: '2026-08-13T00:00:00Z',
+        updatedAt: '2026-08-13T00:01:00Z', completedAt: '2026-08-13T00:01:00Z', lastErrorCode: null,
+      },
+      budget: { usedModelCalls: 1, maxModelCalls: 144 }, activities: [],
+    }))
+    releaseLesson(Response.json({
+      id: 'lesson-early', teachingPlanId: 'plan-early', status: 'COMPLETE',
+      sections: [{ evidenceStatus: 'SUPPORTED' }],
+    }))
+    await vi.waitFor(() => expect(wrapper.find('a[href="/lesson/plan-early"]').exists()).toBe(true))
+    wrapper.unmount()
+  })
+
+  it('aborts all six list reads on unmount without cancelling durable background work', async () => {
+    let releaseLists!: () => void
+    const listGate = new Promise<void>((resolve) => { releaseLists = resolve })
+    const listSignals: AbortSignal[] = []
+    const fetchMock = vi.fn(async (input: string | URL | Request, options?: RequestInit) => {
+      const path = String(input)
+      if (path === '/api/auth/session') return Response.json({ username: 'alice', roles: ['USER'] })
+      if (path === '/api/v1/teaching-plans' || isGuideListPath(path)) {
+        listSignals.push(options?.signal as AbortSignal)
+        await listGate
+        return Response.json(path === '/api/v1/teaching-plans' ? [plan('stale-plan', '晚到的讲解')] : [])
+      }
+      return new Response(null, { status: 404 })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const router = createMemoryRouter()
+    await router.push('/lessons')
+    await router.isReady()
+    const wrapper = mount(LessonsView, {
+      global: { plugins: [router], stubs: { BackgroundWorkCenter: true } },
+    })
+    await vi.waitFor(() => expect(listSignals).toHaveLength(6))
+
+    wrapper.unmount()
+    expect(listSignals.every(signal => signal.aborted)).toBe(true)
+    releaseLists()
+    await flushPromises()
+
+    expect(fetchMock.mock.calls).toHaveLength(7)
+    expect(fetchMock.mock.calls.some(([input]) => /cancel|cancellation/i.test(String(input)))).toBe(false)
+    expect(fetchMock.mock.calls.every(([, options]) => !options?.method || options.method === 'GET')).toBe(true)
+  })
+
+  it('replaces account progress reads and ignores their late settlement', async () => {
+    let releaseOldRun!: (value: Response) => void
+    let releaseOldLesson!: (value: Response) => void
+    const oldRun = new Promise<Response>((resolve) => { releaseOldRun = resolve })
+    const oldLesson = new Promise<Response>((resolve) => { releaseOldLesson = resolve })
+    const oldSignals: AbortSignal[] = []
+    let planReads = 0
+    let sessionReads = 0
+    const fetchMock = vi.fn(async (input: string | URL | Request, options?: RequestInit) => {
+      const path = String(input)
+      if (path === '/api/auth/session') {
+        sessionReads += 1
+        return Response.json({ username: 'alice', roles: ['USER'] })
+      }
+      if (path === '/api/v1/teaching-plans') {
+        planReads += 1
+        return Response.json([plan(planReads === 1 ? 'plan-old' : 'plan-current',
+          planReads === 1 ? '旧账户讲解' : '当前账户讲解')])
+      }
+      if (path.includes('/assistant-runs/latest') && path.includes('plan-old')) {
+        oldSignals.push(options?.signal as AbortSignal)
+        return oldRun
+      }
+      if (path.includes('/plan-old/illustrated-lessons/latest')) {
+        oldSignals.push(options?.signal as AbortSignal)
+        return oldLesson
+      }
+      if (path.includes('/assistant-runs/latest') && path.includes('plan-current')) {
+        return Response.json({
+          run: {
+            id: 'run-current', subjectId: 'plan-current', state: 'COMPLETED', createdAt: '2026-08-13T00:00:00Z',
+            updatedAt: '2026-08-13T00:01:00Z', completedAt: '2026-08-13T00:01:00Z', lastErrorCode: null,
+          }, budget: { usedModelCalls: 1, maxModelCalls: 144 }, activities: [],
+        })
+      }
+      if (path.includes('/plan-current/illustrated-lessons/latest')) {
+        return Response.json({
+          id: 'lesson-current', teachingPlanId: 'plan-current', status: 'COMPLETE', sections: [],
+        })
+      }
+      if (isGuideListPath(path)) return Response.json([])
+      return new Response(null, { status: 404 })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const router = createMemoryRouter()
+    await router.push('/lessons')
+    await router.isReady()
+    const wrapper = mount(LessonsView, {
+      global: { plugins: [router], stubs: { BackgroundWorkCenter: true } },
+    })
+    await vi.waitFor(() => expect(oldSignals).toHaveLength(2))
+    expect(wrapper.text()).toContain('旧账户讲解')
+
+    window.dispatchEvent(new Event(LOGIN_REQUIRED_EVENT))
+    await vi.waitFor(() => expect(wrapper.text()).toContain('当前账户讲解'))
+    expect(oldSignals.every(signal => signal.aborted)).toBe(true)
+    expect(wrapper.text()).not.toContain('旧账户讲解')
+    expect(sessionReads).toBe(1)
+
+    releaseOldRun(Response.json({
+      run: {
+        id: 'run-old', subjectId: 'plan-old', state: 'FAILED', createdAt: '2026-08-13T00:00:00Z',
+        updatedAt: '2026-08-13T00:01:00Z', completedAt: '2026-08-13T00:01:00Z', lastErrorCode: 'STALE',
+      }, budget: { usedModelCalls: 1, maxModelCalls: 144 }, activities: [],
+    }))
+    releaseOldLesson(Response.json({
+      id: 'lesson-old', teachingPlanId: 'plan-old', status: 'COMPLETE', sections: [],
+    }))
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('当前账户讲解')
+    expect(wrapper.text()).not.toContain('旧账户讲解')
+    expect(wrapper.text()).not.toContain('正在自动重试')
+    expect(fetchMock.mock.calls.some(([input]) => /cancel|cancellation/i.test(String(input)))).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('rejects mismatched known-run and lesson identities before merging progress', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const path = String(input)
+      if (path === '/api/auth/session') return Response.json({ username: 'alice', roles: ['USER'] })
+      if (path === '/api/v1/teaching-plans') {
+        return Response.json([
+          plan('plan-run-mismatch', '错误任务对象'),
+          plan('plan-lesson-mismatch', '错误讲解对象'),
+        ])
+      }
+      if (path === '/api/v1/assistant-runs/run-expected') {
+        return Response.json({
+          run: {
+            id: 'run-other', subjectId: 'plan-run-mismatch', state: 'COMPLETED', createdAt: '2026-08-13T00:00:00Z',
+            updatedAt: '2026-08-13T00:01:00Z', completedAt: '2026-08-13T00:01:00Z', lastErrorCode: null,
+          }, budget: { usedModelCalls: 1, maxModelCalls: 144 }, activities: [],
+        })
+      }
+      if (path.includes('/assistant-runs/latest') && path.includes('plan-lesson-mismatch')) {
+        return Response.json({
+          run: {
+            id: 'run-lesson', subjectId: 'plan-lesson-mismatch', state: 'COMPLETED', createdAt: '2026-08-13T00:00:00Z',
+            updatedAt: '2026-08-13T00:01:00Z', completedAt: '2026-08-13T00:01:00Z', lastErrorCode: null,
+          }, budget: { usedModelCalls: 1, maxModelCalls: 144 }, activities: [],
+        })
+      }
+      if (path.includes('/plan-run-mismatch/illustrated-lessons/latest')) {
+        return Response.json({
+          id: 'lesson-run', teachingPlanId: 'plan-run-mismatch', status: 'COMPLETE', sections: [],
+        })
+      }
+      if (path.includes('/plan-lesson-mismatch/illustrated-lessons/latest')) {
+        return Response.json({
+          id: 'lesson-other', teachingPlanId: 'plan-other', status: 'COMPLETE', sections: [],
+        })
+      }
+      if (isGuideListPath(path)) return Response.json([])
+      return new Response(null, { status: 404 })
+    }))
+    const router = createMemoryRouter()
+    await router.push('/lessons?started=plan-run-mismatch&run=run-expected')
+    await router.isReady()
+    const wrapper = mount(LessonsView, {
+      global: { plugins: [router], stubs: { BackgroundWorkCenter: true } },
+    })
+
+    await vi.waitFor(() => expect(
+      (wrapper.text().match(/暂时没拿到最新进度/g) ?? []).length,
+    ).toBe(2))
+    expect(wrapper.find('a[href="/lesson/plan-run-mismatch"]').exists()).toBe(false)
+    expect(wrapper.find('a[href="/lesson/plan-lesson-mismatch"]').exists()).toBe(false)
+    expect(wrapper.findAll('button').filter(button => button.text() === '开始生成')).toHaveLength(2)
+    wrapper.unmount()
+  })
+
+  it('previews duplicate cleanup before confirmation and keeps the dialog retryable after failure', async () => {
+    let cleanupAttempts = 0
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, options?: RequestInit) => {
+      const path = String(input)
+      if (path === '/api/v1/teaching-plans') return Response.json([
+        plan('plan-1', 'Root'), plan('plan-2', 'Root'),
+      ])
+      if (path === '/api/v1/teaching-plans/cleanup-preview') return Response.json({ duplicateCount: 1 })
+      if (path === '/api/v1/teaching-plans/cleanup-duplicates' && options?.method === 'POST') {
+        cleanupAttempts += 1
+        return cleanupAttempts === 1
+          ? new Response(null, { status: 503 })
+          : Response.json({ deletedCount: 1 })
+      }
+      if (path === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      if (path.includes('/api/v1/assistant-runs/latest') || path.includes('/illustrated-lessons/latest')) return new Response(null, { status: 404 })
+      if (path === '/api/v1/documents/official-imports' || path === '/api/v1/documents/upload-teaching-handoffs'
+        || path === '/api/v1/assistant-runs/active?mode=TEACHING_PREPARATION' || path === '/api/v1/documents'
+        || path === '/api/v1/games') return Response.json([])
+      if (path.includes('/api/auth/session')) return Response.json({ username: 'alice', roles: ['USER'] })
+      return new Response(null, { status: 404 })
+    }))
+    const router = createMemoryRouter()
+    await router.push('/lessons')
+    await router.isReady()
+    const wrapper = mount(LessonsView, { attachTo: document.body, global: { plugins: [router] } })
+    await flushPromises()
+
+    await wrapper.findAll('button').find(button => button.text().includes('整理重复讲解'))!.trigger('click')
+    await flushPromises()
+    expect(cleanupAttempts).toBe(0)
+    expect(document.body.querySelector('[role="alertdialog"]')?.textContent).toContain('发现 1 份重复讲解')
+
+    ;[...document.body.querySelectorAll<HTMLButtonElement>('[role="alertdialog"] button')]
+      .find(button => button.textContent?.includes('清理重复项'))!.click()
+    await flushPromises()
+    expect(cleanupAttempts).toBe(1)
+    expect(document.body.querySelector('[role="alertdialog"]')?.textContent).toContain('重复讲解暂时无法清理')
+
+    ;[...document.body.querySelectorAll<HTMLButtonElement>('[role="alertdialog"] button')]
+      .find(button => button.textContent?.includes('重新尝试清理'))!.click()
+    await flushPromises()
+    expect(cleanupAttempts).toBe(2)
+    expect(document.body.querySelector('[role="alertdialog"]')).toBeNull()
+    expect(wrapper.text()).toContain('已清理 1 份重复讲解')
+    expect(document.activeElement).toBe(wrapper.get('h1').element)
+    wrapper.unmount()
+  })
+
+  it('deletes one guide only after confirmation and leaves a failed target available for retry', async () => {
+    let deleteAttempts = 0
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, options?: RequestInit) => {
+      const path = String(input)
+      if (path === '/api/v1/teaching-plans') return Response.json([plan('plan-1', 'Root')])
+      if (path === '/api/v1/teaching-plans/plan-1' && options?.method === 'DELETE') {
+        deleteAttempts += 1
+        return new Response(null, { status: deleteAttempts === 1 ? 503 : 204 })
+      }
+      if (path === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      if (path.includes('/api/v1/assistant-runs/latest') || path.includes('/illustrated-lessons/latest')) return new Response(null, { status: 404 })
+      if (path === '/api/v1/documents/official-imports' || path === '/api/v1/documents/upload-teaching-handoffs'
+        || path === '/api/v1/assistant-runs/active?mode=TEACHING_PREPARATION' || path === '/api/v1/documents'
+        || path === '/api/v1/games') return Response.json([])
+      if (path.includes('/api/auth/session')) return Response.json({ username: 'alice', roles: ['USER'] })
+      return new Response(null, { status: 404 })
+    }))
+    const router = createMemoryRouter()
+    await router.push('/lessons')
+    await router.isReady()
+    const wrapper = mount(LessonsView, { attachTo: document.body, global: { plugins: [router] } })
+    await flushPromises()
+
+    await wrapper.findAll('button').find(button => button.text() === '删除')!.trigger('click')
+    await flushPromises()
+    expect(deleteAttempts).toBe(0)
+    expect(document.body.querySelector('[role="alertdialog"]')?.textContent).toContain('Root')
+    expect(document.activeElement?.textContent).toContain('保留讲解')
+
+    ;[...document.body.querySelectorAll<HTMLButtonElement>('[role="alertdialog"] button')]
+      .find(button => button.textContent?.includes('删除讲解'))!.click()
+    await flushPromises()
+    expect(deleteAttempts).toBe(1)
+    expect(wrapper.text()).toContain('Root')
+    expect(document.body.querySelector('[role="alertdialog"]')?.textContent).toContain('讲解暂时无法删除')
+
+    ;[...document.body.querySelectorAll<HTMLButtonElement>('[role="alertdialog"] button')]
+      .find(button => button.textContent?.includes('重新尝试删除'))!.click()
+    await flushPromises()
+    expect(deleteAttempts).toBe(2)
+    expect(document.body.querySelector('[role="alertdialog"]')).toBeNull()
+    expect(wrapper.text()).not.toContain('Root')
+    expect(wrapper.text()).toContain('讲解已删除')
+    expect(document.activeElement).toBe(wrapper.get('h1').element)
+    wrapper.unmount()
+  })
 })
+
+function plan(id: string, gameTitle: string) {
+  return {
+    id, documentVersionId: `version-${id}`, gameTitle, premise: '', createdAt: '2026-08-13T00:00:00Z',
+    sections: [{ position: 1, required: true, topicKey: 'setup', title: '设置', visualEvidenceRecommended: false }],
+  }
+}
+
+function isGuideListPath(path: string) {
+  return path === '/api/v1/documents/official-imports'
+    || path === '/api/v1/documents/upload-teaching-handoffs'
+    || path === '/api/v1/assistant-runs/active?mode=TEACHING_PREPARATION'
+    || path === '/api/v1/documents'
+    || path === '/api/v1/games'
+}
 
 function createMemoryRouter() {
   return createRouter({
     history: createMemoryHistory(),
     routes: [
       { path: '/', name: 'home', component: { template: '<div />' } },
+      { path: '/discover', name: 'game-recommendations', component: { template: '<div />' } },
+      { path: '/library', name: 'public-library', component: { template: '<div />' } },
       { path: '/catalog', name: 'catalog', component: { template: '<div />' } },
       { path: '/lessons', name: 'lessons', component: LessonsView },
       { path: '/teach', name: 'teach', component: { template: '<div />' } },

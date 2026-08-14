@@ -25,6 +25,7 @@ const playerCount = computed(() => {
   return t('shelf.card.playerCount', { count })
 })
 const status = computed(() => ({
+  IMPORTING: { label: t('shelf.card.status.importing'), className: 'bg-sky-50 text-sky-900' },
   READY: { label: t('shelf.card.status.ready'), className: 'bg-emerald-50 text-emerald-800' },
   READING: { label: t('shelf.card.status.reading'), className: 'bg-amber-50 text-amber-900' },
   NEEDS_ATTENTION: { label: t('shelf.card.status.attention'), className: 'bg-red-50 text-red-800' },
@@ -36,6 +37,18 @@ const rulebookTarget = computed(() => ({
   name: 'teach',
   query: props.item.editionId ? { editionId: props.item.editionId } : undefined,
 }))
+const guideLabel = computed(() => {
+  if (props.item.lessonCount) return t('shelf.card.guides', { count: props.item.lessonCount })
+  return {
+    LOADING: t('shelf.card.guideLoading'),
+    PREPARING: t('shelf.card.guidePreparing'),
+    READY: t('shelf.card.guides', { count: props.item.lessonCount }),
+    NONE: t('shelf.card.noGuide'),
+    FAILED: t('shelf.card.guideFailed'),
+    UNAVAILABLE: t('shelf.card.guideUnavailable'),
+  }[props.item.guideStatus]
+})
+const canManageRulebook = computed(() => props.item.documentCount > 0 || props.item.pendingImportCount === 0)
 </script>
 
 <template>
@@ -84,8 +97,8 @@ const rulebookTarget = computed(() => ({
       </dl>
 
       <div class="mt-5 flex flex-wrap gap-x-4 gap-y-2 text-sm text-ink/60">
-        <span class="inline-flex items-center gap-1.5"><TabletopGlyph name="rulebook" :size="17" class="text-copper" />{{ t('shelf.card.rulebooks', { count: item.documentCount }) }}</span>
-        <span class="inline-flex items-center gap-1.5"><TabletopGlyph name="cards" :size="17" class="text-copper" />{{ item.lessonCount ? t('shelf.card.guides', { count: item.lessonCount }) : t('shelf.card.noGuide') }}</span>
+        <span class="inline-flex items-center gap-1.5"><TabletopGlyph name="rulebook" :size="17" class="text-copper" />{{ item.pendingImportCount && item.documentCount === 0 ? item.documentStatus === 'NEEDS_ATTENTION' ? t('shelf.card.rulebookImportFailed') : t('shelf.card.rulebookImporting') : t('shelf.card.rulebooks', { count: item.documentCount }) }}</span>
+        <span class="inline-flex items-center gap-1.5"><TabletopGlyph name="cards" :size="17" class="text-copper" />{{ guideLabel }}</span>
         <span v-if="item.expansionCount" class="inline-flex items-center gap-1.5"><TabletopGlyph name="cards" :size="17" class="text-copper" />{{ t('shelf.card.expansions', { count: item.expansionCount }) }}</span>
       </div>
 
@@ -93,10 +106,16 @@ const rulebookTarget = computed(() => ({
         <RouterLink v-if="item.latestPlanId" :to="{ name: 'lesson', params: { planId: item.latestPlanId } }" class="inline-flex min-h-11 flex-1 items-center justify-center gap-2 rounded-xl bg-ink px-4 text-sm font-semibold text-canvas transition hover:bg-ink/90">
           {{ t('shelf.card.continue') }} <TabletopGlyph name="arrow" :size="17" />
         </RouterLink>
+        <RouterLink v-else-if="item.guideStatus === 'FAILED' && item.documentCount > 0 && item.documentStatus !== 'NEEDS_ATTENTION'" :to="{ name: 'lessons' }" class="inline-flex min-h-11 flex-1 items-center justify-center gap-2 rounded-xl bg-red-700 px-4 text-sm font-semibold text-white transition hover:bg-red-800">
+          {{ t('shelf.card.recoverGuide') }} <TabletopGlyph name="arrow" :size="17" />
+        </RouterLink>
+        <RouterLink v-else-if="item.gameId && item.pendingImportCount" :to="detailTarget!" class="inline-flex min-h-11 flex-1 items-center justify-center gap-2 rounded-xl bg-ink px-4 text-sm font-semibold text-canvas transition hover:bg-ink/90">
+          {{ t('shelf.card.viewProgress') }} <TabletopGlyph name="arrow" :size="17" />
+        </RouterLink>
         <RouterLink v-else :to="rulebookTarget" class="inline-flex min-h-11 flex-1 items-center justify-center gap-2 rounded-xl bg-copper px-4 text-sm font-semibold text-white transition hover:bg-copper-dark">
           <TabletopGlyph name="rulebook" :size="17" /> {{ item.documentStatus === 'READY' ? t('shelf.card.start') : t('shelf.card.viewRulebook') }}
         </RouterLink>
-        <RouterLink :to="rulebookTarget" class="grid min-h-11 min-w-11 place-items-center rounded-xl border border-ink/12 text-ink/55 transition hover:border-indigo hover:text-indigo" :aria-label="t('shelf.card.manageRulebooks')">
+        <RouterLink v-if="canManageRulebook" :to="rulebookTarget" class="grid min-h-11 min-w-11 place-items-center rounded-xl border border-ink/12 text-ink/55 transition hover:border-indigo hover:text-indigo" :aria-label="t('shelf.card.manageRulebooks')">
           <TabletopGlyph name="library" :size="20" />
         </RouterLink>
       </div>

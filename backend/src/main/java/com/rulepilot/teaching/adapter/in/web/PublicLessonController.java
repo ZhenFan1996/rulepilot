@@ -154,6 +154,14 @@ public class PublicLessonController {
                 .body(crops.crop(image, x, y, width, height));
     }
 
+    @GetMapping("/{planId}/pages/{pageNumber}/image/preview")
+    ResponseEntity<byte[]> pageImagePreview(@PathVariable UUID planId, @PathVariable int pageNumber) {
+        return ResponseEntity.ok()
+                .contentType(MediaType.IMAGE_JPEG)
+                .cacheControl(CacheControl.noStore())
+                .body(crops.preview(image(planId, pageNumber)));
+    }
+
     private DocumentPageImages.PageImage image(UUID planId, int pageNumber) {
         var lesson = requireCitedPage(planId, pageNumber);
         return pageImages.read(lesson.documentVersionId(), Set.of(pageNumber)).stream()

@@ -74,8 +74,12 @@ describe('GameDiscoveryView', () => {
     expect(wrapper.get('a[href="https://boardgamegeek.com/boardgame/42/images"]').attributes('target')).toBe('_blank')
     expect(wrapper.get('a[href="https://boardgamegeek.com/boardgame/42/files"]').attributes('target')).toBe('_blank')
     expect(fetchMock.mock.calls.some(([, options]) => options?.method === 'POST')).toBe(false)
-    expect(fetchMock).toHaveBeenCalledWith('/api/v1/bgg/games/42?locale=zh-CN&translate=false', { credentials: 'include' })
-    expect(fetchMock).toHaveBeenCalledWith('/api/v1/bgg/games/42?locale=zh-CN&translate=true', { credentials: 'include' })
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/bgg/games/42?locale=zh-CN&translate=false', {
+      credentials: 'include', signal: expect.any(AbortSignal),
+    })
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/bgg/games/42?locale=zh-CN&translate=true', {
+      credentials: 'include', signal: expect.any(AbortSignal),
+    })
     expect(wrapper.get('p.whitespace-pre-line').classes()).not.toContain('line-clamp-6')
     expect(wrapper.get('[data-testid="game-cover-column"]').classes()).toContain('self-start')
     expect(wrapper.get('[data-testid="game-cover-column"]').classes()).toContain('game-detail-cover')
@@ -114,7 +118,115 @@ describe('GameDiscoveryView', () => {
     expect(wrapper.text()).toContain('Drafting')
     expect(wrapper.text()).not.toContain('Official Chinese name')
     expect(wrapper.text()).not.toContain('中文对照')
-    expect(fetchMock).toHaveBeenCalledWith('/api/v1/bgg/games/42?locale=en&translate=false', { credentials: 'include' })
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/bgg/games/42?locale=en&translate=false', {
+      credentials: 'include', signal: expect.any(AbortSignal),
+    })
+  })
+
+  it('reloads a reused discovery route and ignores a delayed response from the previous game', async () => {
+    let resolveOldDetails!: (response: Response) => void
+    const oldDetails = new Promise<Response>(resolve => { resolveOldDetails = resolve })
+    let oldSignal: AbortSignal | undefined
+    const nextDetails = {
+      ...details,
+      bggId: 43,
+      name: '新路由游戏',
+      originalName: 'Next Route Game',
+      description: '新路由的资料。',
+      bggUrl: 'https://boardgamegeek.com/boardgame/43',
+    }
+    const fetchMock = vi.fn((input: string | URL | Request, options?: RequestInit) => {
+      const path = String(input)
+      if (path.includes('/games/42') && path.includes('translate=false')) {
+        oldSignal = options?.signal ?? undefined
+        return oldDetails
+      }
+      if (path.includes('/games/43')) return Promise.resolve(Response.json(nextDetails))
+      return Promise.resolve(new Response(null, { status: 404 }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { wrapper, router } = await mountDiscovery()
+    await flushPromises()
+    await router.push('/discover/43')
+    await flushPromises()
+
+    expect(oldSignal?.aborted).toBe(true)
+    expect(wrapper.text()).toContain('新路由游戏')
+    expect(wrapper.text()).not.toContain('目录游戏')
+
+    resolveOldDetails(Response.json(details))
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('新路由游戏')
+    expect(wrapper.text()).not.toContain('目录游戏')
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/games/43?locale=zh-CN&translate=false'))).toBe(true)
+  })
+
+  it('keeps the current game usable when an aborted previous request fails late', async () => {
+    let rejectOldDetails!: (error: Error) => void
+    const oldDetails = new Promise<Response>((_resolve, reject) => { rejectOldDetails = reject })
+    const nextDetails = {
+      ...details,
+      bggId: 43,
+      name: '当前游戏',
+      originalName: 'Current Game',
+      bggUrl: 'https://boardgamegeek.com/boardgame/43',
+    }
+    vi.stubGlobal('fetch', vi.fn((input: string | URL | Request) => {
+      const path = String(input)
+      if (path.includes('/games/42') && path.includes('translate=false')) return oldDetails
+      if (path.includes('/games/43')) return Promise.resolve(Response.json(nextDetails))
+      return Promise.resolve(new Response(null, { status: 404 }))
+    }))
+
+    const { wrapper, router } = await mountDiscovery()
+    await flushPromises()
+    await router.push('/discover/43')
+    await flushPromises()
+    rejectOldDetails(new Error('late old failure'))
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('当前游戏')
+    expect(wrapper.text()).not.toContain('late old failure')
+    expect(wrapper.get('[data-testid="game-detail-hero"]').isVisible()).toBe(true)
+  })
+
+  it('does not let delayed Chinese localization replace a newer English request', async () => {
+    let resolveLocalized!: (response: Response) => void
+    const localized = new Promise<Response>(resolve => { resolveLocalized = resolve })
+    let localizedSignal: AbortSignal | undefined
+    const englishDetails = {
+      ...details,
+      name: 'Current English Game',
+      originalName: 'Current English Game',
+      officialNameLocalized: false,
+      description: 'Current English details.',
+      descriptionTranslated: false,
+    }
+    vi.stubGlobal('fetch', vi.fn((input: string | URL | Request, options?: RequestInit) => {
+      const path = String(input)
+      if (path.includes('locale=zh-CN') && path.includes('translate=true')) {
+        localizedSignal = options?.signal ?? undefined
+        return localized
+      }
+      if (path.includes('locale=en')) return Promise.resolve(Response.json(englishDetails))
+      return Promise.resolve(Response.json({ ...details, name: 'Source Game', description: 'Source details.' }))
+    }))
+
+    const { wrapper } = await mountDiscovery()
+    await flushPromises()
+    expect(wrapper.text()).toContain('Source Game')
+
+    setLocale('en')
+    await flushPromises()
+    expect(localizedSignal?.aborted).toBe(true)
+    expect(wrapper.text()).toContain('Current English Game')
+
+    resolveLocalized(Response.json(details))
+    await flushPromises()
+    expect(wrapper.text()).toContain('Current English Game')
+    expect(wrapper.text()).not.toContain('目录游戏')
   })
 
   it('idempotently selects the game and hands its edition to rulebook acquisition', async () => {
@@ -135,15 +247,17 @@ describe('GameDiscoveryView', () => {
 
     const { wrapper, router } = await mountDiscovery()
     await flushPromises()
-    await wrapper.findAll('button').find(button => button.text().includes('选择这款桌游'))!.trigger('click')
+    const selectButton = wrapper.findAll('button').find(button => button.text().includes('选择这款桌游'))!
+    await selectButton.trigger('click')
+    await selectButton.trigger('click')
     await flushPromises()
 
     expect(router.currentRoute.value.name).toBe('teach')
     expect(router.currentRoute.value.query).toEqual({ editionId: 'edition-1', onboarding: 'selected-game' })
-    expect(fetchMock.mock.calls.some(([input, options]) =>
+    expect(fetchMock.mock.calls.filter(([input, options]) =>
       String(input).includes('/api/v1/bgg/games/42/import')
         && options?.method === 'POST'
-        && (options.headers as Record<string, string>)['X-CSRF-TOKEN'] === 'csrf')).toBe(true)
+        && (options.headers as Record<string, string>)['X-CSRF-TOKEN'] === 'csrf')).toHaveLength(1)
   })
 
   it('keeps the selected route and asks for login when selection is anonymous', async () => {
@@ -163,6 +277,83 @@ describe('GameDiscoveryView', () => {
     expect(loginRequired).toHaveBeenCalledOnce()
     expect(router.currentRoute.value.fullPath).toBe('/discover/42')
     expect(wrapper.text()).toContain('当前选择不会丢失')
+  })
+
+  it('cancels a pending selection when the route changes before CSRF resolves', async () => {
+    let resolveCsrf!: (response: Response) => void
+    const csrf = new Promise<Response>(resolve => { resolveCsrf = resolve })
+    let csrfSignal: AbortSignal | undefined
+    const nextDetails = {
+      ...details,
+      bggId: 43,
+      name: '另一款游戏',
+      originalName: 'Another Game',
+      bggUrl: 'https://boardgamegeek.com/boardgame/43',
+    }
+    const fetchMock = vi.fn((input: string | URL | Request, options?: RequestInit) => {
+      const path = String(input)
+      if (path === '/api/auth/csrf') {
+        csrfSignal = options?.signal ?? undefined
+        return csrf
+      }
+      if (path.includes('/games/43')) return Promise.resolve(Response.json(nextDetails))
+      if (path.includes('/games/42')) return Promise.resolve(Response.json(details))
+      return Promise.resolve(new Response(null, { status: 404 }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { wrapper, router } = await mountDiscovery()
+    await flushPromises()
+    await wrapper.findAll('button').find(button => button.text().includes('选择这款桌游'))!.trigger('click')
+    await flushPromises()
+    await router.push('/discover/43')
+    await flushPromises()
+
+    expect(csrfSignal?.aborted).toBe(true)
+    resolveCsrf(Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' }))
+    await flushPromises()
+
+    expect(router.currentRoute.value.fullPath).toBe('/discover/43')
+    expect(wrapper.text()).toContain('另一款游戏')
+    expect(fetchMock.mock.calls.some(([input, options]) =>
+      String(input).includes('/import') && options?.method === 'POST')).toBe(false)
+  })
+
+  it('aborts pending localization and selection work when the view unmounts', async () => {
+    let resolveLocalized!: (response: Response) => void
+    const localized = new Promise<Response>(resolve => { resolveLocalized = resolve })
+    let resolveCsrf!: (response: Response) => void
+    const csrf = new Promise<Response>(resolve => { resolveCsrf = resolve })
+    let localizedSignal: AbortSignal | undefined
+    let csrfSignal: AbortSignal | undefined
+    const fetchMock = vi.fn((input: string | URL | Request, options?: RequestInit) => {
+      const path = String(input)
+      if (path.includes('translate=true')) {
+        localizedSignal = options?.signal ?? undefined
+        return localized
+      }
+      if (path.includes('translate=false')) return Promise.resolve(Response.json(details))
+      if (path === '/api/auth/csrf') {
+        csrfSignal = options?.signal ?? undefined
+        return csrf
+      }
+      return Promise.resolve(new Response(null, { status: 404 }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { wrapper } = await mountDiscovery()
+    await flushPromises()
+    await wrapper.findAll('button').find(button => button.text().includes('选择这款桌游'))!.trigger('click')
+    await flushPromises()
+    wrapper.unmount()
+
+    expect(localizedSignal?.aborted).toBe(true)
+    expect(csrfSignal?.aborted).toBe(true)
+
+    resolveLocalized(Response.json(details))
+    resolveCsrf(Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' }))
+    await flushPromises()
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/import'))).toBe(false)
   })
 })
 

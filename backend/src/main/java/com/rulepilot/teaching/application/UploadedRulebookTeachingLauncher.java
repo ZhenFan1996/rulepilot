@@ -2,6 +2,7 @@ package com.rulepilot.teaching.application;
 
 import com.rulepilot.document.UploadedRulebookTeachingHandoffs;
 import com.rulepilot.document.UploadedRulebookTeachingHandoffs.ReadyHandoff;
+import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -36,15 +37,23 @@ public class UploadedRulebookTeachingLauncher {
         this.batchSize = batchSize;
     }
 
-    @Scheduled(fixedDelayString = "${rulepilot.teaching.import-handoff.fixed-delay}")
+    @Scheduled(
+            fixedDelayString = "${rulepilot.teaching.import-handoff.fixed-delay}",
+            scheduler = "teachingHandoffScheduler")
     synchronized void launchReadyHandoffs() {
         int unusable = handoffs.failUnusableDocuments();
         if (unusable > 0) {
             LOGGER.warn("Failed {} uploaded-rulebook teaching handoffs whose documents could not be processed", unusable);
         }
-        for (ReadyHandoff handoff : handoffs.claimReady(batchSize)) {
-            launch(handoff);
-        }
+        launch(handoffs.claimReady(batchSize));
+    }
+
+    /** Event-driven wake-up; the atomic persistent claim makes repeated notifications harmless. */
+    public synchronized void dispatchReadyHandoffs(UUID documentVersionId) {
+        if (documentVersionId == null) throw new IllegalArgumentException("ready document version is required");
+        // A READY event cannot correspond to a failed document. Keep the prompt path to one indexed claim and leave
+        // the global unusable-document sweep to scheduled reconciliation.
+        launch(handoffs.claimReadyForDocument(documentVersionId, batchSize));
     }
 
     @EventListener(ApplicationReadyEvent.class)
@@ -54,6 +63,10 @@ public class UploadedRulebookTeachingLauncher {
             LOGGER.warn("Marked {} interrupted uploaded-rulebook teaching launches for explicit retry", interrupted);
         }
         launchReadyHandoffs();
+    }
+
+    private void launch(java.util.List<ReadyHandoff> claimed) {
+        for (ReadyHandoff handoff : claimed) launch(handoff);
     }
 
     private void launch(ReadyHandoff handoff) {

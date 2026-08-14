@@ -96,7 +96,8 @@ class OfficialRulebookTwentyGameRealChainEvaluationTest {
                 storage,
                 documents,
                 processingQueue,
-                mock(UploadedRulebookTeachingHandoffService.class));
+                mock(UploadedRulebookTeachingHandoffService.class),
+                event -> {});
         var fetcher = new HttpOfficialRulebookSourceFetcher(
                 storageProperties(),
                 new PdfBoxPhotographedRulebookAssembler(),
@@ -617,10 +618,27 @@ class OfficialRulebookTwentyGameRealChainEvaluationTest {
         }
 
         @Override
+        public boolean retryTeaching(UUID jobId, UUID expectedPreparationRunId, Instant now) {
+            throw new UnsupportedOperationException("not used by real-chain evaluation");
+        }
+
+        @Override
         public List<OfficialRulebookImportJob> claimReadyTeaching(int limit, Instant now) {
+            return claimReadyTeaching(null, limit, now);
+        }
+
+        @Override
+        public List<OfficialRulebookImportJob> claimReadyTeachingForDocument(
+                UUID documentVersionId, int limit, Instant now) {
+            return claimReadyTeaching(documentVersionId, limit, now);
+        }
+
+        private List<OfficialRulebookImportJob> claimReadyTeaching(
+                UUID documentVersionId, int limit, Instant now) {
             List<OfficialRulebookImportJob> ready = jobs.values().stream()
                     .filter(job -> job.stage() == OfficialRulebookImportJob.Stage.COMPLETED)
                     .filter(job -> job.teachingHandoff().state() == TeachingHandoffState.WAITING_FOR_DOCUMENT)
+                    .filter(job -> documentVersionId == null || documentVersionId.equals(job.documentVersionId()))
                     .limit(limit)
                     .toList();
             ready.forEach(job -> jobs.put(job.id(), copy(
@@ -692,6 +710,29 @@ class OfficialRulebookTwentyGameRealChainEvaluationTest {
         @Override
         public int failInterruptedTeachingLaunches(Instant now) {
             return 0;
+        }
+
+        @Override
+        public void markDownloadCompleted(UUID jobId, Instant now) {
+            var job = jobs.get(jobId);
+            jobs.put(jobId, new OfficialRulebookImportJob(
+                    job.id(),
+                    job.ownerUsername(),
+                    job.editionId(),
+                    job.title(),
+                    job.sourceType(),
+                    job.sourceUrl(),
+                    job.stage(),
+                    job.downloadedBytes(),
+                    job.totalBytes(),
+                    job.documentVersionId(),
+                    job.duplicate(),
+                    job.errorCode(),
+                    now,
+                    job.teachingHandoff(),
+                    job.createdAt(),
+                    now,
+                    job.completedAt()));
         }
 
         @Override
@@ -783,6 +824,7 @@ class OfficialRulebookTwentyGameRealChainEvaluationTest {
                     documentVersionId,
                     duplicate,
                     errorCode,
+                    job.downloadCompletedAt(),
                     teachingHandoff,
                     job.createdAt(),
                     updatedAt,

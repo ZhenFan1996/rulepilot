@@ -81,14 +81,61 @@ public class OfficialRulebookImportJobService implements RulebookTeachingHandoff
         return jobs.findRecentOwned(checkedOwner(ownerUsername), 12);
     }
 
+    public OfficialRulebookImportJob retryTeaching(
+            UUID jobId, UUID expectedPreparationRunId, String ownerUsername) {
+        var job = requireOwned(jobId, ownerUsername);
+        if (job.stage() != OfficialRulebookImportJob.Stage.COMPLETED || job.documentVersionId() == null) {
+            throw new IllegalStateException("official rulebook import is not ready for teaching");
+        }
+        var handoff = job.teachingHandoff();
+        if (handoff.state() == TeachingHandoffState.WAITING_FOR_DOCUMENT
+                || handoff.state() == TeachingHandoffState.LAUNCHING) {
+            return job;
+        }
+        if (handoff.state() == TeachingHandoffState.FAILED
+                && "DOCUMENT_PROCESSING_FAILED".equals(handoff.errorCode())) {
+            throw new IllegalStateException("official rulebook processing failed");
+        }
+        if (handoff.state() != TeachingHandoffState.FAILED
+                && handoff.state() != TeachingHandoffState.LAUNCHED) {
+            throw new IllegalStateException("official rulebook teaching handoff cannot be retried");
+        }
+        boolean changed = jobs.retryTeaching(job.id(), expectedPreparationRunId, Instant.now(clock));
+        var current = requireOwned(job.id(), job.ownerUsername());
+        if (changed
+                || current.teachingHandoff().state() == TeachingHandoffState.WAITING_FOR_DOCUMENT
+                || current.teachingHandoff().state() == TeachingHandoffState.LAUNCHING
+                || current.teachingHandoff().state() == TeachingHandoffState.LAUNCHED
+                        && !java.util.Objects.equals(
+                                current.teachingHandoff().preparationRunId(), expectedPreparationRunId)) {
+            return current;
+        }
+        throw new IllegalStateException("official rulebook teaching handoff could not be retried");
+    }
+
     public int failInterrupted() {
         return jobs.failInterrupted(Instant.now(clock));
     }
 
     @Override
     public List<ReadyHandoff> claimReady(int limit) {
+        return readyHandoffs(jobs.claimReadyTeaching(checkedClaimLimit(limit), Instant.now(clock)));
+    }
+
+    @Override
+    public List<ReadyHandoff> claimReadyForDocument(UUID documentVersionId, int limit) {
+        if (documentVersionId == null) throw new IllegalArgumentException("ready document version is required");
+        return readyHandoffs(jobs.claimReadyTeachingForDocument(
+                documentVersionId, checkedClaimLimit(limit), Instant.now(clock)));
+    }
+
+    private int checkedClaimLimit(int limit) {
         if (limit < 1 || limit > 20) throw new IllegalArgumentException("teaching handoff claim limit is invalid");
-        return jobs.claimReadyTeaching(limit, Instant.now(clock)).stream()
+        return limit;
+    }
+
+    private List<ReadyHandoff> readyHandoffs(List<OfficialRulebookImportJob> claimed) {
+        return claimed.stream()
                 .map(job -> new ReadyHandoff(
                         job.id(),
                         job.documentVersionId(),
@@ -156,6 +203,11 @@ public class OfficialRulebookImportJobService implements RulebookTeachingHandoff
                             jobs.updateProgress(
                                     job.id(), OfficialRulebookImportJob.Stage.DOWNLOADING,
                                     downloadedBytes, totalBytes, Instant.now(clock));
+                        }
+
+                        @Override
+                        public void downloadCompleted() {
+                            jobs.markDownloadCompleted(job.id(), Instant.now(clock));
                         }
 
                         @Override

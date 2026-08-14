@@ -27,6 +27,17 @@ import org.junit.jupiter.api.Test;
 class PdfBoxRulebookPreparationTest {
 
     @Test
+    void rejectsUnboundedEvidenceRenderSessions() {
+        assertThatThrownBy(() -> new PdfBoxRulebookPreparation(10, 10_000, 0))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("PDF extraction limits must be positive and render session size must be 1-8");
+        assertThatThrownBy(() -> new PdfBoxRulebookPreparation(
+                        10, 10_000, PdfBoxRulebookPreparation.MAX_RENDER_SESSION_PAGES + 1))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("PDF extraction limits must be positive and render session size must be 1-8");
+    }
+
+    @Test
     void rejectsDocumentsOverThePageLimitBeforeCallingConsumers() throws IOException {
         var preparation = preparation(1, 10_000);
 
@@ -177,6 +188,44 @@ class PdfBoxRulebookPreparationTest {
             assertThat(image.width()).isGreaterThan(1_600);
             assertThat(image.height()).isGreaterThan(2_000);
         });
+    }
+
+    @Test
+    void streamsEveryCompletedPopplerPageFromTheBoundedSessionInOrder() throws IOException {
+        Assumptions.assumeTrue(popplerAvailable());
+        List<Integer> renderedPageNumbers = new ArrayList<>();
+
+        new PdfBoxRulebookPreparation(10, 10_000, 8, "poppler")
+                .prepare(chunked(pdfWithPages(5)), ignored -> {}, image -> renderedPageNumbers.add(image.pageNumber()));
+
+        assertThat(renderedPageNumbers).containsExactly(1, 2, 3, 4, 5);
+    }
+
+    @Test
+    void acceptsOnlyExactInOrderPopplerProgressForTheCurrentSession() throws IOException {
+        assertThat(PdfBoxRulebookPreparation.completedPopplerPage("5 8 /tmp/page-5.jpg", 5, 8))
+                .isEqualTo(5);
+        assertThatThrownBy(() -> PdfBoxRulebookPreparation.completedPopplerPage("warning", 5, 8))
+                .isInstanceOf(IOException.class)
+                .hasMessage("Poppler progress output is invalid");
+        assertThatThrownBy(() -> PdfBoxRulebookPreparation.completedPopplerPage("4 8 /tmp/page-4.jpg", 5, 8))
+                .isInstanceOf(IOException.class)
+                .hasMessage("Poppler progress output is outside the expected page range");
+        assertThatThrownBy(() -> PdfBoxRulebookPreparation.completedPopplerPage("5 9 /tmp/page-5.jpg", 5, 8))
+                .isInstanceOf(IOException.class)
+                .hasMessage("Poppler progress output is outside the expected page range");
+    }
+
+    @Test
+    void preservesAConsumerFailureWhileStoppingTheActivePopplerSession() throws IOException {
+        Assumptions.assumeTrue(popplerAvailable());
+        var storageFailure = new IllegalStateException("page storage failed");
+
+        assertThatThrownBy(() -> new PdfBoxRulebookPreparation(10, 10_000, 8, "poppler")
+                        .prepare(chunked(pdfWithPages(5)), ignored -> {}, image -> {
+                            throw storageFailure;
+                        }))
+                .isSameAs(storageFailure);
     }
 
     private PdfBoxRulebookPreparation preparation(int maxPages, int maxExtractedCharacters) {

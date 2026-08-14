@@ -81,7 +81,6 @@ public class GroundedTeachingAgent {
         this.sectionDraftComposer = new TeachingSectionDraftComposer(
                 model, evidenceVerifier, invocations, visualFacts);
         this.publishedLessonReviewer = new TeachingPublishedLessonReviewer(
-                model,
                 critic,
                 invocations,
                 sectionDraftComposer,
@@ -269,6 +268,11 @@ public class GroundedTeachingAgent {
             sections.add(outcome.section());
             if (outcome.reviewCandidate() != null) reviewCandidates.add(outcome.reviewCandidate());
             publishProgress(progressPublisher, lessonId, plan, sections, createdAt);
+            recordPublication(
+                    assistantRunId,
+                    planned,
+                    outcome.publicationOutcome(),
+                    outcome.publicationCategory());
             if (outcome.section().evidenceStatus() != EvidenceStatus.INSUFFICIENT_EVIDENCE) break;
         }
 
@@ -328,6 +332,11 @@ public class GroundedTeachingAgent {
                             reviewCandidates.add(contiguous.reviewCandidate());
                         }
                         publishProgress(progressPublisher, lessonId, plan, sections, createdAt);
+                        recordPublication(
+                                assistantRunId,
+                                contiguous.planned(),
+                                contiguous.publicationOutcome(),
+                                contiguous.publicationCategory());
                     }
                 }
             }
@@ -412,8 +421,9 @@ public class GroundedTeachingAgent {
             GenerationMode mode) {
         LessonSection reusable = reusableSections.get(planned.topicKey());
         if (reusable != null) {
-            recordPublication(assistantRunId, planned, ActivityOutcome.SUCCEEDED, "REUSED_VERIFIED_SECTION");
-            return new SectionOutcome(planned.position(), reusable, null, 0);
+            return new SectionOutcome(
+                    planned.position(), planned, reusable, null, 0,
+                    ActivityOutcome.SUCCEEDED, "REUSED_VERIFIED_SECTION");
         }
         TeachingSectionEvidenceRetriever.Result resolution = evidenceRetriever.retrieve(
                 plan, planned, assistantRunId, queryBudget, mode.bindVisualPageEvidence());
@@ -421,14 +431,16 @@ public class GroundedTeachingAgent {
             resolution = evidenceRefiner.refine(plan, planned, assistantRunId, resolution);
         }
         if (!resolution.verified()) {
-            recordPublication(
-                    assistantRunId,
+            return new SectionOutcome(
+                    planned.position(),
                     planned,
+                    lessonAssembly.insufficient(planned),
+                    null,
+                    resolution.toolCalls(),
                     ActivityOutcome.REJECTED,
                     resolution.state() == TeachingSectionEvidenceRetriever.State.EMPTY
                             ? mode.noEvidenceCategory()
                             : mode.invalidEvidenceCategory());
-            return new SectionOutcome(planned.position(), lessonAssembly.insufficient(planned), null, resolution.toolCalls());
         }
         try {
             TeachingSectionDraftCandidate composed = sectionDraftComposer.compose(
@@ -439,14 +451,16 @@ public class GroundedTeachingAgent {
                     assistantRunId,
                     sectionIndex,
                     mode.includeVisualEvidence() && planned.visualEvidenceRecommended());
-            recordPublication(assistantRunId, planned, ActivityOutcome.SUCCEEDED, mode.publishedCategory());
-            return new SectionOutcome(planned.position(), composed.section(), composed, resolution.toolCalls());
+            return new SectionOutcome(
+                    planned.position(), planned, composed.section(), composed, resolution.toolCalls(),
+                    ActivityOutcome.SUCCEEDED, mode.publishedCategory());
         } catch (AgentExecutionStoppedException stopped) {
             throw stopped;
         } catch (RuntimeException invalidDraft) {
             log.warn("Teaching section {} was withheld: {}", planned.topicKey(), invalidDraft.getMessage());
-            recordPublication(assistantRunId, planned, ActivityOutcome.REJECTED, mode.withheldCategory());
-            return new SectionOutcome(planned.position(), lessonAssembly.insufficient(planned), null, resolution.toolCalls());
+            return new SectionOutcome(
+                    planned.position(), planned, lessonAssembly.insufficient(planned), null, resolution.toolCalls(),
+                    ActivityOutcome.REJECTED, mode.withheldCategory());
         }
     }
 
@@ -479,9 +493,9 @@ public class GroundedTeachingAgent {
             boolean reusable = reusableSections.containsKey(planned.topicKey());
             if (!reusable && toolCalls >= maxToolCalls) {
                 log.warn("Teaching Agent tool budget exhausted before topic {}", planned.topicKey());
-                recordPublication(assistantRunId, planned, ActivityOutcome.REJECTED, "TOOL_BUDGET_EXHAUSTED");
                 sections.add(lessonAssembly.insufficient(planned));
                 publishProgress(progressPublisher, lessonId, plan, sections, createdAt);
+                recordPublication(assistantRunId, planned, ActivityOutcome.REJECTED, "TOOL_BUDGET_EXHAUSTED");
                 continue;
             }
             SectionOutcome outcome = generateSection(
@@ -497,6 +511,11 @@ public class GroundedTeachingAgent {
             sections.add(outcome.section());
             if (outcome.reviewCandidate() != null) reviewCandidates.add(outcome.reviewCandidate());
             publishProgress(progressPublisher, lessonId, plan, sections, createdAt);
+            recordPublication(
+                    assistantRunId,
+                    planned,
+                    outcome.publicationOutcome(),
+                    outcome.publicationCategory());
         }
 
         IllustratedLesson draftReady = lesson(lessonId, plan, sections, createdAt);
@@ -573,9 +592,12 @@ public class GroundedTeachingAgent {
 
     private record SectionOutcome(
             int position,
+            TeachingPlan.PlannedSection planned,
             LessonSection section,
             TeachingSectionDraftCandidate reviewCandidate,
-            int retrievalToolCalls) {}
+            int retrievalToolCalls,
+            ActivityOutcome publicationOutcome,
+            String publicationCategory) {}
 
     private int estimateTokens(String value) {
         return value == null ? 0 : Math.max(1, (value.length() + 3) / 4);

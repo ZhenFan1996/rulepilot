@@ -347,7 +347,9 @@ function verifyAcquisition(report, limits) {
 function verifyGroundedEvidence(answer, teaching) {
   const stage = 'EVIDENCE_READY'
   const answerResults = Array.isArray(answer?.results) ? answer.results : []
-  const teachingResults = Array.isArray(teaching?.results) ? teaching.results : []
+  const teachingResults = Array.isArray(teaching?.semanticResults)
+    ? teaching.semanticResults
+    : Array.isArray(teaching?.results) ? teaching.results : []
   const answerProviders = new Set(answerResults
     .filter((result) => result.citationPublished === true && result.withinLatencyBudget === true)
     .map((result) => result.provider).filter(Boolean))

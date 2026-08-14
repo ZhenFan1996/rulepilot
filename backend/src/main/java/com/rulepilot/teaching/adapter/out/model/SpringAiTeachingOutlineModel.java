@@ -71,8 +71,8 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
             return call.get(OUTLINE_DEADLINE_SECONDS, TimeUnit.SECONDS);
         } catch (TimeoutException timeout) {
             call.cancel(true);
-            log.warn("Teaching-outline model exceeded {} seconds; continuing with source-derived plan", OUTLINE_DEADLINE_SECONDS);
-            return fake.organize(request);
+            log.warn("Teaching-outline model exceeded {} seconds; rejecting the low-detail fallback", OUTLINE_DEADLINE_SECONDS);
+            throw planningTimeout(timeout);
         } catch (InterruptedException interrupted) {
             call.cancel(true);
             Thread.currentThread().interrupt();
@@ -81,6 +81,12 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
             if (failed.getCause() instanceof RuntimeException runtime) throw runtime;
             throw new IllegalStateException("teaching outline failed", failed.getCause());
         }
+    }
+
+    static IllegalStateException planningTimeout(TimeoutException timeout) {
+        return new IllegalStateException(
+                "teaching outline timed out before a semantic lesson plan was available; retry preparation",
+                timeout);
     }
 
     @Override
@@ -244,8 +250,8 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
     }
 
     private Role roleFor(OutlineRequest request) {
-        // The visual role has already converted rendered pages into a bounded factual catalog.
-        // Organizing that catalog is a text-planning task and should not repeat the image upload.
+        // VisualRulebookCataloger converts required rendered pages into a bounded factual catalog before this boundary.
+        // Organizing page text or that catalog is a text-planning task and must not repeat raw page-image uploads.
         return Role.TEACHING;
     }
 

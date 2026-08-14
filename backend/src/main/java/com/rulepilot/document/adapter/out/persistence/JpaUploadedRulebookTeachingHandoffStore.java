@@ -10,6 +10,7 @@ import jakarta.persistence.PersistenceContext;
 import jakarta.persistence.Table;
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Repository;
@@ -68,6 +69,60 @@ class JpaUploadedRulebookTeachingHandoffStore implements UploadedRulebookTeachin
     }
 
     @Override
+    @Transactional(readOnly = true)
+    public Optional<Snapshot> findOwned(UUID handoffId, String ownerUsername) {
+        return entityManager
+                .createQuery(
+                        """
+                        select handoff from UploadedRulebookTeachingHandoffEntity handoff
+                        where handoff.id = :handoffId and handoff.ownerUsername = :owner
+                        """,
+                        UploadedRulebookTeachingHandoffEntity.class)
+                .setParameter("handoffId", handoffId)
+                .setParameter("owner", ownerUsername)
+                .getResultStream()
+                .findFirst()
+                .map(UploadedRulebookTeachingHandoffEntity::toSnapshot);
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public Snapshot retry(
+            UUID handoffId, UUID expectedPreparationRunId, String ownerUsername, Instant now) {
+        String eligibleState = expectedPreparationRunId == null
+                ? "handoff.state = 'FAILED'"
+                : "(handoff.state = 'FAILED' or (handoff.state = 'LAUNCHED' and handoff.preparationRunId = :expectedRunId))";
+        var update = entityManager.createQuery(
+                """
+                update UploadedRulebookTeachingHandoffEntity handoff
+                set handoff.state = 'WAITING_FOR_DOCUMENT',
+                    handoff.preparationRunId = null,
+                    handoff.errorCode = null,
+                    handoff.updatedAt = :now
+                where handoff.id = :handoffId
+                  and handoff.ownerUsername = :owner
+                  and (handoff.state <> 'FAILED'
+                       or coalesce(handoff.errorCode, '') <> 'DOCUMENT_PROCESSING_FAILED')
+                  and """ + eligibleState);
+        update.setParameter("handoffId", handoffId)
+                .setParameter("owner", ownerUsername)
+                .setParameter("now", now);
+        if (expectedPreparationRunId != null) update.setParameter("expectedRunId", expectedPreparationRunId);
+        int changed = update.executeUpdate();
+        entityManager.flush();
+        Snapshot current = findOwned(handoffId, ownerUsername)
+                .orElseThrow(() -> new IllegalArgumentException("uploaded teaching handoff does not exist"));
+        if (changed == 1
+                || current.state() == State.WAITING_FOR_DOCUMENT
+                || current.state() == State.LAUNCHING
+                || current.state() == State.LAUNCHED
+                        && !java.util.Objects.equals(current.preparationRunId(), expectedPreparationRunId)) {
+            return current;
+        }
+        throw new IllegalStateException("uploaded rulebook teaching handoff could not be retried");
+    }
+
+    @Override
     public List<Snapshot> findRecentOwned(String ownerUsername, int limit) {
         return entityManager
                 .createQuery(
@@ -88,17 +143,30 @@ class JpaUploadedRulebookTeachingHandoffStore implements UploadedRulebookTeachin
     @Override
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public List<Snapshot> claimReady(int limit, Instant now) {
+        return claimReady(null, limit, now);
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public List<Snapshot> claimReadyForDocument(UUID documentVersionId, int limit, Instant now) {
+        if (documentVersionId == null) throw new IllegalArgumentException("ready document version is required");
+        return claimReady(documentVersionId, limit, now);
+    }
+
+    private List<Snapshot> claimReady(UUID documentVersionId, int limit, Instant now) {
         List<UploadedRulebookTeachingHandoffEntity> claimed = entityManager
                 .createQuery(
                         """
                         select handoff
                         from UploadedRulebookTeachingHandoffEntity handoff, DocumentVersionEntity version
                         where handoff.documentVersionId = version.id
+                          and (:documentVersionId is null or version.id = :documentVersionId)
                           and handoff.state = 'WAITING_FOR_DOCUMENT'
                           and version.processingStatus = 'READY'
                         order by handoff.createdAt
                         """,
                         UploadedRulebookTeachingHandoffEntity.class)
+                .setParameter("documentVersionId", documentVersionId)
                 .setLockMode(LockModeType.PESSIMISTIC_WRITE)
                 .setMaxResults(limit)
                 .getResultList();

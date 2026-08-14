@@ -2,6 +2,8 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { setLocale } from '@/lib/locale'
+
 import GameRecommendationsView from './GameRecommendationsView.vue'
 
 const catalog = {
@@ -11,7 +13,7 @@ const catalog = {
   page: 0,
   size: 20,
   totalPages: 378,
-  sort: 'hot',
+  sort: 'rank',
   type: 'all',
   importedAt: '2026-08-07T08:00:00Z',
   sourceDate: '2026-08-07',
@@ -43,10 +45,13 @@ const catalog = {
 
 describe('GameRecommendationsView', () => {
   beforeEach(() => {
-    localStorage.setItem('rulepilot:locale', 'zh-CN')
+    setLocale('zh-CN')
     vi.stubGlobal('scrollTo', vi.fn())
   })
-  afterEach(() => vi.unstubAllGlobals())
+  afterEach(() => {
+    setLocale('zh-CN')
+    vi.unstubAllGlobals()
+  })
 
   async function mountView() {
     const router = createRouter({
@@ -115,7 +120,14 @@ describe('GameRecommendationsView', () => {
   })
 
   it('sends rating and BGG type filters to the server-side catalog query', async () => {
-    const fetchMock = vi.fn(async (_input: string | URL | Request) => Response.json(catalog))
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const request = new URL(String(input), 'http://localhost')
+      return Response.json({
+        ...catalog,
+        sort: request.searchParams.get('sort'),
+        type: request.searchParams.get('type'),
+      })
+    })
     vi.stubGlobal('fetch', fetchMock)
     const wrapper = await mountView()
     await flushPromises()
@@ -155,6 +167,171 @@ describe('GameRecommendationsView', () => {
     expect(wrapper.text()).toContain('CATAN')
     expect(wrapper.text()).toContain('已展示 2 款')
     expect(fetchMock.mock.calls.some(([input]) => String(input).includes('page=1') && String(input).includes('enrich=false'))).toBe(true)
+  })
+
+  it('reuses an in-flight next-page prefetch and keeps enrichment for every visible page', async () => {
+    let resolvePageOne!: (response: Response) => void
+    const pageOneResponse = new Promise<Response>(resolve => { resolvePageOne = resolve })
+    let resolvePageZeroRich!: (response: Response) => void
+    const pageZeroRich = new Promise<Response>(resolve => { resolvePageZeroRich = resolve })
+    let resolvePageOneRich!: (response: Response) => void
+    const pageOneRich = new Promise<Response>(resolve => { resolvePageOneRich = resolve })
+    const pageOneGame = { ...catalog.games[0], bggId: 13, name: 'Page One Base', originalName: 'Page One Base', nameLocalized: false }
+    const fetchMock = vi.fn((input: string | URL | Request) => {
+      const url = String(input)
+      if (url.includes('page=1') && url.includes('enrich=true')) return pageOneRich
+      if (url.includes('page=0') && url.includes('enrich=true')) return pageZeroRich
+      if (url.includes('page=1') && url.includes('enrich=false')) return pageOneResponse
+      return Promise.resolve(Response.json({ ...catalog, sort: 'rank', total: 2, totalPages: 2 }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const wrapper = await mountView()
+    await flushPromises()
+    await wrapper.get('nav button').trigger('click')
+    await flushPromises()
+
+    expect(fetchMock.mock.calls.filter(([input]) =>
+      String(input).includes('page=1') && String(input).includes('enrich=false'))).toHaveLength(1)
+    resolvePageOne(Response.json({ ...catalog, sort: 'rank', total: 2, totalPages: 2, page: 1, games: [pageOneGame] }))
+    await flushPromises()
+    expect(wrapper.text()).toContain('Page One Base')
+
+    resolvePageZeroRich(Response.json({
+      ...catalog,
+      sort: 'rank',
+      total: 2,
+      totalPages: 2,
+      games: [{ ...catalog.games[0], name: '第一页已补齐' }],
+    }))
+    await flushPromises()
+    expect(wrapper.text()).toContain('第一页已补齐')
+    expect(wrapper.text()).toContain('Page One Base')
+
+    resolvePageOneRich(Response.json({
+      ...catalog,
+      sort: 'rank',
+      total: 2,
+      totalPages: 2,
+      page: 1,
+      games: [{ ...pageOneGame, name: '第二页已补齐' }],
+    }))
+    await flushPromises()
+    expect(wrapper.text()).toContain('第一页已补齐')
+    expect(wrapper.text()).toContain('第二页已补齐')
+  })
+
+  it('aborts old query work and clears old cards when a replacement query fails', async () => {
+    let resolveOldRich!: (response: Response) => void
+    const oldRich = new Promise<Response>(resolve => { resolveOldRich = resolve })
+    let oldRichSignal: AbortSignal | undefined
+    let oldPrefetchSignal: AbortSignal | undefined
+    const fetchMock = vi.fn((input: string | URL | Request, options?: RequestInit) => {
+      const url = String(input)
+      if (url.includes('enrich=true') && !url.includes('q=missing')) {
+        oldRichSignal = options?.signal ?? undefined
+        return oldRich
+      }
+      if (url.includes('page=1') && url.includes('enrich=false') && !url.includes('q=missing')) {
+        oldPrefetchSignal = options?.signal ?? undefined
+        return new Promise<Response>(() => undefined)
+      }
+      if (url.includes('q=missing') && url.includes('enrich=false')) return Promise.resolve(new Response(null, { status: 503 }))
+      return Promise.resolve(Response.json({ ...catalog, sort: 'rank', total: 2, totalPages: 2 }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const wrapper = await mountView()
+    await flushPromises()
+    expect(wrapper.text()).toContain('展翅翱翔')
+
+    await wrapper.get('input[type="search"]').setValue('missing')
+    await wrapper.get('form[role="search"]').trigger('submit')
+    await flushPromises()
+    expect(oldRichSignal?.aborted).toBe(true)
+    expect(oldPrefetchSignal?.aborted).toBe(true)
+    expect(wrapper.text()).toContain('桌游目录暂时打不开')
+    expect(wrapper.text()).not.toContain('展翅翱翔')
+
+    resolveOldRich(Response.json(catalog))
+    await flushPromises()
+    expect(wrapper.text()).not.toContain('展翅翱翔')
+  })
+
+  it('rejects a base response whose sort or type does not match the captured query', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ ...catalog, sort: 'rating' })))
+
+    const wrapper = await mountView()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('桌游目录暂时打不开')
+    expect(wrapper.text()).not.toContain('展翅翱翔')
+  })
+
+  it('preserves current cards and offers an explicit retry after append failure', async () => {
+    let pageOneAttempts = 0
+    const pageOneGame = { ...catalog.games[0], bggId: 13, name: '重试后的游戏', originalName: 'Retried Game', nameLocalized: true }
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input)
+      if (url.includes('page=1') && url.includes('enrich=false')) {
+        pageOneAttempts += 1
+        if (pageOneAttempts <= 2) return new Response(null, { status: 503 })
+        return Response.json({ ...catalog, sort: 'rank', page: 1, total: 2, totalPages: 2, games: [pageOneGame] })
+      }
+      return Response.json({ ...catalog, sort: 'rank', total: 2, totalPages: 2 })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const wrapper = await mountView()
+    await flushPromises()
+    await wrapper.get('nav button').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('展翅翱翔')
+    expect(wrapper.text()).toContain('下一批暂时没取到')
+    await wrapper.findAll('button').find(button => button.text() === '重试下一批')!.trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('重试后的游戏')
+    expect(wrapper.text()).not.toContain('下一批暂时没取到')
+  })
+
+  it('aborts a pending base request when the view unmounts', async () => {
+    let baseSignal: AbortSignal | undefined
+    vi.stubGlobal('fetch', vi.fn((_input: string | URL | Request, options?: RequestInit) => {
+      baseSignal = options?.signal ?? undefined
+      return new Promise<Response>(() => undefined)
+    }))
+
+    const wrapper = await mountView()
+    await flushPromises()
+    wrapper.unmount()
+    expect(baseSignal?.aborted).toBe(true)
+  })
+
+  it('aborts progressive enrichment and prefetch transport when the view unmounts', async () => {
+    const pending = new Promise<Response>(() => undefined)
+    const requests: Array<{ url: string; signal: AbortSignal }> = []
+    const fetchMock = vi.fn((input: string | URL | Request, options?: RequestInit) => {
+      const url = String(input)
+      const signal = options?.signal
+      if (signal) requests.push({ url, signal })
+      if (url.includes('enrich=false') && url.includes('page=0')) {
+        return Promise.resolve(Response.json({ ...catalog, sort: 'rank', total: 2, totalPages: 2 }))
+      }
+      return pending
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const wrapper = await mountView()
+    await vi.waitFor(() => expect(requests.filter(({ url }) => url.includes('/api/v1/bgg/catalog'))).toHaveLength(3))
+    wrapper.unmount()
+
+    const baseRequest = requests.find(({ url }) => url.includes('enrich=false') && url.includes('page=0'))!
+    const outstandingRequests = requests.filter(({ url }) =>
+      url.includes('/api/auth/session') || url.includes('enrich=true') || url.includes('page=1'))
+    expect(baseRequest.signal.aborted).toBe(false)
+    expect(outstandingRequests).toHaveLength(3)
+    expect(outstandingRequests.every(({ signal }) => signal.aborted)).toBe(true)
   })
 
   it('states clearly when the official full snapshot has not been imported', async () => {

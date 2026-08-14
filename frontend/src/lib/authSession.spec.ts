@@ -5,6 +5,7 @@ import {
   SESSION_CLEARED_EVENT,
   notifyLoginRequired,
   notifySessionCleared,
+  safeAuthReturnPath,
   safeLoginReturnPath,
 } from './authSession'
 
@@ -19,12 +20,17 @@ describe('auth session UI policy', () => {
     window.removeEventListener(LOGIN_REQUIRED_EVENT, listener)
   })
 
-  it('accepts only local non-login return paths', () => {
-    expect(safeLoginReturnPath('/lesson/plan-1?lang=en')).toBe('/lesson/plan-1?lang=en')
-    expect(safeLoginReturnPath('https://example.com')).toBeNull()
-    expect(safeLoginReturnPath('//example.com')).toBeNull()
-    expect(safeLoginReturnPath('/login')).toBeNull()
-    expect(safeLoginReturnPath(['/account'])).toBeNull()
+  it('accepts only canonical local paths outside the authentication views', () => {
+    expect(safeAuthReturnPath('/lesson/plan-1?lang=en#sources')).toBe('/lesson/plan-1?lang=en#sources')
+    expect(safeLoginReturnPath('/catalog/../lessons?filter=pending')).toBe('/lessons?filter=pending')
+    expect(safeAuthReturnPath('https://example.com')).toBeNull()
+    expect(safeAuthReturnPath('//example.com')).toBeNull()
+    expect(safeAuthReturnPath('/\\example.com')).toBeNull()
+    expect(safeAuthReturnPath('/%2Fexample.com')).toBeNull()
+    expect(safeAuthReturnPath('/login')).toBeNull()
+    expect(safeAuthReturnPath('/LOGIN/?redirect=/catalog')).toBeNull()
+    expect(safeAuthReturnPath('/register#form')).toBeNull()
+    expect(safeAuthReturnPath(['/account'])).toBeNull()
   })
 
   it('announces a completed logout so mounted private views can discard owner data', () => {

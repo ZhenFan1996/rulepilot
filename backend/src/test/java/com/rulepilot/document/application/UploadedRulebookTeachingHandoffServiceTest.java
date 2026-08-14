@@ -64,14 +64,14 @@ class UploadedRulebookTeachingHandoffServiceTest {
         RuleDocumentRepository documents = mock(RuleDocumentRepository.class);
         UUID handoffId = UUID.randomUUID();
         UUID versionId = UUID.randomUUID();
-        when(store.claimReady(4, NOW)).thenReturn(List.of(snapshot(
+        when(store.claimReadyForDocument(versionId, 4, NOW)).thenReturn(List.of(snapshot(
                 handoffId,
                 versionId,
                 null,
                 UploadedRulebookTeachingHandoffStore.State.LAUNCHING)));
         var service = service(store, documents);
 
-        assertThat(service.claimReady(4)).containsExactly(
+        assertThat(service.claimReadyForDocument(versionId, 4)).containsExactly(
                 new com.rulepilot.document.UploadedRulebookTeachingHandoffs.ReadyHandoff(
                         handoffId, versionId, "alice", null));
     }
@@ -97,6 +97,38 @@ class UploadedRulebookTeachingHandoffServiceTest {
         var service = service(store, documents);
 
         assertThat(service.failUnusableDocuments()).isEqualTo(2);
+    }
+
+    @Test
+    void retriesTheSameUploadedHandoffWithTheObservedPreparationRunIdentity() {
+        UploadedRulebookTeachingHandoffStore store = mock(UploadedRulebookTeachingHandoffStore.class);
+        RuleDocumentRepository documents = mock(RuleDocumentRepository.class);
+        UUID handoffId = UUID.randomUUID();
+        UUID versionId = UUID.randomUUID();
+        UUID editionId = UUID.randomUUID();
+        UUID failedRunId = UUID.randomUUID();
+        var waiting = snapshot(
+                handoffId, versionId, null, UploadedRulebookTeachingHandoffStore.State.WAITING_FOR_DOCUMENT);
+        when(store.findOwned(handoffId, "alice")).thenReturn(java.util.Optional.of(new UploadedRulebookTeachingHandoffStore.Snapshot(
+                handoffId,
+                versionId,
+                "alice",
+                null,
+                UploadedRulebookTeachingHandoffStore.State.LAUNCHED,
+                failedRunId,
+                null,
+                NOW,
+                NOW)));
+        when(store.retry(handoffId, failedRunId, "alice", NOW)).thenReturn(waiting);
+        when(documents.findReferences(List.of(versionId))).thenReturn(Map.of(
+                versionId, new Reference(versionId, editionId, "SETI Rules", null, null)));
+        var service = service(store, documents);
+
+        var retried = service.retry(handoffId, failedRunId, " alice ");
+
+        assertThat(retried.id()).isEqualTo(handoffId);
+        assertThat(retried.state()).isEqualTo(UploadedRulebookTeachingHandoffStore.State.WAITING_FOR_DOCUMENT);
+        verify(store).retry(handoffId, failedRunId, "alice", NOW);
     }
 
     private UploadedRulebookTeachingHandoffService service(

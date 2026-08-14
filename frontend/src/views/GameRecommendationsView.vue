@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 
 import AppShell from '@/components/AppShell.vue'
 import TabletopGlyph from '@/components/TabletopGlyph.vue'
-import { useLocale } from '@/lib/locale'
+import { useLocale, type AppLocale } from '@/lib/locale'
 
 type CatalogSort = 'hot' | 'rating' | 'rank'
 type CatalogType = 'all' | 'abstract' | 'customizable' | 'children' | 'family' | 'party' | 'strategy' | 'thematic' | 'war' | 'expansion'
@@ -61,7 +61,7 @@ const copy = {
     all: '全部基础游戏', abstract: '抽象策略', customizable: '可定制游戏', children: '儿童游戏', family: '家庭游戏', party: '聚会游戏', strategy: '策略游戏', thematic: '主题游戏', war: '战争游戏', expansion: '扩展',
     scope: 'BGG 收录 {sourceCount} 条，当前找到 {total} 条。', sourceDate: '资料更新于 {date}',
     loading: '正在读取 BGG 桌游目录', unavailableTitle: '桌游目录还在准备', unavailableDescription: '暂时可以继续使用推荐对话、个人游戏和规则书功能。',
-    errorTitle: '桌游目录暂时打不开', errorDescription: '筛选条件已经保留，可以稍后重试。', retry: '再试一次',
+    errorTitle: '桌游目录暂时打不开', errorDescription: '筛选条件已经保留，可以稍后重试。', retry: '再试一次', appendError: '下一批暂时没取到，已经展示的桌游仍然保留。', retryAppend: '重试下一批',
     players: '{min}–{max} 人', minutes: '约 {minutes} 分钟', rating: '玩家评分 {rating}', geekRating: 'Geek 评分 {rating}', votes: '{count} 人评分', weight: '复杂度 {weight} / 5',
     rank: '总榜 #{rank}', hotRank: '热榜 #{rank}', noRank: '尚未进入总榜', detailPending: '详细资料将在打开游戏时继续读取',
     categoriesAria: '游戏类型和机制', coverAlt: '{game} 的 BGG 封面', emptyTitle: '没有匹配的桌游', emptyDescription: '试试减少搜索词或选择其他 BGG 类型榜。',
@@ -77,7 +77,7 @@ const copy = {
     all: 'All base games', abstract: 'Abstract', customizable: 'Customizable', children: "Children's", family: 'Family', party: 'Party', strategy: 'Strategy', thematic: 'Thematic', war: 'War', expansion: 'Expansions',
     scope: 'BGG lists {sourceCount} records; {total} match these filters.', sourceDate: 'Updated {date}', loading: 'Loading the BGG catalog',
     unavailableTitle: 'The game catalog is still being prepared', unavailableDescription: 'Recommendations, your games, and rulebooks are still available.',
-    errorTitle: 'The game catalog is unavailable', errorDescription: 'Your filters are still here. Try again later.', retry: 'Try again',
+    errorTitle: 'The game catalog is unavailable', errorDescription: 'Your filters are still here. Try again later.', retry: 'Try again', appendError: 'The next batch could not be loaded. Your current games are still here.', retryAppend: 'Retry next batch',
     players: '{min}–{max} players', minutes: 'About {minutes} min', rating: 'Player rating {rating}', geekRating: 'Geek rating {rating}', votes: '{count} ratings', weight: 'Complexity {weight} / 5',
     rank: 'Overall #{rank}', hotRank: 'Hot #{rank}', noRank: 'Not yet ranked', detailPending: 'Rich details will continue loading when you open the game', categoriesAria: 'Game types and mechanisms', coverAlt: '{game} BGG cover',
     emptyTitle: 'No games match', emptyDescription: 'Try fewer title words or another BGG ranking family.', loadMore: 'Show another batch', loadingMore: 'Loading another batch…', shown: '{shown} games shown', enriching: 'Adding covers, player fit, and localized details in the background…', officialSource: 'Data provided by BoardGameGeek', taxonomyFallback: 'Showing BGG source taxonomy',
@@ -107,14 +107,37 @@ const page = ref(0)
 const searchQuery = ref('')
 const submittedQuery = ref('')
 const searchValidation = ref(false)
-let requestSequence = 0
-const basePageCache = new Map<string, CatalogResponse>()
+let queryGeneration = 0
+let disposed = false
+let activeQuery: CatalogQuery | null = null
+let activeBaseRequest: { generation: number; controller: AbortController } | null = null
+const enrichmentControllers = new Map<number, { generation: number; controller: AbortController }>()
+const prefetches = new Map<string, PrefetchRecord>()
+const visiblePages = new Set<number>()
+const translatedPages = new Set<number>()
+
+interface CatalogQuery {
+  sort: CatalogSort
+  type: CatalogType
+  search: string
+  locale: AppLocale
+}
+
+interface PrefetchRecord {
+  generation: number
+  controller: AbortController
+  promise: Promise<CatalogResponse | null>
+}
 
 const filterActive = computed(() => sort.value !== 'rank' || type.value !== 'all' || Boolean(submittedQuery.value))
 
-function catalogRequest(pageNumber: number, enrich: boolean) {
-  const parameters = new URLSearchParams({ sort: sort.value, type: type.value, page: String(pageNumber), size: '20', locale: locale.value, enrich: String(enrich) })
-  if (submittedQuery.value) parameters.set('q', submittedQuery.value)
+function querySnapshot(): CatalogQuery {
+  return { sort: sort.value, type: type.value, search: submittedQuery.value, locale: locale.value }
+}
+
+function catalogRequest(query: CatalogQuery, pageNumber: number, enrich: boolean) {
+  const parameters = new URLSearchParams({ sort: query.sort, type: query.type, page: String(pageNumber), size: '20', locale: query.locale, enrich: String(enrich) })
+  if (query.search) parameters.set('q', query.search)
   return `/api/v1/bgg/catalog?${parameters.toString()}`
 }
 
@@ -131,59 +154,137 @@ function updateSummary(data: CatalogResponse) {
   sourceDate.value = data.sourceDate
 }
 
-async function enrichPage(request: number, pageNumber: number) {
-  enriching.value = true
+function isExpectedPage(data: CatalogResponse, query: CatalogQuery, pageNumber: number) {
+  return data.page === pageNumber && data.sort === query.sort && data.type === query.type
+}
+
+function isAbortError(error: unknown) {
+  return error instanceof Error && error.name === 'AbortError'
+}
+
+function isCurrentQuery(generation: number, query: CatalogQuery) {
+  return !disposed && generation === queryGeneration && activeQuery === query
+}
+
+function syncEnriching() {
+  enriching.value = [...enrichmentControllers.values()].some(entry => entry.generation === queryGeneration)
+}
+
+function syncTaxonomyTranslation() {
+  taxonomyTranslated.value = activeQuery?.locale !== 'zh-CN'
+    || ([...visiblePages].length > 0 && [...visiblePages].every(pageNumber => translatedPages.has(pageNumber)))
+}
+
+function cancelQueryWork() {
+  activeBaseRequest?.controller.abort()
+  activeBaseRequest = null
+  enrichmentControllers.forEach(entry => entry.controller.abort())
+  enrichmentControllers.clear()
+  prefetches.forEach(entry => entry.controller.abort())
+  prefetches.clear()
+  syncEnriching()
+}
+
+function beginReplacementQuery(query: CatalogQuery) {
+  queryGeneration += 1
+  cancelQueryWork()
+  activeQuery = query
+  visiblePages.clear()
+  translatedPages.clear()
+  games.value = []
+  ready.value = false
+  sourceCount.value = 0
+  total.value = 0
+  totalPages.value = 0
+  sourceDate.value = null
+  page.value = 0
+  taxonomyTranslated.value = query.locale !== 'zh-CN'
+  return queryGeneration
+}
+
+async function enrichPage(generation: number, query: CatalogQuery, pageNumber: number) {
+  const existing = enrichmentControllers.get(pageNumber)
+  existing?.controller.abort()
+  const controller = new AbortController()
+  enrichmentControllers.set(pageNumber, { generation, controller })
+  syncEnriching()
   try {
-    const response = await fetch(catalogRequest(pageNumber, true), { credentials: 'include' })
+    const response = await fetch(catalogRequest(query, pageNumber, true), {
+      credentials: 'include',
+      signal: controller.signal,
+    })
     if (!response.ok) return
     const data = await response.json() as CatalogResponse
-    if (request !== requestSequence) return
+    if (!isCurrentQuery(generation, query) || !isExpectedPage(data, query, pageNumber)) return
     games.value = mergeGames(games.value, data.games)
-    taxonomyTranslated.value = data.taxonomyTranslated
+    if (data.taxonomyTranslated) translatedPages.add(pageNumber)
+    else translatedPages.delete(pageNumber)
+    syncTaxonomyTranslation()
+  } catch (error) {
+    if (!isAbortError(error) && isCurrentQuery(generation, query)) syncTaxonomyTranslation()
   } finally {
-    if (request === requestSequence) enriching.value = false
+    if (enrichmentControllers.get(pageNumber)?.controller === controller) enrichmentControllers.delete(pageNumber)
+    syncEnriching()
   }
 }
 
-function prefetchNextPage(data: CatalogResponse) {
+function prefetchNextPage(generation: number, query: CatalogQuery, data: CatalogResponse) {
   const nextPage = data.page + 1
-  if (nextPage >= data.totalPages) return
-  const url = catalogRequest(nextPage, false)
-  if (basePageCache.has(url)) return
-  void fetch(url, { credentials: 'include' }).then(async response => {
-    if (response.ok) basePageCache.set(url, await response.json() as CatalogResponse)
-  }).catch(() => undefined)
+  if (nextPage >= data.totalPages || !isCurrentQuery(generation, query)) return
+  const url = catalogRequest(query, nextPage, false)
+  if (prefetches.has(url)) return
+  const controller = new AbortController()
+  const promise = fetch(url, { credentials: 'include', signal: controller.signal })
+    .then(async response => response.ok ? await response.json() as CatalogResponse : null)
+    .catch(() => null)
+  prefetches.set(url, { generation, controller, promise })
+}
+
+async function loadBasePage(generation: number, query: CatalogQuery, pageNumber: number) {
+  const url = catalogRequest(query, pageNumber, false)
+  const prefetched = prefetches.get(url)
+  if (prefetched?.generation === generation) {
+    prefetches.delete(url)
+    activeBaseRequest = { generation, controller: prefetched.controller }
+    const data = await prefetched.promise
+    if (data && isExpectedPage(data, query, pageNumber)) return data
+    if (!isCurrentQuery(generation, query)) throw new DOMException('Aborted', 'AbortError')
+  }
+  const controller = new AbortController()
+  activeBaseRequest = { generation, controller }
+  const response = await fetch(url, { credentials: 'include', signal: controller.signal })
+  if (!response.ok) throw new Error('catalog unavailable')
+  const data = await response.json() as CatalogResponse
+  if (!isExpectedPage(data, query, pageNumber)) throw new Error('catalog response identity mismatch')
+  return data
 }
 
 async function loadCatalog(append = false) {
-  const request = ++requestSequence
+  if (append && loading.value) return
+  const query = append && activeQuery ? activeQuery : querySnapshot()
+  const generation = append ? queryGeneration : beginReplacementQuery(query)
   const targetPage = append ? page.value + 1 : 0
   loading.value = true
-  enriching.value = false
   loadFailed.value = false
-  const url = catalogRequest(targetPage, false)
   try {
-    let data = basePageCache.get(url)
-    if (!data) {
-      const response = await fetch(url, { credentials: 'include' })
-      if (!response.ok) throw new Error('catalog unavailable')
-      data = await response.json() as CatalogResponse
-    } else {
-      basePageCache.delete(url)
-    }
-    if (request !== requestSequence) return
+    const data = await loadBasePage(generation, query, targetPage)
+    if (!isCurrentQuery(generation, query)) return
     updateSummary(data)
     page.value = data.page
     games.value = append ? [...games.value, ...data.games.filter(next => !games.value.some(game => game.bggId === next.bggId))] : data.games
-    taxonomyTranslated.value = false
+    visiblePages.add(data.page)
+    if (data.taxonomyTranslated) translatedPages.add(data.page)
+    else translatedPages.delete(data.page)
+    syncTaxonomyTranslation()
     loading.value = false
-    void enrichPage(request, data.page)
-    prefetchNextPage(data)
-  } catch {
-    if (request !== requestSequence) return
+    void enrichPage(generation, query, data.page)
+    prefetchNextPage(generation, query, data)
+  } catch (error) {
+    if (isAbortError(error) || !isCurrentQuery(generation, query)) return
     loadFailed.value = true
   } finally {
-    if (request === requestSequence) loading.value = false
+    if (isCurrentQuery(generation, query)) loading.value = false
+    if (activeBaseRequest?.generation === generation) activeBaseRequest = null
   }
 }
 
@@ -221,11 +322,16 @@ function hideBrokenImage(event: Event) {
 
 onMounted(() => void loadCatalog(false))
 watch(locale, () => void loadCatalog(false))
+onBeforeUnmount(() => {
+  disposed = true
+  queryGeneration += 1
+  cancelQueryWork()
+})
 </script>
 
 <template>
   <AppShell>
-    <main class="tabletop-page">
+    <div class="tabletop-page">
       <header class="grid gap-7 pb-8 xl:grid-cols-[minmax(0,1fr)_20rem] xl:items-end">
         <div class="tabletop-heading">
           <p class="tabletop-kicker">{{ t('eyebrow') }}</p>
@@ -310,9 +416,13 @@ watch(locale, () => void loadCatalog(false))
 
         <nav v-if="ready && games.length" class="mt-8 flex flex-col items-center gap-3" :aria-label="t('shown', { shown: games.length })">
           <span class="text-sm text-ink/55">{{ t('shown', { shown: games.length }) }}</span>
-          <button v-if="games.length < total" type="button" :disabled="loading" class="min-h-12 min-w-48 rounded-xl border border-ink/15 bg-paper px-6 text-sm font-semibold elevation-sm disabled:opacity-50" @click="loadCatalog(true)">{{ loading ? t('loadingMore') : t('loadMore') }}</button>
+          <div v-if="loadFailed" class="rounded-xl border border-danger/20 bg-danger/5 px-4 py-3 text-center text-sm text-danger" role="alert">
+            <p>{{ t('appendError') }}</p>
+            <button type="button" class="mt-2 min-h-11 font-semibold underline" @click="loadCatalog(true)">{{ t('retryAppend') }}</button>
+          </div>
+          <button v-if="games.length < total && !loadFailed" type="button" :disabled="loading" class="min-h-12 min-w-48 rounded-xl border border-ink/15 bg-paper px-6 text-sm font-semibold elevation-sm disabled:opacity-50" @click="loadCatalog(true)">{{ loading ? t('loadingMore') : t('loadMore') }}</button>
         </nav>
       </section>
-    </main>
+    </div>
   </AppShell>
 </template>

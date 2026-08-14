@@ -232,6 +232,7 @@ public class HttpOfficialRulebookSourceFetcher implements OfficialRulebookSource
                     Long totalBytes = declaredSize > 0 ? declaredSize : null;
                     progress.downloadStarted(totalBytes);
                     byte[] content = readBounded(response, progress, totalBytes, maxCompressiblePdfBytes);
+                    progress.downloadCompleted();
                     validatePdfMagic(content);
                     if (content.length > maxPdfBytes) {
                         progress.compressing();
@@ -273,6 +274,7 @@ public class HttpOfficialRulebookSourceFetcher implements OfficialRulebookSource
                     "page-%02d.%s".formatted(index + 1, page.extension()), page.contentType(), page.content()));
             progress.downloaded(downloaded, null);
         }
+        progress.downloadCompleted();
         byte[] pdf = galleryAssembler.assemble(pages).pdf();
         if (pdf.length > maxPdfBytes) {
             throw new IllegalArgumentException("assembled rulebook PDF exceeds the configured size limit");

@@ -153,6 +153,7 @@ interface UseLessonAnswersOptions {
   currentContext: () => AnswerContext | null
   currentLessonRequest: () => number
   isCurrentLessonLoad: (request: number, planId: string) => boolean
+  canRead?: () => boolean
   requestLogin: () => Promise<unknown>
   onReceived: (context: AnswerContext, question: string, answer: StructuredRuleAnswer) => void
 }
@@ -172,16 +173,23 @@ export function useLessonAnswers(options: UseLessonAnswersOptions) {
   let latestAnswerRequest = 0
   let traceTimer: ReturnType<typeof setTimeout> | null = null
   let activeAnswerController: AbortController | null = null
+  let activeTraceController: AbortController | null = null
+  let activeFinalTraceController: AbortController | null = null
+  let traceSequence = 0
+  let finalTraceSequence = 0
+  let disposed = false
 
   function isCurrentAnswerRequest(answerRequest: number, lessonRequest: number, planId: string) {
-    return answerRequest === latestAnswerRequest && options.isCurrentLessonLoad(lessonRequest, planId)
+    return !disposed
+      && answerRequest === latestAnswerRequest
+      && options.isCurrentLessonLoad(lessonRequest, planId)
   }
 
   function resetConversation(clearQuestion = false) {
     latestAnswerRequest++
     activeAnswerController?.abort()
     activeAnswerController = null
-    stopTracePolling()
+    cancelReadTransport()
     if (clearQuestion) question.value = ''
     answer.value = null
     answeredQuestion.value = ''
@@ -193,8 +201,8 @@ export function useLessonAnswers(options: UseLessonAnswersOptions) {
     answerRunId.value = ''
   }
 
-  function restoreConversation(turns: AnswerTurn[]) {
-    resetConversation(true)
+  function restoreConversation(turns: AnswerTurn[], clearQuestion = true) {
+    resetConversation(clearQuestion)
     answerTurns.value = turns.slice(-ANSWER_HISTORY_LIMIT)
     const latest = answerTurns.value.at(-1)
     if (!latest) return
@@ -203,6 +211,7 @@ export function useLessonAnswers(options: UseLessonAnswersOptions) {
   }
 
   function clearAnswerFeedback() {
+    cancelReadTransport()
     answer.value = null
     answerError.value = ''
     answerRunId.value = ''
@@ -213,6 +222,7 @@ export function useLessonAnswers(options: UseLessonAnswersOptions) {
     if (!text || !context || answerLoading.value) return
     const lessonRequest = options.currentLessonRequest()
     const answerRequest = ++latestAnswerRequest
+    cancelReadTransport()
     const controller = new AbortController()
     activeAnswerController = controller
     answerLoading.value = true
@@ -267,6 +277,7 @@ export function useLessonAnswers(options: UseLessonAnswersOptions) {
       ].slice(-ANSWER_HISTORY_LIMIT)
       question.value = ''
       options.onReceived(context, text, received)
+      stopTracePolling()
       void loadFinalTrace(creation.assistantRunId, context, answerRequest, lessonRequest)
     } catch (error) {
       if (!isCurrentAnswerRequest(answerRequest, lessonRequest, context.planId)) return
@@ -282,11 +293,14 @@ export function useLessonAnswers(options: UseLessonAnswersOptions) {
   }
 
   function cancelAnswer() {
-    if (!answerLoading.value) return
+    if (!answerLoading.value) {
+      cancelReadTransport()
+      return
+    }
     latestAnswerRequest++
     activeAnswerController?.abort()
     activeAnswerController = null
-    stopTracePolling()
+    cancelReadTransport()
     answerLoading.value = false
     activeLearningIntent.value = null
     agentTrace.value = []
@@ -301,22 +315,45 @@ export function useLessonAnswers(options: UseLessonAnswersOptions) {
     submittedAt: number,
   ) {
     stopTracePolling()
+    if (options.canRead?.() === false) return
+    const trace = ++traceSequence
     const poll = async () => {
-      if (!isCurrentAnswerRequest(answerRequest, lessonRequest, context.planId) || !answerLoading.value) return
+      if (trace !== traceSequence
+        || options.canRead?.() === false
+        || !isCurrentAnswerRequest(answerRequest, lessonRequest, context.planId)
+        || !answerLoading.value) return
+      activeTraceController?.abort()
+      const controller = new AbortController()
+      activeTraceController = controller
       try {
         const params = new URLSearchParams({ mode: 'QUESTION_ANSWER', subjectId: context.documentVersionId })
-        const response = await fetch(`/api/v1/assistant-runs/latest?${params}`, { credentials: 'include' })
-        if (response.ok) {
+        const response = await fetch(`/api/v1/assistant-runs/latest?${params}`, {
+          credentials: 'include',
+          signal: controller.signal,
+        })
+        if (response.ok
+          && trace === traceSequence
+          && activeTraceController === controller
+          && isCurrentAnswerRequest(answerRequest, lessonRequest, context.planId)) {
           const details = await response.json() as AnswerRunDetails
           const createdAt = Date.parse(details.run.createdAt)
-          if (details.run.subjectId === context.documentVersionId && createdAt >= submittedAt - 1_000) {
+          if (activeTraceController === controller
+            && trace === traceSequence
+            && isCurrentAnswerRequest(answerRequest, lessonRequest, context.planId)
+            && details.run.subjectId === context.documentVersionId
+            && createdAt >= submittedAt - 1_000) {
             agentTrace.value = answerAgentTrace(details.activities, context.locale)
           }
         }
       } catch {
         // The answer request remains authoritative; progress polling retries without replacing the answer state.
+      } finally {
+        if (activeTraceController === controller) activeTraceController = null
       }
-      if (isCurrentAnswerRequest(answerRequest, lessonRequest, context.planId) && answerLoading.value) {
+      if (trace === traceSequence
+        && options.canRead?.() !== false
+        && isCurrentAnswerRequest(answerRequest, lessonRequest, context.planId)
+        && answerLoading.value) {
         traceTimer = setTimeout(poll, 600)
       }
     }
@@ -329,26 +366,56 @@ export function useLessonAnswers(options: UseLessonAnswersOptions) {
     answerRequest: number,
     lessonRequest: number,
   ) {
+    if (options.canRead?.() === false) return
+    const read = ++finalTraceSequence
+    activeFinalTraceController?.abort()
+    const controller = new AbortController()
+    activeFinalTraceController = controller
     try {
-      const response = await fetch(`/api/v1/assistant-runs/${runId}`, { credentials: 'include' })
-      if (!response.ok || !isCurrentAnswerRequest(answerRequest, lessonRequest, context.planId)) return
+      const response = await fetch(`/api/v1/assistant-runs/${runId}`, {
+        credentials: 'include',
+        signal: controller.signal,
+      })
+      if (!response.ok
+        || read !== finalTraceSequence
+        || activeFinalTraceController !== controller
+        || !isCurrentAnswerRequest(answerRequest, lessonRequest, context.planId)) return
       const details = await response.json() as AnswerRunDetails
+      if (activeFinalTraceController !== controller
+        || read !== finalTraceSequence
+        || !isCurrentAnswerRequest(answerRequest, lessonRequest, context.planId)
+        || details.run.id !== runId
+        || details.run.subjectId !== context.documentVersionId) return
       agentTrace.value = answerAgentTrace(details.activities, context.locale)
     } catch {
       // A completed answer remains usable even when optional execution details cannot be loaded.
+    } finally {
+      if (activeFinalTraceController === controller) activeFinalTraceController = null
     }
   }
 
   function stopTracePolling() {
+    traceSequence += 1
     if (traceTimer !== null) clearTimeout(traceTimer)
     traceTimer = null
+    activeTraceController?.abort()
+    activeTraceController = null
+  }
+
+  function cancelReadTransport() {
+    stopTracePolling()
+    finalTraceSequence += 1
+    activeFinalTraceController?.abort()
+    activeFinalTraceController = null
   }
 
   if (getCurrentScope()) {
     onScopeDispose(() => {
+      disposed = true
+      latestAnswerRequest += 1
       activeAnswerController?.abort()
       activeAnswerController = null
-      stopTracePolling()
+      cancelReadTransport()
     })
   }
 
@@ -362,6 +429,7 @@ export function useLessonAnswers(options: UseLessonAnswersOptions) {
     answerError,
     agentTrace,
     answerRunId,
+    cancelReadTransport,
     clearAnswerFeedback,
     cancelAnswer,
     resetConversation,

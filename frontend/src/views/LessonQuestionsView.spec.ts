@@ -15,6 +15,7 @@ describe('LessonQuestionsView', () => {
 
   afterEach(() => {
     vi.unstubAllGlobals()
+    vi.restoreAllMocks()
     setLocale('zh-CN')
   })
 
@@ -70,7 +71,7 @@ describe('LessonQuestionsView', () => {
       if (path === '/api/v1/teaching-plans/plan-1') return Promise.resolve(Response.json(planFixture('plan-1', '第一份规则')))
       if (path === '/api/v1/teaching-plans/plan-2') return Promise.resolve(Response.json(planFixture('plan-2', '第二份规则')))
       if (path.includes('/plan-1/illustrated-lessons/latest')) return Promise.resolve(Response.json(lessonFixture()))
-      if (path.includes('/plan-2/illustrated-lessons/latest')) return Promise.resolve(Response.json(lessonFixture('第二份准备', '第二份结算')))
+      if (path.includes('/plan-2/illustrated-lessons/latest')) return Promise.resolve(Response.json(lessonFixture('第二份准备', '第二份结算', 'plan-2')))
       if (path === '/api/auth/csrf') return Promise.resolve(Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' }))
       if (path.endsWith('/answers') && init?.method === 'POST') {
         return new Promise<Response>((resolve) => { resolveAnswer = resolve })
@@ -119,7 +120,7 @@ describe('LessonQuestionsView', () => {
       }
       return new Response(null, { status: 404 })
     }))
-    const { wrapper } = await mountQuestions('/lesson/plan-1/questions')
+    const { wrapper } = await mountQuestions('/lesson/plan-1/questions', 'alice')
 
     expect(wrapper.get('#lesson-question').attributes('placeholder')).toContain('还是没懂，换个例子')
     await wrapper.get('#lesson-question').setValue('这个行动什么时候结算？')
@@ -135,6 +136,11 @@ describe('LessonQuestionsView', () => {
       learningIntent: null,
       language: 'zh-CN',
     })
+
+    await wrapper.get('#lesson-question').setValue('这句尚未发送')
+    setLocale('en')
+    await flushPromises()
+    expect((wrapper.get('#lesson-question').element as HTMLTextAreaElement).value).toBe('这句尚未发送')
     wrapper.unmount()
   })
 
@@ -231,6 +237,14 @@ describe('LessonQuestionsView', () => {
     expect(wrapper.text()).not.toContain('Bob 的私有问题')
 
     await wrapper.findAll('button').find(button => button.text() === '清空本次答疑')!.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('刚才什么时候结算？')
+    expect(document.body.textContent).toContain('当前浏览器会话中的 1 条问答会被移除')
+    await Array.from(document.body.querySelectorAll('button'))
+      .find(button => button.textContent === '清空答疑')!
+      .click()
+    await flushPromises()
 
     expect(wrapper.text()).not.toContain('刚才什么时候结算？')
     expect(sessionStorage.length).toBe(1)
@@ -238,9 +252,143 @@ describe('LessonQuestionsView', () => {
       .toContain('rulepilot:lesson-answer-thread:v1:bob:plan-1:version-plan-1:zh-CN')
     wrapper.unmount()
   })
+
+  it('cancels the three-read route bundle, ignores late settlement, and never duplicates the shell session read', async () => {
+    const pending: Array<{ path: string; resolve: (response: Response) => void }> = []
+    const firstSignals: AbortSignal[] = []
+    const fetchMock = vi.fn((input: string | URL | Request, init?: RequestInit) => {
+      const path = String(input)
+      if (path.includes('plan-1')) {
+        firstSignals.push(init!.signal!)
+        return new Promise<Response>((resolve) => { pending.push({ path, resolve }) })
+      }
+      if (path === '/api/v1/teaching-plans/plan-2') {
+        return Promise.resolve(Response.json(planFixture('plan-2', '当前规则')))
+      }
+      if (path === '/api/v1/teaching-plans/plan-2/illustrated-lessons/latest') {
+        return Promise.resolve(Response.json(lessonFixture('当前准备', '当前计分', 'plan-2')))
+      }
+      return Promise.resolve(new Response(null, { status: 404 }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const { wrapper, router } = await mountQuestions('/lesson/plan-1/questions')
+
+    expect(pending).toHaveLength(3)
+    await router.push('/lesson/plan-2/questions')
+    await flushPromises()
+
+    expect(firstSignals.every(signal => signal.aborted)).toBe(true)
+    expect(wrapper.text()).toContain('当前规则')
+    expect(fetchMock.mock.calls.some(([input]) => String(input) === '/api/auth/session')).toBe(false)
+
+    for (const request of pending) request.resolve(staleWorkspaceResponse(request.path))
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('当前规则')
+    expect(wrapper.text()).not.toContain('过期规则')
+    wrapper.unmount()
+  })
+
+  it.each(['plan', 'lesson'] as const)('rejects a mismatched %s identity before enabling Q&A', async (mismatch) => {
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const path = String(input)
+      if (path === '/api/v1/teaching-plans/plan-1') {
+        return Response.json(planFixture(mismatch === 'plan' ? 'plan-2' : 'plan-1', '不应启用'))
+      }
+      if (path.endsWith('/illustrated-lessons/latest')) {
+        return Response.json(lessonFixture('不应显示', '不应显示', mismatch === 'lesson' ? 'plan-2' : 'plan-1'))
+      }
+      return new Response(null, { status: 404 })
+    }))
+
+    const { wrapper } = await mountQuestions('/lesson/plan-1/questions')
+
+    await vi.waitFor(() => expect(wrapper.text()).toContain('答疑页面暂时无法打开'))
+    expect(wrapper.find('#lesson-question').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('aborts a failed bundle and retries with a fresh controller', async () => {
+    let planReads = 0
+    const signals: AbortSignal[] = []
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const path = String(input)
+      signals.push(init!.signal!)
+      if (path === '/api/v1/teaching-plans/plan-1') {
+        planReads += 1
+        return planReads === 1
+          ? new Response(null, { status: 503 })
+          : Response.json(planFixture('plan-1', '重试成功的规则'))
+      }
+      if (path.endsWith('/illustrated-lessons/latest')) return Response.json(lessonFixture('重试准备'))
+      return new Response(null, { status: 404 })
+    }))
+    const { wrapper } = await mountQuestions('/lesson/plan-1/questions')
+
+    await vi.waitFor(() => expect(wrapper.text()).toContain('答疑页面暂时无法打开'))
+    expect(signals.slice(0, 3).every(signal => signal.aborted)).toBe(true)
+    const firstSignal = signals[0]
+
+    await wrapper.findAll('button').find(button => button.text() === '重新加载')!.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('重试成功的规则')
+    expect(signals[3]).not.toBe(firstSignal)
+    expect(signals.slice(3, 6).every(signal => !signal.aborted)).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('aborts the current bundle offline and reconnects with fresh transport', async () => {
+    const firstSignals: AbortSignal[] = []
+    const pending: Array<(response: Response) => void> = []
+    let reads = 0
+    vi.stubGlobal('fetch', vi.fn((input: string | URL | Request, init?: RequestInit) => {
+      const path = String(input)
+      reads += 1
+      if (reads <= 3) {
+        firstSignals.push(init!.signal!)
+        return new Promise<Response>((resolve) => { pending.push(resolve) })
+      }
+      if (path === '/api/v1/teaching-plans/plan-1') return Promise.resolve(Response.json(planFixture('plan-1', '重连规则')))
+      if (path.endsWith('/illustrated-lessons/latest')) return Promise.resolve(Response.json(lessonFixture('重连准备')))
+      return Promise.resolve(new Response(null, { status: 404 }))
+    }))
+    const online = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(true)
+    const { wrapper } = await mountQuestions('/lesson/plan-1/questions')
+
+    online.mockReturnValue(false)
+    window.dispatchEvent(new Event('offline'))
+    await flushPromises()
+    expect(firstSignals.every(signal => signal.aborted)).toBe(true)
+
+    for (const resolve of pending) resolve(new Response(null, { status: 503 }))
+    await flushPromises()
+    expect(wrapper.text()).not.toContain('重连规则')
+
+    online.mockReturnValue(true)
+    window.dispatchEvent(new Event('online'))
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('重连规则')
+    wrapper.unmount()
+  })
+
+  it('aborts all initial reads when the Q&A route unmounts', async () => {
+    const signals: AbortSignal[] = []
+    vi.stubGlobal('fetch', vi.fn((_input: string | URL | Request, init?: RequestInit) => {
+      signals.push(init!.signal!)
+      return new Promise<Response>(() => undefined)
+    }))
+    const { wrapper } = await mountQuestions('/lesson/plan-1/questions')
+    expect(signals).toHaveLength(3)
+
+    wrapper.unmount()
+
+    expect(signals.every(signal => signal.aborted)).toBe(true)
+  })
 })
 
-async function mountQuestions(path: string) {
+async function mountQuestions(path: string, username = 'alice') {
   const Empty = { template: '<div />' }
   const router = createRouter({
     history: createMemoryHistory(),
@@ -254,10 +402,17 @@ async function mountQuestions(path: string) {
   await router.push(path)
   await router.isReady()
   const wrapper = mount(LessonQuestionsView, {
+    attachTo: document.body,
     global: {
       plugins: [router],
       stubs: {
-        AppShell: { template: '<div><slot /></div>' },
+        AppShell: {
+          emits: ['sessionIdentity'],
+          template: '<div><slot /></div>',
+          mounted() {
+            queueMicrotask(() => { this.$emit('sessionIdentity', username) })
+          },
+        },
         CardOcrCapture: true,
         VoiceQuestionCapture: true,
       },
@@ -271,9 +426,10 @@ function planFixture(id: string, gameTitle: string) {
   return { id, documentVersionId: `version-${id}`, gameTitle }
 }
 
-function lessonFixture(first = '准备游戏', second = '结算分数') {
+function lessonFixture(first = '准备游戏', second = '结算分数', teachingPlanId = 'plan-1') {
   return {
     id: 'lesson-1',
+    teachingPlanId,
     sections: [
       { position: 1, topicKey: 'setup', coverageTags: ['start'], title: first },
       { position: 2, topicKey: 'scoring', coverageTags: ['score', 'end'], title: second },
@@ -288,4 +444,10 @@ function catalogPresentationFixture(gameName: string) {
     minPlayers: 1, maxPlayers: 5, playingTimeMinutes: 60, minimumAge: 10,
     bggUrl: 'https://boardgamegeek.com/boardgame/42',
   }
+}
+
+function staleWorkspaceResponse(path: string) {
+  if (path === '/api/v1/teaching-plans/plan-1') return Response.json(planFixture('plan-1', '过期规则'))
+  if (path.endsWith('/illustrated-lessons/latest')) return Response.json(lessonFixture('过期准备'))
+  return new Response(null, { status: 404 })
 }

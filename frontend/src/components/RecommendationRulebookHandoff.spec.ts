@@ -3,6 +3,7 @@ import { createMemoryHistory, createRouter } from 'vue-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { readPendingRulebookLessons } from '@/lib/pendingRulebookLesson'
+import { BACKGROUND_WORK_CHANGED_EVENT } from '@/lib/backgroundWorkRefresh'
 
 import RecommendationRulebookHandoff from './RecommendationRulebookHandoff.vue'
 
@@ -43,9 +44,9 @@ function planFixture(id: string, documentVersionId: string) {
   }
 }
 
-function lessonFixture(id: string) {
+function lessonFixture(id: string, teachingPlanId = 'plan-1') {
   return {
-    id, status: 'COMPLETE', sections: [{ position: 1, title: 'Setup' }],
+    id, teachingPlanId, status: 'COMPLETE', sections: [{ position: 1, title: 'Setup' }],
   }
 }
 
@@ -57,6 +58,27 @@ describe('RecommendationRulebookHandoff', () => {
   })
 
   afterEach(() => vi.unstubAllGlobals())
+
+  class FakeProgressEventSource {
+    static instances: FakeProgressEventSource[] = []
+    onerror: ((event: Event) => void) | null = null
+    closed = false
+    private progressListener: ((event: MessageEvent<string>) => void) | null = null
+
+    constructor(public readonly url: string, public readonly options?: EventSourceInit) {
+      FakeProgressEventSource.instances.push(this)
+    }
+
+    addEventListener(name: string, listener: EventListenerOrEventListenerObject) {
+      if (name === 'progress') this.progressListener = listener as (event: MessageEvent<string>) => void
+    }
+
+    emitProgress(snapshot: unknown) {
+      this.progressListener?.(new MessageEvent('progress', { data: JSON.stringify(snapshot) }))
+    }
+
+    close() { this.closed = true }
+  }
 
   async function mountHandoff() {
     const router = createRouter({
@@ -83,6 +105,8 @@ describe('RecommendationRulebookHandoff', () => {
 
   it('keeps selection, candidate review, consent, download, and teaching recovery in one flow', async () => {
     const openSource = vi.fn()
+    const backgroundWorkChanged = vi.fn()
+    window.addEventListener(BACKGROUND_WORK_CHANGED_EVENT, backgroundWorkChanged)
     vi.stubGlobal('open', openSource)
     const requests: Array<{ path: string; options?: RequestInit }> = []
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, options?: RequestInit) => {
@@ -181,11 +205,13 @@ describe('RecommendationRulebookHandoff', () => {
       learningGoal: null,
     })
     expect(readPendingRulebookLessons(localStorage, 'player')).toEqual([])
+    expect(backgroundWorkChanged).toHaveBeenCalledTimes(1)
     expect(router.currentRoute.value.name).toBe('home')
     await vi.waitFor(() => expect(wrapper.text()).toContain('完整讲解已经生成'))
     expect(wrapper.text()).toContain('打开已生成的讲解')
     expect(wrapper.text()).toContain('切换为规则答疑')
     expect(wrapper.get('a[href="/catalog"]').text()).toContain('我的桌游')
+    window.removeEventListener(BACKGROUND_WORK_CHANGED_EVENT, backgroundWorkChanged)
   })
 
   it('imports an ordered community page-image rulebook as part of the same teaching handoff', async () => {
@@ -232,7 +258,7 @@ describe('RecommendationRulebookHandoff', () => {
         return Response.json(runSnapshot('teaching-run-gallery', 'COMPLETED'))
       }
       if (path === '/api/v1/teaching-plans/plan-gallery/illustrated-lessons/latest') {
-        return Response.json(lessonFixture('lesson-gallery'))
+        return Response.json(lessonFixture('lesson-gallery', 'plan-gallery'))
       }
       return new Response(null, { status: 404 })
     }))
@@ -291,7 +317,7 @@ describe('RecommendationRulebookHandoff', () => {
         return Response.json(runSnapshot('teaching-complete', 'COMPLETED'))
       }
       if (path === '/api/v1/teaching-plans/plan-complete/illustrated-lessons/latest') {
-        return Response.json(lessonFixture('lesson-complete'))
+        return Response.json(lessonFixture('lesson-complete', 'plan-complete'))
       }
       return new Response(null, { status: 404 })
     }))
@@ -341,8 +367,11 @@ describe('RecommendationRulebookHandoff', () => {
         const failed = { ...snapshot, run: { ...snapshot.run, lastErrorCode: 'TEACHING_PREPARATION_FAILED' } }
         return Response.json(failed)
       }
-      if (path === '/api/v1/document-versions/version-1/teaching-plans' && options?.method === 'POST') {
-        return Response.json({ assistantRunId: 'preparation-retry', state: 'QUEUED', reused: false }, { status: 202 })
+      if (path === '/api/v1/documents/official-imports/import-1/teaching-retry' && options?.method === 'POST') {
+        return Response.json({
+          id: 'import-1', stage: 'COMPLETED', documentVersionId: 'version-1', duplicate: false, errorCode: null,
+          teachingHandoffState: 'LAUNCHED', teachingPreparationRunId: 'preparation-retry',
+        }, { status: 202 })
       }
       if (path === '/api/v1/assistant-runs/preparation-retry') return Response.json(runSnapshot('preparation-retry', 'COMPLETED'))
       if (path === '/api/v1/document-versions/version-1/teaching-plans/latest') return Response.json(planFixture('plan-1', 'version-1'))
@@ -365,8 +394,9 @@ describe('RecommendationRulebookHandoff', () => {
 
     expect(requests.filter(request => request.path === '/api/v1/bgg/games/266192/import')).toHaveLength(1)
     expect(requests.filter(request => request.path === '/api/v1/documents/official-imports')).toHaveLength(1)
-    const retry = requests.find(request => request.path === '/api/v1/document-versions/version-1/teaching-plans')
-    expect(JSON.parse(String(retry?.options?.body))).toEqual({ learningGoal: null })
+    const retry = requests.find(request => request.path === '/api/v1/documents/official-imports/import-1/teaching-retry')
+    expect(JSON.parse(String(retry?.options?.body))).toEqual({ expectedPreparationRunId: 'preparation-failed' })
+    expect(requests.filter(request => request.path === '/api/v1/document-versions/version-1/teaching-plans')).toHaveLength(0)
   })
 
   it('keeps a published draft readable and exposes a safe retry when later teaching review degrades', async () => {
@@ -424,6 +454,189 @@ describe('RecommendationRulebookHandoff', () => {
 
     expect(requests.filter(request => request.path === '/api/v1/documents/official-imports')).toHaveLength(1)
     expect(requests.filter(request => request.path === '/api/v1/teaching-plans/plan-1/illustrated-lessons')).toHaveLength(1)
+  })
+
+  it('polls quickly only until the first published chapter becomes readable', async () => {
+    vi.useFakeTimers()
+    let wrapper: Awaited<ReturnType<typeof mountHandoff>>['wrapper'] | undefined
+    try {
+      sessionStorage.setItem('rulepilot:recommendation-journey:266192', JSON.stringify({
+        imported: {
+          game: { id: 'game-1', name: '展翅翱翔' },
+          edition: { id: 'edition-1', name: 'BGG 版本' },
+          alreadyImported: false,
+        },
+        importJob: {
+          id: 'import-1', stage: 'COMPLETED', documentVersionId: 'version-1', duplicate: false, errorCode: null,
+          teachingHandoffState: 'LAUNCHED', teachingPreparationRunId: 'preparation-run-1',
+        },
+        preparationRunId: 'preparation-run-1',
+      }))
+      let lessonRequests = 0
+      vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+        const path = String(input)
+        if (path === '/api/v1/document-versions/version-1/progress/snapshot') {
+          return Response.json({ stage: 'READY', percentage: 100, processedPages: 12, totalPages: 12, complete: true })
+        }
+        if (path === '/api/v1/assistant-runs/preparation-run-1') {
+          return Response.json(runSnapshot('preparation-run-1', 'COMPLETED'))
+        }
+        if (path === '/api/v1/document-versions/version-1/teaching-plans/latest') {
+          return Response.json(planFixture('plan-1', 'version-1'))
+        }
+        if (path === '/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=plan-1') {
+          return Response.json(runSnapshot('teaching-run-1', 'LESSON_COMPOSITION'))
+        }
+        if (path === '/api/v1/teaching-plans/plan-1/illustrated-lessons/latest') {
+          lessonRequests += 1
+          return lessonRequests === 1
+            ? new Response(null, { status: 404 })
+            : Response.json({ ...lessonFixture('lesson-1'), status: 'DRAFT_READY' })
+        }
+        return new Response(null, { status: 404 })
+      }))
+
+      const mounted = await mountHandoff()
+      wrapper = mounted.wrapper
+      await vi.advanceTimersByTimeAsync(0)
+      await flushPromises()
+      expect(lessonRequests).toBe(1)
+      expect(wrapper.text()).not.toContain('讲解已有可读内容')
+
+      await vi.advanceTimersByTimeAsync(499)
+      await flushPromises()
+      expect(lessonRequests).toBe(1)
+
+      await vi.advanceTimersByTimeAsync(1)
+      await flushPromises()
+      expect(lessonRequests).toBe(2)
+      expect(wrapper.text()).toContain('讲解已有可读内容')
+      expect(vi.getTimerCount()).toBe(1)
+
+      await vi.runOnlyPendingTimersAsync()
+      await flushPromises()
+      expect(lessonRequests).toBe(3)
+    } finally {
+      wrapper?.unmount()
+      vi.useRealTimers()
+    }
+  })
+
+  it('uses the owned cross-runtime progress stream instead of waiting for the next journey poll', async () => {
+    vi.useFakeTimers()
+    let wrapper: Awaited<ReturnType<typeof mountHandoff>>['wrapper'] | undefined
+    try {
+      FakeProgressEventSource.instances = []
+      vi.stubGlobal('EventSource', FakeProgressEventSource)
+      sessionStorage.setItem('rulepilot:recommendation-journey:266192', JSON.stringify({
+        imported: {
+          game: { id: 'game-1', name: '展翅翱翔' },
+          edition: { id: 'edition-1', name: 'BGG 版本' },
+          alreadyImported: false,
+        },
+        importJob: {
+          id: 'import-1', stage: 'COMPLETED', documentVersionId: 'version-stream', duplicate: false, errorCode: null,
+          teachingHandoffState: 'WAITING_FOR_DOCUMENT', teachingPreparationRunId: null,
+        },
+      }))
+      let importReads = 0
+      const requests: string[] = []
+      vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+        const path = String(input)
+        requests.push(path)
+        if (path === '/api/v1/documents/official-imports/import-1') {
+          importReads += 1
+          return Response.json(importReads === 1 ? {
+            id: 'import-1', stage: 'COMPLETED', documentVersionId: 'version-stream', duplicate: false, errorCode: null,
+            teachingHandoffState: 'WAITING_FOR_DOCUMENT', teachingPreparationRunId: null,
+          } : {
+            id: 'import-1', stage: 'COMPLETED', documentVersionId: 'version-stream', duplicate: false, errorCode: null,
+            teachingHandoffState: 'LAUNCHED', teachingPreparationRunId: 'preparation-stream',
+          })
+        }
+        if (path === '/api/v1/document-versions/version-stream/progress/snapshot') {
+          return Response.json({
+            stage: 'RENDERING', percentage: 55, processedPages: 4, totalPages: 12, complete: false,
+          })
+        }
+        if (path === '/api/v1/assistant-runs/preparation-stream') {
+          return Response.json(runSnapshot('preparation-stream', 'DOCUMENT_READINESS'))
+        }
+        return new Response(null, { status: 404 })
+      }))
+
+      const mounted = await mountHandoff()
+      wrapper = mounted.wrapper
+      await vi.advanceTimersByTimeAsync(0)
+      await flushPromises()
+      expect(FakeProgressEventSource.instances).toHaveLength(1)
+      const source = FakeProgressEventSource.instances[0]!
+      expect(source.url).toBe('/api/v1/document-versions/version-stream/progress')
+      expect(source.options).toEqual({ withCredentials: true })
+      expect(wrapper.text()).toContain('第 4 / 12 页')
+      expect(importReads).toBe(1)
+
+      source.emitProgress({
+        stage: 'READY', percentage: 100, processedPages: 12, totalPages: 12, complete: true,
+      })
+      await flushPromises()
+
+      expect(source.closed).toBe(true)
+      expect(wrapper.text()).toContain('规则书已经可以阅读')
+      expect(importReads).toBe(1)
+      expect(requests.filter(path => path.endsWith('/progress/snapshot'))).toHaveLength(1)
+
+      await vi.advanceTimersByTimeAsync(0)
+      await flushPromises()
+      expect(importReads).toBe(2)
+      expect(wrapper.text()).toContain('正在通读规则书并组织讲解章节')
+    } finally {
+      wrapper?.unmount()
+      vi.useRealTimers()
+    }
+  })
+
+  it('closes the recommendation progress stream on unmount and ignores buffered events', async () => {
+    FakeProgressEventSource.instances = []
+    vi.stubGlobal('EventSource', FakeProgressEventSource)
+    sessionStorage.setItem('rulepilot:recommendation-journey:266192', JSON.stringify({
+      imported: {
+        game: { id: 'game-1', name: '展翅翱翔' },
+        edition: { id: 'edition-1', name: 'BGG 版本' },
+        alreadyImported: false,
+      },
+      importJob: {
+        id: 'import-1', stage: 'COMPLETED', documentVersionId: 'version-stream', duplicate: false, errorCode: null,
+        teachingHandoffState: 'WAITING_FOR_DOCUMENT', teachingPreparationRunId: null,
+      },
+    }))
+    const requests: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const path = String(input)
+      requests.push(path)
+      if (path === '/api/v1/documents/official-imports/import-1') return Response.json({
+        id: 'import-1', stage: 'COMPLETED', documentVersionId: 'version-stream', duplicate: false, errorCode: null,
+        teachingHandoffState: 'WAITING_FOR_DOCUMENT', teachingPreparationRunId: null,
+      })
+      if (path === '/api/v1/document-versions/version-stream/progress/snapshot') return Response.json({
+        stage: 'RENDERING', percentage: 55, processedPages: 4, totalPages: 12, complete: false,
+      })
+      return new Response(null, { status: 404 })
+    }))
+
+    const { wrapper } = await mountHandoff()
+    await vi.waitFor(() => expect(FakeProgressEventSource.instances).toHaveLength(1))
+    const source = FakeProgressEventSource.instances[0]!
+    const callsBeforeUnmount = requests.length
+
+    wrapper.unmount()
+    source.emitProgress({
+      stage: 'READY', percentage: 100, processedPages: 12, totalPages: 12, complete: true,
+    })
+    await flushPromises()
+
+    expect(source.closed).toBe(true)
+    expect(requests).toHaveLength(callsBeforeUnmount)
   })
 
   it('turns an account-gated exact BGG download into an actionable browser handoff', async () => {

@@ -106,6 +106,7 @@ export default defineConfig({
           'assets/liveLesson-*.js',
           'assets/offlineKnowledge-*.js',
           'assets/teachingProgress-*.js',
+          'assets/NotFoundView-*.js',
         ],
         globIgnores: ['ocr-assets/**'],
         runtimeCaching: [

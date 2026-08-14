@@ -5,6 +5,7 @@ import com.rulepilot.assistant.AgentExecutionControl.ActivityOutcome;
 import com.rulepilot.assistant.AgentExecutionControl.ActivityType;
 import com.rulepilot.assistant.AuditedAgentInvocations;
 import java.util.UUID;
+import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.function.ToIntFunction;
 import org.springframework.context.annotation.Profile;
@@ -45,7 +46,28 @@ public class BudgetedAgentInvocations implements AuditedAgentInvocations {
             String successSummary,
             Supplier<T> invocation,
             ToIntFunction<T> outputTokenEstimator) {
-        if (runId == null || invocation == null || outputTokenEstimator == null) {
+        return invoke(
+                runId,
+                type,
+                operation,
+                estimatedInputTokens,
+                successSummary,
+                invocation,
+                outputTokenEstimator,
+                ignored -> successSummary);
+    }
+
+    @Override
+    public <T> T invoke(
+            UUID runId,
+            ActivityType type,
+            String operation,
+            int estimatedInputTokens,
+            String fallbackSuccessSummary,
+            Supplier<T> invocation,
+            ToIntFunction<T> outputTokenEstimator,
+            Function<T, String> successSummary) {
+        if (runId == null || invocation == null || outputTokenEstimator == null || successSummary == null) {
             throw new IllegalArgumentException("audited agent invocation is invalid");
         }
         var reservation = execution.reserve(runId, type, operation, estimatedInputTokens);
@@ -63,12 +85,16 @@ public class BudgetedAgentInvocations implements AuditedAgentInvocations {
             }
             throw exception;
         }
+        String resolvedSuccessSummary = successSummary.apply(result);
+        if (resolvedSuccessSummary == null || resolvedSuccessSummary.isBlank()) {
+            resolvedSuccessSummary = fallbackSuccessSummary;
+        }
         execution.complete(
                 reservation,
                 ActivityOutcome.SUCCEEDED,
                 Math.max(0, outputTokenEstimator.applyAsInt(result)),
                 elapsedMillis(started),
-                successSummary);
+                resolvedSuccessSummary);
         return result;
     }
 

@@ -8,6 +8,8 @@ public interface UploadedRulebookTeachingHandoffs {
 
     List<ReadyHandoff> claimReady(int limit);
 
+    List<ReadyHandoff> claimReadyForDocument(UUID documentVersionId, int limit);
+
     int failUnusableDocuments();
 
     void markLaunched(UUID handoffId, UUID preparationRunId);

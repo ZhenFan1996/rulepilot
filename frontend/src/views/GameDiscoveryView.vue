@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 
 import AppShell from '@/components/AppShell.vue'
 import { notifyLoginRequired } from '@/lib/authSession'
-import { useLocale } from '@/lib/locale'
+import { useLocale, type AppLocale } from '@/lib/locale'
 
 interface BggGameDetails {
   bggId: number
@@ -89,6 +89,10 @@ const selecting = ref(false)
 const errorMessage = ref('')
 const bggId = computed(() => Number(route.params.bggId))
 let requestSequence = 0
+let selectionSequence = 0
+let disposed = false
+let activeDetailsController: AbortController | null = null
+let activeSelectionController: AbortController | null = null
 
 const stats = computed(() => {
   if (!game.value) return []
@@ -122,44 +126,110 @@ function normalizeDetails(parsed: BggGameDetails): BggGameDetails {
   }
 }
 
-async function loadLocalized(request: number) {
-  if (locale.value !== 'zh-CN') return
+function isAbortError(error: unknown) {
+  return error instanceof Error && error.name === 'AbortError'
+}
+
+function isCurrentDetailsRequest(
+  request: number,
+  targetBggId: number,
+  targetLocale: AppLocale,
+  controller: AbortController,
+) {
+  return !disposed
+    && request === requestSequence
+    && activeDetailsController === controller
+    && Object.is(bggId.value, targetBggId)
+    && locale.value === targetLocale
+}
+
+async function loadLocalized(
+  request: number,
+  targetBggId: number,
+  targetLocale: AppLocale,
+  controller: AbortController,
+) {
+  if (targetLocale !== 'zh-CN' || !isCurrentDetailsRequest(request, targetBggId, targetLocale, controller)) return
   translating.value = true
   try {
-    const response = await fetch(`/api/v1/bgg/games/${bggId.value}?locale=${encodeURIComponent(locale.value)}&translate=true`, { credentials: 'include' })
-    if (!response.ok || request !== requestSequence) return
-    game.value = normalizeDetails(await response.json() as BggGameDetails)
+    const response = await fetch(`/api/v1/bgg/games/${targetBggId}?locale=${encodeURIComponent(targetLocale)}&translate=true`, {
+      credentials: 'include',
+      signal: controller.signal,
+    })
+    if (!response.ok) return
+    const localized = normalizeDetails(await response.json() as BggGameDetails)
+    if (!isCurrentDetailsRequest(request, targetBggId, targetLocale, controller)) return
+    if (localized.bggId !== targetBggId) throw new Error('mismatched game details')
+    game.value = localized
+  } catch (error) {
+    if (!isAbortError(error) && isCurrentDetailsRequest(request, targetBggId, targetLocale, controller)) {
+      translating.value = false
+    }
   } finally {
-    if (request === requestSequence) translating.value = false
+    if (isCurrentDetailsRequest(request, targetBggId, targetLocale, controller)) translating.value = false
   }
 }
 
 async function load() {
+  const targetBggId = bggId.value
+  const targetLocale = locale.value
   const request = ++requestSequence
+  activeDetailsController?.abort()
+  const controller = new AbortController()
+  activeDetailsController = controller
   loading.value = true
   translating.value = false
   errorMessage.value = ''
+  game.value = null
   try {
-    if (!Number.isInteger(bggId.value) || bggId.value <= 0) throw new Error(copy.value.error)
-    const response = await fetch(`/api/v1/bgg/games/${bggId.value}?locale=${encodeURIComponent(locale.value)}&translate=false`, { credentials: 'include' })
+    if (!Number.isInteger(targetBggId) || targetBggId <= 0) throw new Error(copy.value.error)
+    const response = await fetch(`/api/v1/bgg/games/${targetBggId}?locale=${encodeURIComponent(targetLocale)}&translate=false`, {
+      credentials: 'include',
+      signal: controller.signal,
+    })
     if (!response.ok) throw new Error(copy.value.error)
     const parsed = normalizeDetails(await response.json() as BggGameDetails)
-    if (request !== requestSequence) return
+    if (!isCurrentDetailsRequest(request, targetBggId, targetLocale, controller)) return
+    if (parsed.bggId !== targetBggId) throw new Error(copy.value.error)
     game.value = parsed
     loading.value = false
-    void loadLocalized(request)
+    void loadLocalized(request, targetBggId, targetLocale, controller)
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : copy.value.error
+    if (!isAbortError(error) && isCurrentDetailsRequest(request, targetBggId, targetLocale, controller)) {
+      errorMessage.value = error instanceof Error ? error.message : copy.value.error
+    }
   } finally {
-    if (request === requestSequence) loading.value = false
+    if (isCurrentDetailsRequest(request, targetBggId, targetLocale, controller)) loading.value = false
   }
 }
 
+function isCurrentSelection(request: number, targetBggId: number, controller: AbortController) {
+  return !disposed
+    && request === selectionSequence
+    && activeSelectionController === controller
+    && bggId.value === targetBggId
+}
+
+function cancelSelection() {
+  selectionSequence += 1
+  activeSelectionController?.abort()
+  activeSelectionController = null
+  selecting.value = false
+}
+
 async function selectGame() {
+  if (selecting.value) return
+  const targetBggId = game.value?.bggId
+  if (!targetBggId || targetBggId !== bggId.value) return
+  const request = ++selectionSequence
+  activeSelectionController?.abort()
+  const controller = new AbortController()
+  activeSelectionController = controller
   selecting.value = true
   errorMessage.value = ''
   try {
-    const csrfResponse = await fetch('/api/auth/csrf', { credentials: 'include' })
+    const csrfResponse = await fetch('/api/auth/csrf', { credentials: 'include', signal: controller.signal })
+    if (!isCurrentSelection(request, targetBggId, controller)) return
     if (csrfResponse.status === 401) {
       notifyLoginRequired()
       errorMessage.value = copy.value.login
@@ -167,9 +237,11 @@ async function selectGame() {
     }
     if (!csrfResponse.ok) throw new Error(copy.value.selectError)
     const csrf = await csrfResponse.json() as CsrfResponse
-    const response = await fetch(`/api/v1/bgg/games/${bggId.value}/import`, {
-      method: 'POST', credentials: 'include', headers: { [csrf.headerName]: csrf.token },
+    if (!isCurrentSelection(request, targetBggId, controller)) return
+    const response = await fetch(`/api/v1/bgg/games/${targetBggId}/import`, {
+      method: 'POST', credentials: 'include', headers: { [csrf.headerName]: csrf.token }, signal: controller.signal,
     })
+    if (!isCurrentSelection(request, targetBggId, controller)) return
     if (response.status === 401) {
       notifyLoginRequired()
       errorMessage.value = copy.value.login
@@ -177,21 +249,39 @@ async function selectGame() {
     }
     if (!response.ok) throw new Error(copy.value.selectError)
     const imported = await response.json() as ImportedGame
+    if (!isCurrentSelection(request, targetBggId, controller)) return
     await router.push({ name: 'teach', query: { editionId: imported.edition.id, onboarding: 'selected-game' } })
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : copy.value.selectError
+    if (!isAbortError(error) && isCurrentSelection(request, targetBggId, controller)) {
+      errorMessage.value = error instanceof Error ? error.message : copy.value.selectError
+    }
   } finally {
-    selecting.value = false
+    if (request === selectionSequence && activeSelectionController === controller) {
+      activeSelectionController = null
+      selecting.value = false
+    }
   }
 }
 
 onMounted(load)
-watch(locale, load)
+watch([bggId, locale], ([nextBggId], [previousBggId]) => {
+  if (nextBggId !== previousBggId) cancelSelection()
+  void load()
+})
+onBeforeUnmount(() => {
+  disposed = true
+  requestSequence += 1
+  selectionSequence += 1
+  activeDetailsController?.abort()
+  activeSelectionController?.abort()
+  activeDetailsController = null
+  activeSelectionController = null
+})
 </script>
 
 <template>
   <AppShell>
-    <main class="tabletop-page max-w-6xl">
+    <div class="tabletop-page max-w-6xl">
       <RouterLink to="/discover" class="inline-flex min-h-11 items-center text-sm font-semibold text-indigo">← {{ copy.back }}</RouterLink>
 
       <div v-if="loading" class="mt-8 animate-pulse rounded-2xl border border-ink/10 bg-paper p-6" :aria-label="copy.loading">
@@ -265,7 +355,7 @@ watch(locale, load)
         <p>{{ errorMessage }}</p>
         <button v-if="!game" type="button" class="mt-3 font-semibold underline" @click="load">{{ copy.retry }}</button>
       </div>
-    </main>
+    </div>
   </AppShell>
 </template>
 

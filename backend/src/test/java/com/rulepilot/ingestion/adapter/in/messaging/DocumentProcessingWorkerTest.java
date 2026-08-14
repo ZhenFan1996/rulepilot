@@ -12,15 +12,19 @@ import com.rulepilot.document.DocumentProcessingCommands;
 import com.rulepilot.document.DocumentProcessingFailures;
 import com.rulepilot.document.DocumentProcessingJobs;
 import com.rulepilot.document.DocumentProcessingIdempotency;
+import com.rulepilot.document.DocumentReadyNotifications;
 import com.rulepilot.document.DocumentProcessingStage;
 import com.rulepilot.document.DocumentVersionScopeLookup;
 import com.rulepilot.document.RetryableDocumentProcessingException;
 import com.rulepilot.ingestion.application.UploadedDocumentIngestion;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.Mockito;
 import org.springframework.amqp.core.Message;
 import org.springframework.context.annotation.Lazy;
@@ -59,7 +63,7 @@ class DocumentProcessingWorkerTest {
         verify(jobs).stageStarted(jobId, DocumentProcessingStage.PARSE);
         verify(ingestion).process(documentVersionId, DocumentProcessingStage.PARSE);
         verify(commands).publish(new DocumentProcessingCommand(
-                1, documentVersionId, jobId, "v1", DocumentProcessingStage.CHUNK));
+                1, documentVersionId, jobId, "v1", DocumentProcessingStage.EMBED));
         verify(idempotency).complete(command);
         assertThat(metrics
                         .counter("rulepilot.document.processing.attempts", "stage", "parse", "outcome", "completed")
@@ -67,6 +71,72 @@ class DocumentProcessingWorkerTest {
                 .isEqualTo(1);
         assertThat(metrics
                         .timer("rulepilot.document.processing.stage.duration", "stage", "parse", "outcome", "completed")
+                        .count())
+                .isEqualTo(1);
+    }
+
+    @Test
+    void publishesAReadyNotificationOnlyAfterTheTerminalStageIsDurable() {
+        UploadedDocumentIngestion ingestion = Mockito.mock(UploadedDocumentIngestion.class);
+        DocumentProcessingCommands commands = Mockito.mock(DocumentProcessingCommands.class);
+        DocumentProcessingJobs jobs = Mockito.mock(DocumentProcessingJobs.class);
+        DocumentProcessingIdempotency idempotency = Mockito.mock(DocumentProcessingIdempotency.class);
+        DocumentProcessingFailures failures = Mockito.mock(DocumentProcessingFailures.class);
+        DocumentReadyNotifications readyNotifications = Mockito.mock(DocumentReadyNotifications.class);
+        UUID documentVersionId = UUID.randomUUID();
+        UUID jobId = UUID.randomUUID();
+        UUID eventId = UUID.randomUUID();
+        var command = new DocumentProcessingCommand(
+                1, documentVersionId, jobId, "v1", DocumentProcessingStage.EMBED);
+        Instant readyAt = Instant.parse("2026-08-13T08:00:00Z");
+        when(idempotency.begin(command, eventId, 1)).thenReturn(true);
+        when(jobs.completed(jobId, DocumentProcessingStage.EMBED)).thenReturn(readyAt);
+        var metrics = new SimpleMeterRegistry();
+
+        worker(ingestion, commands, jobs, idempotency, failures, readyNotifications, metrics)
+                .process(message(payload(documentVersionId, jobId, "EMBED"), eventId, 1));
+
+        var order = Mockito.inOrder(ingestion, jobs, idempotency, readyNotifications);
+        order.verify(ingestion).process(documentVersionId, DocumentProcessingStage.EMBED);
+        order.verify(jobs).completed(jobId, DocumentProcessingStage.EMBED);
+        order.verify(idempotency).complete(command);
+        order.verify(readyNotifications).publish(documentVersionId, readyAt);
+    }
+
+    @Test
+    void keepsReadyNotificationFailureRecoverableByTheDatabaseScan() {
+        UploadedDocumentIngestion ingestion = Mockito.mock(UploadedDocumentIngestion.class);
+        DocumentProcessingCommands commands = Mockito.mock(DocumentProcessingCommands.class);
+        DocumentProcessingJobs jobs = Mockito.mock(DocumentProcessingJobs.class);
+        DocumentProcessingIdempotency idempotency = Mockito.mock(DocumentProcessingIdempotency.class);
+        DocumentProcessingFailures failures = Mockito.mock(DocumentProcessingFailures.class);
+        DocumentReadyNotifications readyNotifications = Mockito.mock(DocumentReadyNotifications.class);
+        UUID documentVersionId = UUID.randomUUID();
+        UUID jobId = UUID.randomUUID();
+        UUID eventId = UUID.randomUUID();
+        var command = new DocumentProcessingCommand(
+                1, documentVersionId, jobId, "v1", DocumentProcessingStage.EMBED);
+        Instant readyAt = Instant.parse("2026-08-13T08:00:00Z");
+        when(idempotency.begin(command, eventId, 1)).thenReturn(true);
+        when(jobs.completed(jobId, DocumentProcessingStage.EMBED)).thenReturn(readyAt);
+        Mockito.doThrow(new IllegalStateException("broker unavailable"))
+                .when(readyNotifications)
+                .publish(documentVersionId, readyAt);
+        var metrics = new SimpleMeterRegistry();
+
+        worker(ingestion, commands, jobs, idempotency, failures, readyNotifications, metrics)
+                .process(message(payload(documentVersionId, jobId, "EMBED"), eventId, 1));
+
+        verify(idempotency).complete(command);
+        verifyNoInteractions(failures);
+        assertThat(metrics.counter("rulepilot.document.ready.notification", "outcome", "failed").count())
+                .isEqualTo(1);
+        assertThat(metrics.counter(
+                                "rulepilot.document.processing.attempts",
+                                "stage",
+                                "embed",
+                                "outcome",
+                                "completed")
                         .count())
                 .isEqualTo(1);
     }
@@ -108,6 +178,91 @@ class DocumentProcessingWorkerTest {
 
         verify(idempotency).begin(command, eventId, 1);
         verifyNoInteractions(ingestion, commands, jobs, failures);
+    }
+
+    @Test
+    void bridgesALegacyChunkDeliveryToEmbedDuringARollingDeployment() {
+        UploadedDocumentIngestion ingestion = Mockito.mock(UploadedDocumentIngestion.class);
+        DocumentProcessingCommands commands = Mockito.mock(DocumentProcessingCommands.class);
+        DocumentProcessingJobs jobs = Mockito.mock(DocumentProcessingJobs.class);
+        DocumentProcessingIdempotency idempotency = Mockito.mock(DocumentProcessingIdempotency.class);
+        DocumentProcessingFailures failures = Mockito.mock(DocumentProcessingFailures.class);
+        DocumentVersionScopeLookup versions = Mockito.mock(DocumentVersionScopeLookup.class);
+        UUID documentVersionId = UUID.randomUUID();
+        UUID jobId = UUID.randomUUID();
+        UUID eventId = UUID.randomUUID();
+        var command = new DocumentProcessingCommand(
+                1, documentVersionId, jobId, "v1", DocumentProcessingStage.CHUNK);
+        when(versions.findVersion(documentVersionId)).thenReturn(Optional.of(
+                new DocumentVersionScopeLookup.VersionScope(
+                        documentVersionId, UUID.randomUUID(), "STRUCTURING", "player")));
+        when(idempotency.begin(command, eventId, 1)).thenReturn(true);
+
+        worker(ingestion, commands, jobs, idempotency, failures, versions, new SimpleMeterRegistry())
+                .process(message(payload(documentVersionId, jobId, "CHUNK"), eventId, 1));
+
+        verify(ingestion).process(documentVersionId, DocumentProcessingStage.CHUNK);
+        verify(commands).publish(new DocumentProcessingCommand(
+                1, documentVersionId, jobId, "v1", DocumentProcessingStage.EMBED));
+        verify(idempotency).complete(command);
+    }
+
+    @Test
+    void republishesEmbedFromALegacyChunkRetryThatAlreadyReachedChunking() {
+        UploadedDocumentIngestion ingestion = Mockito.mock(UploadedDocumentIngestion.class);
+        DocumentProcessingCommands commands = Mockito.mock(DocumentProcessingCommands.class);
+        DocumentProcessingJobs jobs = Mockito.mock(DocumentProcessingJobs.class);
+        DocumentProcessingIdempotency idempotency = Mockito.mock(DocumentProcessingIdempotency.class);
+        DocumentProcessingFailures failures = Mockito.mock(DocumentProcessingFailures.class);
+        DocumentVersionScopeLookup versions = Mockito.mock(DocumentVersionScopeLookup.class);
+        UUID documentVersionId = UUID.randomUUID();
+        UUID jobId = UUID.randomUUID();
+        UUID eventId = UUID.randomUUID();
+        var command = new DocumentProcessingCommand(
+                1, documentVersionId, jobId, "v1", DocumentProcessingStage.CHUNK);
+        when(versions.findVersion(documentVersionId)).thenReturn(Optional.of(
+                new DocumentVersionScopeLookup.VersionScope(
+                        documentVersionId, UUID.randomUUID(), "CHUNKING", "player")));
+        when(idempotency.begin(command, eventId, 2)).thenReturn(true);
+
+        worker(ingestion, commands, jobs, idempotency, failures, versions, new SimpleMeterRegistry())
+                .process(message(payload(documentVersionId, jobId, "CHUNK"), eventId, 2));
+
+        verify(ingestion).process(documentVersionId, DocumentProcessingStage.CHUNK);
+        verify(commands).publish(new DocumentProcessingCommand(
+                1, documentVersionId, jobId, "v1", DocumentProcessingStage.EMBED));
+        verify(idempotency).complete(command);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"EMBEDDING", "INDEXING", "READY", "FAILED"})
+    void acknowledgesALateLegacyChunkWithoutRegressingProgressOrPublishingEmbedAgain(String processingStatus) {
+        UploadedDocumentIngestion ingestion = Mockito.mock(UploadedDocumentIngestion.class);
+        DocumentProcessingCommands commands = Mockito.mock(DocumentProcessingCommands.class);
+        DocumentProcessingJobs jobs = Mockito.mock(DocumentProcessingJobs.class);
+        DocumentProcessingIdempotency idempotency = Mockito.mock(DocumentProcessingIdempotency.class);
+        DocumentProcessingFailures failures = Mockito.mock(DocumentProcessingFailures.class);
+        DocumentVersionScopeLookup versions = Mockito.mock(DocumentVersionScopeLookup.class);
+        UUID documentVersionId = UUID.randomUUID();
+        UUID jobId = UUID.randomUUID();
+        UUID eventId = UUID.randomUUID();
+        var metrics = new SimpleMeterRegistry();
+        when(versions.findVersion(documentVersionId)).thenReturn(Optional.of(
+                new DocumentVersionScopeLookup.VersionScope(
+                        documentVersionId, UUID.randomUUID(), processingStatus, "player")));
+        var command = new DocumentProcessingCommand(
+                1, documentVersionId, jobId, "v1", DocumentProcessingStage.CHUNK);
+        when(idempotency.begin(command, eventId, 1)).thenReturn(true);
+
+        worker(ingestion, commands, jobs, idempotency, failures, versions, metrics)
+                .process(message(payload(documentVersionId, jobId, "CHUNK"), eventId, 1));
+
+        verify(versions).findVersion(documentVersionId);
+        verify(idempotency).begin(command, eventId, 1);
+        verify(idempotency).complete(command);
+        verifyNoInteractions(ingestion, commands, jobs, failures);
+        assertThat(metrics.counter("rulepilot.document.processing.obsolete", "stage", "chunk").count())
+                .isEqualTo(1);
     }
 
     @Test
@@ -238,7 +393,38 @@ class DocumentProcessingWorkerTest {
             DocumentVersionScopeLookup versions,
             SimpleMeterRegistry metrics) {
         return new DocumentProcessingWorker(
-                ingestion, commands, jobs, idempotency, failures, versions, metrics, 4);
+                ingestion,
+                commands,
+                jobs,
+                idempotency,
+                failures,
+                Mockito.mock(DocumentReadyNotifications.class),
+                versions,
+                metrics,
+                4);
+    }
+
+    private DocumentProcessingWorker worker(
+            UploadedDocumentIngestion ingestion,
+            DocumentProcessingCommands commands,
+            DocumentProcessingJobs jobs,
+            DocumentProcessingIdempotency idempotency,
+            DocumentProcessingFailures failures,
+            DocumentReadyNotifications readyNotifications,
+            SimpleMeterRegistry metrics) {
+        DocumentVersionScopeLookup versions = Mockito.mock(DocumentVersionScopeLookup.class);
+        when(versions.findVersion(any())).thenAnswer(invocation -> Optional.of(new DocumentVersionScopeLookup.VersionScope(
+                invocation.getArgument(0), UUID.randomUUID(), "UPLOADED", "player")));
+        return new DocumentProcessingWorker(
+                ingestion,
+                commands,
+                jobs,
+                idempotency,
+                failures,
+                readyNotifications,
+                versions,
+                metrics,
+                4);
     }
 
     private String payload(UUID documentVersionId, UUID jobId, String stage) {

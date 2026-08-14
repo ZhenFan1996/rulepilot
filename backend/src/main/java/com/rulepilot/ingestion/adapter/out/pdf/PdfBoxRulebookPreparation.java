@@ -4,9 +4,11 @@ import com.rulepilot.document.DocumentPageImageStore.RenderedPageImage;
 import com.rulepilot.document.DocumentProcessing;
 import com.rulepilot.ingestion.application.PdfRulebookPreparation;
 import java.awt.image.BufferedImage;
+import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
@@ -66,25 +68,39 @@ public class PdfBoxRulebookPreparation implements PdfRulebookPreparation {
     // on compact publisher page sizes, which makes both visual models and reader crops unreliable.
     private static final float RENDER_DPI = 200;
     private static final float JPEG_QUALITY = 0.90f;
+    static final int MAX_RENDER_SESSION_PAGES = 8;
 
     private final int maxPages;
     private final int maxExtractedCharacters;
     private final int renderSessionPages;
     private final VisualRenderer visualRenderer;
+    private final boolean streamCompletedPopplerPages;
 
     @Autowired
     public PdfBoxRulebookPreparation(
             @Value("${rulepilot.document.max-pdf-pages:500}") int maxPages,
             @Value("${rulepilot.document.max-extracted-characters:5000000}") int maxExtractedCharacters,
-            @Value("${rulepilot.document.render-session-pages:4}") int renderSessionPages,
+            @Value("${rulepilot.document.render-session-pages:8}") int renderSessionPages,
             @Value("${rulepilot.document.visual-renderer:poppler}") String visualRenderer) {
-        if (maxPages < 1 || maxExtractedCharacters < 1 || renderSessionPages < 1) {
-            throw new IllegalArgumentException("PDF extraction limits and render session size must be positive");
+        this(maxPages, maxExtractedCharacters, renderSessionPages, visualRenderer, true);
+    }
+
+    PdfBoxRulebookPreparation(
+            int maxPages,
+            int maxExtractedCharacters,
+            int renderSessionPages,
+            String visualRenderer,
+            boolean streamCompletedPopplerPages) {
+        if (maxPages < 1 || maxExtractedCharacters < 1
+                || renderSessionPages < 1 || renderSessionPages > MAX_RENDER_SESSION_PAGES) {
+            throw new IllegalArgumentException(
+                    "PDF extraction limits must be positive and render session size must be 1-8");
         }
         this.maxPages = maxPages;
         this.maxExtractedCharacters = maxExtractedCharacters;
         this.renderSessionPages = renderSessionPages;
         this.visualRenderer = VisualRenderer.from(visualRenderer);
+        this.streamCompletedPopplerPages = streamCompletedPopplerPages;
     }
 
     PdfBoxRulebookPreparation(int maxPages, int maxExtractedCharacters, int renderSessionPages) {
@@ -188,18 +204,13 @@ public class PdfBoxRulebookPreparation implements PdfRulebookPreparation {
             Path temporaryPdf, int expectedPageCount, Consumer<RenderedPageImage> pageImageConsumer) throws IOException {
         Path outputDirectory = Files.createTempDirectory("rulepilot-poppler-render-");
         try {
-            for (int batchStart = 0; batchStart < expectedPageCount; batchStart += renderSessionPages) {
-                int batchEnd = Math.min(batchStart + renderSessionPages, expectedPageCount);
-                renderPopplerBatch(temporaryPdf, outputDirectory, batchStart + 1, batchEnd);
-                for (int pageNumber = batchStart + 1; pageNumber <= batchEnd; pageNumber++) {
-                    Path renderedPage = locatePopplerPage(outputDirectory, pageNumber);
-                    try {
-                        PageDimensions dimensions = jpegDimensions(renderedPage);
-                        pageImageConsumer.accept(new RenderedPageImage(
-                                pageNumber, Files.readAllBytes(renderedPage), dimensions.width(), dimensions.height()));
-                    } finally {
-                        Files.deleteIfExists(renderedPage);
-                    }
+            for (int firstPage = 1; firstPage <= expectedPageCount; firstPage += renderSessionPages) {
+                int lastPage = Math.min(firstPage + renderSessionPages - 1, expectedPageCount);
+                if (streamCompletedPopplerPages) {
+                    renderPopplerSession(
+                            temporaryPdf, outputDirectory, firstPage, lastPage, pageImageConsumer);
+                } else {
+                    renderPopplerBatch(temporaryPdf, outputDirectory, firstPage, lastPage, pageImageConsumer);
                 }
             }
         } finally {
@@ -207,27 +218,117 @@ public class PdfBoxRulebookPreparation implements PdfRulebookPreparation {
         }
     }
 
-    private void renderPopplerBatch(Path pdf, Path outputDirectory, int firstPage, int lastPage) throws IOException {
-        List<String> command = List.of(
+    private void renderPopplerSession(
+            Path pdf,
+            Path outputDirectory,
+            int firstPage,
+            int lastPage,
+            Consumer<RenderedPageImage> pageImageConsumer) throws IOException {
+        Process process = startPopplerRender(pdf, outputDirectory, firstPage, lastPage, true);
+        int emittedPages = firstPage - 1;
+        try (BufferedReader progress = new BufferedReader(
+                new InputStreamReader(process.getInputStream(), java.nio.charset.StandardCharsets.UTF_8))) {
+            String line;
+            while ((line = progress.readLine()) != null) {
+                int pageNumber = completedPopplerPage(line, firstPage, lastPage);
+                if (pageNumber != emittedPages + 1) {
+                    throw new IOException("Poppler reported pages out of order");
+                }
+                emitPopplerPage(outputDirectory, pageNumber, pageImageConsumer);
+                emittedPages = pageNumber;
+            }
+        } catch (RuntimeException | IOException | Error failure) {
+            stopPoppler(process);
+            throw failure;
+        }
+        int exitCode = waitForPoppler(process);
+        if (exitCode != 0 || emittedPages != lastPage) {
+            throw new IOException("Poppler could not render the complete rulebook session");
+        }
+    }
+
+    private void renderPopplerBatch(
+            Path pdf,
+            Path outputDirectory,
+            int firstPage,
+            int lastPage,
+            Consumer<RenderedPageImage> pageImageConsumer) throws IOException {
+        Process process = startPopplerRender(pdf, outputDirectory, firstPage, lastPage, false);
+        if (waitForPoppler(process) != 0) {
+            throw new IOException("Poppler could not render the rulebook pages");
+        }
+        for (int pageNumber = firstPage; pageNumber <= lastPage; pageNumber++) {
+            emitPopplerPage(outputDirectory, pageNumber, pageImageConsumer);
+        }
+    }
+
+    private Process startPopplerRender(
+            Path pdf, Path outputDirectory, int firstPage, int lastPage, boolean reportProgress) throws IOException {
+        List<String> command = new ArrayList<>(List.of(
                 "pdftoppm",
+                "-q",
                 "-r", String.valueOf((int) RENDER_DPI),
                 "-jpeg",
                 "-jpegopt", "quality=" + Math.round(JPEG_QUALITY * 100),
                 "-f", String.valueOf(firstPage),
-                "-l", String.valueOf(lastPage),
-                pdf.toString(),
-                outputDirectory.resolve("page").toString());
-        Process process = new ProcessBuilder(command)
+                "-l", String.valueOf(lastPage)));
+        if (reportProgress) {
+            command.add("-progress");
+        }
+        command.add(pdf.toString());
+        command.add(outputDirectory.resolve("page").toString());
+        return new ProcessBuilder(command)
                 .redirectErrorStream(true)
-                .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+                .redirectOutput(reportProgress
+                        ? ProcessBuilder.Redirect.PIPE
+                        : ProcessBuilder.Redirect.DISCARD)
                 .start();
+    }
+
+    static int completedPopplerPage(String progress, int firstPage, int lastPage) throws IOException {
+        String[] fields = progress == null ? new String[0] : progress.strip().split("\\s+", 3);
+        if (fields.length != 3) {
+            throw new IOException("Poppler progress output is invalid");
+        }
         try {
-            if (process.waitFor() != 0) {
-                throw new IOException("Poppler could not render the rulebook pages");
+            int pageNumber = Integer.parseInt(fields[0]);
+            int reportedLastPage = Integer.parseInt(fields[1]);
+            if (pageNumber < firstPage || pageNumber > lastPage || reportedLastPage != lastPage) {
+                throw new IOException("Poppler progress output is outside the expected page range");
             }
+            return pageNumber;
+        } catch (NumberFormatException invalidProgress) {
+            throw new IOException("Poppler progress output is invalid", invalidProgress);
+        }
+    }
+
+    private void emitPopplerPage(
+            Path outputDirectory, int pageNumber, Consumer<RenderedPageImage> pageImageConsumer) throws IOException {
+        Path renderedPage = locatePopplerPage(outputDirectory, pageNumber);
+        try {
+            PageDimensions dimensions = jpegDimensions(renderedPage);
+            pageImageConsumer.accept(new RenderedPageImage(
+                    pageNumber, Files.readAllBytes(renderedPage), dimensions.width(), dimensions.height()));
+        } finally {
+            Files.deleteIfExists(renderedPage);
+        }
+    }
+
+    private int waitForPoppler(Process process) throws IOException {
+        try {
+            return process.waitFor();
         } catch (InterruptedException interrupted) {
             Thread.currentThread().interrupt();
             throw new IOException("Poppler rendering was interrupted", interrupted);
+        }
+    }
+
+    private void stopPoppler(Process process) {
+        process.destroyForcibly();
+        try {
+            process.waitFor();
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
         }
     }
 

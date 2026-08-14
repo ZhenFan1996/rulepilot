@@ -87,12 +87,16 @@ class HttpOfficialRulebookSourceFetcherTest {
             @Override public void downloaded(long downloadedBytes, Long totalBytes) {
                 events.add("bytes:" + downloadedBytes + "/" + totalBytes);
             }
+            @Override public void downloadCompleted() { events.add("download-complete"); }
             @Override public void verifying() { events.add("verify"); }
         });
 
         assertThat(events.getFirst()).isEqualTo("start:" + pdf.length);
         assertThat(events).anyMatch(event -> event.startsWith("bytes:262144/"));
-        assertThat(events).contains("bytes:" + pdf.length + "/" + pdf.length, "verify");
+        assertThat(events).containsSubsequence(
+                "bytes:" + pdf.length + "/" + pdf.length,
+                "download-complete",
+                "verify");
         assertThat(events.getLast()).isEqualTo("verify");
     }
 
@@ -216,9 +220,16 @@ class HttpOfficialRulebookSourceFetcherTest {
                     return response(chain.request(), "image/jpeg", call == 1 ? firstPage : secondPage);
                 })
                 .build();
-        var fetcher = new HttpOfficialRulebookSourceFetcher(
-                http, 5 * 1024 * 1024, 64 * 1024, new PdfBoxPhotographedRulebookAssembler());
         List<String> events = new ArrayList<>();
+        var pdfAssembler = new PdfBoxPhotographedRulebookAssembler();
+        var fetcher = new HttpOfficialRulebookSourceFetcher(
+                http,
+                5 * 1024 * 1024,
+                64 * 1024,
+                pages -> {
+                    events.add("assemble");
+                    return pdfAssembler.assemble(pages);
+                });
 
         var fetched = fetcher.fetch(
                 URI.create("https://www.gstonegames.com/game/doc-1234.html"),
@@ -227,6 +238,7 @@ class HttpOfficialRulebookSourceFetcherTest {
                     @Override public void downloaded(long downloadedBytes, Long totalBytes) {
                         events.add("bytes:" + downloadedBytes + "/" + totalBytes);
                     }
+                    @Override public void downloadCompleted() { events.add("download-complete"); }
                     @Override public void verifying() { events.add("verify"); }
                 });
 
@@ -237,7 +249,11 @@ class HttpOfficialRulebookSourceFetcherTest {
             assertThat(pdf.getNumberOfPages()).isEqualTo(2);
         }
         assertThat(events.getFirst()).isEqualTo("start:null");
-        assertThat(events).contains("bytes:" + (firstPage.length + secondPage.length) + "/null", "verify");
+        assertThat(events).containsSubsequence(
+                "bytes:" + (firstPage.length + secondPage.length) + "/null",
+                "download-complete",
+                "assemble",
+                "verify");
         assertThat(events.getLast()).isEqualTo("verify");
     }
 
@@ -315,13 +331,14 @@ class HttpOfficialRulebookSourceFetcherTest {
                 new OfficialRulebookSourceFetcher.ProgressListener() {
                     @Override public void downloadStarted(Long totalBytes) { events.add("download"); }
                     @Override public void downloaded(long downloadedBytes, Long totalBytes) { events.add("bytes"); }
+                    @Override public void downloadCompleted() { events.add("download-complete"); }
                     @Override public void compressing() { events.add("compress"); }
                     @Override public void verifying() { events.add("verify"); }
                 });
 
         assertThat(compressions).hasValue(1);
         assertThat(new String(fetched.content(), StandardCharsets.US_ASCII)).isEqualTo("%PDF-compressed");
-        assertThat(events).containsSubsequence("download", "bytes", "compress", "verify");
+        assertThat(events).containsSubsequence("download", "bytes", "download-complete", "compress", "verify");
     }
 
     @Test

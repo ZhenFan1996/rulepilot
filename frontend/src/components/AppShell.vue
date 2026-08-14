@@ -7,9 +7,14 @@ import TabletopGlyph from '@/components/TabletopGlyph.vue'
 import LanguageSwitcher from '@/components/LanguageSwitcher.vue'
 import BackgroundWorkCenter from '@/components/BackgroundWorkCenter.vue'
 import { LOGIN_REQUIRED_EVENT, notifySessionCleared } from '@/lib/authSession'
+import { clearBackgroundWorkStorage } from '@/lib/backgroundTeachingStatus'
 import { useLocale } from '@/lib/locale'
 
 withDefaults(defineProps<{ immersive?: boolean }>(), { immersive: false })
+defineSlots<{ default(props: { username: string }): unknown }>()
+const emit = defineEmits<{
+  sessionIdentity: [username: string]
+}>()
 
 const route = useRoute()
 const { t } = useLocale()
@@ -30,9 +35,11 @@ const isDark = computed(() => appearance.value === 'dark')
 const username = ref('')
 const roles = ref<string[]>([])
 const loginReminderVisible = ref(false)
-const backgroundWorkCenter = ref<{ openCenter: () => void } | null>(null)
+const backgroundWorkCenter = ref<{ openCenter: (trigger?: HTMLElement | null) => void } | null>(null)
 const backgroundActiveCount = ref(0)
 const backgroundFinishedCount = ref(0)
+let disposed = false
+const sessionController = new AbortController()
 
 const navigation = [
   { name: 'home', path: '/', labelKey: 'nav.home', icon: 'compass' },
@@ -71,21 +78,30 @@ function toggleTheme() {
 
 async function loadSession() {
   try {
-    const response = await fetch('/api/auth/session', { credentials: 'include' })
-    if (response.ok) {
-      const session = await response.json() as { username: string; roles?: string[] }
-      username.value = session.username
-      roles.value = Array.isArray(session.roles) ? session.roles : []
-    }
+    const response = await fetch('/api/auth/session', { credentials: 'include', signal: sessionController.signal })
+    if (disposed) return
+    if (!response.ok) return clearSessionIdentity()
+    const session = await response.json() as { username?: unknown; roles?: unknown }
+    if (disposed) return
+    username.value = typeof session.username === 'string' ? session.username.trim() : ''
+    roles.value = Array.isArray(session.roles)
+      ? session.roles.filter((role): role is string => typeof role === 'string')
+      : []
+    emit('sessionIdentity', username.value)
   } catch {
-    username.value = ''
-    roles.value = []
+    if (!disposed) clearSessionIdentity()
   }
 }
 
-function showLoginReminder() {
+function clearSessionIdentity() {
   username.value = ''
   roles.value = []
+  emit('sessionIdentity', '')
+}
+
+function showLoginReminder() {
+  sessionController.abort()
+  clearSessionIdentity()
   loginReminderVisible.value = true
 }
 
@@ -94,11 +110,12 @@ function updateBackgroundWorkStatus(activeCount: number, finishedCount: number) 
   backgroundFinishedCount.value = finishedCount
 }
 
-function openBackgroundWork() {
-  backgroundWorkCenter.value?.openCenter()
+function openBackgroundWork(event: MouseEvent) {
+  backgroundWorkCenter.value?.openCenter(event.currentTarget as HTMLElement)
 }
 
 async function logout() {
+  const signedOutUsername = username.value
   const csrfResponse = await fetch('/api/auth/csrf', { credentials: 'include' })
   if (!csrfResponse.ok) return
   const csrf = (await csrfResponse.json()) as { headerName: string; token: string }
@@ -106,10 +123,8 @@ async function logout() {
   if (!response.ok) return
   username.value = ''
   roles.value = []
-  sessionStorage.removeItem('rulepilot:active-teaching-runs')
-  sessionStorage.removeItem('rulepilot:completed-teaching-runs')
-  sessionStorage.removeItem('rulepilot:dismissed-official-imports')
-  sessionStorage.removeItem('rulepilot:dismissed-upload-teaching-handoffs')
+  emit('sessionIdentity', '')
+  clearBackgroundWorkStorage(sessionStorage, signedOutUsername)
   notifySessionCleared()
 }
 
@@ -117,13 +132,15 @@ onMounted(() => applyAppearance(appearance.value, false))
 onMounted(loadSession)
 onMounted(() => window.addEventListener(LOGIN_REQUIRED_EVENT, showLoginReminder))
 onBeforeUnmount(() => {
+  disposed = true
+  sessionController.abort()
   window.removeEventListener(LOGIN_REQUIRED_EVENT, showLoginReminder)
 })
 </script>
 
 <template>
   <div class="tabletop-app min-h-screen bg-canvas text-ink lg:pl-64">
-    <aside class="drawer-shelf fixed inset-y-0 left-0 z-30 hidden w-64 flex-col overflow-y-auto border-r border-white/8 bg-ink-panel px-4 py-5 text-[#f5f0e8] lg:flex">
+    <aside class="drawer-shelf app-fixed-top fixed bottom-0 left-0 z-30 hidden w-64 flex-col overflow-y-auto border-r border-white/8 bg-ink-panel px-4 py-5 text-[#f5f0e8] lg:flex">
       <div class="drawer-shelf__ornament" aria-hidden="true">❦</div>
       <RouterLink :to="{ name: 'home' }" :aria-label="t('shell.homeAria')" class="relative mx-2 rounded-xl focus-visible:outline-offset-4">
         <ProductMark />
@@ -182,7 +199,7 @@ onBeforeUnmount(() => {
       </div>
     </aside>
 
-    <header class="mobile-app-header sticky top-0 z-30 flex h-16 items-center justify-between border-b border-ink/10 bg-paper/95 px-3 backdrop-blur lg:hidden">
+    <header class="mobile-app-header app-sticky-top sticky z-30 flex h-16 items-center justify-between border-b border-ink/10 bg-paper/95 px-3 backdrop-blur lg:hidden">
       <RouterLink :to="{ name: 'home' }" :aria-label="t('shell.homeAria')"><ProductMark /></RouterLink>
       <div class="flex min-w-0 items-center gap-1.5">
         <RouterLink v-if="username" :to="{ name: 'account' }" class="max-w-16 truncate text-sm font-semibold text-ink/60 max-[480px]:hidden">{{ username }}</RouterLink>
@@ -207,7 +224,7 @@ onBeforeUnmount(() => {
       </div>
     </header>
 
-    <main class="min-h-screen pb-20 lg:pb-0">
+    <main id="main-content" tabindex="-1" class="app-main min-h-screen pb-20 lg:pb-0" :aria-label="t('shell.mainContent')">
       <aside v-if="loginReminderVisible" class="border-b border-copper/25 bg-copper/10 px-4 py-3 sm:px-8" role="status">
         <div class="mx-auto flex max-w-7xl items-start gap-3">
           <div class="min-w-0 flex-1">
@@ -218,7 +235,7 @@ onBeforeUnmount(() => {
           <button type="button" class="grid min-h-11 min-w-11 place-items-center rounded-lg text-xl text-ink/45 hover:bg-ink/5 hover:text-ink" :aria-label="t('shell.loginReminder.dismiss')" @click="loginReminderVisible = false">×</button>
         </div>
       </aside>
-      <slot />
+      <slot :username="username" />
     </main>
 
     <BackgroundWorkCenter

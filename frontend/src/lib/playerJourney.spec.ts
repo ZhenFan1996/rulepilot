@@ -4,10 +4,22 @@ import {
   acceptImportJob,
   acceptJourneyRun,
   derivePlayerJourney,
+  playerJourneyPollDelay,
   type PlayerJourneyImportJob,
   type PlayerJourneyInput,
   type PlayerJourneyRun,
 } from './playerJourney'
+
+describe('playerJourneyPollDelay', () => {
+  it('checks quickly only while a plan is waiting for its first readable chapter', () => {
+    expect(playerJourneyPollDelay(false, false)).toBe(1_250)
+    expect(playerJourneyPollDelay(false, true)).toBe(500)
+  })
+
+  it('keeps transient failures on the slower retry cadence', () => {
+    expect(playerJourneyPollDelay(true, true)).toBe(3_000)
+  })
+})
 
 function input(overrides: Partial<PlayerJourneyInput> = {}): PlayerJourneyInput {
   return {

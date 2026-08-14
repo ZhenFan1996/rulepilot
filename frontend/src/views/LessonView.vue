@@ -1,12 +1,11 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, onMounted, onUnmounted, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 
 import AppShell from '@/components/AppShell.vue'
 import CatalogGameAttribution from '@/components/CatalogGameAttribution.vue'
 import LessonChapterList from '@/components/LessonChapterList.vue'
 import { notifyLoginRequired } from '@/lib/authSession'
-import LessonComprehensionPanel from '@/components/LessonComprehensionPanel.vue'
 import LessonGenerationStatus from '@/components/LessonGenerationStatus.vue'
 import LessonGuideHero from '@/components/LessonGuideHero.vue'
 import LessonModeNav from '@/components/LessonModeNav.vue'
@@ -43,6 +42,7 @@ interface TeachingPlan {
 
 interface IllustratedLesson {
   id: string
+  teachingPlanId: string
   status: 'COMPLETE' | 'DRAFT_READY' | 'INCOMPLETE'
   sections: LessonSection[]
 }
@@ -76,6 +76,10 @@ interface LessonSection {
   }>
 }
 
+const LessonComprehensionPanel = defineAsyncComponent(
+  () => import('@/components/LessonComprehensionPanel.vue'),
+)
+
 const route = useRoute()
 const router = useRouter()
 const { locale, t } = useLocale()
@@ -97,6 +101,11 @@ const generationNow = ref(Date.now())
 let generationClockTimer: ReturnType<typeof setInterval> | undefined
 let lessonViewDisposed = false
 let latestLessonLoad = 0
+let loadedLessonPlanId: string | null = null
+let activeLessonLoadController: AbortController | null = null
+let activeGenerationController: AbortController | null = null
+let activeVisualController: AbortController | null = null
+let activeSupportingController: AbortController | null = null
 
 const {
   comprehension,
@@ -173,6 +182,11 @@ function pageImageUrl(page: number | undefined) {
   return `/api/v1/document-versions/${plan.value.documentVersionId}/pages/${page}/image`
 }
 
+function pagePreviewImageUrl(page: number) {
+  if (!plan.value) return ''
+  return `/api/v1/document-versions/${plan.value.documentVersionId}/pages/${page}/image/preview`
+}
+
 function focusedPageImageUrl(focus: NonNullable<LessonSection['steps'][number]['visualFocus']>) {
   if (!plan.value) return ''
   const query = new URLSearchParams({
@@ -201,11 +215,31 @@ function isCurrentLessonLoad(request: number, targetPlanId: string) {
   return !lessonViewDisposed && request === latestLessonLoad && targetPlanId === planId.value
 }
 
+function responseMatchesPlan(
+  targetPlanId: string,
+  incomingLesson: IllustratedLesson | null,
+  incomingRun: TeachingRunProgress | null,
+) {
+  return (!incomingLesson || incomingLesson.teachingPlanId === targetPlanId)
+    && (!incomingRun || incomingRun.run.subjectId === targetPlanId)
+}
+
+function isCurrentRead(
+  request: number,
+  targetPlanId: string,
+  controller: AbortController,
+  activeController: AbortController | null,
+) {
+  return isCurrentLessonLoad(request, targetPlanId)
+    && activeController === controller
+}
+
 const {
   status: localizationStatus,
   preparing: localizationPreparing,
   applySelectedLocale,
   prepareEnglishGuide,
+  cancelReads: cancelLocalizationReads,
   reset: resetLessonLocalization,
   dispose: disposeLessonLocalization,
 } = useLessonLocalization({
@@ -215,11 +249,14 @@ const {
   displayedLesson: lesson,
   currentRequest: () => latestLessonLoad,
   isCurrent: (request, targetPlanId) => isCurrentLessonLoad(request, targetPlanId),
+  isLessonForPlan: (candidate, targetPlanId) => candidate.teachingPlanId === targetPlanId,
+  canRead: () => online.value,
   requestLogin: async () => notifyLoginRequired(),
   csrfToken,
 })
 
 function resetLessonReader() {
+  loadedLessonPlanId = null
   plan.value = null
   lesson.value = null
   sourceLesson.value = null
@@ -230,37 +267,61 @@ function resetLessonReader() {
   offlineKnowledge.value = []
 }
 
-async function optionalFetch(url: string) {
+function cancelReadTransport() {
+  activeLessonLoadController?.abort()
+  activeLessonLoadController = null
+  activeGenerationController?.abort()
+  activeGenerationController = null
+  activeVisualController?.abort()
+  activeVisualController = null
+  activeSupportingController?.abort()
+  activeSupportingController = null
+  cancelLocalizationReads()
+}
+
+async function optionalFetch(url: string, signal: AbortSignal) {
   try {
-    return await fetch(url, { credentials: 'include' })
+    return await fetch(url, { credentials: 'include', signal })
   } catch {
+    if (signal.aborted) throw new DOMException('Aborted', 'AbortError')
     return null
   }
 }
 
-async function loadCatalogPresentation(targetPlanId: string) {
+async function loadCatalogPresentation(targetPlanId: string, signal: AbortSignal) {
   try {
     const response = await fetch(
       `/api/v1/teaching-plans/${encodeURIComponent(targetPlanId)}/catalog-presentation`,
-      { credentials: 'include' },
+      { credentials: 'include', signal },
     )
     return response.ok ? await response.json() as CatalogGamePresentation : null
   } catch {
+    if (signal.aborted) throw new DOMException('Aborted', 'AbortError')
     return null
   }
 }
 
 async function loadSupportingContent(targetPlanId: string, request = latestLessonLoad) {
-  await loadSupportingContentForCurrentLesson({
-    planId: targetPlanId,
-    isCurrent: () => isCurrentLessonLoad(request, targetPlanId),
-    requestLogin: async () => notifyLoginRequired(),
-  })
+  activeSupportingController?.abort()
+  const controller = new AbortController()
+  activeSupportingController = controller
+  try {
+    await loadSupportingContentForCurrentLesson({
+      planId: targetPlanId,
+      signal: controller.signal,
+      isCurrent: () => isCurrentLessonLoad(request, targetPlanId)
+        && activeSupportingController === controller,
+      requestLogin: async () => notifyLoginRequired(),
+    })
+  } finally {
+    if (activeSupportingController === controller) activeSupportingController = null
+  }
 }
 
 async function loadLesson() {
   const targetPlanId = planId.value
   const request = ++latestLessonLoad
+  cancelReadTransport()
   generationPolling.clear()
   visualPolling.clear()
   loading.value = true
@@ -278,15 +339,32 @@ async function loadLesson() {
     return
   }
   refreshOfflineKnowledge(targetPlanId)
+  if (!online.value) {
+    if (!offlineKnowledge.value.length) errorMessage.value = t('lesson.reader.error.load')
+    loading.value = false
+    return
+  }
+  const controller = new AbortController()
+  activeLessonLoadController = controller
   try {
     const [planResponse, lessonResponse, runResponse, visualRunResponse, loadedCatalogPresentation] = await Promise.all([
-      fetch(`/api/v1/teaching-plans/${targetPlanId}`, { credentials: 'include' }),
-      fetch(`/api/v1/teaching-plans/${targetPlanId}/illustrated-lessons/latest`, { credentials: 'include' }),
-      optionalFetch(`/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=${encodeURIComponent(targetPlanId)}`),
-      optionalFetch(`/api/v1/assistant-runs/latest?mode=VISUAL_ENRICHMENT&subjectId=${encodeURIComponent(targetPlanId)}`),
-      loadCatalogPresentation(targetPlanId),
+      fetch(`/api/v1/teaching-plans/${encodeURIComponent(targetPlanId)}`, {
+        credentials: 'include', signal: controller.signal,
+      }),
+      fetch(`/api/v1/teaching-plans/${encodeURIComponent(targetPlanId)}/illustrated-lessons/latest`, {
+        credentials: 'include', signal: controller.signal,
+      }),
+      optionalFetch(
+        `/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=${encodeURIComponent(targetPlanId)}`,
+        controller.signal,
+      ),
+      optionalFetch(
+        `/api/v1/assistant-runs/latest?mode=VISUAL_ENRICHMENT&subjectId=${encodeURIComponent(targetPlanId)}`,
+        controller.signal,
+      ),
+      loadCatalogPresentation(targetPlanId, controller.signal),
     ])
-    if (!isCurrentLessonLoad(request, targetPlanId)) return
+    if (!isCurrentRead(request, targetPlanId, controller, activeLessonLoadController)) return
     if (planResponse.status === 401 || lessonResponse.status === 401 || runResponse?.status === 401 || visualRunResponse?.status === 401) {
       notifyLoginRequired()
       errorMessage.value = t('lesson.reader.error.loginRequired')
@@ -301,33 +379,44 @@ async function loadLesson() {
       runResponse?.ok ? runResponse.json() as Promise<TeachingRunProgress> : Promise.resolve(null),
       visualRunResponse?.ok ? visualRunResponse.json() as Promise<TeachingRunProgress> : Promise.resolve(null),
     ])
-    if (!isCurrentLessonLoad(request, targetPlanId)) return
+    if (!isCurrentRead(request, targetPlanId, controller, activeLessonLoadController)) return
+    if (loadedPlan.id !== targetPlanId
+      || !responseMatchesPlan(targetPlanId, loadedLesson, loadedRun)
+      || !responseMatchesPlan(targetPlanId, null, loadedVisualRun)) {
+      throw new Error()
+    }
     plan.value = loadedPlan
     catalogPresentation.value = loadedCatalogPresentation
     sourceLesson.value = loadedLesson
     lesson.value = sourceLesson.value
     await applySelectedLocale(targetPlanId, request)
-    if (!isCurrentLessonLoad(request, targetPlanId)) return
+    if (!isCurrentRead(request, targetPlanId, controller, activeLessonLoadController)) return
     teachingRun.value = loadedRun
     visualEnrichmentRun.value = loadedVisualRun
     generationStatusUnknown.value = runResponse === null || (!runResponse.ok && runResponse.status !== 404)
     if (generationStatusUnknown.value) generationRefreshError.value = t('lesson.generation.refreshFailed')
     localStorage.setItem('rulepilot:last-plan-id', targetPlanId)
     restoreLessonReaderProgress()
+    loadedLessonPlanId = targetPlanId
     if (generationActive.value) generationPolling.schedule()
     else await loadSupportingContent(targetPlanId, request)
     if (!isCurrentLessonLoad(request, targetPlanId)) return
     if (visualEnrichmentActive.value) visualPolling.schedule()
   } catch {
-    if (!isCurrentLessonLoad(request, targetPlanId)) return
+    if (!isCurrentRead(request, targetPlanId, controller, activeLessonLoadController)) return
+    if (controller.signal.aborted) return
+    controller.abort()
     if (offlineKnowledge.value.length) {
       online.value = false
     } else {
-      updateOnlineStatus()
+      online.value = navigator.onLine
       errorMessage.value = t('lesson.reader.error.load')
     }
   } finally {
-    if (isCurrentLessonLoad(request, targetPlanId)) loading.value = false
+    if (isCurrentRead(request, targetPlanId, controller, activeLessonLoadController)) {
+      activeLessonLoadController = null
+      loading.value = false
+    }
   }
 }
 
@@ -335,33 +424,46 @@ async function refreshVisualEnrichment() {
   if (!online.value || lessonViewDisposed) return
   const targetPlanId = planId.value
   const request = latestLessonLoad
+  activeVisualController?.abort()
+  const controller = new AbortController()
+  activeVisualController = controller
   let retryDelay = 2500
   try {
     const [response, lessonResponse] = await Promise.all([
-      optionalFetch(`/api/v1/assistant-runs/latest?mode=VISUAL_ENRICHMENT&subjectId=${encodeURIComponent(targetPlanId)}`),
-      fetch(`/api/v1/teaching-plans/${targetPlanId}/illustrated-lessons/latest`, { credentials: 'include' }),
+      optionalFetch(
+        `/api/v1/assistant-runs/latest?mode=VISUAL_ENRICHMENT&subjectId=${encodeURIComponent(targetPlanId)}`,
+        controller.signal,
+      ),
+      fetch(`/api/v1/teaching-plans/${encodeURIComponent(targetPlanId)}/illustrated-lessons/latest`, {
+        credentials: 'include', signal: controller.signal,
+      }),
     ])
-    if (!isCurrentLessonLoad(request, targetPlanId)) return
+    if (!isCurrentRead(request, targetPlanId, controller, activeVisualController)) return
     if (response?.status === 401 || lessonResponse.status === 401) {
       notifyLoginRequired()
       return
     }
     if (!lessonResponse.ok) throw new Error(t('lesson.generation.refreshFailed'))
     const incomingLesson = await lessonResponse.json() as IllustratedLesson
-    if (!isCurrentLessonLoad(request, targetPlanId)) return
+    const incomingRun = response?.ok ? await response.json() as TeachingRunProgress : null
+    if (!isCurrentRead(request, targetPlanId, controller, activeVisualController)) return
+    if (!responseMatchesPlan(targetPlanId, incomingLesson, incomingRun)) {
+      throw new Error()
+    }
     sourceLesson.value = acceptProgressiveLesson(sourceLesson.value, incomingLesson)
     lesson.value = sourceLesson.value
     await applySelectedLocale(targetPlanId, request)
-    if (!isCurrentLessonLoad(request, targetPlanId)) return
-    if (response?.ok) {
-      const incomingRun = await response.json() as TeachingRunProgress
-      if (!isCurrentLessonLoad(request, targetPlanId)) return
-      visualEnrichmentRun.value = incomingRun
-    }
+    if (!isCurrentRead(request, targetPlanId, controller, activeVisualController)) return
+    if (incomingRun) visualEnrichmentRun.value = incomingRun
   } catch {
+    if (!isCurrentRead(request, targetPlanId, controller, activeVisualController) || controller.signal.aborted) return
+    controller.abort()
     retryDelay = 5000
   } finally {
-    if (isCurrentLessonLoad(request, targetPlanId)) visualPolling.schedule(retryDelay)
+    if (isCurrentRead(request, targetPlanId, controller, activeVisualController)) {
+      activeVisualController = null
+      visualPolling.schedule(retryDelay)
+    }
   }
 }
 
@@ -378,14 +480,21 @@ async function refreshGeneration() {
   if (!generationActive.value || !online.value || lessonViewDisposed) return
   const targetPlanId = planId.value
   const request = latestLessonLoad
+  activeGenerationController?.abort()
+  const controller = new AbortController()
+  activeGenerationController = controller
   const wasActive = generationActive.value
   const activityCursor = teachingActivityCursor(teachingRun.value)
   try {
     const [runResponse, lessonResponse] = await Promise.all([
-      fetch(`/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=${encodeURIComponent(targetPlanId)}${activityCursor}`, { credentials: 'include' }),
-      fetch(`/api/v1/teaching-plans/${targetPlanId}/illustrated-lessons/latest`, { credentials: 'include' }),
+      fetch(`/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=${encodeURIComponent(targetPlanId)}${activityCursor}`, {
+        credentials: 'include', signal: controller.signal,
+      }),
+      fetch(`/api/v1/teaching-plans/${encodeURIComponent(targetPlanId)}/illustrated-lessons/latest`, {
+        credentials: 'include', signal: controller.signal,
+      }),
     ])
-    if (!isCurrentLessonLoad(request, targetPlanId)) return
+    if (!isCurrentRead(request, targetPlanId, controller, activeGenerationController)) return
     if (runResponse.status === 401 || lessonResponse.status === 401) {
       notifyLoginRequired()
       generationRefreshError.value = t('lesson.reader.error.loginRequired')
@@ -399,7 +508,10 @@ async function refreshGeneration() {
       runResponse.ok ? runResponse.json() as Promise<TeachingRunProgress> : Promise.resolve(null),
       lessonResponse.json() as Promise<IllustratedLesson>,
     ])
-    if (!isCurrentLessonLoad(request, targetPlanId)) return
+    if (!isCurrentRead(request, targetPlanId, controller, activeGenerationController)) return
+    if (!responseMatchesPlan(targetPlanId, incomingLesson, incomingRun)) {
+      throw new Error()
+    }
     const acceptedRun = mergeTeachingRunProgress(teachingRun.value, incomingRun)
     const previousLesson = sourceLesson.value
     const previousCount = previousLesson?.sections.length ?? 0
@@ -408,7 +520,7 @@ async function refreshGeneration() {
     sourceLesson.value = acceptedLesson
     lesson.value = acceptedLesson
     await applySelectedLocale(targetPlanId, request)
-    if (!isCurrentLessonLoad(request, targetPlanId)) return
+    if (!isCurrentRead(request, targetPlanId, controller, activeGenerationController)) return
     teachingRun.value = acceptedRun
     generationStatusUnknown.value = false
     generationRefreshError.value = ''
@@ -427,10 +539,14 @@ async function refreshGeneration() {
       await refreshVisualEnrichment()
     }
   } catch {
-    if (!isCurrentLessonLoad(request, targetPlanId)) return
+    if (!isCurrentRead(request, targetPlanId, controller, activeGenerationController) || controller.signal.aborted) return
+    controller.abort()
     generationRefreshError.value = t('lesson.generation.refreshFailed')
   } finally {
-    if (isCurrentLessonLoad(request, targetPlanId)) generationPolling.schedule()
+    if (isCurrentRead(request, targetPlanId, controller, activeGenerationController)) {
+      activeGenerationController = null
+      generationPolling.schedule()
+    }
   }
 }
 
@@ -446,11 +562,23 @@ async function csrfToken() {
 
 function updateOnlineStatus() {
   online.value = navigator.onLine
-  if (!online.value) refreshOfflineKnowledge()
-  if (online.value && generationActive.value) generationPolling.schedule(0)
-  else if (!online.value) generationPolling.clear()
-  if (online.value && visualEnrichmentActive.value) visualPolling.schedule(0)
-  else if (!online.value) visualPolling.clear()
+  if (!online.value) {
+    cancelReadTransport()
+    generationPolling.clear()
+    visualPolling.clear()
+    refreshOfflineKnowledge()
+    loading.value = false
+    if (!lesson.value) errorMessage.value = t('lesson.reader.error.load')
+    return
+  }
+  if (loadedLessonPlanId !== planId.value || !lesson.value) {
+    void loadLesson()
+    return
+  }
+  void applySelectedLocale(planId.value, latestLessonLoad)
+  if (!generationActive.value) void loadSupportingContent(planId.value, latestLessonLoad)
+  if (generationActive.value) generationPolling.schedule(0)
+  if (visualEnrichmentActive.value) visualPolling.schedule(0)
 }
 
 onMounted(() => {
@@ -469,6 +597,8 @@ watch(planId, () => {
 
 onUnmounted(() => {
   lessonViewDisposed = true
+  latestLessonLoad += 1
+  cancelReadTransport()
   generationPolling.dispose()
   visualPolling.dispose()
   disposeLessonLocalization()
@@ -482,7 +612,7 @@ onUnmounted(() => {
 <template>
   <AppShell>
     <div data-testid="private-lesson-surface" class="min-h-screen bg-canvas pb-10 text-ink">
-      <header class="sticky top-0 z-20 border-b border-ink/10 bg-canvas/90 backdrop-blur">
+      <header class="app-sticky-top sticky z-20 border-b border-ink/10 bg-canvas/90 backdrop-blur">
         <div class="mx-auto flex max-w-4xl items-center justify-between gap-4 px-5 py-4 sm:px-8">
           <RouterLink :to="{ name: 'lessons' }" class="text-sm font-semibold text-indigo">← {{ t('lesson.reader.back') }}</RouterLink>
           <LessonModeNav
@@ -558,6 +688,7 @@ onUnmounted(() => {
           :sections="lesson.sections"
           id-prefix="private-chapter"
           :page-image-url="pageImageUrl"
+          :page-preview-image-url="pagePreviewImageUrl"
           :focused-page-image-url="focusedPageImageUrl"
           step-test-id="private-rule-step"
         />

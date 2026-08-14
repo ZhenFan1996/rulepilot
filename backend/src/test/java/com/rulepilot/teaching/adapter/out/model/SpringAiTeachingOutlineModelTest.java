@@ -19,6 +19,7 @@ import com.rulepilot.teaching.TeachingOutlineModel.TopicDraft;
 import java.util.List;
 import java.util.Map;
 import java.net.SocketTimeoutException;
+import java.util.concurrent.TimeoutException;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.ai.chat.messages.AssistantMessage;
@@ -49,6 +50,16 @@ class SpringAiTeachingOutlineModelTest {
         RuntimeException failure = new RuntimeException("model failed", new SocketTimeoutException("read timed out"));
 
         assertThat(SpringAiTeachingOutlineModel.isTimeout(failure)).isTrue();
+    }
+
+    @Test
+    void rejectsAPlanningTimeoutInsteadOfPublishingTheFourGenericFallbackChapters() {
+        var failure = SpringAiTeachingOutlineModel.planningTimeout(new TimeoutException("deadline"));
+
+        assertThat(failure)
+                .hasMessageContaining("semantic lesson plan")
+                .hasMessageContaining("retry preparation")
+                .hasCauseInstanceOf(TimeoutException.class);
     }
 
     @Test

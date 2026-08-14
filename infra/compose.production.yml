@@ -34,6 +34,7 @@ services:
       # one continuation lane finishes chapters and review, preserving the existing two-call host ceiling.
       OUTBOX_PUBLISH_FIXED_DELAY: "500ms"
       TEACHING_IMPORT_HANDOFF_FIXED_DELAY: "500ms"
+      TEACHING_IMPORT_HANDOFF_SCHEDULER_POOL_SIZE: "1"
       TEACHING_STARTUP_QUEUE_CAPACITY: "3"
       TEACHING_BACKGROUND_CORE_POOL_SIZE: "1"
       TEACHING_BACKGROUND_MAX_POOL_SIZE: "1"

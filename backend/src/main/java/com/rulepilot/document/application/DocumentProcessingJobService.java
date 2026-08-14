@@ -5,6 +5,7 @@ import com.rulepilot.document.DocumentProcessingStage;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.UUID;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -14,10 +15,16 @@ import org.springframework.transaction.annotation.Transactional;
 public class DocumentProcessingJobService implements DocumentProcessingJobs {
 
     private final DocumentProcessingJobStore jobs;
-    private final Clock clock = Clock.systemUTC();
+    private final Clock clock;
 
+    @Autowired
     public DocumentProcessingJobService(DocumentProcessingJobStore jobs) {
+        this(jobs, Clock.systemUTC());
+    }
+
+    DocumentProcessingJobService(DocumentProcessingJobStore jobs, Clock clock) {
         this.jobs = jobs;
+        this.clock = clock;
     }
 
     @Override
@@ -28,8 +35,10 @@ public class DocumentProcessingJobService implements DocumentProcessingJobs {
 
     @Override
     @Transactional
-    public void completed(UUID jobId, DocumentProcessingStage stage) {
-        jobs.update(jobId, stage, "COMPLETED", Instant.now(clock));
+    public Instant completed(UUID jobId, DocumentProcessingStage stage) {
+        Instant completedAt = Instant.now(clock);
+        jobs.update(jobId, stage, "COMPLETED", completedAt);
+        return completedAt;
     }
 
     @Override

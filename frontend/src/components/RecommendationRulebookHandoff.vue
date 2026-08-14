@@ -4,12 +4,19 @@ import { RouterLink } from 'vue-router'
 
 import type { RecommendationGame, RecommendationProfile } from '@/components/gameRecommendationTypes'
 import { notifyLoginRequired } from '@/lib/authSession'
+import { notifyBackgroundWorkChanged } from '@/lib/backgroundWorkRefresh'
+import {
+  mergeDocumentProgress,
+  parseDocumentProgressSnapshot,
+} from '@/lib/documentProgress'
 import { acceptProgressiveLesson, teachingRunIsActive } from '@/lib/liveLesson'
 import { useLocale } from '@/lib/locale'
+import { notifyTeachingLaunched } from '@/lib/teachingLaunch'
 import {
   acceptImportJob,
   acceptJourneyRun,
   derivePlayerJourney,
+  playerJourneyPollDelay,
   type PlayerJourneyDocumentProgress,
   type PlayerJourneyImportJob,
   type PlayerJourneyLesson,
@@ -49,6 +56,7 @@ interface OfficialImportJob extends PlayerJourneyImportJob {
 }
 
 interface IllustratedLesson extends PlayerJourneyLesson {
+  teachingPlanId: string
   sections: Array<{
     position: number
     topicKey: string
@@ -176,6 +184,11 @@ let sequence = 0
 let findingClock: ReturnType<typeof setInterval> | null = null
 let journeyTimer: ReturnType<typeof setTimeout> | null = null
 let refreshingJourney = false
+let documentProgressSource: EventSource | null = null
+let documentProgressVersionId: string | null = null
+let documentProgressStreamRetryAt = 0
+let documentProgressStreamRetryAttempt = 0
+let documentReadyRefreshPending = false
 const ensuredLessonPlans = new Set<string>()
 
 const canImport = computed(() => Boolean(
@@ -395,6 +408,7 @@ async function enqueueImport() {
     consent.value = true
     pollingWarning.value = false
     persistJourney()
+    notifyBackgroundWorkChanged()
     scheduleJourney(0)
   } catch {
     if (request === sequence) {
@@ -430,12 +444,17 @@ async function refreshJourney(request = sequence) {
     }
 
     const versionId = currentJob.documentVersionId
-    if (versionId && (currentJob.teachingHandoffState === 'WAITING_FOR_DOCUMENT' || !documentProgress.value?.complete)) {
+    if (versionId && !documentProgress.value?.complete) {
       const progress = await checkedJson<PlayerJourneyDocumentProgress>(
         `/api/v1/document-versions/${encodeURIComponent(versionId)}/progress/snapshot`, true,
       )
       if (request !== sequence) return
-      if (progress) documentProgress.value = progress
+      if (progress) {
+        const checked = parseDocumentProgressSnapshot(progress)
+        if (!checked) throw new Error('document progress response is invalid')
+        documentProgress.value = mergeDocumentProgress(documentProgress.value ?? undefined, checked)
+        if (!checked.complete) watchDocumentProgress(versionId, request)
+      }
     }
 
     const activePreparationRunId = preparationRunId.value ?? currentJob.teachingPreparationRunId
@@ -467,7 +486,10 @@ async function refreshJourney(request = sequence) {
         teachingRun.value = acceptJourneyRun(teachingRun.value, incomingRun)
         teachingRunId.value = incomingRun.run.id
       }
-      if (incomingLesson) lesson.value = acceptProgressiveLesson(lesson.value, incomingLesson)
+      if (incomingLesson) {
+        if (incomingLesson.teachingPlanId !== targetPlanId) throw new Error('lesson response identity mismatch')
+        lesson.value = acceptProgressiveLesson(lesson.value, incomingLesson)
+      }
       if (!incomingRun && preparationRun.value?.run.state === 'COMPLETED' && !ensuredLessonPlans.has(targetPlanId)) {
         ensuredLessonPlans.add(targetPlanId)
         try {
@@ -484,7 +506,16 @@ async function refreshJourney(request = sequence) {
     if (request === sequence) pollingWarning.value = true
   } finally {
     refreshingJourney = false
-    if (request === sequence) scheduleJourney(pollingWarning.value ? 3_000 : 1_250)
+    if (request === sequence) {
+      const immediateReadyRefresh = documentReadyRefreshPending
+      documentReadyRefreshPending = false
+      scheduleJourney(immediateReadyRefresh ? 0 : playerJourneyPollDelay(
+        pollingWarning.value,
+        Boolean(plan.value)
+          && !projection.value.canReadLesson
+          && (!teachingRun.value || teachingRunIsActive(teachingRun.value.run.state)),
+      ))
+    }
   }
 }
 
@@ -498,21 +529,24 @@ async function retryJourney() {
     if (action === 'DISCOVER_RULEBOOK') return await discover()
     if (action === 'IMPORT_RULEBOOK') return await enqueueImport()
     if (action === 'PREPARE_TEACHING') {
-      if (importJob.value?.teachingHandoffState === 'FAILED') return await enqueueImport()
-      const versionId = importJob.value?.documentVersionId
-      if (!versionId) throw new Error('document version unavailable')
+      const currentJob = importJob.value
+      if (!currentJob?.documentVersionId) throw new Error('document version unavailable')
       const token = await csrfToken()
-      const response = await fetch(`/api/v1/document-versions/${encodeURIComponent(versionId)}/teaching-plans`, {
+      const response = await fetch(
+        `/api/v1/documents/official-imports/${encodeURIComponent(currentJob.id)}/teaching-retry`, {
         method: 'POST', credentials: 'include',
         headers: { 'Content-Type': 'application/json', [token.headerName]: token.token },
-        body: JSON.stringify({ learningGoal: null }),
+        body: JSON.stringify({ expectedPreparationRunId: currentJob.teachingPreparationRunId }),
       })
       if (!response.ok) throw new Error('teaching preparation retry failed')
-      const launch = await response.json() as LaunchResponse
-      preparationRunId.value = launch.assistantRunId
+      const retriedJob = normalizeImportJob(await response.json() as OfficialImportJob)
+      if (retriedJob.id !== currentJob.id) throw new Error('teaching preparation retry identity changed')
+      importJob.value = retriedJob
+      preparationRunId.value = retriedJob.teachingPreparationRunId
       preparationRun.value = null
       teachingRun.value = null
       teachingRunId.value = null
+      notifyBackgroundWorkChanged()
       scheduleJourney(0)
       return
     }
@@ -539,6 +573,7 @@ async function launchLesson(planId: string, clearFailedRun: boolean) {
   if (!response.ok) throw new Error('lesson launch failed')
   const launch = await response.json() as LaunchResponse
   teachingRunId.value = launch.assistantRunId
+  notifyTeachingLaunched({ planId, runId: launch.assistantRunId, gameTitle: props.game.name })
   if (clearFailedRun) teachingRun.value = null
 }
 
@@ -552,6 +587,68 @@ function scheduleJourney(delay: number) {
   journeyTimer = setTimeout(() => { void refreshJourney() }, delay)
 }
 
+function watchDocumentProgress(versionId: string, request: number) {
+  if (typeof EventSource === 'undefined'
+    || Date.now() < documentProgressStreamRetryAt
+    || documentProgressSource && documentProgressVersionId === versionId) return
+  closeDocumentProgress()
+  const source = new EventSource(
+    `/api/v1/document-versions/${encodeURIComponent(versionId)}/progress`,
+    { withCredentials: true },
+  )
+  documentProgressSource = source
+  documentProgressVersionId = versionId
+  source.addEventListener('progress', (event) => {
+    if (!currentDocumentProgressSource(source, versionId, request)) return
+    let incoming: ReturnType<typeof parseDocumentProgressSnapshot>
+    try {
+      incoming = parseDocumentProgressSnapshot(JSON.parse((event as MessageEvent<string>).data))
+    } catch {
+      handleDocumentProgressDisconnect(source, versionId, request)
+      return
+    }
+    if (!incoming) {
+      handleDocumentProgressDisconnect(source, versionId, request)
+      return
+    }
+    documentProgressStreamRetryAttempt = 0
+    documentProgressStreamRetryAt = 0
+    documentProgress.value = mergeDocumentProgress(documentProgress.value ?? undefined, incoming)
+    pollingWarning.value = false
+    persistJourney()
+    if (incoming.complete) {
+      closeDocumentProgress()
+      documentReadyRefreshPending = true
+      notifyBackgroundWorkChanged()
+      if (!refreshingJourney) scheduleJourney(0)
+    }
+  })
+  source.onerror = () => handleDocumentProgressDisconnect(source, versionId, request)
+}
+
+function currentDocumentProgressSource(source: EventSource, versionId: string, request: number) {
+  return request === sequence
+    && state.value !== 'login'
+    && documentProgressSource === source
+    && documentProgressVersionId === versionId
+    && importJob.value?.documentVersionId === versionId
+}
+
+function handleDocumentProgressDisconnect(source: EventSource, versionId: string, request: number) {
+  if (!currentDocumentProgressSource(source, versionId, request)) return
+  closeDocumentProgress()
+  documentProgressStreamRetryAttempt = Math.min(documentProgressStreamRetryAttempt + 1, 4)
+  documentProgressStreamRetryAt = Date.now()
+    + [1_000, 2_000, 5_000, 10_000][documentProgressStreamRetryAttempt - 1]!
+  scheduleJourney(0)
+}
+
+function closeDocumentProgress() {
+  documentProgressSource?.close()
+  documentProgressSource = null
+  documentProgressVersionId = null
+}
+
 function clearJourneyTimer() {
   if (journeyTimer) clearTimeout(journeyTimer)
   journeyTimer = null
@@ -559,6 +656,10 @@ function clearJourneyTimer() {
 
 function resetJourneyState() {
   clearJourneyTimer()
+  closeDocumentProgress()
+  documentProgressStreamRetryAt = 0
+  documentProgressStreamRetryAttempt = 0
+  documentReadyRefreshPending = false
   imported.value = null
   candidates.value = []
   selected.value = null
@@ -667,6 +768,7 @@ onMounted(startForCurrentGame)
 onBeforeUnmount(() => {
   sequence += 1
   clearJourneyTimer()
+  closeDocumentProgress()
   if (findingClock) clearInterval(findingClock)
 })
 </script>
@@ -680,7 +782,7 @@ onBeforeUnmount(() => {
         <h3 class="mt-1 font-display text-xl font-semibold">{{ copy.title }}</h3>
         <p v-if="game.nameLocalized" class="mt-1 text-xs text-ink/45">{{ game.originalName }}</p>
       </div>
-      <button type="button" class="grid min-h-11 min-w-11 shrink-0 place-items-center rounded-lg text-2xl text-ink/45 hover:bg-ink/5" :aria-label="copy.close" @click="emit('close')">×</button>
+      <button type="button" data-modal-initial-focus class="grid min-h-11 min-w-11 shrink-0 place-items-center rounded-lg text-2xl text-ink/45 hover:bg-ink/5" :aria-label="copy.close" @click="emit('close')">×</button>
     </div>
 
     <div class="p-4 sm:p-5">

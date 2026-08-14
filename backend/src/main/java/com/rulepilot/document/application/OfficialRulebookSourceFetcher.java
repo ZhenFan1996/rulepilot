@@ -10,6 +10,7 @@ public interface OfficialRulebookSourceFetcher {
         FetchedRulebook fetched = fetch(source);
         progress.downloadStarted((long) fetched.content().length);
         progress.downloaded(fetched.content().length, (long) fetched.content().length);
+        progress.downloadCompleted();
         progress.verifying();
         return fetched;
     }
@@ -18,6 +19,9 @@ public interface OfficialRulebookSourceFetcher {
         void downloadStarted(Long totalBytes);
 
         void downloaded(long downloadedBytes, Long totalBytes);
+
+        /** All remote bytes are local; PDF assembly, compression, validation, and storage may still follow. */
+        default void downloadCompleted() {}
 
         default void compressing() {}
 

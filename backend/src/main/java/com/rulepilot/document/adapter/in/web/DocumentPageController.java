@@ -78,6 +78,19 @@ public class DocumentPageController {
                 .body(imageCropper.crop(image, x, y, width, height));
     }
 
+    @GetMapping("/{pageNumber}/image/preview")
+    ResponseEntity<byte[]> pageImagePreview(
+            @PathVariable UUID versionId, @PathVariable int pageNumber, Principal principal) {
+        requireOwned(versionId, principal);
+        var image = pageImages.read(versionId, Set.of(pageNumber)).stream()
+                .findFirst()
+                .orElseThrow(() -> new IllegalArgumentException("document page image does not exist"));
+        return ResponseEntity.ok()
+                .contentType(MediaType.IMAGE_JPEG)
+                .cacheControl(CacheControl.noStore())
+                .body(imageCropper.preview(image));
+    }
+
     private void requireOwned(UUID versionId, Principal principal) {
         String owner = principal == null ? "" : principal.getName();
         versions.findVersion(versionId)

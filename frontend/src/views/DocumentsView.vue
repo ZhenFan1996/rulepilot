@@ -1,10 +1,15 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 
 import AppShell from '@/components/AppShell.vue'
+import DestructiveActionDialog from '@/components/DestructiveActionDialog.vue'
 import { notifyLoginRequired } from '@/lib/authSession'
-import { mergeDocumentProgress, type DocumentProcessingSnapshot } from '@/lib/documentProgress'
+import {
+  mergeDocumentProgress,
+  parseDocumentProgressSnapshot,
+  type DocumentProcessingSnapshot,
+} from '@/lib/documentProgress'
 import {
   forgetPendingRulebookLesson,
   readPendingRulebookLessons,
@@ -73,10 +78,10 @@ interface OfficialRulebookImportJob {
   teachingErrorCode: string | null
   reused: boolean
 }
-interface TeachingPlanResponse { id: string }
+interface TeachingPlanResponse { id: string; documentVersionId: string }
 interface TeachingPreparationLaunch { assistantRunId: string; state: string; reused: boolean }
 interface TeachingPreparationRun {
-  run: { id: string; state: string; lastErrorCode: string | null }
+  run: { id: string; subjectId: string; state: string; lastErrorCode: string | null }
   activities?: Array<{
     sequence: number
     operation: string
@@ -92,6 +97,14 @@ interface PhotographedPage {
   id: string
   file: File
   previewUrl: string
+}
+interface RulebookIntakeSnapshot {
+  editionId: string
+  learningGoal: string
+  officialImportRightsConfirmed: boolean
+  officialSourceUrl: string
+  sourceType: string
+  title: string
 }
 
 class PreparationFailedError extends Error {}
@@ -120,6 +133,51 @@ const uploading = ref(false)
 const importingOfficial = ref(false)
 const officialImportJob = ref<OfficialRulebookImportJob | null>(null)
 const deletingDocumentId = ref('')
+const documentToDelete = ref<DocumentResponse | null>(null)
+const deleteError = ref('')
+const documentListHeading = ref<HTMLElement | null>(null)
+const restoreAfterDocumentDelete = ref(false)
+const rulebookFileInput = ref<HTMLInputElement | null>(null)
+const intakeReady = ref(false)
+const intakeBaseline = ref<RulebookIntakeSnapshot>({
+  editionId: '', learningGoal: '', officialImportRightsConfirmed: false,
+  officialSourceUrl: '', sourceType: 'BASE_RULEBOOK', title: '',
+})
+const launchingTeaching = ref(false)
+const navigationDialogOpen = ref(false)
+let resolvePendingNavigation: ((allow: boolean) => void) | null = null
+const deleteCopy = computed(() => locale.value === 'zh-CN' ? {
+  title: '删除这本规则书？',
+  description: (name: string) => `“${name}”及其本地页面图片和由它生成的讲解都会被删除，无法恢复。`,
+  cancel: '保留规则书', confirm: '删除规则书', retry: '重新尝试删除',
+} : {
+  title: 'Delete this rulebook?',
+  description: (name: string) => `“${name}”, its local page images, and the guides created from it will all be deleted. This cannot be undone.`,
+  cancel: 'Keep rulebook', confirm: 'Delete rulebook', retry: 'Try deletion again',
+})
+const intakeDraftCopy = computed(() => locale.value === 'zh-CN' ? {
+  status: (areas: string) => `尚未提交：${areas}`,
+  memoryOnly: 'PDF、照片和这些输入只保留在当前页面；交给后台后才能安全离开。',
+  pdf: (name: string) => `PDF“${name}”`,
+  photos: (count: number) => `${count} 页照片`,
+  details: '标题与资料类型', source: '来源与授权', game: '关联游戏', goal: '讲解目标',
+  leaveTitle: '放弃这次规则书草稿并离开？',
+  leaveDescription: (areas: string) => `${areas}还没有交给 RulePilot。离开会清除当前页面中的文件、照片和输入，无法恢复；已在后台运行的其他任务不受影响。`,
+  pendingTitle: '正在完成规则书交接',
+  pendingDescription: '照片整理或服务器接收完成前暂时不能离开。接收成功且没有其他草稿时，会自动前往刚才选择的页面；失败会留在这里供你重试。',
+  stay: '继续准备', leave: '放弃草稿并离开', pending: '正在交接…',
+} : {
+  status: (areas: string) => `Not submitted: ${areas}`,
+  memoryOnly: 'The PDF, photos, and these inputs stay only on this page until they are handed to background work.',
+  pdf: (name: string) => `PDF “${name}”`,
+  photos: (count: number) => `${count} photographed pages`,
+  details: 'title and document type', source: 'source and permission', game: 'linked game', goal: 'teaching goal',
+  leaveTitle: 'Discard this rulebook draft and leave?',
+  leaveDescription: (areas: string) => `${areas} have not been handed to RulePilot. Leaving clears the files, photos, and inputs held on this page, and they cannot be recovered. Other background work is not affected.`,
+  pendingTitle: 'Finishing the rulebook handoff',
+  pendingDescription: 'You cannot leave until photo preparation or server acceptance finishes. If acceptance succeeds and no other draft remains, the page you chose opens automatically; a failure keeps you here to retry.',
+  stay: 'Keep preparing', leave: 'Discard draft and leave', pending: 'Finishing handoff…',
+})
 const preparingVersionId = ref('')
 const preparationElapsedSeconds = ref(0)
 const processingVersionId = ref('')
@@ -132,7 +190,25 @@ const progressRetryTimers = new Map<string, ReturnType<typeof setTimeout>>()
 const progressRetryAttempts = new Map<string, number>()
 const terminalHandoffs = new Set<string>()
 const serverTeachingVersions = new Set<string>()
+const progressGenerations = new Map<string, number>()
+const progressReconcileControllers = new Map<string, AbortController>()
 let disposed = false
+let shellIdentityResolved = false
+let identityGeneration = 0
+let latestInitialLoad = 0
+let activeInitialController: AbortController | null = null
+let initialResourcesReady = false
+let recoveredContextKey = ''
+let officialImportPollGeneration = 0
+let officialImportScopeJobId = ''
+let routeImportTransitionJobId = ''
+let activeOfficialImportController: AbortController | null = null
+let officialImportPollTimer: ReturnType<typeof setTimeout> | null = null
+let resolveOfficialImportDelay: ((current: boolean) => void) | null = null
+let preparationPollGeneration = 0
+let activePreparationController: AbortController | null = null
+let preparationPollTimer: ReturnType<typeof setTimeout> | null = null
+let resolvePreparationDelay: ((current: boolean) => void) | null = null
 let preparationClock: ReturnType<typeof setInterval> | null = null
 let photographedPageSequence = 0
 
@@ -140,6 +216,7 @@ const editionOptions = computed(() => games.value.flatMap((entry) => entry.editi
   id: edition.id,
   label: `${entry.game.name} · ${edition.name}${edition.language ? ` · ${edition.language}` : ''}`,
 }))))
+const routeImportJobId = computed(() => typeof route.query.importJob === 'string' ? route.query.importJob : '')
 const selectedEditionContext = computed(() => {
   for (const entry of games.value) {
     const edition = entry.editions.find(candidate => candidate.id === editionId.value)
@@ -193,7 +270,8 @@ const canUpload = computed(() => Boolean(
   && !uploading.value
   && !importingOfficial.value
   && !officialImportJob.value
-  && !preparingVersionId.value,
+  && !preparingVersionId.value
+  && intakeReady.value,
 ))
 const canImportOfficial = computed(() => Boolean(
   officialSourceUrl.value.trim()
@@ -201,8 +279,59 @@ const canImportOfficial = computed(() => Boolean(
   && !uploading.value
   && !importingOfficial.value
   && !officialImportJob.value
-  && !preparingVersionId.value,
+  && !preparingVersionId.value
+  && intakeReady.value,
 ))
+function currentIntakeSnapshot(): RulebookIntakeSnapshot {
+  return {
+    editionId: editionId.value,
+    learningGoal: learningGoal.value,
+    officialImportRightsConfirmed: officialImportRightsConfirmed.value,
+    officialSourceUrl: officialSourceUrl.value,
+    sourceType: sourceType.value,
+    title: title.value,
+  }
+}
+
+function resetIntakeBaseline() {
+  intakeBaseline.value = currentIntakeSnapshot()
+  intakeReady.value = true
+}
+
+const intakeDraftAreas = computed(() => {
+  if (!intakeReady.value) return []
+  const baseline = intakeBaseline.value
+  return [
+    ...(file.value ? [intakeDraftCopy.value.pdf(file.value.name)] : []),
+    ...(photographedPages.value.length ? [intakeDraftCopy.value.photos(photographedPages.value.length)] : []),
+    ...(title.value.trim() !== baseline.title.trim() || sourceType.value !== baseline.sourceType
+      ? [intakeDraftCopy.value.details] : []),
+    ...(officialSourceUrl.value.trim() !== baseline.officialSourceUrl.trim()
+      || officialImportRightsConfirmed.value !== baseline.officialImportRightsConfirmed
+      ? [intakeDraftCopy.value.source] : []),
+    ...(editionId.value !== baseline.editionId ? [intakeDraftCopy.value.game] : []),
+    ...(learningGoal.value.trim() !== baseline.learningGoal.trim() ? [intakeDraftCopy.value.goal] : []),
+  ]
+})
+const hasUnsavedIntake = computed(() => intakeDraftAreas.value.length > 0)
+const intakeMutationPending = computed(() => (
+  preparingPhotos.value || uploading.value || importingOfficial.value || launchingTeaching.value
+))
+const intakeControlsDisabled = computed(() => Boolean(
+  loading.value || !intakeReady.value || intakeMutationPending.value || officialImportJob.value || preparingVersionId.value,
+))
+const protectsIntakeNavigation = computed(() => hasUnsavedIntake.value || intakeMutationPending.value)
+const navigationCopy = computed(() => intakeMutationPending.value ? {
+  title: intakeDraftCopy.value.pendingTitle,
+  description: intakeDraftCopy.value.pendingDescription,
+} : {
+  title: intakeDraftCopy.value.leaveTitle,
+  description: intakeDraftCopy.value.leaveDescription(
+    intakeDraftAreas.value.join(locale.value === 'zh-CN' ? '、' : ', ') || (
+      locale.value === 'zh-CN' ? '这次规则书草稿' : 'This rulebook draft'
+    ),
+  ),
+})
 const visualProvider = computed(() => modelConfiguration.value?.providers.find(
   (provider) => provider.id === modelConfiguration.value?.assignments.visual,
 ))
@@ -328,16 +457,25 @@ async function checkedFetch(path: string, options?: Parameters<typeof fetch>[1])
   return response
 }
 
-async function csrfToken() {
-  const response = await checkedFetch('/api/auth/csrf')
+async function csrfToken(signal?: AbortSignal) {
+  const response = await checkedFetch('/api/auth/csrf', { signal })
   if (!response.ok) throw new Error(t('documents.error'))
   return await response.json() as CsrfResponse
 }
 
-async function loadDocuments() {
-  const response = await checkedFetch('/api/v1/documents')
+async function fetchDocuments(signal?: AbortSignal) {
+  const response = await checkedFetch('/api/v1/documents', { signal })
   if (!response.ok) throw new Error(t('documents.error'))
-  documents.value = await response.json() as DocumentResponse[]
+  const payload = await response.json() as unknown
+  if (!Array.isArray(payload)) throw new Error(t('documents.error'))
+  return payload as DocumentResponse[]
+}
+
+async function loadDocuments(signal?: AbortSignal) {
+  const received = await fetchDocuments(signal)
+  if (disposed || signal?.aborted) return received
+  documents.value = received
+  return received
 }
 
 async function discoverOfficialRulebooks() {
@@ -358,6 +496,7 @@ async function discoverOfficialRulebooks() {
 }
 
 function chooseRulebookCandidate(candidate: RulebookCandidate) {
+  if (intakeControlsDisabled.value) return
   if (candidate.acquisitionMode === 'SOURCE_PAGE') {
     window.open(candidate.url, '_blank', 'noopener,noreferrer')
     return
@@ -372,29 +511,107 @@ function chooseRulebookCandidate(candidate: RulebookCandidate) {
 }
 
 async function load() {
+  const request = ++latestInitialLoad
+  activeInitialController?.abort()
+  const controller = new AbortController()
+  activeInitialController = controller
   loading.value = true
   errorMessage.value = ''
+  initialResourcesReady = false
+  intakeReady.value = false
+  recoveredContextKey = ''
   try {
-    const [sessionResponse, catalogResponse, modelResponse] = await Promise.all([
-      checkedFetch('/api/auth/session'),
-      checkedFetch('/api/v1/games'),
-      checkedFetch('/api/v1/model-configuration'),
+    const [catalogResponse, modelResponse, receivedDocuments] = await Promise.all([
+      checkedFetch('/api/v1/games', { signal: controller.signal }),
+      checkedFetch('/api/v1/model-configuration', { signal: controller.signal }),
+      fetchDocuments(controller.signal),
     ])
-    if (!sessionResponse.ok) throw new Error(t('documents.error'))
     if (!catalogResponse.ok) throw new Error(t('documents.error'))
-    username.value = ((await sessionResponse.json()) as { username: string }).username
-    games.value = await catalogResponse.json() as GameResponse[]
-    if (modelResponse.ok) modelConfiguration.value = await modelResponse.json() as ModelConfigurationResponse
+    const receivedGames = await catalogResponse.json() as unknown
+    if (!Array.isArray(receivedGames)) throw new Error(t('documents.error'))
+    const receivedModel = modelResponse.ok ? await modelResponse.json() as ModelConfigurationResponse : null
+    if (!isCurrentInitialLoad(request, controller)) return
+    games.value = receivedGames as GameResponse[]
+    documents.value = receivedDocuments
+    modelConfiguration.value = receivedModel
     const requestedEdition = typeof route.query.editionId === 'string' ? route.query.editionId : ''
     editionId.value = editionOptions.value.some((item) => item.id === requestedEdition) ? requestedEdition : ''
-    await loadDocuments()
-    await recoverOfficialImportFromRoute()
-    if (!officialImportJob.value) await recoverPendingHandoff()
+    initialResourcesReady = true
+    void recoverCurrentContext(request)
   } catch (error) {
+    if (!isCurrentInitialLoad(request, controller) || controller.signal.aborted) return
     errorMessage.value = error instanceof Error ? error.message : t('documents.error')
   } finally {
-    loading.value = false
+    if (isCurrentInitialLoad(request, controller)) {
+      activeInitialController = null
+      loading.value = false
+      if (errorMessage.value && !intakeReady.value) resetIntakeBaseline()
+    }
   }
+}
+
+function isCurrentInitialLoad(request: number, controller: AbortController) {
+  return !disposed && request === latestInitialLoad && activeInitialController === controller
+}
+
+function updateSessionIdentity(nextUsername: string) {
+  if (disposed) return
+  const normalizedUsername = nextUsername.trim()
+  const identityChanged = shellIdentityResolved && normalizedUsername !== username.value
+  shellIdentityResolved = true
+  if (!identityChanged && normalizedUsername === username.value) {
+    void recoverCurrentContext(latestInitialLoad)
+    return
+  }
+
+  identityGeneration++
+  username.value = normalizedUsername
+  recoveredContextKey = ''
+  cancelOfficialImportPolling()
+  cancelPreparationPolling()
+  endPreparation()
+  launchingTeaching.value = false
+  cancelAllProgressWatches()
+  progress.value = {}
+  progressRetryAttempts.clear()
+  terminalHandoffs.clear()
+  serverTeachingVersions.clear()
+  officialImportJob.value = null
+  processingVersionId.value = ''
+  if (identityChanged) {
+    documents.value = []
+    games.value = []
+    modelConfiguration.value = null
+    void load()
+    return
+  }
+  void recoverCurrentContext(latestInitialLoad)
+}
+
+async function recoverCurrentContext(initialRequest: number) {
+  if (disposed || !shellIdentityResolved || !initialResourcesReady || initialRequest !== latestInitialLoad) return
+  const contextGeneration = identityGeneration
+  const importJobId = routeImportJobId.value
+  const contextKey = `${contextGeneration}:${initialRequest}:${username.value}:${importJobId}`
+  if (recoveredContextKey === contextKey) return
+  recoveredContextKey = contextKey
+  try {
+    if (username.value && importJobId) await recoverOfficialImport(importJobId, contextGeneration)
+    if (isCurrentRecoveryContext(contextGeneration, initialRequest)
+      && !officialImportJob.value && !importJobId && username.value) {
+      await recoverPendingHandoff()
+    }
+  } finally {
+    if (isCurrentRecoveryContext(contextGeneration, initialRequest) && !intakeReady.value) resetIntakeBaseline()
+  }
+}
+
+function isCurrentRecoveryContext(contextGeneration: number, initialRequest = latestInitialLoad) {
+  return !disposed
+    && contextGeneration === identityGeneration
+    && initialRequest === latestInitialLoad
+    && initialResourcesReady
+    && shellIdentityResolved
 }
 
 function selectFile(event: Event) {
@@ -402,6 +619,11 @@ function selectFile(event: Event) {
   if (file.value) clearPhotographedPages()
   message.value = ''
   errorMessage.value = ''
+}
+
+function clearSelectedFile() {
+  file.value = null
+  if (rulebookFileInput.value) rulebookFileInput.value.value = ''
 }
 
 async function addPhotographedPages(event: Event) {
@@ -422,7 +644,7 @@ async function addPhotographedPages(event: Event) {
     const totalBytes = photographedPages.value.reduce((total, page) => total + page.file.size, 0)
       + prepared.reduce((total, page) => total + page.size, 0)
     if (totalBytes > 48 * 1024 * 1024) throw new Error(t('documents.capture.tooLarge'))
-    file.value = null
+    clearSelectedFile()
     photographedPages.value = [...photographedPages.value, ...prepared.map((photo) => ({
       id: `photo-${Date.now()}-${photographedPageSequence++}`,
       file: photo,
@@ -432,6 +654,7 @@ async function addPhotographedPages(event: Event) {
     errorMessage.value = error instanceof Error ? error.message : t('documents.capture.unsupported')
   } finally {
     preparingPhotos.value = false
+    settlePendingNavigation(false)
   }
 }
 
@@ -475,6 +698,7 @@ async function preparePhotographedPage(photo: File): Promise<File> {
 }
 
 function removePhotographedPage(index: number) {
+  if (intakeControlsDisabled.value) return
   const page = photographedPages.value[index]
   if (!page) return
   URL.revokeObjectURL(page.previewUrl)
@@ -482,6 +706,7 @@ function removePhotographedPage(index: number) {
 }
 
 function movePhotographedPage(index: number, direction: -1 | 1) {
+  if (intakeControlsDisabled.value) return
   const destination = index + direction
   if (destination < 0 || destination >= photographedPages.value.length) return
   const pages = [...photographedPages.value]
@@ -496,6 +721,68 @@ function clearPhotographedPages() {
   photographedPages.value = []
 }
 
+function discardIntakeDraft() {
+  clearSelectedFile()
+  clearPhotographedPages()
+  const baseline = intakeBaseline.value
+  editionId.value = baseline.editionId
+  learningGoal.value = baseline.learningGoal
+  officialImportRightsConfirmed.value = baseline.officialImportRightsConfirmed
+  officialSourceUrl.value = baseline.officialSourceUrl
+  sourceType.value = baseline.sourceType
+  title.value = baseline.title
+  message.value = ''
+  errorMessage.value = ''
+}
+
+function takePendingNavigationResolution() {
+  const resolution = resolvePendingNavigation
+  resolvePendingNavigation = null
+  return resolution
+}
+
+function cancelPendingNavigation() {
+  if (intakeMutationPending.value) return
+  navigationDialogOpen.value = false
+  takePendingNavigationResolution()?.(false)
+}
+
+function discardDraftAndLeave() {
+  if (intakeMutationPending.value) return
+  discardIntakeDraft()
+  navigationDialogOpen.value = false
+  takePendingNavigationResolution()?.(true)
+}
+
+function settlePendingNavigation(mutationAccepted: boolean) {
+  if (!navigationDialogOpen.value || intakeMutationPending.value) return
+  if (!mutationAccepted) {
+    cancelPendingNavigation()
+    return
+  }
+  if (hasUnsavedIntake.value) {
+    cancelPendingNavigation()
+    return
+  }
+  navigationDialogOpen.value = false
+  takePendingNavigationResolution()?.(true)
+}
+
+function protectBrowserUnload(event: BeforeUnloadEvent) {
+  if (!protectsIntakeNavigation.value) return
+  event.preventDefault()
+  event.returnValue = ''
+}
+
+const removeNavigationGuard = router.beforeEach((to, from) => {
+  if (to.path === from.path || !protectsIntakeNavigation.value) return true
+  if (navigationDialogOpen.value) takePendingNavigationResolution()?.(false)
+  navigationDialogOpen.value = true
+  return new Promise<boolean>((resolve) => {
+    resolvePendingNavigation = resolve
+  })
+})
+
 function titleFromFile(selected: File) {
   return selected.name.replace(/\.pdf$/i, '').replace(/[_-]+/g, ' ').trim() || t('documents.titleFallback')
 }
@@ -509,9 +796,18 @@ function currentPreferences(versionId: string): PendingRulebookLesson {
 }
 
 async function startLesson(versionId: string, preferences = currentPreferences(versionId)) {
-  beginPreparation(versionId, 'RECEIVED')
+  let accepted = false
+  const requestIdentityGeneration = identityGeneration
+  launchingTeaching.value = true
+  const preparationGeneration = beginPreparation(versionId, 'RECEIVED')
   try {
-    const csrf = await csrfToken()
+    const csrfController = new AbortController()
+    activePreparationController = csrfController
+    const csrf = await csrfToken(csrfController.signal)
+    if (!isCurrentPreparation(
+      preparationGeneration, versionId, requestIdentityGeneration, csrfController,
+    )) return
+    activePreparationController = null
     const planResponse = await checkedFetch(`/api/v1/document-versions/${versionId}/teaching-plans`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', [csrf.headerName]: csrf.token },
@@ -519,23 +815,42 @@ async function startLesson(versionId: string, preferences = currentPreferences(v
         learningGoal: preferences.learningGoal ?? null,
       }),
     })
+    if (!isCurrentPreparation(preparationGeneration, versionId, requestIdentityGeneration)) return
     if (!planResponse.ok) throw new Error(t('documents.error'))
     const launch = await planResponse.json() as TeachingPreparationLaunch
-    await waitForTeachingPreparation(launch.assistantRunId, preferences, csrf)
+    if (!isCurrentPreparation(preparationGeneration, versionId, requestIdentityGeneration)
+      || typeof launch.assistantRunId !== 'string' || !launch.assistantRunId) return
+    accepted = true
+    intakeBaseline.value = { ...intakeBaseline.value, learningGoal: learningGoal.value }
+    const leavingAfterAcceptance = navigationDialogOpen.value && !hasUnsavedIntake.value
+    launchingTeaching.value = false
+    settlePendingNavigation(true)
+    if (leavingAfterAcceptance) return
+    await waitForTeachingPreparation(
+      launch.assistantRunId, preferences, csrf, preparationGeneration, requestIdentityGeneration,
+    )
   } finally {
-    if (preparingVersionId.value === versionId) endPreparation()
+    if (isCurrentPreparation(preparationGeneration, versionId, requestIdentityGeneration)) {
+      endPreparation()
+      launchingTeaching.value = false
+      settlePendingNavigation(accepted)
+    }
   }
 }
 
 function beginPreparation(versionId: string, state: string) {
+  cancelPreparationPolling()
+  const generation = preparationPollGeneration
   preparingVersionId.value = versionId
   preparationElapsedSeconds.value = 0
   updatePreparationMessage(state)
   if (preparationClock) clearInterval(preparationClock)
   preparationClock = setInterval(() => preparationElapsedSeconds.value += 1, 1000)
+  return generation
 }
 
 function endPreparation() {
+  cancelPreparationPolling()
   preparingVersionId.value = ''
   preparationElapsedSeconds.value = 0
   if (preparationClock) clearInterval(preparationClock)
@@ -579,19 +894,33 @@ async function waitForTeachingPreparation(
   runId: string,
   preferences: PendingRulebookLesson,
   csrf: CsrfResponse,
+  generation: number,
+  requestIdentityGeneration: number,
   initial?: TeachingPreparationRun,
 ) {
   let snapshot = initial
-  while (!disposed && preparingVersionId.value === preferences.versionId) {
+  while (isCurrentPreparation(generation, preferences.versionId, requestIdentityGeneration)) {
     try {
       if (!snapshot) {
-        const response = await checkedFetch(`/api/v1/assistant-runs/${runId}`)
+        const controller = new AbortController()
+        activePreparationController = controller
+        const response = await checkedFetch(`/api/v1/assistant-runs/${encodeURIComponent(runId)}`, {
+          signal: controller.signal,
+        })
+        if (!isCurrentPreparation(generation, preferences.versionId, requestIdentityGeneration, controller)) return
         if (!response.ok) throw new Error(t('documents.error'))
         snapshot = await response.json() as TeachingPreparationRun
+        if (!isCurrentPreparation(generation, preferences.versionId, requestIdentityGeneration, controller)) return
+        activePreparationController = null
+      }
+      if (snapshot.run.id !== runId || snapshot.run.subjectId !== preferences.versionId) {
+        throw new PreparationFailedError(t('documents.error'))
       }
       updatePreparationMessage(snapshot.run.state, snapshot.activities)
       if (snapshot.run.state === 'COMPLETED') {
-        await openPreparedLesson(preferences, csrf)
+        await openPreparedLesson(
+          preferences, csrf, generation, requestIdentityGeneration,
+        )
         return
       }
       if (snapshot.run.state === 'FAILED' || snapshot.run.state === 'DEGRADED') {
@@ -599,29 +928,84 @@ async function waitForTeachingPreparation(
       }
     } catch (error) {
       if (error instanceof PreparationFailedError) throw error
+      if (!isCurrentPreparation(generation, preferences.versionId, requestIdentityGeneration)) return
       message.value = t('documents.prepare.reconnect')
     }
     snapshot = undefined
-    await new Promise((resolve) => setTimeout(resolve, 1200))
+    if (!await waitForPreparationDelay(generation, preferences.versionId, requestIdentityGeneration)) return
   }
 }
 
-async function openPreparedLesson(preferences: PendingRulebookLesson, csrf: CsrfResponse) {
+async function openPreparedLesson(
+  preferences: PendingRulebookLesson,
+  csrf: CsrfResponse,
+  generation: number,
+  requestIdentityGeneration: number,
+) {
+  const controller = new AbortController()
+  activePreparationController = controller
   const latestResponse = await checkedFetch(
     `/api/v1/document-versions/${preferences.versionId}/teaching-plans/latest`,
+    { signal: controller.signal },
   )
+  if (!isCurrentPreparation(generation, preferences.versionId, requestIdentityGeneration, controller)) return
   if (!latestResponse.ok) throw new Error(t('documents.prepare.openLater'))
   const plan = await latestResponse.json() as TeachingPlanResponse
+  if (!isCurrentPreparation(generation, preferences.versionId, requestIdentityGeneration, controller)) return
+  if (!plan.id || plan.documentVersionId !== preferences.versionId) throw new PreparationFailedError(t('documents.error'))
+  activePreparationController = null
   message.value = t('documents.prepare.started')
   const lessonResponse = await checkedFetch(`/api/v1/teaching-plans/${plan.id}/illustrated-lessons`, {
     method: 'POST', headers: { [csrf.headerName]: csrf.token },
   })
+  if (!isCurrentPreparation(generation, preferences.versionId, requestIdentityGeneration)) return
   if (!lessonResponse.ok) throw new Error(t('documents.error'))
   const launch = await lessonResponse.json() as TeachingLaunch
+  if (!isCurrentPreparation(generation, preferences.versionId, requestIdentityGeneration)
+    || typeof launch.assistantRunId !== 'string' || !launch.assistantRunId) return
   notifyTeachingLaunched({ planId: plan.id, runId: launch.assistantRunId })
   if (username.value) forgetPendingRulebookLesson(localStorage, username.value, preferences.versionId)
   localStorage.setItem('rulepilot:last-plan-id', plan.id)
   await router.push({ name: 'lessons', query: { started: plan.id, run: launch.assistantRunId } })
+}
+
+function isCurrentPreparation(
+  generation: number,
+  versionId: string,
+  requestIdentityGeneration: number,
+  controller?: AbortController,
+) {
+  return !disposed
+    && generation === preparationPollGeneration
+    && versionId === preparingVersionId.value
+    && requestIdentityGeneration === identityGeneration
+    && (!controller || activePreparationController === controller)
+}
+
+function waitForPreparationDelay(
+  generation: number,
+  versionId: string,
+  requestIdentityGeneration: number,
+) {
+  return new Promise<boolean>((resolve) => {
+    resolvePreparationDelay?.(false)
+    resolvePreparationDelay = resolve
+    preparationPollTimer = setTimeout(() => {
+      preparationPollTimer = null
+      resolvePreparationDelay = null
+      resolve(isCurrentPreparation(generation, versionId, requestIdentityGeneration))
+    }, 1200)
+  })
+}
+
+function cancelPreparationPolling() {
+  preparationPollGeneration++
+  activePreparationController?.abort()
+  activePreparationController = null
+  if (preparationPollTimer) clearTimeout(preparationPollTimer)
+  preparationPollTimer = null
+  resolvePreparationDelay?.(false)
+  resolvePreparationDelay = null
 }
 
 function closeProgressConnection(versionId: string) {
@@ -632,19 +1016,38 @@ function closeProgressConnection(versionId: string) {
   progressRetryTimers.delete(versionId)
 }
 
+function cancelProgressWatch(versionId: string) {
+  progressGenerations.set(versionId, (progressGenerations.get(versionId) ?? 0) + 1)
+  progressReconcileControllers.get(versionId)?.abort()
+  progressReconcileControllers.delete(versionId)
+  closeProgressConnection(versionId)
+}
+
+function cancelAllProgressWatches() {
+  for (const versionId of new Set([
+    ...progressConnections.keys(),
+    ...progressRetryTimers.keys(),
+    ...progressReconcileControllers.keys(),
+    ...progressGenerations.keys(),
+  ])) cancelProgressWatch(versionId)
+}
+
 function watchProgress(pending: PendingRulebookLesson) {
   const versionId = pending.versionId
-  closeProgressConnection(versionId)
+  cancelProgressWatch(versionId)
   if (disposed) return
+  const generation = progressGenerations.get(versionId) ?? 0
+  const requestIdentityGeneration = identityGeneration
   processingVersionId.value = versionId
   const events = new EventSource(`/api/v1/document-versions/${versionId}/progress`, { withCredentials: true })
   progressConnections.set(versionId, events)
   events.addEventListener('progress', (event) => {
+    if (!isCurrentProgressWatch(versionId, generation, requestIdentityGeneration, events)) return
     const snapshot = parseProgressSnapshot((event as MessageEvent<string>).data)
     if (!snapshot) {
       events.close()
       progressConnections.delete(versionId)
-      void reconcileProgressAfterDisconnect(pending)
+      void reconcileProgressAfterDisconnect(pending, generation, requestIdentityGeneration)
       return
     }
     progressRetryAttempts.set(versionId, 0)
@@ -652,23 +1055,64 @@ function watchProgress(pending: PendingRulebookLesson) {
     progress.value = { ...progress.value, [versionId]: mergedSnapshot }
     message.value = progressMessage(mergedSnapshot)
     if (mergedSnapshot.complete) {
-      void handleTerminalProgress(pending, mergedSnapshot.stage)
+      void handleTerminalProgress(pending, mergedSnapshot.stage, generation, requestIdentityGeneration)
     }
   })
   events.onerror = () => {
+    if (!isCurrentProgressWatch(versionId, generation, requestIdentityGeneration, events)) return
     events.close()
     progressConnections.delete(versionId)
-    if (!disposed) void reconcileProgressAfterDisconnect(pending)
+    void reconcileProgressAfterDisconnect(pending, generation, requestIdentityGeneration)
   }
 }
 
-async function handleTerminalProgress(pending: PendingRulebookLesson, stage: string) {
+function isCurrentProgressWatch(
+  versionId: string,
+  generation: number,
+  requestIdentityGeneration: number,
+  events?: EventSource,
+) {
+  return !disposed
+    && generation === (progressGenerations.get(versionId) ?? 0)
+    && requestIdentityGeneration === identityGeneration
+    && (!events || progressConnections.get(versionId) === events)
+}
+
+async function handleTerminalProgress(
+  pending: PendingRulebookLesson,
+  stage: string,
+  generation = progressGenerations.get(pending.versionId) ?? 0,
+  requestIdentityGeneration = identityGeneration,
+  reconciledDocuments?: DocumentResponse[],
+) {
+  if (!isCurrentProgressWatch(pending.versionId, generation, requestIdentityGeneration)) return
   if (terminalHandoffs.has(pending.versionId)) return
   terminalHandoffs.add(pending.versionId)
   closeProgressConnection(pending.versionId)
   progressRetryAttempts.delete(pending.versionId)
   processingVersionId.value = ''
-  await loadDocuments().catch(() => undefined)
+  if (reconciledDocuments) {
+    documents.value = reconciledDocuments
+  } else {
+    const controller = new AbortController()
+    progressReconcileControllers.set(pending.versionId, controller)
+    try {
+      const receivedDocuments = await fetchDocuments(controller.signal)
+      if (!isCurrentProgressReconciliation(
+        pending.versionId, generation, requestIdentityGeneration, controller,
+      )) return
+      documents.value = receivedDocuments
+    } catch {
+      if (!isCurrentProgressReconciliation(
+        pending.versionId, generation, requestIdentityGeneration, controller,
+      ) || controller.signal.aborted) return
+    } finally {
+      if (progressReconcileControllers.get(pending.versionId) === controller) {
+        progressReconcileControllers.delete(pending.versionId)
+      }
+    }
+  }
+  if (!isCurrentProgressWatch(pending.versionId, generation, requestIdentityGeneration)) return
   if (stage === 'READY') {
     if (serverTeachingVersions.delete(pending.versionId)) {
       if (username.value) forgetPendingRulebookLesson(localStorage, username.value, pending.versionId)
@@ -679,6 +1123,7 @@ async function handleTerminalProgress(pending: PendingRulebookLesson, stage: str
     try {
       await startLesson(pending.versionId, pending)
     } catch (error) {
+      if (!isCurrentProgressWatch(pending.versionId, generation, requestIdentityGeneration)) return
       terminalHandoffs.delete(pending.versionId)
       errorMessage.value = error instanceof Error ? error.message : t('documents.error')
     }
@@ -688,12 +1133,37 @@ async function handleTerminalProgress(pending: PendingRulebookLesson, stage: str
   errorMessage.value = t('documents.progress.failed')
 }
 
-async function reconcileProgressAfterDisconnect(pending: PendingRulebookLesson) {
+function isCurrentProgressReconciliation(
+  versionId: string,
+  generation: number,
+  requestIdentityGeneration: number,
+  controller: AbortController,
+) {
+  return isCurrentProgressWatch(versionId, generation, requestIdentityGeneration)
+    && progressReconcileControllers.get(versionId) === controller
+}
+
+async function reconcileProgressAfterDisconnect(
+  pending: PendingRulebookLesson,
+  generation: number,
+  requestIdentityGeneration: number,
+) {
+  if (!isCurrentProgressWatch(pending.versionId, generation, requestIdentityGeneration)) return
+  progressReconcileControllers.get(pending.versionId)?.abort()
+  const controller = new AbortController()
+  progressReconcileControllers.set(pending.versionId, controller)
   try {
-    await loadDocuments()
-    const status = documents.value.find((entry) => entry.latestVersion.id === pending.versionId)?.latestVersion.status
+    const receivedDocuments = await fetchDocuments(controller.signal)
+    if (!isCurrentProgressReconciliation(
+      pending.versionId, generation, requestIdentityGeneration, controller,
+    )) return
+    documents.value = receivedDocuments
+    const status = receivedDocuments.find((entry) => entry.latestVersion.id === pending.versionId)?.latestVersion.status
     if (status === 'READY' || status === 'FAILED') {
-      await handleTerminalProgress(pending, status)
+      progressReconcileControllers.delete(pending.versionId)
+      await handleTerminalProgress(
+        pending, status, generation, requestIdentityGeneration, receivedDocuments,
+      )
       return
     }
     if (!status) {
@@ -704,37 +1174,38 @@ async function reconcileProgressAfterDisconnect(pending: PendingRulebookLesson) 
     }
     message.value = t('documents.progress.reconnect')
   } catch {
+    if (!isCurrentProgressReconciliation(
+      pending.versionId, generation, requestIdentityGeneration, controller,
+    ) || controller.signal.aborted) return
     message.value = t('documents.progress.reconnect')
+  } finally {
+    if (progressReconcileControllers.get(pending.versionId) === controller) {
+      progressReconcileControllers.delete(pending.versionId)
+    }
   }
-  scheduleProgressReconnect(pending)
+  scheduleProgressReconnect(pending, generation, requestIdentityGeneration)
 }
 
-function scheduleProgressReconnect(pending: PendingRulebookLesson) {
-  if (disposed || progressRetryTimers.has(pending.versionId)) return
+function scheduleProgressReconnect(
+  pending: PendingRulebookLesson,
+  generation: number,
+  requestIdentityGeneration: number,
+) {
+  if (!isCurrentProgressWatch(pending.versionId, generation, requestIdentityGeneration)
+    || progressRetryTimers.has(pending.versionId)) return
   const attempt = Math.min((progressRetryAttempts.get(pending.versionId) ?? 0) + 1, 4)
   progressRetryAttempts.set(pending.versionId, attempt)
   const delay = [1000, 2000, 5000, 10000][attempt - 1]!
   progressRetryTimers.set(pending.versionId, setTimeout(() => {
     progressRetryTimers.delete(pending.versionId)
+    if (!isCurrentProgressWatch(pending.versionId, generation, requestIdentityGeneration)) return
     watchProgress(pending)
   }, delay))
 }
 
 function parseProgressSnapshot(value: string): ProcessingSnapshot | null {
   try {
-    const snapshot = JSON.parse(value) as Partial<ProcessingSnapshot>
-    if (!(typeof snapshot.stage === 'string'
-      && snapshot.stage.length > 0
-      && typeof snapshot.percentage === 'number'
-      && snapshot.percentage >= 0
-      && snapshot.percentage <= 100
-      && typeof snapshot.processedPages === 'number'
-      && snapshot.processedPages >= 0
-      && typeof snapshot.complete === 'boolean')) return null
-    const totalPages = typeof snapshot.totalPages === 'number' && snapshot.totalPages >= snapshot.processedPages
-      ? snapshot.totalPages
-      : snapshot.processedPages
-    return { ...snapshot, totalPages } as ProcessingSnapshot
+    return parseDocumentProgressSnapshot(JSON.parse(value))
   } catch {
     return null
   }
@@ -763,6 +1234,7 @@ async function recoverPendingHandoff() {
 
 async function uploadRulebook() {
   if (!file.value && photographedPages.value.length === 0) return
+  let accepted = false
   uploading.value = true
   message.value = t('documents.uploading')
   errorMessage.value = ''
@@ -788,30 +1260,41 @@ async function uploadRulebook() {
     })
     if (!response.ok) throw new Error(t('documents.error'))
     const result = await response.json() as { duplicate: boolean; version: { id: string; status: string } }
-    file.value = null
+    clearSelectedFile()
     clearPhotographedPages()
+    title.value = ''
+    officialSourceUrl.value = ''
+    officialImportRightsConfirmed.value = false
+    resetIntakeBaseline()
+    const leavingAfterAcceptance = navigationDialogOpen.value
+    accepted = true
+    uploading.value = false
+    settlePendingNavigation(true)
+    if (leavingAfterAcceptance) return
     await continueUploadedRulebook(result)
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : t('documents.error')
   } finally {
     uploading.value = false
+    settlePendingNavigation(accepted)
   }
 }
 
 async function continueUploadedRulebook(
   result: { duplicate: boolean; version: { id: string; status: string } },
   serverTeaching = true,
+  receivedDocuments?: DocumentResponse[],
 ) {
   const pending = currentPreferences(result.version.id)
-  title.value = ''
-  officialSourceUrl.value = ''
-  officialImportRightsConfirmed.value = false
-  await loadDocuments()
+  const currentDocuments = receivedDocuments ?? await loadDocuments()
+  if (receivedDocuments) documents.value = receivedDocuments
   if (result.version.status === 'READY') {
     if (username.value) forgetPendingRulebookLesson(localStorage, username.value, result.version.id)
     message.value = serverTeaching ? t('documents.background') : t('documents.readyToRead')
   } else if (result.version.status === 'FAILED') {
-    await handleTerminalProgress(pending, 'FAILED')
+    await handleTerminalProgress(
+      pending, 'FAILED', undefined, undefined, currentDocuments,
+    )
   } else {
     message.value = result.duplicate ? t('documents.uploadedExisting') : t('documents.uploadedReading')
     if (serverTeaching) {
@@ -833,6 +1316,7 @@ function titleFromOfficialSource() {
 
 async function importOfficialRulebook() {
   if (!canImportOfficial.value) return
+  let accepted = false
   importingOfficial.value = true
   message.value = t('documents.officialImport.downloading')
   errorMessage.value = ''
@@ -852,52 +1336,165 @@ async function importOfficialRulebook() {
       }),
     })
     if (!response.ok) throw new Error(t('documents.officialImport.error'))
-    officialImportJob.value = await response.json() as OfficialRulebookImportJob
-    await router.replace({ query: { ...route.query, importJob: officialImportJob.value.id } })
-    void waitForOfficialImport(officialImportJob.value.id)
+    const acceptedJob = await response.json() as OfficialRulebookImportJob
+    if (!acceptedJob.id) throw new Error(t('documents.officialImport.error'))
+    officialImportJob.value = acceptedJob
+    title.value = ''
+    officialSourceUrl.value = ''
+    officialImportRightsConfirmed.value = false
+    resetIntakeBaseline()
+    const navigationWasRequested = navigationDialogOpen.value
+    const leavingAfterAcceptance = navigationWasRequested && !hasUnsavedIntake.value
+    if (!navigationWasRequested) {
+      routeImportTransitionJobId = acceptedJob.id
+      try {
+        await router.replace({ query: { ...route.query, importJob: acceptedJob.id } })
+      } finally {
+        routeImportTransitionJobId = ''
+      }
+    }
+    accepted = true
+    importingOfficial.value = false
+    settlePendingNavigation(true)
+    if (!leavingAfterAcceptance) {
+      startOfficialImportPolling(acceptedJob, identityGeneration)
+    }
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : t('documents.officialImport.error')
   } finally {
     importingOfficial.value = false
+    settlePendingNavigation(accepted)
   }
 }
 
-async function recoverOfficialImportFromRoute() {
-  const jobId = typeof route.query.importJob === 'string' ? route.query.importJob : ''
-  if (!jobId) return
+async function recoverOfficialImport(jobId: string, requestIdentityGeneration: number) {
+  cancelOfficialImportPolling()
+  const generation = officialImportPollGeneration
+  officialImportScopeJobId = jobId
+  const controller = new AbortController()
+  activeOfficialImportController = controller
   try {
-    officialImportJob.value = await fetchOfficialImport(jobId)
-    if (officialImportSettled(officialImportJob.value)) await finishOfficialImport(officialImportJob.value)
-    else if (officialImportJob.value.stage !== 'FAILED') void waitForOfficialImport(jobId)
+    const job = await fetchOfficialImport(jobId, controller.signal)
+    if (!isCurrentOfficialImport(generation, jobId, requestIdentityGeneration, controller)) return
+    activeOfficialImportController = null
+    officialImportJob.value = job
+    if (officialImportSettled(job)) {
+      const finished = await finishOfficialImport(job, generation, requestIdentityGeneration)
+      if (!finished && isCurrentOfficialImport(generation, jobId, requestIdentityGeneration)) {
+        void waitForOfficialImport(jobId, generation, requestIdentityGeneration)
+      }
+    }
+    else if (job.stage === 'FAILED') errorMessage.value = t('documents.officialImport.error')
+    else void waitForOfficialImport(jobId, generation, requestIdentityGeneration)
   } catch {
-    officialImportJob.value = null
+    if (!isCurrentOfficialImport(generation, jobId, requestIdentityGeneration)
+      || controller.signal.aborted) return
+    message.value = t('documents.progress.reconnect')
+    void waitForOfficialImport(jobId, generation, requestIdentityGeneration)
+  } finally {
+    if (activeOfficialImportController === controller) activeOfficialImportController = null
   }
 }
 
-async function fetchOfficialImport(jobId: string) {
-  const response = await checkedFetch(`/api/v1/documents/official-imports/${encodeURIComponent(jobId)}`)
-  if (!response.ok) throw new Error(t('documents.officialImport.error'))
-  return await response.json() as OfficialRulebookImportJob
+function startOfficialImportPolling(
+  job: OfficialRulebookImportJob,
+  requestIdentityGeneration: number,
+) {
+  cancelOfficialImportPolling()
+  const generation = officialImportPollGeneration
+  officialImportScopeJobId = job.id
+  officialImportJob.value = job
+  if (officialImportSettled(job)) {
+    void finishOfficialImport(job, generation, requestIdentityGeneration).then((finished) => {
+      if (!finished && isCurrentOfficialImport(generation, job.id, requestIdentityGeneration)) {
+        void waitForOfficialImport(job.id, generation, requestIdentityGeneration)
+      }
+    })
+    return
+  }
+  if (job.stage === 'FAILED') {
+    errorMessage.value = t('documents.officialImport.error')
+    return
+  }
+  void waitForOfficialImport(job.id, generation, requestIdentityGeneration)
 }
 
-async function waitForOfficialImport(jobId: string) {
-  while (!disposed && officialImportJob.value?.id === jobId) {
+async function fetchOfficialImport(jobId: string, signal?: AbortSignal) {
+  const response = await checkedFetch(`/api/v1/documents/official-imports/${encodeURIComponent(jobId)}`, { signal })
+  if (!response.ok) throw new Error(t('documents.officialImport.error'))
+  const job = await response.json() as OfficialRulebookImportJob
+  if (job.id !== jobId) throw new Error(t('documents.officialImport.error'))
+  return job
+}
+
+async function waitForOfficialImport(
+  jobId: string,
+  generation: number,
+  requestIdentityGeneration: number,
+) {
+  while (isCurrentOfficialImport(generation, jobId, requestIdentityGeneration)) {
+    if (!await waitForOfficialImportDelay(generation, jobId, requestIdentityGeneration)) return
     try {
-      const job = await fetchOfficialImport(jobId)
+      const controller = new AbortController()
+      activeOfficialImportController = controller
+      const job = await fetchOfficialImport(jobId, controller.signal)
+      if (!isCurrentOfficialImport(generation, jobId, requestIdentityGeneration, controller)) return
+      activeOfficialImportController = null
       officialImportJob.value = job
       if (officialImportSettled(job)) {
-        await finishOfficialImport(job)
-        return
+        if (await finishOfficialImport(job, generation, requestIdentityGeneration)) return
+        if (!isCurrentOfficialImport(generation, jobId, requestIdentityGeneration)) return
+        continue
       }
       if (job.stage === 'FAILED') {
         errorMessage.value = t('documents.officialImport.error')
         return
       }
     } catch {
+      if (!isCurrentOfficialImport(generation, jobId, requestIdentityGeneration)) return
       message.value = t('documents.progress.reconnect')
     }
-    await new Promise(resolve => setTimeout(resolve, 1000))
   }
+}
+
+function isCurrentOfficialImport(
+  generation: number,
+  jobId: string,
+  requestIdentityGeneration: number,
+  controller?: AbortController,
+) {
+  return !disposed
+    && generation === officialImportPollGeneration
+    && requestIdentityGeneration === identityGeneration
+    && officialImportScopeJobId === jobId
+    && (!controller || activeOfficialImportController === controller)
+}
+
+function waitForOfficialImportDelay(
+  generation: number,
+  jobId: string,
+  requestIdentityGeneration: number,
+) {
+  return new Promise<boolean>((resolve) => {
+    resolveOfficialImportDelay?.(false)
+    resolveOfficialImportDelay = resolve
+    officialImportPollTimer = setTimeout(() => {
+      officialImportPollTimer = null
+      resolveOfficialImportDelay = null
+      resolve(isCurrentOfficialImport(generation, jobId, requestIdentityGeneration))
+    }, 1000)
+  })
+}
+
+function cancelOfficialImportPolling() {
+  officialImportPollGeneration++
+  officialImportScopeJobId = ''
+  activeOfficialImportController?.abort()
+  activeOfficialImportController = null
+  if (officialImportPollTimer) clearTimeout(officialImportPollTimer)
+  officialImportPollTimer = null
+  resolveOfficialImportDelay?.(false)
+  resolveOfficialImportDelay = null
 }
 
 function officialImportSettled(job: OfficialRulebookImportJob) {
@@ -905,14 +1502,38 @@ function officialImportSettled(job: OfficialRulebookImportJob) {
     && ['LAUNCHED', 'FAILED', 'NOT_REQUESTED'].includes(job.teachingHandoffState)
 }
 
-async function finishOfficialImport(job: OfficialRulebookImportJob) {
-  if (!job.documentVersionId) throw new Error(t('documents.officialImport.error'))
-  await loadDocuments()
-  const entry = documents.value.find(candidate => candidate.latestVersion.id === job.documentVersionId)
+async function finishOfficialImport(
+  job: OfficialRulebookImportJob,
+  generation: number,
+  requestIdentityGeneration: number,
+) {
+  if (!isCurrentOfficialImport(generation, job.id, requestIdentityGeneration)) return false
+  if (!job.documentVersionId) {
+    errorMessage.value = t('documents.officialImport.error')
+    return false
+  }
+  const controller = new AbortController()
+  activeOfficialImportController = controller
+  let receivedDocuments: DocumentResponse[]
+  try {
+    receivedDocuments = await fetchDocuments(controller.signal)
+    if (!isCurrentOfficialImport(generation, job.id, requestIdentityGeneration, controller)) return false
+  } catch {
+    if (isCurrentOfficialImport(generation, job.id, requestIdentityGeneration, controller)
+      && !controller.signal.aborted) {
+      message.value = t('documents.progress.reconnect')
+    }
+    return false
+  } finally {
+    if (activeOfficialImportController === controller) activeOfficialImportController = null
+  }
+  if (!isCurrentOfficialImport(generation, job.id, requestIdentityGeneration)) return false
+  const entry = receivedDocuments.find(candidate => candidate.latestVersion.id === job.documentVersionId)
   await continueUploadedRulebook({
     duplicate: job.duplicate,
     version: { id: job.documentVersionId, status: entry?.latestVersion.status ?? 'UPLOADED' },
-  }, false)
+  }, false, receivedDocuments)
+  if (!isCurrentOfficialImport(generation, job.id, requestIdentityGeneration)) return false
   message.value = job.teachingHandoffState === 'LAUNCHED'
     ? (locale.value === 'zh-CN'
         ? `《${job.title}》已进入“我的讲解”，规则书现在可以先读。`
@@ -923,9 +1544,11 @@ async function finishOfficialImport(job: OfficialRulebookImportJob) {
         : officialImportCopy.value.TEACHING_FAILED
       : message.value
   officialImportJob.value = null
+  cancelOfficialImportPolling()
   const query = { ...route.query }
   delete query.importJob
   await router.replace({ query })
+  return true
 }
 
 function officialImportProgress() {
@@ -957,27 +1580,50 @@ function officialImportStage() {
   return officialImportCopy.value[job.stage]
 }
 
-async function deleteRulebook(entry: DocumentResponse) {
+function requestDeleteRulebook(entry: DocumentResponse) {
   if (deletingDocumentId.value || preparingVersionId.value) return
-  const confirmed = window.confirm(t('documents.delete.confirm', { title: entry.document.title }))
-  if (!confirmed) return
-  deletingDocumentId.value = entry.document.id
-  errorMessage.value = ''
+  documentToDelete.value = entry
+  deleteError.value = ''
+  restoreAfterDocumentDelete.value = false
+}
+
+function cancelDeleteRulebook() {
+  if (deletingDocumentId.value) return
+  documentToDelete.value = null
+  deleteError.value = ''
+  restoreAfterDocumentDelete.value = false
+}
+
+function documentDeleteRestoreTarget() {
+  if (!restoreAfterDocumentDelete.value) return null
+  restoreAfterDocumentDelete.value = false
+  return documentListHeading.value
+}
+
+async function confirmDeleteRulebook() {
+  const entry = documentToDelete.value
+  if (!entry || deletingDocumentId.value || preparingVersionId.value) return
+  const documentId = entry.document.id
+  const versionId = entry.latestVersion.id
+  deletingDocumentId.value = documentId
+  deleteError.value = ''
   try {
     const csrf = await csrfToken()
-    const response = await checkedFetch(`/api/v1/documents/${encodeURIComponent(entry.document.id)}`, {
+    const response = await checkedFetch(`/api/v1/documents/${encodeURIComponent(documentId)}`, {
       method: 'DELETE', headers: { [csrf.headerName]: csrf.token },
     })
     if (!response.ok) throw new Error(t('documents.error'))
-    if (username.value) forgetPendingRulebookLesson(localStorage, username.value, entry.latestVersion.id)
-    if (processingVersionId.value === entry.latestVersion.id) {
-      closeProgressConnection(entry.latestVersion.id)
+    documents.value = documents.value.filter(item => item.document.id !== documentId)
+    if (username.value) forgetPendingRulebookLesson(localStorage, username.value, versionId)
+    if (processingVersionId.value === versionId) {
+      cancelProgressWatch(versionId)
       processingVersionId.value = ''
     }
-    await loadDocuments()
+    restoreAfterDocumentDelete.value = true
+    documentToDelete.value = null
     message.value = t('documents.deleted')
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : t('documents.error')
+    deleteError.value = error instanceof Error ? error.message : t('documents.error')
   } finally {
     deletingDocumentId.value = ''
   }
@@ -985,22 +1631,36 @@ async function deleteRulebook(entry: DocumentResponse) {
 
 onMounted(() => {
   disposed = false
+  window.addEventListener('beforeunload', protectBrowserUnload)
   void load()
+})
+watch(routeImportJobId, () => {
+  if (routeImportJobId.value && routeImportJobId.value === routeImportTransitionJobId) return
+  recoveredContextKey = ''
+  cancelOfficialImportPolling()
+  officialImportJob.value = null
+  void recoverCurrentContext(latestInitialLoad)
 })
 onBeforeUnmount(() => {
   disposed = true
+  latestInitialLoad++
+  activeInitialController?.abort()
+  activeInitialController = null
+  cancelOfficialImportPolling()
+  cancelPreparationPolling()
+  window.removeEventListener('beforeunload', protectBrowserUnload)
+  removeNavigationGuard()
+  takePendingNavigationResolution()?.(false)
   if (preparationClock) clearInterval(preparationClock)
   preparationClock = null
   clearPhotographedPages()
-  for (const versionId of new Set([...progressConnections.keys(), ...progressRetryTimers.keys()])) {
-    closeProgressConnection(versionId)
-  }
+  cancelAllProgressWatches()
 })
 </script>
 
 <template>
-  <AppShell>
-    <main class="tabletop-page max-w-6xl">
+  <AppShell @session-identity="updateSessionIdentity">
+    <div class="tabletop-page max-w-6xl">
       <section class="mx-auto max-w-5xl">
         <div class="tabletop-illustrated-hero player-board grid lg:grid-cols-[1.08fr_0.92fr]">
           <div class="relative min-h-64 overflow-hidden border-b border-ink/10 lg:min-h-full lg:border-b-0 lg:border-r" aria-hidden="true">
@@ -1056,27 +1716,31 @@ onBeforeUnmount(() => {
         </div>
 
         <form class="tabletop-panel player-board mt-8 p-5 text-left sm:p-7" @submit.prevent="uploadRulebook">
+          <div v-if="hasUnsavedIntake" data-testid="rulebook-intake-unsaved" class="mb-5 rounded-lg bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900" role="status">
+            <strong>{{ intakeDraftCopy.status(intakeDraftAreas.join(locale === 'zh-CN' ? '、' : ', ')) }}</strong>
+            <span class="mt-1 block text-xs leading-5">{{ intakeDraftCopy.memoryOnly }}</span>
+          </div>
           <p class="text-sm font-semibold text-ink/65">{{ t('documents.capture.label') }}</p>
           <div class="mt-3 grid gap-3 sm:grid-cols-3">
-            <label for="rulebook-file" class="group flex min-h-32 cursor-pointer flex-col rounded-xl border border-dashed border-ink/25 bg-canvas p-4 transition hover:border-copper/60 hover:bg-copper/5">
+            <label for="rulebook-file" class="group flex min-h-32 flex-col rounded-xl border border-dashed border-ink/25 bg-canvas p-4 transition" :class="intakeControlsDisabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer hover:border-copper/60 hover:bg-copper/5'">
               <svg class="h-6 w-6 text-copper" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M14.5 2.75H6.75a2 2 0 0 0-2 2v14.5a2 2 0 0 0 2 2h10.5a2 2 0 0 0 2-2V8.75z" /><path d="M14 2.75v6h5.25M8 13h8M8 16.5h6" /></svg>
               <span class="mt-auto font-display text-lg font-semibold">{{ t('documents.capture.pdf.title') }}</span>
               <span class="mt-1 text-sm leading-5 text-ink/45">{{ file?.name ?? t('documents.capture.pdf.detail') }}</span>
             </label>
-            <label for="rulebook-camera" class="flex min-h-32 cursor-pointer flex-col rounded-xl border border-ink/12 bg-paper p-4 text-ink transition hover:border-copper/60 hover:bg-copper/[0.1]">
+            <label for="rulebook-camera" class="flex min-h-32 flex-col rounded-xl border border-ink/12 bg-paper p-4 text-ink transition" :class="intakeControlsDisabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer hover:border-copper/60 hover:bg-copper/[0.1]'">
               <svg class="h-6 w-6 text-copper" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4.75 7.75h3l1.25-2h6l1.25 2h3a1.75 1.75 0 0 1 1.75 1.75v8.75A1.75 1.75 0 0 1 19.25 20H4.75A1.75 1.75 0 0 1 3 18.25V9.5a1.75 1.75 0 0 1 1.75-1.75Z" /><circle cx="12" cy="13.5" r="3.25" /></svg>
               <span class="mt-auto font-display text-lg font-semibold">{{ t('documents.capture.camera.title') }}</span>
               <span class="mt-1 text-sm leading-5 text-ink/45">{{ t('documents.capture.camera.detail') }}</span>
             </label>
-            <label for="rulebook-gallery" class="flex min-h-32 cursor-pointer flex-col rounded-xl border border-ink/12 bg-paper p-4 text-ink transition hover:border-indigo/50 hover:bg-indigo/[0.1]">
+            <label for="rulebook-gallery" class="flex min-h-32 flex-col rounded-xl border border-ink/12 bg-paper p-4 text-ink transition" :class="intakeControlsDisabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer hover:border-indigo/50 hover:bg-indigo/[0.1]'">
               <svg class="h-6 w-6 text-indigo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3.5" y="4" width="17" height="16" rx="2" /><circle cx="8.5" cy="9" r="1.25" /><path d="m5.5 17 4.3-4.3 3.1 3.1 2.1-2.1L18.5 17" /></svg>
               <span class="mt-auto font-display text-lg font-semibold">{{ t('documents.capture.gallery.title') }}</span>
               <span class="mt-1 text-sm leading-5 text-ink/45">{{ t('documents.capture.gallery.detail') }}</span>
             </label>
           </div>
-          <input id="rulebook-file" accept="application/pdf,.pdf" type="file" class="sr-only" @change="selectFile">
-          <input id="rulebook-camera" accept="image/*" capture="environment" type="file" class="sr-only" :aria-label="t('documents.capture.cameraAlt')" @change="addPhotographedPages">
-          <input id="rulebook-gallery" accept="image/*" multiple type="file" class="sr-only" :aria-label="t('documents.capture.galleryAlt')" @change="addPhotographedPages">
+          <input id="rulebook-file" ref="rulebookFileInput" :disabled="intakeControlsDisabled" accept="application/pdf,.pdf" type="file" class="sr-only" @change="selectFile">
+          <input id="rulebook-camera" :disabled="intakeControlsDisabled" accept="image/*" capture="environment" type="file" class="sr-only" :aria-label="t('documents.capture.cameraAlt')" @change="addPhotographedPages">
+          <input id="rulebook-gallery" :disabled="intakeControlsDisabled" accept="image/*" multiple type="file" class="sr-only" :aria-label="t('documents.capture.galleryAlt')" @change="addPhotographedPages">
 
           <div v-if="photographedPages.length" class="mt-4 rounded-xl border border-ink/10 bg-canvas p-3 sm:p-4">
             <div class="flex flex-wrap items-baseline justify-between gap-2">
@@ -1089,9 +1753,9 @@ onBeforeUnmount(() => {
                 <div class="flex items-center justify-between gap-1 px-2 py-2">
                   <span class="text-xs font-semibold text-ink/60">{{ t('documents.capture.photoPage', { position: index + 1 }) }}</span>
                   <span class="flex gap-1">
-                    <button type="button" :disabled="index === 0" class="rounded px-1.5 py-0.5 text-sm text-ink/55 hover:bg-canvas disabled:opacity-25" :aria-label="t('documents.capture.moveEarlier', { position: index + 1 })" @click="movePhotographedPage(index, -1)">←</button>
-                    <button type="button" :disabled="index === photographedPages.length - 1" class="rounded px-1.5 py-0.5 text-sm text-ink/55 hover:bg-canvas disabled:opacity-25" :aria-label="t('documents.capture.moveLater', { position: index + 1 })" @click="movePhotographedPage(index, 1)">→</button>
-                    <button type="button" class="rounded px-1.5 py-0.5 text-sm text-red-700 hover:bg-red-50" :aria-label="t('documents.capture.remove', { position: index + 1 })" @click="removePhotographedPage(index)">×</button>
+                    <button type="button" :disabled="intakeControlsDisabled || index === 0" class="rounded px-1.5 py-0.5 text-sm text-ink/55 hover:bg-canvas disabled:opacity-25" :aria-label="t('documents.capture.moveEarlier', { position: index + 1 })" @click="movePhotographedPage(index, -1)">←</button>
+                    <button type="button" :disabled="intakeControlsDisabled || index === photographedPages.length - 1" class="rounded px-1.5 py-0.5 text-sm text-ink/55 hover:bg-canvas disabled:opacity-25" :aria-label="t('documents.capture.moveLater', { position: index + 1 })" @click="movePhotographedPage(index, 1)">→</button>
+                    <button type="button" :disabled="intakeControlsDisabled" class="rounded px-1.5 py-0.5 text-sm text-red-700 hover:bg-red-50 disabled:opacity-25" :aria-label="t('documents.capture.remove', { position: index + 1 })" @click="removePhotographedPage(index)">×</button>
                   </span>
                 </div>
               </li>
@@ -1101,7 +1765,7 @@ onBeforeUnmount(() => {
           <p v-if="preparingPhotos" class="mt-4 rounded-lg bg-copper/8 px-4 py-3 text-sm text-copper" role="status">{{ t('documents.capture.preparing') }}</p>
 
           <label class="mt-4 block text-sm font-semibold">{{ t('documents.title.label') }} <span class="font-normal text-ink/40">{{ t('documents.optional') }}</span>
-            <input v-model="title" maxlength="160" :placeholder="t('documents.title.placeholder')" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-4 py-3 font-normal outline-none focus:border-copper">
+            <input v-model="title" :disabled="intakeControlsDisabled" maxlength="160" :placeholder="t('documents.title.placeholder')" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-4 py-3 font-normal outline-none focus:border-copper disabled:opacity-50">
             <span v-if="photographedPages.length" class="mt-1 block text-xs font-normal leading-5 text-ink/45">{{ t('documents.title.photoHint') }}</span>
           </label>
 
@@ -1109,21 +1773,21 @@ onBeforeUnmount(() => {
             <summary class="cursor-pointer text-sm font-semibold text-ink/55">{{ t('documents.advanced') }}</summary>
             <div class="mt-4 stack-y-lg">
               <label class="block text-sm font-semibold">{{ t('documents.source.label') }}
-                <input v-model="officialSourceUrl" type="url" inputmode="url" maxlength="2000" placeholder="https://publisher.example.com/rulebook.pdf" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-4 py-3 font-normal outline-none focus:border-copper">
+                <input v-model="officialSourceUrl" :disabled="intakeControlsDisabled" type="url" inputmode="url" maxlength="2000" placeholder="https://publisher.example.com/rulebook.pdf" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-4 py-3 font-normal outline-none focus:border-copper disabled:opacity-50">
                 <span class="mt-1 block text-xs font-normal leading-5 text-ink/45">{{ t('documents.source.hint') }}</span>
               </label>
               <div class="rounded-lg border border-indigo/15 bg-indigo/[0.035] p-4">
                 <p class="text-sm font-semibold">{{ t('documents.officialImport.title') }}</p>
                 <p class="mt-1 text-xs leading-5 text-ink/50">{{ t('documents.officialImport.detail') }}</p>
                 <label class="mt-3 flex items-start gap-3 text-sm leading-6 text-ink/65">
-                  <input v-model="officialImportRightsConfirmed" type="checkbox" class="mt-1 h-5 w-5 shrink-0 accent-indigo">
+                  <input v-model="officialImportRightsConfirmed" :disabled="intakeControlsDisabled" type="checkbox" class="mt-1 h-5 w-5 shrink-0 accent-indigo">
                   <span>{{ t('documents.officialImport.consent') }}</span>
                 </label>
                 <button type="button" :disabled="!canImportOfficial" class="mt-3 min-h-11 rounded-lg bg-indigo px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40" @click="importOfficialRulebook">{{ importingOfficial ? t('documents.officialImport.importing') : t('documents.officialImport.action') }}</button>
               </div>
 
               <label v-if="editionOptions.length" class="block text-sm font-semibold">{{ t('documents.game.label') }}
-                <select v-model="editionId" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-4 py-3 font-normal">
+                <select v-model="editionId" :disabled="intakeControlsDisabled" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-4 py-3 font-normal disabled:opacity-50">
                   <option value="">{{ t('documents.game.none') }}</option>
                   <option v-for="edition in editionOptions" :key="edition.id" :value="edition.id">{{ edition.label }}</option>
                 </select>
@@ -1136,12 +1800,12 @@ onBeforeUnmount(() => {
               </div>
 
               <label class="block text-sm font-semibold">{{ t('documents.learningGoal.label') }} <span class="font-normal text-ink/40">{{ t('documents.optional') }}</span>
-                <textarea v-model="learningGoal" maxlength="500" rows="3" :placeholder="t('documents.learningGoal.placeholder')" class="mt-2 w-full resize-y rounded-lg border border-ink/15 bg-canvas px-4 py-3 font-normal leading-6 outline-none focus:border-copper" />
+                <textarea v-model="learningGoal" :disabled="intakeControlsDisabled" maxlength="500" rows="3" :placeholder="t('documents.learningGoal.placeholder')" class="mt-2 w-full resize-y rounded-lg border border-ink/15 bg-canvas px-4 py-3 font-normal leading-6 outline-none focus:border-copper disabled:opacity-50" />
                 <span class="mt-1 block text-xs font-normal leading-5 text-ink/45">{{ t('documents.learningGoal.hint') }}</span>
               </label>
 
               <label class="block text-sm font-semibold">{{ t('documents.sourceType') }}
-                <select v-model="sourceType" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-3 py-2.5">
+                <select v-model="sourceType" :disabled="intakeControlsDisabled" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-3 py-2.5 disabled:opacity-50">
                   <option value="BASE_RULEBOOK">{{ t('documents.type.base') }}</option>
                   <option value="EXPANSION_RULEBOOK">{{ t('documents.type.expansion') }}</option>
                   <option value="OFFICIAL_FAQ">{{ t('documents.type.faq') }}</option>
@@ -1195,7 +1859,7 @@ onBeforeUnmount(() => {
       <section class="mt-14 border-t border-ink/10 pt-8">
         <div class="flex items-center justify-between gap-4">
           <div>
-            <h2 class="font-display text-2xl font-semibold">{{ t('documents.list.title') }}</h2>
+            <h2 ref="documentListHeading" tabindex="-1" class="font-display text-2xl font-semibold outline-none">{{ t('documents.list.title') }}</h2>
             <p class="mt-1 text-sm text-ink/45">{{ t('documents.list.description') }}</p>
           </div>
           <RouterLink :to="{ name: 'catalog' }" class="shrink-0 text-sm font-semibold text-indigo">{{ t('documents.list.manage') }}</RouterLink>
@@ -1218,7 +1882,7 @@ onBeforeUnmount(() => {
                 <button v-if="entry.latestVersion.status === 'READY'" type="button" :disabled="bggSuggestionState(entry.document.id)?.status === 'loading' || Boolean(deletingDocumentId)" class="min-h-11 rounded-lg border border-indigo/20 px-4 py-2.5 text-sm font-semibold text-indigo hover:border-indigo/50 disabled:opacity-40" @click="loadBggSuggestions(entry.document.id)">{{ bggSuggestionState(entry.document.id)?.status === 'loading' ? t('documents.bgg.loading') : t('documents.bgg.open') }}</button>
                 <RouterLink v-if="entry.latestVersion.status === 'READY'" :to="{ name: 'rulebook-reader', params: { versionId: entry.latestVersion.id } }" class="inline-flex min-h-11 items-center rounded-lg bg-indigo px-4 py-2.5 text-sm font-semibold text-white">{{ t('documents.read') }}</RouterLink>
                 <button v-if="entry.latestVersion.status === 'READY'" :disabled="Boolean(preparingVersionId) || Boolean(deletingDocumentId)" class="rounded-lg border border-ink/15 px-4 py-2.5 text-sm font-semibold hover:border-copper/50 disabled:opacity-40" @click="startLesson(entry.latestVersion.id).catch((error: unknown) => errorMessage = error instanceof Error ? error.message : t('documents.error'))">{{ t('documents.start') }}</button>
-                <button type="button" :disabled="Boolean(preparingVersionId) || Boolean(deletingDocumentId)" class="rounded-lg px-3 py-2.5 text-sm font-semibold text-ink/45 hover:bg-red-50 hover:text-red-700 disabled:opacity-40" @click="deleteRulebook(entry)">{{ deletingDocumentId === entry.document.id ? t('documents.deleting') : t('documents.delete') }}</button>
+                <button type="button" :disabled="Boolean(preparingVersionId) || Boolean(deletingDocumentId)" class="rounded-lg px-3 py-2.5 text-sm font-semibold text-ink/45 hover:bg-red-50 hover:text-red-700 disabled:opacity-40" @click="requestDeleteRulebook(entry)">{{ deletingDocumentId === entry.document.id ? t('documents.deleting') : t('documents.delete') }}</button>
               </div>
             </div>
             <div v-if="bggSuggestionState(entry.document.id)" class="mt-4 rounded-xl border border-indigo/15 bg-indigo/[0.035] p-4">
@@ -1264,6 +1928,32 @@ onBeforeUnmount(() => {
           </li>
         </ul>
       </section>
-    </main>
+
+      <DestructiveActionDialog
+        :open="Boolean(documentToDelete)"
+        :pending="Boolean(deletingDocumentId)"
+        :error="deleteError"
+        :title="deleteCopy.title"
+        :description="deleteCopy.description(documentToDelete?.document.title ?? t('documents.titleFallback'))"
+        :cancel-label="deleteCopy.cancel"
+        :confirm-label="deleteCopy.confirm"
+        :pending-label="t('documents.deleting')"
+        :retry-label="deleteCopy.retry"
+        :restore-focus="documentDeleteRestoreTarget"
+        @cancel="cancelDeleteRulebook"
+        @confirm="confirmDeleteRulebook"
+      />
+      <DestructiveActionDialog
+        :open="navigationDialogOpen"
+        :pending="intakeMutationPending"
+        :title="navigationCopy.title"
+        :description="navigationCopy.description"
+        :cancel-label="intakeDraftCopy.stay"
+        :confirm-label="intakeDraftCopy.leave"
+        :pending-label="intakeDraftCopy.pending"
+        @cancel="cancelPendingNavigation"
+        @confirm="discardDraftAndLeave"
+      />
+    </div>
   </AppShell>
 </template>

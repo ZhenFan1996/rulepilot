@@ -9,6 +9,7 @@ describe('RulebookReaderView', () => {
     localStorage.clear()
     sessionStorage.clear()
     vi.unstubAllGlobals()
+    document.body.innerHTML = ''
   })
 
   it('opens an owned normalized rulebook and answers without a generated lesson', async () => {
@@ -85,5 +86,64 @@ describe('RulebookReaderView', () => {
       question: '开局先做什么？', language: 'zh-CN',
     })
     expect(wrapper.text()).toContain('先放置玩家牌。')
+  })
+
+  it('confirms before clearing only the current browser thread and preserves the draft', async () => {
+    sessionStorage.setItem('rulepilot:lesson-answer-thread:v1:player:rulebook%3Aversion-1:version-1:zh-CN', JSON.stringify([{
+      question: '上一轮什么时候结束？',
+      learningIntent: null,
+      answer: {
+        status: 'ANSWERED', shortVerdict: '完成当前行动后结束。', explanation: '', citations: [], exceptions: [],
+        confidence: 'HIGH', official: false, confirmedRulingId: null, confirmedRulingVersion: null,
+        clarification: null, warnings: [],
+      },
+    }]))
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const path = String(input)
+      if (path.endsWith('/api/v1/document-versions/version-1/pages')) return Response.json([
+        { pageNumber: 1, text: '设置游戏', characterCount: 4 },
+      ])
+      if (path.endsWith('/api/v1/documents')) return Response.json([{
+        document: { title: '测试规则书' },
+        latestVersion: { id: 'version-1', status: 'READY', originalFilename: 'rules.pdf' },
+      }])
+      if (path.endsWith('/api/auth/session')) return Response.json({ username: 'player' })
+      return new Response(null, { status: 404 })
+    }))
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: '/teach', name: 'teach', component: { template: '<div />' } },
+        { path: '/rulebooks/:versionId', name: 'rulebook-reader', component: RulebookReaderView },
+      ],
+    })
+    await router.push('/rulebooks/version-1')
+    await router.isReady()
+    const wrapper = mount(RulebookReaderView, {
+      attachTo: document.body,
+      global: {
+        plugins: [router],
+        stubs: { AppShell: { template: '<div><slot /></div>' }, BackgroundWorkCenter: true },
+      },
+    })
+    await flushPromises()
+
+    await wrapper.findAll('button').find(button => button.text() === '基于这本规则书答疑')!.trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('上一轮什么时候结束？')
+    await wrapper.get('#lesson-question').setValue('尚未发送的问题')
+    await wrapper.findAll('button').find(button => button.text() === '清空本次答疑')!.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('上一轮什么时候结束？')
+    expect(document.body.textContent).toContain('当前浏览器会话中的 1 条问答会被移除')
+    Array.from(document.body.querySelectorAll('button')).find(button => button.textContent === '清空答疑')!.click()
+    await flushPromises()
+
+    expect(wrapper.text()).not.toContain('上一轮什么时候结束？')
+    expect((wrapper.get('#lesson-question').element as HTMLTextAreaElement).value).toBe('尚未发送的问题')
+    expect(document.activeElement).toBe(wrapper.get('#lesson-question').element)
+    expect(sessionStorage.length).toBe(0)
+    wrapper.unmount()
   })
 })

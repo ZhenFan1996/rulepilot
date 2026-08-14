@@ -235,7 +235,7 @@ onUnmounted(() => {
 <template>
   <AppShell immersive>
     <div class="min-h-screen bg-ink-panel pb-36 text-panel-text">
-      <header class="sticky top-0 z-20 border-b border-white/10 bg-ink-panel/95 px-4 py-3 backdrop-blur">
+      <header class="app-sticky-top sticky z-20 border-b border-white/10 bg-ink-panel/95 px-4 py-3 backdrop-blur">
         <div class="mx-auto flex max-w-3xl items-center justify-between gap-3">
           <RouterLink :to="{ name: 'lesson', params: { planId } }" class="min-h-11 py-3 text-sm font-semibold text-amber-200">← 返回讲解</RouterLink>
           <div v-if="plan" class="min-w-0 text-right">
@@ -245,7 +245,7 @@ onUnmounted(() => {
         </div>
       </header>
 
-      <main class="mx-auto max-w-3xl px-4 py-5">
+      <div class="mx-auto max-w-3xl px-4 py-5">
         <div v-if="loading" class="stack-y-lg" aria-live="polite">
           <p class="text-sm text-panel-text/65">正在恢复问答记录…</p>
           <div class="h-28 animate-pulse rounded-2xl bg-white/8" />
@@ -325,7 +325,7 @@ onUnmounted(() => {
             </ol>
           </details>
         </template>
-      </main>
+      </div>
 
       <div v-if="session" class="fixed inset-x-0 bottom-0 z-30 border-t border-white/10 bg-ink-panel/95 px-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-3 backdrop-blur">
         <form class="mx-auto flex max-w-3xl gap-2" @submit.prevent="ask">

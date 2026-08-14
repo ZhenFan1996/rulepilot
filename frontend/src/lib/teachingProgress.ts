@@ -21,6 +21,7 @@ export interface TeachingActivity {
 export interface TeachingRunProgress {
   run: {
     id: string
+    subjectId: string
     state: string
     createdAt: string
     updatedAt: string

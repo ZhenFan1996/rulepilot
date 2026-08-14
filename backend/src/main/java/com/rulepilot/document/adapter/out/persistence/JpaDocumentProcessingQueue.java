@@ -59,7 +59,7 @@ public class JpaDocumentProcessingQueue
                 .setMaxResults(limit)
                 .getResultList()
                 .stream()
-                .map(event -> new PendingEvent(event.id, event.eventType, event.payload))
+                .map(event -> new PendingEvent(event.id, event.eventType, event.payload, event.occurredAt))
                 .toList();
     }
 

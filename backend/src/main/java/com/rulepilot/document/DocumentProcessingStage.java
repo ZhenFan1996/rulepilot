@@ -7,7 +7,9 @@ public enum DocumentProcessingStage {
 
     public DocumentProcessingStage next() {
         return switch (this) {
-            case PARSE -> CHUNK;
+            // PARSE already persists chunks through RuleStructureService. New workers skip the legacy status-only
+            // CHUNK delivery, while the enum and its transition remain readable for messages published before rollout.
+            case PARSE -> EMBED;
             case CHUNK -> EMBED;
             case EMBED -> null;
         };

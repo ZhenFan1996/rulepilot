@@ -8,11 +8,34 @@ export interface DocumentProcessingSnapshot {
 
 const stageRanks: Record<string, number> = {
   UPLOADED: 0,
-  EXTRACTING: 1,
-  RENDERING: 2,
-  STRUCTURING: 3,
-  READY: 4,
-  FAILED: 4,
+  VALIDATING: 1,
+  EXTRACTING: 2,
+  RENDERING: 3,
+  STRUCTURING: 4,
+  CHUNKING: 5,
+  EMBEDDING: 6,
+  INDEXING: 7,
+  READY: 8,
+  FAILED: 8,
+}
+
+export function parseDocumentProgressSnapshot(value: unknown): DocumentProcessingSnapshot | null {
+  if (!value || typeof value !== 'object') return null
+  const candidate = value as Partial<DocumentProcessingSnapshot>
+  const totalPages = candidate.totalPages === undefined ? candidate.processedPages : candidate.totalPages
+  if (!(typeof candidate.stage === 'string'
+    && candidate.stage in stageRanks
+    && Number.isInteger(candidate.percentage)
+    && candidate.percentage! >= 0
+    && candidate.percentage! <= 100
+    && Number.isInteger(candidate.processedPages)
+    && candidate.processedPages! >= 0
+    && Number.isInteger(totalPages)
+    && totalPages! >= candidate.processedPages!
+    && typeof candidate.complete === 'boolean'
+    && (!candidate.complete || ['READY', 'FAILED'].includes(candidate.stage) && candidate.percentage === 100)
+    && (candidate.complete || !['READY', 'FAILED'].includes(candidate.stage)))) return null
+  return { ...candidate, totalPages } as DocumentProcessingSnapshot
 }
 
 export function mergeDocumentProgress(

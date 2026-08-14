@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 
 import type { RecommendationGame } from '@/components/gameRecommendationTypes'
-import { useLocale } from '@/lib/locale'
+import { useModalFocus } from '@/composables/useModalFocus'
+import { useLocale, type AppLocale } from '@/lib/locale'
 
 interface BggEditionImage {
   versionId: number
@@ -53,7 +54,12 @@ const details = ref<BggGameDetails | null>(null)
 const loading = ref(false)
 const translating = ref(false)
 const error = ref(false)
+const dialog = ref<HTMLElement | null>(null)
 let requestSequence = 0
+let disposed = false
+let activeController: AbortController | null = null
+
+useModalFocus({ dialog, open: () => props.open, requestClose: () => emit('close') })
 
 const copy = computed(() => locale.value === 'zh-CN' ? {
   dialog: '桌游详细资料', close: '关闭桌游资料', eyebrow: 'BGG 桌游资料', loading: '正在读取详细资料…', error: '暂时无法读取详细资料。', retry: '重试',
@@ -84,87 +90,143 @@ const stats = computed(() => {
   return result
 })
 
-function normalize(value: Partial<BggGameDetails>): BggGameDetails {
+function normalize(value: Partial<BggGameDetails>, fallback: RecommendationGame): BggGameDetails {
   return {
-    bggId: value.bggId ?? props.game.bggId,
-    name: value.name ?? props.game.name,
-    originalName: value.originalName ?? props.game.originalName,
+    bggId: value.bggId ?? fallback.bggId,
+    name: value.name ?? fallback.name,
+    originalName: value.originalName ?? fallback.originalName,
     officialNameLocalized: value.officialNameLocalized ?? false,
     description: value.description ?? '',
-    thumbnailUrl: value.thumbnailUrl ?? props.game.thumbnailUrl,
+    thumbnailUrl: value.thumbnailUrl ?? fallback.thumbnailUrl,
     imageUrl: value.imageUrl ?? '',
-    publicationYear: value.publicationYear ?? props.game.publicationYear,
-    minPlayers: value.minPlayers ?? props.game.minPlayers,
-    maxPlayers: value.maxPlayers ?? props.game.maxPlayers,
-    playingTimeMinutes: value.playingTimeMinutes ?? props.game.playingTimeMinutes,
-    minimumPlayTimeMinutes: value.minimumPlayTimeMinutes ?? props.game.minimumPlayTimeMinutes ?? null,
-    maximumPlayTimeMinutes: value.maximumPlayTimeMinutes ?? props.game.maximumPlayTimeMinutes ?? null,
-    minimumAge: value.minimumAge ?? props.game.minimumAge ?? null,
-    suggestedMinimumAge: value.suggestedMinimumAge ?? props.game.suggestedMinimumAge ?? null,
-    bestWith: value.bestWith ?? props.game.bestWith ?? '',
-    recommendedWith: value.recommendedWith ?? props.game.recommendedWith ?? '',
-    languageDependenceLevel: value.languageDependenceLevel ?? props.game.languageDependenceLevel ?? null,
-    averageRating: value.averageRating ?? props.game.averageRating,
-    averageWeight: value.averageWeight ?? props.game.averageWeight,
-    weightVotes: value.weightVotes ?? props.game.weightVotes ?? null,
-    categories: value.categories ?? props.game.categories,
-    mechanics: value.mechanics ?? props.game.mechanics,
-    families: value.families ?? props.game.families ?? [],
-    designers: value.designers ?? props.game.designers ?? [],
-    publishers: value.publishers ?? props.game.publishers ?? [],
+    publicationYear: value.publicationYear ?? fallback.publicationYear,
+    minPlayers: value.minPlayers ?? fallback.minPlayers,
+    maxPlayers: value.maxPlayers ?? fallback.maxPlayers,
+    playingTimeMinutes: value.playingTimeMinutes ?? fallback.playingTimeMinutes,
+    minimumPlayTimeMinutes: value.minimumPlayTimeMinutes ?? fallback.minimumPlayTimeMinutes ?? null,
+    maximumPlayTimeMinutes: value.maximumPlayTimeMinutes ?? fallback.maximumPlayTimeMinutes ?? null,
+    minimumAge: value.minimumAge ?? fallback.minimumAge ?? null,
+    suggestedMinimumAge: value.suggestedMinimumAge ?? fallback.suggestedMinimumAge ?? null,
+    bestWith: value.bestWith ?? fallback.bestWith ?? '',
+    recommendedWith: value.recommendedWith ?? fallback.recommendedWith ?? '',
+    languageDependenceLevel: value.languageDependenceLevel ?? fallback.languageDependenceLevel ?? null,
+    averageRating: value.averageRating ?? fallback.averageRating,
+    averageWeight: value.averageWeight ?? fallback.averageWeight,
+    weightVotes: value.weightVotes ?? fallback.weightVotes ?? null,
+    categories: value.categories ?? fallback.categories,
+    mechanics: value.mechanics ?? fallback.mechanics,
+    families: value.families ?? fallback.families ?? [],
+    designers: value.designers ?? fallback.designers ?? [],
+    publishers: value.publishers ?? fallback.publishers ?? [],
     editionImages: value.editionImages ?? [],
     descriptionTranslated: value.descriptionTranslated ?? false,
     categoriesTranslated: value.categoriesTranslated ?? false,
     mechanicsTranslated: value.mechanicsTranslated ?? false,
-    bggUrl: value.bggUrl ?? props.game.bggUrl,
+    bggUrl: value.bggUrl ?? fallback.bggUrl,
   }
+}
+
+function isAbortError(value: unknown) {
+  return value instanceof Error && value.name === 'AbortError'
+}
+
+function isCurrentRequest(
+  request: number,
+  targetBggId: number,
+  targetLocale: AppLocale,
+  controller: AbortController,
+) {
+  return !disposed
+    && props.open
+    && request === requestSequence
+    && activeController === controller
+    && props.game.bggId === targetBggId
+    && locale.value === targetLocale
 }
 
 async function load() {
   if (!props.open) return
+  const fallback = { ...props.game }
+  const targetBggId = fallback.bggId
+  const targetLocale = locale.value
   const request = ++requestSequence
+  activeController?.abort()
+  const controller = new AbortController()
+  activeController = controller
   loading.value = true
   translating.value = false
   error.value = false
   details.value = null
   try {
-    const response = await fetch(`/api/v1/bgg/games/${props.game.bggId}?locale=${encodeURIComponent(locale.value)}&translate=false`, { credentials: 'include' })
+    const response = await fetch(`/api/v1/bgg/games/${targetBggId}?locale=${encodeURIComponent(targetLocale)}&translate=false`, {
+      credentials: 'include',
+      signal: controller.signal,
+    })
     if (!response.ok) throw new Error('details unavailable')
-    const source = normalize(await response.json() as Partial<BggGameDetails>)
-    if (request !== requestSequence) return
+    const source = normalize(await response.json() as Partial<BggGameDetails>, fallback)
+    if (!isCurrentRequest(request, targetBggId, targetLocale, controller)) return
+    if (source.bggId !== targetBggId) throw new Error('mismatched game details')
     details.value = source
     loading.value = false
-    if (locale.value === 'zh-CN') void loadLocalized(request)
-  } catch {
-    if (request === requestSequence) error.value = true
+    if (targetLocale === 'zh-CN') void loadLocalized(request, fallback, targetLocale, controller)
+  } catch (caught) {
+    if (!isAbortError(caught) && isCurrentRequest(request, targetBggId, targetLocale, controller)) error.value = true
   } finally {
-    if (request === requestSequence) loading.value = false
+    if (isCurrentRequest(request, targetBggId, targetLocale, controller)) loading.value = false
   }
 }
 
-async function loadLocalized(request: number) {
+async function loadLocalized(
+  request: number,
+  fallback: RecommendationGame,
+  targetLocale: AppLocale,
+  controller: AbortController,
+) {
+  if (!isCurrentRequest(request, fallback.bggId, targetLocale, controller)) return
   translating.value = true
   try {
-    const response = await fetch(`/api/v1/bgg/games/${props.game.bggId}?locale=${encodeURIComponent(locale.value)}&translate=true`, { credentials: 'include' })
-    if (!response.ok || request !== requestSequence) return
-    details.value = normalize(await response.json() as Partial<BggGameDetails>)
+    const response = await fetch(`/api/v1/bgg/games/${fallback.bggId}?locale=${encodeURIComponent(targetLocale)}&translate=true`, {
+      credentials: 'include',
+      signal: controller.signal,
+    })
+    if (!response.ok) return
+    const localized = normalize(await response.json() as Partial<BggGameDetails>, fallback)
+    if (!isCurrentRequest(request, fallback.bggId, targetLocale, controller)) return
+    if (localized.bggId !== fallback.bggId) return
+    details.value = localized
+  } catch (caught) {
+    if (!isAbortError(caught) && isCurrentRequest(request, fallback.bggId, targetLocale, controller)) {
+      translating.value = false
+    }
   } finally {
-    if (request === requestSequence) translating.value = false
+    if (isCurrentRequest(request, fallback.bggId, targetLocale, controller)) translating.value = false
   }
 }
 
 watch(() => [props.open, props.game.bggId, locale.value] as const, ([open]) => {
   if (open) void load()
-  else requestSequence += 1
+  else {
+    requestSequence += 1
+    activeController?.abort()
+    activeController = null
+    loading.value = false
+    translating.value = false
+  }
 }, { immediate: true })
+onBeforeUnmount(() => {
+  disposed = true
+  requestSequence += 1
+  activeController?.abort()
+  activeController = null
+})
 </script>
 
 <template>
   <div v-if="open" class="fixed inset-0 z-50 overflow-y-auto bg-ink/40 px-3 py-6 backdrop-blur-[2px] sm:px-6" @click.self="emit('close')">
-    <section class="mx-auto w-full max-w-5xl overflow-hidden rounded-3xl border border-gold/25 bg-canvas shadow-2xl" role="dialog" aria-modal="true" :aria-label="copy.dialog">
-      <header class="sticky top-0 z-10 flex items-start justify-between border-b border-ink/10 bg-paper/95 px-5 py-4 backdrop-blur sm:px-7">
+    <section ref="dialog" tabindex="-1" class="mx-auto w-full max-w-5xl overflow-hidden rounded-3xl border border-gold/25 bg-canvas shadow-2xl outline-none" role="dialog" aria-modal="true" :aria-label="copy.dialog">
+      <header class="app-sticky-top sticky z-10 flex items-start justify-between border-b border-ink/10 bg-paper/95 px-5 py-4 backdrop-blur sm:px-7">
         <div><p class="tabletop-kicker">{{ copy.eyebrow }}</p><h2 class="mt-1 font-display text-2xl font-semibold">{{ details?.name ?? game.name }}</h2></div>
-        <button type="button" class="grid min-h-11 min-w-11 place-items-center rounded-lg text-2xl text-ink/45 hover:bg-ink/5" :aria-label="copy.close" @click="emit('close')">×</button>
+        <button type="button" data-modal-initial-focus class="grid min-h-11 min-w-11 place-items-center rounded-lg text-2xl text-ink/45 hover:bg-ink/5" :aria-label="copy.close" @click="emit('close')">×</button>
       </header>
 
       <div v-if="loading" class="grid min-h-96 place-items-center p-8 text-sm text-ink/50" role="status">{{ copy.loading }}</div>

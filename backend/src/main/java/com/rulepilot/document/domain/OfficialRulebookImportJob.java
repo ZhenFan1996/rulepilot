@@ -16,6 +16,7 @@ public record OfficialRulebookImportJob(
         UUID documentVersionId,
         boolean duplicate,
         String errorCode,
+        Instant downloadCompletedAt,
         TeachingHandoff teachingHandoff,
         Instant createdAt,
         Instant updatedAt,
@@ -40,7 +41,9 @@ public record OfficialRulebookImportJob(
         if (id == null || ownerUsername == null || ownerUsername.isBlank() || title == null || title.isBlank()
                 || sourceType == null || sourceUrl == null || sourceUrl.isBlank() || stage == null
                 || downloadedBytes < 0 || totalBytes != null && totalBytes <= 0
-                || teachingHandoff == null || createdAt == null || updatedAt == null || updatedAt.isBefore(createdAt)) {
+                || teachingHandoff == null || createdAt == null || updatedAt == null || updatedAt.isBefore(createdAt)
+                || downloadCompletedAt != null
+                        && (downloadCompletedAt.isBefore(createdAt) || downloadCompletedAt.isAfter(updatedAt))) {
             throw new IllegalArgumentException("official rulebook import job is invalid");
         }
         ownerUsername = ownerUsername.strip();
@@ -77,6 +80,7 @@ public record OfficialRulebookImportJob(
         return new OfficialRulebookImportJob(
                 id, ownerUsername, editionId, title, sourceType, sourceUrl, Stage.QUEUED,
                 0, null, null, false, null,
+                null,
                 startTeaching ? TeachingHandoff.requested(learningGoal, now) : TeachingHandoff.notRequested(),
                 now, now, null);
     }
@@ -100,7 +104,30 @@ public record OfficialRulebookImportJob(
         this(
                 id, ownerUsername, editionId, title, sourceType, sourceUrl, stage,
                 downloadedBytes, totalBytes, documentVersionId, duplicate, errorCode,
-                TeachingHandoff.notRequested(), createdAt, updatedAt, completedAt);
+                null, TeachingHandoff.notRequested(), createdAt, updatedAt, completedAt);
+    }
+
+    public OfficialRulebookImportJob(
+            UUID id,
+            String ownerUsername,
+            UUID editionId,
+            String title,
+            DocumentSourceType sourceType,
+            String sourceUrl,
+            Stage stage,
+            long downloadedBytes,
+            Long totalBytes,
+            UUID documentVersionId,
+            boolean duplicate,
+            String errorCode,
+            TeachingHandoff teachingHandoff,
+            Instant createdAt,
+            Instant updatedAt,
+            Instant completedAt) {
+        this(
+                id, ownerUsername, editionId, title, sourceType, sourceUrl, stage,
+                downloadedBytes, totalBytes, documentVersionId, duplicate, errorCode,
+                null, teachingHandoff, createdAt, updatedAt, completedAt);
     }
 
     public enum TeachingHandoffState {

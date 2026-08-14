@@ -50,9 +50,17 @@ final class VisualLessonSectionEnricher {
             LessonSection section,
             String modelConfigurationOwner,
             VisualLessonEnricher.VisualProgressListener progress,
-            List<VisualFocus> acceptedVisuals) {
+            List<VisualFocus> acceptedVisuals,
+            java.util.Set<Integer> explicitVisualStepPositions) {
         return enrich(
-                understanding, documentVersionId, section, modelConfigurationOwner, null, progress, acceptedVisuals);
+                understanding,
+                documentVersionId,
+                section,
+                modelConfigurationOwner,
+                null,
+                progress,
+                acceptedVisuals,
+                explicitVisualStepPositions);
     }
 
     Result enrich(
@@ -62,9 +70,15 @@ final class VisualLessonSectionEnricher {
             String modelConfigurationOwner,
             UUID runId,
             VisualLessonEnricher.VisualProgressListener progress,
-            List<VisualFocus> acceptedVisuals) {
+            List<VisualFocus> acceptedVisuals,
+            java.util.Set<Integer> explicitVisualStepPositions) {
+        if (explicitVisualStepPositions == null) {
+            throw new IllegalArgumentException("explicit visual step positions are required");
+        }
         int existingVisualSteps = (int) section.steps().stream()
-                .filter(step -> step.kind() == TeachingMove.VISUAL && !cropPolicy.needsTighterReaderCrop(step.visualFocus()))
+                .filter(step -> step.kind() == TeachingMove.VISUAL)
+                .filter(step -> step.visualFocus() != null)
+                .filter(step -> !cropPolicy.needsTighterReaderCrop(step.visualFocus()))
                 .count();
         if (existingVisualSteps >= maxVisualStepsPerSection) {
             return Result.rejected(section, VisualLessonEnricher.Outcome.ALREADY_PRESENT);
@@ -72,10 +86,12 @@ final class VisualLessonSectionEnricher {
         List<VisualRegionLocator.LocatedRegion> accepted = new ArrayList<>();
         VisualLessonEnricher.Outcome rejected = null;
         int availableStepSlots = (int) section.steps().stream()
-                .filter(step -> step.kind() != TeachingMove.VISUAL || cropPolicy.needsTighterReaderCrop(step.visualFocus()))
+                .filter(step -> step.kind() != TeachingMove.VISUAL
+                        || step.visualFocus() == null
+                        || cropPolicy.needsTighterReaderCrop(step.visualFocus()))
                 .count();
         int limit = Math.min(maxVisualStepsPerSection - existingVisualSteps, availableStepSlots);
-        List<LessonStep> targets = visualTargets(section, limit);
+        List<LessonStep> targets = visualTargets(section, limit, explicitVisualStepPositions);
         if (targets.isEmpty()) return Result.rejected(section, VisualLessonEnricher.Outcome.NO_CITED_CANDIDATE);
         try (var executor = Executors.newFixedThreadPool(Math.min(requestParallelism, targets.size()))) {
             List<Future<VisualLessonStepLocator.Result>> attempts = targets.stream()
@@ -141,10 +157,20 @@ final class VisualLessonSectionEnricher {
         }
     }
 
-    private List<LessonStep> visualTargets(LessonSection section, int limit) {
-        return section.steps().stream()
-                .filter(step -> step.kind() != TeachingMove.VISUAL || cropPolicy.needsTighterReaderCrop(step.visualFocus()))
+    private List<LessonStep> visualTargets(
+            LessonSection section, int limit, java.util.Set<Integer> explicitVisualStepPositions) {
+        List<LessonStep> eligible = section.steps().stream()
+                .filter(step -> step.kind() != TeachingMove.VISUAL
+                        || step.visualFocus() == null
+                        || cropPolicy.needsTighterReaderCrop(step.visualFocus()))
                 .filter(step -> !step.sourcePages().isEmpty() && !step.sourceChunkIds().isEmpty())
+                .toList();
+        boolean hasExplicitVisualIntent = !explicitVisualStepPositions.isEmpty()
+                || eligible.stream().anyMatch(step -> step.kind() == TeachingMove.VISUAL);
+        return eligible.stream()
+                .filter(step -> !hasExplicitVisualIntent
+                        || explicitVisualStepPositions.contains(step.position())
+                        || step.kind() == TeachingMove.VISUAL)
                 .sorted(java.util.Comparator.comparingInt(this::visualAffinity).reversed()
                         .thenComparingInt(LessonStep::position))
                 .limit(limit)

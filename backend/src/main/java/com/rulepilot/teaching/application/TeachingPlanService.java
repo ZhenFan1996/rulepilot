@@ -5,16 +5,13 @@ import com.rulepilot.assistant.AgentExecutionControl.ActivityOutcome;
 import com.rulepilot.assistant.AuditedAgentInvocations;
 import com.rulepilot.catalog.CatalogEditionLookup;
 import com.rulepilot.document.DocumentProcessing;
-import com.rulepilot.document.DocumentPageImages;
 import com.rulepilot.document.DocumentVersionScopeLookup;
 import com.rulepilot.document.RulebookTitleInferencePolicy;
 import com.rulepilot.teaching.TeachingOutlineModel;
 import com.rulepilot.teaching.TeachingOutlineModel.OutlineRequest;
 import com.rulepilot.teaching.TeachingOutlineModel.PageInput;
-import com.rulepilot.teaching.TeachingOutlineModel.PageImageInput;
 import com.rulepilot.teaching.VisualRulebookPageFacts.PageFact;
 import com.rulepilot.teaching.domain.TeachingPlan;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -32,8 +29,6 @@ import org.springframework.transaction.annotation.Transactional;
 public class TeachingPlanService {
 
     private static final Logger log = LoggerFactory.getLogger(TeachingPlanService.class);
-    private static final int MAX_PAGE_CATALOG_CHARACTERS = 3_200;
-    private static final int MAX_OUTLINE_PAGE_IMAGES = 4;
     // The first focused rewrite receives every detected boundary conflict. Repeating whole-outline rewrites tends to
     // oscillate on wording while delaying a fully cited lesson; section-level validation still protects every claim.
     private static final int MAX_CHAPTER_OWNERSHIP_REFINEMENTS = 1;
@@ -41,7 +36,6 @@ public class TeachingPlanService {
     private static final String VISUAL_PAGE_CATALOG =
             "页面文字无法提取；请依据随附的规则书页面图像理解此页内容。";
     private final DocumentProcessing documents;
-    private final DocumentPageImages pageImages;
     private final DocumentVersionScopeLookup documentScopes;
     private final CatalogEditionLookup catalog;
     private final VisualRulebookCataloger visualCataloger;
@@ -53,7 +47,6 @@ public class TeachingPlanService {
 
     public TeachingPlanService(
             DocumentProcessing documents,
-            DocumentPageImages pageImages,
             DocumentVersionScopeLookup documentScopes,
             CatalogEditionLookup catalog,
             VisualRulebookCataloger visualCataloger,
@@ -63,7 +56,6 @@ public class TeachingPlanService {
             TeachingPlanRepository repository,
             TeachingPlanPublication publication) {
         this.documents = documents;
-        this.pageImages = pageImages;
         this.documentScopes = documentScopes;
         this.catalog = catalog;
         this.visualCataloger = visualCataloger;
@@ -123,17 +115,10 @@ public class TeachingPlanService {
                         .map(page -> new PageInput(
                                 page.pageNumber(), page.text() == null || page.text().isBlank()
                                         ? VISUAL_PAGE_CATALOG
-                                        : boundedPageText(page.text())))
+                                        : TeachingPageCatalogText.bounded(page.text())))
                         .toList();
-        var outlineImages = pageImages.read(
-                        documentVersionId,
-                        representativePageNumbers(documentPages))
-                .stream()
-                .map(image -> new PageImageInput(
-                        image.pageNumber(), image.mediaType(), image.content()))
-                .toList();
         var initialOutlineRequest = new OutlineRequest(
-                pages, outlineImages, learningGoal, createdBy);
+                pages, List.of(), learningGoal, createdBy);
         var outline = preferDocumentTitle(
                 playerGameTitle,
                 VisualOutlineEvidencePolicy.bindIconLegendEvidence(invokeModel(
@@ -144,8 +129,6 @@ public class TeachingPlanService {
                         () -> outlines.organize(initialOutlineRequest),
                         this::outlineOutputTokens), documentPages),
                 pages);
-        outline = refineChapterOwnership(
-                initialOutlineRequest, outline, assistantRunId, documentPages, playerGameTitle);
         OutlineRequest outlineRequest = initialOutlineRequest;
         if (textRulebookVisualCatalogAvailable) {
             List<PageFact> coverageFacts = visualCataloger.inspectUnownedSparseVisualPages(
@@ -153,23 +136,12 @@ public class TeachingPlanService {
             if (!coverageFacts.isEmpty()) {
                 pages = VisualRulebookCatalogPolicy.appendFactsToPageInputs(pages, coverageFacts);
                 outlineRequest = new OutlineRequest(
-                        pages, outlineImages, learningGoal, createdBy);
+                        pages, List.of(), learningGoal, createdBy);
             }
         }
         if (requiresModelSourcePageCoverageRevision(visualOnly)) {
-            var outlineBeforeCoverageRevision = outline;
             outline = refineSourcePageCoverage(
                     outlineRequest, outline, pages, assistantRunId, documentPages, playerGameTitle);
-            if (TeachingOutlineRevisionPolicy.requiresChapterOwnershipRerun(outlineBeforeCoverageRevision, outline)) {
-                outline = refineChapterOwnership(outlineRequest, outline, assistantRunId, documentPages, playerGameTitle);
-            } else if (assistantRunId != null) {
-                invocations.record(
-                        assistantRunId,
-                        ActivityType.VALIDATION,
-                        "skipRedundantTeachingOutlineOwnership",
-                        ActivityOutcome.SUCCEEDED,
-                        "Source-page coverage did not change chapter ownership; skipped a duplicate outline revision");
-            }
         } else if (assistantRunId != null) {
             invocations.record(
                     assistantRunId,
@@ -178,6 +150,8 @@ public class TeachingPlanService {
                     ActivityOutcome.SUCCEEDED,
                     "Visual catalog pages use deterministic whole-rulebook coverage validation; skipped a redundant model revision");
         }
+        outline = refineChapterOwnership(
+                outlineRequest, outline, assistantRunId, documentPages, playerGameTitle);
         try {
             if (visualOnly) VisualOutlineEvidencePolicy.validateVisualFastBaseline(outline);
             plans.validate(outline);
@@ -186,7 +160,21 @@ public class TeachingPlanService {
                 VisualOutlineEvidencePolicy.validateVisualCoreTopicBindings(outline, pages);
             }
         } catch (IllegalArgumentException invalidOutline) {
-            log.warn("Teaching outline was incomplete; continuing with a source-derived outline: {}", invalidOutline.getMessage());
+            if (!visualOnly) {
+                log.warn("Semantic teaching outline was incomplete; rejecting preparation: {}", invalidOutline.getMessage());
+                if (assistantRunId != null) {
+                    invocations.record(
+                            assistantRunId,
+                            ActivityType.VALIDATION,
+                            "rejectIncompleteSemanticOutline",
+                            ActivityOutcome.REJECTED,
+                            "Text rulebook preparation stopped before a generic low-detail plan could be published");
+                }
+                throw new IllegalStateException(
+                        "semantic teaching outline was incomplete; retry preparation",
+                        invalidOutline);
+            }
+            log.warn("Visual teaching outline was incomplete; continuing with a source-derived outline: {}", invalidOutline.getMessage());
             if (assistantRunId != null) {
                 invocations.record(
                         assistantRunId,
@@ -300,6 +288,7 @@ public class TeachingPlanService {
                         documentTitle,
                         VisualOutlineEvidencePolicy.bindIconLegendEvidence(refined, documentPages),
                         request.pages());
+                plans.validate(current);
                 if (current.equals(beforeRefinement)) return current;
             } catch (RuntimeException refinementFailure) {
                 log.warn("Teaching outline ownership refinement was skipped: {}", refinementFailure.getMessage());
@@ -345,6 +334,7 @@ public class TeachingPlanService {
                         documentTitle,
                         VisualOutlineEvidencePolicy.bindIconLegendEvidence(refined, documentPages),
                         request.pages());
+                plans.validate(current);
                 if (current.equals(beforeRefinement)) return current;
             } catch (RuntimeException refinementFailure) {
                 log.warn("Teaching outline source-coverage refinement was skipped: {}", refinementFailure.getMessage());
@@ -380,13 +370,6 @@ public class TeachingPlanService {
     @Transactional(readOnly = true)
     public List<TeachingPlan> listOwned(String createdBy) {
         return repository.findAllByCreatedBy(createdBy);
-    }
-
-    private String boundedPageText(String text) {
-        String value = text.strip();
-        return value.length() <= MAX_PAGE_CATALOG_CHARACTERS
-                ? value
-                : value.substring(0, MAX_PAGE_CATALOG_CHARACTERS) + "…";
     }
 
     static TeachingOutlineModel.OutlineDraft preferDocumentTitle(
@@ -465,15 +448,4 @@ public class TeachingPlanService {
         }
     }
 
-    private Set<Integer> representativePageNumbers(List<DocumentProcessing.PageView> pages) {
-        if (pages.size() <= MAX_OUTLINE_PAGE_IMAGES) {
-            return pages.stream().map(DocumentProcessing.PageView::pageNumber).collect(java.util.stream.Collectors.toSet());
-        }
-        Set<Integer> selected = new LinkedHashSet<>();
-        for (int index = 0; index < MAX_OUTLINE_PAGE_IMAGES; index++) {
-            int pageIndex = (int) Math.round((double) index * (pages.size() - 1) / (MAX_OUTLINE_PAGE_IMAGES - 1));
-            selected.add(pages.get(pageIndex).pageNumber());
-        }
-        return Set.copyOf(selected);
-    }
 }

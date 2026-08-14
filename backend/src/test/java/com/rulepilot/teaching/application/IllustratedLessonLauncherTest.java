@@ -18,6 +18,7 @@ import com.rulepilot.teaching.application.IllustratedLessonService.GenerationOut
 import com.rulepilot.teaching.application.IllustratedLessonService.GenerationContinuation;
 import com.rulepilot.teaching.application.GroundedTeachingAgent.BaseLessonContinuation;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonStatus;
+import com.rulepilot.teaching.domain.TeachingPlan;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
@@ -54,6 +55,28 @@ class IllustratedLessonLauncherTest {
         verify(lessons).startGeneration(planId, "alice", run);
         verify(lessons).continueGeneration(continuation);
         verify(lessons).finish(outcome);
+    }
+
+    @Test
+    void immediatelyLaunchesFromThePreparedPlanWithoutReloadingIt() {
+        RunSnapshot run = run(AssistantRunState.RECEIVED);
+        TeachingPlan plan = mock(TeachingPlan.class);
+        when(plan.id()).thenReturn(planId);
+        when(runs.findLatestOwned(AssistantRunMode.TEACHING, planId, "alice")).thenReturn(Optional.empty());
+        when(lessons.begin(plan, "alice")).thenReturn(run);
+        var continuation = continuation(run);
+        var outcome = new GenerationOutcome(run, LessonStatus.COMPLETE);
+        when(lessons.startGeneration(plan, "alice", run)).thenReturn(continuation);
+        when(lessons.continueGeneration(continuation)).thenReturn(outcome);
+        var launcher = new IllustratedLessonLauncher(lessons, runs, new SyncTaskExecutor());
+
+        var launch = launcher.launchImmediately(plan, "alice");
+
+        assertThat(launch.assistantRunId()).isEqualTo(run.id());
+        verify(lessons).begin(plan, "alice");
+        verify(lessons).startGeneration(plan, "alice", run);
+        verify(lessons, never()).begin(planId, "alice");
+        verify(lessons, never()).startGeneration(planId, "alice", run);
     }
 
     @Test

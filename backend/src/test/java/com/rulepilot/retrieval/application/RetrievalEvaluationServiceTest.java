@@ -27,10 +27,14 @@ class RetrievalEvaluationServiceTest {
                 return samples;
             }
         };
+        List<RuleEvidenceHit> indexed = List.of(hit(versionId, "OBJECTIVE"), hit(versionId, "SCORING"));
         var search = new HybridRuleSearchService(
-                (version, query, limit) -> List.of(hit(version, "OBJECTIVE"), hit(version, "SCORING")),
+                (version, query, limit) -> indexed,
                 (version, query, limit) -> List.of(),
-                (version, chunkIds) -> List.of());
+                (version, chunkIds) -> indexed.stream()
+                        .filter(candidate -> chunkIds.contains(candidate.chunkId()))
+                        .toList(),
+                new io.micrometer.core.instrument.simple.SimpleMeterRegistry());
 
         var report = new RetrievalEvaluationService(search, evaluationSet).evaluate(versionId);
 

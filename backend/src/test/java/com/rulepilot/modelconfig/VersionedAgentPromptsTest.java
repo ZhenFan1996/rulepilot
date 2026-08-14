@@ -75,6 +75,8 @@ class VersionedAgentPromptsTest {
                         "MISSING_CRITICAL_RULE",
                         "OVERREACH",
                         "CHAPTER_SCOPE_DUPLICATION",
+                        "at most 12 issues",
+                        "setup, legal actions, timing, scoring, game end",
                         "defectConfirmed=true",
                         "empty issues array",
                         "Return only the requested JSON schema")

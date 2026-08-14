@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
+import ConversationResetDialog from '@/components/ConversationResetDialog.vue'
 import RecommendationGameCard from '@/components/RecommendationGameCard.vue'
 import RecommendationAnswerWorkspace from '@/components/RecommendationAnswerWorkspace.vue'
 import RecommendationGameDetailsDialog from '@/components/RecommendationGameDetailsDialog.vue'
@@ -15,6 +16,7 @@ import type {
   RecommendationProgressStage,
   RecommendationProfile,
 } from '@/components/gameRecommendationTypes'
+import { useModalFocus } from '@/composables/useModalFocus'
 import { streamGameRecommendation } from '@/lib/gameRecommendationStream'
 import { useLocale } from '@/lib/locale'
 
@@ -35,7 +37,7 @@ const copy = {
     starters: ['想找和我喜欢的一款机制相近的', '先聊聊最近流行什么', '朋友聚会，想热闹但不要尴尬', '我不确定，先问我一个问题吧'],
     type: '类型：{value}', interaction: '互动：{value}',
     journeyWorking: '正在为《{game}》获取规则书并生成讲解 · {progress}%', journeyReady: '《{game}》的讲解已经可以阅读',
-    journeyFailed: '《{game}》的准备流程需要处理', journeyOpen: '打开进度', journeyDialog: '规则书与讲解进度',
+    journeyFailed: '《{game}》的准备流程需要处理', journeyOpen: '打开进度', journeyRead: '打开讲解', journeyProgress: '查看进度', journeyDialog: '规则书与讲解进度',
     recommendationRole: '继续推荐', answerRole: '规则答疑', roleLabel: '切换 Agent 任务',
   },
   en: {
@@ -53,7 +55,7 @@ const copy = {
     starters: ['Find something mechanically similar to a game I like', 'Let’s chat about what is popular', 'Lively with friends, but not awkward', 'I am not sure—ask me one useful question'],
     type: 'Type: {value}', interaction: 'Interaction: {value}',
     journeyWorking: 'Getting the rulebook and building a guide for {game} · {progress}%', journeyReady: 'The guide for {game} is ready to read',
-    journeyFailed: 'The preparation flow for {game} needs attention', journeyOpen: 'Open progress', journeyDialog: 'Rulebook and guide progress',
+    journeyFailed: 'The preparation flow for {game} needs attention', journeyOpen: 'Open progress', journeyRead: 'Open guide', journeyProgress: 'View progress', journeyDialog: 'Rulebook and guide progress',
     recommendationRole: 'Recommendations', answerRole: 'Rules Q&A', roleLabel: 'Switch Agent task',
   },
 } as const
@@ -119,10 +121,23 @@ const openSurface = ref<'none' | 'game-details' | 'journey' | 'rulebook' | 'less
 const journeyStatus = ref<RecommendationJourneyStatus | null>(null)
 const conversationRole = ref<'recommendation' | 'rule-qa'>('recommendation')
 const conversationScroller = ref<HTMLElement | null>(null)
+const recommendationInput = ref<HTMLTextAreaElement | null>(null)
+const journeyDialog = ref<HTMLElement | null>(null)
+const journeyDock = ref<HTMLButtonElement | null>(null)
+const returnToAnswerWorkspace = ref(false)
+const resetDialogOpen = ref(false)
+const restoreRecommendationInputAfterReset = ref(false)
 let messageId = 1
 let csrf: { headerName: string; token: string } | null = null
 let loadingClock: ReturnType<typeof setInterval> | null = null
 let activeRequest: AbortController | null = null
+
+useModalFocus({
+  dialog: journeyDialog,
+  open: () => openSurface.value === 'journey',
+  requestClose: () => { openSurface.value = 'none' },
+  restoreFocus: journeyReturnTarget,
+})
 
 const loadingMessage = computed(() => {
   const message = loadingCopy[locale.value][loadingStage.value]
@@ -151,6 +166,16 @@ const answerWorkspaceReady = computed(() => Boolean(
   journeyStatus.value?.projection.canAskQuestions
     && journeyStatus.value.plan?.id
     && journeyStatus.value.importJob?.documentVersionId,
+))
+const canResetRecommendation = computed(() => Boolean(
+  messages.value.length > 1
+    || response.value
+    || profileLabels.value.length
+    || selectedGame.value
+    || detailsGame.value
+    || failed.value
+    || lastRequest.value
+    || knownGames.value.length,
 ))
 
 function toolLabelsFor(turnResponse?: RecommendationAgentResponse) {
@@ -311,12 +336,33 @@ function openLesson(value: RecommendationJourneyStatus) {
   if (value.plan?.id) openSurface.value = 'lesson'
 }
 
+function openJourneyDock() {
+  const status = journeyStatus.value
+  if (status?.projection.canReadLesson && status.plan?.id) {
+    openLesson(status)
+    return
+  }
+  openSurface.value = 'journey'
+}
+
+function journeyReturnTarget() {
+  if (!returnToAnswerWorkspace.value) return null
+  returnToAnswerWorkspace.value = false
+  return document.querySelector<HTMLElement>('[data-testid="recommendation-answer-workspace"]')
+}
+
+function journeySurfaceReturnTarget() {
+  return journeyReturnTarget() ?? journeyDock.value
+}
+
 function switchToQuestions(value?: RecommendationJourneyStatus) {
+  returnToAnswerWorkspace.value = false
   if (value) journeyStatus.value = value
   if (!answerWorkspaceReady.value) {
     if (selectedGame.value) openSurface.value = 'journey'
     return
   }
+  returnToAnswerWorkspace.value = true
   conversationRole.value = 'rule-qa'
   openSurface.value = 'none'
 }
@@ -360,11 +406,40 @@ function reset(preserveJourney = false) {
   }
 }
 
+function requestReset() {
+  if (loading.value || !canResetRecommendation.value) return
+  restoreRecommendationInputAfterReset.value = false
+  resetDialogOpen.value = true
+}
+
+function cancelReset() {
+  restoreRecommendationInputAfterReset.value = false
+  resetDialogOpen.value = false
+}
+
+function recommendationResetRestoreTarget() {
+  if (!restoreRecommendationInputAfterReset.value) return null
+  restoreRecommendationInputAfterReset.value = false
+  recommendationInput.value?.focus({ preventScroll: true })
+  return recommendationInput.value
+}
+
+function confirmReset() {
+  if (loading.value) return
+  reset()
+  restoreRecommendationInputAfterReset.value = true
+  resetDialogOpen.value = false
+}
+
 function confidenceLabel(confidence: 'low' | 'medium' | 'high') {
   return t(confidence)
 }
 
-watch(locale, () => reset(true))
+watch(locale, () => {
+  if (messages.value.length !== 1 || response.value || lastRequest.value || profileLabels.value.length) return
+  messages.value = [{ id: ++messageId, role: 'assistant', text: t('initial') }]
+  clarification.value = initialClarification()
+})
 watch(
   () => [messages.value.length, loading.value, loadingStage.value],
   () => { void scrollConversationToLatest() },
@@ -394,7 +469,7 @@ onBeforeUnmount(() => {
             <p class="mt-3 text-sm leading-6 text-white/72">{{ response.userModel.summary }}</p>
             <ul v-if="response.userModel.hypotheses.length" class="mt-3 stack-y-sm"><li v-for="hypothesis in response.userModel.hypotheses" :key="`${hypothesis.text}-${hypothesis.basedOn}`" class="text-xs leading-5 text-white/58"><span class="mr-2 font-semibold text-[#e8bd6a]">{{ confidenceLabel(hypothesis.confidence) }}</span>{{ hypothesis.text }}<span class="block text-white/38">{{ t('basedOn', { value: hypothesis.basedOn }) }}</span></li></ul>
           </details>
-          <button type="button" class="mt-5 min-h-11 text-sm font-semibold text-white/55 underline decoration-light-soft underline-offset-4 hover:text-white" @click="reset()">{{ t('reset') }}</button>
+          <button v-if="canResetRecommendation" type="button" :disabled="loading" class="mt-5 min-h-11 text-sm font-semibold text-white/55 underline decoration-light-soft underline-offset-4 hover:text-white disabled:cursor-not-allowed disabled:opacity-40" @click="requestReset">{{ t('reset') }}</button>
         </div>
 
         <div class="min-w-0 bg-paper text-ink">
@@ -430,7 +505,7 @@ onBeforeUnmount(() => {
             </div>
             <div v-if="clarification?.options.length && !loading" class="border-t border-ink/8 px-4 py-4 sm:px-6"><div class="flex flex-wrap gap-2"><button v-for="option in clarification.options" :key="option.value" type="button" class="min-h-11 rounded-lg border border-ink/15 bg-ink/5 px-4 text-sm font-semibold text-ink/72 hover:border-copper/50" @click="choose(option)">{{ option.label }}</button></div></div>
             <div v-if="failed" class="mx-4 mb-3 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800 sm:mx-6" role="alert"><p>{{ t('error') }}</p><button type="button" class="mt-2 min-h-11 font-semibold underline" @click="retry">{{ t('retry') }}</button></div>
-            <form class="flex gap-2 border-t border-ink/8 p-4 sm:p-5" @submit.prevent="submitMessage"><label for="recommendation-agent-message" class="sr-only">{{ t('inputLabel') }}</label><textarea id="recommendation-agent-message" v-model="draft" rows="2" maxlength="500" :placeholder="t('inputPlaceholder')" class="min-h-14 min-w-0 flex-1 resize-none rounded-xl border border-ink/15 bg-canvas px-4 py-3 text-sm leading-6 outline-none focus:border-felt" /><button type="submit" :disabled="loading || !draft.trim()" class="min-h-12 self-end rounded-xl bg-felt px-5 text-sm font-semibold text-white disabled:opacity-40">{{ t('send') }}</button></form>
+            <form class="flex gap-2 border-t border-ink/8 p-4 sm:p-5" @submit.prevent="submitMessage"><label for="recommendation-agent-message" class="sr-only">{{ t('inputLabel') }}</label><textarea id="recommendation-agent-message" ref="recommendationInput" v-model="draft" rows="2" maxlength="500" :placeholder="t('inputPlaceholder')" class="min-h-14 min-w-0 flex-1 resize-none rounded-xl border border-ink/15 bg-canvas px-4 py-3 text-sm leading-6 outline-none focus:border-felt" /><button type="submit" :disabled="loading || !draft.trim()" class="min-h-12 self-end rounded-xl bg-felt px-5 text-sm font-semibold text-white disabled:opacity-40">{{ t('send') }}</button></form>
           </div>
 
           <RecommendationAnswerWorkspace
@@ -446,15 +521,18 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <button v-if="selectedGame && openSurface !== 'journey'" data-testid="player-journey-dock" type="button" class="mt-4 flex min-h-16 w-full items-center gap-3 rounded-2xl border border-copper/25 bg-paper px-4 py-3 text-left elevation-sm hover:border-copper/45" @click="openSurface = 'journey'">
-      <span class="grid size-9 shrink-0 place-items-center rounded-full bg-copper/10 font-mono text-xs font-bold text-copper">{{ journeyStatus?.projection.progress ?? 5 }}%</span>
-      <span class="min-w-0 flex-1 text-sm font-semibold text-ink">{{ compactJourneyText }}</span>
-      <span class="shrink-0 text-sm font-semibold text-indigo underline">{{ t('journeyOpen') }}</span>
-    </button>
+    <div v-if="selectedGame && openSurface !== 'journey'" data-testid="player-journey-continuation" class="mt-4 flex flex-col overflow-hidden rounded-2xl border border-copper/25 bg-paper elevation-sm hover:border-copper/45 sm:flex-row">
+      <button ref="journeyDock" data-testid="player-journey-dock" type="button" class="flex min-h-16 min-w-0 flex-1 items-center gap-3 px-4 py-3 text-left" @click="openJourneyDock">
+        <span class="grid size-9 shrink-0 place-items-center rounded-full bg-copper/10 font-mono text-xs font-bold text-copper">{{ journeyStatus?.projection.progress ?? 5 }}%</span>
+        <span class="min-w-0 flex-1 text-sm font-semibold text-ink">{{ compactJourneyText }}</span>
+        <span class="shrink-0 text-sm font-semibold text-indigo underline">{{ t(journeyStatus?.projection.canReadLesson && journeyStatus.plan?.id ? 'journeyRead' : 'journeyOpen') }}</span>
+      </button>
+      <button v-if="journeyStatus?.projection.canReadLesson && journeyStatus.plan?.id" data-testid="player-journey-progress-button" type="button" class="min-h-11 w-full shrink-0 border-t border-copper/20 px-4 text-sm font-semibold text-ink/55 underline sm:w-auto sm:border-l sm:border-t-0" @click="openSurface = 'journey'">{{ t('journeyProgress') }}</button>
+    </div>
 
     <Teleport to="body">
       <div v-if="selectedGame" v-show="openSurface === 'journey'" data-testid="player-journey-backdrop" class="fixed inset-0 z-[100] overflow-y-auto bg-ink/45 px-3 py-6 backdrop-blur-[2px] sm:px-6" @click.self="openSurface = 'none'">
-        <div class="mx-auto w-full max-w-3xl" role="dialog" aria-modal="true" :aria-label="t('journeyDialog')">
+        <div ref="journeyDialog" tabindex="-1" class="mx-auto w-full max-w-3xl outline-none" role="dialog" aria-modal="true" :aria-label="t('journeyDialog')">
           <RecommendationRulebookHandoff
             :key="selectedGame.bggId"
             :game="selectedGame"
@@ -476,14 +554,25 @@ onBeforeUnmount(() => {
       :open="openSurface === 'rulebook'"
       :version-id="journeyStatus.importJob.documentVersionId"
       :title="selectedGame.name"
+      :restore-focus="journeySurfaceReturnTarget"
       @close="openSurface = 'none'"
     />
     <RecommendationLessonDialog
       v-if="journeyStatus?.plan?.id"
       :open="openSurface === 'lesson'"
       :plan-id="journeyStatus.plan.id"
+      :initial-plan="journeyStatus.plan"
+      :initial-lesson="journeyStatus.lesson"
+      :restore-focus="journeySurfaceReturnTarget"
       @close="openSurface = 'none'"
       @ask-questions="switchToQuestions()"
+    />
+    <ConversationResetDialog
+      kind="recommendation"
+      :open="resetDialogOpen"
+      :restore-focus="recommendationResetRestoreTarget"
+      @cancel="cancelReset"
+      @confirm="confirmReset"
     />
   </section>
 </template>

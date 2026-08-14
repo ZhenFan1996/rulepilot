@@ -185,12 +185,32 @@ public class UserRuleDocumentController {
         return officialImportResponse(officialImports.requireOwned(jobId, principal.getName()), false);
     }
 
+    @PostMapping("/official-imports/{jobId}/teaching-retry")
+    @ResponseStatus(HttpStatus.ACCEPTED)
+    OfficialRulebookImportJobResponse retryOfficialRulebookTeaching(
+            @PathVariable UUID jobId,
+            @RequestBody TeachingHandoffRetryRequest request,
+            Principal principal) {
+        return officialImportResponse(officialImports.retryTeaching(
+                jobId, request.expectedPreparationRunId(), principal.getName()), true);
+    }
+
     @GetMapping("/upload-teaching-handoffs")
     List<UploadedRulebookTeachingHandoffResponse> uploadedRulebookTeachingHandoffs(
             Principal principal) {
         return uploadedTeachingHandoffs.recentOwned(principal.getName()).stream()
                 .map(view -> UploadedRulebookTeachingHandoffResponse.from(view, catalog))
                 .toList();
+    }
+
+    @PostMapping("/upload-teaching-handoffs/{handoffId}/retry")
+    @ResponseStatus(HttpStatus.ACCEPTED)
+    UploadedRulebookTeachingHandoffResponse retryUploadedRulebookTeaching(
+            @PathVariable UUID handoffId,
+            @RequestBody TeachingHandoffRetryRequest request,
+            Principal principal) {
+        return UploadedRulebookTeachingHandoffResponse.from(uploadedTeachingHandoffs.retry(
+                handoffId, request.expectedPreparationRunId(), principal.getName()), catalog);
     }
 
     private OfficialRulebookImportJobResponse officialImportResponse(
@@ -295,6 +315,8 @@ public class UserRuleDocumentController {
             boolean startTeaching,
             String learningGoal) {}
 
+    record TeachingHandoffRetryRequest(UUID expectedPreparationRunId) {}
+
     record OfficialRulebookImportJobResponse(
             UUID id,
             String title,
@@ -311,6 +333,9 @@ public class UserRuleDocumentController {
             OfficialRulebookImportJob.TeachingHandoffState teachingHandoffState,
             UUID teachingPreparationRunId,
             String teachingErrorCode,
+            java.time.Instant downloadCompletedAt,
+            java.time.Instant importCompletedAt,
+            java.time.Instant teachingHandoffUpdatedAt,
             java.time.Instant createdAt,
             java.time.Instant updatedAt,
             boolean reused) {
@@ -335,6 +360,9 @@ public class UserRuleDocumentController {
                     job.teachingHandoff().state(),
                     job.teachingHandoff().preparationRunId(),
                     job.teachingHandoff().errorCode(),
+                    job.downloadCompletedAt(),
+                    job.completedAt(),
+                    job.teachingHandoff().updatedAt(),
                     job.createdAt(),
                     job.updatedAt(),
                     reused);

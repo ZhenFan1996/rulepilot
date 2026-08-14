@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onUnmounted, ref } from 'vue'
 
+import { useModalFocus } from '@/composables/useModalFocus'
 import { normalizeCardText } from '@/lib/cardOcr'
 import { useLocale } from '@/lib/locale'
 
@@ -38,8 +39,11 @@ const errorStatus = ref<ErrorStatus>('')
 const progress = ref(0)
 const progressStatus = ref<ProgressStatus>('cardOcr.status.waitingForPhoto')
 const recognizing = ref(false)
+const dialog = ref<HTMLElement | null>(null)
 const language = ref<'chi_sim+eng' | 'eng'>(locale.value === 'en' ? 'eng' : 'chi_sim+eng')
 let activeWorker: Awaited<ReturnType<typeof import('tesseract.js')['createWorker']>> | null = null
+
+useModalFocus({ dialog, open: () => true, requestClose: close })
 
 const progressPercent = computed(() => Math.round(progress.value * 100))
 const canUseText = computed(() => normalizeCardText(recognizedText.value).length > 0)
@@ -151,6 +155,8 @@ onUnmounted(() => {
 <template>
   <div class="fixed inset-0 z-50 grid place-items-end bg-black/55 p-0 sm:place-items-center sm:p-6" role="presentation" @click.self="close">
     <section
+      ref="dialog"
+      tabindex="-1"
       class="max-h-[92vh] w-full overflow-y-auto rounded-t-[2rem] bg-paper p-5 text-ink elevation-2xl sm:max-w-2xl sm:rounded-[2rem] sm:p-7"
       role="dialog"
       aria-modal="true"
@@ -162,7 +168,7 @@ onUnmounted(() => {
           <h3 id="card-ocr-title" class="mt-2 font-display text-3xl font-semibold">{{ t('cardOcr.title') }}</h3>
           <p class="mt-2 text-sm leading-6 text-ink/60">{{ t('cardOcr.description') }}</p>
         </div>
-        <button class="grid size-11 shrink-0 place-items-center rounded-full border border-ink/15 text-xl" :disabled="recognizing" :aria-label="t('cardOcr.close')" @click="close">×</button>
+        <button data-modal-initial-focus class="grid size-11 shrink-0 place-items-center rounded-full border border-ink/15 text-xl" :disabled="recognizing" :aria-label="t('cardOcr.close')" @click="close">×</button>
       </div>
 
       <input

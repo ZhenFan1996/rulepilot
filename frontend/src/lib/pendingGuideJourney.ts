@@ -52,6 +52,8 @@ export interface PendingGuideJourney {
   rulebookTitle: string | null
   documentVersionId: string | null
   importJobId: string | null
+  uploadHandoffId: string | null
+  preparationRunId: string | null
   phase: 'DOWNLOADING' | 'READING_RULEBOOK' | 'PREPARING_GUIDE' | 'FAILED'
   state: 'active' | 'failed'
   progress: number | null
@@ -96,6 +98,8 @@ export function buildPendingGuideJourneys(
       rulebookTitle: job.rulebookTitle && job.rulebookTitle !== job.title ? job.rulebookTitle : null,
       documentVersionId: job.documentVersionId,
       importJobId: job.id,
+      uploadHandoffId: null,
+      preparationRunId: job.teachingPreparationRunId,
       phase: failed
         ? 'FAILED'
         : preparation || job.teachingHandoffState === 'LAUNCHING' || job.teachingHandoffState === 'LAUNCHED'
@@ -132,6 +136,8 @@ export function buildPendingGuideJourneys(
       rulebookTitle: gameTitle && gameTitle !== handoff.rulebookTitle ? handoff.rulebookTitle : null,
       documentVersionId: handoff.documentVersionId,
       importJobId: null,
+      uploadHandoffId: handoff.id,
+      preparationRunId: handoff.preparationRunId,
       phase: failed
         ? 'FAILED'
         : preparation || handoff.state === 'LAUNCHING' || handoff.state === 'LAUNCHED'
@@ -162,6 +168,8 @@ export function buildPendingGuideJourneys(
       rulebookTitle: gameTitle && gameTitle !== document.document.title ? document.document.title : null,
       documentVersionId: run.subjectId,
       importJobId: null,
+      uploadHandoffId: null,
+      preparationRunId: run.id,
       phase: failed ? 'FAILED' : 'PREPARING_GUIDE',
       state: failed ? 'failed' : 'active',
       progress: null,

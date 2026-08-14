@@ -86,7 +86,7 @@ class TeachingPublishedLessonReviewerTest {
         List<LessonSection> published = new ArrayList<>(List.of(candidate.section()));
 
         new TeachingPublishedLessonReviewer(
-                        model, critic, invocations, composer, new TeachingReviewCorrectionPolicy())
+                        critic, invocations, composer, new TeachingReviewCorrectionPolicy())
                 .review(plan, List.of(candidate), published, runId, () -> {});
 
         assertThat(published).singleElement().satisfies(section -> {
@@ -154,7 +154,7 @@ class TeachingPublishedLessonReviewerTest {
         List<LessonSection> published = new ArrayList<>(List.of(candidate.section()));
 
         new TeachingPublishedLessonReviewer(
-                        model, critic, invocations, composer, new TeachingReviewCorrectionPolicy())
+                        critic, invocations, composer, new TeachingReviewCorrectionPolicy())
                 .review(plan, List.of(candidate), published, runId, () -> {});
 
         assertThat(published).singleElement().satisfies(section ->
@@ -214,7 +214,7 @@ class TeachingPublishedLessonReviewerTest {
         List<LessonSection> published = new ArrayList<>(List.of(candidate.section()));
 
         new TeachingPublishedLessonReviewer(
-                        model, critic, invocations, composer, new TeachingReviewCorrectionPolicy())
+                        critic, invocations, composer, new TeachingReviewCorrectionPolicy())
                 .review(plan, List.of(candidate), published, runId, () -> {});
 
         assertThat(published).singleElement().satisfies(section -> {
@@ -300,7 +300,7 @@ class TeachingPublishedLessonReviewerTest {
         List<LessonSection> published = new ArrayList<>(List.of(candidate.section()));
 
         new TeachingPublishedLessonReviewer(
-                        model, critic, invocations, composer, new TeachingReviewCorrectionPolicy())
+                        critic, invocations, composer, new TeachingReviewCorrectionPolicy())
                 .review(plan, List.of(candidate), published, runId, () -> {});
 
         assertThat(published).singleElement().satisfies(section -> {
