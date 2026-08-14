@@ -89,14 +89,6 @@ public class PdfBoxRulebookPreparation implements PdfRulebookPreparation {
             int maxPages,
             int maxExtractedCharacters,
             int renderSessionPages,
-            String visualRenderer) {
-        this(maxPages, maxExtractedCharacters, renderSessionPages, visualRenderer, true);
-    }
-
-    PdfBoxRulebookPreparation(
-            int maxPages,
-            int maxExtractedCharacters,
-            int renderSessionPages,
             String visualRenderer,
             boolean streamCompletedPopplerPages) {
         if (maxPages < 1 || maxExtractedCharacters < 1
