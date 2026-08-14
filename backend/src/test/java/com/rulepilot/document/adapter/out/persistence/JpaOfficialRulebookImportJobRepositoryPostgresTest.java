@@ -59,6 +59,7 @@ class JpaOfficialRulebookImportJobRepositoryPostgresTest {
                 .build();
         sessionFactory = new MetadataSources(registry)
                 .addAnnotatedClass(OfficialRulebookImportJobEntity.class)
+                .addAnnotatedClass(DocumentVersionEntity.class)
                 .buildMetadata()
                 .buildSessionFactory();
     }
@@ -72,6 +73,7 @@ class JpaOfficialRulebookImportJobRepositoryPostgresTest {
     @BeforeEach
     void clearImportJobs() {
         jdbc.update("DELETE FROM official_rulebook_import_job");
+        jdbc.update("DELETE FROM assistant_run WHERE owner_username = 'official-handoff-player'");
         jdbc.update("DELETE FROM document_version WHERE object_key LIKE 'official-handoff-test/%'");
         jdbc.update("DELETE FROM rule_document WHERE created_by = 'official-handoff-player'");
     }
@@ -202,6 +204,8 @@ class JpaOfficialRulebookImportJobRepositoryPostgresTest {
         UUID jobId = insertCompletedTeachingJob(versionId, now);
         UUID failedRunId = UUID.randomUUID();
         UUID newerRunId = UUID.randomUUID();
+        insertPreparationRun(failedRunId, versionId, "FAILED", now);
+        insertPreparationRun(newerRunId, versionId, "RECEIVED", now.plusSeconds(4));
         inTransaction(repository -> repository.claimReadyTeachingForDocument(versionId, 1, now.plusSeconds(1)));
         inTransaction(repository -> repository.completeTeachingLaunch(jobId, failedRunId, now.plusSeconds(2)));
 
@@ -280,6 +284,25 @@ class JpaOfficialRulebookImportJobRepositoryPostgresTest {
                 timestamp,
                 timestamp);
         return jobId;
+    }
+
+    private static void insertPreparationRun(UUID runId, UUID versionId, String state, Instant now) {
+        boolean failed = "FAILED".equals(state);
+        OffsetDateTime timestamp = OffsetDateTime.ofInstant(now, ZoneOffset.UTC);
+        jdbc.update(
+                """
+                INSERT INTO assistant_run (
+                    id, mode, subject_id, owner_username, state, revision,
+                    created_at, updated_at, completed_at, last_error_code
+                ) VALUES (?, 'TEACHING_PREPARATION', ?, 'official-handoff-player', ?, 1, ?, ?, ?, ?)
+                """,
+                runId,
+                versionId,
+                state,
+                timestamp,
+                timestamp,
+                failed ? timestamp : null,
+                failed ? "TEACHING_PREPARATION_FAILED" : null);
     }
 
     private static UUID insertJob(String teachingState, Instant teachingUpdatedAt, Instant createdAt) {

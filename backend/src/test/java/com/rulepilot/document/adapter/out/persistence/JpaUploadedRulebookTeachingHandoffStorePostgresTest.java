@@ -74,6 +74,7 @@ class JpaUploadedRulebookTeachingHandoffStorePostgresTest {
     @BeforeEach
     void clearPlayerUploads() {
         jdbc.update("DELETE FROM uploaded_rulebook_teaching_handoff");
+        jdbc.update("DELETE FROM assistant_run WHERE owner_username = 'upload-handoff-player'");
         jdbc.update("DELETE FROM document_version WHERE object_key LIKE 'test-upload/%'");
         jdbc.update("DELETE FROM rule_document WHERE created_by = 'upload-handoff-player'");
     }
@@ -195,6 +196,8 @@ class JpaUploadedRulebookTeachingHandoffStorePostgresTest {
         UUID handoffId = UUID.randomUUID();
         UUID failedRunId = UUID.randomUUID();
         UUID newerRunId = UUID.randomUUID();
+        insertPreparationRun(failedRunId, versionId, "FAILED", now);
+        insertPreparationRun(newerRunId, versionId, "RECEIVED", now.plusSeconds(4));
         inTransactionReturning(store -> store.request(
                 handoffId, versionId, "upload-handoff-player", null, now));
         inTransaction(store -> store.claimReadyForDocument(versionId, 1, now.plusSeconds(1)));
@@ -224,7 +227,7 @@ class JpaUploadedRulebookTeachingHandoffStorePostgresTest {
                 VALUES (?, NULL, ?, 'BASE_RULEBOOK', 'upload-handoff-player', ?)
                 """,
                 documentId,
-                "Local upload rules",
+                "Local upload rules " + documentId,
                 now);
         jdbc.update(
                 """
@@ -241,6 +244,25 @@ class JpaUploadedRulebookTeachingHandoffStorePostgresTest {
                 status,
                 now);
         return versionId;
+    }
+
+    private static void insertPreparationRun(UUID runId, UUID versionId, String state, Instant now) {
+        boolean failed = "FAILED".equals(state);
+        OffsetDateTime timestamp = OffsetDateTime.ofInstant(now, ZoneOffset.UTC);
+        jdbc.update(
+                """
+                INSERT INTO assistant_run (
+                    id, mode, subject_id, owner_username, state, revision,
+                    created_at, updated_at, completed_at, last_error_code
+                ) VALUES (?, 'TEACHING_PREPARATION', ?, 'upload-handoff-player', ?, 1, ?, ?, ?, ?)
+                """,
+                runId,
+                versionId,
+                state,
+                timestamp,
+                timestamp,
+                failed ? timestamp : null,
+                failed ? "TEACHING_PREPARATION_FAILED" : null);
     }
 
     private static void inTransaction(RepositoryWork work) {
