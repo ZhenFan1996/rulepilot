@@ -18,6 +18,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.LockSupport;
 import org.junit.jupiter.api.Test;
 
@@ -190,6 +191,38 @@ class PdfPageImageStoragePipelinePerformanceEvaluationTest {
         assertThat(eightPageStream).containsExactlyElementsOf(twoPageBaseline);
     }
 
+    @Test
+    void attributesTheStreamedRenderAndStorageCriticalPath() throws IOException {
+        assumeTrue("true".equalsIgnoreCase(System.getenv("RULEPILOT_REAL_PDF_POPPLER_PHASE_EVAL")));
+        Path rulebook = Path.of(requiredEnvironment("RULEPILOT_REAL_PDF_STORAGE_PIPELINE_PATH"));
+        assumeTrue(Files.isRegularFile(rulebook), "configured PDF does not exist");
+        assumeTrue(popplerAvailable(), "pdftoppm is required for the production renderer measurement");
+        Duration pageStorageDelay = Duration.ofMillis(environmentInteger(
+                "RULEPILOT_REAL_PDF_STORAGE_DELAY_MS", 90, 1, 5_000));
+
+        ProfiledMeasurement first = profile(rulebook, pageStorageDelay);
+        ProfiledMeasurement second = profile(rulebook, pageStorageDelay);
+
+        System.out.printf(
+                "PDF Poppler phase measurement: pages=%d, delayMs=%d, totalMs=%d/%d, extractionMs=%d/%d, "
+                        + "renderSubmitMs=%d/%d, finalDrainMs=%d/%d, storageWorkMs=%d/%d, jpegBytes=%d%n",
+                first.pageCount(),
+                pageStorageDelay.toMillis(),
+                milliseconds(first.totalNanos()),
+                milliseconds(second.totalNanos()),
+                milliseconds(first.extractionNanos()),
+                milliseconds(second.extractionNanos()),
+                milliseconds(first.renderSubmissionNanos()),
+                milliseconds(second.renderSubmissionNanos()),
+                milliseconds(first.finalDrainNanos()),
+                milliseconds(second.finalDrainNanos()),
+                milliseconds(first.storageWorkNanos()),
+                milliseconds(second.storageWorkNanos()),
+                first.jpegBytes());
+        assertThat(second.pageCount()).isEqualTo(first.pageCount());
+        assertThat(second.jpegBytes()).isEqualTo(first.jpegBytes());
+    }
+
     private Measurement measure(
             Path rulebook,
             Duration pageStorageDelay,
@@ -220,6 +253,42 @@ class PdfPageImageStoragePipelinePerformanceEvaluationTest {
             }
             batch.awaitCompletion();
             return new Measurement(storedPages.get(), System.nanoTime() - startedAt);
+        } finally {
+            storageLane.shutdownNow();
+        }
+    }
+
+    private ProfiledMeasurement profile(Path rulebook, Duration pageStorageDelay) throws IOException {
+        ExecutorService storageLane = Executors.newFixedThreadPool(2);
+        try {
+            var pipeline = new BoundedPageImageStoragePipeline(storageLane, 2);
+            var storedPages = new AtomicInteger();
+            var jpegBytes = new AtomicLong();
+            var storageWorkNanos = new AtomicLong();
+            var extractionCompletedAt = new AtomicLong();
+            var batch = pipeline.openBatch(image -> {
+                long storageStartedAt = System.nanoTime();
+                LockSupport.parkNanos(pageStorageDelay.toNanos());
+                jpegBytes.addAndGet(image.content().length);
+                storedPages.incrementAndGet();
+                storageWorkNanos.addAndGet(System.nanoTime() - storageStartedAt);
+            });
+            long startedAt = System.nanoTime();
+            try (InputStream input = Files.newInputStream(rulebook)) {
+                new PdfBoxRulebookPreparation(500, 5_000_000, 8, "poppler")
+                        .prepare(input, ignored -> extractionCompletedAt.set(System.nanoTime()), batch::submit);
+            }
+            long renderSubmissionCompletedAt = System.nanoTime();
+            batch.awaitCompletion();
+            long completedAt = System.nanoTime();
+            return new ProfiledMeasurement(
+                    storedPages.get(),
+                    jpegBytes.get(),
+                    completedAt - startedAt,
+                    extractionCompletedAt.get() - startedAt,
+                    renderSubmissionCompletedAt - extractionCompletedAt.get(),
+                    completedAt - renderSubmissionCompletedAt,
+                    storageWorkNanos.get());
         } finally {
             storageLane.shutdownNow();
         }
@@ -297,6 +366,15 @@ class PdfPageImageStoragePipelinePerformanceEvaluationTest {
     }
 
     private record Measurement(int pageCount, long elapsedNanos) {}
+
+    private record ProfiledMeasurement(
+            int pageCount,
+            long jpegBytes,
+            long totalNanos,
+            long extractionNanos,
+            long renderSubmissionNanos,
+            long finalDrainNanos,
+            long storageWorkNanos) {}
 
     private record RenderedDigest(int pageNumber, int width, int height, String sha256) {}
 }
