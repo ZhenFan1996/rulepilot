@@ -5,6 +5,10 @@ import { RouterLink } from 'vue-router'
 import type { RecommendationGame, RecommendationProfile } from '@/components/gameRecommendationTypes'
 import { notifyLoginRequired } from '@/lib/authSession'
 import { notifyBackgroundWorkChanged } from '@/lib/backgroundWorkRefresh'
+import {
+  mergeDocumentProgress,
+  parseDocumentProgressSnapshot,
+} from '@/lib/documentProgress'
 import { acceptProgressiveLesson, teachingRunIsActive } from '@/lib/liveLesson'
 import { useLocale } from '@/lib/locale'
 import { notifyTeachingLaunched } from '@/lib/teachingLaunch'
@@ -180,6 +184,11 @@ let sequence = 0
 let findingClock: ReturnType<typeof setInterval> | null = null
 let journeyTimer: ReturnType<typeof setTimeout> | null = null
 let refreshingJourney = false
+let documentProgressSource: EventSource | null = null
+let documentProgressVersionId: string | null = null
+let documentProgressStreamRetryAt = 0
+let documentProgressStreamRetryAttempt = 0
+let documentReadyRefreshPending = false
 const ensuredLessonPlans = new Set<string>()
 
 const canImport = computed(() => Boolean(
@@ -435,12 +444,17 @@ async function refreshJourney(request = sequence) {
     }
 
     const versionId = currentJob.documentVersionId
-    if (versionId && (currentJob.teachingHandoffState === 'WAITING_FOR_DOCUMENT' || !documentProgress.value?.complete)) {
+    if (versionId && !documentProgress.value?.complete) {
       const progress = await checkedJson<PlayerJourneyDocumentProgress>(
         `/api/v1/document-versions/${encodeURIComponent(versionId)}/progress/snapshot`, true,
       )
       if (request !== sequence) return
-      if (progress) documentProgress.value = progress
+      if (progress) {
+        const checked = parseDocumentProgressSnapshot(progress)
+        if (!checked) throw new Error('document progress response is invalid')
+        documentProgress.value = mergeDocumentProgress(documentProgress.value ?? undefined, checked)
+        if (!checked.complete) watchDocumentProgress(versionId, request)
+      }
     }
 
     const activePreparationRunId = preparationRunId.value ?? currentJob.teachingPreparationRunId
@@ -493,7 +507,9 @@ async function refreshJourney(request = sequence) {
   } finally {
     refreshingJourney = false
     if (request === sequence) {
-      scheduleJourney(playerJourneyPollDelay(
+      const immediateReadyRefresh = documentReadyRefreshPending
+      documentReadyRefreshPending = false
+      scheduleJourney(immediateReadyRefresh ? 0 : playerJourneyPollDelay(
         pollingWarning.value,
         Boolean(plan.value)
           && !projection.value.canReadLesson
@@ -571,6 +587,68 @@ function scheduleJourney(delay: number) {
   journeyTimer = setTimeout(() => { void refreshJourney() }, delay)
 }
 
+function watchDocumentProgress(versionId: string, request: number) {
+  if (typeof EventSource === 'undefined'
+    || Date.now() < documentProgressStreamRetryAt
+    || documentProgressSource && documentProgressVersionId === versionId) return
+  closeDocumentProgress()
+  const source = new EventSource(
+    `/api/v1/document-versions/${encodeURIComponent(versionId)}/progress`,
+    { withCredentials: true },
+  )
+  documentProgressSource = source
+  documentProgressVersionId = versionId
+  source.addEventListener('progress', (event) => {
+    if (!currentDocumentProgressSource(source, versionId, request)) return
+    let incoming: ReturnType<typeof parseDocumentProgressSnapshot>
+    try {
+      incoming = parseDocumentProgressSnapshot(JSON.parse((event as MessageEvent<string>).data))
+    } catch {
+      handleDocumentProgressDisconnect(source, versionId, request)
+      return
+    }
+    if (!incoming) {
+      handleDocumentProgressDisconnect(source, versionId, request)
+      return
+    }
+    documentProgressStreamRetryAttempt = 0
+    documentProgressStreamRetryAt = 0
+    documentProgress.value = mergeDocumentProgress(documentProgress.value ?? undefined, incoming)
+    pollingWarning.value = false
+    persistJourney()
+    if (incoming.complete) {
+      closeDocumentProgress()
+      documentReadyRefreshPending = true
+      notifyBackgroundWorkChanged()
+      if (!refreshingJourney) scheduleJourney(0)
+    }
+  })
+  source.onerror = () => handleDocumentProgressDisconnect(source, versionId, request)
+}
+
+function currentDocumentProgressSource(source: EventSource, versionId: string, request: number) {
+  return request === sequence
+    && state.value !== 'login'
+    && documentProgressSource === source
+    && documentProgressVersionId === versionId
+    && importJob.value?.documentVersionId === versionId
+}
+
+function handleDocumentProgressDisconnect(source: EventSource, versionId: string, request: number) {
+  if (!currentDocumentProgressSource(source, versionId, request)) return
+  closeDocumentProgress()
+  documentProgressStreamRetryAttempt = Math.min(documentProgressStreamRetryAttempt + 1, 4)
+  documentProgressStreamRetryAt = Date.now()
+    + [1_000, 2_000, 5_000, 10_000][documentProgressStreamRetryAttempt - 1]!
+  scheduleJourney(0)
+}
+
+function closeDocumentProgress() {
+  documentProgressSource?.close()
+  documentProgressSource = null
+  documentProgressVersionId = null
+}
+
 function clearJourneyTimer() {
   if (journeyTimer) clearTimeout(journeyTimer)
   journeyTimer = null
@@ -578,6 +656,10 @@ function clearJourneyTimer() {
 
 function resetJourneyState() {
   clearJourneyTimer()
+  closeDocumentProgress()
+  documentProgressStreamRetryAt = 0
+  documentProgressStreamRetryAttempt = 0
+  documentReadyRefreshPending = false
   imported.value = null
   candidates.value = []
   selected.value = null
@@ -686,6 +768,7 @@ onMounted(startForCurrentGame)
 onBeforeUnmount(() => {
   sequence += 1
   clearJourneyTimer()
+  closeDocumentProgress()
   if (findingClock) clearInterval(findingClock)
 })
 </script>

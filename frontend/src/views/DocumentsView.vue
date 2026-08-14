@@ -5,7 +5,11 @@ import { RouterLink, useRoute, useRouter } from 'vue-router'
 import AppShell from '@/components/AppShell.vue'
 import DestructiveActionDialog from '@/components/DestructiveActionDialog.vue'
 import { notifyLoginRequired } from '@/lib/authSession'
-import { mergeDocumentProgress, type DocumentProcessingSnapshot } from '@/lib/documentProgress'
+import {
+  mergeDocumentProgress,
+  parseDocumentProgressSnapshot,
+  type DocumentProcessingSnapshot,
+} from '@/lib/documentProgress'
 import {
   forgetPendingRulebookLesson,
   readPendingRulebookLessons,
@@ -1201,19 +1205,7 @@ function scheduleProgressReconnect(
 
 function parseProgressSnapshot(value: string): ProcessingSnapshot | null {
   try {
-    const snapshot = JSON.parse(value) as Partial<ProcessingSnapshot>
-    if (!(typeof snapshot.stage === 'string'
-      && snapshot.stage.length > 0
-      && typeof snapshot.percentage === 'number'
-      && snapshot.percentage >= 0
-      && snapshot.percentage <= 100
-      && typeof snapshot.processedPages === 'number'
-      && snapshot.processedPages >= 0
-      && typeof snapshot.complete === 'boolean')) return null
-    const totalPages = typeof snapshot.totalPages === 'number' && snapshot.totalPages >= snapshot.processedPages
-      ? snapshot.totalPages
-      : snapshot.processedPages
-    return { ...snapshot, totalPages } as ProcessingSnapshot
+    return parseDocumentProgressSnapshot(JSON.parse(value))
   } catch {
     return null
   }

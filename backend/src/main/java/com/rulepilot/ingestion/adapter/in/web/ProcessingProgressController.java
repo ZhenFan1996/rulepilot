@@ -6,6 +6,7 @@ import com.rulepilot.ingestion.application.ProcessingProgressTracker.ProgressSna
 import java.io.IOException;
 import java.security.Principal;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import org.springframework.context.annotation.Profile;
 import org.springframework.http.HttpStatus;
@@ -36,12 +37,26 @@ public class ProcessingProgressController {
     SseEmitter progress(@PathVariable UUID versionId, Principal principal) {
         var version = requireOwnedVersion(versionId, principal);
         SseEmitter emitter = new SseEmitter(0L);
-        AtomicReference<Runnable> unsubscribe = new AtomicReference<>(() -> {});
-        unsubscribe.set(progress.subscribe(versionId, snapshot -> send(emitter, snapshot, unsubscribe.get())));
-        emitter.onCompletion(unsubscribe.get());
-        emitter.onTimeout(unsubscribe.get());
-        emitter.onError(ignored -> unsubscribe.get().run());
-        send(emitter, authoritativeProgress(version), unsubscribe.get());
+        AtomicReference<Runnable> subscription = new AtomicReference<>();
+        AtomicBoolean cleanupRequested = new AtomicBoolean(false);
+        Runnable unsubscribe = () -> {
+            Runnable registered = subscription.get();
+            if (registered == null) {
+                cleanupRequested.set(true);
+            } else {
+                registered.run();
+            }
+        };
+        Runnable registered = progress.subscribe(versionId, snapshot -> send(emitter, snapshot, unsubscribe));
+        subscription.set(registered);
+        if (cleanupRequested.get()) {
+            registered.run();
+            return emitter;
+        }
+        emitter.onCompletion(unsubscribe);
+        emitter.onTimeout(unsubscribe);
+        emitter.onError(ignored -> unsubscribe.run());
+        send(emitter, authoritativeProgress(version), unsubscribe);
         return emitter;
     }
 

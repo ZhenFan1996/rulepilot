@@ -132,6 +132,7 @@ async function mockPublicDiscovery(
   authenticated = false,
   holdPreparation = false,
   failPreparation = false,
+  streamDocumentProgress = false,
 ) {
   let teachingPoll = 0
   let lessonPoll = 0
@@ -143,6 +144,18 @@ async function mockPublicDiscovery(
   let preparationRetryAccepted = false
   let importStarts = 0
   let preparationRetryRequests = 0
+  let documentReady = !streamDocumentProgress
+  let documentSnapshotReads = 0
+  let importJobReads = 0
+  let releaseDocumentProgress!: () => void
+  const documentProgressGate = new Promise<void>(resolve => { releaseDocumentProgress = resolve })
+  const currentImportJob = () => documentReady
+    ? officialImportJob(preparationRetryAccepted ? 'preparation-run-retry' : 'preparation-run-1')
+    : {
+        ...officialImportJob(),
+        teachingHandoffState: 'WAITING_FOR_DOCUMENT',
+        teachingPreparationRunId: null,
+      }
   await page.route('**/api/auth/session', route => authenticated
     ? route.fulfill({ json: { username: 'player', roles: ['USER'] } })
     : route.fulfill({ status: 401 }))
@@ -288,11 +301,15 @@ async function mockPublicDiscovery(
     if (route.request().method() === 'POST') {
       importStarts += 1
       journeyImported = true
-      return route.fulfill({ status: 202, json: officialImportJob() })
+      return route.fulfill({ status: 202, json: currentImportJob() })
     }
     return route.fulfill({ json: journeyImported
-      ? [officialImportJob(preparationRetryAccepted ? 'preparation-run-retry' : 'preparation-run-1')]
+      ? [currentImportJob()]
       : [] })
+  })
+  await page.route('**/api/v1/documents/official-imports/import-job-1', route => {
+    importJobReads += 1
+    return route.fulfill({ json: currentImportJob() })
   })
   await page.route('**/api/v1/documents/official-imports/import-job-1/teaching-retry', route => {
     preparationRetryRequests += 1
@@ -322,9 +339,22 @@ async function mockPublicDiscovery(
     },
     latestVersion: { id: 'version-1', originalFilename: 'wingspan.pdf', size: 4096, status: 'READY' },
   }] }))
-  await page.route('**/api/v1/document-versions/version-1/progress/snapshot', route => route.fulfill({ json: {
-    stage: 'READY', percentage: 100, processedPages: 12, totalPages: 12, complete: true,
-  } }))
+  await page.route('**/api/v1/document-versions/version-1/progress/snapshot', route => {
+    documentSnapshotReads += 1
+    return route.fulfill({ json: documentReady
+      ? { stage: 'READY', percentage: 100, processedPages: 12, totalPages: 12, complete: true }
+      : { stage: 'RENDERING', percentage: 55, processedPages: 4, totalPages: 12, complete: false } })
+  })
+  if (streamDocumentProgress) {
+    await page.route('**/api/v1/document-versions/version-1/progress', async route => {
+      await documentProgressGate
+      return route.fulfill({
+        status: 200,
+        contentType: 'text/event-stream',
+        body: 'event: progress\ndata: {"stage":"READY","percentage":100,"processedPages":12,"totalPages":12,"complete":true}\n\n',
+      })
+    })
+  }
   await page.route('**/api/v1/document-versions/version-1/pages', route => route.fulfill({ json: [
     { pageNumber: 1, text: 'Setup', characterCount: 1200 },
     { pageNumber: 2, text: 'Goal', characterCount: 960 },
@@ -387,6 +417,12 @@ async function mockPublicDiscovery(
     completePreparation: () => { preparationCompleted = true },
     planReads: () => planReads,
     importStarts: () => importStarts,
+    importJobReads: () => importJobReads,
+    documentSnapshotReads: () => documentSnapshotReads,
+    publishDocumentReady: () => {
+      documentReady = true
+      releaseDocumentProgress()
+    },
     preparationRetryRequests: () => preparationRetryRequests,
   }
 }
@@ -455,6 +491,28 @@ test('keeps full-catalog discovery usable without horizontal overflow at 390 px'
     () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
   )
   expect(hasHorizontalOverflow).toBe(false)
+})
+
+test('shows streamed rulebook readiness without waiting for the next recommendation poll', async ({ page }) => {
+  const progress = await mockPublicDiscovery(page, true, true, false, true)
+  await page.goto('/discover')
+
+  await page.getByLabel('和推荐 Agent 聊聊').fill('4 个人，90 分钟内，想要中等策略')
+  await page.getByRole('button', { name: '发送', exact: true }).click()
+  await page.getByRole('button', { name: '选这款，找规则书' }).click()
+  const journey = page.getByTestId('player-journey-surface')
+  await journey.getByRole('button', { name: '选择这份' }).click()
+  await journey.getByRole('checkbox', { name: /我确认该链接来自有权提供/ }).check()
+  await journey.getByRole('button', { name: '下载规则书并生成讲解' }).click()
+
+  await expect(journey.getByText('第 4 / 12 页')).toBeVisible()
+  expect(progress.importJobReads()).toBe(1)
+  expect(progress.documentSnapshotReads()).toBe(1)
+
+  progress.publishDocumentReady()
+  await expect(journey.getByText('规则书已经可以阅读；讲解会继续在后台生成。')).toBeVisible()
+  await expect.poll(() => progress.importJobReads()).toBe(2)
+  expect(progress.documentSnapshotReads()).toBe(1)
 })
 
 test('keeps a corrected reference title in conversational context on mobile', async ({ page }) => {
