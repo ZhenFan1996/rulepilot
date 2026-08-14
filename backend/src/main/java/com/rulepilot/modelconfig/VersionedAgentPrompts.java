@@ -142,7 +142,7 @@ public class VersionedAgentPrompts {
             @Value("classpath:prompts/content-critic-v23-source-causal-direction-system.txt") Resource criticSourceCausalDirection,
             @Value("classpath:prompts/content-critic-v24-source-temporal-boundary-system.txt") Resource criticSourceTemporalBoundary,
             @Value("classpath:prompts/content-critic-v25-permission-ruling-system.txt") Resource criticPermissionRuling,
-            @Value("classpath:prompts/content-critic-v33-focused-runtime-system.txt") Resource focusedCriticSystem,
+            @Value("classpath:prompts/content-critic-v34-focused-runtime-system.txt") Resource focusedCriticSystem,
             @Value("classpath:prompts/atomic-content-critic-v3-system.txt") Resource atomicCriticSystem,
             @Value("classpath:prompts/objective-coverage-critic-v3-system.txt") Resource objectiveCoverageCriticSystem,
             @Value("classpath:prompts/content-critic-v4-user.txt") Resource criticUser,

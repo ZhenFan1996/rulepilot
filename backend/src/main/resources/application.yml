@@ -171,9 +171,11 @@ rulepilot:
   visual:
     provider: ${VISUAL_PROVIDER:fake}
     model-provider: ${VISUAL_MODEL_PROVIDER:gemini}
-    max-sections: ${VISUAL_MAX_SECTIONS:12}
-    # A published section has at most six rule steps. Try every grounded step for a distinct local visual; the
-    # enricher still declines duplicate, text-only, or unrelated crops instead of decorating prose with page images.
+    # Keep the application default aligned with the shipped environment example: at most five high-value sections
+    # receive optional crop work, so vision cannot dominate an otherwise complete text lesson.
+    max-sections: ${VISUAL_MAX_SECTIONS:5}
+    # Within each selected section, try at most two grounded steps for distinct local visuals; the enricher still
+    # declines duplicate, text-only, or unrelated crops instead of decorating prose with page images.
     max-steps-per-section: ${VISUAL_MAX_STEPS_PER_SECTION:2}
     # Keep Qwen at its verified one-request limit by default. Providers that have passed a real concurrency probe may
     # opt into two or three independent step checks; the zero-capacity executor still rejects excess work rather than

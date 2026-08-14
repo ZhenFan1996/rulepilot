@@ -15,6 +15,7 @@ import org.springframework.stereotype.Component;
 public final class VisualSectionPrioritizer {
 
     private static final int DEFAULT_MAX_VISUAL_STEPS_PER_SECTION = 2;
+    private final VisualReaderCropPolicy cropPolicy = new VisualReaderCropPolicy();
 
     public Set<Integer> positions(List<LessonSection> sections, int limit) {
         return positions(sections, limit, DEFAULT_MAX_VISUAL_STEPS_PER_SECTION);
@@ -24,16 +25,35 @@ public final class VisualSectionPrioritizer {
         if (sections == null || limit < 1 || maxVisualStepsPerSection < 1) {
             throw new IllegalArgumentException("visual section priority input is invalid");
         }
-        return sections.stream()
+        List<LessonSection> eligible = sections.stream()
                 .filter(section -> section.evidenceStatus() != EvidenceStatus.INSUFFICIENT_EVIDENCE)
-                .filter(section -> section.steps().stream().filter(step -> step.kind() == TeachingMove.VISUAL).count()
+                .filter(section -> resolvedVisualCount(section)
                         < maxVisualStepsPerSection)
                 .filter(section -> section.steps().stream().anyMatch(step -> !step.sourcePages().isEmpty()))
+                .toList();
+        boolean hasExplicitVisualIntent = eligible.stream().anyMatch(this::hasUnresolvedExplicitVisual);
+        return eligible.stream()
+                .filter(section -> !hasExplicitVisualIntent || hasUnresolvedExplicitVisual(section))
                 .sorted(Comparator.comparingInt(this::score).reversed()
                         .thenComparingInt(LessonSection::position))
                 .limit(limit)
                 .map(LessonSection::position)
                 .collect(Collectors.toUnmodifiableSet());
+    }
+
+    private long resolvedVisualCount(LessonSection section) {
+        return section.steps().stream()
+                .filter(step -> step.kind() == TeachingMove.VISUAL)
+                .filter(step -> step.visualFocus() != null)
+                .filter(step -> !cropPolicy.needsTighterReaderCrop(step.visualFocus()))
+                .count();
+    }
+
+    private boolean hasUnresolvedExplicitVisual(LessonSection section) {
+        return section.steps().stream()
+                .filter(step -> step.kind() == TeachingMove.VISUAL)
+                .filter(step -> step.visualFocus() == null || cropPolicy.needsTighterReaderCrop(step.visualFocus()))
+                .anyMatch(step -> !step.sourcePages().isEmpty() && !step.sourceChunkIds().isEmpty());
     }
 
     private int score(LessonSection section) {

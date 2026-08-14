@@ -177,6 +177,101 @@ class TeachingPlanServiceTest {
     }
 
     @Test
+    void retainsAValidTextOutlineWhenTheCoverageRewriteDropsRequiredLearningObligations() {
+        UUID documentVersionId = UUID.randomUUID();
+        DocumentProcessing documents = mock(DocumentProcessing.class);
+        DocumentVersionScopeLookup scopes = mock(DocumentVersionScopeLookup.class);
+        CatalogEditionLookup catalog = mock(CatalogEditionLookup.class);
+        VisualRulebookCataloger visualCataloger = mock(VisualRulebookCataloger.class);
+        com.rulepilot.teaching.TeachingOutlineModel outlines =
+                mock(com.rulepilot.teaching.TeachingOutlineModel.class);
+        AuditedAgentInvocations invocations = mock(AuditedAgentInvocations.class);
+        TeachingPlanRepository repository = mock(TeachingPlanRepository.class);
+        TeachingPlanPublication publication = mock(TeachingPlanPublication.class);
+        OutlineDraft complete = new OutlineDraft(
+                "Example Game",
+                "Teach the complete game in dependency order.",
+                List.of(new TopicDraft(
+                        "complete",
+                        "完整讲解",
+                        "覆盖所有核心学习义务。",
+                        true,
+                        false,
+                        List.of("SOURCE TERM"),
+                        List.of("setup", "core_loop", "end", "scoring"),
+                        List.of(1))));
+        OutlineDraft invalidRewrite = new OutlineDraft(
+                "Example Game",
+                "Incomplete rewrite",
+                List.of(topic("partial", List.of("source_coverage"), List.of(2))));
+        when(scopes.findVersion(documentVersionId)).thenReturn(Optional.of(new VersionScope(
+                documentVersionId, null, "READY", "alice", "Example Game")));
+        when(documents.pages(documentVersionId)).thenReturn(List.of(
+                page(1, "A complete first source page with enough opaque text for structural admission."),
+                page(2, "A complete second source page with enough opaque text for structural admission.")));
+        when(outlines.organize(any())).thenReturn(complete);
+        when(outlines.refineChapterOwnership(any(), any(), any())).thenReturn(invalidRewrite);
+        when(publication.publish(any(TeachingPlan.class), eq("Example Game")))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+        TeachingPlanService service = new TeachingPlanService(
+                documents,
+                scopes,
+                catalog,
+                visualCataloger,
+                outlines,
+                invocations,
+                new TeachingPlanFactory(),
+                repository,
+                publication);
+
+        TeachingPlan plan = service.create(documentVersionId, null, "alice", null);
+
+        assertThat(plan.sections()).singleElement().satisfies(section -> {
+            assertThat(section.topicKey()).isEqualTo("complete");
+            assertThat(section.coverageTags()).contains("setup", "core_loop", "end", "scoring");
+        });
+        verify(outlines).refineChapterOwnership(any(), any(), any());
+        verify(outlines, never()).fallback(any());
+    }
+
+    @Test
+    void rejectsAnIncompleteTextOutlineInsteadOfPublishingTheGenericFourChapterFallback() {
+        UUID documentVersionId = UUID.randomUUID();
+        DocumentProcessing documents = mock(DocumentProcessing.class);
+        DocumentVersionScopeLookup scopes = mock(DocumentVersionScopeLookup.class);
+        CatalogEditionLookup catalog = mock(CatalogEditionLookup.class);
+        VisualRulebookCataloger visualCataloger = mock(VisualRulebookCataloger.class);
+        com.rulepilot.teaching.TeachingOutlineModel outlines =
+                mock(com.rulepilot.teaching.TeachingOutlineModel.class);
+        TeachingPlanPublication publication = mock(TeachingPlanPublication.class);
+        when(scopes.findVersion(documentVersionId)).thenReturn(Optional.of(new VersionScope(
+                documentVersionId, null, "READY", "alice", "Example Game")));
+        when(documents.pages(documentVersionId)).thenReturn(List.of(
+                page(1, "A complete source page with enough opaque text for structural admission.")));
+        when(outlines.organize(any())).thenReturn(new OutlineDraft(
+                "Example Game",
+                "Incomplete outline",
+                List.of(topic("partial", List.of("core_loop"), List.of(1)))));
+        TeachingPlanService service = new TeachingPlanService(
+                documents,
+                scopes,
+                catalog,
+                visualCataloger,
+                outlines,
+                mock(AuditedAgentInvocations.class),
+                new TeachingPlanFactory(),
+                mock(TeachingPlanRepository.class),
+                publication);
+
+        assertThatThrownBy(() -> service.create(documentVersionId, null, "alice", null))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("semantic teaching outline")
+                .hasMessageContaining("retry preparation");
+        verify(outlines, never()).fallback(any());
+        verifyNoInteractions(publication);
+    }
+
+    @Test
     void slowVisualCatalogWorkIsCancelledAtTheApplicationTimeout() throws InterruptedException {
         FutureTask<VisualRulebookPageCatalogModel.CatalogDraft> slow = new FutureTask<>(() -> {
             Thread.sleep(5_000);
@@ -228,6 +323,55 @@ class TeachingPlanServiceTest {
         OutlineDraft outline = outline(List.of(
                 detailedTopic("alpha", "回合流程与终局", "Contains setup, winner, cleanup, and scoring words."),
                 detailedTopic("beta", "下一章", "Contains the same words in another language.")));
+
+        assertThat(TeachingOutlineRevisionPolicy.chapterOwnershipRevisionFeedback(outline)).isEmpty();
+    }
+
+    @Test
+    void requestsSemanticOwnershipReviewWhenOneTopicStructurallyClaimsFourLaterDimensions() {
+        OutlineDraft outline = outline(List.of(
+                topic("overview", List.of("axis_one", "axis_two", "axis_three", "axis_four"), List.of(1)),
+                topic("procedure-a", List.of("axis_one", "axis_two"), List.of(3)),
+                topic("procedure-b", List.of("axis_three", "axis_four"), List.of(8))));
+
+        assertThat(TeachingOutlineRevisionPolicy.chapterOwnershipRevisionFeedback(outline))
+                .hasValueSatisfying(feedback -> assertThat(feedback)
+                        .contains("topic=overview", "axis_one", "axis_three", "procedure-a", "procedure-b")
+                        .contains("dependency order", "one primary teaching home"));
+    }
+
+    @Test
+    void appliesTheSameOwnershipInvariantToDifferentOpaqueTopicShapes() {
+        OutlineDraft outline = outline(List.of(
+                topic("hub", List.of("red", "green", "blue", "violet"), List.of(9)),
+                topic("left", List.of("red", "green"), List.of(2)),
+                topic("right", List.of("blue", "violet"), List.of(4)),
+                topic("unrelated", List.of("amber"), List.of(6))));
+
+        assertThat(TeachingOutlineRevisionPolicy.chapterOwnershipRevisionFeedback(outline))
+                .hasValueSatisfying(feedback -> assertThat(feedback)
+                        .contains("topic=hub", "red", "green", "blue", "violet"));
+    }
+
+    @Test
+    void doesNotRequestOwnershipReviewForOneSharedDimensionOrAnUncontestedBroadTopic() {
+        OutlineDraft oneSharedDimension = outline(List.of(
+                topic("first", List.of("shared"), List.of(1)),
+                topic("second", List.of("shared"), List.of(2))));
+        OutlineDraft uncontested = outline(List.of(
+                topic("only", List.of("one", "two", "three", "four"), List.of(1))));
+
+        assertThat(TeachingOutlineRevisionPolicy.chapterOwnershipRevisionFeedback(oneSharedDimension)).isEmpty();
+        assertThat(TeachingOutlineRevisionPolicy.chapterOwnershipRevisionFeedback(uncontested)).isEmpty();
+    }
+
+    @Test
+    void doesNotTreatThreeOrthogonalMetadataTagsAsBroadChapterOwnership() {
+        OutlineDraft outline = outline(List.of(
+                topic("reference", List.of("goal", "flow", "visual"), List.of(1)),
+                topic("goal-owner", List.of("goal"), List.of(2)),
+                topic("flow-owner", List.of("flow"), List.of(3)),
+                topic("visual-owner", List.of("visual"), List.of(4))));
 
         assertThat(TeachingOutlineRevisionPolicy.chapterOwnershipRevisionFeedback(outline)).isEmpty();
     }

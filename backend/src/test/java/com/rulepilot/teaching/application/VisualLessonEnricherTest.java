@@ -497,6 +497,41 @@ class VisualLessonEnricherTest {
     }
 
     @Test
+    void attemptsOnlyTheExplicitVisualStepWhenThePublishedSectionDeclaresVisualIntent() {
+        UUID sharedEvidence = UUID.randomUUID();
+        java.util.List<Integer> requestedSteps = new java.util.ArrayList<>();
+        VisualRegionLocator locator = request -> {
+            int stepPosition = request.claims().getFirst().stepPosition();
+            requestedSteps.add(stepPosition);
+            return java.util.Optional.of(new VisualRegionLocator.LocatedRegion(
+                    2,
+                    "探测器轨道图",
+                    "一枚探测器标记位于弧形刻度轨道上",
+                    180,
+                    220,
+                    220,
+                    160,
+                    List.of(sharedEvidence),
+                    List.of(stepPosition)));
+        };
+
+        IllustratedLesson enriched = new VisualLessonEnricher(
+                        ignored -> understanding(),
+                        (ignored, pages) -> List.of(new DocumentPageImages.PageImage(
+                                2, "image/png", new byte[] {1}, 1_000, 1_000)),
+                        new VisualRegionCandidateSelector(),
+                        locator)
+                .enrich(UUID.randomUUID(), lessonWithExplicitVisualIntent(sharedEvidence));
+
+        assertThat(requestedSteps).containsExactly(2);
+        assertThat(enriched.sections().getFirst().steps().get(0).kind())
+                .isEqualTo(IllustratedLesson.TeachingMove.DO);
+        assertThat(enriched.sections().getFirst().steps().get(1).kind())
+                .isEqualTo(IllustratedLesson.TeachingMove.VISUAL);
+        assertThat(enriched.sections().getFirst().steps().get(1).visualFocus()).isNotNull();
+    }
+
+    @Test
     void binds_a_visual_crop_to_its_source_page_even_when_one_evidence_chunk_spans_two_steps() {
         UUID sharedEvidence = UUID.randomUUID();
         RulebookUnderstanding crossPageUnderstanding = new RulebookUnderstanding(
@@ -807,6 +842,28 @@ class VisualLessonEnricherTest {
     }
 
     @Test
+    void preservesBroadModelVisualIntentForTargetingWithoutProbingOrdinarySteps() {
+        UUID chunk = UUID.randomUUID();
+        List<Integer> requestedSteps = new java.util.ArrayList<>();
+        var result = new VisualLessonEnricher(
+                        ignored -> understanding(),
+                        (ignored, pages) -> List.of(new DocumentPageImages.PageImage(
+                                2, "image/png", new byte[] {1}, 1_000, 1_000)),
+                        new VisualRegionCandidateSelector(),
+                        request -> {
+                            requestedSteps.add(request.claims().getFirst().stepPosition());
+                            return java.util.Optional.empty();
+                        })
+                .enrichWithReport(
+                        UUID.randomUUID(), lessonWithBroadVisualIntentAndOrdinaryStep(chunk), "owner");
+
+        assertThat(requestedSteps).containsExactly(1);
+        assertThat(result.lesson().sections().getFirst().steps())
+                .extracting(IllustratedLesson.LessonStep::kind)
+                .containsExactly(IllustratedLesson.TeachingMove.DO, IllustratedLesson.TeachingMove.DO);
+    }
+
+    @Test
     void keepsAnExistingBoundedCropWithoutGameSpecificAspectRatioRules() {
         UUID chunk = UUID.randomUUID();
         var result = new VisualLessonEnricher(
@@ -983,6 +1040,32 @@ class VisualLessonEnricherTest {
                 List.of(section), "test", Instant.now());
     }
 
+    private IllustratedLesson lessonWithBroadVisualIntentAndOrdinaryStep(UUID chunk) {
+        var source = lessonWithOverlyBroadVisual(chunk);
+        var original = source.sections().getFirst();
+        var ordinary = new IllustratedLesson.LessonStep(
+                2,
+                "Resolve an ordinary exception",
+                IllustratedLesson.TeachingMove.DO,
+                "Resolve the cited exception without a diagram.",
+                List.of(2),
+                List.of(chunk));
+        var section = new IllustratedLesson.LessonSection(
+                original.position(),
+                original.topicKey(),
+                original.coverageTags(),
+                original.title(),
+                original.required(),
+                original.evidenceStatus(),
+                original.visualKind(),
+                original.visualCaption(),
+                original.visualSourcePages(),
+                original.visualSourceChunkIds(),
+                List.of(original.steps().getFirst(), ordinary));
+        return new IllustratedLesson(
+                source.id(), source.teachingPlanId(), source.status(), List.of(section), source.generatorVersion(), source.createdAt());
+    }
+
     private IllustratedLesson lessonWithNarrowTallScoreVisual(UUID chunk) {
         var step = new IllustratedLesson.LessonStep(
                 1,
@@ -1044,6 +1127,30 @@ class VisualLessonEnricherTest {
                 1, "turn", List.of("turn"), "完整回合", true,
                 IllustratedLesson.EvidenceStatus.SUPPORTED, IllustratedLesson.VisualKind.FLOW_DIAGRAM,
                 "完成完整回合", List.of(), List.of(), steps);
+        return new IllustratedLesson(
+                UUID.randomUUID(), UUID.randomUUID(), IllustratedLesson.LessonStatus.DRAFT_READY,
+                List.of(section), "test", Instant.now());
+    }
+
+    private IllustratedLesson lessonWithExplicitVisualIntent(UUID evidence) {
+        var ordinary = new IllustratedLesson.LessonStep(
+                1,
+                "Read the exception",
+                IllustratedLesson.TeachingMove.DO,
+                "Resolve the cited exception before continuing.",
+                List.of(2),
+                List.of(evidence));
+        var visual = new IllustratedLesson.LessonStep(
+                2,
+                "查看探测器轨道",
+                IllustratedLesson.TeachingMove.VISUAL,
+                "把探测器放到轨道上。",
+                List.of(2),
+                List.of(evidence));
+        var section = new IllustratedLesson.LessonSection(
+                1, "opaque-flow", List.of("opaque"), "Opaque procedure", true,
+                IllustratedLesson.EvidenceStatus.SUPPORTED, IllustratedLesson.VisualKind.REFERENCE_CARD,
+                "Complete the procedure", List.of(), List.of(), List.of(ordinary, visual));
         return new IllustratedLesson(
                 UUID.randomUUID(), UUID.randomUUID(), IllustratedLesson.LessonStatus.DRAFT_READY,
                 List.of(section), "test", Instant.now());

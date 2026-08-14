@@ -89,6 +89,7 @@ final class VisualLessonMergePolicy {
             LessonStep originalStep = originalSteps.get(step.position());
             boolean newlyVisual = originalStep != null
                     && (originalStep.kind() != TeachingMove.VISUAL
+                            || originalStep.visualFocus() == null
                             || cropPolicy.needsTighterReaderCrop(originalStep.visualFocus()))
                     && step.kind() == TeachingMove.VISUAL
                     && step.visualFocus() != null;
@@ -134,6 +135,7 @@ final class VisualLessonMergePolicy {
         List<LessonStep> steps = new ArrayList<>(section.steps());
         Set<Integer> availableIndexes = java.util.stream.IntStream.range(0, steps.size())
                 .filter(index -> steps.get(index).kind() != TeachingMove.VISUAL
+                        || steps.get(index).visualFocus() == null
                         || cropPolicy.needsTighterReaderCrop(steps.get(index).visualFocus()))
                 .boxed()
                 .collect(Collectors.toCollection(LinkedHashSet::new));

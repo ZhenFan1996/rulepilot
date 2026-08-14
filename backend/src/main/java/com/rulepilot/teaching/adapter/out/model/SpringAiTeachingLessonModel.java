@@ -100,8 +100,9 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
     @Override
     public int maxConcurrentSectionRequests(String modelConfigurationOwner) {
         String teaching = models.providerFor(Role.TEACHING, modelConfigurationOwner);
-        String visual = models.providerFor(Role.VISUAL, modelConfigurationOwner);
-        return "qwen".equals(teaching) || "qwen".equals(visual) ? 1 : Integer.MAX_VALUE;
+        // Section composition always uses TEACHING. A Qwen visual assignment must not serialize independent
+        // DeepSeek teaching calls merely because visual enrichment runs later in the same lesson workflow.
+        return "qwen".equals(teaching) ? 1 : Integer.MAX_VALUE;
     }
 
     @Override

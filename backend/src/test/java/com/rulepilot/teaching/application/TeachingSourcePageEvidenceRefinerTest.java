@@ -34,26 +34,22 @@ class TeachingSourcePageEvidenceRefinerTest {
     private final UUID runId = UUID.randomUUID();
 
     @Test
-    void keepsACompleteReadySectionOnTheDeterministicFastPath() {
-        NativeToolScopes scopes = mock(NativeToolScopes.class);
-        AssistantReadTools tools = mock(AssistantReadTools.class);
+    void readsTheCanonicalPageEvenWhenSearchAlreadyHitEveryPlannedPage() {
+        RuleEvidence searchHit = evidence(UUID.randomUUID(), 2, "Visible heading and first procedure.");
+        RuleEvidence laterClause = evidence(UUID.randomUUID(), 2, "A later exception on the same page.");
+        AssistantReadTools tools = tools(List.of(searchHit, laterClause));
         RecordingInvocations invocations = new RecordingInvocations();
-        var refiner = refiner(scopes, tools, invocations);
         TeachingPlan plan = plan(List.of(2));
-        var deterministic = verified(2, evidence(UUID.randomUUID(), 2, "Complete setup rule."));
+        var deterministic = verified(2, searchHit);
 
-        var result = refiner.refine(plan, plan.sections().getFirst(), runId, deterministic);
+        var result = refiner(scopes(), tools, invocations)
+                .refine(plan, plan.sections().getFirst(), runId, deterministic);
 
-        assertThat(result).isSameAs(deterministic);
-        assertThat(invocations.toolCalls).hasValue(0);
-        verify(scopes, never()).create(
-                org.mockito.ArgumentMatchers.any(),
-                org.mockito.ArgumentMatchers.any(),
-                org.mockito.ArgumentMatchers.any());
-        verify(tools, never()).readRuleEvidencePages(
-                org.mockito.ArgumentMatchers.any(),
-                org.mockito.ArgumentMatchers.anySet(),
-                org.mockito.ArgumentMatchers.anyBoolean());
+        assertThat(result.state()).isEqualTo(TeachingSectionEvidenceRetriever.State.VERIFIED);
+        assertThat(result.toolCalls()).isEqualTo(3);
+        assertThat(result.evidence()).containsExactly(searchHit, laterClause);
+        assertThat(invocations.toolCalls).hasValue(1);
+        verify(tools).readRuleEvidencePages(versionId, Set.of(2), false);
     }
 
     @Test
@@ -69,11 +65,11 @@ class TeachingSourcePageEvidenceRefinerTest {
 
         assertThat(result.state()).isEqualTo(TeachingSectionEvidenceRetriever.State.VERIFIED);
         assertThat(result.toolCalls()).isEqualTo(3);
-        assertThat(result.evidence()).extracting(RuleEvidence::pageFrom).containsExactly(5, 2);
+        assertThat(result.evidence()).extracting(RuleEvidence::pageFrom).containsExactly(2, 5);
         assertThat(invocations.toolCalls).hasValue(1);
         assertThat(invocations.modelCalls).hasValue(0);
         assertThat(invocations.operations).containsExactly("readTeachingSourcePages|1");
-        verify(tools).readRuleEvidencePages(versionId, Set.of(5), false);
+        verify(tools).readRuleEvidencePages(versionId, Set.of(2, 5), false);
         verify(tools, never()).readRuleEvidenceIds(
                 org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anySet());
     }
@@ -169,7 +165,7 @@ class TeachingSourcePageEvidenceRefinerTest {
     void preservesVerifiedEvidenceWhenThePageReadFails() {
         RuleEvidence initial = evidence(UUID.randomUUID(), 2, "Place the shared board.");
         AssistantReadTools tools = mock(AssistantReadTools.class);
-        when(tools.readRuleEvidencePages(versionId, Set.of(5), false))
+        when(tools.readRuleEvidencePages(versionId, Set.of(2, 5), false))
                 .thenThrow(new IllegalStateException("repository unavailable"));
         TeachingPlan plan = plan(List.of(2, 5));
 
@@ -219,6 +215,30 @@ class TeachingSourcePageEvidenceRefinerTest {
         assertThat(result.state()).isEqualTo(TeachingSectionEvidenceRetriever.State.VERIFIED);
         assertThat(result.evidence()).containsExactly(initial);
         assertThat(result.toolCalls()).isEqualTo(2);
+    }
+
+    @Test
+    void keepsSearchRelevantEvidenceFirstWhileRoundRobiningCanonicalChunksAcrossPages() {
+        RuleEvidence pageTwoSearchHit = evidence(UUID.randomUUID(), 2, "Relevant hit on the first planned page.");
+        RuleEvidence pageFiveSearchHit = evidence(UUID.randomUUID(), 5, "Relevant hit on the second planned page.");
+        List<RuleEvidence> canonical = new java.util.ArrayList<>();
+        canonical.add(pageTwoSearchHit);
+        canonical.add(pageFiveSearchHit);
+        for (int index = 1; index <= 5; index++) {
+            canonical.add(evidence(UUID.randomUUID(), 2, "Opaque page two clause " + index));
+        }
+        for (int index = 1; index <= 5; index++) {
+            canonical.add(evidence(UUID.randomUUID(), 5, "Opaque page five clause " + index));
+        }
+        TeachingPlan plan = plan(List.of(2, 5));
+
+        var result = refiner(scopes(), tools(canonical), new RecordingInvocations())
+                .refine(plan, plan.sections().getFirst(), runId, verified(2, pageTwoSearchHit, pageFiveSearchHit));
+
+        assertThat(result.evidence()).hasSize(8);
+        assertThat(result.evidence().subList(0, 2)).containsExactly(pageTwoSearchHit, pageFiveSearchHit);
+        assertThat(result.evidence().stream().filter(source -> source.pageFrom() == 2)).hasSize(4);
+        assertThat(result.evidence().stream().filter(source -> source.pageFrom() == 5)).hasSize(4);
     }
 
     private TeachingSourcePageEvidenceRefiner refiner(

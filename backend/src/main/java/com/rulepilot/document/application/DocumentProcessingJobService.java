@@ -5,6 +5,7 @@ import com.rulepilot.document.DocumentProcessingStage;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.UUID;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -16,6 +17,7 @@ public class DocumentProcessingJobService implements DocumentProcessingJobs {
     private final DocumentProcessingJobStore jobs;
     private final Clock clock;
 
+    @Autowired
     public DocumentProcessingJobService(DocumentProcessingJobStore jobs) {
         this(jobs, Clock.systemUTC());
     }

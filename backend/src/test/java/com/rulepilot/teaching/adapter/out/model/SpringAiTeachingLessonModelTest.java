@@ -102,10 +102,21 @@ class SpringAiTeachingLessonModelTest {
     }
 
     @Test
-    void serializesSectionRequestsWhenEitherAssignedRoleUsesQwen() {
+    void keepsDeepSeekTeachingParallelWhenOnlyTheLaterVisualRoleUsesQwen() {
         RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
         when(configuration.providerFor(Role.TEACHING, "player")).thenReturn("deepseek");
         when(configuration.providerFor(Role.VISUAL, "player")).thenReturn("qwen");
+        SpringAiTeachingLessonModel model = new SpringAiTeachingLessonModel(
+                configuration, new FakeTeachingLessonModel(), mock(VersionedAgentPrompts.class));
+
+        assertThat(model.maxConcurrentSectionRequests("player")).isEqualTo(Integer.MAX_VALUE);
+    }
+
+    @Test
+    void serializesSectionRequestsWhenTeachingItselfUsesQwen() {
+        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        when(configuration.providerFor(Role.TEACHING, "player")).thenReturn("qwen");
+        when(configuration.providerFor(Role.VISUAL, "player")).thenReturn("deepseek");
         SpringAiTeachingLessonModel model = new SpringAiTeachingLessonModel(
                 configuration, new FakeTeachingLessonModel(), mock(VersionedAgentPrompts.class));
 

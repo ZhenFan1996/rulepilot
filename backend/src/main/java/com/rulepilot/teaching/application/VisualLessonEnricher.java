@@ -9,8 +9,10 @@ import com.rulepilot.teaching.domain.IllustratedLesson.LessonSection;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonStep;
 import com.rulepilot.teaching.domain.IllustratedLesson.VisualFocus;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.Consumer;
@@ -146,9 +148,10 @@ public class VisualLessonEnricher {
             VisualProgressListener progress) {
         if (progress == null) throw new IllegalArgumentException("visual enrichment progress listener is required");
         var map = understanding.understanding(documentVersionId);
+        Map<Integer, Set<Integer>> explicitVisualStepPositions = explicitVisualStepPositions(lesson);
         IllustratedLesson readerReadyLesson = mergePolicy.discardOverlyBroadVisuals(lesson);
         Set<Integer> selectedPositions = prioritizer.positions(
-                readerReadyLesson.sections(), maxSections, maxVisualStepsPerSection);
+                lesson.sections(), maxSections, maxVisualStepsPerSection);
         List<VisualFocus> acceptedVisuals = readerReadyLesson.sections().stream()
                 .flatMap(section -> section.steps().stream())
                 .map(LessonStep::visualFocus)
@@ -161,7 +164,14 @@ public class VisualLessonEnricher {
             LessonSection section = readerReadyLesson.sections().get(sectionIndex);
             if (!selectedPositions.contains(section.position())) continue;
             VisualLessonSectionEnricher.Result enriched = sectionEnricher.enrich(
-                    map, documentVersionId, section, modelConfigurationOwner, runId, progress, acceptedVisuals);
+                    map,
+                    documentVersionId,
+                    section,
+                    modelConfigurationOwner,
+                    runId,
+                    progress,
+                    acceptedVisuals,
+                    explicitVisualStepPositions.getOrDefault(section.position(), Set.of()));
             SectionResult sectionResult = sectionResult(enriched);
             sectionResults.add(sectionResult);
             currentSections.set(sectionIndex, sectionResult.section());
@@ -178,6 +188,19 @@ public class VisualLessonEnricher {
         return new EnrichmentResult(
                 enriched,
                 sectionResults.stream().map(SectionResult::outcome).filter(java.util.Objects::nonNull).toList());
+    }
+
+    private Map<Integer, Set<Integer>> explicitVisualStepPositions(IllustratedLesson lesson) {
+        Map<Integer, Set<Integer>> positions = new LinkedHashMap<>();
+        for (LessonSection section : lesson.sections()) {
+            Set<Integer> sectionPositions = section.steps().stream()
+                    .filter(step -> step.kind() == IllustratedLesson.TeachingMove.VISUAL)
+                    .filter(step -> step.visualFocus() == null || cropPolicy.needsTighterReaderCrop(step.visualFocus()))
+                    .map(LessonStep::position)
+                    .collect(Collectors.toCollection(LinkedHashSet::new));
+            if (!sectionPositions.isEmpty()) positions.put(section.position(), Set.copyOf(sectionPositions));
+        }
+        return Map.copyOf(positions);
     }
 
     private IllustratedLesson lessonWithSections(IllustratedLesson original, List<LessonSection> sections) {

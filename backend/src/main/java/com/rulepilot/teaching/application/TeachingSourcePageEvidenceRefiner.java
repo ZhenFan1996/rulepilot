@@ -21,14 +21,14 @@ import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 
-/** Fills validated planned-page gaps through one scope-bound, audited canonical read. */
+/** Completes validated planned-page evidence through one scope-bound, audited canonical read. */
 @Service
 @Profile("!test")
 public class TeachingSourcePageEvidenceRefiner implements TeachingEvidenceRefiner {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(TeachingSourcePageEvidenceRefiner.class);
     private static final int MAX_EVIDENCE_PER_SECTION = 10;
-    private static final int MAX_EVIDENCE_CHUNKS_PER_PAGE = 3;
+    private static final int MAX_EVIDENCE_CHUNKS_PER_PAGE = 4;
     private static final int MAX_OBSERVED_EVIDENCE = 24;
 
     private final NativeToolScopes scopes;
@@ -56,8 +56,8 @@ public class TeachingSourcePageEvidenceRefiner implements TeachingEvidenceRefine
         if (ProgressiveVisualTeachingPlanPolicy.isProgressive(plan)) return deterministic;
         if (!TeachingEvidenceRefinementPolicy.requiresRefinement(planned, deterministic)) return deterministic;
         if (scopes.create(plan.createdBy(), plan.documentVersionId(), assistantRunId).isEmpty()) return deterministic;
-        List<Integer> missingSourcePages = missingSourcePages(planned, deterministic.evidence());
-        if (missingSourcePages.isEmpty()) return deterministic;
+        List<Integer> plannedSourcePages = plannedSourcePages(planned);
+        if (plannedSourcePages.isEmpty()) return deterministic;
 
         List<RuleEvidence> observed;
         try {
@@ -65,10 +65,10 @@ public class TeachingSourcePageEvidenceRefiner implements TeachingEvidenceRefine
                     assistantRunId,
                     ActivityType.TOOL,
                     operationName(planned.position()),
-                    missingSourcePages.size(),
+                    plannedSourcePages.size(),
                     "Validated teaching source pages read",
                     () -> tools.readRuleEvidencePages(
-                                    plan.documentVersionId(), Set.copyOf(missingSourcePages), false)
+                                    plan.documentVersionId(), Set.copyOf(plannedSourcePages), false)
                             .stream()
                             .limit(MAX_OBSERVED_EVIDENCE)
                             .toList(),
@@ -86,7 +86,7 @@ public class TeachingSourcePageEvidenceRefiner implements TeachingEvidenceRefine
                 plan.documentVersionId(),
                 deterministic,
                 observed,
-                Set.copyOf(missingSourcePages),
+                Set.copyOf(plannedSourcePages),
                 deterministic.toolCalls() + 1);
     }
 
@@ -98,7 +98,7 @@ public class TeachingSourcePageEvidenceRefiner implements TeachingEvidenceRefine
             int totalToolCalls) {
         Map<UUID, RuleEvidence> merged = new LinkedHashMap<>();
         deterministic.evidence().forEach(source -> merged.put(source.chunkId(), source));
-        List<RuleEvidence> prioritized = new ArrayList<>();
+        List<RuleEvidence> canonicalExtras = new ArrayList<>();
         for (RuleEvidence source : observed) {
             if (!documentVersionId.equals(source.documentVersionId())) {
                 return invalid(totalToolCalls);
@@ -111,18 +111,14 @@ public class TeachingSourcePageEvidenceRefiner implements TeachingEvidenceRefine
                 return invalid(totalToolCalls);
             }
             merged.put(source.chunkId(), source);
-            prioritized.add(source);
+            if (existing == null) canonicalExtras.add(source);
         }
-        if (prioritized.isEmpty()) {
+        if (observed.isEmpty()) {
             return new TeachingSectionEvidenceRetriever.Result(
                     deterministic.evidence(), totalToolCalls, deterministic.state());
         }
-        Set<UUID> observedIds = prioritized.stream()
-                .map(RuleEvidence::chunkId)
-                .collect(java.util.stream.Collectors.toUnmodifiableSet());
-        deterministic.evidence().stream()
-                .filter(source -> !observedIds.contains(source.chunkId()))
-                .forEach(prioritized::add);
+        List<RuleEvidence> prioritized = new ArrayList<>(deterministic.evidence());
+        prioritized.addAll(canonicalExtras);
         List<RuleEvidence> selected = selectPageDiverseEvidence(prioritized);
         boolean verified = evidenceVerifier.verify(new VerificationRequest(
                         documentVersionId,
@@ -141,26 +137,27 @@ public class TeachingSourcePageEvidenceRefiner implements TeachingEvidenceRefine
     }
 
     private List<RuleEvidence> selectPageDiverseEvidence(List<RuleEvidence> prioritized) {
-        Map<String, Integer> chunksPerPage = new LinkedHashMap<>();
-        List<RuleEvidence> selected = new ArrayList<>();
+        Map<String, List<RuleEvidence>> evidenceByPage = new LinkedHashMap<>();
         for (RuleEvidence source : prioritized) {
             String pageKey = source.pageFrom() + ":" + source.pageTo();
-            int pageCount = chunksPerPage.getOrDefault(pageKey, 0);
-            if (pageCount >= MAX_EVIDENCE_CHUNKS_PER_PAGE) continue;
-            selected.add(source);
-            chunksPerPage.put(pageKey, pageCount + 1);
-            if (selected.size() == MAX_EVIDENCE_PER_SECTION) break;
+            List<RuleEvidence> pageEvidence = evidenceByPage.computeIfAbsent(pageKey, ignored -> new ArrayList<>());
+            if (pageEvidence.stream().noneMatch(existing -> existing.chunkId().equals(source.chunkId()))) {
+                pageEvidence.add(source);
+            }
+        }
+        List<RuleEvidence> selected = new ArrayList<>();
+        for (int rank = 0; rank < MAX_EVIDENCE_CHUNKS_PER_PAGE; rank++) {
+            for (List<RuleEvidence> pageEvidence : evidenceByPage.values()) {
+                if (rank >= pageEvidence.size()) continue;
+                selected.add(pageEvidence.get(rank));
+                if (selected.size() == MAX_EVIDENCE_PER_SECTION) return List.copyOf(selected);
+            }
         }
         return List.copyOf(selected);
     }
 
-    private List<Integer> missingSourcePages(
-            TeachingPlan.PlannedSection planned, List<RuleEvidence> evidence) {
-        Set<Integer> evidencedPages = evidence.stream()
-                .flatMap(source -> java.util.stream.IntStream.rangeClosed(source.pageFrom(), source.pageTo()).boxed())
-                .collect(java.util.stream.Collectors.toSet());
+    private List<Integer> plannedSourcePages(TeachingPlan.PlannedSection planned) {
         return planned.sourcePageNumbers().stream()
-                .filter(page -> !evidencedPages.contains(page))
                 .distinct()
                 .limit(5)
                 .toList();

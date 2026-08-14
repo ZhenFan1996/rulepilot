@@ -10,8 +10,22 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
+import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 
 class DocumentProcessingJobServiceTest {
+
+    @Test
+    void startsFromTheProductionProfileWithTheExplicitDependencyConstructor() {
+        DocumentProcessingJobStore jobs = mock(DocumentProcessingJobStore.class);
+
+        try (var context = new AnnotationConfigApplicationContext()) {
+            context.registerBean(DocumentProcessingJobStore.class, () -> jobs);
+            context.register(DocumentProcessingJobService.class);
+            context.refresh();
+
+            assertThat(context.getBean(DocumentProcessingJobService.class)).isNotNull();
+        }
+    }
 
     @Test
     void returnsTheSameTerminalTimestampThatItPersists() {
