@@ -3,6 +3,8 @@ package com.rulepilot.recommendation.adapter.in.web;
 import com.rulepilot.catalog.BggRecommendationPresentation;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ProgressUpdate;
+import com.rulepilot.recommendation.application.RecommendationConversationCoordinator;
+import com.rulepilot.recommendation.application.RecommendationConversationException;
 import java.io.IOException;
 import java.security.Principal;
 import java.util.Locale;
@@ -10,6 +12,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Profile;
 import org.springframework.core.task.TaskExecutor;
 import org.springframework.http.MediaType;
@@ -29,14 +32,25 @@ public class BggRecommendationAgentStreamController {
     private final BoardGameRecommendationAgent agent;
     private final BggRecommendationPresentation presentation;
     private final TaskExecutor executor;
+    private final RecommendationConversationCoordinator conversations;
 
+    @Autowired
     public BggRecommendationAgentStreamController(
             BoardGameRecommendationAgent agent,
             BggRecommendationPresentation presentation,
-            @Qualifier("bggRecommendationStreamExecutor") TaskExecutor executor) {
+            @Qualifier("bggRecommendationStreamExecutor") TaskExecutor executor,
+            RecommendationConversationCoordinator conversations) {
         this.agent = agent;
         this.presentation = presentation;
         this.executor = executor;
+        this.conversations = conversations;
+    }
+
+    BggRecommendationAgentStreamController(
+            BoardGameRecommendationAgent agent,
+            BggRecommendationPresentation presentation,
+            TaskExecutor executor) {
+        this(agent, presentation, executor, null);
     }
 
     @PostMapping(
@@ -56,7 +70,7 @@ public class BggRecommendationAgentStreamController {
             executor.execute(() -> runConversation(
                     emitter, open, request, locale, modelConfigurationOwner));
         } catch (RuntimeException exception) {
-            sendError(emitter, open);
+            sendError(emitter, open, "recommendation_unavailable");
         }
         return emitter;
     }
@@ -68,19 +82,33 @@ public class BggRecommendationAgentStreamController {
             String locale,
             String modelConfigurationOwner) {
         try {
-            var response = agent.converse(
-                    request.toCommand(),
-                    locale,
-                    modelConfigurationOwner,
-                    update -> sendProgress(emitter, open, update));
+            var presented = request.clientTurnId() != null && conversations != null
+                    ? BggRecommendationAgentController.present(
+                            conversations.converse(
+                                    request.toSessionTurn(),
+                                    locale,
+                                    modelConfigurationOwner,
+                                    update -> sendProgress(emitter, open, update)),
+                            presentation)
+                    : BggRecommendationAgentController.present(
+                            agent.converse(
+                                    request.toCommand(),
+                                    locale,
+                                    modelConfigurationOwner,
+                                    update -> sendProgress(emitter, open, update)),
+                            locale,
+                            presentation);
             if (!open.get()) return;
             emitter.send(SseEmitter.event()
                     .name("result")
-                    .data(BggRecommendationAgentController.present(response, locale, presentation)));
+                    .data(presented));
             emitter.complete();
         } catch (RuntimeException | IOException exception) {
             LOGGER.warn("Recommendation stream did not complete: {}", exception.getClass().getSimpleName());
-            sendError(emitter, open);
+            String code = exception instanceof RecommendationConversationException conversationFailure
+                    ? conversationFailure.code().name().toLowerCase(Locale.ROOT)
+                    : "recommendation_unavailable";
+            sendError(emitter, open, code);
         }
     }
 
@@ -93,16 +121,16 @@ public class BggRecommendationAgentStreamController {
                             update.stage().name().toLowerCase(Locale.ROOT), update.elapsedMs())));
         } catch (IOException | RuntimeException exception) {
             open.set(false);
-            throw new ProgressDisconnectedException(exception);
+            LOGGER.debug("Recommendation progress stream disconnected before completion");
         }
     }
 
-    private void sendError(SseEmitter emitter, AtomicBoolean open) {
+    private void sendError(SseEmitter emitter, AtomicBoolean open, String code) {
         if (!open.getAndSet(false)) return;
         try {
             emitter.send(SseEmitter.event()
                     .name("error")
-                    .data(new StreamError("recommendation_unavailable")));
+                    .data(new StreamError(code)));
         } catch (IOException | RuntimeException ignored) {
             // The client may already have closed the stream.
         } finally {
@@ -113,10 +141,4 @@ public class BggRecommendationAgentStreamController {
     record ProgressResponse(String stage, long elapsedMs) {}
 
     record StreamError(String code) {}
-
-    private static final class ProgressDisconnectedException extends RuntimeException {
-        private ProgressDisconnectedException(Throwable cause) {
-            super(cause);
-        }
-    }
 }

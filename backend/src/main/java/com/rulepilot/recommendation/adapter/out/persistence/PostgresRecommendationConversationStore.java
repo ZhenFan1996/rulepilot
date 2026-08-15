@@ -1,0 +1,260 @@
+package com.rulepilot.recommendation.adapter.out.persistence;
+
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.DeserializationFeature;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ConversationResponse;
+import com.rulepilot.recommendation.application.RecommendationConversationStore;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Timestamp;
+import java.time.Instant;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.UUID;
+import org.springframework.context.annotation.Profile;
+import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
+import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
+import org.springframework.stereotype.Repository;
+import org.springframework.transaction.annotation.Transactional;
+
+@Repository
+@Profile("!test")
+public class PostgresRecommendationConversationStore implements RecommendationConversationStore {
+
+    private static final String SELECT_COLUMNS = """
+            select id, owner_username, revision, state_json,
+                   last_client_turn_id, last_request_fingerprint, last_response_json, last_response_locale,
+                   active_client_turn_id, active_request_fingerprint, active_started_at,
+                   created_at, updated_at
+            from recommendation_conversation
+            """;
+
+    private final NamedParameterJdbcTemplate jdbc;
+    private final ObjectMapper json;
+
+    public PostgresRecommendationConversationStore(
+            NamedParameterJdbcTemplate jdbc,
+            ObjectMapper json) {
+        this.jdbc = jdbc;
+        this.json = json.copy()
+                .findAndRegisterModules()
+                .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
+    }
+
+    @Override
+    @Transactional
+    public StoredConversation createIfAbsent(
+            UUID conversationId,
+            String ownerUsername,
+            ConversationState initialState,
+            Instant now) {
+        jdbc.update(
+                """
+                insert into recommendation_conversation (
+                    id, owner_username, revision, state_json, created_at, updated_at
+                ) values (
+                    :id, :owner, 0, cast(:stateJson as jsonb), :now, :now
+                )
+                on conflict (owner_username) do nothing
+                """,
+                new MapSqlParameterSource()
+                        .addValue("id", conversationId)
+                        .addValue("owner", ownerUsername)
+                        .addValue("stateJson", write(initialState))
+                        .addValue("now", Timestamp.from(now)));
+        return findLatestOwned(ownerUsername)
+                .orElseThrow(() -> new IllegalStateException("recommendation conversation was not created"));
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Optional<StoredConversation> findOwned(UUID conversationId, String ownerUsername) {
+        return one(
+                SELECT_COLUMNS + " where id = :id and owner_username = :owner",
+                Map.of("id", conversationId, "owner", ownerUsername));
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Optional<StoredConversation> findLatestOwned(String ownerUsername) {
+        return one(
+                SELECT_COLUMNS + " where owner_username = :owner",
+                Map.of("owner", ownerUsername));
+    }
+
+    @Override
+    @Transactional
+    public boolean claimTurn(
+            UUID conversationId,
+            String ownerUsername,
+            long expectedRevision,
+            UUID clientTurnId,
+            String requestFingerprint,
+            Instant startedAt,
+            Instant staleBefore) {
+        int updated = jdbc.update(
+                """
+                update recommendation_conversation
+                set active_client_turn_id = :clientTurnId,
+                    active_request_fingerprint = :fingerprint,
+                    active_started_at = :startedAt,
+                    updated_at = :startedAt
+                where id = :id
+                  and owner_username = :owner
+                  and revision = :expectedRevision
+                  and (
+                    active_client_turn_id is null
+                    or (
+                      active_client_turn_id = :clientTurnId
+                      and active_request_fingerprint = :fingerprint
+                      and active_started_at <= :staleBefore
+                    )
+                  )
+                """,
+                new MapSqlParameterSource()
+                        .addValue("id", conversationId)
+                        .addValue("owner", ownerUsername)
+                        .addValue("expectedRevision", expectedRevision)
+                        .addValue("clientTurnId", clientTurnId)
+                        .addValue("fingerprint", requestFingerprint)
+                        .addValue("startedAt", Timestamp.from(startedAt))
+                        .addValue("staleBefore", Timestamp.from(staleBefore)));
+        return updated == 1;
+    }
+
+    @Override
+    @Transactional
+    public boolean completeTurn(
+            UUID conversationId,
+            String ownerUsername,
+            long expectedRevision,
+            UUID clientTurnId,
+            String requestFingerprint,
+            ConversationState nextState,
+            ConversationResponse response,
+            String responseLocale,
+            Instant completedAt) {
+        int updated = jdbc.update(
+                """
+                update recommendation_conversation
+                set revision = revision + 1,
+                    state_json = cast(:stateJson as jsonb),
+                    last_client_turn_id = :clientTurnId,
+                    last_request_fingerprint = :fingerprint,
+                    last_response_json = cast(:responseJson as jsonb),
+                    last_response_locale = :responseLocale,
+                    active_client_turn_id = null,
+                    active_request_fingerprint = null,
+                    active_started_at = null,
+                    updated_at = :completedAt
+                where id = :id
+                  and owner_username = :owner
+                  and revision = :expectedRevision
+                  and active_client_turn_id = :clientTurnId
+                  and active_request_fingerprint = :fingerprint
+                """,
+                new MapSqlParameterSource()
+                        .addValue("id", conversationId)
+                        .addValue("owner", ownerUsername)
+                        .addValue("expectedRevision", expectedRevision)
+                        .addValue("clientTurnId", clientTurnId)
+                        .addValue("fingerprint", requestFingerprint)
+                        .addValue("stateJson", write(nextState))
+                        .addValue("responseJson", write(response))
+                        .addValue("responseLocale", responseLocale)
+                        .addValue("completedAt", Timestamp.from(completedAt)));
+        return updated == 1;
+    }
+
+    @Override
+    @Transactional
+    public void releaseTurn(
+            UUID conversationId,
+            String ownerUsername,
+            long expectedRevision,
+            UUID clientTurnId,
+            String requestFingerprint,
+            Instant releasedAt) {
+        jdbc.update(
+                """
+                update recommendation_conversation
+                set active_client_turn_id = null,
+                    active_request_fingerprint = null,
+                    active_started_at = null,
+                    updated_at = :releasedAt
+                where id = :id
+                  and owner_username = :owner
+                  and revision = :expectedRevision
+                  and active_client_turn_id = :clientTurnId
+                  and active_request_fingerprint = :fingerprint
+                """,
+                new MapSqlParameterSource()
+                        .addValue("id", conversationId)
+                        .addValue("owner", ownerUsername)
+                        .addValue("expectedRevision", expectedRevision)
+                        .addValue("clientTurnId", clientTurnId)
+                        .addValue("fingerprint", requestFingerprint)
+                        .addValue("releasedAt", Timestamp.from(releasedAt)));
+    }
+
+    @Override
+    @Transactional
+    public boolean deleteOwned(UUID conversationId, String ownerUsername) {
+        return jdbc.update(
+                        """
+                        delete from recommendation_conversation
+                        where id = :id and owner_username = :owner
+                        """,
+                        Map.of("id", conversationId, "owner", ownerUsername))
+                == 1;
+    }
+
+    private Optional<StoredConversation> one(String sql, Map<String, ?> parameters) {
+        List<StoredConversation> rows = jdbc.query(sql, parameters, this::row);
+        return rows.stream().findFirst();
+    }
+
+    private StoredConversation row(ResultSet result, int rowNumber) throws SQLException {
+        return new StoredConversation(
+                result.getObject("id", UUID.class),
+                result.getString("owner_username"),
+                result.getLong("revision"),
+                read(result.getString("state_json"), ConversationState.class),
+                result.getObject("last_client_turn_id", UUID.class),
+                result.getString("last_request_fingerprint"),
+                readNullable(result.getString("last_response_json"), ConversationResponse.class),
+                result.getString("last_response_locale"),
+                result.getObject("active_client_turn_id", UUID.class),
+                result.getString("active_request_fingerprint"),
+                instant(result, "active_started_at"),
+                instant(result, "created_at"),
+                instant(result, "updated_at"));
+    }
+
+    private Instant instant(ResultSet result, String column) throws SQLException {
+        Timestamp value = result.getTimestamp(column);
+        return value == null ? null : value.toInstant();
+    }
+
+    private String write(Object value) {
+        try {
+            return json.writeValueAsString(value);
+        } catch (JsonProcessingException exception) {
+            throw new IllegalStateException("recommendation conversation could not be serialized", exception);
+        }
+    }
+
+    private <T> T read(String value, Class<T> type) {
+        try {
+            return json.readValue(value, type);
+        } catch (JsonProcessingException exception) {
+            throw new IllegalStateException("recommendation conversation could not be deserialized", exception);
+        }
+    }
+
+    private <T> T readNullable(String value, Class<T> type) {
+        return value == null ? null : read(value, type);
+    }
+}

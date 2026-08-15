@@ -82,7 +82,8 @@ describe('GameRecommendationAgent', () => {
     const returned = await mountAgent({}, { sessionIdentity: 'player' })
     expect((returned.get('textarea').element as HTMLTextAreaElement).value)
       .toBe('4 个人，想玩 60 分钟内、全程都有参与感的游戏')
-    expect(fetchMock).not.toHaveBeenCalled()
+    expect(fetchMock).toHaveBeenCalledOnce()
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe('/api/v1/bgg/recommendation-agent/session')
   })
 
   it('turns an expired-session 401 into the same recoverable sign-in gate', async () => {
@@ -133,12 +134,13 @@ describe('GameRecommendationAgent', () => {
     expect(returned.text()).toContain('我核对了这款候选，可以继续比较。')
     expect(returned.text()).toContain('上次已核对候选：展翅翱翔')
     expect(returned.text()).toContain('4 人')
-    expect(fetchMock).not.toHaveBeenCalled()
+    expect(fetchMock).toHaveBeenCalledOnce()
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe('/api/v1/bgg/recommendation-agent/session')
 
     await returned.get('textarea').setValue('那它和我前面说的自然主题偏好怎么取舍？')
     await returned.get('form').trigger('submit')
     await flushPromises()
-    const continuedRequest = fetchMock.mock.calls.find(([input]) => String(input).includes('/recommendation-agent'))
+    const continuedRequest = fetchMock.mock.calls.find(([input]) => String(input).includes('/recommendation-agent/stream'))
     const continuedBody = JSON.parse(String(continuedRequest?.[1]?.body)) as {
       knownGames: Array<{ bggId: number; name: string; originalName: string }>
       transcript: Array<{ role: string; text: string }>
@@ -157,10 +159,97 @@ describe('GameRecommendationAgent', () => {
     expect(otherAccount.text()).not.toContain('上次已核对候选')
   })
 
+  it('restores the owner-scoped server conversation as authoritative and continues at its revision', async () => {
+    const conversationId = '2efc8376-883b-4ec0-b310-e1fc39a75473'
+    const englishGame = { ...game, name: 'Wingspan', nameLocalized: false }
+    const requests: Array<Record<string, unknown>> = []
+    const restoredProfile = {
+      ...baseProfile,
+      players: 4,
+      maxMinutes: 180,
+      maxWeight: 3.2,
+      playerCount: { minimum: 3, maximum: 4, strength: 'hard', sourceText: '3–4 players', confirmedTurn: 1 },
+      durationMinutes: { minimum: 120, maximum: 180, strength: 'hard', sourceText: '120–180 minutes', confirmedTurn: 1 },
+      complexity: { minimum: 2.4, maximum: 3.2, strength: 'soft', sourceText: 'prefer 2.4–3.2', confirmedTurn: 1 },
+    }
+    const latestResponse = {
+      conversationId, revision: 4, clientTurnId: null, replayed: true, responseLocale: 'en',
+      outcome: 'recommendations', mode: 'model_assisted', assistantMessage: 'These are the verified options so far.',
+      profile: restoredProfile, clarification: null,
+      sourceCount: 179737, candidatesEvaluated: 1,
+      games: [{ game: englishGame, matches: ['Supports 4 players'], tradeoffs: [] }],
+    }
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const path = String(input)
+      if (path === '/api/v1/bgg/recommendation-agent/session') {
+        return Response.json({
+          conversationId,
+          revision: 4,
+          profile: latestResponse.profile,
+          transcript: [
+            { role: 'user', text: 'Four players, around 90 minutes.' },
+            { role: 'assistant', text: latestResponse.assistantMessage },
+          ],
+          knownGames: [{ bggId: game.bggId, name: 'Wingspan', originalName: 'Wingspan' }],
+          shownBggIds: [game.bggId],
+          processing: false,
+          processingSince: null,
+          latestResponse,
+        })
+      }
+      if (path === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      const request = JSON.parse(String(init?.body)) as Record<string, unknown>
+      requests.push(request)
+      return Response.json({
+        ...latestResponse,
+        revision: 5,
+        clientTurnId: request.clientTurnId,
+        replayed: false,
+        assistantMessage: 'I kept the restored candidates and checked the next question.',
+        outcome: 'conversation',
+        games: [],
+      })
+    }))
+
+    const wrapper = await mountAgent({}, { sessionIdentity: 'alice' })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Four players, around 90 minutes.')
+    expect(wrapper.text()).toContain('These are the verified options so far.')
+    expect(wrapper.text()).toContain('Wingspan')
+    expect(wrapper.findAll('[data-testid="recommendation-game-card"]')).toHaveLength(1)
+    expect(wrapper.findAll('button').some(button => button.text() === 'Tell me more')).toBe(true)
+
+    await wrapper.get('textarea').setValue('Keep those candidates and compare the uncertainty.')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    expect(requests).toHaveLength(1)
+    expect(requests[0]).toMatchObject({
+      conversationId,
+      revision: 4,
+      message: 'Keep those candidates and compare the uncertainty.',
+      shownBggIds: [game.bggId],
+    })
+    expect(requests[0]?.profile).toEqual({
+      type: 'all',
+      interaction: 'any',
+      playerCount: restoredProfile.playerCount,
+      durationMinutes: restoredProfile.durationMinutes,
+      complexity: restoredProfile.complexity,
+    })
+    expect(String(requests[0]?.clientTurnId)).toHaveLength(36)
+    expect(wrapper.text()).toContain('I kept the restored candidates and checked the next question.')
+  })
+
   it('restores a failed turn and its one-click retry without replaying it on mount', async () => {
-    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+    const requestBodies: Array<Record<string, unknown>> = []
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       if (String(input) === '/api/auth/csrf') {
         return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      }
+      if (String(input).includes('/recommendation-agent/stream')) {
+        requestBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>)
       }
       throw new Error('offline')
     })
@@ -178,7 +267,16 @@ describe('GameRecommendationAgent', () => {
     expect(returned.text()).toContain('想换一批互动更多的候选')
     expect(returned.text()).toContain('刚才没有接上')
     expect(returned.findAll('button').some(button => button.text() === '重试')).toBe(true)
-    expect(fetchMock).not.toHaveBeenCalled()
+    expect(fetchMock).toHaveBeenCalledOnce()
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe('/api/v1/bgg/recommendation-agent/session')
+
+    await returned.findAll('button').find(button => button.text() === '重试')!.trigger('click')
+    await flushPromises()
+    expect(requestBodies).toHaveLength(2)
+    expect(requestBodies[1]).toMatchObject({
+      message: '想换一批互动更多的候选',
+      clientTurnId: requestBodies[0]?.clientTurnId,
+    })
   })
 
   it('clears one account immediately when the same mounted page switches owners, then restores it safely', async () => {
@@ -315,8 +413,16 @@ describe('GameRecommendationAgent', () => {
       if (String(input) === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
       return Response.json({
         outcome: 'no_match', mode: 'model_assisted',
-        assistantMessage: '这批高排名候选里没有同时满足这些硬条件的桌游。可以放宽时长、复杂度或人数后再试。',
-        profile: { ...baseProfile, players: 8, maxMinutes: 30, maxWeight: 2.3 }, clarification: null,
+        assistantMessage: '20 个已核对候选中没有同时满足全部硬条件的桌游。最小可行调整是只临时放宽时长；不会自动更改你的条件。',
+        profile: { ...baseProfile, players: 8, maxMinutes: 30, maxWeight: 2.3 },
+        clarification: {
+          field: 'conversation',
+          prompt: '要只临时放宽时长，保留人数和复杂度硬条件吗？',
+          options: [{
+            value: '只把“30 分钟以内”临时改为软偏好，其他硬条件不变',
+            label: '仅放宽时长',
+          }],
+        },
         sourceCount: 179737, candidatesEvaluated: 20, games: [],
       })
     })
@@ -327,11 +433,25 @@ describe('GameRecommendationAgent', () => {
     await wrapper.get('form').trigger('submit')
     await flushPromises()
 
-    const post = fetchMock.mock.calls.find(([input]) => String(input).includes('/recommendation-agent'))
+    const post = fetchMock.mock.calls.find(([input]) => String(input).includes('/recommendation-agent/stream'))
     expect(post?.[1]?.headers).toMatchObject({ 'X-CSRF-TOKEN': 'csrf' })
     expect(JSON.parse(String(post?.[1]?.body))).toMatchObject({ message: '8 个人，半小时，规则要简单' })
-    expect(wrapper.text()).toContain('没有同时满足这些硬条件')
+    expect(wrapper.text()).toContain('没有同时满足全部硬条件')
+    expect(wrapper.text()).toContain('不会自动更改你的条件')
     expect(wrapper.text()).toContain('8 人')
+    expect(wrapper.findAll('[data-testid="recommendation-game-card"]')).toHaveLength(0)
+
+    const relaxationOptions = wrapper.findAll('button')
+      .filter(button => button.text() === '仅放宽时长')
+    expect(relaxationOptions).toHaveLength(1)
+    await relaxationOptions[0]!.trigger('click')
+    await flushPromises()
+
+    const posts = fetchMock.mock.calls.filter(([input]) => String(input).includes('/recommendation-agent/stream'))
+    expect(posts).toHaveLength(2)
+    expect(JSON.parse(String(posts[1]?.[1]?.body))).toMatchObject({
+      message: '只把“30 分钟以内”临时改为软偏好，其他硬条件不变',
+    })
   })
 
   it('scrolls to the start of a newly returned recommendation turn instead of its card footer', async () => {
@@ -470,6 +590,116 @@ describe('GameRecommendationAgent', () => {
     expect(wrapper.get('[role="alert"] button').text()).toBe('重试')
   })
 
+  it('keeps an over-limit turn intact, explains the 500-character boundary, and never sends it', async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      if (String(input) === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      throw new Error('an over-limit turn must not reach the recommendation endpoint')
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const wrapper = await mountAgent()
+    const overLimit = '我'.repeat(501)
+
+    await wrapper.get('textarea').setValue(overLimit)
+    await flushPromises()
+
+    expect((wrapper.get('textarea').element as HTMLTextAreaElement).value).toBe(overLimit)
+    expect(wrapper.text()).toContain('501 / 500')
+    expect(wrapper.text()).toContain('请删减 1 个字后再发送')
+    expect(wrapper.get('button[type="submit"]').attributes('disabled')).toBeDefined()
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('requests the response language from the current turn while leaving the UI locale unchanged', async () => {
+    const requestedUrls: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      requestedUrls.push(String(input))
+      if (String(input) === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      return Response.json({
+        outcome: 'conversation', mode: 'model_assisted', assistantMessage: 'Here is the direct comparison.',
+        profile: baseProfile, clarification: null, sourceCount: 0, candidatesEvaluated: 0, games: [],
+      })
+    }))
+    const wrapper = await mountAgent()
+
+    await wrapper.get('textarea').setValue('Which one works better for exactly three players?')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    expect(requestedUrls).toContain('/api/v1/bgg/recommendation-agent/stream?locale=en')
+    expect(wrapper.text()).toContain('Here is the direct comparison.')
+    expect(wrapper.text()).toContain('今晚想玩什么？')
+  })
+
+  it('keeps a structured comparison in the same conversation and carries its candidates into the next turn', async () => {
+    const requests: Array<Record<string, unknown>> = []
+    let turn = 0
+    const secondGame = { ...game, bggId: 77, name: 'Loom City', originalName: 'Loom City', nameLocalized: false }
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      if (String(input) === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      requests.push(JSON.parse(String(init?.body)) as Record<string, unknown>)
+      turn += 1
+      if (turn === 1) {
+        return Response.json({
+          outcome: 'conversation', mode: 'model_assisted',
+          assistantMessage: 'I put these candidates side by side and kept the unsupported axis unknown.',
+          profile: baseProfile, clarification: null, sourceCount: 0, candidatesEvaluated: 2, games: [],
+          comparison: {
+            candidates: [
+              { game: { ...game, name: 'Wingspan', originalName: 'Wingspan', nameLocalized: false }, fitClaims: [] },
+              { game: secondGame, fitClaims: [] },
+            ],
+            axes: [
+              {
+                subject: 'durationMinutes', label: 'Listed duration', capability: 'structured_metadata',
+                cells: [
+                  { bggId: game.bggId, status: 'observed', observationKind: 'structured_metadata', value: '40–70 min' },
+                  { bggId: secondGame.bggId, status: 'observed', observationKind: 'structured_metadata', value: '45–60 min' },
+                ],
+              },
+              {
+                subject: 'reportedExperience', label: 'Sourced player experience', capability: 'attributed_report',
+                cells: [
+                  { bggId: game.bggId, status: 'unknown', observationKind: '', value: '' },
+                  { bggId: secondGame.bggId, status: 'unknown', observationKind: '', value: '' },
+                ],
+              },
+            ],
+          },
+        })
+      }
+      return Response.json({
+        outcome: 'conversation', mode: 'model_assisted', assistantMessage: 'I kept both candidates in context.',
+        profile: baseProfile, clarification: null, sourceCount: 0, candidatesEvaluated: 2, games: [],
+      })
+    }))
+    const wrapper = await mountAgent()
+
+    await wrapper.get('textarea').setValue('Compare their listed time and actual table feel; keep unknowns explicit.')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="candidate-comparison"]').text()).toContain('Side-by-side check')
+    expect(wrapper.text()).toContain('Wingspan')
+    expect(wrapper.text()).toContain('Loom City')
+    expect(wrapper.text().match(/Unknown from the available evidence/g)).toHaveLength(2)
+    expect(wrapper.text()).toContain('今晚想玩什么？')
+
+    await wrapper.get('textarea').setValue('Keep those two and tell me what evidence would resolve the unknown.')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    const nextRequest = requests[1]
+    if (!nextRequest) throw new Error('expected a second recommendation turn')
+    expect(nextRequest.knownGames).toEqual(expect.arrayContaining([
+      expect.objectContaining({ bggId: game.bggId, originalName: 'Wingspan' }),
+      expect.objectContaining({ bggId: secondGame.bggId, originalName: 'Loom City' }),
+    ]))
+    expect(nextRequest.shownBggIds).toEqual(expect.arrayContaining([game.bggId, secondGame.bggId]))
+    expect(wrapper.text()).toContain('I kept both candidates in context.')
+  })
+
   it('confirms reset, preserves unsent text, and does not silently clear on locale changes', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
       if (String(input) === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
@@ -508,6 +738,55 @@ describe('GameRecommendationAgent', () => {
     expect(wrapper.get('textarea').element).toHaveProperty('value', '这句还没有发送')
     expect(document.activeElement).toBe(wrapper.get('textarea').element)
     expect(wrapper.findAll('button').some(button => button.text() === 'Clear this conversation')).toBe(false)
+  })
+
+  it('keeps the visible conversation until the server confirms an owner-scoped reset', async () => {
+    const conversationId = '2efc8376-883b-4ec0-b310-e1fc39a75473'
+    let deleteAttempts = 0
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const path = String(input)
+      if (path === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      if (path.includes('/recommendation-agent/sessions/')) {
+        deleteAttempts += 1
+        return new Response(null, { status: deleteAttempts === 1 ? 503 : 204 })
+      }
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>
+      return Response.json({
+        conversationId,
+        revision: 1,
+        clientTurnId: body.clientTurnId,
+        replayed: false,
+        responseLocale: 'zh-CN',
+        outcome: 'conversation', mode: 'model_assisted', assistantMessage: '这段对话已经保存在服务器。',
+        profile: { ...baseProfile, players: 4 }, clarification: null,
+        sourceCount: 179737, candidatesEvaluated: 0, games: [],
+      })
+    }))
+    const wrapper = await mountAgent()
+    await wrapper.get('textarea').setValue('四个人继续聊')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    await wrapper.findAll('button').find(button => button.text() === '清空这次对话')!.trigger('click')
+    await flushPromises()
+    Array.from(document.body.querySelectorAll('button'))
+      .find(button => button.textContent === '重新开始')!
+      .click()
+    await flushPromises()
+
+    expect(deleteAttempts).toBe(1)
+    expect(document.body.textContent).toContain('服务器没有确认删除')
+    expect(wrapper.text()).toContain('四个人继续聊')
+    expect(wrapper.text()).toContain('这段对话已经保存在服务器。')
+
+    Array.from(document.body.querySelectorAll('button'))
+      .find(button => button.textContent === '重新尝试')!
+      .click()
+    await flushPromises()
+
+    expect(deleteAttempts).toBe(2)
+    expect(wrapper.text()).not.toContain('四个人继续聊')
+    expect(wrapper.text()).not.toContain('这段对话已经保存在服务器。')
   })
 
   it('opens the rulebook handoff directly from a recommendation card', async () => {

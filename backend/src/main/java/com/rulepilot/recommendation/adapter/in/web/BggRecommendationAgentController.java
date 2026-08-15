@@ -4,6 +4,7 @@ import com.rulepilot.catalog.BggGameType;
 import com.rulepilot.catalog.BggRecommendationPresentation;
 import com.rulepilot.catalog.BggRecommendationPresentation.LocalizedTaxonomy;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent;
+import com.rulepilot.recommendation.CandidateClaim;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ConversationRequest;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ConversationResponse;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.DialogueMessage;
@@ -11,13 +12,26 @@ import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.Int
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.KnownGame;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendationProfile;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendedGame;
+import com.rulepilot.recommendation.application.RecommendationConversationCoordinator;
+import com.rulepilot.recommendation.application.RecommendationConversationCoordinator.SessionSnapshot;
+import com.rulepilot.recommendation.application.RecommendationConversationCoordinator.SessionTurn;
+import com.rulepilot.recommendation.application.RecommendationConversationCoordinator.TurnResult;
+import com.rulepilot.recommendation.ConstraintRange;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.Details;
+import com.rulepilot.catalog.BoardGameRecommendationCatalog.Game;
 import java.math.BigDecimal;
 import java.security.Principal;
+import java.time.Instant;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.UUID;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Profile;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -29,12 +43,22 @@ public class BggRecommendationAgentController {
 
     private final BoardGameRecommendationAgent agent;
     private final BggRecommendationPresentation presentation;
+    private final RecommendationConversationCoordinator conversations;
 
+    @Autowired
     public BggRecommendationAgentController(
             BoardGameRecommendationAgent agent,
-            BggRecommendationPresentation presentation) {
+            BggRecommendationPresentation presentation,
+            RecommendationConversationCoordinator conversations) {
         this.agent = agent;
         this.presentation = presentation;
+        this.conversations = conversations;
+    }
+
+    BggRecommendationAgentController(
+            BoardGameRecommendationAgent agent,
+            BggRecommendationPresentation presentation) {
+        this(agent, presentation, null);
     }
 
     @PostMapping("/api/v1/bgg/recommendation-agent")
@@ -42,30 +66,89 @@ public class BggRecommendationAgentController {
             @RequestBody RecommendationConversationRequest request,
             @RequestParam(defaultValue = "en") String locale,
             Principal principal) {
+        if (request.clientTurnId() != null && conversations != null) {
+            TurnResult result = conversations.converse(
+                    request.toSessionTurn(), locale, principal.getName(), ignored -> {});
+            return present(result, presentation);
+        }
         ConversationResponse response = agent.converse(request.toCommand(), locale, principal.getName());
         return present(response, locale, presentation);
+    }
+
+    @GetMapping("/api/v1/bgg/recommendation-agent/session")
+    ResponseEntity<RecommendationSessionResponse> latest(
+            Principal principal) {
+        if (conversations == null) return ResponseEntity.noContent().build();
+        return conversations.latest(principal.getName())
+                .map(snapshot -> ResponseEntity.ok(RecommendationSessionResponse.from(snapshot, presentation)))
+                .orElseGet(() -> ResponseEntity.noContent().build());
+    }
+
+    @DeleteMapping("/api/v1/bgg/recommendation-agent/sessions/{conversationId}")
+    ResponseEntity<Void> delete(
+            @PathVariable UUID conversationId,
+            Principal principal) {
+        if (conversations != null) conversations.delete(conversationId, principal.getName());
+        return ResponseEntity.noContent().build();
+    }
+
+    static RecommendationConversationResponse present(
+            TurnResult result,
+            BggRecommendationPresentation presentation) {
+        return present(
+                result.response(),
+                result.responseLocale(),
+                presentation,
+                result.conversationId(),
+                result.revision(),
+                result.clientTurnId(),
+                result.replayed());
     }
 
     static RecommendationConversationResponse present(
             ConversationResponse response,
             String locale,
             BggRecommendationPresentation presentation) {
-        List<String> categories = response.games().stream()
-                .map(RecommendedGame::game)
+        return present(response, locale, presentation, null, null, null, false);
+    }
+
+    private static RecommendationConversationResponse present(
+            ConversationResponse response,
+            String locale,
+            BggRecommendationPresentation presentation,
+            UUID conversationId,
+            Long revision,
+            UUID clientTurnId,
+            boolean replayed) {
+        java.util.stream.Stream<Game> responseGames = java.util.stream.Stream.concat(
+                response.games().stream().map(RecommendedGame::game),
+                response.comparison() == null
+                        ? java.util.stream.Stream.empty()
+                        : response.comparison().candidates().stream()
+                                .map(BoardGameRecommendationAgent.ComparisonCandidate::game));
+        List<Game> presentedGames = responseGames.distinct().toList();
+        List<String> categories = presentedGames.stream()
                 .map(game -> game.details())
                 .filter(java.util.Objects::nonNull)
                 .flatMap(game -> game.categories().stream())
                 .distinct()
                 .toList();
-        List<String> mechanics = response.games().stream()
-                .map(RecommendedGame::game)
+        List<String> mechanics = presentedGames.stream()
                 .map(game -> game.details())
                 .filter(java.util.Objects::nonNull)
                 .flatMap(game -> game.mechanics().stream())
                 .distinct()
                 .toList();
         LocalizedTaxonomy taxonomy = presentation.localizeTaxonomy(categories, mechanics, locale);
-        return RecommendationConversationResponse.from(response, taxonomy, locale, presentation);
+        return RecommendationConversationResponse.from(
+                response,
+                taxonomy,
+                locale,
+                presentation,
+                conversationId,
+                revision,
+                clientTurnId,
+                replayed);
     }
 
     record RecommendationConversationRequest(
@@ -75,16 +158,19 @@ public class BggRecommendationAgentController {
             List<DialogueMessageRequest> transcript,
             Integer focusedBggId,
             List<KnownGameRequest> knownGames,
-            List<Integer> shownBggIds) {
+            List<Integer> shownBggIds,
+            UUID conversationId,
+            Long revision,
+            UUID clientTurnId) {
         RecommendationConversationRequest(RecommendationProfileRequest profile, String message) {
-            this(profile, message, List.of(), List.of(), null, List.of(), List.of());
+            this(profile, message, List.of(), List.of(), null, List.of(), List.of(), null, null, null);
         }
 
         RecommendationConversationRequest(
                 RecommendationProfileRequest profile,
                 String message,
                 List<Integer> excludedBggIds) {
-            this(profile, message, excludedBggIds, List.of(), null, List.of(), List.of());
+            this(profile, message, excludedBggIds, List.of(), null, List.of(), List.of(), null, null, null);
         }
 
         RecommendationConversationRequest(
@@ -93,7 +179,36 @@ public class BggRecommendationAgentController {
                 List<Integer> excludedBggIds,
                 List<DialogueMessageRequest> transcript,
                 Integer focusedBggId) {
-            this(profile, message, excludedBggIds, transcript, focusedBggId, List.of(), List.of());
+            this(profile, message, excludedBggIds, transcript, focusedBggId, List.of(), List.of(), null, null, null);
+        }
+
+        RecommendationConversationRequest(
+                RecommendationProfileRequest profile,
+                String message,
+                List<Integer> excludedBggIds,
+                List<DialogueMessageRequest> transcript,
+                Integer focusedBggId,
+                List<KnownGameRequest> knownGames,
+                List<Integer> shownBggIds) {
+            this(
+                    profile,
+                    message,
+                    excludedBggIds,
+                    transcript,
+                    focusedBggId,
+                    knownGames,
+                    shownBggIds,
+                    null,
+                    null,
+                    null);
+        }
+
+        SessionTurn toSessionTurn() {
+            return new SessionTurn(
+                    conversationId,
+                    revision == null ? 0 : revision,
+                    clientTurnId,
+                    toCommand());
         }
 
         ConversationRequest toCommand() {
@@ -123,18 +238,59 @@ public class BggRecommendationAgentController {
             Integer maxMinutes,
             BigDecimal maxWeight,
             String type,
-            String interaction) {
+            String interaction,
+            ConstraintRangeRequest<Integer> playerCount,
+            ConstraintRangeRequest<Integer> durationMinutes,
+            ConstraintRangeRequest<BigDecimal> complexity) {
+        RecommendationProfileRequest(
+                Integer players,
+                Integer maxMinutes,
+                BigDecimal maxWeight,
+                String type,
+                String interaction) {
+            this(players, maxMinutes, maxWeight, type, interaction, null, null, null);
+        }
+
         RecommendationProfile toProfile() {
             return new RecommendationProfile(
-                    players,
-                    maxMinutes,
-                    maxWeight,
+                    playerCount == null
+                            ? players == null ? null : ConstraintRange.hardExact(players)
+                            : playerCount.toRange(),
+                    durationMinutes == null
+                            ? maxMinutes == null || maxMinutes == 0 ? null : ConstraintRange.hardAtMost(maxMinutes)
+                            : durationMinutes.toRange(),
+                    complexity == null
+                            ? maxWeight == null || maxWeight.compareTo(BigDecimal.ZERO) == 0
+                                    ? null
+                                    : ConstraintRange.hardAtMost(maxWeight)
+                            : complexity.toRange(),
                     enumValue(BggGameType.class, type, BggGameType.ALL),
                     enumValue(InteractionPreference.class, interaction, InteractionPreference.ANY));
         }
     }
 
+    record ConstraintRangeRequest<T extends Comparable<? super T>>(
+            T minimum,
+            T maximum,
+            String strength,
+            String sourceText,
+            Integer confirmedTurn) {
+        ConstraintRange<T> toRange() {
+            return new ConstraintRange<>(
+                    minimum,
+                    maximum,
+                    enumValue(ConstraintRange.Strength.class, strength, ConstraintRange.Strength.HARD),
+                    sourceText,
+                    confirmedTurn == null ? 0 : confirmedTurn);
+        }
+    }
+
     record RecommendationConversationResponse(
+            UUID conversationId,
+            Long revision,
+            UUID clientTurnId,
+            boolean replayed,
+            String responseLocale,
             String outcome,
             String mode,
             String assistantMessage,
@@ -145,13 +301,23 @@ public class BggRecommendationAgentController {
             UserModelResponse userModel,
             List<ResearchSourceResponse> researchSources,
             HarnessResponse harness,
+            CandidateComparisonResponse comparison,
             List<RecommendedGameResponse> games) {
         static RecommendationConversationResponse from(
                 ConversationResponse response,
                 LocalizedTaxonomy taxonomy,
                 String locale,
-                BggRecommendationPresentation presentation) {
+                BggRecommendationPresentation presentation,
+                UUID conversationId,
+                Long revision,
+                UUID clientTurnId,
+                boolean replayed) {
             return new RecommendationConversationResponse(
+                    conversationId,
+                    revision,
+                    clientTurnId,
+                    replayed,
+                    locale,
                     response.outcome().name().toLowerCase(Locale.ROOT),
                     response.mode().name().toLowerCase(Locale.ROOT),
                     response.assistantMessage(),
@@ -162,9 +328,53 @@ public class BggRecommendationAgentController {
                     UserModelResponse.from(response.userModel()),
                     response.researchSources().stream().map(ResearchSourceResponse::from).toList(),
                     HarnessResponse.from(response.harness()),
+                    response.comparison() == null
+                            ? null
+                            : CandidateComparisonResponse.from(response.comparison(), taxonomy, locale, presentation),
                     response.games().stream()
                             .map(game -> RecommendedGameResponse.from(game, taxonomy, locale, presentation))
                             .toList());
+        }
+    }
+
+    record RecommendationSessionResponse(
+            UUID conversationId,
+            long revision,
+            RecommendationProfileResponse profile,
+            List<DialogueMessageRequest> transcript,
+            List<KnownGameRequest> knownGames,
+            List<Integer> shownBggIds,
+            boolean processing,
+            Instant processingSince,
+            RecommendationConversationResponse latestResponse) {
+        static RecommendationSessionResponse from(
+                SessionSnapshot snapshot,
+                BggRecommendationPresentation presentation) {
+            String responseLocale = snapshot.lastResponseLocale() == null ? "en" : snapshot.lastResponseLocale();
+            RecommendationConversationResponse latestResponse = snapshot.lastResponse() == null
+                    ? null
+                    : present(
+                            snapshot.lastResponse(),
+                            responseLocale,
+                            presentation,
+                            snapshot.conversationId(),
+                            snapshot.revision(),
+                            null,
+                            true);
+            return new RecommendationSessionResponse(
+                    snapshot.conversationId(),
+                    snapshot.revision(),
+                    RecommendationProfileResponse.from(snapshot.state().profile()),
+                    snapshot.state().transcript().stream()
+                            .map(message -> new DialogueMessageRequest(message.role(), message.text()))
+                            .toList(),
+                    snapshot.state().knownGames().stream()
+                            .map(game -> new KnownGameRequest(game.bggId(), game.name(), game.originalName()))
+                            .toList(),
+                    snapshot.state().shownBggIds(),
+                    snapshot.activeClientTurnId() != null,
+                    snapshot.activeStartedAt(),
+                    latestResponse);
         }
     }
 
@@ -173,14 +383,38 @@ public class BggRecommendationAgentController {
             Integer maxMinutes,
             BigDecimal maxWeight,
             String type,
-            String interaction) {
+            String interaction,
+            ConstraintRangeResponse<Integer> playerCount,
+            ConstraintRangeResponse<Integer> durationMinutes,
+            ConstraintRangeResponse<BigDecimal> complexity) {
         static RecommendationProfileResponse from(RecommendationProfile profile) {
             return new RecommendationProfileResponse(
                     profile.players(),
                     profile.maxMinutes(),
                     profile.maxWeight(),
                     profile.type().name().toLowerCase(Locale.ROOT),
-                    profile.interaction().name().toLowerCase(Locale.ROOT));
+                    profile.interaction().name().toLowerCase(Locale.ROOT),
+                    ConstraintRangeResponse.from(profile.playerCount()),
+                    ConstraintRangeResponse.from(profile.durationMinutes()),
+                    ConstraintRangeResponse.from(profile.complexity()));
+        }
+    }
+
+    record ConstraintRangeResponse<T>(
+            T minimum,
+            T maximum,
+            String strength,
+            String sourceText,
+            int confirmedTurn) {
+        static <T extends Comparable<? super T>> ConstraintRangeResponse<T> from(ConstraintRange<T> range) {
+            return range == null
+                    ? null
+                    : new ConstraintRangeResponse<>(
+                            range.minimum(),
+                            range.maximum(),
+                            range.strength().name().toLowerCase(Locale.ROOT),
+                            range.sourceText(),
+                            range.confirmedTurn());
         }
     }
 
@@ -249,7 +483,8 @@ public class BggRecommendationAgentController {
             CatalogGameResponse game,
             List<String> matches,
             List<String> tradeoffs,
-            List<RecommendationReasonResponse> reasons) {
+            List<RecommendationReasonResponse> reasons,
+            List<CandidateFitClaimResponse> fitClaims) {
         static RecommendedGameResponse from(
                 RecommendedGame game,
                 LocalizedTaxonomy taxonomy,
@@ -261,8 +496,143 @@ public class BggRecommendationAgentController {
                     game.tradeoffs().stream().map(value -> localizeTaxonomyText(value, taxonomy)).toList(),
                     game.reasons().stream()
                             .map(reason -> RecommendationReasonResponse.from(reason, taxonomy))
+                            .toList(),
+                    game.claims().stream()
+                            .filter(claim -> claim.type() == CandidateClaim.Type.CONSTRAINT_FIT)
+                            .map(CandidateFitClaimResponse::from)
                             .toList());
         }
+    }
+
+    record CandidateFitClaimResponse(String subject, String strength, String relation, String text) {
+        static CandidateFitClaimResponse from(CandidateClaim claim) {
+            return new CandidateFitClaimResponse(
+                    claim.subject(),
+                    claim.strength().name().toLowerCase(Locale.ROOT),
+                    claim.relation().name().toLowerCase(Locale.ROOT),
+                    claim.text());
+        }
+    }
+
+    record CandidateComparisonResponse(
+            List<ComparisonCandidateResponse> candidates,
+            List<ComparisonAxisResponse> axes) {
+        static CandidateComparisonResponse from(
+                BoardGameRecommendationAgent.CandidateComparison comparison,
+                LocalizedTaxonomy taxonomy,
+                String locale,
+                BggRecommendationPresentation presentation) {
+            return new CandidateComparisonResponse(
+                    comparison.candidates().stream()
+                            .map(candidate -> new ComparisonCandidateResponse(
+                                    CatalogGameResponse.from(candidate.game(), taxonomy, locale, presentation),
+                                    candidate.fitClaims().stream()
+                                            .filter(claim -> claim.type() == CandidateClaim.Type.CONSTRAINT_FIT)
+                                            .map(CandidateFitClaimResponse::from)
+                                            .toList()))
+                            .toList(),
+                    comparison.axes().stream()
+                            .map(axis -> ComparisonAxisResponse.from(axis, taxonomy, locale))
+                            .toList());
+        }
+    }
+
+    record ComparisonCandidateResponse(
+            CatalogGameResponse game,
+            List<CandidateFitClaimResponse> fitClaims) {}
+
+    record ComparisonAxisResponse(
+            String subject,
+            String label,
+            String capability,
+            List<ComparisonCellResponse> cells) {
+        static ComparisonAxisResponse from(
+                BoardGameRecommendationAgent.ComparisonAxis axis,
+                LocalizedTaxonomy taxonomy,
+                String locale) {
+            boolean chinese = locale != null && locale.toLowerCase(Locale.ROOT).startsWith("zh");
+            return new ComparisonAxisResponse(
+                    axis.subject(),
+                    comparisonSubjectLabel(axis.subject(), chinese),
+                    comparisonSubjectCapability(axis.subject()),
+                    axis.cells().stream()
+                            .map(cell -> ComparisonCellResponse.from(cell, axis.subject(), taxonomy, chinese))
+                            .toList());
+        }
+    }
+
+    record ComparisonCellResponse(
+            int bggId,
+            String status,
+            String observationKind,
+            String value) {
+        static ComparisonCellResponse from(
+                BoardGameRecommendationAgent.ComparisonCell cell,
+                String subject,
+                LocalizedTaxonomy taxonomy,
+                boolean chinese) {
+            return cell.known()
+                    ? new ComparisonCellResponse(
+                            cell.bggId(),
+                            "observed",
+                            cell.observation().kind().name().toLowerCase(Locale.ROOT),
+                            comparisonValue(subject, cell.observation().value(), taxonomy, chinese))
+                    : new ComparisonCellResponse(cell.bggId(), "unknown", "", "");
+        }
+    }
+
+    private static String comparisonValue(
+            String subject,
+            String value,
+            LocalizedTaxonomy taxonomy,
+            boolean chinese) {
+        if (value == null || value.isBlank()) return value;
+        if (subject.equals("categories") || subject.equals("mechanics")) {
+            return localizeTaxonomyText(value, taxonomy);
+        }
+        if (subject.equals("complexity")) return value + " / 5";
+        if (subject.equals("minimumAge")) return chinese ? value + " 岁以上" : "Age " + value + "+";
+        if (!subject.equals("playerCount") && !subject.equals("durationMinutes")) return value;
+        int separator = value.indexOf("..");
+        if (separator <= 0 || separator + 2 >= value.length()) return value;
+        try {
+            int minimum = Integer.parseInt(value.substring(0, separator));
+            int maximum = Integer.parseInt(value.substring(separator + 2));
+            String range = minimum == maximum ? Integer.toString(minimum) : minimum + "–" + maximum;
+            if (subject.equals("playerCount")) return chinese ? range + " 人" : range + " players";
+            return chinese ? range + " 分钟" : range + " min";
+        } catch (NumberFormatException ignored) {
+            return value;
+        }
+    }
+
+    private static String comparisonSubjectCapability(String subject) {
+        return switch (subject) {
+            case "bggType", "categories", "mechanics", "families" -> "taxonomy";
+            case "reportedExperience" -> "attributed_report";
+            case "rulebookFact" -> "rulebook_fact";
+            default -> "structured_metadata";
+        };
+    }
+
+    private static String comparisonSubjectLabel(String subject, boolean chinese) {
+        return switch (subject) {
+            case "playerCount" -> chinese ? "支持人数" : "Player count";
+            case "durationMinutes" -> chinese ? "标注时长" : "Listed duration";
+            case "complexity" -> chinese ? "BGG 复杂度" : "BGG complexity";
+            case "bggType" -> chinese ? "BGG 类型（仅分类）" : "BGG type (classification only)";
+            case "categories" -> chinese ? "BGG 类别（仅分类）" : "BGG categories (classification only)";
+            case "mechanics" -> chinese ? "BGG 机制（仅分类）" : "BGG mechanisms (classification only)";
+            case "families" -> chinese ? "BGG 系列（仅分类）" : "BGG families (classification only)";
+            case "minimumAge" -> chinese ? "标注最低年龄" : "Listed minimum age";
+            case "bestWith" -> chinese ? "BGG 最佳人数投票" : "BGG best-with poll";
+            case "recommendedWith" -> chinese ? "BGG 推荐人数投票" : "BGG recommended-with poll";
+            case "designers" -> chinese ? "设计者" : "Designers";
+            case "publishers" -> chinese ? "出版方" : "Publishers";
+            case "reportedExperience" -> chinese ? "有来源的玩家体验" : "Sourced player experience";
+            case "rulebookFact" -> chinese ? "规则书事实" : "Rulebook fact";
+            default -> throw new IllegalArgumentException("unsupported comparison subject");
+        };
     }
 
     record RecommendationReasonResponse(String kind, String text, List<Integer> sourceIndexes) {
@@ -310,7 +680,14 @@ public class BggRecommendationAgentController {
                 LocalizedTaxonomy taxonomy,
                 String locale,
                 BggRecommendationPresentation presentation) {
-            var browse = recommendation.game();
+            return from(recommendation.game(), taxonomy, locale, presentation);
+        }
+
+        static CatalogGameResponse from(
+                Game browse,
+                LocalizedTaxonomy taxonomy,
+                String locale,
+                BggRecommendationPresentation presentation) {
             Details details = browse.details();
             boolean localized = details != null
                     && presentation.usesSimplifiedChinese(locale)

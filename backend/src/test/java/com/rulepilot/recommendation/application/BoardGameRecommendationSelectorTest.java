@@ -7,6 +7,8 @@ import com.rulepilot.catalog.BggGameType;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.Details;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.Game;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.Ranking;
+import com.rulepilot.recommendation.ConstraintRange;
+import com.rulepilot.recommendation.CandidateClaim;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Research;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.InteractionPreference;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ReasonKind;
@@ -141,6 +143,106 @@ class BoardGameRecommendationSelectorTest {
     }
 
     @Test
+    void keepsTwoSidedHardRangesIntactAcrossEligibilityAndPlayerFacingReasons() {
+        RecommendationProfile profile = new RecommendationProfile(
+                ConstraintRange.hard(3, 4, "3–4 players", 1),
+                ConstraintRange.hard(120, 180, "120–180 minutes", 1),
+                ConstraintRange.hard(new BigDecimal("2.0"), new BigDecimal("3.0"), "weight 2–3", 1),
+                BggGameType.ALL,
+                InteractionPreference.ANY);
+
+        Game exactFit = gameWithRanges(10, 2, 5, 120, 180, new BigDecimal("2.5"));
+        Game entirelyTooShort = gameWithRanges(11, 2, 5, 60, 90, new BigDecimal("2.5"));
+        Game onlyPartlyOverlaps = gameWithRanges(12, 2, 5, 100, 150, new BigDecimal("2.5"));
+        Game missesOnePlayerCount = gameWithRanges(13, 2, 3, 120, 180, new BigDecimal("2.5"));
+        Game tooLight = gameWithRanges(14, 2, 5, 120, 180, new BigDecimal("1.5"));
+
+        assertThat(selector.eligible(exactFit, profile)).isTrue();
+        assertThat(selector.eligible(entirelyTooShort, profile)).isFalse();
+        assertThat(selector.eligible(onlyPartlyOverlaps, profile))
+                .as("a partially overlapping advertised duration is not a proven hard-range match")
+                .isFalse();
+        assertThat(selector.eligible(missesOnePlayerCount, profile)).isFalse();
+        assertThat(selector.eligible(tooLight, profile)).isFalse();
+
+        var presented = selector.present(
+                List.of(exactFit), profile, List.of(), true, Research.empty()).getFirst();
+        assertThat(presented.matches()).anySatisfy(text -> assertThat(text).contains("3–4 人"));
+        assertThat(presented.matches()).anySatisfy(text -> assertThat(text).contains("120–180 分钟"));
+        assertThat(presented.matches()).anySatisfy(text -> assertThat(text).contains("2.0–3.0"));
+        assertThat(presented.matches()).noneSatisfy(text -> assertThat(text).contains("上限内"));
+        assertThat(presented.claims())
+                .filteredOn(claim -> claim.type() == CandidateClaim.Type.CONSTRAINT_FIT)
+                .extracting(CandidateClaim::relation)
+                .containsExactly(
+                        CandidateClaim.Relation.SATISFIED,
+                        CandidateClaim.Relation.SATISFIED,
+                        CandidateClaim.Relation.SATISFIED);
+        assertThat(presented.claims()).allSatisfy(claim -> claim.evidence().forEach(observation ->
+                assertThat(observation.bggId()).isEqualTo(10)));
+    }
+
+    @Test
+    void usesTheSameTypedAssessmentForSoftPresentationWithoutTurningItIntoAHardGate() {
+        RecommendationProfile profile = new RecommendationProfile(
+                null,
+                new ConstraintRange<>(
+                        120,
+                        180,
+                        ConstraintRange.Strength.SOFT,
+                        "ideally 120–180 minutes",
+                        2),
+                null,
+                BggGameType.ALL,
+                InteractionPreference.ANY);
+        Game shortCandidate = gameWithRanges(19, 2, 5, 45, 75, new BigDecimal("2.2"));
+
+        assertThat(selector.eligible(shortCandidate, profile))
+                .as("a soft preference is reported honestly but does not exclude the candidate")
+                .isTrue();
+        var presented = selector.present(
+                        List.of(shortCandidate), profile, List.of(), false, Research.empty())
+                .getFirst();
+        assertThat(presented.matches()).noneSatisfy(text -> assertThat(text).contains("fully within"));
+        assertThat(presented.claims()).singleElement().satisfies(claim -> {
+            assertThat(claim.subject()).isEqualTo("durationMinutes");
+            assertThat(claim.strength()).isEqualTo(ConstraintRange.Strength.SOFT);
+            assertThat(claim.relation()).isEqualTo(CandidateClaim.Relation.CONFLICT);
+            assertThat(claim.text())
+                    .contains("preferred range")
+                    .doesNotContain("hard constraint");
+        });
+    }
+
+    @Test
+    void distinguishesConflictUnknownAndSatisfiedFromCandidateSpecificFacts() {
+        RecommendationProfile profile = new RecommendationProfile(
+                ConstraintRange.hard(3, 4, "3–4 players", 1),
+                ConstraintRange.hard(120, 180, "120–180 minutes", 1),
+                null,
+                BggGameType.ALL,
+                InteractionPreference.ANY);
+        Game shortCandidate = gameWithRanges(21, 2, 5, 45, 75, new BigDecimal("2.2"));
+        Game partialCandidate = gameWithRanges(22, 2, 5, 90, 150, new BigDecimal("2.2"));
+
+        assertThat(selector.fitClaims(shortCandidate, profile, false))
+                .filteredOn(claim -> claim.text().contains("duration"))
+                .singleElement()
+                .extracting(CandidateClaim::relation)
+                .isEqualTo(CandidateClaim.Relation.CONFLICT);
+        assertThat(selector.fitClaims(partialCandidate, profile, false))
+                .filteredOn(claim -> claim.text().contains("duration"))
+                .singleElement()
+                .extracting(CandidateClaim::relation)
+                .isEqualTo(CandidateClaim.Relation.UNKNOWN);
+        assertThat(selector.fitClaims(partialCandidate, profile, false))
+                .filteredOn(claim -> claim.text().contains("player"))
+                .singleElement()
+                .extracting(CandidateClaim::relation)
+                .isEqualTo(CandidateClaim.Relation.SATISFIED);
+    }
+
+    @Test
     void appliesTheRequestedBggRankingTypeToEveryCandidateRegardlessOfItsDiscoveryPath() {
         RecommendationProfile partyProfile = new RecommendationProfile(
                 2, null, null, BggGameType.PARTY, InteractionPreference.ANY);
@@ -212,6 +314,46 @@ class BoardGameRecommendationSelectorTest {
                         10,
                         "4",
                         "2-4",
+                        2,
+                        100,
+                        List.of(),
+                        List.of(),
+                        List.of()));
+    }
+
+    private Game gameWithRanges(
+            int id,
+            int minimumPlayers,
+            int maximumPlayers,
+            int minimumMinutes,
+            int maximumMinutes,
+            BigDecimal weight) {
+        return new Game(
+                new Ranking(
+                        id,
+                        "Game " + id,
+                        2024,
+                        id,
+                        new BigDecimal("7.0"),
+                        new BigDecimal("7.3"),
+                        500,
+                        List.of(BggGameType.STRATEGY)),
+                new Details(
+                        "Game " + id,
+                        "",
+                        "",
+                        minimumPlayers,
+                        maximumPlayers,
+                        maximumMinutes,
+                        weight,
+                        List.of("Strategy"),
+                        List.of("Open Drafting"),
+                        minimumMinutes,
+                        maximumMinutes,
+                        10,
+                        10,
+                        Integer.toString(maximumPlayers),
+                        minimumPlayers + "-" + maximumPlayers,
                         2,
                         100,
                         List.of(),

@@ -8,7 +8,15 @@ import {
 } from './recommendationConversationSession'
 
 const snapshot: RecommendationConversationSnapshot = {
-  profile: { players: 4, maxMinutes: 90, maxWeight: 3.2, type: 'all', interaction: 'any' },
+  conversationId: '2efc8376-883b-4ec0-b310-e1fc39a75473',
+  revision: 3,
+  profile: {
+    type: 'all',
+    interaction: 'any',
+    playerCount: { minimum: 3, maximum: 4, strength: 'hard', sourceText: '3–4 人', confirmedTurn: 1 },
+    durationMinutes: { minimum: 120, maximum: 180, strength: 'hard', sourceText: '120–180 分钟', confirmedTurn: 1 },
+    complexity: { minimum: 2, maximum: 3.2, strength: 'hard', sourceText: '复杂度 2–3.2', confirmedTurn: 1 },
+  },
   transcript: [
     { role: 'assistant', text: '今晚想玩什么？' },
     { role: 'user', text: '想找 4 人、90 分钟内的游戏' },
@@ -17,7 +25,12 @@ const snapshot: RecommendationConversationSnapshot = {
   knownGames: [{ bggId: 1, name: '候选一', originalName: 'Candidate One' }],
   shownBggIds: [1],
   failed: true,
-  pending: { message: '换一批', excludedBggIds: [1], focusedBggId: null },
+  pending: {
+    message: '换一批',
+    excludedBggIds: [1],
+    focusedBggId: null,
+    clientTurnId: '37d65d0d-c113-4ed0-af41-5da19c4e3bb8',
+  },
 }
 
 describe('recommendation conversation session', () => {
@@ -72,5 +85,48 @@ describe('recommendation conversation session', () => {
 
     expect(readRecommendationConversation(sessionStorage, 'alice')).toBeNull()
     expect(readRecommendationConversation(sessionStorage, 'bob')).toEqual(snapshot)
+  })
+
+  it('preserves a failed pending message losslessly instead of slicing it to the send limit', () => {
+    const pendingMessage = '完整保留'.repeat(1_000)
+    rememberRecommendationConversation(sessionStorage, 'alice', {
+      ...snapshot,
+      failed: true,
+      pending: { ...snapshot.pending!, message: pendingMessage },
+    })
+
+    expect(readRecommendationConversation(sessionStorage, 'alice')?.pending?.message).toBe(pendingMessage)
+  })
+
+  it('migrates the previous browser snapshot without inventing a server identity', () => {
+    rememberRecommendationConversation(sessionStorage, 'alice', snapshot)
+    const key = sessionStorage.key(0)!
+    const current = JSON.parse(sessionStorage.getItem(key)!) as Record<string, unknown>
+    const pending = current.pending as Record<string, unknown>
+    delete current.conversationId
+    delete current.revision
+    delete pending.clientTurnId
+    current.profile = {
+      players: 4,
+      maxMinutes: 90,
+      maxWeight: 3,
+      type: 'all',
+      interaction: 'any',
+    }
+    current.version = 1
+    sessionStorage.setItem(key, JSON.stringify(current))
+
+    expect(readRecommendationConversation(sessionStorage, 'alice')).toMatchObject({
+      conversationId: null,
+      revision: 0,
+      profile: {
+        type: 'all',
+        interaction: 'any',
+        playerCount: { minimum: 4, maximum: 4, strength: 'hard' },
+        durationMinutes: { minimum: null, maximum: 90, strength: 'hard' },
+        complexity: { minimum: null, maximum: 3, strength: 'hard' },
+      },
+      pending: { message: '换一批', clientTurnId: null },
+    })
   })
 })

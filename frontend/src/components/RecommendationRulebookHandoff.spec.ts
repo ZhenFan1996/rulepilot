@@ -96,7 +96,13 @@ describe('RecommendationRulebookHandoff', () => {
     const wrapper = mount(RecommendationRulebookHandoff, {
       props: {
         game,
-        profile: { players: 5, maxMinutes: 90, maxWeight: 3, type: 'all', interaction: 'any' },
+        profile: {
+          type: 'all',
+          interaction: 'any',
+          playerCount: { minimum: 5, maximum: 5, strength: 'hard', sourceText: 'five players', confirmedTurn: 1 },
+          durationMinutes: { minimum: null, maximum: 90, strength: 'hard', sourceText: 'up to 90 minutes', confirmedTurn: 1 },
+          complexity: { minimum: null, maximum: 3, strength: 'hard', sourceText: 'complexity at most 3', confirmedTurn: 1 },
+        },
       },
       global: { plugins: [router] },
     })

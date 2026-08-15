@@ -1,14 +1,15 @@
 import type { RecommendationProfile } from '@/components/gameRecommendationTypes'
+import { canonicalRecommendationProfile, emptyRecommendationProfile } from '@/lib/recommendationProfile'
 
 const STORAGE_PREFIX = 'rulepilot:recommendation-conversation:v1:'
-const STORAGE_VERSION = 1
-const MAX_RAW_LENGTH = 50_000
+const STORAGE_VERSION = 2
+const MAX_RAW_LENGTH = 200_000
 const MAX_TRANSCRIPT = 24
-const MAX_TRANSCRIPT_TEXT = 1_200
+const MAX_TRANSCRIPT_TEXT = 4_000
 const MAX_KNOWN_GAMES = 60
 const MAX_SHOWN_GAMES = 60
 const MAX_GAME_NAME = 160
-const MAX_PENDING_MESSAGE = 500
+const MAX_PENDING_MESSAGE = 20_000
 const MAX_PROFILE_TERM = 80
 
 export type RecommendationConversationTurn = {
@@ -26,9 +27,12 @@ export type RecommendationConversationPending = {
   message: string
   excludedBggIds: number[]
   focusedBggId: number | null
+  clientTurnId: string | null
 }
 
 export type RecommendationConversationSnapshot = {
+  conversationId: string | null
+  revision: number
   profile: RecommendationProfile
   transcript: RecommendationConversationTurn[]
   knownGames: RecommendationConversationGame[]
@@ -38,6 +42,10 @@ export type RecommendationConversationSnapshot = {
 }
 
 type StoredRecommendationConversation = RecommendationConversationSnapshot & { version: number }
+type LegacyRecommendationConversation = Omit<RecommendationConversationSnapshot, 'conversationId' | 'revision' | 'pending'> & {
+  version: 1
+  pending: Omit<RecommendationConversationPending, 'clientTurnId'> | null
+}
 
 export function readRecommendationConversation(
   storage: Storage,
@@ -53,11 +61,12 @@ export function readRecommendationConversation(
       return null
     }
     const parsed = JSON.parse(raw) as unknown
-    if (!isStoredConversation(parsed)) {
+    const stored = storedConversation(parsed)
+    if (!stored) {
       storage.removeItem(key)
       return null
     }
-    return withoutVersion(parsed)
+    return withoutVersion(stored)
   } catch {
     try {
       storage.removeItem(key)
@@ -107,29 +116,48 @@ function boundedSnapshot(snapshot: RecommendationConversationSnapshot): Recommen
   const transcript = snapshot.transcript
     .filter(isConversationTurn)
     .slice(-MAX_TRANSCRIPT)
-    .map(turn => ({ role: turn.role, text: turn.text.slice(0, MAX_TRANSCRIPT_TEXT) }))
+    .map(turn => ({ role: turn.role, text: turn.text }))
   const knownGames = uniqueGames(snapshot.knownGames.filter(isConversationGame)).slice(0, MAX_KNOWN_GAMES)
   const shownBggIds = uniquePositiveIntegers(snapshot.shownBggIds).slice(-MAX_SHOWN_GAMES)
   const pending = isConversationPending(snapshot.pending)
-    ? {
-        message: snapshot.pending.message.slice(0, MAX_PENDING_MESSAGE),
+      ? {
+        message: snapshot.pending.message,
         excludedBggIds: uniquePositiveIntegers(snapshot.pending.excludedBggIds).slice(-MAX_SHOWN_GAMES),
         focusedBggId: snapshot.pending.focusedBggId,
+        clientTurnId: snapshot.pending.clientTurnId,
       }
     : null
   return {
-    profile: isProfile(snapshot.profile) ? { ...snapshot.profile } : emptyProfile(),
+    conversationId: validUuid(snapshot.conversationId) ? snapshot.conversationId : null,
+    revision: validRevision(snapshot.revision) ? snapshot.revision : 0,
+    profile: isProfile(snapshot.profile)
+      ? canonicalRecommendationProfile(snapshot.profile)
+      : emptyRecommendationProfile(),
     transcript,
     knownGames,
     shownBggIds,
     failed: snapshot.failed === true,
-    pending: snapshot.failed === true ? pending : null,
+    pending,
+  }
+}
+
+function storedConversation(value: unknown): StoredRecommendationConversation | null {
+  if (isStoredConversation(value)) return value
+  if (!isLegacyConversation(value)) return null
+  return {
+    ...value,
+    version: STORAGE_VERSION,
+    conversationId: null,
+    revision: 0,
+    pending: value.pending ? { ...value.pending, clientTurnId: null } : null,
   }
 }
 
 function isStoredConversation(value: unknown): value is StoredRecommendationConversation {
   return isRecord(value)
     && value.version === STORAGE_VERSION
+    && (value.conversationId === null || validUuid(value.conversationId))
+    && validRevision(value.revision)
     && isProfile(value.profile)
     && Array.isArray(value.transcript)
     && value.transcript.length <= MAX_TRANSCRIPT
@@ -144,12 +172,32 @@ function isStoredConversation(value: unknown): value is StoredRecommendationConv
     && new Set(value.shownBggIds).size === value.shownBggIds.length
     && typeof value.failed === 'boolean'
     && (value.pending === null || isConversationPending(value.pending))
-    && (value.failed || value.pending === null)
+}
+
+function isLegacyConversation(value: unknown): value is LegacyRecommendationConversation {
+  return isRecord(value)
+    && value.version === 1
+    && isProfile(value.profile)
+    && Array.isArray(value.transcript)
+    && value.transcript.length <= MAX_TRANSCRIPT
+    && value.transcript.every(isConversationTurn)
+    && Array.isArray(value.knownGames)
+    && value.knownGames.length <= MAX_KNOWN_GAMES
+    && value.knownGames.every(isConversationGame)
+    && hasUniqueGameIds(value.knownGames)
+    && Array.isArray(value.shownBggIds)
+    && value.shownBggIds.length <= MAX_SHOWN_GAMES
+    && value.shownBggIds.every(isPositiveInteger)
+    && new Set(value.shownBggIds).size === value.shownBggIds.length
+    && typeof value.failed === 'boolean'
+    && (value.pending === null || isLegacyPending(value.pending))
 }
 
 function withoutVersion(value: StoredRecommendationConversation): RecommendationConversationSnapshot {
   return {
-    profile: { ...value.profile },
+    conversationId: value.conversationId,
+    revision: value.revision,
+    profile: canonicalRecommendationProfile(value.profile),
     transcript: value.transcript.map(turn => ({ ...turn })),
     knownGames: value.knownGames.map(game => ({ ...game })),
     shownBggIds: [...value.shownBggIds],
@@ -158,14 +206,15 @@ function withoutVersion(value: StoredRecommendationConversation): Recommendation
       message: value.pending.message,
       excludedBggIds: [...value.pending.excludedBggIds],
       focusedBggId: value.pending.focusedBggId,
+      clientTurnId: value.pending.clientTurnId,
     } : null,
   }
 }
 
 function isEmptySnapshot(snapshot: RecommendationConversationSnapshot) {
-  const profileEmpty = snapshot.profile.players === null
-    && snapshot.profile.maxMinutes === null
-    && snapshot.profile.maxWeight === null
+  const profileEmpty = !snapshot.profile.playerCount
+    && !snapshot.profile.durationMinutes
+    && !snapshot.profile.complexity
     && snapshot.profile.type === 'all'
     && snapshot.profile.interaction === 'any'
   return !snapshot.transcript.some(turn => turn.role === 'user')
@@ -173,21 +222,52 @@ function isEmptySnapshot(snapshot: RecommendationConversationSnapshot) {
     && snapshot.shownBggIds.length === 0
     && !snapshot.failed
     && snapshot.pending === null
+    && snapshot.conversationId === null
+    && snapshot.revision === 0
     && profileEmpty
-}
-
-function emptyProfile(): RecommendationProfile {
-  return { players: null, maxMinutes: null, maxWeight: null, type: 'all', interaction: 'any' }
 }
 
 function isProfile(value: unknown): value is RecommendationProfile {
   return isRecord(value)
-    && nullableIntegerInRange(value.players, 1, 20)
-    && nullableIntegerInRange(value.maxMinutes, 0, 1_440)
-    && (value.maxMinutes === null || value.maxMinutes === 0 || Number(value.maxMinutes) >= 5)
-    && nullableNumberInRange(value.maxWeight, 0, 5)
+    && (value.players === undefined || nullableIntegerInRange(value.players, 1, 20))
+    && (value.maxMinutes === undefined || nullableIntegerInRange(value.maxMinutes, 0, 1_440))
+    && (value.maxMinutes === undefined
+      || value.maxMinutes === null
+      || value.maxMinutes === 0
+      || Number(value.maxMinutes) >= 5)
+    && (value.maxWeight === undefined || nullableNumberInRange(value.maxWeight, 0, 5))
     && boundedString(value.type, 1, MAX_PROFILE_TERM)
     && boundedString(value.interaction, 1, MAX_PROFILE_TERM)
+    && optionalConstraintRange(value.playerCount, 1, 20, true)
+    && optionalConstraintRange(value.durationMinutes, 5, 1_440, true)
+    && optionalConstraintRange(value.complexity, 0, 5, false)
+}
+
+function optionalConstraintRange(
+  value: unknown,
+  minimumAllowed: number,
+  maximumAllowed: number,
+  integers: boolean,
+) {
+  if (value === undefined || value === null) return true
+  if (!isRecord(value)) return false
+  const minimum = value.minimum
+  const maximum = value.maximum
+  const validBound = (bound: unknown) => bound === null
+    || typeof bound === 'number'
+      && Number.isFinite(bound)
+      && (!integers || Number.isSafeInteger(bound))
+      && bound >= minimumAllowed
+      && bound <= maximumAllowed
+  return validBound(minimum)
+    && validBound(maximum)
+    && (minimum !== null || maximum !== null)
+    && (minimum === null || maximum === null || Number(minimum) <= Number(maximum))
+    && (value.strength === 'hard' || value.strength === 'soft')
+    && boundedString(value.sourceText, 0, 160)
+    && Number.isSafeInteger(value.confirmedTurn)
+    && Number(value.confirmedTurn) >= 0
+    && Number(value.confirmedTurn) <= 10_000
 }
 
 function isConversationTurn(value: unknown): value is RecommendationConversationTurn {
@@ -204,6 +284,17 @@ function isConversationGame(value: unknown): value is RecommendationConversation
 }
 
 function isConversationPending(value: unknown): value is RecommendationConversationPending {
+  return isRecord(value)
+    && boundedString(value.message, 1, MAX_PENDING_MESSAGE)
+    && Array.isArray(value.excludedBggIds)
+    && value.excludedBggIds.length <= MAX_SHOWN_GAMES
+    && value.excludedBggIds.every(isPositiveInteger)
+    && new Set(value.excludedBggIds).size === value.excludedBggIds.length
+    && (value.focusedBggId === null || isPositiveInteger(value.focusedBggId))
+    && (value.clientTurnId === null || validUuid(value.clientTurnId))
+}
+
+function isLegacyPending(value: unknown): value is Omit<RecommendationConversationPending, 'clientTurnId'> {
   return isRecord(value)
     && boundedString(value.message, 1, MAX_PENDING_MESSAGE)
     && Array.isArray(value.excludedBggIds)
@@ -243,4 +334,24 @@ function boundedString(value: unknown, minimum: number, maximum: number): value 
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function validRevision(value: unknown): value is number {
+  return Number.isSafeInteger(value) && Number(value) >= 0
+}
+
+function validUuid(value: unknown): value is string {
+  if (typeof value !== 'string' || value.length !== 36) return false
+  const separators = new Set([8, 13, 18, 23])
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index]!
+    if (separators.has(index)) {
+      if (character !== '-') return false
+      continue
+    }
+    const code = character.codePointAt(0) ?? -1
+    const hexadecimal = code >= 48 && code <= 57 || code >= 65 && code <= 70 || code >= 97 && code <= 102
+    if (!hexadecimal) return false
+  }
+  return true
 }

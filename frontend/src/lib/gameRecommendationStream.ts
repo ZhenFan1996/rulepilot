@@ -12,6 +12,13 @@ export class RecommendationRequestError extends Error {
   }
 }
 
+export class RecommendationStreamError extends Error {
+  constructor(readonly code: string) {
+    super('recommendation stream did not complete')
+    this.name = 'RecommendationStreamError'
+  }
+}
+
 export async function streamGameRecommendation(
   url: string,
   init: RequestInit,
@@ -36,7 +43,8 @@ export async function streamGameRecommendation(
     } else if (event.event === 'result') {
       result = JSON.parse(event.data) as RecommendationAgentResponse
     } else if (event.event === 'error') {
-      throw new Error('recommendation unavailable')
+      const payload = JSON.parse(event.data) as { code?: unknown }
+      throw new RecommendationStreamError(typeof payload.code === 'string' ? payload.code : 'recommendation_unavailable')
     }
   }
 

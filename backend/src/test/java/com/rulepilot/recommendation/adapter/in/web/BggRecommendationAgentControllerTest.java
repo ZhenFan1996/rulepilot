@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.rulepilot.catalog.BggGameType;
@@ -12,6 +13,9 @@ import com.rulepilot.catalog.BggRecommendationPresentation.LocalizedTaxonomy;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.Details;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.Game;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.Ranking;
+import com.rulepilot.recommendation.ConstraintRange;
+import com.rulepilot.recommendation.CandidateClaim;
+import com.rulepilot.recommendation.CandidateObservation;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.Clarification;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ConversationResponse;
@@ -23,10 +27,16 @@ import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.Rec
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendationReason;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendedGame;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ReasonKind;
+import com.rulepilot.recommendation.application.RecommendationConversationCoordinator;
+import com.rulepilot.recommendation.application.RecommendationConversationCoordinator.SessionSnapshot;
+import com.rulepilot.recommendation.application.RecommendationConversationCoordinator.TurnResult;
+import com.rulepilot.recommendation.application.RecommendationConversationStore.ConversationState;
 import java.math.BigDecimal;
 import java.security.Principal;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
 class BggRecommendationAgentControllerTest {
@@ -38,9 +48,84 @@ class BggRecommendationAgentControllerTest {
     private final Principal principal = () -> "player";
 
     @Test
+    void exposesStableTurnMetadataAndRestoresAndDeletesOnlyThroughTheConversationCoordinator() {
+        RecommendationConversationCoordinator conversations = mock(RecommendationConversationCoordinator.class);
+        var statefulController = new BggRecommendationAgentController(agent, presentation, conversations);
+        UUID conversationId = UUID.randomUUID();
+        UUID clientTurnId = UUID.randomUUID();
+        ConversationResponse conversationResponse = new ConversationResponse(
+                Outcome.CONVERSATION,
+                DecisionMode.MODEL_ASSISTED,
+                "I kept the context.",
+                RecommendationProfile.empty(),
+                null,
+                10,
+                0,
+                List.of());
+        when(conversations.converse(any(), eq("en"), eq("player"), any()))
+                .thenReturn(new TurnResult(
+                        conversationId, 5, clientTurnId, false, "en", conversationResponse));
+        when(presentation.localizeTaxonomy(List.of(), List.of(), "en"))
+                .thenReturn(new LocalizedTaxonomy(Map.of(), Map.of()));
+        var request = new BggRecommendationAgentController.RecommendationConversationRequest(
+                null,
+                "Continue",
+                List.of(),
+                List.of(),
+                null,
+                List.of(),
+                List.of(),
+                conversationId,
+                4L,
+                clientTurnId);
+
+        var turn = statefulController.converse(request, "en", principal);
+
+        assertThat(turn.conversationId()).isEqualTo(conversationId);
+        assertThat(turn.revision()).isEqualTo(5);
+        assertThat(turn.clientTurnId()).isEqualTo(clientTurnId);
+        assertThat(turn.replayed()).isFalse();
+        assertThat(turn.responseLocale()).isEqualTo("en");
+        assertThat(turn.assistantMessage()).isEqualTo("I kept the context.");
+
+        ConversationState state = new ConversationState(
+                RecommendationProfile.empty(),
+                List.of(
+                        new BoardGameRecommendationAgent.DialogueMessage("user", "Continue"),
+                        new BoardGameRecommendationAgent.DialogueMessage("assistant", "I kept the context.")),
+                List.of(new BoardGameRecommendationAgent.KnownGame(1, "Candidate", "Candidate")),
+                List.of(1));
+        when(conversations.latest("player")).thenReturn(Optional.of(new SessionSnapshot(
+                conversationId,
+                5,
+                state,
+                null,
+                null,
+                conversationResponse,
+                "en")));
+
+        var restored = statefulController.latest(principal).getBody();
+
+        assertThat(restored).isNotNull();
+        assertThat(restored.conversationId()).isEqualTo(conversationId);
+        assertThat(restored.revision()).isEqualTo(5);
+        assertThat(restored.transcript()).extracting(value -> value.text())
+                .containsExactly("Continue", "I kept the context.");
+        assertThat(restored.knownGames()).extracting(value -> value.bggId()).containsExactly(1);
+        assertThat(restored.latestResponse().assistantMessage()).isEqualTo("I kept the context.");
+
+        statefulController.delete(conversationId, principal);
+        verify(conversations).delete(conversationId, "player");
+    }
+
+    @Test
     void exposesTheTypedClarificationAndNormalizedProfile() {
         RecommendationProfile profile = new RecommendationProfile(
-                4, null, null, BggGameType.ALL, InteractionPreference.ANY);
+                ConstraintRange.hard(3, 4, "3–4 人", 2),
+                ConstraintRange.hard(60, 90, "60–90 分钟", 2),
+                null,
+                BggGameType.ALL,
+                InteractionPreference.ANY);
         when(agent.converse(any(), eq("zh-CN"), eq("player"))).thenReturn(new ConversationResponse(
                 Outcome.NEEDS_CLARIFICATION,
                 DecisionMode.MODEL_ASSISTED,
@@ -65,10 +150,52 @@ class BggRecommendationAgentControllerTest {
                 principal);
 
         assertThat(response.outcome()).isEqualTo("needs_clarification");
-        assertThat(response.profile().players()).isEqualTo(4);
+        assertThat(response.profile().players()).isNull();
+        assertThat(response.profile().maxMinutes()).isEqualTo(90);
+        assertThat(response.profile().playerCount()).satisfies(range -> {
+            assertThat(range.minimum()).isEqualTo(3);
+            assertThat(range.maximum()).isEqualTo(4);
+            assertThat(range.sourceText()).isEqualTo("3–4 人");
+            assertThat(range.confirmedTurn()).isEqualTo(2);
+        });
+        assertThat(response.profile().durationMinutes()).satisfies(range -> {
+            assertThat(range.minimum()).isEqualTo(60);
+            assertThat(range.maximum()).isEqualTo(90);
+        });
         assertThat(response.mode()).isEqualTo("model_assisted");
         assertThat(response.clarification().field()).isEqualTo("conversation");
         assertThat(response.clarification().options()).isEmpty();
+    }
+
+    @Test
+    void acceptsTwoSidedConstraintRangesWithoutCollapsingTheirEvidence() {
+        var request = new BggRecommendationAgentController.RecommendationConversationRequest(
+                new BggRecommendationAgentController.RecommendationProfileRequest(
+                        null,
+                        null,
+                        null,
+                        "strategy",
+                        "competitive",
+                        new BggRecommendationAgentController.ConstraintRangeRequest<>(
+                                3, 5, "hard", "3–5 人", 4),
+                        new BggRecommendationAgentController.ConstraintRangeRequest<>(
+                                90, 150, "hard", "90–150 分钟", 4),
+                        new BggRecommendationAgentController.ConstraintRangeRequest<>(
+                                new BigDecimal("2.5"), new BigDecimal("3.5"), "hard", "复杂度 2.5–3.5", 4)),
+                "继续推荐");
+
+        var profile = request.toCommand().profile();
+
+        assertThat(profile.minPlayers()).isEqualTo(3);
+        assertThat(profile.maxPlayers()).isEqualTo(5);
+        assertThat(profile.minMinutes()).isEqualTo(90);
+        assertThat(profile.maxMinutes()).isEqualTo(150);
+        assertThat(profile.minWeight()).isEqualByComparingTo("2.5");
+        assertThat(profile.maxWeight()).isEqualByComparingTo("3.5");
+        assertThat(profile.playerCount().sourceText()).isEqualTo("3–5 人");
+        assertThat(profile.playerCount().confirmedTurn()).isEqualTo(4);
+        assertThat(profile.type()).isEqualTo(BggGameType.STRATEGY);
+        assertThat(profile.interaction()).isEqualTo(InteractionPreference.COMPETITIVE);
     }
 
     @Test
@@ -119,7 +246,21 @@ class BggRecommendationAgentControllerTest {
                         List.of(new RecommendationReason(
                                 ReasonKind.BGG_FACT,
                                 "与参考游戏共有的 BGG 机制/类型：Animals、Card Drafting",
-                                List.of()))))));
+                                List.of())),
+                        List.of(new CandidateClaim(
+                                266192,
+                                "playerCount",
+                                CandidateClaim.Type.CONSTRAINT_FIT,
+                                ConstraintRange.Strength.HARD,
+                                CandidateClaim.Relation.SATISFIED,
+                                "候选人数 1–5 人与硬条件 4 人：满足。",
+                                List.of(new CandidateObservation(
+                                        "bgg-266192-playerCount",
+                                        266192,
+                                        CandidateObservation.Kind.STRUCTURED_METADATA,
+                                        "playerCount",
+                                        "1..5",
+                                        List.of()))))))));
         when(presentation.localizeTaxonomy(List.of("Animals"), List.of("Card Drafting"), "zh-CN"))
                 .thenReturn(new LocalizedTaxonomy(
                         Map.of("Animals", "动物"), Map.of("Card Drafting", "卡牌轮抽")));
@@ -153,6 +294,12 @@ class BggRecommendationAgentControllerTest {
                     .containsExactly("支持 4 人游玩", "与参考游戏共有的 BGG 机制/类型：动物、卡牌轮抽");
             assertThat(game.reasons()).singleElement().satisfies(reason ->
                     assertThat(reason.text()).isEqualTo("与参考游戏共有的 BGG 机制/类型：动物、卡牌轮抽"));
+            assertThat(game.fitClaims()).singleElement().satisfies(claim -> {
+                assertThat(claim.subject()).isEqualTo("playerCount");
+                assertThat(claim.strength()).isEqualTo("hard");
+                assertThat(claim.relation()).isEqualTo("satisfied");
+                assertThat(claim.text()).contains("候选人数", "满足");
+            });
         });
     }
 
@@ -175,5 +322,117 @@ class BggRecommendationAgentControllerTest {
         assertThat(command.focusedBggId()).isNull();
         assertThat(command.knownGames()).extracting(game -> game.bggId()).containsExactly(101, 102);
         assertThat(command.shownBggIds()).containsExactly(101, 102);
+    }
+
+    @Test
+    void presentsAComparisonAsCandidateFactsAndExplicitUnknownCellsWithoutObservationIds() {
+        Game first = comparisonGame(301, "Opaque One", 45, List.of("Pattern Building"));
+        Game second = comparisonGame(302, "Opaque Two", 75, List.of("Open Drafting"));
+        var comparison = new BoardGameRecommendationAgent.CandidateComparison(
+                List.of(
+                        new BoardGameRecommendationAgent.ComparisonCandidate(first, List.of()),
+                        new BoardGameRecommendationAgent.ComparisonCandidate(second, List.of())),
+                List.of(
+                        new BoardGameRecommendationAgent.ComparisonAxis(
+                                "mechanics",
+                                List.of(
+                                        new BoardGameRecommendationAgent.ComparisonCell(
+                                                301,
+                                                new CandidateObservation(
+                                                        "B301:mechanics",
+                                                        301,
+                                                        CandidateObservation.Kind.TAXONOMY,
+                                                        "mechanics",
+                                                        "Pattern Building",
+                                                        List.of())),
+                                        new BoardGameRecommendationAgent.ComparisonCell(
+                                                302,
+                                                new CandidateObservation(
+                                                        "B302:mechanics",
+                                                        302,
+                                                        CandidateObservation.Kind.TAXONOMY,
+                                                        "mechanics",
+                                                        "Open Drafting",
+                                                        List.of())))),
+                        new BoardGameRecommendationAgent.ComparisonAxis(
+                                "reportedExperience",
+                                List.of(
+                                        new BoardGameRecommendationAgent.ComparisonCell(301, null),
+                                        new BoardGameRecommendationAgent.ComparisonCell(302, null)))));
+        when(agent.converse(any(), eq("zh-CN"), eq("player"))).thenReturn(new ConversationResponse(
+                Outcome.CONVERSATION,
+                DecisionMode.MODEL_ASSISTED,
+                "我把两款并排核对。",
+                RecommendationProfile.empty(),
+                null,
+                0,
+                2,
+                new BoardGameRecommendationAgent.UserModelView("", List.of()),
+                List.of(),
+                new BoardGameRecommendationAgent.HarnessTrace(1, 1, 0, false, List.of("COMPARE_CANDIDATES")),
+                List.of(),
+                comparison));
+        when(presentation.localizeTaxonomy(
+                        List.of("Abstract Strategy"),
+                        List.of("Pattern Building", "Open Drafting"),
+                        "zh-CN"))
+                .thenReturn(new LocalizedTaxonomy(Map.of(), Map.of()));
+
+        var response = controller.converse(
+                new BggRecommendationAgentController.RecommendationConversationRequest(
+                        null, "比较这两款"),
+                "zh-CN",
+                principal);
+
+        assertThat(response.comparison().candidates())
+                .extracting(candidate -> candidate.game().name())
+                .containsExactly("Opaque One", "Opaque Two");
+        assertThat(response.comparison().axes().getFirst()).satisfies(axis -> {
+            assertThat(axis.subject()).isEqualTo("mechanics");
+            assertThat(axis.label()).isEqualTo("BGG 机制（仅分类）");
+            assertThat(axis.capability()).isEqualTo("taxonomy");
+            assertThat(axis.cells()).extracting(cell -> cell.status()).containsOnly("observed");
+            assertThat(axis.cells()).extracting(cell -> cell.value())
+                    .containsExactly("Pattern Building", "Open Drafting");
+        });
+        assertThat(response.comparison().axes().get(1).cells()).allSatisfy(cell -> {
+            assertThat(cell.status()).isEqualTo("unknown");
+            assertThat(cell.observationKind()).isEmpty();
+            assertThat(cell.value()).isEmpty();
+        });
+    }
+
+    private static Game comparisonGame(int id, String name, int minutes, List<String> mechanics) {
+        return new Game(
+                new Ranking(
+                        id,
+                        name,
+                        2025,
+                        null,
+                        new BigDecimal("7.1"),
+                        new BigDecimal("7.4"),
+                        400,
+                        List.of()),
+                new Details(
+                        name,
+                        "",
+                        "",
+                        2,
+                        4,
+                        minutes,
+                        new BigDecimal("2.3"),
+                        List.of("Abstract Strategy"),
+                        mechanics,
+                        minutes,
+                        minutes,
+                        10,
+                        10,
+                        "",
+                        "",
+                        null,
+                        null,
+                        List.of(),
+                        List.of(),
+                        List.of()));
     }
 }

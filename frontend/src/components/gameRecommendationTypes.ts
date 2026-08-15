@@ -1,9 +1,21 @@
+export type RecommendationConstraintRange<T extends number = number> = {
+  minimum: T | null
+  maximum: T | null
+  strength: 'hard' | 'soft'
+  sourceText: string
+  confirmedTurn: number
+}
+
 export type RecommendationProfile = {
-  players: number | null
-  maxMinutes: number | null
-  maxWeight: number | null
+  /** Rolling-deploy read compatibility only; canonical client writes omit these projections. */
+  players?: number | null
+  maxMinutes?: number | null
+  maxWeight?: number | null
   type: string
   interaction: string
+  playerCount: RecommendationConstraintRange | null
+  durationMinutes: RecommendationConstraintRange | null
+  complexity: RecommendationConstraintRange | null
 }
 
 export type RecommendationClarification = {
@@ -54,13 +66,44 @@ export type RecommendedGame = {
   matches: string[]
   tradeoffs: string[]
   reasons?: RecommendationReason[]
+  fitClaims?: CandidateFitClaim[]
+}
+
+export type CandidateFitClaim = {
+  subject: string
+  strength: 'hard' | 'soft'
+  relation: 'satisfied' | 'conflict' | 'unknown'
+  text: string
+}
+
+export type CandidateComparison = {
+  candidates: {
+    game: RecommendationGame
+    fitClaims: CandidateFitClaim[]
+  }[]
+  axes: {
+    subject: string
+    label: string
+    capability: 'structured_metadata' | 'taxonomy' | 'attributed_report' | 'rulebook_fact'
+    cells: {
+      bggId: number
+      status: 'observed' | 'unknown'
+      observationKind: string
+      value: string
+    }[]
+  }[]
 }
 
 export type ResearchSource = { index: number; title: string; url: string; domain: string }
 
 export type RecommendationAgentResponse = {
+  conversationId?: string | null
+  revision?: number | null
+  clientTurnId?: string | null
+  replayed?: boolean
   outcome: 'conversation' | 'needs_clarification' | 'recommendations' | 'no_match' | 'unavailable'
   mode: 'model_assisted'
+  responseLocale?: 'zh-CN' | 'en'
   assistantMessage: string
   profile: RecommendationProfile
   clarification: RecommendationClarification | null
@@ -77,6 +120,7 @@ export type RecommendationAgentResponse = {
     }[]
   }
   researchSources?: ResearchSource[]
+  comparison?: CandidateComparison | null
   harness?: {
     modelCalls: number
     catalogCalls: number
@@ -86,6 +130,18 @@ export type RecommendationAgentResponse = {
     totalElapsedMs?: number
   }
   games: RecommendedGame[]
+}
+
+export type RecommendationServerSession = {
+  conversationId: string
+  revision: number
+  profile: RecommendationProfile
+  transcript: { role: 'assistant' | 'user'; text: string }[]
+  knownGames: { bggId: number; name: string; originalName: string }[]
+  shownBggIds: number[]
+  processing: boolean
+  processingSince: string | null
+  latestResponse: RecommendationAgentResponse | null
 }
 
 export type RecommendationMessage = {

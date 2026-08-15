@@ -5,7 +5,12 @@ import TabletopGlyph from '@/components/TabletopGlyph.vue'
 import type { RecommendedGame, ResearchSource } from '@/components/gameRecommendationTypes'
 import { useLocale } from '@/lib/locale'
 
-const props = defineProps<{ entry: RecommendedGame; sources: ResearchSource[]; loading: boolean }>()
+const props = defineProps<{
+  entry: RecommendedGame
+  sources: ResearchSource[]
+  loading: boolean
+  responseLocale?: 'zh-CN' | 'en'
+}>()
 defineEmits<{
   introduce: [bggId: number, name: string]
   select: [game: RecommendedGame['game']]
@@ -13,14 +18,17 @@ defineEmits<{
 }>()
 
 const { locale } = useLocale()
-const labels = computed(() => locale.value === 'zh-CN'
+const cardLocale = computed(() => props.responseLocale ?? locale.value)
+const labels = computed(() => cardLocale.value === 'zh-CN'
   ? {
       bgg: '已核对信息', inferred: '结合你刚才说的', researched: '进一步了解', tradeoff: '选择前留意',
+      fit: '条件核对', hard: '硬条件', soft: '偏好', satisfied: '满足', conflict: '冲突', unknown: '待核对',
       introduce: '介绍一下', select: '选这款，找规则书', details: '查看完整资料', source: '来源', noCover: '封面加载中', cover: '的 BGG 封面',
       players: (min: number, max: number) => `${min}–${max} 人`, minutes: (min: number, max: number) => min === max ? `约 ${max} 分钟` : `${min}–${max} 分钟`, weight: (value: number) => `复杂度 ${value.toFixed(1)}`, designer: (value: string) => `设计：${value}`,
     }
   : {
       bgg: 'Verified facts', inferred: 'Based on what you said', researched: 'A closer look', tradeoff: 'Worth checking',
+      fit: 'Constraint check', hard: 'Hard', soft: 'Preference', satisfied: 'Satisfied', conflict: 'Conflict', unknown: 'Unknown',
       introduce: 'Tell me more', select: 'Choose and find rulebook', details: 'View full details', source: 'Source', noCover: 'Cover loading', cover: ' BGG cover',
       players: (min: number, max: number) => `${min}–${max} players`, minutes: (min: number, max: number) => min === max ? `About ${max} min` : `${min}–${max} min`, weight: (value: number) => `Weight ${value.toFixed(1)}`, designer: (value: string) => `By ${value}`,
     })
@@ -48,6 +56,18 @@ const groupedReasons = computed(() => {
   }
 })
 
+const fitClaims = computed(() => props.entry.fitClaims ?? [])
+
+function fitLabel(relation: 'satisfied' | 'conflict' | 'unknown') {
+  return labels.value[relation]
+}
+
+function fitIcon(relation: 'satisfied' | 'conflict' | 'unknown') {
+  if (relation === 'satisfied') return '✓'
+  if (relation === 'conflict') return '!'
+  return '?'
+}
+
 function source(index: number) {
   return props.sources.find(item => item.index === index)
 }
@@ -58,7 +78,7 @@ function hideBrokenImage(event: Event) {
 </script>
 
 <template>
-  <article class="game-tile min-w-0 p-3 sm:p-4">
+  <article class="game-tile min-w-0 p-3 sm:p-4" data-testid="recommendation-game-card">
     <button type="button" class="block w-full text-left" :aria-label="`${labels.details}：${entry.game.name}`" @click="$emit('details', entry.game)">
       <div class="flex aspect-[16/10] items-center justify-center overflow-hidden rounded-lg border border-ink/6 bg-canvas p-3 text-ink/25">
         <img v-if="entry.game.thumbnailUrl" :src="entry.game.thumbnailUrl" :alt="`${entry.game.name}${labels.cover}`" loading="lazy" class="h-full w-full object-contain" @error="hideBrokenImage">
@@ -68,6 +88,16 @@ function hideBrokenImage(event: Event) {
       <p v-if="entry.game.nameLocalized" class="mt-1 line-clamp-1 text-xs text-ink/45">{{ entry.game.originalName }}</p>
       <p v-if="quickFacts.length" class="mt-2 line-clamp-2 text-xs leading-5 text-ink/55">{{ quickFacts.join(' · ') }}</p>
     </button>
+
+    <section v-if="fitClaims.length" class="mt-4 rounded-lg border border-ink/10 bg-paper p-3" data-testid="candidate-fit-claims">
+      <p class="tabletop-rule text-copper">{{ labels.fit }}</p>
+      <ul class="mt-2 stack-y-s text-sm leading-5">
+        <li v-for="claim in fitClaims" :key="`${claim.subject}-${claim.relation}`" class="flex gap-2" :class="claim.relation === 'conflict' ? 'text-red-700' : claim.relation === 'unknown' ? 'text-ink/55' : 'text-ink/68'">
+          <span aria-hidden="true" class="font-bold">{{ fitIcon(claim.relation) }}</span>
+          <span><span class="mr-1.5 text-[0.6875rem] font-bold uppercase tracking-wide">{{ claim.strength === 'hard' ? labels.hard : labels.soft }} · {{ fitLabel(claim.relation) }}</span>{{ claim.text }}</span>
+        </li>
+      </ul>
+    </section>
 
     <section v-if="groupedReasons.bgg_fact.length" class="mt-4">
       <p class="tabletop-rule text-copper">{{ labels.bgg }}</p>
