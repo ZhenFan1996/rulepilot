@@ -2,6 +2,7 @@ package com.rulepilot.assistant.application;
 
 import com.rulepilot.assistant.EvidenceVerifier.VerificationStatus;
 import com.rulepilot.assistant.domain.AnswerStatus;
+import com.rulepilot.retrieval.AnswerEvidenceRetriever;
 import com.rulepilot.retrieval.evidence.HybridEvidenceHit;
 import java.util.List;
 import java.util.UUID;

@@ -2,6 +2,7 @@ package com.rulepilot.assistant.application;
 
 import com.rulepilot.assistant.QuestionUnderstanding.QuestionContext;
 import com.rulepilot.assistant.domain.UnderstoodQuestion;
+import com.rulepilot.retrieval.AnswerEvidenceRetriever;
 import java.util.UUID;
 
 /** Stable boundary between answer orchestration and optional evidence acquisition. */

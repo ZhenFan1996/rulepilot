@@ -1,7 +1,5 @@
-package com.rulepilot.assistant.application;
+package com.rulepilot.retrieval;
 
-import com.rulepilot.assistant.RuleAnswerModel.AnswerAid;
-import com.rulepilot.assistant.RuleAnswerModel.EvidenceNeed;
 import com.rulepilot.retrieval.evidence.HybridEvidenceHit;
 import java.util.Collection;
 import java.util.Comparator;
@@ -12,7 +10,7 @@ import java.util.Set;
 import java.util.UUID;
 
 /** Selects a bounded evidence set without re-interpreting player wording. */
-final class AnswerEvidenceSelectionPolicy {
+public final class AnswerEvidenceSelectionPolicy {
 
     private AnswerEvidenceSelectionPolicy() {}
 
@@ -43,14 +41,14 @@ final class AnswerEvidenceSelectionPolicy {
                 confirmedPageGroups);
     }
 
-    static List<HybridEvidenceHit> select(
+    public static List<HybridEvidenceHit> select(
             Map<UUID, HybridEvidenceHit> evidenceById,
             Collection<HybridEvidenceHit> intentAnchors,
             Set<UUID> visualEvidenceIds,
-            AnswerQuestionPlan plan,
+            AnswerRetrievalPlan plan,
             List<List<HybridEvidenceHit>> confirmedPageGroups) {
         Map<UUID, HybridEvidenceHit> selected = new LinkedHashMap<>();
-        boolean visualRequested = plan != null && plan.evidenceNeeds().contains(EvidenceNeed.VISUAL_REFERENCE);
+        boolean visualRequested = plan != null && plan.visualRequested();
         List<HybridEvidenceHit> visual = visualEvidenceIds.stream()
                 .map(evidenceById::get)
                 .filter(java.util.Objects::nonNull)
@@ -69,10 +67,7 @@ final class AnswerEvidenceSelectionPolicy {
                 .forEach(hit -> selected.putIfAbsent(hit.evidence().chunkId(), hit));
         if (!visualRequested) addAll(selected, visual);
 
-        boolean expandedCoverage = plan != null
-                && (plan.subquestions().size() > 1
-                        || plan.evidenceNeeds().contains(EvidenceNeed.COMPLETE_LIST)
-                        || plan.answerAid() == AnswerAid.CALCULATION);
+        boolean expandedCoverage = plan != null && plan.expandedCoverageRequired();
         int targetSize = expandedCoverage ? 8 : 5;
         evidenceById.values().stream()
                 .sorted(byScoreThenId())

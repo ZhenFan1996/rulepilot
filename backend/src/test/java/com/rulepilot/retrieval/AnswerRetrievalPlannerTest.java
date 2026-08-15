@@ -1,16 +1,11 @@
-package com.rulepilot.assistant.application;
+package com.rulepilot.retrieval;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import com.rulepilot.assistant.PlayerLocale;
-import com.rulepilot.assistant.QuestionUnderstanding.QuestionContext;
-import com.rulepilot.assistant.RuleAnswerModel.AnswerAid;
-import com.rulepilot.assistant.RuleAnswerModel.EvidenceNeed;
-import com.rulepilot.assistant.RuleAnswerModel.ReferenceBinding;
-import com.rulepilot.assistant.domain.LearningIntent;
-import com.rulepilot.assistant.domain.QuestionType;
-import com.rulepilot.assistant.domain.UnderstoodQuestion;
+import com.rulepilot.retrieval.AnswerRetrievalContext.LearningIntent;
+import com.rulepilot.retrieval.AnswerRetrievalPlan.EvidenceNeed;
+import com.rulepilot.retrieval.AnswerRetrievalQuestion.QuestionType;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
@@ -22,14 +17,12 @@ class AnswerRetrievalPlannerTest {
 
     @Test
     void followsValidatedSubquestionsAndEvidenceNeedsWithoutPunctuationHeuristics() {
-        UnderstoodQuestion question = question("行动后先补牌吗，还有例外情况吗？", List.of("补牌", "例外"));
-        AnswerQuestionPlan plan = new AnswerQuestionPlan(
+        AnswerRetrievalQuestion question = question("行动后先补牌吗，还有例外情况吗？", List.of("补牌", "例外"));
+        AnswerRetrievalPlan plan = new AnswerRetrievalPlan(
                 List.of(
-                        new AnswerQuestionPlan.Subquestion("行动后先补牌吗", Set.of(EvidenceNeed.SEQUENCE)),
-                        new AnswerQuestionPlan.Subquestion("例外情况吗", Set.of(EvidenceNeed.EXCEPTION))),
-                true,
-                AnswerAid.WALKTHROUGH,
-                ReferenceBinding.CURRENT_QUESTION);
+                        new AnswerRetrievalPlan.Subquestion("行动后先补牌吗", Set.of(EvidenceNeed.SEQUENCE)),
+                        new AnswerRetrievalPlan.Subquestion("例外情况吗", Set.of(EvidenceNeed.EXCEPTION))),
+                false);
 
         var intents = AnswerRetrievalPlanner.plan(question, context(), List.of(), plan);
 
@@ -47,11 +40,11 @@ class AnswerRetrievalPlannerTest {
 
     @Test
     void addsSourceAuthoredAdviceCuesOnlyWhenThePlanRequestsAdviceEvidence() {
-        UnderstoodQuestion question = question("有没有更容易赢的打法或建议？", List.of("打法", "建议"));
-        AnswerQuestionPlan plan = new AnswerQuestionPlan(
-                List.of(new AnswerQuestionPlan.Subquestion(
+        AnswerRetrievalQuestion question = question("有没有更容易赢的打法或建议？", List.of("打法", "建议"));
+        AnswerRetrievalPlan plan = new AnswerRetrievalPlan(
+                List.of(new AnswerRetrievalPlan.Subquestion(
                         question.normalizedQuestion(), Set.of(EvidenceNeed.ADVICE))),
-                true);
+                false);
 
         var queries = AnswerRetrievalPlanner.plan(question, context(), List.of(), plan).stream()
                 .map(AnswerRetrievalPlanner.RetrievalIntent::query)
@@ -65,11 +58,11 @@ class AnswerRetrievalPlannerTest {
 
     @Test
     void keepsBoundedModelRewritesAfterDirectSubquestionsAndDeduplicatesQueries() {
-        UnderstoodQuestion question = question("When does the phase end?", List.of());
-        AnswerQuestionPlan plan = new AnswerQuestionPlan(
-                List.of(new AnswerQuestionPlan.Subquestion(
+        AnswerRetrievalQuestion question = question("When does the phase end?", List.of());
+        AnswerRetrievalPlan plan = new AnswerRetrievalPlan(
+                List.of(new AnswerRetrievalPlan.Subquestion(
                         "When does the phase end?", Set.of(EvidenceNeed.DIRECT_RULE))),
-                true);
+                false);
 
         var intents = AnswerRetrievalPlanner.plan(
                 question,
@@ -85,7 +78,7 @@ class AnswerRetrievalPlannerTest {
 
     @Test
     void fallbackPlanAddsOnlyGenericSyntacticFacets() {
-        UnderstoodQuestion question = question("Can this action happen now?", List.of());
+        AnswerRetrievalQuestion question = question("Can this action happen now?", List.of());
 
         var intents = AnswerRetrievalPlanner.plan(question, context());
 
@@ -98,9 +91,9 @@ class AnswerRetrievalPlannerTest {
 
     @Test
     void supplementaryQueryUsesCallerContextTermsAndLearningIntentAsRetrievalData() {
-        UnderstoodQuestion question = question("请解释上一条里的术语。", List.of("声望里程碑"));
-        QuestionContext context = new QuestionContext(
-                versionId, "声望轨道上的里程碑是什么意思？", LearningIntent.DEFINE, PlayerLocale.ZH_CN);
+        AnswerRetrievalQuestion question = question("请解释上一条里的术语。", List.of("声望里程碑"));
+        AnswerRetrievalContext context = new AnswerRetrievalContext(
+                versionId, "声望轨道上的里程碑是什么意思？", LearningIntent.DEFINE);
 
         var queries = AnswerRetrievalPlanner.plan(question, context).stream()
                 .map(AnswerRetrievalPlanner.RetrievalIntent::query)
@@ -115,13 +108,13 @@ class AnswerRetrievalPlannerTest {
 
     @Test
     void enforcesIntentCountAndQueryLengthBudgets() {
-        AnswerQuestionPlan plan = new AnswerQuestionPlan(
+        AnswerRetrievalPlan plan = new AnswerRetrievalPlan(
                 List.of(
                         subquestion("one"),
                         subquestion("two"),
                         subquestion("three"),
                         subquestion("four")),
-                true);
+                false);
         String longRewrite = "x".repeat(700);
 
         var intents = AnswerRetrievalPlanner.plan(
@@ -142,16 +135,15 @@ class AnswerRetrievalPlannerTest {
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
-    private AnswerQuestionPlan.Subquestion subquestion(String text) {
-        return new AnswerQuestionPlan.Subquestion(text, Set.of(EvidenceNeed.DIRECT_RULE));
+    private AnswerRetrievalPlan.Subquestion subquestion(String text) {
+        return new AnswerRetrievalPlan.Subquestion(text, Set.of(EvidenceNeed.DIRECT_RULE));
     }
 
-    private UnderstoodQuestion question(String text, List<String> terms) {
-        return new UnderstoodQuestion(
-                versionId, text, text, QuestionType.RULE_QUERY, terms, Set.of());
+    private AnswerRetrievalQuestion question(String text, List<String> terms) {
+        return new AnswerRetrievalQuestion(text, QuestionType.RULE_QUERY, terms);
     }
 
-    private QuestionContext context() {
-        return new QuestionContext(versionId);
+    private AnswerRetrievalContext context() {
+        return new AnswerRetrievalContext(versionId);
     }
 }

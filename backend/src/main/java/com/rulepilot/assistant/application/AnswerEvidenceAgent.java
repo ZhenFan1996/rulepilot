@@ -8,6 +8,10 @@ import com.rulepilot.assistant.NativeToolAgent.RunRequest;
 import com.rulepilot.assistant.NativeToolAgent.RunStatus;
 import com.rulepilot.assistant.QuestionUnderstanding.QuestionContext;
 import com.rulepilot.assistant.domain.UnderstoodQuestion;
+import com.rulepilot.retrieval.AnswerEvidencePolicy;
+import com.rulepilot.retrieval.AnswerEvidenceRetriever;
+import com.rulepilot.retrieval.AnswerEvidenceSelectionPolicy;
+import com.rulepilot.retrieval.AnswerRetrievalPlanner;
 import com.rulepilot.retrieval.RuleEvidenceLookup;
 import com.rulepilot.retrieval.evidence.HybridEvidenceHit;
 import com.rulepilot.retrieval.evidence.RuleEvidenceHit;
@@ -285,7 +289,11 @@ public class AnswerEvidenceAgent implements AnswerEvidenceRefiner {
         List<List<HybridEvidenceHit>> confirmedPageGroups = canonicalPageGroups(
                 exactPageObservationGroups, hydratedById, merged);
         List<HybridEvidenceHit> selected = AnswerEvidenceSelectionPolicy.select(
-                merged, observed, Set.of(), questionPlan, confirmedPageGroups);
+                merged,
+                observed,
+                Set.of(),
+                AnswerRetrievalInputMapper.plan(questionPlan),
+                confirmedPageGroups);
         return new AnswerEvidenceRetriever.Result(selected, AnswerEvidenceRetriever.State.READY);
     }
 

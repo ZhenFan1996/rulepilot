@@ -1,10 +1,9 @@
-package com.rulepilot.assistant.application;
+package com.rulepilot.retrieval;
 
-import com.rulepilot.assistant.QuestionUnderstanding.QuestionContext;
-import com.rulepilot.assistant.RuleAnswerModel.EvidenceNeed;
-import com.rulepilot.assistant.domain.LearningIntent;
-import com.rulepilot.assistant.domain.QuestionType;
-import com.rulepilot.assistant.domain.UnderstoodQuestion;
+import com.rulepilot.retrieval.AnswerRetrievalContext.LearningIntent;
+import com.rulepilot.retrieval.AnswerRetrievalPlan.EvidenceNeed;
+import com.rulepilot.retrieval.AnswerRetrievalPlan.Subquestion;
+import com.rulepilot.retrieval.AnswerRetrievalQuestion.QuestionType;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -19,26 +18,28 @@ public final class AnswerRetrievalPlanner {
 
     private AnswerRetrievalPlanner() {}
 
-    public static List<RetrievalIntent> plan(UnderstoodQuestion question, QuestionContext context) {
-        return plan(question, context, List.of(), AnswerQuestionPlan.fallback(question));
+    static List<RetrievalIntent> plan(AnswerRetrievalQuestion question, AnswerRetrievalContext context) {
+        return plan(question, context, List.of(), AnswerRetrievalPlan.fallback(question));
     }
 
-    public static List<RetrievalIntent> plan(
-            UnderstoodQuestion question, QuestionContext context, List<String> rewrittenQueries) {
-        return plan(question, context, rewrittenQueries, AnswerQuestionPlan.fallback(question));
+    static List<RetrievalIntent> plan(
+            AnswerRetrievalQuestion question,
+            AnswerRetrievalContext context,
+            List<String> rewrittenQueries) {
+        return plan(question, context, rewrittenQueries, AnswerRetrievalPlan.fallback(question));
     }
 
-    public static List<RetrievalIntent> plan(
-            UnderstoodQuestion question,
-            QuestionContext context,
+    static List<RetrievalIntent> plan(
+            AnswerRetrievalQuestion question,
+            AnswerRetrievalContext context,
             List<String> rewrittenQueries,
-            AnswerQuestionPlan questionPlan) {
+            AnswerRetrievalPlan questionPlan) {
         if (question == null || context == null) {
             throw new IllegalArgumentException("answer retrieval planning input is required");
         }
-        AnswerQuestionPlan acceptedPlan = questionPlan == null ? AnswerQuestionPlan.fallback(question) : questionPlan;
+        AnswerRetrievalPlan acceptedPlan = questionPlan == null ? AnswerRetrievalPlan.fallback(question) : questionPlan;
         List<RetrievalIntent> intents = new ArrayList<>();
-        for (AnswerQuestionPlan.Subquestion subquestion : acceptedPlan.subquestions()) {
+        for (Subquestion subquestion : acceptedPlan.subquestions()) {
             addDistinct(intents, new RetrievalIntent(
                     plannedQuery(subquestion), Set.of(), null, true, RetrievalPurpose.GENERAL));
             if (intents.size() == MAX_INTENTS) return List.copyOf(intents);
@@ -75,7 +76,7 @@ public final class AnswerRetrievalPlanner {
         }
     }
 
-    private static String plannedQuery(AnswerQuestionPlan.Subquestion subquestion) {
+    private static String plannedQuery(Subquestion subquestion) {
         StringBuilder query = new StringBuilder(subquestion.text());
         subquestion.evidenceNeeds().stream()
                 .map(AnswerRetrievalPlanner::evidenceNeedFacets)
@@ -98,14 +99,14 @@ public final class AnswerRetrievalPlanner {
         };
     }
 
-    static List<String> adviceSourceCueQueries() {
+    public static List<String> adviceSourceCueQueries() {
         return List.of(
                 "source-authored recommendation preferred choice ideal should recommendation advice",
                 "source-authored caution avoid warning watch out");
     }
 
     private static String supplementaryQuery(
-            UnderstoodQuestion question, QuestionContext context, AnswerQuestionPlan plan) {
+            AnswerRetrievalQuestion question, AnswerRetrievalContext context, AnswerRetrievalPlan plan) {
         StringBuilder query = new StringBuilder(question.normalizedQuestion());
         if (context.previousQuestion() != null) append(query, context.previousQuestion());
         if (!question.terms().isEmpty()) append(query, String.join(" ", question.terms()));
@@ -153,13 +154,13 @@ public final class AnswerRetrievalPlanner {
     }
 
     /** Historical purpose values remain readable in stored diagnostics; new plans use GENERAL. */
-    public enum RetrievalPurpose {
+    enum RetrievalPurpose {
         GENERAL,
         ENDGAME_RESOLUTION,
         CONDITION_PROCEDURE
     }
 
-    public record RetrievalIntent(
+    record RetrievalIntent(
             String query,
             Set<String> sectionTypes,
             String currentSectionType,

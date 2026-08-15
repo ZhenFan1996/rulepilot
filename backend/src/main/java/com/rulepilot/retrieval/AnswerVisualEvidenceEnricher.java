@@ -1,9 +1,5 @@
-package com.rulepilot.assistant.application;
+package com.rulepilot.retrieval;
 
-import com.rulepilot.assistant.AgentExecutionControl.ActivityType;
-import com.rulepilot.assistant.AgentExecutionStoppedException;
-import com.rulepilot.assistant.AuditedAgentInvocations;
-import com.rulepilot.retrieval.RuleEvidenceLookup;
 import com.rulepilot.retrieval.VisualRulebookPageFactSearch.PageFactMatch;
 import com.rulepilot.retrieval.evidence.HybridEvidenceHit;
 import com.rulepilot.retrieval.evidence.RuleEvidenceHit;
@@ -25,9 +21,9 @@ final class AnswerVisualEvidenceEnricher {
     private static final int MAX_VISUAL_SOURCE_PAGES = 4;
 
     private final RuleEvidenceLookup evidenceLookup;
-    private final AuditedAgentInvocations invocations;
+    private final AnswerRetrievalInvocations invocations;
 
-    AnswerVisualEvidenceEnricher(RuleEvidenceLookup evidenceLookup, AuditedAgentInvocations invocations) {
+    AnswerVisualEvidenceEnricher(RuleEvidenceLookup evidenceLookup, AnswerRetrievalInvocations invocations) {
         this.evidenceLookup = evidenceLookup;
         this.invocations = invocations;
     }
@@ -44,15 +40,13 @@ final class AnswerVisualEvidenceEnricher {
         try {
             pageSources = invocations.invoke(
                     assistantRunId,
-                    ActivityType.TOOL,
                     "readVisualRulebookFactPages",
                     selectedPages.size(),
                     "Original rulebook pages " + selectedPages + " for visual facts retrieved",
                     () -> evidenceLookup.findByPageNumbers(documentVersionId, selectedPages),
                     sources -> sources.size() * 80);
-        } catch (AgentExecutionStoppedException stopped) {
-            throw stopped;
         } catch (RuntimeException lookupFailure) {
+            if (invocations.executionStopped(lookupFailure)) throw lookupFailure;
             LOGGER.warn(
                     "Optional visual source-page lookup failed for document version {}: {}",
                     documentVersionId,

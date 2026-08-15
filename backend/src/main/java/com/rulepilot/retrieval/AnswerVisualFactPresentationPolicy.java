@@ -1,7 +1,6 @@
-package com.rulepilot.assistant.application;
+package com.rulepilot.retrieval;
 
 import com.rulepilot.retrieval.VisualRulebookPageFactSearch.PageFactMatch;
-import com.rulepilot.retrieval.VisualTranscribedRuleEvidence;
 import java.util.stream.Collectors;
 
 /** Presents stored visual observations without rewriting their natural-language meaning. */

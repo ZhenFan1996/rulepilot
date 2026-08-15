@@ -1,4 +1,4 @@
-package com.rulepilot.assistant.application;
+package com.rulepilot.retrieval;
 
 import com.rulepilot.retrieval.evidence.HybridEvidenceHit;
 import java.util.LinkedHashSet;
@@ -7,7 +7,7 @@ import java.util.Locale;
 import java.util.regex.Pattern;
 
 /** Mechanical evidence identity and locator rules shared by answer retrieval adapters. */
-final class AnswerEvidencePolicy {
+public final class AnswerEvidencePolicy {
 
     /** Printed catalogue identifiers are document coordinates, not inferred game vocabulary. */
     private static final Pattern PRINTED_IDENTIFIER = Pattern.compile(
@@ -27,7 +27,7 @@ final class AnswerEvidencePolicy {
         return List.copyOf(identifiers);
     }
 
-    static boolean isVisualPlaceholder(HybridEvidenceHit hit) {
+    public static boolean isVisualPlaceholder(HybridEvidenceHit hit) {
         return hit != null && VISUAL_PAGE_PLACEHOLDER.equals(hit.evidence().excerpt());
     }
 

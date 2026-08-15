@@ -5,6 +5,7 @@ import com.rulepilot.assistant.RuleAnswerModel.AnswerAid;
 import com.rulepilot.assistant.RuleAnswerModel.EvidenceNeed;
 import com.rulepilot.assistant.RuleAnswerModel.ReferenceBinding;
 import com.rulepilot.assistant.domain.UnderstoodQuestion;
+import com.rulepilot.retrieval.AnswerEvidenceRetriever;
 
 /** Decides whether the accepted structured plan warrants a bounded native-tool refinement pass. */
 final class AnswerEvidenceRefinementPolicy {

@@ -1,24 +1,18 @@
-package com.rulepilot.assistant.application;
+package com.rulepilot.retrieval;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import com.rulepilot.assistant.ImmediateAuditedAgentInvocations;
-import com.rulepilot.assistant.QuestionUnderstanding.QuestionContext;
-import com.rulepilot.assistant.RuleAnswerModel;
-import com.rulepilot.assistant.RuleAnswerModel.EvidenceNeed;
-import com.rulepilot.assistant.RuleAnswerModel.ModelDraft;
-import com.rulepilot.assistant.RuleAnswerModel.ModelRequest;
-import com.rulepilot.assistant.domain.QuestionType;
-import com.rulepilot.assistant.domain.UnderstoodQuestion;
-import com.rulepilot.retrieval.HybridRuleSearch;
-import com.rulepilot.retrieval.RuleEvidenceLookup;
-import com.rulepilot.retrieval.VisualRulebookPageFactSearch;
+import com.rulepilot.retrieval.AnswerRetrievalPlan.EvidenceNeed;
+import com.rulepilot.retrieval.AnswerRetrievalQuestion.QuestionType;
 import com.rulepilot.retrieval.evidence.HybridEvidenceHit;
 import com.rulepilot.retrieval.evidence.RuleEvidenceHit;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.Supplier;
+import java.util.function.ToIntFunction;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
@@ -51,7 +45,7 @@ class AnswerEvidenceRetrieverTest {
         };
         AnswerEvidenceRetriever retriever = retriever((documentVersionId, query, options) -> List.of(source), facts, lookup);
 
-        UnderstoodQuestion question = question("How do I score after this action?");
+        AnswerRetrievalQuestion question = question("How do I score after this action?");
         AnswerEvidenceRetriever.Result result = retriever.retrieve(
                 UUID.randomUUID(), question, context(), "alice", visualPlan(question));
 
@@ -287,46 +281,106 @@ class AnswerEvidenceRetrieverTest {
                 .containsExactly(direct.evidence().chunkId());
     }
 
+    @Test
+    void acceptsCrossLanguageRewritesThroughTheCallerPortWithoutOwningAModelContract() {
+        List<String> searchedQueries = new ArrayList<>();
+        List<String> rewriteInputs = new ArrayList<>();
+        HybridEvidenceHit source = evidence("Setup happens before the first turn.", 0.8);
+        AnswerEvidenceRetriever retriever = retriever(
+                (documentVersionId, query, options) -> {
+                    searchedQueries.add(query);
+                    return List.of(source);
+                },
+                VisualRulebookPageFactSearch.empty(),
+                (documentVersionId, chunkIds) -> List.of(),
+                (runId, username, question, previousQuestion) -> {
+                    rewriteInputs.add(username);
+                    rewriteInputs.add(question);
+                    rewriteInputs.add(previousQuestion);
+                    return List.of("setup before first turn");
+                });
+
+        retriever.retrieve(
+                UUID.randomUUID(),
+                question("游戏开始前如何设置？"),
+                new AnswerRetrievalContext(versionId, "上一轮问了回合顺序。", null),
+                "alice");
+
+        assertThat(rewriteInputs).containsExactly("alice", "游戏开始前如何设置？", "上一轮问了回合顺序。");
+        assertThat(searchedQueries).contains("setup before first turn");
+    }
+
+    @Test
+    void propagatesTheOwningAgentStopSignalInsteadOfDegradingItAsSearchUnavailability() {
+        RuntimeException stopped = new RuntimeException("tool budget stopped");
+        AnswerRetrievalInvocations stoppedInvocations = new AnswerRetrievalInvocations() {
+            @Override
+            public <T> T invoke(
+                    UUID runId,
+                    String operation,
+                    int estimatedInputTokens,
+                    String successSummary,
+                    Supplier<T> invocation,
+                    ToIntFunction<T> outputTokenEstimator) {
+                throw stopped;
+            }
+
+            @Override
+            public boolean executionStopped(RuntimeException failure) {
+                return failure == stopped;
+            }
+        };
+        AnswerEvidenceRetriever retriever = new AnswerEvidenceRetriever(
+                (documentVersionId, query, options) -> List.of(),
+                VisualRulebookPageFactSearch.empty(),
+                (documentVersionId, chunkIds) -> List.of(),
+                stoppedInvocations,
+                (runId, username, question, previousQuestion) -> List.of());
+
+        assertThatThrownBy(() -> retriever.retrieve(
+                        UUID.randomUUID(), question("How does this action work?"), context(), "alice"))
+                .isSameAs(stopped);
+    }
+
     private AnswerEvidenceRetriever retriever(
             HybridRuleSearch retrieval,
             VisualRulebookPageFactSearch visualFacts,
             RuleEvidenceLookup evidenceLookup) {
-        ImmediateAuditedAgentInvocations invocations = new ImmediateAuditedAgentInvocations();
+        return retriever(
+                retrieval,
+                visualFacts,
+                evidenceLookup,
+                (runId, username, question, previousQuestion) -> List.of());
+    }
+
+    private AnswerEvidenceRetriever retriever(
+            HybridRuleSearch retrieval,
+            VisualRulebookPageFactSearch visualFacts,
+            RuleEvidenceLookup evidenceLookup,
+            AnswerRetrievalQueryRewriter queryRewriter) {
+        ImmediateAnswerRetrievalInvocations invocations = new ImmediateAnswerRetrievalInvocations();
         return new AnswerEvidenceRetriever(
                 retrieval,
                 visualFacts,
                 evidenceLookup,
                 invocations,
-                new AnswerModelGateway(new RuleAnswerModel() {
-                    @Override
-                    public ModelDraft compose(ModelRequest request) {
-                        return null;
-                    }
-                }, new RuleAnswerRateLimiter() {
-                    @Override
-                    public void checkUser(String username) {}
-
-                    @Override
-                    public Permit acquireModel(String username, UUID gameSessionId, String providerId) {
-                        return () -> {};
-                    }
-                }, invocations));
+                queryRewriter);
     }
 
-    private UnderstoodQuestion question(String text) {
-        return new UnderstoodQuestion(
-                versionId, text, text.toLowerCase(), QuestionType.RULE_QUERY, List.of("score"), Set.of());
+    private AnswerRetrievalQuestion question(String text) {
+        return new AnswerRetrievalQuestion(
+                text.toLowerCase(), QuestionType.RULE_QUERY, List.of("score"));
     }
 
-    private QuestionContext context() {
-        return new QuestionContext(versionId);
+    private AnswerRetrievalContext context() {
+        return new AnswerRetrievalContext(versionId);
     }
 
-    private AnswerQuestionPlan visualPlan(UnderstoodQuestion question) {
-        return new AnswerQuestionPlan(
-                List.of(new AnswerQuestionPlan.Subquestion(
+    private AnswerRetrievalPlan visualPlan(AnswerRetrievalQuestion question) {
+        return new AnswerRetrievalPlan(
+                List.of(new AnswerRetrievalPlan.Subquestion(
                         question.normalizedQuestion(), Set.of(EvidenceNeed.VISUAL_REFERENCE))),
-                true);
+                false);
     }
 
     private HybridEvidenceHit evidence(String excerpt, double score) {

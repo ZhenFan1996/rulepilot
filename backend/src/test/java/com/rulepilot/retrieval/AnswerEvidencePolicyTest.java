@@ -1,4 +1,4 @@
-package com.rulepilot.assistant.application;
+package com.rulepilot.retrieval;
 
 import static org.assertj.core.api.Assertions.assertThat;
 

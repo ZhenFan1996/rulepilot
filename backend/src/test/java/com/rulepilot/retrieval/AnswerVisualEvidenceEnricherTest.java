@@ -1,9 +1,7 @@
-package com.rulepilot.assistant.application;
+package com.rulepilot.retrieval;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.rulepilot.assistant.ImmediateAuditedAgentInvocations;
-import com.rulepilot.retrieval.RuleEvidenceLookup;
 import com.rulepilot.retrieval.VisualRulebookPageFactSearch.PageFactMatch;
 import com.rulepilot.retrieval.evidence.HybridEvidenceHit;
 import com.rulepilot.retrieval.evidence.RuleEvidenceHit;
@@ -102,7 +100,7 @@ class AnswerVisualEvidenceEnricherTest {
                 return sources.stream().filter(source -> pages.contains(source.pageFrom())).toList();
             }
         };
-        return new AnswerVisualEvidenceEnricher(lookup, new ImmediateAuditedAgentInvocations());
+        return new AnswerVisualEvidenceEnricher(lookup, new ImmediateAnswerRetrievalInvocations());
     }
 
     private PageFactMatch fact(int pageNumber, String evidenceText) {

@@ -1,18 +1,8 @@
-package com.rulepilot.assistant.application;
+package com.rulepilot.retrieval;
 
-import com.rulepilot.assistant.AgentExecutionControl.ActivityType;
-import com.rulepilot.assistant.AgentExecutionStoppedException;
-import com.rulepilot.assistant.AuditedAgentInvocations;
-import com.rulepilot.assistant.QuestionUnderstanding.QuestionContext;
-import com.rulepilot.assistant.RuleAnswerModel.RetrievalQueryRequest;
-import com.rulepilot.assistant.RuleAnswerModelTimeoutException;
-import com.rulepilot.assistant.application.AnswerRetrievalPlanner.RetrievalIntent;
-import com.rulepilot.assistant.RuleAnswerModel.EvidenceNeed;
-import com.rulepilot.assistant.domain.UnderstoodQuestion;
-import com.rulepilot.retrieval.HybridRuleSearch;
+import com.rulepilot.retrieval.AnswerRetrievalPlan.EvidenceNeed;
+import com.rulepilot.retrieval.AnswerRetrievalPlanner.RetrievalIntent;
 import com.rulepilot.retrieval.HybridRuleSearch.RetrievalOptions;
-import com.rulepilot.retrieval.RuleEvidenceLookup;
-import com.rulepilot.retrieval.VisualRulebookPageFactSearch;
 import com.rulepilot.retrieval.VisualRulebookPageFactSearch.PageFactMatch;
 import com.rulepilot.retrieval.evidence.HybridEvidenceHit;
 import java.util.LinkedHashMap;
@@ -25,45 +15,49 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /** Acquires and reconciles source-scoped answer evidence; it never produces a player-facing rule conclusion. */
-final class AnswerEvidenceRetriever {
+public final class AnswerEvidenceRetriever {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(AnswerEvidenceRetriever.class);
     private final HybridRuleSearch retrieval;
     private final VisualRulebookPageFactSearch visualFacts;
     private final RuleEvidenceLookup evidenceLookup;
-    private final AuditedAgentInvocations invocations;
-    private final AnswerModelGateway modelGateway;
+    private final AnswerRetrievalInvocations invocations;
+    private final AnswerRetrievalQueryRewriter queryRewriter;
     private final AnswerVisualEvidenceEnricher visualEvidenceEnricher;
 
-    AnswerEvidenceRetriever(
+    public AnswerEvidenceRetriever(
             HybridRuleSearch retrieval,
             VisualRulebookPageFactSearch visualFacts,
             RuleEvidenceLookup evidenceLookup,
-            AuditedAgentInvocations invocations,
-            AnswerModelGateway modelGateway) {
+            AnswerRetrievalInvocations invocations,
+            AnswerRetrievalQueryRewriter queryRewriter) {
         this.retrieval = retrieval;
         this.visualFacts = visualFacts;
         this.evidenceLookup = evidenceLookup;
         this.invocations = invocations;
-        this.modelGateway = modelGateway;
+        this.queryRewriter = queryRewriter;
         this.visualEvidenceEnricher = new AnswerVisualEvidenceEnricher(evidenceLookup, invocations);
     }
 
-    Result retrieve(UUID assistantRunId, UnderstoodQuestion question, QuestionContext context, String username) {
+    public Result retrieve(
+            UUID assistantRunId,
+            AnswerRetrievalQuestion question,
+            AnswerRetrievalContext context,
+            String username) {
         return retrieve(
                 assistantRunId,
                 question,
                 context,
                 username,
-                AnswerQuestionPlan.fallback(question));
+                AnswerRetrievalPlan.fallback(question));
     }
 
-    Result retrieve(
+    public Result retrieve(
             UUID assistantRunId,
-            UnderstoodQuestion question,
-            QuestionContext context,
+            AnswerRetrievalQuestion question,
+            AnswerRetrievalContext context,
             String username,
-            AnswerQuestionPlan questionPlan) {
+            AnswerRetrievalPlan questionPlan) {
         Map<UUID, HybridEvidenceHit> evidenceById = new LinkedHashMap<>();
         Map<UUID, HybridEvidenceHit> intentAnchors = new LinkedHashMap<>();
         Map<Integer, PageFactMatch> visualFactsByPage = new LinkedHashMap<>();
@@ -87,7 +81,6 @@ final class AnswerEvidenceRetriever {
             try {
                 retrieved = invocations.invoke(
                         assistantRunId,
-                        ActivityType.TOOL,
                         "hybridRuleSearch",
                         estimateTokens(intent.query()),
                         "Version-scoped answer evidence retrieved",
@@ -103,9 +96,8 @@ final class AnswerEvidenceRetriever {
                                         intent.currentSectionType())),
                         this::evidenceTokens);
                 successfulCoreRetrievals++;
-            } catch (AgentExecutionStoppedException stopped) {
-                throw stopped;
             } catch (RuntimeException retrievalFailure) {
+                if (invocations.executionStopped(retrievalFailure)) throw retrievalFailure;
                 failedCoreRetrievals++;
                 LOGGER.warn(
                         "Answer retrieval intent failed for document version {}: {}",
@@ -139,7 +131,6 @@ final class AnswerEvidenceRetriever {
                     || !directQuestionVisualFactPages.isEmpty()) try {
                 List<PageFactMatch> visualMatches = invocations.invoke(
                         assistantRunId,
-                        ActivityType.TOOL,
                         "searchVisualRulebookPageFacts",
                         estimateTokens(intent.query()),
                         "Page-scoped visual rule facts retrieved",
@@ -150,9 +141,8 @@ final class AnswerEvidenceRetriever {
                 if (intent.directQuestion()) {
                     visualMatches.forEach(match -> directQuestionVisualFactPages.add(match.pageNumber()));
                 }
-            } catch (AgentExecutionStoppedException stopped) {
-                throw stopped;
             } catch (RuntimeException visualLookupFailure) {
+                if (invocations.executionStopped(visualLookupFailure)) throw visualLookupFailure;
                 LOGGER.warn(
                         "Optional visual fact lookup failed for document version {}: {}",
                         context.documentVersionId(),
@@ -166,7 +156,6 @@ final class AnswerEvidenceRetriever {
             try {
                 List<PageFactMatch> legendMatches = invocations.invoke(
                         assistantRunId,
-                        ActivityType.TOOL,
                         "searchVisualRulebookIconLegend",
                         12,
                         "Cross-page icon legend evidence retrieved",
@@ -178,9 +167,8 @@ final class AnswerEvidenceRetriever {
                         matches -> matches.size() * 80);
                 legendMatches.forEach(match -> visualFactsByPage.merge(
                         match.pageNumber(), match, (first, candidate) -> candidate.score() > first.score() ? candidate : first));
-            } catch (AgentExecutionStoppedException stopped) {
-                throw stopped;
             } catch (RuntimeException lookupFailure) {
+                if (invocations.executionStopped(lookupFailure)) throw lookupFailure;
                 LOGGER.warn(
                         "Optional icon-legend lookup failed for document version {}: {}",
                         context.documentVersionId(),
@@ -213,7 +201,6 @@ final class AnswerEvidenceRetriever {
         try {
             List<PageFactMatch> matches = invocations.invoke(
                     assistantRunId,
-                    ActivityType.TOOL,
                     "searchIdentifierBoundVisualFacts",
                     estimateTokens(query),
                     "Page facts retrieved by printed identifier",
@@ -226,9 +213,8 @@ final class AnswerEvidenceRetriever {
                         (first, candidate) -> candidate.score() > first.score() ? candidate : first);
                 directQuestionVisualFactPages.add(match.pageNumber());
             });
-        } catch (AgentExecutionStoppedException stopped) {
-            throw stopped;
         } catch (RuntimeException lookupFailure) {
+            if (invocations.executionStopped(lookupFailure)) throw lookupFailure;
             LOGGER.warn(
                     "Optional identifier-bound visual fact lookup failed for document version {}: {}",
                     documentVersionId,
@@ -250,21 +236,25 @@ final class AnswerEvidenceRetriever {
     }
 
     private List<String> rewriteCrossLanguageQueries(
-            UUID assistantRunId, UnderstoodQuestion question, QuestionContext context, String username) {
+            UUID assistantRunId,
+            AnswerRetrievalQuestion question,
+            AnswerRetrievalContext context,
+            String username) {
         if (!AnswerEvidencePolicy.requiresCrossLanguageExpansion(question.normalizedQuestion())) {
             return List.of();
         }
         try {
-            return modelGateway.rewriteRetrievalQueries(
+            return queryRewriter.rewrite(
                     assistantRunId,
                     username,
-                    new RetrievalQueryRequest(
-                            question.normalizedQuestion(), context.previousQuestion()));
-        } catch (RuleAnswerModelTimeoutException exception) {
-            LOGGER.info("Cross-language retrieval rewrite timed out; continuing with the original question");
-            return List.of();
+                    question.normalizedQuestion(),
+                    context.previousQuestion());
         } catch (RuntimeException exception) {
-            LOGGER.info("Cross-language retrieval rewrite unavailable; continuing with the original question");
+            if (queryRewriter.timedOut(exception)) {
+                LOGGER.info("Cross-language retrieval rewrite timed out; continuing with the original question");
+            } else {
+                LOGGER.info("Cross-language retrieval rewrite unavailable; continuing with the original question");
+            }
             return List.of();
         }
     }
@@ -277,7 +267,7 @@ final class AnswerEvidenceRetriever {
         return value == null ? 0 : Math.max(1, (value.length() + 3) / 4);
     }
 
-    enum State { READY, CONFLICTING, UNAVAILABLE }
+    public enum State { READY, CONFLICTING, UNAVAILABLE }
 
-    record Result(List<HybridEvidenceHit> evidence, State state) {}
+    public record Result(List<HybridEvidenceHit> evidence, State state) {}
 }

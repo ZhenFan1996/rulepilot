@@ -30,6 +30,7 @@ import com.rulepilot.assistant.domain.MissingQuestionContext;
 import com.rulepilot.assistant.domain.QuestionType;
 import com.rulepilot.assistant.domain.StructuredRuleAnswer;
 import com.rulepilot.document.RuleDataVersion;
+import com.rulepilot.retrieval.AnswerEvidenceRetriever;
 import com.rulepilot.retrieval.HybridRuleSearch;
 import com.rulepilot.retrieval.RuleEvidenceLookup;
 import com.rulepilot.retrieval.VisualRulebookPageFactSearch;

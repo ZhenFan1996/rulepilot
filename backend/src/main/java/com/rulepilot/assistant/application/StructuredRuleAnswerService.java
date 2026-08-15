@@ -32,6 +32,7 @@ import com.rulepilot.assistant.domain.RuleWalkthroughStep;
 import com.rulepilot.assistant.domain.StructuredRuleAnswer;
 import com.rulepilot.assistant.domain.UnderstoodQuestion;
 import com.rulepilot.document.RuleDataVersion;
+import com.rulepilot.retrieval.AnswerEvidenceRetriever;
 import com.rulepilot.retrieval.HybridRuleSearch;
 import com.rulepilot.retrieval.RuleEvidenceLookup;
 import com.rulepilot.retrieval.VisualRulebookPageFactSearch;
@@ -121,7 +122,11 @@ public class StructuredRuleAnswerService implements RuleAnswering {
         this.modelGateway = new AnswerModelGateway(model, rateLimiter, invocations);
         this.questionInterpretation = new AnswerQuestionInterpretationPolicy();
         this.evidenceRetriever = new AnswerEvidenceRetriever(
-                retrieval, visualFacts, evidenceLookup, invocations, modelGateway);
+                retrieval,
+                visualFacts,
+                evidenceLookup,
+                new AuditedAnswerRetrievalInvocations(invocations),
+                new ModelAnswerRetrievalQueryRewriter(modelGateway));
         this.evidenceRefiner = evidenceRefiner;
         this.modelRequestFactory = new AnswerModelRequestFactory();
         this.cache = cache;
@@ -403,7 +408,11 @@ public class StructuredRuleAnswerService implements RuleAnswering {
             cacheMisses.increment();
         }
         AnswerEvidenceRetriever.Result retrievalResult = evidenceRetriever.retrieve(
-                assistantRunId, interpretedQuestion, context, username, questionPlan);
+                assistantRunId,
+                AnswerRetrievalInputMapper.question(interpretedQuestion),
+                AnswerRetrievalInputMapper.context(context),
+                username,
+                AnswerRetrievalInputMapper.plan(questionPlan));
         if (evidenceRefiner != null) {
             retrievalResult = evidenceRefiner.refine(
                     assistantRunId,

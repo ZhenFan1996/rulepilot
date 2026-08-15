@@ -1,10 +1,8 @@
-package com.rulepilot.assistant.application;
+package com.rulepilot.retrieval;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.rulepilot.assistant.RuleAnswerModel.AnswerAid;
-import com.rulepilot.assistant.RuleAnswerModel.EvidenceNeed;
-import com.rulepilot.assistant.RuleAnswerModel.ReferenceBinding;
+import com.rulepilot.retrieval.AnswerRetrievalPlan.EvidenceNeed;
 import com.rulepilot.retrieval.evidence.HybridEvidenceHit;
 import com.rulepilot.retrieval.evidence.RuleEvidenceHit;
 import java.util.LinkedHashMap;
@@ -59,12 +57,10 @@ class AnswerEvidenceSelectionPolicyTest {
     void keepsTheGoverningRuleAndWorkedExampleBudgetForACalculation() {
         UUID versionId = UUID.randomUUID();
         Map<UUID, HybridEvidenceHit> evidence = evidence(versionId, 8);
-        AnswerQuestionPlan calculation = new AnswerQuestionPlan(
-                List.of(new AnswerQuestionPlan.Subquestion(
+        AnswerRetrievalPlan calculation = new AnswerRetrievalPlan(
+                List.of(new AnswerRetrievalPlan.Subquestion(
                         "calculate the current total", Set.of(EvidenceNeed.DIRECT_RULE))),
-                true,
-                AnswerAid.CALCULATION,
-                ReferenceBinding.CURRENT_QUESTION);
+                true);
 
         assertThat(AnswerEvidenceSelectionPolicy.select(
                         evidence, List.of(), Set.of(), calculation, List.of()))
@@ -115,12 +111,10 @@ class AnswerEvidenceSelectionPolicyTest {
         assertThat(selected).containsExactly(lowerScoreFirst, higherScoreSecond);
     }
 
-    private AnswerQuestionPlan plan(EvidenceNeed need) {
-        return new AnswerQuestionPlan(
-                List.of(new AnswerQuestionPlan.Subquestion("bounded subquestion", Set.of(need))),
-                true,
-                AnswerAid.NONE,
-                ReferenceBinding.CURRENT_QUESTION);
+    private AnswerRetrievalPlan plan(EvidenceNeed need) {
+        return new AnswerRetrievalPlan(
+                List.of(new AnswerRetrievalPlan.Subquestion("bounded subquestion", Set.of(need))),
+                false);
     }
 
     private Map<UUID, HybridEvidenceHit> evidence(UUID versionId, int count) {
