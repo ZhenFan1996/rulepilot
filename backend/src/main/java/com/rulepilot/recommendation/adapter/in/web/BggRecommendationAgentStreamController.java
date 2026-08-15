@@ -2,6 +2,7 @@ package com.rulepilot.recommendation.adapter.in.web;
 
 import com.rulepilot.catalog.BggRecommendationPresentation;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ConversationRequest;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ProgressUpdate;
 import com.rulepilot.recommendation.application.RecommendationConversationCoordinator;
 import com.rulepilot.recommendation.application.RecommendationConversationException;
@@ -60,6 +61,7 @@ public class BggRecommendationAgentStreamController {
             @RequestBody BggRecommendationAgentController.RecommendationConversationRequest request,
             @RequestParam(defaultValue = "en") String locale,
             Principal principal) {
+        ConversationRequest command = request.toCommand();
         SseEmitter emitter = new SseEmitter(STREAM_TIMEOUT_MILLIS);
         AtomicBoolean open = new AtomicBoolean(true);
         emitter.onCompletion(() -> open.set(false));
@@ -68,7 +70,7 @@ public class BggRecommendationAgentStreamController {
         try {
             String modelConfigurationOwner = principal.getName();
             executor.execute(() -> runConversation(
-                    emitter, open, request, locale, modelConfigurationOwner));
+                    emitter, open, request, command, locale, modelConfigurationOwner));
         } catch (RuntimeException exception) {
             sendError(emitter, open, "recommendation_unavailable");
         }
@@ -79,20 +81,21 @@ public class BggRecommendationAgentStreamController {
             SseEmitter emitter,
             AtomicBoolean open,
             BggRecommendationAgentController.RecommendationConversationRequest request,
+            ConversationRequest command,
             String locale,
             String modelConfigurationOwner) {
         try {
             var presented = request.clientTurnId() != null && conversations != null
                     ? BggRecommendationAgentController.present(
                             conversations.converse(
-                                    request.toSessionTurn(),
+                                    request.toSessionTurn(command),
                                     locale,
                                     modelConfigurationOwner,
                                     update -> sendProgress(emitter, open, update)),
                             presentation)
                     : BggRecommendationAgentController.present(
                             agent.converse(
-                                    request.toCommand(),
+                                    command,
                                     locale,
                                     modelConfigurationOwner,
                                     update -> sendProgress(emitter, open, update)),

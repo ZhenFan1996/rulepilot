@@ -24,6 +24,7 @@ import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Source;
 import com.rulepilot.recommendation.CandidateClaim;
 import com.rulepilot.recommendation.CandidateObservation;
 import com.rulepilot.recommendation.ConstraintRange;
+import com.rulepilot.recommendation.RecommendationConversationText;
 import com.rulepilot.recommendation.PlayerFacingMessagePolicy;
 import com.rulepilot.recommendation.application.BoardGameRecommendationTools.CatalogObservation;
 import com.rulepilot.recommendation.application.BoardGameRecommendationTools.DiscoveryObservation;
@@ -2367,7 +2368,7 @@ public class BoardGameRecommendationAgent {
 
     private ConversationRequest validate(ConversationRequest input) {
         if (input == null) throw new IllegalArgumentException("recommendation conversation request is required");
-        String message = conversationText(input.message(), 500, true);
+        String message = RecommendationConversationText.currentTurn(input.message());
         List<Integer> excluded = positiveIds(input.excludedBggIds(), 60, "excludedBggIds");
         Integer focused = input.focusedBggId();
         if (focused != null && focused <= 0) throw new IllegalArgumentException("focusedBggId must be positive");
@@ -2462,7 +2463,10 @@ public class BoardGameRecommendationAgent {
         if (message == null || !("user".equals(message.role()) || "assistant".equals(message.role()))) {
             throw new IllegalArgumentException("recommendation transcript role is invalid");
         }
-        return new DialogueMessage(message.role(), conversationText(message.text(), 500, false));
+        String text = "user".equals(message.role())
+                ? RecommendationConversationText.playerTranscriptTurn(message.text())
+                : RecommendationConversationText.assistantTranscriptTurn(message.text());
+        return new DialogueMessage(message.role(), text);
     }
 
     private List<Integer> positiveIds(List<Integer> values, int maximum, String label) {
@@ -2478,15 +2482,6 @@ public class BoardGameRecommendationAgent {
     private String normalized(String value, int maximum, boolean allowBlank) {
         String checked = value == null ? "" : value.strip().replaceAll("\\s+", " ");
         if ((!allowBlank && checked.isBlank()) || checked.length() > maximum) {
-            throw new IllegalArgumentException("recommendation conversation text is invalid");
-        }
-        return checked;
-    }
-
-    private String conversationText(String value, int maximum, boolean allowBlank) {
-        String checked = value == null ? "" : value.strip();
-        if ((!allowBlank && checked.isBlank())
-                || checked.codePointCount(0, checked.length()) > maximum) {
             throw new IllegalArgumentException("recommendation conversation text is invalid");
         }
         return checked;

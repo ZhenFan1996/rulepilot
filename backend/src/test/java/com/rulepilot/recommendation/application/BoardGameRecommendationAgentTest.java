@@ -27,6 +27,7 @@ import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Discovery
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Research;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Source;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.WebResearchUnavailableException;
+import com.rulepilot.recommendation.RecommendationConversationInputException;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ConversationRequest;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.DialogueMessage;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.InteractionPreference;
@@ -1354,8 +1355,38 @@ class BoardGameRecommendationAgentTest {
         assertThatThrownBy(() -> agent(model, new TrackingCatalog(), noResearch()).converse(
                         new ConversationRequest(RecommendationProfile.empty(), "😀".repeat(501)),
                         "zh-CN"))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessage("recommendation conversation text is invalid");
+                .isInstanceOfSatisfying(RecommendationConversationInputException.class, failure -> {
+                    assertThat(failure.code())
+                            .isEqualTo(RecommendationConversationInputException.Code.MESSAGE_TOO_LONG);
+                    assertThat(failure.limit()).isEqualTo(500);
+                    assertThat(failure.actual()).isEqualTo(501);
+                });
+    }
+
+    @Test
+    void keepsACompleteAssistantTurnBeyondThePlayerInputBoundary() {
+        String assistantTurn = "答".repeat(800);
+        ScriptedModel model = new ScriptedModel(List.of(request -> {
+            assertThat(request.messages().get(1).content()).contains(assistantTurn);
+            return action(
+                    "continue-after-complete-assistant-turn",
+                    BoardGameRecommendationAgent.REPLY_TOOL,
+                    "{\"message\":\"我会接着完整回复继续。\"}");
+        }));
+
+        var response = agent(model, new TrackingCatalog(), noResearch()).converse(
+                new ConversationRequest(
+                        RecommendationProfile.empty(),
+                        "继续",
+                        List.of(),
+                        List.of(new DialogueMessage("assistant", assistantTurn)),
+                        null,
+                        List.of(),
+                        List.of()),
+                "zh-CN");
+
+        assertThat(response.outcome()).isEqualTo(Outcome.CONVERSATION);
+        assertThat(response.assistantMessage()).isEqualTo("我会接着完整回复继续。");
     }
 
     @Test

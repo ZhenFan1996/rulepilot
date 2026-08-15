@@ -479,6 +479,46 @@ test('keeps full-catalog browsing separate from the conversational recommendatio
   await expect(page.getByText('目前记下的偏好')).toBeVisible()
 })
 
+test('keeps a pasted 501-character recommendation intact and sends exactly 500 characters', async ({ page }) => {
+  await mockPublicDiscovery(page, true)
+  await page.route('**/api/v1/bgg/recommendation-agent/session', route => route.fulfill({ status: 204 }))
+  let submittedTurns = 0
+  page.on('request', (request) => {
+    const url = new URL(request.url())
+    if (request.method() === 'POST' && url.pathname === '/api/v1/bgg/recommendation-agent/stream') {
+      submittedTurns += 1
+    }
+  })
+  await page.goto('/discover')
+
+  const composer = page.getByLabel('和推荐 Agent 聊聊')
+  const send = page.getByRole('button', { name: '发送', exact: true })
+  const overLimit = '界'.repeat(501)
+  await composer.fill(overLimit)
+
+  await expect(composer).toHaveValue(overLimit)
+  await expect(page.getByText('请删减 1 个字后再发送')).toBeVisible()
+  await expect(page.getByText('501 / 500')).toBeVisible()
+  await expect(send).toBeDisabled()
+  const form = page.locator('form').filter({ has: composer })
+  await form.evaluate(element => element.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
+  expect(submittedTurns).toBe(0)
+
+  const accepted = '😀'.repeat(500)
+  await composer.fill(accepted)
+  await expect(page.getByText('500 / 500')).toBeVisible()
+  await expect(send).toBeEnabled()
+  const acceptedRequest = page.waitForRequest((request) => {
+    const url = new URL(request.url())
+    return request.method() === 'POST' && url.pathname === '/api/v1/bgg/recommendation-agent/stream'
+  })
+  await send.click()
+  const request = await acceptedRequest
+
+  expect((request.postDataJSON() as { message: string }).message).toBe(accepted)
+  expect(submittedTurns).toBe(1)
+})
+
 test('keeps full-catalog discovery usable without horizontal overflow at 390 px', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 })
   await mockPublicDiscovery(page)

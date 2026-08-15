@@ -243,6 +243,8 @@ describe('GameRecommendationAgent', () => {
   })
 
   it('restores a failed turn and its one-click retry without replaying it on mount', async () => {
+    const boundaryMessage = `${'😀'.repeat(495)}  A\n中`
+    expect(Array.from(boundaryMessage)).toHaveLength(500)
     const requestBodies: Array<Record<string, unknown>> = []
     const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       if (String(input) === '/api/auth/csrf') {
@@ -256,15 +258,21 @@ describe('GameRecommendationAgent', () => {
     vi.stubGlobal('fetch', fetchMock)
     const wrapper = await mountAgent({}, { sessionIdentity: 'alice' })
 
-    await wrapper.get('textarea').setValue('想换一批互动更多的候选')
+    await wrapper.get('textarea').setValue(boundaryMessage)
     await wrapper.get('form').trigger('submit')
     await flushPromises()
     expect(wrapper.text()).toContain('刚才没有接上')
+    expect(requestBodies[0]?.message).toBe(boundaryMessage)
+    const stored = JSON.parse(sessionStorage.getItem('rulepilot:recommendation-conversation:v1:alice') ?? 'null') as {
+      transcript: Array<{ role: string; text: string }>
+      pending: { message: string }
+    }
+    expect(stored.transcript.at(-1)).toEqual({ role: 'user', text: boundaryMessage })
+    expect(stored.pending.message).toBe(boundaryMessage)
     wrapper.unmount()
     fetchMock.mockClear()
 
     const returned = await mountAgent({}, { sessionIdentity: 'alice' })
-    expect(returned.text()).toContain('想换一批互动更多的候选')
     expect(returned.text()).toContain('刚才没有接上')
     expect(returned.findAll('button').some(button => button.text() === '重试')).toBe(true)
     expect(fetchMock).toHaveBeenCalledOnce()
@@ -274,7 +282,7 @@ describe('GameRecommendationAgent', () => {
     await flushPromises()
     expect(requestBodies).toHaveLength(2)
     expect(requestBodies[1]).toMatchObject({
-      message: '想换一批互动更多的候选',
+      message: boundaryMessage,
       clientTurnId: requestBodies[0]?.clientTurnId,
     })
   })

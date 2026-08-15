@@ -4,9 +4,15 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rulepilot.catalog.BggGameType;
 import com.rulepilot.catalog.BggRecommendationPresentation;
 import com.rulepilot.catalog.BggRecommendationPresentation.LocalizedTaxonomy;
@@ -33,11 +39,14 @@ import com.rulepilot.recommendation.application.RecommendationConversationCoordi
 import com.rulepilot.recommendation.application.RecommendationConversationStore.ConversationState;
 import java.math.BigDecimal;
 import java.security.Principal;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.MediaType;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 class BggRecommendationAgentControllerTest {
 
@@ -46,6 +55,93 @@ class BggRecommendationAgentControllerTest {
     private final BggRecommendationAgentController controller =
             new BggRecommendationAgentController(agent, presentation);
     private final Principal principal = () -> "player";
+
+    @Test
+    void preservesFiveHundredUnicodeCharactersAndRejectsTheNextCharacterWithoutTruncation() throws Exception {
+        String accepted = "😀".repeat(500);
+        String rejected = accepted + "中";
+        List<String> receivedMessages = new ArrayList<>();
+        when(agent.converse(any(), eq("zh-CN"), eq("player"))).thenAnswer(invocation -> {
+            var command = invocation.getArgument(
+                    0, BoardGameRecommendationAgent.ConversationRequest.class);
+            receivedMessages.add(command.message());
+            return new ConversationResponse(
+                    Outcome.CONVERSATION,
+                    DecisionMode.MODEL_ASSISTED,
+                    "完整收到。",
+                    RecommendationProfile.empty(),
+                    null,
+                    0,
+                    0,
+                    List.of());
+        });
+        when(presentation.localizeTaxonomy(List.of(), List.of(), "zh-CN"))
+                .thenReturn(new LocalizedTaxonomy(Map.of(), Map.of()));
+        var mockMvc = MockMvcBuilders.standaloneSetup(controller)
+                .setControllerAdvice(new RecommendationConversationExceptionHandler())
+                .build();
+        var objectMapper = new ObjectMapper();
+
+        mockMvc.perform(post("/api/v1/bgg/recommendation-agent")
+                        .principal(principal)
+                        .queryParam("locale", "zh-CN")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsBytes(Map.of("message", accepted))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.assistantMessage").value("完整收到。"));
+
+        mockMvc.perform(post("/api/v1/bgg/recommendation-agent")
+                        .principal(principal)
+                        .queryParam("locale", "zh-CN")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsBytes(Map.of("message", rejected))))
+                .andExpect(status().isBadRequest())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
+                .andExpect(jsonPath("$.code").value("message_too_long"))
+                .andExpect(jsonPath("$.detail").value(org.hamcrest.Matchers.allOf(
+                        org.hamcrest.Matchers.containsString("500"),
+                        org.hamcrest.Matchers.containsString("没有被截断"))));
+
+        assertThat(receivedMessages).containsExactly(accepted);
+        verify(agent, times(1)).converse(any(), eq("zh-CN"), eq("player"));
+    }
+
+    @Test
+    void doesNotApplyThePlayerInputLimitToAnAssistantTranscriptTurn() throws Exception {
+        String assistantTurn = "答".repeat(800);
+        when(agent.converse(any(), eq("zh-CN"), eq("player"))).thenAnswer(invocation -> {
+            var command = invocation.getArgument(
+                    0, BoardGameRecommendationAgent.ConversationRequest.class);
+            assertThat(command.transcript()).singleElement().satisfies(message -> {
+                assertThat(message.role()).isEqualTo("assistant");
+                assertThat(message.text()).isEqualTo(assistantTurn);
+            });
+            return new ConversationResponse(
+                    Outcome.CONVERSATION,
+                    DecisionMode.MODEL_ASSISTED,
+                    "继续。",
+                    RecommendationProfile.empty(),
+                    null,
+                    0,
+                    0,
+                    List.of());
+        });
+        when(presentation.localizeTaxonomy(List.of(), List.of(), "zh-CN"))
+                .thenReturn(new LocalizedTaxonomy(Map.of(), Map.of()));
+        var mockMvc = MockMvcBuilders.standaloneSetup(controller)
+                .setControllerAdvice(new RecommendationConversationExceptionHandler())
+                .build();
+
+        mockMvc.perform(post("/api/v1/bgg/recommendation-agent")
+                        .principal(principal)
+                        .queryParam("locale", "zh-CN")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(new ObjectMapper().writeValueAsBytes(Map.of(
+                                "message", "继续",
+                                "transcript", List.of(Map.of("role", "assistant", "text", assistantTurn))))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.assistantMessage").value("继续。"));
+    }
 
     @Test
     void exposesStableTurnMetadataAndRestoresAndDeletesOnlyThroughTheConversationCoordinator() {

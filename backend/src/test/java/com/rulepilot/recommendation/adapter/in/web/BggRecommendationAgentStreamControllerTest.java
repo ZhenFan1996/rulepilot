@@ -4,10 +4,14 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.asyncDispatch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.request;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.rulepilot.catalog.BggRecommendationPresentation;
 import com.rulepilot.catalog.BggRecommendationPresentation.LocalizedTaxonomy;
@@ -28,6 +32,31 @@ import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 class BggRecommendationAgentStreamControllerTest {
+
+    @Test
+    void rejectsAnOversizedTurnBeforeStartingTheStreamOrCallingTheAgent() throws Exception {
+        BoardGameRecommendationAgent agent = mock(BoardGameRecommendationAgent.class);
+        BggRecommendationPresentation presentation = mock(BggRecommendationPresentation.class);
+        var controller = new BggRecommendationAgentStreamController(
+                agent, presentation, new SyncTaskExecutor());
+        var mockMvc = MockMvcBuilders.standaloneSetup(controller)
+                .setControllerAdvice(new RecommendationConversationExceptionHandler())
+                .build();
+        String rejected = "😀".repeat(500) + "中";
+
+        mockMvc.perform(post("/api/v1/bgg/recommendation-agent/stream")
+                        .principal(() -> "player")
+                        .queryParam("locale", "zh-CN")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .accept(MediaType.TEXT_EVENT_STREAM)
+                        .content(new com.fasterxml.jackson.databind.ObjectMapper()
+                                .writeValueAsBytes(Map.of("message", rejected))))
+                .andExpect(status().isBadRequest())
+                .andExpect(request().asyncNotStarted())
+                .andExpect(jsonPath("$.code").value("message_too_long"));
+
+        verify(agent, never()).converse(any(), any(), any(), any());
+    }
 
     @Test
     @SuppressWarnings("unchecked")

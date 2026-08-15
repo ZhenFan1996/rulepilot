@@ -17,6 +17,7 @@ import com.rulepilot.recommendation.application.RecommendationConversationCoordi
 import com.rulepilot.recommendation.application.RecommendationConversationCoordinator.SessionTurn;
 import com.rulepilot.recommendation.application.RecommendationConversationCoordinator.TurnResult;
 import com.rulepilot.recommendation.ConstraintRange;
+import com.rulepilot.recommendation.RecommendationConversationText;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.Details;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.Game;
 import java.math.BigDecimal;
@@ -204,21 +205,31 @@ public class BggRecommendationAgentController {
         }
 
         SessionTurn toSessionTurn() {
+            return toSessionTurn(toCommand());
+        }
+
+        SessionTurn toSessionTurn(ConversationRequest command) {
             return new SessionTurn(
                     conversationId,
                     revision == null ? 0 : revision,
                     clientTurnId,
-                    toCommand());
+                    command);
         }
 
         ConversationRequest toCommand() {
             return new ConversationRequest(
                     profile == null ? RecommendationProfile.empty() : profile.toProfile(),
-                    message,
+                    RecommendationConversationText.currentTurn(message),
                     excludedBggIds == null ? List.of() : excludedBggIds,
                     transcript == null
                             ? List.of()
-                            : transcript.stream().map(value -> new DialogueMessage(value.role(), value.text())).toList(),
+                            : transcript.stream()
+                                    .map(value -> new DialogueMessage(
+                                            value.role(),
+                                            "assistant".equals(value.role())
+                                                    ? RecommendationConversationText.assistantTranscriptTurn(value.text())
+                                                    : RecommendationConversationText.playerTranscriptTurn(value.text())))
+                                    .toList(),
                     focusedBggId,
                     knownGames == null
                             ? List.of()
