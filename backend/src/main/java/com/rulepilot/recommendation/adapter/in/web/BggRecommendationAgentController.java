@@ -370,7 +370,7 @@ public class BggRecommendationAgentController {
                             presentation,
                             snapshot.conversationId(),
                             snapshot.revision(),
-                            null,
+                            snapshot.lastClientTurnId(),
                             true);
             return new RecommendationSessionResponse(
                     snapshot.conversationId(),

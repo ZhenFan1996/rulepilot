@@ -242,6 +242,228 @@ describe('GameRecommendationAgent', () => {
     expect(wrapper.text()).toContain('I kept the restored candidates and checked the next question.')
   })
 
+  it('reconciles a broken transport with the completed server turn without losing the next draft', async () => {
+    const conversationId = 'fd6fa932-b4c8-4896-8136-259129502f69'
+    const completedProfile = {
+      ...baseProfile,
+      playerCount: { minimum: 3, maximum: 4, strength: 'hard', sourceText: '3–4 人', confirmedTurn: 1 },
+      durationMinutes: { minimum: 120, maximum: 180, strength: 'hard', sourceText: '120–180 分钟', confirmedTurn: 1 },
+      complexity: null,
+    }
+    let sessionReads = 0
+    let submitted: Record<string, unknown> | null = null
+    let rejectStream: (() => void) | null = null
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const path = String(input)
+      if (path === '/api/v1/bgg/recommendation-agent/session') {
+        sessionReads += 1
+        if (!submitted) return new Response(null, { status: 204 })
+        const clientTurnId = String(submitted.clientTurnId)
+        const latestResponse = {
+          conversationId, revision: 1, clientTurnId, replayed: true, responseLocale: 'zh-CN',
+          outcome: 'recommendations', mode: 'model_assisted', assistantMessage: '服务器已经完成并保存了这一轮。',
+          profile: completedProfile, clarification: null, sourceCount: 179737, candidatesEvaluated: 1,
+          games: [{ game, matches: ['支持 3–4 人'], tradeoffs: [] }],
+        }
+        return Response.json({
+          conversationId,
+          revision: 1,
+          profile: completedProfile,
+          transcript: [
+            { role: 'user', text: '想找 3–4 人、120–180 分钟的策略游戏' },
+            { role: 'assistant', text: latestResponse.assistantMessage },
+          ],
+          knownGames: [{ bggId: game.bggId, name: game.name, originalName: game.originalName }],
+          shownBggIds: [game.bggId],
+          processing: false,
+          processingSince: null,
+          latestResponse,
+        })
+      }
+      if (path === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      submitted = JSON.parse(String(init?.body)) as Record<string, unknown>
+      return await new Promise<Response>((_resolve, reject) => {
+        rejectStream = () => reject(new TypeError('connection closed after request upload'))
+      })
+    }))
+    const wrapper = await mountAgent({}, { sessionIdentity: 'alice' })
+    await flushPromises()
+
+    await wrapper.get('textarea').setValue('想找 3–4 人、120–180 分钟的策略游戏')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    expect(rejectStream).not.toBeNull()
+    await wrapper.get('textarea').setValue('这一句还没有发送')
+    rejectStream!()
+    await flushPromises()
+
+    expect(sessionReads).toBe(2)
+    expect(wrapper.text()).toContain('服务器已经完成并保存了这一轮。')
+    expect(wrapper.text()).toContain('支持 3–4 人')
+    expect(wrapper.text()).toContain('3–4 人')
+    expect(wrapper.text()).toContain('120–180 分钟')
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false)
+    expect(wrapper.get('textarea').element).toHaveProperty('value', '这一句还没有发送')
+    const turns = wrapper.findAll('[data-conversation-message]').map(turn => turn.text())
+    expect(turns.filter(turn => turn.includes('想找 3–4 人、120–180 分钟的策略游戏'))).toHaveLength(1)
+    expect(turns.filter(turn => turn.includes('服务器已经完成并保存了这一轮。'))).toHaveLength(1)
+
+    wrapper.unmount()
+    sessionStorage.removeItem('rulepilot:recommendation-conversation:v1:alice')
+    const refreshed = await mountAgent({}, { sessionIdentity: 'alice' })
+    await flushPromises()
+    expect(sessionReads).toBe(3)
+    expect(refreshed.text()).toContain('服务器已经完成并保存了这一轮。')
+    expect(refreshed.text()).toContain('支持 3–4 人')
+    expect(refreshed.get('textarea').element).toHaveProperty('value', '这一句还没有发送')
+  })
+
+  it('keeps an unaccepted turn after server reconciliation and retries the exact request identity', async () => {
+    const conversationId = '6b97841c-2a4d-49e9-a451-a58ee02f4583'
+    const previousClientTurnId = '41d3b9ea-5d58-468c-9528-a6459725294a'
+    const previousResponse = {
+      conversationId, revision: 3, clientTurnId: previousClientTurnId, replayed: true, responseLocale: 'zh-CN',
+      outcome: 'recommendations', mode: 'model_assisted', assistantMessage: '上一轮已经核对了一款候选。',
+      profile: baseProfile, clarification: null, sourceCount: 179737, candidatesEvaluated: 1,
+      games: [{ game, matches: ['支持 4 人'], tradeoffs: [] }],
+    }
+    const requestBodies: Array<Record<string, unknown>> = []
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const path = String(input)
+      if (path === '/api/v1/bgg/recommendation-agent/session') {
+        return Response.json({
+          conversationId,
+          revision: 3,
+          profile: baseProfile,
+          transcript: [
+            { role: 'user', text: '先给我一款已核对候选' },
+            { role: 'assistant', text: previousResponse.assistantMessage },
+          ],
+          knownGames: [{ bggId: game.bggId, name: game.name, originalName: game.originalName }],
+          shownBggIds: [game.bggId],
+          processing: false,
+          processingSince: null,
+          latestResponse: previousResponse,
+        })
+      }
+      if (path === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>
+      requestBodies.push(body)
+      if (requestBodies.length === 1) {
+        return new Response('event: error\ndata: {"code":"recommendation_unavailable"}\n\n', {
+          headers: { 'Content-Type': 'text/event-stream' },
+        })
+      }
+      return Response.json({
+        ...previousResponse,
+        revision: 4,
+        clientTurnId: body.clientTurnId,
+        replayed: false,
+        outcome: 'conversation',
+        assistantMessage: '重试只执行了原来的玩家回合。',
+        games: [],
+      })
+    }))
+    const wrapper = await mountAgent({}, { sessionIdentity: 'alice' })
+    await flushPromises()
+
+    await wrapper.get('textarea').setValue('保留上一款，再比较未知项')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('保留上一款，再比较未知项')
+    expect(wrapper.text()).toContain('刚才没有接上')
+    const retryButton = wrapper.findAll('button').find(button => button.text() === '重试')
+    expect(retryButton).toBeDefined()
+    await retryButton!.trigger('click')
+    await flushPromises()
+
+    expect(requestBodies).toHaveLength(2)
+    expect(requestBodies[1]).toEqual(requestBodies[0])
+    expect(wrapper.text()).toContain('重试只执行了原来的玩家回合。')
+  })
+
+  it('stops server recovery polling when browser navigation unmounts the conversation', async () => {
+    vi.useFakeTimers()
+    let sessionReads = 0
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      if (String(input) !== '/api/v1/bgg/recommendation-agent/session') {
+        throw new Error('only session recovery is expected')
+      }
+      sessionReads += 1
+      return Response.json({
+        conversationId: '2011a4fa-da7c-4a1a-a12b-19d1d36a8758',
+        revision: 0,
+        profile: baseProfile,
+        transcript: [],
+        knownGames: [],
+        shownBggIds: [],
+        processing: true,
+        processingSince: '2026-08-15T08:00:00Z',
+        latestResponse: null,
+      })
+    }))
+    const wrapper = await mountAgent({}, { sessionIdentity: 'alice' })
+    await flushPromises()
+    expect(sessionReads).toBe(1)
+
+    wrapper.unmount()
+    await vi.advanceTimersByTimeAsync(5_000)
+
+    expect(sessionReads).toBe(1)
+  })
+
+  it('does not reconcile an intentionally aborted turn into a newly selected account', async () => {
+    const bobConversationId = '380a9c35-6746-40d5-8f6c-d10a833011de'
+    let visibleOwner = 'alice'
+    let sessionReads = 0
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const path = String(input)
+      if (path === '/api/v1/bgg/recommendation-agent/session') {
+        sessionReads += 1
+        if (visibleOwner === 'alice') return new Response(null, { status: 204 })
+        const latestResponse = {
+          conversationId: bobConversationId, revision: 2,
+          clientTurnId: '8aa067f8-8d48-4ed3-a205-901ae01826d5', replayed: true, responseLocale: 'en',
+          outcome: 'conversation', mode: 'model_assisted', assistantMessage: 'Bob server conversation.',
+          profile: baseProfile, clarification: null, sourceCount: 0, candidatesEvaluated: 0, games: [],
+        }
+        return Response.json({
+          conversationId: bobConversationId,
+          revision: 2,
+          profile: baseProfile,
+          transcript: [
+            { role: 'user', text: 'Bob prior turn.' },
+            { role: 'assistant', text: latestResponse.assistantMessage },
+          ],
+          knownGames: [],
+          shownBggIds: [],
+          processing: false,
+          processingSince: null,
+          latestResponse,
+        })
+      }
+      if (path === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      return await new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(new DOMException('account changed', 'AbortError')))
+      })
+    }))
+    const wrapper = await mountAgent({}, { sessionIdentity: 'alice' })
+    await flushPromises()
+    await wrapper.get('textarea').setValue('Alice turn still in flight')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    visibleOwner = 'bob'
+    await wrapper.setProps({ sessionIdentity: 'bob' })
+    await flushPromises()
+
+    expect(sessionReads).toBe(2)
+    expect(wrapper.text()).toContain('Bob server conversation.')
+    expect(wrapper.text()).not.toContain('Alice turn still in flight')
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false)
+  })
+
   it('restores a failed turn and its one-click retry without replaying it on mount', async () => {
     const boundaryMessage = `${'😀'.repeat(495)}  A\n中`
     expect(Array.from(boundaryMessage)).toHaveLength(500)

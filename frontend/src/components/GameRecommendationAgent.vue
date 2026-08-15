@@ -233,6 +233,8 @@ let restoredConversationOwner: string | null = null
 let restoredSummaryMessageId: number | null = null
 let restoringConversation = false
 let serverRestoreGeneration = 0
+let turnCancellationGeneration = 0
+let disposed = false
 
 const sessionKnown = computed(() => props.sessionIdentity !== null)
 const signedIn = computed(() => props.sessionIdentity === undefined
@@ -382,7 +384,6 @@ async function sendTurn(
   userLabel?: string,
   excludedBggIds: number[] = [],
   focusedBggId: number | null = null,
-  retryClientTurnId?: string,
   requestedResponseLocale?: AppLocale,
 ) {
   if (!serverSessionReady.value) return
@@ -393,9 +394,8 @@ async function sendTurn(
     messages.value.push({ id: optimisticUserMessageId, role: 'user', text: userLabel })
   }
   const transcript = playerConversationTranscript()
-  const clientTurnId = retryClientTurnId ?? crypto.randomUUID()
   const pending = {
-    clientTurnId,
+    clientTurnId: crypto.randomUUID(),
     responseLocale,
     message,
     profile: canonicalRecommendationProfile(requestProfile),
@@ -405,29 +405,61 @@ async function sendTurn(
     knownGames: minimalKnownGames(),
     shownBggIds: [...seenBggIds.value],
   }
+  await submitPendingTurn(pending, optimisticUserMessageId)
+}
+
+function copiedPendingRequest(pending: PendingRequest): PendingRequest {
+  return {
+    clientTurnId: pending.clientTurnId,
+    responseLocale: pending.responseLocale,
+    message: pending.message,
+    profile: canonicalRecommendationProfile(pending.profile),
+    excludedBggIds: [...pending.excludedBggIds],
+    focusedBggId: pending.focusedBggId,
+    transcript: pending.transcript.map(turn => ({ ...turn })),
+    knownGames: pending.knownGames.map(candidate => ({ ...candidate })),
+    shownBggIds: [...pending.shownBggIds],
+  }
+}
+
+function pendingUserText(pending: PendingRequest) {
+  const lastTurn = pending.transcript.at(-1)
+  return lastTurn?.role === 'user' ? lastTurn.text : pending.message
+}
+
+async function submitPendingTurn(
+  pendingValue: PendingRequest,
+  optimisticUserMessageId: number | null = null,
+) {
+  if (!serverSessionReady.value || disposed) return
+  const cancellationGeneration = turnCancellationGeneration
+  const pending = copiedPendingRequest(pendingValue)
   lastRequest.value = pending
-  activeTurnLocale.value = responseLocale
+  activeTurnLocale.value = pending.responseLocale
   failedTurnLocale.value = null
   beginLoading()
   failed.value = false
   try {
     const token = await csrfToken()
+    if (disposed
+      || cancellationGeneration !== turnCancellationGeneration
+      || !serverSessionReady.value) return
     activeRequest = new AbortController()
-    const serverResponse = await streamGameRecommendation(`/api/v1/bgg/recommendation-agent/stream?locale=${encodeURIComponent(responseLocale)}`, {
+    const serverResponse = await streamGameRecommendation(`/api/v1/bgg/recommendation-agent/stream?locale=${encodeURIComponent(pending.responseLocale)}`, {
       method: 'POST', credentials: 'include',
       headers: { 'Content-Type': 'application/json', [token.headerName]: token.token },
       body: JSON.stringify({
         ...pending,
         conversationId: conversationId.value,
         revision: conversationRevision.value,
-        transcript: transcript.map(({ role, text }) => ({ role, text })),
+        transcript: pending.transcript.map(({ role, text }) => ({ role, text })),
       }),
       signal: activeRequest.signal,
     }, update => {
       loadingStage.value = update.stage
       loadingElapsedSeconds.value = Math.max(loadingElapsedSeconds.value, Math.floor(update.elapsedMs / 1000))
     })
-    if (serverResponse.clientTurnId && serverResponse.clientTurnId !== clientTurnId) {
+    if (serverResponse.clientTurnId && serverResponse.clientTurnId !== pending.clientTurnId) {
       throw new Error('recommendation response belongs to another client turn')
     }
     if (serverResponse.conversationId && !protocolUuid(serverResponse.conversationId)) {
@@ -446,9 +478,9 @@ async function sendTurn(
     const parsed: RecommendationAgentResponse = {
       ...serverResponse,
       profile: canonicalRecommendationProfile(serverResponse.profile),
-      responseLocale: serverResponse.responseLocale ?? responseLocale,
+      responseLocale: serverResponse.responseLocale ?? pending.responseLocale,
     }
-    activeTurnLocale.value = parsed.responseLocale ?? responseLocale
+    activeTurnLocale.value = parsed.responseLocale ?? pending.responseLocale
     profile.value = parsed.profile
     clarification.value = parsed.clarification
     response.value = parsed
@@ -469,19 +501,20 @@ async function sendTurn(
     })
     lastRequest.value = null
   } catch (error) {
-    failedTurnLocale.value = responseLocale
+    if (disposed || cancellationGeneration !== turnCancellationGeneration) return
+    failedTurnLocale.value = pending.responseLocale
     if (error instanceof RecommendationRequestError && error.status === 401) {
       if (optimisticUserMessageId !== null) {
         messages.value = messages.value.filter(item => item.id !== optimisticUserMessageId)
       }
       csrf = null
-      draft.value = userLabel ?? message
+      draft.value = pendingUserText(pending)
       loginGateVisible.value = true
       notifyLoginRequired({ showReminder: false })
     } else {
       failed.value = true
-      if (error instanceof RecommendationStreamError
-        && error.code !== 'turn_id_reused'
+      if (!disposed
+        && !(error instanceof RecommendationStreamError && error.code === 'turn_id_reused')
         && restoredConversationOwner) {
         serverSessionReady.value = false
         serverRestoreGeneration += 1
@@ -489,7 +522,7 @@ async function sendTurn(
       }
     }
   } finally {
-    endLoading()
+    if (cancellationGeneration === turnCancellationGeneration) endLoading()
   }
 }
 
@@ -501,7 +534,6 @@ function choose(option: { value: string; label: string }) {
     option.label,
     [],
     null,
-    undefined,
     response.value?.responseLocale,
   )
 }
@@ -523,14 +555,14 @@ function moreGames(turnResponse?: RecommendationAgentResponse) {
   if (!turnResponse?.games.length || loading.value || turnResponse !== response.value) return
   const responseLocale = turnResponse.responseLocale ?? locale.value
   const message = translated(responseLocale, 'more')
-  void sendTurn(message, profile.value, message, seenBggIds.value, null, undefined, responseLocale)
+  void sendTurn(message, profile.value, message, seenBggIds.value, null, responseLocale)
 }
 
 function introduce(bggId: number, name: string, responseLocale: AppLocale) {
   if (loading.value) return
   activeFocusedBggId.value = bggId
   const message = responseLocale === 'zh-CN' ? `介绍一下《${name}》` : `Tell me more about ${name}`
-  void sendTurn(message, profile.value, message, [], bggId, undefined, responseLocale)
+  void sendTurn(message, profile.value, message, [], bggId, responseLocale)
 }
 
 function selectGame(game: RecommendationGame) {
@@ -613,15 +645,7 @@ function retry() {
   const pending = lastRequest.value
   if (!pending) return
   failed.value = false
-  void sendTurn(
-    pending.message,
-    pending.profile,
-    undefined,
-    pending.excludedBggIds,
-    pending.focusedBggId,
-    pending.clientTurnId,
-    pending.responseLocale,
-  )
+  void submitPendingTurn(pending)
 }
 
 function playerConversationTranscript() {
@@ -765,7 +789,7 @@ function isRecommendationServerSession(value: unknown): value is RecommendationS
 }
 
 function applyServerRecommendationConversation(session: RecommendationServerSession) {
-  const pending = lastRequest.value
+  const pending = lastRequest.value ? copiedPendingRequest(lastRequest.value) : null
   clearVisibleRecommendationConversation()
   conversationId.value = session.conversationId
   conversationRevision.value = session.revision
@@ -797,12 +821,21 @@ function applyServerRecommendationConversation(session: RecommendationServerSess
     clarification.value = null
   }
 
-  if ((session.processing || !session.latestResponse) && pending) {
+  const completedPending = pending
+    && protocolUuid(session.latestResponse?.clientTurnId)
+    && session.latestResponse.clientTurnId === pending.clientTurnId
+  if (pending && !completedPending) {
     lastRequest.value = pending
     activeTurnLocale.value = pending.responseLocale
     failedTurnLocale.value = pending.responseLocale
     activeFocusedBggId.value = pending.focusedBggId
     failed.value = true
+    const pendingTurn = pending.transcript.at(-1)
+    const visibleLastTurn = messages.value.at(-1)
+    if (pendingTurn?.role === 'user'
+      && (visibleLastTurn?.role !== 'user' || visibleLastTurn.text !== pendingTurn.text)) {
+      messages.value.push({ id: ++messageId, role: 'user', text: pendingTurn.text })
+    }
   }
 }
 
@@ -811,9 +844,10 @@ async function restoreServerRecommendationConversation(
   generation: number,
   attempt = 0,
 ) {
+  if (disposed || generation !== serverRestoreGeneration) return
   try {
     const result = await fetch('/api/v1/bgg/recommendation-agent/session', { credentials: 'include' })
-    if (generation !== serverRestoreGeneration) return
+    if (disposed || generation !== serverRestoreGeneration) return
     if (!result || typeof result.status !== 'number') return
     if (result.status === 204) return
     if (result.status === 401) {
@@ -823,7 +857,7 @@ async function restoreServerRecommendationConversation(
     }
     if (!result.ok) return
     const candidate = await result.json() as unknown
-    if (generation !== serverRestoreGeneration || !isRecommendationServerSession(candidate)) return
+    if (disposed || generation !== serverRestoreGeneration || !isRecommendationServerSession(candidate)) return
 
     restoringConversation = true
     applyServerRecommendationConversation(candidate)
@@ -831,7 +865,7 @@ async function restoreServerRecommendationConversation(
     if (candidate.processing && attempt < 50) {
       if (!loading.value) beginLoading()
       await new Promise(resolve => setTimeout(resolve, 1_000))
-      if (generation === serverRestoreGeneration) {
+      if (!disposed && generation === serverRestoreGeneration) {
         await restoreServerRecommendationConversation(owner, generation, attempt + 1)
       }
       return
@@ -839,7 +873,7 @@ async function restoreServerRecommendationConversation(
   } catch {
     // The bounded browser snapshot remains available when session restoration is temporarily offline.
   } finally {
-    if (generation === serverRestoreGeneration) {
+    if (!disposed && generation === serverRestoreGeneration) {
       restoringConversation = false
       if (attempt === 0 || attempt >= 50) {
         if (loading.value) endLoading()
@@ -851,6 +885,7 @@ async function restoreServerRecommendationConversation(
 }
 
 function reset(preserveJourney = false) {
+  turnCancellationGeneration += 1
   activeRequest?.abort()
   endLoading()
   conversationId.value = null
@@ -960,6 +995,7 @@ watch(
       if (loading.value && lastRequest.value) failed.value = true
       persistRecommendationConversation(restoredConversationOwner)
     }
+    turnCancellationGeneration += 1
     activeRequest?.abort()
     endLoading()
     serverRestoreGeneration += 1
@@ -991,6 +1027,9 @@ watch(
 )
 onMounted(() => { void scrollConversationToLatest() })
 onBeforeUnmount(() => {
+  disposed = true
+  serverRestoreGeneration += 1
+  turnCancellationGeneration += 1
   if (loading.value && lastRequest.value) failed.value = true
   persistRecommendationConversation()
   activeRequest?.abort()

@@ -195,6 +195,7 @@ class BggRecommendationAgentControllerTest {
                 conversationId,
                 5,
                 state,
+                clientTurnId,
                 null,
                 null,
                 conversationResponse,
@@ -208,6 +209,7 @@ class BggRecommendationAgentControllerTest {
         assertThat(restored.transcript()).extracting(value -> value.text())
                 .containsExactly("Continue", "I kept the context.");
         assertThat(restored.knownGames()).extracting(value -> value.bggId()).containsExactly(1);
+        assertThat(restored.latestResponse().clientTurnId()).isEqualTo(clientTurnId);
         assertThat(restored.latestResponse().assistantMessage()).isEqualTo("I kept the context.");
 
         statefulController.delete(conversationId, principal);

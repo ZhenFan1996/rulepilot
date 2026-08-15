@@ -61,7 +61,9 @@ class RecommendationConversationCoordinatorTest {
         assertThat(replayed.revision()).isEqualTo(1);
         assertThat(replayed.replayed()).isTrue();
         assertThat(replayed.response()).isEqualTo(completed.response());
-        assertThat(coordinator.latest("alice").orElseThrow().state().transcript())
+        var latest = coordinator.latest("alice").orElseThrow();
+        assertThat(latest.lastClientTurnId()).isEqualTo(clientTurnId);
+        assertThat(latest.state().transcript())
                 .extracting(message -> message.role() + ":" + message.text())
                 .containsExactly("user:想找四人游戏", "assistant:我核对好了。");
         verify(agent, times(1)).converse(any(), eq("zh-CN"), eq("alice"), any());
