@@ -6,9 +6,19 @@ import RulebookSourceImportPanel from './RulebookSourceImportPanel.vue'
 
 const copy = {
   action: 'Discover', loading: 'Searching', title: 'Importable sources', detail: 'Importable detail',
+  elapsed: (seconds: number) => `${seconds}s elapsed`,
   noImportableTitle: 'No importable rulebook yet', noImportableDetail: 'Continue from a listing or use local upload.',
   identityOnlyTitle: 'Game identity references', identityOnlyDetail: 'Not rulebook choices.',
   unavailable: 'Unavailable', empty: 'Empty', error: 'Error',
+  retrySearch: 'Search again',
+  terminalTiming: (elapsed: number, budget: number) => `${elapsed}s of ${budget}s`,
+  terminal: {
+    PARTIAL: 'Only verified partial results are shown.',
+    TIMED_OUT: 'Search timed out.',
+    FAILED: 'Search failed.',
+  },
+  providers: { CATALOG: 'Catalog', SOURCE_INSPECTION: 'Inspection', WEB_SEARCH: 'Web' },
+  providerStates: { FINISHED: 'finished', TIMED_OUT: 'timed out', FAILED: 'failed', SKIPPED: 'skipped', UNAVAILABLE: 'unavailable' },
   sources: {
     PUBLISHER: 'Publisher', TRUSTED_REPOSITORY: 'Repository',
     COMMUNITY_PLATFORM: 'Community', PUBLIC_WEB: 'Public web',
@@ -67,7 +77,7 @@ describe('RulebookSourceImportPanel', () => {
           edition: { id: 'edition', name: 'First', language: 'en' },
           bggMetadata: null,
         },
-        status: 'success', candidates, copy,
+        status: 'success', candidates, elapsedSeconds: 0, discoverySummary: null, copy,
       },
     })
 
@@ -82,7 +92,7 @@ describe('RulebookSourceImportPanel', () => {
     expect(wrapper.emitted('choose')).toEqual([[candidates[0]], [candidates[2]]])
   })
 
-  it('states that discovery found no importable document and keeps local upload actionable', () => {
+  it('states that discovery found no importable document and keeps retry and local upload actionable', async () => {
     const wrapper = mount(RulebookSourceImportPanel, {
       props: {
         selectedEdition: {
@@ -92,12 +102,45 @@ describe('RulebookSourceImportPanel', () => {
         },
         status: 'success',
         candidates: [candidate('DOCUMENT_LISTING', 1), candidate('GAME_INFO_ONLY', 2)],
+        elapsedSeconds: 0,
+        discoverySummary: null,
         copy,
       },
     })
 
     expect(wrapper.text()).toContain('No importable rulebook yet')
     expect(wrapper.get('a[href="#rulebook-file"]').text()).toBe('Use local upload')
+    await wrapper.findAll('button').find(button => button.text() === 'Search again')!.trigger('click')
+    expect(wrapper.emitted('discover')).toEqual([[]])
     expect(wrapper.findAll('button').some(button => button.text() === 'Use source')).toBe(false)
+  })
+
+  it('labels bounded partial discovery without hiding its verified result', () => {
+    const wrapper = mount(RulebookSourceImportPanel, {
+      props: {
+        selectedEdition: {
+          game: { id: 'game', name: 'Opaque Atlas' },
+          edition: { id: 'edition', name: 'First', language: 'en' },
+          bggMetadata: null,
+        },
+        status: 'success',
+        candidates: [candidate('DIRECT_DOCUMENT', 1)],
+        elapsedSeconds: 18,
+        discoverySummary: {
+          completion: 'PARTIAL', elapsedMs: 18_050, totalBudgetMs: 30_000,
+          providers: [
+            { provider: 'CATALOG', state: 'FINISHED', elapsedMs: 40 },
+            { provider: 'WEB_SEARCH', state: 'TIMED_OUT', elapsedMs: 18_000 },
+          ],
+        },
+        copy,
+      },
+    })
+
+    const summary = wrapper.get('[data-testid="rulebook-discovery-summary"]')
+    expect(summary.text()).toContain('Only verified partial results are shown.')
+    expect(summary.text()).toContain('19s of 30s')
+    expect(summary.text()).toContain('Web: timed out')
+    expect(wrapper.get('[data-capability="DIRECT_DOCUMENT"] button').text()).toBe('Use source')
   })
 })

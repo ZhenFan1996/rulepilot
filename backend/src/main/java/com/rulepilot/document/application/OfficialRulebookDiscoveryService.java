@@ -6,11 +6,13 @@ import java.net.IDN;
 import java.net.URI;
 import java.text.Normalizer;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
+import java.util.EnumMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -18,8 +20,14 @@ import java.util.Locale;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.FutureTask;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.function.Supplier;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
@@ -61,6 +69,37 @@ public class OfficialRulebookDiscoveryService {
     private final OfficialRulebookSourceInspector sourceInspector;
     private final Set<String> trustedDomains;
     private final Clock clock;
+    private final Duration catalogProviderBudget;
+    private final Duration sourceInspectionProviderBudget;
+    private final Duration webSearchProviderBudget;
+    private final Duration totalBudget;
+
+    @Autowired
+    public OfficialRulebookDiscoveryService(
+            CatalogGamePresentationLookup catalog,
+            CatalogGameSourceIdentityLookup sourceIdentities,
+            OfficialRulebookCandidateFinder finder,
+            GstoneRulebookCatalogLookup gstoneCatalog,
+            OfficialRulebookSourceInspector sourceInspector,
+            @Value("${rulepilot.rulebook-discovery.trusted-domains:}") String trustedDomains,
+            @Value("${rulepilot.rulebook-discovery.catalog-provider-budget:PT6S}") Duration catalogProviderBudget,
+            @Value("${rulepilot.rulebook-discovery.source-inspection-provider-budget:PT6S}")
+                    Duration sourceInspectionProviderBudget,
+            @Value("${rulepilot.rulebook-discovery.web-search-provider-budget:PT18S}") Duration webSearchProviderBudget,
+            @Value("${rulepilot.rulebook-discovery.total-budget:PT30S}") Duration totalBudget) {
+        this(
+                catalog,
+                sourceIdentities,
+                finder,
+                gstoneCatalog,
+                sourceInspector,
+                trustedDomains,
+                catalogProviderBudget,
+                sourceInspectionProviderBudget,
+                webSearchProviderBudget,
+                totalBudget,
+                Clock.systemUTC());
+    }
 
     public OfficialRulebookDiscoveryService(
             CatalogGamePresentationLookup catalog,
@@ -68,13 +107,67 @@ public class OfficialRulebookDiscoveryService {
             OfficialRulebookCandidateFinder finder,
             GstoneRulebookCatalogLookup gstoneCatalog,
             OfficialRulebookSourceInspector sourceInspector,
-            @Value("${rulepilot.rulebook-discovery.trusted-domains:}") String trustedDomains) {
+            String trustedDomains) {
+        this(
+                catalog,
+                sourceIdentities,
+                finder,
+                gstoneCatalog,
+                sourceInspector,
+                trustedDomains,
+                Duration.ofSeconds(6),
+                Duration.ofSeconds(6),
+                Duration.ofSeconds(18),
+                Duration.ofSeconds(30));
+    }
+
+    OfficialRulebookDiscoveryService(
+            CatalogGamePresentationLookup catalog,
+            CatalogGameSourceIdentityLookup sourceIdentities,
+            OfficialRulebookCandidateFinder finder,
+            GstoneRulebookCatalogLookup gstoneCatalog,
+            OfficialRulebookSourceInspector sourceInspector,
+            String trustedDomains,
+            Duration catalogProviderBudget,
+            Duration sourceInspectionProviderBudget,
+            Duration webSearchProviderBudget,
+            Duration totalBudget) {
+        this(
+                catalog,
+                sourceIdentities,
+                finder,
+                gstoneCatalog,
+                sourceInspector,
+                trustedDomains,
+                catalogProviderBudget,
+                sourceInspectionProviderBudget,
+                webSearchProviderBudget,
+                totalBudget,
+                Clock.systemUTC());
+    }
+
+    private OfficialRulebookDiscoveryService(
+            CatalogGamePresentationLookup catalog,
+            CatalogGameSourceIdentityLookup sourceIdentities,
+            OfficialRulebookCandidateFinder finder,
+            GstoneRulebookCatalogLookup gstoneCatalog,
+            OfficialRulebookSourceInspector sourceInspector,
+            String trustedDomains,
+            Duration catalogProviderBudget,
+            Duration sourceInspectionProviderBudget,
+            Duration webSearchProviderBudget,
+            Duration totalBudget,
+            Clock clock) {
         this.catalog = catalog;
         this.sourceIdentities = sourceIdentities;
         this.finder = finder;
         this.gstoneCatalog = gstoneCatalog;
         this.sourceInspector = sourceInspector;
-        this.clock = Clock.systemUTC();
+        this.clock = clock;
+        this.catalogProviderBudget = checkedBudget(catalogProviderBudget, "catalog provider");
+        this.sourceInspectionProviderBudget = checkedBudget(sourceInspectionProviderBudget, "source inspection provider");
+        this.webSearchProviderBudget = checkedBudget(webSearchProviderBudget, "web search provider");
+        this.totalBudget = checkedBudget(totalBudget, "total discovery");
         this.trustedDomains = Arrays.stream(trustedDomains.split(","))
                 .map(String::strip)
                 .filter(value -> !value.isBlank())
@@ -82,7 +175,22 @@ public class OfficialRulebookDiscoveryService {
                 .collect(Collectors.toUnmodifiableSet());
     }
 
+    private Duration checkedBudget(Duration value, String label) {
+        if (value == null
+                || value.isZero()
+                || value.isNegative()
+                || value.compareTo(Duration.ofMinutes(2)) > 0) {
+            throw new IllegalArgumentException(label + " budget must be between 1 ns and 2 minutes");
+        }
+        return value;
+    }
+
     public Result discover(UUID editionId, String language) {
+        var budget = new DiscoveryBudget(
+                catalogProviderBudget,
+                sourceInspectionProviderBudget,
+                webSearchProviderBudget,
+                totalBudget);
         boolean modelSearchConfigured = finder.configured();
         var game = catalog.findByEdition(editionId)
                 .orElseThrow(() -> new IllegalArgumentException("catalog edition does not exist or has no BGG metadata"));
@@ -100,21 +208,26 @@ public class OfficialRulebookDiscoveryService {
                 identity.officialNames(),
                 identity.publishers(),
                 trustedDomains.stream().sorted().toList());
-        List<OfficialRulebookCandidateFinder.Candidate> catalogDiscovered = gstoneCatalog.find(request);
+        List<OfficialRulebookCandidateFinder.Candidate> catalogDiscovered = budget
+                .call(DiscoveryProvider.CATALOG, () -> gstoneCatalog.find(request))
+                .orElse(List.of());
         List<Candidate> catalogCandidates = catalogDiscovered.stream()
                 .map(candidate -> validate(candidate, identity.publishers()))
                 .filter(java.util.Objects::nonNull)
                 .toList();
         var allCandidates = new ArrayList<Candidate>();
-        allCandidates.addAll(assessCandidates(catalogCandidates, request));
+        allCandidates.addAll(assessCandidates(catalogCandidates, request, budget));
         if (allCandidates.stream().anyMatch(candidate -> isImportableForLanguage(candidate, checkedLanguage))) {
-            return new Result(true, discoveryIdentity, rankedCandidates(allCandidates));
+            return completeResult(true, discoveryIdentity, allCandidates, budget);
         }
         if (!modelSearchConfigured) {
-            return new Result(!catalogDiscovered.isEmpty(), discoveryIdentity, rankedCandidates(allCandidates));
+            budget.unavailable(DiscoveryProvider.WEB_SEARCH);
+            return completeResult(!catalogDiscovered.isEmpty(), discoveryIdentity, allCandidates, budget);
         }
 
-        var modelDiscovered = new ArrayList<>(finder.find(request));
+        var modelDiscovered = new ArrayList<>(budget
+                .call(DiscoveryProvider.WEB_SEARCH, () -> finder.find(request))
+                .orElse(List.of()));
         modelDiscovered.add(new OfficialRulebookCandidateFinder.Candidate(
                 "BoardGameGeek Files",
                 "https://boardgamegeek.com/files/thing/" + game.bggId(),
@@ -126,21 +239,36 @@ public class OfficialRulebookDiscoveryService {
                 .map(candidate -> validate(candidate, identity.publishers()))
                 .filter(java.util.Objects::nonNull)
                 .toList();
-        allCandidates.addAll(assessCandidates(modelCandidates, request));
-        if (allCandidates.stream().noneMatch(candidate -> isImportableForLanguage(candidate, checkedLanguage))) {
+        allCandidates.addAll(assessCandidates(modelCandidates, request, budget));
+        if (allCandidates.stream().noneMatch(candidate -> isImportableForLanguage(candidate, checkedLanguage))
+                && !budget.timedOut(DiscoveryProvider.WEB_SEARCH)) {
             List<OfficialRulebookCandidateFinder.Candidate> observedPages = rankedCandidates(allCandidates).stream()
                     .filter(candidate -> !isImportable(candidate))
                     .filter(candidate -> candidate.sourceType() != SourceType.PUBLIC_WEB)
                     .limit(6)
                     .map(this::finderCandidate)
                     .toList();
-            List<Candidate> recovered = finder.findAfterSourcePages(request, observedPages).stream()
+            List<Candidate> recovered = budget
+                    .call(
+                            DiscoveryProvider.WEB_SEARCH,
+                            () -> finder.findAfterSourcePages(request, observedPages))
+                    .orElse(List.of())
+                    .stream()
                     .map(candidate -> validate(candidate, identity.publishers()))
                     .filter(java.util.Objects::nonNull)
                     .toList();
-            allCandidates.addAll(assessCandidates(recovered, request));
+            allCandidates.addAll(assessCandidates(recovered, request, budget));
         }
-        return new Result(true, discoveryIdentity, rankedCandidates(allCandidates));
+        return completeResult(true, discoveryIdentity, allCandidates, budget);
+    }
+
+    private Result completeResult(
+            boolean configured,
+            DiscoveryIdentity identity,
+            List<Candidate> candidates,
+            DiscoveryBudget budget) {
+        List<Candidate> ranked = rankedCandidates(candidates);
+        return new Result(configured, identity, ranked, budget.summary(ranked.size()));
     }
 
     private List<Candidate> rankedCandidates(List<Candidate> allCandidates) {
@@ -157,7 +285,9 @@ public class OfficialRulebookDiscoveryService {
     }
 
     private List<Candidate> assessCandidates(
-            List<Candidate> candidates, OfficialRulebookCandidateFinder.Request request) {
+            List<Candidate> candidates,
+            OfficialRulebookCandidateFinder.Request request,
+            DiscoveryBudget budget) {
         var queue = new ArrayDeque<SourcePage>();
         var assessed = new ArrayList<Candidate>(candidates);
         candidates.stream()
@@ -173,7 +303,11 @@ public class OfficialRulebookDiscoveryService {
             if (!inspected.add(page.url().toASCIIString())) continue;
             inspections++;
             Instant checkedAt = clock.instant();
-            Optional<OfficialRulebookSourceInspector.Inspection> inspectedSource = sourceInspector.inspect(page.url());
+            Optional<Optional<OfficialRulebookSourceInspector.Inspection>> inspectionAttempt = budget.call(
+                    DiscoveryProvider.SOURCE_INSPECTION,
+                    () -> sourceInspector.inspect(page.url()));
+            Optional<OfficialRulebookSourceInspector.Inspection> inspectedSource =
+                    inspectionAttempt.orElse(Optional.empty());
             if (inspectedSource.isEmpty()) {
                 if (page.depth() == 0) {
                     assessed.add(withAssessment(
@@ -182,6 +316,7 @@ public class OfficialRulebookDiscoveryService {
                             List.of(CapabilityEvidence.SOURCE_PROBE_UNAVAILABLE),
                             checkedAt));
                 }
+                if (budget.timedOut(DiscoveryProvider.SOURCE_INSPECTION)) break;
                 continue;
             }
             var inspection = inspectedSource.orElseThrow();
@@ -613,11 +748,64 @@ public class OfficialRulebookDiscoveryService {
         return checked.length() <= maximum ? checked : checked.substring(0, maximum);
     }
 
-    public record Result(boolean configured, DiscoveryIdentity identity, List<Candidate> candidates) {
+    public record Result(
+            boolean configured,
+            DiscoveryIdentity identity,
+            List<Candidate> candidates,
+            DiscoverySummary discovery) {
         public Result {
             if (identity == null) throw new IllegalArgumentException("rulebook discovery identity is required");
+            if (discovery == null) throw new IllegalArgumentException("rulebook discovery summary is required");
             candidates = List.copyOf(candidates);
         }
+    }
+
+    public record DiscoverySummary(
+            DiscoveryCompletion completion,
+            long elapsedMs,
+            long totalBudgetMs,
+            List<ProviderProgress> providers) {
+        public DiscoverySummary {
+            if (completion == null
+                    || elapsedMs < 0
+                    || totalBudgetMs < 1
+                    || providers == null) {
+                throw new IllegalArgumentException("rulebook discovery summary is invalid");
+            }
+            providers = List.copyOf(providers);
+        }
+    }
+
+    public record ProviderProgress(
+            DiscoveryProvider provider,
+            DiscoveryProviderState state,
+            long elapsedMs) {
+        public ProviderProgress {
+            if (provider == null || state == null || elapsedMs < 0) {
+                throw new IllegalArgumentException("rulebook discovery provider progress is invalid");
+            }
+        }
+    }
+
+    public enum DiscoveryCompletion {
+        COMPLETE,
+        PARTIAL,
+        TIMED_OUT,
+        FAILED
+    }
+
+    public enum DiscoveryProvider {
+        CATALOG,
+        SOURCE_INSPECTION,
+        WEB_SEARCH
+    }
+
+    public enum DiscoveryProviderState {
+        FINISHED,
+        TIMED_OUT,
+        FAILED,
+        SKIPPED,
+        UNAVAILABLE
     }
 
     public record DiscoveryIdentity(
@@ -727,6 +915,124 @@ public class OfficialRulebookDiscoveryService {
         CONTINUE_ON_SOURCE,
         USE_FOR_IDENTITY_ONLY,
         REVIEW_OR_UPLOAD
+    }
+
+    private static final class DiscoveryBudget {
+
+        private final long startedNanos = System.nanoTime();
+        private final long totalBudgetNanos;
+        private final EnumMap<DiscoveryProvider, Long> providerBudgets =
+                new EnumMap<>(DiscoveryProvider.class);
+        private final EnumMap<DiscoveryProvider, Long> providerElapsed =
+                new EnumMap<>(DiscoveryProvider.class);
+        private final EnumMap<DiscoveryProvider, DiscoveryProviderState> providerStates =
+                new EnumMap<>(DiscoveryProvider.class);
+
+        private DiscoveryBudget(
+                Duration catalogBudget,
+                Duration sourceInspectionBudget,
+                Duration webSearchBudget,
+                Duration totalBudget) {
+            this.totalBudgetNanos = totalBudget.toNanos();
+            providerBudgets.put(DiscoveryProvider.CATALOG, catalogBudget.toNanos());
+            providerBudgets.put(DiscoveryProvider.SOURCE_INSPECTION, sourceInspectionBudget.toNanos());
+            providerBudgets.put(DiscoveryProvider.WEB_SEARCH, webSearchBudget.toNanos());
+            for (DiscoveryProvider provider : DiscoveryProvider.values()) {
+                providerElapsed.put(provider, 0L);
+                providerStates.put(provider, DiscoveryProviderState.SKIPPED);
+            }
+        }
+
+        private <T> Optional<T> call(DiscoveryProvider provider, Supplier<T> action) {
+            long remainingNanos = Math.min(totalRemainingNanos(), providerRemainingNanos(provider));
+            if (remainingNanos <= 0) {
+                providerStates.put(provider, DiscoveryProviderState.TIMED_OUT);
+                return Optional.empty();
+            }
+            var task = new FutureTask<>(action::get);
+            Thread thread = Thread.ofVirtual()
+                    .name("rulebook-discovery-" + provider.name().toLowerCase(Locale.ROOT))
+                    .unstarted(task);
+            long callStartedNanos = System.nanoTime();
+            thread.start();
+            try {
+                T value = task.get(remainingNanos, TimeUnit.NANOSECONDS);
+                markFinished(provider);
+                return Optional.ofNullable(value);
+            } catch (TimeoutException exception) {
+                task.cancel(true);
+                providerStates.put(provider, DiscoveryProviderState.TIMED_OUT);
+                return Optional.empty();
+            } catch (InterruptedException exception) {
+                task.cancel(true);
+                Thread.currentThread().interrupt();
+                providerStates.put(provider, DiscoveryProviderState.FAILED);
+                return Optional.empty();
+            } catch (ExecutionException exception) {
+                task.cancel(true);
+                if (exception.getCause() instanceof Error error) throw error;
+                providerStates.put(provider, DiscoveryProviderState.FAILED);
+                return Optional.empty();
+            } finally {
+                long callElapsedNanos = Math.max(0, System.nanoTime() - callStartedNanos);
+                providerElapsed.merge(provider, callElapsedNanos, DiscoveryBudget::saturatedAdd);
+            }
+        }
+
+        private void unavailable(DiscoveryProvider provider) {
+            if (providerStates.get(provider) == DiscoveryProviderState.SKIPPED) {
+                providerStates.put(provider, DiscoveryProviderState.UNAVAILABLE);
+            }
+        }
+
+        private boolean timedOut(DiscoveryProvider provider) {
+            return providerStates.get(provider) == DiscoveryProviderState.TIMED_OUT;
+        }
+
+        private DiscoverySummary summary(int candidateCount) {
+            boolean timedOut = providerStates.containsValue(DiscoveryProviderState.TIMED_OUT);
+            boolean failed = providerStates.containsValue(DiscoveryProviderState.FAILED);
+            DiscoveryCompletion completion = timedOut
+                    ? candidateCount > 0 ? DiscoveryCompletion.PARTIAL : DiscoveryCompletion.TIMED_OUT
+                    : failed
+                            ? candidateCount > 0 ? DiscoveryCompletion.PARTIAL : DiscoveryCompletion.FAILED
+                            : DiscoveryCompletion.COMPLETE;
+            List<ProviderProgress> providers = Arrays.stream(DiscoveryProvider.values())
+                    .map(provider -> new ProviderProgress(
+                            provider,
+                            providerStates.get(provider),
+                            elapsedMillis(providerElapsed.get(provider))))
+                    .toList();
+            return new DiscoverySummary(
+                    completion,
+                    elapsedMillis(Math.max(0, System.nanoTime() - startedNanos)),
+                    Math.max(1, Duration.ofNanos(totalBudgetNanos).toMillis()),
+                    providers);
+        }
+
+        private void markFinished(DiscoveryProvider provider) {
+            DiscoveryProviderState state = providerStates.get(provider);
+            if (state != DiscoveryProviderState.TIMED_OUT && state != DiscoveryProviderState.FAILED) {
+                providerStates.put(provider, DiscoveryProviderState.FINISHED);
+            }
+        }
+
+        private long totalRemainingNanos() {
+            return totalBudgetNanos - Math.max(0, System.nanoTime() - startedNanos);
+        }
+
+        private long providerRemainingNanos(DiscoveryProvider provider) {
+            return providerBudgets.get(provider) - providerElapsed.get(provider);
+        }
+
+        private static long saturatedAdd(long left, long right) {
+            if (Long.MAX_VALUE - left < right) return Long.MAX_VALUE;
+            return left + right;
+        }
+
+        private static long elapsedMillis(long nanos) {
+            return TimeUnit.NANOSECONDS.toMillis(Math.max(0, nanos));
+        }
     }
 
     private record SourcePage(Candidate provenance, URI url, String label, int depth) {}

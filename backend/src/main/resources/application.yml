@@ -303,6 +303,10 @@ rulepilot:
     base-url: ${RULEBOOK_DISCOVERY_BASE_URL:${WEB_SEARCH_BASE_URL:${QWEN_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}}}
     model: ${RULEBOOK_DISCOVERY_MODEL:qwen3.7-max}
     timeout: ${RULEBOOK_DISCOVERY_TIMEOUT:PT30S}
+    catalog-provider-budget: ${RULEBOOK_DISCOVERY_CATALOG_PROVIDER_BUDGET:PT6S}
+    source-inspection-provider-budget: ${RULEBOOK_DISCOVERY_SOURCE_INSPECTION_PROVIDER_BUDGET:PT6S}
+    web-search-provider-budget: ${RULEBOOK_DISCOVERY_WEB_SEARCH_PROVIDER_BUDGET:PT18S}
+    total-budget: ${RULEBOOK_DISCOVERY_TOTAL_BUDGET:PT30S}
     cache-ttl: ${RULEBOOK_DISCOVERY_CACHE_TTL:P30D}
     negative-cache-ttl: ${RULEBOOK_DISCOVERY_NEGATIVE_CACHE_TTL:PT10M}
     hourly-limit: ${RULEBOOK_DISCOVERY_HOURLY_LIMIT:30}

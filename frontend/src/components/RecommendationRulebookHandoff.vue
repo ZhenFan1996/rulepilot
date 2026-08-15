@@ -8,6 +8,7 @@ import type {
   RulebookCandidate,
   RulebookCapabilityEvidence,
   RulebookDiscoveryIdentity,
+  RulebookDiscoverySummary,
   RulebookSourceAction,
   RulebookSourceCapability,
 } from '@/components/documents/types'
@@ -20,6 +21,10 @@ import {
 import { acceptProgressiveLesson, teachingRunIsActive } from '@/lib/liveLesson'
 import { useLocale } from '@/lib/locale'
 import { playerFacingLanguageName } from '@/lib/playerFacingLanguage'
+import {
+  monotonicElapsedSeconds,
+  normalizeRulebookDiscoverySummary,
+} from '@/lib/rulebookDiscovery'
 import { notifyTeachingLaunched } from '@/lib/teachingLaunch'
 import {
   acceptImportJob,
@@ -47,6 +52,7 @@ interface RulebookCandidateResponse {
   configured: boolean
   identity: RulebookDiscoveryIdentity
   candidates: RulebookCandidate[]
+  discovery?: unknown
 }
 
 interface OfficialImportJob extends PlayerJourneyImportJob {
@@ -123,6 +129,15 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   identityChanged: '提交前目录或来源身份发生了变化。请重新比较上面的游戏、版本和语言后再次确认。',
   identityActive: '这个链接正在为另一个版本导入。请等待那次导入结束，或改用公开链接 / 本地上传；当前桌游选择不会丢失。',
   import: '下载规则书并生成讲解', manual: '改用公开链接或本地上传',
+  retryDiscovery: '继续查找',
+  discoveryTerminal: {
+    PARTIAL: '部分来源未在本次预算内完成；下面只保留已经核验的结果。',
+    TIMED_OUT: '本次检索已到达时间预算，尚未找到可审阅结果。',
+    FAILED: '部分来源检索失败，尚未找到可审阅结果。',
+  },
+  discoveryTiming: (elapsed: number, budget: number) => `本次检索用时 ${elapsed} 秒，最长预算 ${budget} 秒。`,
+  discoveryProviders: { CATALOG: '规则书目录', SOURCE_INSPECTION: '来源核验', WEB_SEARCH: '联网搜索' },
+  discoveryProviderStates: { FINISHED: '已完成', TIMED_OUT: '已超时', FAILED: '失败', SKIPPED: '未使用', UNAVAILABLE: '未配置' },
   browserRequired: '已经找到这份文件，但来源网站要求在浏览器里完成隐私选择、刷新临时链接或登录。打开原始下载页取得 PDF 后，回到 RulePilot 上传即可继续；桌游、版本和讲解偏好都已保留。',
   sourcePageHandoff: '这个结果不是可直接导入的规则书文档。请在来源网站继续查找或核对语言和版本，取得 PDF 后回到 RulePilot 上传；桌游和讲解偏好都已保留。',
   browserAction: '在来源网站继续下载',
@@ -163,6 +178,15 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   identityChanged: 'The catalog or source identity changed before submission. Compare the game, edition, and language above, then reconfirm.',
   identityActive: 'This URL is already being imported for another edition. Wait for it to finish or use a public URL / local upload; the selected game remains intact.',
   import: 'Download and generate guide', manual: 'Use a public URL or local upload',
+  retryDiscovery: 'Search again',
+  discoveryTerminal: {
+    PARTIAL: 'Some sources did not finish within this search budget. Only verified results are shown below.',
+    TIMED_OUT: 'This search reached its time budget without a reviewable result.',
+    FAILED: 'Some source checks failed and no reviewable result is available yet.',
+  },
+  discoveryTiming: (elapsed: number, budget: number) => `Search finished in ${elapsed}s with a ${budget}s maximum budget.`,
+  discoveryProviders: { CATALOG: 'Rulebook catalog', SOURCE_INSPECTION: 'Source verification', WEB_SEARCH: 'Web search' },
+  discoveryProviderStates: { FINISHED: 'finished', TIMED_OUT: 'timed out', FAILED: 'failed', SKIPPED: 'not needed', UNAVAILABLE: 'not configured' },
   browserRequired: 'The file was found, but its source requires an in-browser privacy choice, refreshed temporary link, or sign-in. Download it there, then return to upload it; the game, edition, and guide preferences are preserved.',
   sourcePageHandoff: 'This result is not a directly importable rulebook document. Continue the search or review language and edition on the source site, then return to upload the PDF; the game and guide preferences are preserved.',
   browserAction: 'Continue on the source site',
@@ -196,6 +220,7 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
 const imported = ref<ImportedGame | null>(null)
 const candidates = ref<RulebookCandidate[]>([])
 const discoveryIdentity = ref<RulebookDiscoveryIdentity | null>(null)
+const discoverySummary = ref<RulebookDiscoverySummary | null>(null)
 const selected = ref<RulebookCandidate | null>(null)
 const openedSource = ref<RulebookCandidate | null>(null)
 const consent = ref(false)
@@ -216,6 +241,7 @@ const retrying = ref(false)
 let csrf: CsrfResponse | null = null
 let sequence = 0
 let findingClock: ReturnType<typeof setInterval> | null = null
+let findingStartedAt: number | null = null
 let journeyTimer: ReturnType<typeof setTimeout> | null = null
 let refreshingJourney = false
 let documentProgressSource: EventSource | null = null
@@ -242,6 +268,19 @@ const identityTarget = computed<RulebookDiscoveryIdentity | null>(() => imported
   language: imported.value.edition.language,
 } : null)
 const findingText = computed(() => copy.value.finding.replace('{seconds}', String(findingSeconds.value)))
+const discoveryNotice = computed(() => {
+  const summary = discoverySummary.value
+  if (!summary || summary.completion === 'COMPLETE') return ''
+  return copy.value.discoveryTerminal[summary.completion]
+})
+const discoveryTiming = computed(() => {
+  const summary = discoverySummary.value
+  if (!summary) return ''
+  return copy.value.discoveryTiming(
+    Math.max(1, Math.ceil(summary.elapsedMs / 1_000)),
+    Math.max(1, Math.ceil(summary.totalBudgetMs / 1_000)),
+  )
+})
 const manualRoute = computed(() => ({
   name: 'teach' as const,
   query: imported.value ? { editionId: imported.value.edition.id, onboarding: 'recommendation-agent' } : {},
@@ -386,9 +425,8 @@ async function prepare() {
 async function discover(request = sequence) {
   if (!imported.value || request !== sequence) return
   state.value = 'finding'
-  findingSeconds.value = 0
-  if (findingClock) clearInterval(findingClock)
-  findingClock = setInterval(() => { findingSeconds.value += 1 }, 1000)
+  discoverySummary.value = null
+  startFindingClock()
   try {
     const parameters = new URLSearchParams({ editionId: imported.value.edition.id, language: locale.value })
     const response = await fetch(`/api/v1/documents/rulebook-candidates?${parameters.toString()}`, { credentials: 'include' })
@@ -399,16 +437,33 @@ async function discover(request = sequence) {
     if (result.identity?.editionId !== imported.value.edition.id) throw new Error('discovery identity mismatch')
     discoveryIdentity.value = result.identity
     candidates.value = result.candidates.map(normalizeRulebookCandidate)
+    discoverySummary.value = normalizeRulebookDiscoverySummary(result.discovery)
     state.value = result.configured && candidates.value.length ? 'review' : 'unavailable'
     persistJourney()
   } catch {
     if (request === sequence) state.value = 'error'
   } finally {
-    if (request === sequence && findingClock) {
-      clearInterval(findingClock)
-      findingClock = null
-    }
+    if (request === sequence) stopFindingClock(true)
   }
+}
+
+function startFindingClock() {
+  stopFindingClock(false)
+  findingSeconds.value = 0
+  findingStartedAt = performance.now()
+  findingClock = setInterval(updateFindingElapsed, 1_000)
+}
+
+function updateFindingElapsed() {
+  if (findingStartedAt === null) return
+  findingSeconds.value = monotonicElapsedSeconds(findingStartedAt)
+}
+
+function stopFindingClock(updateElapsed: boolean) {
+  if (updateElapsed) updateFindingElapsed()
+  if (findingClock !== null) clearInterval(findingClock)
+  findingClock = null
+  findingStartedAt = null
 }
 
 function choose(candidate: RulebookCandidate) {
@@ -837,6 +892,7 @@ function clearJourneyTimer() {
 
 function resetJourneyState() {
   clearJourneyTimer()
+  stopFindingClock(false)
   closeDocumentProgress()
   documentProgressStreamRetryAt = 0
   documentProgressStreamRetryAttempt = 0
@@ -844,6 +900,7 @@ function resetJourneyState() {
   imported.value = null
   candidates.value = []
   discoveryIdentity.value = null
+  discoverySummary.value = null
   selected.value = null
   openedSource.value = null
   consent.value = false
@@ -945,6 +1002,7 @@ function persistJourney() {
       imported: imported.value,
       candidates: candidates.value,
       discoveryIdentity: discoveryIdentity.value,
+      discoverySummary: discoverySummary.value,
       selected: selected.value,
       importJob: importJob.value,
       preparationRunId: preparationRunId.value,
@@ -964,6 +1022,7 @@ function restoreJourney() {
       imported?: ImportedGame
       candidates?: RulebookCandidate[]
       discoveryIdentity?: RulebookDiscoveryIdentity
+      discoverySummary?: unknown
       selected?: RulebookCandidate
       importJob?: OfficialImportJob
       preparationRunId?: string
@@ -975,6 +1034,7 @@ function restoreJourney() {
     discoveryIdentity.value = stored.discoveryIdentity?.editionId === restoredImported.edition.id
       ? stored.discoveryIdentity
       : null
+    discoverySummary.value = normalizeRulebookDiscoverySummary(stored.discoverySummary)
     candidates.value = Array.isArray(stored.candidates)
       ? stored.candidates.map(normalizeRulebookCandidate)
       : []
@@ -1014,7 +1074,7 @@ onBeforeUnmount(() => {
   sequence += 1
   clearJourneyTimer()
   closeDocumentProgress()
-  if (findingClock) clearInterval(findingClock)
+  stopFindingClock(false)
 })
 </script>
 
@@ -1039,6 +1099,19 @@ onBeforeUnmount(() => {
       <template v-else-if="state === 'review'">
         <h4 class="font-display text-lg font-semibold">{{ hasImportableCandidate ? copy.found : copy.noImportableTitle }}</h4>
         <p class="mt-1 text-xs leading-5 text-ink/50">{{ hasImportableCandidate ? copy.detail : copy.noImportableDetail }}</p>
+        <div
+          v-if="discoveryNotice && discoverySummary"
+          data-testid="rulebook-discovery-summary"
+          class="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-950"
+          role="status"
+        >
+          <p>{{ discoveryNotice }} {{ discoveryTiming }}</p>
+          <ul class="mt-2 flex flex-wrap gap-x-4 gap-y-1">
+            <li v-for="provider in discoverySummary.providers" :key="provider.provider">
+              {{ copy.discoveryProviders[provider.provider] }}：{{ copy.discoveryProviderStates[provider.state] }}
+            </li>
+          </ul>
+        </div>
         <ol class="mt-4 grid grid-cols-2 gap-2 text-xs sm:grid-cols-5" :aria-label="copy.progress">
           <li v-for="milestone in milestones" :key="milestone.label" :data-fact-confirmed="milestone.done ? 'true' : 'false'" class="rounded-lg border px-2.5 py-2" :class="milestone.done ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : milestone.active ? 'border-copper/30 bg-copper/5 font-semibold text-copper' : 'border-ink/8 bg-paper text-ink/40'">
             <span class="mr-1" aria-hidden="true">{{ milestone.done ? '✓' : milestone.active ? '●' : '○' }}</span>{{ milestone.label }}
@@ -1059,7 +1132,10 @@ onBeforeUnmount(() => {
             </div>
           </li>
         </ul>
-        <RouterLink v-if="!hasImportableCandidate" :to="manualRoute" class="mt-4 inline-flex min-h-11 items-center text-sm font-semibold text-indigo underline">{{ copy.manual }} →</RouterLink>
+        <div v-if="!hasImportableCandidate" class="mt-4 flex flex-wrap gap-x-4 gap-y-2">
+          <button type="button" class="inline-flex min-h-11 items-center text-sm font-semibold text-indigo underline" @click="discover()">{{ copy.retryDiscovery }} →</button>
+          <RouterLink :to="manualRoute" class="inline-flex min-h-11 items-center text-sm font-semibold text-indigo underline">{{ copy.manual }} →</RouterLink>
+        </div>
         <section v-if="identityCandidates.length" class="mt-5 border-t border-ink/10 pt-4" :aria-label="copy.identityOnlyTitle">
           <h5 class="text-sm font-semibold text-ink/70">{{ copy.identityOnlyTitle }}</h5>
           <p class="mt-1 text-xs leading-5 text-ink/50">{{ copy.identityOnlyDetail }}</p>
@@ -1156,7 +1232,19 @@ onBeforeUnmount(() => {
 
       <div v-else-if="state === 'unavailable'" class="text-sm leading-6 text-ink/65" role="status">
         <p>{{ copy.unavailable }}</p>
-        <button type="button" class="mt-3 inline-flex min-h-11 items-center font-semibold text-indigo underline" @click="discover()">{{ copy.retry }} →</button>
+        <div
+          v-if="discoveryNotice && discoverySummary"
+          data-testid="rulebook-discovery-summary"
+          class="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-950"
+        >
+          <p>{{ discoveryNotice }} {{ discoveryTiming }}</p>
+          <ul class="mt-2 flex flex-wrap gap-x-4 gap-y-1">
+            <li v-for="provider in discoverySummary.providers" :key="provider.provider">
+              {{ copy.discoveryProviders[provider.provider] }}：{{ copy.discoveryProviderStates[provider.state] }}
+            </li>
+          </ul>
+        </div>
+        <button type="button" class="mt-3 inline-flex min-h-11 items-center font-semibold text-indigo underline" @click="discover()">{{ copy.retryDiscovery }} →</button>
         <RouterLink :to="manualRoute" class="ml-4 inline-flex min-h-11 items-center font-semibold text-indigo underline">{{ copy.manual }} →</RouterLink>
       </div>
 

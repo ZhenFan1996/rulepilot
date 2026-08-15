@@ -28,13 +28,38 @@ public class OfficialRulebookDiscoveryController {
         return new DiscoveryResponse(
                 result.configured(),
                 DiscoveryIdentityResponse.from(result.identity()),
-                result.candidates().stream().map(CandidateResponse::from).toList());
+                result.candidates().stream().map(CandidateResponse::from).toList(),
+                DiscoverySummaryResponse.from(result.discovery()));
     }
 
     record DiscoveryResponse(
             boolean configured,
             DiscoveryIdentityResponse identity,
-            List<CandidateResponse> candidates) {}
+            List<CandidateResponse> candidates,
+            DiscoverySummaryResponse discovery) {}
+
+    record DiscoverySummaryResponse(
+            OfficialRulebookDiscoveryService.DiscoveryCompletion completion,
+            long elapsedMs,
+            long totalBudgetMs,
+            List<ProviderProgressResponse> providers) {
+        static DiscoverySummaryResponse from(OfficialRulebookDiscoveryService.DiscoverySummary summary) {
+            return new DiscoverySummaryResponse(
+                    summary.completion(),
+                    summary.elapsedMs(),
+                    summary.totalBudgetMs(),
+                    summary.providers().stream().map(ProviderProgressResponse::from).toList());
+        }
+    }
+
+    record ProviderProgressResponse(
+            OfficialRulebookDiscoveryService.DiscoveryProvider provider,
+            OfficialRulebookDiscoveryService.DiscoveryProviderState state,
+            long elapsedMs) {
+        static ProviderProgressResponse from(OfficialRulebookDiscoveryService.ProviderProgress progress) {
+            return new ProviderProgressResponse(progress.provider(), progress.state(), progress.elapsedMs());
+        }
+    }
 
     record DiscoveryIdentityResponse(
             UUID editionId,

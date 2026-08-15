@@ -238,6 +238,42 @@ test('uses verified source capability for every desktop source-selection action'
     .toHaveValue('https://publisher.example/asset/42')
 })
 
+test('keeps source discovery honest through a bounded partial terminal state on desktop', async ({ page }) => {
+  let releaseDiscovery!: () => void
+  const discoveryGate = new Promise<void>((resolve) => { releaseDiscovery = resolve })
+  await mockOnboardingApis(page, {
+    recommendations: [hotGame],
+    suggestions: [candidate],
+    rulebookDiscoveryGate: discoveryGate,
+    rulebookCandidates: [{
+      title: 'Opaque document collection', url: 'https://listing.example/files', publisher: 'Opaque Studio',
+      language: 'en', edition: 'First', sourceDomain: 'listing.example', officialDomainVerified: true,
+      sourceType: 'PUBLISHER', acquisitionMode: 'SOURCE_PAGE', capability: 'DOCUMENT_LISTING',
+      capabilityEvidence: ['DOWNLOADABLE_DOCUMENT_LINKS_OBSERVED'],
+      capabilityCheckedAt: '2026-08-15T12:00:00Z', nextAction: 'CONTINUE_ON_SOURCE',
+    }],
+    rulebookDiscoverySummary: {
+      completion: 'PARTIAL', elapsedMs: 18_025, totalBudgetMs: 30_000,
+      providers: [
+        { provider: 'CATALOG', state: 'FINISHED', elapsedMs: 35 },
+        { provider: 'SOURCE_INSPECTION', state: 'FINISHED', elapsedMs: 120 },
+        { provider: 'WEB_SEARCH', state: 'TIMED_OUT', elapsedMs: 18_000 },
+      ],
+    },
+  })
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto('/teach?editionId=edition-1&onboarding=selected-game')
+
+  await page.getByRole('button', { name: '帮我找规则书' }).click()
+  await expect(page.getByRole('button', { name: /已等待 1 秒/ })).toBeVisible({ timeout: 3_000 })
+  releaseDiscovery()
+  await expect(page.getByTestId('rulebook-discovery-summary')).toContainText('部分来源未在本次预算内完成')
+  await expect(page.getByTestId('rulebook-discovery-summary')).toContainText('联网搜索: 已超时')
+  await expect(page.locator('[data-capability="DOCUMENT_LISTING"] button')).toHaveText('继续查找文件')
+  await expect(page.getByRole('button', { name: '继续查找', exact: true })).toBeVisible()
+  await expect(page.getByRole('link', { name: '上传本地规则书' })).toHaveAttribute('href', '#rulebook-file')
+})
+
 test('releases a terminal import and restores a safe edition-aware intake draft on desktop', async ({ page }) => {
   await mockOnboardingApis(page, {
     recommendations: [hotGame],
@@ -347,6 +383,8 @@ async function mockOnboardingApis(page: Page, options: {
   onBggImport?: () => void
   onBggLink?: (body: Record<string, unknown>) => void
   rulebookCandidates?: Array<Record<string, unknown>>
+  rulebookDiscoveryGate?: Promise<void>
+  rulebookDiscoverySummary?: Record<string, unknown>
   recoveredOfficialImport?: Record<string, unknown>
   recoveredOfficialImportStatus?: number
   onRecoveredOfficialImportRead?: () => void
@@ -441,6 +479,7 @@ async function mockOnboardingApis(page: Page, options: {
       } })
     }
     if (path === '/api/v1/documents/rulebook-candidates') {
+      if (options.rulebookDiscoveryGate) await options.rulebookDiscoveryGate
       return route.fulfill({ json: {
         configured: true,
         identity: {
@@ -452,6 +491,14 @@ async function mockOnboardingApis(page: Page, options: {
           sourceType: 'PUBLISHER', acquisitionMode: 'DIRECT_PDF',
           ...directCapability,
         }],
+        discovery: options.rulebookDiscoverySummary ?? {
+          completion: 'COMPLETE', elapsedMs: 120, totalBudgetMs: 30_000,
+          providers: [
+            { provider: 'CATALOG', state: 'FINISHED', elapsedMs: 20 },
+            { provider: 'SOURCE_INSPECTION', state: 'FINISHED', elapsedMs: 80 },
+            { provider: 'WEB_SEARCH', state: 'SKIPPED', elapsedMs: 0 },
+          ],
+        },
       } })
     }
     if (path === '/api/v1/documents' && request.method() === 'GET') {

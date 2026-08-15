@@ -144,6 +144,49 @@ describe('RecommendationRulebookHandoff', () => {
     await confirmations[1]!.setValue(true)
   }
 
+  it('derives source-search elapsed time from a monotonic clock after timer throttling', async () => {
+    let now = 1_000
+    let findingTick: (() => void) | undefined
+    let releaseDiscovery!: (value: Response) => void
+    const discoveryResponse = new Promise<Response>((resolve) => { releaseDiscovery = resolve })
+    const nowSpy = vi.spyOn(performance, 'now').mockImplementation(() => now)
+    vi.stubGlobal('setInterval', vi.fn((callback: TimerHandler) => {
+      findingTick = callback as () => void
+      return 41
+    }))
+    vi.stubGlobal('clearInterval', vi.fn())
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const path = String(input)
+      if (path === '/api/auth/csrf') {
+        return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      }
+      if (path === '/api/v1/bgg/games/266192/import') return Response.json({
+        game: { id: 'game-1', name: '展翅翱翔' },
+        edition: { id: 'edition-1', name: 'BGG 版本', language: 'zh-CN' },
+        alreadyImported: false,
+      })
+      if (path.startsWith('/api/v1/documents/rulebook-candidates?')) return discoveryResponse
+      return new Response(null, { status: 404 })
+    }))
+
+    const { wrapper } = await mountHandoff()
+    try {
+      await vi.waitFor(() => expect(findingTick).toBeDefined())
+      expect(wrapper.text()).toContain('已等待 0 秒')
+
+      now = 62_000
+      findingTick!()
+      await wrapper.vm.$nextTick()
+
+      expect(wrapper.text()).toContain('已等待 61 秒')
+    } finally {
+      releaseDiscovery(Response.json({ configured: true, identity: discoveryIdentity, candidates: [] }))
+      await flushPromises()
+      wrapper.unmount()
+      nowSpy.mockRestore()
+    }
+  })
+
   it('keeps selection, candidate review, consent, download, and teaching recovery in one flow', async () => {
     const openSource = vi.fn()
     const backgroundWorkChanged = vi.fn()
@@ -297,6 +340,14 @@ describe('RecommendationRulebookHandoff', () => {
       if (path.startsWith('/api/v1/documents/rulebook-candidates?')) return Response.json({
         configured: true,
         identity: discoveryIdentity,
+        discovery: {
+          completion: 'PARTIAL', elapsedMs: 18_025, totalBudgetMs: 30_000,
+          providers: [
+            { provider: 'CATALOG', state: 'FINISHED', elapsedMs: 25 },
+            { provider: 'SOURCE_INSPECTION', state: 'FINISHED', elapsedMs: 80 },
+            { provider: 'WEB_SEARCH', state: 'TIMED_OUT', elapsedMs: 18_000 },
+          ],
+        },
         candidates: [{
           title: 'Opaque file listing', url: 'https://listing.example/files', publisher: 'Opaque Studio',
           language: 'en', edition: 'First', sourceDomain: 'listing.example', officialDomainVerified: true,
@@ -322,6 +373,8 @@ describe('RecommendationRulebookHandoff', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('暂未找到可直接导入的规则书')
+    expect(wrapper.get('[data-testid="rulebook-discovery-summary"]').text()).toContain('联网搜索：已超时')
+    expect(wrapper.findAll('button').some(button => button.text().includes('继续查找'))).toBe(true)
     expect(wrapper.get('[data-capability="GAME_INFO_ONLY"]').find('button').exists()).toBe(false)
     expect(wrapper.get('section[aria-label="仅用于核对桌游身份"]').text()).toContain('Opaque catalog entry')
     expect(wrapper.find('input[type="checkbox"]').exists()).toBe(false)

@@ -183,6 +183,68 @@ describe('DocumentsView recoverable lesson handoff', () => {
     wrapper.unmount()
   })
 
+  it('uses monotonic elapsed time and exposes bounded zero-result recovery', async () => {
+    let now = 1_000
+    let discoveryTick: (() => void) | undefined
+    let releaseDiscovery!: (response: Response) => void
+    const pendingDiscovery = new Promise<Response>((resolve) => { releaseDiscovery = resolve })
+    const applicationFetch = mockApplicationFetch(() => 'READY')
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, options?: RequestInit) => {
+      const path = String(input)
+      if (path.includes('/api/v1/documents/rulebook-candidates')) return pendingDiscovery
+      if (path.includes('/api/v1/games')) return response([{
+        game: { id: 'game-1', name: 'Opaque Atlas' },
+        editions: [{ id: 'edition-1', name: 'First', language: 'en' }],
+        bggMetadata: null,
+      }])
+      return applicationFetch(input, options)
+    }))
+    vi.stubGlobal('EventSource', FakeEventSource)
+
+    const { wrapper } = await mountDocuments('/teach?editionId=edition-1')
+    await flushPromises()
+    const nowSpy = vi.spyOn(performance, 'now').mockImplementation(() => now)
+    vi.stubGlobal('setInterval', vi.fn((callback: TimerHandler) => {
+      discoveryTick = callback as () => void
+      return 42
+    }))
+    vi.stubGlobal('clearInterval', vi.fn())
+
+    try {
+      await wrapper.findAll('button').find(button => button.text().includes('帮我找规则书'))!.trigger('click')
+      await vi.waitFor(() => expect(discoveryTick).toBeDefined())
+      expect(wrapper.text()).toContain('已等待 0 秒')
+
+      now = 62_000
+      discoveryTick!()
+      await wrapper.vm.$nextTick()
+      expect(wrapper.text()).toContain('已等待 61 秒')
+
+      releaseDiscovery(response({
+        configured: true,
+        identity: { editionId: 'edition-1', gameName: 'Opaque Atlas', editionName: 'First', language: 'en' },
+        candidates: [],
+        discovery: {
+          completion: 'TIMED_OUT', elapsedMs: 30_005, totalBudgetMs: 30_000,
+          providers: [
+            { provider: 'CATALOG', state: 'FINISHED', elapsedMs: 25 },
+            { provider: 'SOURCE_INSPECTION', state: 'SKIPPED', elapsedMs: 0 },
+            { provider: 'WEB_SEARCH', state: 'TIMED_OUT', elapsedMs: 29_975 },
+          ],
+        },
+      }))
+      await flushPromises()
+
+      expect(wrapper.get('[data-testid="rulebook-discovery-summary"]').text()).toContain('联网搜索: 已超时')
+      expect(wrapper.text()).toContain('本次检索已到达时间预算')
+      expect(wrapper.findAll('button').some(button => button.text() === '继续查找')).toBe(true)
+      expect(wrapper.get('a[href="#rulebook-file"]').text()).toBe('上传本地规则书')
+    } finally {
+      wrapper.unmount()
+      nowSpy.mockRestore()
+    }
+  })
+
   it('treats a failed terminal progress event as failure and never starts teaching', async () => {
     rememberPendingRulebookLesson(localStorage, 'player', {
       versionId: 'version-1',

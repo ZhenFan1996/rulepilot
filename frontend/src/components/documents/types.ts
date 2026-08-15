@@ -67,6 +67,30 @@ export interface RulebookDiscoveryIdentity {
   language: string
 }
 
+export type RulebookDiscoveryCompletion = 'COMPLETE' | 'PARTIAL' | 'TIMED_OUT' | 'FAILED'
+
+export type RulebookDiscoveryProvider = 'CATALOG' | 'SOURCE_INSPECTION' | 'WEB_SEARCH'
+
+export type RulebookDiscoveryProviderState =
+  | 'FINISHED'
+  | 'TIMED_OUT'
+  | 'FAILED'
+  | 'SKIPPED'
+  | 'UNAVAILABLE'
+
+export interface RulebookDiscoveryProviderProgress {
+  provider: RulebookDiscoveryProvider
+  state: RulebookDiscoveryProviderState
+  elapsedMs: number
+}
+
+export interface RulebookDiscoverySummary {
+  completion: RulebookDiscoveryCompletion
+  elapsedMs: number
+  totalBudgetMs: number
+  providers: RulebookDiscoveryProviderProgress[]
+}
+
 export interface RulebookImportIdentitySource {
   edition: string
   language: string
@@ -105,11 +129,17 @@ export type RulebookDiscoveryStatus = 'idle' | 'loading' | 'success' | 'unavaila
 export interface RulebookDiscoveryCopy {
   action: string
   loading: string
+  elapsed: (seconds: number) => string
   title: string
   detail: string
   unavailable: string
   empty: string
   error: string
+  retrySearch: string
+  terminalTiming: (elapsedSeconds: number, budgetSeconds: number) => string
+  terminal: Record<Exclude<RulebookDiscoveryCompletion, 'COMPLETE'>, string>
+  providers: Record<RulebookDiscoveryProvider, string>
+  providerStates: Record<RulebookDiscoveryProviderState, string>
   sources: Record<RulebookCandidate['sourceType'], string>
   capabilities: Record<RulebookSourceCapability, string>
   noImportableTitle: string

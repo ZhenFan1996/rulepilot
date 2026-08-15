@@ -13,10 +13,12 @@ import com.rulepilot.document.application.OfficialRulebookDiscoveryService.Sourc
 import com.rulepilot.document.application.OfficialRulebookDiscoveryService.SourceType;
 import com.rulepilot.document.application.OfficialRulebookSourceInspector.PageSignal;
 import java.net.URI;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
 import org.junit.jupiter.api.Test;
 
 class OfficialRulebookDiscoveryServiceTest {
@@ -468,6 +470,182 @@ class OfficialRulebookDiscoveryServiceTest {
                     assertThat(candidate.sourceType()).isEqualTo(SourceType.COMMUNITY_PLATFORM);
                     assertThat(candidate.acquisitionMode()).isEqualTo(AcquisitionMode.DIRECT_PDF);
                 });
+    }
+
+    @Test
+    void sourceInspectionBudgetReturnsTheCandidateAsUnverifiedInsteadOfBlockingDiscovery() {
+        var releaseInspection = new CountDownLatch(1);
+        OfficialRulebookSourceInspector slowInspector = source -> {
+            awaitIgnoringInterrupt(releaseInspection);
+            return Optional.of(new OfficialRulebookSourceInspector.Inspection(
+                    source, OfficialRulebookSourceInspector.MediaType.PDF, List.of()));
+        };
+        GstoneRulebookCatalogLookup catalogLookup = request -> List.of(
+                new OfficialRulebookCandidateFinder.Candidate(
+                        "Opaque catalog entry",
+                        "https://catalog.example/item/42",
+                        "Opaque Studio",
+                        "en",
+                        "First"));
+        FakeFinder finder = new FakeFinder(List.of());
+        finder.configured = false;
+        var service = new OfficialRulebookDiscoveryService(
+                opaqueCatalog(),
+                opaqueSourceIdentity(),
+                finder,
+                catalogLookup,
+                slowInspector,
+                "",
+                Duration.ofMillis(100),
+                Duration.ofMillis(50),
+                Duration.ofMillis(100),
+                Duration.ofMillis(250));
+
+        OfficialRulebookDiscoveryService.Result result;
+        try {
+            result = service.discover(EDITION_ID, "en");
+        } finally {
+            releaseInspection.countDown();
+        }
+
+        assertThat(result.candidates())
+                .filteredOn(candidate -> candidate.url().equals("https://catalog.example/item/42"))
+                .singleElement()
+                .satisfies(candidate -> {
+                    assertThat(candidate.capability()).isEqualTo(SourceCapability.UNVERIFIED_PAGE);
+                    assertThat(candidate.capabilityEvidence())
+                            .containsExactly(CapabilityEvidence.SOURCE_PROBE_UNAVAILABLE);
+                });
+        assertThat(result.discovery().completion())
+                .isEqualTo(OfficialRulebookDiscoveryService.DiscoveryCompletion.PARTIAL);
+        assertThat(result.discovery().providers())
+                .filteredOn(provider -> provider.provider()
+                        == OfficialRulebookDiscoveryService.DiscoveryProvider.SOURCE_INSPECTION)
+                .singleElement()
+                .satisfies(provider -> assertThat(provider.state())
+                        .isEqualTo(OfficialRulebookDiscoveryService.DiscoveryProviderState.TIMED_OUT));
+    }
+
+    @Test
+    void returnsCompletedCatalogEvidenceWhenWebSearchExceedsItsProviderBudget() {
+        var releaseWebSearch = new CountDownLatch(1);
+        OfficialRulebookCandidateFinder slowFinder = new OfficialRulebookCandidateFinder() {
+            @Override
+            public boolean configured() {
+                return true;
+            }
+
+            @Override
+            public List<OfficialRulebookCandidateFinder.Candidate> find(Request request) {
+                awaitIgnoringInterrupt(releaseWebSearch);
+                return List.of();
+            }
+        };
+        GstoneRulebookCatalogLookup catalogLookup = request -> List.of(
+                new OfficialRulebookCandidateFinder.Candidate(
+                        "Opaque catalog entry",
+                        "https://catalog.example/files",
+                        "Opaque Studio",
+                        "en",
+                        "First",
+                        OfficialRulebookCandidateFinder.SourcePageHint.DOCUMENT_LISTING));
+        OfficialRulebookSourceInspector inspector = source -> Optional.of(
+                new OfficialRulebookSourceInspector.Inspection(
+                        source,
+                        OfficialRulebookSourceInspector.MediaType.HTML,
+                        List.of(),
+                        java.util.Set.of(PageSignal.DOWNLOADABLE_DOCUMENT_LINKS)));
+        var service = new OfficialRulebookDiscoveryService(
+                opaqueCatalog(),
+                opaqueSourceIdentity(),
+                slowFinder,
+                catalogLookup,
+                inspector,
+                "",
+                Duration.ofMillis(100),
+                Duration.ofMillis(100),
+                Duration.ofMillis(50),
+                Duration.ofMillis(250));
+
+        OfficialRulebookDiscoveryService.Result result;
+        long started = System.nanoTime();
+        try {
+            result = service.discover(EDITION_ID, "en");
+        } finally {
+            releaseWebSearch.countDown();
+        }
+        long elapsedMillis = Duration.ofNanos(System.nanoTime() - started).toMillis();
+
+        assertThat(elapsedMillis).isLessThan(1_000);
+        assertThat(result.candidates())
+                .filteredOn(candidate -> candidate.url().equals("https://catalog.example/files"))
+                .singleElement()
+                .satisfies(candidate -> assertThat(candidate.capability())
+                        .isEqualTo(SourceCapability.DOCUMENT_LISTING));
+        assertThat(result.discovery().completion())
+                .isEqualTo(OfficialRulebookDiscoveryService.DiscoveryCompletion.PARTIAL);
+        assertThat(result.discovery().providers())
+                .filteredOn(provider -> provider.provider()
+                        == OfficialRulebookDiscoveryService.DiscoveryProvider.WEB_SEARCH)
+                .singleElement()
+                .satisfies(provider -> assertThat(provider.state())
+                        .isEqualTo(OfficialRulebookDiscoveryService.DiscoveryProviderState.TIMED_OUT));
+    }
+
+    @Test
+    void totalBudgetStopsASlowFirstProviderEvenWhenItsOwnBudgetIsLarger() {
+        var releaseCatalog = new CountDownLatch(1);
+        GstoneRulebookCatalogLookup slowCatalog = request -> {
+            awaitIgnoringInterrupt(releaseCatalog);
+            return List.of();
+        };
+        FakeFinder finder = new FakeFinder(List.of());
+        finder.configured = false;
+        var service = new OfficialRulebookDiscoveryService(
+                opaqueCatalog(),
+                opaqueSourceIdentity(),
+                finder,
+                slowCatalog,
+                emptyInspector(),
+                "",
+                Duration.ofMillis(500),
+                Duration.ofMillis(500),
+                Duration.ofMillis(500),
+                Duration.ofMillis(75));
+
+        OfficialRulebookDiscoveryService.Result result;
+        long started = System.nanoTime();
+        try {
+            result = service.discover(EDITION_ID, "en");
+        } finally {
+            releaseCatalog.countDown();
+        }
+        long elapsedMillis = Duration.ofNanos(System.nanoTime() - started).toMillis();
+
+        assertThat(elapsedMillis).isLessThan(1_000);
+        assertThat(result.discovery().completion())
+                .isEqualTo(OfficialRulebookDiscoveryService.DiscoveryCompletion.TIMED_OUT);
+        assertThat(result.discovery().elapsedMs()).isLessThan(1_000);
+        assertThat(result.discovery().providers())
+                .filteredOn(provider -> provider.provider()
+                        == OfficialRulebookDiscoveryService.DiscoveryProvider.CATALOG)
+                .singleElement()
+                .satisfies(provider -> assertThat(provider.state())
+                        .isEqualTo(OfficialRulebookDiscoveryService.DiscoveryProviderState.TIMED_OUT));
+        assertThat(finder.calls).isZero();
+    }
+
+    private static void awaitIgnoringInterrupt(CountDownLatch latch) {
+        boolean interrupted = false;
+        while (true) {
+            try {
+                latch.await();
+                break;
+            } catch (InterruptedException exception) {
+                interrupted = true;
+            }
+        }
+        if (interrupted) Thread.currentThread().interrupt();
     }
 
     private CatalogGamePresentationLookup catalog() {

@@ -7,6 +7,7 @@ import type {
   RulebookCandidate,
   RulebookDiscoveryCopy,
   RulebookDiscoveryStatus,
+  RulebookDiscoverySummary,
   SelectedEditionContext,
 } from './types'
 
@@ -14,6 +15,8 @@ const props = defineProps<{
   selectedEdition: SelectedEditionContext | null
   status: RulebookDiscoveryStatus
   candidates: RulebookCandidate[]
+  elapsedSeconds: number
+  discoverySummary: RulebookDiscoverySummary | null
   copy: RulebookDiscoveryCopy
 }>()
 
@@ -26,6 +29,19 @@ const { locale, t } = useLocale()
 const hasImportableCandidate = computed(() => props.candidates.some(isImportable))
 const sourceCandidates = computed(() => props.candidates.filter(candidate => candidate.capability !== 'GAME_INFO_ONLY'))
 const identityCandidates = computed(() => props.candidates.filter(candidate => candidate.capability === 'GAME_INFO_ONLY'))
+const terminalNotice = computed(() => {
+  const summary = props.discoverySummary
+  if (!summary || summary.completion === 'COMPLETE') return ''
+  return props.copy.terminal[summary.completion]
+})
+const terminalTiming = computed(() => {
+  const summary = props.discoverySummary
+  if (!summary) return ''
+  return props.copy.terminalTiming(
+    Math.max(1, Math.ceil(summary.elapsedMs / 1_000)),
+    Math.max(1, Math.ceil(summary.totalBudgetMs / 1_000)),
+  )
+})
 
 function isImportable(candidate: RulebookCandidate) {
   return candidate.capability === 'DIRECT_DOCUMENT' && candidate.acquisitionMode === 'DIRECT_PDF'
@@ -83,7 +99,7 @@ function candidateLanguage(candidate: RulebookCandidate) {
       class="min-h-11 rounded-xl bg-indigo px-5 text-sm font-semibold text-white disabled:opacity-50"
       @click="emit('discover')"
     >
-      {{ status === 'loading' ? copy.loading : copy.action }}
+      {{ status === 'loading' ? `${copy.loading} · ${copy.elapsed(elapsedSeconds)}` : copy.action }}
     </button>
     <ol
       v-if="status === 'loading'"
@@ -102,6 +118,19 @@ function candidateLanguage(candidate: RulebookCandidate) {
     >
       <h2 class="font-display text-xl font-semibold">{{ hasImportableCandidate ? copy.title : copy.noImportableTitle }}</h2>
       <p class="mt-1 text-xs leading-5 text-ink/50">{{ hasImportableCandidate ? copy.detail : copy.noImportableDetail }}</p>
+      <div
+        v-if="terminalNotice && discoverySummary"
+        data-testid="rulebook-discovery-summary"
+        class="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-950"
+        role="status"
+      >
+        <p>{{ terminalNotice }} {{ terminalTiming }}</p>
+        <ul class="mt-2 flex flex-wrap gap-x-4 gap-y-1">
+          <li v-for="provider in discoverySummary.providers" :key="provider.provider">
+            {{ copy.providers[provider.provider] }}: {{ copy.providerStates[provider.state] }}
+          </li>
+        </ul>
+      </div>
       <ul v-if="sourceCandidates.length" class="mt-4 stack-y-md">
         <li v-for="candidate in sourceCandidates" :key="candidate.url" :data-capability="candidate.capability" class="rounded-lg border border-ink/10 bg-canvas p-4">
           <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -131,11 +160,19 @@ function candidateLanguage(candidate: RulebookCandidate) {
         </li>
       </ul>
       <p v-else-if="!candidates.length" class="mt-4 text-sm text-ink/55">{{ copy.empty }}</p>
-      <a
-        v-if="!hasImportableCandidate"
-        href="#rulebook-file"
-        class="mt-4 inline-flex min-h-11 items-center text-sm font-semibold text-indigo underline underline-offset-2"
-      >{{ copy.localUpload }}</a>
+      <div v-if="!hasImportableCandidate" class="mt-4 flex flex-wrap gap-x-4 gap-y-2">
+        <button
+          type="button"
+          class="inline-flex min-h-11 items-center text-sm font-semibold text-indigo underline underline-offset-2"
+          @click="emit('discover')"
+        >
+          {{ copy.retrySearch }}
+        </button>
+        <a
+          href="#rulebook-file"
+          class="inline-flex min-h-11 items-center text-sm font-semibold text-indigo underline underline-offset-2"
+        >{{ copy.localUpload }}</a>
+      </div>
       <section v-if="identityCandidates.length" class="mt-5 border-t border-ink/10 pt-4" :aria-label="copy.identityOnlyTitle">
         <h3 class="text-sm font-semibold text-ink/70">{{ copy.identityOnlyTitle }}</h3>
         <p class="mt-1 text-xs leading-5 text-ink/50">{{ copy.identityOnlyDetail }}</p>
@@ -148,12 +185,24 @@ function candidateLanguage(candidate: RulebookCandidate) {
         </ul>
       </section>
     </section>
-    <p
-      v-else-if="status === 'unavailable'"
+    <div
+      v-else-if="status === 'unavailable' || status === 'error'"
       class="mt-3 rounded-lg bg-amber-50 px-4 py-3 text-sm text-amber-900"
       role="status"
     >
-      {{ copy.unavailable }}
-    </p>
+      <p>{{ status === 'unavailable' ? copy.unavailable : copy.error }}</p>
+      <div v-if="terminalNotice && discoverySummary" data-testid="rulebook-discovery-summary" class="mt-2 text-xs leading-5">
+        <p>{{ terminalNotice }} {{ terminalTiming }}</p>
+        <ul class="mt-2 flex flex-wrap gap-x-4 gap-y-1">
+          <li v-for="provider in discoverySummary.providers" :key="provider.provider">
+            {{ copy.providers[provider.provider] }}: {{ copy.providerStates[provider.state] }}
+          </li>
+        </ul>
+      </div>
+      <div class="mt-3 flex flex-wrap gap-x-4 gap-y-2">
+        <button type="button" class="inline-flex min-h-11 items-center font-semibold text-indigo underline" @click="emit('discover')">{{ copy.retrySearch }}</button>
+        <a href="#rulebook-file" class="inline-flex min-h-11 items-center font-semibold text-indigo underline">{{ copy.localUpload }}</a>
+      </div>
+    </div>
   </div>
 </template>

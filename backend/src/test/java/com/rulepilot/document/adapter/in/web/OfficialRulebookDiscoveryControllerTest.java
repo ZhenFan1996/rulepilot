@@ -33,7 +33,24 @@ class OfficialRulebookDiscoveryControllerTest {
                         OfficialRulebookDiscoveryService.AcquisitionMode.DIRECT_PDF,
                         OfficialRulebookDiscoveryService.SourceCapability.DIRECT_DOCUMENT,
                         List.of(OfficialRulebookDiscoveryService.CapabilityEvidence.DOCUMENT_RESPONSE_CONFIRMED),
-                        Instant.parse("2026-08-15T12:00:00Z")))));
+                        Instant.parse("2026-08-15T12:00:00Z"))),
+                new OfficialRulebookDiscoveryService.DiscoverySummary(
+                        OfficialRulebookDiscoveryService.DiscoveryCompletion.PARTIAL,
+                        12_345,
+                        30_000,
+                        List.of(
+                                new OfficialRulebookDiscoveryService.ProviderProgress(
+                                        OfficialRulebookDiscoveryService.DiscoveryProvider.CATALOG,
+                                        OfficialRulebookDiscoveryService.DiscoveryProviderState.FINISHED,
+                                        1_200),
+                                new OfficialRulebookDiscoveryService.ProviderProgress(
+                                        OfficialRulebookDiscoveryService.DiscoveryProvider.SOURCE_INSPECTION,
+                                        OfficialRulebookDiscoveryService.DiscoveryProviderState.SKIPPED,
+                                        0),
+                                new OfficialRulebookDiscoveryService.ProviderProgress(
+                                        OfficialRulebookDiscoveryService.DiscoveryProvider.WEB_SEARCH,
+                                        OfficialRulebookDiscoveryService.DiscoveryProviderState.TIMED_OUT,
+                                        11_000)))));
 
         var response = new OfficialRulebookDiscoveryController(discovery).discover(editionId, "en");
 
@@ -58,6 +75,18 @@ class OfficialRulebookDiscoveryControllerTest {
             assertThat(candidate.capabilityCheckedAt()).isEqualTo(Instant.parse("2026-08-15T12:00:00Z"));
             assertThat(candidate.nextAction())
                     .isEqualTo(OfficialRulebookDiscoveryService.SourceAction.IMPORT_DOCUMENT);
+        });
+        assertThat(response.discovery()).satisfies(summary -> {
+            assertThat(summary.completion())
+                    .isEqualTo(OfficialRulebookDiscoveryService.DiscoveryCompletion.PARTIAL);
+            assertThat(summary.elapsedMs()).isEqualTo(12_345);
+            assertThat(summary.totalBudgetMs()).isEqualTo(30_000);
+            assertThat(summary.providers())
+                    .extracting(OfficialRulebookDiscoveryController.ProviderProgressResponse::provider)
+                    .containsExactly(
+                            OfficialRulebookDiscoveryService.DiscoveryProvider.CATALOG,
+                            OfficialRulebookDiscoveryService.DiscoveryProvider.SOURCE_INSPECTION,
+                            OfficialRulebookDiscoveryService.DiscoveryProvider.WEB_SEARCH);
         });
     }
 }

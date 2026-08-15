@@ -20,6 +20,7 @@ import type {
   RulebookDiscoveryIdentity,
   RulebookDiscoveryCopy,
   RulebookDiscoveryStatus,
+  RulebookDiscoverySummary,
 } from '@/components/documents/types'
 import { notifyLoginRequired } from '@/lib/authSession'
 import {
@@ -34,6 +35,10 @@ import {
 } from '@/lib/pendingRulebookLesson'
 import { useLocale } from '@/lib/locale'
 import { playerFacingLanguageName } from '@/lib/playerFacingLanguage'
+import {
+  monotonicElapsedSeconds,
+  normalizeRulebookDiscoverySummary,
+} from '@/lib/rulebookDiscovery'
 import { notifyTeachingLaunched, type TeachingLaunch } from '@/lib/teachingLaunch'
 
 interface CsrfResponse { headerName: string; token: string }
@@ -42,6 +47,7 @@ interface RulebookCandidateResponse {
   configured: boolean
   identity: RulebookDiscoveryIdentity
   candidates: RulebookCandidate[]
+  discovery?: unknown
 }
 interface RulebookIdentityProblem { code?: string }
 interface TeachingPlanResponse { id: string; documentVersionId: string }
@@ -95,6 +101,8 @@ const rulebookDiscoveryIdentity = ref<RulebookDiscoveryIdentity | null>(null)
 const selectedRulebookCandidate = ref<RulebookCandidate | null>(null)
 const selectedRulebookDiscoveryIdentity = ref<RulebookDiscoveryIdentity | null>(null)
 const rulebookDiscoveryStatus = ref<RulebookDiscoveryStatus>('idle')
+const rulebookDiscoveryElapsedSeconds = ref(0)
+const rulebookDiscoverySummary = ref<RulebookDiscoverySummary | null>(null)
 const uploadPanel = ref<RulebookUploadPanelHandle | null>(null)
 const file = ref<File | null>(null)
 const photographedPages = ref<PhotographedPage[]>([])
@@ -187,6 +195,9 @@ let activePreparationController: AbortController | null = null
 let preparationPollTimer: ReturnType<typeof setTimeout> | null = null
 let resolvePreparationDelay: ((current: boolean) => void) | null = null
 let preparationClock: ReturnType<typeof setInterval> | null = null
+let rulebookDiscoveryRequest = 0
+let rulebookDiscoveryClock: ReturnType<typeof setInterval> | null = null
+let rulebookDiscoveryStartedAt: number | null = null
 let photographedPageSequence = 0
 
 const editionOptions = computed(() => games.value.flatMap((entry) => entry.editions.map((edition) => ({
@@ -227,10 +238,20 @@ const officialImportDiscoveryIdentity = computed(() => (
 ))
 const rulebookDiscoveryCopy = computed<RulebookDiscoveryCopy>(() => locale.value === 'zh-CN' ? {
   action: '帮我找规则书', loading: '正在检索多个可信来源…', title: '找到这些规则书来源',
+  elapsed: (seconds: number) => `已等待 ${seconds} 秒`,
   detail: '会优先找出版社，也会补查 BGG、集石与可信规则库。来源页会在新窗口打开；PDF 直链和已识别的连续规则页图片都可以在确认后导入。',
-  unavailable: '当前模型未开启联网搜索。你仍可粘贴公开 PDF 链接或上传本地文件。',
+  unavailable: '当前没有找到可审阅的规则书来源。你仍可继续查找、粘贴公开 PDF 链接或上传本地文件。',
   empty: '没有找到可信的规则书来源。请改用公开链接或本地上传。',
   error: '规则书搜索暂时不可用，手动入口仍可使用。',
+  retrySearch: '继续查找',
+  terminalTiming: (elapsed: number, budget: number) => `本次检索用时 ${elapsed} 秒，最长预算 ${budget} 秒。`,
+  terminal: {
+    PARTIAL: '部分来源未在本次预算内完成；下面只保留已经核验的结果。',
+    TIMED_OUT: '本次检索已到达时间预算，尚未找到可审阅结果。',
+    FAILED: '部分来源检索失败，尚未找到可审阅结果。',
+  },
+  providers: { CATALOG: '规则书目录', SOURCE_INSPECTION: '来源核验', WEB_SEARCH: '联网搜索' },
+  providerStates: { FINISHED: '已完成', TIMED_OUT: '已超时', FAILED: '失败', SKIPPED: '未使用', UNAVAILABLE: '未配置' },
   sources: { PUBLISHER: '出版社 / 权利方来源', TRUSTED_REPOSITORY: '可信规则库', COMMUNITY_PLATFORM: '社区规则书来源（如 BGG / 集石）', PUBLIC_WEB: '公开来源（请重点核对）' },
   capabilities: { DIRECT_DOCUMENT: '已核验为可下载文档', CONTIGUOUS_RULE_PAGES: '已核验为连续规则页', DOCUMENT_LISTING: '仅确认是文档列表页', GAME_INFO_ONLY: '仅有桌游信息，没有规则书文件', UNVERIFIED_PAGE: '尚未核验出可导入文档' },
   noImportableTitle: '暂未找到可直接导入的规则书', noImportableDetail: '这些结果只能用于继续查找或核对桌游信息；你也可以直接上传本地规则书。',
@@ -241,10 +262,20 @@ const rulebookDiscoveryCopy = computed<RulebookDiscoveryCopy>(() => locale.value
   searchSteps: ['核对 BGG 身份与版本', '搜索出版社、发行方与本地化方', '补查 BGG、集石和可信规则库'],
 } : {
   action: 'Find a rulebook', loading: 'Searching multiple trusted sources…', title: 'Rulebook sources found',
+  elapsed: (seconds: number) => `${seconds}s elapsed`,
   detail: 'Publisher sources come first, followed by BGG, Gstone, and trusted repositories. Source pages open separately; direct PDFs and recognized ordered page-image documents can be imported after confirmation.',
-  unavailable: 'Web search is not enabled for the current model. You can still paste a public PDF URL or upload a local file.',
+  unavailable: 'No reviewable rulebook source was found. Search again, paste a public PDF URL, or upload a local file.',
   empty: 'No credible rulebook source was found. Use a public URL or local upload instead.',
   error: 'Rulebook search is temporarily unavailable. Manual options still work.',
+  retrySearch: 'Search again',
+  terminalTiming: (elapsed: number, budget: number) => `Search finished in ${elapsed}s with a ${budget}s maximum budget.`,
+  terminal: {
+    PARTIAL: 'Some sources did not finish within this search budget. Only verified results are shown below.',
+    TIMED_OUT: 'This search reached its time budget without a reviewable result.',
+    FAILED: 'Some source checks failed and no reviewable result is available yet.',
+  },
+  providers: { CATALOG: 'Rulebook catalog', SOURCE_INSPECTION: 'Source verification', WEB_SEARCH: 'Web search' },
+  providerStates: { FINISHED: 'finished', TIMED_OUT: 'timed out', FAILED: 'failed', SKIPPED: 'not needed', UNAVAILABLE: 'not configured' },
   sources: { PUBLISHER: 'Publisher / rights-holder', TRUSTED_REPOSITORY: 'Trusted rules repository', COMMUNITY_PLATFORM: 'Community rulebook source (such as BGG / Gstone)', PUBLIC_WEB: 'Public source (review carefully)' },
   capabilities: { DIRECT_DOCUMENT: 'Confirmed downloadable document', CONTIGUOUS_RULE_PAGES: 'Confirmed ordered rule pages', DOCUMENT_LISTING: 'Document listing only', GAME_INFO_ONLY: 'Game information only; no rulebook file', UNVERIFIED_PAGE: 'No importable document verified' },
   noImportableTitle: 'No directly importable rulebook yet', noImportableDetail: 'These results can only continue the search or confirm game identity. You can also upload a local rulebook.',
@@ -516,23 +547,51 @@ async function loadDocuments(signal?: AbortSignal) {
 
 async function discoverOfficialRulebooks() {
   if (!editionId.value) return
+  const request = ++rulebookDiscoveryRequest
   const requestedEditionId = editionId.value
   rulebookDiscoveryStatus.value = 'loading'
+  rulebookDiscoverySummary.value = null
   rulebookCandidates.value = []
   rulebookDiscoveryIdentity.value = null
+  startRulebookDiscoveryClock()
   try {
     const parameters = new URLSearchParams({ editionId: requestedEditionId, language: locale.value })
     const response = await checkedFetch(`/api/v1/documents/rulebook-candidates?${parameters.toString()}`)
     if (!response.ok) throw new Error(rulebookDiscoveryCopy.value.error)
     const result = await response.json() as RulebookCandidateResponse
-    if (editionId.value !== requestedEditionId || result.identity?.editionId !== requestedEditionId) return
+    if (request !== rulebookDiscoveryRequest
+      || editionId.value !== requestedEditionId
+      || result.identity?.editionId !== requestedEditionId) return
     rulebookDiscoveryIdentity.value = result.identity
     rulebookCandidates.value = result.candidates
+    rulebookDiscoverySummary.value = normalizeRulebookDiscoverySummary(result.discovery)
     rulebookDiscoveryStatus.value = result.configured ? 'success' : 'unavailable'
   } catch (error) {
+    if (request !== rulebookDiscoveryRequest) return
     errorMessage.value = error instanceof Error ? error.message : rulebookDiscoveryCopy.value.error
     rulebookDiscoveryStatus.value = 'error'
+  } finally {
+    if (request === rulebookDiscoveryRequest) stopRulebookDiscoveryClock(true)
   }
+}
+
+function startRulebookDiscoveryClock() {
+  stopRulebookDiscoveryClock(false)
+  rulebookDiscoveryElapsedSeconds.value = 0
+  rulebookDiscoveryStartedAt = performance.now()
+  rulebookDiscoveryClock = setInterval(updateRulebookDiscoveryElapsed, 1_000)
+}
+
+function updateRulebookDiscoveryElapsed() {
+  if (rulebookDiscoveryStartedAt === null) return
+  rulebookDiscoveryElapsedSeconds.value = monotonicElapsedSeconds(rulebookDiscoveryStartedAt)
+}
+
+function stopRulebookDiscoveryClock(updateElapsed: boolean) {
+  if (updateElapsed) updateRulebookDiscoveryElapsed()
+  if (rulebookDiscoveryClock !== null) clearInterval(rulebookDiscoveryClock)
+  rulebookDiscoveryClock = null
+  rulebookDiscoveryStartedAt = null
 }
 
 function chooseRulebookCandidate(candidate: RulebookCandidate) {
@@ -1794,6 +1853,13 @@ watch(routeImportJobId, () => {
 })
 watch(editionId, () => {
   officialImportIdentityConfirmed.value = false
+  rulebookDiscoveryRequest += 1
+  stopRulebookDiscoveryClock(false)
+  rulebookDiscoveryElapsedSeconds.value = 0
+  rulebookDiscoverySummary.value = null
+  rulebookDiscoveryIdentity.value = null
+  rulebookCandidates.value = []
+  rulebookDiscoveryStatus.value = 'idle'
 })
 watch(officialSourceUrl, (value) => {
   officialImportIdentityConfirmed.value = false
@@ -1804,6 +1870,8 @@ watch(officialSourceUrl, (value) => {
 })
 onBeforeUnmount(() => {
   disposed = true
+  rulebookDiscoveryRequest += 1
+  stopRulebookDiscoveryClock(false)
   latestInitialLoad++
   activeInitialController?.abort()
   activeInitialController = null
@@ -1838,6 +1906,8 @@ onBeforeUnmount(() => {
           :selected-edition="selectedEditionContext"
           :status="rulebookDiscoveryStatus"
           :candidates="rulebookCandidates"
+          :elapsed-seconds="rulebookDiscoveryElapsedSeconds"
+          :discovery-summary="rulebookDiscoverySummary"
           :copy="rulebookDiscoveryCopy"
           @discover="discoverOfficialRulebooks"
           @choose="chooseRulebookCandidate"
