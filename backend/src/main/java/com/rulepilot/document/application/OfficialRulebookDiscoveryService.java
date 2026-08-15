@@ -121,31 +121,6 @@ public class OfficialRulebookDiscoveryService {
                 Duration.ofSeconds(30));
     }
 
-    OfficialRulebookDiscoveryService(
-            CatalogGamePresentationLookup catalog,
-            CatalogGameSourceIdentityLookup sourceIdentities,
-            OfficialRulebookCandidateFinder finder,
-            GstoneRulebookCatalogLookup gstoneCatalog,
-            OfficialRulebookSourceInspector sourceInspector,
-            String trustedDomains,
-            Duration catalogProviderBudget,
-            Duration sourceInspectionProviderBudget,
-            Duration webSearchProviderBudget,
-            Duration totalBudget) {
-        this(
-                catalog,
-                sourceIdentities,
-                finder,
-                gstoneCatalog,
-                sourceInspector,
-                trustedDomains,
-                catalogProviderBudget,
-                sourceInspectionProviderBudget,
-                webSearchProviderBudget,
-                totalBudget,
-                Clock.systemUTC());
-    }
-
     private OfficialRulebookDiscoveryService(
             CatalogGamePresentationLookup catalog,
             CatalogGameSourceIdentityLookup sourceIdentities,
