@@ -124,7 +124,8 @@ describe('RecommendationRulebookHandoff', () => {
           title: 'Wingspan Rulebook',
           url: 'https://publisher.example/files/wingspan-rulebook.pdf',
           publisher: 'Stonemaier Games',
-          language: 'English',
+          language: 'en',
+          languageVerified: true,
           edition: 'Base game',
           sourceDomain: 'publisher.example',
           officialDomainVerified: true,
@@ -170,7 +171,7 @@ describe('RecommendationRulebookHandoff', () => {
 
     expect(wrapper.text()).toContain('已选《展翅翱翔》')
     expect(wrapper.text()).toContain('Wingspan Rulebook')
-    expect(wrapper.text()).toContain('English')
+    expect(wrapper.text()).toContain('英文（来源已明确标注）')
     expect(wrapper.text()).toContain('出版社 / 权利方来源')
     expect(requests.find(request => request.path === '/api/v1/bgg/games/266192/import')?.options).toMatchObject({
       method: 'POST',
@@ -203,6 +204,7 @@ describe('RecommendationRulebookHandoff', () => {
       rightsConfirmed: true,
       startTeaching: true,
       learningGoal: null,
+      confirmedSourceLanguage: 'en',
     })
     expect(readPendingRulebookLessons(localStorage, 'player')).toEqual([])
     expect(backgroundWorkChanged).toHaveBeenCalledTimes(1)
@@ -273,12 +275,14 @@ describe('RecommendationRulebookHandoff', () => {
     await flushPromises()
 
     const request = requests.find(candidate => candidate.path === '/api/v1/documents/official-imports')
-    expect(JSON.parse(String(request?.options?.body))).toMatchObject({
+    const requestBody = JSON.parse(String(request?.options?.body)) as Record<string, unknown>
+    expect(requestBody).toMatchObject({
       title: '官方规则书',
       officialSourceUrl: 'https://www.gstonegames.com/game/doc-1234.html',
       rightsConfirmed: true,
       startTeaching: true,
     })
+    expect(requestBody).not.toHaveProperty('confirmedSourceLanguage')
     await vi.waitFor(() => expect(wrapper.text()).toContain('完整讲解已经生成'))
   })
 

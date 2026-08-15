@@ -150,7 +150,7 @@ public class RulebookIconGlossaryService {
         return GlossaryStatus.PARTIAL;
     }
 
-    private static PageFact withGroundedIconEvidence(PageFact fact, String sourcePageText) {
+    static PageFact withGroundedIconEvidence(PageFact fact, String sourcePageText) {
         return new PageFact(
                 fact.pageNumber(),
                 fact.printedTerms(),
@@ -159,7 +159,10 @@ public class RulebookIconGlossaryService {
                 fact.visualAnchors(),
                 IconEvidencePolicy.sanitize(fact.iconOccurrences(), sourcePageText),
                 fact.iconInventoryComplete(),
-                fact.schemaVersion());
+                fact.schemaVersion(),
+                fact.sourceDependencies(),
+                fact.ruleGroupIdentifiers(),
+                fact.ruleGroupInventoryComplete());
     }
 
     private IconCrop crop(TeachingPlan plan, UUID occurrenceId) {

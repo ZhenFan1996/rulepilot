@@ -8,8 +8,10 @@ import com.rulepilot.document.DocumentProcessing;
 import com.rulepilot.document.DocumentVersionScopeLookup;
 import com.rulepilot.document.RulebookTitleInferencePolicy;
 import com.rulepilot.teaching.TeachingOutlineModel;
+import com.rulepilot.teaching.TeachingOutlineModel.OutlineGenerationException;
 import com.rulepilot.teaching.TeachingOutlineModel.OutlineRequest;
 import com.rulepilot.teaching.TeachingOutlineModel.PageInput;
+import com.rulepilot.teaching.VisualSourceRuleGroupLedger;
 import com.rulepilot.teaching.VisualRulebookPageFacts.PageFact;
 import com.rulepilot.teaching.domain.TeachingPlan;
 import java.util.List;
@@ -119,16 +121,13 @@ public class TeachingPlanService {
                         .toList();
         var initialOutlineRequest = new OutlineRequest(
                 pages, List.of(), learningGoal, createdBy);
-        var outline = preferDocumentTitle(
+        var outline = organizeInitialOutline(
+                visualOnly,
                 playerGameTitle,
-                VisualOutlineEvidencePolicy.bindIconLegendEvidence(invokeModel(
-                        assistantRunId,
-                        "organizeTeachingOutline",
-                        outlineInputTokens(pages),
-                        "Rulebook lesson topics organized",
-                        () -> outlines.organize(initialOutlineRequest),
-                        this::outlineOutputTokens), documentPages),
-                pages);
+                initialOutlineRequest,
+                pages,
+                documentPages,
+                assistantRunId);
         OutlineRequest outlineRequest = initialOutlineRequest;
         if (textRulebookVisualCatalogAvailable) {
             List<PageFact> coverageFacts = visualCataloger.inspectUnownedSparseVisualPages(
@@ -154,6 +153,9 @@ public class TeachingPlanService {
                 outlineRequest, outline, assistantRunId, documentPages, playerGameTitle);
         try {
             if (visualOnly) VisualOutlineEvidencePolicy.validateVisualFastBaseline(outline);
+            if (visualOnly || hasStructuredSourceDependencies(pages)) {
+                VisualOutlineEvidencePolicy.validateVisualSourceDependencies(outline, pages);
+            }
             plans.validate(outline);
             if (visualOnly) {
                 outline = VisualOutlineEvidencePolicy.bindVisualCoreTopicEvidence(outline, pages);
@@ -186,6 +188,7 @@ public class TeachingPlanService {
             outline = preferDocumentTitle(
                     playerGameTitle, VisualOutlineEvidencePolicy.bindIconLegendEvidence(
                             outlines.fallback(outlineRequest), documentPages), outlineRequest.pages());
+            VisualOutlineEvidencePolicy.validateVisualSourceDependencies(outline, pages);
             plans.validate(outline);
             if (visualOnly) {
                 outline = VisualOutlineEvidencePolicy.bindVisualCoreTopicEvidence(outline, pages);
@@ -197,46 +200,35 @@ public class TeachingPlanService {
                 VisualOutlineEvidencePolicy.validateVisualRulebookCoverage(outline, pages);
             } catch (IllegalArgumentException incompleteCoverage) {
                 log.warn(
-                        "Teaching outline omitted visual source pages; adding source-derived coverage: {}",
+                        "Teaching outline shortened the visual source ledger; using the complete source-derived outline: {}",
                         incompleteCoverage.getMessage());
                 if (assistantRunId != null) {
                     invocations.record(
                             assistantRunId,
                             ActivityType.VALIDATION,
-                            "augmentOutlineCoverageFromSource",
+                            "fallbackToCompleteSourceLedger",
                             ActivityOutcome.REJECTED,
-                            "Model outline omitted source pages; source-derived sections were added");
+                            "Model outline omitted a source page or rule group; the complete page-owned source ledger was retained");
                 }
-                var sourceOutline = preferDocumentTitle(
+                outline = preferDocumentTitle(
                         playerGameTitle, VisualOutlineEvidencePolicy.bindIconLegendEvidence(
                                 outlines.fallback(outlineRequest), documentPages), outlineRequest.pages());
-                outline = VisualOutlineEvidencePolicy.augmentVisualCoverage(outline, sourceOutline);
-                if (outline.topics().size() > 10) {
-                    outline = VisualOutlineEvidencePolicy.keepFastVisualBaseline(outline, sourceOutline);
-                    if (assistantRunId != null) {
-                        invocations.record(
-                                assistantRunId,
-                                ActivityType.VALIDATION,
-                                "compactVisualOutline",
-                                ActivityOutcome.REJECTED,
-                                "Page coverage made the model outline too fragmented; source-derived teaching groups were retained");
-                    }
-                }
                 log.info(
-                        "Using compact visual teaching outline for documentVersionId={}: {}",
+                        "Using complete source-ledger teaching outline for documentVersionId={}: {}",
                         documentVersionId,
                         outline.topics().stream()
                                 .map(topic -> topic.key() + "=" + topic.sourcePageNumbers()
                                         + " tags=" + topic.coverageTags())
                                 .toList());
                 outline = VisualOutlineEvidencePolicy.bindVisualCoreTopicEvidence(outline, pages);
-                // A direct core proof can replace the final source page in a bounded topic. Retain that displaced
-                // page as a small source-derived companion instead of silently weakening whole-rulebook coverage.
-                outline = VisualOutlineEvidencePolicy.augmentVisualCoverage(outline, sourceOutline);
+                VisualOutlineEvidencePolicy.validateVisualSourceDependencies(outline, pages);
                 plans.validate(outline);
                 VisualOutlineEvidencePolicy.validateVisualCoreTopicBindings(outline, pages);
                 VisualOutlineEvidencePolicy.validateVisualRulebookCoverage(outline, pages);
             }
+        }
+        if (visualOnly || hasStructuredSourceDependencies(pages)) {
+            VisualOutlineEvidencePolicy.validateVisualSourceDependencies(outline, pages);
         }
         if (visualOnly) validateVisualPageBindings(outline, documentPages);
         if (textRulebookVisualCatalogAvailable && assistantRunId != null) {
@@ -263,6 +255,65 @@ public class TeachingPlanService {
                 learningGoal,
                 createdBy,
                 outline), outline.gameTitle());
+    }
+
+    private static boolean hasStructuredSourceDependencies(List<PageInput> pages) {
+        return pages.stream().anyMatch(page -> !page.sourceDependencies().isEmpty());
+    }
+
+    private TeachingOutlineModel.OutlineDraft organizeInitialOutline(
+            boolean visualOnly,
+            String playerGameTitle,
+            OutlineRequest request,
+            List<PageInput> pages,
+            List<DocumentProcessing.PageView> documentPages,
+            UUID assistantRunId) {
+        TeachingOutlineModel.OutlineDraft organized;
+        try {
+            organized = invokeModel(
+                    assistantRunId,
+                    "organizeTeachingOutline",
+                    outlineInputTokens(pages),
+                    "Rulebook lesson topics organized",
+                    () -> outlines.organize(request),
+                    this::outlineOutputTokens);
+        } catch (OutlineGenerationException generationFailure) {
+            if (!visualOnly || !hasCompleteVisualSourceLedger(pages, documentPages)) throw generationFailure;
+            log.warn(
+                    "Visual semantic outline generation failed after a complete source ledger was built; "
+                            + "continuing with the deterministic source outline (failureType={})",
+                    generationFailure.getCause() == null
+                            ? generationFailure.getClass().getSimpleName()
+                            : generationFailure.getCause().getClass().getSimpleName());
+            if (assistantRunId != null) {
+                invocations.record(
+                        assistantRunId,
+                        ActivityType.VALIDATION,
+                        "fallbackFromVisualOutlineGenerationFailure",
+                        ActivityOutcome.REJECTED,
+                        "Semantic outline generation was unavailable; the complete page-owned source ledger was retained");
+            }
+            organized = outlines.fallback(request);
+        }
+        return preferDocumentTitle(
+                playerGameTitle,
+                VisualOutlineEvidencePolicy.bindIconLegendEvidence(organized, documentPages),
+                pages);
+    }
+
+    static boolean hasCompleteVisualSourceLedger(
+            List<PageInput> pages, List<DocumentProcessing.PageView> documentPages) {
+        if (pages == null || pages.isEmpty() || documentPages == null || documentPages.isEmpty()) return false;
+        Set<Integer> expectedPages = documentPages.stream()
+                .map(DocumentProcessing.PageView::pageNumber)
+                .collect(java.util.stream.Collectors.toUnmodifiableSet());
+        Set<Integer> catalogedPages = pages.stream()
+                .map(PageInput::pageNumber)
+                .collect(java.util.stream.Collectors.toUnmodifiableSet());
+        return pages.size() == documentPages.size()
+                && expectedPages.size() == documentPages.size()
+                && catalogedPages.equals(expectedPages)
+                && pages.stream().allMatch(VisualSourceRuleGroupLedger::hasCompleteExactFactLedger);
     }
 
     private TeachingOutlineModel.OutlineDraft refineChapterOwnership(

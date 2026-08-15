@@ -94,6 +94,60 @@ class AnswerEvidenceRetrieverTest {
                 assertThat(hit.evidence().excerpt()).contains("A-01 grants movement", "B#02 grants energy"));
     }
 
+    @Test
+    void usesDocumentPageFactsToRecoverAHeadedRuleWhenGenericTextRetrievalAnchorsTheWrongPage() {
+        HybridEvidenceHit wrongText = hit(
+                "ACTIONS",
+                "Exchange",
+                "Exchange two resources after choosing this action.",
+                6,
+                0.9);
+        List<String> visualQueries = new ArrayList<>();
+        VisualRulebookPageFactSearch facts = (documentVersionId, query, limit) -> {
+            visualQueries.add(query);
+            if (!query.toLowerCase().contains("recover")) return List.of();
+            return List.of(new VisualRulebookPageFactSearch.PageFactMatch(
+                    2,
+                    "RECOVER",
+                    "RECOVER returns every previously played action card to the player's hand.",
+                    List.of("RECOVER", "action cards"),
+                    1.0));
+        };
+        RuleEvidenceHit directRule = hit(
+                        "ACTIONS",
+                        "RECOVER",
+                        "Return every previously played action card to your hand.",
+                        2,
+                        0.8)
+                .evidence();
+        RuleEvidenceLookup lookup = new RuleEvidenceLookup() {
+            @Override
+            public List<RuleEvidenceHit> findByChunkIds(UUID documentVersionId, Set<UUID> chunkIds) {
+                return List.of();
+            }
+
+            @Override
+            public List<RuleEvidenceHit> findByPageNumbers(UUID documentVersionId, Set<Integer> pageNumbers) {
+                return pageNumbers.contains(2) ? List.of(directRule) : List.of();
+            }
+        };
+        AnswerEvidenceRetriever retriever = retriever(
+                (documentVersionId, query, options) -> List.of(wrongText), facts, lookup);
+
+        AnswerEvidenceRetriever.Result result = retriever.retrieve(
+                UUID.randomUUID(),
+                question("If I use RECOVER now, which played cards return to my hand?"),
+                context(),
+                "alice");
+
+        assertThat(visualQueries).isNotEmpty();
+        assertThat(result.evidence()).anySatisfy(hit -> {
+            assertThat(hit.evidence().pageFrom()).isEqualTo(2);
+            assertThat(hit.evidence().heading()).isEqualTo("RECOVER");
+            assertThat(hit.evidence().excerpt()).contains("every previously played action card");
+        });
+    }
+
     @ParameterizedTest
     @MethodSource("imageOnlyRuleQuestions")
     void fallsBackToPageScopedVisualTranscriptionForDifferentImageOnlyRulebooks(

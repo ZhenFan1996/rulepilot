@@ -4,6 +4,7 @@ import com.rulepilot.document.DocumentProcessing;
 import com.rulepilot.teaching.TeachingOutlineModel;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.ProgressiveTeachingStartDraft;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.SourceDependency;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.TeachingPageRole;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.TeachingPageSketch;
 import com.rulepilot.teaching.domain.TeachingPlan;
@@ -21,6 +22,7 @@ final class ProgressiveVisualTeachingPlanPolicy {
 
     private static final String TOPIC_PREFIX = "progressive-visual-page-";
     private static final Set<String> CORE_COVERAGE = Set.of("setup", "core_loop", "end", "scoring");
+    private static final Set<String> EARLY_JOURNEY_COVERAGE = Set.of("setup", "core_loop");
 
     private ProgressiveVisualTeachingPlanPolicy() {}
 
@@ -50,14 +52,19 @@ final class ProgressiveVisualTeachingPlanPolicy {
                 .sorted(Comparator.comparingInt(page -> sourceOrder.get(page.pageNumber())))
                 .forEach(ordered::add);
 
-        List<TeachingOutlineModel.TopicDraft> topics = java.util.stream.IntStream.range(0, ordered.size())
+        List<TeachingOutlineModel.TopicDraft> topics = new ArrayList<>(java.util.stream.IntStream.range(0, ordered.size())
                 .mapToObj(index -> topic(ordered.get(index), start.selectedPageFacts(), index == 0))
-                .toList();
+                .toList());
+        start.pages().stream()
+                .filter(page -> !page.sourceDependencies().isEmpty())
+                .sorted(Comparator.comparingInt(page -> sourceOrder.get(page.pageNumber())))
+                .map(ProgressiveVisualTeachingPlanPolicy::sourceDependencyTopic)
+                .forEach(topics::add);
         return new TeachingOutlineModel.OutlineDraft(
                 gameTitle,
                 "先发布一个有逐页证据的可读章节，再在后台按同一不可变计划补齐其余玩法页；"
                         + "每条规则仍需通过原页引用验证。",
-                topics);
+                List.copyOf(topics));
     }
 
     static boolean isProgressive(TeachingPlan plan) {
@@ -86,14 +93,62 @@ final class ProgressiveVisualTeachingPlanPolicy {
         if (selected.role() != TeachingPageRole.GAMEPLAY_RULES || selected.visibleTerms().isEmpty()) {
             throw new IllegalArgumentException("progressive visual teaching selected no verifiable gameplay page");
         }
+        boolean earlyJourneyPageAvailable = start.pages().stream()
+                .filter(page -> page.role() == TeachingPageRole.GAMEPLAY_RULES)
+                .flatMap(page -> page.coverageTags().stream())
+                .anyMatch(EARLY_JOURNEY_COVERAGE::contains);
+        boolean selectedSupportsEarlyJourney = selected.coverageTags().stream()
+                .anyMatch(EARLY_JOURNEY_COVERAGE::contains);
+        if (earlyJourneyPageAvailable && !selectedSupportsEarlyJourney) {
+            throw new IllegalArgumentException(
+                    "progressive visual teaching did not start from the visible early player journey");
+        }
+        if (start.pages().stream()
+                .filter(page -> page.role() == TeachingPageRole.GAMEPLAY_RULES)
+                .anyMatch(page -> !page.ruleGroupInventoryComplete())) {
+            throw new IllegalArgumentException(
+                    "progressive visual teaching did not inventory every visible gameplay rule group");
+        }
         validateSelectedFacts(start.selectedPageFacts());
         Set<String> covered = start.pages().stream()
                 .filter(page -> page.role() == TeachingPageRole.GAMEPLAY_RULES)
                 .flatMap(page -> page.coverageTags().stream())
                 .collect(Collectors.toSet());
-        if (!covered.containsAll(CORE_COVERAGE)) {
+        Set<String> explicitlyMissing = start.pages().stream()
+                .flatMap(page -> page.sourceDependencies().stream())
+                .flatMap(dependency -> dependency.missingCoverageTags().stream())
+                .collect(Collectors.toSet());
+        Set<String> accountedFor = new LinkedHashSet<>(covered);
+        accountedFor.addAll(explicitlyMissing);
+        if (!accountedFor.containsAll(CORE_COVERAGE)) {
             throw new IllegalArgumentException("progressive visual teaching did not locate every core learning obligation");
         }
+    }
+
+    private static TeachingOutlineModel.TopicDraft sourceDependencyTopic(TeachingPageSketch page) {
+        List<String> titles = page.sourceDependencies().stream()
+                .map(SourceDependency::title)
+                .distinct()
+                .toList();
+        LinkedHashSet<String> tags = new LinkedHashSet<>();
+        tags.add("source_dependency");
+        page.sourceDependencies().stream()
+                .flatMap(dependency -> dependency.missingCoverageTags().stream())
+                .map(tag -> "missing_" + tag + "_source")
+                .forEach(tags::add);
+        String joinedTitles = String.join("、", titles);
+        return new TeachingOutlineModel.TopicDraft(
+                TOPIC_PREFIX + "source-dependency-" + page.pageNumber(),
+                "当前规则书还需要的资料",
+                bounded(
+                        "第 " + page.pageNumber() + " 页只证明当前规则书要求另行查看“" + joinedTitles
+                                + "”；明确告诉玩家这份资料尚未导入，不能补写开局步骤、回合流程、结束或计分规则。",
+                        600),
+                true,
+                true,
+                titles,
+                List.copyOf(tags),
+                List.of(page.pageNumber()));
     }
 
     private static TeachingOutlineModel.TopicDraft topic(
@@ -121,7 +176,7 @@ final class ProgressiveVisualTeachingPlanPolicy {
                                 + " 页是否包含可验证的玩法规则；若页面证据仍不足，明确保留空缺。",
                 gameplay,
                 true,
-                queries.stream().map(value -> bounded(value, 300)).limit(4).toList(),
+                queries.stream().map(value -> bounded(value, 300)).limit(8).toList(),
                 List.copyOf(tags),
                 List.of(page.pageNumber()));
     }
@@ -141,7 +196,7 @@ final class ProgressiveVisualTeachingPlanPolicy {
                 .count();
         long factStatements = facts.factualSummary().lines()
                 .filter(statement -> !statement.isBlank())
-                .limit(6)
+                .limit(10)
                 .count();
         String defaultKeyword = "page " + facts.pageNumber();
         if (facts.printedTerms().equals("No legible printed term on this page.")
@@ -149,7 +204,7 @@ final class ProgressiveVisualTeachingPlanPolicy {
                 || facts.keywords().size() < 2
                 || facts.keywords().size() > 6
                 || facts.keywords().stream().anyMatch(keyword -> keyword.equalsIgnoreCase(defaultKeyword))
-                || factStatements > 4
+                || factStatements > 8
                 || factCharacters < 16) {
             throw new IllegalArgumentException("progressive visual teaching selected page facts are insufficient");
         }

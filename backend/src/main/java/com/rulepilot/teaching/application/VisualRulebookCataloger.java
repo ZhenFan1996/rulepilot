@@ -238,25 +238,33 @@ class VisualRulebookCataloger {
         List<PageFact> facts = cached.isEmpty()
                 ? VisualRulebookCatalogPolicy.mergeFreshFacts(cached, fresh)
                 : VisualRulebookCatalogPolicy.backfillAnchors(cached, fresh);
-        if (facts.isEmpty()) {
-            throw new IllegalArgumentException("visual rulebook catalog did not produce any reliable page facts");
-        }
         if (!fresh.isEmpty()) visualFacts.merge(documentVersionId, facts);
-        int unavailablePages = documentPages.size() - facts.size();
-        if (unavailablePages > 0) {
+        List<PageFact> completeTeachingFacts = facts.stream()
+                .filter(VisualRulebookCatalogPolicy::hasReusableCompleteRuleLedger)
+                .toList();
+        Set<Integer> completedPages = completeTeachingFacts.stream()
+                .map(PageFact::pageNumber)
+                .collect(Collectors.toSet());
+        List<Integer> unavailablePages = requestedPages.stream()
+                .filter(page -> !completedPages.contains(page))
+                .toList();
+        if (!unavailablePages.isEmpty()) {
             log.warn(
-                    "Visual catalog completed {} of {} pages for document {}; retaining {} source pages without visual claims",
-                    facts.size(), documentPages.size(), documentVersionId, unavailablePages);
+                    "Visual teaching inventory remained incomplete for document {} pages {}; rejecting preparation",
+                    documentVersionId,
+                    unavailablePages);
             if (assistantRunId != null) {
                 invocations.record(
                         assistantRunId,
                         ActivityType.VALIDATION,
-                        "retainPartialVisualCatalog",
+                        "rejectIncompleteVisualRuleGroupInventory",
                         ActivityOutcome.REJECTED,
-                        "Visual catalog was incomplete; completed facts are used and remaining source pages stay in the outline");
+                        "Teaching preparation stopped because one or more source pages lacked a complete rule-group inventory");
             }
+            throw new IllegalStateException(
+                    "visual rulebook rule-group inventory is incomplete; retry preparation");
         }
-        return VisualRulebookCatalogPolicy.pageInputs(documentPages, facts);
+        return VisualRulebookCatalogPolicy.pageInputs(documentPages, completeTeachingFacts);
     }
 
     List<PageFact> inspectUnownedSparseVisualPages(
@@ -271,7 +279,7 @@ class VisualRulebookCataloger {
         if (selected.isEmpty()) return List.of();
         List<PageFact> cached = visualFacts.find(documentVersionId, selected);
         Set<Integer> cachedPages = cached.stream()
-                .filter(fact -> fact.schemaVersion() == PageFact.CURRENT_SCHEMA_VERSION)
+                .filter(VisualRulebookCatalogPolicy::hasReusableCompleteRuleLedger)
                 .map(PageFact::pageNumber)
                 .collect(Collectors.toSet());
         Set<Integer> missing = selected.stream()
@@ -297,7 +305,7 @@ class VisualRulebookCataloger {
                     documentVersionId,
                     fresh.stream().map(PageFact::pageNumber).toList());
         }
-        return VisualRulebookCatalogPolicy.mergeFreshFacts(cached, fresh);
+        return VisualRulebookCatalogPolicy.backfillAnchors(cached, fresh);
     }
 
     /**
@@ -677,7 +685,12 @@ class VisualRulebookCataloger {
                         .map(VisualRulebookPageCatalogModel.IdentifierCellFact::factualSummary)
                         .distinct()
                         .collect(Collectors.joining("\n"));
-                String combined = mergeIdentifierFactsWithSharedRules(cellFacts, summary.factualSummary());
+                String combined = mergeIdentifierFactsWithSharedRules(
+                        cellFacts, summary.factualSummary(), summary.ruleGroupInventoryComplete());
+                if (summary.ruleGroupInventoryComplete()) {
+                    VisualRulebookCatalogPolicy.validateRuleGroupFactBindings(
+                            summary.ruleGroupIdentifiers(), combined);
+                }
                 enriched.add(new VisualRulebookPageCatalogModel.PageSummary(
                         summary.pageNumber(),
                         summary.printedTerms(),
@@ -685,7 +698,10 @@ class VisualRulebookCataloger {
                         summary.keywords(),
                         summary.visualAnchors(),
                         summary.iconOccurrences(),
-                        summary.iconInventoryComplete()));
+                        summary.iconInventoryComplete(),
+                        summary.sourceDependencies(),
+                        summary.ruleGroupIdentifiers(),
+                        summary.ruleGroupInventoryComplete()));
             } catch (RuntimeException failure) {
                 log.warn("Printed identifier cell enrichment skipped for page {}", summary.pageNumber(), failure);
                 enriched.add(summary);
@@ -725,10 +741,16 @@ class VisualRulebookCataloger {
                 .toList();
     }
 
-    static String mergeIdentifierFactsWithSharedRules(String identifierFacts, String pageSummary) {
+    static String mergeIdentifierFactsWithSharedRules(
+            String identifierFacts, String pageSummary, boolean preserveCompletePageFacts) {
         LinkedHashSet<String> blocks = new LinkedHashSet<>();
+        if (preserveCompletePageFacts && pageSummary != null && !pageSummary.isBlank()) {
+            blocks.add(pageSummary.strip());
+        }
         if (identifierFacts != null && !identifierFacts.isBlank()) blocks.add(identifierFacts.strip());
-        if (pageSummary != null && !pageSummary.isBlank()) blocks.add(pageSummary.strip());
+        if (!preserveCompletePageFacts && pageSummary != null && !pageSummary.isBlank()) {
+            blocks.add(pageSummary.strip());
+        }
         StringBuilder merged = new StringBuilder();
         for (String block : blocks) {
             int separator = merged.isEmpty() ? 0 : 1;
@@ -756,7 +778,7 @@ class VisualRulebookCataloger {
                 .map(VisualRulebookCataloger::pageSummary)
                 .forEach(summary -> accumulated.put(summary.pageNumber(), summary));
         observations.forEach(summary -> accumulated.merge(
-                summary.pageNumber(), summary, VisualRulebookCatalogPolicy::mergeIconTileAudit));
+                summary.pageNumber(), summary, VisualRulebookCatalogPolicy::mergePersistedPageObservation));
         visualFacts.merge(
                 documentVersionId,
                 accumulated.values().stream()
@@ -776,7 +798,10 @@ class VisualRulebookCataloger {
                 fact.keywords(),
                 fact.visualAnchors(),
                 fact.iconOccurrences(),
-                fact.iconInventoryComplete());
+                fact.iconInventoryComplete(),
+                fact.sourceDependencies(),
+                fact.ruleGroupIdentifiers(),
+                fact.ruleGroupInventoryComplete());
     }
 
     /**
@@ -1022,7 +1047,10 @@ class VisualRulebookCataloger {
                     summary.keywords(),
                     summary.visualAnchors(),
                     icons,
-                    summary.iconInventoryComplete());
+                    summary.iconInventoryComplete(),
+                    summary.sourceDependencies(),
+                    summary.ruleGroupIdentifiers(),
+                    summary.ruleGroupInventoryComplete());
         } catch (RuntimeException localizationFailure) {
             log.warn(
                     "Icon rectangle verification failed for rulebook page {} in document {}; keeping the page incomplete",
@@ -1174,7 +1202,10 @@ class VisualRulebookCataloger {
                 summary.keywords(),
                 summary.visualAnchors(),
                 List.of(),
-                false);
+                false,
+                summary.sourceDependencies(),
+                summary.ruleGroupIdentifiers(),
+                summary.ruleGroupInventoryComplete());
     }
 
     private VisualRulebookPageCatalogModel.CatalogDraft catalogBatch(
@@ -1261,6 +1292,7 @@ class VisualRulebookCataloger {
                 .mapToInt(page -> page.printedTerms().length()
                         + page.factualSummary().length()
                         + page.keywords().stream().mapToInt(String::length).sum()
+                        + page.ruleGroupIdentifiers().stream().mapToInt(String::length).sum()
                         + page.iconOccurrences().stream()
                                 .mapToInt(icon -> icon.name().length()
                                         + icon.visualDescription().length()
@@ -1278,7 +1310,11 @@ class VisualRulebookCataloger {
         characters += start.pages().stream()
                 .mapToInt(page -> page.visibleHeading().length()
                         + page.visibleTerms().stream().mapToInt(String::length).sum()
-                        + page.coverageTags().stream().mapToInt(String::length).sum())
+                        + page.coverageTags().stream().mapToInt(String::length).sum()
+                        + page.sourceDependencies().stream()
+                                .mapToInt(dependency -> dependency.title().length()
+                                        + dependency.missingCoverageTags().stream().mapToInt(String::length).sum())
+                                .sum())
                 .sum();
         return Math.max(1, characters / 4);
     }

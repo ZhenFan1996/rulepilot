@@ -409,8 +409,15 @@ class GroundedTeachingAgentTest {
                 return List.of(new PageFact(
                         4,
                         "Overpopulation: 3 of the same Wildlife Token",
-                        "3 个相同动物标记时，当前玩家可以清除这 3 个标记；每回合只能这样做一次。",
-                        List.of("Overpopulation", "Wildlife Token")));
+                        "OVERPOPULATION: 3 个相同动物标记时，当前玩家可以清除这 3 个标记；每回合只能这样做一次。",
+                        List.of("Overpopulation", "Wildlife Token"),
+                        List.of(),
+                        List.of(),
+                        false,
+                        PageFact.CURRENT_SCHEMA_VERSION,
+                        List.of(),
+                        List.of("OVERPOPULATION"),
+                        true));
             }
         };
         TeachingLessonModel model = request -> {
@@ -496,10 +503,15 @@ class GroundedTeachingAgentTest {
             return new VisualRulebookPageCatalogModel.CatalogDraft(List.of(new VisualRulebookPageCatalogModel.PageSummary(
                     14,
                     "KODORA; victory point token",
-                    "KODORA只能在至少拥有2个胜利点时使用；把2个胜利点放在KODORA上。",
+                    "KODORA USE: KODORA只能在至少拥有2个胜利点时使用；把2个胜利点放在KODORA上。",
                     List.of("KODORA", "victory point token"),
                     List.of(new VisualRulebookPageFacts.VisualAnchor(
-                            "worked example", "KODORA payment", "KODORA与两个胜利点标记。", 120, 220, 320, 280)))));
+                            "worked example", "KODORA payment", "KODORA与两个胜利点标记。", 120, 220, 320, 280)),
+                    List.of(),
+                    false,
+                    List.of(),
+                    List.of("KODORA USE"),
+                    true)));
         };
         TeachingLessonModel model = request -> {
             assertThat(request.evidence()).singleElement().extracting(TeachingLessonModel.EvidenceInput::excerpt)
@@ -779,8 +791,29 @@ class GroundedTeachingAgentTest {
         storedFacts.put(2, new VisualRulebookPageFacts.PageFact(
                 2,
                 "TAKE TWO CARDS",
-                "当前玩家从同一列拿取两张可见卡牌，然后结束本回合。",
-                List.of("TAKE TWO CARDS", "turn")));
+                "TAKE TWO CARDS: 当前玩家从同一列拿取两张可见卡牌，然后结束本回合。",
+                List.of("TAKE TWO CARDS", "turn"),
+                List.of(),
+                List.of(),
+                false,
+                VisualRulebookPageFacts.PageFact.CURRENT_SCHEMA_VERSION,
+                List.of(),
+                List.of("TAKE TWO CARDS"),
+                true));
+        var priorPageThreeAnchor = new VisualRulebookPageFacts.VisualAnchor(
+                "diagram", "Prior end track", "A previously localized end track.", 30, 40, 280, 180);
+        storedFacts.put(3, new VisualRulebookPageFacts.PageFact(
+                3,
+                "OLD PARTIAL",
+                "An earlier current-schema observation admitted that it was partial.",
+                List.of("old"),
+                List.of(priorPageThreeAnchor),
+                List.of(),
+                false,
+                VisualRulebookPageFacts.PageFact.CURRENT_SCHEMA_VERSION,
+                List.of(),
+                List.of("OLD PARTIAL"),
+                false));
         VisualRulebookPageFacts facts = new VisualRulebookPageFacts() {
             @Override
             public void replace(UUID documentVersionId, List<PageFact> pages) {
@@ -837,8 +870,14 @@ class GroundedTeachingAgentTest {
                 return new CatalogDraft(List.of(new PageSummary(
                         3,
                         "GAME END; SCORE",
-                        "牌库耗尽且市场无法补满时游戏结束；玩家按自己卡牌上可见的计分条件结算分数。",
-                        List.of("GAME END", "SCORE"))));
+                        "GAME END: 牌库耗尽且市场无法补满时游戏结束。\nSCORE: 玩家按自己卡牌上可见的计分条件结算分数。",
+                        List.of("GAME END", "SCORE"),
+                        List.of(),
+                        List.of(),
+                        false,
+                        List.of(),
+                        List.of("GAME END", "SCORE"),
+                        true)));
             }
 
             @Override
@@ -901,7 +940,7 @@ class GroundedTeachingAgentTest {
 
         assertThat(events).containsExactly("read-first-page", "composed-2", "published-1");
         assertThat(prefetchCalls).hasValue(0);
-        assertThat(storedFacts.keySet()).containsExactly(2);
+        assertThat(storedFacts.keySet()).containsExactly(2, 3);
 
         IllustratedLesson lesson = agent.continueBase(continuation, snapshot -> {
             events.add("published-" + snapshot.sections().size());
@@ -918,6 +957,14 @@ class GroundedTeachingAgentTest {
                 "published-2");
         assertThat(prefetchCalls).hasValue(1);
         assertThat(storedFacts.keySet()).containsExactly(2, 3);
+        assertThat(storedFacts.get(3)).satisfies(fact -> {
+            assertThat(fact.factualSummary())
+                    .contains("GAME END: 牌库耗尽且市场无法补满时游戏结束。")
+                    .doesNotContain("earlier current-schema observation");
+            assertThat(fact.visualAnchors()).containsExactly(priorPageThreeAnchor);
+            assertThat(fact.ruleGroupIdentifiers()).containsExactly("GAME END", "SCORE");
+            assertThat(fact.ruleGroupInventoryComplete()).isTrue();
+        });
         assertThat(lesson.sections()).extracting(LessonSection::evidenceStatus)
                 .containsOnly(EvidenceStatus.SUPPORTED);
     }
@@ -2446,7 +2493,7 @@ class GroundedTeachingAgentTest {
     }
 
     @Test
-    void routesARewrittenRelativeRuleThroughTheDocumentAgnosticCritic() {
+    void withholdsARewrittenRelativeRuleRejectedByTheDocumentAgnosticCritic() {
         UUID versionId = UUID.randomUUID();
         RuleEvidence gate = new RuleEvidence(
                 UUID.randomUUID(),
@@ -2483,8 +2530,8 @@ class GroundedTeachingAgentTest {
 
         var lesson = agent.create(plan(versionId), UUID.randomUUID());
 
-        assertThat(lesson.status()).isEqualTo(LessonStatus.DRAFT_READY);
-        assertThat(lesson.sections().getFirst().evidenceStatus()).isEqualTo(EvidenceStatus.CITED_DRAFT);
+        assertThat(lesson.status()).isEqualTo(LessonStatus.INCOMPLETE);
+        assertThat(lesson.sections().getFirst().evidenceStatus()).isEqualTo(EvidenceStatus.INSUFFICIENT_EVIDENCE);
     }
 
     @Test
@@ -2639,7 +2686,7 @@ class GroundedTeachingAgentTest {
     }
 
     @Test
-    void sendsAnAmbiguousInlineGlyphClaimToTheGenericCritic() {
+    void withholdsAnAmbiguousInlineGlyphClaimRejectedByTheGenericCritic() {
         UUID versionId = UUID.randomUUID();
         RuleEvidence evidence = new RuleEvidence(
                 UUID.randomUUID(),
@@ -2676,12 +2723,12 @@ class GroundedTeachingAgentTest {
 
         var lesson = agent.create(plan(versionId), UUID.randomUUID());
 
-        assertThat(lesson.status()).isEqualTo(LessonStatus.DRAFT_READY);
-        assertThat(lesson.sections().getFirst().evidenceStatus()).isEqualTo(EvidenceStatus.CITED_DRAFT);
+        assertThat(lesson.status()).isEqualTo(LessonStatus.INCOMPLETE);
+        assertThat(lesson.sections().getFirst().evidenceStatus()).isEqualTo(EvidenceStatus.INSUFFICIENT_EVIDENCE);
     }
 
     @Test
-    void sendsInventedExampleStartingValuesToTheGenericCritic() {
+    void withholdsInventedExampleStartingValuesRejectedByTheGenericCritic() {
         UUID versionId = UUID.randomUUID();
         RuleEvidence evidence = evidence(UUID.randomUUID(), versionId);
         TeachingLessonModel model = request -> new SectionDraft(
@@ -2711,8 +2758,8 @@ class GroundedTeachingAgentTest {
 
         var lesson = agent.create(plan(versionId), UUID.randomUUID());
 
-        assertThat(lesson.status()).isEqualTo(LessonStatus.DRAFT_READY);
-        assertThat(lesson.sections().getFirst().evidenceStatus()).isEqualTo(EvidenceStatus.CITED_DRAFT);
+        assertThat(lesson.status()).isEqualTo(LessonStatus.INCOMPLETE);
+        assertThat(lesson.sections().getFirst().evidenceStatus()).isEqualTo(EvidenceStatus.INSUFFICIENT_EVIDENCE);
     }
 
     @Test
@@ -2761,7 +2808,7 @@ class GroundedTeachingAgentTest {
     }
 
     @Test
-    void retainsACitedSectionWhenCorrectionAndRepairLeaveTheFlaggedClaimUnchanged() {
+    void withholdsASectionWhenCorrectionAndRepairLeaveTheFlaggedClaimUnchanged() {
         UUID versionId = UUID.randomUUID();
         UUID chunkId = UUID.randomUUID();
         AssistantReadTools retrieval = request -> List.of(evidence(chunkId, versionId));
@@ -2791,10 +2838,10 @@ class GroundedTeachingAgentTest {
 
         var lesson = agent.create(plan(versionId), UUID.randomUUID());
 
-        assertThat(lesson.status()).isEqualTo(LessonStatus.DRAFT_READY);
+        assertThat(lesson.status()).isEqualTo(LessonStatus.INCOMPLETE);
         assertThat(lesson.sections().getFirst().evidenceStatus())
-                .isEqualTo(EvidenceStatus.CITED_DRAFT);
-        assertThat(lesson.sections().getFirst().steps().getFirst().text()).contains("任意放置");
+                .isEqualTo(EvidenceStatus.INSUFFICIENT_EVIDENCE);
+        assertThat(lesson.sections().getFirst().steps().getFirst().text()).contains("尚未找到");
         assertThat(modelCalls).hasValue(3);
         assertThat(criticCalls).hasValue(1);
         assertThat(invocations.diagnostics).containsExactly(
@@ -2804,8 +2851,8 @@ class GroundedTeachingAgentTest {
                         "Teaching section published: CITED_DRAFT_PUBLISHED"),
                 new Diagnostic("validateTeachingSection|1|0", ActivityOutcome.REJECTED,
                         "Teaching draft rejected: CRITIC_CONTRADICTION@1"),
-                new Diagnostic("publishTeachingSection|1", ActivityOutcome.SUCCEEDED,
-                        "Teaching section published: POST_PUBLICATION_REVIEW_RETAINED_CITED_DRAFT"));
+                new Diagnostic("publishTeachingSection|1", ActivityOutcome.REJECTED,
+                        "Teaching section withheld: POST_PUBLICATION_CORRECTION_FAILED_WITHHELD_CONFIRMED_DEFECT"));
     }
 
     @Test
@@ -2999,7 +3046,7 @@ class GroundedTeachingAgentTest {
     }
 
     @Test
-    void boundsWholeLessonCorrectionsAtFourWhileKeepingAllCitedChaptersReadable() {
+    void boundsWholeLessonCorrectionsAtFourAndWithholdsEveryUnresolvedDefect() {
         UUID versionId = UUID.randomUUID();
         UUID chunkId = UUID.randomUUID();
         TeachingPlan plan = new TeachingPlan(
@@ -3049,14 +3096,15 @@ class GroundedTeachingAgentTest {
 
         IllustratedLesson lesson = agent.create(plan, UUID.randomUUID());
 
-        assertThat(lesson.status()).isEqualTo(LessonStatus.DRAFT_READY);
-        assertThat(lesson.sections()).allMatch(section -> section.evidenceStatus() == EvidenceStatus.CITED_DRAFT);
+        assertThat(lesson.status()).isEqualTo(LessonStatus.INCOMPLETE);
+        assertThat(lesson.sections())
+                .allMatch(section -> section.evidenceStatus() == EvidenceStatus.INSUFFICIENT_EVIDENCE);
         assertThat(modelCalls).hasValue(9);
         assertThat(criticCalls).hasValue(1);
         assertThat(invocations.diagnostics).contains(new Diagnostic(
                 "publishTeachingSection|5",
-                ActivityOutcome.SUCCEEDED,
-                "Teaching section published: POST_PUBLICATION_REVIEW_DEFERRED_FOR_INCREMENTAL_REVIEW"));
+                ActivityOutcome.REJECTED,
+                "Teaching section withheld: POST_PUBLICATION_REVIEW_BUDGET_EXHAUSTED_WITHHELD_CONFIRMED_DEFECT"));
     }
 
     @Test

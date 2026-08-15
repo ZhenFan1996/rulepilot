@@ -15,12 +15,12 @@ defineEmits<{
 const { locale } = useLocale()
 const labels = computed(() => locale.value === 'zh-CN'
   ? {
-      bgg: '为什么适合', inferred: '结合你刚才说的', researched: '进一步了解', tradeoff: '选择前留意',
+      bgg: '已核对信息', inferred: '结合你刚才说的', researched: '进一步了解', tradeoff: '选择前留意',
       introduce: '介绍一下', select: '选这款，找规则书', details: '查看完整资料', source: '来源', noCover: '封面加载中', cover: '的 BGG 封面',
       players: (min: number, max: number) => `${min}–${max} 人`, minutes: (min: number, max: number) => min === max ? `约 ${max} 分钟` : `${min}–${max} 分钟`, weight: (value: number) => `复杂度 ${value.toFixed(1)}`, designer: (value: string) => `设计：${value}`,
     }
   : {
-      bgg: 'Why it fits', inferred: 'Based on what you said', researched: 'A closer look', tradeoff: 'Worth checking',
+      bgg: 'Verified facts', inferred: 'Based on what you said', researched: 'A closer look', tradeoff: 'Worth checking',
       introduce: 'Tell me more', select: 'Choose and find rulebook', details: 'View full details', source: 'Source', noCover: 'Cover loading', cover: ' BGG cover',
       players: (min: number, max: number) => `${min}–${max} players`, minutes: (min: number, max: number) => min === max ? `About ${max} min` : `${min}–${max} min`, weight: (value: number) => `Weight ${value.toFixed(1)}`, designer: (value: string) => `By ${value}`,
     })

@@ -28,7 +28,12 @@ import java.util.stream.Stream;
  */
 final class LessonReviewPlanner {
 
-    private static final int MAX_UNCITED_EVIDENCE_PER_SECTION = 2;
+    // The drafting model may see up to ten bounded source chunks. Two uncited chunks are not enough to retain a
+    // page-local aggregation clause plus its worked example after the draft cites only the isolated unit-value rule.
+    // Six keeps an ordinary whole-lesson review bounded. A quantitative or explicit source-coverage section receives
+    // all ten because its correctness depends on comparing the generated draft with every bounded rule group.
+    private static final int MAX_UNCITED_EVIDENCE_PER_SECTION = 6;
+    private static final int MAX_COMPLETE_EVIDENCE_PER_SECTION = 10;
 
     private LessonReviewPlanner() {}
 
@@ -97,9 +102,17 @@ final class LessonReviewPlanner {
         cited.stream().map(byId::get).filter(java.util.Objects::nonNull).forEach(selected::add);
         candidate.evidence().stream()
                 .filter(source -> !cited.contains(source.chunkId()))
-                .limit(MAX_UNCITED_EVIDENCE_PER_SECTION)
+                .limit(requiresCompleteReviewEvidence(candidate)
+                        ? MAX_COMPLETE_EVIDENCE_PER_SECTION
+                        : MAX_UNCITED_EVIDENCE_PER_SECTION)
                 .forEach(selected::add);
         return List.copyOf(selected);
+    }
+
+    private static boolean requiresCompleteReviewEvidence(TeachingSectionDraftCandidate candidate) {
+        return TeachingQuantitativeReviewPolicy.requiresCompleteReviewEvidence(
+                        candidate.planned(), candidate.draft())
+                || candidate.planned().coverageTags().stream().anyMatch("source_coverage"::equalsIgnoreCase);
     }
 
     private static String requiredCoverage(TeachingPlan.PlannedSection planned) {

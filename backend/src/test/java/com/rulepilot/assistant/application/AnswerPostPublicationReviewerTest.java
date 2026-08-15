@@ -208,7 +208,7 @@ class AnswerPostPublicationReviewerTest {
     }
 
     @Test
-    void returnsAQualifiedAnswerWhenTheCriticIsUnavailable() {
+    void withholdsAHighImpactConclusionWhenTheCriticIsUnavailable() {
         UUID versionId = UUID.randomUUID();
         RuleEvidenceHit source = new RuleEvidenceHit(
                 UUID.randomUUID(), versionId, "ACTIONS", "Action timing", "Take the main action once.", 4, 4, 0.9);
@@ -239,10 +239,81 @@ class AnswerPostPublicationReviewerTest {
                 answer,
                 List.of(evidence));
 
-        assertThat(result.accepted()).isTrue();
-        assertThat(result.answer().warnings())
-                .extracting(warning -> warning.type())
-                .containsExactly(com.rulepilot.assistant.domain.AnswerWarning.Type.REVIEW_UNAVAILABLE);
+        assertThat(result.accepted()).isFalse();
+        assertThat(result.failureStatus()).isEqualTo(AnswerStatus.INVALID_MODEL_OUTPUT);
+        assertThat(result.failureMessage()).contains("事实复核");
+    }
+
+    @Test
+    void withholdsARevisedHighImpactConclusionWhenItsSecondReviewIsUnavailable() {
+        UUID versionId = UUID.randomUUID();
+        RuleEvidenceHit source = new RuleEvidenceHit(
+                UUID.randomUUID(),
+                versionId,
+                "SCORING",
+                "Scoring groups",
+                "Each scoring card scores the number of matching spaces. Two cards and nine spaces score eighteen points.",
+                8,
+                8,
+                0.9);
+        HybridEvidenceHit evidence = new HybridEvidenceHit(source, 0.1, 1, null, false);
+        StructuredRuleAnswer answer = answer(versionId, source);
+        AtomicInteger reviews = new AtomicInteger();
+        AnswerPostPublicationReviewer reviewer = new AnswerPostPublicationReviewer(
+                (request, risk) -> {
+                    if (reviews.getAndIncrement() == 0) {
+                        return new GeneratedContentCritic.Review(
+                                true,
+                                List.of(new GeneratedContentCritic.Issue(
+                                        GeneratedContentCritic.IssueType.CONTRADICTION,
+                                        1,
+                                        List.of(source.chunkId()),
+                                        "The total omitted the per-card multiplier.")));
+                    }
+                    throw new IllegalStateException("critic unavailable");
+                },
+                new AnswerModelGateway(
+                        new RuleAnswerModel() {
+                            @Override
+                            public ModelDraft compose(ModelRequest request) {
+                                throw new AssertionError("reviewer must use the bounded revision path");
+                            }
+
+                            @Override
+                            public ModelDraft revise(
+                                    ModelRequest request, ModelDraft previousDraft, List<String> feedback) {
+                                return new ModelDraft(
+                                        "Two cards score eighteen points.",
+                                        "Each of the two cards scores the nine matching spaces.",
+                                        List.of(source.chunkId()),
+                                        List.of(),
+                                        "HIGH");
+                            }
+                        },
+                        unlimitedRateLimiter(),
+                        immediateInvocations()),
+                new AnswerPublicationValidator(verifiedEvidence()));
+
+        AnswerPostPublicationReviewer.Result result = reviewer.review(
+                UUID.randomUUID(),
+                understood(versionId),
+                new QuestionContext(versionId),
+                "player",
+                null,
+                request(source),
+                new ModelDraft(
+                        answer.shortVerdict(),
+                        answer.explanation(),
+                        List.of(source.chunkId()),
+                        List.of(),
+                        "HIGH"),
+                answer,
+                List.of(evidence));
+
+        assertThat(result.accepted()).isFalse();
+        assertThat(result.failureStatus()).isEqualTo(AnswerStatus.INVALID_MODEL_OUTPUT);
+        assertThat(result.failureMessage()).contains("复核");
+        assertThat(reviews).hasValue(2);
     }
 
     private static StructuredRuleAnswer answer(UUID versionId, RuleEvidenceHit source) {

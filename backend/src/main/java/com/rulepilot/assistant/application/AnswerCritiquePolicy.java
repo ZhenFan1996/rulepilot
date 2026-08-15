@@ -48,7 +48,10 @@ final class AnswerCritiquePolicy {
                         "Judge every player-facing claim against its own combined citations. Preserve actor, action, "
                                 + "object, condition, quantity, modality, timing, sequence, result, exception, and "
                                 + "scope. Cover every material obligation in the question and the selected structured "
-                                + "aid. Do not accept outside knowledge, invented table state, inferred strategy, or "
+                                + "aid. For numerical claims, preserve the aggregation unit, per-item or per-category "
+                                + "scope, repetition count, multiplier, cap, and exception together. Treat a supplied "
+                                + "same-scope worked example as a consistency check on the governing rule and total. "
+                                + "Do not accept outside knowledge, invented table state, inferred strategy, or "
                                 + "source-authored advice without directly cited advice text. Natural paraphrase and "
                                 + "faithful translation are valid."),
                 claims,

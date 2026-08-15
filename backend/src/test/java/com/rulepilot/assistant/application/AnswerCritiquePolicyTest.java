@@ -51,7 +51,14 @@ class AnswerCritiquePolicyTest {
         assertThat(request.contentType()).isEqualTo(GeneratedContentCritic.ContentType.ANSWER);
         assertThat(request.taskContext().objective()).contains(question().normalizedQuestion());
         assertThat(request.taskContext().requiredCoverage())
-                .contains("actor", "condition", "selected structured aid", "Natural paraphrase");
+                .contains(
+                        "actor",
+                        "condition",
+                        "selected structured aid",
+                        "aggregation unit",
+                        "multiplier",
+                        "worked example",
+                        "Natural paraphrase");
         assertThat(request.claims()).extracting(GeneratedContentCritic.Claim::text)
                 .containsExactly(
                         "Direct verdict.\nGrounded explanation.",

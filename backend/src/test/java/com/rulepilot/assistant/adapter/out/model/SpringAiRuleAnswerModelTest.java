@@ -87,7 +87,9 @@ class SpringAiRuleAnswerModelTest {
                                 "GENERAL_QUESTION",
                                 "fallback hint",
                                 "PREVIOUS_QUESTION even if deterministicMissingContext",
-                                "MUST contain between one and four"));
+                                "MUST contain between one and four",
+                                "Use CALCULATION whenever",
+                                "which of two proposed totals"));
     }
 
     @Test

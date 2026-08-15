@@ -1,0 +1,5 @@
+Quantitative relationship boundary:
+- For every calculable rule, preserve the aggregation owner and aggregation dimension together with the value: per card, per player, per category, per region, per occurrence, or once overall.
+- Keep the complete relationship in one cited step: counted object, unit value, repetition count or multiplier, subtotal, cap, rounding rule, and exception when the evidence supplies them. A unit value is not a final total unless the source explicitly makes it one.
+- When the evidence includes a worked total, silently apply the written procedure to that example. If the generated procedure cannot reproduce the evidenced result, do not publish the calculation as a playable instruction.
+- Never add a category count, multiplier, cap, or total merely because nearby terms or numbers make it plausible.

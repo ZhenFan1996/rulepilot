@@ -24,6 +24,14 @@ class VersionedAgentPromptsTest {
                         "current-section evidence",
                         "directly support the whole claim",
                         "complete tie handling",
+                        "aggregation dimension",
+                        "per card, per player, per category",
+                        "once overall",
+                        "coverage_checklist contains source_coverage",
+                        "preserve that exact original-language identifier",
+                        "coverage_checklist contains source_dependency",
+                        "procedure is not present in the current document",
+                        "sole exception for plainly naming a cited missing source",
                         "Return only the requested JSON schema",
                         "no unsupported next-player handoff")
                 .doesNotContain("revision v", "maximum step count", "allotted step count");
@@ -48,7 +56,11 @@ class VersionedAgentPromptsTest {
                         "Focused answer-aid routing revision v55",
                         "at most one primary structured aid family",
                         "situationChecks` must always be empty",
-                        "Source-authored advice boundary revision v56")
+                        "Source-authored advice boundary revision v56",
+                        "Player-facing answer progression revision v57",
+                        "must add a material condition, reason, boundary, or application detail",
+                        "Do not restate the same complete",
+                        "rule sequence in `shortVerdict`, `explanation`, and a walkthrough")
                 .doesNotContain("Cited-tie-resolution revision v37", "Cited-worked-example revision v34");
 
         assertThat(prompts.answerSystem("TIE"))
@@ -77,6 +89,8 @@ class VersionedAgentPromptsTest {
                         "CHAPTER_SCOPE_DUPLICATION",
                         "at most 12 issues",
                         "setup, legal actions, timing, scoring, game end",
+                        "aggregation owner",
+                        "worked total",
                         "defectConfirmed=true",
                         "empty issues array",
                         "Return only the requested JSON schema")
@@ -97,6 +111,15 @@ class VersionedAgentPromptsTest {
                 "defectConfirmed: true",
                 "exactly one allowed issue type",
                 "Never place a supported");
+
+        assertThat(prompts.teachingOutlineSystem()).contains(
+                "quantitative relationship",
+                "aggregation owner",
+                "worked example",
+                "Source-dependency planning revision v17",
+                "source_dependency",
+                "missing_setup_source",
+                "must not also receive the setup tag");
     }
 
     @Test

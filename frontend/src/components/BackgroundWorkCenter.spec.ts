@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { backgroundWorkStorageKeys } from '@/lib/backgroundTeachingStatus'
 import { notifyBackgroundWorkChanged } from '@/lib/backgroundWorkRefresh'
+import { preloadLocale, setLocale } from '@/lib/locale'
 import { notifyTeachingLaunched } from '@/lib/teachingLaunch'
 import BackgroundWorkCenter from './BackgroundWorkCenter.vue'
 
@@ -12,6 +13,7 @@ enableAutoUnmount(afterEach)
 describe('BackgroundWorkCenter request lifecycle', () => {
   afterEach(() => {
     sessionStorage.clear()
+    setLocale('zh-CN')
     setVisibility('visible')
     vi.useRealTimers()
     vi.unstubAllGlobals()
@@ -109,6 +111,60 @@ describe('BackgroundWorkCenter request lifecycle', () => {
     expect(importReads).toBe(2)
     expect(wrapper.text()).toContain('刚保存的讲解')
     expect(wrapper.text()).toContain('等待下载')
+    wrapper.unmount()
+  })
+
+  it.each([
+    ['RECEIVED', '讲解任务已接收'],
+    ['DOCUMENT_READINESS', '正在确认规则书可以用于讲解'],
+    ['LESSON_PLANNING', '正在读取规则并建立讲解结构'],
+    ['RETRIEVAL_PLANNING', '正在确定各章节需要核对的规则'],
+    ['RETRIEVING', '正在查找各章节需要的规则依据'],
+    ['VERIFYING_EVIDENCE', '正在逐条核对讲解与规则依据'],
+    ['LESSON_COMPOSITION', '正在把规则整理成可读的讲解'],
+    ['MEDIA_PACKAGING', '正在补充规则页与图示'],
+    ['CRITIQUING', '正在复核讲解中的规则结论'],
+  ])('translates the active Teaching state %s instead of exposing its internal enum', async (state, expected) => {
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const path = String(input)
+      if (path.includes('/api/v1/assistant-runs/active')) {
+        return response([teachingRun('run-progress', 'plan-progress', 'player', state)])
+      }
+      if (path.endsWith('/api/v1/teaching-plans')) {
+        return response([{ id: 'plan-progress', gameTitle: '真实玩家讲解' }])
+      }
+      if (isBackgroundBaseList(path)) return response([])
+      return new Response(null, { status: 404 })
+    }))
+    const wrapper = await mountCenter('player')
+    await flushPromises()
+    await openCenter(wrapper)
+
+    expect(wrapper.text()).toContain(expected)
+    expect(wrapper.text()).not.toContain(state)
+    wrapper.unmount()
+  })
+
+  it('localizes Teaching progress in English without exposing the internal enum', async () => {
+    await preloadLocale('en')
+    setLocale('en')
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const path = String(input)
+      if (path.includes('/api/v1/assistant-runs/active')) {
+        return response([teachingRun('run-review', 'plan-review', 'player', 'CRITIQUING')])
+      }
+      if (path.endsWith('/api/v1/teaching-plans')) {
+        return response([{ id: 'plan-review', gameTitle: 'A real player guide' }])
+      }
+      if (isBackgroundBaseList(path)) return response([])
+      return new Response(null, { status: 404 })
+    }))
+    const wrapper = await mountCenter('player')
+    await flushPromises()
+    await openCenter(wrapper)
+
+    expect(wrapper.text()).toContain("Reviewing the guide's rule claims")
+    expect(wrapper.text()).not.toContain('CRITIQUING')
     wrapper.unmount()
   })
 

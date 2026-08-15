@@ -299,7 +299,7 @@ class StructuredRuleAnswerServiceTest {
     }
 
     @Test
-    void returnsAQualifiedAnswerWhenTheSemanticCriticIsUnavailable() {
+    void withholdsAConclusionWhenTheSemanticCriticIsUnavailable() {
         RuleEvidenceHit source = source("The active player may move one space.");
         GeneratedContentCritic critic = (request, risk) -> {
             throw new IllegalStateException("critic unavailable");
@@ -311,9 +311,9 @@ class StructuredRuleAnswerServiceTest {
                         critic)
                 .answer("How far may I move?", new QuestionContext(versionId));
 
-        assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED_WITH_WARNING);
-        assertThat(answer.warnings()).extracting(AnswerWarning::type)
-                .containsExactly(AnswerWarning.Type.REVIEW_UNAVAILABLE);
+        assertThat(answer.status()).isEqualTo(AnswerStatus.INVALID_MODEL_OUTPUT);
+        assertThat(answer.shortVerdict()).contains("事实复核");
+        assertThat(answer.citations()).isEmpty();
     }
 
     @Test

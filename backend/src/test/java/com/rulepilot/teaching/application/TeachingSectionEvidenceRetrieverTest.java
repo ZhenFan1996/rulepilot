@@ -8,7 +8,12 @@ import com.rulepilot.assistant.AssistantReadTools.RulePageImage;
 import com.rulepilot.assistant.ImmediateAuditedAgentInvocations;
 import com.rulepilot.assistant.application.PolicyEvidenceVerifier;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.SourceDependency;
 import com.rulepilot.teaching.VisualRulebookPageFacts;
+import com.rulepilot.teaching.VisualRulebookPageFacts.IconMeaningStatus;
+import com.rulepilot.teaching.VisualRulebookPageFacts.IconOccurrence;
+import com.rulepilot.teaching.VisualRulebookPageFacts.PageFact;
+import com.rulepilot.teaching.VisualRulebookPageFacts.VisualAnchor;
 import com.rulepilot.teaching.domain.TeachingPlan;
 import com.rulepilot.teaching.domain.TeachingPlan.PlannedSection;
 import java.time.Instant;
@@ -79,6 +84,31 @@ class TeachingSectionEvidenceRetrieverTest {
         UUID chunkId = UUID.randomUUID();
         AtomicInteger catalogCalls = new AtomicInteger();
         Map<Integer, VisualRulebookPageFacts.PageFact> stored = new java.util.LinkedHashMap<>();
+        VisualAnchor priorAnchor = new VisualAnchor(
+                "diagram", "Prior end track", "A previously localized end track.", 30, 40, 280, 180);
+        IconOccurrence priorIcon = new IconOccurrence(
+                "end marker",
+                "End marker",
+                "A previously verified compact end marker.",
+                "",
+                "",
+                IconMeaningStatus.UNEXPLAINED,
+                80,
+                90,
+                30,
+                30);
+        stored.put(4, new PageFact(
+                4,
+                "OLD PARTIAL",
+                "An earlier current-schema observation admitted that it was partial.",
+                List.of("old"),
+                List.of(priorAnchor),
+                List.of(priorIcon),
+                true,
+                PageFact.CURRENT_SCHEMA_VERSION,
+                List.of(new SourceDependency("Obsolete leaflet", List.of("setup"))),
+                List.of("OLD PARTIAL"),
+                false));
         VisualRulebookPageFacts facts = new VisualRulebookPageFacts() {
             @Override
             public void replace(UUID documentVersionId, List<PageFact> pages) {
@@ -130,8 +160,14 @@ class TeachingSectionEvidenceRetrieverTest {
                 return new CatalogDraft(List.of(new PageSummary(
                         4,
                         "GAME END; SCORE",
-                        "牌库耗尽且市场无法补满时游戏结束；玩家随后按照可见条件结算分数。",
-                        List.of("GAME END", "SCORE"))));
+                        "GAME END: 牌库耗尽且市场无法补满时游戏结束。\nSCORE: 玩家随后按照可见条件结算分数。",
+                        List.of("GAME END", "SCORE"),
+                        List.of(),
+                        List.of(),
+                        false,
+                        List.of(new SourceDependency("First Session Booklet", List.of("setup"))),
+                        List.of("GAME END", "SCORE"),
+                        true)));
             }
 
             @Override
@@ -179,6 +215,16 @@ class TeachingSectionEvidenceRetrieverTest {
         });
         assertThat(catalogCalls).hasValue(1);
         assertThat(stored.keySet()).containsExactly(4);
+        assertThat(stored.get(4)).satisfies(fact -> {
+            assertThat(fact.factualSummary()).doesNotContain("earlier current-schema observation");
+            assertThat(fact.visualAnchors()).containsExactly(priorAnchor);
+            assertThat(fact.iconOccurrences()).containsExactly(priorIcon);
+            assertThat(fact.iconInventoryComplete()).isTrue();
+            assertThat(fact.sourceDependencies())
+                    .containsExactly(new SourceDependency("First Session Booklet", List.of("setup")));
+            assertThat(fact.ruleGroupIdentifiers()).containsExactly("GAME END", "SCORE");
+            assertThat(fact.ruleGroupInventoryComplete()).isTrue();
+        });
     }
 
     private TeachingSectionEvidenceRetriever retriever(AssistantReadTools tools) {

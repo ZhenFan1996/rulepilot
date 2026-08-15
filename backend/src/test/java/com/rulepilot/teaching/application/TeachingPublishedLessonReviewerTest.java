@@ -7,6 +7,8 @@ import com.rulepilot.assistant.GeneratedContentCritic;
 import com.rulepilot.assistant.GeneratedContentCritic.Issue;
 import com.rulepilot.assistant.GeneratedContentCritic.IssueType;
 import com.rulepilot.assistant.GeneratedContentCritic.Review;
+import com.rulepilot.assistant.AgentExecutionStoppedException;
+import com.rulepilot.assistant.AgentExecutionStoppedException.StopReason;
 import com.rulepilot.assistant.ImmediateAuditedAgentInvocations;
 import com.rulepilot.assistant.application.PolicyEvidenceVerifier;
 import com.rulepilot.teaching.TeachingLessonModel;
@@ -26,6 +28,287 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 
 class TeachingPublishedLessonReviewerTest {
+
+    @Test
+    void givesTheWholeLessonCriticEnoughUncitedContextToCheckAWorkedTotal() {
+        UUID versionId = UUID.randomUUID();
+        UUID unitRuleId = UUID.randomUUID();
+        RuleEvidence unitRule = new RuleEvidence(
+                unitRuleId, versionId, "SCORING", "Unit value", "Each qualifying object is worth one point.", 7, 7);
+        RuleEvidence nearbyDefinition = new RuleEvidence(
+                UUID.randomUUID(), versionId, "SCORING", "Qualifying objects", "Stone objects do not qualify.", 7, 7);
+        RuleEvidence nearbyCap = new RuleEvidence(
+                UUID.randomUUID(), versionId, "SCORING", "Category cap", "At most fifteen objects count.", 7, 7);
+        List<RuleEvidence> lowerPriorityNeighbors = java.util.stream.IntStream.rangeClosed(1, 5)
+                .mapToObj(index -> new RuleEvidence(
+                        UUID.randomUUID(),
+                        versionId,
+                        "SCORING",
+                        "Adjacent scoring note " + index,
+                        "A different scoring note remains separately scoped.",
+                        7,
+                        7))
+                .toList();
+        RuleEvidence aggregation = new RuleEvidence(
+                UUID.randomUUID(), versionId, "SCORING", "Per-card repetition",
+                "Score the category once for each matching card.", 7, 7);
+        RuleEvidence workedTotal = new RuleEvidence(
+                UUID.randomUUID(), versionId, "SCORING", "Worked total",
+                "Two matching cards and nine qualifying objects score two times nine, for eighteen points.", 7, 7);
+        List<RuleEvidence> evidence = new ArrayList<>();
+        evidence.add(unitRule);
+        evidence.add(nearbyDefinition);
+        evidence.add(nearbyCap);
+        evidence.addAll(lowerPriorityNeighbors);
+        evidence.add(aggregation);
+        evidence.add(workedTotal);
+        SectionDraft citedDraft = draft(unitRuleId, "这一类一共得到9分。");
+        TeachingLessonModel model = request -> citedDraft;
+        var invocations = new ImmediateAuditedAgentInvocations();
+        TeachingSectionDraftComposer composer = new TeachingSectionDraftComposer(
+                model, new PolicyEvidenceVerifier(), invocations, VisualRulebookPageFacts.empty());
+        TeachingPlan plan = plan(versionId);
+        UUID runId = UUID.randomUUID();
+        TeachingSectionDraftCandidate candidate = composer.compose(
+                plan, plan.sections().getFirst(), List.of(), evidence, runId, 0, false);
+        List<UUID> reviewedEvidence = new ArrayList<>();
+        GeneratedContentCritic critic = (request, risk) -> {
+            reviewedEvidence.addAll(request.evidence().stream()
+                    .map(GeneratedContentCritic.Evidence::chunkId)
+                    .toList());
+            return new Review(true, List.of());
+        };
+        List<LessonSection> published = new ArrayList<>(List.of(candidate.section()));
+
+        new TeachingPublishedLessonReviewer(
+                        critic, invocations, composer, new TeachingReviewCorrectionPolicy())
+                .review(plan, List.of(candidate), published, runId, () -> {});
+
+        assertThat(reviewedEvidence).contains(aggregation.chunkId(), workedTotal.chunkId());
+    }
+
+    @Test
+    void givesASourceCoverageSectionEveryBoundedRuleGroupInsteadOfStoppingAtSix() {
+        UUID versionId = UUID.randomUUID();
+        UUID citedId = UUID.randomUUID();
+        RuleEvidence cited = new RuleEvidence(
+                citedId, versionId, "RULE", "Turn start", "Choose one action at the start of a turn.", 3, 3);
+        List<RuleEvidence> earlierGroups = java.util.stream.IntStream.rangeClosed(2, 8)
+                .mapToObj(index -> new RuleEvidence(
+                        UUID.randomUUID(),
+                        versionId,
+                        "RULE",
+                        "Rule group " + index,
+                        "A separately headed rule group explains a distinct non-numeric action.",
+                        3,
+                        3))
+                .toList();
+        RuleEvidence ninthGroup = new RuleEvidence(
+                UUID.randomUUID(), versionId, "RULE", "Alternative action",
+                "Instead of the ordinary action, the player may pass.", 3, 3);
+        RuleEvidence tenthGroup = new RuleEvidence(
+                UUID.randomUUID(), versionId, "RULE", "End of turn",
+                "After the action, play continues with the next player.", 3, 3);
+        List<RuleEvidence> evidence = new ArrayList<>();
+        evidence.add(cited);
+        evidence.addAll(earlierGroups);
+        evidence.add(ninthGroup);
+        evidence.add(tenthGroup);
+        SectionDraft citedDraft = draft(citedId, "选择可用行动并执行。");
+        TeachingLessonModel model = request -> citedDraft;
+        var invocations = new ImmediateAuditedAgentInvocations();
+        TeachingSectionDraftComposer composer = new TeachingSectionDraftComposer(
+                model, new PolicyEvidenceVerifier(), invocations, VisualRulebookPageFacts.empty());
+        TeachingPlan plan = sourceCoveragePlan(versionId);
+        UUID runId = UUID.randomUUID();
+        TeachingSectionDraftCandidate candidate = composer.compose(
+                plan, plan.sections().getFirst(), List.of(), evidence, runId, 0, false);
+        List<UUID> reviewedEvidence = new ArrayList<>();
+        GeneratedContentCritic critic = (request, risk) -> {
+            reviewedEvidence.addAll(request.evidence().stream()
+                    .map(GeneratedContentCritic.Evidence::chunkId)
+                    .toList());
+            return new Review(true, List.of());
+        };
+        List<LessonSection> published = new ArrayList<>(List.of(candidate.section()));
+
+        new TeachingPublishedLessonReviewer(
+                        critic, invocations, composer, new TeachingReviewCorrectionPolicy())
+                .review(plan, List.of(candidate), published, runId, () -> {});
+
+        assertThat(reviewedEvidence).contains(ninthGroup.chunkId(), tenthGroup.chunkId());
+    }
+
+    @Test
+    void withholdsAnInitialQuantitativeDraftWhenItsRequiredIndependentReviewCannotRun() {
+        UUID versionId = UUID.randomUUID();
+        UUID evidenceId = UUID.randomUUID();
+        RuleEvidence evidence = new RuleEvidence(
+                evidenceId,
+                versionId,
+                "SCORING",
+                "Per-card scoring",
+                "Each matching card scores nine points.",
+                7,
+                7);
+        SectionDraft citedDraft = draft(evidenceId, "每张同类卡得到九分。");
+        TeachingLessonModel model = request -> citedDraft;
+        var invocations = new ImmediateAuditedAgentInvocations();
+        TeachingSectionDraftComposer composer = new TeachingSectionDraftComposer(
+                model, new PolicyEvidenceVerifier(), invocations, VisualRulebookPageFacts.empty());
+        TeachingPlan plan = plan(versionId);
+        UUID runId = UUID.randomUUID();
+        TeachingSectionDraftCandidate candidate = composer.compose(
+                plan, plan.sections().getFirst(), List.of(), List.of(evidence), runId, 0, false);
+        GeneratedContentCritic unavailableCritic = (request, risk) -> {
+            throw new IllegalStateException("critic unavailable");
+        };
+        List<LessonSection> published = new ArrayList<>(List.of(candidate.section()));
+
+        new TeachingPublishedLessonReviewer(
+                        unavailableCritic, invocations, composer, new TeachingReviewCorrectionPolicy())
+                .review(plan, List.of(candidate), published, runId, () -> {});
+
+        assertThat(published).singleElement().satisfies(section ->
+                assertThat(section.evidenceStatus()).isEqualTo(EvidenceStatus.INSUFFICIENT_EVIDENCE));
+    }
+
+    @Test
+    void retainsANonQuantitativeCitedDraftWhenTheOptionalInitialReviewCannotRun() {
+        UUID versionId = UUID.randomUUID();
+        UUID evidenceId = UUID.randomUUID();
+        RuleEvidence evidence = new RuleEvidence(
+                evidenceId,
+                versionId,
+                "FLOW",
+                "Turn handoff",
+                "After resolving the action, pass the marker to the next player.",
+                7,
+                7);
+        SectionDraft citedDraft = draft(evidenceId, "行动结算后，把标记交给下一位玩家。");
+        TeachingLessonModel model = request -> citedDraft;
+        var invocations = new ImmediateAuditedAgentInvocations();
+        TeachingSectionDraftComposer composer = new TeachingSectionDraftComposer(
+                model, new PolicyEvidenceVerifier(), invocations, VisualRulebookPageFacts.empty());
+        TeachingPlan plan = plan(versionId);
+        UUID runId = UUID.randomUUID();
+        TeachingSectionDraftCandidate candidate = composer.compose(
+                plan, plan.sections().getFirst(), List.of(), List.of(evidence), runId, 0, false);
+        GeneratedContentCritic unavailableCritic = (request, risk) -> {
+            throw new IllegalStateException("critic unavailable");
+        };
+        List<LessonSection> published = new ArrayList<>(List.of(candidate.section()));
+
+        new TeachingPublishedLessonReviewer(
+                        unavailableCritic, invocations, composer, new TeachingReviewCorrectionPolicy())
+                .review(plan, List.of(candidate), published, runId, () -> {});
+
+        assertThat(published).singleElement().satisfies(section ->
+                assertThat(section.evidenceStatus()).isEqualTo(EvidenceStatus.CITED_DRAFT));
+    }
+
+    @Test
+    void withholdsASectionWhenAKnownFactualDefectCannotBeCorrected() {
+        UUID versionId = UUID.randomUUID();
+        UUID evidenceId = UUID.randomUUID();
+        RuleEvidence evidence = new RuleEvidence(
+                evidenceId,
+                versionId,
+                "SCORING",
+                "Per-card scoring",
+                "Score the category once for each matching card. Two cards worth nine points each score eighteen.",
+                7,
+                7);
+        SectionDraft citedDraft = draft(evidenceId, "这一类一共得到9分。");
+        TeachingLessonModel model = new TeachingLessonModel() {
+            @Override
+            public SectionDraft compose(SectionRequest request) {
+                return citedDraft;
+            }
+
+            @Override
+            public SectionDraft revise(SectionRequest request, SectionDraft previousDraft, List<String> feedback) {
+                throw new IllegalStateException("correction provider unavailable");
+            }
+        };
+        var invocations = new ImmediateAuditedAgentInvocations();
+        TeachingSectionDraftComposer composer = new TeachingSectionDraftComposer(
+                model, new PolicyEvidenceVerifier(), invocations, VisualRulebookPageFacts.empty());
+        TeachingPlan plan = plan(versionId);
+        UUID runId = UUID.randomUUID();
+        TeachingSectionDraftCandidate candidate = composer.compose(
+                plan, plan.sections().getFirst(), List.of(), List.of(evidence), runId, 0, false);
+        GeneratedContentCritic critic = (request, risk) -> new Review(
+                true,
+                List.of(new Issue(
+                        IssueType.CONTRADICTION,
+                        2,
+                        List.of(evidenceId),
+                        "The repeated per-card score was collapsed into one subtotal.")));
+        List<LessonSection> published = new ArrayList<>(List.of(candidate.section()));
+
+        new TeachingPublishedLessonReviewer(
+                        critic, invocations, composer, new TeachingReviewCorrectionPolicy())
+                .review(plan, List.of(candidate), published, runId, () -> {});
+
+        assertThat(published).singleElement().satisfies(section ->
+                assertThat(section.evidenceStatus()).isEqualTo(EvidenceStatus.INSUFFICIENT_EVIDENCE));
+    }
+
+    @Test
+    void withholdsACorrectionWhenItsRequiredIndependentReviewCannotRun() {
+        UUID versionId = UUID.randomUUID();
+        UUID evidenceId = UUID.randomUUID();
+        RuleEvidence evidence = new RuleEvidence(
+                evidenceId,
+                versionId,
+                "SCORING",
+                "Per-card scoring",
+                "Score the category once for each matching card. Two cards worth nine points each score eighteen.",
+                7,
+                7);
+        SectionDraft citedDraft = draft(evidenceId, "这一类一共得到9分。");
+        TeachingLessonModel model = new TeachingLessonModel() {
+            @Override
+            public SectionDraft compose(SectionRequest request) {
+                return citedDraft;
+            }
+
+            @Override
+            public SectionDraft revise(SectionRequest request, SectionDraft previousDraft, List<String> feedback) {
+                return draft(evidenceId, "每张同类卡分别得到9分；两张合计18分。");
+            }
+        };
+        var invocations = new ImmediateAuditedAgentInvocations();
+        TeachingSectionDraftComposer composer = new TeachingSectionDraftComposer(
+                model, new PolicyEvidenceVerifier(), invocations, VisualRulebookPageFacts.empty());
+        TeachingPlan plan = plan(versionId);
+        UUID runId = UUID.randomUUID();
+        TeachingSectionDraftCandidate candidate = composer.compose(
+                plan, plan.sections().getFirst(), List.of(), List.of(evidence), runId, 0, false);
+        AtomicInteger reviews = new AtomicInteger();
+        GeneratedContentCritic critic = (request, risk) -> {
+            if (reviews.getAndIncrement() == 0) {
+                return new Review(
+                        true,
+                        List.of(new Issue(
+                                IssueType.CONTRADICTION,
+                                2,
+                                List.of(evidenceId),
+                                "The repeated per-card score was collapsed into one subtotal.")));
+            }
+            throw new AgentExecutionStoppedException(StopReason.MODEL_BUDGET);
+        };
+        List<LessonSection> published = new ArrayList<>(List.of(candidate.section()));
+
+        new TeachingPublishedLessonReviewer(
+                        critic, invocations, composer, new TeachingReviewCorrectionPolicy())
+                .review(plan, List.of(candidate), published, runId, () -> {});
+
+        assertThat(published).singleElement().satisfies(section ->
+                assertThat(section.evidenceStatus()).isEqualTo(EvidenceStatus.INSUFFICIENT_EVIDENCE));
+        assertThat(reviews).hasValue(2);
+    }
 
     @Test
     void acceptsAModelCorrectionOnlyAfterTheFollowupCriticApprovesIt() {
@@ -100,7 +383,7 @@ class TeachingPublishedLessonReviewerTest {
     }
 
     @Test
-    void doesNotCallAChangedCorrectionSupportedUntilASecondReviewAcceptsIt() {
+    void withholdsAChangedCorrectionThatNeverPassesAnIndependentReview() {
         UUID versionId = UUID.randomUUID();
         UUID evidenceId = UUID.randomUUID();
         RuleEvidence evidence = new RuleEvidence(
@@ -158,7 +441,7 @@ class TeachingPublishedLessonReviewerTest {
                 .review(plan, List.of(candidate), published, runId, () -> {});
 
         assertThat(published).singleElement().satisfies(section ->
-                assertThat(section.evidenceStatus()).isEqualTo(EvidenceStatus.CITED_DRAFT));
+                assertThat(section.evidenceStatus()).isEqualTo(EvidenceStatus.INSUFFICIENT_EVIDENCE));
         assertThat(revisions).hasValue(4);
     }
 
@@ -326,6 +609,26 @@ class TeachingPublishedLessonReviewerTest {
                         false,
                         List.of("end condition", "next round"),
                         List.of("end"))),
+                "player",
+                Instant.now());
+    }
+
+    private TeachingPlan sourceCoveragePlan(UUID versionId) {
+        return new TeachingPlan(
+                UUID.randomUUID(),
+                versionId,
+                "Game",
+                "Premise",
+                List.of(new TeachingPlan.PlannedSection(
+                        1,
+                        "source-page-3",
+                        "第三页规则",
+                        "Teach every independently headed rule group on this source page.",
+                        true,
+                        true,
+                        List.of("turn start", "ordinary action", "alternative action", "end of turn"),
+                        List.of("core_loop", "source_coverage"),
+                        List.of(3))),
                 "player",
                 Instant.now());
     }

@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -13,6 +14,7 @@ import com.rulepilot.modelconfig.RuntimeModelConfiguration.Role;
 import com.rulepilot.modelconfig.VersionedAgentPrompts;
 import com.rulepilot.teaching.TeachingOutlineModel.OutlineRequest;
 import com.rulepilot.teaching.TeachingOutlineModel.OutlineDraft;
+import com.rulepilot.teaching.TeachingOutlineModel.OutlineGenerationException;
 import com.rulepilot.teaching.TeachingOutlineModel.PageImageInput;
 import com.rulepilot.teaching.TeachingOutlineModel.PageInput;
 import com.rulepilot.teaching.TeachingOutlineModel.TopicDraft;
@@ -114,6 +116,45 @@ class SpringAiTeachingOutlineModelTest {
         assertThat(outline.topics()).anyMatch(topic -> topic.coverageTags().contains("setup"));
         assertThat(outline.topics()).anyMatch(topic -> topic.coverageTags().contains("scoring"));
         verify(configuration, never()).modelFor(Role.TEACHING, "player");
+    }
+
+    @Test
+    void translatesRepeatedStructuredOutputFailuresAtTheModelBoundary() {
+        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        VersionedAgentPrompts prompts = mock(VersionedAgentPrompts.class);
+        ChatModel chatModel = mock(ChatModel.class);
+        when(configuration.usesFake(Role.TEACHING, "player")).thenReturn(false);
+        when(configuration.modelFor(Role.TEACHING, "player")).thenReturn(chatModel);
+        when(chatModel.getDefaultOptions()).thenReturn(ToolCallingChatOptions.builder().build());
+        when(chatModel.getOptions()).thenReturn(ToolCallingChatOptions.builder().build());
+        when(prompts.teachingOutlineSystem()).thenReturn("Return a bounded outline.");
+        when(prompts.teachingOutlineUser()).thenReturn("{pages}\n{repair}");
+        when(prompts.structuredOutputRepair()).thenReturn("Repair the invalid structure.");
+        when(chatModel.call(any(Prompt.class))).thenReturn(new ChatResponse(List.of(new Generation(
+                new AssistantMessage("""
+                        {"gameTitle":"Game","premise":"Premise","topics":[{
+                          "key":"invalid","title":"","objective":"Teach one source relation.",
+                          "required":true,"visualEvidenceRecommended":true,
+                          "retrievalQueries":["OPAQUE"],"coverageTags":["core_loop"],
+                          "sourcePageNumbers":[1]
+                        }]}
+                        """)))));
+        SpringAiTeachingOutlineModel model = new SpringAiTeachingOutlineModel(
+                configuration, prompts, new FakeTeachingOutlineModel());
+
+        try {
+            assertThatThrownBy(() -> model.organize(new OutlineRequest(
+                            List.of(new PageInput(1, "OPAQUE source relation")),
+                            List.of(),
+                            "player")))
+                    .isInstanceOf(OutlineGenerationException.class)
+                    .hasMessageContaining("no valid outline")
+                    .hasCauseInstanceOf(RuntimeException.class);
+        } finally {
+            model.close();
+        }
+
+        verify(chatModel, times(2)).call(any(Prompt.class));
     }
 
     @Test

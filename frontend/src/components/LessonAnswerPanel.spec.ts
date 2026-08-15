@@ -65,6 +65,33 @@ describe('LessonAnswerPanel', () => {
     expect(wrapper.emitted('voiceTranscript')).toEqual([['语音问题']])
   })
 
+  it('shows a readable legacy visual citation without its internal evidence instructions', () => {
+    const visualAnswer = {
+      ...answered,
+      citations: [{
+        chunkId: 'chunk-1',
+        sectionType: 'RULE',
+        heading: '目标计分',
+        pageFrom: 4,
+        pageTo: 4,
+        excerpt: 'Visual-transcribed rule evidence. Only the statements under Visible rule facts are rule evidence. '
+          + 'Do not derive a per-item value from a worked total.\nVisible rule facts: 每张完成的目标卡得 2 分。',
+      }],
+    }
+    const wrapper = mount(LessonAnswerPanel, {
+      props: {
+        ...baseProps,
+        answer: visualAnswer,
+        answeredQuestion: '目标卡怎么计分？',
+        answerTurns: [{ question: '目标卡怎么计分？', answer: visualAnswer, learningIntent: null }],
+      },
+      global: { stubs: { VoiceQuestionCapture: true } },
+    })
+
+    expect(wrapper.text()).toContain('每张完成的目标卡得 2 分。')
+    expect(wrapper.text()).not.toMatch(/Visual-transcribed|Do not derive|Visible rule facts/)
+  })
+
   it('disables thread reset while a ruling edit or save makes clearing unsafe', () => {
     const wrapper = mount(LessonAnswerPanel, {
       props: {
@@ -99,8 +126,9 @@ describe('LessonAnswerPanel', () => {
     expect(wrapper.text()).toContain('回合结束')
     expect(wrapper.text()).toContain('第 4 页')
     expect(wrapper.text()).toContain('按规则回答当前问题')
-    expect(wrapper.text()).toContain('这条答案如何得出')
-    expect(wrapper.text()).toContain('这不是额外规则')
+    expect(wrapper.text()).toContain('规则书把结算放在本轮结束之后')
+    expect(wrapper.text()).not.toContain('这条答案如何得出')
+    expect(wrapper.text()).not.toContain('这不是额外规则')
     expect(wrapper.text()).toContain('直接核对规则依据')
     expect(wrapper.get('form').element.parentElement?.className).toContain('lg:sticky')
     expect(wrapper.get('article[aria-live="polite"]').element.parentElement?.className).toContain('min-w-0')
@@ -117,6 +145,59 @@ describe('LessonAnswerPanel', () => {
     expect(wrapper.emitted('update:edited-verdict')).toEqual([['更新后的裁定']])
     expect(wrapper.emitted('update:edited-explanation')).toEqual([['更新后的解释']])
     expect(wrapper.emitted('saveRulingRevision')).toHaveLength(1)
+  })
+
+  it('shows one progressive player answer instead of repeating a verdict as explanation and steps', () => {
+    const repetitiveAnswer = {
+      ...answered,
+      shortVerdict: '轮到你时，打出一张人格牌，然后执行该牌行动。',
+      explanation: '先选择并打出人格牌，再执行这张牌的行动。',
+      walkthroughSteps: [
+        { instruction: '打出一张人格牌。', explanation: '轮到你时选择并打出一张人格牌。', orderBasis: 'RULE_ORDER' as const },
+        { instruction: '执行该牌行动。', explanation: '打出后执行这张牌的行动。', orderBasis: 'RULE_ORDER' as const },
+      ],
+    }
+    const wrapper = mount(LessonAnswerPanel, {
+      props: {
+        ...baseProps,
+        answer: repetitiveAnswer,
+        answeredQuestion: '基本回合怎么走？',
+        answerTurns: [{ question: '基本回合怎么走？', answer: repetitiveAnswer, learningIntent: null }],
+      },
+      global: { stubs: { VoiceQuestionCapture: true } },
+    })
+
+    expect(wrapper.text()).toContain(repetitiveAnswer.shortVerdict)
+    expect(wrapper.text()).not.toContain(repetitiveAnswer.explanation)
+    expect(wrapper.text()).not.toContain('照这个顺序做')
+    expect(wrapper.text()).not.toContain('这条答案如何得出')
+    expect(wrapper.text()).toContain('直接核对规则依据')
+  })
+
+  it('keeps a non-repeated walkthrough and every material condition visible', () => {
+    const proceduralAnswer = {
+      ...answered,
+      shortVerdict: '执行 Architect 行动。',
+      explanation: '移动后可以建造房屋。',
+      walkthroughSteps: [
+        { instruction: '先移动殖民者。', explanation: '移动总步数不能超过殖民者数量。', orderBasis: 'RULE_ORDER' as const },
+        { instruction: '再建造房屋。', explanation: '每座房屋都要支付对应费用。', orderBasis: 'RULE_ORDER' as const },
+      ],
+    }
+    const wrapper = mount(LessonAnswerPanel, {
+      props: {
+        ...baseProps,
+        answer: proceduralAnswer,
+        answeredQuestion: 'Architect 具体怎么执行？',
+        answerTurns: [{ question: 'Architect 具体怎么执行？', answer: proceduralAnswer, learningIntent: null }],
+      },
+      global: { stubs: { VoiceQuestionCapture: true } },
+    })
+
+    expect(wrapper.text()).toContain('移动后可以建造房屋')
+    expect(wrapper.text()).toContain('照这个顺序做')
+    expect(wrapper.text()).toContain('移动总步数不能超过殖民者数量')
+    expect(wrapper.text()).toContain('每座房屋都要支付对应费用')
   })
 
   it('lets the player challenge a conclusion through a fresh verified retrieval', async () => {
@@ -512,7 +593,7 @@ describe('LessonAnswerPanel', () => {
 
     expect(wrapper.text()).toContain('Ask the rulebook')
     expect(wrapper.text()).toContain('Ask a question')
-    expect(wrapper.text()).toContain('How this answer was reached')
+    expect(wrapper.text()).not.toContain('How this answer was reached')
     expect(wrapper.text()).toContain('Applied to your question')
     expect(wrapper.text()).toContain('Page 4')
     expect(wrapper.text()).toContain('Review this answer and its sources')
@@ -580,7 +661,7 @@ describe('LessonAnswerPanel', () => {
     expect(wrapper.text()).toContain('回合结束')
   })
 
-  it('turns insufficient evidence into an actionable refinement and exposes the support run id', async () => {
+  it('turns insufficient evidence into an actionable refinement without exposing an internal run id', async () => {
     const insufficient = {
       ...answered,
       status: 'INSUFFICIENT_EVIDENCE' as const,
@@ -605,8 +686,8 @@ describe('LessonAnswerPanel', () => {
     })
 
     expect(wrapper.text()).toContain('规则中的具体对象名称')
-    expect(wrapper.text()).toContain('本次回答编号')
-    expect(wrapper.text()).toContain('11111111-1111-4111-8111-111111111111')
+    expect(wrapper.text()).not.toContain('本次回答编号')
+    expect(wrapper.text()).not.toContain('11111111-1111-4111-8111-111111111111')
 
     await wrapper.findAll('button').find(button => button.text() === '回到问题补充信息')!.trigger('click')
     expect(document.activeElement).toBe(wrapper.get('#lesson-question').element)

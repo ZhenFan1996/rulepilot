@@ -11,6 +11,9 @@ import java.sql.SQLException;
 import java.time.Instant;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import org.flywaydb.core.Flyway;
 import org.hibernate.SessionFactory;
 import org.hibernate.boot.MetadataSources;
@@ -84,6 +87,39 @@ class JpaCatalogRepositoryPostgresTest {
         List<Expansion> result = inTransaction(repository -> repository.findExpansions(game.id()));
 
         assertThat(result).containsExactly(first, second);
+    }
+
+    @Test
+    void atomicallyConfirmsAnUnknownEditionLanguageOnlyOnceUnderConcurrentRequests() throws Exception {
+        Instant now = Instant.parse("2026-08-15T00:00:00Z");
+        Game game = Game.create("Language confirmation regression", now);
+        GameEdition edition = GameEdition.create(game.id(), "Unknown-language edition", "und", 2026, now);
+        inTransaction(repository -> {
+            repository.save(game);
+            repository.save(edition);
+            return null;
+        });
+
+        var start = new CountDownLatch(1);
+        try (var executor = Executors.newFixedThreadPool(2)) {
+            var english = executor.submit(() -> {
+                start.await(5, TimeUnit.SECONDS);
+                return inTransaction(repository ->
+                        repository.confirmEditionLanguageIfUnknown(edition.id(), "en"));
+            });
+            var chinese = executor.submit(() -> {
+                start.await(5, TimeUnit.SECONDS);
+                return inTransaction(repository ->
+                        repository.confirmEditionLanguageIfUnknown(edition.id(), "zh-CN"));
+            });
+            start.countDown();
+
+            assertThat(List.of(english.get(15, TimeUnit.SECONDS), chinese.get(15, TimeUnit.SECONDS)))
+                    .containsExactlyInAnyOrder(true, false);
+        }
+        GameEdition persisted = inTransaction(repository -> repository.findEdition(edition.id()).orElseThrow());
+
+        assertThat(persisted.language()).isIn("en", "zh-CN");
     }
 
     private static <T> T inTransaction(RepositoryWork<T> work) {

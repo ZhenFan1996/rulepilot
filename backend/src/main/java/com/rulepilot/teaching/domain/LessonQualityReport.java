@@ -19,6 +19,8 @@ public record LessonQualityReport(OverallStatus status, int score, List<QualityC
 
     public enum CheckType {
         REQUIRED_SECTION_COVERAGE,
+        SOURCE_RULE_GROUP_COVERAGE,
+        SOURCE_AVAILABILITY,
         CITATION_SUPPORT,
         SETUP_EXECUTABILITY,
         END_AND_SCORING_COMPLETENESS,

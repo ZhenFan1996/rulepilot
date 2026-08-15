@@ -168,7 +168,8 @@ public class UserRuleDocumentController {
                 request.officialSourceUrl(),
                 request.rightsConfirmed(),
                 request.startTeaching(),
-                request.learningGoal()), principal.getName());
+                request.learningGoal(),
+                request.confirmedSourceLanguage()), principal.getName());
         return officialImportResponse(launch.job(), launch.reused());
     }
 
@@ -313,7 +314,8 @@ public class UserRuleDocumentController {
             String officialSourceUrl,
             boolean rightsConfirmed,
             boolean startTeaching,
-            String learningGoal) {}
+            String learningGoal,
+            String confirmedSourceLanguage) {}
 
     record TeachingHandoffRetryRequest(UUID expectedPreparationRunId) {}
 

@@ -45,6 +45,19 @@ class AnswerEvidenceRefinementPolicyTest {
     }
 
     @Test
+    void refinesAConcreteCalculationEvenWhenItsEvidenceNeedIsDirectRule() {
+        AnswerQuestionPlan calculation = new AnswerQuestionPlan(
+                List.of(subquestion(EvidenceNeed.DIRECT_RULE)),
+                true,
+                AnswerAid.CALCULATION,
+                ReferenceBinding.CURRENT_QUESTION);
+
+        assertThat(AnswerEvidenceRefinementPolicy.requiresRefinement(
+                        question, context, calculation, ready()))
+                .isTrue();
+    }
+
+    @Test
     void usesStructuredReferenceAndEvidenceObligationsInsteadOfQuestionKeywords() {
         AnswerQuestionPlan priorTurn = plan(
                 List.of(subquestion(EvidenceNeed.DIRECT_RULE)),

@@ -58,7 +58,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(StructuredRuleAnswerService.class);
     // Context-resolved questions use a new semantic identity, so earlier answer-cache entries are stale.
-    private static final String ANSWER_POLICY_VERSION = "answer-v111-agent-question-planning";
+    private static final String ANSWER_POLICY_VERSION = "answer-v113-player-facing-progression";
     private final QuestionUnderstanding understanding;
     private final AnswerModelGateway modelGateway;
     private final AnswerQuestionInterpretationPolicy questionInterpretation;

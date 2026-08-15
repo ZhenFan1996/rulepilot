@@ -48,6 +48,7 @@ final class TeachingSectionCandidateValidator {
         LessonDraftValidator.validateVisualBlockEvidence(draft, modelRequest, allowedEvidence);
         List<UUID> visualCitationIds = LessonDraftValidator.validatedVisualCitationIds(draft, allowedEvidence);
         List<Claim> reviewClaims = LessonDraftValidator.reviewClaims(draft, visualCitationIds);
+        TeachingQuantitativeClaimPolicy.validate(planned, draft, reviewClaims, allowedEvidence);
         List<EvidenceClaim> generatedClaims = reviewClaims.stream()
                 .map(claim -> new EvidenceClaim(claim.text(), claim.citationIds()))
                 .toList();

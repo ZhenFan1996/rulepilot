@@ -73,15 +73,35 @@ public class TeachingPlanFactory {
         }
         Set<String> keys = new HashSet<>();
         Set<String> covered = new HashSet<>();
+        Set<String> explicitlyMissing = new HashSet<>();
         for (int index = 0; index < outline.topics().size(); index++) {
             var topic = outline.topics().get(index);
             if (!keys.add(normalizedKey(topic.key(), index + 1))) {
                 throw new IllegalArgumentException("teaching topic keys must be unique");
             }
             normalizedQueries(topic.retrievalQueries());
-            covered.addAll(normalizedTags(topic.coverageTags()));
+            List<String> tags = normalizedTags(topic.coverageTags());
+            covered.addAll(tags);
+            if (tags.contains("source_dependency")) {
+                if (CORE_COVERAGE.stream().anyMatch(tags::contains)) {
+                    throw new IllegalArgumentException(
+                            "source dependency cannot claim covered core rules");
+                }
+                boolean unknownMissingTag = tags.stream()
+                        .filter(tag -> tag.startsWith("missing_") && tag.endsWith("_source"))
+                        .anyMatch(tag -> CORE_COVERAGE.stream()
+                                .noneMatch(core -> tag.equals("missing_" + core + "_source")));
+                if (unknownMissingTag) {
+                    throw new IllegalArgumentException("source dependency has an unknown missing coverage tag");
+                }
+                CORE_COVERAGE.stream()
+                        .filter(tag -> tags.contains("missing_" + tag + "_source"))
+                        .forEach(explicitlyMissing::add);
+            }
         }
-        if (!covered.containsAll(CORE_COVERAGE)) {
+        Set<String> accountedFor = new HashSet<>(covered);
+        accountedFor.addAll(explicitlyMissing);
+        if (!accountedFor.containsAll(CORE_COVERAGE)) {
             throw new IllegalArgumentException("teaching outline omitted setup, core loop, ending, or scoring coverage");
         }
     }
@@ -110,7 +130,7 @@ public class TeachingPlanFactory {
                 .map(String::strip)
                 .filter(value -> value.length() <= 300)
                 .distinct()
-                .limit(4)
+                .limit(8)
                 .toList();
     }
 

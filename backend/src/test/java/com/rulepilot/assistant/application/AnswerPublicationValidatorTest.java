@@ -9,6 +9,7 @@ import com.rulepilot.assistant.EvidenceVerifier.VerificationStatus;
 import com.rulepilot.assistant.RuleAnswerModel.ModelDraft;
 import com.rulepilot.assistant.domain.AnswerBasis;
 import com.rulepilot.assistant.domain.AnswerConfidence;
+import com.rulepilot.retrieval.VisualTranscribedRuleEvidence;
 import com.rulepilot.retrieval.evidence.HybridEvidenceHit;
 import com.rulepilot.retrieval.evidence.RuleEvidenceHit;
 import java.util.List;
@@ -81,6 +82,33 @@ class AnswerPublicationValidatorTest {
     }
 
     @Test
+    void rejectsTheKnownShortEvidenceHandleObservedInPlayerFacingProse() {
+        AnswerPublicationValidator validator = new AnswerPublicationValidator(verified());
+        String shortHandle = chunkId.toString().substring(0, 8);
+        ModelDraft leaking = new ModelDraft(
+                "按规则执行。", "来源 " + shortHandle + " 说明应这样处理。", List.of(chunkId), List.of(), "HIGH");
+
+        assertThatThrownBy(() -> validator.publish(versionId, leaking, List.of(evidence(versionId))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("internal evidence");
+    }
+
+    @Test
+    void publishesOnlyTheReadableRuleFactsFromAVisualEvidenceEnvelope() {
+        AnswerPublicationValidator validator = new AnswerPublicationValidator(verified());
+        HybridEvidenceHit visualEvidence = evidence(
+                versionId,
+                VisualTranscribedRuleEvidence.render("每张已完成的目标卡得 2 分。"));
+
+        var answer = validator.publish(versionId, draft(List.of(chunkId), "HIGH"), List.of(visualEvidence));
+
+        assertThat(answer.citations()).singleElement().satisfies(citation -> {
+            assertThat(citation.excerpt()).isEqualTo("每张已完成的目标卡得 2 分。");
+            assertThat(citation.excerpt()).doesNotContain("Visual-transcribed", "Do not derive", "Visible rule facts");
+        });
+    }
+
+    @Test
     void rejectsCitationsOutsideTheRetrievedCurrentVersionScope() {
         AnswerPublicationValidator validator = new AnswerPublicationValidator(verified());
 
@@ -114,12 +142,16 @@ class AnswerPublicationValidatorTest {
     }
 
     private HybridEvidenceHit evidence(UUID sourceVersionId) {
+        return evidence(sourceVersionId, "满足列出的条件后执行该规则。");
+    }
+
+    private HybridEvidenceHit evidence(UUID sourceVersionId, String excerpt) {
         return new HybridEvidenceHit(new RuleEvidenceHit(
                 chunkId,
                 sourceVersionId,
                 "RULES",
                 "行动",
-                "满足列出的条件后执行该规则。",
+                excerpt,
                 4,
                 4,
                 0.9), 0.9, 1, null, false);

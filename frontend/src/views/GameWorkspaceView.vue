@@ -28,6 +28,7 @@ import {
   type RichBggDetails,
 } from '@/lib/gameShelfSnapshot'
 import { useLocale } from '@/lib/locale'
+import { playerFacingLanguageName } from '@/lib/playerFacingLanguage'
 
 const route = useRoute()
 const { locale } = useLocale()
@@ -636,7 +637,7 @@ onBeforeUnmount(() => {
           <div class="mt-5 stack-y-xl">
             <article v-for="edition in game.editions" :key="edition.id" class="tabletop-panel player-board p-5 sm:p-6">
               <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <div><h3 class="font-display text-2xl font-semibold">{{ edition.name }}</h3><p class="mt-1 text-sm text-ink/45">{{ edition.language }}<span v-if="edition.publicationYear"> · {{ edition.publicationYear }}</span></p></div>
+                <div><h3 class="font-display text-2xl font-semibold">{{ edition.name }}</h3><p class="mt-1 text-sm text-ink/45">{{ playerFacingLanguageName(edition.language, locale) }}<span v-if="edition.publicationYear"> · {{ edition.publicationYear }}</span></p></div>
                 <RouterLink :to="{ name: 'teach', query: { editionId: edition.id, onboarding: 'selected-game' } }" class="inline-flex min-h-11 items-center justify-center rounded-xl bg-copper px-5 text-sm font-semibold text-white">{{ copy.addRulebook }}</RouterLink>
               </div>
 

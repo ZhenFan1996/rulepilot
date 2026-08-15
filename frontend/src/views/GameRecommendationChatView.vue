@@ -1,10 +1,13 @@
 <script setup lang="ts">
+import { ref } from 'vue'
+
 import AppShell from '@/components/AppShell.vue'
 import GameRecommendationAgent from '@/components/GameRecommendationAgent.vue'
 import TabletopGlyph from '@/components/TabletopGlyph.vue'
 import { useLocale } from '@/lib/locale'
 
 const { locale } = useLocale()
+const sessionIdentity = ref<string | null>(null)
 const copy = {
   'zh-CN': {
     eyebrow: '一起挑一款',
@@ -29,7 +32,7 @@ const t = (key: keyof typeof copy['zh-CN']) => copy[locale.value][key]
 </script>
 
 <template>
-  <AppShell>
+  <AppShell @session-identity="sessionIdentity = $event">
     <div class="tabletop-page">
       <header class="grid gap-7 pb-7 xl:grid-cols-[minmax(0,1fr)_22rem] xl:items-end">
         <div class="tabletop-heading">
@@ -49,7 +52,7 @@ const t = (key: keyof typeof copy['zh-CN']) => copy[locale.value][key]
         </RouterLink>
       </header>
 
-      <GameRecommendationAgent />
+      <GameRecommendationAgent :session-identity="sessionIdentity" />
     </div>
   </AppShell>
 </template>

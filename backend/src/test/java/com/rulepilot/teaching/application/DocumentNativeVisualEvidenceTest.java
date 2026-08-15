@@ -22,6 +22,41 @@ import org.junit.jupiter.api.Test;
 class DocumentNativeVisualEvidenceTest {
 
     @Test
+    void exposesOnlyCurrentSchemaFactsToTheNativeAnswerTool() {
+        UUID versionId = UUID.randomUUID();
+        UUID evidenceId = UUID.randomUUID();
+        AssistantReadTools reads = mock(AssistantReadTools.class);
+        when(reads.readRuleEvidenceIds(versionId, Set.of(evidenceId))).thenReturn(List.of(new RuleEvidence(
+                evidenceId, versionId, "PLAY", "Play", "Take one action.", 4, 4)));
+        VisualRulebookPageFacts facts = mock(VisualRulebookPageFacts.class);
+        when(facts.find(versionId, Set.of(4))).thenReturn(List.of(
+                new PageFact(
+                        4,
+                        "old board label",
+                        "An obsolete visual summary.",
+                        List.of("old", "board"),
+                        List.of(),
+                        PageFact.CURRENT_SCHEMA_VERSION - 1),
+                new PageFact(
+                        4,
+                        "current board label",
+                        "A current but deliberately partial visual observation.",
+                        List.of("current", "board"))));
+        var adapter = new DocumentNativeVisualEvidence(
+                reads,
+                mock(DocumentPageImages.class),
+                mock(DocumentPageImageCropper.class),
+                facts);
+
+        var visualFacts = adapter.readPageFacts(versionId, evidenceId, 4);
+
+        assertThat(visualFacts).singleElement().satisfies(value -> {
+            assertThat(value.printedTerms()).contains("current board label");
+            assertThat(value.literalSummary()).doesNotContain("obsolete");
+        });
+    }
+
+    @Test
     void requiresTheCanonicalEvidenceHandleToCoverTheRequestedPage() {
         UUID versionId = UUID.randomUUID();
         UUID evidenceId = UUID.randomUUID();

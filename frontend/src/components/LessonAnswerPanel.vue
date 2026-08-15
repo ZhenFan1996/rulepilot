@@ -4,6 +4,8 @@ import { computed, nextTick, ref } from 'vue'
 import AgentWorkspaceHeader from '@/components/AgentWorkspaceHeader.vue'
 import VoiceQuestionCapture from '@/components/VoiceQuestionCapture.vue'
 import { useLocale } from '@/lib/locale'
+import { playerFacingExplanation, playerFacingWalkthroughSteps } from '@/lib/playerFacingAnswer'
+import { playerFacingCitationExcerpt } from '@/lib/playerFacingCitation'
 import type {
   AnswerTurn,
   ConfirmedRuling,
@@ -82,6 +84,11 @@ const { t } = useLocale()
 async function focusQuestionForMoreDetail() {
   await nextTick()
   questionInput.value?.focus()
+}
+
+async function prepareFeedbackFollowUp(intent: 'SIMPLIFY' | 'VERIFY') {
+  emit('requestHelp', intent)
+  await focusQuestionForMoreDetail()
 }
 
 async function prepareClarificationReply() {
@@ -205,12 +212,6 @@ function answerBasisLabel(answerBasis: StructuredRuleAnswer['answerBasis']) {
   return answerBasis === 'GROUNDED_APPLICATION' ? t('public.answer.groundedBasis') : t('public.answer.directBasis')
 }
 
-function answerBasisDescription(answerBasis: StructuredRuleAnswer['answerBasis']) {
-  return answerBasis === 'GROUNDED_APPLICATION'
-    ? t('public.answer.groundedDescription')
-    : t('public.answer.directDescription')
-}
-
 function citationPages(citation: StructuredRuleAnswer['citations'][number]) {
   return citation.pageFrom === citation.pageTo
     ? t('lesson.answer.pageSingle', { page: citation.pageFrom })
@@ -235,6 +236,25 @@ function publishesConclusion(status: StructuredRuleAnswer['status']) {
 
 function warningMessage(warning: StructuredRuleAnswer['warnings'][number]) {
   return t(`lesson.answer.warning.${warning.type}` as const)
+}
+
+function hasStructuredAnswerDetails(answer: StructuredRuleAnswer) {
+  return !!(
+    answer.calculations?.length
+    || answer.situationChecks?.length
+    || playerFacingWalkthroughSteps(answer).length
+    || answer.decisionBranches?.length
+    || answer.exceptionClauses?.length
+    || answer.termDefinitions?.length
+    || answer.workedExamples?.length
+    || answer.priorityResolutions?.length
+    || answer.timingResolutions?.length
+    || answer.tieResolutions?.length
+    || answer.scopeResolutions?.length
+    || answer.conceptComparisons?.length
+    || answer.ruleOptions?.length
+    || answer.exceptions.length
+  )
 }
 </script>
 
@@ -269,7 +289,7 @@ function warningMessage(warning: StructuredRuleAnswer['warnings'][number]) {
             <summary class="cursor-pointer text-sm font-semibold text-indigo">{{ t('lesson.answer.history.open') }}</summary>
             <div class="mt-3 stack-y-md text-sm leading-6 text-ink/65">
               <p v-if="turn.answer.clarification" class="rounded-xl bg-amber-50 px-3 py-2 text-amber-950">{{ turn.answer.clarification }}</p>
-              <p v-else-if="turn.answer.explanation">{{ turn.answer.explanation }}</p>
+              <p v-else-if="playerFacingExplanation(turn.answer)">{{ playerFacingExplanation(turn.answer) }}</p>
               <div v-if="turn.answer.calculations?.length" class="rounded-xl border border-indigo/15 bg-indigo/[0.04] px-3 py-2">
                 <p class="font-semibold text-ink">{{ t('lesson.answer.calculationTitle') }}</p>
                 <ul class="mt-1 stack-y-xs font-mono text-xs text-indigo">
@@ -286,10 +306,10 @@ function warningMessage(warning: StructuredRuleAnswer['warnings'][number]) {
                   </li>
                 </ul>
               </div>
-              <div v-if="turn.answer.walkthroughSteps?.length" class="rounded-xl border border-copper/20 bg-copper/[0.04] px-3 py-2">
+              <div v-if="playerFacingWalkthroughSteps(turn.answer).length" class="rounded-xl border border-copper/20 bg-copper/[0.04] px-3 py-2">
                 <p class="font-semibold text-ink">{{ t('lesson.answer.walkthrough.title') }}</p>
                 <ol class="mt-2 stack-y-sm">
-                  <li v-for="(step, stepIndex) in turn.answer.walkthroughSteps" :key="`${stepIndex}-${step.instruction}`" class="flex gap-2">
+                  <li v-for="(step, stepIndex) in playerFacingWalkthroughSteps(turn.answer)" :key="`${stepIndex}-${step.instruction}`" class="flex gap-2">
                     <span class="font-semibold text-copper">{{ stepIndex + 1 }}.</span>
                     <div><p class="font-medium text-ink">{{ step.instruction }}</p><p class="text-xs text-ink/50">{{ step.explanation }}</p></div>
                   </li>
@@ -409,7 +429,7 @@ function warningMessage(warning: StructuredRuleAnswer['warnings'][number]) {
                 <ol class="mt-2 stack-y-sm">
                   <li v-for="citation in turn.answer.citations" :key="citation.chunkId" class="rounded-xl bg-paper px-3 py-2">
                     <p class="font-semibold text-indigo">{{ citation.heading }} · {{ citationPages(citation) }}</p>
-                    <p class="mt-1 text-xs leading-5 text-ink/55">{{ citation.excerpt }}</p>
+                    <p class="mt-1 text-xs leading-5 text-ink/55">{{ playerFacingCitationExcerpt(citation.excerpt) }}</p>
                   </li>
                 </ol>
               </div>
@@ -487,6 +507,7 @@ function warningMessage(warning: StructuredRuleAnswer['warnings'][number]) {
                 <span class="rounded-full bg-ink/6 px-3 py-1.5 text-ink/60">{{ answer.confirmedRulingId ? t('lesson.answer.source.confirmed') : answer.official ? t('lesson.answer.source.official') : t('lesson.answer.source.uploaded') }}</span>
               </div>
               <p class="mt-4 font-display text-xl font-semibold leading-8">{{ answer.shortVerdict }}</p>
+              <p v-if="publishesConclusion(answer.status) && playerFacingExplanation(answer)" class="mt-3 text-sm leading-7 text-ink/70">{{ playerFacingExplanation(answer) }}</p>
 
               <div v-if="answer.status === 'CLARIFICATION_REQUIRED'" class="mt-4 rounded-2xl bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900">
                 <p>{{ answer.clarification }}</p>
@@ -512,11 +533,8 @@ function warningMessage(warning: StructuredRuleAnswer['warnings'][number]) {
                 </ul>
               </div>
 
-              <div v-if="publishesConclusion(answer.status)" class="mt-5 border-t border-ink/10 pt-4">
-                <p class="text-sm font-semibold text-indigo">{{ t('public.answer.trace') }}</p>
-                <ol class="mt-3 stack-y-md text-sm leading-6 text-ink/70">
-                  <li class="rounded-2xl bg-indigo/[0.045] p-3"><span class="font-semibold text-ink">{{ t('public.answer.ruleBasis') }}：</span>{{ answerBasisDescription(answer.answerBasis) }}</li>
-                  <li class="rounded-2xl bg-paper p-3"><span class="font-semibold text-ink">{{ t('public.answer.application') }}：</span>{{ answer.explanation }}</li>
+              <div v-if="publishesConclusion(answer.status) && hasStructuredAnswerDetails(answer)" class="mt-5 border-t border-ink/10 pt-4">
+                <ol class="stack-y-md text-sm leading-6 text-ink/70">
                   <li v-if="answer.calculations?.length" class="rounded-2xl border border-indigo/15 bg-indigo/[0.04] p-3">
                     <span class="font-semibold text-ink">{{ t('lesson.answer.calculationTitle') }}：</span>
                     <span class="ml-1 text-xs text-ink/50">{{ t('lesson.answer.calculationDescription') }}</span>
@@ -538,11 +556,11 @@ function warningMessage(warning: StructuredRuleAnswer['warnings'][number]) {
                       </li>
                     </ul>
                   </li>
-                  <li v-if="answer.walkthroughSteps?.length" class="rounded-2xl border border-copper/20 bg-copper/[0.04] p-3">
+                  <li v-if="playerFacingWalkthroughSteps(answer).length" class="rounded-2xl border border-copper/20 bg-copper/[0.04] p-3">
                     <p class="font-semibold text-ink">{{ t('lesson.answer.walkthrough.title') }}</p>
                     <p class="mt-1 text-xs text-ink/50">{{ t('lesson.answer.walkthrough.description') }}</p>
                     <ol class="mt-3 stack-y-md">
-                      <li v-for="(step, stepIndex) in answer.walkthroughSteps" :key="`${stepIndex}-${step.instruction}`" class="flex gap-3 rounded-xl bg-canvas px-3 py-3">
+                      <li v-for="(step, stepIndex) in playerFacingWalkthroughSteps(answer)" :key="`${stepIndex}-${step.instruction}`" class="flex gap-3 rounded-xl bg-canvas px-3 py-3">
                         <span class="flex size-7 shrink-0 items-center justify-center rounded-full bg-copper/15 text-sm font-bold text-copper">{{ stepIndex + 1 }}</span>
                         <div>
                           <div class="flex flex-wrap items-center gap-2"><p class="font-semibold text-ink">{{ step.instruction }}</p><span class="rounded-full bg-ink/6 px-2 py-0.5 text-[11px] font-semibold text-ink/55">{{ walkthroughBasisLabel(step.orderBasis) }}</span></div>
@@ -675,7 +693,6 @@ function warningMessage(warning: StructuredRuleAnswer['warnings'][number]) {
               <details v-if="agentTrace.length" class="mt-5 border-t border-ink/10 pt-4">
                 <summary class="cursor-pointer text-sm font-semibold text-indigo">{{ t('lesson.answer.agentTrace') }}</summary>
                 <p class="mt-2 text-xs leading-5 text-ink/45">{{ t('lesson.answer.agentTraceBoundary') }}</p>
-                <p v-if="answerRunId" class="mt-2 text-xs leading-5 text-ink/50">{{ t('lesson.answer.runId') }} <code class="select-all rounded bg-ink/5 px-1.5 py-0.5">{{ answerRunId }}</code></p>
                 <ol class="mt-3 stack-y-sm text-sm leading-6 text-ink/65">
                   <li v-for="item in agentTrace" :key="item.sequence" class="flex items-start gap-2 rounded-xl bg-paper px-3 py-2">
                     <span :class="item.status === 'done' ? 'bg-emerald-500' : item.status === 'running' ? 'bg-copper' : 'bg-amber-500'" class="mt-2 size-2 shrink-0 rounded-full" aria-hidden="true" />
@@ -698,8 +715,8 @@ function warningMessage(warning: StructuredRuleAnswer['warnings'][number]) {
                 <p v-if="answerResolved" class="mt-3 rounded-xl bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-800" role="status">{{ t('lesson.answer.feedback.resolvedStatus') }}</p>
                 <div v-else class="mt-3 flex flex-wrap gap-2">
                   <button type="button" class="min-h-11 rounded-xl border border-emerald-300 bg-emerald-50 px-3 text-sm font-semibold text-emerald-800" @click="markAnswerResolved">{{ t('lesson.answer.feedback.resolved') }}</button>
-                  <button type="button" :disabled="answerLoading || !online" class="min-h-11 rounded-xl border border-copper/30 bg-copper/[0.06] px-3 text-sm font-semibold text-copper disabled:opacity-40" @click="emit('requestHelp', 'SIMPLIFY')">{{ t('lesson.answer.feedback.unclear') }}</button>
-                  <button type="button" :disabled="answerLoading || !online" class="min-h-11 rounded-xl border border-amber-400 bg-amber-50 px-3 text-sm font-semibold text-amber-950 disabled:opacity-40" @click="emit('requestHelp', 'VERIFY')">{{ t('lesson.answer.feedback.incorrect') }}</button>
+                  <button type="button" :disabled="answerLoading || !online" class="min-h-11 rounded-xl border border-copper/30 bg-copper/[0.06] px-3 text-sm font-semibold text-copper disabled:opacity-40" @click="prepareFeedbackFollowUp('SIMPLIFY')">{{ t('lesson.answer.feedback.unclear') }}</button>
+                  <button type="button" :disabled="answerLoading || !online" class="min-h-11 rounded-xl border border-amber-400 bg-amber-50 px-3 text-sm font-semibold text-amber-950 disabled:opacity-40" @click="prepareFeedbackFollowUp('VERIFY')">{{ t('lesson.answer.feedback.incorrect') }}</button>
                 </div>
               </div>
             </div>
@@ -712,7 +729,7 @@ function warningMessage(warning: StructuredRuleAnswer['warnings'][number]) {
                   <p class="font-semibold">{{ primaryCitation.heading }}</p>
                   <span class="text-xs font-semibold text-indigo">{{ citationPages(primaryCitation) }}</span>
                 </div>
-                <p class="mt-2 text-sm leading-6 text-ink/65">{{ primaryCitation.excerpt }}</p>
+                <p class="mt-2 text-sm leading-6 text-ink/65">{{ playerFacingCitationExcerpt(primaryCitation.excerpt) }}</p>
               </article>
               <details v-if="additionalCitations.length" class="mt-4">
                 <summary class="cursor-pointer text-sm font-semibold text-indigo">{{ t('lesson.answer.evidence.more', { count: additionalCitations.length }) }}</summary>
@@ -722,7 +739,7 @@ function warningMessage(warning: StructuredRuleAnswer['warnings'][number]) {
                       <p class="font-semibold">{{ citation.heading }}</p>
                       <span class="text-xs font-semibold text-indigo">{{ citationPages(citation) }}</span>
                     </div>
-                    <p class="mt-2 text-sm leading-6 text-ink/65">{{ citation.excerpt }}</p>
+                    <p class="mt-2 text-sm leading-6 text-ink/65">{{ playerFacingCitationExcerpt(citation.excerpt) }}</p>
                   </li>
                 </ol>
               </details>

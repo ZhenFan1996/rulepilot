@@ -35,7 +35,7 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final Logger LOGGER = LoggerFactory.getLogger(SpringAiRuleAnswerModel.class);
     private static final String QUESTION_INTERPRETATION_SYSTEM = readPrompt(
-            "prompts/rule-answer-question-interpretation-v5-system.txt");
+            "prompts/rule-answer-question-interpretation-v6-calculation-scope-system.txt");
     private static final String QUESTION_INTERPRETATION_USER = readPrompt(
             "prompts/rule-answer-question-interpretation-v3-user.txt");
     private static final String QUESTION_INTERPRETATION_REPAIR = readPrompt(

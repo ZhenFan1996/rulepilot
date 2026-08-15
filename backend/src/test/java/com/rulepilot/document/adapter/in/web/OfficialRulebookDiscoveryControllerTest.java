@@ -25,6 +25,7 @@ class OfficialRulebookDiscoveryControllerTest {
                         "First",
                         "publisher.example",
                         true,
+                        true,
                         OfficialRulebookDiscoveryService.SourceType.PUBLISHER,
                         OfficialRulebookDiscoveryService.AcquisitionMode.DIRECT_PDF))));
 
@@ -34,6 +35,7 @@ class OfficialRulebookDiscoveryControllerTest {
         assertThat(response.candidates()).singleElement().satisfies(candidate -> {
             assertThat(candidate.sourceDomain()).isEqualTo("publisher.example");
             assertThat(candidate.officialDomainVerified()).isTrue();
+            assertThat(candidate.languageVerified()).isTrue();
             assertThat(candidate.sourceType()).isEqualTo(OfficialRulebookDiscoveryService.SourceType.PUBLISHER);
             assertThat(candidate.acquisitionMode())
                     .isEqualTo(OfficialRulebookDiscoveryService.AcquisitionMode.DIRECT_PDF);

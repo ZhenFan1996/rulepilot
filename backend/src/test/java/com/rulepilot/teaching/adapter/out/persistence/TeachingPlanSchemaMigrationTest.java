@@ -107,6 +107,48 @@ class TeachingPlanSchemaMigrationTest {
                 .isEqualTo("WAITING_FOR_DOCUMENT");
     }
 
+    @Test
+    void addsANonNullStructuredExternalSourceLedgerToVisualPageFacts() {
+        var column = jdbc.queryForMap(
+                """
+                SELECT data_type, is_nullable, column_default
+                FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name = 'visual_rulebook_page_fact'
+                  AND column_name = 'source_dependencies'
+                """);
+
+        assertThat(column)
+                .containsEntry("data_type", "text")
+                .containsEntry("is_nullable", "NO");
+        assertThat(String.valueOf(column.get("column_default"))).contains("[]");
+    }
+
+    @Test
+    void addsANonNullCompleteRuleGroupInventoryToVisualPageFacts() {
+        var columns = jdbc.queryForList(
+                """
+                SELECT column_name, data_type, is_nullable, column_default
+                FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name = 'visual_rulebook_page_fact'
+                  AND column_name IN ('rule_group_identifiers', 'rule_group_inventory_complete')
+                ORDER BY column_name
+                """);
+
+        assertThat(columns).hasSize(2);
+        assertThat(columns.getFirst())
+                .containsEntry("column_name", "rule_group_identifiers")
+                .containsEntry("data_type", "text")
+                .containsEntry("is_nullable", "NO");
+        assertThat(String.valueOf(columns.getFirst().get("column_default"))).contains("[]");
+        assertThat(columns.getLast())
+                .containsEntry("column_name", "rule_group_inventory_complete")
+                .containsEntry("data_type", "boolean")
+                .containsEntry("is_nullable", "NO");
+        assertThat(String.valueOf(columns.getLast().get("column_default"))).contains("false");
+    }
+
     private static void enableProductionExtensions() {
         try (var connection = DriverManager.getConnection(
                         POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());

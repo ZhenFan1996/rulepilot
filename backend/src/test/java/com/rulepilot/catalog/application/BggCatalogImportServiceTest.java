@@ -232,6 +232,17 @@ class BggCatalogImportServiceTest {
         }
 
         @Override
+        public boolean confirmEditionLanguageIfUnknown(UUID editionId, String language) {
+            for (int index = 0; index < editions.size(); index++) {
+                GameEdition current = editions.get(index);
+                if (!current.id().equals(editionId) || !current.language().equals("und")) continue;
+                editions.set(index, current.confirmLanguageIfUnknown(language));
+                return true;
+            }
+            return false;
+        }
+
+        @Override
         public Expansion save(Expansion expansion) {
             throw new UnsupportedOperationException();
         }

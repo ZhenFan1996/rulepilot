@@ -29,6 +29,13 @@ public record GameEdition(
         return new GameEdition(UUID.randomUUID(), gameId, name, language, publicationYear, now);
     }
 
+    public GameEdition confirmLanguageIfUnknown(String confirmedLanguage) {
+        if (!"und".equals(language)) return this;
+        String normalized = normalizeLanguage(confirmedLanguage);
+        if ("und".equals(normalized)) return this;
+        return new GameEdition(id, gameId, name, normalized, publicationYear, createdAt);
+    }
+
     private static String normalizeLanguage(String language) {
         String normalized = CatalogText.required(language, "language", 20).replace('_', '-');
         if (normalized.equalsIgnoreCase("und")) {

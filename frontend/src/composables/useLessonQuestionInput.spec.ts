@@ -35,15 +35,26 @@ describe('useLessonQuestionInput', () => {
     expect(fixture.submitQuestion).toHaveBeenCalledWith(fixture.question.value, 'EXAMPLE')
   })
 
-  it('turns an answer challenge into a bounded verification follow-up', async () => {
+  it('turns an answer challenge into an editable natural follow-up before sending', async () => {
     const fixture = createInput()
 
     await fixture.input.requestLearningHelp('VERIFY')
 
     expect(fixture.question.value).toContain('When does the milestone score?')
-    expect(fixture.question.value).toContain('重新检索并核对')
-    expect(fixture.question.value).toContain('证据不足就明确拒答')
-    expect(fixture.submitQuestion).toHaveBeenCalledWith(fixture.question.value, 'VERIFY')
+    expect(fixture.question.value).toContain('我还是有点不放心')
+    expect(fixture.question.value).toContain('条件、时机或例外')
+    expect(fixture.question.value).not.toMatch(/检索|证据不足|拒答/)
+    expect(fixture.submitQuestion).not.toHaveBeenCalled()
+  })
+
+  it('lets the player explain what was unclear instead of auto-sending a meta prompt', async () => {
+    const fixture = createInput('When does the milestone score?')
+
+    await fixture.input.requestLearningHelp('SIMPLIFY')
+
+    expect(fixture.question.value).toContain('我还是没听明白')
+    expect(fixture.question.value).not.toContain('请用更简单的话回答')
+    expect(fixture.submitQuestion).not.toHaveBeenCalled()
   })
 
   it('requests a rulebook-grounded definition instead of a model-knowledge definition', async () => {
@@ -78,7 +89,8 @@ describe('useLessonQuestionInput', () => {
 
     expect(fixture.question.value.length).toBeLessThanOrEqual(800)
     expect(fixture.question.value).toContain('Which milestone applies after scoring?')
-    expect(fixture.question.value).toContain('If the evidence is insufficient')
+    expect(fixture.question.value).toContain('Could you check it once more')
+    expect(fixture.submitQuestion).not.toHaveBeenCalled()
   })
 
   it('trims a direct question before submitting it without a learning intent', async () => {

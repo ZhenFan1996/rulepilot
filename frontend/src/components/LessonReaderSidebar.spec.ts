@@ -73,6 +73,28 @@ describe('LessonReaderSidebar', () => {
     expect(wrapper.get('button.bg-indigo').text()).toContain('继续核对细节')
   })
 
+  it('shows an explicit missing-source dependency as a blocked quality check', () => {
+    const wrapper = mountSidebar({
+      quality: {
+        status: 'BLOCKED',
+        score: 40,
+        checks: [{
+          type: 'SOURCE_AVAILABILITY',
+          status: 'FAIL',
+          summary: '当前规则书还缺 1 份被明确引用的资料',
+          detail: '第 1 页指向 Quick Start Guide；当前文档不包含开局步骤。',
+        }],
+      },
+    })
+
+    expect(wrapper.text()).toContain('暂不能确认')
+    expect(wrapper.text()).toContain('当前规则书还缺 1 份被明确引用的资料')
+    expect(wrapper.text()).toContain('第 1 页指向 Quick Start Guide')
+    expect(wrapper.text()).toContain('当前文档不包含开局步骤')
+    expect(wrapper.text()).not.toContain('完整基础讲解可以使用')
+    expect(wrapper.text()).not.toContain('你可以先开桌')
+  })
+
   it('localizes reader controls and status chrome without changing emitted intents', () => {
     setLocale('en')
     const wrapper = mountSidebar()

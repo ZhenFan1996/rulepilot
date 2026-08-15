@@ -15,6 +15,7 @@ import java.math.RoundingMode;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
@@ -74,13 +75,24 @@ class BoardGameRecommendationSelector {
             List<Game> references,
             boolean chinese,
             Research research) {
+        return present(selected, profile, references, chinese, research, Map.of());
+    }
+
+    List<RecommendedGame> present(
+            List<Game> selected,
+            RecommendationProfile profile,
+            List<Game> references,
+            boolean chinese,
+            Research research,
+            Map<Integer, PreferenceLink> preferenceLinks) {
         return selected.stream()
                 .map(game -> present(
                         game,
                         profile,
                         sharedTaxonomy(game, references),
                         chinese,
-                        research))
+                        research,
+                        preferenceLinks.get(game.ranking().bggId())))
                 .toList();
     }
 
@@ -109,7 +121,8 @@ class BoardGameRecommendationSelector {
             RecommendationProfile profile,
             List<String> sharedTaxonomy,
             boolean chinese,
-            Research research) {
+            Research research,
+            PreferenceLink preferenceLink) {
         Details details = game.details();
         List<String> matches = new ArrayList<>();
         if (profile.players() != null) {
@@ -134,6 +147,11 @@ class BoardGameRecommendationSelector {
                     ? "BGG 复杂度 " + oneDecimal(details.averageWeight()) + " / 5，在你的上限内"
                     : "BGG complexity " + oneDecimal(details.averageWeight()) + " / 5 is within your limit");
         }
+        List<String> taxonomyLabels = taxonomyLabels(details);
+        if (sharedTaxonomy.isEmpty() && !taxonomyLabels.isEmpty()) {
+            matches.add((chinese ? "BGG 机制/类型标签：" : "BGG mechanism/category tags: ")
+                    + String.join(chinese ? "、" : ", ", taxonomyLabels));
+        }
         if (!sharedTaxonomy.isEmpty()) {
             matches.add((chinese ? "与参考游戏共有的 BGG 机制/类型：" : "BGG mechanisms/categories shared with the reference: ")
                     + String.join(chinese ? "、" : ", ", sharedTaxonomy));
@@ -141,8 +159,40 @@ class BoardGameRecommendationSelector {
         List<RecommendationReason> reasons = new ArrayList<>(matches.stream()
                 .map(text -> new RecommendationReason(ReasonKind.BGG_FACT, text, List.of()))
                 .toList());
-        reasons.addAll(researchReasons(research, game.ranking().bggId()));
-        return new RecommendedGame(game, matches, List.of(), reasons);
+        if (preferenceLink != null) {
+            reasons.add(new RecommendationReason(
+                    ReasonKind.PREFERENCE_INFERENCE,
+                    preferenceReason(preferenceLink, chinese),
+                    List.of()));
+        }
+        List<RecommendationReason> researchReasons = researchReasons(research, game.ranking().bggId());
+        reasons.addAll(researchReasons);
+        List<String> tradeoffs = researchReasons.isEmpty() && !taxonomyLabels.isEmpty()
+                ? List.of(chinese
+                        ? "BGG 标签只能说明机制分类，不能证明实际互动感或等待时间；在意这点时请继续点名比较。"
+                        : "BGG tags describe mechanisms, not actual interaction or downtime; ask for a named comparison if that matters.")
+                : List.of();
+        return new RecommendedGame(game, matches, tradeoffs, reasons);
+    }
+
+    private String preferenceReason(PreferenceLink link, boolean chinese) {
+        String taxonomy = String.join(chinese ? "、" : ", ", link.taxonomyTerms());
+        return chinese
+                ? "你说“" + link.evidenceQuote() + "”；这款的 BGG 标签中有 " + taxonomy
+                        + "。这是可核对的匹配线索，不能证明实际互动感或节奏。"
+                : "You said “" + link.evidenceQuote() + "”; this game's BGG tags include " + taxonomy
+                        + ". That is a checkable fit clue, not proof of its actual interaction or pace.";
+    }
+
+    private List<String> taxonomyLabels(Details details) {
+        return java.util.stream.Stream.of(details.mechanics(), details.categories())
+                .flatMap(List::stream)
+                .filter(java.util.Objects::nonNull)
+                .map(String::strip)
+                .filter(value -> !value.isBlank())
+                .distinct()
+                .limit(4)
+                .toList();
     }
 
     private List<RecommendationReason> researchReasons(Research research, int bggId) {
@@ -253,5 +303,18 @@ class BoardGameRecommendationSelector {
 
     private String oneDecimal(BigDecimal value) {
         return value.setScale(1, RoundingMode.HALF_UP).toPlainString();
+    }
+
+    record PreferenceLink(String evidenceQuote, List<String> taxonomyTerms) {
+        PreferenceLink {
+            evidenceQuote = evidenceQuote == null ? "" : evidenceQuote.strip().replaceAll("\\s+", " ");
+            taxonomyTerms = taxonomyTerms == null ? List.of() : List.copyOf(taxonomyTerms);
+            if (evidenceQuote.isBlank()
+                    || evidenceQuote.length() > 120
+                    || taxonomyTerms.isEmpty()
+                    || taxonomyTerms.size() > 2) {
+                throw new IllegalArgumentException("recommendation preference link is invalid");
+            }
+        }
     }
 }

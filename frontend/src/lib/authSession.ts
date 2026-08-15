@@ -3,8 +3,10 @@ export const SESSION_CLEARED_EVENT = 'rulepilot:session-cleared'
 const AUTH_RETURN_ORIGIN = 'https://rulepilot.invalid'
 const AUTHENTICATION_PATHS = new Set(['/login', '/register'])
 
-export function notifyLoginRequired() {
-  window.dispatchEvent(new Event(LOGIN_REQUIRED_EVENT))
+export function notifyLoginRequired(options: { showReminder?: boolean } = {}) {
+  window.dispatchEvent(new CustomEvent(LOGIN_REQUIRED_EVENT, {
+    detail: { showReminder: options.showReminder !== false },
+  }))
 }
 
 export function notifySessionCleared() {

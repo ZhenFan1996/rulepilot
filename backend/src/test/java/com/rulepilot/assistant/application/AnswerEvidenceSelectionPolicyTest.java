@@ -56,6 +56,22 @@ class AnswerEvidenceSelectionPolicyTest {
     }
 
     @Test
+    void keepsTheGoverningRuleAndWorkedExampleBudgetForACalculation() {
+        UUID versionId = UUID.randomUUID();
+        Map<UUID, HybridEvidenceHit> evidence = evidence(versionId, 8);
+        AnswerQuestionPlan calculation = new AnswerQuestionPlan(
+                List.of(new AnswerQuestionPlan.Subquestion(
+                        "calculate the current total", Set.of(EvidenceNeed.DIRECT_RULE))),
+                true,
+                AnswerAid.CALCULATION,
+                ReferenceBinding.CURRENT_QUESTION);
+
+        assertThat(AnswerEvidenceSelectionPolicy.select(
+                        evidence, List.of(), Set.of(), calculation, List.of()))
+                .hasSize(8);
+    }
+
+    @Test
     void preservesCallerConfirmedPageGroupsWithoutReinterpretingQuestionText() {
         UUID versionId = UUID.randomUUID();
         List<HybridEvidenceHit> firstConfirmedPage = List.of(

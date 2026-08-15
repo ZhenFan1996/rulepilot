@@ -1,5 +1,6 @@
 package com.rulepilot.assistant.application;
 
+import com.rulepilot.assistant.RuleAnswerModel.AnswerAid;
 import com.rulepilot.assistant.RuleAnswerModel.EvidenceNeed;
 import com.rulepilot.retrieval.evidence.HybridEvidenceHit;
 import java.util.Collection;
@@ -69,7 +70,9 @@ final class AnswerEvidenceSelectionPolicy {
         if (!visualRequested) addAll(selected, visual);
 
         boolean expandedCoverage = plan != null
-                && (plan.subquestions().size() > 1 || plan.evidenceNeeds().contains(EvidenceNeed.COMPLETE_LIST));
+                && (plan.subquestions().size() > 1
+                        || plan.evidenceNeeds().contains(EvidenceNeed.COMPLETE_LIST)
+                        || plan.answerAid() == AnswerAid.CALCULATION);
         int targetSize = expandedCoverage ? 8 : 5;
         evidenceById.values().stream()
                 .sorted(byScoreThenId())

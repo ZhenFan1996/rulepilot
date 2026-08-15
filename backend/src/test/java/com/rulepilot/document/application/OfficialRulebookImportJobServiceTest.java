@@ -13,6 +13,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import com.rulepilot.catalog.CatalogEditionLanguageConfirmation;
 import com.rulepilot.document.domain.DocumentSourceType;
 import com.rulepilot.document.domain.DocumentVersion;
 import com.rulepilot.document.domain.OfficialRulebookImportJob;
@@ -105,6 +106,52 @@ class OfficialRulebookImportJobServiceTest {
         assertThat(launch.job().teachingHandoff().state()).isEqualTo(TeachingHandoffState.WAITING_FOR_DOCUMENT);
         assertThat(launch.job().teachingHandoff().learningGoal()).isEqualTo("重点讲清开局和第一轮。");
         verify(executor).execute(any());
+    }
+
+    @Test
+    void confirmsOnlyAnExplicitCanonicalSourceLanguageAgainstTheBoundEdition() {
+        FakeJobs jobs = new FakeJobs();
+        OfficialRulebookImportService imports = mock(OfficialRulebookImportService.class);
+        TaskExecutor executor = mock(TaskExecutor.class);
+        CatalogEditionLanguageConfirmation languages = mock(CatalogEditionLanguageConfirmation.class);
+        OfficialRulebookImportJobService service = service(jobs, imports, executor, languages);
+        UUID editionId = UUID.fromString("11111111-1111-1111-1111-111111111111");
+        var command = new OfficialRulebookImportJobService.Command(
+                editionId,
+                "Example Rules",
+                DocumentSourceType.BASE_RULEBOOK,
+                SOURCE,
+                true,
+                true,
+                null,
+                "zh_cn");
+
+        service.enqueue(command, "alice");
+
+        verify(languages).confirmIfUnknown(editionId, "zh-CN");
+        verify(executor).execute(any());
+    }
+
+    @Test
+    void rejectsAHumanLanguageLabelThatWasNotAConfirmedLanguageTag() {
+        OfficialRulebookImportJobService service = service(
+                new FakeJobs(),
+                mock(OfficialRulebookImportService.class),
+                mock(TaskExecutor.class),
+                mock(CatalogEditionLanguageConfirmation.class));
+        var command = new OfficialRulebookImportJobService.Command(
+                UUID.randomUUID(),
+                "Example Rules",
+                DocumentSourceType.BASE_RULEBOOK,
+                SOURCE,
+                true,
+                true,
+                null,
+                "English");
+
+        assertThatThrownBy(() -> service.enqueue(command, "alice"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("language tag");
     }
 
     @Test
@@ -272,8 +319,16 @@ class OfficialRulebookImportJobServiceTest {
 
     private OfficialRulebookImportJobService service(
             FakeJobs jobs, OfficialRulebookImportService imports, TaskExecutor executor) {
+        return service(jobs, imports, executor, (editionId, language) -> false);
+    }
+
+    private OfficialRulebookImportJobService service(
+            FakeJobs jobs,
+            OfficialRulebookImportService imports,
+            TaskExecutor executor,
+            CatalogEditionLanguageConfirmation languages) {
         return new OfficialRulebookImportJobService(
-                jobs, imports, executor, Clock.fixed(NOW, ZoneOffset.UTC));
+                jobs, imports, executor, languages, Clock.fixed(NOW, ZoneOffset.UTC));
     }
 
     private OfficialRulebookImportJobService.Command command() {

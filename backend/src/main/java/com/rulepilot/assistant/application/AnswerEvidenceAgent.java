@@ -63,6 +63,11 @@ public class AnswerEvidenceAgent implements AnswerEvidenceRefiner {
             source cues such as worked example, for example, 示例, or 例如. A cue is only a retrieval hint: acquire the
             complete cited setup, action, and outcome, and do not turn that example into a general rule. For a compound question,
             check every requested condition, sequence, exception, and complete-list obligation separately. A result
+            requested as a concrete calculation requires an exact-page check of the governing numerical clause. Keep
+            the counted object, aggregation unit, per-item or per-category scope, repetition count, multiplier, cap,
+            and exception together. When that page supplies a worked example in the same scope, use its stated inputs,
+            operation, and total as a consistency check; never detach a local per-item sentence from its governing
+            preamble or silently discard a multiplier. A result
             count does not prove coverage: if a broad search misses one obligation, search that obligation again with
             the player's distinctive wording before reading the best candidate page. Only after every obligation has
             a confirmed page observation may you return exactly EVIDENCE_READY. Do not invent identifiers or scope.
@@ -204,7 +209,9 @@ public class AnswerEvidenceAgent implements AnswerEvidenceRefiner {
 
     private Set<String> requiredEvidenceTools(AnswerQuestionPlan questionPlan, QuestionContext context) {
         if (usesPriorPages(questionPlan, context)) return Set.of("read_rule_pages");
-        if (requiresSourceAuthoredAdvice(questionPlan)) return Set.of("read_rule_pages");
+        if (requiresSourceAuthoredAdvice(questionPlan) || requiresNumericalScopeAudit(questionPlan)) {
+            return Set.of("read_rule_pages");
+        }
         return Set.of();
     }
 
@@ -223,6 +230,10 @@ public class AnswerEvidenceAgent implements AnswerEvidenceRefiner {
     private boolean requiresSourceAuthoredAdvice(AnswerQuestionPlan questionPlan) {
         return questionPlan.evidenceNeeds().contains(
                 com.rulepilot.assistant.RuleAnswerModel.EvidenceNeed.ADVICE);
+    }
+
+    private boolean requiresNumericalScopeAudit(AnswerQuestionPlan questionPlan) {
+        return questionPlan.answerAid() == com.rulepilot.assistant.RuleAnswerModel.AnswerAid.CALCULATION;
     }
 
     private AnswerEvidenceRetriever.Result mergeCanonicalEvidence(

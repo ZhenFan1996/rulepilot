@@ -11,6 +11,7 @@ import {
 } from '@/lib/documentProgress'
 import { acceptProgressiveLesson, teachingRunIsActive } from '@/lib/liveLesson'
 import { useLocale } from '@/lib/locale'
+import { playerFacingLanguageName } from '@/lib/playerFacingLanguage'
 import { notifyTeachingLaunched } from '@/lib/teachingLaunch'
 import {
   acceptImportJob,
@@ -40,6 +41,7 @@ interface RulebookCandidate {
   edition: string
   sourceDomain: string
   officialDomainVerified: boolean
+  languageVerified?: boolean
   sourceType: 'PUBLISHER' | 'TRUSTED_REPOSITORY' | 'COMMUNITY_PLATFORM' | 'PUBLIC_WEB'
   acquisitionMode: 'DIRECT_PDF' | 'IMAGE_GALLERY' | 'SOURCE_PAGE'
 }
@@ -114,8 +116,8 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   eyebrow: '从推荐到答疑', title: `已选《${props.game.name}》`, preparing: '正在加入“我的桌游”并寻找可审阅的规则书…',
   finding: '桌游已保存，正在检索出版社、BGG、集石和可信规则库（已等待 {seconds} 秒，通常几秒，偶尔约 30 秒）…', found: '选择一份规则书', detail: '优先展示出版社来源，也会保留社区与可信规则库结果。请核对语言和版本；PDF 直链与已识别的连续规则页图片都可直接导入。',
   sources: { PUBLISHER: '出版社 / 权利方来源', TRUSTED_REPOSITORY: '可信规则库', COMMUNITY_PLATFORM: '社区规则书来源（如 BGG / 集石）', PUBLIC_WEB: '公开来源（请重点核对）' },
-  direct: 'PDF 可直接核验并下载', gallery: '连续规则页图片，可合成为 PDF', page: '来源页，需要继续查找文件', publisher: '发布者', language: '语言', edition: '版本', unknown: '未标明', choose: '选择这份', selected: '已选择', open: '打开来源页',
-  consent: '我确认该链接来自有权提供这份规则书的来源，并授权 RulePilot 下载用于我的个人讲解。',
+  direct: 'PDF 可直接核验并下载', gallery: '连续规则页图片，可合成为 PDF', page: '来源页，需要继续查找文件', publisher: '发布者', language: '语言', languageVerified: '来源已明确标注', languageReview: '需在来源页核对', edition: '版本', unknown: '未标明', choose: '选择这份', selected: '已选择', open: '打开来源页',
+  consent: '我已核对上方语言与版本，确认该链接来自有权提供这份规则书的来源，并授权 RulePilot 下载用于我的个人讲解。',
   import: '下载规则书并生成讲解', manual: '改用公开链接或本地上传',
   browserRequired: '已经找到这份文件，但来源网站要求在浏览器里完成隐私选择、刷新临时链接或登录。打开原始下载页取得 PDF 后，回到 RulePilot 上传即可继续；桌游、版本和讲解偏好都已保留。',
   sourcePageHandoff: '这是经过核对的来源页面，但搜索结果没有提供可验证的 PDF 直链。请在来源网站核对语言和版本并下载 PDF，再回到 RulePilot 上传；桌游和讲解偏好都已保留。',
@@ -139,8 +141,8 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   eyebrow: 'Recommendation to Q&A', title: `${props.game.name} selected`, preparing: 'Adding the game to My Games and finding reviewable rulebooks…',
   finding: 'Game saved. Searching publishers, BGG, Gstone, and trusted repositories ({seconds}s elapsed; usually a few seconds, occasionally about 30s)…', found: 'Choose a rulebook', detail: 'Publisher sources come first, with useful community and trusted-repository results preserved. Review language and edition; direct PDFs and recognized ordered page-image documents can both be imported.',
   sources: { PUBLISHER: 'Publisher / rights-holder', TRUSTED_REPOSITORY: 'Trusted rules repository', COMMUNITY_PLATFORM: 'Community rulebook source (such as BGG / Gstone)', PUBLIC_WEB: 'Public source (review carefully)' },
-  direct: 'Direct PDF ready for verification', gallery: 'Ordered rulebook pages; RulePilot can build the PDF', page: 'Source page; continue there', publisher: 'Provider', language: 'Language', edition: 'Edition', unknown: 'Not stated', choose: 'Choose this one', selected: 'Selected', open: 'Open source page',
-  consent: 'I confirm that this source may provide the rulebook and authorize RulePilot to download it for my personal guide.',
+  direct: 'Direct PDF ready for verification', gallery: 'Ordered rulebook pages; RulePilot can build the PDF', page: 'Source page; continue there', publisher: 'Provider', language: 'Language', languageVerified: 'stated by the source', languageReview: 'verify on the source page', edition: 'Edition', unknown: 'Not stated', choose: 'Choose this one', selected: 'Selected', open: 'Open source page',
+  consent: 'I reviewed the language and edition above, confirm that this source may provide the rulebook, and authorize RulePilot to download it for my personal guide.',
   import: 'Download and generate guide', manual: 'Use a public URL or local upload',
   browserRequired: 'The file was found, but its source requires an in-browser privacy choice, refreshed temporary link, or sign-in. Download it there, then return to upload it; the game, edition, and guide preferences are preserved.',
   sourcePageHandoff: 'This source page was verified, but search did not expose a verifiable PDF URL. Review the language and edition there, download the PDF, then return to upload it; the game and guide preferences are preserved.',
@@ -373,6 +375,12 @@ function choose(candidate: RulebookCandidate) {
   persistJourney()
 }
 
+function candidateLanguage(candidate: RulebookCandidate) {
+  const name = playerFacingLanguageName(candidate.language, locale.value)
+  if (!candidate.language) return name
+  return `${name}（${candidate.languageVerified ? copy.value.languageVerified : copy.value.languageReview}）`
+}
+
 async function importAndTeach() {
   if (!canImport.value) return
   await enqueueImport()
@@ -397,6 +405,7 @@ async function enqueueImport() {
         rightsConfirmed: true,
         startTeaching: true,
         learningGoal: null,
+        ...(candidate.languageVerified ? { confirmedSourceLanguage: candidate.language } : {}),
       }),
     })
     if (request !== sequence) return
@@ -805,7 +814,7 @@ onBeforeUnmount(() => {
               <div class="min-w-0">
                 <p class="font-semibold">{{ candidate.title }}</p>
                 <a :href="candidate.url" target="_blank" rel="noopener noreferrer" class="mt-1 block break-all text-xs font-semibold text-indigo underline underline-offset-2">{{ candidate.sourceDomain }} ↗</a>
-                <p class="mt-2 text-xs leading-5 text-ink/55">{{ copy.publisher }}：{{ candidate.publisher || copy.unknown }} · {{ copy.language }}：{{ candidate.language || copy.unknown }} · {{ copy.edition }}：{{ candidate.edition || copy.unknown }}</p>
+                <p class="mt-2 text-xs leading-5 text-ink/55">{{ copy.publisher }}：{{ candidate.publisher || copy.unknown }} · {{ copy.language }}：{{ candidateLanguage(candidate) }} · {{ copy.edition }}：{{ candidate.edition || copy.unknown }}</p>
                 <p class="mt-1 text-xs font-semibold" :class="candidate.sourceType === 'PUBLIC_WEB' ? 'text-amber-700' : 'text-emerald-700'">{{ copy.sources[candidate.sourceType] }}</p>
                 <p class="mt-1 text-xs text-ink/45">{{ candidate.acquisitionMode === 'DIRECT_PDF' ? copy.direct : candidate.acquisitionMode === 'IMAGE_GALLERY' ? copy.gallery : copy.page }}</p>
               </div>

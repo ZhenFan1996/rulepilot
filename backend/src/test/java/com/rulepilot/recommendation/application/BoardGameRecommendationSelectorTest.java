@@ -1,6 +1,7 @@
 package com.rulepilot.recommendation.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.rulepilot.catalog.BggGameType;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.Details;
@@ -8,17 +9,27 @@ import com.rulepilot.catalog.BoardGameRecommendationCatalog.Game;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.Ranking;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Research;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.InteractionPreference;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ReasonKind;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendationProfile;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
 
 class BoardGameRecommendationSelectorTest {
 
     private final BoardGameRecommendationSelector selector = new BoardGameRecommendationSelector(
-            new BoardGameRecommendationProperties(8, 3, new BigDecimal("0.66"), Duration.ofSeconds(55)));
+            new BoardGameRecommendationProperties(8, 3, new BigDecimal("0.66"), Duration.ofSeconds(20)));
+
+    @Test
+    void rejectsAWholeTurnBudgetLongerThanThePlayerFacingTwentySecondContract() {
+        assertThatThrownBy(() -> new BoardGameRecommendationProperties(
+                        8, 3, new BigDecimal("0.66"), Duration.ofSeconds(21)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("no longer than 20 seconds");
+    }
 
     @Test
     void preservesAgentSelectionOrderAndDerivesSharedTaxonomyFromVerifiedGames() {
@@ -39,6 +50,67 @@ class BoardGameRecommendationSelectorTest {
         assertThat(result.get(1).matches()).singleElement().asString()
                 .contains("Abstract Strategy")
                 .doesNotContain("Pattern Building");
+    }
+
+    @Test
+    void showsVerifiedTaxonomyAndAnHonestBoundaryWhenNoExperienceResearchExists() {
+        Game candidate = game(
+                1,
+                100,
+                new BigDecimal("3.0"),
+                List.of("Hand Management", "Network and Route Building"));
+        RecommendationProfile profile = new RecommendationProfile(
+                4, 120, null, BggGameType.ALL, InteractionPreference.ANY);
+
+        var result = selector.present(
+                List.of(candidate),
+                profile,
+                List.of(),
+                true,
+                Research.empty()).getFirst();
+
+        assertThat(result.reasons())
+                .filteredOn(reason -> reason.kind() == ReasonKind.BGG_FACT)
+                .extracting(reason -> reason.text())
+                .anySatisfy(text -> assertThat(text)
+                        .contains("BGG 机制/类型标签", "Hand Management", "Network and Route Building"));
+        assertThat(result.tradeoffs()).singleElement().asString()
+                .contains("BGG 标签", "不能证明", "互动感", "等待时间");
+    }
+
+    @Test
+    void keepsEachPreferenceInferenceAttachedToItsOwnQuoteAndCandidateTaxonomy() {
+        Game pattern = game(1, 50, new BigDecimal("2.2"), List.of("Pattern Building"));
+        Game drafting = game(2, 55, new BigDecimal("2.4"), List.of("Open Drafting"));
+
+        var result = selector.present(
+                List.of(pattern, drafting),
+                RecommendationProfile.empty(),
+                List.of(),
+                true,
+                Research.empty(),
+                Map.of(
+                        1,
+                        new BoardGameRecommendationSelector.PreferenceLink(
+                                "想拼出自己的版图", List.of("Pattern Building")),
+                        2,
+                        new BoardGameRecommendationSelector.PreferenceLink(
+                                "喜欢公开选牌的拉扯", List.of("Open Drafting"))));
+
+        assertThat(result.get(0).reasons())
+                .filteredOn(reason -> reason.kind() == ReasonKind.PREFERENCE_INFERENCE)
+                .singleElement()
+                .extracting(reason -> reason.text())
+                .asString()
+                .contains("想拼出自己的版图", "Pattern Building")
+                .doesNotContain("公开选牌", "Open Drafting");
+        assertThat(result.get(1).reasons())
+                .filteredOn(reason -> reason.kind() == ReasonKind.PREFERENCE_INFERENCE)
+                .singleElement()
+                .extracting(reason -> reason.text())
+                .asString()
+                .contains("喜欢公开选牌的拉扯", "Open Drafting")
+                .doesNotContain("自己的版图", "Pattern Building");
     }
 
     @Test

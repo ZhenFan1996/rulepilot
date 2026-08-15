@@ -16,6 +16,7 @@ import {
   type PendingRulebookLesson,
 } from '@/lib/pendingRulebookLesson'
 import { useLocale } from '@/lib/locale'
+import { playerFacingLanguageName } from '@/lib/playerFacingLanguage'
 import { notifyTeachingLaunched, type TeachingLaunch } from '@/lib/teachingLaunch'
 
 interface CsrfResponse { headerName: string; token: string }
@@ -56,6 +57,7 @@ interface RulebookCandidate {
   edition: string
   sourceDomain: string
   officialDomainVerified: boolean
+  languageVerified?: boolean
   sourceType: 'PUBLISHER' | 'TRUSTED_REPOSITORY' | 'COMMUNITY_PLATFORM' | 'PUBLIC_WEB'
   acquisitionMode: 'DIRECT_PDF' | 'IMAGE_GALLERY' | 'SOURCE_PAGE'
 }
@@ -214,7 +216,7 @@ let photographedPageSequence = 0
 
 const editionOptions = computed(() => games.value.flatMap((entry) => entry.editions.map((edition) => ({
   id: edition.id,
-  label: `${entry.game.name} · ${edition.name}${edition.language ? ` · ${edition.language}` : ''}`,
+  label: `${entry.game.name} · ${edition.name} · ${playerFacingLanguageName(edition.language, locale.value)}`,
 }))))
 const routeImportJobId = computed(() => typeof route.query.importJob === 'string' ? route.query.importJob : '')
 const selectedEditionContext = computed(() => {
@@ -232,7 +234,7 @@ const rulebookDiscoveryCopy = computed(() => locale.value === 'zh-CN' ? {
   error: '规则书搜索暂时不可用，手动入口仍可使用。',
   sources: { PUBLISHER: '出版社 / 权利方来源', TRUSTED_REPOSITORY: '可信规则库', COMMUNITY_PLATFORM: '社区规则书来源（如 BGG / 集石）', PUBLIC_WEB: '公开来源（请重点核对）' },
   direct: 'PDF 可直接核验并下载', gallery: '连续规则页图片，可合成为 PDF', page: '来源页，需要继续查找文件', use: '选择并继续核对', open: '打开来源页',
-  publisher: '发布者', language: '语言', edition: '版本',
+  publisher: '发布者', language: '语言', languageVerified: '来源已明确标注', languageReview: '需在来源页核对', edition: '版本',
   searchSteps: ['核对 BGG 身份与版本', '搜索出版社、发行方与本地化方', '补查 BGG、集石和可信规则库'],
 } : {
   action: 'Find a rulebook', loading: 'Searching multiple trusted sources…', title: 'Rulebook sources found',
@@ -242,7 +244,7 @@ const rulebookDiscoveryCopy = computed(() => locale.value === 'zh-CN' ? {
   error: 'Rulebook search is temporarily unavailable. Manual options still work.',
   sources: { PUBLISHER: 'Publisher / rights-holder', TRUSTED_REPOSITORY: 'Trusted rules repository', COMMUNITY_PLATFORM: 'Community rulebook source (such as BGG / Gstone)', PUBLIC_WEB: 'Public source (review carefully)' },
   direct: 'Direct PDF ready for verification', gallery: 'Ordered rulebook pages; RulePilot can build the PDF', page: 'Source page; continue there', use: 'Choose and review', open: 'Open source page',
-  publisher: 'Provider', language: 'Language', edition: 'Edition',
+  publisher: 'Provider', language: 'Language', languageVerified: 'stated by the source', languageReview: 'verify on the source page', edition: 'Edition',
   searchSteps: ['Verify BGG identity and edition', 'Search publishers, distributors, and localizers', 'Check BGG, Gstone, and trusted repositories'],
 })
 const officialImportCopy = computed(() => locale.value === 'zh-CN' ? {
@@ -508,6 +510,14 @@ function chooseRulebookCandidate(candidate: RulebookCandidate) {
   if (typeof officialDetails.value?.scrollIntoView === 'function') {
     officialDetails.value.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }
+}
+
+function candidateLanguage(candidate: RulebookCandidate) {
+  const name = playerFacingLanguageName(candidate.language, locale.value)
+  if (!candidate.language) return name
+  return `${name}（${candidate.languageVerified
+    ? rulebookDiscoveryCopy.value.languageVerified
+    : rulebookDiscoveryCopy.value.languageReview}）`
 }
 
 async function load() {
@@ -1321,6 +1331,9 @@ async function importOfficialRulebook() {
   message.value = t('documents.officialImport.downloading')
   errorMessage.value = ''
   try {
+    const selectedCandidate = rulebookCandidates.value.find(
+      candidate => candidate.url === officialSourceUrl.value.trim(),
+    )
     const csrf = await csrfToken()
     const response = await checkedFetch('/api/v1/documents/official-imports', {
       method: 'POST',
@@ -1333,6 +1346,9 @@ async function importOfficialRulebook() {
         rightsConfirmed: officialImportRightsConfirmed.value,
         startTeaching: true,
         learningGoal: learningGoal.value.trim() || null,
+        ...(selectedCandidate?.languageVerified
+          ? { confirmedSourceLanguage: selectedCandidate.language }
+          : {}),
       }),
     })
     if (!response.ok) throw new Error(t('documents.officialImport.error'))
@@ -1702,7 +1718,7 @@ onBeforeUnmount(() => {
                   <div class="min-w-0">
                     <p class="font-semibold">{{ candidate.title }}</p>
                     <p class="mt-1 break-all text-xs text-ink/45">{{ candidate.sourceDomain }}</p>
-                    <p class="mt-2 text-xs leading-5 text-ink/55">{{ rulebookDiscoveryCopy.publisher }}: {{ candidate.publisher || '—' }} · {{ rulebookDiscoveryCopy.language }}: {{ candidate.language || '—' }} · {{ rulebookDiscoveryCopy.edition }}: {{ candidate.edition || '—' }}</p>
+                    <p class="mt-2 text-xs leading-5 text-ink/55">{{ rulebookDiscoveryCopy.publisher }}: {{ candidate.publisher || '—' }} · {{ rulebookDiscoveryCopy.language }}: {{ candidateLanguage(candidate) }} · {{ rulebookDiscoveryCopy.edition }}: {{ candidate.edition || '—' }}</p>
                     <p class="mt-1 text-xs font-semibold" :class="candidate.sourceType === 'PUBLIC_WEB' ? 'text-amber-700' : 'text-emerald-700'">{{ rulebookDiscoveryCopy.sources[candidate.sourceType] }}</p>
                     <p class="mt-1 text-xs text-ink/45">{{ candidate.acquisitionMode === 'DIRECT_PDF' ? rulebookDiscoveryCopy.direct : candidate.acquisitionMode === 'IMAGE_GALLERY' ? rulebookDiscoveryCopy.gallery : rulebookDiscoveryCopy.page }}</p>
                   </div>

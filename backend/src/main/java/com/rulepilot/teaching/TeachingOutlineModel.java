@@ -23,6 +23,17 @@ public interface TeachingOutlineModel {
         return current;
     }
 
+    /**
+     * Marks a provider or structured-output failure at the model adapter boundary. Application services may recover
+     * from this failure only when an independently complete source ledger is already available.
+     */
+    final class OutlineGenerationException extends RuntimeException {
+
+        public OutlineGenerationException(String message, Throwable cause) {
+            super(message, cause);
+        }
+    }
+
     record OutlineRequest(
             List<PageInput> pages,
             List<PageImageInput> pageImages,
@@ -69,12 +80,33 @@ public interface TeachingOutlineModel {
         }
     }
 
-    record PageInput(int pageNumber, String text) {
+    record PageInput(
+            int pageNumber,
+            String text,
+            List<VisualRulebookPageCatalogModel.SourceDependency> sourceDependencies,
+            List<String> sourceRuleGroupIdentifiers,
+            boolean sourceRuleGroupInventoryComplete) {
         public PageInput {
-            if (pageNumber < 1 || text == null || text.isBlank()) {
+            if (pageNumber < 1 || text == null || text.isBlank() || sourceDependencies == null
+                    || sourceRuleGroupIdentifiers == null || sourceRuleGroupIdentifiers.size() > 16
+                    || sourceRuleGroupIdentifiers.stream()
+                            .anyMatch(identifier -> identifier == null || identifier.isBlank() || identifier.length() > 160)) {
                 throw new IllegalArgumentException("rulebook page input is invalid");
             }
             text = text.strip();
+            sourceDependencies = sourceDependencies.stream().distinct().toList();
+            sourceRuleGroupIdentifiers = sourceRuleGroupIdentifiers.stream().map(String::strip).distinct().toList();
+        }
+
+        public PageInput(
+                int pageNumber,
+                String text,
+                List<VisualRulebookPageCatalogModel.SourceDependency> sourceDependencies) {
+            this(pageNumber, text, sourceDependencies, List.of(), false);
+        }
+
+        public PageInput(int pageNumber, String text) {
+            this(pageNumber, text, List.of(), List.of(), false);
         }
     }
 

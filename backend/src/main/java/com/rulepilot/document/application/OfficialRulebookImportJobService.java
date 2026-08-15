@@ -1,5 +1,6 @@
 package com.rulepilot.document.application;
 
+import com.rulepilot.catalog.CatalogEditionLanguageConfirmation;
 import com.rulepilot.document.RulebookTeachingHandoffs;
 import com.rulepilot.document.domain.DocumentSourceType;
 import com.rulepilot.document.domain.OfficialRulebookImportJob;
@@ -8,6 +9,7 @@ import java.net.URI;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
+import java.util.Locale;
 import java.util.UUID;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -23,14 +25,16 @@ public class OfficialRulebookImportJobService implements RulebookTeachingHandoff
     private final OfficialRulebookImportJobRepository jobs;
     private final OfficialRulebookImportService imports;
     private final TaskExecutor executor;
+    private final CatalogEditionLanguageConfirmation editionLanguages;
     private final Clock clock;
 
     @Autowired
     public OfficialRulebookImportJobService(
             OfficialRulebookImportJobRepository jobs,
             OfficialRulebookImportService imports,
-            @Qualifier("officialRulebookImportExecutor") TaskExecutor executor) {
-        this(jobs, imports, executor, Clock.systemUTC());
+            @Qualifier("officialRulebookImportExecutor") TaskExecutor executor,
+            CatalogEditionLanguageConfirmation editionLanguages) {
+        this(jobs, imports, executor, editionLanguages, Clock.systemUTC());
     }
 
     OfficialRulebookImportJobService(
@@ -38,15 +42,28 @@ public class OfficialRulebookImportJobService implements RulebookTeachingHandoff
             OfficialRulebookImportService imports,
             TaskExecutor executor,
             Clock clock) {
+        this(jobs, imports, executor, (editionId, language) -> false, clock);
+    }
+
+    OfficialRulebookImportJobService(
+            OfficialRulebookImportJobRepository jobs,
+            OfficialRulebookImportService imports,
+            TaskExecutor executor,
+            CatalogEditionLanguageConfirmation editionLanguages,
+            Clock clock) {
         this.jobs = jobs;
         this.imports = imports;
         this.executor = executor;
+        this.editionLanguages = editionLanguages;
         this.clock = clock;
     }
 
     public Launch enqueue(Command command, String ownerUsername) {
         Command checked = command.checked();
         String owner = checkedOwner(ownerUsername);
+        if (checked.confirmedSourceLanguage() != null) {
+            editionLanguages.confirmIfUnknown(checked.editionId(), checked.confirmedSourceLanguage());
+        }
         var active = jobs.findActiveOwnedBySource(owner, checked.officialSourceUrl());
         if (active.isPresent()) {
             return new Launch(ensureTeachingRequested(active.orElseThrow(), checked), true);
@@ -263,7 +280,27 @@ public class OfficialRulebookImportJobService implements RulebookTeachingHandoff
             String officialSourceUrl,
             boolean rightsConfirmed,
             boolean startTeaching,
-            String learningGoal) {
+            String learningGoal,
+            String confirmedSourceLanguage) {
+
+        public Command(
+                UUID editionId,
+                String title,
+                DocumentSourceType sourceType,
+                String officialSourceUrl,
+                boolean rightsConfirmed,
+                boolean startTeaching,
+                String learningGoal) {
+            this(
+                    editionId,
+                    title,
+                    sourceType,
+                    officialSourceUrl,
+                    rightsConfirmed,
+                    startTeaching,
+                    learningGoal,
+                    null);
+        }
 
         public Command(
                 UUID editionId,
@@ -271,7 +308,7 @@ public class OfficialRulebookImportJobService implements RulebookTeachingHandoff
                 DocumentSourceType sourceType,
                 String officialSourceUrl,
                 boolean rightsConfirmed) {
-            this(editionId, title, sourceType, officialSourceUrl, rightsConfirmed, false, null);
+            this(editionId, title, sourceType, officialSourceUrl, rightsConfirmed, false, null, null);
         }
 
         Command checked() {
@@ -293,8 +330,33 @@ public class OfficialRulebookImportJobService implements RulebookTeachingHandoff
             if (!startTeaching && normalizedGoal != null) {
                 throw new IllegalArgumentException("teaching goal requires an automatic teaching handoff");
             }
+            String normalizedLanguage = checkedConfirmedLanguage(confirmedSourceLanguage);
+            if (normalizedLanguage != null && editionId == null) {
+                throw new IllegalArgumentException("confirmed source language requires a catalog edition");
+            }
             return new Command(
-                    editionId, title.strip(), sourceType, source.toASCIIString(), true, startTeaching, normalizedGoal);
+                    editionId,
+                    title.strip(),
+                    sourceType,
+                    source.toASCIIString(),
+                    true,
+                    startTeaching,
+                    normalizedGoal,
+                    normalizedLanguage);
+        }
+
+        private String checkedConfirmedLanguage(String language) {
+            if (language == null || language.isBlank()) return null;
+            String normalized = language.strip().replace('_', '-');
+            if (normalized.length() > 20
+                    || !normalized.matches("(?i)[a-z]{2,3}(?:-[a-z]{4})?(?:-(?:[a-z]{2}|[0-9]{3}))?")) {
+                throw new IllegalArgumentException("confirmed source language must be a valid language tag");
+            }
+            String canonical = Locale.forLanguageTag(normalized).toLanguageTag();
+            if (canonical.equalsIgnoreCase("und")) {
+                throw new IllegalArgumentException("confirmed source language must be a known language tag");
+            }
+            return canonical;
         }
     }
 

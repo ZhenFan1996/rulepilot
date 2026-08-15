@@ -212,14 +212,16 @@ public class OfficialRulebookDiscoveryService {
     private Candidate resolvedImageGallery(SourcePage page, URI target) {
         String host = IDN.toASCII(target.getHost()).toLowerCase(Locale.ROOT);
         String title = page.label().isBlank() ? page.provenance().title() : page.label();
+        LanguageResolution language = resolvedLanguage(page);
         return new Candidate(
                 bounded(title, 180),
                 target.toASCIIString(),
                 page.provenance().publisher(),
-                resolvedLanguage(page),
+                language.value(),
                 page.provenance().edition(),
                 host,
                 page.provenance().officialDomainVerified(),
+                language.verified(),
                 page.provenance().sourceType(),
                 AcquisitionMode.IMAGE_GALLERY);
     }
@@ -227,39 +229,56 @@ public class OfficialRulebookDiscoveryService {
     private Candidate resolvedDownload(SourcePage page, URI target) {
         String host = IDN.toASCII(target.getHost()).toLowerCase(Locale.ROOT);
         String title = page.label().isBlank() ? page.provenance().title() : page.label();
+        LanguageResolution language = resolvedLanguage(page);
         return new Candidate(
                 bounded(title, 180),
                 target.toASCIIString(),
                 page.provenance().publisher(),
-                resolvedLanguage(page),
+                language.value(),
                 page.provenance().edition(),
                 host,
                 page.provenance().officialDomainVerified(),
+                language.verified(),
                 page.provenance().sourceType(),
                 AcquisitionMode.DIRECT_PDF);
     }
 
-    private String resolvedLanguage(SourcePage page) {
+    private LanguageResolution resolvedLanguage(SourcePage page) {
         String label = page.label();
         String words = normalizedWords(label);
-        if (containsAnyWord(words, Set.of("chinese", "chinois", "zhongwen"))) return "zh-CN";
-        if (containsAnyWord(words, Set.of("english", "anglais", "rulebook", "rules", "instructions"))) return "en";
-        if (containsAnyWord(words, Set.of("french", "francais", "regles"))) return "fr";
-        if (containsAnyWord(words, Set.of("german", "allemand", "deutsch", "regeln", "spielanleitung"))) return "de";
-        if (containsAnyWord(words, Set.of("spanish", "espagnol", "espanol", "reglas"))) return "es";
-        if (containsAnyWord(words, Set.of("italian", "italien", "italiano", "regolamento"))) return "it";
-        if (containsAnyWord(words, Set.of("dutch", "neerlandais", "nederlands", "spelregels"))) return "nl";
-        if (containsAnyWord(words, Set.of("portuguese", "portugais", "portugues", "regras"))) return "pt";
-        if (label != null && label.codePoints().anyMatch(this::isHan)) return "zh-CN";
-        return page.provenance().language();
+        String compact = Normalizer.normalize(label == null ? "" : label, Normalizer.Form.NFKC)
+                .toLowerCase(Locale.ROOT);
+        if (containsAnyWord(words, Set.of("chinese", "chinois", "zhongwen"))
+                || compact.contains("简体中文") || compact.contains("繁體中文")
+                || compact.contains("繁体中文") || compact.contains("中文")) {
+            return new LanguageResolution("zh-CN", true);
+        }
+        if (containsAnyWord(words, Set.of("english", "anglais")) || compact.contains("英文")) {
+            return new LanguageResolution("en", true);
+        }
+        if (containsAnyWord(words, Set.of("french", "francais")) || compact.contains("法文")) {
+            return new LanguageResolution("fr", true);
+        }
+        if (containsAnyWord(words, Set.of("german", "allemand", "deutsch")) || compact.contains("德文")) {
+            return new LanguageResolution("de", true);
+        }
+        if (containsAnyWord(words, Set.of("spanish", "espagnol", "espanol")) || compact.contains("西班牙文")) {
+            return new LanguageResolution("es", true);
+        }
+        if (containsAnyWord(words, Set.of("italian", "italien", "italiano")) || compact.contains("意大利文")) {
+            return new LanguageResolution("it", true);
+        }
+        if (containsAnyWord(words, Set.of("dutch", "neerlandais", "nederlands")) || compact.contains("荷兰文")) {
+            return new LanguageResolution("nl", true);
+        }
+        if (containsAnyWord(words, Set.of("portuguese", "portugais", "portugues")) || compact.contains("葡萄牙文")) {
+            return new LanguageResolution("pt", true);
+        }
+        return new LanguageResolution(bounded(page.provenance().language(), 40), false);
     }
 
     private boolean containsAnyWord(String words, Set<String> terms) {
         return terms.stream().anyMatch(term -> containsWord(words, term));
-    }
-
-    private boolean isHan(int codePoint) {
-        return Character.UnicodeScript.of(codePoint) == Character.UnicodeScript.HAN;
     }
 
     private int linkScore(
@@ -343,12 +362,33 @@ public class OfficialRulebookDiscoveryService {
                 bounded(candidate.title(), 180),
                 uri.toASCIIString(),
                 bounded(candidate.publisher(), 120),
-                bounded(candidate.language(), 40),
+                normalizedCandidateLanguage(candidate.language()),
                 bounded(candidate.edition(), 120),
                 host,
                 publisherMatch,
+                false,
                 sourceType,
                 acquisitionMode);
+    }
+
+    private String normalizedCandidateLanguage(String language) {
+        if (language == null || language.isBlank()) return "";
+        String checked = Normalizer.normalize(language.strip(), Normalizer.Form.NFKC);
+        String words = normalizedWords(checked);
+        if (Set.of("english", "anglais", "英文").contains(words)) return "en";
+        if (Set.of("traditional chinese", "繁体中文", "繁體中文").contains(words)) return "zh-TW";
+        if (Set.of("simplified chinese", "简体中文").contains(words)) return "zh-CN";
+        if (Set.of("chinese", "chinois", "中文").contains(words)) return "zh";
+        if (Set.of("french", "francais", "法文").contains(words)) return "fr";
+        if (Set.of("german", "deutsch", "德文").contains(words)) return "de";
+        if (Set.of("spanish", "espanol", "西班牙文").contains(words)) return "es";
+        if (Set.of("italian", "italiano", "意大利文").contains(words)) return "it";
+        if (Set.of("dutch", "nederlands", "荷兰文").contains(words)) return "nl";
+        if (Set.of("portuguese", "portugues", "葡萄牙文").contains(words)) return "pt";
+        String tag = checked.replace('_', '-');
+        if (!tag.matches("(?i)[a-z]{2,3}(?:-[a-z]{4})?(?:-(?:[a-z]{2}|[0-9]{3}))?")) return "";
+        String canonical = Locale.forLanguageTag(tag).toLanguageTag();
+        return canonical.equalsIgnoreCase("und") ? "" : canonical;
     }
 
     private boolean looksLikeDirectPdf(URI uri) {
@@ -395,7 +435,7 @@ public class OfficialRulebookDiscoveryService {
         if (!isImportable(candidate)) return false;
         String requested = primaryLanguage(requestedLanguage);
         if (requested.isBlank() || "und".equals(requested)) return true;
-        return requested.equals(primaryLanguage(candidate.language()));
+        return candidate.languageVerified() && requested.equals(primaryLanguage(candidate.language()));
     }
 
     private String primaryLanguage(String language) {
@@ -437,6 +477,7 @@ public class OfficialRulebookDiscoveryService {
             String edition,
             String sourceDomain,
             boolean officialDomainVerified,
+            boolean languageVerified,
             SourceType sourceType,
             AcquisitionMode acquisitionMode) {}
 
@@ -454,6 +495,8 @@ public class OfficialRulebookDiscoveryService {
     }
 
     private record SourcePage(Candidate provenance, URI url, String label, int depth) {}
+
+    private record LanguageResolution(String value, boolean verified) {}
 
     private record ScoredLink(OfficialRulebookSourceInspector.Link link, int score) {}
 }

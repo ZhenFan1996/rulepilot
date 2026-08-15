@@ -72,6 +72,39 @@ describe('GameShelfView', () => {
     expect(wrapper.text()).not.toContain('今晚想开哪一局？')
   })
 
+  it('presents an unspecified edition language honestly instead of exposing the und code', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const path = String(input)
+      if (path.includes('/api/auth/session')) return response({ username: 'player' })
+      if (path.includes('/api/v1/assistant-runs/active')) return response([])
+      if (path.endsWith('/api/v1/games')) return response([{
+        ...catalogGame('game-1', 'edition-1', 'Concordia'),
+        editions: [{ id: 'edition-1', gameId: 'game-1', name: 'BGG 基础版', language: 'und', publicationYear: 2013 }],
+      }])
+      if (path.endsWith('/api/v1/documents')) {
+        return response([ownedDocument('document-1', 'edition-1', 'version-1', 'Official Rulebook')])
+      }
+      if (path.endsWith('/api/v1/documents/official-imports')) return response([])
+      if (path.endsWith('/api/v1/documents/upload-teaching-handoffs')) return response([])
+      if (path.endsWith('/api/v1/teaching-plans')) return response([])
+      return new Response(null, { status: 404 })
+    }))
+
+    const router = appRouter()
+    await router.push('/catalog')
+    await router.isReady()
+    const wrapper = mount(GameShelfView, { global: { plugins: [router] } })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('BGG 基础版 · 语言未标注 · 2013')
+    expect(wrapper.text()).not.toMatch(/\bund\b/)
+
+    setLocale('en')
+    await flushPromises()
+    expect(wrapper.text()).toContain('BGG 基础版 · Language not stated · 2013')
+    expect(wrapper.text()).not.toMatch(/\bund\b/)
+  })
+
   it('retains the shelf route and shows a sign-in action when the session is missing', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 401 })))
     const router = appRouter()

@@ -2,7 +2,10 @@ package com.rulepilot.assistant.application;
 
 import com.rulepilot.assistant.RuleAnswerModel.ModelDraft;
 import com.rulepilot.assistant.RuleAnswerModel.ModelRequest;
+import java.util.Collection;
 import java.util.List;
+import java.util.Locale;
+import java.util.UUID;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -45,6 +48,32 @@ final class AnswerDraftSafetyPolicy {
 
     static boolean containsInternalEvidenceReference(String value) {
         return value != null && INTERNAL_EVIDENCE_REFERENCE.matcher(value).find();
+    }
+
+    static boolean containsKnownEvidenceReference(String value, Collection<UUID> evidenceIds) {
+        if (value == null || value.isBlank() || evidenceIds == null || evidenceIds.isEmpty()) return false;
+        String normalized = value.toLowerCase(Locale.ROOT);
+        return evidenceIds.stream().anyMatch(id -> {
+            if (id == null) return false;
+            String full = id.toString().toLowerCase(Locale.ROOT);
+            return containsHexToken(normalized, full) || containsHexToken(normalized, full.substring(0, 8));
+        });
+    }
+
+    private static boolean containsHexToken(String value, String candidate) {
+        int start = value.indexOf(candidate);
+        while (start >= 0) {
+            int end = start + candidate.length();
+            boolean leftBoundary = start == 0 || !isHex(value.charAt(start - 1));
+            boolean rightBoundary = end == value.length() || !isHex(value.charAt(end));
+            if (leftBoundary && rightBoundary) return true;
+            start = value.indexOf(candidate, start + 1);
+        }
+        return false;
+    }
+
+    private static boolean isHex(char value) {
+        return value >= '0' && value <= '9' || value >= 'a' && value <= 'f';
     }
 
     private static ModelDraft copyWithPlayerText(

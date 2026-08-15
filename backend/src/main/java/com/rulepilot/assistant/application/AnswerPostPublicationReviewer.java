@@ -144,7 +144,7 @@ final class AnswerPostPublicationReviewer {
             } catch (AgentExecutionStoppedException stopped) {
                 throw stopped;
             } catch (RuntimeException reviewFailure) {
-                return Result.warned(revised, Type.REVIEW_UNAVAILABLE);
+                return unavailableReview();
             }
             if (!revisionReview.accepted()) {
                 return unresolvedReview(revised, revisionReview, "局部重讲仍未通过事实一致性审查。");
@@ -158,8 +158,14 @@ final class AnswerPostPublicationReviewer {
                     assistantRunId,
                     exception.getMessage(),
                     exception.getClass().getSimpleName());
-            return Result.warned(answer, Type.REVIEW_UNAVAILABLE);
+            return unavailableReview();
         }
+    }
+
+    private Result unavailableReview() {
+        return Result.rejected(
+                AnswerStatus.INVALID_MODEL_OUTPUT,
+                "事实复核暂时不可用；为避免发布未经复核的规则结论，本次不作判定，请重试或直接查看规则页。");
     }
 
     private Result unresolvedReview(StructuredRuleAnswer answer, Review review, String materialFailureMessage) {

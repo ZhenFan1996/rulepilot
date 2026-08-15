@@ -68,6 +68,7 @@ public class DocumentNativeVisualEvidence implements NativeVisualEvidence {
         if (!allowsPage(documentVersionId, evidenceId, pageNumber)) return List.of();
         return visualFacts.find(documentVersionId, Set.of(pageNumber)).stream()
                 .filter(fact -> fact.pageNumber() == pageNumber)
+                .filter(fact -> fact.schemaVersion() == VisualRulebookPageFacts.PageFact.CURRENT_SCHEMA_VERSION)
                 .map(fact -> new VisualPageFact(
                         fact.pageNumber(),
                         fact.printedTerms(),

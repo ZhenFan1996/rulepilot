@@ -287,7 +287,7 @@ rulepilot:
       model-candidate-limit: ${BGG_RECOMMENDATION_MODEL_CANDIDATE_LIMIT:8}
       result-count: ${BGG_RECOMMENDATION_RESULT_COUNT:3}
       diversity-overlap-limit: ${BGG_RECOMMENDATION_DIVERSITY_OVERLAP_LIMIT:0.66}
-      timeout: ${BGG_RECOMMENDATION_AGENT_TIMEOUT:PT55S}
+      timeout: ${BGG_RECOMMENDATION_AGENT_TIMEOUT:PT20S}
       web-research:
         enabled: ${BGG_RECOMMENDATION_WEB_RESEARCH_ENABLED:false}
         api-key: ${WEB_SEARCH_API_KEY:${QWEN_API_KEY:}}

@@ -183,12 +183,31 @@ public interface VisualRulebookPageCatalogModel {
      * A compact page-role ledger used only to build an immutable source-bound plan. Coverage tags express teaching
      * obligations visible on a page; they are not themselves rule claims and never replace the page evidence.
      */
+    record SourceDependency(String title, List<String> missingCoverageTags) {
+
+        private static final Set<String> ALLOWED_MISSING_COVERAGE =
+                Set.of("setup", "core_loop", "end", "scoring");
+
+        public SourceDependency {
+            if (title == null || title.isBlank() || title.length() > 160
+                    || missingCoverageTags == null || missingCoverageTags.size() > ALLOWED_MISSING_COVERAGE.size()
+                    || missingCoverageTags.stream()
+                            .anyMatch(tag -> tag == null || !ALLOWED_MISSING_COVERAGE.contains(tag))) {
+                throw new IllegalArgumentException("visual teaching source dependency is invalid");
+            }
+            title = title.strip().replaceAll("\\s+", " ");
+            missingCoverageTags = missingCoverageTags.stream().distinct().toList();
+        }
+    }
+
     record TeachingPageSketch(
             int pageNumber,
             TeachingPageRole role,
             String visibleHeading,
             List<String> visibleTerms,
-            List<String> coverageTags) {
+            List<String> coverageTags,
+            boolean ruleGroupInventoryComplete,
+            List<SourceDependency> sourceDependencies) {
 
         private static final Set<String> ALLOWED_COVERAGE_TAGS =
                 Set.of("setup", "core_loop", "end", "scoring", "source_coverage");
@@ -196,21 +215,64 @@ public interface VisualRulebookPageCatalogModel {
         public TeachingPageSketch {
             if (pageNumber < 1 || role == null
                     || (visibleHeading != null && visibleHeading.length() > 160)
-                    || visibleTerms == null || visibleTerms.size() > 4
+                    || visibleTerms == null || visibleTerms.size() > 8
                     || visibleTerms.stream().anyMatch(term -> term == null || term.isBlank() || term.length() > 120)
                     || coverageTags == null || coverageTags.size() > ALLOWED_COVERAGE_TAGS.size()
-                    || coverageTags.stream().anyMatch(tag -> tag == null || !ALLOWED_COVERAGE_TAGS.contains(tag))) {
+                    || coverageTags.stream().anyMatch(tag -> tag == null || !ALLOWED_COVERAGE_TAGS.contains(tag))
+                    || sourceDependencies == null || sourceDependencies.size() > 4) {
                 throw new IllegalArgumentException("visual teaching page sketch is invalid");
             }
             visibleHeading = visibleHeading == null ? "" : visibleHeading.strip();
             visibleTerms = visibleTerms.stream().map(String::strip).distinct().toList();
             coverageTags = coverageTags.stream().distinct().toList();
+            sourceDependencies = sourceDependencies.stream().distinct().toList();
             if (role != TeachingPageRole.GAMEPLAY_RULES && !coverageTags.isEmpty()) {
                 throw new IllegalArgumentException("non-gameplay visual pages cannot claim teaching coverage");
+            }
+            if (role != TeachingPageRole.GAMEPLAY_RULES && ruleGroupInventoryComplete) {
+                throw new IllegalArgumentException("non-gameplay visual pages cannot complete a gameplay inventory");
             }
             if (role == TeachingPageRole.GAMEPLAY_RULES && coverageTags.isEmpty()) {
                 throw new IllegalArgumentException("gameplay visual pages need a bounded teaching role");
             }
+            if (role == TeachingPageRole.GAMEPLAY_RULES
+                    && ruleGroupInventoryComplete
+                    && visibleTerms.isEmpty()) {
+                throw new IllegalArgumentException("complete gameplay inventory cannot be empty");
+            }
+        }
+
+        public TeachingPageSketch(
+                int pageNumber,
+                TeachingPageRole role,
+                String visibleHeading,
+                List<String> visibleTerms,
+                List<String> coverageTags,
+                boolean ruleGroupInventoryComplete) {
+            this(
+                    pageNumber,
+                    role,
+                    visibleHeading,
+                    visibleTerms,
+                    coverageTags,
+                    ruleGroupInventoryComplete,
+                    List.of());
+        }
+
+        public TeachingPageSketch(
+                int pageNumber,
+                TeachingPageRole role,
+                String visibleHeading,
+                List<String> visibleTerms,
+                List<String> coverageTags) {
+            this(
+                    pageNumber,
+                    role,
+                    visibleHeading,
+                    visibleTerms,
+                    coverageTags,
+                    role == TeachingPageRole.GAMEPLAY_RULES,
+                    List.of());
         }
     }
 
@@ -519,10 +581,23 @@ public interface VisualRulebookPageCatalogModel {
             List<String> keywords,
             List<VisualAnchor> visualAnchors,
             List<IconOccurrence> iconOccurrences,
-            boolean iconInventoryComplete) {
+            boolean iconInventoryComplete,
+            List<SourceDependency> sourceDependencies,
+            List<String> ruleGroupIdentifiers,
+            boolean ruleGroupInventoryComplete) {
 
         public PageSummary(int pageNumber, String printedTerms, String factualSummary, List<String> keywords) {
-            this(pageNumber, printedTerms, factualSummary, keywords, List.of(), List.of(), false);
+            this(
+                    pageNumber,
+                    printedTerms,
+                    factualSummary,
+                    keywords,
+                    List.of(),
+                    List.of(),
+                    false,
+                    List.of(),
+                    List.of(),
+                    false);
         }
 
         public PageSummary(
@@ -531,7 +606,60 @@ public interface VisualRulebookPageCatalogModel {
                 String factualSummary,
                 List<String> keywords,
                 List<VisualAnchor> visualAnchors) {
-            this(pageNumber, printedTerms, factualSummary, keywords, visualAnchors, List.of(), false);
+            this(
+                    pageNumber,
+                    printedTerms,
+                    factualSummary,
+                    keywords,
+                    visualAnchors,
+                    List.of(),
+                    false,
+                    List.of(),
+                    List.of(),
+                    false);
+        }
+
+        public PageSummary(
+                int pageNumber,
+                String printedTerms,
+                String factualSummary,
+                List<String> keywords,
+                List<VisualAnchor> visualAnchors,
+                List<IconOccurrence> iconOccurrences,
+                boolean iconInventoryComplete) {
+            this(
+                    pageNumber,
+                    printedTerms,
+                    factualSummary,
+                    keywords,
+                    visualAnchors,
+                    iconOccurrences,
+                    iconInventoryComplete,
+                    List.of(),
+                    List.of(),
+                    false);
+        }
+
+        public PageSummary(
+                int pageNumber,
+                String printedTerms,
+                String factualSummary,
+                List<String> keywords,
+                List<VisualAnchor> visualAnchors,
+                List<IconOccurrence> iconOccurrences,
+                boolean iconInventoryComplete,
+                List<SourceDependency> sourceDependencies) {
+            this(
+                    pageNumber,
+                    printedTerms,
+                    factualSummary,
+                    keywords,
+                    visualAnchors,
+                    iconOccurrences,
+                    iconInventoryComplete,
+                    sourceDependencies,
+                    List.of(),
+                    false);
         }
 
         public PageSummary {
@@ -541,7 +669,12 @@ public interface VisualRulebookPageCatalogModel {
                     || (keywords != null && (keywords.size() > 16
                             || keywords.stream().anyMatch(keyword -> keyword == null || keyword.isBlank() || keyword.length() > 120)))
                     || (visualAnchors != null && visualAnchors.size() > 8)
-                    || (iconOccurrences != null && iconOccurrences.size() > 32)) {
+                    || (iconOccurrences != null && iconOccurrences.size() > 32)
+                    || sourceDependencies == null
+                    || sourceDependencies.size() > 4
+                    || ruleGroupIdentifiers == null || ruleGroupIdentifiers.size() > 16
+                    || ruleGroupIdentifiers.stream()
+                            .anyMatch(identifier -> identifier == null || identifier.isBlank() || identifier.length() > 120)) {
                 throw new IllegalArgumentException("visual page summary is invalid");
             }
             printedTerms = printedTerms == null || printedTerms.isBlank()
@@ -555,6 +688,8 @@ public interface VisualRulebookPageCatalogModel {
                     : keywords.stream().map(String::strip).distinct().toList();
             visualAnchors = visualAnchors == null ? List.of() : visualAnchors.stream().distinct().toList();
             iconOccurrences = iconOccurrences == null ? List.of() : iconOccurrences.stream().distinct().toList();
+            sourceDependencies = sourceDependencies.stream().distinct().toList();
+            ruleGroupIdentifiers = ruleGroupIdentifiers.stream().map(String::strip).distinct().toList();
         }
     }
 }

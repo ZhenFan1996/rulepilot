@@ -291,7 +291,9 @@ final class AnswerPublicationValidator {
                                 + option.optionName() + "\n" + option.availabilityCondition() + "\n"
                                 + option.result())
                         .collect(java.util.stream.Collectors.joining("\n"));
-        if (AnswerDraftSafetyPolicy.containsInternalEvidenceReference(completeAnswer)) {
+        List<UUID> evidenceIds = evidence.stream().map(hit -> hit.evidence().chunkId()).toList();
+        if (AnswerDraftSafetyPolicy.containsInternalEvidenceReference(completeAnswer)
+                || AnswerDraftSafetyPolicy.containsKnownEvidenceReference(completeAnswer, evidenceIds)) {
             throw new IllegalArgumentException("player-facing answer contains internal evidence references");
         }
         List<EvidenceClaim> claims = new java.util.ArrayList<>();
@@ -350,7 +352,7 @@ final class AnswerPublicationValidator {
             var source = hit.evidence();
             return new RuleCitation(
                     source.chunkId(), source.documentVersionId(), source.sectionType(), source.heading(),
-                    source.excerpt(), source.pageFrom(), source.pageTo());
+                    AnswerCitationPresentationPolicy.excerpt(source.excerpt()), source.pageFrom(), source.pageTo());
         }).toList();
         AnswerConfidence confidence = AnswerConfidence.valueOf(draft.confidence().toUpperCase(Locale.ROOT));
         AnswerBasis answerBasis = AnswerBasis.fromModelValue(draft.answerBasis());

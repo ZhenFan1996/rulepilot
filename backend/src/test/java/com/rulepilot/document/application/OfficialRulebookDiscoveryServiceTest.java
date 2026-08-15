@@ -86,6 +86,23 @@ class OfficialRulebookDiscoveryServiceTest {
     }
 
     @Test
+    void normalizesAnUnverifiedHumanLanguageLabelWithoutPromotingItToSourceEvidence() {
+        var finder = new FakeFinder(List.of(new OfficialRulebookCandidateFinder.Candidate(
+                "Publisher rulebook",
+                "https://stonemaiergames.com/files/wingspan-rules.pdf",
+                "Stonemaier Games",
+                "English",
+                "First")));
+        var service = new OfficialRulebookDiscoveryService(
+                catalog(), sourceIdentity(), finder, request -> List.of(), emptyInspector(), "");
+
+        Candidate candidate = service.discover(EDITION_ID, "en").candidates().getFirst();
+
+        assertThat(candidate.language()).isEqualTo("en");
+        assertThat(candidate.languageVerified()).isFalse();
+    }
+
+    @Test
     void followsABoundedDownloadControlAndPromotesASuffixlessPdfOnlyAfterInspection() {
         var finder = new FakeFinder(List.of(new OfficialRulebookCandidateFinder.Candidate(
                 "Publisher rules",
@@ -118,7 +135,7 @@ class OfficialRulebookDiscoveryServiceTest {
                     assertThat(candidate.sourceType()).isEqualTo(SourceType.PUBLISHER);
                     assertThat(candidate.acquisitionMode()).isEqualTo(AcquisitionMode.DIRECT_PDF);
                 });
-        assertThat(finder.refinementCalls).isZero();
+        assertThat(finder.refinementCalls).isEqualTo(1);
     }
 
     @Test
@@ -141,10 +158,10 @@ class OfficialRulebookDiscoveryServiceTest {
                         List.of(
                                 new OfficialRulebookSourceInspector.Link(
                                         URI.create("https://www.gstonegames.com/game/doc-1111.html"),
-                                        "Official Rulebook"),
+                                        "English Rulebook"),
                                 new OfficialRulebookSourceInspector.Link(
                                         URI.create("https://www.gstonegames.com/game/doc-4321.html"),
-                                        "官方规则书"),
+                                        "简体中文规则书"),
                                 new OfficialRulebookSourceInspector.Link(
                                         URI.create("https://www.gstonegames.com/game/doc-2222.html"),
                                         "目录游戏图标概览 / 术语表"))));
@@ -164,21 +181,58 @@ class OfficialRulebookDiscoveryServiceTest {
 
         assertThat(result.candidates())
                 .anySatisfy(candidate -> {
-                    assertThat(candidate.title()).isEqualTo("官方规则书");
+                    assertThat(candidate.title()).isEqualTo("简体中文规则书");
                     assertThat(candidate.url()).isEqualTo("https://www.gstonegames.com/game/doc-4321.html");
                     assertThat(candidate.language()).isEqualTo("zh-CN");
+                    assertThat(candidate.languageVerified()).isTrue();
                     assertThat(candidate.sourceType()).isEqualTo(SourceType.COMMUNITY_PLATFORM);
                     assertThat(candidate.acquisitionMode()).isEqualTo(AcquisitionMode.IMAGE_GALLERY);
                 });
         assertThat(result.candidates())
                 .filteredOn(candidate -> candidate.url().endsWith("/game/doc-1111.html"))
                 .singleElement()
-                .extracting(Candidate::language)
-                .isEqualTo("en");
+                .satisfies(candidate -> {
+                    assertThat(candidate.language()).isEqualTo("en");
+                    assertThat(candidate.languageVerified()).isTrue();
+                });
         assertThat(result.candidates())
                 .noneMatch(candidate -> candidate.url().endsWith("/game/doc-2222.html"));
         assertThat(finder.refinementCalls).isZero();
         assertThat(finder.calls).isZero();
+    }
+
+    @Test
+    void doesNotTreatTheRequestedLanguageOrAGenericRulebookLabelAsSourceEvidence() {
+        GstoneRulebookCatalogLookup gstoneCatalog = request -> List.of(
+                new OfficialRulebookCandidateFinder.Candidate(
+                        "目录游戏", "https://www.gstonegames.com/game/info-1234.html", "集石", "", "基础版"));
+        OfficialRulebookSourceInspector inspector = source -> {
+            if (source.getPath().equals("/game/info-1234.html")) {
+                return Optional.of(new OfficialRulebookSourceInspector.Inspection(
+                        source,
+                        OfficialRulebookSourceInspector.MediaType.HTML,
+                        List.of(new OfficialRulebookSourceInspector.Link(
+                                URI.create("https://www.gstonegames.com/game/doc-1111.html"),
+                                "Official Rulebook"))));
+            }
+            if (source.getPath().equals("/game/doc-1111.html")) {
+                return Optional.of(new OfficialRulebookSourceInspector.Inspection(
+                        source, OfficialRulebookSourceInspector.MediaType.IMAGE_GALLERY, List.of()));
+            }
+            return Optional.empty();
+        };
+        FakeFinder finder = new FakeFinder(List.of());
+        finder.configured = false;
+        var service = new OfficialRulebookDiscoveryService(
+                catalog(), sourceIdentity(), finder, gstoneCatalog, inspector, "");
+
+        var candidate = service.discover(EDITION_ID, "zh-CN").candidates().stream()
+                .filter(value -> value.url().endsWith("/game/doc-1111.html"))
+                .findFirst()
+                .orElseThrow();
+
+        assertThat(candidate.language()).isBlank();
+        assertThat(candidate.languageVerified()).isFalse();
     }
 
     @Test

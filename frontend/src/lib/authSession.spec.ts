@@ -20,6 +20,17 @@ describe('auth session UI policy', () => {
     window.removeEventListener(LOGIN_REQUIRED_EVENT, listener)
   })
 
+  it('lets a route-owned sign-in gate suppress the duplicate global reminder', () => {
+    const listener = vi.fn()
+    window.addEventListener(LOGIN_REQUIRED_EVENT, listener)
+
+    notifyLoginRequired({ showReminder: false })
+
+    expect(listener).toHaveBeenCalledOnce()
+    expect((listener.mock.calls[0]?.[0] as CustomEvent).detail).toEqual({ showReminder: false })
+    window.removeEventListener(LOGIN_REQUIRED_EVENT, listener)
+  })
+
   it('accepts only canonical local paths outside the authentication views', () => {
     expect(safeAuthReturnPath('/lesson/plan-1?lang=en#sources')).toBe('/lesson/plan-1?lang=en#sources')
     expect(safeLoginReturnPath('/catalog/../lessons?filter=pending')).toBe('/lessons?filter=pending')

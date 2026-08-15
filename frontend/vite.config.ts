@@ -7,28 +7,28 @@ import { type Plugin } from 'vite'
 import { VitePWA } from 'vite-plugin-pwa'
 import { defineConfig } from 'vitest/config'
 
-import { pwaNavigationFallbackDenylist } from './src/lib/pwaRouting'
+import { pwaNavigationFallbackDenylist } from './src/lib/pwaRouting.ts'
 
 const ocrAssets = [
   {
     fileName: 'ocr-assets/v7/worker.min.js',
-    sourcePath: path.resolve(__dirname, 'node_modules/tesseract.js/dist/worker.min.js'),
+    sourcePath: path.resolve(import.meta.dirname, 'node_modules/tesseract.js/dist/worker.min.js'),
   },
   {
     fileName: 'ocr-assets/v7/tesseract-core-lstm.wasm.js',
-    sourcePath: path.resolve(__dirname, 'node_modules/tesseract.js-core/tesseract-core-lstm.wasm.js'),
+    sourcePath: path.resolve(import.meta.dirname, 'node_modules/tesseract.js-core/tesseract-core-lstm.wasm.js'),
   },
   {
     fileName: 'ocr-assets/v7/lang/eng.traineddata.gz',
     sourcePath: path.resolve(
-      __dirname,
+      import.meta.dirname,
       'node_modules/@tesseract.js-data/eng/4.0.0_best_int/eng.traineddata.gz',
     ),
   },
   {
     fileName: 'ocr-assets/v7/lang/chi_sim.traineddata.gz',
     sourcePath: path.resolve(
-      __dirname,
+      import.meta.dirname,
       'node_modules/@tesseract.js-data/chi_sim/4.0.0_best_int/chi_sim.traineddata.gz',
     ),
   },
@@ -71,7 +71,7 @@ export default defineConfig({
     localOcrRuntime(),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['rulepilot-icon.svg'],
+      includeManifestIcons: false,
       manifest: {
         name: 'RulePilot 桌游规则讲解助手',
         short_name: 'RulePilot',
@@ -97,14 +97,13 @@ export default defineConfig({
         navigateFallbackDenylist: pwaNavigationFallbackDenylist,
         globPatterns: [
           'index.html',
-          'manifest.webmanifest',
-          'rulepilot-icon.svg',
           'assets/index-*.{js,css}',
           'assets/LessonView-*.js',
           'assets/LessonModeNav-*.js',
           'assets/LessonChapterList-*.js',
           'assets/liveLesson-*.js',
           'assets/offlineKnowledge-*.js',
+          'assets/playerFacingCitation-*.js',
           'assets/teachingProgress-*.js',
           'assets/NotFoundView-*.js',
         ],
@@ -135,7 +134,7 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      '@': path.resolve(__dirname, './src'),
+      '@': path.resolve(import.meta.dirname, './src'),
     },
   },
   test: {

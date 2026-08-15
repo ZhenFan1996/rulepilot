@@ -99,10 +99,11 @@ function clearSessionIdentity() {
   emit('sessionIdentity', '')
 }
 
-function showLoginReminder() {
+function showLoginReminder(event: Event) {
   sessionController.abort()
   clearSessionIdentity()
-  loginReminderVisible.value = true
+  loginReminderVisible.value = !(event instanceof CustomEvent
+    && (event.detail as { showReminder?: unknown } | null)?.showReminder === false)
 }
 
 function updateBackgroundWorkStatus(activeCount: number, finishedCount: number) {

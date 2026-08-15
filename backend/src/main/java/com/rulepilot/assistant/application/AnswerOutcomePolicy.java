@@ -195,7 +195,7 @@ final class AnswerOutcomePolicy {
                         source.documentVersionId(),
                         source.sectionType(),
                         source.heading(),
-                        source.excerpt(),
+                        AnswerCitationPresentationPolicy.excerpt(source.excerpt()),
                         source.pageFrom(),
                         source.pageTo()))
                 .distinct()

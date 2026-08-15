@@ -101,6 +101,9 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   teachingLaunched: '规则书已保存，讲解任务已交给后台', teachingLaunchFailed: '规则书已保存，但自动讲解没有启动',
   preparationReceived: '讲解任务已接收', preparationReading: '正在确认规则书可以用于讲解',
   preparationPlanning: '正在读取规则并建立讲解结构', preparationFailed: '讲解准备失败，可在讲解中心重试',
+  teachingPlanningEvidence: '正在确定各章节需要核对的规则', teachingRetrieving: '正在查找各章节需要的规则依据',
+  teachingVerifying: '正在逐条核对讲解与规则依据', teachingComposing: '正在把规则整理成可读的讲解',
+  teachingPackaging: '正在补充规则页与图示', teachingReviewing: '正在复核讲解中的规则结论',
   bytes: (done: string, total: string) => `${done} / ${total}`, pages: (done: number, total: number) => `第 ${done} / ${total} 页`,
   browserRequired: '需要在来源网站刷新链接或登录',
   openRulebooks: '打开规则书', openLessons: '打开讲解中心',
@@ -117,6 +120,9 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   teachingLaunched: 'Rulebook saved; guide work was handed to the background', teachingLaunchFailed: 'Rulebook saved, but the automatic guide did not start',
   preparationReceived: 'Guide task received', preparationReading: 'Confirming that the rulebook is ready for a guide',
   preparationPlanning: 'Reading the rules and building the guide structure', preparationFailed: 'Guide preparation failed; retry from the lesson center',
+  teachingPlanningEvidence: 'Deciding which rules each section must verify', teachingRetrieving: 'Finding rule evidence for each section',
+  teachingVerifying: 'Checking each guide claim against the rules', teachingComposing: 'Turning the rules into a readable guide',
+  teachingPackaging: 'Adding rule pages and visual references', teachingReviewing: 'Reviewing the guide\'s rule claims',
   bytes: (done: string, total: string) => `${done} / ${total}`, pages: (done: number, total: number) => `Page ${done} / ${total}`,
   browserRequired: 'Refresh the link or sign in on the source site',
   openRulebooks: 'Open rulebooks', openLessons: 'Open lesson center',
@@ -205,6 +211,20 @@ function preparationStage(state: string) {
   }[state] ?? copy.value.teaching
 }
 
+function teachingStateDetail(state: string | undefined) {
+  return {
+    RECEIVED: copy.value.preparationReceived,
+    DOCUMENT_READINESS: copy.value.preparationReading,
+    LESSON_PLANNING: copy.value.preparationPlanning,
+    RETRIEVAL_PLANNING: copy.value.teachingPlanningEvidence,
+    RETRIEVING: copy.value.teachingRetrieving,
+    VERIFYING_EVIDENCE: copy.value.teachingVerifying,
+    LESSON_COMPOSITION: copy.value.teachingComposing,
+    MEDIA_PACKAGING: copy.value.teachingPackaging,
+    CRITIQUING: copy.value.teachingReviewing,
+  }[state ?? ''] ?? copy.value.safe
+}
+
 function documentStage(progress: DocumentProgress | undefined, status: string) {
   const stage = progress?.stage ?? status
   return {
@@ -284,7 +304,7 @@ const workItems = computed<WorkItem[]>(() => {
     })
   const teachingItems = activeTeaching.value.map((item): WorkItem => ({
     id: `teaching:${item.runId}`, kind: 'lesson', title: item.gameTitle,
-    stage: copy.value.teaching, detail: teachingStates.value[item.runId] ?? copy.value.safe,
+    stage: copy.value.teaching, detail: teachingStateDetail(teachingStates.value[item.runId]),
     state: 'active', progress: null, target: { name: 'lessons' },
   }))
   const finishedTeachingItems = completedTeaching.value.map((item): WorkItem => ({

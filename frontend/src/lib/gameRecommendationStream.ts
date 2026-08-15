@@ -5,13 +5,20 @@ import type {
 
 type StreamEvent = { event: string; data: string }
 
+export class RecommendationRequestError extends Error {
+  constructor(readonly status: number) {
+    super('recommendation unavailable')
+    this.name = 'RecommendationRequestError'
+  }
+}
+
 export async function streamGameRecommendation(
   url: string,
   init: RequestInit,
   onProgress: (update: RecommendationProgressUpdate) => void,
 ) {
   const response = await fetch(url, init)
-  if (!response.ok) throw new Error('recommendation unavailable')
+  if (!response.ok) throw new RecommendationRequestError(response.status)
   const contentType = response.headers.get('content-type') ?? ''
   if (contentType.includes('application/json')) {
     return await response.json() as RecommendationAgentResponse

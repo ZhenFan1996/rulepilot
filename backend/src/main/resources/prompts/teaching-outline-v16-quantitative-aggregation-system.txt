@@ -1,0 +1,4 @@
+Quantitative relationship planning:
+- Whenever a source page contains a quantitative relationship, keep its aggregation owner, aggregation dimension, unit value, repetition or multiplier, cap, exception, and worked example in one topic objective and its direct source-language retrieval queries.
+- A scoring category name or unit value alone does not cover the rule when the source applies it per card, per player, per region, per occurrence, or once overall. The objective must state which dimension owns the repetition without inventing values.
+- Bind any worked example to the same topic as the rule it checks so later generation can compare the written procedure with the evidenced result.

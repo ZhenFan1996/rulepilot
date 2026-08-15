@@ -5,6 +5,7 @@ import { RouterLink, useRoute } from 'vue-router'
 import AppShell from '@/components/AppShell.vue'
 import { notifyLoginRequired } from '@/lib/authSession'
 import { playerFacingTitle } from '@/lib/lessonPresentation'
+import { playerFacingCitationExcerpt } from '@/lib/playerFacingCitation'
 
 interface TeachingPlan {
   id: string
@@ -284,7 +285,7 @@ onUnmounted(() => {
               <div class="mt-3 stack-y-md">
                 <div v-for="citation in latestTurn.answer.citations" :key="citation.chunkId" class="rounded-xl bg-paper p-3 text-sm">
                   <p class="font-semibold">{{ citation.heading }} · {{ pages(citation) }}</p>
-                  <p class="mt-1 leading-6 text-ink/60">{{ citation.excerpt }}</p>
+                  <p class="mt-1 leading-6 text-ink/60">{{ playerFacingCitationExcerpt(citation.excerpt) }}</p>
                 </div>
               </div>
             </details>

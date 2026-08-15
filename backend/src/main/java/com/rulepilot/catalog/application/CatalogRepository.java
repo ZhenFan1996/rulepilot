@@ -17,6 +17,8 @@ public interface CatalogRepository {
 
     GameEdition save(GameEdition edition);
 
+    boolean confirmEditionLanguageIfUnknown(UUID editionId, String language);
+
     Expansion save(Expansion expansion);
 
     BggGameMetadata save(BggGameMetadata metadata);

@@ -60,6 +60,7 @@ public class VersionedAgentPrompts {
             @Value("classpath:prompts/teaching-agent-v40-source-temporal-boundary-system.txt") Resource teachingSourceTemporalBoundary,
             @Value("classpath:prompts/teaching-agent-v41-permission-ruling-system.txt") Resource teachingPermissionRuling,
             @Value("classpath:prompts/teaching-agent-v42-focused-runtime-system.txt") Resource focusedTeachingSystem,
+            @Value("classpath:prompts/teaching-agent-v44-quantitative-aggregation-system.txt") Resource teachingQuantitativeAggregation,
             @Value("classpath:prompts/teaching-agent-v12-user.txt") Resource teachingUser,
             @Value("classpath:prompts/teaching-outline-v14-intrinsic-scope-system.txt") Resource teachingOutlineSystem,
             @Value("classpath:prompts/teaching-outline-v7-fidelity-system.txt") Resource teachingOutlineFidelity,
@@ -69,6 +70,8 @@ public class VersionedAgentPrompts {
             @Value("classpath:prompts/teaching-outline-v11-visual-coverage-system.txt") Resource teachingOutlineVisualCoverage,
             @Value("classpath:prompts/teaching-outline-v15-retired-audience-system.txt") Resource teachingOutlineRulebookScope,
             @Value("classpath:prompts/teaching-outline-v13-player-goal-system.txt") Resource teachingOutlinePlayerGoal,
+            @Value("classpath:prompts/teaching-outline-v16-quantitative-aggregation-system.txt") Resource teachingOutlineQuantitativeAggregation,
+            @Value("classpath:prompts/teaching-outline-v17-source-dependency-system.txt") Resource teachingOutlineSourceDependency,
             @Value("classpath:prompts/teaching-outline-v6-user.txt") Resource teachingOutlineUser,
             @Value("classpath:prompts/rule-answer-agent-v6-system.txt") Resource answerSystem,
             @Value("classpath:prompts/rule-answer-agent-v7-fidelity-system.txt") Resource answerFidelity,
@@ -120,6 +123,7 @@ public class VersionedAgentPrompts {
             @Value("classpath:prompts/rule-answer-agent-v54-permission-ruling-system.txt") Resource answerPermissionRuling,
             @Value("classpath:prompts/rule-answer-agent-v55-focused-aid-routing-system.txt") Resource answerFocusedAidRouting,
             @Value("classpath:prompts/rule-answer-agent-v56-source-advice-boundary-system.txt") Resource answerSourceAdviceBoundary,
+            @Value("classpath:prompts/rule-answer-agent-v57-player-facing-progression-system.txt") Resource answerPlayerFacingProgression,
             @Value("classpath:prompts/rule-answer-agent-v5-user.txt") Resource answerUser,
             @Value("classpath:prompts/rule-answer-retrieval-rewrite-v1-system.txt") Resource answerRetrievalRewriteSystem,
             @Value("classpath:prompts/rule-answer-retrieval-rewrite-v1-user.txt") Resource answerRetrievalRewriteUser,
@@ -143,6 +147,7 @@ public class VersionedAgentPrompts {
             @Value("classpath:prompts/content-critic-v24-source-temporal-boundary-system.txt") Resource criticSourceTemporalBoundary,
             @Value("classpath:prompts/content-critic-v25-permission-ruling-system.txt") Resource criticPermissionRuling,
             @Value("classpath:prompts/content-critic-v34-focused-runtime-system.txt") Resource focusedCriticSystem,
+            @Value("classpath:prompts/content-critic-v35-quantitative-aggregation-system.txt") Resource criticQuantitativeAggregation,
             @Value("classpath:prompts/atomic-content-critic-v3-system.txt") Resource atomicCriticSystem,
             @Value("classpath:prompts/objective-coverage-critic-v3-system.txt") Resource objectiveCoverageCriticSystem,
             @Value("classpath:prompts/content-critic-v4-user.txt") Resource criticUser,
@@ -179,7 +184,7 @@ public class VersionedAgentPrompts {
                 teachingSourceCausalDirection,
                 teachingSourceTemporalBoundary,
                 teachingPermissionRuling);
-        this.focusedTeachingSystem = read(focusedTeachingSystem);
+        this.focusedTeachingSystem = combined(focusedTeachingSystem, teachingQuantitativeAggregation);
         this.teachingUser = read(teachingUser);
         this.teachingOutlineSystem = combined(
                 teachingOutlineSystem,
@@ -189,7 +194,9 @@ public class VersionedAgentPrompts {
                 teachingOutlineChapterOwnership,
                 teachingOutlineVisualCoverage,
                 teachingOutlineRulebookScope,
-                teachingOutlinePlayerGoal);
+                teachingOutlinePlayerGoal,
+                teachingOutlineQuantitativeAggregation,
+                teachingOutlineSourceDependency);
         this.teachingOutlineUser = read(teachingOutlineUser);
         this.answerSystem = combined(
                 answerSystem,
@@ -241,7 +248,8 @@ public class VersionedAgentPrompts {
                 answerSourceTemporalBoundary,
                 answerPermissionRuling,
                 answerFocusedAidRouting,
-                answerSourceAdviceBoundary);
+                answerSourceAdviceBoundary,
+                answerPlayerFacingProgression);
         this.focusedAnswerCoreSystem = combined(
                 answerSystem,
                 answerFidelity,
@@ -264,7 +272,8 @@ public class VersionedAgentPrompts {
                 answerSourceTemporalBoundary,
                 answerPermissionRuling,
                 answerFocusedAidRouting,
-                answerSourceAdviceBoundary);
+                answerSourceAdviceBoundary,
+                answerPlayerFacingProgression);
         this.focusedAnswerModules = Map.ofEntries(
                 Map.entry("NONE", ""),
                 Map.entry("OPTIONS", combined(answerCompleteList, answerCitedRuleOptions)),
@@ -297,8 +306,8 @@ public class VersionedAgentPrompts {
         this.answerUser = read(answerUser);
         this.answerRetrievalRewriteSystem = read(answerRetrievalRewriteSystem);
         this.answerRetrievalRewriteUser = read(answerRetrievalRewriteUser);
-        this.criticSystem = read(focusedCriticSystem);
-        this.lessonStructureCriticSystem = read(focusedCriticSystem);
+        this.criticSystem = combined(focusedCriticSystem, criticQuantitativeAggregation);
+        this.lessonStructureCriticSystem = combined(focusedCriticSystem, criticQuantitativeAggregation);
         this.atomicCriticSystem = read(atomicCriticSystem);
         this.objectiveCoverageCriticSystem = read(objectiveCoverageCriticSystem);
         this.criticUser = read(criticUser);

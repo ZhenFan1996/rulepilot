@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { RouterLink } from 'vue-router'
 
 import ConversationResetDialog from '@/components/ConversationResetDialog.vue'
 import RecommendationGameCard from '@/components/RecommendationGameCard.vue'
@@ -17,9 +18,18 @@ import type {
   RecommendationProfile,
 } from '@/components/gameRecommendationTypes'
 import { useModalFocus } from '@/composables/useModalFocus'
-import { streamGameRecommendation } from '@/lib/gameRecommendationStream'
+import { notifyLoginRequired } from '@/lib/authSession'
+import { RecommendationRequestError, streamGameRecommendation } from '@/lib/gameRecommendationStream'
 import { useLocale } from '@/lib/locale'
+import {
+  forgetRecommendationConversation,
+  readRecommendationConversation,
+  rememberRecommendationConversation,
+  type RecommendationConversationGame,
+  type RecommendationConversationSnapshot,
+} from '@/lib/recommendationConversationSession'
 
+const props = defineProps<{ sessionIdentity?: string | null }>()
 const { locale } = useLocale()
 const copy = {
   'zh-CN': {
@@ -39,6 +49,9 @@ const copy = {
     journeyWorking: '正在为《{game}》获取规则书并生成讲解 · {progress}%', journeyReady: '《{game}》的讲解已经可以阅读',
     journeyFailed: '《{game}》的准备流程需要处理', journeyOpen: '打开进度', journeyRead: '打开讲解', journeyProgress: '查看进度', journeyDialog: '规则书与讲解进度',
     recommendationRole: '继续推荐', answerRole: '规则答疑', roleLabel: '切换 Agent 任务',
+    loginRequired: '推荐需要登录；你写的条件已保留在这个浏览器会话中。登录后回来检查一下，再发送。',
+    login: '登录并继续', register: '创建账号', checkingSession: '正在确认登录…',
+    restoredGames: '上次已核对候选：{games}。可以直接继续比较。',
   },
   en: {
     eyebrow: 'Choose together', title: 'What should we play tonight?',
@@ -57,6 +70,9 @@ const copy = {
     journeyWorking: 'Getting the rulebook and building a guide for {game} · {progress}%', journeyReady: 'The guide for {game} is ready to read',
     journeyFailed: 'The preparation flow for {game} needs attention', journeyOpen: 'Open progress', journeyRead: 'Open guide', journeyProgress: 'View progress', journeyDialog: 'Rulebook and guide progress',
     recommendationRole: 'Recommendations', answerRole: 'Rules Q&A', roleLabel: 'Switch Agent task',
+    loginRequired: 'Sign in to use recommendations. Your draft is saved in this browser session; review it and send after you return.',
+    login: 'Sign in and continue', register: 'Create account', checkingSession: 'Checking sign-in…',
+    restoredGames: 'Previously verified candidates: {games}. You can continue comparing them here.',
   },
 } as const
 
@@ -102,18 +118,47 @@ function initialClarification(): RecommendationClarification {
   return { field: 'conversation', prompt: t('initial'), options: copy[locale.value].starters.map(label => ({ value: label, label })) }
 }
 
+const DRAFT_STORAGE_KEY = 'rulepilot:recommendation-draft:v1'
+
+function restoredDraft() {
+  try {
+    const parsed = JSON.parse(sessionStorage.getItem(DRAFT_STORAGE_KEY) ?? 'null') as unknown
+    if (!parsed || typeof parsed !== 'object') return ''
+    const saved = parsed as { version?: unknown; draft?: unknown }
+    return saved.version === 1 && typeof saved.draft === 'string' && saved.draft.length <= 500
+      ? saved.draft
+      : ''
+  } catch {
+    return ''
+  }
+}
+
+function rememberDraft(value: string) {
+  try {
+    if (value) {
+      sessionStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify({ version: 1, draft: value.slice(0, 500) }))
+    } else {
+      sessionStorage.removeItem(DRAFT_STORAGE_KEY)
+    }
+  } catch {
+    // The visible draft remains authoritative when browser-session storage is unavailable.
+  }
+}
+
 const profile = ref<RecommendationProfile>(emptyProfile())
 const clarification = ref<RecommendationClarification | null>(initialClarification())
 const response = ref<RecommendationAgentResponse | null>(null)
 const messages = ref<RecommendationMessage[]>([{ id: 1, role: 'assistant', text: t('initial') }])
-const draft = ref('')
+const draft = ref(restoredDraft())
 const loading = ref(false)
 const loadingStage = ref<LoadingStage>('requesting')
 const loadingElapsedSeconds = ref(0)
 const failed = ref(false)
+const loginGateVisible = ref(false)
 const lastRequest = ref<PendingRequest | null>(null)
 const seenBggIds = ref<number[]>([])
 const knownGames = ref<RecommendationGame[]>([])
+const rememberedKnownGames = ref<RecommendationConversationGame[]>([])
 const activeFocusedBggId = ref<number | null>(null)
 const selectedGame = ref<RecommendationGame | null>(null)
 const detailsGame = ref<RecommendationGame | null>(null)
@@ -131,6 +176,13 @@ let messageId = 1
 let csrf: { headerName: string; token: string } | null = null
 let loadingClock: ReturnType<typeof setInterval> | null = null
 let activeRequest: AbortController | null = null
+let restoredConversationOwner: string | null = null
+let restoredSummaryMessageId: number | null = null
+let restoringConversation = false
+
+const sessionKnown = computed(() => props.sessionIdentity !== null)
+const signedIn = computed(() => props.sessionIdentity === undefined
+  || (typeof props.sessionIdentity === 'string' && Boolean(props.sessionIdentity.trim())))
 
 useModalFocus({
   dialog: journeyDialog,
@@ -232,15 +284,19 @@ async function scrollConversationToLatest() {
 }
 
 async function sendTurn(message: string, requestProfile: RecommendationProfile, userLabel?: string, excludedBggIds: number[] = [], focusedBggId: number | null = null) {
-  if (userLabel) messages.value.push({ id: ++messageId, role: 'user', text: userLabel })
-  const transcript = messages.value.slice(-24).map(({ id, role, text }) => ({ id, role, text }))
+  let optimisticUserMessageId: number | null = null
+  if (userLabel) {
+    optimisticUserMessageId = ++messageId
+    messages.value.push({ id: optimisticUserMessageId, role: 'user', text: userLabel })
+  }
+  const transcript = playerConversationTranscript()
   const pending = {
     message,
     profile: { ...requestProfile },
     excludedBggIds: [...excludedBggIds],
     focusedBggId,
     transcript,
-    knownGames: knownGames.value.map(game => ({ bggId: game.bggId, name: game.name, originalName: game.originalName })),
+    knownGames: minimalKnownGames(),
     shownBggIds: [...seenBggIds.value],
   }
   lastRequest.value = pending
@@ -265,14 +321,25 @@ async function sendTurn(message: string, requestProfile: RecommendationProfile, 
     knownGames.value = [...parsed.games.map(entry => entry.game), ...knownGames.value]
       .filter((game, index, games) => games.findIndex(candidate => candidate.bggId === game.bggId) === index)
       .slice(0, 60)
+    rememberedKnownGames.value = minimalKnownGames()
     messages.value.push({
       id: ++messageId,
       role: 'assistant',
       text: parsed.assistantMessage,
       response: parsed,
     })
-  } catch {
-    failed.value = true
+  } catch (error) {
+    if (error instanceof RecommendationRequestError && error.status === 401) {
+      if (optimisticUserMessageId !== null) {
+        messages.value = messages.value.filter(item => item.id !== optimisticUserMessageId)
+      }
+      csrf = null
+      draft.value = userLabel ?? message
+      loginGateVisible.value = true
+      notifyLoginRequired({ showReminder: false })
+    } else {
+      failed.value = true
+    }
   } finally {
     endLoading()
   }
@@ -285,7 +352,13 @@ function choose(option: { value: string; label: string }) {
 
 function submitMessage() {
   const message = draft.value.trim().replace(/\s+/g, ' ')
-  if (!message || loading.value) return
+  if (!message || loading.value || !sessionKnown.value) return
+  if (!signedIn.value) {
+    loginGateVisible.value = true
+    notifyLoginRequired({ showReminder: false })
+    return
+  }
+  loginGateVisible.value = false
   draft.value = ''
   void sendTurn(message, profile.value, message, [], activeFocusedBggId.value)
 }
@@ -385,6 +458,108 @@ function retry() {
   void sendTurn(pending.message, pending.profile, undefined, pending.excludedBggIds, pending.focusedBggId)
 }
 
+function playerConversationTranscript() {
+  return messages.value
+    .filter(message => message.id !== restoredSummaryMessageId)
+    .slice(-24)
+    .map(({ id, role, text }) => ({ id, role, text }))
+}
+
+function minimalKnownGames() {
+  return [
+    ...knownGames.value.map(game => ({ bggId: game.bggId, name: game.name, originalName: game.originalName })),
+    ...rememberedKnownGames.value,
+  ]
+    .filter((game, index, games) => games.findIndex(candidate => candidate.bggId === game.bggId) === index)
+    .slice(0, 60)
+}
+
+function explicitSessionOwner(value: string | null | undefined) {
+  if (typeof value !== 'string') return null
+  const owner = value.normalize('NFKC').trim().toLowerCase().slice(0, 320)
+  return owner || null
+}
+
+function conversationSnapshot(): RecommendationConversationSnapshot {
+  const pending = failed.value && lastRequest.value
+    ? {
+        message: lastRequest.value.message,
+        excludedBggIds: [...lastRequest.value.excludedBggIds],
+        focusedBggId: lastRequest.value.focusedBggId,
+      }
+    : null
+  return {
+    profile: { ...profile.value },
+    transcript: playerConversationTranscript().map(({ role, text }) => ({ role, text })),
+    knownGames: minimalKnownGames(),
+    shownBggIds: [...seenBggIds.value],
+    failed: Boolean(failed.value && pending),
+    pending,
+  }
+}
+
+function persistRecommendationConversation(owner = restoredConversationOwner) {
+  if (!owner || restoringConversation) return
+  rememberRecommendationConversation(sessionStorage, owner, conversationSnapshot())
+}
+
+function clearVisibleRecommendationConversation() {
+  profile.value = emptyProfile()
+  clarification.value = initialClarification()
+  response.value = null
+  messages.value = [{ id: ++messageId, role: 'assistant', text: t('initial') }]
+  failed.value = false
+  lastRequest.value = null
+  seenBggIds.value = []
+  knownGames.value = []
+  rememberedKnownGames.value = []
+  activeFocusedBggId.value = null
+  selectedGame.value = null
+  detailsGame.value = null
+  journeyStatus.value = null
+  conversationRole.value = 'recommendation'
+  openSurface.value = 'none'
+  restoredSummaryMessageId = null
+}
+
+function restoreRecommendationConversation(owner: string) {
+  const snapshot = readRecommendationConversation(sessionStorage, owner)
+  clearVisibleRecommendationConversation()
+  if (!snapshot) return
+
+  profile.value = { ...snapshot.profile }
+  clarification.value = null
+  messages.value = snapshot.transcript.map(turn => ({ id: ++messageId, ...turn }))
+  if (!messages.value.length) {
+    messages.value = [{ id: ++messageId, role: 'assistant', text: t('initial') }]
+  }
+  rememberedKnownGames.value = snapshot.knownGames.map(game => ({ ...game }))
+  seenBggIds.value = [...snapshot.shownBggIds]
+  failed.value = Boolean(snapshot.failed && snapshot.pending)
+  if (snapshot.pending) {
+    activeFocusedBggId.value = snapshot.pending.focusedBggId
+    lastRequest.value = {
+      message: snapshot.pending.message,
+      profile: { ...snapshot.profile },
+      excludedBggIds: [...snapshot.pending.excludedBggIds],
+      focusedBggId: snapshot.pending.focusedBggId,
+      transcript: playerConversationTranscript(),
+      knownGames: minimalKnownGames(),
+      shownBggIds: [...snapshot.shownBggIds],
+    }
+  }
+
+  const names = [...new Set(snapshot.knownGames.map(game => game.name || game.originalName))].slice(0, 5)
+  if (names.length) {
+    restoredSummaryMessageId = ++messageId
+    messages.value.push({
+      id: restoredSummaryMessageId,
+      role: 'assistant',
+      text: t('restoredGames', { games: names.join(locale.value === 'zh-CN' ? '、' : ', ') }),
+    })
+  }
+}
+
 function reset(preserveJourney = false) {
   activeRequest?.abort()
   endLoading()
@@ -396,7 +571,12 @@ function reset(preserveJourney = false) {
   lastRequest.value = null
   seenBggIds.value = []
   knownGames.value = []
+  rememberedKnownGames.value = []
   activeFocusedBggId.value = null
+  restoredSummaryMessageId = null
+  if (restoredConversationOwner) {
+    forgetRecommendationConversation(sessionStorage, restoredConversationOwner)
+  }
   if (!preserveJourney) {
     selectedGame.value = null
     detailsGame.value = null
@@ -440,16 +620,48 @@ watch(locale, () => {
   messages.value = [{ id: ++messageId, role: 'assistant', text: t('initial') }]
   clarification.value = initialClarification()
 })
+watch(draft, rememberDraft)
+watch(
+  () => props.sessionIdentity,
+  value => {
+    if (value === undefined) return
+    const owner = explicitSessionOwner(value)
+    if (owner === restoredConversationOwner) {
+      if (owner) loginGateVisible.value = false
+      return
+    }
+
+    if (restoredConversationOwner) {
+      if (loading.value && lastRequest.value) failed.value = true
+      persistRecommendationConversation(restoredConversationOwner)
+    }
+    activeRequest?.abort()
+    endLoading()
+    restoringConversation = true
+    restoredConversationOwner = owner
+    clearVisibleRecommendationConversation()
+    if (owner) {
+      loginGateVisible.value = false
+      restoreRecommendationConversation(owner)
+    }
+    restoringConversation = false
+  },
+  { immediate: true },
+)
+watch(
+  [profile, messages, rememberedKnownGames, seenBggIds, failed, lastRequest],
+  () => { persistRecommendationConversation() },
+  { deep: true, flush: 'post' },
+)
 watch(
   () => [messages.value.length, loading.value, loadingStage.value],
   () => { void scrollConversationToLatest() },
   { flush: 'post' },
 )
-onMounted(() => {
-  void csrfToken().catch(() => undefined)
-  void scrollConversationToLatest()
-})
+onMounted(() => { void scrollConversationToLatest() })
 onBeforeUnmount(() => {
+  if (loading.value && lastRequest.value) failed.value = true
+  persistRecommendationConversation()
   activeRequest?.abort()
   endLoading()
 })
@@ -505,7 +717,14 @@ onBeforeUnmount(() => {
             </div>
             <div v-if="clarification?.options.length && !loading" class="border-t border-ink/8 px-4 py-4 sm:px-6"><div class="flex flex-wrap gap-2"><button v-for="option in clarification.options" :key="option.value" type="button" class="min-h-11 rounded-lg border border-ink/15 bg-ink/5 px-4 text-sm font-semibold text-ink/72 hover:border-copper/50" @click="choose(option)">{{ option.label }}</button></div></div>
             <div v-if="failed" class="mx-4 mb-3 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800 sm:mx-6" role="alert"><p>{{ t('error') }}</p><button type="button" class="mt-2 min-h-11 font-semibold underline" @click="retry">{{ t('retry') }}</button></div>
-            <form class="flex gap-2 border-t border-ink/8 p-4 sm:p-5" @submit.prevent="submitMessage"><label for="recommendation-agent-message" class="sr-only">{{ t('inputLabel') }}</label><textarea id="recommendation-agent-message" ref="recommendationInput" v-model="draft" rows="2" maxlength="500" :placeholder="t('inputPlaceholder')" class="min-h-14 min-w-0 flex-1 resize-none rounded-xl border border-ink/15 bg-canvas px-4 py-3 text-sm leading-6 outline-none focus:border-felt" /><button type="submit" :disabled="loading || !draft.trim()" class="min-h-12 self-end rounded-xl bg-felt px-5 text-sm font-semibold text-white disabled:opacity-40">{{ t('send') }}</button></form>
+            <div v-if="loginGateVisible" class="mx-4 mb-3 rounded-xl border border-copper/25 bg-copper/5 p-4 text-sm leading-6 text-ink/72 sm:mx-6" role="status">
+              <p>{{ t('loginRequired') }}</p>
+              <div class="mt-3 flex flex-wrap gap-4">
+                <RouterLink :to="{ name: 'login', query: { redirect: '/discover' } }" class="inline-flex min-h-11 items-center font-semibold text-indigo underline underline-offset-4">{{ t('login') }}</RouterLink>
+                <RouterLink :to="{ name: 'register', query: { redirect: '/discover' } }" class="inline-flex min-h-11 items-center font-semibold text-indigo underline underline-offset-4">{{ t('register') }}</RouterLink>
+              </div>
+            </div>
+            <form class="flex gap-2 border-t border-ink/8 p-4 sm:p-5" @submit.prevent="submitMessage"><label for="recommendation-agent-message" class="sr-only">{{ t('inputLabel') }}</label><textarea id="recommendation-agent-message" ref="recommendationInput" v-model="draft" rows="2" maxlength="500" :placeholder="t('inputPlaceholder')" class="min-h-14 min-w-0 flex-1 resize-none rounded-xl border border-ink/15 bg-canvas px-4 py-3 text-sm leading-6 outline-none focus:border-felt" /><button type="submit" :disabled="loading || !draft.trim() || !sessionKnown" class="min-h-12 self-end rounded-xl bg-felt px-5 text-sm font-semibold text-white disabled:opacity-40">{{ sessionKnown ? t('send') : t('checkingSession') }}</button></form>
           </div>
 
           <RecommendationAnswerWorkspace

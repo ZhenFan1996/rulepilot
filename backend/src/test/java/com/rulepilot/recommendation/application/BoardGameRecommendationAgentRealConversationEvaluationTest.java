@@ -137,7 +137,7 @@ class BoardGameRecommendationAgentRealConversationEvaluationTest {
         activeRawModelCapture = new RawModelCapture(provider.name(), provider.model(), temperature, json);
         UnlockableCatalog catalog = new UnlockableCatalog();
         var properties = new BoardGameRecommendationProperties(
-                8, 3, new BigDecimal("0.66"), Duration.ofSeconds(30));
+                8, 3, new BigDecimal("0.66"), Duration.ofSeconds(20));
         var agent = new BoardGameRecommendationAgent(
                 model(provider),
                 new BoardGameRecommendationTools(catalog, noResearch()),
@@ -384,7 +384,7 @@ class BoardGameRecommendationAgentRealConversationEvaluationTest {
         UnlockableCatalog catalog = new UnlockableCatalog();
         catalog.unlock();
         var properties = new BoardGameRecommendationProperties(
-                8, 3, new BigDecimal("0.66"), Duration.ofSeconds(30));
+                8, 3, new BigDecimal("0.66"), Duration.ofSeconds(20));
         var agent = new BoardGameRecommendationAgent(
                 model(provider),
                 new BoardGameRecommendationTools(catalog, noResearch()),
@@ -427,7 +427,7 @@ class BoardGameRecommendationAgentRealConversationEvaluationTest {
         UnlockableCatalog catalog = new UnlockableCatalog();
         catalog.unlock();
         var properties = new BoardGameRecommendationProperties(
-                8, 3, new BigDecimal("0.66"), Duration.ofSeconds(30));
+                8, 3, new BigDecimal("0.66"), Duration.ofSeconds(20));
         var agent = new BoardGameRecommendationAgent(
                 model(provider),
                 new BoardGameRecommendationTools(catalog, noResearch()),
@@ -556,7 +556,7 @@ class BoardGameRecommendationAgentRealConversationEvaluationTest {
             }
         };
         var properties = new BoardGameRecommendationProperties(
-                8, 3, new BigDecimal("0.66"), Duration.ofSeconds(30));
+                8, 3, new BigDecimal("0.66"), Duration.ofSeconds(20));
         var agent = new BoardGameRecommendationAgent(
                 model(provider),
                 new BoardGameRecommendationTools(catalog, research),
@@ -608,7 +608,7 @@ class BoardGameRecommendationAgentRealConversationEvaluationTest {
         UnlockableCatalog catalog = new UnlockableCatalog();
         catalog.unlock();
         var properties = new BoardGameRecommendationProperties(
-                8, 3, new BigDecimal("0.66"), Duration.ofSeconds(30));
+                8, 3, new BigDecimal("0.66"), Duration.ofSeconds(20));
         var agent = new BoardGameRecommendationAgent(
                 model(provider),
                 new BoardGameRecommendationTools(catalog, noResearch()),
@@ -696,7 +696,7 @@ class BoardGameRecommendationAgentRealConversationEvaluationTest {
         activeRawModelCapture.scenario("preference-revision-without-unwanted-cards");
         UnlockableCatalog catalog = new UnlockableCatalog();
         var properties = new BoardGameRecommendationProperties(
-                8, 3, new BigDecimal("0.66"), Duration.ofSeconds(30));
+                8, 3, new BigDecimal("0.66"), Duration.ofSeconds(20));
         var agent = new BoardGameRecommendationAgent(
                 model(provider),
                 new BoardGameRecommendationTools(catalog, noResearch()),
@@ -794,7 +794,7 @@ class BoardGameRecommendationAgentRealConversationEvaluationTest {
     private SemanticBoundaryEvaluation runSemanticBoundaries(Provider provider) {
         UnlockableCatalog catalog = new UnlockableCatalog();
         var properties = new BoardGameRecommendationProperties(
-                8, 3, new BigDecimal("0.66"), Duration.ofSeconds(30));
+                8, 3, new BigDecimal("0.66"), Duration.ofSeconds(20));
         var agent = new BoardGameRecommendationAgent(
                 model(provider),
                 new BoardGameRecommendationTools(catalog, noResearch()),

@@ -5,6 +5,7 @@ import { createMemoryHistory, createRouter } from 'vue-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { setLocale } from '@/lib/locale'
+import { LOGIN_REQUIRED_EVENT } from '@/lib/authSession'
 import GameRecommendationAgent from './GameRecommendationAgent.vue'
 
 const baseProfile = { players: null, maxMinutes: null, maxWeight: null, type: 'all', interaction: 'any' }
@@ -32,21 +33,184 @@ describe('GameRecommendationAgent', () => {
     setLocale('zh-CN')
   })
 
-  async function mountAgent(stubs: Record<string, boolean | Component> = {}) {
+  async function mountAgent(
+    stubs: Record<string, boolean | Component> = {},
+    props: Record<string, unknown> = {},
+  ) {
     const router = createRouter({
       history: createMemoryHistory(),
       routes: [
         { path: '/', name: 'home', component: { template: '<div />' } },
+        { path: '/login', name: 'login', component: { template: '<div />' } },
+        { path: '/register', name: 'register', component: { template: '<div />' } },
         { path: '/discover/:bggId', name: 'game-discovery', component: { template: '<div />' } },
         { path: '/teach', name: 'teach', component: { template: '<div />' } },
       ],
     })
     await router.push('/')
     await router.isReady()
-    const wrapper = mount(GameRecommendationAgent, { attachTo: document.body, global: { plugins: [router], stubs } })
+    const wrapper = mount(GameRecommendationAgent, {
+      attachTo: document.body,
+      props: props as never,
+      global: { plugins: [router], stubs },
+    })
     mountedAgents.push(wrapper)
     return wrapper
   }
+
+  it('keeps a guest draft and offers explicit sign-in without starting a recommendation request', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const wrapper = await mountAgent({}, { sessionIdentity: '' })
+
+    await wrapper.get('textarea').setValue('4 个人，想玩 60 分钟内、全程都有参与感的游戏')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect((wrapper.get('textarea').element as HTMLTextAreaElement).value)
+      .toBe('4 个人，想玩 60 分钟内、全程都有参与感的游戏')
+    expect(wrapper.text()).toContain('推荐需要登录')
+    expect(wrapper.text()).toContain('条件已保留在这个浏览器会话中')
+    expect(wrapper.get('a[href^="/login"]').attributes('href')).toContain('redirect=/discover')
+    expect(wrapper.get('a[href^="/register"]').attributes('href')).toContain('redirect=/discover')
+    expect(sessionStorage.getItem('rulepilot:recommendation-draft:v1'))
+      .toContain('全程都有参与感')
+
+    wrapper.unmount()
+    fetchMock.mockClear()
+    const returned = await mountAgent({}, { sessionIdentity: 'player' })
+    expect((returned.get('textarea').element as HTMLTextAreaElement).value)
+      .toBe('4 个人，想玩 60 分钟内、全程都有参与感的游戏')
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('turns an expired-session 401 into the same recoverable sign-in gate', async () => {
+    const loginRequired = vi.fn()
+    window.addEventListener(LOGIN_REQUIRED_EVENT, loginRequired, { once: true })
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      if (String(input) === '/api/auth/csrf') {
+        return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      }
+      return new Response(null, { status: 401 })
+    }))
+    const wrapper = await mountAgent()
+
+    await wrapper.get('textarea').setValue('两个人，想玩半小时的对抗游戏')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    expect(loginRequired).toHaveBeenCalledTimes(1)
+    expect(wrapper.text()).toContain('推荐需要登录')
+    expect(wrapper.text()).not.toContain('刚才没有接上')
+    expect((wrapper.get('textarea').element as HTMLTextAreaElement).value)
+      .toBe('两个人，想玩半小时的对抗游戏')
+  })
+
+  it('restores an account-scoped transcript, preferences, and verified candidate names after route remount', async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request, _init?: RequestInit) => {
+      if (String(input) === '/api/auth/csrf') {
+        return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      }
+      return Response.json({
+        outcome: 'recommendations', mode: 'model_assisted', assistantMessage: '我核对了这款候选，可以继续比较。',
+        profile: { ...baseProfile, players: 4, maxMinutes: 90 }, clarification: null,
+        sourceCount: 179737, candidatesEvaluated: 1,
+        games: [{ game, matches: ['支持 4 人游玩'], tradeoffs: [] }],
+      })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const wrapper = await mountAgent({}, { sessionIdentity: 'alice' })
+
+    await wrapper.get('textarea').setValue('想找 4 人、90 分钟内的自然主题游戏')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    wrapper.unmount()
+    fetchMock.mockClear()
+
+    const returned = await mountAgent({}, { sessionIdentity: 'alice' })
+    expect(returned.text()).toContain('想找 4 人、90 分钟内的自然主题游戏')
+    expect(returned.text()).toContain('我核对了这款候选，可以继续比较。')
+    expect(returned.text()).toContain('上次已核对候选：展翅翱翔')
+    expect(returned.text()).toContain('4 人')
+    expect(fetchMock).not.toHaveBeenCalled()
+
+    await returned.get('textarea').setValue('那它和我前面说的自然主题偏好怎么取舍？')
+    await returned.get('form').trigger('submit')
+    await flushPromises()
+    const continuedRequest = fetchMock.mock.calls.find(([input]) => String(input).includes('/recommendation-agent'))
+    const continuedBody = JSON.parse(String(continuedRequest?.[1]?.body)) as {
+      knownGames: Array<{ bggId: number; name: string; originalName: string }>
+      transcript: Array<{ role: string; text: string }>
+    }
+    expect(continuedBody.knownGames).toEqual([{ bggId: 266192, name: '展翅翱翔', originalName: 'Wingspan' }])
+    expect(continuedBody.transcript).toEqual(expect.arrayContaining([
+      { role: 'user', text: '想找 4 人、90 分钟内的自然主题游戏' },
+      { role: 'assistant', text: '我核对了这款候选，可以继续比较。' },
+      { role: 'user', text: '那它和我前面说的自然主题偏好怎么取舍？' },
+    ]))
+    expect(continuedBody.transcript.map(turn => turn.text).join('\n')).not.toContain('上次已核对候选')
+
+    returned.unmount()
+    const otherAccount = await mountAgent({}, { sessionIdentity: 'bob' })
+    expect(otherAccount.text()).not.toContain('自然主题游戏')
+    expect(otherAccount.text()).not.toContain('上次已核对候选')
+  })
+
+  it('restores a failed turn and its one-click retry without replaying it on mount', async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      if (String(input) === '/api/auth/csrf') {
+        return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      }
+      throw new Error('offline')
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const wrapper = await mountAgent({}, { sessionIdentity: 'alice' })
+
+    await wrapper.get('textarea').setValue('想换一批互动更多的候选')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    expect(wrapper.text()).toContain('刚才没有接上')
+    wrapper.unmount()
+    fetchMock.mockClear()
+
+    const returned = await mountAgent({}, { sessionIdentity: 'alice' })
+    expect(returned.text()).toContain('想换一批互动更多的候选')
+    expect(returned.text()).toContain('刚才没有接上')
+    expect(returned.findAll('button').some(button => button.text() === '重试')).toBe(true)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('clears one account immediately when the same mounted page switches owners, then restores it safely', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      if (String(input) === '/api/auth/csrf') {
+        return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      }
+      return Response.json({
+        outcome: 'conversation', mode: 'model_assisted', assistantMessage: '记住了 Alice 的聚会条件。',
+        profile: { ...baseProfile, players: 5 }, clarification: null,
+        sourceCount: 179737, candidatesEvaluated: 0, games: [],
+      })
+    }))
+    const wrapper = await mountAgent({}, { sessionIdentity: 'alice' })
+
+    await wrapper.get('textarea').setValue('Alice 想找五个人玩的聚会游戏')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    expect(wrapper.text()).toContain('Alice 想找五个人玩的聚会游戏')
+
+    await wrapper.setProps({ sessionIdentity: 'bob' })
+    await flushPromises()
+    expect(wrapper.text()).not.toContain('Alice 想找五个人玩的聚会游戏')
+    expect(wrapper.text()).not.toContain('记住了 Alice')
+    expect(wrapper.text()).not.toContain('5 人')
+
+    await wrapper.setProps({ sessionIdentity: ' ALICE ' })
+    await flushPromises()
+    expect(wrapper.text()).toContain('Alice 想找五个人玩的聚会游戏')
+    expect(wrapper.text()).toContain('记住了 Alice 的聚会条件')
+    expect(wrapper.text()).toContain('5 人')
+  })
 
   it('asks one natural material question and then renders attributed recommendation cards', async () => {
     const requests: Array<Record<string, unknown>> = []
@@ -70,7 +234,11 @@ describe('GameRecommendationAgent', () => {
           game, matches: ['BGG 总榜第 34 名'], tradeoffs: ['需要留意卡牌文字量'],
           reasons: [
             { kind: 'bgg_fact', text: 'BGG 总榜第 34 名', sourceIndexes: [] },
-            { kind: 'preference_inference', text: '可能符合你希望全桌参与的倾向', sourceIndexes: [] },
+            {
+              kind: 'preference_inference',
+              text: '你说“朋友聚会，想热闹但不要尴尬”；这款的 BGG 标签中有 Pattern Building。这是可核对的匹配线索，不能证明实际互动感或节奏。',
+              sourceIndexes: [],
+            },
             { kind: 'web_research', text: '发行商资料展示了分步教学流程', sourceIndexes: [1] },
           ],
         }],
@@ -112,6 +280,8 @@ describe('GameRecommendationAgent', () => {
     expect(wrapper.text()).toContain('展翅翱翔')
     expect(wrapper.text()).toContain('Wingspan')
     expect(wrapper.text()).toContain('支持 4 人游玩')
+    expect(wrapper.text()).toContain('已核对信息')
+    expect(wrapper.text()).not.toContain('为什么适合')
     expect(wrapper.text()).toContain('完整 BGG 目录')
     expect(wrapper.get('button[aria-label="查看完整资料：展翅翱翔"]').attributes('aria-label'))
       .toBe('查看完整资料：展翅翱翔')
@@ -124,6 +294,10 @@ describe('GameRecommendationAgent', () => {
     expect(requests[2]).toMatchObject({ focusedBggId: 266192, message: '介绍一下《展翅翱翔》' })
     expect(wrapper.text()).toContain('进一步了解')
     expect(wrapper.text()).toContain('发行商资料展示了分步教学流程')
+    expect(wrapper.text()).toContain('结合你刚才说的')
+    expect(wrapper.text()).toContain('你说“朋友聚会，想热闹但不要尴尬”')
+    expect(wrapper.text()).toContain('BGG 标签中有 Pattern Building')
+    expect(wrapper.text()).toContain('不能证明实际互动感或节奏')
     expect(wrapper.get('a[href="https://publisher.example/wingspan"]').attributes('rel')).toContain('noopener')
     expect(wrapper.text()).toContain('目前记下的偏好')
     expect(wrapper.text()).toContain('本轮 Agent 轨迹')

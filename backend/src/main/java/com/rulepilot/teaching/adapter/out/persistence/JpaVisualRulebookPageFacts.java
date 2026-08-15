@@ -7,6 +7,7 @@ import com.rulepilot.teaching.VisualRulebookPageFacts;
 import com.rulepilot.teaching.VisualRulebookPageFacts.IconOccurrence;
 import com.rulepilot.teaching.VisualRulebookPageFacts.PageFact;
 import com.rulepilot.teaching.VisualRulebookPageFacts.VisualAnchor;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.SourceDependency;
 import com.rulepilot.retrieval.VisualRulebookPageFactSearch;
 import com.rulepilot.retrieval.VisualRulebookPageFactSearch.PageFactMatch;
 import jakarta.persistence.Column;
@@ -34,9 +35,9 @@ public class JpaVisualRulebookPageFacts implements VisualRulebookPageFacts, Visu
     private static final int MAX_CJK_FRAGMENTS = 16;
     private static final Set<String> SEARCH_FILLER = Set.of(
             "and", "are", "can", "does", "for", "from", "how", "into", "must", "not", "the", "this", "what",
-            "when", "where", "with", "you", "your");
+            "when", "where", "with", "work", "works", "you", "your");
     private static final Set<String> GENERIC_RULE_TERMS = Set.of(
-            "action", "game", "habitat", "page", "player", "rule", "tile", "token", "wildlife");
+            "clause", "direct", "game", "page", "rule");
     private static final Set<String> CJK_QUESTION_FILLER = Set.of(
             "哪些", "什么", "如何", "怎么", "是否", "为何", "为什么");
     private static final Pattern CJK_RUN = Pattern.compile("\\p{IsHan}+");
@@ -133,12 +134,14 @@ public class JpaVisualRulebookPageFacts implements VisualRulebookPageFacts, Visu
                        %s AS relevance
                 FROM %s
                 WHERE document_version_id = :versionId
+                  AND schema_version = :schemaVersion
                   AND (%s) > 0
                 ORDER BY matched_terms DESC, relevance DESC, page_number
                 LIMIT :limit
                 """.formatted(requested, coverage, relevance, source, coverage);
         var databaseQuery = entityManager.createNativeQuery(sql)
                 .setParameter("versionId", documentVersionId)
+                .setParameter("schemaVersion", PageFact.CURRENT_SCHEMA_VERSION)
                 .setParameter("limit", limit);
         if (!lexemes.isEmpty()) {
             databaseQuery.setParameter("query", searchTerms(query));
@@ -181,6 +184,7 @@ public class JpaVisualRulebookPageFacts implements VisualRulebookPageFacts, Visu
                 .filter(term -> term.length() >= 3)
                 .filter(term -> !SEARCH_FILLER.contains(term))
                 .map(JpaVisualRulebookPageFacts::normalizeEnglishTerm)
+                .filter(term -> !GENERIC_RULE_TERMS.contains(term))
                 .collect(java.util.stream.Collectors.toCollection(java.util.LinkedHashSet::new));
         Matcher identifier = SHORT_PRINTED_IDENTIFIER.matcher(query);
         while (identifier.find() && terms.size() < 12) {
@@ -244,6 +248,8 @@ class VisualRulebookPageFactEntity {
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final TypeReference<List<VisualAnchor>> VISUAL_ANCHORS = new TypeReference<>() {};
     private static final TypeReference<List<IconOccurrence>> ICON_OCCURRENCES = new TypeReference<>() {};
+    private static final TypeReference<List<SourceDependency>> SOURCE_DEPENDENCIES = new TypeReference<>() {};
+    private static final TypeReference<List<String>> RULE_GROUP_IDENTIFIERS = new TypeReference<>() {};
 
     @Id
     UUID id;
@@ -275,6 +281,15 @@ class VisualRulebookPageFactEntity {
     @Column(name = "schema_version", nullable = false)
     int schemaVersion;
 
+    @Column(name = "source_dependencies", nullable = false, columnDefinition = "text")
+    String sourceDependencies;
+
+    @Column(name = "rule_group_identifiers", nullable = false, columnDefinition = "text")
+    String ruleGroupIdentifiers;
+
+    @Column(name = "rule_group_inventory_complete", nullable = false)
+    boolean ruleGroupInventoryComplete;
+
     protected VisualRulebookPageFactEntity() {}
 
     VisualRulebookPageFactEntity(UUID documentVersionId, PageFact page) {
@@ -288,6 +303,9 @@ class VisualRulebookPageFactEntity {
         this.iconOccurrences = serialize(page.iconOccurrences());
         this.iconInventoryComplete = page.iconInventoryComplete();
         this.schemaVersion = page.schemaVersion();
+        this.sourceDependencies = serialize(page.sourceDependencies());
+        this.ruleGroupIdentifiers = serialize(page.ruleGroupIdentifiers());
+        this.ruleGroupInventoryComplete = page.ruleGroupInventoryComplete();
     }
 
     PageFact toDomain() {
@@ -299,7 +317,10 @@ class VisualRulebookPageFactEntity {
                 deserialize(visualAnchors),
                 deserializeIcons(iconOccurrences),
                 iconInventoryComplete,
-                schemaVersion);
+                schemaVersion,
+                deserializeSourceDependencies(sourceDependencies),
+                deserializeRuleGroupIdentifiers(ruleGroupIdentifiers),
+                ruleGroupInventoryComplete);
     }
 
     private static String serialize(List<?> values) {
@@ -325,6 +346,24 @@ class VisualRulebookPageFactEntity {
             return JSON.readValue(serialized, ICON_OCCURRENCES);
         } catch (JsonProcessingException invalidStoredData) {
             throw new IllegalStateException("stored visual icon occurrences are invalid", invalidStoredData);
+        }
+    }
+
+    private static List<SourceDependency> deserializeSourceDependencies(String serialized) {
+        if (serialized == null || serialized.isBlank()) return List.of();
+        try {
+            return JSON.readValue(serialized, SOURCE_DEPENDENCIES);
+        } catch (JsonProcessingException invalidStoredData) {
+            throw new IllegalStateException("stored visual source dependencies are invalid", invalidStoredData);
+        }
+    }
+
+    private static List<String> deserializeRuleGroupIdentifiers(String serialized) {
+        if (serialized == null || serialized.isBlank()) return List.of();
+        try {
+            return JSON.readValue(serialized, RULE_GROUP_IDENTIFIERS);
+        } catch (JsonProcessingException invalidStoredData) {
+            throw new IllegalStateException("stored visual rule-group identifiers are invalid", invalidStoredData);
         }
     }
 }

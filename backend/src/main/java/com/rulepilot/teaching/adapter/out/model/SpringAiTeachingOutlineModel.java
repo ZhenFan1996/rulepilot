@@ -5,6 +5,7 @@ import com.rulepilot.modelconfig.RuntimeModelConfiguration;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration.Role;
 import com.rulepilot.modelconfig.VersionedAgentPrompts;
 import com.rulepilot.teaching.TeachingOutlineModel;
+import com.rulepilot.teaching.TeachingOutlineModel.OutlineGenerationException;
 import com.rulepilot.teaching.application.SourceLanguageRetrievalPolicy;
 import jakarta.annotation.PreDestroy;
 import java.util.concurrent.ExecutionException;
@@ -71,15 +72,21 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
             return call.get(OUTLINE_DEADLINE_SECONDS, TimeUnit.SECONDS);
         } catch (TimeoutException timeout) {
             call.cancel(true);
-            log.warn("Teaching-outline model exceeded {} seconds; rejecting the low-detail fallback", OUTLINE_DEADLINE_SECONDS);
-            throw planningTimeout(timeout);
+            log.warn(
+                    "Teaching-outline model exceeded {} seconds; reporting the bounded generation failure",
+                    OUTLINE_DEADLINE_SECONDS);
+            throw new OutlineGenerationException(
+                    "teaching outline generation did not complete",
+                    planningTimeout(timeout));
         } catch (InterruptedException interrupted) {
             call.cancel(true);
             Thread.currentThread().interrupt();
             throw new IllegalStateException("teaching outline interrupted", interrupted);
         } catch (ExecutionException failed) {
-            if (failed.getCause() instanceof RuntimeException runtime) throw runtime;
-            throw new IllegalStateException("teaching outline failed", failed.getCause());
+            if (failed.getCause() instanceof AgentExecutionStoppedException stopped) throw stopped;
+            throw new OutlineGenerationException(
+                    "teaching outline generation returned no valid outline",
+                    failed.getCause());
         }
     }
 

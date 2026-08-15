@@ -185,7 +185,7 @@ public class HttpGstoneRulebookCatalogLookup implements GstoneRulebookCatalogLoo
                 visibleName + " · 集石规则页",
                 gamePage.toASCIIString(),
                 "集石",
-                request.language(),
+                "",
                 request.editionName());
     }
 

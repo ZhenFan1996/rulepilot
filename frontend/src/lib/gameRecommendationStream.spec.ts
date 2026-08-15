@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { streamGameRecommendation } from './gameRecommendationStream'
+import { RecommendationRequestError, streamGameRecommendation } from './gameRecommendationStream'
 
 describe('streamGameRecommendation', () => {
   afterEach(() => vi.unstubAllGlobals())
@@ -38,5 +38,12 @@ describe('streamGameRecommendation', () => {
 
     await expect(streamGameRecommendation('/stream', { method: 'POST' }, () => undefined))
       .resolves.toMatchObject(payload)
+  })
+
+  it('preserves the HTTP status so authentication failures are not shown as network failures', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 401 })))
+
+    await expect(streamGameRecommendation('/stream', { method: 'POST' }, () => undefined))
+      .rejects.toEqual(new RecommendationRequestError(401))
   })
 })

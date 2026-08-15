@@ -99,7 +99,7 @@ class UserRuleDocumentControllerTest {
                 now);
         var command = new OfficialRulebookImportJobService.Command(
                 editionId, "Example Rules", DocumentSourceType.BASE_RULEBOOK,
-                "https://publisher.example/rules.pdf", true, true, "重点讲清开局和第一轮。");
+                "https://publisher.example/rules.pdf", true, true, "重点讲清开局和第一轮。", "en");
         when(imports.enqueue(command, "alice"))
                 .thenReturn(new OfficialRulebookImportJobService.Launch(job, false));
         when(catalog.findEdition(editionId)).thenReturn(java.util.Optional.of(
@@ -114,7 +114,8 @@ class UserRuleDocumentControllerTest {
                         "https://publisher.example/rules.pdf",
                         true,
                         true,
-                        "重点讲清开局和第一轮。"),
+                        "重点讲清开局和第一轮。",
+                        "en"),
                 () -> "alice");
 
         assertThat(response.id()).isEqualTo(jobId);

@@ -130,7 +130,13 @@ final class AnswerEvidenceRetriever {
                     evidenceById.put(hit.evidence().chunkId(), hit);
                 }
             }
-            if (visualRequested || visualTranscriptionFallback || !directQuestionVisualFactPages.isEmpty()) try {
+            // A text chunk can be non-empty yet still be the wrong subsection on a compact illustrated page. The
+            // page-fact index is a cheap, document-scoped locator, so every direct subquestion gets one bounded
+            // lookup instead of reserving it only for image placeholders or explicitly visual questions.
+            if (visualRequested
+                    || visualTranscriptionFallback
+                    || intent.directQuestion()
+                    || !directQuestionVisualFactPages.isEmpty()) try {
                 List<PageFactMatch> visualMatches = invocations.invoke(
                         assistantRunId,
                         ActivityType.TOOL,
