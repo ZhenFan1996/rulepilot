@@ -24,10 +24,12 @@ import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IconCropReviewDraft
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IconCropReviewRequest;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.ModelExecutionIdentity;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.ProgressiveTeachingStartDraft;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.RuleGroupCoverage;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.SourceDependency;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.TeachingPageRole;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.TeachingPageSketch;
 import com.rulepilot.teaching.TeachingOutlineModel.PageImageInput;
+import com.rulepilot.teaching.TeachingOutlineModel.SourceCoverageRole;
 import com.rulepilot.teaching.VisualRulebookPageFacts.IconMeaningStatus;
 import com.rulepilot.teaching.VisualRulebookPageFacts.IconOccurrence;
 import com.rulepilot.teaching.VisualRulebookPageFacts.VisualAnchor;
@@ -78,6 +80,7 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
             "derivedTotal",
             "originalSpan",
             "resolution");
+    private static final Set<String> RULE_GROUP_COVERAGE_FIELDS = Set.of("identifier", "role");
     private final RuntimeModelConfiguration models;
     private final FakeVisualRulebookPageCatalogModel fake;
     private final TeachingOutlineImagePreparer images = new TeachingOutlineImagePreparer();
@@ -96,7 +99,7 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
             @Value("classpath:prompts/visual-page-catalog-v2-icon-inventory-system.txt") Resource systemPrompt,
             @Value("classpath:prompts/visual-page-teaching-catalog-v3-quantity-observations-system.txt")
                     Resource teachingStartupPrompt,
-            @Value("classpath:prompts/visual-page-progressive-teaching-start-v3-quantity-observations-system.txt")
+            @Value("classpath:prompts/visual-page-progressive-teaching-start-v4-source-contract-system.txt")
                     Resource progressiveTeachingStartPrompt,
             @Value("classpath:prompts/visual-icon-localization-v2-system.txt") Resource iconLocalizationPrompt,
             @Value("classpath:prompts/visual-icon-crop-review-v4-system.txt") Resource iconCropReviewPrompt,
@@ -361,7 +364,7 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
                 })
                 .call()
                 .content();
-        return parseProgressiveTeachingStartV3(content);
+        return parseProgressiveTeachingStartV4(content);
     }
 
     private CatalogDraft summarizeOnce(CatalogRequest request, String owner, String correction) {
@@ -860,15 +863,19 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
     }
 
     static ProgressiveTeachingStartDraft parseProgressiveTeachingStart(String content) {
-        return parseProgressiveTeachingStart(content, false);
+        return parseProgressiveTeachingStart(content, false, false);
     }
 
     static ProgressiveTeachingStartDraft parseProgressiveTeachingStartV3(String content) {
-        return parseProgressiveTeachingStart(content, true);
+        return parseProgressiveTeachingStart(content, true, false);
+    }
+
+    static ProgressiveTeachingStartDraft parseProgressiveTeachingStartV4(String content) {
+        return parseProgressiveTeachingStart(content, true, true);
     }
 
     private static ProgressiveTeachingStartDraft parseProgressiveTeachingStart(
-            String content, boolean requireQuantityObservations) {
+            String content, boolean requireQuantityObservations, boolean requireRuleGroupCoverage) {
         if (content == null || content.isBlank()) {
             throw new IllegalArgumentException("progressive visual teaching model returned no content");
         }
@@ -905,6 +912,8 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
                 List<String> visibleTerms = ruleGroupInventoryComplete
                         ? strictIdentifiers(page.get("visibleTerms"), 8, "progressive visual teaching")
                         : boundedStrings(page.get("visibleTerms"), 8, 120);
+                List<RuleGroupCoverage> ruleGroupCoverage = ruleGroupCoverage(
+                        page.get("ruleGroupCoverage"), requireRuleGroupCoverage);
                 sketches.add(new TeachingPageSketch(
                         page.path("pageNumber").asInt(),
                         role,
@@ -912,7 +921,8 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
                         visibleTerms,
                         boundedStrings(page.get("coverageTags"), 5, 40),
                         ruleGroupInventoryComplete,
-                        sourceDependencies(sourceDependencyInventory)));
+                        sourceDependencies(sourceDependencyInventory),
+                        ruleGroupCoverage));
             }
             int selectedPageNumber = selected.path("pageNumber").asInt();
             TeachingPageSketch selectedSketch = sketches.stream()
@@ -961,6 +971,43 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
         } catch (JsonProcessingException invalidJson) {
             throw new IllegalArgumentException("progressive visual teaching returned invalid JSON", invalidJson);
         }
+    }
+
+    private static List<RuleGroupCoverage> ruleGroupCoverage(JsonNode value, boolean required) {
+        if (value == null || value.isMissingNode()) {
+            if (required) {
+                throw new IllegalArgumentException(
+                        "progressive visual teaching must return ruleGroupCoverage for every page");
+            }
+            return List.of();
+        }
+        if (!value.isArray() || value.size() > 8) {
+            throw new IllegalArgumentException("progressive visual teaching ruleGroupCoverage is invalid");
+        }
+        List<RuleGroupCoverage> coverage = new java.util.ArrayList<>();
+        for (JsonNode item : value) {
+            if (!item.isObject()) {
+                throw new IllegalArgumentException(
+                        "progressive visual teaching ruleGroupCoverage item must be an object");
+            }
+            Set<String> fields = new java.util.LinkedHashSet<>();
+            item.fieldNames().forEachRemaining(fields::add);
+            if (!fields.equals(RULE_GROUP_COVERAGE_FIELDS)) {
+                throw new IllegalArgumentException(
+                        "progressive visual teaching ruleGroupCoverage item must contain the exact fields");
+            }
+            try {
+                coverage.add(new RuleGroupCoverage(
+                        requiredText(item.get("identifier"), "identifier", false),
+                        SourceCoverageRole.valueOf(requiredText(item.get("role"), "role", false))));
+            } catch (IllegalArgumentException invalidCoverage) {
+                throw new IllegalArgumentException(
+                        "progressive visual teaching ruleGroupCoverage item is invalid: "
+                                + invalidCoverage.getMessage(),
+                        invalidCoverage);
+            }
+        }
+        return List.copyOf(coverage);
     }
 
     private static void validateRuleGroupFactBindings(

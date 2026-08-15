@@ -2,8 +2,12 @@ package com.rulepilot.teaching.application;
 
 import com.rulepilot.document.DocumentProcessing;
 import com.rulepilot.teaching.TeachingOutlineModel;
+import com.rulepilot.teaching.TeachingOutlineModel.SourceCoverageAvailability;
+import com.rulepilot.teaching.TeachingOutlineModel.SourceCoverageRole;
+import com.rulepilot.teaching.TeachingOutlineModel.SourceCoverageSlotDraft;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.ProgressiveTeachingStartDraft;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.RuleGroupCoverage;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.SourceDependency;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.TeachingPageRole;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.TeachingPageSketch;
@@ -53,18 +57,21 @@ final class ProgressiveVisualTeachingPlanPolicy {
                 .forEach(ordered::add);
 
         List<TeachingOutlineModel.TopicDraft> topics = new ArrayList<>(java.util.stream.IntStream.range(0, ordered.size())
-                .mapToObj(index -> topic(ordered.get(index), start.selectedPageFacts(), index == 0))
+                .mapToObj(index -> topic(ordered.get(index)))
                 .toList());
         start.pages().stream()
                 .filter(page -> !page.sourceDependencies().isEmpty())
                 .sorted(Comparator.comparingInt(page -> sourceOrder.get(page.pageNumber())))
                 .map(ProgressiveVisualTeachingPlanPolicy::sourceDependencyTopic)
                 .forEach(topics::add);
+        boolean explicitSourceContract = hasExplicitSourceContract(start);
         return new TeachingOutlineModel.OutlineDraft(
                 gameTitle,
                 "先发布一个有逐页证据的可读章节，再在后台按同一不可变计划补齐其余玩法页；"
                         + "每条规则仍需通过原页引用验证。",
-                List.copyOf(topics));
+                List.copyOf(topics),
+                explicitSourceContract ? sourceCoverageSlots(start) : List.of(),
+                explicitSourceContract);
     }
 
     static boolean isProgressive(TeachingPlan plan) {
@@ -109,6 +116,21 @@ final class ProgressiveVisualTeachingPlanPolicy {
             throw new IllegalArgumentException(
                     "progressive visual teaching did not inventory every visible gameplay rule group");
         }
+        if (hasExplicitSourceContract(start)) {
+            if (start.pages().stream().anyMatch(page -> page.role() == TeachingPageRole.UNCERTAIN)) {
+                throw new IllegalArgumentException(
+                        "progressive visual teaching cannot complete a source contract while a page remains uncertain");
+            }
+            boolean sourcedSetupAvailable = start.pages().stream()
+                    .flatMap(page -> page.ruleGroupCoverage().stream())
+                    .anyMatch(coverage -> coverage.role() == SourceCoverageRole.SETUP);
+            boolean selectedOwnsSetup = selected.ruleGroupCoverage().stream()
+                    .anyMatch(coverage -> coverage.role() == SourceCoverageRole.SETUP);
+            if (sourcedSetupAvailable && !selectedOwnsSetup) {
+                throw new IllegalArgumentException(
+                        "progressive visual teaching source contract must start from its sourced setup obligation");
+            }
+        }
         validateSelectedFacts(start.selectedPageFacts());
         Set<String> covered = start.pages().stream()
                 .filter(page -> page.role() == TeachingPageRole.GAMEPLAY_RULES)
@@ -125,6 +147,12 @@ final class ProgressiveVisualTeachingPlanPolicy {
         }
     }
 
+    private static boolean hasExplicitSourceContract(ProgressiveTeachingStartDraft start) {
+        return start.pages().stream()
+                .filter(page -> page.role() == TeachingPageRole.GAMEPLAY_RULES)
+                .allMatch(page -> !page.ruleGroupCoverage().isEmpty());
+    }
+
     private static TeachingOutlineModel.TopicDraft sourceDependencyTopic(TeachingPageSketch page) {
         List<String> titles = page.sourceDependencies().stream()
                 .map(SourceDependency::title)
@@ -138,7 +166,7 @@ final class ProgressiveVisualTeachingPlanPolicy {
                 .forEach(tags::add);
         String joinedTitles = String.join("、", titles);
         return new TeachingOutlineModel.TopicDraft(
-                TOPIC_PREFIX + "source-dependency-" + page.pageNumber(),
+                sourceDependencyTopicKey(page),
                 "当前规则书还需要的资料",
                 bounded(
                         "第 " + page.pageNumber() + " 页只证明当前规则书要求另行查看“" + joinedTitles
@@ -151,23 +179,24 @@ final class ProgressiveVisualTeachingPlanPolicy {
                 List.of(page.pageNumber()));
     }
 
-    private static TeachingOutlineModel.TopicDraft topic(
-            TeachingPageSketch page,
-            PageSummary selectedFacts,
-            boolean selected) {
+    private static TeachingOutlineModel.TopicDraft topic(TeachingPageSketch page) {
         boolean gameplay = page.role() == TeachingPageRole.GAMEPLAY_RULES;
         String title = page.visibleHeading().isBlank()
                 ? page.visibleTerms().stream().findFirst().orElse("核对规则书第 " + page.pageNumber() + " 页")
                 : page.visibleHeading();
         LinkedHashSet<String> queries = new LinkedHashSet<>(page.visibleTerms());
-        if (selected) queries.addAll(selectedFacts.keywords());
         if (queries.isEmpty()) {
             queries.add("Inspect only the rules visibly supported on PDF page " + page.pageNumber() + ".");
         }
         LinkedHashSet<String> tags = new LinkedHashSet<>(page.coverageTags());
         tags.add("source_coverage");
+        page.ruleGroupCoverage().stream()
+                .map(RuleGroupCoverage::role)
+                .map(ProgressiveVisualTeachingPlanPolicy::roleCoverageTag)
+                .filter(java.util.Objects::nonNull)
+                .forEach(tags::add);
         return new TeachingOutlineModel.TopicDraft(
-                TOPIC_PREFIX + (gameplay ? "rules-" : "uncertain-") + page.pageNumber(),
+                topicKey(page),
                 bounded(title, 160),
                 gameplay
                         ? "仅依据规则书第 " + page.pageNumber()
@@ -187,6 +216,68 @@ final class ProgressiveVisualTeachingPlanPolicy {
         if (page.coverageTags().contains("end")) return 3;
         if (page.coverageTags().contains("scoring")) return 4;
         return 2;
+    }
+
+    private static List<SourceCoverageSlotDraft> sourceCoverageSlots(ProgressiveTeachingStartDraft start) {
+        List<SourceCoverageSlotDraft> slots = new ArrayList<>();
+        for (TeachingPageSketch page : start.pages()) {
+            for (int index = 0; index < page.ruleGroupCoverage().size(); index++) {
+                RuleGroupCoverage coverage = page.ruleGroupCoverage().get(index);
+                slots.add(new SourceCoverageSlotDraft(
+                        "page-" + page.pageNumber() + "-rule-" + (index + 1),
+                        coverage.role(),
+                        coverage.identifier(),
+                        List.of(page.pageNumber()),
+                        topicKey(page),
+                        SourceCoverageAvailability.SOURCED));
+            }
+            for (int dependencyIndex = 0; dependencyIndex < page.sourceDependencies().size(); dependencyIndex++) {
+                SourceDependency dependency = page.sourceDependencies().get(dependencyIndex);
+                for (String missing : dependency.missingCoverageTags()) {
+                    slots.add(new SourceCoverageSlotDraft(
+                            "page-" + page.pageNumber() + "-source-" + (dependencyIndex + 1)
+                                    + "-missing-" + missing.replace('_', '-'),
+                            missingRole(missing),
+                            dependency.title(),
+                            List.of(page.pageNumber()),
+                            sourceDependencyTopicKey(page),
+                            SourceCoverageAvailability.MISSING_EXTERNAL_SOURCE));
+                }
+            }
+        }
+        return List.copyOf(slots);
+    }
+
+    private static String topicKey(TeachingPageSketch page) {
+        return TOPIC_PREFIX
+                + (page.role() == TeachingPageRole.GAMEPLAY_RULES ? "rules-" : "uncertain-")
+                + page.pageNumber();
+    }
+
+    private static String sourceDependencyTopicKey(TeachingPageSketch page) {
+        return TOPIC_PREFIX + "source-dependency-" + page.pageNumber();
+    }
+
+    private static String roleCoverageTag(SourceCoverageRole role) {
+        return switch (role) {
+            case SETUP -> "setup";
+            case CORE_LOOP -> "core_loop";
+            case LEGAL_ACTION -> "legal_action";
+            case ENDING -> "end";
+            case SCORING -> "scoring";
+            case NECESSARY_EXCEPTION -> "necessary_exception";
+            case SUPPORTING_RULE -> null;
+        };
+    }
+
+    private static SourceCoverageRole missingRole(String coverageTag) {
+        return switch (coverageTag) {
+            case "setup" -> SourceCoverageRole.SETUP;
+            case "core_loop" -> SourceCoverageRole.CORE_LOOP;
+            case "end" -> SourceCoverageRole.ENDING;
+            case "scoring" -> SourceCoverageRole.SCORING;
+            default -> throw new IllegalArgumentException("unknown missing source coverage role");
+        };
     }
 
     private static void validateSelectedFacts(PageSummary facts) {

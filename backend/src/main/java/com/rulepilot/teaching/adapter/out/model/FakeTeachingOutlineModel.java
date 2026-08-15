@@ -1,6 +1,9 @@
 package com.rulepilot.teaching.adapter.out.model;
 
 import com.rulepilot.teaching.TeachingOutlineModel;
+import com.rulepilot.teaching.TeachingOutlineModel.SourceCoverageAvailability;
+import com.rulepilot.teaching.TeachingOutlineModel.SourceCoverageRole;
+import com.rulepilot.teaching.TeachingOutlineModel.SourceCoverageSlotDraft;
 import com.rulepilot.teaching.VisualSourceRuleGroupLedger;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.SourceDependency;
 import com.rulepilot.teaching.VisualRulebookPageClassifier;
@@ -78,10 +81,15 @@ public class FakeTeachingOutlineModel implements TeachingOutlineModel {
             throw new IllegalArgumentException(
                     "text rulebook exceeds source-preserving fallback capacity; a semantic outline model is required");
         }
+        List<SourceCoverageSlotDraft> slots = new ArrayList<>();
+        addUnresolvedCoreSlots(topics, explicitlyMissing, slots);
+        addMissingSourceSlots(request.pages(), slots);
         return new OutlineDraft(
                 "Imported rulebook",
                 "按准备、主要流程、结束与计分四项通用学习目标检索原规则；没有可核对证据时明确保留空缺。",
-                List.copyOf(topics));
+                List.copyOf(topics),
+                List.copyOf(slots),
+                false);
     }
 
     private TopicDraft coreTopic(
@@ -128,10 +136,111 @@ public class FakeTeachingOutlineModel implements TeachingOutlineModel {
                 .filter(page -> !page.sourceDependencies().isEmpty())
                 .map(this::sourceDependencyTopic)
                 .forEach(topics::add);
+        List<SourceCoverageSlotDraft> slots = new ArrayList<>();
+        addVisualSourceSlots(topics, sourcePages, slots);
+        addUnresolvedCoreSlots(topics, explicitlyMissing, slots);
+        addMissingSourceSlots(sourcePages, slots);
         return new OutlineDraft(
                 "Imported rulebook",
                 "逐页核对视觉规则证据，再由证据约束的讲解模型组织玩家可执行的说明；无法确认的内容保持为空缺。",
-                List.copyOf(topics));
+                List.copyOf(topics),
+                List.copyOf(slots),
+                false);
+    }
+
+    private void addVisualSourceSlots(
+            List<TopicDraft> topics,
+            List<PageInput> sourcePages,
+            List<SourceCoverageSlotDraft> slots) {
+        int slotNumber = 1;
+        for (TopicDraft topic : topics) {
+            if (!topic.coverageTags().contains("source_coverage")) continue;
+            for (String query : topic.retrievalQueries()) {
+                List<Integer> exactPages = sourcePages.stream()
+                        .filter(page -> topic.sourcePageNumbers().contains(page.pageNumber()))
+                        .filter(PageInput::sourceRuleGroupInventoryComplete)
+                        .filter(page -> page.sourceRuleGroupIdentifiers().stream()
+                                .map(VisualSourceRuleGroupLedger::identity)
+                                .anyMatch(VisualSourceRuleGroupLedger.identity(query)::equals))
+                        .map(PageInput::pageNumber)
+                        .distinct()
+                        .toList();
+                boolean sourced = !exactPages.isEmpty();
+                slots.add(new SourceCoverageSlotDraft(
+                        "fallback-source-" + slotNumber++,
+                        SourceCoverageRole.SUPPORTING_RULE,
+                        query,
+                        sourced ? exactPages : topic.sourcePageNumbers(),
+                        topic.key(),
+                        sourced ? SourceCoverageAvailability.SOURCED : SourceCoverageAvailability.UNRESOLVED));
+            }
+        }
+    }
+
+    private void addUnresolvedCoreSlots(
+            List<TopicDraft> topics,
+            Set<String> explicitlyMissing,
+            List<SourceCoverageSlotDraft> slots) {
+        for (SourceCoverageRole role : List.of(
+                SourceCoverageRole.SETUP,
+                SourceCoverageRole.CORE_LOOP,
+                SourceCoverageRole.ENDING,
+                SourceCoverageRole.SCORING)) {
+            String coverageTag = coverageTag(role);
+            if (explicitlyMissing.contains(coverageTag)) continue;
+            TopicDraft owner = topics.stream()
+                    .filter(topic -> topic.coverageTags().contains(coverageTag))
+                    .findFirst()
+                    .orElseThrow(() -> new IllegalArgumentException(
+                            "source-preserving fallback has no owner for " + coverageTag));
+            slots.add(new SourceCoverageSlotDraft(
+                    "fallback-core-" + coverageTag.replace('_', '-'),
+                    role,
+                    owner.retrievalQueries().getFirst(),
+                    owner.sourcePageNumbers(),
+                    owner.key(),
+                    SourceCoverageAvailability.UNRESOLVED));
+        }
+    }
+
+    private void addMissingSourceSlots(
+            List<PageInput> pages,
+            List<SourceCoverageSlotDraft> slots) {
+        int slotNumber = 1;
+        for (PageInput page : pages) {
+            for (SourceDependency dependency : page.sourceDependencies()) {
+                for (String missingCoverageTag : dependency.missingCoverageTags()) {
+                    slots.add(new SourceCoverageSlotDraft(
+                            "fallback-missing-" + slotNumber++,
+                            roleForCoverageTag(missingCoverageTag),
+                            dependency.title(),
+                            List.of(page.pageNumber()),
+                            "source-dependency-page-" + page.pageNumber(),
+                            SourceCoverageAvailability.MISSING_EXTERNAL_SOURCE));
+                }
+            }
+        }
+    }
+
+    private static String coverageTag(SourceCoverageRole role) {
+        return switch (role) {
+            case SETUP -> "setup";
+            case CORE_LOOP -> "core_loop";
+            case ENDING -> "end";
+            case SCORING -> "scoring";
+            case LEGAL_ACTION, NECESSARY_EXCEPTION, SUPPORTING_RULE ->
+                    throw new IllegalArgumentException("role has no core fallback coverage tag");
+        };
+    }
+
+    private static SourceCoverageRole roleForCoverageTag(String coverageTag) {
+        return switch (coverageTag) {
+            case "setup" -> SourceCoverageRole.SETUP;
+            case "core_loop" -> SourceCoverageRole.CORE_LOOP;
+            case "end" -> SourceCoverageRole.ENDING;
+            case "scoring" -> SourceCoverageRole.SCORING;
+            default -> throw new IllegalArgumentException("unknown source dependency responsibility");
+        };
     }
 
     private List<List<String>> chunks(List<String> queries) {

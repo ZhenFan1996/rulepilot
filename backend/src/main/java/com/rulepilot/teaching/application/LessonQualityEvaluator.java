@@ -23,7 +23,8 @@ public class LessonQualityEvaluator {
     public LessonQualityReport evaluate(TeachingPlan plan, IllustratedLesson lesson) {
         List<QualityCheck> checks = new ArrayList<>();
         checks.add(requiredCoverage(plan, lesson));
-        if (plan.sections().stream().anyMatch(section -> section.coverageTags().contains("source_coverage"))) {
+        if (plan.sections().stream().anyMatch(section -> section.coverageTags().contains("source_coverage")
+                || section.coverageTags().contains(TeachingSourceCoverageContract.CONTRACT_VERSION_TAG))) {
             checks.add(sourceRuleGroupCoverage(plan, lesson));
         }
         if (plan.sections().stream().anyMatch(section -> section.coverageTags().contains("source_dependency"))) {
@@ -90,8 +91,13 @@ public class LessonQualityEvaluator {
     }
 
     private QualityCheck sourceRuleGroupCoverage(TeachingPlan plan, IllustratedLesson lesson) {
+        boolean sourceContract = plan.sections().stream()
+                .anyMatch(section -> section.coverageTags()
+                        .contains(TeachingSourceCoverageContract.CONTRACT_VERSION_TAG));
         List<TeachingPlan.PlannedSection> sourceSections = plan.sections().stream()
-                .filter(section -> section.coverageTags().contains("source_coverage"))
+                .filter(section -> sourceContract
+                        ? ownsContractSlot(section)
+                        : section.coverageTags().contains("source_coverage"))
                 .toList();
         long required = sourceSections.stream()
                 .mapToLong(section -> section.retrievalQueries().size())
@@ -102,14 +108,23 @@ public class LessonQualityEvaluator {
         long reviewed = sourceSections.stream()
                 .mapToLong(planned -> coveredSourceGroups(planned, lesson, true))
                 .sum();
-        CheckStatus status = available < required
+        boolean sourceInventoryUnavailable = sourceContract && plan.sections().stream()
+                .anyMatch(section -> section.coverageTags().contains(
+                                TeachingSourceCoverageContract.INCOMPLETE_INVENTORY_TAG)
+                        || section.coverageTags().contains(TeachingSourceCoverageContract.UNSOURCED_TAG));
+        CheckStatus status = sourceInventoryUnavailable
+                ? CheckStatus.FAIL
+                : available < required
                 ? CheckStatus.FAIL
                 : reviewed < required ? CheckStatus.NOT_EVALUATED : CheckStatus.PASS;
         return new QualityCheck(
                 CheckType.SOURCE_RULE_GROUP_COVERAGE,
                 status,
                 "来源规则组已核对 " + reviewed + " / " + required,
-                available < required
+                sourceInventoryUnavailable
+                        ? "来源义务清单仍不完整，或至少一个开局、行动、结束、计分、必要例外没有可用来源；"
+                                + "即使已有章节带引用，也不能把整局标为完整。"
+                        : available < required
                         ? "有 " + (required - available) + " 个从规则页清点出的规则组，尚未逐项在带原始标识和"
                                 + "来源页的讲解步骤中出现；不能把整章通过自动算成全部规则组已核对。"
                         : reviewed < required
@@ -117,6 +132,12 @@ public class LessonQualityEvaluator {
                                         + " 个未通过逐项完整证据窗口的独立核对；"
                                         + "不能确认全部可读规则组均已进入讲解。"
                                 : "每个从规则页清点出的可读规则组，都以原始标识和同页引用进入讲解并通过独立核对。");
+    }
+
+    private boolean ownsContractSlot(TeachingPlan.PlannedSection section) {
+        return java.util.Arrays.stream(com.rulepilot.teaching.TeachingOutlineModel.SourceCoverageRole.values())
+                .map(TeachingSourceCoverageContract::roleTag)
+                .anyMatch(section.coverageTags()::contains);
     }
 
     private long coveredSourceGroups(

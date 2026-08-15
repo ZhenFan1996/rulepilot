@@ -41,6 +41,9 @@ final class TeachingLessonAssemblyPolicy {
         if (required.stream().anyMatch(section -> section.evidenceStatus() == EvidenceStatus.INSUFFICIENT_EVIDENCE)) {
             return LessonStatus.INCOMPLETE;
         }
+        TeachingSourceCoverageContract.Assessment sourceCoverage =
+                TeachingSourceCoverageContract.assess(plan, sections);
+        if (sourceCoverage.applicable() && !sourceCoverage.complete()) return LessonStatus.INCOMPLETE;
         return required.stream().allMatch(section -> section.evidenceStatus() == EvidenceStatus.SUPPORTED)
                 ? LessonStatus.COMPLETE
                 : LessonStatus.DRAFT_READY;

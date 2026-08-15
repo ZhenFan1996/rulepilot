@@ -23,11 +23,13 @@ import com.rulepilot.teaching.TeachingOutlineModel.OutlineDraft;
 import com.rulepilot.teaching.TeachingOutlineModel.OutlineGenerationException;
 import com.rulepilot.teaching.TeachingOutlineModel.OutlineRequest;
 import com.rulepilot.teaching.TeachingOutlineModel.PageInput;
+import com.rulepilot.teaching.TeachingOutlineModel.SourceCoverageRole;
 import com.rulepilot.teaching.TeachingOutlineModel.TopicDraft;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.SourceDependency;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.ProgressiveTeachingStartDraft;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.RuleGroupCoverage;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.TeachingPageRole;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.TeachingPageSketch;
 import com.rulepilot.teaching.adapter.out.model.FakeTeachingOutlineModel;
@@ -86,9 +88,11 @@ class TeachingPlanServiceTest {
 
         assertThat(plan.gameTitle()).isEqualTo("Example Game");
         assertThat(plan.sections()).extracting(section -> section.sourcePageNumbers().getFirst())
-                .containsExactly(3, 2, 4);
+                .containsExactly(2, 3, 4);
         assertThat(plan.sections()).allMatch(section ->
                 section.topicKey().startsWith("progressive-visual-page-"));
+        assertThat(plan.sections()).allSatisfy(section -> assertThat(section.coverageTags())
+                .contains(TeachingSourceCoverageContract.CONTRACT_VERSION_TAG));
         verify(publication).publish(any(TeachingPlan.class), eq("Example Game"));
         verifyNoInteractions(outlines);
     }
@@ -1035,20 +1039,41 @@ class TeachingPlanServiceTest {
                         new TeachingPageSketch(
                                 1, TeachingPageRole.NON_GAMEPLAY, "Example Game", List.of(), List.of()),
                         new TeachingPageSketch(
-                                2, TeachingPageRole.GAMEPLAY_RULES, "Setup", List.of("market"), List.of("setup")),
+                                2,
+                                TeachingPageRole.GAMEPLAY_RULES,
+                                "Setup",
+                                List.of("market"),
+                                List.of("setup"),
+                                true,
+                                List.of(),
+                                List.of(new RuleGroupCoverage("market", SourceCoverageRole.SETUP))),
                         new TeachingPageSketch(
-                                3, TeachingPageRole.GAMEPLAY_RULES, "Turn", List.of("take cards"), List.of("core_loop")),
+                                3,
+                                TeachingPageRole.GAMEPLAY_RULES,
+                                "Turn",
+                                List.of("turn cycle", "take cards"),
+                                List.of("core_loop"),
+                                true,
+                                List.of(),
+                                List.of(
+                                        new RuleGroupCoverage("turn cycle", SourceCoverageRole.CORE_LOOP),
+                                        new RuleGroupCoverage("take cards", SourceCoverageRole.LEGAL_ACTION))),
                         new TeachingPageSketch(
                                 4,
                                 TeachingPageRole.GAMEPLAY_RULES,
                                 "Game end and scoring",
                                 List.of("game end", "score"),
-                                List.of("end", "scoring"))),
+                                List.of("end", "scoring"),
+                                true,
+                                List.of(),
+                                List.of(
+                                        new RuleGroupCoverage("game end", SourceCoverageRole.ENDING),
+                                        new RuleGroupCoverage("score", SourceCoverageRole.SCORING)))),
                 new PageSummary(
-                        3,
-                        "TAKE CARDS",
-                        "当前玩家从市场拿取可见卡牌，然后按照页面所示顺序结束本回合。",
-                        List.of("TAKE CARDS", "market")));
+                        2,
+                        "market",
+                        "market：每位玩家按页面所示关系完成开局。",
+                        List.of("market", "setup")));
     }
 
     private TopicDraft topic(String key, List<String> tags, List<Integer> pages) {

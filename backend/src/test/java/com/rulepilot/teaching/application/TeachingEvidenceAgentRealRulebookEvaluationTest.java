@@ -105,6 +105,7 @@ class TeachingEvidenceAgentRealRulebookEvaluationTest {
                     .containsEntry("citationAccepted", true)
                     .containsEntry("modelCalls", 0)
                     .containsEntry("directAdditionalModelCalls", 0)
+                    .containsEntry("directAdditionalToolCalls", 1)
                     .containsEntry("withinLatencyBudget", true);
             assertThat(result.get("toolOperations"))
                     .isEqualTo(List.of("readTeachingSourcePages|1"));
@@ -436,14 +437,16 @@ class TeachingEvidenceAgentRealRulebookEvaluationTest {
                 .orElse(null);
         boolean citationAccepted = expected != null && citationAccepted(plan, refined.evidence(), expected);
         int modelCallsBeforeDirect = audited.modelCalls.get();
+        int toolCallsBeforeDirect = audited.toolCalls.get();
+        List<String> toolOperationsBeforeDirect = List.copyOf(audited.toolOperations);
         TeachingPlan directPlan = plan(versionId, case_.caseNode(), List.of(case_.initialPage()));
         var directResult = agent.refine(directPlan, directPlan.sections().getFirst(), runId, deterministic);
 
         return Map.ofEntries(
                 Map.entry("caseId", case_.caseId()),
                 Map.entry("provider", case_.provider().provider()),
-                Map.entry("toolCalls", audited.toolCalls.get()),
-                Map.entry("toolOperations", List.copyOf(audited.toolOperations)),
+                Map.entry("toolCalls", toolCallsBeforeDirect),
+                Map.entry("toolOperations", toolOperationsBeforeDirect),
                 Map.entry("searchDiagnostics", corpus.searchDiagnostics(case_.expectedTerms())),
                 Map.entry("modelCalls", modelCallsBeforeDirect),
                 Map.entry("expectedCoverageAdded", expected != null),
@@ -454,6 +457,7 @@ class TeachingEvidenceAgentRealRulebookEvaluationTest {
                         .distinct()
                         .toList()),
                 Map.entry("directAdditionalModelCalls", audited.modelCalls.get() - modelCallsBeforeDirect),
+                Map.entry("directAdditionalToolCalls", audited.toolCalls.get() - toolCallsBeforeDirect),
                 Map.entry("directEvidenceUnchanged", directResult == deterministic),
                 Map.entry("latencyMs", latencyMs),
                 Map.entry("withinLatencyBudget", latencyMs < 90_000));

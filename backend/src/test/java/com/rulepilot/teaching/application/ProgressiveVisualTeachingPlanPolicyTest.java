@@ -1,11 +1,14 @@
 package com.rulepilot.teaching.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.rulepilot.document.DocumentProcessing.PageView;
+import com.rulepilot.teaching.TeachingOutlineModel.SourceCoverageRole;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.ProgressiveTeachingStartDraft;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.RuleGroupCoverage;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.SourceDependency;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.TeachingPageRole;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.TeachingPageSketch;
@@ -13,6 +16,64 @@ import java.util.List;
 import org.junit.jupiter.api.Test;
 
 class ProgressiveVisualTeachingPlanPolicyTest {
+
+    @Test
+    void explicitPageInventoryBuildsSeparateRequiredSlotsForEveryLegalActionAndNecessaryException() {
+        var start = new ProgressiveTeachingStartDraft(
+                List.of(
+                        pageWithRoles(1, "S-0", List.of("S-0"), List.of("setup"),
+                                List.of(coverage("S-0", SourceCoverageRole.SETUP))),
+                        pageWithRoles(
+                                2,
+                                "T-0",
+                                List.of("T-0", "A-1", "A-2", "E-0"),
+                                List.of("core_loop", "source_coverage"),
+                                List.of(
+                                        coverage("T-0", SourceCoverageRole.CORE_LOOP),
+                                        coverage("A-1", SourceCoverageRole.LEGAL_ACTION),
+                                        coverage("A-2", SourceCoverageRole.LEGAL_ACTION),
+                                        coverage("E-0", SourceCoverageRole.NECESSARY_EXCEPTION))),
+                        pageWithRoles(3, "F-0", List.of("F-0"), List.of("end"),
+                                List.of(coverage("F-0", SourceCoverageRole.ENDING))),
+                        pageWithRoles(4, "P-0", List.of("P-0"), List.of("scoring"),
+                                List.of(coverage("P-0", SourceCoverageRole.SCORING)))),
+                facts(1, "S-0", "S-0：每位玩家按照页面上清楚可见的完整关系完成全部开局准备。", "S-0"));
+
+        var outline = ProgressiveVisualTeachingPlanPolicy.outline("Opaque game", pages(4), start);
+
+        assertThat(outline.sourceCoverageInventoryComplete()).isTrue();
+        assertThat(outline.sourceCoverageSlots())
+                .filteredOn(slot -> slot.role() == SourceCoverageRole.LEGAL_ACTION)
+                .extracting(slot -> slot.sourceIdentifier())
+                .containsExactly("A-1", "A-2");
+        assertThat(outline.sourceCoverageSlots())
+                .filteredOn(slot -> slot.role() == SourceCoverageRole.NECESSARY_EXCEPTION)
+                .extracting(slot -> slot.sourceIdentifier())
+                .containsExactly("E-0");
+        assertThat(outline.topics()).flatExtracting(topic -> topic.coverageTags())
+                .contains("legal_action", "necessary_exception");
+    }
+
+    @Test
+    void explicitSourceContractCannotStartAfterItsSourcedSetupObligation() {
+        var start = new ProgressiveTeachingStartDraft(
+                List.of(
+                        pageWithRoles(1, "S-0", List.of("S-0"), List.of("setup"),
+                                List.of(coverage("S-0", SourceCoverageRole.SETUP))),
+                        pageWithRoles(2, "T-0", List.of("T-0", "A-1"), List.of("core_loop"),
+                                List.of(
+                                        coverage("T-0", SourceCoverageRole.CORE_LOOP),
+                                        coverage("A-1", SourceCoverageRole.LEGAL_ACTION))),
+                        pageWithRoles(3, "F-0", List.of("F-0"), List.of("end"),
+                                List.of(coverage("F-0", SourceCoverageRole.ENDING))),
+                        pageWithRoles(4, "P-0", List.of("P-0"), List.of("scoring"),
+                                List.of(coverage("P-0", SourceCoverageRole.SCORING)))),
+                facts(2, "T-0; A-1", "T-0：可见循环推进；A-1：玩家执行可见行动。", "T-0"));
+
+        assertThatThrownBy(() -> ProgressiveVisualTeachingPlanPolicy.outline("Opaque game", pages(4), start))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("start from its sourced setup obligation");
+    }
 
     @Test
     void startsWithTheModelSelectedEarlyJourneyPageAndKeepsEveryGameplayObligation() {
@@ -131,6 +192,45 @@ class ProgressiveVisualTeachingPlanPolicyTest {
     }
 
     @Test
+    void multipleExternalSourcesForOneMissingRoleKeepUniqueContractSlots() {
+        var start = new ProgressiveTeachingStartDraft(
+                List.of(
+                        new TeachingPageSketch(
+                                1,
+                                TeachingPageRole.GAMEPLAY_RULES,
+                                "T-0",
+                                List.of("T-0", "A-1"),
+                                List.of("core_loop"),
+                                true,
+                                List.of(
+                                        new SourceDependency("Start Leaflet", List.of("setup")),
+                                        new SourceDependency("Initial State Sheet", List.of("setup"))),
+                                List.of(
+                                        coverage("T-0", SourceCoverageRole.CORE_LOOP),
+                                        coverage("A-1", SourceCoverageRole.LEGAL_ACTION))),
+                        pageWithRoles(
+                                2,
+                                "F-0",
+                                List.of("F-0", "P-0"),
+                                List.of("end", "scoring"),
+                                List.of(
+                                        coverage("F-0", SourceCoverageRole.ENDING),
+                                        coverage("P-0", SourceCoverageRole.SCORING)))),
+                facts(1, "T-0; A-1", "T-0：可见循环推进；A-1：玩家执行可见行动。", "T-0"));
+
+        var outline = ProgressiveVisualTeachingPlanPolicy.outline("Opaque game", pages(2), start);
+
+        assertThatCode(() -> new TeachingPlanFactory().create(
+                        java.util.UUID.randomUUID(), "player", outline))
+                .doesNotThrowAnyException();
+        assertThat(outline.sourceCoverageSlots())
+                .filteredOn(slot -> slot.availability()
+                        == com.rulepilot.teaching.TeachingOutlineModel.SourceCoverageAvailability.MISSING_EXTERNAL_SOURCE)
+                .extracting(slot -> slot.slotId())
+                .doesNotHaveDuplicates();
+    }
+
+    @Test
     void aGenericExternalReferenceCannotWaiveAnUnidentifiedCoreObligation() {
         var start = new ProgressiveTeachingStartDraft(
                 List.of(
@@ -240,6 +340,27 @@ class ProgressiveVisualTeachingPlanPolicyTest {
             List<String> terms,
             List<String> tags) {
         return new TeachingPageSketch(number, role, heading, terms, tags);
+    }
+
+    private TeachingPageSketch pageWithRoles(
+            int number,
+            String heading,
+            List<String> terms,
+            List<String> tags,
+            List<RuleGroupCoverage> coverage) {
+        return new TeachingPageSketch(
+                number,
+                TeachingPageRole.GAMEPLAY_RULES,
+                heading,
+                terms,
+                tags,
+                true,
+                List.of(),
+                coverage);
+    }
+
+    private RuleGroupCoverage coverage(String identifier, SourceCoverageRole role) {
+        return new RuleGroupCoverage(identifier, role);
     }
 
     private PageSummary facts(int number, String terms, String summary, String keyword) {

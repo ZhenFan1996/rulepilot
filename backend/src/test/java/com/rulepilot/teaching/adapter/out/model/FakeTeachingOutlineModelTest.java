@@ -5,6 +5,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.rulepilot.teaching.TeachingOutlineModel.OutlineRequest;
 import com.rulepilot.teaching.TeachingOutlineModel.PageInput;
+import com.rulepilot.teaching.TeachingOutlineModel.SourceCoverageAvailability;
+import com.rulepilot.teaching.TeachingOutlineModel.SourceCoverageRole;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.SourceDependency;
 import java.util.List;
 import java.util.stream.IntStream;
@@ -28,6 +30,17 @@ class FakeTeachingOutlineModelTest {
             assertThat(topic.retrievalQueries()).isNotEmpty();
             assertThat(topic.sourcePageNumbers()).isEmpty();
         });
+        assertThat(outline.sourceCoverageInventoryComplete()).isFalse();
+        assertThat(outline.sourceCoverageSlots())
+                .extracting(slot -> slot.role())
+                .containsExactly(
+                        SourceCoverageRole.SETUP,
+                        SourceCoverageRole.CORE_LOOP,
+                        SourceCoverageRole.ENDING,
+                        SourceCoverageRole.SCORING);
+        assertThat(outline.sourceCoverageSlots())
+                .allSatisfy(slot -> assertThat(slot.availability())
+                        .isEqualTo(SourceCoverageAvailability.UNRESOLVED));
     }
 
     @Test
@@ -47,6 +60,12 @@ class FakeTeachingOutlineModelTest {
             assertThat(dependency.retrievalQueries()).containsExactly("First Session Booklet");
             assertThat(dependency.sourcePageNumbers()).containsExactly(1);
         });
+        assertThat(outline.sourceCoverageSlots())
+                .anySatisfy(slot -> {
+                    assertThat(slot.role()).isEqualTo(SourceCoverageRole.SETUP);
+                    assertThat(slot.sourceIdentifier()).isEqualTo("First Session Booklet");
+                    assertThat(slot.availability()).isEqualTo(SourceCoverageAvailability.MISSING_EXTERNAL_SOURCE);
+                });
     }
 
     @Test
@@ -72,6 +91,10 @@ class FakeTeachingOutlineModelTest {
                 .containsExactly("setup", "core_loop", "end", "scoring", "source_coverage");
         assertThat(outline.topics().subList(1, outline.topics().size()))
                 .allSatisfy(topic -> assertThat(topic.coverageTags()).containsExactly("source_coverage"));
+        assertThat(outline.sourceCoverageInventoryComplete()).isFalse();
+        assertThat(outline.sourceCoverageSlots())
+                .anySatisfy(slot -> assertThat(slot.availability())
+                        .isEqualTo(SourceCoverageAvailability.UNRESOLVED));
     }
 
     @Test

@@ -5,6 +5,7 @@ import com.rulepilot.teaching.domain.TeachingPlan;
 import com.rulepilot.teaching.domain.TeachingPlan.PlannedSection;
 import java.time.Instant;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
@@ -50,7 +51,7 @@ public class TeachingPlanFactory {
                             topic.required(),
                             topic.visualEvidenceRecommended(),
                             normalizedQueries(topic.retrievalQueries()),
-                            normalizedTags(topic.coverageTags()),
+                            planTags(outline, topic),
                             topic.sourcePageNumbers());
                 })
                 .toList();
@@ -71,6 +72,7 @@ public class TeachingPlanFactory {
                 || outline.topics().isEmpty() || outline.topics().size() > MAX_TOPICS) {
             throw new IllegalArgumentException("model did not produce a usable teaching outline");
         }
+        TeachingSourceCoverageContract.validateStructure(outline);
         Set<String> keys = new HashSet<>();
         Set<String> covered = new HashSet<>();
         Set<String> explicitlyMissing = new HashSet<>();
@@ -119,6 +121,12 @@ public class TeachingPlanFactory {
                 .map(value -> canonicalTag(value.toLowerCase(Locale.ROOT).replace('-', '_').strip()))
                 .distinct()
                 .toList();
+    }
+
+    private List<String> planTags(OutlineDraft outline, com.rulepilot.teaching.TeachingOutlineModel.TopicDraft topic) {
+        LinkedHashSet<String> tags = new LinkedHashSet<>(normalizedTags(topic.coverageTags()));
+        tags.addAll(TeachingSourceCoverageContract.metadataForTopic(outline, topic));
+        return List.copyOf(tags);
     }
 
     private List<String> normalizedQueries(List<String> values) {

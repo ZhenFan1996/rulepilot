@@ -156,6 +156,7 @@ public class TeachingPlanService {
             if (visualOnly || hasStructuredSourceDependencies(pages)) {
                 VisualOutlineEvidencePolicy.validateVisualSourceDependencies(outline, pages);
             }
+            TeachingSourceCoverageContract.validateAgainstSources(outlineRequest, outline);
             plans.validate(outline);
             if (visualOnly) {
                 outline = VisualOutlineEvidencePolicy.bindVisualCoreTopicEvidence(outline, pages);
@@ -189,6 +190,7 @@ public class TeachingPlanService {
                     playerGameTitle, VisualOutlineEvidencePolicy.bindIconLegendEvidence(
                             outlines.fallback(outlineRequest), documentPages), outlineRequest.pages());
             VisualOutlineEvidencePolicy.validateVisualSourceDependencies(outline, pages);
+            TeachingSourceCoverageContract.validateAgainstSources(outlineRequest, outline);
             plans.validate(outline);
             if (visualOnly) {
                 outline = VisualOutlineEvidencePolicy.bindVisualCoreTopicEvidence(outline, pages);
@@ -222,6 +224,7 @@ public class TeachingPlanService {
                                 .toList());
                 outline = VisualOutlineEvidencePolicy.bindVisualCoreTopicEvidence(outline, pages);
                 VisualOutlineEvidencePolicy.validateVisualSourceDependencies(outline, pages);
+                TeachingSourceCoverageContract.validateAgainstSources(outlineRequest, outline);
                 plans.validate(outline);
                 VisualOutlineEvidencePolicy.validateVisualCoreTopicBindings(outline, pages);
                 VisualOutlineEvidencePolicy.validateVisualRulebookCoverage(outline, pages);
@@ -242,6 +245,7 @@ public class TeachingPlanService {
         if (catalogGameTitle.isPresent()) {
             outline = withGameTitle(catalogGameTitle.orElseThrow(), outline);
         }
+        TeachingSourceCoverageContract.validateAgainstSources(outlineRequest, outline);
         log.info(
                 "Teaching outline generated for documentVersionId={}: gameTitle={}, topics={}",
                 documentVersionId,
@@ -339,6 +343,7 @@ public class TeachingPlanService {
                         documentTitle,
                         VisualOutlineEvidencePolicy.bindIconLegendEvidence(refined, documentPages),
                         request.pages());
+                TeachingSourceCoverageContract.validateAgainstSources(request, current);
                 plans.validate(current);
                 if (current.equals(beforeRefinement)) return current;
             } catch (RuntimeException refinementFailure) {
@@ -385,6 +390,7 @@ public class TeachingPlanService {
                         documentTitle,
                         VisualOutlineEvidencePolicy.bindIconLegendEvidence(refined, documentPages),
                         request.pages());
+                TeachingSourceCoverageContract.validateAgainstSources(request, current);
                 plans.validate(current);
                 if (current.equals(beforeRefinement)) return current;
             } catch (RuntimeException refinementFailure) {
@@ -431,7 +437,12 @@ public class TeachingPlanService {
                 documentTitle,
                 outline.gameTitle(),
                 activeDocumentPages.stream().map(PageInput::text).toList());
-        return new TeachingOutlineModel.OutlineDraft(selectedTitle, outline.premise(), outline.topics());
+        return new TeachingOutlineModel.OutlineDraft(
+                selectedTitle,
+                outline.premise(),
+                outline.topics(),
+                outline.sourceCoverageSlots(),
+                outline.sourceCoverageInventoryComplete());
     }
 
     static String playerGameTitle(
@@ -452,7 +463,12 @@ public class TeachingPlanService {
     static TeachingOutlineModel.OutlineDraft withGameTitle(
             String gameTitle,
             TeachingOutlineModel.OutlineDraft outline) {
-        return new TeachingOutlineModel.OutlineDraft(gameTitle.strip(), outline.premise(), outline.topics());
+        return new TeachingOutlineModel.OutlineDraft(
+                gameTitle.strip(),
+                outline.premise(),
+                outline.topics(),
+                outline.sourceCoverageSlots(),
+                outline.sourceCoverageInventoryComplete());
     }
 
     private <T> T invokeModel(
@@ -483,6 +499,11 @@ public class TeachingPlanService {
                 .mapToInt(topic -> topic.title().length()
                         + topic.objective().length()
                         + topic.retrievalQueries().stream().mapToInt(String::length).sum())
+                .sum();
+        characters += outline.sourceCoverageSlots().stream()
+                .mapToInt(slot -> slot.slotId().length()
+                        + slot.sourceIdentifier().length()
+                        + slot.ownerTopicKey().length())
                 .sum();
         return Math.max(1, characters / 4);
     }

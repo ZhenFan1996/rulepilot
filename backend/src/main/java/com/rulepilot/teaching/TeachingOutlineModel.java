@@ -125,14 +125,79 @@ public interface TeachingOutlineModel {
         }
     }
 
-    record OutlineDraft(String gameTitle, String premise, List<TopicDraft> topics) {
+    record OutlineDraft(
+            String gameTitle,
+            String premise,
+            List<TopicDraft> topics,
+            List<SourceCoverageSlotDraft> sourceCoverageSlots,
+            boolean sourceCoverageInventoryComplete) {
+
+        private static final int MAX_SOURCE_COVERAGE_SLOTS = 128;
+
         public OutlineDraft {
             if (gameTitle == null || gameTitle.isBlank() || gameTitle.length() > 200
                     || premise == null || premise.isBlank() || premise.length() > 1_200) {
                 throw new IllegalArgumentException("teaching outline identity is invalid");
             }
+            if (sourceCoverageSlots != null && sourceCoverageSlots.size() > MAX_SOURCE_COVERAGE_SLOTS) {
+                throw new IllegalArgumentException("teaching outline has too many source coverage slots");
+            }
+            if (sourceCoverageSlots != null && sourceCoverageSlots.stream().anyMatch(java.util.Objects::isNull)) {
+                throw new IllegalArgumentException("teaching source coverage inventory is invalid");
+            }
             topics = topics == null ? List.of() : List.copyOf(topics);
+            sourceCoverageSlots = sourceCoverageSlots == null ? List.of() : List.copyOf(sourceCoverageSlots);
         }
+
+        public OutlineDraft(String gameTitle, String premise, List<TopicDraft> topics) {
+            this(gameTitle, premise, topics, List.of(), false);
+        }
+    }
+
+    /** One independently auditable obligation from the active rulebook, before chapter prose is generated. */
+    record SourceCoverageSlotDraft(
+            String slotId,
+            SourceCoverageRole role,
+            String sourceIdentifier,
+            List<Integer> sourcePageNumbers,
+            String ownerTopicKey,
+            SourceCoverageAvailability availability) {
+        public SourceCoverageSlotDraft {
+            if (slotId == null || slotId.isBlank() || slotId.length() > 80
+                    || !slotId.matches("[a-z0-9]+(?:-[a-z0-9]+)*")
+                    || role == null
+                    || sourceIdentifier == null || sourceIdentifier.isBlank() || sourceIdentifier.length() > 160
+                    || sourceIdentifier.codePoints().anyMatch(Character::isISOControl)
+                    || sourcePageNumbers == null || sourcePageNumbers.size() > 5
+                    || sourcePageNumbers.stream().anyMatch(page -> page == null || page < 1)
+                    || ownerTopicKey == null || ownerTopicKey.isBlank() || ownerTopicKey.length() > 100
+                    || availability == null) {
+                throw new IllegalArgumentException("teaching source coverage slot is invalid");
+            }
+            slotId = slotId.strip();
+            sourceIdentifier = sourceIdentifier.strip();
+            sourcePageNumbers = sourcePageNumbers.stream().distinct().toList();
+            ownerTopicKey = ownerTopicKey.strip();
+            if (availability != SourceCoverageAvailability.UNRESOLVED && sourcePageNumbers.isEmpty()) {
+                throw new IllegalArgumentException("sourced teaching coverage slots require a source page");
+            }
+        }
+    }
+
+    public enum SourceCoverageRole {
+        SETUP,
+        CORE_LOOP,
+        LEGAL_ACTION,
+        ENDING,
+        SCORING,
+        NECESSARY_EXCEPTION,
+        SUPPORTING_RULE
+    }
+
+    public enum SourceCoverageAvailability {
+        SOURCED,
+        MISSING_EXTERNAL_SOURCE,
+        UNRESOLVED
     }
 
     record TopicDraft(

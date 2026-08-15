@@ -14,6 +14,7 @@ import com.rulepilot.assistant.application.PolicyEvidenceVerifier;
 import com.rulepilot.teaching.TeachingLessonModel;
 import com.rulepilot.teaching.TeachingLessonModel.SectionDraft;
 import com.rulepilot.teaching.TeachingLessonModel.StepDraft;
+import com.rulepilot.teaching.TeachingOutlineModel.SourceCoverageRole;
 import com.rulepilot.teaching.VisualRulebookPageFacts;
 import com.rulepilot.teaching.domain.IllustratedLesson.EvidenceStatus;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonSection;
@@ -88,7 +89,7 @@ class TeachingPublishedLessonReviewerTest {
     }
 
     @Test
-    void givesASourceCoverageSectionEveryBoundedRuleGroupInsteadOfStoppingAtSix() {
+    void givesASourceContractSectionEveryBoundedRuleGroupInsteadOfStoppingAtSix() {
         UUID versionId = UUID.randomUUID();
         UUID citedId = UUID.randomUUID();
         RuleEvidence cited = new RuleEvidence(
@@ -119,7 +120,7 @@ class TeachingPublishedLessonReviewerTest {
         var invocations = new ImmediateAuditedAgentInvocations();
         TeachingSectionDraftComposer composer = new TeachingSectionDraftComposer(
                 model, new PolicyEvidenceVerifier(), invocations, VisualRulebookPageFacts.empty());
-        TeachingPlan plan = sourceCoveragePlan(versionId);
+        TeachingPlan plan = sourceContractPlan(versionId);
         UUID runId = UUID.randomUUID();
         TeachingSectionDraftCandidate candidate = composer.compose(
                 plan, plan.sections().getFirst(), List.of(), evidence, runId, 0, false);
@@ -613,7 +614,7 @@ class TeachingPublishedLessonReviewerTest {
                 Instant.now());
     }
 
-    private TeachingPlan sourceCoveragePlan(UUID versionId) {
+    private TeachingPlan sourceContractPlan(UUID versionId) {
         return new TeachingPlan(
                 UUID.randomUUID(),
                 versionId,
@@ -627,7 +628,10 @@ class TeachingPublishedLessonReviewerTest {
                         true,
                         true,
                         List.of("turn start", "ordinary action", "alternative action", "end of turn"),
-                        List.of("core_loop", "source_coverage"),
+                        List.of(
+                                "core_loop",
+                                TeachingSourceCoverageContract.CONTRACT_VERSION_TAG,
+                                TeachingSourceCoverageContract.roleTag(SourceCoverageRole.LEGAL_ACTION)),
                         List.of(3))),
                 "player",
                 Instant.now());

@@ -41,7 +41,7 @@ import org.springframework.stereotype.Component;
 public class GroundedTeachingAgent {
 
     private static final Logger log = LoggerFactory.getLogger(GroundedTeachingAgent.class);
-    static final String GENERATOR_VERSION = "adaptive-teaching-v56-source-dependency-ledger";
+    static final String GENERATOR_VERSION = "adaptive-teaching-v57-source-coverage-contract";
     private static final Set<String> REUSABLE_GENERATOR_VERSIONS =
             Set.of(GENERATOR_VERSION);
     private final AssistantReadTools tools;

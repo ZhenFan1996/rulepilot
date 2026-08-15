@@ -28,6 +28,7 @@ class VersionedAgentPromptsTest {
                         "per card, per player, per category",
                         "once overall",
                         "coverage_checklist contains source_coverage",
+                        "or source_contract_v1",
                         "preserve that exact original-language identifier",
                         "coverage_checklist contains source_dependency",
                         "procedure is not present in the current document",
@@ -119,7 +120,13 @@ class VersionedAgentPromptsTest {
                 "Source-dependency planning revision v17",
                 "source_dependency",
                 "missing_setup_source",
-                "must not also receive the setup tag");
+                "must not also receive the setup tag",
+                "Source coverage contract revision v18",
+                "sourceCoverageInventoryComplete",
+                "sourceCoverageSlots",
+                "LEGAL_ACTION",
+                "NECESSARY_EXCEPTION",
+                "ownerTopicKey");
     }
 
     @Test

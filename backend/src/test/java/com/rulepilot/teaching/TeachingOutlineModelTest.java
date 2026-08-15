@@ -4,8 +4,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.rulepilot.teaching.TeachingOutlineModel.OutlineRequest;
+import com.rulepilot.teaching.TeachingOutlineModel.OutlineDraft;
 import com.rulepilot.teaching.TeachingOutlineModel.PageImageInput;
 import com.rulepilot.teaching.TeachingOutlineModel.PageInput;
+import com.rulepilot.teaching.TeachingOutlineModel.SourceCoverageAvailability;
+import com.rulepilot.teaching.TeachingOutlineModel.SourceCoverageRole;
+import com.rulepilot.teaching.TeachingOutlineModel.SourceCoverageSlotDraft;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 
@@ -40,5 +44,32 @@ class TeachingOutlineModelTest {
         assertThatThrownBy(() -> new OutlineRequest(
                          request.pages(), List.of(), "x".repeat(501), "player"))
                 .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void rejectsAnUnboundedModelSourceCoverageInventory() {
+        var topic = new TeachingOutlineModel.TopicDraft(
+                "opaque",
+                "Opaque topic",
+                "Teach only the bounded source obligations.",
+                true,
+                false,
+                List.of("R-0"),
+                List.of("source_coverage"),
+                List.of(1));
+        List<SourceCoverageSlotDraft> slots = java.util.stream.IntStream.rangeClosed(1, 129)
+                .mapToObj(index -> new SourceCoverageSlotDraft(
+                        "slot-" + index,
+                        SourceCoverageRole.SUPPORTING_RULE,
+                        "R-" + index,
+                        List.of(1),
+                        "opaque",
+                        SourceCoverageAvailability.SOURCED))
+                .toList();
+
+        assertThatThrownBy(() -> new OutlineDraft(
+                        "Opaque game", "Opaque premise", List.of(topic), slots, true))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("too many source coverage slots");
     }
 }

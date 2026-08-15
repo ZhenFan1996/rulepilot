@@ -1,6 +1,7 @@
 package com.rulepilot.teaching;
 
 import com.rulepilot.teaching.TeachingOutlineModel.PageImageInput;
+import com.rulepilot.teaching.TeachingOutlineModel.SourceCoverageRole;
 import com.rulepilot.teaching.VisualRulebookPageFacts.IconOccurrence;
 import com.rulepilot.teaching.VisualRulebookPageFacts.VisualAnchor;
 import java.util.List;
@@ -200,6 +201,16 @@ public interface VisualRulebookPageCatalogModel {
         }
     }
 
+    /** Source-derived semantic role for one literal rule-group identifier on a progressive visual page. */
+    record RuleGroupCoverage(String identifier, SourceCoverageRole role) {
+        public RuleGroupCoverage {
+            if (identifier == null || identifier.isBlank() || identifier.length() > 120 || role == null) {
+                throw new IllegalArgumentException("visual teaching rule-group coverage is invalid");
+            }
+            identifier = identifier.strip();
+        }
+    }
+
     record TeachingPageSketch(
             int pageNumber,
             TeachingPageRole role,
@@ -207,7 +218,8 @@ public interface VisualRulebookPageCatalogModel {
             List<String> visibleTerms,
             List<String> coverageTags,
             boolean ruleGroupInventoryComplete,
-            List<SourceDependency> sourceDependencies) {
+            List<SourceDependency> sourceDependencies,
+            List<RuleGroupCoverage> ruleGroupCoverage) {
 
         private static final Set<String> ALLOWED_COVERAGE_TAGS =
                 Set.of("setup", "core_loop", "end", "scoring", "source_coverage");
@@ -219,13 +231,16 @@ public interface VisualRulebookPageCatalogModel {
                     || visibleTerms.stream().anyMatch(term -> term == null || term.isBlank() || term.length() > 120)
                     || coverageTags == null || coverageTags.size() > ALLOWED_COVERAGE_TAGS.size()
                     || coverageTags.stream().anyMatch(tag -> tag == null || !ALLOWED_COVERAGE_TAGS.contains(tag))
-                    || sourceDependencies == null || sourceDependencies.size() > 4) {
+                    || sourceDependencies == null || sourceDependencies.size() > 4
+                    || ruleGroupCoverage == null || ruleGroupCoverage.size() > 8
+                    || ruleGroupCoverage.stream().anyMatch(java.util.Objects::isNull)) {
                 throw new IllegalArgumentException("visual teaching page sketch is invalid");
             }
             visibleHeading = visibleHeading == null ? "" : visibleHeading.strip();
             visibleTerms = visibleTerms.stream().map(String::strip).distinct().toList();
             coverageTags = coverageTags.stream().distinct().toList();
             sourceDependencies = sourceDependencies.stream().distinct().toList();
+            ruleGroupCoverage = ruleGroupCoverage.stream().distinct().toList();
             if (role != TeachingPageRole.GAMEPLAY_RULES && !coverageTags.isEmpty()) {
                 throw new IllegalArgumentException("non-gameplay visual pages cannot claim teaching coverage");
             }
@@ -240,6 +255,42 @@ public interface VisualRulebookPageCatalogModel {
                     && visibleTerms.isEmpty()) {
                 throw new IllegalArgumentException("complete gameplay inventory cannot be empty");
             }
+            if (role != TeachingPageRole.GAMEPLAY_RULES && !ruleGroupCoverage.isEmpty()) {
+                throw new IllegalArgumentException("non-gameplay visual pages cannot own rule-group coverage");
+            }
+            if (!ruleGroupCoverage.isEmpty()) {
+                Set<String> visibleIdentities = visibleTerms.stream()
+                        .map(VisualSourceRuleGroupLedger::identity)
+                        .collect(java.util.stream.Collectors.toUnmodifiableSet());
+                Set<String> coveredIdentities = ruleGroupCoverage.stream()
+                        .map(RuleGroupCoverage::identifier)
+                        .map(VisualSourceRuleGroupLedger::identity)
+                        .collect(java.util.stream.Collectors.toUnmodifiableSet());
+                if (coveredIdentities.size() != ruleGroupCoverage.size()
+                        || !coveredIdentities.equals(visibleIdentities)) {
+                    throw new IllegalArgumentException(
+                            "visual teaching rule-group coverage must classify every visible term exactly once");
+                }
+            }
+        }
+
+        public TeachingPageSketch(
+                int pageNumber,
+                TeachingPageRole role,
+                String visibleHeading,
+                List<String> visibleTerms,
+                List<String> coverageTags,
+                boolean ruleGroupInventoryComplete,
+                List<SourceDependency> sourceDependencies) {
+            this(
+                    pageNumber,
+                    role,
+                    visibleHeading,
+                    visibleTerms,
+                    coverageTags,
+                    ruleGroupInventoryComplete,
+                    sourceDependencies,
+                    List.of());
         }
 
         public TeachingPageSketch(
@@ -256,6 +307,7 @@ public interface VisualRulebookPageCatalogModel {
                     visibleTerms,
                     coverageTags,
                     ruleGroupInventoryComplete,
+                    List.of(),
                     List.of());
         }
 
@@ -272,6 +324,7 @@ public interface VisualRulebookPageCatalogModel {
                     visibleTerms,
                     coverageTags,
                     role == TeachingPageRole.GAMEPLAY_RULES,
+                    List.of(),
                     List.of());
         }
     }

@@ -7,6 +7,7 @@ import com.rulepilot.modelconfig.VersionedAgentPrompts;
 import com.rulepilot.teaching.TeachingOutlineModel;
 import com.rulepilot.teaching.TeachingOutlineModel.OutlineGenerationException;
 import com.rulepilot.teaching.application.SourceLanguageRetrievalPolicy;
+import com.rulepilot.teaching.application.TeachingSourceCoverageContract;
 import jakarta.annotation.PreDestroy;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -210,6 +211,7 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
                 .call()
                 .entity(OutlineDraft.class);
         if (outline == null) throw new IllegalArgumentException("teaching outline model returned no draft");
+        TeachingSourceCoverageContract.requireCompleteModelContract(request, outline);
         if (!outline.topics().isEmpty()
                 && outline.topics().stream().allMatch(topic -> !topic.sourcePageNumbers().isEmpty())) {
             return outline;
