@@ -1,13 +1,19 @@
 package com.rulepilot.document.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.rulepilot.catalog.CatalogGamePresentationLookup;
 import com.rulepilot.catalog.CatalogGameSourceIdentityLookup;
 import com.rulepilot.document.application.OfficialRulebookDiscoveryService.AcquisitionMode;
+import com.rulepilot.document.application.OfficialRulebookDiscoveryService.CapabilityEvidence;
 import com.rulepilot.document.application.OfficialRulebookDiscoveryService.Candidate;
+import com.rulepilot.document.application.OfficialRulebookDiscoveryService.SourceAction;
+import com.rulepilot.document.application.OfficialRulebookDiscoveryService.SourceCapability;
 import com.rulepilot.document.application.OfficialRulebookDiscoveryService.SourceType;
+import com.rulepilot.document.application.OfficialRulebookSourceInspector.PageSignal;
 import java.net.URI;
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -16,6 +22,26 @@ import org.junit.jupiter.api.Test;
 class OfficialRulebookDiscoveryServiceTest {
 
     private static final UUID EDITION_ID = UUID.fromString("26ba0d70-51e3-445b-9245-d50754562a13");
+
+    @Test
+    void rejectsAnImportActionWhenCapabilityAndAcquisitionModeDisagree() {
+        assertThatThrownBy(() -> new Candidate(
+                        "Opaque source",
+                        "https://publisher.example/asset/42",
+                        "Opaque Studio",
+                        "en",
+                        "First",
+                        "publisher.example",
+                        true,
+                        true,
+                        SourceType.PUBLISHER,
+                        AcquisitionMode.SOURCE_PAGE,
+                        SourceCapability.DIRECT_DOCUMENT,
+                        List.of(CapabilityEvidence.DOCUMENT_RESPONSE_CONFIRMED),
+                        Instant.parse("2026-08-15T12:00:00Z")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("capability and acquisition mode");
+    }
 
     @Test
     void validatesClassifiesAndRanksCandidatesWithoutTrustingModelUrls() {
@@ -50,23 +76,30 @@ class OfficialRulebookDiscoveryServiceTest {
         var result = service.discover(EDITION_ID, "en");
 
         assertThat(result.configured()).isTrue();
-        assertThat(result.candidates()).hasSize(6);
-        assertThat(result.candidates().getFirst().officialDomainVerified()).isTrue();
-        assertThat(result.candidates().getFirst().sourceDomain()).isEqualTo("stonemaiergames.com");
-        assertThat(result.candidates()).extracting(Candidate::sourceType).containsExactly(
-                SourceType.PUBLISHER,
-                SourceType.PUBLISHER,
-                SourceType.TRUSTED_REPOSITORY,
-                SourceType.COMMUNITY_PLATFORM,
-                SourceType.COMMUNITY_PLATFORM,
-                SourceType.PUBLIC_WEB);
-        assertThat(result.candidates()).extracting(Candidate::acquisitionMode).containsExactly(
-                AcquisitionMode.DIRECT_PDF,
-                AcquisitionMode.SOURCE_PAGE,
-                AcquisitionMode.SOURCE_PAGE,
-                AcquisitionMode.DIRECT_PDF,
-                AcquisitionMode.SOURCE_PAGE,
-                AcquisitionMode.DIRECT_PDF);
+        assertThat(result.candidates()).hasSize(7);
+        assertThat(result.candidates()).extracting(Candidate::url)
+                .doesNotContain(
+                        "http://127.0.0.1/rules.pdf",
+                        "https://boardgamegeek.com/file/download_redirect/88465/wingspan-rules.pdf");
+        assertThat(result.candidates())
+                .filteredOn(candidate -> candidate.url().equals("https://stonemaiergames.com/files/rules.pdf"))
+                .singleElement()
+                .satisfies(candidate -> {
+                    assertThat(candidate.officialDomainVerified()).isTrue();
+                    assertThat(candidate.sourceType()).isEqualTo(SourceType.PUBLISHER);
+                    assertThat(candidate.acquisitionMode()).isEqualTo(AcquisitionMode.SOURCE_PAGE);
+                    assertThat(candidate.capability()).isEqualTo(SourceCapability.UNVERIFIED_PAGE);
+                    assertThat(candidate.nextAction()).isEqualTo(SourceAction.REVIEW_OR_UPLOAD);
+                });
+        assertThat(result.candidates())
+                .filteredOn(candidate -> candidate.title().equals("Observed BGG rulebook download"))
+                .singleElement()
+                .satisfies(candidate -> {
+                    assertThat(candidate.acquisitionMode()).isEqualTo(AcquisitionMode.SOURCE_PAGE);
+                    assertThat(candidate.capability()).isEqualTo(SourceCapability.UNVERIFIED_PAGE);
+                });
+        assertThat(result.candidates())
+                .noneMatch(candidate -> candidate.capability() == SourceCapability.DIRECT_DOCUMENT);
         assertThat(result.candidates()).extracting(Candidate::url)
                 .contains("https://boardgamegeek.com/files/thing/266192");
     }
@@ -134,8 +167,118 @@ class OfficialRulebookDiscoveryServiceTest {
                     assertThat(candidate.url()).isEqualTo("https://stonemaiergames.com/api/download?id=42");
                     assertThat(candidate.sourceType()).isEqualTo(SourceType.PUBLISHER);
                     assertThat(candidate.acquisitionMode()).isEqualTo(AcquisitionMode.DIRECT_PDF);
+                    assertThat(candidate.capability()).isEqualTo(SourceCapability.DIRECT_DOCUMENT);
+                    assertThat(candidate.nextAction()).isEqualTo(SourceAction.IMPORT_DOCUMENT);
                 });
         assertThat(finder.refinementCalls).isEqualTo(1);
+    }
+
+    @Test
+    void derivesSourceCapabilityFromObservedContentAndLetsNegativeSignalsOverrideNamesAndSuffixes() {
+        var finder = new FakeFinder(
+                List.of(
+                        new OfficialRulebookCandidateFinder.Candidate(
+                                "Opaque document A",
+                                "https://publisher.example/confirmed.pdf",
+                                "Opaque Studio",
+                                "en",
+                                "First"),
+                        new OfficialRulebookCandidateFinder.Candidate(
+                                "Opaque file collection",
+                                "https://publisher.example/files",
+                                "Opaque Studio",
+                                "en",
+                                "First"),
+                        new OfficialRulebookCandidateFinder.Candidate(
+                                "Rules PDF download",
+                                "https://publisher.example/not-a-document.pdf",
+                                "Opaque Studio",
+                                "en",
+                                "First"),
+                        new OfficialRulebookCandidateFinder.Candidate(
+                                "Opaque protected page",
+                                "https://publisher.example/sign-in",
+                                "Opaque Studio",
+                                "en",
+                                "First")),
+                "Opaque Atlas",
+                "Opaque Studio");
+        OfficialRulebookSourceInspector inspector = source -> switch (source.getPath()) {
+            case "/confirmed.pdf" -> Optional.of(new OfficialRulebookSourceInspector.Inspection(
+                    source, OfficialRulebookSourceInspector.MediaType.PDF, List.of()));
+            case "/files" -> Optional.of(new OfficialRulebookSourceInspector.Inspection(
+                    source,
+                    OfficialRulebookSourceInspector.MediaType.HTML,
+                    List.of(new OfficialRulebookSourceInspector.Link(
+                            URI.create("https://publisher.example/download/opaque-manual.pdf"),
+                            "Download")),
+                    java.util.Set.of(PageSignal.DOWNLOADABLE_DOCUMENT_LINKS)));
+            case "/not-a-document.pdf" -> Optional.of(new OfficialRulebookSourceInspector.Inspection(
+                    source,
+                    OfficialRulebookSourceInspector.MediaType.HTML,
+                    List.of(),
+                    java.util.Set.of(
+                            PageSignal.EXPLICIT_EMPTY_DOCUMENT_COLLECTION,
+                            PageSignal.STRUCTURED_GAME_INFORMATION)));
+            case "/sign-in" -> Optional.of(new OfficialRulebookSourceInspector.Inspection(
+                    source,
+                    OfficialRulebookSourceInspector.MediaType.HTML,
+                    List.of(),
+                    java.util.Set.of(PageSignal.LOGIN_REQUIRED)));
+            default -> Optional.empty();
+        };
+        var service = new OfficialRulebookDiscoveryService(
+                opaqueCatalog(), opaqueSourceIdentity(), finder, request -> List.of(), inspector, "");
+
+        var candidates = service.discover(EDITION_ID, "en").candidates();
+
+        assertThat(candidates)
+                .filteredOn(candidate -> candidate.url().endsWith("/confirmed.pdf"))
+                .singleElement()
+                .satisfies(candidate -> {
+                    assertThat(candidate.capability()).isEqualTo(SourceCapability.DIRECT_DOCUMENT);
+                    assertThat(candidate.capabilityEvidence())
+                            .containsExactly(CapabilityEvidence.DOCUMENT_RESPONSE_CONFIRMED);
+                    assertThat(candidate.capabilityCheckedAt()).isNotNull();
+                    assertThat(candidate.nextAction()).isEqualTo(SourceAction.IMPORT_DOCUMENT);
+                });
+        assertThat(candidates)
+                .filteredOn(candidate -> candidate.url().endsWith("/files"))
+                .singleElement()
+                .satisfies(candidate -> {
+                    assertThat(candidate.capability()).isEqualTo(SourceCapability.DOCUMENT_LISTING);
+                    assertThat(candidate.capabilityEvidence())
+                            .contains(CapabilityEvidence.DOWNLOADABLE_DOCUMENT_LINKS_OBSERVED);
+                    assertThat(candidate.nextAction()).isEqualTo(SourceAction.CONTINUE_ON_SOURCE);
+                });
+        assertThat(candidates)
+                .filteredOn(candidate -> candidate.url().endsWith("/not-a-document.pdf"))
+                .singleElement()
+                .satisfies(candidate -> {
+                    assertThat(candidate.capability()).isEqualTo(SourceCapability.GAME_INFO_ONLY);
+                    assertThat(candidate.capabilityEvidence())
+                            .contains(CapabilityEvidence.EXPLICIT_EMPTY_DOCUMENT_COLLECTION);
+                    assertThat(candidate.nextAction()).isEqualTo(SourceAction.USE_FOR_IDENTITY_ONLY);
+                });
+        assertThat(candidates)
+                .filteredOn(candidate -> candidate.url().endsWith("/sign-in"))
+                .singleElement()
+                .satisfies(candidate -> {
+                    assertThat(candidate.capability()).isEqualTo(SourceCapability.UNVERIFIED_PAGE);
+                    assertThat(candidate.capabilityEvidence()).contains(CapabilityEvidence.ACCESS_REQUIRES_LOGIN);
+                    assertThat(candidate.nextAction()).isEqualTo(SourceAction.REVIEW_OR_UPLOAD);
+                });
+        assertThat(candidates)
+                .filteredOn(candidate -> candidate.url().equals("https://boardgamegeek.com/files/thing/424242"))
+                .singleElement()
+                .satisfies(candidate -> {
+                    assertThat(candidate.capability()).isEqualTo(SourceCapability.DOCUMENT_LISTING);
+                    assertThat(candidate.capabilityEvidence())
+                            .contains(CapabilityEvidence.KNOWN_DOCUMENT_LISTING_ROUTE);
+                });
+        assertThat(candidates)
+                .filteredOn(candidate -> candidate.capability() == SourceCapability.DIRECT_DOCUMENT)
+                .allSatisfy(candidate -> assertThat(candidate.url()).endsWith("/confirmed.pdf"));
     }
 
     @Test
@@ -187,6 +330,8 @@ class OfficialRulebookDiscoveryServiceTest {
                     assertThat(candidate.languageVerified()).isTrue();
                     assertThat(candidate.sourceType()).isEqualTo(SourceType.COMMUNITY_PLATFORM);
                     assertThat(candidate.acquisitionMode()).isEqualTo(AcquisitionMode.IMAGE_GALLERY);
+                    assertThat(candidate.capability()).isEqualTo(SourceCapability.CONTIGUOUS_RULE_PAGES);
+                    assertThat(candidate.nextAction()).isEqualTo(SourceAction.IMPORT_PAGE_SEQUENCE);
                 });
         assertThat(result.candidates())
                 .filteredOn(candidate -> candidate.url().endsWith("/game/doc-1111.html"))
@@ -263,6 +408,10 @@ class OfficialRulebookDiscoveryServiceTest {
                 return Optional.of(new OfficialRulebookSourceInspector.Inspection(
                         source, OfficialRulebookSourceInspector.MediaType.IMAGE_GALLERY, List.of()));
             }
+            if (source.getPath().equals("/files/wingspan-zh-rules.pdf")) {
+                return Optional.of(new OfficialRulebookSourceInspector.Inspection(
+                        source, OfficialRulebookSourceInspector.MediaType.PDF, List.of()));
+            }
             return Optional.empty();
         };
         var service = new OfficialRulebookDiscoveryService(
@@ -277,6 +426,9 @@ class OfficialRulebookDiscoveryServiceTest {
                             .isEqualTo("https://stonemaiergames.com/files/wingspan-zh-rules.pdf");
                     assertThat(candidate.language()).isEqualTo("zh-CN");
                     assertThat(candidate.acquisitionMode()).isEqualTo(AcquisitionMode.DIRECT_PDF);
+                    assertThat(candidate.capability()).isEqualTo(SourceCapability.DIRECT_DOCUMENT);
+                    assertThat(candidate.capabilityEvidence())
+                            .containsExactly(CapabilityEvidence.DOCUMENT_RESPONSE_CONFIRMED);
                 });
     }
 
@@ -296,6 +448,10 @@ class OfficialRulebookDiscoveryServiceTest {
                         List.of(new OfficialRulebookSourceInspector.Link(
                                 URI.create("https://cdn.1j1ju.com/medias/12/34/wingspan-rulebook.pdf"),
                                 "English"))));
+            }
+            if (source.getHost().equals("cdn.1j1ju.com")) {
+                return Optional.of(new OfficialRulebookSourceInspector.Inspection(
+                        source, OfficialRulebookSourceInspector.MediaType.PDF, List.of()));
             }
             return Optional.empty();
         };
@@ -330,9 +486,30 @@ class OfficialRulebookDiscoveryServiceTest {
                 "https://boardgamegeek.com/boardgame/266192"));
     }
 
+    private CatalogGamePresentationLookup opaqueCatalog() {
+        return editionId -> Optional.of(new CatalogGamePresentationLookup.Presentation(
+                EDITION_ID,
+                "Opaque Atlas",
+                "First",
+                "en",
+                2026,
+                424242,
+                "https://example.test/opaque.jpg",
+                1,
+                4,
+                90,
+                12,
+                "https://boardgamegeek.com/boardgame/424242"));
+    }
+
     private CatalogGameSourceIdentityLookup sourceIdentity() {
         return bggId -> Optional.of(new CatalogGameSourceIdentityLookup.Identity(
                 "Wingspan", List.of("Wingspan", "展翅翱翔"), List.of("Stonemaier Games")));
+    }
+
+    private CatalogGameSourceIdentityLookup opaqueSourceIdentity() {
+        return bggId -> Optional.of(new CatalogGameSourceIdentityLookup.Identity(
+                "Opaque Atlas", List.of("Opaque Atlas"), List.of("Opaque Studio")));
     }
 
     private OfficialRulebookSourceInspector emptyInspector() {
@@ -344,9 +521,20 @@ class OfficialRulebookDiscoveryServiceTest {
         private boolean configured = true;
         private int calls;
         private int refinementCalls;
+        private final String expectedGame;
+        private final String expectedPublisher;
 
         private FakeFinder(List<OfficialRulebookCandidateFinder.Candidate> candidates) {
+            this(candidates, "Wingspan", "Stonemaier Games");
+        }
+
+        private FakeFinder(
+                List<OfficialRulebookCandidateFinder.Candidate> candidates,
+                String expectedGame,
+                String expectedPublisher) {
             this.candidates = candidates;
+            this.expectedGame = expectedGame;
+            this.expectedPublisher = expectedPublisher;
         }
 
         @Override
@@ -357,8 +545,8 @@ class OfficialRulebookDiscoveryServiceTest {
         @Override
         public List<OfficialRulebookCandidateFinder.Candidate> find(Request request) {
             calls++;
-            assertThat(request.gameName()).isEqualTo("Wingspan");
-            assertThat(request.publishers()).containsExactly("Stonemaier Games");
+            assertThat(request.gameName()).isEqualTo(expectedGame);
+            assertThat(request.publishers()).containsExactly(expectedPublisher);
             return candidates;
         }
 

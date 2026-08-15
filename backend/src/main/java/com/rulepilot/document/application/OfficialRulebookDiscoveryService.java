@@ -5,6 +5,8 @@ import com.rulepilot.catalog.CatalogGameSourceIdentityLookup;
 import java.net.IDN;
 import java.net.URI;
 import java.text.Normalizer;
+import java.time.Clock;
+import java.time.Instant;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -58,6 +60,7 @@ public class OfficialRulebookDiscoveryService {
     private final GstoneRulebookCatalogLookup gstoneCatalog;
     private final OfficialRulebookSourceInspector sourceInspector;
     private final Set<String> trustedDomains;
+    private final Clock clock;
 
     public OfficialRulebookDiscoveryService(
             CatalogGamePresentationLookup catalog,
@@ -71,6 +74,7 @@ public class OfficialRulebookDiscoveryService {
         this.finder = finder;
         this.gstoneCatalog = gstoneCatalog;
         this.sourceInspector = sourceInspector;
+        this.clock = Clock.systemUTC();
         this.trustedDomains = Arrays.stream(trustedDomains.split(","))
                 .map(String::strip)
                 .filter(value -> !value.isBlank())
@@ -100,8 +104,7 @@ public class OfficialRulebookDiscoveryService {
                 .filter(java.util.Objects::nonNull)
                 .toList();
         var allCandidates = new ArrayList<Candidate>();
-        allCandidates.addAll(catalogCandidates);
-        allCandidates.addAll(resolveSourcePages(catalogCandidates, request));
+        allCandidates.addAll(assessCandidates(catalogCandidates, request));
         if (allCandidates.stream().anyMatch(candidate -> isImportableForLanguage(candidate, checkedLanguage))) {
             return new Result(true, rankedCandidates(allCandidates));
         }
@@ -115,76 +118,85 @@ public class OfficialRulebookDiscoveryService {
                 "https://boardgamegeek.com/files/thing/" + game.bggId(),
                 "BoardGameGeek",
                 checkedLanguage,
-                game.editionName()));
+                game.editionName(),
+                OfficialRulebookCandidateFinder.SourcePageHint.DOCUMENT_LISTING));
         List<Candidate> modelCandidates = modelDiscovered.stream()
                 .map(candidate -> validate(candidate, identity.publishers()))
                 .filter(java.util.Objects::nonNull)
                 .toList();
-        allCandidates.addAll(modelCandidates);
-        allCandidates.addAll(resolveSourcePages(modelCandidates, request));
+        allCandidates.addAll(assessCandidates(modelCandidates, request));
         if (allCandidates.stream().noneMatch(candidate -> isImportableForLanguage(candidate, checkedLanguage))) {
-            List<OfficialRulebookCandidateFinder.Candidate> observedPages = java.util.stream.Stream.concat(
-                            catalogCandidates.stream(), modelCandidates.stream())
-                    .filter(candidate -> candidate.acquisitionMode() == AcquisitionMode.SOURCE_PAGE)
+            List<OfficialRulebookCandidateFinder.Candidate> observedPages = rankedCandidates(allCandidates).stream()
+                    .filter(candidate -> !isImportable(candidate))
                     .filter(candidate -> candidate.sourceType() != SourceType.PUBLIC_WEB)
                     .limit(6)
                     .map(this::finderCandidate)
                     .toList();
-            finder.findAfterSourcePages(request, observedPages).stream()
+            List<Candidate> recovered = finder.findAfterSourcePages(request, observedPages).stream()
                     .map(candidate -> validate(candidate, identity.publishers()))
                     .filter(java.util.Objects::nonNull)
-                    .forEach(allCandidates::add);
+                    .toList();
+            allCandidates.addAll(assessCandidates(recovered, request));
         }
         return new Result(true, rankedCandidates(allCandidates));
     }
 
     private List<Candidate> rankedCandidates(List<Candidate> allCandidates) {
         var uniqueCandidates = new LinkedHashMap<String, Candidate>();
-        allCandidates.stream()
-                .filter(candidate -> candidate.sourceType() != SourceType.PUBLIC_WEB
-                        || isImportable(candidate))
-                .forEach(candidate -> uniqueCandidates.putIfAbsent(candidate.url(), candidate));
+        allCandidates.forEach(candidate ->
+                uniqueCandidates.merge(candidate.url(), candidate, this::strongerAssessment));
         List<Candidate> candidates = uniqueCandidates.values().stream()
-                .sorted(java.util.Comparator.comparingInt((Candidate candidate) -> sourcePriority(candidate.sourceType()))
+                .sorted(java.util.Comparator.comparingInt((Candidate candidate) -> capabilityPriority(candidate.capability()))
+                .thenComparingInt(candidate -> sourcePriority(candidate.sourceType()))
                 .thenComparingInt(candidate -> acquisitionPriority(candidate.acquisitionMode())))
                 .limit(8)
                 .toList();
         return candidates;
     }
 
-    private List<Candidate> resolveSourcePages(
+    private List<Candidate> assessCandidates(
             List<Candidate> candidates, OfficialRulebookCandidateFinder.Request request) {
-        if (candidates.stream().anyMatch(candidate -> candidate.acquisitionMode() == AcquisitionMode.DIRECT_PDF
-                && (candidate.sourceType() == SourceType.PUBLISHER
-                        || candidate.sourceType() == SourceType.TRUSTED_REPOSITORY))) {
-            return List.of();
-        }
         var queue = new ArrayDeque<SourcePage>();
+        var assessed = new ArrayList<Candidate>(candidates);
         candidates.stream()
-                .filter(candidate -> candidate.acquisitionMode() == AcquisitionMode.SOURCE_PAGE)
                 .filter(candidate -> !requiresBrowserHandoff(URI.create(candidate.url())))
-                .sorted(Comparator.comparingInt(candidate -> sourcePriority(candidate.sourceType())))
-                .limit(3)
+                .sorted(Comparator.comparingInt((Candidate candidate) -> capabilityPriority(candidate.capability()))
+                        .thenComparingInt(candidate -> sourcePriority(candidate.sourceType())))
                 .forEach(candidate -> queue.add(new SourcePage(candidate, URI.create(candidate.url()), candidate.title(), 0)));
         Set<String> inspected = new HashSet<>();
-        var resolved = new ArrayList<Candidate>();
         int inspections = 0;
-        while (!queue.isEmpty()
-                && inspections < MAX_SOURCE_INSPECTIONS
-                && resolved.size() < MAX_RESOLVED_DOWNLOADS) {
+        int confirmedDocuments = 0;
+        while (!queue.isEmpty() && inspections < MAX_SOURCE_INSPECTIONS) {
             SourcePage page = queue.removeFirst();
             if (!inspected.add(page.url().toASCIIString())) continue;
             inspections++;
+            Instant checkedAt = clock.instant();
             Optional<OfficialRulebookSourceInspector.Inspection> inspectedSource = sourceInspector.inspect(page.url());
-            if (inspectedSource.isEmpty()) continue;
+            if (inspectedSource.isEmpty()) {
+                if (page.depth() == 0) {
+                    assessed.add(withAssessment(
+                            page.provenance(),
+                            SourceCapability.UNVERIFIED_PAGE,
+                            List.of(CapabilityEvidence.SOURCE_PROBE_UNAVAILABLE),
+                            checkedAt));
+                }
+                continue;
+            }
             var inspection = inspectedSource.orElseThrow();
             if (inspection.mediaType() == OfficialRulebookSourceInspector.MediaType.PDF) {
-                resolved.add(resolvedDownload(page, inspection.finalSource()));
+                if (confirmedDocuments++ < MAX_RESOLVED_DOWNLOADS) {
+                    assessed.add(resolvedDownload(page, inspection.finalSource(), checkedAt));
+                }
                 continue;
             }
             if (inspection.mediaType() == OfficialRulebookSourceInspector.MediaType.IMAGE_GALLERY) {
-                resolved.add(resolvedImageGallery(page, inspection.finalSource()));
+                if (confirmedDocuments++ < MAX_RESOLVED_DOWNLOADS) {
+                    assessed.add(resolvedImageGallery(page, inspection.finalSource(), checkedAt));
+                }
                 continue;
+            }
+            if (page.depth() == 0) {
+                assessed.add(assessHtml(page.provenance(), inspection, checkedAt));
             }
             if (page.provenance().sourceType() == SourceType.PUBLIC_WEB || page.depth() >= 1) continue;
             inspection.links().stream()
@@ -194,22 +206,16 @@ public class OfficialRulebookDiscoveryService {
                             .thenComparing(link -> link.link().target().toASCIIString()))
                     .limit(4)
                     .forEach(link -> {
-                        if (resolved.size() >= MAX_RESOLVED_DOWNLOADS) return;
                         URI target = link.link().target();
-                        if (looksLikeDirectPdf(target)) {
-                            if (resolved.stream().noneMatch(candidate -> candidate.url().equals(target.toASCIIString()))) {
-                                resolved.add(resolvedDownload(
-                                        new SourcePage(page.provenance(), target, link.link().label(), 1), target));
-                            }
-                        } else if (!inspected.contains(target.toASCIIString())) {
+                        if (!inspected.contains(target.toASCIIString())) {
                             queue.addLast(new SourcePage(page.provenance(), target, link.link().label(), 1));
                         }
                     });
         }
-        return List.copyOf(resolved);
+        return List.copyOf(assessed);
     }
 
-    private Candidate resolvedImageGallery(SourcePage page, URI target) {
+    private Candidate resolvedImageGallery(SourcePage page, URI target, Instant checkedAt) {
         String host = IDN.toASCII(target.getHost()).toLowerCase(Locale.ROOT);
         String title = page.label().isBlank() ? page.provenance().title() : page.label();
         LanguageResolution language = resolvedLanguage(page);
@@ -223,10 +229,13 @@ public class OfficialRulebookDiscoveryService {
                 page.provenance().officialDomainVerified(),
                 language.verified(),
                 page.provenance().sourceType(),
-                AcquisitionMode.IMAGE_GALLERY);
+                AcquisitionMode.IMAGE_GALLERY,
+                SourceCapability.CONTIGUOUS_RULE_PAGES,
+                List.of(CapabilityEvidence.ORDERED_PAGE_SEQUENCE_CONFIRMED),
+                checkedAt);
     }
 
-    private Candidate resolvedDownload(SourcePage page, URI target) {
+    private Candidate resolvedDownload(SourcePage page, URI target, Instant checkedAt) {
         String host = IDN.toASCII(target.getHost()).toLowerCase(Locale.ROOT);
         String title = page.label().isBlank() ? page.provenance().title() : page.label();
         LanguageResolution language = resolvedLanguage(page);
@@ -240,7 +249,67 @@ public class OfficialRulebookDiscoveryService {
                 page.provenance().officialDomainVerified(),
                 language.verified(),
                 page.provenance().sourceType(),
-                AcquisitionMode.DIRECT_PDF);
+                AcquisitionMode.DIRECT_PDF,
+                SourceCapability.DIRECT_DOCUMENT,
+                List.of(CapabilityEvidence.DOCUMENT_RESPONSE_CONFIRMED),
+                checkedAt);
+    }
+
+    private Candidate assessHtml(
+            Candidate candidate,
+            OfficialRulebookSourceInspector.Inspection inspection,
+            Instant checkedAt) {
+        Set<OfficialRulebookSourceInspector.PageSignal> signals = inspection.pageSignals();
+        if (signals.contains(OfficialRulebookSourceInspector.PageSignal.LOGIN_REQUIRED)) {
+            return withAssessment(
+                    candidate,
+                    SourceCapability.UNVERIFIED_PAGE,
+                    List.of(CapabilityEvidence.ACCESS_REQUIRES_LOGIN),
+                    checkedAt);
+        }
+        if (signals.contains(OfficialRulebookSourceInspector.PageSignal.EXPLICIT_EMPTY_DOCUMENT_COLLECTION)) {
+            return withAssessment(
+                    candidate,
+                    SourceCapability.GAME_INFO_ONLY,
+                    List.of(CapabilityEvidence.EXPLICIT_EMPTY_DOCUMENT_COLLECTION),
+                    checkedAt);
+        }
+        if (signals.contains(OfficialRulebookSourceInspector.PageSignal.DOWNLOADABLE_DOCUMENT_LINKS)) {
+            return withAssessment(
+                    candidate,
+                    SourceCapability.DOCUMENT_LISTING,
+                    List.of(CapabilityEvidence.DOWNLOADABLE_DOCUMENT_LINKS_OBSERVED),
+                    checkedAt);
+        }
+        if (signals.contains(OfficialRulebookSourceInspector.PageSignal.STRUCTURED_GAME_INFORMATION)) {
+            return withAssessment(
+                    candidate,
+                    SourceCapability.GAME_INFO_ONLY,
+                    List.of(CapabilityEvidence.STRUCTURED_GAME_INFORMATION_OBSERVED),
+                    checkedAt);
+        }
+        if (candidate.capability() == SourceCapability.DOCUMENT_LISTING
+                || candidate.capability() == SourceCapability.GAME_INFO_ONLY) {
+            return new Candidate(
+                    candidate.title(),
+                    candidate.url(),
+                    candidate.publisher(),
+                    candidate.language(),
+                    candidate.edition(),
+                    candidate.sourceDomain(),
+                    candidate.officialDomainVerified(),
+                    candidate.languageVerified(),
+                    candidate.sourceType(),
+                    AcquisitionMode.SOURCE_PAGE,
+                    candidate.capability(),
+                    candidate.capabilityEvidence(),
+                    checkedAt);
+        }
+        return withAssessment(
+                candidate,
+                SourceCapability.UNVERIFIED_PAGE,
+                List.of(CapabilityEvidence.HTML_PAGE_WITHOUT_DOCUMENT_CAPABILITY),
+                checkedAt);
     }
 
     private LanguageResolution resolvedLanguage(SourcePage page) {
@@ -325,7 +394,12 @@ public class OfficialRulebookDiscoveryService {
                 candidate.url(),
                 candidate.publisher(),
                 candidate.language(),
-                candidate.edition());
+                candidate.edition(),
+                switch (candidate.capability()) {
+                    case DOCUMENT_LISTING -> OfficialRulebookCandidateFinder.SourcePageHint.DOCUMENT_LISTING;
+                    case GAME_INFO_ONLY -> OfficialRulebookCandidateFinder.SourcePageHint.GAME_INFORMATION;
+                    default -> OfficialRulebookCandidateFinder.SourcePageHint.UNVERIFIED_PAGE;
+                });
     }
 
     private Candidate validate(
@@ -353,11 +427,22 @@ public class OfficialRulebookDiscoveryService {
                         : matchesDomain(host, COMMUNITY_DOMAINS)
                                 ? SourceType.COMMUNITY_PLATFORM
                                 : SourceType.PUBLIC_WEB;
-        AcquisitionMode acquisitionMode = looksLikeDirectPdf(uri) ? AcquisitionMode.DIRECT_PDF : AcquisitionMode.SOURCE_PAGE;
+        boolean structurallyValidDocumentUrl = looksLikeDirectPdf(uri);
+        AcquisitionMode acquisitionMode = AcquisitionMode.SOURCE_PAGE;
         if (isBggPageHost(host)
                 && uri.getPath() != null
                 && uri.getPath().startsWith("/file/download_redirect/")
-                && acquisitionMode != AcquisitionMode.DIRECT_PDF) return null;
+                && !structurallyValidDocumentUrl) return null;
+        SourceCapability initialCapability = switch (candidate.sourcePageHint()) {
+            case DOCUMENT_LISTING -> SourceCapability.DOCUMENT_LISTING;
+            case GAME_INFORMATION -> SourceCapability.GAME_INFO_ONLY;
+            case UNVERIFIED_PAGE -> SourceCapability.UNVERIFIED_PAGE;
+        };
+        CapabilityEvidence initialEvidence = switch (candidate.sourcePageHint()) {
+            case DOCUMENT_LISTING -> CapabilityEvidence.KNOWN_DOCUMENT_LISTING_ROUTE;
+            case GAME_INFORMATION -> CapabilityEvidence.KNOWN_GAME_INFORMATION_ROUTE;
+            case UNVERIFIED_PAGE -> CapabilityEvidence.CANDIDATE_ONLY;
+        };
         return new Candidate(
                 bounded(candidate.title(), 180),
                 uri.toASCIIString(),
@@ -368,7 +453,10 @@ public class OfficialRulebookDiscoveryService {
                 publisherMatch,
                 false,
                 sourceType,
-                acquisitionMode);
+                acquisitionMode,
+                initialCapability,
+                List.of(initialEvidence),
+                clock.instant());
     }
 
     private String normalizedCandidateLanguage(String language) {
@@ -418,6 +506,16 @@ public class OfficialRulebookDiscoveryService {
         };
     }
 
+    private int capabilityPriority(SourceCapability capability) {
+        return switch (capability) {
+            case DIRECT_DOCUMENT -> 0;
+            case CONTIGUOUS_RULE_PAGES -> 1;
+            case DOCUMENT_LISTING -> 2;
+            case GAME_INFO_ONLY -> 3;
+            case UNVERIFIED_PAGE -> 4;
+        };
+    }
+
     private int acquisitionPriority(AcquisitionMode acquisitionMode) {
         return switch (acquisitionMode) {
             case DIRECT_PDF -> 0;
@@ -427,8 +525,58 @@ public class OfficialRulebookDiscoveryService {
     }
 
     private boolean isImportable(Candidate candidate) {
-        return candidate.acquisitionMode() == AcquisitionMode.DIRECT_PDF
-                || candidate.acquisitionMode() == AcquisitionMode.IMAGE_GALLERY;
+        return candidate.capability() == SourceCapability.DIRECT_DOCUMENT
+                        && candidate.acquisitionMode() == AcquisitionMode.DIRECT_PDF
+                || candidate.capability() == SourceCapability.CONTIGUOUS_RULE_PAGES
+                        && candidate.acquisitionMode() == AcquisitionMode.IMAGE_GALLERY;
+    }
+
+    private Candidate withAssessment(
+            Candidate candidate,
+            SourceCapability capability,
+            List<CapabilityEvidence> evidence,
+            Instant checkedAt) {
+        AcquisitionMode mode = switch (capability) {
+            case DIRECT_DOCUMENT -> AcquisitionMode.DIRECT_PDF;
+            case CONTIGUOUS_RULE_PAGES -> AcquisitionMode.IMAGE_GALLERY;
+            case DOCUMENT_LISTING, GAME_INFO_ONLY, UNVERIFIED_PAGE -> AcquisitionMode.SOURCE_PAGE;
+        };
+        return new Candidate(
+                candidate.title(),
+                candidate.url(),
+                candidate.publisher(),
+                candidate.language(),
+                candidate.edition(),
+                candidate.sourceDomain(),
+                candidate.officialDomainVerified(),
+                candidate.languageVerified(),
+                candidate.sourceType(),
+                mode,
+                capability,
+                evidence,
+                checkedAt);
+    }
+
+    private Candidate strongerAssessment(Candidate first, Candidate second) {
+        int firstStrength = assessmentStrength(first);
+        int secondStrength = assessmentStrength(second);
+        if (secondStrength != firstStrength) return secondStrength > firstStrength ? second : first;
+        return capabilityPriority(second.capability()) < capabilityPriority(first.capability()) ? second : first;
+    }
+
+    private int assessmentStrength(Candidate candidate) {
+        return candidate.capabilityEvidence().stream()
+                .mapToInt(evidence -> switch (evidence) {
+                    case DOCUMENT_RESPONSE_CONFIRMED, ORDERED_PAGE_SEQUENCE_CONFIRMED -> 100;
+                    case EXPLICIT_EMPTY_DOCUMENT_COLLECTION, ACCESS_REQUIRES_LOGIN -> 90;
+                    case DOWNLOADABLE_DOCUMENT_LINKS_OBSERVED -> 80;
+                    case STRUCTURED_GAME_INFORMATION_OBSERVED -> 70;
+                    case HTML_PAGE_WITHOUT_DOCUMENT_CAPABILITY, SOURCE_PROBE_UNAVAILABLE -> 60;
+                    case KNOWN_DOCUMENT_LISTING_ROUTE, KNOWN_GAME_INFORMATION_ROUTE -> 40;
+                    case CANDIDATE_ONLY -> 10;
+                })
+                .max()
+                .orElse(0);
     }
 
     private boolean isImportableForLanguage(Candidate candidate, String requestedLanguage) {
@@ -479,7 +627,40 @@ public class OfficialRulebookDiscoveryService {
             boolean officialDomainVerified,
             boolean languageVerified,
             SourceType sourceType,
-            AcquisitionMode acquisitionMode) {}
+            AcquisitionMode acquisitionMode,
+            SourceCapability capability,
+            List<CapabilityEvidence> capabilityEvidence,
+            Instant capabilityCheckedAt) {
+        public Candidate {
+            if (sourceType == null
+                    || acquisitionMode == null
+                    || capability == null
+                    || capabilityEvidence == null
+                    || capabilityEvidence.isEmpty()
+                    || capabilityCheckedAt == null) {
+                throw new IllegalArgumentException("rulebook source capability assessment is required");
+            }
+            AcquisitionMode requiredMode = switch (capability) {
+                case DIRECT_DOCUMENT -> AcquisitionMode.DIRECT_PDF;
+                case CONTIGUOUS_RULE_PAGES -> AcquisitionMode.IMAGE_GALLERY;
+                case DOCUMENT_LISTING, GAME_INFO_ONLY, UNVERIFIED_PAGE -> AcquisitionMode.SOURCE_PAGE;
+            };
+            if (acquisitionMode != requiredMode) {
+                throw new IllegalArgumentException("rulebook source capability and acquisition mode disagree");
+            }
+            capabilityEvidence = List.copyOf(capabilityEvidence);
+        }
+
+        public SourceAction nextAction() {
+            return switch (capability) {
+                case DIRECT_DOCUMENT -> SourceAction.IMPORT_DOCUMENT;
+                case CONTIGUOUS_RULE_PAGES -> SourceAction.IMPORT_PAGE_SEQUENCE;
+                case DOCUMENT_LISTING -> SourceAction.CONTINUE_ON_SOURCE;
+                case GAME_INFO_ONLY -> SourceAction.USE_FOR_IDENTITY_ONLY;
+                case UNVERIFIED_PAGE -> SourceAction.REVIEW_OR_UPLOAD;
+            };
+        }
+    }
 
     public enum SourceType {
         PUBLISHER,
@@ -492,6 +673,36 @@ public class OfficialRulebookDiscoveryService {
         DIRECT_PDF,
         IMAGE_GALLERY,
         SOURCE_PAGE
+    }
+
+    public enum SourceCapability {
+        DIRECT_DOCUMENT,
+        CONTIGUOUS_RULE_PAGES,
+        DOCUMENT_LISTING,
+        GAME_INFO_ONLY,
+        UNVERIFIED_PAGE
+    }
+
+    public enum CapabilityEvidence {
+        DOCUMENT_RESPONSE_CONFIRMED,
+        ORDERED_PAGE_SEQUENCE_CONFIRMED,
+        DOWNLOADABLE_DOCUMENT_LINKS_OBSERVED,
+        EXPLICIT_EMPTY_DOCUMENT_COLLECTION,
+        STRUCTURED_GAME_INFORMATION_OBSERVED,
+        ACCESS_REQUIRES_LOGIN,
+        SOURCE_PROBE_UNAVAILABLE,
+        HTML_PAGE_WITHOUT_DOCUMENT_CAPABILITY,
+        KNOWN_DOCUMENT_LISTING_ROUTE,
+        KNOWN_GAME_INFORMATION_ROUTE,
+        CANDIDATE_ONLY
+    }
+
+    public enum SourceAction {
+        IMPORT_DOCUMENT,
+        IMPORT_PAGE_SEQUENCE,
+        CONTINUE_ON_SOURCE,
+        USE_FOR_IDENTITY_ONLY,
+        REVIEW_OR_UPLOAD
     }
 
     private record SourcePage(Candidate provenance, URI url, String label, int depth) {}

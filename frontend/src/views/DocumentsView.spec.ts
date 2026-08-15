@@ -108,10 +108,14 @@ describe('DocumentsView recoverable lesson handoff', () => {
           title: 'Catalog Game Rules', url: 'https://publisher.example/rules.pdf', publisher: 'Publisher',
           language: 'zh-CN', edition: 'First', sourceDomain: 'publisher.example', officialDomainVerified: true,
           sourceType: 'PUBLISHER', acquisitionMode: 'DIRECT_PDF',
+          capability: 'DIRECT_DOCUMENT', capabilityEvidence: ['DOCUMENT_RESPONSE_CONFIRMED'],
+          capabilityCheckedAt: '2026-08-15T12:00:00Z', nextAction: 'IMPORT_DOCUMENT',
         }, {
           title: 'BGG 文件页', url: 'https://boardgamegeek.com/filepage/123/rules', publisher: '',
           language: 'zh-CN', edition: 'First', sourceDomain: 'boardgamegeek.com', officialDomainVerified: false,
           sourceType: 'COMMUNITY_PLATFORM', acquisitionMode: 'SOURCE_PAGE',
+          capability: 'DOCUMENT_LISTING', capabilityEvidence: ['KNOWN_DOCUMENT_LISTING_ROUTE'],
+          capabilityCheckedAt: '2026-08-15T12:00:00Z', nextAction: 'CONTINUE_ON_SOURCE',
         }],
       })
       if (String(input).includes('/api/v1/games')) return response([{
@@ -139,7 +143,7 @@ describe('DocumentsView recoverable lesson handoff', () => {
     await flushPromises()
     expect(wrapper.text()).toContain('Catalog Game Rules')
     expect(wrapper.text()).toContain('出版社 / 权利方来源')
-    await wrapper.findAll('button').find(button => button.text() === '打开来源页')!.trigger('click')
+    await wrapper.findAll('button').find(button => button.text() === '继续查找文件')!.trigger('click')
     expect(openSource).toHaveBeenCalledWith(
       'https://boardgamegeek.com/filepage/123/rules', '_blank', 'noopener,noreferrer',
     )

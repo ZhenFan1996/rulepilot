@@ -4,7 +4,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.rulepilot.document.application.OfficialRulebookSourceInspector;
+import com.rulepilot.document.application.OfficialRulebookSourceInspector.PageSignal;
 import java.net.URI;
+import java.net.SocketTimeoutException;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.atomic.AtomicInteger;
 import okhttp3.MediaType;
@@ -151,6 +153,168 @@ class HttpOfficialRulebookSourceInspectorTest {
         assertThatThrownBy(() -> inspector.inspect(URI.create("http://publisher.example/rules")))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("HTTPS");
+    }
+
+    @Test
+    void preservesLoginRequiredWhenAPublicSourceRedirectsToSignIn() {
+        AtomicInteger calls = new AtomicInteger();
+        OkHttpClient http = new OkHttpClient.Builder()
+                .addInterceptor(chain -> {
+                    if (calls.getAndIncrement() == 0) {
+                        return new Response.Builder()
+                                .request(chain.request())
+                                .protocol(Protocol.HTTP_1_1)
+                                .code(302)
+                                .message("Found")
+                                .header("Location", "https://publisher.example/sign-in")
+                                .body(ResponseBody.create(new byte[0], null))
+                                .build();
+                    }
+                    return response(
+                            chain.request(),
+                            200,
+                            "OK",
+                            HTML,
+                            "<html><form><input type=password></form></html>"
+                                    .getBytes(StandardCharsets.UTF_8));
+                })
+                .followRedirects(false)
+                .build();
+        var inspector = new HttpOfficialRulebookSourceInspector(http, 64 * 1024);
+
+        assertThat(inspector.inspect(URI.create("https://publisher.example/rules")))
+                .get()
+                .extracting(OfficialRulebookSourceInspector.Inspection::pageSignals)
+                .asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.set(PageSignal.class))
+                .containsExactly(PageSignal.LOGIN_REQUIRED);
+        assertThat(calls).hasValue(2);
+    }
+
+    @Test
+    void reportsProtocolAndStructuredPageSignalsWithoutUsingTheCandidateTitle() {
+        OkHttpClient http = new OkHttpClient.Builder()
+                .addInterceptor(chain -> {
+                    String path = chain.request().url().encodedPath();
+                    String html = switch (path) {
+                        case "/documents" -> """
+                                <!doctype html><html><body>
+                                  <main><a download href="/asset/opaque.bin" type="application/pdf">Get file</a></main>
+                                </body></html>
+                                """;
+                        case "/game" -> """
+                                <!doctype html><html><head>
+                                  <script type="application/ld+json">{"@type":"Game","name":"Opaque Atlas"}</script>
+                                </head><body>
+                                  <main><section data-document-count="0"><h2>Documents</h2><ul></ul></section></main>
+                                </body></html>
+                                """;
+                        case "/login" -> """
+                                <!doctype html><html><body><main><form><input type="password"></form></main></body></html>
+                                """;
+                        default -> throw new AssertionError("unexpected path " + path);
+                    };
+                    return response(chain.request(), 200, "OK", HTML, html.getBytes(StandardCharsets.UTF_8));
+                })
+                .build();
+        var inspector = new HttpOfficialRulebookSourceInspector(http, 64 * 1024);
+
+        assertThat(inspector.inspect(URI.create("https://publisher.example/documents")))
+                .get()
+                .extracting(OfficialRulebookSourceInspector.Inspection::pageSignals)
+                .asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.set(PageSignal.class))
+                .containsExactly(PageSignal.DOWNLOADABLE_DOCUMENT_LINKS);
+        assertThat(inspector.inspect(URI.create("https://publisher.example/game")))
+                .get()
+                .extracting(OfficialRulebookSourceInspector.Inspection::pageSignals)
+                .asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.set(PageSignal.class))
+                .containsExactlyInAnyOrder(
+                        PageSignal.EXPLICIT_EMPTY_DOCUMENT_COLLECTION,
+                        PageSignal.STRUCTURED_GAME_INFORMATION);
+        assertThat(inspector.inspect(URI.create("https://publisher.example/login")))
+                .get()
+                .extracting(OfficialRulebookSourceInspector.Inspection::pageSignals)
+                .asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.set(PageSignal.class))
+                .containsExactly(PageSignal.LOGIN_REQUIRED);
+    }
+
+    @Test
+    void acceptsOnlyParsedExactStructuredTypesAsGameInformationEvidence() {
+        String html = """
+                <!doctype html><html><head>
+                  <script type="application/ld+json">not-json {"@type":"Game"}</script>
+                  <meta itemprop="numberOfItems" content="0">
+                </head><body>
+                  <main itemtype="https://example.com/NotAGame"></main>
+                </body></html>
+                """;
+        OkHttpClient http = new OkHttpClient.Builder()
+                .addInterceptor(chain -> response(
+                        chain.request(), 200, "OK", HTML, html.getBytes(StandardCharsets.UTF_8)))
+                .build();
+        var inspector = new HttpOfficialRulebookSourceInspector(http, 64 * 1024);
+
+        assertThat(inspector.inspect(URI.create("https://publisher.example/catalog-entry")))
+                .get()
+                .extracting(OfficialRulebookSourceInspector.Inspection::pageSignals)
+                .asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.set(PageSignal.class))
+                .isEmpty();
+    }
+
+    @Test
+    void recognizesAnExactPdfDispositionWithoutTrustingAFilenameSubstring() {
+        AtomicInteger calls = new AtomicInteger();
+        OkHttpClient http = new OkHttpClient.Builder()
+                .addInterceptor(chain -> {
+                    boolean exactPdf = calls.getAndIncrement() == 0;
+                    return response(
+                                    chain.request(),
+                                    200,
+                                    "OK",
+                                    exactPdf ? MediaType.get("application/octet-stream") : HTML,
+                                    exactPdf
+                                            ? "opaque attachment".getBytes(StandardCharsets.UTF_8)
+                                            : "<html><body>catalog page</body></html>"
+                                                    .getBytes(StandardCharsets.UTF_8))
+                            .newBuilder()
+                            .header(
+                                    "Content-Disposition",
+                                    exactPdf
+                                            ? "attachment; filename=opaque-rulebook.pdf"
+                                            : "attachment; filename=opaque-rulebook.pdf.exe")
+                            .build();
+                })
+                .build();
+        var inspector = new HttpOfficialRulebookSourceInspector(http, 64 * 1024);
+
+        assertThat(inspector.inspect(URI.create("https://publisher.example/attachment/1")))
+                .get()
+                .extracting(OfficialRulebookSourceInspector.Inspection::mediaType)
+                .isEqualTo(OfficialRulebookSourceInspector.MediaType.PDF);
+        assertThat(inspector.inspect(URI.create("https://publisher.example/attachment/2")))
+                .get()
+                .extracting(OfficialRulebookSourceInspector.Inspection::mediaType)
+                .isEqualTo(OfficialRulebookSourceInspector.MediaType.HTML);
+    }
+
+    @Test
+    void leavesForbiddenAndTimedOutSourcesUnverifiedInsteadOfInferringFromTheirUrls() {
+        OkHttpClient http = new OkHttpClient.Builder()
+                .addInterceptor(chain -> {
+                    if (chain.request().url().encodedPath().equals("/timeout.pdf")) {
+                        throw new SocketTimeoutException("fixture timeout");
+                    }
+                    return response(
+                            chain.request(),
+                            403,
+                            "Forbidden",
+                            HTML,
+                            "<html><title>Rules PDF</title></html>".getBytes(StandardCharsets.UTF_8));
+                })
+                .build();
+        var inspector = new HttpOfficialRulebookSourceInspector(http, 64 * 1024);
+
+        assertThat(inspector.inspect(URI.create("https://publisher.example/forbidden.pdf"))).isEmpty();
+        assertThat(inspector.inspect(URI.create("https://publisher.example/timeout.pdf"))).isEmpty();
     }
 
     private Response response(

@@ -33,5 +33,26 @@ public interface OfficialRulebookCandidateFinder {
         }
     }
 
-    record Candidate(String title, String url, String publisher, String language, String edition) {}
+    record Candidate(
+            String title,
+            String url,
+            String publisher,
+            String language,
+            String edition,
+            SourcePageHint sourcePageHint) {
+        public Candidate {
+            sourcePageHint = sourcePageHint == null ? SourcePageHint.UNVERIFIED_PAGE : sourcePageHint;
+        }
+
+        public Candidate(String title, String url, String publisher, String language, String edition) {
+            this(title, url, publisher, language, edition, SourcePageHint.UNVERIFIED_PAGE);
+        }
+    }
+
+    /** A provider-owned structural hint; it never upgrades a page to an importable document. */
+    enum SourcePageHint {
+        UNVERIFIED_PAGE,
+        DOCUMENT_LISTING,
+        GAME_INFORMATION
+    }
 }

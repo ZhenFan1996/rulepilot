@@ -15,6 +15,7 @@ interface RulebookCandidate {
   sourceDomain: string
   language: string
   acquisitionMode: 'DIRECT_PDF' | 'IMAGE_GALLERY' | 'SOURCE_PAGE'
+  capability: 'DIRECT_DOCUMENT' | 'CONTIGUOUS_RULE_PAGES' | 'DOCUMENT_LISTING' | 'GAME_INFO_ONLY' | 'UNVERIFIED_PAGE'
 }
 
 interface CandidateResponse {
@@ -458,7 +459,8 @@ test('recommendation becomes one readable, taught, and answerable production jou
     const gstoneCandidate = candidateResult.candidates.find(candidate =>
       candidate.sourceDomain.endsWith('gstonegames.com')
       && candidate.language.toLowerCase().startsWith('zh')
-      && candidate.acquisitionMode !== 'SOURCE_PAGE')
+      && (candidate.capability === 'DIRECT_DOCUMENT' && candidate.acquisitionMode === 'DIRECT_PDF'
+        || candidate.capability === 'CONTIGUOUS_RULE_PAGES' && candidate.acquisitionMode === 'IMAGE_GALLERY'))
     expect(gstoneCandidate, 'No importable Chinese Gstone rulebook was discovered').toBeDefined()
     report.sourceDomain = gstoneCandidate!.sourceDomain
     report.sourceUrl = gstoneCandidate!.url

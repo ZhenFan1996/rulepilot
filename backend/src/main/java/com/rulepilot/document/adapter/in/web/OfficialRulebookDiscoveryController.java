@@ -1,6 +1,7 @@
 package com.rulepilot.document.adapter.in.web;
 
 import com.rulepilot.document.application.OfficialRulebookDiscoveryService;
+import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.context.annotation.Profile;
@@ -40,7 +41,11 @@ public class OfficialRulebookDiscoveryController {
             boolean officialDomainVerified,
             boolean languageVerified,
             OfficialRulebookDiscoveryService.SourceType sourceType,
-            OfficialRulebookDiscoveryService.AcquisitionMode acquisitionMode) {
+            OfficialRulebookDiscoveryService.AcquisitionMode acquisitionMode,
+            OfficialRulebookDiscoveryService.SourceCapability capability,
+            List<OfficialRulebookDiscoveryService.CapabilityEvidence> capabilityEvidence,
+            Instant capabilityCheckedAt,
+            OfficialRulebookDiscoveryService.SourceAction nextAction) {
         static CandidateResponse from(OfficialRulebookDiscoveryService.Candidate candidate) {
             return new CandidateResponse(
                     candidate.title(),
@@ -52,7 +57,11 @@ public class OfficialRulebookDiscoveryController {
                     candidate.officialDomainVerified(),
                     candidate.languageVerified(),
                     candidate.sourceType(),
-                    candidate.acquisitionMode());
+                    candidate.acquisitionMode(),
+                    candidate.capability(),
+                    candidate.capabilityEvidence(),
+                    candidate.capabilityCheckedAt(),
+                    candidate.nextAction());
         }
     }
 }

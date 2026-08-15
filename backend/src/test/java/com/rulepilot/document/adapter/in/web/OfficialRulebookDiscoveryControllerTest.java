@@ -5,6 +5,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import com.rulepilot.document.application.OfficialRulebookDiscoveryService;
+import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -27,7 +28,10 @@ class OfficialRulebookDiscoveryControllerTest {
                         true,
                         true,
                         OfficialRulebookDiscoveryService.SourceType.PUBLISHER,
-                        OfficialRulebookDiscoveryService.AcquisitionMode.DIRECT_PDF))));
+                        OfficialRulebookDiscoveryService.AcquisitionMode.DIRECT_PDF,
+                        OfficialRulebookDiscoveryService.SourceCapability.DIRECT_DOCUMENT,
+                        List.of(OfficialRulebookDiscoveryService.CapabilityEvidence.DOCUMENT_RESPONSE_CONFIRMED),
+                        Instant.parse("2026-08-15T12:00:00Z")))));
 
         var response = new OfficialRulebookDiscoveryController(discovery).discover(editionId, "en");
 
@@ -39,6 +43,13 @@ class OfficialRulebookDiscoveryControllerTest {
             assertThat(candidate.sourceType()).isEqualTo(OfficialRulebookDiscoveryService.SourceType.PUBLISHER);
             assertThat(candidate.acquisitionMode())
                     .isEqualTo(OfficialRulebookDiscoveryService.AcquisitionMode.DIRECT_PDF);
+            assertThat(candidate.capability())
+                    .isEqualTo(OfficialRulebookDiscoveryService.SourceCapability.DIRECT_DOCUMENT);
+            assertThat(candidate.capabilityEvidence())
+                    .containsExactly(OfficialRulebookDiscoveryService.CapabilityEvidence.DOCUMENT_RESPONSE_CONFIRMED);
+            assertThat(candidate.capabilityCheckedAt()).isEqualTo(Instant.parse("2026-08-15T12:00:00Z"));
+            assertThat(candidate.nextAction())
+                    .isEqualTo(OfficialRulebookDiscoveryService.SourceAction.IMPORT_DOCUMENT);
         });
     }
 }

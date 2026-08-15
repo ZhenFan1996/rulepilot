@@ -25,6 +25,11 @@ const candidate = {
   bggUrl: 'https://boardgamegeek.com/boardgame/42',
 }
 
+const directCapability = {
+  capability: 'DIRECT_DOCUMENT', capabilityEvidence: ['DOCUMENT_RESPONSE_CONFIRMED'],
+  capabilityCheckedAt: '2026-08-15T12:00:00Z', nextAction: 'IMPORT_DOCUMENT',
+}
+
 test('covers attributed discovery, official PDF intake, and explicit metadata confirmation on desktop', async ({ page }) => {
   let officialImport: Record<string, unknown> | null = null
   let bggImportCount = 0
@@ -163,6 +168,68 @@ test('keeps the game identity and primary action in proportion on mobile', async
   expect(proportions.primaryBottom).toBeLessThan(proportions.viewportHeight)
 })
 
+test('uses verified source capability for every desktop source-selection action', async ({ page }) => {
+  await mockOnboardingApis(page, {
+    recommendations: [hotGame],
+    suggestions: [candidate],
+    rulebookCandidates: [{
+      title: 'Opaque confirmed response', url: 'https://publisher.example/asset/42', publisher: 'Opaque Studio',
+      language: 'en', edition: 'First', sourceDomain: 'publisher.example', officialDomainVerified: true,
+      languageVerified: true, sourceType: 'PUBLISHER', acquisitionMode: 'DIRECT_PDF', ...directCapability,
+    }, {
+      title: 'Opaque page sequence', url: 'https://pages.example/viewer/42', publisher: 'Opaque Studio',
+      language: 'en', edition: 'First', sourceDomain: 'pages.example', officialDomainVerified: true,
+      languageVerified: true, sourceType: 'PUBLISHER', acquisitionMode: 'IMAGE_GALLERY',
+      capability: 'CONTIGUOUS_RULE_PAGES', capabilityEvidence: ['ORDERED_PAGE_SEQUENCE_CONFIRMED'],
+      capabilityCheckedAt: '2026-08-15T12:00:00Z', nextAction: 'IMPORT_PAGE_SEQUENCE',
+    }, {
+      title: 'Opaque document collection', url: 'https://listing.example/files', publisher: 'Opaque Studio',
+      language: 'en', edition: 'First', sourceDomain: 'listing.example', officialDomainVerified: true,
+      sourceType: 'PUBLISHER', acquisitionMode: 'SOURCE_PAGE', capability: 'DOCUMENT_LISTING',
+      capabilityEvidence: ['DOWNLOADABLE_DOCUMENT_LINKS_OBSERVED'],
+      capabilityCheckedAt: '2026-08-15T12:00:00Z', nextAction: 'CONTINUE_ON_SOURCE',
+    }, {
+      title: 'Rules PDF download', url: 'https://catalog.example/not-a-document.pdf', publisher: 'Opaque Studio',
+      language: 'en', edition: 'First', sourceDomain: 'catalog.example', officialDomainVerified: true,
+      sourceType: 'PUBLISHER', acquisitionMode: 'SOURCE_PAGE', capability: 'GAME_INFO_ONLY',
+      capabilityEvidence: ['EXPLICIT_EMPTY_DOCUMENT_COLLECTION'],
+      capabilityCheckedAt: '2026-08-15T12:00:00Z', nextAction: 'USE_FOR_IDENTITY_ONLY',
+    }, {
+      title: 'Opaque protected page', url: 'https://review.example/login', publisher: 'Opaque Studio',
+      language: 'en', edition: 'First', sourceDomain: 'review.example', officialDomainVerified: true,
+      sourceType: 'PUBLISHER', acquisitionMode: 'SOURCE_PAGE', capability: 'UNVERIFIED_PAGE',
+      capabilityEvidence: ['ACCESS_REQUIRES_LOGIN'], capabilityCheckedAt: '2026-08-15T12:00:00Z',
+      nextAction: 'REVIEW_OR_UPLOAD',
+    }],
+  })
+  await page.addInitScript(() => {
+    Object.defineProperty(window, '__openedRulebookSources', { value: [], writable: true })
+    window.open = ((url?: string | URL) => {
+      ;(window as Window & { __openedRulebookSources: string[] }).__openedRulebookSources.push(String(url))
+      return null
+    }) as typeof window.open
+  })
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto('/teach?editionId=edition-1&onboarding=selected-game')
+
+  await page.getByRole('button', { name: '帮我找规则书' }).click()
+  await expect(page.locator('[data-capability="DIRECT_DOCUMENT"] button')).toHaveText('选择并继续核对')
+  await expect(page.locator('[data-capability="CONTIGUOUS_RULE_PAGES"] button')).toHaveText('选择并继续核对')
+  await expect(page.locator('[data-capability="DOCUMENT_LISTING"] button')).toHaveText('继续查找文件')
+  await expect(page.locator('[data-capability="UNVERIFIED_PAGE"] button')).toHaveText('审阅来源页')
+  await expect(page.locator('[data-capability="GAME_INFO_ONLY"] button')).toHaveCount(0)
+
+  await page.locator('[data-capability="DOCUMENT_LISTING"] button').click()
+  await page.locator('[data-capability="UNVERIFIED_PAGE"] button').click()
+  await expect.poll(() => page.evaluate(() =>
+    (window as Window & { __openedRulebookSources: string[] }).__openedRulebookSources,
+  )).toEqual(['https://listing.example/files', 'https://review.example/login'])
+
+  await page.locator('[data-capability="DIRECT_DOCUMENT"] button').click()
+  await expect(page.getByRole('textbox', { name: /规则书来源链接/ }))
+    .toHaveValue('https://publisher.example/asset/42')
+})
+
 test('keeps manual onboarding and the ready guide usable when BGG fails on mobile', async ({ page }) => {
   await mockOnboardingApis(page, { recommendations: null, suggestions: null })
   await page.setViewportSize({ width: 390, height: 844 })
@@ -192,6 +259,7 @@ async function mockOnboardingApis(page: Page, options: {
   onOfficialImport?: (body: Record<string, unknown>) => void
   onBggImport?: () => void
   onBggLink?: (body: Record<string, unknown>) => void
+  rulebookCandidates?: Array<Record<string, unknown>>
 }) {
   await page.route('**/api/**', async (route) => {
     const request = route.request()
@@ -284,10 +352,11 @@ async function mockOnboardingApis(page: Page, options: {
     if (path === '/api/v1/documents/rulebook-candidates') {
       return route.fulfill({ json: {
         configured: true,
-        candidates: [{
+        candidates: options.rulebookCandidates ?? [{
           title: 'Catalog Game Rules', url: 'https://publisher.example/rules.pdf', publisher: 'Publisher',
           language: 'zh-CN', edition: 'First', sourceDomain: 'publisher.example', officialDomainVerified: true,
           sourceType: 'PUBLISHER', acquisitionMode: 'DIRECT_PDF',
+          ...directCapability,
         }],
       } })
     }

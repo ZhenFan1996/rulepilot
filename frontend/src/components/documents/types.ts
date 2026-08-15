@@ -52,7 +52,38 @@ export interface RulebookCandidate {
   languageVerified?: boolean
   sourceType: 'PUBLISHER' | 'TRUSTED_REPOSITORY' | 'COMMUNITY_PLATFORM' | 'PUBLIC_WEB'
   acquisitionMode: 'DIRECT_PDF' | 'IMAGE_GALLERY' | 'SOURCE_PAGE'
+  capability: RulebookSourceCapability
+  capabilityEvidence: RulebookCapabilityEvidence[]
+  capabilityCheckedAt: string
+  nextAction: RulebookSourceAction
 }
+
+export type RulebookSourceCapability =
+  | 'DIRECT_DOCUMENT'
+  | 'CONTIGUOUS_RULE_PAGES'
+  | 'DOCUMENT_LISTING'
+  | 'GAME_INFO_ONLY'
+  | 'UNVERIFIED_PAGE'
+
+export type RulebookCapabilityEvidence =
+  | 'DOCUMENT_RESPONSE_CONFIRMED'
+  | 'ORDERED_PAGE_SEQUENCE_CONFIRMED'
+  | 'DOWNLOADABLE_DOCUMENT_LINKS_OBSERVED'
+  | 'EXPLICIT_EMPTY_DOCUMENT_COLLECTION'
+  | 'STRUCTURED_GAME_INFORMATION_OBSERVED'
+  | 'ACCESS_REQUIRES_LOGIN'
+  | 'SOURCE_PROBE_UNAVAILABLE'
+  | 'HTML_PAGE_WITHOUT_DOCUMENT_CAPABILITY'
+  | 'KNOWN_DOCUMENT_LISTING_ROUTE'
+  | 'KNOWN_GAME_INFORMATION_ROUTE'
+  | 'CANDIDATE_ONLY'
+
+export type RulebookSourceAction =
+  | 'IMPORT_DOCUMENT'
+  | 'IMPORT_PAGE_SEQUENCE'
+  | 'CONTINUE_ON_SOURCE'
+  | 'USE_FOR_IDENTITY_ONLY'
+  | 'REVIEW_OR_UPLOAD'
 
 export type RulebookDiscoveryStatus = 'idle' | 'loading' | 'success' | 'unavailable' | 'error'
 
@@ -65,11 +96,18 @@ export interface RulebookDiscoveryCopy {
   empty: string
   error: string
   sources: Record<RulebookCandidate['sourceType'], string>
+  capabilities: Record<RulebookSourceCapability, string>
+  noImportableTitle: string
+  noImportableDetail: string
+  identityOnlyTitle: string
+  identityOnlyDetail: string
   direct: string
   gallery: string
   page: string
   use: string
-  open: string
+  continueListing: string
+  reviewUnverified: string
+  localUpload: string
   publisher: string
   language: string
   languageVerified: string

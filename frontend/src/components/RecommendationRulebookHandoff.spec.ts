@@ -27,6 +27,27 @@ const game = {
   bggUrl: 'https://boardgamegeek.com/boardgame/266192',
 }
 
+const confirmedDocumentCapability = {
+  capability: 'DIRECT_DOCUMENT',
+  capabilityEvidence: ['DOCUMENT_RESPONSE_CONFIRMED'],
+  capabilityCheckedAt: '2026-08-15T12:00:00Z',
+  nextAction: 'IMPORT_DOCUMENT',
+} as const
+
+const confirmedGalleryCapability = {
+  capability: 'CONTIGUOUS_RULE_PAGES',
+  capabilityEvidence: ['ORDERED_PAGE_SEQUENCE_CONFIRMED'],
+  capabilityCheckedAt: '2026-08-15T12:00:00Z',
+  nextAction: 'IMPORT_PAGE_SEQUENCE',
+} as const
+
+const documentListingCapability = {
+  capability: 'DOCUMENT_LISTING',
+  capabilityEvidence: ['KNOWN_DOCUMENT_LISTING_ROUTE'],
+  capabilityCheckedAt: '2026-08-15T12:00:00Z',
+  nextAction: 'CONTINUE_ON_SOURCE',
+} as const
+
 function runSnapshot(id: string, state: string) {
   return {
     run: {
@@ -137,6 +158,7 @@ describe('RecommendationRulebookHandoff', () => {
           officialDomainVerified: true,
           sourceType: 'PUBLISHER',
           acquisitionMode: 'DIRECT_PDF',
+          ...confirmedDocumentCapability,
         }, {
           title: 'BGG files',
           url: 'https://boardgamegeek.com/filepage/123/rules',
@@ -147,6 +169,7 @@ describe('RecommendationRulebookHandoff', () => {
           officialDomainVerified: false,
           sourceType: 'COMMUNITY_PLATFORM',
           acquisitionMode: 'SOURCE_PAGE',
+          ...documentListingCapability,
         }],
       })
       if (path === '/api/auth/session') return Response.json({ username: 'player', roles: ['USER'] })
@@ -184,11 +207,11 @@ describe('RecommendationRulebookHandoff', () => {
       headers: { 'X-CSRF-TOKEN': 'csrf' },
     })
 
-    await wrapper.findAll('button').find(button => button.text() === '打开来源页')!.trigger('click')
+    await wrapper.findAll('button').find(button => button.text() === '继续查找文件')!.trigger('click')
     expect(openSource).toHaveBeenCalledWith(
       'https://boardgamegeek.com/filepage/123/rules', '_blank', 'noopener,noreferrer',
     )
-    expect(wrapper.text()).toContain('搜索结果没有提供可验证的 PDF 直链')
+    expect(wrapper.text()).toContain('这个结果不是可直接导入的规则书文档')
     expect(wrapper.find('input[type="checkbox"]').exists()).toBe(false)
 
     await wrapper.get('button[aria-pressed="false"]').trigger('click')
@@ -222,6 +245,94 @@ describe('RecommendationRulebookHandoff', () => {
     window.removeEventListener(BACKGROUND_WORK_CHANGED_EVENT, backgroundWorkChanged)
   })
 
+  it('keeps listings and unverified pages actionable without presenting game information as a rulebook', async () => {
+    const openSource = vi.fn()
+    const requests: string[] = []
+    vi.stubGlobal('open', openSource)
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const path = String(input)
+      requests.push(path)
+      if (path === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      if (path === '/api/v1/bgg/games/266192/import') return Response.json({
+        game: { id: 'game-1', name: '展翅翱翔' },
+        edition: { id: 'edition-1', name: 'BGG 版本' },
+        alreadyImported: false,
+      })
+      if (path.startsWith('/api/v1/documents/rulebook-candidates?')) return Response.json({
+        configured: true,
+        candidates: [{
+          title: 'Opaque file listing', url: 'https://listing.example/files', publisher: 'Opaque Studio',
+          language: 'en', edition: 'First', sourceDomain: 'listing.example', officialDomainVerified: true,
+          sourceType: 'PUBLISHER', acquisitionMode: 'SOURCE_PAGE', ...documentListingCapability,
+        }, {
+          title: 'Opaque catalog entry', url: 'https://catalog.example/game', publisher: 'Opaque Studio',
+          language: 'en', edition: 'First', sourceDomain: 'catalog.example', officialDomainVerified: true,
+          sourceType: 'PUBLISHER', acquisitionMode: 'SOURCE_PAGE',
+          capability: 'GAME_INFO_ONLY', capabilityEvidence: ['EXPLICIT_EMPTY_DOCUMENT_COLLECTION'],
+          capabilityCheckedAt: '2026-08-15T12:00:00Z', nextAction: 'USE_FOR_IDENTITY_ONLY',
+        }, {
+          title: 'Opaque protected page', url: 'https://review.example/login', publisher: 'Opaque Studio',
+          language: 'en', edition: 'First', sourceDomain: 'review.example', officialDomainVerified: true,
+          sourceType: 'PUBLISHER', acquisitionMode: 'SOURCE_PAGE',
+          capability: 'UNVERIFIED_PAGE', capabilityEvidence: ['ACCESS_REQUIRES_LOGIN'],
+          capabilityCheckedAt: '2026-08-15T12:00:00Z', nextAction: 'REVIEW_OR_UPLOAD',
+        }],
+      })
+      return new Response(null, { status: 404 })
+    }))
+
+    const { wrapper } = await mountHandoff()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('暂未找到可直接导入的规则书')
+    expect(wrapper.get('[data-capability="GAME_INFO_ONLY"]').find('button').exists()).toBe(false)
+    expect(wrapper.get('section[aria-label="仅用于核对桌游身份"]').text()).toContain('Opaque catalog entry')
+    expect(wrapper.find('input[type="checkbox"]').exists()).toBe(false)
+    const manualFallback = wrapper.findAll('a').find(link => link.text().includes('本地上传'))
+    expect(manualFallback?.attributes('href')).toBe('/teach?editionId=edition-1&onboarding=recommendation-agent')
+
+    await wrapper.get('[data-capability="DOCUMENT_LISTING"] button').trigger('click')
+    await wrapper.get('[data-capability="UNVERIFIED_PAGE"] button').trigger('click')
+    expect(openSource).toHaveBeenNthCalledWith(
+      1, 'https://listing.example/files', '_blank', 'noopener,noreferrer',
+    )
+    expect(openSource).toHaveBeenNthCalledWith(
+      2, 'https://review.example/login', '_blank', 'noopener,noreferrer',
+    )
+    expect(requests).not.toContain('/api/v1/documents/official-imports')
+  })
+
+  it('fails old session candidates closed when capability evidence is missing', async () => {
+    const openSource = vi.fn()
+    vi.stubGlobal('open', openSource)
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 500 })))
+    const legacyCandidate = {
+      title: 'Legacy PDF candidate', url: 'https://legacy.example/rules.pdf', publisher: 'Legacy Studio',
+      language: 'en', edition: 'First', sourceDomain: 'legacy.example', officialDomainVerified: true,
+      sourceType: 'PUBLISHER', acquisitionMode: 'DIRECT_PDF',
+    }
+    sessionStorage.setItem('rulepilot:recommendation-journey:266192', JSON.stringify({
+      imported: {
+        game: { id: 'game-1', name: '展翅翱翔' },
+        edition: { id: 'edition-1', name: 'BGG 版本' },
+        alreadyImported: false,
+      },
+      candidates: [legacyCandidate],
+      selected: legacyCandidate,
+    }))
+
+    const { wrapper } = await mountHandoff()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('暂未找到可直接导入的规则书')
+    expect(wrapper.get('[data-capability="UNVERIFIED_PAGE"] button').text()).toBe('审阅来源页')
+    expect(wrapper.find('input[type="checkbox"]').exists()).toBe(false)
+    await wrapper.get('[data-capability="UNVERIFIED_PAGE"] button').trigger('click')
+    expect(openSource).toHaveBeenCalledWith(
+      'https://legacy.example/rules.pdf', '_blank', 'noopener,noreferrer',
+    )
+  })
+
   it('imports an ordered community page-image rulebook as part of the same teaching handoff', async () => {
     const requests: Array<{ path: string; options?: RequestInit }> = []
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, options?: RequestInit) => {
@@ -245,6 +356,7 @@ describe('RecommendationRulebookHandoff', () => {
           officialDomainVerified: false,
           sourceType: 'COMMUNITY_PLATFORM',
           acquisitionMode: 'IMAGE_GALLERY',
+          ...confirmedGalleryCapability,
         }],
       })
       if (path === '/api/auth/session') return Response.json({ username: 'player', roles: ['USER'] })
@@ -307,6 +419,7 @@ describe('RecommendationRulebookHandoff', () => {
           title: 'Wingspan Rulebook', url: 'https://publisher.example/wingspan.pdf', publisher: 'Stonemaier Games',
           language: 'English', edition: 'Base game', sourceDomain: 'publisher.example', officialDomainVerified: true,
           sourceType: 'PUBLISHER', acquisitionMode: 'DIRECT_PDF',
+          ...confirmedDocumentCapability,
         }],
       })
       if (path === '/api/v1/documents/official-imports') return Response.json({
@@ -366,6 +479,7 @@ describe('RecommendationRulebookHandoff', () => {
           title: 'Wingspan Rulebook', url: 'https://publisher.example/wingspan.pdf', publisher: 'Stonemaier Games',
           language: 'English', edition: 'Base game', sourceDomain: 'publisher.example', officialDomainVerified: true,
           sourceType: 'PUBLISHER', acquisitionMode: 'DIRECT_PDF',
+          ...confirmedDocumentCapability,
         }],
       })
       if (path === '/api/v1/documents/official-imports') return Response.json({
@@ -425,6 +539,7 @@ describe('RecommendationRulebookHandoff', () => {
           title: 'Wingspan Rulebook', url: 'https://publisher.example/wingspan.pdf', publisher: 'Stonemaier Games',
           language: 'English', edition: 'Base game', sourceDomain: 'publisher.example', officialDomainVerified: true,
           sourceType: 'PUBLISHER', acquisitionMode: 'DIRECT_PDF',
+          ...confirmedDocumentCapability,
         }],
       })
       if (path === '/api/v1/documents/official-imports') return Response.json({
@@ -670,6 +785,7 @@ describe('RecommendationRulebookHandoff', () => {
           officialDomainVerified: false,
           sourceType: 'COMMUNITY_PLATFORM',
           acquisitionMode: 'DIRECT_PDF',
+          ...confirmedDocumentCapability,
         }],
       })
       if (path === '/api/auth/session') return Response.json({ username: 'player', roles: ['USER'] })

@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { computed } from 'vue'
+
 import { useLocale } from '@/lib/locale'
 import { playerFacingLanguageName } from '@/lib/playerFacingLanguage'
 import type {
@@ -21,6 +23,26 @@ const emit = defineEmits<{
 }>()
 
 const { locale, t } = useLocale()
+const hasImportableCandidate = computed(() => props.candidates.some(isImportable))
+const sourceCandidates = computed(() => props.candidates.filter(candidate => candidate.capability !== 'GAME_INFO_ONLY'))
+const identityCandidates = computed(() => props.candidates.filter(candidate => candidate.capability === 'GAME_INFO_ONLY'))
+
+function isImportable(candidate: RulebookCandidate) {
+  return candidate.capability === 'DIRECT_DOCUMENT' && candidate.acquisitionMode === 'DIRECT_PDF'
+    || candidate.capability === 'CONTIGUOUS_RULE_PAGES' && candidate.acquisitionMode === 'IMAGE_GALLERY'
+}
+
+function canContinue(candidate: RulebookCandidate) {
+  return isImportable(candidate)
+    || candidate.capability === 'DOCUMENT_LISTING'
+    || candidate.capability === 'UNVERIFIED_PAGE'
+}
+
+function actionLabel(candidate: RulebookCandidate) {
+  if (isImportable(candidate)) return props.copy.use
+  if (candidate.capability === 'DOCUMENT_LISTING') return props.copy.continueListing
+  return props.copy.reviewUnverified
+}
 
 function candidateLanguage(candidate: RulebookCandidate) {
   const name = playerFacingLanguageName(candidate.language, locale.value)
@@ -78,10 +100,10 @@ function candidateLanguage(candidate: RulebookCandidate) {
       class="mt-4 rounded-xl border border-indigo/15 bg-paper p-4 sm:p-5"
       aria-live="polite"
     >
-      <h2 class="font-display text-xl font-semibold">{{ copy.title }}</h2>
-      <p class="mt-1 text-xs leading-5 text-ink/50">{{ copy.detail }}</p>
-      <ul v-if="candidates.length" class="mt-4 stack-y-md">
-        <li v-for="candidate in candidates" :key="candidate.url" class="rounded-lg border border-ink/10 bg-canvas p-4">
+      <h2 class="font-display text-xl font-semibold">{{ hasImportableCandidate ? copy.title : copy.noImportableTitle }}</h2>
+      <p class="mt-1 text-xs leading-5 text-ink/50">{{ hasImportableCandidate ? copy.detail : copy.noImportableDetail }}</p>
+      <ul v-if="sourceCandidates.length" class="mt-4 stack-y-md">
+        <li v-for="candidate in sourceCandidates" :key="candidate.url" :data-capability="candidate.capability" class="rounded-lg border border-ink/10 bg-canvas p-4">
           <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div class="min-w-0">
               <p class="font-semibold">{{ candidate.title }}</p>
@@ -95,18 +117,36 @@ function candidateLanguage(candidate: RulebookCandidate) {
               <p class="mt-1 text-xs text-ink/45">
                 {{ candidate.acquisitionMode === 'DIRECT_PDF' ? copy.direct : candidate.acquisitionMode === 'IMAGE_GALLERY' ? copy.gallery : copy.page }}
               </p>
+              <p class="mt-1 text-xs font-semibold text-indigo">{{ copy.capabilities[candidate.capability] }}</p>
             </div>
             <button
+              v-if="canContinue(candidate)"
               type="button"
               class="min-h-11 shrink-0 rounded-lg border border-indigo/30 px-4 text-sm font-semibold text-indigo"
               @click="emit('choose', candidate)"
             >
-              {{ candidate.acquisitionMode === 'SOURCE_PAGE' ? copy.open : copy.use }}
+              {{ actionLabel(candidate) }}
             </button>
           </div>
         </li>
       </ul>
-      <p v-else class="mt-4 text-sm text-ink/55">{{ copy.empty }}</p>
+      <p v-else-if="!candidates.length" class="mt-4 text-sm text-ink/55">{{ copy.empty }}</p>
+      <a
+        v-if="!hasImportableCandidate"
+        href="#rulebook-file"
+        class="mt-4 inline-flex min-h-11 items-center text-sm font-semibold text-indigo underline underline-offset-2"
+      >{{ copy.localUpload }}</a>
+      <section v-if="identityCandidates.length" class="mt-5 border-t border-ink/10 pt-4" :aria-label="copy.identityOnlyTitle">
+        <h3 class="text-sm font-semibold text-ink/70">{{ copy.identityOnlyTitle }}</h3>
+        <p class="mt-1 text-xs leading-5 text-ink/50">{{ copy.identityOnlyDetail }}</p>
+        <ul class="mt-3 stack-y-sm">
+          <li v-for="candidate in identityCandidates" :key="candidate.url" :data-capability="candidate.capability" class="rounded-lg border border-ink/10 bg-canvas p-3 text-xs">
+            <p class="font-semibold text-ink/70">{{ candidate.title }}</p>
+            <a :href="candidate.url" target="_blank" rel="noopener noreferrer" class="mt-1 block break-all font-semibold text-indigo underline underline-offset-2">{{ candidate.sourceDomain }} ↗</a>
+            <p class="mt-1 text-ink/50">{{ copy.capabilities[candidate.capability] }}</p>
+          </li>
+        </ul>
+      </section>
     </section>
     <p
       v-else-if="status === 'unavailable'"

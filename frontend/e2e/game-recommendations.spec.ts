@@ -301,6 +301,8 @@ async function mockPublicDiscovery(
       publisher: 'Stonemaier Games', language: 'English', edition: 'Base game',
       sourceDomain: 'publisher.example', officialDomainVerified: true,
       sourceType: 'PUBLISHER', acquisitionMode: 'DIRECT_PDF',
+      capability: 'DIRECT_DOCUMENT', capabilityEvidence: ['DOCUMENT_RESPONSE_CONFIRMED'],
+      capabilityCheckedAt: '2026-08-15T12:00:00Z', nextAction: 'IMPORT_DOCUMENT',
     }],
   } }))
   await page.route('**/api/v1/documents/official-imports', route => {

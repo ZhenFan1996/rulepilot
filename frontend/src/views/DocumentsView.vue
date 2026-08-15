@@ -194,7 +194,11 @@ const rulebookDiscoveryCopy = computed<RulebookDiscoveryCopy>(() => locale.value
   empty: '没有找到可信的规则书来源。请改用公开链接或本地上传。',
   error: '规则书搜索暂时不可用，手动入口仍可使用。',
   sources: { PUBLISHER: '出版社 / 权利方来源', TRUSTED_REPOSITORY: '可信规则库', COMMUNITY_PLATFORM: '社区规则书来源（如 BGG / 集石）', PUBLIC_WEB: '公开来源（请重点核对）' },
-  direct: 'PDF 可直接核验并下载', gallery: '连续规则页图片，可合成为 PDF', page: '来源页，需要继续查找文件', use: '选择并继续核对', open: '打开来源页',
+  capabilities: { DIRECT_DOCUMENT: '已核验为可下载文档', CONTIGUOUS_RULE_PAGES: '已核验为连续规则页', DOCUMENT_LISTING: '仅确认是文档列表页', GAME_INFO_ONLY: '仅有桌游信息，没有规则书文件', UNVERIFIED_PAGE: '尚未核验出可导入文档' },
+  noImportableTitle: '暂未找到可直接导入的规则书', noImportableDetail: '这些结果只能用于继续查找或核对桌游信息；你也可以直接上传本地规则书。',
+  identityOnlyTitle: '仅用于核对桌游身份', identityOnlyDetail: '这些页面没有可导入的规则书文件，不属于规则书选择。',
+  direct: 'PDF 可直接核验并下载', gallery: '连续规则页图片，可合成为 PDF', page: '来源页，需要继续查找文件', use: '选择并继续核对',
+  continueListing: '继续查找文件', reviewUnverified: '审阅来源页', localUpload: '上传本地规则书',
   publisher: '发布者', language: '语言', languageVerified: '来源已明确标注', languageReview: '需在来源页核对', edition: '版本',
   searchSteps: ['核对 BGG 身份与版本', '搜索出版社、发行方与本地化方', '补查 BGG、集石和可信规则库'],
 } : {
@@ -204,7 +208,11 @@ const rulebookDiscoveryCopy = computed<RulebookDiscoveryCopy>(() => locale.value
   empty: 'No credible rulebook source was found. Use a public URL or local upload instead.',
   error: 'Rulebook search is temporarily unavailable. Manual options still work.',
   sources: { PUBLISHER: 'Publisher / rights-holder', TRUSTED_REPOSITORY: 'Trusted rules repository', COMMUNITY_PLATFORM: 'Community rulebook source (such as BGG / Gstone)', PUBLIC_WEB: 'Public source (review carefully)' },
-  direct: 'Direct PDF ready for verification', gallery: 'Ordered rulebook pages; RulePilot can build the PDF', page: 'Source page; continue there', use: 'Choose and review', open: 'Open source page',
+  capabilities: { DIRECT_DOCUMENT: 'Confirmed downloadable document', CONTIGUOUS_RULE_PAGES: 'Confirmed ordered rule pages', DOCUMENT_LISTING: 'Document listing only', GAME_INFO_ONLY: 'Game information only; no rulebook file', UNVERIFIED_PAGE: 'No importable document verified' },
+  noImportableTitle: 'No directly importable rulebook yet', noImportableDetail: 'These results can only continue the search or confirm game identity. You can also upload a local rulebook.',
+  identityOnlyTitle: 'Game identity references only', identityOnlyDetail: 'These pages do not contain an importable rulebook and are not rulebook choices.',
+  direct: 'Direct PDF ready for verification', gallery: 'Ordered rulebook pages; RulePilot can build the PDF', page: 'Source page; continue there', use: 'Choose and review',
+  continueListing: 'Continue finding a file', reviewUnverified: 'Review source page', localUpload: 'Upload a local rulebook',
   publisher: 'Provider', language: 'Language', languageVerified: 'stated by the source', languageReview: 'verify on the source page', edition: 'Edition',
   searchSteps: ['Verify BGG identity and edition', 'Search publishers, distributors, and localizers', 'Check BGG, Gstone, and trusted repositories'],
 })
@@ -444,10 +452,14 @@ async function discoverOfficialRulebooks() {
 
 function chooseRulebookCandidate(candidate: RulebookCandidate) {
   if (intakeControlsDisabled.value) return
-  if (candidate.acquisitionMode === 'SOURCE_PAGE') {
+  if (candidate.capability === 'DOCUMENT_LISTING' || candidate.capability === 'UNVERIFIED_PAGE') {
     window.open(candidate.url, '_blank', 'noopener,noreferrer')
     return
   }
+  if (candidate.capability === 'GAME_INFO_ONLY') return
+  const importable = candidate.capability === 'DIRECT_DOCUMENT' && candidate.acquisitionMode === 'DIRECT_PDF'
+    || candidate.capability === 'CONTIGUOUS_RULE_PAGES' && candidate.acquisitionMode === 'IMAGE_GALLERY'
+  if (!importable) return
   officialSourceUrl.value = candidate.url
   if (!title.value.trim()) title.value = candidate.title
   officialImportRightsConfirmed.value = false
