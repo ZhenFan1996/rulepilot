@@ -4,6 +4,7 @@ import com.rulepilot.assistant.ContentCriticModel;
 import com.rulepilot.assistant.AgentExecutionControl.ActivityType;
 import com.rulepilot.assistant.AuditedAgentInvocations;
 import com.rulepilot.assistant.GeneratedContentCritic;
+import com.rulepilot.assistant.GeneratedContentCritic.ClaimAspect;
 import com.rulepilot.assistant.GeneratedContentCritic.Issue;
 import com.rulepilot.assistant.GeneratedContentCritic.IssueType;
 import com.rulepilot.assistant.GeneratedContentCritic.Review;
@@ -116,11 +117,13 @@ public class ConditionalGeneratedContentCritic implements GeneratedContentCritic
 
     private List<Issue> confirmCandidateIssues(
             ReviewRequest request, List<Issue> candidates, String ownerUsername) {
-        Map<Integer, Set<IssueType>> candidateTypesByPosition = candidates.stream()
+        Map<Integer, Set<CandidateDefect>> candidateDefectsByPosition = candidates.stream()
                 .collect(Collectors.groupingBy(
                         Issue::claimPosition,
                         LinkedHashMap::new,
-                        Collectors.mapping(Issue::type, Collectors.toUnmodifiableSet())));
+                        Collectors.mapping(
+                                issue -> new CandidateDefect(issue.type(), issue.claimAspect()),
+                                Collectors.toUnmodifiableSet())));
         List<GeneratedContentCritic.Claim> contextualClaims = request.claims().stream()
                 .sorted(Comparator.comparingInt(GeneratedContentCritic.Claim::position))
                 .toList();
@@ -140,7 +143,7 @@ public class ConditionalGeneratedContentCritic implements GeneratedContentCritic
                 ReviewMode.ATOMIC_CONFIRMATION,
                 new TaskContext(
                         "Independently confirm candidate factual defects without relying on the discovery verdict.",
-                        atomicCoverage(candidateTypesByPosition)),
+                        atomicCoverage(candidateDefectsByPosition)),
                 contextualClaims,
                 contextualEvidence);
         Map<Integer, Set<UUID>> claimEvidenceByPosition = contextualClaims.stream()
@@ -153,9 +156,9 @@ public class ConditionalGeneratedContentCritic implements GeneratedContentCritic
                         "Candidate claim defects independently confirmed",
                         ownerUsername)
                 .stream()
-                .filter(issue -> candidateTypesByPosition
+                .filter(issue -> candidateDefectsByPosition
                         .getOrDefault(issue.claimPosition(), Set.of())
-                        .contains(issue.type()))
+                        .contains(new CandidateDefect(issue.type(), issue.claimAspect())))
                 .map(issue -> scopeEvidenceToClaim(issue, claimEvidenceByPosition))
                 .distinct()
                 .sorted(Comparator.comparingInt(Issue::claimPosition)
@@ -165,15 +168,16 @@ public class ConditionalGeneratedContentCritic implements GeneratedContentCritic
                 .toList();
     }
 
-    private String atomicCoverage(Map<Integer, Set<IssueType>> candidateTypesByPosition) {
-        String candidates = candidateTypesByPosition.entrySet().stream()
+    private String atomicCoverage(Map<Integer, Set<CandidateDefect>> candidateDefectsByPosition) {
+        String candidates = candidateDefectsByPosition.entrySet().stream()
                 .sorted(Map.Entry.comparingByKey())
                 .map(entry -> entry.getKey() + "=[" + entry.getValue().stream()
-                        .sorted()
-                        .map(Enum::name)
+                        .sorted(Comparator.comparing(CandidateDefect::type)
+                                .thenComparing(CandidateDefect::claimAspect))
+                        .map(defect -> defect.type().name() + "/" + defect.claimAspect().name())
                         .collect(Collectors.joining(", ")) + "]")
                 .collect(Collectors.joining("; "));
-        return "Confirm only these candidate issue types by claim position: " + candidates
+        return "Confirm only these candidate issue type/aspect pairs by claim position: " + candidates
                 + ". Positions not listed are context only and cannot produce issues. Judge every claim only against "
                 + "its own cited evidence IDs, while using sibling claims to recognize coverage already supplied "
                 + "elsewhere in the content; return no issue for a supported claim.";
@@ -184,7 +188,11 @@ public class ConditionalGeneratedContentCritic implements GeneratedContentCritic
         List<UUID> scopedEvidence = issue.evidenceIds().stream()
                 .filter(claimEvidence::contains)
                 .toList();
-        return new Issue(issue.type(), issue.claimPosition(), scopedEvidence, issue.summary());
+        if (scopedEvidence.isEmpty()) {
+            throw new IllegalArgumentException("confirmed critic issue must cite its own cited evidence");
+        }
+        return new Issue(
+                issue.type(), issue.claimAspect(), issue.claimPosition(), scopedEvidence, issue.summary());
     }
 
     private void validateRequest(ReviewRequest request) {
@@ -215,7 +223,8 @@ public class ConditionalGeneratedContentCritic implements GeneratedContentCritic
     }
 
     private Issue normalizeIssue(Issue issue, Set<Integer> claimPositions, Set<UUID> allowedEvidence) {
-        if (issue == null || issue.type() == null || issue.summary() == null || issue.summary().isBlank()) {
+        if (issue == null || issue.type() == null || issue.claimAspect() == null
+                || issue.summary() == null || issue.summary().isBlank()) {
             throw new IllegalArgumentException("critic issue is invalid");
         }
         int claimPosition = claimPositions.contains(issue.claimPosition())
@@ -225,14 +234,19 @@ public class ConditionalGeneratedContentCritic implements GeneratedContentCritic
                 .filter(id -> id != null && allowedEvidence.contains(id))
                 .distinct()
                 .toList();
+        if (evidenceIds.isEmpty()) {
+            throw new IllegalArgumentException("critic issue must cite supplied evidence");
+        }
         String summary = issue.summary().strip();
         if (summary.length() > 240) {
             summary = summary.substring(0, 240).stripTrailing();
         }
-        return new Issue(issue.type(), claimPosition, evidenceIds, summary);
+        return new Issue(issue.type(), issue.claimAspect(), claimPosition, evidenceIds, summary);
     }
 
     private int estimateTokens(String value) {
         return value == null ? 0 : Math.max(1, (value.length() + 3) / 4);
     }
+
+    private record CandidateDefect(IssueType type, ClaimAspect claimAspect) {}
 }

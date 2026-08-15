@@ -32,6 +32,21 @@ class TeachingQuantitativeClaimPolicyTest {
     }
 
     @Test
+    void acceptsAnOpaqueDirectQuantityButRejectsAChangedValue() {
+        var evidence = evidence("Each vek ledger records four luma in every nari row.");
+
+        assertThatCode(() -> validate(
+                        List.of(new Claim(1, "计分：每个 vek 账本在每个 nari 行记录 4 个 luma。", List.of(sourceId))),
+                        evidence))
+                .doesNotThrowAnyException();
+        assertThatThrownBy(() -> validate(
+                        List.of(new Claim(1, "计分：每个 vek 账本在每个 nari 行记录 5 个 luma。", List.of(sourceId))),
+                        evidence))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("unsupported value", "5");
+    }
+
+    @Test
     void rejectsAUnitValueThatDropsAnExplicitSourceMultiplier() {
         var evidence = evidence(
                 "Score one point for each eligible space on each matching card. Example: 2 x 9 = 18 points.");

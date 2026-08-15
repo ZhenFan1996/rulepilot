@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.rulepilot.assistant.ContentCriticModel;
 import com.rulepilot.assistant.ContentCriticModel.CritiqueDraft;
 import com.rulepilot.assistant.GeneratedContentCritic.Claim;
+import com.rulepilot.assistant.GeneratedContentCritic.ClaimAspect;
 import com.rulepilot.assistant.GeneratedContentCritic.ContentType;
 import com.rulepilot.assistant.GeneratedContentCritic.Evidence;
 import com.rulepilot.assistant.GeneratedContentCritic.Issue;
@@ -96,7 +97,11 @@ class ConditionalGeneratedContentCriticTest {
         AtomicInteger calls = new AtomicInteger();
         List<ReviewRequest> observed = new ArrayList<>();
         Issue issue = new Issue(
-                IssueType.MISSING_EXCEPTION, 1, List.of(chunkId), "The cited exception was omitted.");
+                IssueType.MISSING_EXCEPTION,
+                ClaimAspect.NEGATION,
+                1,
+                List.of(chunkId),
+                "The cited exception was omitted.");
         var critic = critic(true, request -> {
             calls.incrementAndGet();
             observed.add(request);
@@ -110,7 +115,7 @@ class ConditionalGeneratedContentCriticTest {
         assertThat(observed.getFirst()).isSameAs(request);
         assertThat(observed.getLast().reviewMode()).isEqualTo(ReviewMode.ATOMIC_CONFIRMATION);
         assertThat(observed.getLast().taskContext().requiredCoverage())
-                .contains("1=[MISSING_EXCEPTION]", "only against its own cited evidence IDs");
+                .contains("1=[MISSING_EXCEPTION/NEGATION]", "only against its own cited evidence IDs");
         assertThat(review.performed()).isTrue();
         assertThat(review.issues()).containsExactly(issue);
     }
@@ -131,6 +136,148 @@ class ConditionalGeneratedContentCriticTest {
 
         assertThat(calls).hasValue(2);
         assertThat(review.accepted()).isTrue();
+    }
+
+    @Test
+    void requiresIndependentConfirmationOfTheSameClaimAspect() {
+        AtomicInteger calls = new AtomicInteger();
+        Issue temporalCandidate = new Issue(
+                IssueType.CONTRADICTION,
+                ClaimAspect.TIMING,
+                1,
+                List.of(chunkId),
+                "The generated claim moves the action beyond the current interval.");
+        Issue differentOwnerVerdict = new Issue(
+                IssueType.CONTRADICTION,
+                ClaimAspect.SUBJECT,
+                1,
+                List.of(chunkId),
+                "The generated claim assigns the action to a different keeper.");
+        var critic = critic(true, request -> calls.getAndIncrement() == 0
+                ? new CritiqueDraft(List.of(temporalCandidate))
+                : new CritiqueDraft(List.of(differentOwnerVerdict)));
+
+        var review = critic.review(opaqueLessonRequest(), ReviewRisk.HIGH_IMPACT);
+
+        assertThat(calls).hasValue(2);
+        assertThat(review.accepted()).isTrue();
+    }
+
+    @Test
+    void rejectsAConfirmedIssueBoundOnlyToASiblingClaimsEvidence() {
+        UUID siblingEvidenceId = UUID.randomUUID();
+        AtomicInteger calls = new AtomicInteger();
+        var critic = critic(true, request -> calls.getAndIncrement() == 0
+                ? new CritiqueDraft(List.of(new Issue(
+                        IssueType.CONTRADICTION,
+                        ClaimAspect.SUBJECT,
+                        1,
+                        List.of(chunkId),
+                        "The generated claim changes the acting keeper.")))
+                : new CritiqueDraft(List.of(new Issue(
+                        IssueType.CONTRADICTION,
+                        ClaimAspect.SUBJECT,
+                        1,
+                        List.of(siblingEvidenceId),
+                        "The generated claim changes the acting keeper."))));
+        ReviewRequest request = new ReviewRequest(
+                UUID.randomUUID(),
+                ContentType.LESSON,
+                ReviewMode.POST_PUBLICATION,
+                new TaskContext("Teach two opaque procedures.", "Preserve each cited relation."),
+                List.of(
+                        new Claim(1, "The vek keeper seals the luma during this interval.", List.of(chunkId)),
+                        new Claim(2, "The toro keeper opens the nari after the interval.", List.of(siblingEvidenceId))),
+                List.of(
+                        new Evidence(chunkId, "During this interval, the vek keeper seals the luma."),
+                        new Evidence(siblingEvidenceId, "After the interval, the toro keeper opens the nari.")));
+
+        assertThatThrownBy(() -> critic.review(request, ReviewRisk.HIGH_IMPACT))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("own cited evidence");
+        assertThat(calls).hasValue(2);
+    }
+
+    @Test
+    void acceptsDirectlySupportedOpaqueClaimsWhenAtomicReviewClearsEveryAspectCandidate() {
+        List<ClaimAspect> aspects = List.of(
+                ClaimAspect.QUANTITY,
+                ClaimAspect.MULTIPLIER,
+                ClaimAspect.TIMING,
+                ClaimAspect.SUBJECT,
+                ClaimAspect.NEGATION);
+        for (ClaimAspect aspect : aspects) {
+            AtomicInteger calls = new AtomicInteger();
+            var critic = critic(true, request -> calls.getAndIncrement() == 0
+                    ? new CritiqueDraft(List.of(new Issue(
+                            IssueType.CONTRADICTION,
+                            aspect,
+                            1,
+                            List.of(chunkId),
+                            "Candidate semantic mismatch requires independent adjudication.")))
+                    : new CritiqueDraft(List.of()));
+
+            var review = critic.review(opaqueLessonRequest(), ReviewRisk.HIGH_IMPACT);
+
+            assertThat(review.accepted()).as("direct support for %s", aspect).isTrue();
+            assertThat(calls).as("bounded calls for %s", aspect).hasValue(2);
+        }
+    }
+
+    @Test
+    void independentlyConfirmsEveryProtectedRelationOnStructurallyDifferentOpaqueClaims() {
+        List<FidelityScenario> scenarios = List.of(
+                new FidelityScenario(
+                        ClaimAspect.QUANTITY,
+                        IssueType.MISSING_CRITICAL_RULE,
+                        "The vek keeper seals luma.",
+                        "The vek keeper seals exactly four luma."),
+                new FidelityScenario(
+                        ClaimAspect.MULTIPLIER,
+                        IssueType.MISSING_CRITICAL_RULE,
+                        "Perform the toro transfer once.",
+                        "Repeat the toro transfer for each nari."),
+                new FidelityScenario(
+                        ClaimAspect.TIMING,
+                        IssueType.CONTRADICTION,
+                        "After the pale interval, the vek keeper turns the luma.",
+                        "During the pale interval, the vek keeper turns the luma."),
+                new FidelityScenario(
+                        ClaimAspect.SUBJECT,
+                        IssueType.CONTRADICTION,
+                        "The toro keeper opens the nari.",
+                        "The vek keeper opens the nari."),
+                new FidelityScenario(
+                        ClaimAspect.NEGATION,
+                        IssueType.CONTRADICTION,
+                        "The nari bearer may open the luma.",
+                        "The nari bearer must not open the luma."));
+
+        for (FidelityScenario scenario : scenarios) {
+            AtomicInteger calls = new AtomicInteger();
+            Issue confirmed = new Issue(
+                    scenario.type(),
+                    scenario.aspect(),
+                    1,
+                    List.of(chunkId),
+                    "The complete generated relation differs from its cited source relation.");
+            var critic = critic(true, request -> {
+                calls.incrementAndGet();
+                return new CritiqueDraft(List.of(confirmed));
+            });
+            ReviewRequest request = new ReviewRequest(
+                    UUID.randomUUID(),
+                    ContentType.LESSON,
+                    ReviewMode.POST_PUBLICATION,
+                    new TaskContext("Teach one opaque relation.", "Preserve the complete cited relation."),
+                    List.of(new Claim(1, scenario.claim(), List.of(chunkId))),
+                    List.of(new Evidence(chunkId, scenario.evidence())));
+
+            var review = critic.review(request, ReviewRisk.HIGH_IMPACT);
+
+            assertThat(review.issues()).as("confirmed %s", scenario.aspect()).containsExactly(confirmed);
+            assertThat(calls).as("bounded calls for %s", scenario.aspect()).hasValue(2);
+        }
     }
 
     @Test
@@ -278,5 +425,22 @@ class ConditionalGeneratedContentCriticTest {
                 List.of(new Evidence(chunkId, "Each coin scores one point.")));
     }
 
+    private ReviewRequest opaqueLessonRequest() {
+        return new ReviewRequest(
+                UUID.randomUUID(),
+                ContentType.LESSON,
+                ReviewMode.POST_PUBLICATION,
+                new TaskContext("Teach the luma procedure.", "Preserve the complete cited relation."),
+                List.of(new Claim(
+                        1,
+                        "During this interval, the vek keeper must not seal more than four luma for each nari.",
+                        List.of(chunkId))),
+                List.of(new Evidence(
+                        chunkId,
+                        "During this interval, the vek keeper must not seal more than four luma for each nari.")));
+    }
+
     private record Scenario(boolean evaluationMode, ReviewRisk risk) {}
+
+    private record FidelityScenario(ClaimAspect aspect, IssueType type, String claim, String evidence) {}
 }

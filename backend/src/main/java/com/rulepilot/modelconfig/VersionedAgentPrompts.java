@@ -149,12 +149,16 @@ public class VersionedAgentPrompts {
             @Value("classpath:prompts/content-critic-v25-permission-ruling-system.txt") Resource criticPermissionRuling,
             @Value("classpath:prompts/content-critic-v34-focused-runtime-system.txt") Resource focusedCriticSystem,
             @Value("classpath:prompts/content-critic-v35-quantitative-aggregation-system.txt") Resource criticQuantitativeAggregation,
+            @Value("classpath:prompts/content-critic-v36-claim-aspect-contract-system.txt") Resource criticClaimAspectContract,
             @Value("classpath:prompts/atomic-content-critic-v3-system.txt") Resource atomicCriticSystem,
+            @Value("classpath:prompts/atomic-content-critic-v5-claim-aspect-system.txt") Resource atomicClaimAspectSystem,
             @Value("classpath:prompts/objective-coverage-critic-v3-system.txt") Resource objectiveCoverageCriticSystem,
             @Value("classpath:prompts/content-critic-v4-user.txt") Resource criticUser,
             @Value("classpath:prompts/atomic-content-critic-v4-user.txt") Resource atomicCriticUser,
+            @Value("classpath:prompts/atomic-content-critic-v5-claim-aspect-user.txt") Resource atomicClaimAspectUser,
             @Value("classpath:prompts/structured-output-repair-v1.txt") Resource structuredOutputRepair,
             @Value("classpath:prompts/content-critic-output-repair-v1.txt") Resource criticOutputRepair,
+            @Value("classpath:prompts/content-critic-output-repair-v2-claim-aspect.txt") Resource criticClaimAspectRepair,
             @Value("classpath:prompts/lesson-localization-v2-system.txt") Resource lessonLocalizationSystem,
             @Value("classpath:prompts/lesson-localization-v1-user.txt") Resource lessonLocalizationUser)
             throws IOException {
@@ -308,14 +312,15 @@ public class VersionedAgentPrompts {
         this.answerUser = read(answerUser);
         this.answerRetrievalRewriteSystem = read(answerRetrievalRewriteSystem);
         this.answerRetrievalRewriteUser = read(answerRetrievalRewriteUser);
-        this.criticSystem = combined(focusedCriticSystem, criticQuantitativeAggregation);
-        this.lessonStructureCriticSystem = combined(focusedCriticSystem, criticQuantitativeAggregation);
-        this.atomicCriticSystem = read(atomicCriticSystem);
-        this.objectiveCoverageCriticSystem = read(objectiveCoverageCriticSystem);
+        this.criticSystem = combined(focusedCriticSystem, criticQuantitativeAggregation, criticClaimAspectContract);
+        this.lessonStructureCriticSystem = combined(
+                focusedCriticSystem, criticQuantitativeAggregation, criticClaimAspectContract);
+        this.atomicCriticSystem = combined(atomicCriticSystem, atomicClaimAspectSystem);
+        this.objectiveCoverageCriticSystem = combined(objectiveCoverageCriticSystem, criticClaimAspectContract);
         this.criticUser = read(criticUser);
-        this.atomicCriticUser = read(atomicCriticUser);
+        this.atomicCriticUser = combined(atomicCriticUser, atomicClaimAspectUser);
         this.structuredOutputRepair = read(structuredOutputRepair);
-        this.criticOutputRepair = read(criticOutputRepair);
+        this.criticOutputRepair = combined(criticOutputRepair, criticClaimAspectRepair);
         this.lessonLocalizationSystem = read(lessonLocalizationSystem);
         this.lessonLocalizationUser = read(lessonLocalizationUser);
     }

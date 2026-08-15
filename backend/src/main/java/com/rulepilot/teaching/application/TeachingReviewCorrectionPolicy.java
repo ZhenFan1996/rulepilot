@@ -31,7 +31,11 @@ final class TeachingReviewCorrectionPolicy {
 
     List<String> correctionFeedback(List<GeneratedContentCritic.Issue> issues) {
         return List.of("Whole-lesson review found: " + issues.stream()
-                .map(issue -> issue.type() + " claim=" + issue.claimPosition()
+                .map(issue -> issue.type()
+                        + (issue.claimAspect() == GeneratedContentCritic.ClaimAspect.GENERAL
+                                ? ""
+                                : " aspect=" + issue.claimAspect())
+                        + " claim=" + issue.claimPosition()
                         + " evidence=" + issue.evidenceIds() + " - " + issue.summary())
                 .collect(Collectors.joining("; "))
                 + ". Return a complete replacement section. Correct every flagged claim from the supplied evidence, "
@@ -50,7 +54,7 @@ final class TeachingReviewCorrectionPolicy {
     String criticDiagnostic(List<GeneratedContentCritic.Issue> issues) {
         String diagnostic = "CRITIC_" + issues.stream()
                 .collect(Collectors.groupingBy(
-                        GeneratedContentCritic.Issue::type,
+                        this::diagnosticLabel,
                         TreeMap::new,
                         Collectors.mapping(
                                 GeneratedContentCritic.Issue::claimPosition,
@@ -63,6 +67,12 @@ final class TeachingReviewCorrectionPolicy {
                 .map(entry -> entry.getKey() + "@" + entry.getValue())
                 .collect(Collectors.joining("+"));
         return diagnostic.length() <= 180 ? diagnostic : diagnostic.substring(0, 180);
+    }
+
+    private String diagnosticLabel(GeneratedContentCritic.Issue issue) {
+        return issue.claimAspect() == GeneratedContentCritic.ClaimAspect.GENERAL
+                ? issue.type().name()
+                : issue.type().name() + "_" + issue.claimAspect().name();
     }
 
     enum CorrectionKind {

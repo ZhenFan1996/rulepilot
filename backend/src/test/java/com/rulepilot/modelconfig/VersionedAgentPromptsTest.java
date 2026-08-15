@@ -92,6 +92,12 @@ class VersionedAgentPromptsTest {
                         "setup, legal actions, timing, scoring, game end",
                         "aggregation owner",
                         "worked total",
+                        "claimAspect",
+                        "QUANTITY",
+                        "MULTIPLIER",
+                        "TIMING",
+                        "SUBJECT",
+                        "NEGATION",
                         "defectConfirmed=true",
                         "empty issues array",
                         "Return only the requested JSON schema")
@@ -102,14 +108,19 @@ class VersionedAgentPromptsTest {
                 .contains(
                         "defectConfirmed=false",
                         "defectConfirmed=true",
+                        "claim-position/type/claimAspect",
                         "complete claim",
                         "current-turn/later-turn distinction",
                         "{claims}",
                         "{evidence}");
+        assertThat(prompts.objectiveCoverageCriticSystem())
+                .contains("claimAspect", "MISSING_CRITICAL_RULE", "evidenceIds");
         assertThat(prompts.structuredOutputRepair()).contains("schema-valid object only");
         assertThat(prompts.criticOutputRepair()).contains(
                 "Return {\"issues\":[]}",
                 "defectConfirmed: true",
+                "claimAspect",
+                "at least one evidenceIds reference owned by that claim",
                 "exactly one allowed issue type",
                 "Never place a supported");
 

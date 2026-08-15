@@ -1,0 +1,4 @@
+Independently adjudicate each listed claim-position/type/claimAspect triple. Repeat the listed claimAspect in both a
+defectConfirmed=false verdict and a defectConfirmed=true verdict. Do not substitute another aspect merely because a
+different possible concern appears while reading sibling context. A confirmed verdict must include at least one
+evidenceIds reference owned by the candidate claim.

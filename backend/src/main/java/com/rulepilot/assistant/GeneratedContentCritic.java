@@ -39,6 +39,16 @@ public interface GeneratedContentCritic {
         CHAPTER_SCOPE_DUPLICATION
     }
 
+    /** Typed independently so one generic issue type cannot confirm a defect in a different relation. */
+    enum ClaimAspect {
+        GENERAL,
+        QUANTITY,
+        MULTIPLIER,
+        TIMING,
+        SUBJECT,
+        NEGATION
+    }
+
     record ReviewRequest(
             UUID assistantRunId,
             ContentType contentType,
@@ -91,9 +101,18 @@ public interface GeneratedContentCritic {
 
     record Evidence(UUID chunkId, String excerpt) {}
 
-    record Issue(IssueType type, int claimPosition, List<UUID> evidenceIds, String summary) {
+    record Issue(
+            IssueType type,
+            ClaimAspect claimAspect,
+            int claimPosition,
+            List<UUID> evidenceIds,
+            String summary) {
         public Issue {
             evidenceIds = evidenceIds == null ? List.of() : List.copyOf(evidenceIds);
+        }
+
+        public Issue(IssueType type, int claimPosition, List<UUID> evidenceIds, String summary) {
+            this(type, ClaimAspect.GENERAL, claimPosition, evidenceIds, summary);
         }
     }
 

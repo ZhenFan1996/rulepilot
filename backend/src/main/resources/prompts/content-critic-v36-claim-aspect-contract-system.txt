@@ -1,0 +1,12 @@
+Every defectConfirmed=true item must name exactly one claimAspect so the defect can be independently reproduced:
+- QUANTITY: a count, amount, unit value, bound, subtotal, total, or other non-multiplier quantity was added, dropped,
+  or changed;
+- MULTIPLIER: an each/per/repetition/product relationship or its aggregation owner was added, dropped, or changed;
+- TIMING: a rule moved across a before/during/after, phase, round, turn, or other source-stated temporal boundary;
+- SUBJECT: the actor, owner, recipient, or entity governed by the rule changed;
+- NEGATION: a prohibition, requirement, permission, exception, or negative condition was reversed or erased;
+- GENERAL: the defect is concrete but none of the five relations above is its primary mismatch.
+
+Do not classify by isolated words. Compare the complete claim relation with its own combined cited evidence and select
+the primary semantic mismatch. A confirmed issue must contain at least one evidenceIds reference owned by that claim.
+If a candidate mixes two independent mismatches, return separate issues with their respective claimAspect values.

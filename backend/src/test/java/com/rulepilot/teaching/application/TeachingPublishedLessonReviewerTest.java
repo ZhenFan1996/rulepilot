@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.rulepilot.assistant.AssistantReadTools.RuleEvidence;
 import com.rulepilot.assistant.GeneratedContentCritic;
+import com.rulepilot.assistant.GeneratedContentCritic.ClaimAspect;
 import com.rulepilot.assistant.GeneratedContentCritic.Issue;
 import com.rulepilot.assistant.GeneratedContentCritic.IssueType;
 import com.rulepilot.assistant.GeneratedContentCritic.Review;
@@ -29,6 +30,84 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 
 class TeachingPublishedLessonReviewerTest {
+
+    @Test
+    void withholdsOpaqueTeachingClaimsWhenAnyProtectedRelationCannotBeCorrected() {
+        UUID versionId = UUID.randomUUID();
+        List<RuleEvidence> evidence = List.of(
+                opaqueEvidence(versionId, "Quantity", "The vek keeper seals exactly four luma."),
+                opaqueEvidence(versionId, "Multiplier", "For each nari, repeat the toro transfer."),
+                opaqueEvidence(versionId, "Timing", "During the pale interval, the vek keeper turns the luma."),
+                opaqueEvidence(versionId, "Subject", "The vek keeper opens the nari."),
+                opaqueEvidence(versionId, "Negation", "The nari bearer must not open the luma."));
+        SectionDraft alteredDraft = new SectionDraft(
+                "Opaque procedure",
+                VisualKind.FLOW_DIAGRAM,
+                "Follow only the cited relations.",
+                List.of(evidence.getFirst().chunkId()),
+                List.of(
+                        new StepDraft(
+                                "Quantity",
+                                TeachingMove.FLOW,
+                                "The vek keeper seals luma.",
+                                List.of(evidence.get(0).chunkId())),
+                        new StepDraft(
+                                "Multiplier",
+                                TeachingMove.FLOW,
+                                "Perform the toro transfer once.",
+                                List.of(evidence.get(1).chunkId())),
+                        new StepDraft(
+                                "Timing",
+                                TeachingMove.FLOW,
+                                "After the pale interval, the vek keeper turns the luma.",
+                                List.of(evidence.get(2).chunkId())),
+                        new StepDraft(
+                                "Subject",
+                                TeachingMove.FLOW,
+                                "The toro keeper opens the nari.",
+                                List.of(evidence.get(3).chunkId())),
+                        new StepDraft(
+                                "Negation",
+                                TeachingMove.FLOW,
+                                "The nari bearer may open the luma.",
+                                List.of(evidence.get(4).chunkId()))));
+        TeachingLessonModel model = new TeachingLessonModel() {
+            @Override
+            public SectionDraft compose(SectionRequest request) {
+                return alteredDraft;
+            }
+
+            @Override
+            public SectionDraft revise(SectionRequest request, SectionDraft previousDraft, List<String> feedback) {
+                throw new IllegalStateException("correction unavailable");
+            }
+        };
+        var invocations = new ImmediateAuditedAgentInvocations();
+        TeachingSectionDraftComposer composer = new TeachingSectionDraftComposer(
+                model, new PolicyEvidenceVerifier(), invocations, VisualRulebookPageFacts.empty());
+        TeachingPlan plan = plan(versionId);
+        UUID runId = UUID.randomUUID();
+        TeachingSectionDraftCandidate candidate = composer.compose(
+                plan, plan.sections().getFirst(), List.of(), evidence, runId, 0, false);
+        GeneratedContentCritic critic = (request, risk) -> new Review(
+                true,
+                List.of(
+                        issue(IssueType.MISSING_CRITICAL_RULE, ClaimAspect.QUANTITY, 2, evidence.get(0)),
+                        issue(IssueType.MISSING_CRITICAL_RULE, ClaimAspect.MULTIPLIER, 3, evidence.get(1)),
+                        issue(IssueType.CONTRADICTION, ClaimAspect.TIMING, 4, evidence.get(2)),
+                        issue(IssueType.CONTRADICTION, ClaimAspect.SUBJECT, 5, evidence.get(3)),
+                        issue(IssueType.CONTRADICTION, ClaimAspect.NEGATION, 6, evidence.get(4))));
+        List<LessonSection> published = new ArrayList<>(List.of(candidate.section()));
+
+        new TeachingPublishedLessonReviewer(
+                        critic, invocations, composer, new TeachingReviewCorrectionPolicy())
+                .review(plan, List.of(candidate), published, runId, () -> {});
+
+        assertThat(published).singleElement().satisfies(section -> {
+            assertThat(section.evidenceStatus()).isEqualTo(EvidenceStatus.INSUFFICIENT_EVIDENCE);
+            assertThat(section.steps()).singleElement().satisfies(step -> assertThat(step.text()).contains("尚未找到"));
+        });
+    }
 
     @Test
     void givesTheWholeLessonCriticEnoughUncitedContextToCheckAWorkedTotal() {
@@ -644,5 +723,18 @@ class TeachingPublishedLessonReviewerTest {
                 "检查结束条件，再选择唯一适用的分支。",
                 List.of(evidenceId),
                 List.of(new StepDraft("准备下一轮", TeachingMove.FLOW, text, List.of(evidenceId))));
+    }
+
+    private RuleEvidence opaqueEvidence(UUID versionId, String heading, String excerpt) {
+        return new RuleEvidence(UUID.randomUUID(), versionId, "OPAQUE", heading, excerpt, 6, 6);
+    }
+
+    private Issue issue(IssueType type, ClaimAspect aspect, int claimPosition, RuleEvidence evidence) {
+        return new Issue(
+                type,
+                aspect,
+                claimPosition,
+                List.of(evidence.chunkId()),
+                "The generated relation does not preserve the directly cited source fact.");
     }
 }

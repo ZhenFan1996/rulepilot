@@ -9,6 +9,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.rulepilot.assistant.GeneratedContentCritic.Claim;
+import com.rulepilot.assistant.GeneratedContentCritic.ClaimAspect;
 import com.rulepilot.assistant.GeneratedContentCritic.ContentType;
 import com.rulepilot.assistant.GeneratedContentCritic.Evidence;
 import com.rulepilot.assistant.GeneratedContentCritic.ReviewMode;
@@ -288,6 +289,95 @@ class SpringAiContentCriticModelTest {
         assertThat(prompt.getAllValues().getLast().getInstructions())
                 .extracting(message -> message.getText())
                 .anyMatch(text -> text.contains("every retained issue requires a type"));
+    }
+
+    @Test
+    void repairsAConfirmedLessonDefectThatOmitsItsClaimAspect() {
+        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        ChatModel chatModel = mock(ChatModel.class);
+        VersionedAgentPrompts prompts = mock(VersionedAgentPrompts.class);
+        when(configuration.usesFake(Role.CRITIC)).thenReturn(false);
+        when(configuration.providerFor(Role.CRITIC)).thenReturn("deepseek");
+        when(configuration.modelNameFor(Role.CRITIC)).thenReturn("deepseek-chat");
+        when(configuration.modelFor(Role.CRITIC)).thenReturn(chatModel);
+        when(configuration.usesDeepSeekNonThinkingGeneration(Role.CRITIC)).thenReturn(true);
+        OpenAiChatOptions providerOptions = OpenAiChatOptions.builder()
+                .apiKey("test-key")
+                .baseUrl("https://provider.example/v1")
+                .model("deepseek-chat")
+                .build();
+        when(chatModel.getDefaultOptions()).thenReturn(providerOptions);
+        when(chatModel.getOptions()).thenReturn(providerOptions);
+        when(prompts.atomicCriticSystem()).thenReturn("Confirm the exact candidate claim aspect.");
+        when(prompts.atomicCriticUser()).thenReturn("Claims: {claims}\nEvidence: {evidence}\nRepair: {repair}");
+        when(prompts.criticOutputRepair()).thenReturn("Every confirmed lesson issue requires claimAspect.");
+        when(chatModel.call(any(Prompt.class)))
+                .thenReturn(new ChatResponse(List.of(new Generation(new AssistantMessage(
+                        "{\"issues\":[{\"defectConfirmed\":true,\"type\":\"CONTRADICTION\","
+                                + "\"claimPosition\":1,\"evidenceIds\":[\"E1\"],"
+                                + "\"summary\":\"The interval changed.\"}]}")))))
+                .thenReturn(new ChatResponse(List.of(new Generation(new AssistantMessage(
+                        "{\"issues\":[{\"defectConfirmed\":true,\"type\":\"CONTRADICTION\","
+                                + "\"claimAspect\":\"TIMING\",\"claimPosition\":1,"
+                                + "\"evidenceIds\":[\"E1\"],\"summary\":\"The interval changed.\"}]}")))));
+        SpringAiContentCriticModel model = new SpringAiContentCriticModel(
+                configuration, new FakeContentCriticModel(), prompts);
+        UUID evidenceId = UUID.randomUUID();
+
+        var result = model.critique(new ReviewRequest(
+                UUID.randomUUID(),
+                ContentType.LESSON,
+                ReviewMode.ATOMIC_CONFIRMATION,
+                new TaskContext("Confirm one opaque procedure.", "1=[CONTRADICTION/TIMING]", 1),
+                List.of(new Claim(1, "The vek keeper seals the luma after the interval.", List.of(evidenceId))),
+                List.of(new Evidence(evidenceId, "The vek keeper seals the luma during the interval."))));
+
+        assertThat(result.issues()).singleElement().satisfies(issue -> {
+            assertThat(issue.claimAspect()).isEqualTo(ClaimAspect.TIMING);
+            assertThat(issue.evidenceIds()).containsExactly(evidenceId);
+        });
+        verify(chatModel, times(2)).call(any(Prompt.class));
+    }
+
+    @Test
+    void repairsAConfirmedLessonDefectThatHasNoClaimBoundEvidence() {
+        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        ChatModel chatModel = mock(ChatModel.class);
+        VersionedAgentPrompts prompts = mock(VersionedAgentPrompts.class);
+        when(configuration.usesFake(Role.CRITIC)).thenReturn(false);
+        when(configuration.providerFor(Role.CRITIC)).thenReturn("qwen");
+        when(configuration.modelNameFor(Role.CRITIC)).thenReturn("qwen3.7-plus");
+        when(configuration.modelFor(Role.CRITIC)).thenReturn(chatModel);
+        OpenAiChatOptions providerOptions = OpenAiChatOptions.builder()
+                .apiKey("test-key")
+                .baseUrl("https://provider.example/v1")
+                .model("qwen3.7-plus")
+                .build();
+        when(chatModel.getDefaultOptions()).thenReturn(providerOptions);
+        when(chatModel.getOptions()).thenReturn(providerOptions);
+        when(prompts.criticSystem()).thenReturn("Review the exact claim aspect and evidence binding.");
+        when(prompts.criticUser()).thenReturn("Claims: {claims}\nEvidence: {evidence}\nRepair: {repair}");
+        when(prompts.criticOutputRepair()).thenReturn("Every confirmed lesson issue requires relevant evidenceIds.");
+        when(chatModel.call(any(Prompt.class)))
+                .thenReturn(new ChatResponse(List.of(new Generation(new AssistantMessage(
+                        "{\"issues\":[{\"defectConfirmed\":true,\"type\":\"CONTRADICTION\","
+                                + "\"claimAspect\":\"SUBJECT\",\"claimPosition\":1,\"evidenceIds\":[],"
+                                + "\"summary\":\"The acting keeper changed.\"}]}")))))
+                .thenReturn(new ChatResponse(List.of(new Generation(new AssistantMessage("{\"issues\":[]}")))));
+        SpringAiContentCriticModel model = new SpringAiContentCriticModel(
+                configuration, new FakeContentCriticModel(), prompts);
+        UUID evidenceId = UUID.randomUUID();
+
+        var result = model.critique(new ReviewRequest(
+                UUID.randomUUID(),
+                ContentType.LESSON,
+                ReviewMode.POST_PUBLICATION,
+                new TaskContext("Teach one opaque procedure.", "Preserve its actor.", 1),
+                List.of(new Claim(1, "The toro keeper opens the nari.", List.of(evidenceId))),
+                List.of(new Evidence(evidenceId, "The vek keeper opens the nari."))));
+
+        assertThat(result.issues()).isEmpty();
+        verify(chatModel, times(2)).call(any(Prompt.class));
     }
 
     @Test

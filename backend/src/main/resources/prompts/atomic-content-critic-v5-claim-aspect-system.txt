@@ -1,0 +1,4 @@
+Candidate coverage is an exact claim-position/type/claimAspect contract. Confirm an issue only when its claim position,
+issue type, and claimAspect all match one listed candidate. A verdict about a different aspect does not confirm the
+candidate. Every confirmed issue must cite at least one evidence reference listed on that same claim; sibling evidence
+may provide context but cannot substantiate the verdict.

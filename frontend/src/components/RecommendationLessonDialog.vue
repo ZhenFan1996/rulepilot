@@ -39,7 +39,7 @@ interface LessonSection {
   coverageTags: string[]
   title: string
   required: boolean
-  evidenceStatus: string
+  evidenceStatus: 'SUPPORTED' | 'CITED_DRAFT' | 'INSUFFICIENT_EVIDENCE'
   visualKind: string
   visualCaption: string
   visualSourcePages: number[]
@@ -91,30 +91,32 @@ useModalFocus({
 
 const copy = computed(() => locale.value === 'zh-CN' ? {
   dialog: '生成讲解阅读器', close: '关闭讲解', eyebrow: '规则书讲解', loading: '正在打开已生成的讲解…', error: '讲解暂时无法打开。', retry: '重试',
-  draft: '已有 {done} / {total} 章可以阅读；后台会继续生成和核对。', complete: '完整讲解已经生成。', incomplete: '当前讲解只发布了有足够规则依据的内容。',
-  syncing: '已有 {done} / {total} 章可以阅读；正在核对持久化后台任务状态。', settledDraft: '已有 {done} / {total} 章可以阅读；本轮后台生成已结束，未发布内容仍需更多规则依据。',
+  draft: '已有 {done} / {total} 章通过规则核对；其余基础内容仍可阅读，后台会继续核对。', complete: '完整讲解已经生成。', incomplete: '当前讲解只发布了有足够规则依据的内容。',
+  syncing: '已有 {done} / {total} 章通过规则核对；正在核对持久化后台任务状态。', settledDraft: '已有 {done} / {total} 章通过规则核对；未通过的章节仍需更强的规则依据。',
   refresh: '暂时无法刷新最新章节，已显示的内容仍可继续阅读。', ask: '切换到规则答疑', source: '每个步骤都保留原规则书页码；答疑只使用同一份规则书。',
 } : {
   dialog: 'Generated guide reader', close: 'Close guide', eyebrow: 'Rulebook guide', loading: 'Opening generated guide content…', error: 'The guide cannot be opened right now.', retry: 'Retry',
-  draft: '{done} / {total} chapters are readable while generation and review continue.', complete: 'The complete guide is ready.', incomplete: 'This guide publishes only content with enough rulebook support.',
-  syncing: '{done} / {total} chapters are readable while the persisted background task is reconciled.', settledDraft: '{done} / {total} chapters are readable. This background run has ended; unpublished content still needs stronger rule evidence.',
+  draft: '{done} / {total} chapters passed rule review; the remaining starter content is readable while review continues.', complete: 'The complete guide is ready.', incomplete: 'This guide publishes only content with enough rulebook support.',
+  syncing: '{done} / {total} chapters passed rule review while the persisted background task is reconciled.', settledDraft: '{done} / {total} chapters passed rule review; the remaining chapters still need stronger rule evidence.',
   refresh: 'The latest chapter update is unavailable. Confirmed content remains readable.', ask: 'Switch to rules Q&A', source: 'Every step retains original rulebook page references; Q&A uses the same rulebook.',
 })
 
 const active = computed(() => teachingRunIsActive(run.value?.run.state))
+const supportedChapterCount = computed(() => lesson.value?.sections
+  .filter(section => section.evidenceStatus === 'SUPPORTED').length ?? 0)
 const statusText = computed(() => {
   if (!plan.value || !lesson.value) return ''
   if (lesson.value.status === 'COMPLETE' && run.value?.run.state === 'COMPLETED') return copy.value.complete
   if (lesson.value.status === 'INCOMPLETE') return copy.value.incomplete
   const template = !run.value ? copy.value.syncing : active.value ? copy.value.draft : copy.value.settledDraft
   return template
-    .replace('{done}', String(lesson.value.sections.length))
+    .replace('{done}', String(supportedChapterCount.value))
     .replace('{total}', String(plan.value.sections.length))
 })
 const progress = computed(() => {
   const total = plan.value?.sections.length ?? 0
   if (!total) return 0
-  return Math.min(100, Math.round((lesson.value?.sections.length ?? 0) / total * 100))
+  return Math.min(100, Math.round(supportedChapterCount.value / total * 100))
 })
 const activityText = computed(() => {
   if (!plan.value || !run.value?.activities.length) return ''
@@ -313,8 +315,8 @@ onBeforeUnmount(() => {
             <div class="flex shrink-0 items-center gap-2"><button v-if="lesson" type="button" class="min-h-11 rounded-lg bg-indigo px-4 text-sm font-semibold text-white" @click="emit('ask-questions')">{{ copy.ask }}</button><button type="button" data-modal-initial-focus class="grid min-h-11 min-w-11 place-items-center rounded-lg text-2xl text-ink/45 hover:bg-ink/5" :aria-label="copy.close" @click="emit('close')">×</button></div>
           </div>
           <div v-if="plan && lesson" class="mt-3">
-            <div class="flex items-center justify-between gap-3 text-xs"><p class="font-semibold" :class="active || !run ? 'text-indigo' : 'text-emerald-700'" role="status">{{ statusText }}</p><span class="font-mono font-semibold text-ink/50">{{ lesson.sections.length }} / {{ plan.sections.length }}</span></div>
-            <div class="mt-2 h-1.5 overflow-hidden rounded-full bg-indigo/10"><div class="h-full rounded-full bg-indigo transition-[width] duration-500" :style="{ width: `${progress}%` }" /></div>
+            <div class="flex items-center justify-between gap-3 text-xs"><p class="font-semibold" :class="active || !run ? 'text-indigo' : 'text-emerald-700'" role="status">{{ statusText }}</p><span class="font-mono font-semibold text-ink/50">{{ supportedChapterCount }} / {{ plan.sections.length }}</span></div>
+            <div class="mt-2 h-1.5 overflow-hidden rounded-full bg-indigo/10"><div data-testid="recommendation-lesson-progress" class="h-full rounded-full bg-indigo transition-[width] duration-500" :style="{ width: `${progress}%` }" /></div>
             <p v-if="activityText" class="mt-2 text-xs text-ink/50">{{ activityText }}</p>
             <p v-if="refreshWarning" class="mt-2 text-xs font-semibold text-amber-800" role="status">{{ copy.refresh }}</p>
           </div>
