@@ -279,6 +279,44 @@ test('releases a terminal import and restores a safe edition-aware intake draft 
   await expect(page.getByRole('textbox', { name: /规则书来源链接/ })).toBeFocused()
 })
 
+test('keeps a newer local upload in control when an old import poll is late on desktop', async ({ page }) => {
+  let oldJobReads = 0
+  let localUploads = 0
+  await mockOnboardingApis(page, {
+    recommendations: [hotGame],
+    suggestions: [candidate],
+    recoveredOfficialImport: {
+      id: 'old-import', title: 'Old remote rules', sourceDomain: 'old-source.example',
+      stage: 'QUEUED', downloadedBytes: 0, totalBytes: null, documentVersionId: null,
+      duplicate: false, errorCode: null, reused: false,
+      teachingHandoffState: 'WAITING_FOR_DOCUMENT', teachingPreparationRunId: null,
+      teachingErrorCode: null,
+    },
+    recoveredOfficialImportStatus: 503,
+    onRecoveredOfficialImportRead: () => { oldJobReads += 1 },
+    onDocumentUpload: () => { localUploads += 1 },
+  })
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto('/teach?importJob=old-import')
+
+  await expect(page.getByText(/暂时没有收到最新读取进度，正在重新连接/)).toBeVisible()
+  await expect(page.locator('#rulebook-file')).toBeEnabled()
+  expect(oldJobReads).toBe(1)
+
+  await page.locator('#rulebook-file').setInputFiles({
+    name: 'new-local-rules.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.7'),
+  })
+  await page.getByRole('button', { name: '上传规则书并生成讲解', exact: true }).click()
+
+  await expect.poll(() => localUploads).toBe(1)
+  await expect(page).toHaveURL('/teach')
+  await expect(page.getByText(/你可以离开这里，处理会在后台继续/)).toBeVisible()
+  await page.waitForTimeout(1_250)
+  expect(oldJobReads).toBe(1)
+  await expect(page.getByText('Old remote rules')).toHaveCount(0)
+  await expect(page.locator('#rulebook-file')).toBeEnabled()
+})
+
 test('keeps manual onboarding and the ready guide usable when BGG fails on mobile', async ({ page }) => {
   await mockOnboardingApis(page, { recommendations: null, suggestions: null })
   await page.setViewportSize({ width: 390, height: 844 })
@@ -310,6 +348,9 @@ async function mockOnboardingApis(page: Page, options: {
   onBggLink?: (body: Record<string, unknown>) => void
   rulebookCandidates?: Array<Record<string, unknown>>
   recoveredOfficialImport?: Record<string, unknown>
+  recoveredOfficialImportStatus?: number
+  onRecoveredOfficialImportRead?: () => void
+  onDocumentUpload?: () => void
 }) {
   await page.route('**/api/**', async (route) => {
     const request = route.request()
@@ -416,6 +457,12 @@ async function mockOnboardingApis(page: Page, options: {
     if (path === '/api/v1/documents' && request.method() === 'GET') {
       return route.fulfill({ json: [readyDocument] })
     }
+    if (path === '/api/v1/documents' && request.method() === 'POST') {
+      options.onDocumentUpload?.()
+      return route.fulfill({ status: 201, json: {
+        duplicate: false, version: { id: 'local-version', status: 'READY' },
+      } })
+    }
     if (path === '/api/v1/documents/upload-teaching-handoffs' && request.method() === 'GET') {
       return route.fulfill({ json: [] })
     }
@@ -443,6 +490,10 @@ async function mockOnboardingApis(page: Page, options: {
     if (options.recoveredOfficialImport
       && path === `/api/v1/documents/official-imports/${options.recoveredOfficialImport.id}`
       && request.method() === 'GET') {
+      options.onRecoveredOfficialImportRead?.()
+      if (options.recoveredOfficialImportStatus) {
+        return route.fulfill({ status: options.recoveredOfficialImportStatus })
+      }
       return route.fulfill({ json: options.recoveredOfficialImport })
     }
     if (path === '/api/v1/documents/official-imports/import-job-1' && request.method() === 'GET') {

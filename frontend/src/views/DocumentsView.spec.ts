@@ -991,6 +991,75 @@ describe('DocumentsView recoverable lesson handoff', () => {
     wrapper.unmount()
   })
 
+  it('does not let a late old-job poll reclaim the page after a newer local upload', async () => {
+    vi.useFakeTimers()
+    let oldJobReads = 0
+    let oldPollSignal: AbortSignal | undefined
+    let releaseLateOldPoll!: (value: Response) => void
+    const lateOldPoll = new Promise<Response>((resolve) => { releaseLateOldPoll = resolve })
+    const applicationFetch = mockApplicationFetch(() => 'READY')
+    const fetchMock = vi.fn(async (input: string | URL | Request, options?: RequestInit) => {
+      const path = String(input)
+      if (path.endsWith('/api/v1/documents/official-imports/job-old')) {
+        oldJobReads += 1
+        if (oldJobReads === 1) return new Response(null, { status: 503 })
+        oldPollSignal = options?.signal ?? undefined
+        return lateOldPoll
+      }
+      if (path.endsWith('/api/v1/documents') && options?.method === 'POST') {
+        return response({ duplicate: false, version: { id: 'version-new', status: 'READY' } }, 201)
+      }
+      return applicationFetch(input, options)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('EventSource', FakeEventSource)
+
+    const { wrapper, router } = await mountDocuments('/teach?importJob=job-old')
+    await flushPromises()
+    expect(oldJobReads).toBe(1)
+    expect(wrapper.text()).toContain('暂时没有收到最新读取进度，正在重新连接')
+    expect(wrapper.get('#rulebook-file').attributes('disabled')).toBeUndefined()
+
+    await vi.advanceTimersByTimeAsync(1_000)
+    await flushPromises()
+    expect(oldJobReads).toBe(2)
+    expect(oldPollSignal?.aborted).toBe(false)
+
+    const input = wrapper.get('#rulebook-file')
+    Object.defineProperty(input.element, 'files', {
+      configurable: true,
+      value: [new File(['%PDF-1.7'], 'new-local-rules.pdf', { type: 'application/pdf' })],
+    })
+    await input.trigger('change')
+    await wrapper.get('form.tabletop-panel').trigger('submit')
+    await flushPromises()
+
+    expect(fetchMock.mock.calls.filter(([request, options]) =>
+      String(request).endsWith('/api/v1/documents') && options?.method === 'POST')).toHaveLength(1)
+    expect(router.currentRoute.value.query.importJob).toBeUndefined()
+    expect(wrapper.text()).toContain('你可以离开这里，处理会在后台继续')
+    expect(oldPollSignal?.aborted).toBe(true)
+
+    releaseLateOldPoll(response({
+      id: 'job-old', title: 'Old remote rules', sourceDomain: 'old-source.example',
+      stage: 'QUEUED', downloadedBytes: 0, totalBytes: null, documentVersionId: null,
+      duplicate: false, errorCode: null, reused: false,
+      teachingHandoffState: 'WAITING_FOR_DOCUMENT', teachingPreparationRunId: null,
+      teachingErrorCode: null,
+      recovery: {
+        state: 'RUNNING', failureKind: 'NONE', busy: true,
+        canChooseAnotherSource: false, canUseLocalUpload: false,
+        canRetryOriginalSource: false, canOpenSourceInBrowser: false,
+      },
+    }))
+    await flushPromises()
+
+    expect(oldJobReads).toBe(2)
+    expect(wrapper.text()).not.toContain('Old remote rules')
+    expect(wrapper.get('#rulebook-file').attributes('disabled')).toBeUndefined()
+    wrapper.unmount()
+  })
+
   it('aborts only the recovered import read on unmount and ignores its late settlement', async () => {
     let releaseImport!: (value: Response) => void
     const importResponse = new Promise<Response>((resolve) => { releaseImport = resolve })

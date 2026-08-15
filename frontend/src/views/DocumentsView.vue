@@ -1284,7 +1284,7 @@ async function uploadRulebook() {
   message.value = t('documents.uploading')
   errorMessage.value = ''
   try {
-    await detachFailedOfficialImport()
+    await releaseOfficialImportScope()
     message.value = t('documents.uploading')
     const selectedFile = file.value
     const selectedPhotos = [...photographedPages.value]
@@ -1369,7 +1369,7 @@ async function importOfficialRulebook() {
   message.value = t('documents.officialImport.downloading')
   errorMessage.value = ''
   try {
-    await detachFailedOfficialImport()
+    await releaseOfficialImportScope()
     message.value = t('documents.officialImport.downloading')
     const selectedCandidate = selectedOfficialCandidate.value
     const discoveryIdentity = officialImportDiscoveryIdentity.value
@@ -1596,8 +1596,12 @@ function restoreFailedOfficialImportContext(job: OfficialRulebookImportJob) {
 async function detachFailedOfficialImport() {
   const failedJob = officialImportJob.value
   if (failedJob?.stage !== 'FAILED') return
+  await releaseOfficialImportScope()
+}
+
+async function releaseOfficialImportScope() {
   cancelOfficialImportPolling()
-  if (routeImportJobId.value === failedJob.id) {
+  if (routeImportJobId.value) {
     const query = { ...route.query }
     delete query.importJob
     routeImportTransitionJobId = ''
