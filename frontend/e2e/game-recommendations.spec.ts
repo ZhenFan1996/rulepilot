@@ -281,7 +281,7 @@ async function mockPublicDiscovery(
   })
   await page.route('**/api/v1/bgg/games/266192/import', route => route.fulfill({ json: {
     game: { id: 'game-1', name: '展翅翱翔' },
-    edition: { id: 'edition-1', name: 'BGG 基础版' },
+    edition: { id: 'edition-1', name: 'BGG 基础版', language: 'und' },
     alreadyImported: false,
   } }))
   await page.route('**/api/v1/bgg/games/266192?*', route => route.fulfill({ json: {
@@ -296,9 +296,12 @@ async function mockPublicDiscovery(
   } }))
   await page.route('**/api/v1/documents/rulebook-candidates?*', route => route.fulfill({ json: {
     configured: true,
+    identity: {
+      editionId: 'edition-1', gameName: '展翅翱翔', editionName: 'BGG 基础版', language: 'und',
+    },
     candidates: [{
       title: 'Wingspan Rulebook', url: 'https://publisher.example/wingspan.pdf',
-      publisher: 'Stonemaier Games', language: 'English', edition: 'Base game',
+      publisher: 'Stonemaier Games', language: 'en', languageVerified: true, edition: 'Base game',
       sourceDomain: 'publisher.example', officialDomainVerified: true,
       sourceType: 'PUBLISHER', acquisitionMode: 'DIRECT_PDF',
       capability: 'DIRECT_DOCUMENT', capabilityEvidence: ['DOCUMENT_RESPONSE_CONFIRMED'],
@@ -637,6 +640,7 @@ test('shows streamed rulebook readiness without waiting for the next recommendat
   await page.getByRole('button', { name: '选这款，找规则书' }).click()
   const journey = page.getByTestId('player-journey-surface')
   await journey.getByRole('button', { name: '选择这份' }).click()
+  await journey.getByRole('checkbox', { name: /我已比较以上游戏、版本和语言/ }).check()
   await journey.getByRole('checkbox', { name: /确认该链接来自有权提供/ }).check()
   await journey.getByRole('button', { name: '下载规则书并生成讲解' }).click()
 
@@ -704,6 +708,7 @@ test('stops closed reader transport while the durable guide remains reopenable',
   const journey = page.getByTestId('player-journey-surface')
   await expect(journey.getByText('Wingspan Rulebook')).toBeVisible()
   await journey.getByRole('button', { name: '选择这份' }).click()
+  await journey.getByRole('checkbox', { name: /我已比较以上游戏、版本和语言/ }).check()
   await journey.getByRole('checkbox', { name: /确认该链接来自有权提供/ }).check()
   await journey.getByRole('button', { name: '下载规则书并生成讲解' }).click()
   await expect(journey.getByText('讲解已经完整生成并通过后台收尾。')).toBeVisible({ timeout: 8_000 })
@@ -863,6 +868,7 @@ test('keeps recommendation, rulebook reading, progressive teaching, and grounded
   await page.getByRole('button', { name: '选择这份' }).click()
   const handoff = page.getByRole('button', { name: '下载规则书并生成讲解' })
   await expect(handoff).toBeDisabled()
+  await page.getByRole('checkbox', { name: /我已比较以上游戏、版本和语言/ }).check()
   await page.getByRole('checkbox', { name: /确认该链接来自有权提供/ }).check()
 
   const officialImport = page.waitForRequest(request => request.url().endsWith('/api/v1/documents/official-imports'))
@@ -876,6 +882,11 @@ test('keeps recommendation, rulebook reading, progressive teaching, and grounded
     rightsConfirmed: true,
     startTeaching: true,
     learningGoal: null,
+    discoveredForEditionId: 'edition-1',
+    sourceEdition: 'Base game',
+    sourceLanguage: 'en',
+    sourceLanguageVerified: true,
+    identityConfirmed: true,
   })
   await expect(page).toHaveURL(/\/discover$/)
 
@@ -950,6 +961,7 @@ test('hands persisted recommendation work to global guides before the preparatio
   await page.getByRole('button', { name: '选这款，找规则书' }).click()
   const journey = page.getByTestId('player-journey-surface')
   await journey.getByRole('button', { name: '选择这份' }).click()
+  await journey.getByRole('checkbox', { name: /我已比较以上游戏、版本和语言/ }).check()
   await journey.getByRole('checkbox', { name: /确认该链接来自有权提供/ }).check()
   await journey.getByRole('button', { name: '下载规则书并生成讲解' }).click()
 
@@ -979,6 +991,7 @@ test('recovers persisted recommendation work after a full refresh without journe
   await page.getByRole('button', { name: '选这款，找规则书' }).click()
   const journey = page.getByTestId('player-journey-surface')
   await journey.getByRole('button', { name: '选择这份' }).click()
+  await journey.getByRole('checkbox', { name: /我已比较以上游戏、版本和语言/ }).check()
   await journey.getByRole('checkbox', { name: /确认该链接来自有权提供/ }).check()
   await journey.getByRole('button', { name: '下载规则书并生成讲解' }).click()
   await expect(page.getByTestId('background-work-trigger-desktop').locator('span').filter({ hasText: '1' })).toBeVisible()
@@ -1010,6 +1023,7 @@ test('advances My Guides from plan startup to the first readable chapter without
   await page.getByRole('button', { name: '选这款，找规则书' }).click()
   const journey = page.getByTestId('player-journey-surface')
   await journey.getByRole('button', { name: '选择这份' }).click()
+  await journey.getByRole('checkbox', { name: /我已比较以上游戏、版本和语言/ }).check()
   await journey.getByRole('checkbox', { name: /确认该链接来自有权提供/ }).check()
   await journey.getByRole('button', { name: '下载规则书并生成讲解' }).click()
   await journey.getByRole('button', { name: '关闭小窗' }).click()
@@ -1043,6 +1057,7 @@ test('keeps one global task while completed preparation hands off to a Teaching 
   await page.getByRole('button', { name: '选这款，找规则书' }).click()
   const journey = page.getByTestId('player-journey-surface')
   await journey.getByRole('button', { name: '选择这份' }).click()
+  await journey.getByRole('checkbox', { name: /我已比较以上游戏、版本和语言/ }).check()
   await journey.getByRole('checkbox', { name: /确认该链接来自有权提供/ }).check()
   await journey.getByRole('button', { name: '下载规则书并生成讲解' }).click()
   await journey.getByRole('button', { name: '关闭小窗' }).click()
@@ -1073,6 +1088,7 @@ test('recovers the preparation-to-Teaching bridge after a storage-free browser r
   await page.getByRole('button', { name: '选这款，找规则书' }).click()
   const journey = page.getByTestId('player-journey-surface')
   await journey.getByRole('button', { name: '选择这份' }).click()
+  await journey.getByRole('checkbox', { name: /我已比较以上游戏、版本和语言/ }).check()
   await journey.getByRole('checkbox', { name: /确认该链接来自有权提供/ }).check()
   await journey.getByRole('button', { name: '下载规则书并生成讲解' }).click()
   await journey.getByRole('button', { name: '关闭小窗' }).click()
@@ -1107,6 +1123,7 @@ test('retries failed preparation through the original import without downloading
   await page.getByRole('button', { name: '选这款，找规则书' }).click()
   const journey = page.getByTestId('player-journey-surface')
   await journey.getByRole('button', { name: '选择这份' }).click()
+  await journey.getByRole('checkbox', { name: /我已比较以上游戏、版本和语言/ }).check()
   await journey.getByRole('checkbox', { name: /确认该链接来自有权提供/ }).check()
   await journey.getByRole('button', { name: '下载规则书并生成讲解' }).click()
   await expect(journey.getByText('TEACHING_PREPARATION_FAILED')).toBeVisible()
@@ -1135,6 +1152,7 @@ test('keeps the readable-guide continuation legible and focus-safe at 320 and 39
   await page.getByRole('button', { name: '选这款，找规则书' }).click()
   const journey = page.getByTestId('player-journey-surface')
   await journey.getByRole('button', { name: '选择这份' }).click()
+  await journey.getByRole('checkbox', { name: /我已比较以上游戏、版本和语言/ }).check()
   await journey.getByRole('checkbox', { name: /确认该链接来自有权提供/ }).check()
   await journey.getByRole('button', { name: '下载规则书并生成讲解' }).click()
   await journey.getByRole('button', { name: '关闭小窗' }).click()

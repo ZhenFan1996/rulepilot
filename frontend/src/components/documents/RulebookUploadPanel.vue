@@ -3,7 +3,13 @@ import { ref } from 'vue'
 import { RouterLink } from 'vue-router'
 
 import { useLocale } from '@/lib/locale'
-import type { EditionOption, PhotographedPage } from './types'
+import RulebookIdentityConfirmation from './RulebookIdentityConfirmation.vue'
+import type {
+  EditionOption,
+  PhotographedPage,
+  RulebookDiscoveryIdentity,
+  RulebookImportIdentitySource,
+} from './types'
 
 defineProps<{
   file: File | null
@@ -16,6 +22,9 @@ defineProps<{
     memoryOnly: string
   }
   editionOptions: EditionOption[]
+  identityTarget: RulebookDiscoveryIdentity | null
+  identitySourceContext: RulebookDiscoveryIdentity | null
+  identitySource: RulebookImportIdentitySource | null
   modelConfigurationAvailable: boolean
   visualVisionCapable: boolean
   canImportOfficial: boolean
@@ -27,6 +36,7 @@ defineProps<{
 
 const title = defineModel<string>('title', { required: true })
 const officialSourceUrl = defineModel<string>('officialSourceUrl', { required: true })
+const officialImportIdentityConfirmed = defineModel<boolean>('officialImportIdentityConfirmed', { required: true })
 const officialImportRightsConfirmed = defineModel<boolean>('officialImportRightsConfirmed', { required: true })
 const editionId = defineModel<string>('editionId', { required: true })
 const learningGoal = defineModel<string>('learningGoal', { required: true })
@@ -124,6 +134,15 @@ defineExpose({ clearSelectedFileInput, openOfficialDetails })
         <div class="rounded-lg border border-indigo/15 bg-indigo/[0.035] p-4">
           <p class="text-sm font-semibold">{{ t('documents.officialImport.title') }}</p>
           <p class="mt-1 text-xs leading-5 text-ink/50">{{ t('documents.officialImport.detail') }}</p>
+          <RulebookIdentityConfirmation
+            v-if="identityTarget && officialSourceUrl.trim()"
+            v-model="officialImportIdentityConfirmed"
+            class="mt-3"
+            :target="identityTarget"
+            :source-context="identitySourceContext"
+            :source="identitySource"
+            :disabled="intakeControlsDisabled"
+          />
           <label class="mt-3 flex items-start gap-3 text-sm leading-6 text-ink/65">
             <input v-model="officialImportRightsConfirmed" :disabled="intakeControlsDisabled" type="checkbox" class="mt-1 h-5 w-5 shrink-0 accent-indigo">
             <span>{{ t('documents.officialImport.consent') }}</span>

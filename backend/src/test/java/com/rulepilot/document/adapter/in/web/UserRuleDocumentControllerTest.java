@@ -13,6 +13,7 @@ import com.rulepilot.document.application.RuleDocumentMetadataConfirmationServic
 import com.rulepilot.document.application.RuleDocumentMetadataConfirmationService.Confirmation;
 import com.rulepilot.document.application.RuleDocumentRemovalService;
 import com.rulepilot.document.application.OfficialRulebookImportJobService;
+import com.rulepilot.document.application.OfficialRulebookImportIdentity;
 import com.rulepilot.document.application.UploadRuleDocumentService;
 import com.rulepilot.document.application.UploadedRulebookTeachingHandoffService;
 import com.rulepilot.catalog.BoardGameMetadataLinking.Link;
@@ -99,7 +100,10 @@ class UserRuleDocumentControllerTest {
                 now);
         var command = new OfficialRulebookImportJobService.Command(
                 editionId, "Example Rules", DocumentSourceType.BASE_RULEBOOK,
-                "https://publisher.example/rules.pdf", true, true, "重点讲清开局和第一轮。", "en");
+                "https://publisher.example/rules.pdf", true, true, "重点讲清开局和第一轮。",
+                new OfficialRulebookImportIdentity.SourceClaim(
+                        editionId, "English Edition", "en", true),
+                true);
         when(imports.enqueue(command, "alice"))
                 .thenReturn(new OfficialRulebookImportJobService.Launch(job, false));
         when(catalog.findEdition(editionId)).thenReturn(java.util.Optional.of(
@@ -115,7 +119,11 @@ class UserRuleDocumentControllerTest {
                         true,
                         true,
                         "重点讲清开局和第一轮。",
-                        "en"),
+                        editionId,
+                        "English Edition",
+                        "en",
+                        true,
+                        true),
                 () -> "alice");
 
         assertThat(response.id()).isEqualTo(jobId);

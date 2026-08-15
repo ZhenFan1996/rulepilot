@@ -18,6 +18,8 @@ public interface RuleDocumentRepository {
 
     Optional<RuleDocument> findUnassignedDocument(String createdBy, String title, DocumentSourceType sourceType);
 
+    Optional<RuleDocument> findLatestOwnedByOfficialSource(String createdBy, String officialSourceUrl);
+
     Optional<RuleDocument> findDocument(UUID documentId);
 
     RuleDocument save(RuleDocument document);

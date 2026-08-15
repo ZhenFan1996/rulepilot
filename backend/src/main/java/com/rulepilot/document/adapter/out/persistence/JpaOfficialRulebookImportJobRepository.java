@@ -68,6 +68,25 @@ class JpaOfficialRulebookImportJobRepository implements OfficialRulebookImportJo
 
     @Override
     @Transactional(readOnly = true)
+    public Optional<OfficialRulebookImportJob> findLatestOwnedBySource(String ownerUsername, String sourceUrl) {
+        return entityManager
+                .createQuery(
+                        """
+                        select job from OfficialRulebookImportJobEntity job
+                        where job.ownerUsername = :owner and job.sourceUrl = :sourceUrl
+                        order by job.createdAt desc
+                        """,
+                        OfficialRulebookImportJobEntity.class)
+                .setParameter("owner", ownerUsername)
+                .setParameter("sourceUrl", sourceUrl)
+                .setMaxResults(1)
+                .getResultStream()
+                .findFirst()
+                .map(OfficialRulebookImportJobEntity::toDomain);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
     public Optional<OfficialRulebookImportJob> findCompletedOwnedBySourceAndEdition(
             String ownerUsername, String sourceUrl, UUID editionId) {
         return entityManager

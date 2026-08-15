@@ -58,6 +58,19 @@ export interface RulebookCandidate {
   nextAction: RulebookSourceAction
 }
 
+export interface RulebookDiscoveryIdentity {
+  editionId: string
+  gameName: string
+  editionName: string
+  language: string
+}
+
+export interface RulebookImportIdentitySource {
+  edition: string
+  language: string
+  languageVerified: boolean
+}
+
 export type RulebookSourceCapability =
   | 'DIRECT_DOCUMENT'
   | 'CONTIGUOUS_RULE_PAGES'

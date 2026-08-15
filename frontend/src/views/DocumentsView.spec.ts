@@ -104,6 +104,9 @@ describe('DocumentsView recoverable lesson handoff', () => {
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, options?: RequestInit) => {
       if (String(input).includes('/api/v1/documents/rulebook-candidates')) return response({
         configured: true,
+        identity: {
+          editionId: 'edition-1', gameName: 'Catalog Game', editionName: 'BGG 基础版', language: 'und',
+        },
         candidates: [{
           title: 'Catalog Game Rules', url: 'https://publisher.example/rules.pdf', publisher: 'Publisher',
           language: 'zh-CN', edition: 'First', sourceDomain: 'publisher.example', officialDomainVerified: true,
@@ -150,8 +153,13 @@ describe('DocumentsView recoverable lesson handoff', () => {
     expect((wrapper.get('input[type="url"]').element as HTMLInputElement).value).toBe('')
     await wrapper.findAll('button').find(button => button.text() === '选择并继续核对')!.trigger('click')
     expect((wrapper.get('input[type="url"]').element as HTMLInputElement).value).toBe('https://publisher.example/rules.pdf')
-    expect((wrapper.get('input[type="checkbox"]').element as HTMLInputElement).checked).toBe(false)
-    await wrapper.get('input[type="checkbox"]').setValue(true)
+    const confirmations = wrapper.findAll('input[type="checkbox"]')
+    expect(confirmations).toHaveLength(2)
+    expect(wrapper.text()).toContain('目录语言未知，不能用来源语言静默替换')
+    expect(confirmations.every(input => !(input.element as HTMLInputElement).checked)).toBe(true)
+    await confirmations[0]!.setValue(true)
+    expect(wrapper.findAll('button').find(button => button.text() === '下载规则书并生成讲解')!.attributes('disabled')).toBeDefined()
+    await confirmations[1]!.setValue(true)
     await wrapper.findAll('button').find(button => button.text() === '下载规则书并生成讲解')!.trigger('click')
     const importRequest = await vi.waitFor(() => {
       const request = fetchMock.mock.calls.find(([input, options]) =>
@@ -160,7 +168,13 @@ describe('DocumentsView recoverable lesson handoff', () => {
       return request
     })
     expect(JSON.parse(String(importRequest?.[1]?.body))).toMatchObject({
-      editionId: 'edition-1', startTeaching: true,
+      editionId: 'edition-1',
+      discoveredForEditionId: 'edition-1',
+      sourceEdition: 'First',
+      sourceLanguage: null,
+      sourceLanguageVerified: false,
+      identityConfirmed: true,
+      startTeaching: true,
     })
     await vi.advanceTimersByTimeAsync(1_000)
     await flushPromises()
@@ -808,6 +822,11 @@ describe('DocumentsView recoverable lesson handoff', () => {
       rightsConfirmed: true,
       startTeaching: true,
       learningGoal: null,
+      discoveredForEditionId: null,
+      sourceEdition: null,
+      sourceLanguage: null,
+      sourceLanguageVerified: false,
+      identityConfirmed: false,
     })
     expect(importOptions?.headers).toEqual({
       'Content-Type': 'application/json',

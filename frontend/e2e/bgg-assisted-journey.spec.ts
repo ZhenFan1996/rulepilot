@@ -89,6 +89,9 @@ test('covers attributed discovery, official PDF intake, and explicit metadata co
   const officialButton = page.getByRole('button', { name: '下载规则书并生成讲解' })
   await expect(officialButton).toBeDisabled()
   await expect(page.getByRole('textbox', { name: /规则书来源链接/ })).toHaveValue('https://publisher.example/rules.pdf')
+  await expect(page.getByText('目录语言未知，不能用来源语言静默替换')).toBeVisible()
+  await page.getByRole('checkbox', { name: /我已比较以上游戏、版本和语言/ }).check()
+  await expect(officialButton).toBeDisabled()
   await page.getByRole('checkbox', { name: /我确认该来源有权提供这份规则书/ }).check()
   await expect(officialButton).toBeEnabled()
   await officialButton.click()
@@ -100,6 +103,11 @@ test('covers attributed discovery, official PDF intake, and explicit metadata co
     rightsConfirmed: true,
     startTeaching: true,
     learningGoal: null,
+    discoveredForEditionId: 'edition-1',
+    sourceEdition: 'First',
+    sourceLanguage: 'zh-CN',
+    sourceLanguageVerified: true,
+    identityConfirmed: true,
   })
   await expect(page.getByText('规则书与讲解正在后台准备')).toBeVisible()
   await expect(page.getByText('正在下载规则书内容')).toBeVisible()
@@ -352,9 +360,12 @@ async function mockOnboardingApis(page: Page, options: {
     if (path === '/api/v1/documents/rulebook-candidates') {
       return route.fulfill({ json: {
         configured: true,
+        identity: {
+          editionId: 'edition-1', gameName: 'Catalog Game', editionName: 'BGG 基础版', language: 'und',
+        },
         candidates: options.rulebookCandidates ?? [{
           title: 'Catalog Game Rules', url: 'https://publisher.example/rules.pdf', publisher: 'Publisher',
-          language: 'zh-CN', edition: 'First', sourceDomain: 'publisher.example', officialDomainVerified: true,
+          language: 'zh-CN', languageVerified: true, edition: 'First', sourceDomain: 'publisher.example', officialDomainVerified: true,
           sourceType: 'PUBLISHER', acquisitionMode: 'DIRECT_PDF',
           ...directCapability,
         }],

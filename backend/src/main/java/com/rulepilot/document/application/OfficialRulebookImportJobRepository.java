@@ -14,6 +14,8 @@ public interface OfficialRulebookImportJobRepository {
 
     Optional<OfficialRulebookImportJob> findActiveOwnedBySource(String ownerUsername, String sourceUrl);
 
+    Optional<OfficialRulebookImportJob> findLatestOwnedBySource(String ownerUsername, String sourceUrl);
+
     Optional<OfficialRulebookImportJob> findCompletedOwnedBySourceAndEdition(
             String ownerUsername, String sourceUrl, UUID editionId);
 

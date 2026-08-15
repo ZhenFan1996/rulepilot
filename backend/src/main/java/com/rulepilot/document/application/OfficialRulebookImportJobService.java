@@ -1,15 +1,20 @@
 package com.rulepilot.document.application;
 
+import com.rulepilot.catalog.CatalogEditionLookup;
+import com.rulepilot.catalog.CatalogEditionLookup.EditionReference;
 import com.rulepilot.catalog.CatalogEditionLanguageConfirmation;
 import com.rulepilot.document.RulebookTeachingHandoffs;
 import com.rulepilot.document.domain.DocumentSourceType;
 import com.rulepilot.document.domain.OfficialRulebookImportJob;
 import com.rulepilot.document.domain.OfficialRulebookImportJob.TeachingHandoffState;
+import com.rulepilot.document.domain.RuleDocument;
 import java.net.URI;
 import java.time.Clock;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
+import java.util.Objects;
+import java.util.Optional;
 import java.util.UUID;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -23,48 +28,73 @@ import org.springframework.stereotype.Service;
 public class OfficialRulebookImportJobService implements RulebookTeachingHandoffs {
 
     private final OfficialRulebookImportJobRepository jobs;
+    private final RuleDocumentRepository documents;
     private final OfficialRulebookImportService imports;
     private final TaskExecutor executor;
     private final CatalogEditionLanguageConfirmation editionLanguages;
+    private final CatalogEditionLookup catalog;
     private final Clock clock;
 
     @Autowired
     public OfficialRulebookImportJobService(
             OfficialRulebookImportJobRepository jobs,
+            RuleDocumentRepository documents,
             OfficialRulebookImportService imports,
             @Qualifier("officialRulebookImportExecutor") TaskExecutor executor,
-            CatalogEditionLanguageConfirmation editionLanguages) {
-        this(jobs, imports, executor, editionLanguages, Clock.systemUTC());
+            CatalogEditionLanguageConfirmation editionLanguages,
+            CatalogEditionLookup catalog) {
+        this(jobs, documents, imports, executor, editionLanguages, catalog, Clock.systemUTC());
     }
 
     OfficialRulebookImportJobService(
             OfficialRulebookImportJobRepository jobs,
+            RuleDocumentRepository documents,
             OfficialRulebookImportService imports,
             TaskExecutor executor,
+            CatalogEditionLookup catalog,
             Clock clock) {
-        this(jobs, imports, executor, (editionId, language) -> false, clock);
+        this(jobs, documents, imports, executor, (editionId, language) -> false, catalog, clock);
     }
 
     OfficialRulebookImportJobService(
             OfficialRulebookImportJobRepository jobs,
+            RuleDocumentRepository documents,
             OfficialRulebookImportService imports,
             TaskExecutor executor,
             CatalogEditionLanguageConfirmation editionLanguages,
+            CatalogEditionLookup catalog,
             Clock clock) {
         this.jobs = jobs;
+        this.documents = documents;
         this.imports = imports;
         this.executor = executor;
         this.editionLanguages = editionLanguages;
+        this.catalog = catalog;
         this.clock = clock;
     }
 
     public Launch enqueue(Command command, String ownerUsername) {
         Command checked = command.checked();
         String owner = checkedOwner(ownerUsername);
-        if (checked.confirmedSourceLanguage() != null) {
-            editionLanguages.confirmIfUnknown(checked.editionId(), checked.confirmedSourceLanguage());
-        }
         var active = jobs.findActiveOwnedBySource(owner, checked.officialSourceUrl());
+        var persistedBinding = active.isPresent()
+                ? active
+                : jobs.findLatestOwnedBySource(owner, checked.officialSourceUrl())
+                        .filter(job -> job.documentVersionId() != null);
+        var persistedDocument = documents.findLatestOwnedByOfficialSource(owner, checked.officialSourceUrl());
+        OfficialRulebookImportIdentity.Review identityReview =
+                reviewIdentity(checked, persistedBinding, persistedDocument);
+        if (identityReview != null && identityReview.confirmationRequired() && !checked.identityConfirmed()) {
+            throw OfficialRulebookImportIdentityException.confirmationRequired(identityReview);
+        }
+        if (active.isPresent()
+                && !Objects.equals(active.orElseThrow().editionId(), checked.editionId())) {
+            if (identityReview == null) {
+                throw new IllegalArgumentException("this source is already being imported for a catalog edition");
+            }
+            throw OfficialRulebookImportIdentityException.activeImportConflict(identityReview);
+        }
+        confirmCatalogLanguageAfterPlayerReview(checked, identityReview);
         if (active.isPresent()) {
             return new Launch(ensureTeachingRequested(active.orElseThrow(), checked), true);
         }
@@ -87,6 +117,49 @@ public class OfficialRulebookImportJobService implements RulebookTeachingHandoff
             return new Launch(requireOwned(job.id(), owner), false);
         }
         return new Launch(job, false);
+    }
+
+    private OfficialRulebookImportIdentity.Review reviewIdentity(
+            Command command,
+            Optional<OfficialRulebookImportJob> persistedBinding,
+            Optional<RuleDocument> persistedDocument) {
+        if (command.editionId() == null) return null;
+        EditionReference selected = catalog.findEdition(command.editionId())
+                .orElseThrow(() -> new IllegalArgumentException("catalog edition does not exist"));
+        var source = command.sourceIdentity();
+        Optional<EditionReference> discovered = source.discoveredForEditionId() == null
+                ? Optional.empty()
+                : catalog.findEdition(source.discoveredForEditionId());
+        List<OfficialRulebookImportIdentity.PersistedInput> persisted = new ArrayList<>();
+        persistedBinding.ifPresent(job -> persisted.add(new OfficialRulebookImportIdentity.PersistedInput(
+                OfficialRulebookImportIdentity.PersistedSource.IMPORT_JOB,
+                job.editionId(),
+                findEdition(job.editionId()).orElse(null))));
+        persistedDocument.ifPresent(document -> persisted.add(new OfficialRulebookImportIdentity.PersistedInput(
+                OfficialRulebookImportIdentity.PersistedSource.DOCUMENT,
+                document.gameEditionId(),
+                findEdition(document.gameEditionId()).orElse(null))));
+        return OfficialRulebookImportIdentity.review(
+                selected,
+                source,
+                discovered,
+                persisted);
+    }
+
+    private Optional<EditionReference> findEdition(UUID editionId) {
+        return editionId == null ? Optional.empty() : catalog.findEdition(editionId);
+    }
+
+    private void confirmCatalogLanguageAfterPlayerReview(
+            Command command, OfficialRulebookImportIdentity.Review review) {
+        if (review == null
+                || !command.identityConfirmed()
+                || !command.sourceIdentity().languageVerified()
+                || command.sourceIdentity().language() == null
+                || !"und".equalsIgnoreCase(review.selected().language())) {
+            return;
+        }
+        editionLanguages.confirmIfUnknown(command.editionId(), command.sourceIdentity().language());
     }
 
     public OfficialRulebookImportJob requireOwned(UUID jobId, String ownerUsername) {
@@ -281,7 +354,8 @@ public class OfficialRulebookImportJobService implements RulebookTeachingHandoff
             boolean rightsConfirmed,
             boolean startTeaching,
             String learningGoal,
-            String confirmedSourceLanguage) {
+            OfficialRulebookImportIdentity.SourceClaim sourceIdentity,
+            boolean identityConfirmed) {
 
         public Command(
                 UUID editionId,
@@ -299,7 +373,8 @@ public class OfficialRulebookImportJobService implements RulebookTeachingHandoff
                     rightsConfirmed,
                     startTeaching,
                     learningGoal,
-                    null);
+                    OfficialRulebookImportIdentity.SourceClaim.unknown(),
+                    false);
         }
 
         public Command(
@@ -308,7 +383,16 @@ public class OfficialRulebookImportJobService implements RulebookTeachingHandoff
                 DocumentSourceType sourceType,
                 String officialSourceUrl,
                 boolean rightsConfirmed) {
-            this(editionId, title, sourceType, officialSourceUrl, rightsConfirmed, false, null, null);
+            this(
+                    editionId,
+                    title,
+                    sourceType,
+                    officialSourceUrl,
+                    rightsConfirmed,
+                    false,
+                    null,
+                    OfficialRulebookImportIdentity.SourceClaim.unknown(),
+                    false);
         }
 
         Command checked() {
@@ -330,9 +414,12 @@ public class OfficialRulebookImportJobService implements RulebookTeachingHandoff
             if (!startTeaching && normalizedGoal != null) {
                 throw new IllegalArgumentException("teaching goal requires an automatic teaching handoff");
             }
-            String normalizedLanguage = checkedConfirmedLanguage(confirmedSourceLanguage);
-            if (normalizedLanguage != null && editionId == null) {
-                throw new IllegalArgumentException("confirmed source language requires a catalog edition");
+            OfficialRulebookImportIdentity.SourceClaim checkedSource = sourceIdentity == null
+                    ? OfficialRulebookImportIdentity.SourceClaim.unknown()
+                    : sourceIdentity;
+            if (editionId == null
+                    && (checkedSource.discoveredForEditionId() != null || identityConfirmed)) {
+                throw new IllegalArgumentException("source identity confirmation requires a catalog edition");
             }
             return new Command(
                     editionId,
@@ -342,21 +429,8 @@ public class OfficialRulebookImportJobService implements RulebookTeachingHandoff
                     true,
                     startTeaching,
                     normalizedGoal,
-                    normalizedLanguage);
-        }
-
-        private String checkedConfirmedLanguage(String language) {
-            if (language == null || language.isBlank()) return null;
-            String normalized = language.strip().replace('_', '-');
-            if (normalized.length() > 20
-                    || !normalized.matches("(?i)[a-z]{2,3}(?:-[a-z]{4})?(?:-(?:[a-z]{2}|[0-9]{3}))?")) {
-                throw new IllegalArgumentException("confirmed source language must be a valid language tag");
-            }
-            String canonical = Locale.forLanguageTag(normalized).toLanguageTag();
-            if (canonical.equalsIgnoreCase("und")) {
-                throw new IllegalArgumentException("confirmed source language must be a known language tag");
-            }
-            return canonical;
+                    checkedSource,
+                    identityConfirmed);
         }
     }
 

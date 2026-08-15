@@ -21,6 +21,7 @@ import java.util.Optional;
 import java.util.UUID;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Repository;
+import org.springframework.transaction.annotation.Transactional;
 
 @Repository
 @Profile("!test")
@@ -76,6 +77,27 @@ public class JpaRuleDocumentRepository implements RuleDocumentRepository {
                 .setParameter("createdBy", createdBy)
                 .setParameter("title", title)
                 .setParameter("sourceType", sourceType.name())
+                .getResultStream()
+                .findFirst()
+                .map(RuleDocumentEntity::toDomain);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Optional<RuleDocument> findLatestOwnedByOfficialSource(
+            String createdBy, String officialSourceUrl) {
+        return entityManager
+                .createQuery(
+                        """
+                        select document from RuleDocumentEntity document
+                        where document.createdBy = :createdBy
+                          and document.officialSourceUrl = :officialSourceUrl
+                        order by document.createdAt desc
+                        """,
+                        RuleDocumentEntity.class)
+                .setParameter("createdBy", createdBy)
+                .setParameter("officialSourceUrl", officialSourceUrl)
+                .setMaxResults(1)
                 .getResultStream()
                 .findFirst()
                 .map(RuleDocumentEntity::toDomain);

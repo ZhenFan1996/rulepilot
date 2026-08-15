@@ -1131,11 +1131,14 @@ describe('GameRecommendationAgent', () => {
       if (path === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
       if (path === '/api/v1/bgg/games/266192/import') return Response.json({
         game: { id: 'game-1', name: '展翅翱翔' },
-        edition: { id: 'edition-1', name: 'BGG 版本' },
+        edition: { id: 'edition-1', name: 'BGG 版本', language: 'und' },
         alreadyImported: false,
       })
       if (path.startsWith('/api/v1/documents/rulebook-candidates?')) return Response.json({
         configured: true,
+        identity: {
+          editionId: 'edition-1', gameName: '展翅翱翔', editionName: 'BGG 版本', language: 'und',
+        },
         candidates: [],
       })
       return Response.json({

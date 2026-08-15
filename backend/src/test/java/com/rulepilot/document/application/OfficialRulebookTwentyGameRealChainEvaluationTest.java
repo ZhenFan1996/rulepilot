@@ -108,7 +108,7 @@ class OfficialRulebookTwentyGameRealChainEvaluationTest {
         var imports = new OfficialRulebookImportService(fetcher, uploadService);
         var jobs = new InMemoryImportJobs();
         var importJobs = new OfficialRulebookImportJobService(
-                jobs, imports, Runnable::run, Clock.fixed(NOW, ZoneOffset.UTC));
+                jobs, documents, imports, Runnable::run, editions, Clock.fixed(NOW, ZoneOffset.UTC));
         var gstone = new HttpGstoneRulebookCatalogLookup(json, true, Duration.ofSeconds(8));
         var inspector = new HttpOfficialRulebookSourceInspector(Duration.ofSeconds(8), 1024 * 1024);
         OfficialRulebookCandidateFinder configuredModelFinder = unreachableConfiguredModelFinder();
@@ -146,6 +146,14 @@ class OfficialRulebookTwentyGameRealChainEvaluationTest {
                                 case_.gameName() + " Rulebook",
                                 DocumentSourceType.BASE_RULEBOOK,
                                 selected.url(),
+                                true,
+                                false,
+                                null,
+                                new OfficialRulebookImportIdentity.SourceClaim(
+                                        case_.editionId(),
+                                        selected.edition(),
+                                        selected.language(),
+                                        selected.languageVerified()),
                                 true),
                         OWNER);
                 var completed = importJobs.requireOwned(launch.job().id(), OWNER);
@@ -448,6 +456,16 @@ class OfficialRulebookTwentyGameRealChainEvaluationTest {
         }
 
         @Override
+        public Optional<RuleDocument> findLatestOwnedByOfficialSource(
+                String createdBy, String officialSourceUrl) {
+            return documents.values().stream()
+                    .filter(document -> document.createdBy().equals(createdBy))
+                    .filter(document -> java.util.Objects.equals(
+                            document.officialSourceUrl(), officialSourceUrl))
+                    .reduce((first, second) -> second);
+        }
+
+        @Override
         public Optional<RuleDocument> findDocument(UUID documentId) {
             return Optional.ofNullable(documents.get(documentId));
         }
@@ -580,6 +598,14 @@ class OfficialRulebookTwentyGameRealChainEvaluationTest {
                     .filter(job -> job.ownerUsername().equals(ownerUsername))
                     .filter(job -> job.sourceUrl().equals(sourceUrl) && !job.stage().terminal())
                     .findFirst();
+        }
+
+        @Override
+        public Optional<OfficialRulebookImportJob> findLatestOwnedBySource(String ownerUsername, String sourceUrl) {
+            return jobs.values().stream()
+                    .filter(job -> job.ownerUsername().equals(ownerUsername))
+                    .filter(job -> job.sourceUrl().equals(sourceUrl))
+                    .reduce((first, second) -> second);
         }
 
         @Override

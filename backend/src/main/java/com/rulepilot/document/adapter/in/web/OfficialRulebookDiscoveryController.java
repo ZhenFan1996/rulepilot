@@ -26,10 +26,26 @@ public class OfficialRulebookDiscoveryController {
             @RequestParam UUID editionId, @RequestParam(required = false) String language) {
         var result = discovery.discover(editionId, language);
         return new DiscoveryResponse(
-                result.configured(), result.candidates().stream().map(CandidateResponse::from).toList());
+                result.configured(),
+                DiscoveryIdentityResponse.from(result.identity()),
+                result.candidates().stream().map(CandidateResponse::from).toList());
     }
 
-    record DiscoveryResponse(boolean configured, List<CandidateResponse> candidates) {}
+    record DiscoveryResponse(
+            boolean configured,
+            DiscoveryIdentityResponse identity,
+            List<CandidateResponse> candidates) {}
+
+    record DiscoveryIdentityResponse(
+            UUID editionId,
+            String gameName,
+            String editionName,
+            String language) {
+        static DiscoveryIdentityResponse from(OfficialRulebookDiscoveryService.DiscoveryIdentity identity) {
+            return new DiscoveryIdentityResponse(
+                    identity.editionId(), identity.gameName(), identity.editionName(), identity.language());
+        }
+    }
 
     record CandidateResponse(
             String title,

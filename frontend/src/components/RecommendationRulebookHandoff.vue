@@ -3,9 +3,11 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 
 import type { RecommendationGame, RecommendationProfile } from '@/components/gameRecommendationTypes'
+import RulebookIdentityConfirmation from '@/components/documents/RulebookIdentityConfirmation.vue'
 import type {
   RulebookCandidate,
   RulebookCapabilityEvidence,
+  RulebookDiscoveryIdentity,
   RulebookSourceAction,
   RulebookSourceCapability,
 } from '@/components/documents/types'
@@ -35,12 +37,13 @@ import { teachingActivityText, type TeachingActivity } from '@/lib/teachingProgr
 
 interface ImportedGame {
   game: { id: string; name: string }
-  edition: { id: string; name: string }
+  edition: { id: string; name: string; language: string }
   alreadyImported: boolean
 }
 
 interface RulebookCandidateResponse {
   configured: boolean
+  identity: RulebookDiscoveryIdentity
   candidates: RulebookCandidate[]
 }
 
@@ -84,6 +87,7 @@ interface IllustratedLesson extends PlayerJourneyLesson {
 
 interface CsrfResponse { headerName: string; token: string }
 interface LaunchResponse { assistantRunId: string; state: string; reused: boolean }
+interface RulebookIdentityProblem { code?: string }
 
 export interface RecommendationJourneyStatus {
   projection: PlayerJourneyProjection
@@ -113,7 +117,9 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   sources: { PUBLISHER: '出版社 / 权利方来源', TRUSTED_REPOSITORY: '可信规则库', COMMUNITY_PLATFORM: '社区规则书来源（如 BGG / 集石）', PUBLIC_WEB: '公开来源（请重点核对）' },
   capabilities: { DIRECT_DOCUMENT: '已核验为可下载文档', CONTIGUOUS_RULE_PAGES: '已核验为连续规则页', DOCUMENT_LISTING: '仅确认是文档列表页', GAME_INFO_ONLY: '仅有桌游信息，没有规则书文件', UNVERIFIED_PAGE: '尚未核验出可导入文档' },
   direct: 'PDF 可直接核验并下载', gallery: '连续规则页图片，可合成为 PDF', page: '来源页，需要继续查找文件', publisher: '发布者', language: '语言', languageVerified: '来源已明确标注', languageReview: '需在来源页核对', edition: '版本', unknown: '未标明', choose: '选择这份', selected: '已选择', continueListing: '继续查找文件', reviewUnverified: '审阅来源页',
-  consent: '我已核对上方语言与版本，确认该链接来自有权提供这份规则书的来源，并授权 RulePilot 下载用于我的个人讲解。',
+  consent: '我确认该链接来自有权提供这份规则书的来源，并授权 RulePilot 下载用于我的个人讲解。',
+  identityChanged: '提交前目录或来源身份发生了变化。请重新比较上面的游戏、版本和语言后再次确认。',
+  identityActive: '这个链接正在为另一个版本导入。请等待那次导入结束，或改用公开链接 / 本地上传；当前桌游选择不会丢失。',
   import: '下载规则书并生成讲解', manual: '改用公开链接或本地上传',
   browserRequired: '已经找到这份文件，但来源网站要求在浏览器里完成隐私选择、刷新临时链接或登录。打开原始下载页取得 PDF 后，回到 RulePilot 上传即可继续；桌游、版本和讲解偏好都已保留。',
   sourcePageHandoff: '这个结果不是可直接导入的规则书文档。请在来源网站继续查找或核对语言和版本，取得 PDF 后回到 RulePilot 上传；桌游和讲解偏好都已保留。',
@@ -141,7 +147,9 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   sources: { PUBLISHER: 'Publisher / rights-holder', TRUSTED_REPOSITORY: 'Trusted rules repository', COMMUNITY_PLATFORM: 'Community rulebook source (such as BGG / Gstone)', PUBLIC_WEB: 'Public source (review carefully)' },
   capabilities: { DIRECT_DOCUMENT: 'Confirmed downloadable document', CONTIGUOUS_RULE_PAGES: 'Confirmed ordered rule pages', DOCUMENT_LISTING: 'Document listing only', GAME_INFO_ONLY: 'Game information only; no rulebook file', UNVERIFIED_PAGE: 'No importable document verified' },
   direct: 'Direct PDF ready for verification', gallery: 'Ordered rulebook pages; RulePilot can build the PDF', page: 'Source page; continue there', publisher: 'Provider', language: 'Language', languageVerified: 'stated by the source', languageReview: 'verify on the source page', edition: 'Edition', unknown: 'Not stated', choose: 'Choose this one', selected: 'Selected', continueListing: 'Continue finding a file', reviewUnverified: 'Review source page',
-  consent: 'I reviewed the language and edition above, confirm that this source may provide the rulebook, and authorize RulePilot to download it for my personal guide.',
+  consent: 'I confirm that this source may provide the rulebook and authorize RulePilot to download it for my personal guide.',
+  identityChanged: 'The catalog or source identity changed before submission. Compare the game, edition, and language above, then reconfirm.',
+  identityActive: 'This URL is already being imported for another edition. Wait for it to finish or use a public URL / local upload; the selected game remains intact.',
   import: 'Download and generate guide', manual: 'Use a public URL or local upload',
   browserRequired: 'The file was found, but its source requires an in-browser privacy choice, refreshed temporary link, or sign-in. Download it there, then return to upload it; the game, edition, and guide preferences are preserved.',
   sourcePageHandoff: 'This result is not a directly importable rulebook document. Continue the search or review language and edition on the source site, then return to upload the PDF; the game and guide preferences are preserved.',
@@ -165,9 +173,12 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
 
 const imported = ref<ImportedGame | null>(null)
 const candidates = ref<RulebookCandidate[]>([])
+const discoveryIdentity = ref<RulebookDiscoveryIdentity | null>(null)
 const selected = ref<RulebookCandidate | null>(null)
 const openedSource = ref<RulebookCandidate | null>(null)
 const consent = ref(false)
+const identityConfirmed = ref(false)
+const identityNotice = ref('')
 const state = ref<'preparing' | 'finding' | 'review' | 'unavailable' | 'login' | 'error' | 'browser-required' | 'journey'>('preparing')
 const findingSeconds = ref(0)
 const importJob = ref<OfficialImportJob | null>(null)
@@ -199,8 +210,15 @@ const canImport = computed(() => Boolean(
   selected.value
   && isImportableCandidate(selected.value)
   && consent.value
+  && identityConfirmed.value
   && state.value === 'review',
 ))
+const identityTarget = computed<RulebookDiscoveryIdentity | null>(() => imported.value ? {
+  editionId: imported.value.edition.id,
+  gameName: imported.value.game.name,
+  editionName: imported.value.edition.name,
+  language: imported.value.edition.language,
+} : null)
 const findingText = computed(() => copy.value.finding.replace('{seconds}', String(findingSeconds.value)))
 const manualRoute = computed(() => ({
   name: 'teach' as const,
@@ -331,7 +349,7 @@ async function prepare() {
     if (request !== sequence) return
     if (response.status === 401 || response.status === 403) return requireLogin()
     if (!response.ok) throw new Error('selection failed')
-    imported.value = await response.json() as ImportedGame
+    imported.value = normalizeImportedGame(await response.json() as ImportedGame)
     persistJourney()
     await discover(request)
   } catch {
@@ -352,6 +370,8 @@ async function discover(request = sequence) {
     if (response.status === 401 || response.status === 403) return requireLogin()
     if (!response.ok) throw new Error('discovery failed')
     const result = await response.json() as RulebookCandidateResponse
+    if (result.identity?.editionId !== imported.value.edition.id) throw new Error('discovery identity mismatch')
+    discoveryIdentity.value = result.identity
     candidates.value = result.candidates.map(normalizeRulebookCandidate)
     state.value = result.configured && candidates.value.length ? 'review' : 'unavailable'
     persistJourney()
@@ -375,6 +395,8 @@ function choose(candidate: RulebookCandidate) {
   openedSource.value = null
   selected.value = candidate
   consent.value = false
+  identityConfirmed.value = false
+  identityNotice.value = ''
   persistJourney()
 }
 
@@ -454,16 +476,31 @@ async function enqueueImport() {
         rightsConfirmed: true,
         startTeaching: true,
         learningGoal: null,
-        ...(candidate.languageVerified ? { confirmedSourceLanguage: candidate.language } : {}),
+        discoveredForEditionId: discoveryIdentity.value?.editionId ?? null,
+        sourceEdition: candidate.edition || null,
+        sourceLanguage: candidate.languageVerified ? candidate.language : null,
+        sourceLanguageVerified: candidate.languageVerified === true,
+        identityConfirmed: identityConfirmed.value,
       }),
     })
     if (request !== sequence) return
     if (response.status === 401 || response.status === 403) return requireLogin()
+    if (response.status === 409) {
+      const problem = await response.json().catch(() => ({})) as RulebookIdentityProblem
+      identityConfirmed.value = false
+      identityNotice.value = problem.code === 'RULEBOOK_ACTIVE_IMPORT_CONFLICT'
+        ? copy.value.identityActive
+        : copy.value.identityChanged
+      state.value = 'review'
+      return
+    }
     if (!response.ok) throw new Error('import failed')
     const incoming = normalizeImportJob(await response.json() as OfficialImportJob)
     importJob.value = acceptImportJob(importJob.value?.id === incoming.id ? importJob.value : null, incoming) as OfficialImportJob
     preparationRunId.value = incoming.teachingPreparationRunId
     consent.value = true
+    identityConfirmed.value = true
+    identityNotice.value = ''
     pollingWarning.value = false
     persistJourney()
     notifyBackgroundWorkChanged()
@@ -720,9 +757,12 @@ function resetJourneyState() {
   documentReadyRefreshPending = false
   imported.value = null
   candidates.value = []
+  discoveryIdentity.value = null
   selected.value = null
   openedSource.value = null
   consent.value = false
+  identityConfirmed.value = false
+  identityNotice.value = ''
   importJob.value = null
   documentProgress.value = null
   preparationRun.value = null
@@ -733,6 +773,18 @@ function resetJourneyState() {
   lesson.value = null
   pollingWarning.value = false
   ensuredLessonPlans.clear()
+}
+
+function normalizeImportedGame(game: ImportedGame): ImportedGame {
+  return {
+    ...game,
+    edition: {
+      ...game.edition,
+      language: typeof game.edition.language === 'string' && game.edition.language.trim()
+        ? game.edition.language
+        : 'und',
+    },
+  }
 }
 
 function normalizeImportJob(job: OfficialImportJob): OfficialImportJob {
@@ -769,6 +821,7 @@ function persistJourney() {
     sessionStorage.setItem(storageKey(), JSON.stringify({
       imported: imported.value,
       candidates: candidates.value,
+      discoveryIdentity: discoveryIdentity.value,
       selected: selected.value,
       importJob: importJob.value,
       preparationRunId: preparationRunId.value,
@@ -787,13 +840,18 @@ function restoreJourney() {
     const stored = JSON.parse(raw) as {
       imported?: ImportedGame
       candidates?: RulebookCandidate[]
+      discoveryIdentity?: RulebookDiscoveryIdentity
       selected?: RulebookCandidate
       importJob?: OfficialImportJob
       preparationRunId?: string
       teachingRunId?: string
     }
     if (!stored.imported) return false
-    imported.value = stored.imported
+    const restoredImported = normalizeImportedGame(stored.imported)
+    imported.value = restoredImported
+    discoveryIdentity.value = stored.discoveryIdentity?.editionId === restoredImported.edition.id
+      ? stored.discoveryIdentity
+      : null
     candidates.value = Array.isArray(stored.candidates)
       ? stored.candidates.map(normalizeRulebookCandidate)
       : []
@@ -804,6 +862,7 @@ function restoreJourney() {
       preparationRunId.value = stored.preparationRunId ?? stored.importJob.teachingPreparationRunId
       teachingRunId.value = stored.teachingRunId ?? null
       consent.value = true
+      identityConfirmed.value = true
       state.value = 'journey'
       scheduleJourney(0)
     } else {
@@ -893,7 +952,20 @@ onBeforeUnmount(() => {
           <RouterLink :to="manualRoute" class="ml-4 inline-flex min-h-11 items-center font-semibold text-indigo underline">{{ copy.manual }} →</RouterLink>
         </div>
         <div v-if="selected" class="mt-4 rounded-xl border border-indigo/15 bg-indigo/5 p-4">
-          <label class="flex items-start gap-3 text-sm leading-6 text-ink/65">
+          <RulebookIdentityConfirmation
+            v-if="identityTarget"
+            v-model="identityConfirmed"
+            :target="identityTarget"
+            :source-context="discoveryIdentity"
+            :source="{
+              edition: selected.edition,
+              language: selected.language,
+              languageVerified: selected.languageVerified === true,
+            }"
+            :disabled="retrying"
+          />
+          <p v-if="identityNotice" class="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-950" role="alert">{{ identityNotice }}</p>
+          <label class="mt-3 flex items-start gap-3 text-sm leading-6 text-ink/65">
             <input v-model="consent" type="checkbox" class="mt-1 size-5 shrink-0 accent-indigo">
             <span>{{ copy.consent }}</span>
           </label>

@@ -7,6 +7,7 @@ import com.rulepilot.document.application.RuleDocumentMetadataSuggestionService;
 import com.rulepilot.document.application.RuleDocumentMetadataConfirmationService;
 import com.rulepilot.document.application.RuleDocumentMetadataConfirmationService.Confirmation;
 import com.rulepilot.document.application.OfficialRulebookImportJobService;
+import com.rulepilot.document.application.OfficialRulebookImportIdentity;
 import com.rulepilot.document.domain.OfficialRulebookImportJob;
 import com.rulepilot.document.application.UploadRuleDocumentService;
 import com.rulepilot.document.application.UploadedRulebookTeachingHandoffService;
@@ -169,7 +170,12 @@ public class UserRuleDocumentController {
                 request.rightsConfirmed(),
                 request.startTeaching(),
                 request.learningGoal(),
-                request.confirmedSourceLanguage()), principal.getName());
+                new OfficialRulebookImportIdentity.SourceClaim(
+                        request.discoveredForEditionId(),
+                        request.sourceEdition(),
+                        request.sourceLanguage(),
+                        request.sourceLanguageVerified()),
+                request.identityConfirmed()), principal.getName());
         return officialImportResponse(launch.job(), launch.reused());
     }
 
@@ -315,7 +321,11 @@ public class UserRuleDocumentController {
             boolean rightsConfirmed,
             boolean startTeaching,
             String learningGoal,
-            String confirmedSourceLanguage) {}
+            UUID discoveredForEditionId,
+            String sourceEdition,
+            String sourceLanguage,
+            boolean sourceLanguageVerified,
+            boolean identityConfirmed) {}
 
     record TeachingHandoffRetryRequest(UUID expectedPreparationRunId) {}
 

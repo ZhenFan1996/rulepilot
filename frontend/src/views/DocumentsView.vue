@@ -17,6 +17,7 @@ import type {
   OfficialRulebookImportJob,
   PhotographedPage,
   RulebookCandidate,
+  RulebookDiscoveryIdentity,
   RulebookDiscoveryCopy,
   RulebookDiscoveryStatus,
 } from '@/components/documents/types'
@@ -37,7 +38,12 @@ import { notifyTeachingLaunched, type TeachingLaunch } from '@/lib/teachingLaunc
 
 interface CsrfResponse { headerName: string; token: string }
 interface BggLinkResponse { alreadyImported: boolean }
-interface RulebookCandidateResponse { configured: boolean; candidates: RulebookCandidate[] }
+interface RulebookCandidateResponse {
+  configured: boolean
+  identity: RulebookDiscoveryIdentity
+  candidates: RulebookCandidate[]
+}
+interface RulebookIdentityProblem { code?: string }
 interface TeachingPlanResponse { id: string; documentVersionId: string }
 interface TeachingPreparationLaunch { assistantRunId: string; state: string; reused: boolean }
 interface TeachingPreparationRun {
@@ -56,6 +62,7 @@ interface ModelConfigurationResponse {
 interface RulebookIntakeSnapshot {
   editionId: string
   learningGoal: string
+  officialImportIdentityConfirmed: boolean
   officialImportRightsConfirmed: boolean
   officialSourceUrl: string
   sourceType: string
@@ -82,6 +89,9 @@ const editionId = ref('')
 const documents = ref<DocumentResponse[]>([])
 const bggSuggestionStates = ref<Record<string, BggSuggestionState>>({})
 const rulebookCandidates = ref<RulebookCandidate[]>([])
+const rulebookDiscoveryIdentity = ref<RulebookDiscoveryIdentity | null>(null)
+const selectedRulebookCandidate = ref<RulebookCandidate | null>(null)
+const selectedRulebookDiscoveryIdentity = ref<RulebookDiscoveryIdentity | null>(null)
 const rulebookDiscoveryStatus = ref<RulebookDiscoveryStatus>('idle')
 const uploadPanel = ref<RulebookUploadPanelHandle | null>(null)
 const file = ref<File | null>(null)
@@ -90,6 +100,7 @@ const preparingPhotos = ref(false)
 const title = ref('')
 const officialSourceUrl = ref('')
 const officialImportRightsConfirmed = ref(false)
+const officialImportIdentityConfirmed = ref(false)
 const sourceType = ref('BASE_RULEBOOK')
 const learningGoal = ref('')
 const loading = ref(true)
@@ -103,7 +114,7 @@ const documentList = ref<RulebookDocumentListHandle | null>(null)
 const restoreAfterDocumentDelete = ref(false)
 const intakeReady = ref(false)
 const intakeBaseline = ref<RulebookIntakeSnapshot>({
-  editionId: '', learningGoal: '', officialImportRightsConfirmed: false,
+  editionId: '', learningGoal: '', officialImportIdentityConfirmed: false, officialImportRightsConfirmed: false,
   officialSourceUrl: '', sourceType: 'BASE_RULEBOOK', title: '',
 })
 const launchingTeaching = ref(false)
@@ -187,6 +198,30 @@ const selectedEditionContext = computed(() => {
   }
   return null
 })
+const officialImportIdentityTarget = computed<RulebookDiscoveryIdentity | null>(() => {
+  const selected = selectedEditionContext.value
+  return selected ? {
+    editionId: selected.edition.id,
+    gameName: selected.game.name,
+    editionName: selected.edition.name,
+    language: selected.edition.language,
+  } : null
+})
+const selectedOfficialCandidate = computed(() => {
+  const selected = selectedRulebookCandidate.value
+  return selected?.url === officialSourceUrl.value.trim() ? selected : null
+})
+const officialImportSourceIdentity = computed(() => {
+  const candidate = selectedOfficialCandidate.value
+  return candidate ? {
+    edition: candidate.edition,
+    language: candidate.language,
+    languageVerified: candidate.languageVerified === true,
+  } : null
+})
+const officialImportDiscoveryIdentity = computed(() => (
+  selectedOfficialCandidate.value ? selectedRulebookDiscoveryIdentity.value : null
+))
 const rulebookDiscoveryCopy = computed<RulebookDiscoveryCopy>(() => locale.value === 'zh-CN' ? {
   action: '帮我找规则书', loading: '正在检索多个可信来源…', title: '找到这些规则书来源',
   detail: '会优先找出版社，也会补查 BGG、集石与可信规则库。来源页会在新窗口打开；PDF 直链和已识别的连续规则页图片都可以在确认后导入。',
@@ -235,6 +270,13 @@ const officialImportCopy = computed<OfficialImportCopy>(() => locale.value === '
   LAUNCHED: 'The guide task is now running in the background', TEACHING_FAILED: 'Rulebook readable, but the guide task needs a retry', DOCUMENT_FAILED: 'Rulebook reading failed, so the guide could not start',
   background: 'Open Background work from any page to return to this progress.',
 })
+const officialImportIdentityErrorCopy = computed(() => locale.value === 'zh-CN' ? {
+  changed: '提交前目录或来源身份发生了变化。请重新比较游戏、版本和语言后再次确认。',
+  active: '这个链接正在为另一个版本导入。请等待那次导入结束后再试，或保留当前游戏与讲解目标并改用本地上传。',
+} : {
+  changed: 'The catalog or source identity changed before submission. Compare the game, edition, and language again, then reconfirm.',
+  active: 'This URL is already being imported for another edition. Wait for that import to finish, or keep the current game and guide goal and use a local upload.',
+})
 const canUpload = computed(() => Boolean(
   (file.value || photographedPages.value.length)
   && !preparingPhotos.value
@@ -247,6 +289,7 @@ const canUpload = computed(() => Boolean(
 const canImportOfficial = computed(() => Boolean(
   officialSourceUrl.value.trim()
   && officialImportRightsConfirmed.value
+  && (!editionId.value || officialImportIdentityConfirmed.value)
   && !uploading.value
   && !importingOfficial.value
   && !officialImportJob.value
@@ -257,6 +300,7 @@ function currentIntakeSnapshot(): RulebookIntakeSnapshot {
   return {
     editionId: editionId.value,
     learningGoal: learningGoal.value,
+    officialImportIdentityConfirmed: officialImportIdentityConfirmed.value,
     officialImportRightsConfirmed: officialImportRightsConfirmed.value,
     officialSourceUrl: officialSourceUrl.value,
     sourceType: sourceType.value,
@@ -278,6 +322,7 @@ const intakeDraftAreas = computed(() => {
     ...(title.value.trim() !== baseline.title.trim() || sourceType.value !== baseline.sourceType
       ? [intakeDraftCopy.value.details] : []),
     ...(officialSourceUrl.value.trim() !== baseline.officialSourceUrl.trim()
+      || officialImportIdentityConfirmed.value !== baseline.officialImportIdentityConfirmed
       || officialImportRightsConfirmed.value !== baseline.officialImportRightsConfirmed
       ? [intakeDraftCopy.value.source] : []),
     ...(editionId.value !== baseline.editionId ? [intakeDraftCopy.value.game] : []),
@@ -435,13 +480,17 @@ async function loadDocuments(signal?: AbortSignal) {
 
 async function discoverOfficialRulebooks() {
   if (!editionId.value) return
+  const requestedEditionId = editionId.value
   rulebookDiscoveryStatus.value = 'loading'
   rulebookCandidates.value = []
+  rulebookDiscoveryIdentity.value = null
   try {
-    const parameters = new URLSearchParams({ editionId: editionId.value, language: locale.value })
+    const parameters = new URLSearchParams({ editionId: requestedEditionId, language: locale.value })
     const response = await checkedFetch(`/api/v1/documents/rulebook-candidates?${parameters.toString()}`)
     if (!response.ok) throw new Error(rulebookDiscoveryCopy.value.error)
     const result = await response.json() as RulebookCandidateResponse
+    if (editionId.value !== requestedEditionId || result.identity?.editionId !== requestedEditionId) return
+    rulebookDiscoveryIdentity.value = result.identity
     rulebookCandidates.value = result.candidates
     rulebookDiscoveryStatus.value = result.configured ? 'success' : 'unavailable'
   } catch (error) {
@@ -462,6 +511,9 @@ function chooseRulebookCandidate(candidate: RulebookCandidate) {
   if (!importable) return
   officialSourceUrl.value = candidate.url
   if (!title.value.trim()) title.value = candidate.title
+  selectedRulebookCandidate.value = candidate
+  selectedRulebookDiscoveryIdentity.value = rulebookDiscoveryIdentity.value
+  officialImportIdentityConfirmed.value = false
   officialImportRightsConfirmed.value = false
   uploadPanel.value?.openOfficialDetails()
 }
@@ -683,6 +735,7 @@ function discardIntakeDraft() {
   const baseline = intakeBaseline.value
   editionId.value = baseline.editionId
   learningGoal.value = baseline.learningGoal
+  officialImportIdentityConfirmed.value = baseline.officialImportIdentityConfirmed
   officialImportRightsConfirmed.value = baseline.officialImportRightsConfirmed
   officialSourceUrl.value = baseline.officialSourceUrl
   sourceType.value = baseline.sourceType
@@ -1220,6 +1273,7 @@ async function uploadRulebook() {
     clearPhotographedPages()
     title.value = ''
     officialSourceUrl.value = ''
+    officialImportIdentityConfirmed.value = false
     officialImportRightsConfirmed.value = false
     resetIntakeBaseline()
     const leavingAfterAcceptance = navigationDialogOpen.value
@@ -1277,9 +1331,8 @@ async function importOfficialRulebook() {
   message.value = t('documents.officialImport.downloading')
   errorMessage.value = ''
   try {
-    const selectedCandidate = rulebookCandidates.value.find(
-      candidate => candidate.url === officialSourceUrl.value.trim(),
-    )
+    const selectedCandidate = selectedOfficialCandidate.value
+    const discoveryIdentity = officialImportDiscoveryIdentity.value
     const csrf = await csrfToken()
     const response = await checkedFetch('/api/v1/documents/official-imports', {
       method: 'POST',
@@ -1292,17 +1345,27 @@ async function importOfficialRulebook() {
         rightsConfirmed: officialImportRightsConfirmed.value,
         startTeaching: true,
         learningGoal: learningGoal.value.trim() || null,
-        ...(selectedCandidate?.languageVerified
-          ? { confirmedSourceLanguage: selectedCandidate.language }
-          : {}),
+        discoveredForEditionId: discoveryIdentity?.editionId ?? null,
+        sourceEdition: selectedCandidate?.edition || null,
+        sourceLanguage: selectedCandidate?.languageVerified ? selectedCandidate.language : null,
+        sourceLanguageVerified: selectedCandidate?.languageVerified === true,
+        identityConfirmed: editionId.value ? officialImportIdentityConfirmed.value : false,
       }),
     })
+    if (response.status === 409) {
+      const problem = await response.json().catch(() => ({})) as RulebookIdentityProblem
+      officialImportIdentityConfirmed.value = false
+      throw new Error(problem.code === 'RULEBOOK_ACTIVE_IMPORT_CONFLICT'
+        ? officialImportIdentityErrorCopy.value.active
+        : officialImportIdentityErrorCopy.value.changed)
+    }
     if (!response.ok) throw new Error(t('documents.officialImport.error'))
     const acceptedJob = await response.json() as OfficialRulebookImportJob
     if (!acceptedJob.id) throw new Error(t('documents.officialImport.error'))
     officialImportJob.value = acceptedJob
     title.value = ''
     officialSourceUrl.value = ''
+    officialImportIdentityConfirmed.value = false
     officialImportRightsConfirmed.value = false
     resetIntakeBaseline()
     const navigationWasRequested = navigationDialogOpen.value
@@ -1574,6 +1637,16 @@ watch(routeImportJobId, () => {
   officialImportJob.value = null
   void recoverCurrentContext(latestInitialLoad)
 })
+watch(editionId, () => {
+  officialImportIdentityConfirmed.value = false
+})
+watch(officialSourceUrl, (value) => {
+  officialImportIdentityConfirmed.value = false
+  if (selectedRulebookCandidate.value?.url !== value.trim()) {
+    selectedRulebookCandidate.value = null
+    selectedRulebookDiscoveryIdentity.value = null
+  }
+})
 onBeforeUnmount(() => {
   disposed = true
   latestInitialLoad++
@@ -1619,6 +1692,7 @@ onBeforeUnmount(() => {
           ref="uploadPanel"
           v-model:title="title"
           v-model:official-source-url="officialSourceUrl"
+          v-model:official-import-identity-confirmed="officialImportIdentityConfirmed"
           v-model:official-import-rights-confirmed="officialImportRightsConfirmed"
           v-model:edition-id="editionId"
           v-model:learning-goal="learningGoal"
@@ -1630,6 +1704,9 @@ onBeforeUnmount(() => {
           :intake-draft-areas="intakeDraftAreas"
           :intake-draft-copy="intakeDraftCopy"
           :edition-options="editionOptions"
+          :identity-target="officialImportIdentityTarget"
+          :identity-source-context="officialImportDiscoveryIdentity"
+          :identity-source="officialImportSourceIdentity"
           :model-configuration-available="Boolean(modelConfiguration)"
           :visual-vision-capable="visualVisionCapable"
           :can-import-official="canImportOfficial"

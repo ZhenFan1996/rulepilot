@@ -20,6 +20,7 @@ interface RulebookCandidate {
 
 interface CandidateResponse {
   configured: boolean
+  identity: { editionId: string; gameName: string; editionName: string; language: string }
   candidates: RulebookCandidate[]
 }
 
@@ -47,7 +48,7 @@ interface ImportJob {
 
 interface BoundGameResponse {
   game: { id: string; name: string }
-  edition: { id: string; name: string }
+  edition: { id: string; name: string; language: string }
   bggId: number
 }
 
@@ -364,13 +365,18 @@ test('recommendation becomes one readable, taught, and answerable production jou
   let importRequestCount = 0
   let observedDocumentVersionId: string | null = null
   let observedPreparationRunId: string | null = null
-  let observedImportRequest: { editionId?: string; officialSourceUrl?: string } | null = null
+  let observedImportRequest: {
+    editionId?: string
+    discoveredForEditionId?: string
+    officialSourceUrl?: string
+    identityConfirmed?: boolean
+  } | null = null
   page.on('pageerror', error => pageErrors.push(error))
   page.on('request', request => {
     const path = new URL(request.url()).pathname
     if (path === '/api/v1/documents/official-imports' && request.method() === 'POST') {
       importRequestCount += 1
-      observedImportRequest = request.postDataJSON() as { editionId?: string; officialSourceUrl?: string }
+      observedImportRequest = request.postDataJSON() as typeof observedImportRequest
     }
   })
 
@@ -456,6 +462,8 @@ test('recommendation becomes one readable, taught, and answerable production jou
       'Rulebook discovery used a different edition from the selected recommendation').toBe(true)
     report.discoveryMs = elapsed(discoveryStartedAt)
     expect(candidateResult.configured).toBe(true)
+    expect(candidateResult.identity.editionId,
+      'Rulebook discovery response lost the selected edition identity').toBe(boundGame.edition.id)
     const gstoneCandidate = candidateResult.candidates.find(candidate =>
       candidate.sourceDomain.endsWith('gstonegames.com')
       && candidate.language.toLowerCase().startsWith('zh')
@@ -492,6 +500,8 @@ test('recommendation becomes one readable, taught, and answerable production jou
     await candidateCard.getByRole('button', { name: '选择这份' }).click()
     const importButton = page.getByRole('button', { name: '下载规则书并生成讲解' })
     await expect(importButton).toBeDisabled()
+    await page.getByRole('checkbox', { name: /我已比较以上游戏、版本和语言/ }).check()
+    await expect(importButton).toBeDisabled()
     await page.getByRole('checkbox', { name: /我确认该链接来自有权提供/ }).check()
     await expect(importButton).toBeEnabled()
 
@@ -508,7 +518,9 @@ test('recommendation becomes one readable, taught, and answerable production jou
     report.importReused = launchedJob.reused
     report.importEditionMatchesSelection = launchedJob.editionId === boundGame.edition.id
       && observedImportRequest?.editionId === boundGame.edition.id
+      && observedImportRequest?.discoveredForEditionId === boundGame.edition.id
       && observedImportRequest?.officialSourceUrl === gstoneCandidate!.url
+      && observedImportRequest?.identityConfirmed === true
     expect(report.importEditionMatchesSelection,
       'The official import request or persisted job changed the selected edition/source identity').toBe(true)
     expect(launchedJob.title, 'The official import response did not retain the selected game title')

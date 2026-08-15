@@ -86,6 +86,8 @@ public class OfficialRulebookDiscoveryService {
         boolean modelSearchConfigured = finder.configured();
         var game = catalog.findByEdition(editionId)
                 .orElseThrow(() -> new IllegalArgumentException("catalog edition does not exist or has no BGG metadata"));
+        var discoveryIdentity = new DiscoveryIdentity(
+                game.editionId(), game.gameName(), game.editionName(), game.language());
         String checkedLanguage = language == null || language.isBlank() ? game.language() : language.strip();
         var identity = sourceIdentities.findByBggId(game.bggId())
                 .orElse(new CatalogGameSourceIdentityLookup.Identity(game.gameName(), List.of(game.gameName()), List.of()));
@@ -106,10 +108,10 @@ public class OfficialRulebookDiscoveryService {
         var allCandidates = new ArrayList<Candidate>();
         allCandidates.addAll(assessCandidates(catalogCandidates, request));
         if (allCandidates.stream().anyMatch(candidate -> isImportableForLanguage(candidate, checkedLanguage))) {
-            return new Result(true, rankedCandidates(allCandidates));
+            return new Result(true, discoveryIdentity, rankedCandidates(allCandidates));
         }
         if (!modelSearchConfigured) {
-            return new Result(!catalogDiscovered.isEmpty(), rankedCandidates(allCandidates));
+            return new Result(!catalogDiscovered.isEmpty(), discoveryIdentity, rankedCandidates(allCandidates));
         }
 
         var modelDiscovered = new ArrayList<>(finder.find(request));
@@ -138,7 +140,7 @@ public class OfficialRulebookDiscoveryService {
                     .toList();
             allCandidates.addAll(assessCandidates(recovered, request));
         }
-        return new Result(true, rankedCandidates(allCandidates));
+        return new Result(true, discoveryIdentity, rankedCandidates(allCandidates));
     }
 
     private List<Candidate> rankedCandidates(List<Candidate> allCandidates) {
@@ -611,9 +613,31 @@ public class OfficialRulebookDiscoveryService {
         return checked.length() <= maximum ? checked : checked.substring(0, maximum);
     }
 
-    public record Result(boolean configured, List<Candidate> candidates) {
+    public record Result(boolean configured, DiscoveryIdentity identity, List<Candidate> candidates) {
         public Result {
+            if (identity == null) throw new IllegalArgumentException("rulebook discovery identity is required");
             candidates = List.copyOf(candidates);
+        }
+    }
+
+    public record DiscoveryIdentity(
+            UUID editionId,
+            String gameName,
+            String editionName,
+            String language) {
+        public DiscoveryIdentity {
+            if (editionId == null
+                    || gameName == null
+                    || gameName.isBlank()
+                    || editionName == null
+                    || editionName.isBlank()
+                    || language == null
+                    || language.isBlank()) {
+                throw new IllegalArgumentException("rulebook discovery identity is invalid");
+            }
+            gameName = gameName.strip();
+            editionName = editionName.strip();
+            language = language.strip();
         }
     }
 

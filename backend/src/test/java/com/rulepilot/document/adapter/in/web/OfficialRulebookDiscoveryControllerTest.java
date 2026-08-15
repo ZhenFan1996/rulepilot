@@ -18,6 +18,8 @@ class OfficialRulebookDiscoveryControllerTest {
         OfficialRulebookDiscoveryService discovery = mock(OfficialRulebookDiscoveryService.class);
         when(discovery.discover(editionId, "en")).thenReturn(new OfficialRulebookDiscoveryService.Result(
                 true,
+                new OfficialRulebookDiscoveryService.DiscoveryIdentity(
+                        editionId, "Opaque Game", "First", "en"),
                 List.of(new OfficialRulebookDiscoveryService.Candidate(
                         "Official Rules",
                         "https://publisher.example/rules.pdf",
@@ -36,6 +38,12 @@ class OfficialRulebookDiscoveryControllerTest {
         var response = new OfficialRulebookDiscoveryController(discovery).discover(editionId, "en");
 
         assertThat(response.configured()).isTrue();
+        assertThat(response.identity()).satisfies(identity -> {
+            assertThat(identity.editionId()).isEqualTo(editionId);
+            assertThat(identity.gameName()).isEqualTo("Opaque Game");
+            assertThat(identity.editionName()).isEqualTo("First");
+            assertThat(identity.language()).isEqualTo("en");
+        });
         assertThat(response.candidates()).singleElement().satisfies(candidate -> {
             assertThat(candidate.sourceDomain()).isEqualTo("publisher.example");
             assertThat(candidate.officialDomainVerified()).isTrue();
