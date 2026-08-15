@@ -29,7 +29,7 @@ const game = {
 describe('RecommendationGameCard', () => {
   afterEach(() => setLocale('zh-CN'))
 
-  it('shows satisfied, conflicting, and unknown candidate-scoped checks without upgrading uncertainty', () => {
+  it('shows candidate-scoped checks and keeps its follow-up action in the response language', async () => {
     const wrapper = mount(RecommendationGameCard, {
       props: {
         entry: {
@@ -54,5 +54,8 @@ describe('RecommendationGameCard', () => {
     expect(checks).toContain('Preference · Conflict')
     expect(checks).toContain('Hard · Unknown')
     expect(checks).not.toContain('条件核对')
+
+    await wrapper.get('button:nth-of-type(2)').trigger('click')
+    expect(wrapper.emitted('introduce')).toEqual([[game.bggId, game.name, 'en']])
   })
 })

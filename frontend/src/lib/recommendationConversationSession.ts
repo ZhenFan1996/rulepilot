@@ -1,8 +1,9 @@
 import type { RecommendationProfile } from '@/components/gameRecommendationTypes'
+import type { AppLocale } from '@/lib/locale'
 import { canonicalRecommendationProfile, emptyRecommendationProfile } from '@/lib/recommendationProfile'
 
 const STORAGE_PREFIX = 'rulepilot:recommendation-conversation:v1:'
-const STORAGE_VERSION = 2
+const STORAGE_VERSION = 3
 const MAX_RAW_LENGTH = 200_000
 const MAX_TRANSCRIPT = 24
 const MAX_TRANSCRIPT_TEXT = 4_000
@@ -28,11 +29,13 @@ export type RecommendationConversationPending = {
   excludedBggIds: number[]
   focusedBggId: number | null
   clientTurnId: string | null
+  responseLocale: AppLocale | null
 }
 
 export type RecommendationConversationSnapshot = {
   conversationId: string | null
   revision: number
+  responseLocale: AppLocale | null
   profile: RecommendationProfile
   transcript: RecommendationConversationTurn[]
   knownGames: RecommendationConversationGame[]
@@ -41,10 +44,18 @@ export type RecommendationConversationSnapshot = {
   pending: RecommendationConversationPending | null
 }
 
-type StoredRecommendationConversation = RecommendationConversationSnapshot & { version: number }
-type LegacyRecommendationConversation = Omit<RecommendationConversationSnapshot, 'conversationId' | 'revision' | 'pending'> & {
+type StoredRecommendationConversation = RecommendationConversationSnapshot & { version: 3 }
+type PreviousRecommendationPending = Omit<RecommendationConversationPending, 'responseLocale'>
+type PreviousRecommendationConversation = Omit<RecommendationConversationSnapshot, 'responseLocale' | 'pending'> & {
+  version: 2
+  pending: PreviousRecommendationPending | null
+}
+type LegacyRecommendationConversation = Omit<
+  PreviousRecommendationConversation,
+  'conversationId' | 'revision' | 'version' | 'pending'
+> & {
   version: 1
-  pending: Omit<RecommendationConversationPending, 'clientTurnId'> | null
+  pending: Omit<PreviousRecommendationPending, 'clientTurnId'> | null
 }
 
 export function readRecommendationConversation(
@@ -125,11 +136,13 @@ function boundedSnapshot(snapshot: RecommendationConversationSnapshot): Recommen
         excludedBggIds: uniquePositiveIntegers(snapshot.pending.excludedBggIds).slice(-MAX_SHOWN_GAMES),
         focusedBggId: snapshot.pending.focusedBggId,
         clientTurnId: snapshot.pending.clientTurnId,
+        responseLocale: validLocale(snapshot.pending.responseLocale) ? snapshot.pending.responseLocale : null,
       }
     : null
   return {
     conversationId: validUuid(snapshot.conversationId) ? snapshot.conversationId : null,
     revision: validRevision(snapshot.revision) ? snapshot.revision : 0,
+    responseLocale: validLocale(snapshot.responseLocale) ? snapshot.responseLocale : null,
     profile: isProfile(snapshot.profile)
       ? canonicalRecommendationProfile(snapshot.profile)
       : emptyRecommendationProfile(),
@@ -143,19 +156,50 @@ function boundedSnapshot(snapshot: RecommendationConversationSnapshot): Recommen
 
 function storedConversation(value: unknown): StoredRecommendationConversation | null {
   if (isStoredConversation(value)) return value
+  if (isPreviousConversation(value)) {
+    return {
+      ...value,
+      version: STORAGE_VERSION,
+      responseLocale: null,
+      pending: value.pending ? { ...value.pending, responseLocale: null } : null,
+    }
+  }
   if (!isLegacyConversation(value)) return null
   return {
     ...value,
     version: STORAGE_VERSION,
     conversationId: null,
     revision: 0,
-    pending: value.pending ? { ...value.pending, clientTurnId: null } : null,
+    responseLocale: null,
+    pending: value.pending ? { ...value.pending, clientTurnId: null, responseLocale: null } : null,
   }
 }
 
 function isStoredConversation(value: unknown): value is StoredRecommendationConversation {
   return isRecord(value)
     && value.version === STORAGE_VERSION
+    && (value.conversationId === null || validUuid(value.conversationId))
+    && validRevision(value.revision)
+    && (value.responseLocale === null || validLocale(value.responseLocale))
+    && isProfile(value.profile)
+    && Array.isArray(value.transcript)
+    && value.transcript.length <= MAX_TRANSCRIPT
+    && value.transcript.every(isConversationTurn)
+    && Array.isArray(value.knownGames)
+    && value.knownGames.length <= MAX_KNOWN_GAMES
+    && value.knownGames.every(isConversationGame)
+    && hasUniqueGameIds(value.knownGames)
+    && Array.isArray(value.shownBggIds)
+    && value.shownBggIds.length <= MAX_SHOWN_GAMES
+    && value.shownBggIds.every(isPositiveInteger)
+    && new Set(value.shownBggIds).size === value.shownBggIds.length
+    && typeof value.failed === 'boolean'
+    && (value.pending === null || isConversationPending(value.pending))
+}
+
+function isPreviousConversation(value: unknown): value is PreviousRecommendationConversation {
+  return isRecord(value)
+    && value.version === 2
     && (value.conversationId === null || validUuid(value.conversationId))
     && validRevision(value.revision)
     && isProfile(value.profile)
@@ -171,7 +215,7 @@ function isStoredConversation(value: unknown): value is StoredRecommendationConv
     && value.shownBggIds.every(isPositiveInteger)
     && new Set(value.shownBggIds).size === value.shownBggIds.length
     && typeof value.failed === 'boolean'
-    && (value.pending === null || isConversationPending(value.pending))
+    && (value.pending === null || isPreviousPending(value.pending))
 }
 
 function isLegacyConversation(value: unknown): value is LegacyRecommendationConversation {
@@ -197,6 +241,7 @@ function withoutVersion(value: StoredRecommendationConversation): Recommendation
   return {
     conversationId: value.conversationId,
     revision: value.revision,
+    responseLocale: value.responseLocale,
     profile: canonicalRecommendationProfile(value.profile),
     transcript: value.transcript.map(turn => ({ ...turn })),
     knownGames: value.knownGames.map(game => ({ ...game })),
@@ -207,6 +252,7 @@ function withoutVersion(value: StoredRecommendationConversation): Recommendation
       excludedBggIds: [...value.pending.excludedBggIds],
       focusedBggId: value.pending.focusedBggId,
       clientTurnId: value.pending.clientTurnId,
+      responseLocale: value.pending.responseLocale,
     } : null,
   }
 }
@@ -292,10 +338,23 @@ function isConversationPending(value: unknown): value is RecommendationConversat
     && new Set(value.excludedBggIds).size === value.excludedBggIds.length
     && (value.focusedBggId === null || isPositiveInteger(value.focusedBggId))
     && (value.clientTurnId === null || validUuid(value.clientTurnId))
+    && (value.responseLocale === null || validLocale(value.responseLocale))
 }
 
-function isLegacyPending(value: unknown): value is Omit<RecommendationConversationPending, 'clientTurnId'> {
+function isPreviousPending(value: unknown): value is PreviousRecommendationPending {
   return isRecord(value)
+    && boundedString(value.message, 1, MAX_PENDING_MESSAGE)
+    && Array.isArray(value.excludedBggIds)
+    && value.excludedBggIds.length <= MAX_SHOWN_GAMES
+    && value.excludedBggIds.every(isPositiveInteger)
+    && new Set(value.excludedBggIds).size === value.excludedBggIds.length
+    && (value.focusedBggId === null || isPositiveInteger(value.focusedBggId))
+    && (value.clientTurnId === null || validUuid(value.clientTurnId))
+}
+
+function isLegacyPending(value: unknown): value is Omit<PreviousRecommendationPending, 'clientTurnId'> {
+  return isRecord(value)
+    && !('clientTurnId' in value)
     && boundedString(value.message, 1, MAX_PENDING_MESSAGE)
     && Array.isArray(value.excludedBggIds)
     && value.excludedBggIds.length <= MAX_SHOWN_GAMES
@@ -338,6 +397,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function validRevision(value: unknown): value is number {
   return Number.isSafeInteger(value) && Number(value) >= 0
+}
+
+function validLocale(value: unknown): value is AppLocale {
+  return value === 'zh-CN' || value === 'en'
 }
 
 function validUuid(value: unknown): value is string {

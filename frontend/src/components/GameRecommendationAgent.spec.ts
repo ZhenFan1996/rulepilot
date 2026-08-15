@@ -632,6 +632,112 @@ describe('GameRecommendationAgent', () => {
     expect(wrapper.text()).toContain('今晚想玩什么？')
   })
 
+  it('uses a Chinese current turn after English for the whole new recommendation surface', async () => {
+    setLocale('en')
+    const requestedUrls: string[] = []
+    let turn = 0
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const path = String(input)
+      requestedUrls.push(path)
+      if (path === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      turn += 1
+      if (turn === 1) {
+        return Response.json({
+          responseLocale: 'en', outcome: 'conversation', mode: 'model_assisted',
+          assistantMessage: 'I kept the first turn in English.', profile: baseProfile,
+          clarification: null, sourceCount: 0, candidatesEvaluated: 0, games: [],
+        })
+      }
+      return Response.json({
+        responseLocale: 'zh-CN', outcome: 'recommendations', mode: 'model_assisted',
+        assistantMessage: '这轮按你当前的中文问题回答。', profile: baseProfile,
+        clarification: null, sourceCount: 179737, candidatesEvaluated: 1,
+        harness: {
+          modelCalls: 2, catalogCalls: 2, webResearchCalls: 0, fallbackUsed: false,
+          actions: ['SEARCH_BGG_BY_NAME', 'LOOKUP_BGG_CANDIDATES', 'RECOMMEND_GAMES'],
+        },
+        games: [{
+          game,
+          matches: [],
+          tradeoffs: [],
+          fitClaims: [{
+            subject: 'playerCount', strength: 'hard', relation: 'satisfied',
+            text: '候选人数范围满足当前硬条件。',
+          }],
+        }],
+      })
+    }))
+    const wrapper = await mountAgent()
+
+    await wrapper.get('textarea').setValue('Which option is better for exactly three players?')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    await wrapper.get('textarea').setValue('现在请用中文比较，并保留刚才的三人条件。')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    expect(requestedUrls).toContain('/api/v1/bgg/recommendation-agent/stream?locale=en')
+    expect(requestedUrls).toContain('/api/v1/bgg/recommendation-agent/stream?locale=zh-CN')
+    const currentTurn = wrapper.get('[data-testid="assistant-recommendation-turn"]')
+    expect(currentTurn.text()).toContain('这轮按你当前的中文问题回答。')
+    expect(currentTurn.text()).toContain('本轮 Agent 轨迹')
+    expect(currentTurn.text()).toContain('完整目录按标题找候选')
+    expect(currentTurn.text()).toContain('从完整 BGG 目录中核对了 1 款候选。')
+    expect(currentTurn.text()).toContain('换一批')
+    expect(currentTurn.text()).toContain('条件核对')
+    expect(currentTurn.text()).not.toContain('Agent trajectory this turn')
+    expect(currentTurn.text()).not.toContain('Find titles in the full catalog')
+    expect(currentTurn.text()).not.toContain('Checked 1 candidates')
+    expect(currentTurn.text()).not.toContain('Try another batch')
+  })
+
+  it('keeps a failed English turn and its retry action in the attempted turn language', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      if (String(input) === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      return new Response(null, { status: 500 })
+    }))
+    const wrapper = await mountAgent()
+
+    await wrapper.get('textarea').setValue('Could you compare the remaining options?')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    const alert = wrapper.get('[role="alert"]')
+    expect(alert.text()).toContain('That reply did not come through. Your preferences are still here.')
+    expect(alert.get('button').text()).toBe('Retry')
+    expect(alert.text()).not.toContain('刚才没有接上')
+    expect(alert.text()).not.toContain('重试')
+  })
+
+  it('keeps the browser fallback recovery summary in the last successful response language', async () => {
+    setLocale('en')
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const path = String(input)
+      if (path === '/api/v1/bgg/recommendation-agent/session') return new Response(null, { status: 204 })
+      if (path === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      return Response.json({
+        responseLocale: 'en', outcome: 'recommendations', mode: 'model_assisted',
+        assistantMessage: 'I verified this candidate and kept it available.', profile: baseProfile,
+        clarification: null, sourceCount: 179737, candidatesEvaluated: 1,
+        games: [{ game: { ...game, name: 'Wingspan', nameLocalized: false }, matches: [], tradeoffs: [] }],
+      })
+    }))
+    const wrapper = await mountAgent({}, { sessionIdentity: 'alice' })
+    await flushPromises()
+
+    await wrapper.get('textarea').setValue('Which one works for three players?')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    wrapper.unmount()
+
+    setLocale('zh-CN')
+    const restored = await mountAgent({}, { sessionIdentity: 'alice' })
+    await flushPromises()
+
+    expect(restored.text()).toContain('Previously verified candidates: Wingspan. You can continue comparing them here.')
+    expect(restored.text()).not.toContain('上次已核对候选：Wingspan')
+  })
+
   it('keeps a structured comparison in the same conversation and carries its candidates into the next turn', async () => {
     const requests: Array<Record<string, unknown>> = []
     let turn = 0

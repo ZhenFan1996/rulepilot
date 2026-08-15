@@ -2640,6 +2640,50 @@ class BoardGameRecommendationAgentTest {
     }
 
     @Test
+    void currentChineseTurnOverridesAnEarlierEnglishConversationForPromptAndSafeFailureCopy() {
+        ScriptedModel model = new ScriptedModel(List.of(request -> {
+            assertThat(request.messages().getLast().content())
+                    .contains(
+                            "\"locale\":\"zh-CN\"",
+                            "Which candidate works for three players?",
+                            "I kept the player count and the verified candidates.",
+                            "现在请用中文继续比较。")
+                    .containsSubsequence(
+                            "Which candidate works for three players?",
+                            "I kept the player count and the verified candidates.",
+                            "现在请用中文继续比较。");
+            return new Turn(
+                    "",
+                    List.of(new ToolCall(
+                            "truncated-current-turn",
+                            BoardGameRecommendationAgent.REPLY_TOOL,
+                            "{\"message\":\"This stale English payload must never be shown\"}")),
+                    CompletionStatus.OUTPUT_LIMIT);
+        }));
+
+        var response = agent(model, new TrackingCatalog(), noResearch()).converse(
+                new ConversationRequest(
+                        RecommendationProfile.empty(),
+                        "现在请用中文继续比较。",
+                        List.of(),
+                        List.of(
+                                new DialogueMessage("user", "Which candidate works for three players?"),
+                                new DialogueMessage("assistant", "I kept the player count and the verified candidates."),
+                                new DialogueMessage("user", "现在请用中文继续比较。")),
+                        null,
+                        List.of(),
+                        List.of()),
+                "zh-CN");
+
+        assertThat(response.outcome()).isEqualTo(Outcome.UNAVAILABLE);
+        assertThat(response.assistantMessage())
+                .contains("暂时没能完成", "可以直接重试")
+                .doesNotContain("stale English payload");
+        assertThat(response.harness().actions()).containsExactly(
+                "MODEL_OUTPUT_TRUNCATED", "UNAVAILABLE:MODEL_OUTPUT_TRUNCATED");
+    }
+
+    @Test
     void rejectsStructurallyIncompleteOrRawMarkupRepliesAndPublishesOnlyTheCorrectedPlainText() {
         ScriptedModel model = new ScriptedModel(List.of(
                 ignored -> action(

@@ -3,7 +3,7 @@ import { computed } from 'vue'
 
 import TabletopGlyph from '@/components/TabletopGlyph.vue'
 import type { RecommendedGame, ResearchSource } from '@/components/gameRecommendationTypes'
-import { useLocale } from '@/lib/locale'
+import { useLocale, type AppLocale } from '@/lib/locale'
 
 const props = defineProps<{
   entry: RecommendedGame
@@ -12,7 +12,7 @@ const props = defineProps<{
   responseLocale?: 'zh-CN' | 'en'
 }>()
 defineEmits<{
-  introduce: [bggId: number, name: string]
+  introduce: [bggId: number, name: string, responseLocale: AppLocale]
   select: [game: RecommendedGame['game']]
   details: [game: RecommendedGame['game']]
 }>()
@@ -79,7 +79,7 @@ function hideBrokenImage(event: Event) {
 
 <template>
   <article class="game-tile min-w-0 p-3 sm:p-4" data-testid="recommendation-game-card">
-    <button type="button" class="block w-full text-left" :aria-label="`${labels.details}：${entry.game.name}`" @click="$emit('details', entry.game)">
+    <button type="button" class="block w-full text-left" :aria-label="`${labels.details}${cardLocale === 'zh-CN' ? '：' : ': '}${entry.game.name}`" @click="$emit('details', entry.game)">
       <div class="flex aspect-[16/10] items-center justify-center overflow-hidden rounded-lg border border-ink/6 bg-canvas p-3 text-ink/25">
         <img v-if="entry.game.thumbnailUrl" :src="entry.game.thumbnailUrl" :alt="`${entry.game.name}${labels.cover}`" loading="lazy" class="h-full w-full object-contain" @error="hideBrokenImage">
         <TabletopGlyph v-else name="cards" :size="44" :aria-label="labels.noCover" />
@@ -120,11 +120,11 @@ function hideBrokenImage(event: Event) {
         </p>
       </div>
     </section>
-    <div v-if="entry.tradeoffs.length" class="mt-3 border-t border-ink/8 pt-3"><p class="text-xs font-bold text-copper">{{ labels.tradeoff }}</p><p class="mt-1 text-xs leading-5 text-ink/60">{{ entry.tradeoffs.join('；') }}</p></div>
+    <div v-if="entry.tradeoffs.length" class="mt-3 border-t border-ink/8 pt-3"><p class="text-xs font-bold text-copper">{{ labels.tradeoff }}</p><p class="mt-1 text-xs leading-5 text-ink/60">{{ entry.tradeoffs.join(cardLocale === 'zh-CN' ? '；' : '; ') }}</p></div>
 
     <div class="mt-3 flex flex-wrap gap-3">
       <button type="button" :disabled="loading" class="min-h-11 rounded-lg bg-felt px-4 text-sm font-semibold text-white disabled:opacity-40" @click="$emit('select', entry.game)">{{ labels.select }}</button>
-      <button type="button" :disabled="loading" class="min-h-11 text-sm font-semibold text-felt disabled:opacity-40" @click="$emit('introduce', entry.game.bggId, entry.game.name)">{{ labels.introduce }}</button>
+      <button type="button" :disabled="loading" class="min-h-11 text-sm font-semibold text-felt disabled:opacity-40" @click="$emit('introduce', entry.game.bggId, entry.game.name, cardLocale)">{{ labels.introduce }}</button>
       <button type="button" class="min-h-11 text-sm font-semibold text-indigo" @click="$emit('details', entry.game)">{{ labels.details }} →</button>
     </div>
   </article>

@@ -22,7 +22,7 @@ import type {
 import { useModalFocus } from '@/composables/useModalFocus'
 import { notifyLoginRequired } from '@/lib/authSession'
 import { RecommendationRequestError, RecommendationStreamError, streamGameRecommendation } from '@/lib/gameRecommendationStream'
-import { useLocale } from '@/lib/locale'
+import { useLocale, type AppLocale } from '@/lib/locale'
 import { playerTurnLocale } from '@/lib/playerTurnLanguage'
 import { canonicalRecommendationProfile, emptyRecommendationProfile } from '@/lib/recommendationProfile'
 import {
@@ -106,6 +106,7 @@ type LoadingStage = 'requesting' | RecommendationProgressStage
 type CopyKey = Exclude<keyof typeof copy['zh-CN'], 'starters'>
 type PendingRequest = {
   clientTurnId: string
+  responseLocale: AppLocale
   message: string
   profile: RecommendationProfile
   excludedBggIds: number[]
@@ -115,8 +116,20 @@ type PendingRequest = {
   shownBggIds: number[]
 }
 
+function translated(responseLocale: AppLocale, key: CopyKey, parameters: Record<string, string | number> = {}) {
+  return copy[responseLocale][key].replace(/\{(\w+)\}/g, (placeholder, name: string) => parameters[name] === undefined ? placeholder : String(parameters[name]))
+}
+
 function t(key: CopyKey, parameters: Record<string, string | number> = {}) {
-  return copy[locale.value][key].replace(/\{(\w+)\}/g, (placeholder, name: string) => parameters[name] === undefined ? placeholder : String(parameters[name]))
+  return translated(locale.value, key, parameters)
+}
+
+function responseT(
+  turnResponse: RecommendationAgentResponse | null | undefined,
+  key: CopyKey,
+  parameters: Record<string, string | number> = {},
+) {
+  return translated(turnResponse?.responseLocale ?? locale.value, key, parameters)
 }
 
 function emptyProfile(): RecommendationProfile {
@@ -187,6 +200,8 @@ const loading = ref(false)
 const loadingStage = ref<LoadingStage>('requesting')
 const loadingElapsedSeconds = ref(0)
 const failed = ref(false)
+const activeTurnLocale = ref<AppLocale | null>(null)
+const failedTurnLocale = ref<AppLocale | null>(null)
 const loginGateVisible = ref(false)
 const lastRequest = ref<PendingRequest | null>(null)
 const seenBggIds = ref<number[]>([])
@@ -231,9 +246,13 @@ useModalFocus({
 })
 
 const loadingMessage = computed(() => {
-  const message = loadingCopy[locale.value][loadingStage.value]
+  const message = loadingCopy[activeTurnLocale.value ?? locale.value][loadingStage.value]
   return loadingElapsedSeconds.value > 0 ? `${message} ${loadingElapsedSeconds.value}s` : message
 })
+
+const failureMessage = computed(() => translated(failedTurnLocale.value ?? locale.value, 'error'))
+const retryLabel = computed(() => translated(failedTurnLocale.value ?? locale.value, 'retry'))
+const loginLocale = computed(() => activeTurnLocale.value ?? locale.value)
 
 const profileLabels = computed(() => {
   const labels: string[] = []
@@ -304,16 +323,17 @@ const canResetRecommendation = computed(() => Boolean(
 
 function toolLabelsFor(turnResponse?: RecommendationAgentResponse) {
   const actions = turnResponse?.harness?.actions ?? []
+  const turnLocale = turnResponse?.responseLocale ?? locale.value
   const labels: string[] = []
   const add = (label: string) => { if (!labels.includes(label)) labels.push(label) }
-  if (actions.some(action => action === 'REPLY_TO_USER' || action === 'ASK_USER' || action === 'UPDATE_PREFERENCES' || action === 'RECOMMEND_GAMES')) add(t('toolUnderstand'))
-  if (actions.includes('RESOLVE_BGG_REFERENCE')) add(t('toolReference'))
-  if (actions.includes('SEARCH_BGG_CATALOG')) add(t('toolCatalog'))
-  if (actions.includes('SEARCH_BGG_BY_NAME')) add(t('toolNames'))
-  if (actions.some(action => action === 'LOOKUP_BGG_CANDIDATES' || action === 'LOOKUP_BGG_GAME')) add(t('toolDetails'))
-  if (actions.includes('DISCOVER_CANDIDATES')) add(t('toolDiscover'))
-  if (actions.some(action => action === 'RESEARCH_GAME_FIT' || action === 'RESEARCH_GAME_QUESTION')) add(t('toolResearch'))
-  if (actions.includes('COMPARE_CANDIDATES')) add(t('toolCompare'))
+  if (actions.some(action => action === 'REPLY_TO_USER' || action === 'ASK_USER' || action === 'UPDATE_PREFERENCES' || action === 'RECOMMEND_GAMES')) add(translated(turnLocale, 'toolUnderstand'))
+  if (actions.includes('RESOLVE_BGG_REFERENCE')) add(translated(turnLocale, 'toolReference'))
+  if (actions.includes('SEARCH_BGG_CATALOG')) add(translated(turnLocale, 'toolCatalog'))
+  if (actions.includes('SEARCH_BGG_BY_NAME')) add(translated(turnLocale, 'toolNames'))
+  if (actions.some(action => action === 'LOOKUP_BGG_CANDIDATES' || action === 'LOOKUP_BGG_GAME')) add(translated(turnLocale, 'toolDetails'))
+  if (actions.includes('DISCOVER_CANDIDATES')) add(translated(turnLocale, 'toolDiscover'))
+  if (actions.some(action => action === 'RESEARCH_GAME_FIT' || action === 'RESEARCH_GAME_QUESTION')) add(translated(turnLocale, 'toolResearch'))
+  if (actions.includes('COMPARE_CANDIDATES')) add(translated(turnLocale, 'toolCompare'))
   return labels
 }
 
@@ -363,8 +383,10 @@ async function sendTurn(
   excludedBggIds: number[] = [],
   focusedBggId: number | null = null,
   retryClientTurnId?: string,
+  requestedResponseLocale?: AppLocale,
 ) {
   if (!serverSessionReady.value) return
+  const responseLocale = requestedResponseLocale ?? playerTurnLocale(message, locale.value)
   let optimisticUserMessageId: number | null = null
   if (userLabel) {
     optimisticUserMessageId = ++messageId
@@ -374,6 +396,7 @@ async function sendTurn(
   const clientTurnId = retryClientTurnId ?? crypto.randomUUID()
   const pending = {
     clientTurnId,
+    responseLocale,
     message,
     profile: canonicalRecommendationProfile(requestProfile),
     excludedBggIds: [...excludedBggIds],
@@ -383,12 +406,13 @@ async function sendTurn(
     shownBggIds: [...seenBggIds.value],
   }
   lastRequest.value = pending
+  activeTurnLocale.value = responseLocale
+  failedTurnLocale.value = null
   beginLoading()
   failed.value = false
   try {
     const token = await csrfToken()
     activeRequest = new AbortController()
-    const responseLocale = playerTurnLocale(message, locale.value)
     const serverResponse = await streamGameRecommendation(`/api/v1/bgg/recommendation-agent/stream?locale=${encodeURIComponent(responseLocale)}`, {
       method: 'POST', credentials: 'include',
       headers: { 'Content-Type': 'application/json', [token.headerName]: token.token },
@@ -424,6 +448,7 @@ async function sendTurn(
       profile: canonicalRecommendationProfile(serverResponse.profile),
       responseLocale: serverResponse.responseLocale ?? responseLocale,
     }
+    activeTurnLocale.value = parsed.responseLocale ?? responseLocale
     profile.value = parsed.profile
     clarification.value = parsed.clarification
     response.value = parsed
@@ -444,6 +469,7 @@ async function sendTurn(
     })
     lastRequest.value = null
   } catch (error) {
+    failedTurnLocale.value = responseLocale
     if (error instanceof RecommendationRequestError && error.status === 401) {
       if (optimisticUserMessageId !== null) {
         messages.value = messages.value.filter(item => item.id !== optimisticUserMessageId)
@@ -469,7 +495,15 @@ async function sendTurn(
 
 function choose(option: { value: string; label: string }) {
   if (!clarification.value || loading.value) return
-  void sendTurn(option.value, profile.value, option.label)
+  void sendTurn(
+    option.value,
+    profile.value,
+    option.label,
+    [],
+    null,
+    undefined,
+    response.value?.responseLocale,
+  )
 }
 
 function submitMessage() {
@@ -487,14 +521,16 @@ function submitMessage() {
 
 function moreGames(turnResponse?: RecommendationAgentResponse) {
   if (!turnResponse?.games.length || loading.value || turnResponse !== response.value) return
-  void sendTurn(t('more'), profile.value, t('more'), seenBggIds.value)
+  const responseLocale = turnResponse.responseLocale ?? locale.value
+  const message = translated(responseLocale, 'more')
+  void sendTurn(message, profile.value, message, seenBggIds.value, null, undefined, responseLocale)
 }
 
-function introduce(bggId: number, name: string) {
+function introduce(bggId: number, name: string, responseLocale: AppLocale) {
   if (loading.value) return
   activeFocusedBggId.value = bggId
-  const message = locale.value === 'zh-CN' ? `介绍一下《${name}》` : `Tell me more about ${name}`
-  void sendTurn(message, profile.value, message, [], bggId)
+  const message = responseLocale === 'zh-CN' ? `介绍一下《${name}》` : `Tell me more about ${name}`
+  void sendTurn(message, profile.value, message, [], bggId, undefined, responseLocale)
 }
 
 function selectGame(game: RecommendationGame) {
@@ -584,6 +620,7 @@ function retry() {
     pending.excludedBggIds,
     pending.focusedBggId,
     pending.clientTurnId,
+    pending.responseLocale,
   )
 }
 
@@ -613,6 +650,7 @@ function conversationSnapshot(): RecommendationConversationSnapshot {
   const pending = (failed.value || loading.value) && lastRequest.value
     ? {
         clientTurnId: lastRequest.value.clientTurnId,
+        responseLocale: lastRequest.value.responseLocale,
         message: lastRequest.value.message,
         excludedBggIds: [...lastRequest.value.excludedBggIds],
         focusedBggId: lastRequest.value.focusedBggId,
@@ -621,6 +659,7 @@ function conversationSnapshot(): RecommendationConversationSnapshot {
   return {
     conversationId: conversationId.value,
     revision: conversationRevision.value,
+    responseLocale: response.value?.responseLocale ?? activeTurnLocale.value,
     profile: canonicalRecommendationProfile(profile.value),
     transcript: playerConversationTranscript().map(({ role, text }) => ({ role, text })),
     knownGames: minimalKnownGames(),
@@ -643,6 +682,8 @@ function clearVisibleRecommendationConversation() {
   response.value = null
   messages.value = [{ id: ++messageId, role: 'assistant', text: t('initial') }]
   failed.value = false
+  activeTurnLocale.value = null
+  failedTurnLocale.value = null
   lastRequest.value = null
   seenBggIds.value = []
   knownGames.value = []
@@ -664,6 +705,7 @@ function restoreRecommendationConversation(owner: string) {
   profile.value = canonicalRecommendationProfile(snapshot.profile)
   conversationId.value = snapshot.conversationId
   conversationRevision.value = snapshot.revision
+  activeTurnLocale.value = snapshot.responseLocale
   clarification.value = null
   messages.value = snapshot.transcript.map(turn => ({ id: ++messageId, ...turn }))
   if (!messages.value.length) {
@@ -672,10 +714,16 @@ function restoreRecommendationConversation(owner: string) {
   rememberedKnownGames.value = snapshot.knownGames.map(game => ({ ...game }))
   seenBggIds.value = [...snapshot.shownBggIds]
   failed.value = Boolean(snapshot.failed && snapshot.pending)
+  failedTurnLocale.value = failed.value
+    ? snapshot.pending?.responseLocale ?? snapshot.responseLocale
+    : null
   if (snapshot.pending) {
+    const responseLocale = snapshot.pending.responseLocale
+      ?? playerTurnLocale(snapshot.pending.message, snapshot.responseLocale ?? locale.value)
     activeFocusedBggId.value = snapshot.pending.focusedBggId
     lastRequest.value = {
       clientTurnId: snapshot.pending.clientTurnId ?? crypto.randomUUID(),
+      responseLocale,
       message: snapshot.pending.message,
       profile: canonicalRecommendationProfile(snapshot.profile),
       excludedBggIds: [...snapshot.pending.excludedBggIds],
@@ -688,11 +736,12 @@ function restoreRecommendationConversation(owner: string) {
 
   const names = [...new Set(snapshot.knownGames.map(game => game.name || game.originalName))].slice(0, 5)
   if (names.length) {
+    const responseLocale = snapshot.responseLocale ?? locale.value
     restoredSummaryMessageId = ++messageId
     messages.value.push({
       id: restoredSummaryMessageId,
       role: 'assistant',
-      text: t('restoredGames', { games: names.join(locale.value === 'zh-CN' ? '、' : ', ') }),
+      text: translated(responseLocale, 'restoredGames', { games: names.join(responseLocale === 'zh-CN' ? '、' : ', ') }),
     })
   }
 }
@@ -734,6 +783,7 @@ function applyServerRecommendationConversation(session: RecommendationServerSess
       profile: canonicalRecommendationProfile(session.latestResponse.profile),
     }
     response.value = latest
+    activeTurnLocale.value = latest.responseLocale ?? activeTurnLocale.value
     clarification.value = latest.clarification
     const responseGames = [
       ...latest.games.map(entry => entry.game),
@@ -749,6 +799,8 @@ function applyServerRecommendationConversation(session: RecommendationServerSess
 
   if ((session.processing || !session.latestResponse) && pending) {
     lastRequest.value = pending
+    activeTurnLocale.value = pending.responseLocale
+    failedTurnLocale.value = pending.responseLocale
     activeFocusedBggId.value = pending.focusedBggId
     failed.value = true
   }
@@ -808,6 +860,8 @@ function reset(preserveJourney = false) {
   response.value = null
   messages.value = [{ id: ++messageId, role: 'assistant', text: t('initial') }]
   failed.value = false
+  activeTurnLocale.value = null
+  failedTurnLocale.value = null
   lastRequest.value = null
   seenBggIds.value = []
   knownGames.value = []
@@ -875,8 +929,15 @@ async function confirmReset() {
   }
 }
 
-function confidenceLabel(confidence: 'low' | 'medium' | 'high') {
-  return t(confidence)
+function confidenceLabel(
+  confidence: 'low' | 'medium' | 'high',
+  responseLocale: AppLocale | undefined,
+) {
+  return translated(responseLocale ?? locale.value, confidence)
+}
+
+function loginT(key: 'loginRequired' | 'login' | 'register') {
+  return translated(loginLocale.value, key)
 }
 
 watch(locale, () => {
@@ -947,9 +1008,9 @@ onBeforeUnmount(() => {
           <p class="recommendation-intro-copy mt-4 max-w-xl text-sm leading-7">{{ t('description') }}</p>
           <div v-if="profileLabels.length" class="mt-6"><p class="recommendation-profile-label text-xs font-bold uppercase tracking-[0.12em]">{{ t('profile') }}</p><ul class="mt-2 flex flex-wrap gap-2"><li v-for="label in profileLabels" :key="label" class="recommendation-profile-chip rounded-md border border-white/15 bg-white/7 px-2.5 py-1.5 text-xs font-semibold">{{ label }}</li></ul></div>
           <details v-if="response?.userModel?.summary" class="mt-5 rounded-xl border border-white/10 bg-black/10 p-4">
-            <summary class="cursor-pointer text-xs font-bold uppercase tracking-[0.1em] text-[#e8bd6a]">{{ t('understanding') }}</summary>
+            <summary class="cursor-pointer text-xs font-bold uppercase tracking-[0.1em] text-[#e8bd6a]">{{ responseT(response, 'understanding') }}</summary>
             <p class="recommendation-understanding-copy mt-3 text-sm leading-6">{{ response.userModel.summary }}</p>
-            <ul v-if="response.userModel.hypotheses.length" class="mt-3 stack-y-sm"><li v-for="hypothesis in response.userModel.hypotheses" :key="`${hypothesis.text}-${hypothesis.basedOn}`" class="recommendation-hypothesis text-xs leading-5"><span class="mr-2 font-semibold text-[#e8bd6a]">{{ confidenceLabel(hypothesis.confidence) }}</span>{{ hypothesis.text }}<span class="recommendation-basis block">{{ t('basedOn', { value: hypothesis.basedOn }) }}</span></li></ul>
+            <ul v-if="response.userModel.hypotheses.length" class="mt-3 stack-y-sm"><li v-for="hypothesis in response.userModel.hypotheses" :key="`${hypothesis.text}-${hypothesis.basedOn}`" class="recommendation-hypothesis text-xs leading-5"><span class="mr-2 font-semibold text-[#e8bd6a]">{{ confidenceLabel(hypothesis.confidence, response.responseLocale) }}</span>{{ hypothesis.text }}<span class="recommendation-basis block">{{ responseT(response, 'basedOn', { value: hypothesis.basedOn }) }}</span></li></ul>
           </details>
           <button v-if="canResetRecommendation" type="button" :disabled="loading" class="recommendation-reset mt-5 min-h-11 text-sm font-semibold underline decoration-light-soft underline-offset-4 disabled:cursor-not-allowed disabled:opacity-40" @click="requestReset">{{ t('reset') }}</button>
         </div>
@@ -967,8 +1028,8 @@ onBeforeUnmount(() => {
                 <article v-else class="min-w-0 w-full" :data-testid="message.response?.games.length ? 'assistant-recommendation-turn' : 'assistant-conversation-turn'">
                   <p class="max-w-[88%] rounded-2xl rounded-bl-sm border border-ink/8 bg-canvas px-4 py-3 text-sm leading-6 text-ink/72">{{ message.text }}</p>
 
-                  <div v-if="toolLabelsFor(message.response).length" class="mt-2 flex flex-wrap items-center gap-2 pl-1 text-[0.6875rem] text-ink/45" aria-label="recommendation tool trail">
-                    <span class="recommendation-tool-label font-semibold">{{ t('toolTrail') }}</span>
+                  <div v-if="toolLabelsFor(message.response).length" class="mt-2 flex flex-wrap items-center gap-2 pl-1 text-[0.6875rem] text-ink/45" :aria-label="responseT(message.response, 'toolTrail')">
+                    <span class="recommendation-tool-label font-semibold">{{ responseT(message.response, 'toolTrail') }}</span>
                     <span v-for="label in toolLabelsFor(message.response)" :key="label" class="rounded-full border border-ink/10 bg-paper px-2.5 py-1">{{ label }}</span>
                   </div>
 
@@ -976,8 +1037,8 @@ onBeforeUnmount(() => {
 
                   <div v-if="message.response?.games.length" class="mt-3 rounded-2xl border border-ink/8 bg-canvas/45 p-3 sm:p-4">
                     <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                      <p class="recommendation-source-summary text-xs leading-5">{{ t('source', { source: message.response.sourceCount.toLocaleString(), count: message.response.candidatesEvaluated }) }}</p>
-                      <button v-if="message.response === response" type="button" :disabled="loading" class="min-h-11 self-start text-sm font-semibold text-copper underline decoration-copper-soft underline-offset-4 disabled:opacity-40 sm:self-auto" @click="moreGames(message.response)">{{ t('more') }}</button>
+                      <p class="recommendation-source-summary text-xs leading-5">{{ responseT(message.response, 'source', { source: message.response.sourceCount.toLocaleString(), count: message.response.candidatesEvaluated }) }}</p>
+                      <button v-if="message.response === response" type="button" :disabled="loading" class="min-h-11 self-start text-sm font-semibold text-copper underline decoration-copper-soft underline-offset-4 disabled:opacity-40 sm:self-auto" @click="moreGames(message.response)">{{ responseT(message.response, 'more') }}</button>
                     </div>
                     <TransitionGroup tag="div" name="tile" class="mt-3 grid gap-3 xl:grid-cols-2 2xl:grid-cols-3">
                       <RecommendationGameCard v-for="entry in message.response.games" :key="entry.game.bggId" :entry="entry" :sources="message.response.researchSources ?? []" :loading="loading" :response-locale="message.response.responseLocale" @introduce="introduce" @select="selectGame" @details="openDetails" />
@@ -988,12 +1049,12 @@ onBeforeUnmount(() => {
               <div v-if="loading" class="flex items-center gap-3 rounded-2xl rounded-bl-sm border border-ink/8 bg-canvas px-4 py-3 text-sm text-ink/55" role="status"><span class="flex gap-1" aria-hidden="true"><span class="size-1.5 animate-pulse rounded-full bg-copper" /><span class="size-1.5 animate-pulse rounded-full bg-copper [animation-delay:160ms]" /><span class="size-1.5 animate-pulse rounded-full bg-copper [animation-delay:320ms]" /></span><span>{{ loadingMessage }}</span></div>
             </div>
             <div v-if="clarification?.options.length && !loading" class="border-t border-ink/8 px-4 py-4 sm:px-6"><div class="flex flex-wrap gap-2"><button v-for="option in clarification.options" :key="option.value" type="button" class="min-h-11 rounded-lg border border-ink/15 bg-ink/5 px-4 text-sm font-semibold text-ink/72 hover:border-copper/50" @click="choose(option)">{{ option.label }}</button></div></div>
-            <div v-if="failed" class="mx-4 mb-3 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800 sm:mx-6" role="alert"><p>{{ t('error') }}</p><button type="button" class="mt-2 min-h-11 font-semibold underline" @click="retry">{{ t('retry') }}</button></div>
+            <div v-if="failed" class="mx-4 mb-3 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800 sm:mx-6" role="alert"><p>{{ failureMessage }}</p><button type="button" class="mt-2 min-h-11 font-semibold underline" @click="retry">{{ retryLabel }}</button></div>
             <div v-if="loginGateVisible" class="mx-4 mb-3 rounded-xl border border-copper/25 bg-copper/5 p-4 text-sm leading-6 text-ink/72 sm:mx-6" role="status">
-              <p>{{ t('loginRequired') }}</p>
+              <p>{{ loginT('loginRequired') }}</p>
               <div class="mt-3 flex flex-wrap gap-4">
-                <RouterLink :to="{ name: 'login', query: { redirect: '/discover' } }" class="inline-flex min-h-11 items-center font-semibold text-indigo underline underline-offset-4">{{ t('login') }}</RouterLink>
-                <RouterLink :to="{ name: 'register', query: { redirect: '/discover' } }" class="inline-flex min-h-11 items-center font-semibold text-indigo underline underline-offset-4">{{ t('register') }}</RouterLink>
+                <RouterLink :to="{ name: 'login', query: { redirect: '/discover' } }" class="inline-flex min-h-11 items-center font-semibold text-indigo underline underline-offset-4">{{ loginT('login') }}</RouterLink>
+                <RouterLink :to="{ name: 'register', query: { redirect: '/discover' } }" class="inline-flex min-h-11 items-center font-semibold text-indigo underline underline-offset-4">{{ loginT('register') }}</RouterLink>
               </div>
             </div>
             <form class="flex items-end gap-2 border-t border-ink/8 p-4 sm:p-5" @submit.prevent="submitMessage">
