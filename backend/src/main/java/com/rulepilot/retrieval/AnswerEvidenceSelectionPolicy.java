@@ -48,29 +48,32 @@ public final class AnswerEvidenceSelectionPolicy {
             AnswerRetrievalPlan plan,
             List<List<HybridEvidenceHit>> confirmedPageGroups) {
         Map<UUID, HybridEvidenceHit> selected = new LinkedHashMap<>();
-        boolean visualRequested = plan != null && plan.visualRequested();
         List<HybridEvidenceHit> visual = visualEvidenceIds.stream()
                 .map(evidenceById::get)
                 .filter(java.util.Objects::nonNull)
+                .filter(AnswerEvidenceSelectionPolicy::eligible)
                 .sorted(byScoreThenId())
                 .toList();
-        if (visualRequested) addAll(selected, visual);
+        // A current, complete page-fact ledger is a direct rule source, not presentation metadata.
+        addAll(selected, visual);
         for (List<HybridEvidenceHit> group : confirmedPageGroups) {
             group.stream()
                     .map(hit -> evidenceById.get(hit.evidence().chunkId()))
                     .filter(java.util.Objects::nonNull)
+                    .filter(AnswerEvidenceSelectionPolicy::eligible)
                     .forEach(hit -> selected.putIfAbsent(hit.evidence().chunkId(), hit));
         }
         intentAnchors.stream()
                 .map(hit -> evidenceById.get(hit.evidence().chunkId()))
                 .filter(java.util.Objects::nonNull)
+                .filter(AnswerEvidenceSelectionPolicy::eligible)
                 .forEach(hit -> selected.putIfAbsent(hit.evidence().chunkId(), hit));
-        if (!visualRequested) addAll(selected, visual);
 
         boolean expandedCoverage = plan != null && plan.expandedCoverageRequired();
         int targetSize = expandedCoverage ? 8 : 5;
         evidenceById.values().stream()
                 .sorted(byScoreThenId())
+                .filter(AnswerEvidenceSelectionPolicy::eligible)
                 .filter(hit -> !selected.containsKey(hit.evidence().chunkId()))
                 .limit(Math.max(0, targetSize - selected.size()))
                 .forEach(hit -> selected.put(hit.evidence().chunkId(), hit));
@@ -85,5 +88,9 @@ public final class AnswerEvidenceSelectionPolicy {
 
     private static void addAll(Map<UUID, HybridEvidenceHit> selected, List<HybridEvidenceHit> hits) {
         hits.forEach(hit -> selected.putIfAbsent(hit.evidence().chunkId(), hit));
+    }
+
+    private static boolean eligible(HybridEvidenceHit hit) {
+        return !AnswerEvidencePolicy.isVisualPlaceholder(hit);
     }
 }

@@ -61,7 +61,11 @@ class VersionedAgentPromptsTest {
                         "Player-facing answer progression revision v57",
                         "must add a material condition, reason, boundary, or application detail",
                         "Do not restate the same complete",
-                        "rule sequence in `shortVerdict`, `explanation`, and a walkthrough")
+                        "rule sequence in `shortVerdict`, `explanation`, and a walkthrough",
+                        "Question and source authority revision v58",
+                        "current player question",
+                        "page hint is only a retrieval locator",
+                        "Advertising copy, contents or listings, placeholders")
                 .doesNotContain("Cited-tie-resolution revision v37", "Cited-worked-example revision v34");
 
         assertThat(prompts.answerSystem("TIE"))
@@ -72,7 +76,16 @@ class VersionedAgentPromptsTest {
                 .doesNotContain("Cited-decision-table revision v28", "Cited-tie-resolution revision v37");
 
         assertThat(prompts.answerUser())
-                .contains("{questionType}", "{evidenceNeeds}", "{answerAid}", "{evidence}")
+                .contains(
+                        "{questionType}",
+                        "{evidenceNeeds}",
+                        "{answerAid}",
+                        "{referenceBinding}",
+                        "{currentRuleObjects}",
+                        "{pageHints}",
+                        "Page locator hints only identify",
+                        "candidate pages",
+                        "{evidence}")
                 .doesNotContain("{lessonSection}", "{playerCount}");
     }
 
@@ -100,6 +113,9 @@ class VersionedAgentPromptsTest {
                         "NEGATION",
                         "defectConfirmed=true",
                         "empty issues array",
+                        "explicitly named rule objects",
+                        "page hint is only a retrieval locator",
+                        "Advertising copy, contents or listings, placeholders",
                         "Return only the requested JSON schema")
                 .doesNotContain("revision v", "keyword checklist", "ATOMIC_CONFIRMATION");
 
@@ -113,6 +129,13 @@ class VersionedAgentPromptsTest {
                         "current-turn/later-turn distinction",
                         "{claims}",
                         "{evidence}");
+        assertThat(prompts.atomicCriticSystem())
+                .contains(
+                        "authoritative target",
+                        "page hint only locates candidates",
+                        "descriptive visual",
+                        "metadata",
+                        "does not directly entail the mechanical conclusion");
         assertThat(prompts.objectiveCoverageCriticSystem())
                 .contains("claimAspect", "MISSING_CRITICAL_RULE", "evidenceIds");
         assertThat(prompts.structuredOutputRepair()).contains("schema-valid object only");

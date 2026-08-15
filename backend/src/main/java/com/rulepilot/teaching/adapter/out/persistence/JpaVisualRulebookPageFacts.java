@@ -10,6 +10,7 @@ import com.rulepilot.teaching.VisualRulebookPageFacts.VisualAnchor;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.SourceDependency;
 import com.rulepilot.retrieval.VisualRulebookPageFactSearch;
 import com.rulepilot.retrieval.VisualRulebookPageFactSearch.PageFactMatch;
+import com.rulepilot.retrieval.VisualRulebookPageFactSearch.RuleFactStatus;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EntityManager;
@@ -32,6 +33,8 @@ import org.springframework.transaction.annotation.Transactional;
 @Profile("!test")
 public class JpaVisualRulebookPageFacts implements VisualRulebookPageFacts, VisualRulebookPageFactSearch {
 
+    private static final ObjectMapper JSON = new ObjectMapper();
+    private static final TypeReference<List<String>> RULE_GROUP_IDENTIFIERS = new TypeReference<>() {};
     private static final int MAX_CJK_FRAGMENTS = 16;
     private static final Set<String> SEARCH_FILLER = Set.of(
             "and", "are", "can", "does", "for", "from", "how", "into", "must", "not", "the", "this", "what",
@@ -93,6 +96,23 @@ public class JpaVisualRulebookPageFacts implements VisualRulebookPageFacts, Visu
 
     @Override
     @Transactional(readOnly = true)
+    public List<PageFactMatch> findByPageNumbers(UUID documentVersionId, Set<Integer> pageNumbers) {
+        return find(documentVersionId, pageNumbers).stream()
+                .map(fact -> new PageFactMatch(
+                        fact.pageNumber(),
+                        fact.printedTerms(),
+                        fact.factualSummary(),
+                        fact.keywords(),
+                        1.0,
+                        ruleFactStatus(
+                                fact.ruleGroupIdentifiers(),
+                                fact.ruleGroupInventoryComplete(),
+                                fact.schemaVersion() == PageFact.CURRENT_SCHEMA_VERSION)))
+                .toList();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
     @SuppressWarnings("unchecked")
     public List<PageFactMatch> search(UUID documentVersionId, String query, int limit) {
         if (documentVersionId == null || query == null || query.isBlank() || query.length() > 600
@@ -131,7 +151,9 @@ public class JpaVisualRulebookPageFacts implements VisualRulebookPageFacts, Visu
                 %s
                 SELECT page_number, printed_terms, factual_summary, keywords,
                        (%s) AS matched_terms,
-                       %s AS relevance
+                       %s AS relevance,
+                       rule_group_identifiers,
+                       rule_group_inventory_complete
                 FROM %s
                 WHERE document_version_id = :versionId
                   AND schema_version = :schemaVersion
@@ -159,8 +181,29 @@ public class JpaVisualRulebookPageFacts implements VisualRulebookPageFacts, Visu
                         (String) row[1],
                         (String) row[2],
                         ((String) row[3]).lines().filter(value -> !value.isBlank()).toList(),
-                        ((Number) row[4]).doubleValue() * 10 + ((Number) row[5]).doubleValue()))
+                        ((Number) row[4]).doubleValue() * 10 + ((Number) row[5]).doubleValue(),
+                        ruleFactStatus(
+                                deserializeRuleGroupIdentifiers((String) row[6]),
+                                (Boolean) row[7],
+                                true)))
                 .toList();
+    }
+
+    private static RuleFactStatus ruleFactStatus(
+            List<String> ruleGroupIdentifiers, boolean inventoryComplete, boolean currentSchema) {
+        if (!currentSchema || !inventoryComplete) return RuleFactStatus.FACTS_INCOMPLETE;
+        return ruleGroupIdentifiers.isEmpty()
+                ? RuleFactStatus.NO_RULE_CONTENT
+                : RuleFactStatus.CURRENT_RULE_FACTS;
+    }
+
+    private static List<String> deserializeRuleGroupIdentifiers(String serialized) {
+        if (serialized == null || serialized.isBlank()) return List.of();
+        try {
+            return JSON.readValue(serialized, RULE_GROUP_IDENTIFIERS);
+        } catch (JsonProcessingException invalidStoredData) {
+            throw new IllegalStateException("stored visual rule-group identifiers are invalid", invalidStoredData);
+        }
     }
 
     static String searchTerms(String query) {

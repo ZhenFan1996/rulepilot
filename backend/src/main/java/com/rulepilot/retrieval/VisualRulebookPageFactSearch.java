@@ -8,6 +8,10 @@ public interface VisualRulebookPageFactSearch {
 
     List<PageFactMatch> search(UUID documentVersionId, String query, int limit);
 
+    default List<PageFactMatch> findByPageNumbers(UUID documentVersionId, java.util.Set<Integer> pageNumbers) {
+        return List.of();
+    }
+
     static VisualRulebookPageFactSearch empty() {
         return (documentVersionId, query, limit) -> List.of();
     }
@@ -17,11 +21,12 @@ public interface VisualRulebookPageFactSearch {
             String printedTerms,
             String factualSummary,
             List<String> keywords,
-            double score) {
+            double score,
+            RuleFactStatus ruleFactStatus) {
         public PageFactMatch {
             if (pageNumber < 1 || printedTerms == null || printedTerms.isBlank() || factualSummary == null
                     || factualSummary.isBlank() || keywords == null || keywords.isEmpty()
-                    || !Double.isFinite(score) || score < 0) {
+                    || !Double.isFinite(score) || score < 0 || ruleFactStatus == null) {
                 throw new IllegalArgumentException("visual page fact match is invalid");
             }
             printedTerms = printedTerms.strip();
@@ -29,9 +34,29 @@ public interface VisualRulebookPageFactSearch {
             keywords = keywords.stream().map(String::strip).filter(value -> !value.isBlank()).distinct().toList();
         }
 
+        /** Compatibility constructor for callers that already supply a bounded atomic rule-fact fixture. */
+        public PageFactMatch(
+                int pageNumber,
+                String printedTerms,
+                String factualSummary,
+                List<String> keywords,
+                double score) {
+            this(pageNumber, printedTerms, factualSummary, keywords, score, RuleFactStatus.CURRENT_RULE_FACTS);
+        }
+
+        public boolean supportsRuleClaims() {
+            return ruleFactStatus == RuleFactStatus.CURRENT_RULE_FACTS;
+        }
+
         public String evidenceText() {
             return "Visual page facts (verify against the cited rulebook page).\nPrinted terms: " + printedTerms
                     + "\nVisible facts: " + factualSummary + "\nKeywords: " + String.join(", ", keywords);
         }
+    }
+
+    enum RuleFactStatus {
+        CURRENT_RULE_FACTS,
+        NO_RULE_CONTENT,
+        FACTS_INCOMPLETE
     }
 }

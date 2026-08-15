@@ -5,6 +5,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.rulepilot.retrieval.AnswerRetrievalPlan.EvidenceNeed;
 import com.rulepilot.retrieval.AnswerRetrievalQuestion.QuestionType;
+import com.rulepilot.retrieval.VisualRulebookPageFactSearch.PageFactMatch;
+import com.rulepilot.retrieval.VisualRulebookPageFactSearch.RuleFactStatus;
 import com.rulepilot.retrieval.evidence.HybridEvidenceHit;
 import com.rulepilot.retrieval.evidence.RuleEvidenceHit;
 import java.util.ArrayList;
@@ -17,6 +19,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 class AnswerEvidenceRetrieverTest {
 
@@ -190,9 +193,7 @@ class AnswerEvidenceRetrieverTest {
         AnswerEvidenceRetriever.Result result = retriever.retrieve(
                 UUID.randomUUID(), question("What happens to unused pieces?"), context(), "alice");
 
-        assertThat(result.evidence()).extracting(hit -> hit.evidence().excerpt())
-                .contains(VISUAL_PLACEHOLDER)
-                .allSatisfy(excerpt -> assertThat(excerpt).doesNotContain("Visual-transcribed rule evidence"));
+        assertThat(result.evidence()).isEmpty();
     }
 
     @Test
@@ -254,7 +255,7 @@ class AnswerEvidenceRetrieverTest {
     }
 
     @Test
-    void keepsBroadSupplementaryRecallOutOfTheAnswerContextWhenAPrimaryAnchorExists() {
+    void keepsBroadSupplementaryRecallBehindThePrimaryDirectAnchor() {
         HybridEvidenceHit direct = hit(
                 "ROUND_STRUCTURE",
                 "Collision",
@@ -268,7 +269,7 @@ class AnswerEvidenceRetrieverTest {
                 11,
                 0.9);
         AnswerEvidenceRetriever retriever = retriever(
-                (documentVersionId, query, options) -> query.contains("rule definition")
+                (documentVersionId, query, options) -> query.contains("rule condition consequence")
                         ? List.of(broadSupplement)
                         : List.of(direct),
                 VisualRulebookPageFactSearch.empty(),
@@ -278,7 +279,41 @@ class AnswerEvidenceRetrieverTest {
                 UUID.randomUUID(), question("What happens when players choose the same number?"), context(), "alice");
 
         assertThat(result.evidence()).extracting(hit -> hit.evidence().chunkId())
-                .containsExactly(direct.evidence().chunkId());
+                .containsExactly(direct.evidence().chunkId(), broadSupplement.evidence().chunkId());
+    }
+
+    @Test
+    void keepsEveryDirectObligationAnchoredWhenTheFiveIntentBudgetIsFull() {
+        java.util.concurrent.atomic.AtomicInteger searchIndex = new java.util.concurrent.atomic.AtomicInteger();
+        List<String> directHeadings = new ArrayList<>();
+        AnswerEvidenceRetriever retriever = retriever(
+                (documentVersionId, query, options) -> {
+                    int index = searchIndex.getAndIncrement();
+                    String heading = "Direct obligation " + index;
+                    directHeadings.add(heading);
+                    return List.of(
+                            hit("RULE", heading, "Opaque direct clause " + index, index + 1, 0.1),
+                            hit("GENERAL", "Metadata " + index + "A", "Opaque metadata.", index + 20, 1.0),
+                            hit("GENERAL", "Metadata " + index + "B", "Opaque metadata.", index + 30, 0.9));
+                },
+                VisualRulebookPageFactSearch.empty(),
+                (documentVersionId, chunkIds) -> List.of());
+        AnswerRetrievalQuestion question = question("Current cobalt spindle question");
+        AnswerRetrievalPlan fullPlan = new AnswerRetrievalPlan(
+                List.of(
+                        new AnswerRetrievalPlan.Subquestion("first obligation", Set.of(EvidenceNeed.DIRECT_RULE)),
+                        new AnswerRetrievalPlan.Subquestion("second obligation", Set.of(EvidenceNeed.DIRECT_RULE)),
+                        new AnswerRetrievalPlan.Subquestion("third obligation", Set.of(EvidenceNeed.DIRECT_RULE)),
+                        new AnswerRetrievalPlan.Subquestion("fourth obligation", Set.of(EvidenceNeed.DIRECT_RULE))),
+                false);
+
+        AnswerEvidenceRetriever.Result result = retriever.retrieve(
+                UUID.randomUUID(), question, context(), "alice", fullPlan);
+
+        assertThat(searchIndex).hasValue(5);
+        assertThat(result.evidence())
+                .extracting(hit -> hit.evidence().heading())
+                .containsAll(directHeadings);
     }
 
     @Test
@@ -306,8 +341,115 @@ class AnswerEvidenceRetrieverTest {
                 new AnswerRetrievalContext(versionId, "上一轮问了回合顺序。", null),
                 "alice");
 
-        assertThat(rewriteInputs).containsExactly("alice", "游戏开始前如何设置？", "上一轮问了回合顺序。");
+        assertThat(rewriteInputs).containsExactly("alice", "游戏开始前如何设置？", null);
         assertThat(searchedQueries).contains("setup before first turn");
+    }
+
+    @Test
+    void treatsAnExplicitPageAsALocatorAndRanksItsCurrentRuleFactsAboveDescriptiveMetadata() {
+        RuleEvidenceHit hintedPage = hit(
+                        "GENERAL", "Rendered page", VISUAL_PLACEHOLDER, 47, 0.1)
+                .evidence();
+        HybridEvidenceHit descriptive = hit(
+                "GENERAL",
+                "Archive panel",
+                "A release archive entry describes the document but states no playable rule.",
+                12,
+                1.0);
+        VisualRulebookPageFactSearch facts = new VisualRulebookPageFactSearch() {
+            @Override
+            public List<PageFactMatch> search(UUID documentVersionId, String query, int limit) {
+                return List.of(new PageFactMatch(
+                        12,
+                        "Archive panel",
+                        "This page is descriptive material only.",
+                        List.of("archive"),
+                        1.0,
+                        RuleFactStatus.NO_RULE_CONTENT));
+            }
+
+            @Override
+            public List<PageFactMatch> findByPageNumbers(UUID documentVersionId, Set<Integer> pageNumbers) {
+                if (!pageNumbers.contains(47)) return List.of();
+                return List.of(new PageFactMatch(
+                        47,
+                        "cobalt spindle",
+                        "The cobalt spindle returns after the current interval.",
+                        List.of("cobalt spindle"),
+                        0.8,
+                        RuleFactStatus.CURRENT_RULE_FACTS));
+            }
+        };
+        RuleEvidenceLookup lookup = new RuleEvidenceLookup() {
+            @Override
+            public List<RuleEvidenceHit> findByChunkIds(UUID documentVersionId, Set<UUID> chunkIds) {
+                return List.of();
+            }
+
+            @Override
+            public List<RuleEvidenceHit> findByPageNumbers(UUID documentVersionId, Set<Integer> pageNumbers) {
+                List<RuleEvidenceHit> sources = new ArrayList<>();
+                if (pageNumbers.contains(47)) sources.add(hintedPage);
+                if (pageNumbers.contains(12)) sources.add(descriptive.evidence());
+                return List.copyOf(sources);
+            }
+        };
+        AnswerEvidenceRetriever retriever = retriever(
+                (documentVersionId, query, options) -> List.of(descriptive), facts, lookup);
+        AnswerRetrievalQuestion question = question(
+                "On page 47, does the cobalt spindle return after the current interval?");
+        AnswerRetrievalPlan plan = new AnswerRetrievalPlan(
+                List.of(new AnswerRetrievalPlan.Subquestion(
+                        "does the cobalt spindle return after the current interval?",
+                        Set.of(EvidenceNeed.DIRECT_RULE),
+                        AnswerRetrievalPlan.QuestionOwner.CURRENT_QUESTION)),
+                false,
+                AnswerRetrievalPlan.ReferenceBinding.CURRENT_QUESTION,
+                null,
+                List.of("cobalt spindle"),
+                List.of(new AnswerRetrievalPlan.PageHint("page 47", 47)));
+
+        AnswerEvidenceRetriever.Result result = retriever.retrieve(
+                UUID.randomUUID(), question, context(), "alice", plan);
+
+        assertThat(result.evidence()).singleElement().satisfies(hit -> {
+            assertThat(hit.evidence().pageFrom()).isEqualTo(47);
+            assertThat(hit.evidence().excerpt())
+                    .startsWith("Visual-transcribed rule evidence")
+                    .contains("returns after the current interval");
+        });
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"Promotional panel", "Document listing", "Request failure notice"})
+    void excludesTypedNonRulePagesWithoutClassifyingTheirWording(String heading) {
+        HybridEvidenceHit source = hit(
+                "GENERAL", heading, "Opaque descriptive content with no executable clause.", 31, 1.0);
+        VisualRulebookPageFactSearch facts = (documentVersionId, query, limit) -> List.of(new PageFactMatch(
+                31,
+                heading,
+                "The page has no gameplay rule group.",
+                List.of("descriptive"),
+                1.0,
+                RuleFactStatus.NO_RULE_CONTENT));
+        RuleEvidenceLookup lookup = new RuleEvidenceLookup() {
+            @Override
+            public List<RuleEvidenceHit> findByChunkIds(UUID documentVersionId, Set<UUID> chunkIds) {
+                return List.of();
+            }
+
+            @Override
+            public List<RuleEvidenceHit> findByPageNumbers(UUID documentVersionId, Set<Integer> pageNumbers) {
+                return pageNumbers.contains(31) ? List.of(source.evidence()) : List.of();
+            }
+        };
+        AnswerEvidenceRetriever retriever = retriever(
+                (documentVersionId, query, options) -> List.of(source), facts, lookup);
+
+        AnswerEvidenceRetriever.Result result = retriever.retrieve(
+                UUID.randomUUID(), question("What does the cobalt spindle do?"), context(), "alice");
+
+        assertThat(result.evidence()).isEmpty();
     }
 
     @Test

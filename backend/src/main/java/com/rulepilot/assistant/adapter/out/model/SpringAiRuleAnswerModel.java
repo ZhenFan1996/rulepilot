@@ -35,11 +35,11 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final Logger LOGGER = LoggerFactory.getLogger(SpringAiRuleAnswerModel.class);
     private static final String QUESTION_INTERPRETATION_SYSTEM = readPrompt(
-            "prompts/rule-answer-question-interpretation-v6-calculation-scope-system.txt");
+            "prompts/rule-answer-question-interpretation-v7-intent-ownership-system.txt");
     private static final String QUESTION_INTERPRETATION_USER = readPrompt(
             "prompts/rule-answer-question-interpretation-v3-user.txt");
     private static final String QUESTION_INTERPRETATION_REPAIR = readPrompt(
-            "prompts/rule-answer-question-interpretation-repair-v1-system.txt");
+            "prompts/rule-answer-question-interpretation-repair-v2-intent-ownership-system.txt");
 
     private final RuntimeModelConfiguration models;
     private final FakeRuleAnswerModel fakeModel;
@@ -320,6 +320,9 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
                         .param("questionType", request.questionType().name())
                         .param("evidenceNeeds", request.evidenceNeeds())
                         .param("answerAid", request.answerAid())
+                        .param("referenceBinding", request.context().referenceBinding())
+                        .param("currentRuleObjects", request.context().currentRuleObjectSpans())
+                        .param("pageHints", request.context().pageHints())
                         .param("previousQuestion", request.context().previousQuestion())
                         .param("learningIntent", request.context().learningIntentForPrompt())
                         .param("outputLanguage", request.context().outputLanguageForPrompt())

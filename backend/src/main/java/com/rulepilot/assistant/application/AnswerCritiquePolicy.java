@@ -8,6 +8,7 @@ import com.rulepilot.assistant.GeneratedContentCritic.ReviewRequest;
 import com.rulepilot.assistant.GeneratedContentCritic.ReviewRisk;
 import com.rulepilot.assistant.GeneratedContentCritic.TaskContext;
 import com.rulepilot.assistant.QuestionUnderstanding.QuestionContext;
+import com.rulepilot.assistant.RuleAnswerModel.ModelRequest;
 import com.rulepilot.assistant.domain.RuleCitation;
 import com.rulepilot.assistant.domain.StructuredRuleAnswer;
 import com.rulepilot.assistant.domain.UnderstoodQuestion;
@@ -38,13 +39,37 @@ final class AnswerCritiquePolicy {
             QuestionContext context,
             StructuredRuleAnswer answer,
             List<HybridEvidenceHit> evidence) {
+        return request(assistantRunId, question, context, null, answer, evidence);
+    }
+
+    static ReviewRequest request(
+            UUID assistantRunId,
+            UnderstoodQuestion question,
+            QuestionContext context,
+            ModelRequest modelRequest,
+            StructuredRuleAnswer answer,
+            List<HybridEvidenceHit> evidence) {
         List<UUID> answerCitations = answer.citations().stream().map(RuleCitation::chunkId).toList();
         List<Claim> claims = claims(answer, answerCitations);
+        String selectedReference = modelRequest == null
+                ? ""
+                : modelRequest.context().previousQuestion();
+        String focusContract = modelRequest == null
+                ? ""
+                : " The validated current rule-object spans are "
+                        + modelRequest.context().currentRuleObjectSpans()
+                        + ". Explicit page locators are "
+                        + modelRequest.context().pageHints()
+                        + "; a page locator narrows where to inspect but is never proof of a rule claim.";
         return new ReviewRequest(
                 assistantRunId,
                 ContentType.ANSWER,
                 new TaskContext(
-                        "Answer the player's rule question: " + question.normalizedQuestion(),
+                        "Answer the player's current rule question: " + question.originalQuestion()
+                                + (selectedReference == null || selectedReference.isBlank()
+                                                || "not provided".equals(selectedReference)
+                                        ? ""
+                                        : " Selected reference context (reference resolution only): " + selectedReference),
                         "Judge every player-facing claim against its own combined citations. Preserve actor, action, "
                                 + "object, condition, quantity, modality, timing, sequence, result, exception, and "
                                 + "scope. Cover every material obligation in the question and the selected structured "
@@ -53,7 +78,11 @@ final class AnswerCritiquePolicy {
                                 + "same-scope worked example as a consistency check on the governing rule and total. "
                                 + "Do not accept outside knowledge, invented table state, inferred strategy, or "
                                 + "source-authored advice without directly cited advice text. Natural paraphrase and "
-                                + "faithful translation are valid."),
+                                + "faithful translation are valid. The current question and its explicitly named "
+                                + "object remain authoritative; selected prior context may resolve an omitted reference "
+                                + "but may not replace a current object. Advertising, contents/listing text, error-page "
+                                + "text, extraction placeholders, and descriptive visual metadata cannot entail a "
+                                + "gameplay rule. A directly answering source clause can." + focusContract),
                 claims,
                 evidence.stream()
                         .map(HybridEvidenceHit::evidence)

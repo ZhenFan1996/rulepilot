@@ -110,12 +110,12 @@ final class AnswerPostPublicationReviewer {
         try {
             ReviewRisk risk = AnswerCritiquePolicy.reviewRisk(question, context, answer);
             Review review = critic.review(
-                    AnswerCritiquePolicy.request(assistantRunId, question, context, answer, evidence),
+                    AnswerCritiquePolicy.request(assistantRunId, question, context, modelRequest, answer, evidence),
                     risk,
                     username);
             if (review.accepted()) return Result.accepted(answer);
             if (!AnswerCritiquePolicy.allowsBoundedCorrection(question, context)) {
-                return unresolvedReview(answer, review, "事实一致性审查发现未修正的关键问题。");
+                return unresolvedReview(answer, review, context);
             }
             StructuredRuleAnswer revised;
             try {
@@ -132,13 +132,13 @@ final class AnswerPostPublicationReviewer {
                 throw stopped;
             } catch (RuntimeException correctionFailure) {
                 return hasMaterialDefect(review)
-                        ? Result.rejected(AnswerStatus.INVALID_MODEL_OUTPUT, "事实一致性审查发现未修正的关键问题。")
+                        ? unsupportedReview(context)
                         : Result.warned(answer, Type.REVIEW_UNRESOLVED);
             }
             Review revisionReview;
             try {
                 revisionReview = critic.review(
-                        AnswerCritiquePolicy.request(assistantRunId, question, context, revised, evidence),
+                        AnswerCritiquePolicy.request(assistantRunId, question, context, modelRequest, revised, evidence),
                         ReviewRisk.HIGH_IMPACT,
                         username);
             } catch (AgentExecutionStoppedException stopped) {
@@ -147,7 +147,7 @@ final class AnswerPostPublicationReviewer {
                 return unavailableReview();
             }
             if (!revisionReview.accepted()) {
-                return unresolvedReview(revised, revisionReview, "局部重讲仍未通过事实一致性审查。");
+                return unresolvedReview(revised, revisionReview, context);
             }
             return Result.accepted(revised);
         } catch (AgentExecutionStoppedException exception) {
@@ -168,10 +168,21 @@ final class AnswerPostPublicationReviewer {
                 "事实复核暂时不可用；为避免发布未经复核的规则结论，本次不作判定，请重试或直接查看规则页。");
     }
 
-    private Result unresolvedReview(StructuredRuleAnswer answer, Review review, String materialFailureMessage) {
+    private Result unresolvedReview(
+            StructuredRuleAnswer answer, Review review, QuestionContext context) {
         return hasMaterialDefect(review)
-                ? Result.rejected(AnswerStatus.INVALID_MODEL_OUTPUT, materialFailureMessage)
+                ? unsupportedReview(context)
                 : Result.warned(answer, Type.REVIEW_UNRESOLVED);
+    }
+
+    private Result unsupportedReview(QuestionContext context) {
+        boolean english = context != null && context.outputLanguage() == com.rulepilot.assistant.PlayerLocale.EN;
+        return Result.rejected(
+                AnswerStatus.INSUFFICIENT_EVIDENCE,
+                english
+                        ? "Candidate rule pages were found, but the generated conclusion could not be verified by "
+                                + "its own citations. Open the cited pages or ask again with the exact rulebook object name."
+                        : "已找到候选规则页，但生成结论无法由自己的引用核对；请打开来源页核对，或用规则书中的准确对象名称重新提问。");
     }
 
     private boolean hasMaterialDefect(Review review) {

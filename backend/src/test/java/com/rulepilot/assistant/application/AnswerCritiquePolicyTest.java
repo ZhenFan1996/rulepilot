@@ -82,6 +82,24 @@ class AnswerCritiquePolicyTest {
                 "MISSING_EXCEPTION: Add the cited exception.");
     }
 
+    @Test
+    void keepsTheCurrentQuestionAuthoritativeWhenResolvedContextContainsAnEarlierObject() {
+        UnderstoodQuestion question = new UnderstoodQuestion(
+                versionId,
+                "Does the cobalt spindle return now?",
+                "How many marks does the amber lattice award? Follow-up: Does the cobalt spindle return now?",
+                QuestionType.RULE_QUERY,
+                List.of("cobalt spindle"),
+                Set.of());
+
+        GeneratedContentCritic.ReviewRequest request = AnswerCritiquePolicy.request(
+                UUID.randomUUID(), question, context(), answer(), List.of(evidence()));
+
+        assertThat(request.taskContext().objective())
+                .contains("Does the cobalt spindle return now?")
+                .doesNotContain("amber lattice");
+    }
+
     private UnderstoodQuestion question() {
         return new UnderstoodQuestion(
                 versionId,

@@ -12,6 +12,7 @@ import com.rulepilot.teaching.VisualRulebookPageCatalogModel.SourceDependency;
 import com.rulepilot.teaching.VisualRulebookPageFacts.IconMeaningStatus;
 import com.rulepilot.teaching.VisualRulebookPageFacts.IconOccurrence;
 import com.rulepilot.teaching.VisualRulebookPageFacts.VisualAnchor;
+import com.rulepilot.retrieval.VisualRulebookPageFactSearch.RuleFactStatus;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.Query;
 import java.util.List;
@@ -35,8 +36,64 @@ class JpaVisualRulebookPageFactsTest {
 
         repository.search(UUID.randomUUID(), "MOVE", 2);
 
-        assertThat(sql.getValue()).contains("schema_version = :schemaVersion");
+        assertThat(sql.getValue())
+                .contains(
+                        "schema_version = :schemaVersion",
+                        "rule_group_identifiers",
+                        "rule_group_inventory_complete");
         verify(query).setParameter("schemaVersion", PageFact.CURRENT_SCHEMA_VERSION);
+    }
+
+    @Test
+    void mapsCompleteRuleGroupInventoriesIntoTypedAnswerEvidenceReadiness() {
+        UUID documentVersionId = UUID.randomUUID();
+        JpaVisualRulebookPageFacts repository = new JpaVisualRulebookPageFacts();
+        EntityManager entityManager = mock(EntityManager.class);
+        ReflectionTestUtils.setField(repository, "entityManager", entityManager);
+        var currentRuleFact = new PageFact(
+                7,
+                "Cobalt spindle",
+                "Cobalt spindle: The cobalt spindle returns after the final pulse.",
+                List.of("cobalt spindle"),
+                List.of(),
+                List.of(),
+                false,
+                PageFact.CURRENT_SCHEMA_VERSION,
+                List.of(),
+                List.of("Cobalt spindle"),
+                true);
+        var noRuleContent = new PageFact(
+                8,
+                "Panel",
+                "A descriptive panel has no rule group.",
+                List.of("panel"),
+                List.of(),
+                List.of(),
+                false,
+                PageFact.CURRENT_SCHEMA_VERSION,
+                List.of(),
+                List.of(),
+                true);
+        var incomplete = new PageFact(
+                9,
+                "Pending",
+                "The page inventory is not complete.",
+                List.of("pending"));
+        var jpaQuery = mock(jakarta.persistence.TypedQuery.class);
+        when(entityManager.createQuery(anyString(), org.mockito.ArgumentMatchers.eq(VisualRulebookPageFactEntity.class)))
+                .thenReturn(jpaQuery);
+        when(jpaQuery.setParameter(anyString(), any())).thenReturn(jpaQuery);
+        when(jpaQuery.getResultList()).thenReturn(List.of(
+                new VisualRulebookPageFactEntity(documentVersionId, currentRuleFact),
+                new VisualRulebookPageFactEntity(documentVersionId, noRuleContent),
+                new VisualRulebookPageFactEntity(documentVersionId, incomplete)));
+
+        assertThat(repository.findByPageNumbers(documentVersionId, java.util.Set.of(7, 8, 9)))
+                .extracting(match -> match.pageNumber() + ":" + match.ruleFactStatus())
+                .containsExactly(
+                        "7:" + RuleFactStatus.CURRENT_RULE_FACTS,
+                        "8:" + RuleFactStatus.NO_RULE_CONTENT,
+                        "9:" + RuleFactStatus.FACTS_INCOMPLETE);
     }
 
     @Test

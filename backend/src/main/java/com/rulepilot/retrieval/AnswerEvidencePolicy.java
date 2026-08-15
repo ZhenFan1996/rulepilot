@@ -1,6 +1,7 @@
 package com.rulepilot.retrieval;
 
 import com.rulepilot.retrieval.evidence.HybridEvidenceHit;
+import com.rulepilot.retrieval.evidence.RuleEvidenceHit;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -28,7 +29,11 @@ public final class AnswerEvidencePolicy {
     }
 
     public static boolean isVisualPlaceholder(HybridEvidenceHit hit) {
-        return hit != null && VISUAL_PAGE_PLACEHOLDER.equals(hit.evidence().excerpt());
+        return hit != null && isVisualPlaceholder(hit.evidence());
+    }
+
+    public static boolean isVisualPlaceholder(RuleEvidenceHit hit) {
+        return hit != null && VISUAL_PAGE_PLACEHOLDER.equals(hit.excerpt());
     }
 
     static boolean requiresCrossLanguageExpansion(String question) {

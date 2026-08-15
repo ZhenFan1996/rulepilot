@@ -153,8 +153,8 @@ class AnswerPostPublicationReviewerTest {
                 List.of(evidence));
 
         assertThat(result.accepted()).isFalse();
-        assertThat(result.failureStatus()).isEqualTo(AnswerStatus.INVALID_MODEL_OUTPUT);
-        assertThat(result.failureMessage()).contains("一致性审查");
+        assertThat(result.failureStatus()).isEqualTo(AnswerStatus.INSUFFICIENT_EVIDENCE);
+        assertThat(result.failureMessage()).contains("引用", "核对");
         assertThat(modelCalls).hasValue(1);
     }
 

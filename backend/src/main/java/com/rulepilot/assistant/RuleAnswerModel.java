@@ -185,16 +185,31 @@ public interface RuleAnswerModel {
         }
     }
 
+    /** One explicit page locator copied from the current question; it is never rule evidence by itself. */
+    record PlannedPageHint(String questionSpan, int pageNumber) {
+        public PlannedPageHint {
+            if (questionSpan == null || questionSpan.isBlank() || questionSpan.length() > 120
+                    || pageNumber < 1 || pageNumber > 10_000) {
+                throw new IllegalArgumentException("planned answer page hint is invalid");
+            }
+            questionSpan = questionSpan.strip();
+        }
+    }
+
     record QuestionInterpretationDraft(
             QuestionType questionType,
             ReferenceBinding referenceBinding,
             List<String> terms,
+            List<String> ruleObjectSpans,
+            List<PlannedPageHint> pageHints,
             Set<MissingQuestionContext> missingContext,
             LearningIntent learningIntent,
             AnswerAid answerAid,
             List<PlannedSubquestion> subquestions) {
         public QuestionInterpretationDraft {
             if (questionType == null || referenceBinding == null || terms == null || terms.size() > 12
+                    || ruleObjectSpans == null || ruleObjectSpans.size() > 4
+                    || pageHints == null || pageHints.size() > 4
                     || missingContext == null || missingContext.size() > 2
                     || answerAid == null || subquestions == null || subquestions.size() > 4) {
                 throw new IllegalArgumentException("question interpretation draft is invalid");
@@ -202,12 +217,41 @@ public interface RuleAnswerModel {
             if (terms.stream().anyMatch(value -> value == null || value.isBlank() || value.length() > 80)) {
                 throw new IllegalArgumentException("question interpretation term is invalid");
             }
+            if (ruleObjectSpans.stream()
+                    .anyMatch(value -> value == null || value.isBlank() || value.length() > 120)) {
+                throw new IllegalArgumentException("question interpretation rule object is invalid");
+            }
             terms = terms.stream()
                     .map(String::strip)
                     .distinct()
                     .toList();
+            ruleObjectSpans = ruleObjectSpans.stream()
+                    .map(String::strip)
+                    .distinct()
+                    .toList();
+            pageHints = pageHints.stream().distinct().toList();
             missingContext = Set.copyOf(missingContext);
             subquestions = List.copyOf(subquestions);
+        }
+
+        public QuestionInterpretationDraft(
+                QuestionType questionType,
+                ReferenceBinding referenceBinding,
+                List<String> terms,
+                Set<MissingQuestionContext> missingContext,
+                LearningIntent learningIntent,
+                AnswerAid answerAid,
+                List<PlannedSubquestion> subquestions) {
+            this(
+                    questionType,
+                    referenceBinding,
+                    terms,
+                    List.of(),
+                    List.of(),
+                    missingContext,
+                    learningIntent,
+                    answerAid,
+                    subquestions);
         }
 
         public QuestionInterpretationDraft(
@@ -221,6 +265,8 @@ public interface RuleAnswerModel {
                     questionType,
                     referenceBinding,
                     terms,
+                    List.of(),
+                    List.of(),
                     missingContext,
                     learningIntent,
                     AnswerAid.forLearningIntent(learningIntent),
@@ -233,7 +279,16 @@ public interface RuleAnswerModel {
                 List<String> terms,
                 Set<MissingQuestionContext> missingContext,
                 List<PlannedSubquestion> subquestions) {
-            this(questionType, referenceBinding, terms, missingContext, null, AnswerAid.NONE, subquestions);
+            this(
+                    questionType,
+                    referenceBinding,
+                    terms,
+                    List.of(),
+                    List.of(),
+                    missingContext,
+                    null,
+                    AnswerAid.NONE,
+                    subquestions);
         }
     }
 
@@ -300,11 +355,39 @@ public interface RuleAnswerModel {
     record AnswerContext(
             String previousQuestion,
             LearningIntent learningIntent,
-            PlayerLocale outputLanguage) {
+            PlayerLocale outputLanguage,
+            ReferenceBinding referenceBinding,
+            List<String> currentRuleObjectSpans,
+            List<Integer> pageHints) {
 
         public AnswerContext {
             previousQuestion = optional(previousQuestion);
             outputLanguage = outputLanguage == null ? PlayerLocale.ZH_CN : outputLanguage;
+            referenceBinding = referenceBinding == null ? ReferenceBinding.CURRENT_QUESTION : referenceBinding;
+            currentRuleObjectSpans = currentRuleObjectSpans == null
+                    ? List.of()
+                    : currentRuleObjectSpans.stream().map(String::strip).distinct().toList();
+            pageHints = pageHints == null ? List.of() : pageHints.stream().distinct().toList();
+            if (currentRuleObjectSpans.size() > 4
+                    || currentRuleObjectSpans.stream()
+                            .anyMatch(value -> value.isBlank() || value.length() > 120)
+                    || pageHints.size() > 4
+                    || pageHints.stream().anyMatch(page -> page == null || page < 1 || page > 10_000)) {
+                throw new IllegalArgumentException("answer context focus is invalid");
+            }
+        }
+
+        public AnswerContext(
+                String previousQuestion,
+                LearningIntent learningIntent,
+                PlayerLocale outputLanguage) {
+            this(
+                    previousQuestion,
+                    learningIntent,
+                    outputLanguage,
+                    ReferenceBinding.CURRENT_QUESTION,
+                    List.of(),
+                    List.of());
         }
 
         private static String optional(String value) {

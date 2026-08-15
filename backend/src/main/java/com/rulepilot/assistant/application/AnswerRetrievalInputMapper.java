@@ -18,6 +18,7 @@ final class AnswerRetrievalInputMapper {
     static AnswerRetrievalQuestion question(UnderstoodQuestion source) {
         if (source == null) throw new IllegalArgumentException("understood question is required");
         return new AnswerRetrievalQuestion(
+                source.originalQuestion(),
                 source.normalizedQuestion(),
                 questionType(source.type()),
                 source.terms());
@@ -39,9 +40,16 @@ final class AnswerRetrievalInputMapper {
                                 subquestion.text(),
                                 subquestion.evidenceNeeds().stream()
                                         .map(AnswerRetrievalInputMapper::evidenceNeed)
-                                        .collect(java.util.stream.Collectors.toUnmodifiableSet())))
+                                        .collect(java.util.stream.Collectors.toUnmodifiableSet()),
+                                questionOwner(subquestion.owner())))
                         .toList(),
-                source.answerAid() == AnswerAid.CALCULATION);
+                source.answerAid() == AnswerAid.CALCULATION,
+                referenceBinding(source.referenceBinding()),
+                source.boundReferenceQuestion(),
+                source.currentRuleObjectSpans(),
+                source.pageHints().stream()
+                        .map(hint -> new AnswerRetrievalPlan.PageHint(hint.questionSpan(), hint.pageNumber()))
+                        .toList());
     }
 
     private static AnswerRetrievalQuestion.QuestionType questionType(QuestionType source) {
@@ -77,6 +85,22 @@ final class AnswerRetrievalInputMapper {
             case COMPLETE_LIST -> AnswerRetrievalPlan.EvidenceNeed.COMPLETE_LIST;
             case ADVICE -> AnswerRetrievalPlan.EvidenceNeed.ADVICE;
             case PRIOR_TURN -> AnswerRetrievalPlan.EvidenceNeed.PRIOR_TURN;
+        };
+    }
+
+    private static AnswerRetrievalPlan.QuestionOwner questionOwner(AnswerQuestionPlan.QuestionOwner source) {
+        return switch (source) {
+            case CURRENT_QUESTION -> AnswerRetrievalPlan.QuestionOwner.CURRENT_QUESTION;
+            case BOUND_REFERENCE -> AnswerRetrievalPlan.QuestionOwner.BOUND_REFERENCE;
+        };
+    }
+
+    private static AnswerRetrievalPlan.ReferenceBinding referenceBinding(
+            com.rulepilot.assistant.RuleAnswerModel.ReferenceBinding source) {
+        return switch (source) {
+            case CURRENT_QUESTION, NEEDS_CLARIFICATION -> AnswerRetrievalPlan.ReferenceBinding.CURRENT_QUESTION;
+            case PREVIOUS_QUESTION -> AnswerRetrievalPlan.ReferenceBinding.PREVIOUS_QUESTION;
+            case PRIOR_GROUNDED_TURN -> AnswerRetrievalPlan.ReferenceBinding.PRIOR_GROUNDED_TURN;
         };
     }
 }

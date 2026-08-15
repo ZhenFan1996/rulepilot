@@ -39,9 +39,11 @@ public final class AnswerRetrievalPlanner {
         }
         AnswerRetrievalPlan acceptedPlan = questionPlan == null ? AnswerRetrievalPlan.fallback(question) : questionPlan;
         List<RetrievalIntent> intents = new ArrayList<>();
+        addDistinct(intents, new RetrievalIntent(
+                currentFocusQuery(question, acceptedPlan), Set.of(), null, true, RetrievalPurpose.GENERAL));
         for (Subquestion subquestion : acceptedPlan.subquestions()) {
             addDistinct(intents, new RetrievalIntent(
-                    plannedQuery(subquestion), Set.of(), null, true, RetrievalPurpose.GENERAL));
+                    plannedQuery(subquestion, acceptedPlan), Set.of(), null, true, RetrievalPurpose.GENERAL));
             if (intents.size() == MAX_INTENTS) return List.copyOf(intents);
         }
         if (rewrittenQueries != null) {
@@ -56,7 +58,7 @@ public final class AnswerRetrievalPlanner {
         if (acceptedPlan.evidenceNeeds().contains(EvidenceNeed.ADVICE)) {
             for (String cue : adviceSourceCueQueries()) {
                 addDistinct(intents, new RetrievalIntent(
-                        bounded(question.normalizedQuestion() + " " + cue),
+                        bounded(question.currentQuestion() + " " + cue),
                         Set.of(),
                         null,
                         false,
@@ -76,8 +78,23 @@ public final class AnswerRetrievalPlanner {
         }
     }
 
-    private static String plannedQuery(Subquestion subquestion) {
+    private static String currentFocusQuery(AnswerRetrievalQuestion question, AnswerRetrievalPlan plan) {
+        StringBuilder query = new StringBuilder(question.currentQuestion());
+        plan.currentRuleObjectSpans().forEach(object -> append(query, object));
+        plan.subquestions().stream()
+                .filter(subquestion -> subquestion.owner() == AnswerRetrievalPlan.QuestionOwner.CURRENT_QUESTION)
+                .flatMap(subquestion -> subquestion.evidenceNeeds().stream())
+                .distinct()
+                .map(AnswerRetrievalPlanner::evidenceNeedFacets)
+                .forEach(facet -> append(query, facet));
+        return bounded(query.toString());
+    }
+
+    private static String plannedQuery(Subquestion subquestion, AnswerRetrievalPlan plan) {
         StringBuilder query = new StringBuilder(subquestion.text());
+        if (subquestion.owner() == AnswerRetrievalPlan.QuestionOwner.CURRENT_QUESTION) {
+            plan.currentRuleObjectSpans().forEach(object -> append(query, object));
+        }
         subquestion.evidenceNeeds().stream()
                 .map(AnswerRetrievalPlanner::evidenceNeedFacets)
                 .forEach(facet -> append(query, facet));
@@ -107,8 +124,11 @@ public final class AnswerRetrievalPlanner {
 
     private static String supplementaryQuery(
             AnswerRetrievalQuestion question, AnswerRetrievalContext context, AnswerRetrievalPlan plan) {
-        StringBuilder query = new StringBuilder(question.normalizedQuestion());
-        if (context.previousQuestion() != null) append(query, context.previousQuestion());
+        StringBuilder query = new StringBuilder(question.currentQuestion());
+        plan.currentRuleObjectSpans().forEach(object -> append(query, object));
+        if (plan.referenceBinding() != AnswerRetrievalPlan.ReferenceBinding.CURRENT_QUESTION) {
+            append(query, plan.boundReferenceQuestion());
+        }
         if (!question.terms().isEmpty()) append(query, String.join(" ", question.terms()));
         append(query, questionTypeFacets(question.type()));
         append(query, learningFacets(context.learningIntent()));

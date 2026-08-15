@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.SourceDependency;
 import com.rulepilot.teaching.VisualRulebookPageFacts.PageFact;
+import com.rulepilot.retrieval.VisualRulebookPageFactSearch.RuleFactStatus;
 import jakarta.persistence.EntityManager;
 import java.sql.DriverManager;
 import java.sql.SQLException;
@@ -107,7 +108,14 @@ class JpaVisualRulebookPageFactsPostgresTest {
                 5,
                 "TURN",
                 "TURN: This current observation may be used to locate source evidence.",
-                List.of("turn", "current"));
+                List.of("turn", "current"),
+                List.of(),
+                List.of(),
+                false,
+                PageFact.CURRENT_SCHEMA_VERSION,
+                List.of(),
+                List.of("TURN"),
+                true);
 
         inTransaction(repository -> {
             repository.replace(documentVersionId, List.of(stale, current));
@@ -118,6 +126,7 @@ class JpaVisualRulebookPageFactsPostgresTest {
         assertThat(matches).singleElement().satisfies(match -> {
             assertThat(match.pageNumber()).isEqualTo(5);
             assertThat(match.factualSummary()).doesNotContain("obsolete");
+            assertThat(match.ruleFactStatus()).isEqualTo(RuleFactStatus.CURRENT_RULE_FACTS);
         });
     }
 

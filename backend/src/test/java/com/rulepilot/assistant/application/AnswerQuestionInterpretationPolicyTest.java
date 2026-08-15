@@ -9,6 +9,7 @@ import com.rulepilot.assistant.QuestionUnderstanding.QuestionContext;
 import com.rulepilot.assistant.RuleAnswerModel.QuestionInterpretationDraft;
 import com.rulepilot.assistant.RuleAnswerModel.EvidenceNeed;
 import com.rulepilot.assistant.RuleAnswerModel.PlannedSubquestion;
+import com.rulepilot.assistant.RuleAnswerModel.PlannedPageHint;
 import com.rulepilot.assistant.RuleAnswerModel.ReferenceBinding;
 import com.rulepilot.assistant.domain.MissingQuestionContext;
 import com.rulepilot.assistant.domain.LearningIntent;
@@ -207,6 +208,69 @@ class AnswerQuestionInterpretationPolicyTest {
                     assertThat(interpretation.plan().evidenceNeeds()).containsExactly(EvidenceNeed.ADVICE);
                     assertThat(interpretation.question().terms()).containsExactly("打法", "建议");
                 });
+    }
+
+    @Test
+    void keepsCurrentObjectAndPageLocatorSeparateFromTheSelectedReferenceQuestion() {
+        String current = "On page 47, does the cobalt spindle resolve like that?";
+        String previous = "When does the amber lattice release its stored marker?";
+        QuestionContext context = new QuestionContext(versionId, previous, null, PlayerLocale.EN);
+        QuestionInterpretationDraft draft = new QuestionInterpretationDraft(
+                QuestionType.LESSON_STEP_FOLLOW_UP,
+                ReferenceBinding.PREVIOUS_QUESTION,
+                List.of("cobalt spindle", "amber lattice"),
+                List.of("cobalt spindle"),
+                List.of(new PlannedPageHint("page 47", 47)),
+                Set.of(),
+                null,
+                com.rulepilot.assistant.RuleAnswerModel.AnswerAid.NONE,
+                List.of(
+                        new PlannedSubquestion(previous, Set.of(EvidenceNeed.PRIOR_TURN)),
+                        new PlannedSubquestion(current, Set.of(EvidenceNeed.DIRECT_RULE))));
+
+        assertThat(policy.applyWithPlan(deterministic(current), context, draft))
+                .hasValueSatisfying(interpretation -> {
+                    assertThat(interpretation.plan().subquestions())
+                            .extracting(AnswerQuestionPlan.Subquestion::owner)
+                            .containsExactly(
+                                    AnswerQuestionPlan.QuestionOwner.CURRENT_QUESTION,
+                                    AnswerQuestionPlan.QuestionOwner.BOUND_REFERENCE);
+                    assertThat(interpretation.plan().boundReferenceQuestion()).isEqualTo(previous);
+                    assertThat(interpretation.plan().currentRuleObjectSpans())
+                            .containsExactly("cobalt spindle");
+                    assertThat(interpretation.plan().pageHints())
+                            .containsExactly(new AnswerQuestionPlan.PageHint("page 47", 47));
+                });
+    }
+
+    @Test
+    void rejectsAReferenceObjectOrPageHintSubstitutedFromEarlierContext() {
+        String current = "On page 47, what does the cobalt spindle do?";
+        String previous = "What does the amber lattice do on page 12?";
+        QuestionContext context = new QuestionContext(versionId, previous, null, PlayerLocale.EN);
+        QuestionInterpretationDraft substitutedObject = new QuestionInterpretationDraft(
+                QuestionType.RULE_QUERY,
+                ReferenceBinding.PREVIOUS_QUESTION,
+                List.of("amber lattice"),
+                List.of("amber lattice"),
+                List.of(),
+                Set.of(),
+                null,
+                com.rulepilot.assistant.RuleAnswerModel.AnswerAid.NONE,
+                List.of(new PlannedSubquestion(current, Set.of(EvidenceNeed.DIRECT_RULE))));
+        QuestionInterpretationDraft substitutedPage = new QuestionInterpretationDraft(
+                QuestionType.RULE_QUERY,
+                ReferenceBinding.PREVIOUS_QUESTION,
+                List.of("cobalt spindle"),
+                List.of("cobalt spindle"),
+                List.of(new PlannedPageHint("page 12", 12)),
+                Set.of(),
+                null,
+                com.rulepilot.assistant.RuleAnswerModel.AnswerAid.NONE,
+                List.of(new PlannedSubquestion(current, Set.of(EvidenceNeed.DIRECT_RULE))));
+
+        assertThat(policy.applyWithPlan(deterministic(current), context, substitutedObject)).isEmpty();
+        assertThat(policy.applyWithPlan(deterministic(current), context, substitutedPage)).isEmpty();
     }
 
     private UnderstoodQuestion deterministic(String question) {

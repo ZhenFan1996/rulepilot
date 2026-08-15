@@ -66,17 +66,24 @@ public final class AnswerEvidenceRetriever {
         boolean conflicting = false;
         int successfulCoreRetrievals = 0;
         int failedCoreRetrievals = 0;
+        retrievePageHintCandidates(
+                assistantRunId,
+                context.documentVersionId(),
+                questionPlan,
+                evidenceById,
+                visualFactsByPage,
+                directQuestionVisualFactPages);
         retrieveIdentifierBoundVisualFacts(
                 assistantRunId,
                 context.documentVersionId(),
-                question.normalizedQuestion(),
+                question.currentQuestion(),
                 visualFactsByPage,
                 directQuestionVisualFactPages);
-        List<String> rewrittenQueries = rewriteCrossLanguageQueries(assistantRunId, question, context, username);
+        List<String> rewrittenQueries = rewriteCrossLanguageQueries(
+                assistantRunId, question, username, questionPlan);
         List<RetrievalIntent> intents = AnswerRetrievalPlanner.plan(
                 question, context, rewrittenQueries, questionPlan);
-        for (int intentIndex = 0; intentIndex < intents.size(); intentIndex++) {
-            RetrievalIntent intent = intents.get(intentIndex);
+        for (RetrievalIntent intent : intents) {
             List<HybridEvidenceHit> retrieved;
             try {
                 retrieved = invocations.invoke(
@@ -107,11 +114,8 @@ public final class AnswerEvidenceRetriever {
             }
             boolean visualTranscriptionFallback = retrieved.isEmpty()
                     || retrieved.stream().anyMatch(AnswerEvidencePolicy::isVisualPlaceholder);
-            // The last intent is deliberately broad recall support. It may fill a genuine retrieval gap, but it
-            // must never become the answer's primary anchor merely because it happens to rank a generic paragraph.
-            boolean supplementaryIntent = intentIndex == intents.size() - 1;
             List<HybridEvidenceHit> answerEvidence = retrieved;
-            selectIntentAnchor(intent, answerEvidence, supplementaryIntent, intentAnchors);
+            selectIntentAnchor(answerEvidence, intent.directQuestion(), intentAnchors);
             for (HybridEvidenceHit hit : answerEvidence) {
                 HybridEvidenceHit existing = evidenceById.get(hit.evidence().chunkId());
                 if (existing != null && !AnswerEvidencePolicy.sameEvidenceSnapshot(existing, hit)) {
@@ -189,13 +193,63 @@ public final class AnswerEvidenceRetriever {
         return new Result(selectedEvidence, State.READY);
     }
 
+    private void retrievePageHintCandidates(
+            UUID assistantRunId,
+            UUID documentVersionId,
+            AnswerRetrievalPlan plan,
+            Map<UUID, HybridEvidenceHit> evidenceById,
+            Map<Integer, PageFactMatch> visualFactsByPage,
+            Set<Integer> priorityPages) {
+        Set<Integer> pageNumbers = plan.pageHints().stream()
+                .map(AnswerRetrievalPlan.PageHint::pageNumber)
+                .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+        if (pageNumbers.isEmpty()) return;
+        try {
+            List<HybridEvidenceHit> hinted = invocations.invoke(
+                    assistantRunId,
+                    "readQuestionHintPages",
+                    pageNumbers.size(),
+                    "Player-supplied page locators checked against the active rulebook",
+                    () -> evidenceLookup.findByPageNumbers(documentVersionId, pageNumbers).stream()
+                            .filter(source -> documentVersionId.equals(source.documentVersionId()))
+                            .map(source -> new HybridEvidenceHit(
+                                    source, Math.max(0.01, source.score()), 1, null, false))
+                            .toList(),
+                    this::evidenceTokens);
+            hinted.forEach(hit -> evidenceById.putIfAbsent(hit.evidence().chunkId(), hit));
+        } catch (RuntimeException lookupFailure) {
+            if (invocations.executionStopped(lookupFailure)) throw lookupFailure;
+            LOGGER.warn(
+                    "Optional player page-hint lookup failed for document version {}: {}",
+                    documentVersionId,
+                    lookupFailure.getClass().getSimpleName());
+        }
+        try {
+            List<PageFactMatch> hintedFacts = invocations.invoke(
+                    assistantRunId,
+                    "readQuestionHintPageFacts",
+                    pageNumbers.size(),
+                    "Page-scoped fact readiness checked for player-supplied locators",
+                    () -> visualFacts.findByPageNumbers(documentVersionId, pageNumbers),
+                    matches -> matches.size() * 80);
+            hintedFacts.forEach(match -> visualFactsByPage.put(match.pageNumber(), match));
+            priorityPages.addAll(pageNumbers);
+        } catch (RuntimeException lookupFailure) {
+            if (invocations.executionStopped(lookupFailure)) throw lookupFailure;
+            LOGGER.warn(
+                    "Optional player page-hint fact lookup failed for document version {}: {}",
+                    documentVersionId,
+                    lookupFailure.getClass().getSimpleName());
+        }
+    }
+
     private void retrieveIdentifierBoundVisualFacts(
             UUID assistantRunId,
             UUID documentVersionId,
-            String normalizedQuestion,
+            String currentQuestion,
             Map<Integer, PageFactMatch> visualFactsByPage,
             Set<Integer> directQuestionVisualFactPages) {
-        List<String> identifiers = AnswerEvidencePolicy.printedIdentifiers(normalizedQuestion);
+        List<String> identifiers = AnswerEvidencePolicy.printedIdentifiers(currentQuestion);
         if (identifiers.isEmpty()) return;
         String query = String.join(" ", identifiers);
         try {
@@ -223,11 +277,10 @@ public final class AnswerEvidenceRetriever {
     }
 
     private void selectIntentAnchor(
-            RetrievalIntent intent,
             List<HybridEvidenceHit> retrieved,
-            boolean supplementaryIntent,
+            boolean directQuestion,
             Map<UUID, HybridEvidenceHit> intentAnchors) {
-        if (retrieved.isEmpty() || supplementaryIntent) return;
+        if (retrieved.isEmpty() || !directQuestion) return;
         HybridEvidenceHit anchor = retrieved.stream()
                 .filter(hit -> !intentAnchors.containsKey(hit.evidence().chunkId()))
                 .findFirst()
@@ -238,17 +291,19 @@ public final class AnswerEvidenceRetriever {
     private List<String> rewriteCrossLanguageQueries(
             UUID assistantRunId,
             AnswerRetrievalQuestion question,
-            AnswerRetrievalContext context,
-            String username) {
-        if (!AnswerEvidencePolicy.requiresCrossLanguageExpansion(question.normalizedQuestion())) {
+            String username,
+            AnswerRetrievalPlan plan) {
+        if (!AnswerEvidencePolicy.requiresCrossLanguageExpansion(question.currentQuestion())) {
             return List.of();
         }
         try {
             return queryRewriter.rewrite(
                     assistantRunId,
                     username,
-                    question.normalizedQuestion(),
-                    context.previousQuestion());
+                    question.currentQuestion(),
+                    plan.referenceBinding() == AnswerRetrievalPlan.ReferenceBinding.CURRENT_QUESTION
+                            ? null
+                            : plan.boundReferenceQuestion());
         } catch (RuntimeException exception) {
             if (queryRewriter.timedOut(exception)) {
                 LOGGER.info("Cross-language retrieval rewrite timed out; continuing with the original question");

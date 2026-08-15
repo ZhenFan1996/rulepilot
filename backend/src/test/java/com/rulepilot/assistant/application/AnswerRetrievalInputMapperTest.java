@@ -34,6 +34,8 @@ class AnswerRetrievalInputMapperTest {
 
             assertThat(AnswerRetrievalInputMapper.question(question).type().name())
                     .isEqualTo(type.name());
+            assertThat(AnswerRetrievalInputMapper.question(question).currentQuestion())
+                    .isEqualTo("Original question");
         }
         for (LearningIntent intent : LearningIntent.values()) {
             QuestionContext context = new QuestionContext(
@@ -47,6 +49,39 @@ class AnswerRetrievalInputMapperTest {
             assertThat(mapped.previousQuestion()).isEqualTo("Previous question");
             assertThat(mapped.learningIntent().name()).isEqualTo(intent.name());
         }
+    }
+
+    @Test
+    void mapsValidatedOwnershipObjectsAndPageHintsWithoutTreatingThemAsClaims() {
+        AnswerQuestionPlan source = new AnswerQuestionPlan(
+                List.of(
+                        new AnswerQuestionPlan.Subquestion(
+                                "Does the cobalt spindle return?",
+                                Set.of(EvidenceNeed.DIRECT_RULE),
+                                AnswerQuestionPlan.QuestionOwner.CURRENT_QUESTION),
+                        new AnswerQuestionPlan.Subquestion(
+                                "When does the amber lattice release?",
+                                Set.of(EvidenceNeed.PRIOR_TURN),
+                                AnswerQuestionPlan.QuestionOwner.BOUND_REFERENCE)),
+                true,
+                AnswerAid.NONE,
+                ReferenceBinding.PREVIOUS_QUESTION,
+                "When does the amber lattice release?",
+                List.of("cobalt spindle"),
+                List.of(new AnswerQuestionPlan.PageHint("page 47", 47)));
+
+        AnswerRetrievalPlan mapped = AnswerRetrievalInputMapper.plan(source);
+
+        assertThat(mapped.referenceBinding())
+                .isEqualTo(AnswerRetrievalPlan.ReferenceBinding.PREVIOUS_QUESTION);
+        assertThat(mapped.boundReferenceQuestion()).isEqualTo("When does the amber lattice release?");
+        assertThat(mapped.currentRuleObjectSpans()).containsExactly("cobalt spindle");
+        assertThat(mapped.pageHints()).containsExactly(new AnswerRetrievalPlan.PageHint("page 47", 47));
+        assertThat(mapped.subquestions())
+                .extracting(AnswerRetrievalPlan.Subquestion::owner)
+                .containsExactly(
+                        AnswerRetrievalPlan.QuestionOwner.CURRENT_QUESTION,
+                        AnswerRetrievalPlan.QuestionOwner.BOUND_REFERENCE);
     }
 
     @Test

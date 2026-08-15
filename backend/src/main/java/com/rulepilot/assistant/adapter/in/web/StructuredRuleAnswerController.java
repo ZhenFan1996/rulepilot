@@ -52,12 +52,11 @@ public class StructuredRuleAnswerController {
         var priorTurn = session == null
                 ? null
                 : conversations.priorTurnReference(session.sessionId(), username, versionId).orElse(null);
-        String previousQuestion = priorTurn == null ? request.previousQuestion() : priorTurn.question();
         AnswerCreation creation = answers.answerWithRun(
                 request.question(),
                 new QuestionContext(
                         versionId,
-                        previousQuestion,
+                        request.previousQuestion(),
                         request.learningIntent(),
                         PlayerLocale.fromRequest(request.language()),
                         priorTurn),

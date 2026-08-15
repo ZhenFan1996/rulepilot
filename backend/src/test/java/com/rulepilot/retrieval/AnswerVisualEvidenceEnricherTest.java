@@ -3,6 +3,7 @@ package com.rulepilot.retrieval;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.rulepilot.retrieval.VisualRulebookPageFactSearch.PageFactMatch;
+import com.rulepilot.retrieval.VisualRulebookPageFactSearch.RuleFactStatus;
 import com.rulepilot.retrieval.evidence.HybridEvidenceHit;
 import com.rulepilot.retrieval.evidence.RuleEvidenceHit;
 import java.util.LinkedHashMap;
@@ -58,6 +59,30 @@ class AnswerVisualEvidenceEnricherTest {
                 .startsWith("Visual-transcribed rule evidence")
                 .contains("Unused pieces move to the common area")
                 .doesNotContain(VISUAL_PLACEHOLDER, "Printed terms:");
+    }
+
+    @Test
+    void removesAPlaceholderWhenTheTypedPageInventorySaysThereIsNoRuleContent() {
+        RuleEvidenceHit placeholder = source(UUID.randomUUID(), 11, VISUAL_PLACEHOLDER);
+        Map<UUID, HybridEvidenceHit> evidence = new LinkedHashMap<>();
+        evidence.put(placeholder.chunkId(), new HybridEvidenceHit(placeholder, 0.8, 1, null, false));
+        PageFactMatch noRuleContent = new PageFactMatch(
+                11,
+                "Descriptive panel",
+                "No page-owned rule group was transcribed.",
+                List.of("panel"),
+                0.9,
+                RuleFactStatus.NO_RULE_CONTENT);
+
+        Set<UUID> enriched = enricher(List.of(placeholder)).enrich(
+                UUID.randomUUID(),
+                documentVersionId,
+                evidence,
+                Map.of(11, noRuleContent),
+                Set.of(11));
+
+        assertThat(enriched).isEmpty();
+        assertThat(evidence).doesNotContainKey(placeholder.chunkId());
     }
 
     @Test

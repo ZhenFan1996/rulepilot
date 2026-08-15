@@ -81,6 +81,17 @@ final class AnswerVisualEvidenceEnricher {
             PageFactMatch fact = factsByPage.get(source.pageFrom());
             if (fact == null) continue;
             HybridEvidenceHit existing = evidenceById.get(source.chunkId());
+            if (fact.ruleFactStatus() == VisualRulebookPageFactSearch.RuleFactStatus.NO_RULE_CONTENT) {
+                evidenceById.remove(source.chunkId());
+                continue;
+            }
+            if (!fact.supportsRuleClaims()) {
+                if ((existing != null && AnswerEvidencePolicy.isVisualPlaceholder(existing))
+                        || AnswerEvidencePolicy.isVisualPlaceholder(source)) {
+                    evidenceById.remove(source.chunkId());
+                }
+                continue;
+            }
             if (existing != null && !AnswerEvidencePolicy.isVisualPlaceholder(existing)) {
                 evidenceById.put(source.chunkId(), enrichedTextHit(existing, fact, rankByPage.get(source.pageFrom())));
             } else {

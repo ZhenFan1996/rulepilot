@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.rulepilot.assistant.PlayerLocale;
 import com.rulepilot.assistant.QuestionUnderstanding.QuestionContext;
 import com.rulepilot.assistant.RuleAnswerModel.EvidenceNeed;
+import com.rulepilot.assistant.RuleAnswerModel.ReferenceBinding;
 import com.rulepilot.assistant.domain.LearningIntent;
 import com.rulepilot.assistant.domain.QuestionType;
 import com.rulepilot.assistant.domain.UnderstoodQuestion;
@@ -20,7 +21,7 @@ class AnswerModelRequestFactoryTest {
     private final AnswerModelRequestFactory factory = new AnswerModelRequestFactory();
 
     @Test
-    void preservesQuestionContextAndMapsOnlySourceBackedEvidenceFields() {
+    void keepsTheCurrentQuestionAuthoritativeAndMapsOnlySelectedContextAndEvidence() {
         UUID documentVersionId = UUID.randomUUID();
         UUID chunkId = UUID.randomUUID();
         UnderstoodQuestion question = new UnderstoodQuestion(
@@ -56,12 +57,15 @@ class AnswerModelRequestFactoryTest {
                                 question.normalizedQuestion(), Set.of(EvidenceNeed.ADVICE))),
                         true));
 
-        assertThat(request.question()).isEqualTo("标准化问题");
+        assertThat(request.question()).isEqualTo("原始问题");
         assertThat(request.questionType()).isEqualTo(QuestionType.LESSON_STEP_FOLLOW_UP);
         assertThat(request.context()).satisfies(context -> {
-            assertThat(context.previousQuestion()).isEqualTo("前一个问题");
+            assertThat(context.previousQuestion()).isEqualTo("not provided");
             assertThat(context.learningIntent()).isEqualTo(LearningIntent.EXAMPLE);
             assertThat(context.outputLanguage()).isEqualTo(PlayerLocale.EN);
+            assertThat(context.referenceBinding()).isEqualTo(ReferenceBinding.CURRENT_QUESTION);
+            assertThat(context.currentRuleObjectSpans()).isEmpty();
+            assertThat(context.pageHints()).isEmpty();
         });
         assertThat(request.evidence()).containsExactly(
                 new com.rulepilot.assistant.RuleAnswerModel.EvidenceInput(

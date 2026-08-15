@@ -26,9 +26,10 @@ class AnswerRetrievalPlannerTest {
 
         var intents = AnswerRetrievalPlanner.plan(question, context(), List.of(), plan);
 
+        assertThat(intents.getFirst().query()).startsWith(question.currentQuestion());
         assertThat(intents).filteredOn(AnswerRetrievalPlanner.RetrievalIntent::directQuestion)
                 .extracting(AnswerRetrievalPlanner.RetrievalIntent::query)
-                .containsExactly(
+                .contains(
                         "行动后先补牌吗 order timing procedure",
                         "例外情况吗 exception restriction");
         assertThat(intents).allSatisfy(intent -> {
@@ -94,8 +95,23 @@ class AnswerRetrievalPlannerTest {
         AnswerRetrievalQuestion question = question("请解释上一条里的术语。", List.of("声望里程碑"));
         AnswerRetrievalContext context = new AnswerRetrievalContext(
                 versionId, "声望轨道上的里程碑是什么意思？", LearningIntent.DEFINE);
+        AnswerRetrievalPlan plan = new AnswerRetrievalPlan(
+                List.of(
+                        new AnswerRetrievalPlan.Subquestion(
+                                "请解释上一条里的术语。",
+                                Set.of(EvidenceNeed.DEFINITION),
+                                AnswerRetrievalPlan.QuestionOwner.CURRENT_QUESTION),
+                        new AnswerRetrievalPlan.Subquestion(
+                                "声望轨道上的里程碑是什么意思？",
+                                Set.of(EvidenceNeed.PRIOR_TURN),
+                                AnswerRetrievalPlan.QuestionOwner.BOUND_REFERENCE)),
+                false,
+                AnswerRetrievalPlan.ReferenceBinding.PREVIOUS_QUESTION,
+                "声望轨道上的里程碑是什么意思？",
+                List.of(),
+                List.of());
 
-        var queries = AnswerRetrievalPlanner.plan(question, context).stream()
+        var queries = AnswerRetrievalPlanner.plan(question, context, List.of(), plan).stream()
                 .map(AnswerRetrievalPlanner.RetrievalIntent::query)
                 .toList();
 
@@ -104,6 +120,27 @@ class AnswerRetrievalPlannerTest {
                 "声望轨道上的里程碑是什么意思？",
                 "声望里程碑",
                 "definition terminology"));
+    }
+
+    @Test
+    void doesNotLetUnselectedEarlierContextReplaceASelfContainedCurrentQuestion() {
+        AnswerRetrievalQuestion question = new AnswerRetrievalQuestion(
+                "Does the cobalt spindle return after the current interval?",
+                "How many marks does the amber lattice award? Follow-up: Does the cobalt spindle return after the current interval?",
+                QuestionType.RULE_QUERY,
+                List.of("cobalt spindle"));
+        AnswerRetrievalContext context = new AnswerRetrievalContext(
+                versionId,
+                "How many marks does the amber lattice award?",
+                LearningIntent.VERIFY);
+
+        var intents = AnswerRetrievalPlanner.plan(question, context);
+
+        assertThat(intents.getFirst().query())
+                .startsWith("Does the cobalt spindle return after the current interval?");
+        assertThat(intents)
+                .extracting(AnswerRetrievalPlanner.RetrievalIntent::query)
+                .allSatisfy(query -> assertThat(query).doesNotContain("amber lattice"));
     }
 
     @Test
@@ -121,7 +158,7 @@ class AnswerRetrievalPlannerTest {
                 question("question", List.of()), context(), List.of(longRewrite, "six"), plan);
 
         assertThat(intents).hasSize(5);
-        assertThat(intents.getLast().query()).hasSize(500);
+        assertThat(intents).allSatisfy(intent -> assertThat(intent.query().length()).isLessThanOrEqualTo(500));
     }
 
     @Test

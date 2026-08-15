@@ -318,6 +318,36 @@ class StructuredRuleAnswerServiceTest {
     }
 
     @Test
+    void returnsInsufficientEvidenceWithCandidateSourcesWhenOwnCitationsDoNotEntailTheConclusion() {
+        RuleEvidenceHit source = source("An opaque descriptive panel names the cobalt spindle.");
+        RuleAnswerModel model = new RuleAnswerModel() {
+            @Override
+            public ModelDraft compose(ModelRequest request) {
+                return draft(source, "The spindle returns now.", "The panel supposedly establishes the return rule.");
+            }
+
+            @Override
+            public ModelDraft revise(ModelRequest request, ModelDraft previousDraft, List<String> feedback) {
+                return previousDraft;
+            }
+        };
+        GeneratedContentCritic critic = (request, risk) -> new Review(true, List.of(new Issue(
+                IssueType.UNSUPPORTED_CLAIM,
+                1,
+                List.of(source.chunkId()),
+                "The cited panel does not state the claimed return rule.")));
+
+        StructuredRuleAnswer answer = service(search(source), model, critic).answer(
+                "Does the cobalt spindle return now?", new QuestionContext(versionId));
+
+        assertThat(answer.status()).isEqualTo(AnswerStatus.INSUFFICIENT_EVIDENCE);
+        assertThat(answer.shortVerdict()).contains("生成结论无法由自己的引用核对");
+        assertThat(answer.citations()).extracting(citation -> citation.chunkId())
+                .containsExactly(source.chunkId());
+        assertThat(answer.shortVerdict()).doesNotContain("spindle returns");
+    }
+
+    @Test
     void servesAValidatedCacheHitWithoutRepeatingRetrievalCompositionOrReview() {
         RuleEvidenceHit source = source("Each coin scores one point.");
         AtomicInteger retrievalCalls = new AtomicInteger();

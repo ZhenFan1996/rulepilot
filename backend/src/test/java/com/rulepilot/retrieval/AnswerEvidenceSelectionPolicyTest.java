@@ -15,7 +15,7 @@ import org.junit.jupiter.api.Test;
 class AnswerEvidenceSelectionPolicyTest {
 
     @Test
-    void placesVisualEvidenceFirstOnlyWhenTheStructuredPlanRequestsIt() {
+    void placesDirectPageFactsBeforeDescriptiveTextForEveryRuleQuestion() {
         UUID versionId = UUID.randomUUID();
         HybridEvidenceHit visual = hit(versionId, "VISUAL", "Printed cell", "A-01 is visible.", 7, 0.4);
         HybridEvidenceHit text = hit(versionId, "RULE", "Actions", "Actions grant movement.", 5, 0.9);
@@ -37,7 +37,38 @@ class AnswerEvidenceSelectionPolicyTest {
                 List.of());
 
         assertThat(visualFirst).containsExactly(visual, text);
-        assertThat(textFirst).containsExactly(text, visual);
+        assertThat(textFirst).containsExactly(visual, text);
+    }
+
+    @Test
+    void excludesVisualExtractionPlaceholdersFromTheBoundedAnswerContext() {
+        UUID versionId = UUID.randomUUID();
+        HybridEvidenceHit placeholder = hit(
+                versionId,
+                "GENERAL",
+                "Rendered page",
+                "This rulebook page is visual evidence. Text extraction was unavailable; inspect the rendered page image.",
+                19,
+                1.0);
+        HybridEvidenceHit direct = hit(
+                versionId,
+                "RULE",
+                "Cobalt spindle",
+                "The cobalt spindle returns after the current interval.",
+                6,
+                0.4);
+        Map<UUID, HybridEvidenceHit> evidence = Map.of(
+                placeholder.evidence().chunkId(), placeholder,
+                direct.evidence().chunkId(), direct);
+
+        List<HybridEvidenceHit> selected = AnswerEvidenceSelectionPolicy.select(
+                evidence,
+                List.of(placeholder, direct),
+                Set.of(),
+                plan(EvidenceNeed.DIRECT_RULE),
+                List.of());
+
+        assertThat(selected).containsExactly(direct);
     }
 
     @Test
