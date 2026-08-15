@@ -86,7 +86,7 @@ class JpaVisualRulebookPageFactsPostgresTest {
         List<PageFact> restored = inTransaction(repository -> repository.find(documentVersionId, Set.of(4)));
 
         assertThat(restored).singleElement().satisfies(page -> {
-            assertThat(page.schemaVersion()).isEqualTo(33);
+            assertThat(page.schemaVersion()).isEqualTo(PageFact.CURRENT_SCHEMA_VERSION);
             assertThat(page.sourceDependencies()).containsExactly(dependency);
             assertThat(page.ruleGroupIdentifiers()).containsExactly("PLAY A CARD");
             assertThat(page.ruleGroupInventoryComplete()).isTrue();

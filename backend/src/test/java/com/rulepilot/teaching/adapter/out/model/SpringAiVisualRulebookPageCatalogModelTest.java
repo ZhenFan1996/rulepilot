@@ -21,6 +21,8 @@ import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IdentifierReference
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.SourceDependency;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.TeachingPageRole;
+import com.rulepilot.teaching.VisualQuantityObservation.QuantityResolution;
+import com.rulepilot.teaching.VisualQuantityObservation.QuantifierScope;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -42,7 +44,7 @@ class SpringAiVisualRulebookPageCatalogModelTest {
 
     @Test
     void teachingStartupPromptKeepsEvidenceAtomicAndDefersVisualEnrichment() throws IOException {
-        String prompt = new ClassPathResource("prompts/visual-page-teaching-catalog-v2-quantitative-scope-system.txt")
+        String prompt = new ClassPathResource("prompts/visual-page-teaching-catalog-v3-quantity-observations-system.txt")
                 .getContentAsString(StandardCharsets.UTF_8)
                 .replaceAll("\\s+", " ");
 
@@ -55,6 +57,14 @@ class SpringAiVisualRulebookPageCatalogModelTest {
                 "repetition count, multiplier",
                 "same-scope example to cross-check",
                 "Never rewrite a repeated calculation as a single local subtotal",
+                "quantityObservations",
+                "quantifierScope",
+                "variantAxis",
+                "variantCount",
+                "perVariantQuantity",
+                "derivedTotal",
+                "originalSpan",
+                "REQUIRES_PAGE_INSPECTION",
                 "state its visible non-gameplay role",
                 "ruleGroupIdentifiers",
                 "ruleGroupInventoryComplete",
@@ -71,7 +81,7 @@ class SpringAiVisualRulebookPageCatalogModelTest {
     @Test
     void progressiveTeachingPromptKeepsFactsAndSourceDependenciesInsideTheirDurableContracts() throws IOException {
         String prompt = new ClassPathResource(
-                        "prompts/visual-page-progressive-teaching-start-v2-source-coverage-system.txt")
+                        "prompts/visual-page-progressive-teaching-start-v3-quantity-observations-system.txt")
                 .getContentAsString(StandardCharsets.UTF_8)
                 .replaceAll("\\s+", " ");
 
@@ -80,7 +90,166 @@ class SpringAiVisualRulebookPageCatalogModelTest {
                 "never rely on text beyond that limit",
                 "title as one non-empty string",
                 "never return an array or a shortened title",
-                "must always be an explicit array with no duplicates");
+                "must always be an explicit array with no duplicates",
+                "quantityObservations",
+                "originalSpan",
+                "REQUIRES_PAGE_INSPECTION");
+    }
+
+    @Test
+    void mapsOpaqueQuantityFixturesWithoutFlatteningPerVariantScopeOrRawEvidence() throws IOException {
+        var root = new com.fasterxml.jackson.databind.ObjectMapper().readTree(
+                new ClassPathResource("evaluation/visual-quantity-observations-v1.json").getInputStream());
+
+        var explicit = SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalogV3(
+                root.path("cases").get(0).path("response").toString());
+        var observation = explicit.pages().getFirst().quantityObservations().getFirst();
+        var evidence = observation.evidenceText();
+
+        assertThat(observation.pageNumber()).isEqualTo(7);
+        assertThat(observation.ruleGroupIdentifier()).isEqualTo("R-Δ");
+        assertThat(observation.quantifierScope()).isEqualTo(QuantifierScope.PER_VARIANT);
+        assertThat(observation.variantAxis()).isEqualTo("glyph families");
+        assertThat(observation.variantCount()).isEqualTo(4);
+        assertThat(observation.perVariantQuantity()).isEqualTo(1);
+        assertThat(observation.derivedTotal()).isEqualTo(4);
+        assertThat(observation.originalSpan()).isEqualTo("4 glyph families × 1 prism each");
+        assertThat(observation.resolution()).isEqualTo(QuantityResolution.EXACT);
+        assertThat(evidence).contains(
+                "page=7",
+                "ruleGroup=R-Δ",
+                "scope=PER_VARIANT",
+                "variantAxis=glyph families",
+                "variantCount=4",
+                "perVariantQuantity=1",
+                "derivedTotal=4",
+                "resolution=EXACT",
+                "originalSpan=4 glyph families × 1 prism each");
+
+        var ambiguous = SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalogV3(
+                root.path("cases").get(1).path("response").toString());
+        var ambiguousObservation = ambiguous.pages().getFirst().quantityObservations().getFirst();
+        var ambiguousEvidence = ambiguousObservation.evidenceText();
+
+        assertThat(ambiguousObservation.quantifierScope()).isEqualTo(QuantifierScope.UNRESOLVED);
+        assertThat(ambiguousObservation.variantAxis()).isEqualTo("active notches");
+        assertThat(ambiguousObservation.derivedTotal()).isNull();
+        assertThat(ambiguousObservation.originalSpan()).isEqualTo("one shard at every active notch");
+        assertThat(ambiguousObservation.resolution()).isEqualTo(QuantityResolution.REQUIRES_PAGE_INSPECTION);
+        assertThat(ambiguousEvidence)
+                .contains(
+                        "page=19",
+                        "ruleGroup=K#2",
+                        "scope=UNRESOLVED",
+                        "resolution=REQUIRES_PAGE_INSPECTION",
+                        "originalSpan=one shard at every active notch",
+                        "inspect the cited page; no total was inferred")
+                .doesNotContain("derivedTotal=1");
+    }
+
+    @Test
+    void rejectsUnsafeQuantityArithmeticInsteadOfPublishingAGuessedTotal() {
+        assertThatThrownBy(() -> SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalogV3("""
+                {"pages":[{"pageNumber":7,"printedTerms":["R-Δ"],
+                "factualSummary":["R-Δ: Place the visibly specified prisms."],"keywords":["R-Δ","prism"],
+                "sourceDependencies":[],"ruleGroupIdentifiers":["R-Δ"],"ruleGroupInventoryComplete":true,
+                "quantityObservations":[{"pageNumber":7,"ruleGroupIdentifier":"R-Δ",
+                  "quantifierScope":"PER_VARIANT","variantAxis":"glyph families","variantCount":4,
+                  "perVariantQuantity":1,"derivedTotal":1,
+                  "originalSpan":"4 glyph families × 1 prism each","resolution":"EXACT"}]}]}
+                """))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("derived total");
+
+        assertThatThrownBy(() -> SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalogV3("""
+                {"pages":[{"pageNumber":19,"printedTerms":["K#2"],
+                "factualSummary":["K#2: Follow the visible placement relation."],"keywords":["K#2","shard"],
+                "sourceDependencies":[],"ruleGroupIdentifiers":["K#2"],"ruleGroupInventoryComplete":true,
+                "quantityObservations":[{"pageNumber":19,"ruleGroupIdentifier":"K#2",
+                  "quantifierScope":"UNRESOLVED","variantAxis":"active notches","variantCount":null,
+                  "perVariantQuantity":null,"derivedTotal":1,
+                  "originalSpan":"one shard at every active notch",
+                  "resolution":"REQUIRES_PAGE_INSPECTION"}]}]}
+                """))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("cannot publish a derived total");
+    }
+
+    @Test
+    void v3QuantityObservationsStayBoundToTheirExactPageAndRuleGroup() {
+        assertThatThrownBy(() -> SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalogV3("""
+                {"pages":[{"pageNumber":7,"printedTerms":["R-Δ"],
+                "factualSummary":["R-Δ: Place one prism for each glyph family."],"keywords":["R-Δ","prism"],
+                "sourceDependencies":[],"ruleGroupIdentifiers":["R-Δ"],"ruleGroupInventoryComplete":true,
+                "quantityObservations":[{"pageNumber":8,"ruleGroupIdentifier":"OTHER",
+                  "quantifierScope":"PER_VARIANT","variantAxis":"glyph families","variantCount":4,
+                  "perVariantQuantity":1,"derivedTotal":4,
+                  "originalSpan":"4 glyph families × 1 prism each","resolution":"EXACT"}]}]}
+                """))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("page and rule group");
+    }
+
+    @Test
+    void v3QuantityObservationRejectsFieldsOutsideTheVersionedContract() {
+        assertThatThrownBy(() -> SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalogV3("""
+                {"pages":[{"pageNumber":7,"printedTerms":["R-Δ"],
+                "factualSummary":["R-Δ: Place one prism for each glyph family."],"keywords":["R-Δ","prism"],
+                "sourceDependencies":[],"ruleGroupIdentifiers":["R-Δ"],"ruleGroupInventoryComplete":true,
+                "quantityObservations":[{"pageNumber":7,"ruleGroupIdentifier":"R-Δ",
+                  "quantifierScope":"PER_VARIANT","variantAxis":"glyph families","variantCount":4,
+                  "perVariantQuantity":1,"derivedTotal":4,
+                  "originalSpan":"4 glyph families × 1 prism each","resolution":"EXACT",
+                  "guessedUnit":"prism"}]}]}
+                """))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("exact fields");
+    }
+
+    @Test
+    void legacyV2TeachingReplayStillParsesWithoutInventingQuantityObservations() {
+        var replay = SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalog("""
+                {"pages":[{"pageNumber":4,"printedTerms":["PLAY"],
+                "factualSummary":["PLAY: The player takes one visible action."],"keywords":["PLAY"],
+                "sourceDependencies":[],"ruleGroupIdentifiers":["PLAY"],
+                "ruleGroupInventoryComplete":true}]}
+                """);
+
+        assertThat(replay.pages()).singleElement().satisfies(page -> assertThat(page.quantityObservations()).isEmpty());
+        assertThatThrownBy(() -> SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalogV3("""
+                {"pages":[{"pageNumber":4,"printedTerms":["PLAY"],
+                "factualSummary":["PLAY: The player takes one visible action."],"keywords":["PLAY"],
+                "sourceDependencies":[],"ruleGroupIdentifiers":["PLAY"],
+                "ruleGroupInventoryComplete":true}]}
+                """))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("quantityObservations");
+    }
+
+    @Test
+    void progressiveV3SelectedPageKeepsItsExactQuantityObservation() {
+        var draft = SpringAiVisualRulebookPageCatalogModel.parseProgressiveTeachingStartV3("""
+                {"pageSketches":[
+                  {"pageNumber":12,"role":"GAMEPLAY_RULES","visibleHeading":"M-β",
+                   "visibleTerms":["M-β"],"coverageTags":["setup"],
+                   "ruleGroupInventoryComplete":true,"sourceDependencies":[]}],
+                 "selectedPageFacts":{"pageNumber":12,"printedTerms":["M-β","rings"],
+                  "factualSummary":["M-β: Place two rings for each of three visible lanes."],
+                  "keywords":["M-β","rings"],
+                  "quantityObservations":[{"pageNumber":12,"ruleGroupIdentifier":"M-β",
+                    "quantifierScope":"PER_VARIANT","variantAxis":"lanes","variantCount":3,
+                    "perVariantQuantity":2,"derivedTotal":6,
+                    "originalSpan":"3 lanes × 2 rings each","resolution":"EXACT"}]}}
+                """);
+
+        assertThat(draft.selectedPageFacts().quantityObservations()).singleElement().satisfies(observation -> {
+            assertThat(observation.pageNumber()).isEqualTo(12);
+            assertThat(observation.variantAxis()).isEqualTo("lanes");
+            assertThat(observation.variantCount()).isEqualTo(3);
+            assertThat(observation.perVariantQuantity()).isEqualTo(2);
+            assertThat(observation.derivedTotal()).isEqualTo(6);
+            assertThat(observation.originalSpan()).isEqualTo("3 lanes × 2 rings each");
+        });
     }
 
     @Test
@@ -214,7 +383,7 @@ class SpringAiVisualRulebookPageCatalogModelTest {
                         {"pages":[{"pageNumber":1,"printedTerms":"SETUP",
                          "factualSummary":"SETUP: Each player takes one card.","keywords":["setup"],
                          "sourceDependencies":[],"ruleGroupIdentifiers":["SETUP"],
-                         "ruleGroupInventoryComplete":true}]}
+                         "ruleGroupInventoryComplete":true,"quantityObservations":[]}]}
                         """)))));
         SpringAiVisualRulebookPageCatalogModel model = model(configuration);
 
@@ -243,6 +412,8 @@ class SpringAiVisualRulebookPageCatalogModelTest {
                 "A direction to use another guide, sheet, booklet, or document",
                 "sourceDependencies",
                 "missingCoverageTags",
+                "quantityObservations",
+                "REQUIRES_PAGE_INSPECTION",
                 "does not supply that missing procedure"));
         assertThat(model.teachingStartupExecutionIdentity("owner")).hasValueSatisfying(identity -> {
             assertThat(identity.provider()).isEqualTo("qwen");
@@ -295,7 +466,7 @@ class SpringAiVisualRulebookPageCatalogModelTest {
                            "ruleGroupInventoryComplete":true,"sourceDependencies":[]}],
                          "selectedPageFacts":{"pageNumber":3,"printedTerms":["take cards","refill"],
                            "factualSummary":["take cards：当前玩家拿取可见卡牌。","refill：拿取后补满市场。"],
-                           "keywords":["take cards","refill"]}}
+                           "keywords":["take cards","refill"],"quantityObservations":[]}}
                         """)))));
         SpringAiVisualRulebookPageCatalogModel model = model(configuration);
         CatalogRequest request = new CatalogRequest(
@@ -336,6 +507,8 @@ class SpringAiVisualRulebookPageCatalogModelTest {
                         "every distinct readable gameplay rule group",
                         "sourceDependencies",
                         "missingCoverageTags",
+                        "quantityObservations",
+                        "REQUIRES_PAGE_INSPECTION",
                         "Prefer an executable setup page, then a core turn or action page",
                         "A direction to use another guide, sheet, booklet, or document",
                         "Do not inventory icons"));
@@ -833,8 +1006,8 @@ class SpringAiVisualRulebookPageCatalogModelTest {
                 configuration,
                 new FakeVisualRulebookPageCatalogModel(),
                 new ClassPathResource("prompts/visual-page-catalog-v2-icon-inventory-system.txt"),
-                new ClassPathResource("prompts/visual-page-teaching-catalog-v2-quantitative-scope-system.txt"),
-                new ClassPathResource("prompts/visual-page-progressive-teaching-start-v2-source-coverage-system.txt"),
+                new ClassPathResource("prompts/visual-page-teaching-catalog-v3-quantity-observations-system.txt"),
+                new ClassPathResource("prompts/visual-page-progressive-teaching-start-v3-quantity-observations-system.txt"),
                 new ClassPathResource("prompts/visual-icon-localization-v2-system.txt"),
                 new ClassPathResource("prompts/visual-icon-crop-review-v4-system.txt"),
                 new ClassPathResource("prompts/visual-identifier-cell-v1-system.txt"),
@@ -1193,14 +1366,24 @@ class SpringAiVisualRulebookPageCatalogModelTest {
                 new PageSummary(
                         111,
                         "TURN",
-                        "TURN: Visible turn rule.",
-                        List.of("turn"),
+                        "TURN: Place one marker for each of two visible bands.",
+                        List.of("turn", "bands"),
                         List.of(),
                         List.of(),
                         false,
                         List.of(),
                         List.of("TURN"),
-                        true)));
+                        true,
+                        List.of(new com.rulepilot.teaching.VisualQuantityObservation(
+                                111,
+                                "TURN",
+                                QuantifierScope.PER_VARIANT,
+                                "bands",
+                                2,
+                                1,
+                                2,
+                                "2 bands × 1 marker each",
+                                QuantityResolution.EXACT)))));
 
         CatalogDraft normalized =
                 SpringAiVisualRulebookPageCatalogModel.normalizeTeachingPageBindings(request, draft);
@@ -1209,6 +1392,10 @@ class SpringAiVisualRulebookPageCatalogModelTest {
             assertThat(page.pageNumber()).isEqualTo(11);
             assertThat(page.ruleGroupIdentifiers()).containsExactly("TURN");
             assertThat(page.ruleGroupInventoryComplete()).isTrue();
+            assertThat(page.quantityObservations()).singleElement().satisfies(observation -> {
+                assertThat(observation.pageNumber()).isEqualTo(11);
+                assertThat(observation.originalSpan()).isEqualTo("2 bands × 1 marker each");
+            });
         });
     }
 

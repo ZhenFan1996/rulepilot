@@ -701,7 +701,8 @@ class VisualRulebookCataloger {
                         summary.iconInventoryComplete(),
                         summary.sourceDependencies(),
                         summary.ruleGroupIdentifiers(),
-                        summary.ruleGroupInventoryComplete()));
+                        summary.ruleGroupInventoryComplete(),
+                        summary.quantityObservations()));
             } catch (RuntimeException failure) {
                 log.warn("Printed identifier cell enrichment skipped for page {}", summary.pageNumber(), failure);
                 enriched.add(summary);
@@ -1050,7 +1051,8 @@ class VisualRulebookCataloger {
                     summary.iconInventoryComplete(),
                     summary.sourceDependencies(),
                     summary.ruleGroupIdentifiers(),
-                    summary.ruleGroupInventoryComplete());
+                    summary.ruleGroupInventoryComplete(),
+                    summary.quantityObservations());
         } catch (RuntimeException localizationFailure) {
             log.warn(
                     "Icon rectangle verification failed for rulebook page {} in document {}; keeping the page incomplete",
@@ -1205,7 +1207,8 @@ class VisualRulebookCataloger {
                 false,
                 summary.sourceDependencies(),
                 summary.ruleGroupIdentifiers(),
-                summary.ruleGroupInventoryComplete());
+                summary.ruleGroupInventoryComplete(),
+                summary.quantityObservations());
     }
 
     private VisualRulebookPageCatalogModel.CatalogDraft catalogBatch(
@@ -1293,6 +1296,9 @@ class VisualRulebookCataloger {
                         + page.factualSummary().length()
                         + page.keywords().stream().mapToInt(String::length).sum()
                         + page.ruleGroupIdentifiers().stream().mapToInt(String::length).sum()
+                        + page.quantityObservations().stream()
+                                .mapToInt(observation -> observation.evidenceText().length())
+                                .sum()
                         + page.iconOccurrences().stream()
                                 .mapToInt(icon -> icon.name().length()
                                         + icon.visualDescription().length()
@@ -1306,7 +1312,10 @@ class VisualRulebookCataloger {
     private int progressiveTeachingStartOutputTokens(ProgressiveTeachingStartDraft start) {
         int characters = start.selectedPageFacts().printedTerms().length()
                 + start.selectedPageFacts().factualSummary().length()
-                + start.selectedPageFacts().keywords().stream().mapToInt(String::length).sum();
+                + start.selectedPageFacts().keywords().stream().mapToInt(String::length).sum()
+                + start.selectedPageFacts().quantityObservations().stream()
+                        .mapToInt(observation -> observation.evidenceText().length())
+                        .sum();
         characters += start.pages().stream()
                 .mapToInt(page -> page.visibleHeading().length()
                         + page.visibleTerms().stream().mapToInt(String::length).sum()

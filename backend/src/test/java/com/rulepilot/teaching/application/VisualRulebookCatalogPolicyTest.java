@@ -9,11 +9,53 @@ import com.rulepilot.teaching.VisualRulebookPageFacts.PageFact;
 import com.rulepilot.teaching.VisualRulebookPageFacts.IconMeaningStatus;
 import com.rulepilot.teaching.VisualRulebookPageFacts.IconOccurrence;
 import com.rulepilot.teaching.VisualRulebookPageFacts.VisualAnchor;
+import com.rulepilot.teaching.VisualQuantityObservation;
+import com.rulepilot.teaching.VisualQuantityObservation.QuantityResolution;
+import com.rulepilot.teaching.VisualQuantityObservation.QuantifierScope;
 import java.util.List;
 import java.util.stream.IntStream;
 import org.junit.jupiter.api.Test;
 
 class VisualRulebookCatalogPolicyTest {
+
+    @Test
+    void pageFactEvidenceRetainsValidatedQuantityScopeAndTheOriginalVisibleSpan() {
+        PageSummary summary = new PageSummary(
+                7,
+                "R-Δ; glyph families; prisms",
+                "R-Δ: Place one prism for each of the four visibly listed glyph families.",
+                List.of("R-Δ", "glyph families", "prisms"),
+                List.of(),
+                List.of(),
+                false,
+                List.of(),
+                List.of("R-Δ"),
+                true,
+                List.of(new VisualQuantityObservation(
+                        7,
+                        "R-Δ",
+                        QuantifierScope.PER_VARIANT,
+                        "glyph families",
+                        4,
+                        1,
+                        4,
+                        "4 glyph families × 1 prism each",
+                        QuantityResolution.EXACT)));
+
+        PageFact fact = VisualRulebookCatalogPolicy.toPageFact(summary);
+
+        assertThat(fact.factualSummary()).contains(
+                "R-Δ: Place one prism for each of the four visibly listed glyph families.",
+                "page=7",
+                "ruleGroup=R-Δ",
+                "scope=PER_VARIANT",
+                "variantAxis=glyph families",
+                "variantCount=4",
+                "perVariantQuantity=1",
+                "derivedTotal=4",
+                "resolution=EXACT",
+                "originalSpan=4 glyph families × 1 prism each");
+    }
 
     @Test
     void keepsEveryVisualPageIndependent() {

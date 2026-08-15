@@ -584,7 +584,8 @@ public interface VisualRulebookPageCatalogModel {
             boolean iconInventoryComplete,
             List<SourceDependency> sourceDependencies,
             List<String> ruleGroupIdentifiers,
-            boolean ruleGroupInventoryComplete) {
+            boolean ruleGroupInventoryComplete,
+            List<VisualQuantityObservation> quantityObservations) {
 
         public PageSummary(int pageNumber, String printedTerms, String factualSummary, List<String> keywords) {
             this(
@@ -597,7 +598,8 @@ public interface VisualRulebookPageCatalogModel {
                     false,
                     List.of(),
                     List.of(),
-                    false);
+                    false,
+                    List.of());
         }
 
         public PageSummary(
@@ -616,7 +618,8 @@ public interface VisualRulebookPageCatalogModel {
                     false,
                     List.of(),
                     List.of(),
-                    false);
+                    false,
+                    List.of());
         }
 
         public PageSummary(
@@ -637,7 +640,8 @@ public interface VisualRulebookPageCatalogModel {
                     iconInventoryComplete,
                     List.of(),
                     List.of(),
-                    false);
+                    false,
+                    List.of());
         }
 
         public PageSummary(
@@ -659,7 +663,33 @@ public interface VisualRulebookPageCatalogModel {
                     iconInventoryComplete,
                     sourceDependencies,
                     List.of(),
-                    false);
+                    false,
+                    List.of());
+        }
+
+        public PageSummary(
+                int pageNumber,
+                String printedTerms,
+                String factualSummary,
+                List<String> keywords,
+                List<VisualAnchor> visualAnchors,
+                List<IconOccurrence> iconOccurrences,
+                boolean iconInventoryComplete,
+                List<SourceDependency> sourceDependencies,
+                List<String> ruleGroupIdentifiers,
+                boolean ruleGroupInventoryComplete) {
+            this(
+                    pageNumber,
+                    printedTerms,
+                    factualSummary,
+                    keywords,
+                    visualAnchors,
+                    iconOccurrences,
+                    iconInventoryComplete,
+                    sourceDependencies,
+                    ruleGroupIdentifiers,
+                    ruleGroupInventoryComplete,
+                    List.of());
         }
 
         public PageSummary {
@@ -674,7 +704,10 @@ public interface VisualRulebookPageCatalogModel {
                     || sourceDependencies.size() > 4
                     || ruleGroupIdentifiers == null || ruleGroupIdentifiers.size() > 16
                     || ruleGroupIdentifiers.stream()
-                            .anyMatch(identifier -> identifier == null || identifier.isBlank() || identifier.length() > 120)) {
+                            .anyMatch(identifier -> identifier == null || identifier.isBlank() || identifier.length() > 120)
+                    || quantityObservations == null
+                    || quantityObservations.size() > VisualQuantityObservation.MAX_OBSERVATIONS_PER_PAGE
+                    || quantityObservations.stream().anyMatch(java.util.Objects::isNull)) {
                 throw new IllegalArgumentException("visual page summary is invalid");
             }
             printedTerms = printedTerms == null || printedTerms.isBlank()
@@ -690,6 +723,20 @@ public interface VisualRulebookPageCatalogModel {
             iconOccurrences = iconOccurrences == null ? List.of() : iconOccurrences.stream().distinct().toList();
             sourceDependencies = sourceDependencies.stream().distinct().toList();
             ruleGroupIdentifiers = ruleGroupIdentifiers.stream().map(String::strip).distinct().toList();
+            quantityObservations = List.copyOf(quantityObservations);
+            Set<String> ruleGroupIdentities = ruleGroupIdentifiers.stream()
+                    .map(VisualSourceRuleGroupLedger::identity)
+                    .collect(java.util.stream.Collectors.toSet());
+            if (quantityObservations.stream().anyMatch(observation -> observation.pageNumber() != pageNumber
+                    || !ruleGroupIdentities.contains(
+                            VisualSourceRuleGroupLedger.identity(observation.ruleGroupIdentifier())))) {
+                throw new IllegalArgumentException(
+                        "visual quantity observation must match its page and rule group");
+            }
+            if (new java.util.LinkedHashSet<>(quantityObservations).size() != quantityObservations.size()) {
+                throw new IllegalArgumentException("visual quantity observations cannot be duplicated");
+            }
+            VisualQuantityObservation.appendEvidence(factualSummary, quantityObservations);
         }
     }
 }

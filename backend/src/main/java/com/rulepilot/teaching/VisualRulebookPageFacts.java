@@ -68,7 +68,9 @@ public interface VisualRulebookPageFacts {
         // Schema 31 persists explicitly named external-source dependencies separately from executable page rules.
         // Schema 32 persists the complete page-owned gameplay rule-group inventory used by teaching coverage gates.
         // Schema 33 rejects summaries that would lose a bound rule-group fact at the durable 4,000-character edge.
-        public static final int CURRENT_SCHEMA_VERSION = 33;
+        // Schema 34 embeds validated, page- and rule-group-bound quantity observations in the factual ledger while
+        // preserving their original short source spans and refusing unsafe arithmetic.
+        public static final int CURRENT_SCHEMA_VERSION = 34;
 
         public PageFact(int pageNumber, String printedTerms, String factualSummary, List<String> keywords) {
             this(

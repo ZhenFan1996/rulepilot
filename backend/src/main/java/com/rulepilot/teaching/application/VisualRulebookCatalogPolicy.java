@@ -5,6 +5,7 @@ import com.rulepilot.teaching.TeachingOutlineModel.PageInput;
 import com.rulepilot.teaching.VisualSourceRuleGroupLedger;
 import com.rulepilot.teaching.VisualRulebookPageFacts.PageFact;
 import com.rulepilot.teaching.VisualRulebookPageFacts.IconOccurrence;
+import com.rulepilot.teaching.VisualQuantityObservation;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -117,7 +118,8 @@ final class VisualRulebookCatalogPolicy {
         return new PageFact(
                 summary.pageNumber(),
                 summary.printedTerms(),
-                summary.factualSummary(),
+                VisualQuantityObservation.appendEvidence(
+                        summary.factualSummary(), summary.quantityObservations()),
                 summary.keywords().stream().distinct().limit(12).toList(),
                 summary.visualAnchors(),
                 IconEvidencePolicy.sanitize(summary.iconOccurrences()),
@@ -195,7 +197,8 @@ final class VisualRulebookCatalogPolicy {
                 false,
                 summary.sourceDependencies(),
                 summary.ruleGroupIdentifiers(),
-                true);
+                true,
+                summary.quantityObservations());
     }
 
     static com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary requireCompleteRuleLedger(
@@ -269,7 +272,8 @@ final class VisualRulebookCatalogPolicy {
                         .limit(4)
                         .toList(),
                 ruleGroups,
-                ruleGroupsComplete);
+                ruleGroupsComplete,
+                compatibleQuantityObservations(ruleGroups, fullPage, tileAudit));
     }
 
     /**
@@ -301,7 +305,8 @@ final class VisualRulebookCatalogPolicy {
                 (observation.iconInventoryComplete() || existing.iconInventoryComplete()) && withinLimit,
                 observation.sourceDependencies(),
                 observation.ruleGroupIdentifiers(),
-                true);
+                true,
+                observation.quantityObservations());
     }
 
     static PageFact mergePersistedPageFact(PageFact existing, PageFact observation) {
@@ -327,6 +332,21 @@ final class VisualRulebookCatalogPolicy {
                 fact.sourceDependencies(),
                 fact.ruleGroupIdentifiers(),
                 fact.ruleGroupInventoryComplete());
+    }
+
+    private static List<VisualQuantityObservation> compatibleQuantityObservations(
+            List<String> ruleGroups,
+            com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary first,
+            com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary second) {
+        Set<String> identities = ruleGroups.stream()
+                .map(VisualSourceRuleGroupLedger::identity)
+                .collect(Collectors.toSet());
+        return Stream.concat(first.quantityObservations().stream(), second.quantityObservations().stream())
+                .filter(observation -> identities.contains(
+                        VisualSourceRuleGroupLedger.identity(observation.ruleGroupIdentifier())))
+                .distinct()
+                .limit(VisualQuantityObservation.MAX_OBSERVATIONS_PER_PAGE)
+                .toList();
     }
 
     private static Map<String, IconOccurrence> mergedIcons(
