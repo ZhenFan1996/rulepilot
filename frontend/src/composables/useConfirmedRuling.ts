@@ -1,6 +1,11 @@
 import { ref, type Ref } from 'vue'
 
-import type { ConfirmedRuling, CsrfResponse, StructuredRuleAnswer } from '@/composables/useLessonAnswers'
+import type {
+  AnswerRulingReference,
+  ConfirmedRuling,
+  CsrfResponse,
+  StructuredRuleAnswer,
+} from '@/composables/useLessonAnswers'
 
 interface ConfirmedRulingMessages {
   createFailed: () => string
@@ -14,6 +19,7 @@ interface ConfirmedRulingMessages {
 interface UseConfirmedRulingOptions {
   documentVersionId: Readonly<Ref<string | null>>
   answer: Ref<StructuredRuleAnswer | null>
+  rulingReference: Readonly<Ref<AnswerRulingReference | null>>
   answeredQuestion: Readonly<Ref<string>>
   csrfToken: () => Promise<CsrfResponse>
   onApplied: (ruling: ConfirmedRuling, question: string) => void
@@ -66,8 +72,10 @@ export function useConfirmedRuling(options: UseConfirmedRulingOptions) {
 
   async function confirmAnswer() {
     const answer = options.answer.value
+    const rulingReference = options.rulingReference.value
     const documentVersionId = options.documentVersionId.value
-    if (!answer || answer.status !== 'ANSWERED' || !documentVersionId || saving.value) return
+    if (!answer || answer.status !== 'ANSWERED' || !rulingReference?.citationIds.length
+      || !documentVersionId || saving.value) return
     const context = options.currentReadContext?.() ?? documentVersionId
     if (!context) return
     const mutation = ++mutationSequence
@@ -86,7 +94,7 @@ export function useConfirmedRuling(options: UseConfirmedRulingOptions) {
           question: options.answeredQuestion.value,
           shortVerdict: answer.shortVerdict,
           explanation: answer.explanation,
-          citationChunkIds: answer.citations.map((citation) => citation.chunkId),
+          citationChunkIds: rulingReference.citationIds,
           exceptions: answer.exceptions,
           confidence: answer.confidence,
         }),

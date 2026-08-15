@@ -23,7 +23,6 @@ const props = withDefaults(defineProps<{
   answerLoading: boolean
   answerError: string
   agentTrace?: AnswerAgentTraceItem[]
-  answerRunId?: string
   online: boolean
   ruling: ConfirmedRuling | null
   rulingSaving: boolean
@@ -36,7 +35,6 @@ const props = withDefaults(defineProps<{
   showHeader?: boolean
 }>(), {
   agentTrace: () => [],
-  answerRunId: '',
   clearThreadDisabled: false,
   showHeader: true,
 })
@@ -91,9 +89,10 @@ async function prepareFeedbackFollowUp(intent: 'SIMPLIFY' | 'VERIFY') {
   await focusQuestionForMoreDetail()
 }
 
-async function prepareClarificationReply() {
-  if (!props.question.trim() || props.question.trim() === props.answeredQuestion.trim()) {
-    emit('update:question', t('lesson.answer.clarification.prefix'))
+async function prepareRecoveryReply() {
+  const draft = props.answer?.recovery?.draft?.trim() ?? ''
+  if (draft && (!props.question.trim() || props.question.trim() === props.answeredQuestion.trim())) {
+    emit('update:question', draft)
   }
   await focusQuestionForMoreDetail()
 }
@@ -427,7 +426,7 @@ function hasStructuredAnswerDetails(answer: StructuredRuleAnswer) {
               <div v-if="turn.answer.citations.length">
                 <p class="font-semibold text-ink">{{ t('lesson.answer.history.sources') }}</p>
                 <ol class="mt-2 stack-y-sm">
-                  <li v-for="citation in turn.answer.citations" :key="citation.chunkId" class="rounded-xl bg-paper px-3 py-2">
+                  <li v-for="(citation, citationIndex) in turn.answer.citations" :key="`${citation.heading}-${citation.pageFrom}-${citation.pageTo}-${citationIndex}`" class="rounded-xl bg-paper px-3 py-2">
                     <p class="font-semibold text-indigo">{{ citation.heading }} · {{ citationPages(citation) }}</p>
                     <p class="mt-1 text-xs leading-5 text-ink/55">{{ playerFacingCitationExcerpt(citation.excerpt) }}</p>
                   </li>
@@ -501,29 +500,17 @@ function hasStructuredAnswerDetails(answer: StructuredRuleAnswer) {
           <article v-if="answer" class="overflow-hidden rounded-3xl border border-ink/10 bg-canvas" aria-live="polite">
             <div class="p-5 sm:p-6">
               <p class="text-xs font-semibold text-ink/45">{{ currentAnswerTurn?.learningIntent ? learningIntentLabel(currentAnswerTurn.learningIntent) : t('lesson.answer.youAsked') }}：{{ answeredQuestion }}</p>
-              <div class="flex flex-wrap items-center gap-2 text-xs font-semibold">
+              <div v-if="publishesConclusion(answer.status)" class="flex flex-wrap items-center gap-2 text-xs font-semibold">
                 <span :class="confidenceClasses(answer.confidence)" :data-confidence="answer.confidence" class="rounded-full px-3 py-1.5">{{ confidenceLabel(answer.confidence) }}</span>
-                <span v-if="publishesConclusion(answer.status)" class="rounded-full bg-copper/[0.12] px-3 py-1.5 text-copper">{{ answerBasisLabel(answer.answerBasis) }}</span>
-                <span class="rounded-full bg-ink/6 px-3 py-1.5 text-ink/60">{{ answer.confirmedRulingId ? t('lesson.answer.source.confirmed') : answer.official ? t('lesson.answer.source.official') : t('lesson.answer.source.uploaded') }}</span>
+                <span class="rounded-full bg-copper/[0.12] px-3 py-1.5 text-copper">{{ answerBasisLabel(answer.answerBasis) }}</span>
+                <span class="rounded-full bg-ink/6 px-3 py-1.5 text-ink/60">{{ answer.source === 'CONFIRMED' ? t('lesson.answer.source.confirmed') : answer.source === 'OFFICIAL' ? t('lesson.answer.source.official') : t('lesson.answer.source.uploaded') }}</span>
               </div>
               <p class="mt-4 font-display text-xl font-semibold leading-8">{{ answer.shortVerdict }}</p>
               <p v-if="publishesConclusion(answer.status) && playerFacingExplanation(answer)" class="mt-3 text-sm leading-7 text-ink/70">{{ playerFacingExplanation(answer) }}</p>
 
-              <div v-if="answer.status === 'CLARIFICATION_REQUIRED'" class="mt-4 rounded-2xl bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900">
-                <p>{{ answer.clarification }}</p>
-                <button type="button" class="mt-3 min-h-10 rounded-xl border border-amber-400 bg-paper px-3 font-semibold" @click="prepareClarificationReply">{{ t('lesson.answer.clarification.action') }}</button>
-              </div>
-              <p v-else-if="!publishesConclusion(answer.status)" class="mt-4 rounded-2xl bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900">{{ answerFailureMessage(answer.status) }}</p>
-
-              <div v-if="answer.status === 'INSUFFICIENT_EVIDENCE'" class="mt-3 rounded-2xl border border-amber-200 bg-amber-50/60 px-4 py-3 text-sm leading-6 text-amber-950">
-                <p class="font-semibold">{{ t('lesson.answer.refine.title') }}</p>
-                <p class="mt-1">{{ t('lesson.answer.refine.description') }}</p>
-                <ul class="mt-2 list-disc stack-y-xs pl-5">
-                  <li>{{ t('lesson.answer.refine.object') }}</li>
-                  <li>{{ t('lesson.answer.refine.timing') }}</li>
-                  <li>{{ t('lesson.answer.refine.single') }}</li>
-                </ul>
-                <button type="button" class="mt-3 min-h-10 rounded-xl border border-amber-400 bg-paper px-3 font-semibold" @click="focusQuestionForMoreDetail">{{ t('lesson.answer.refine.action') }}</button>
+              <div v-if="!publishesConclusion(answer.status)" class="mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-950">
+                <p>{{ answer.recovery?.message || answer.clarification || answerFailureMessage(answer.status) }}</p>
+                <button v-if="answer.recovery" type="button" class="mt-3 min-h-10 rounded-xl border border-amber-400 bg-paper px-3 font-semibold" @click="prepareRecoveryReply">{{ answer.recovery.actionLabel }}</button>
               </div>
 
               <div v-if="answer.warnings.length" class="mt-4 rounded-2xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-950" role="status">
@@ -690,17 +677,6 @@ function hasStructuredAnswerDetails(answer: StructuredRuleAnswer) {
                 </ol>
               </div>
 
-              <details v-if="agentTrace.length" class="mt-5 border-t border-ink/10 pt-4">
-                <summary class="cursor-pointer text-sm font-semibold text-indigo">{{ t('lesson.answer.agentTrace') }}</summary>
-                <p class="mt-2 text-xs leading-5 text-ink/45">{{ t('lesson.answer.agentTraceBoundary') }}</p>
-                <ol class="mt-3 stack-y-sm text-sm leading-6 text-ink/65">
-                  <li v-for="item in agentTrace" :key="item.sequence" class="flex items-start gap-2 rounded-xl bg-paper px-3 py-2">
-                    <span :class="item.status === 'done' ? 'bg-emerald-500' : item.status === 'running' ? 'bg-copper' : 'bg-amber-500'" class="mt-2 size-2 shrink-0 rounded-full" aria-hidden="true" />
-                    <span>{{ item.label }}</span>
-                  </li>
-                </ol>
-              </details>
-
               <div v-if="publishesConclusion(answer.status)" class="mt-5 flex flex-wrap gap-2 border-t border-ink/10 pt-4" :aria-label="t('lesson.answer.followUps')">
                 <button type="button" :disabled="answerLoading || !online" class="min-h-10 rounded-xl border border-ink/12 px-3 text-sm font-semibold hover:bg-paper disabled:opacity-40" @click="emit('requestHelp', 'DEFINE')">{{ t('lesson.answer.intent.define') }}</button>
                 <button type="button" :disabled="answerLoading || !online" class="min-h-10 rounded-xl border border-ink/12 px-3 text-sm font-semibold hover:bg-paper disabled:opacity-40" @click="emit('requestHelp', 'WHY')">{{ t('lesson.answer.intent.why') }}</button>
@@ -734,7 +710,7 @@ function hasStructuredAnswerDetails(answer: StructuredRuleAnswer) {
               <details v-if="additionalCitations.length" class="mt-4">
                 <summary class="cursor-pointer text-sm font-semibold text-indigo">{{ t('lesson.answer.evidence.more', { count: additionalCitations.length }) }}</summary>
                 <ol class="mt-3 stack-y-md">
-                  <li v-for="citation in additionalCitations" :key="citation.chunkId" class="rounded-2xl border border-indigo/15 bg-paper p-4">
+                  <li v-for="(citation, citationIndex) in additionalCitations" :key="`${citation.heading}-${citation.pageFrom}-${citation.pageTo}-${citationIndex}`" class="rounded-2xl border border-indigo/15 bg-paper p-4">
                     <div class="flex flex-wrap items-center justify-between gap-2">
                       <p class="font-semibold">{{ citation.heading }}</p>
                       <span class="text-xs font-semibold text-indigo">{{ citationPages(citation) }}</span>

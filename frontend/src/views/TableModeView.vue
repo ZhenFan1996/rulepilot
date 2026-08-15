@@ -18,7 +18,6 @@ interface GameSession {
 }
 
 interface Citation {
-  chunkId: string
   heading: string
   excerpt: string
   pageFrom: number
@@ -283,7 +282,7 @@ onUnmounted(() => {
             <details v-if="latestTurn.answer.citations.length" class="border-t border-indigo/15 bg-indigo/5 p-5">
               <summary class="cursor-pointer font-semibold text-indigo">查看规则出处</summary>
               <div class="mt-3 stack-y-md">
-                <div v-for="citation in latestTurn.answer.citations" :key="citation.chunkId" class="rounded-xl bg-paper p-3 text-sm">
+                <div v-for="(citation, citationIndex) in latestTurn.answer.citations" :key="`${citation.heading}-${citation.pageFrom}-${citation.pageTo}-${citationIndex}`" class="rounded-xl bg-paper p-3 text-sm">
                   <p class="font-semibold">{{ citation.heading }} · {{ pages(citation) }}</p>
                   <p class="mt-1 leading-6 text-ink/60">{{ playerFacingCitationExcerpt(citation.excerpt) }}</p>
                 </div>

@@ -1,121 +1,30 @@
 import { getCurrentScope, onScopeDispose, ref } from 'vue'
 
-import { useLocale, type AppLocale } from '@/lib/locale'
+import type { AppLocale } from '@/lib/locale'
 import {
   answerAgentTrace,
   type AnswerAgentActivity,
   type AnswerAgentTraceItem,
 } from '@/lib/answerAgentTrace'
+import {
+  isAnswerRulingReference,
+  parsePlayerFacingRuleAnswer,
+  type AnswerRulingReference,
+  type PlayerFacingRuleAnswer,
+  type PlayerRuleCitation,
+} from '@/lib/playerAnswerContract'
+import { playerTurnLocale } from '@/lib/playerTurnLanguage'
 
 const ANSWER_HISTORY_LIMIT = 12
 
-export interface RuleCitation {
-  chunkId: string
-  sectionType: string
-  heading: string
-  excerpt: string
-  pageFrom: number
-  pageTo: number
-}
-
-export interface StructuredRuleAnswer {
-  status: 'ANSWERED' | 'ANSWERED_WITH_WARNING' | 'CLARIFICATION_REQUIRED' | 'INSUFFICIENT_EVIDENCE' | 'MODEL_TIMEOUT' | 'INVALID_MODEL_OUTPUT' | 'VERSION_CONFLICT'
-  shortVerdict: string
-  explanation: string
-  citations: RuleCitation[]
-  exceptions: string[]
-  confidence: 'HIGH' | 'MEDIUM' | 'LOW'
-  answerBasis?: 'DIRECT_RULE' | 'GROUNDED_APPLICATION' | null
-  official: boolean
-  confirmedRulingId: string | null
-  confirmedRulingVersion: number | null
-  clarification: string | null
-  warnings: Array<{
-    type: 'INDIRECT_CITATION' | 'LOW_CONFIDENCE' | 'REVIEW_UNRESOLVED' | 'REVIEW_UNAVAILABLE'
-  }>
-  calculations?: Array<{
-    expression: string
-    result: string
-  }>
-  situationChecks?: Array<{
-    requirement: string
-    status: 'CONFIRMED' | 'CONTRADICTED' | 'NOT_PROVIDED'
-    playerFact: string
-  }>
-  walkthroughSteps?: Array<{
-    instruction: string
-    explanation: string
-    orderBasis: 'RULE_ORDER' | 'EXPLANATION_ORDER'
-  }>
-  decisionBranches?: Array<{
-    condition: string
-    outcome: string
-    basis: 'EXPLICIT_RULE' | 'RULEBOOK_EXAMPLE'
-  }>
-  exceptionClauses?: Array<{
-    condition: string
-    effect: string
-  }>
-  termDefinitions?: Array<{
-    term: string
-    definition: string
-    boundary: string
-  }>
-  workedExamples?: Array<{
-    setup: string
-    action: string
-    outcome: string
-    basis: 'RULEBOOK_EXAMPLE' | 'EVIDENCE_BOUND_ILLUSTRATION'
-  }>
-  priorityResolutions?: Array<{
-    baseRule: string
-    competingRule: string
-    resolution: string
-    basis: 'EXPLICIT_OVERRIDE' | 'IMPOSSIBILITY_PRIORITY' | 'CONFLICT_ONLY_OVERRIDE'
-  }>
-  timingResolutions?: Array<{
-    timingContext: string
-    resolutionOrder: string
-    orderSource: string
-    basis: 'CURRENT_PLAYER_CHOOSES' | 'PRINTED_TOP_TO_BOTTOM' | 'NORMAL_TURN_ORDER'
-  }>
-  tieResolutions?: Array<{
-    tieContext: string
-    resolutionSteps: string[]
-    finalOutcome: string
-    basis: 'SINGLE_TIEBREAKER' | 'ORDERED_TIEBREAKERS' | 'RANK_REWARD_SHIFT' | 'POSITIONAL_PRIORITY'
-  }>
-  scopeResolutions?: Array<{
-    ruleContext: string
-    governingCondition: string
-    currentSituation: string
-    matchStatus: 'MATCHES_SCOPE' | 'OUTSIDE_SCOPE' | 'NEEDS_CONTEXT'
-    effect: string
-    basis: 'PLAYER_COUNT' | 'ROLE_PRESENCE' | 'GAME_MODE' | 'VARIANT_SELECTION' | 'PLAYER_COUNT_EXCEPTION'
-  }>
-  conceptComparisons?: Array<{
-    leftConcept: string
-    leftDefinition: string
-    rightConcept: string
-    rightDefinition: string
-    commonGround: string
-    keyDifference: string
-    practicalBoundary: string
-    basis: 'ACTION_WINDOW' | 'RESOURCE_FUNCTION' | 'STORAGE_STATUS' | 'RULE_SCOPE' | 'DEFINITION_BOUNDARY'
-  }>
-  ruleOptions?: Array<{
-    decisionContext: string
-    selectionRule: string
-    optionName: string
-    availabilityCondition: string
-    result: string
-    basis: 'SOURCE_SELECTION' | 'TIMING_CATALOG' | 'ALTERNATIVE_ACTION' | 'EXCLUSIVE_CHOICE'
-  }>
-}
+export type RuleCitation = PlayerRuleCitation
+export type StructuredRuleAnswer = PlayerFacingRuleAnswer
+export type { AnswerRulingReference } from '@/lib/playerAnswerContract'
 
 export interface AnswerCreation {
-  assistantRunId: string
   answer: StructuredRuleAnswer
+  conversationTurnId?: string | null
+  rulingReference: AnswerRulingReference
 }
 
 export type LearningIntent = 'SIMPLIFY' | 'EXAMPLE' | 'DEFINE' | 'WHY' | 'EXCEPTIONS' | 'SOURCE' | 'VERIFY'
@@ -124,13 +33,19 @@ export interface AnswerTurn {
   question: string
   answer: StructuredRuleAnswer
   learningIntent: LearningIntent | null
+  rulingReference?: AnswerRulingReference | null
+}
+
+export interface ConfirmedRulingCitation extends RuleCitation {
+  chunkId: string
+  sectionType: string
 }
 
 export interface ConfirmedRuling {
   id: string
   shortVerdict: string
   explanation: string
-  citations: RuleCitation[]
+  citations: ConfirmedRulingCitation[]
   exceptions: string[]
   confidence: StructuredRuleAnswer['confidence']
   status: 'CONFIRMED' | 'SUPERSEDED'
@@ -155,28 +70,30 @@ interface UseLessonAnswersOptions {
   isCurrentLessonLoad: (request: number, planId: string) => boolean
   canRead?: () => boolean
   requestLogin: () => Promise<unknown>
-  onReceived: (context: AnswerContext, question: string, answer: StructuredRuleAnswer) => void
+  onReceived: (
+    context: AnswerContext,
+    question: string,
+    answer: StructuredRuleAnswer,
+    rulingReference: AnswerRulingReference,
+  ) => void
 }
 
 /** Keeps a question attached to the exact lesson workspace that created it. */
 export function useLessonAnswers(options: UseLessonAnswersOptions) {
-  const { t } = useLocale()
   const question = ref('')
   const answer = ref<StructuredRuleAnswer | null>(null)
   const answeredQuestion = ref('')
   const answerTurns = ref<AnswerTurn[]>([])
+  const answerRulingReference = ref<AnswerRulingReference | null>(null)
   const activeLearningIntent = ref<LearningIntent | null>(null)
   const answerLoading = ref(false)
   const answerError = ref('')
   const agentTrace = ref<AnswerAgentTraceItem[]>([])
-  const answerRunId = ref('')
   let latestAnswerRequest = 0
   let traceTimer: ReturnType<typeof setTimeout> | null = null
   let activeAnswerController: AbortController | null = null
   let activeTraceController: AbortController | null = null
-  let activeFinalTraceController: AbortController | null = null
   let traceSequence = 0
-  let finalTraceSequence = 0
   let disposed = false
 
   function isCurrentAnswerRequest(answerRequest: number, lessonRequest: number, planId: string) {
@@ -194,11 +111,11 @@ export function useLessonAnswers(options: UseLessonAnswersOptions) {
     answer.value = null
     answeredQuestion.value = ''
     answerTurns.value = []
+    answerRulingReference.value = null
     activeLearningIntent.value = null
     answerLoading.value = false
     answerError.value = ''
     agentTrace.value = []
-    answerRunId.value = ''
   }
 
   function restoreConversation(turns: AnswerTurn[], clearQuestion = true) {
@@ -207,6 +124,7 @@ export function useLessonAnswers(options: UseLessonAnswersOptions) {
     const latest = answerTurns.value.at(-1)
     if (!latest) return
     answer.value = latest.answer
+    answerRulingReference.value = latest.rulingReference ?? null
     answeredQuestion.value = latest.question
   }
 
@@ -214,12 +132,14 @@ export function useLessonAnswers(options: UseLessonAnswersOptions) {
     cancelReadTransport()
     answer.value = null
     answerError.value = ''
-    answerRunId.value = ''
+    answerRulingReference.value = null
   }
 
   async function submitQuestion(text: string, learningIntent: LearningIntent | null) {
     const context = options.currentContext()
     if (!text || !context || answerLoading.value) return
+    const responseLocale = playerTurnLocale(text, context.locale)
+    let failureKind: AnswerRequestFailure = 'request'
     const lessonRequest = options.currentLessonRequest()
     const answerRequest = ++latestAnswerRequest
     cancelReadTransport()
@@ -230,7 +150,7 @@ export function useLessonAnswers(options: UseLessonAnswersOptions) {
     answerError.value = ''
     answer.value = null
     agentTrace.value = []
-    answerRunId.value = ''
+    answerRulingReference.value = null
     try {
       const csrfResponse = await fetch('/api/auth/csrf', {
         credentials: 'include',
@@ -241,7 +161,10 @@ export function useLessonAnswers(options: UseLessonAnswersOptions) {
         await options.requestLogin()
         return
       }
-      if (!csrfResponse.ok) throw new Error(t('lesson.answer.error.session'))
+      if (!csrfResponse.ok) {
+        failureKind = 'session'
+        throw new Error('secure session unavailable')
+      }
       const csrf = (await csrfResponse.json()) as CsrfResponse
       const previousTurn = answerTurns.value.at(-1)
       const submittedAt = Date.now()
@@ -264,24 +187,32 @@ export function useLessonAnswers(options: UseLessonAnswersOptions) {
         await options.requestLogin()
         return
       }
-      if (!response.ok) throw new Error(t('lesson.answer.error.unavailable'))
-      const creation = (await response.json()) as AnswerCreation
+      if (!response.ok) {
+        failureKind = 'unavailable'
+        throw new Error('answer unavailable')
+      }
+      const creation = parseAnswerCreation(await response.json() as unknown)
+      if (!creation) {
+        failureKind = 'unavailable'
+        throw new Error('player answer response is invalid')
+      }
       if (!isCurrentAnswerRequest(answerRequest, lessonRequest, context.planId)) return
       const received = creation.answer
-      answerRunId.value = creation.assistantRunId
+      const rulingReference = safeRulingReference(creation.rulingReference, received.citations.length)
+      answerRulingReference.value = rulingReference
       answer.value = received
       answeredQuestion.value = text
       answerTurns.value = [
         ...answerTurns.value,
-        { question: text, answer: received, learningIntent },
+        { question: text, answer: received, learningIntent, rulingReference },
       ].slice(-ANSWER_HISTORY_LIMIT)
       question.value = ''
-      options.onReceived(context, text, received)
+      options.onReceived(context, text, received, rulingReference)
       stopTracePolling()
-      void loadFinalTrace(creation.assistantRunId, context, answerRequest, lessonRequest)
-    } catch (error) {
+      agentTrace.value = []
+    } catch {
       if (!isCurrentAnswerRequest(answerRequest, lessonRequest, context.planId)) return
-      answerError.value = error instanceof Error ? error.message : t('lesson.answer.error.request')
+      answerError.value = answerRequestFailureCopy(failureKind, responseLocale)
     } finally {
       if (activeAnswerController === controller) activeAnswerController = null
       if (isCurrentAnswerRequest(answerRequest, lessonRequest, context.planId)) {
@@ -304,8 +235,8 @@ export function useLessonAnswers(options: UseLessonAnswersOptions) {
     answerLoading.value = false
     activeLearningIntent.value = null
     agentTrace.value = []
-    answerRunId.value = ''
-    answerError.value = t('lesson.answer.cancelled')
+    const fallback = options.currentContext()?.locale ?? 'zh-CN'
+    answerError.value = answerRequestFailureCopy('cancelled', playerTurnLocale(question.value, fallback))
   }
 
   function startTracePolling(
@@ -360,40 +291,6 @@ export function useLessonAnswers(options: UseLessonAnswersOptions) {
     traceTimer = setTimeout(poll, 250)
   }
 
-  async function loadFinalTrace(
-    runId: string,
-    context: AnswerContext,
-    answerRequest: number,
-    lessonRequest: number,
-  ) {
-    if (options.canRead?.() === false) return
-    const read = ++finalTraceSequence
-    activeFinalTraceController?.abort()
-    const controller = new AbortController()
-    activeFinalTraceController = controller
-    try {
-      const response = await fetch(`/api/v1/assistant-runs/${runId}`, {
-        credentials: 'include',
-        signal: controller.signal,
-      })
-      if (!response.ok
-        || read !== finalTraceSequence
-        || activeFinalTraceController !== controller
-        || !isCurrentAnswerRequest(answerRequest, lessonRequest, context.planId)) return
-      const details = await response.json() as AnswerRunDetails
-      if (activeFinalTraceController !== controller
-        || read !== finalTraceSequence
-        || !isCurrentAnswerRequest(answerRequest, lessonRequest, context.planId)
-        || details.run.id !== runId
-        || details.run.subjectId !== context.documentVersionId) return
-      agentTrace.value = answerAgentTrace(details.activities, context.locale)
-    } catch {
-      // A completed answer remains usable even when optional execution details cannot be loaded.
-    } finally {
-      if (activeFinalTraceController === controller) activeFinalTraceController = null
-    }
-  }
-
   function stopTracePolling() {
     traceSequence += 1
     if (traceTimer !== null) clearTimeout(traceTimer)
@@ -404,9 +301,6 @@ export function useLessonAnswers(options: UseLessonAnswersOptions) {
 
   function cancelReadTransport() {
     stopTracePolling()
-    finalTraceSequence += 1
-    activeFinalTraceController?.abort()
-    activeFinalTraceController = null
   }
 
   if (getCurrentScope()) {
@@ -424,11 +318,11 @@ export function useLessonAnswers(options: UseLessonAnswersOptions) {
     answer,
     answeredQuestion,
     answerTurns,
+    answerRulingReference,
     activeLearningIntent,
     answerLoading,
     answerError,
     agentTrace,
-    answerRunId,
     cancelReadTransport,
     clearAnswerFeedback,
     cancelAnswer,
@@ -438,6 +332,27 @@ export function useLessonAnswers(options: UseLessonAnswersOptions) {
   }
 }
 
+type AnswerRequestFailure = 'session' | 'unavailable' | 'request' | 'cancelled'
+
+function answerRequestFailureCopy(failure: AnswerRequestFailure, locale: AppLocale) {
+  if (locale === 'en') {
+    if (failure === 'session') {
+      return "I couldn't establish a secure session. Your question is still here; review it and try again."
+    }
+    if (failure === 'unavailable') {
+      return 'The rules answer service is unavailable right now. Your question is still here; review it and try again.'
+    }
+    if (failure === 'cancelled') {
+      return 'Stopped waiting. This unfinished result will not replace the current page. You can edit the question and send it again.'
+    }
+    return "I couldn't send this question. It is still here; review it and try again."
+  }
+  if (failure === 'session') return '无法建立安全会话。问题仍保留在这里；检查后可以直接重试。'
+  if (failure === 'unavailable') return '规则答疑暂时不可用。问题仍保留在这里；检查后可以直接重试。'
+  if (failure === 'cancelled') return '已停止等待；这次未完成的结果不会替换当前页面。你可以修改问题后重新发送。'
+  return '这次没有成功发送问题。问题仍保留在这里；检查后可以直接重试。'
+}
+
 interface AnswerRunDetails {
   run: {
     id: string
@@ -445,4 +360,40 @@ interface AnswerRunDetails {
     createdAt: string
   }
   activities: AnswerAgentActivity[]
+}
+
+function parseAnswerCreation(value: unknown): AnswerCreation | null {
+  if (!isRecord(value) || !isAnswerRulingReference(value.rulingReference)
+    || !(value.conversationTurnId === undefined
+      || value.conversationTurnId === null
+      || typeof value.conversationTurnId === 'string')) return null
+  const answer = parsePlayerFacingRuleAnswer(value.answer)
+  if (!answer) return null
+  return {
+    answer,
+    conversationTurnId: value.conversationTurnId,
+    rulingReference: {
+      citationIds: [...value.rulingReference.citationIds],
+      confirmedRulingId: value.rulingReference.confirmedRulingId,
+      confirmedRulingVersion: value.rulingReference.confirmedRulingVersion,
+    },
+  }
+}
+
+function safeRulingReference(value: unknown, citationCount: number): AnswerRulingReference {
+  if (!isAnswerRulingReference(value)
+    || value.citationIds.length !== citationCount
+    || new Set(value.citationIds).size !== value.citationIds.length
+    || (value.confirmedRulingId === null) !== (value.confirmedRulingVersion === null)) {
+    return { citationIds: [], confirmedRulingId: null, confirmedRulingVersion: null }
+  }
+  return {
+    citationIds: [...value.citationIds],
+    confirmedRulingId: value.confirmedRulingId,
+    confirmedRulingVersion: value.confirmedRulingVersion,
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }

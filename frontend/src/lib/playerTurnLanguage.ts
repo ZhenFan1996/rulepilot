@@ -2,7 +2,7 @@ import type { AppLocale } from '@/lib/locale'
 
 const englishFunctionWords = new Set([
   'a', 'an', 'and', 'are', 'can', 'do', 'does', 'for', 'how', 'i', 'in', 'is', 'it', 'of', 'or',
-  'should', 'the', 'this', 'to', 'we', 'what', 'which', 'with', 'would', 'you',
+  'should', 'the', 'this', 'to', 'we', 'what', 'when', 'where', 'which', 'why', 'with', 'would', 'you',
 ])
 
 /** Chooses the reply language from the current player turn; UI locale is only the ambiguity fallback. */
@@ -26,7 +26,8 @@ export function playerTurnLocale(text: string, fallback: AppLocale): AppLocale {
   const englishSignals = latinWords.filter(word => englishFunctionWords.has(word)).length
 
   if (englishSignals >= 2) return 'en'
-  if (hanCharacters >= 4 && latinWords.length <= 3) return 'zh-CN'
+  if (englishSignals >= 1 && latinWords.length >= 2 && hanCharacters <= 1) return 'en'
+  if (hanCharacters >= 4 && (latinWords.length <= 3 || hanCharacters >= latinWords.length)) return 'zh-CN'
   if (latinWords.length >= 4 && hanCharacters <= 4) return 'en'
   if (hanCharacters >= 2 && latinWords.length === 0) return 'zh-CN'
   return fallback

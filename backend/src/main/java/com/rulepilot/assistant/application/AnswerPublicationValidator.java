@@ -253,6 +253,18 @@ final class AnswerPublicationValidator {
         }
         String completeAnswer = shortVerdict + "\n" + explanation + "\n"
                 + String.join("\n", draft.exceptions()) + "\n"
+                + calculations.stream()
+                        .map(calculation -> calculation.expression() + "\n" + calculation.result())
+                        .collect(java.util.stream.Collectors.joining("\n")) + "\n"
+                + situationChecks.stream()
+                        .map(check -> check.requirement() + "\n" + check.playerFact())
+                        .collect(java.util.stream.Collectors.joining("\n")) + "\n"
+                + walkthroughSteps.stream()
+                        .map(step -> step.instruction() + "\n" + step.explanation())
+                        .collect(java.util.stream.Collectors.joining("\n")) + "\n"
+                + decisionBranches.stream()
+                        .map(branch -> branch.condition() + "\n" + branch.outcome())
+                        .collect(java.util.stream.Collectors.joining("\n")) + "\n"
                 + exceptionClauses.stream()
                         .map(clause -> clause.condition() + "\n" + clause.effect())
                         .collect(java.util.stream.Collectors.joining("\n")) + "\n"

@@ -16,7 +16,19 @@ final class AnswerDraftSafetyPolicy {
     /** Internal protocol identifiers must never appear in player-facing prose. */
     private static final Pattern INTERNAL_EVIDENCE_REFERENCE = Pattern.compile(
             "(?iu)[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}|\\bchunk(?:id)?\\b"
-                    + "|(?:证据|引用|evidence|source)\\s*\\[?E\\d+\\]?|\\[E\\d+\\]|\\[[0-9a-f]{8}]");
+                    + "|(?:证据|引用|evidence|source)\\s*\\[?E\\d+\\]?|\\[E\\d+\\]|\\[[0-9a-f]{8}]"
+                    + "|\\b(?:assistantRunId|conversationTurnId|documentVersionId|citationIds?)\\b"
+                    + "|\\b(?:native|repair)[A-Z][A-Za-z]+\\b"
+                    + "|\\b(?:hybridRuleSearch|calculateRuleMath|checkRule[A-Z][A-Za-z]+"
+                    + "|buildRule[A-Z][A-Za-z]+|traceRuleDependencies|defineRuleTerms|illustrateRule"
+                    + "|resolveRule[A-Z][A-Za-z]+|compareRuleConcepts|listRuleOptions|showRuleEvidence)\\b"
+                    + "|\\b(?:ANSWERED_WITH_WARNING|CLARIFICATION_REQUIRED|INSUFFICIENT_EVIDENCE"
+                    + "|INVALID_MODEL_OUTPUT|MODEL_TIMEOUT|VERSION_CONFLICT)\\b"
+                    + "|\\b(?:system|assistant|user)[ _-]?prompt\\b"
+                    + "|(?:系统|助手|用户)(?:提示词|提示)"
+                    + "|(?:模型输出|模型响应|结构化输出)(?:校验|验证|解析|错误|失败|无效|未通过|不合法)?"
+                    + "|\\b(?:model|schema|json|yaml)[ _-]?"
+                    + "(?:output|response|validation|parse|parsing|error|failure|invalid)\\b");
     private AnswerDraftSafetyPolicy() {}
 
     static ModelDraft normalizeInternalEvidenceReferences(ModelDraft draft) {

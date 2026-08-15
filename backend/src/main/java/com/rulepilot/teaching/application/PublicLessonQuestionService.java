@@ -31,7 +31,8 @@ public class PublicLessonQuestionService {
     }
 
     private PublicAnswer answer(PublicLessonReader.PublicLesson lesson, QuestionRequest request) {
-        PlayerLocale language = PlayerLocale.fromRequest(request.language());
+        PlayerLocale language = PlayerLocale.forQuestion(
+                request.question(), PlayerLocale.fromRequest(request.language()));
         var creation = request.learningIntent() == null
                 ? answers.answerForPublicReader(
                         lesson.documentVersionId(),
@@ -46,7 +47,6 @@ public class PublicLessonQuestionService {
                         request.learningIntent());
         Set<Integer> citedPages = citedPages(creation.answer());
         return new PublicAnswer(
-                creation.assistantRunId(),
                 creation.answer(),
                 visualAids(lesson, citedPages, creation.citedEvidenceIds(), language),
                 List.of());
@@ -132,7 +132,6 @@ public class PublicLessonQuestionService {
     }
 
     public record PublicAnswer(
-            UUID assistantRunId,
             RuleAnswering.Answer answer,
             List<VisualAid> visualAids,
             List<Example> examples) {

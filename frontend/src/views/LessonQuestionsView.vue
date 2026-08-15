@@ -75,11 +75,11 @@ const {
   answer,
   answeredQuestion,
   answerTurns,
+  answerRulingReference,
   activeLearningIntent,
   answerLoading,
   answerError,
   agentTrace,
-  answerRunId,
   cancelAnswer,
   cancelReadTransport: cancelAnswerReads,
   clearAnswerFeedback,
@@ -99,22 +99,27 @@ const {
   isCurrentLessonLoad: isCurrentWorkspaceLoad,
   canRead: () => online.value,
   requestLogin: async () => notifyLoginRequired(),
-  onReceived: (context, text, received) => {
+  onReceived: (context, text, received, reference) => {
     rememberCurrentAnswerThread()
     if (received.status === 'ANSWERED') {
       cacheOfflineAnswer(context.planId, text, received)
       refreshOfflineKnowledge(context.planId)
     }
-    if (received.confirmedRulingId !== null && received.confirmedRulingVersion !== null) {
+    if (reference.confirmedRulingId !== null && reference.confirmedRulingVersion !== null
+      && reference.citationIds.length === received.citations.length) {
       applyRuling({
-        id: received.confirmedRulingId,
+        id: reference.confirmedRulingId,
         shortVerdict: received.shortVerdict,
         explanation: received.explanation,
-        citations: received.citations,
+        citations: received.citations.map((citation, index) => ({
+          ...citation,
+          chunkId: reference.citationIds[index]!,
+          sectionType: '',
+        })),
         exceptions: received.exceptions,
         confidence: received.confidence,
         status: 'CONFIRMED',
-        version: received.confirmedRulingVersion,
+        version: reference.confirmedRulingVersion,
       })
     } else {
       resetRuling()
@@ -207,6 +212,7 @@ const {
 } = useConfirmedRuling({
   documentVersionId: computed(() => plan.value?.documentVersionId ?? null),
   answer,
+  rulingReference: answerRulingReference,
   answeredQuestion,
   csrfToken,
   currentReadContext: () => plan.value
@@ -442,7 +448,6 @@ onUnmounted(() => {
             :answer-loading="answerLoading"
             :answer-error="answerError"
             :agent-trace="agentTrace"
-            :answer-run-id="answerRunId"
             :online="online"
             :ruling="ruling"
             :ruling-saving="rulingSaving"

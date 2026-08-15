@@ -5,17 +5,17 @@ import LessonAnswerPanel from './LessonAnswerPanel.vue'
 import { setLocale } from '@/lib/locale'
 
 const answered = {
+  language: 'zh-CN' as const,
   status: 'ANSWERED' as const,
   shortVerdict: '先完成结算，再记录本轮结果。',
   explanation: '规则书把结算放在本轮结束之后。',
-  citations: [{ chunkId: 'chunk-1', sectionType: 'RULE', heading: '回合结束', excerpt: '结算本轮。', pageFrom: 4, pageTo: 4 }],
+  citations: [{ heading: '回合结束', excerpt: '结算本轮。', pageFrom: 4, pageTo: 4 }],
   exceptions: ['除非效果明确打断结算。'],
   confidence: 'HIGH' as const,
   answerBasis: 'GROUNDED_APPLICATION' as const,
-  official: false,
-  confirmedRulingId: null,
-  confirmedRulingVersion: null,
+  source: 'UPLOADED' as const,
   clarification: null,
+  recovery: null,
   warnings: [],
 }
 
@@ -69,8 +69,6 @@ describe('LessonAnswerPanel', () => {
     const visualAnswer = {
       ...answered,
       citations: [{
-        chunkId: 'chunk-1',
-        sectionType: 'RULE',
         heading: '目标计分',
         pageFrom: 4,
         pageTo: 4,
@@ -117,7 +115,10 @@ describe('LessonAnswerPanel', () => {
         answerTurns: [{ question: '什么时候结算？', answer: answered, learningIntent: null }],
         ruling: {
           id: 'ruling-1', shortVerdict: answered.shortVerdict, explanation: answered.explanation,
-          citations: answered.citations, exceptions: answered.exceptions, confidence: 'HIGH', status: 'CONFIRMED', version: 3,
+          citations: answered.citations.map(citation => ({
+            ...citation, chunkId: 'chunk-1', sectionType: 'RULE',
+          })),
+          exceptions: answered.exceptions, confidence: 'HIGH', status: 'CONFIRMED', version: 3,
         },
       },
     })
@@ -607,7 +608,7 @@ describe('LessonAnswerPanel', () => {
 
   it('shows the first rule source immediately and distinguishes medium confidence from high', () => {
     const secondCitation = {
-      chunkId: 'chunk-2', sectionType: 'RULE', heading: '计分顺序',
+      heading: '计分顺序',
       excerpt: '完成目标后计算分数。', pageFrom: 7, pageTo: 8,
     }
     const mediumAnswer = {
@@ -670,6 +671,11 @@ describe('LessonAnswerPanel', () => {
       citations: [],
       exceptions: [],
       confidence: 'LOW' as const,
+      recovery: {
+        message: '请补充规则中的具体对象名称、发生时机或页码。',
+        actionLabel: '回到问题补充信息',
+        draft: '',
+      },
     }
     const wrapper = mount(LessonAnswerPanel, {
       attachTo: document.body,
@@ -679,7 +685,6 @@ describe('LessonAnswerPanel', () => {
         answer: insufficient,
         answeredQuestion: '这个效果什么时候发生？',
         answerTurns: [{ question: '这个效果什么时候发生？', answer: insufficient, learningIntent: null }],
-        answerRunId: '11111111-1111-4111-8111-111111111111',
         agentTrace: [{ sequence: 1, kind: 'verification', label: '没有找到足够依据', status: 'stopped' }],
       },
       global: { stubs: { VoiceQuestionCapture: true } },
@@ -688,10 +693,54 @@ describe('LessonAnswerPanel', () => {
     expect(wrapper.text()).toContain('规则中的具体对象名称')
     expect(wrapper.text()).not.toContain('本次回答编号')
     expect(wrapper.text()).not.toContain('11111111-1111-4111-8111-111111111111')
+    expect(wrapper.text()).not.toContain('没有找到足够依据')
+    expect(wrapper.find('[data-confidence]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('上传的规则书')
 
     await wrapper.findAll('button').find(button => button.text() === '回到问题补充信息')!.trigger('click')
     expect(document.activeElement).toBe(wrapper.get('#lesson-question').element)
     wrapper.unmount()
+  })
+
+  it('uses the current-turn recovery language even when the surrounding UI is Chinese', async () => {
+    setLocale('zh-CN')
+    const failure = {
+      ...answered,
+      language: 'en' as const,
+      status: 'MODEL_TIMEOUT' as const,
+      shortVerdict: "I couldn't finish checking the rule in time.",
+      explanation: '',
+      citations: [],
+      exceptions: [],
+      confidence: 'LOW' as const,
+      recovery: {
+        message: 'Your question is still here. Review or edit it, then try again.',
+        actionLabel: 'Review and try again',
+        draft: 'When does the cobalt spindle resolve?',
+      },
+    }
+    const wrapper = mount(LessonAnswerPanel, {
+      props: {
+        ...baseProps,
+        question: 'When does the cobalt spindle resolve?',
+        answer: failure,
+        answeredQuestion: 'When does the cobalt spindle resolve?',
+        answerTurns: [{
+          question: 'When does the cobalt spindle resolve?', answer: failure, learningIntent: null,
+        }],
+      },
+      global: { stubs: { VoiceQuestionCapture: true } },
+    })
+
+    expect(wrapper.text()).toContain('Your question is still here')
+    expect(wrapper.text()).toContain('Review and try again')
+    expect(wrapper.text()).not.toContain('这次没有在时限内')
+    expect(wrapper.find('[data-confidence]').exists()).toBe(false)
+
+    await wrapper.findAll('button').find(button => button.text() === 'Review and try again')!.trigger('click')
+
+    expect(wrapper.emitted('update:question')).toEqual([['When does the cobalt spindle resolve?']])
+    expect(wrapper.emitted('ask')).toBeUndefined()
   })
 
   it('keeps a localized clarification actionable without publishing a conclusion', async () => {
@@ -704,6 +753,11 @@ describe('LessonAnswerPanel', () => {
       exceptions: [],
       confidence: 'LOW' as const,
       clarification: '你说的“这个”具体指什么？请写出规则书里的名称。',
+      recovery: {
+        message: '你说的“这个”具体指什么？请写出规则书里的名称。',
+        actionLabel: '补充这项信息',
+        draft: '我指的是：',
+      },
     }
     const wrapper = mount(LessonAnswerPanel, {
       attachTo: document.body,
@@ -735,6 +789,11 @@ describe('LessonAnswerPanel', () => {
       exceptions: [],
       confidence: 'LOW' as const,
       clarification: '你说的“这个”具体指什么？',
+      recovery: {
+        message: '你说的“这个”具体指什么？',
+        actionLabel: '补充这项信息',
+        draft: '我指的是：',
+      },
     }
     const wrapper = mount(LessonAnswerPanel, {
       props: {

@@ -6,6 +6,7 @@ import LessonAnswerPanel from '@/components/LessonAnswerPanel.vue'
 import { useConfirmedRuling } from '@/composables/useConfirmedRuling'
 import {
   useLessonAnswers,
+  type AnswerRulingReference,
   type AnswerTurn,
   type ConfirmedRuling,
   type CsrfResponse,
@@ -14,6 +15,7 @@ import {
 import { useLessonQuestionInput } from '@/composables/useLessonQuestionInput'
 import { notifyLoginRequired } from '@/lib/authSession'
 import { useLocale } from '@/lib/locale'
+import { isAnswerRulingReference, parsePlayerFacingRuleAnswer } from '@/lib/playerAnswerContract'
 
 interface GameSession {
   id: string
@@ -25,6 +27,7 @@ interface ConversationTurnResponse {
   id: string
   question: string
   answer: StructuredRuleAnswer
+  rulingReference: AnswerRulingReference
   createdAt: string
 }
 
@@ -160,36 +163,78 @@ async function restoreOrCreateSession(versionId: string) {
 }
 
 async function conversation(versionId: string, sessionId: string) {
-  const parameters = new URLSearchParams({ gameSessionId: sessionId })
+  const parameters = new URLSearchParams({ gameSessionId: sessionId, language: locale.value })
   const response = await fetch(
     `/api/v1/document-versions/${encodeURIComponent(versionId)}/answers/conversation?${parameters}`,
     { credentials: 'include' },
   )
   if (!response.ok) throw new Error(copy.value.conversation)
-  return await response.json() as ConversationTurnResponse[]
+  const payload = await response.json() as unknown
+  if (!Array.isArray(payload)) throw new Error(copy.value.conversation)
+  const turns = payload.map(parseConversationTurnResponse)
+  if (turns.some(turn => turn === null)) throw new Error(copy.value.conversation)
+  return turns.filter((turn): turn is ConversationTurnResponse => turn !== null)
+}
+
+function parseConversationTurnResponse(value: unknown): ConversationTurnResponse | null {
+  if (!isRecord(value)
+    || typeof value.id !== 'string'
+    || value.id.length === 0
+    || typeof value.question !== 'string'
+    || value.question.trim().length === 0
+    || value.question.length > 800
+    || typeof value.createdAt !== 'string'
+    || !isAnswerRulingReference(value.rulingReference)) return null
+  const answer = parsePlayerFacingRuleAnswer(value.answer)
+  if (!answer) return null
+  return {
+    id: value.id,
+    question: value.question,
+    answer,
+    rulingReference: {
+      citationIds: [...value.rulingReference.citationIds],
+      confirmedRulingId: value.rulingReference.confirmedRulingId,
+      confirmedRulingVersion: value.rulingReference.confirmedRulingVersion,
+    },
+    createdAt: value.createdAt,
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 function restoredTurns(turns: ConversationTurnResponse[]): AnswerTurn[] {
-  return turns.map(turn => ({ question: turn.question, answer: turn.answer, learningIntent: null }))
+  return turns.map(turn => ({
+    question: turn.question,
+    answer: turn.answer,
+    learningIntent: null,
+    rulingReference: turn.rulingReference,
+  }))
 }
 
-function rulingFrom(answer: StructuredRuleAnswer): ConfirmedRuling | null {
-  if (!answer.confirmedRulingId || answer.confirmedRulingVersion === null) return null
+function rulingFrom(answer: StructuredRuleAnswer, reference: AnswerRulingReference): ConfirmedRuling | null {
+  if (!reference.confirmedRulingId || reference.confirmedRulingVersion === null
+    || reference.citationIds.length !== answer.citations.length) return null
   return {
-    id: answer.confirmedRulingId,
+    id: reference.confirmedRulingId,
     shortVerdict: answer.shortVerdict,
     explanation: answer.explanation,
-    citations: answer.citations,
+    citations: answer.citations.map((citation, index) => ({
+      ...citation,
+      chunkId: reference.citationIds[index]!,
+      sectionType: '',
+    })),
     exceptions: answer.exceptions,
     confidence: answer.confidence,
     status: 'CONFIRMED',
-    version: answer.confirmedRulingVersion,
+    version: reference.confirmedRulingVersion,
   }
 }
 
 const {
   question, answer, answeredQuestion, answerTurns, activeLearningIntent, answerLoading, answerError,
-  agentTrace, answerRunId, cancelAnswer, clearAnswerFeedback, resetConversation, restoreConversation, submitQuestion,
+  agentTrace, answerRulingReference, cancelAnswer, clearAnswerFeedback, resetConversation, restoreConversation, submitQuestion,
 } = useLessonAnswers({
   currentContext: () => session.value && props.documentVersionId && online.value
     ? {
@@ -202,8 +247,8 @@ const {
   currentLessonRequest: () => workspaceRequest,
   isCurrentLessonLoad: (request, planId) => request === workspaceRequest && planId === props.planId,
   requestLogin: async () => notifyLoginRequired(),
-  onReceived: (_context, _question, received) => {
-    const confirmed = rulingFrom(received)
+  onReceived: (_context, _question, received, reference) => {
+    const confirmed = rulingFrom(received, reference)
     if (confirmed) applyRuling(confirmed)
     else resetRuling()
   },
@@ -215,6 +260,7 @@ const {
 } = useConfirmedRuling({
   documentVersionId: computed(() => props.documentVersionId || null),
   answer,
+  rulingReference: answerRulingReference,
   answeredQuestion,
   csrfToken,
   onApplied: () => undefined,
@@ -260,7 +306,8 @@ async function loadWorkspace() {
     session.value = restoredSession
     initializedVersion.value = versionId
     restoreConversation(restoredTurns(turns))
-    const confirmed = turns.length ? rulingFrom(turns.at(-1)!.answer) : null
+    const latest = turns.at(-1)
+    const confirmed = latest?.rulingReference ? rulingFrom(latest.answer, latest.rulingReference) : null
     if (confirmed) applyRuling(confirmed)
   } catch (error) {
     if (request === workspaceRequest) {
@@ -311,7 +358,8 @@ async function createAndSwitchToNewSession() {
     initializedVersion.value = versionId
     restoreConversation(restoredTurns(turns), false)
     resetRuling()
-    const confirmed = turns.length ? rulingFrom(turns.at(-1)!.answer) : null
+    const latest = turns.at(-1)
+    const confirmed = latest?.rulingReference ? rulingFrom(latest.answer, latest.rulingReference) : null
     if (confirmed) applyRuling(confirmed)
     resettingSession.value = false
     restoreQuestionAfterReset.value = true
@@ -380,7 +428,7 @@ onBeforeUnmount(() => {
       ref="answerPanel"
       :question="question" :answer="answer" :answered-question="answeredQuestion" :answer-turns="answerTurns"
       :active-learning-intent="activeLearningIntent" :answer-loading="answerLoading" :answer-error="answerError"
-      :agent-trace="agentTrace" :answer-run-id="answerRunId" :online="online" :ruling="ruling"
+      :agent-trace="agentTrace" :online="online" :ruling="ruling"
       :ruling-saving="rulingSaving" :clear-thread-disabled="rulingSaving || editingRuling || resettingSession" :ruling-error="rulingError" :ruling-conflict="rulingConflict"
       :editing-ruling="editingRuling" :edited-verdict="editedVerdict" :edited-explanation="editedExplanation"
       :show-header="false"

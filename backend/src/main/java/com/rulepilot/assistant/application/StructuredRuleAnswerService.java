@@ -268,16 +268,18 @@ public class StructuredRuleAnswerService implements RuleAnswering {
             String previousQuestion,
             PlayerLocale outputLanguage,
             RuleAnswering.PublicLearningIntent learningIntent) {
+        PlayerLocale turnLanguage = PlayerLocale.forQuestion(question, outputLanguage);
         AnswerCreation creation = answerWithRun(
                 question,
                 new QuestionContext(
                         documentVersionId,
                         previousQuestion,
                         learningIntent == null ? null : LearningIntent.valueOf(learningIntent.name()),
-                        outputLanguage),
+                        turnLanguage),
                 "public-reader",
                 null);
-        return AnswerOutcomePolicy.publicReaderAnswer(creation.assistantRunId(), creation.answer());
+        return AnswerOutcomePolicy.publicReaderAnswer(
+                creation.assistantRunId(), creation.answer(), question, turnLanguage);
     }
 
     public AnswerCreation evaluateWithRun(
@@ -347,6 +349,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
             UUID gameSessionId,
             UUID assistantRunId,
             boolean useCache) {
+        context = context.withOutputLanguage(PlayerLocale.forQuestion(question, context.outputLanguage()));
         UnderstoodQuestion deterministic = understanding.understand(question, context);
         UnderstoodQuestion understood = deterministic;
         AnswerQuestionPlan questionPlan = AnswerQuestionPlan.fallback(deterministic);

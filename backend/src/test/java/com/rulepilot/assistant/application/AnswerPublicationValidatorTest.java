@@ -9,6 +9,8 @@ import com.rulepilot.assistant.EvidenceVerifier.VerificationStatus;
 import com.rulepilot.assistant.RuleAnswerModel.ModelDraft;
 import com.rulepilot.assistant.domain.AnswerBasis;
 import com.rulepilot.assistant.domain.AnswerConfidence;
+import com.rulepilot.assistant.domain.RuleWalkthroughStep;
+import com.rulepilot.assistant.domain.WalkthroughOrderBasis;
 import com.rulepilot.retrieval.VisualTranscribedRuleEvidence;
 import com.rulepilot.retrieval.evidence.HybridEvidenceHit;
 import com.rulepilot.retrieval.evidence.RuleEvidenceHit;
@@ -89,6 +91,26 @@ class AnswerPublicationValidatorTest {
                 "按规则执行。", "来源 " + shortHandle + " 说明应这样处理。", List.of(chunkId), List.of(), "HIGH");
 
         assertThatThrownBy(() -> validator.publish(versionId, leaking, List.of(evidence(versionId))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("internal evidence");
+    }
+
+    @Test
+    void rejectsInternalProtocolReferencesInsideStructuredPlayerFacingDetails() {
+        AnswerPublicationValidator validator = new AnswerPublicationValidator(verified());
+        RuleWalkthroughStep leakingStep = new RuleWalkthroughStep(
+                "Move the cobalt spindle.",
+                "Then run repairRuleTimingResolutions for " + UUID.randomUUID() + ".",
+                WalkthroughOrderBasis.RULE_ORDER,
+                List.of(chunkId));
+
+        assertThatThrownBy(() -> validator.publish(
+                        versionId,
+                        draft(List.of(chunkId), "HIGH"),
+                        List.of(evidence(versionId)),
+                        List.of(),
+                        List.of(),
+                        List.of(leakingStep)))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("internal evidence");
     }

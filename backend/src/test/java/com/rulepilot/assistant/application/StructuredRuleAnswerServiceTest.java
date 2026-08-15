@@ -341,7 +341,7 @@ class StructuredRuleAnswerServiceTest {
                 "Does the cobalt spindle return now?", new QuestionContext(versionId));
 
         assertThat(answer.status()).isEqualTo(AnswerStatus.INSUFFICIENT_EVIDENCE);
-        assertThat(answer.shortVerdict()).contains("生成结论无法由自己的引用核对");
+        assertThat(answer.shortVerdict()).contains("generated conclusion could not be verified by its own citations");
         assertThat(answer.citations()).extracting(citation -> citation.chunkId())
                 .containsExactly(source.chunkId());
         assertThat(answer.shortVerdict()).doesNotContain("spindle returns");

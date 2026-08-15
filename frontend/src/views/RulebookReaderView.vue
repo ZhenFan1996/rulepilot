@@ -76,7 +76,7 @@ function answerThreadScope(): LessonAnswerThreadScope | null {
 
 const {
   question, answer, answeredQuestion, answerTurns, activeLearningIntent, answerLoading, answerError,
-  agentTrace, answerRunId, cancelAnswer, clearAnswerFeedback, resetConversation, restoreConversation, submitQuestion,
+  agentTrace, answerRulingReference, cancelAnswer, clearAnswerFeedback, resetConversation, restoreConversation, submitQuestion,
 } = useLessonAnswers({
   currentContext: () => versionId.value && online.value
     ? { planId: workspaceId.value, documentVersionId: versionId.value, locale: locale.value }
@@ -84,14 +84,18 @@ const {
   currentLessonRequest: () => loadSequence,
   isCurrentLessonLoad: isCurrentLoad,
   requestLogin: async () => notifyLoginRequired(),
-  onReceived: (_context, _text, received) => {
+  onReceived: (_context, _text, received, reference) => {
     const scope = answerThreadScope()
     if (scope) rememberLessonAnswerThread(sessionStorage, scope, answerTurns.value)
-    if (received.confirmedRulingId !== null && received.confirmedRulingVersion !== null) {
+    if (reference.confirmedRulingId !== null && reference.confirmedRulingVersion !== null
+      && reference.citationIds.length === received.citations.length) {
       applyRuling({
-        id: received.confirmedRulingId, shortVerdict: received.shortVerdict, explanation: received.explanation,
-        citations: received.citations, exceptions: received.exceptions, confidence: received.confidence,
-        status: 'CONFIRMED', version: received.confirmedRulingVersion,
+        id: reference.confirmedRulingId, shortVerdict: received.shortVerdict, explanation: received.explanation,
+        citations: received.citations.map((citation, index) => ({
+          ...citation, chunkId: reference.citationIds[index]!, sectionType: '',
+        })),
+        exceptions: received.exceptions, confidence: received.confidence,
+        status: 'CONFIRMED', version: reference.confirmedRulingVersion,
       })
     } else resetRuling()
   },
@@ -128,6 +132,7 @@ const {
   editedVerdict, editedExplanation, applyRuling, confirmAnswer, saveRulingRevision, reloadRuling, reset: resetRuling,
 } = useConfirmedRuling({
   documentVersionId: computed(() => versionId.value || null), answer, answeredQuestion, csrfToken,
+  rulingReference: answerRulingReference,
   onApplied: () => undefined,
   messages: {
     createFailed: () => t('lesson.answer.ruling.createFailed'),
@@ -292,7 +297,7 @@ onUnmounted(() => {
             ref="answerPanel"
             :question="question" :answer="answer" :answered-question="answeredQuestion" :answer-turns="answerTurns"
             :active-learning-intent="activeLearningIntent" :answer-loading="answerLoading" :answer-error="answerError"
-            :agent-trace="agentTrace" :answer-run-id="answerRunId" :online="online" :ruling="ruling"
+            :agent-trace="agentTrace" :online="online" :ruling="ruling"
             :ruling-saving="rulingSaving" :clear-thread-disabled="rulingSaving || editingRuling" :ruling-error="rulingError" :ruling-conflict="rulingConflict"
             :editing-ruling="editingRuling" :edited-verdict="editedVerdict" :edited-explanation="editedExplanation"
             @update:question="question = $event" @update:editing-ruling="editingRuling = $event"

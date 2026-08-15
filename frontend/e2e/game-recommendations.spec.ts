@@ -116,15 +116,16 @@ function officialImportJob(preparationRunId = 'preparation-run-1') {
 }
 
 const ruleAnswer = {
+  language: 'zh-CN',
   status: 'ANSWERED',
   shortVerdict: '获得食物后，再发动该栖息地中从右到左的棕色能力。',
   explanation: '规则书把获得食物写在发动棕色能力之前，因此按这个顺序结算。',
   citations: [{
-    chunkId: 'answer-chunk-1', sectionType: 'TURN', heading: '获得食物',
+    heading: '获得食物',
     excerpt: '获得食物后，依次发动栖息地中的棕色能力。', pageFrom: 7, pageTo: 7,
   }],
-  exceptions: [], confidence: 'HIGH', answerBasis: 'DIRECT_RULE', official: true,
-  confirmedRulingId: null, confirmedRulingVersion: null, clarification: null, warnings: [],
+  exceptions: [], confidence: 'HIGH', answerBasis: 'DIRECT_RULE', source: 'OFFICIAL',
+  clarification: null, recovery: null, warnings: [],
 }
 
 async function mockPublicDiscovery(
@@ -417,10 +418,9 @@ async function mockPublicDiscovery(
   } }))
   await page.route('**/api/v1/document-versions/version-1/answers/conversation?*', route => route.fulfill({ json: [] }))
   await page.route('**/api/v1/document-versions/version-1/answers', route => route.fulfill({ json: {
-    assistantRunId: 'answer-run-1', answer: ruleAnswer, conversationTurnId: 'turn-1',
-  } }))
-  await page.route('**/api/v1/assistant-runs/answer-run-1', route => route.fulfill({ json: {
-    run: { id: 'answer-run-1', subjectId: 'version-1', createdAt: new Date().toISOString() }, activities: [],
+    answer: ruleAnswer, conversationTurnId: 'turn-1', rulingReference: {
+      citationIds: ['answer-chunk-1'], confirmedRulingId: null, confirmedRulingVersion: null,
+    },
   } }))
   return {
     publishPlan: () => { planPublished = true },

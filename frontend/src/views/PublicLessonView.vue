@@ -11,6 +11,7 @@ import type { LearningIntent } from '@/composables/useLessonAnswers'
 import { groundedLearningPrompt } from '@/lib/groundedLearningPrompt'
 import { useLocale } from '@/lib/locale'
 import { publicLessonTitle } from '@/lib/lessonPresentation'
+import { playerTurnLocale } from '@/lib/playerTurnLanguage'
 import { publicCoverUrl } from '@/lib/publicCover'
 
 interface VisualFocus {
@@ -54,7 +55,7 @@ interface PublicLessonResponse {
 interface RuleCitation { heading: string; pageFrom: number; pageTo: number }
 interface PublicAnswer {
   answer: {
-    status: 'ANSWERED' | 'ANSWERED_WITH_WARNING' | 'CLARIFICATION_REQUIRED' | 'INSUFFICIENT_EVIDENCE' | 'INVALID_MODEL_OUTPUT' | 'MODEL_TIMEOUT'
+    status: 'ANSWERED' | 'ANSWERED_WITH_WARNING' | 'CLARIFICATION_REQUIRED' | 'INSUFFICIENT_EVIDENCE' | 'INVALID_MODEL_OUTPUT' | 'MODEL_TIMEOUT' | 'VERSION_CONFLICT'
     shortVerdict: string
     explanation: string | null
     citations: RuleCitation[]
@@ -88,8 +89,24 @@ interface PublicAnswerTurn {
 }
 
 const PUBLIC_ANSWER_HISTORY_LIMIT = 6
-const PUBLIC_ANSWER_STORAGE_PREFIX = 'rulepilot:public-answer-thread:'
+const PUBLIC_ANSWER_STORAGE_PREFIX = 'rulepilot:public-answer-thread:v2:'
 const PUBLIC_ANSWER_READER_KEY = 'rulepilot:public-answer-reader'
+const PUBLIC_ANSWER_FIELDS = new Set([
+  'answer', 'visualAids', 'examples',
+  'status', 'shortVerdict', 'explanation', 'citations', 'exceptions', 'confidence', 'answerBasis',
+  'calculations', 'situationChecks', 'walkthroughSteps', 'decisionBranches', 'exceptionClauses',
+  'termDefinitions', 'workedExamples', 'priorityResolutions', 'timingResolutions', 'tieResolutions',
+  'scopeResolutions', 'conceptComparisons', 'ruleOptions', 'clarification', 'warnings',
+  'heading', 'pageFrom', 'pageTo', 'type', 'expression', 'result', 'requirement', 'playerFact',
+  'instruction', 'orderBasis', 'condition', 'outcome', 'basis', 'effect', 'term', 'definition',
+  'boundary', 'setup', 'action', 'baseRule', 'competingRule', 'resolution', 'timingContext',
+  'resolutionOrder', 'orderSource', 'tieContext', 'resolutionSteps', 'finalOutcome', 'ruleContext',
+  'governingCondition', 'currentSituation', 'matchStatus', 'leftConcept', 'leftDefinition',
+  'rightConcept', 'rightDefinition', 'commonGround', 'keyDifference', 'practicalBoundary',
+  'decisionContext', 'selectionRule', 'optionName', 'availabilityCondition', 'visualFocus',
+  'relatedStep', 'pageNumber', 'label', 'visibleDescription', 'x', 'y', 'width', 'height',
+  'text', 'sourcePages',
+])
 
 const route = useRoute()
 const { locale, t } = useLocale()
@@ -204,7 +221,10 @@ function restorePublicAnswerTurns(
     const stored = sessionStorage.getItem(storageKey)
     const parsed = stored ? JSON.parse(stored) : []
     publicAnswerTurns.value = Array.isArray(parsed)
-      ? parsed.filter(isPublicAnswerTurn).slice(-PUBLIC_ANSWER_HISTORY_LIMIT)
+      ? parsed
+          .map(parsePublicAnswerTurn)
+          .filter((turn): turn is PublicAnswerTurn => turn !== null)
+          .slice(-PUBLIC_ANSWER_HISTORY_LIMIT)
       : []
   } catch {
     publicAnswerTurns.value = []
@@ -220,7 +240,11 @@ function rememberPublicAnswerTurns(
   const storageKey = answerThreadStorageKey(scope, targetPlanId, targetLocale)
   if (!storageKey) return
   try {
-    sessionStorage.setItem(storageKey, JSON.stringify(turns))
+    const safeTurns = turns
+      .map(parsePublicAnswerTurn)
+      .filter((turn): turn is PublicAnswerTurn => turn !== null)
+      .slice(-PUBLIC_ANSWER_HISTORY_LIMIT)
+    sessionStorage.setItem(storageKey, JSON.stringify(safeTurns))
   } catch {
     // A private browser mode may not expose storage; the current on-page thread remains usable.
   }
@@ -261,15 +285,33 @@ function confirmClearPublicAnswerTurns() {
   publicResetDialogOpen.value = false
 }
 
-function isPublicAnswerTurn(value: unknown): value is PublicAnswerTurn {
-  if (!isRecord(value) || typeof value.question !== 'string' || value.question.trim().length === 0 || value.question.length > 800) return false
-  return isPublicAnswer(value.answer) && isPublicLearningIntent(value.learningIntent)
+function parsePublicAnswerTurn(value: unknown): PublicAnswerTurn | null {
+  if (!isRecord(value)
+    || typeof value.question !== 'string'
+    || value.question.trim().length === 0
+    || value.question.length > 800
+    || !isPublicLearningIntent(value.learningIntent)) return null
+  const answer = parsePublicAnswer(value.answer)
+  if (!answer) return null
+  return { question: value.question, answer, learningIntent: value.learningIntent }
 }
 
 function isPublicLearningIntent(value: unknown) {
   return value === undefined || value === null || value === 'SIMPLIFY' || value === 'EXAMPLE'
     || value === 'DEFINE' || value === 'WHY' || value === 'EXCEPTIONS' || value === 'SOURCE' || value === 'VERIFY'
-    || value === 'DEFINE' || value === 'WHY' || value === 'EXCEPTIONS' || value === 'VERIFY'
+}
+
+function parsePublicAnswer(value: unknown): PublicAnswer | null {
+  if (!isPublicAnswer(value)) return null
+  try {
+    const projected = JSON.parse(JSON.stringify(value, function(this: unknown, key, nestedValue) {
+      if (key === '' || Array.isArray(this) || PUBLIC_ANSWER_FIELDS.has(key)) return nestedValue
+      return undefined
+    })) as unknown
+    return isPublicAnswer(projected) ? projected : null
+  } catch {
+    return null
+  }
 }
 
 function isPublicAnswer(value: unknown): value is PublicAnswer {
@@ -367,6 +409,40 @@ function isPublicAnswer(value: unknown): value is PublicAnswer {
     && Array.isArray(answer.warnings) && answer.warnings.every(isAnswerWarning)
     && Array.isArray(value.visualAids) && value.visualAids.every(isVisualAid)
     && Array.isArray(value.examples) && value.examples.every(isExample)
+    && hasValidPublicOutcomeShape(answer as unknown as PublicAnswer['answer'])
+}
+
+function hasValidPublicOutcomeShape(answer: PublicAnswer['answer']) {
+  const publishes = answer.status === 'ANSWERED' || answer.status === 'ANSWERED_WITH_WARNING'
+  const structured = [
+    answer.calculations,
+    answer.situationChecks,
+    answer.walkthroughSteps,
+    answer.decisionBranches,
+    answer.exceptionClauses,
+    answer.termDefinitions,
+    answer.workedExamples,
+    answer.priorityResolutions,
+    answer.timingResolutions,
+    answer.tieResolutions,
+    answer.scopeResolutions,
+    answer.conceptComparisons,
+    answer.ruleOptions,
+  ].some(items => items !== undefined && items.length > 0)
+  if (publishes) {
+    return answer.citations.length > 0
+      && (answer.answerBasis === 'DIRECT_RULE' || answer.answerBasis === 'GROUNDED_APPLICATION')
+      && answer.clarification === null
+      && (answer.status === 'ANSWERED_WITH_WARNING') === (answer.warnings.length > 0)
+  }
+  return answer.confidence === 'LOW'
+    && (answer.answerBasis === undefined || answer.answerBasis === null)
+    && (answer.explanation === null || answer.explanation === '')
+    && answer.exceptions.length === 0
+    && answer.warnings.length === 0
+    && !structured
+    && (answer.status === 'INSUFFICIENT_EVIDENCE' || answer.citations.length === 0)
+    && (answer.status === 'CLARIFICATION_REQUIRED') === Boolean(answer.clarification?.trim())
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -376,7 +452,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function isAnswerStatus(value: unknown): value is PublicAnswer['answer']['status'] {
   return value === 'ANSWERED' || value === 'ANSWERED_WITH_WARNING'
     || value === 'CLARIFICATION_REQUIRED' || value === 'INSUFFICIENT_EVIDENCE'
-    || value === 'INVALID_MODEL_OUTPUT' || value === 'MODEL_TIMEOUT'
+    || value === 'INVALID_MODEL_OUTPUT' || value === 'MODEL_TIMEOUT' || value === 'VERSION_CONFLICT'
 }
 
 function isAnswerWarning(value: unknown): value is PublicAnswer['answer']['warnings'][number] {
@@ -507,12 +583,6 @@ function citationPageLabel(citation: RuleCitation) {
   return locale.value === 'en' ? `p. ${pages}` : `第 ${pages} 页`
 }
 
-function answerFailureMessage(answer: PublicAnswer['answer']) {
-  if (answer.status === 'CLARIFICATION_REQUIRED') return answer.clarification ?? t('public.answer.clarify')
-  if (answer.status === 'MODEL_TIMEOUT') return t('public.answer.timeout')
-  return answer.shortVerdict
-}
-
 function publishesConclusion(status: PublicAnswer['answer']['status']) {
   return status === 'ANSWERED' || status === 'ANSWERED_WITH_WARNING'
 }
@@ -527,11 +597,14 @@ function answerWarningMessage(warning: PublicAnswer['answer']['warnings'][number
 async function preparePublicAnswerReply(turn: PublicAnswerTurn) {
   if (publicAnswerLoading.value) return
   if (!publicQuestion.value.trim() || publicQuestion.value.trim() === turn.question.trim()) {
+    const replyLanguage = playerTurnLocale(turn.question, locale.value)
     if (turn.answer.answer.status === 'CLARIFICATION_REQUIRED') {
-      publicQuestion.value = t('public.answer.clarificationPrefix')
-    } else {
-      const suffix = t('public.answer.refineSuffix')
+      publicQuestion.value = replyLanguage === 'en' ? 'I mean: ' : '我指的是：'
+    } else if (turn.answer.answer.status === 'INSUFFICIENT_EVIDENCE') {
+      const suffix = replyLanguage === 'en' ? '\nAdditional condition: ' : '\n补充条件：'
       publicQuestion.value = `${turn.question.slice(0, Math.max(0, 800 - suffix.length))}${suffix}`
+    } else {
+      publicQuestion.value = turn.question
     }
   }
   publicAnswerNotice.value = ''
@@ -539,6 +612,27 @@ async function preparePublicAnswerReply(turn: PublicAnswerTurn) {
   const input = document.getElementById('public-question')
   input?.focus()
   input?.scrollIntoView?.({ behavior: 'smooth', block: 'center' })
+}
+
+function publicRecoveryCopy(turn: PublicAnswerTurn) {
+  const english = playerTurnLocale(turn.question, locale.value) === 'en'
+  if (turn.answer.answer.status === 'CLARIFICATION_REQUIRED') {
+    return { message: '', action: english ? 'Add this detail' : '补充这项信息' }
+  }
+  if (turn.answer.answer.status === 'INSUFFICIENT_EVIDENCE') {
+    return {
+      message: english
+        ? 'Add the exact rule object, trigger, or what happened immediately before it so the answer can be checked again.'
+        : '请补充规则中的具体对象、触发时机或前一步发生了什么，再重新查证。',
+      action: english ? 'Add detail and retry' : '补充条件后重试',
+    }
+  }
+  return {
+    message: english
+      ? 'Your question is still here. Review or edit it, then try again.'
+      : '问题仍保留在这里；可以先检查或修改，再重新尝试。',
+    action: english ? 'Review and try again' : '检查后重试',
+  }
 }
 
 async function submitPublicQuestion() {
@@ -556,6 +650,7 @@ async function sendPublicQuestion(question: string, learningIntent: LearningInte
   const requestedReaderScopeGeneration = readerScopeGeneration
   const answerRequest = ++latestPublicAnswerRequest
   const controller = new AbortController()
+  let failureKind: PublicAnswerRequestFailure = 'unavailable'
   activePublicAnswerController = controller
   publicAnswerLoading.value = true
   publicAnswerError.value = ''
@@ -576,9 +671,16 @@ async function sendPublicQuestion(question: string, learningIntent: LearningInte
     if (!isCurrentPublicAnswerRequest(
       answerRequest, requestedPlanId, requestedLocale, requestedReaderScopeGeneration, requestedReaderScope, controller,
     )) return
-    if (response.status === 404) throw new Error(t('public.answer.missing'))
-    if (!response.ok) throw new Error(t('public.answer.failed'))
-    const received = await response.json() as PublicAnswer
+    if (response.status === 404) {
+      failureKind = 'missing'
+      throw new Error('public lesson is not readable')
+    }
+    if (!response.ok) throw new Error('public answer unavailable')
+    const received = parsePublicAnswer(await response.json() as unknown)
+    if (!received) {
+      failureKind = 'invalid'
+      throw new Error('public answer response is invalid')
+    }
     if (!isCurrentPublicAnswerRequest(
       answerRequest, requestedPlanId, requestedLocale, requestedReaderScopeGeneration, requestedReaderScope, controller,
     )) return
@@ -593,11 +695,14 @@ async function sendPublicQuestion(question: string, learningIntent: LearningInte
     const answerElement = document.getElementById(`public-answer-${publicAnswerTurns.value.length - 1}`)
     answerElement?.focus({ preventScroll: true })
     answerElement?.scrollIntoView?.({ behavior: 'smooth', block: 'start' })
-  } catch (error) {
+  } catch {
     if (!isCurrentPublicAnswerRequest(
       answerRequest, requestedPlanId, requestedLocale, requestedReaderScopeGeneration, requestedReaderScope, controller,
     ) || controller.signal.aborted) return
-    publicAnswerError.value = error instanceof Error ? error.message : t('public.answer.fallback')
+    publicAnswerError.value = publicAnswerRequestFailureCopy(
+      failureKind,
+      playerTurnLocale(question, requestedLocale),
+    )
   } finally {
     const requestStillCurrent = isCurrentPublicAnswerRequest(
       answerRequest, requestedPlanId, requestedLocale, requestedReaderScopeGeneration, requestedReaderScope, controller,
@@ -607,6 +712,23 @@ async function sendPublicQuestion(question: string, learningIntent: LearningInte
       publicAnswerLoading.value = false
     }
   }
+}
+
+type PublicAnswerRequestFailure = 'missing' | 'unavailable' | 'invalid'
+
+function publicAnswerRequestFailureCopy(failure: PublicAnswerRequestFailure, replyLanguage: 'zh-CN' | 'en') {
+  if (replyLanguage === 'en') {
+    if (failure === 'missing') {
+      return 'This guide is no longer public, so it cannot answer this question. Your question is still here.'
+    }
+    if (failure === 'invalid') {
+      return "I couldn't verify the answer response. Your question is still here; review it and try again."
+    }
+    return "I couldn't send this question. It is still here; review it and try again."
+  }
+  if (failure === 'missing') return '这份讲解已不再公开，无法继续答疑；你的问题仍保留在这里。'
+  if (failure === 'invalid') return '这次答复没有通过完整性核对。问题仍保留在这里；检查后可以直接重试。'
+  return '这次没有成功发送问题。问题仍保留在这里；检查后可以直接重试。'
 }
 
 function publicLearningAnchorQuestion() {
@@ -767,7 +889,7 @@ onUnmounted(() => {
               <div class="ml-auto max-w-[92%] rounded-2xl rounded-tr-md bg-copper px-4 py-3 text-sm font-medium leading-6 text-white sm:max-w-[78%]">{{ turn.question }}</div>
               <article :id="`public-answer-${index}`" tabindex="-1" class="max-w-[96%] overflow-hidden rounded-3xl border border-ink/10 bg-paper elevation-sm outline-none focus:ring-4 focus:ring-indigo/15 sm:max-w-[88%]">
                 <div class="p-5 sm:p-6">
-                  <div class="flex flex-wrap items-center gap-2"><span :class="confidenceClasses(turn.answer.answer.confidence)" :data-confidence="turn.answer.answer.confidence" class="rounded-full px-3 py-1 text-xs font-semibold">{{ confidenceLabel(turn.answer.answer.confidence) }}</span><span v-if="publishesConclusion(turn.answer.answer.status)" class="rounded-full bg-copper/[0.1] px-3 py-1 text-xs font-semibold text-copper">{{ answerBasisLabel(turn.answer.answer.answerBasis) }}</span><span class="text-xs font-semibold text-ink/40">{{ t('public.question.answer') }}</span></div>
+                  <div class="flex flex-wrap items-center gap-2"><span v-if="publishesConclusion(turn.answer.answer.status)" :class="confidenceClasses(turn.answer.answer.confidence)" :data-confidence="turn.answer.answer.confidence" class="rounded-full px-3 py-1 text-xs font-semibold">{{ confidenceLabel(turn.answer.answer.confidence) }}</span><span v-if="publishesConclusion(turn.answer.answer.status)" class="rounded-full bg-copper/[0.1] px-3 py-1 text-xs font-semibold text-copper">{{ answerBasisLabel(turn.answer.answer.answerBasis) }}</span><span class="text-xs font-semibold text-ink/40">{{ t('public.question.answer') }}</span></div>
                   <p class="mt-4 font-display text-xl font-semibold leading-8">{{ turn.answer.answer.shortVerdict }}</p>
                   <div v-if="turn.answer.answer.warnings.length" class="mt-4 rounded-2xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-950" role="status"><p class="font-semibold">{{ t('lesson.answer.warning.title') }}</p><ul class="mt-1 list-disc pl-5"><li v-for="warning in turn.answer.answer.warnings" :key="warning.type">{{ answerWarningMessage(warning) }}</li></ul></div>
                   <div v-if="publishesConclusion(turn.answer.answer.status) && turn.answer.answer.explanation" class="mt-4 rounded-2xl bg-canvas p-4 text-sm leading-6 text-ink/70">
@@ -788,13 +910,10 @@ onUnmounted(() => {
                     <div v-if="turn.answer.answer.conceptComparisons?.length" class="mt-3 rounded-xl border border-indigo/15 bg-indigo/[0.04] px-3 py-2"><p class="font-semibold text-ink">{{ t('lesson.answer.comparison.title') }}</p><div v-for="item in turn.answer.answer.conceptComparisons" :key="`${item.leftConcept}-${item.rightConcept}`" class="mt-2 rounded-lg bg-paper px-3 py-2"><div class="grid gap-2 sm:grid-cols-2"><p><span class="font-semibold text-indigo">{{ item.leftConcept }}：</span>{{ item.leftDefinition }}</p><p><span class="font-semibold text-indigo">{{ item.rightConcept }}：</span>{{ item.rightDefinition }}</p></div><p class="mt-2"><span class="font-semibold">{{ t('lesson.answer.comparison.keyDifference') }}：</span>{{ item.keyDifference }}</p><p><span class="font-semibold">{{ t('lesson.answer.comparison.boundary') }}：</span>{{ item.practicalBoundary }}</p></div></div>
                     <div v-if="turn.answer.answer.ruleOptions?.length" class="mt-3 rounded-xl border border-copper/20 bg-copper/[0.05] px-3 py-2"><p class="font-semibold text-ink">{{ t('lesson.answer.options.title') }}</p><p class="mt-1 text-xs text-ink/55"><span class="font-semibold">{{ t('lesson.answer.options.selectionRule') }}：</span>{{ turn.answer.answer.ruleOptions[0]?.selectionRule }}</p><ol class="mt-2 grid gap-2 sm:grid-cols-2"><li v-for="(item, optionIndex) in turn.answer.answer.ruleOptions" :key="`${item.optionName}-${optionIndex}`" class="rounded-lg bg-paper px-3 py-2"><p class="font-semibold text-copper">{{ optionIndex + 1 }}. {{ item.optionName }}</p><p><span class="font-semibold">{{ t('lesson.answer.options.availability') }}：</span>{{ item.availabilityCondition }}</p><p><span class="font-semibold">{{ t('lesson.answer.options.result') }}：</span>{{ item.result }}</p></li></ol></div>
                   </div>
-                  <p v-else class="mt-3 rounded-2xl bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-950">{{ answerFailureMessage(turn.answer.answer) }}</p>
-                  <div v-if="index === publicAnswerTurns.length - 1 && turn.answer.answer.status === 'CLARIFICATION_REQUIRED'" class="mt-3">
-                    <button type="button" :disabled="publicAnswerLoading" class="min-h-11 rounded-xl border border-amber-400 bg-amber-50 px-4 text-sm font-semibold text-amber-950 disabled:opacity-40" @click="preparePublicAnswerReply(turn)">{{ t('public.answer.clarificationAction') }}</button>
-                  </div>
-                  <div v-else-if="index === publicAnswerTurns.length - 1 && turn.answer.answer.status === 'INSUFFICIENT_EVIDENCE'" class="mt-3 rounded-2xl border border-amber-200 bg-amber-50/60 p-4 text-sm leading-6 text-amber-950">
-                    <p>{{ t('public.answer.refineHint') }}</p>
-                    <button type="button" :disabled="publicAnswerLoading" class="mt-3 min-h-11 rounded-xl border border-amber-400 bg-paper px-4 font-semibold disabled:opacity-40" @click="preparePublicAnswerReply(turn)">{{ t('public.answer.refineAction') }}</button>
+                  <p v-else-if="turn.answer.answer.status === 'CLARIFICATION_REQUIRED'" class="mt-3 rounded-2xl bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-950">{{ turn.answer.answer.clarification || t('public.answer.clarify') }}</p>
+                  <div v-if="index === publicAnswerTurns.length - 1 && !publishesConclusion(turn.answer.answer.status)" class="mt-3 rounded-2xl border border-amber-200 bg-amber-50/60 p-4 text-sm leading-6 text-amber-950">
+                    <p v-if="publicRecoveryCopy(turn).message">{{ publicRecoveryCopy(turn).message }}</p>
+                    <button type="button" :disabled="publicAnswerLoading" :class="publicRecoveryCopy(turn).message ? 'mt-3' : ''" class="min-h-11 rounded-xl border border-amber-400 bg-paper px-4 font-semibold disabled:opacity-40" @click="preparePublicAnswerReply(turn)">{{ publicRecoveryCopy(turn).action }}</button>
                   </div>
                   <ul v-if="turn.answer.answer.exceptions.length" class="mt-4 list-disc stack-y-xs pl-5 text-sm leading-6 text-ink/65"><li v-for="exception in turn.answer.answer.exceptions" :key="exception">{{ exception }}</li></ul>
 

@@ -11,12 +11,10 @@ const answer: OfflineAnswer = {
   status: 'ANSWERED',
   shortVerdict: '每枚剩余硬币计一分。',
   explanation: '终局时计算玩家剩余硬币。',
-  citations: [{ chunkId: 'chunk-1', sectionType: 'SCORING', heading: '计分', excerpt: '每枚硬币一分。', pageFrom: 5, pageTo: 5 }],
+  citations: [{ heading: '计分', excerpt: '每枚硬币一分。', pageFrom: 5, pageTo: 5 }],
   exceptions: [],
   confidence: 'HIGH',
-  official: false,
-  confirmedRulingId: null,
-  confirmedRulingVersion: null,
+  source: 'UPLOADED',
   clarification: null,
 }
 
@@ -29,7 +27,7 @@ describe('offline knowledge cache', () => {
       id: 'ruling-1',
       shortVerdict: answer.shortVerdict,
       explanation: answer.explanation,
-      citations: answer.citations,
+      citations: answer.citations.map(citation => ({ ...citation, chunkId: 'chunk-1', sectionType: 'SCORING' })),
       exceptions: [],
       confidence: 'HIGH',
       status: 'CONFIRMED',
@@ -42,7 +40,7 @@ describe('offline knowledge cache', () => {
   })
 
   it('rejects malformed browser storage instead of trusting it', () => {
-    localStorage.setItem('rulepilot:offline-knowledge:plan-1', JSON.stringify({ version: 1, entries: [{ question: '<script>' }] }))
+    localStorage.setItem('rulepilot:offline-knowledge:plan-1', JSON.stringify({ version: 2, entries: [{ question: '<script>' }] }))
 
     expect(loadOfflineKnowledge('plan-1')).toEqual([])
   })

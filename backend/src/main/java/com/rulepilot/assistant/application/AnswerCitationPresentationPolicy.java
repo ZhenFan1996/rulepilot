@@ -23,6 +23,6 @@ final class AnswerCitationPresentationPolicy {
 
     private static String contentAfter(String value, String marker) {
         int markerStart = value.indexOf(marker);
-        return markerStart < 0 ? value : value.substring(markerStart + marker.length()).strip();
+        return markerStart < 0 ? "" : value.substring(markerStart + marker.length()).strip();
     }
 }

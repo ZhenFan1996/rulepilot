@@ -1,6 +1,4 @@
 export interface OfflineCitation {
-  chunkId: string
-  sectionType: string
   heading: string
   excerpt: string
   pageFrom: number
@@ -14,17 +12,21 @@ export interface OfflineAnswer {
   citations: OfflineCitation[]
   exceptions: string[]
   confidence: 'HIGH' | 'MEDIUM' | 'LOW'
-  official: boolean
-  confirmedRulingId: string | null
-  confirmedRulingVersion: number | null
+  language?: 'zh-CN' | 'en'
+  source?: 'CONFIRMED' | 'OFFICIAL' | 'UPLOADED'
   clarification: null
+}
+
+export interface OfflineRulingCitation extends OfflineCitation {
+  chunkId: string
+  sectionType: string
 }
 
 export interface OfflineRuling {
   id: string
   shortVerdict: string
   explanation: string
-  citations: OfflineCitation[]
+  citations: OfflineRulingCitation[]
   exceptions: string[]
   confidence: OfflineAnswer['confidence']
   status: 'CONFIRMED'
@@ -38,7 +40,7 @@ export interface OfflineKnowledgeEntry {
   ruling: OfflineRuling | null
 }
 
-const VERSION = 1
+const VERSION = 2
 const MAX_ENTRIES = 12
 
 function storageKey(planId: string) {
@@ -52,9 +54,7 @@ function isString(value: unknown, max: number): value is string {
 function isCitation(value: unknown): value is OfflineCitation {
   if (!value || typeof value !== 'object') return false
   const citation = value as Record<string, unknown>
-  return isString(citation.chunkId, 80)
-    && isString(citation.sectionType, 80)
-    && isString(citation.heading, 500)
+  return isString(citation.heading, 500)
     && isString(citation.excerpt, 10_000)
     && Number.isInteger(citation.pageFrom)
     && Number.isInteger(citation.pageTo)
@@ -76,9 +76,9 @@ function isAnswer(value: unknown): value is OfflineAnswer {
     && answer.exceptions.length <= 20
     && answer.exceptions.every((item) => isString(item, 2_000))
     && ['HIGH', 'MEDIUM', 'LOW'].includes(String(answer.confidence))
-    && typeof answer.official === 'boolean'
-    && (answer.confirmedRulingId === null || isString(answer.confirmedRulingId, 80))
-    && (answer.confirmedRulingVersion === null || Number.isInteger(answer.confirmedRulingVersion))
+    && (answer.language === undefined || answer.language === 'zh-CN' || answer.language === 'en')
+    && (answer.source === undefined || answer.source === 'CONFIRMED'
+      || answer.source === 'OFFICIAL' || answer.source === 'UPLOADED')
     && answer.clarification === null
 }
 
@@ -91,7 +91,7 @@ function isRuling(value: unknown): value is OfflineRuling {
     && Array.isArray(ruling.citations)
     && ruling.citations.length > 0
     && ruling.citations.length <= 20
-    && ruling.citations.every(isCitation)
+    && ruling.citations.every(isRulingCitation)
     && Array.isArray(ruling.exceptions)
     && ruling.exceptions.length <= 20
     && ruling.exceptions.every((item) => isString(item, 2_000))
@@ -99,6 +99,14 @@ function isRuling(value: unknown): value is OfflineRuling {
     && ruling.status === 'CONFIRMED'
     && Number.isInteger(ruling.version)
     && Number(ruling.version) > 0
+}
+
+function isRulingCitation(value: unknown): value is OfflineRulingCitation {
+  if (!value || typeof value !== 'object' || !isCitation(value)) return false
+  const citation = value as unknown as Record<string, unknown>
+  return isString(citation.chunkId, 80)
+    && typeof citation.sectionType === 'string'
+    && citation.sectionType.length <= 80
 }
 
 function isEntry(value: unknown): value is OfflineKnowledgeEntry {
@@ -162,12 +170,15 @@ export function cacheOfflineRuling(
     status: 'ANSWERED',
     shortVerdict: ruling.shortVerdict,
     explanation: ruling.explanation,
-    citations: ruling.citations,
+    citations: ruling.citations.map(citation => ({
+      heading: citation.heading,
+      excerpt: citation.excerpt,
+      pageFrom: citation.pageFrom,
+      pageTo: citation.pageTo,
+    })),
     exceptions: ruling.exceptions,
     confidence: ruling.confidence,
-    official: false,
-    confirmedRulingId: ruling.id,
-    confirmedRulingVersion: ruling.version,
+    source: 'CONFIRMED',
     clarification: null,
   }
   const updated = { question: normalized, cachedAt: new Date().toISOString(), answer, ruling }

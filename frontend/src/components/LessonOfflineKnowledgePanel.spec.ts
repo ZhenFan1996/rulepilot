@@ -9,8 +9,8 @@ const entries = [{
   cachedAt: '2026-07-24T12:30:00.000Z',
   answer: {
     status: 'ANSWERED' as const, shortVerdict: '金币更多的玩家获胜。', explanation: '比较金币数量。',
-    citations: [{ chunkId: 'chunk-1', sectionType: 'end', heading: 'Tie break', excerpt: 'Most gold wins.', pageFrom: 4, pageTo: 4 }],
-    exceptions: [], confidence: 'HIGH' as const, official: false, confirmedRulingId: null, confirmedRulingVersion: null, clarification: null,
+    citations: [{ heading: 'Tie break', excerpt: 'Most gold wins.', pageFrom: 4, pageTo: 4 }],
+    exceptions: [], confidence: 'HIGH' as const, source: 'UPLOADED' as const, clarification: null,
   },
   ruling: {
     id: 'ruling-1', shortVerdict: '金币更多的玩家获胜。', explanation: '比较金币数量。',

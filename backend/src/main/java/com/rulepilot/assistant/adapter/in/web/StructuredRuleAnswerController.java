@@ -1,15 +1,17 @@
 package com.rulepilot.assistant.adapter.in.web;
 
+import com.rulepilot.assistant.PlayerLocale;
 import com.rulepilot.assistant.QuestionUnderstanding.QuestionContext;
-import com.rulepilot.assistant.application.StructuredRuleAnswerService;
-import com.rulepilot.assistant.application.StructuredRuleAnswerService.AnswerCreation;
 import com.rulepilot.assistant.application.AnswerFeedbackService;
 import com.rulepilot.assistant.application.GameSessionConversationService;
+import com.rulepilot.assistant.application.PlayerFacingAnswerPresenter;
+import com.rulepilot.assistant.application.PlayerFacingRuleAnswer;
+import com.rulepilot.assistant.application.StructuredRuleAnswerService;
+import com.rulepilot.assistant.application.StructuredRuleAnswerService.AnswerCreation;
 import com.rulepilot.assistant.domain.AnswerFeedback.Rating;
 import com.rulepilot.assistant.domain.GameSessionConversationTurn;
 import com.rulepilot.assistant.domain.StructuredRuleAnswer;
 import com.rulepilot.gamesession.GameSessionContextLookup;
-import com.rulepilot.assistant.PlayerLocale;
 import java.security.Principal;
 import java.time.Instant;
 import java.util.List;
@@ -52,34 +54,46 @@ public class StructuredRuleAnswerController {
         var priorTurn = session == null
                 ? null
                 : conversations.priorTurnReference(session.sessionId(), username, versionId).orElse(null);
+        PlayerLocale outputLanguage = PlayerLocale.forQuestion(
+                request.question(), PlayerLocale.fromRequest(request.language()));
         AnswerCreation creation = answers.answerWithRun(
                 request.question(),
                 new QuestionContext(
                         versionId,
                         request.previousQuestion(),
                         request.learningIntent(),
-                        PlayerLocale.fromRequest(request.language()),
+                        outputLanguage,
                         priorTurn),
                 username,
                 request.gameSessionId());
         GameSessionConversationTurn turn = session == null
                 ? null
                 : conversations.record(session.sessionId(), request.question(), creation.answer(), username);
-        return new AnswerResponse(creation.assistantRunId(), creation.answer(), turn == null ? null : turn.id());
+        return new AnswerResponse(
+                PlayerFacingAnswerPresenter.present(creation.answer(), request.question(), outputLanguage),
+                turn == null ? null : turn.id(),
+                RulingReference.from(creation.answer()));
     }
 
     @GetMapping("/conversation")
     List<ConversationTurnResponse> conversation(
             @PathVariable UUID versionId,
             @RequestParam UUID gameSessionId,
+            @RequestParam(defaultValue = "zh-CN") String language,
             Principal principal) {
         String username = principal.getName();
         var session = validateSession(gameSessionId, versionId, username);
         List<GameSessionConversationTurn> turns = conversations.history(session.sessionId(), username);
         var ratings = feedback.ratingsFor(turns, username);
+        PlayerLocale requestedLanguage = PlayerLocale.fromRequest(language);
         return turns.stream()
                 .map(turn -> new ConversationTurnResponse(
-                        turn.id(), turn.question(), turn.answer(), turn.createdAt(), ratings.get(turn.id())))
+                        turn.id(),
+                        turn.question(),
+                        PlayerFacingAnswerPresenter.present(turn.answer(), turn.question(), requestedLanguage),
+                        turn.createdAt(),
+                        ratings.get(turn.id()),
+                        RulingReference.from(turn.answer())))
                 .toList();
     }
 
@@ -104,10 +118,33 @@ public class StructuredRuleAnswerController {
             String language) {}
 
     record AnswerResponse(
-            UUID assistantRunId,
-            StructuredRuleAnswer answer,
-            UUID conversationTurnId) {}
+            PlayerFacingRuleAnswer answer,
+            UUID conversationTurnId,
+            RulingReference rulingReference) {}
 
     record ConversationTurnResponse(
-            UUID id, String question, StructuredRuleAnswer answer, Instant createdAt, Rating feedback) {}
+            UUID id,
+            String question,
+            PlayerFacingRuleAnswer answer,
+            Instant createdAt,
+            Rating feedback,
+            RulingReference rulingReference) {}
+
+    /** Operational references for explicit save/edit actions; these are never part of player-visible answer content. */
+    record RulingReference(
+            List<UUID> citationIds,
+            UUID confirmedRulingId,
+            Long confirmedRulingVersion) {
+
+        static RulingReference from(StructuredRuleAnswer answer) {
+            return new RulingReference(
+                    answer.citations().stream().map(citation -> citation.chunkId()).toList(),
+                    answer.confirmedRulingId(),
+                    answer.confirmedRulingVersion());
+        }
+
+        RulingReference {
+            citationIds = List.copyOf(citationIds);
+        }
+    }
 }

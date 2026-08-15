@@ -5,16 +5,16 @@ import { useConfirmedRuling } from '@/composables/useConfirmedRuling'
 import type { StructuredRuleAnswer } from '@/composables/useLessonAnswers'
 
 const answer: StructuredRuleAnswer = {
+  language: 'en',
   status: 'ANSWERED',
   shortVerdict: 'Resolve the tie with coins.',
   explanation: 'Compare coins after matching score.',
-  citations: [{ chunkId: 'chunk-1', sectionType: 'SCORING', heading: 'Tie break', excerpt: 'Most coins wins.', pageFrom: 4, pageTo: 4 }],
+  citations: [{ heading: 'Tie break', excerpt: 'Most coins wins.', pageFrom: 4, pageTo: 4 }],
   exceptions: [],
   confidence: 'HIGH',
-  official: false,
-  confirmedRulingId: null,
-  confirmedRulingVersion: null,
+  source: 'UPLOADED',
   clarification: null,
+  recovery: null,
   warnings: [],
 }
 
@@ -23,7 +23,7 @@ function confirmedRuling(overrides = {}) {
     id: 'ruling-1',
     shortVerdict: 'Resolve the tie with coins.',
     explanation: 'Compare coins after matching score.',
-    citations: answer.citations,
+    citations: answer.citations.map(citation => ({ ...citation, chunkId: 'chunk-1', sectionType: 'SCORING' })),
     exceptions: [],
     confidence: 'HIGH' as const,
     status: 'CONFIRMED' as const,
@@ -35,12 +35,18 @@ function confirmedRuling(overrides = {}) {
 function createRuling(contextRef = ref('plan-1:version-1')) {
   const documentVersionId = ref<string | null>('version-1')
   const currentAnswer = ref<StructuredRuleAnswer | null>(answer)
+  const rulingReference = ref({
+    citationIds: ['chunk-1'],
+    confirmedRulingId: null,
+    confirmedRulingVersion: null,
+  })
   const answeredQuestion = ref('How is a tie resolved?')
   const csrfToken = vi.fn(async () => ({ headerName: 'X-CSRF-TOKEN', token: 'csrf' }))
   const onApplied = vi.fn()
   const ruling = useConfirmedRuling({
     documentVersionId,
     answer: currentAnswer,
+    rulingReference,
     answeredQuestion,
     csrfToken,
     onApplied,

@@ -86,12 +86,14 @@ describe('LessonQuestionsView', () => {
     await router.push('/lesson/plan-2/questions')
     await flushPromises()
     resolveAnswer!(Response.json({
-      assistantRunId: 'answer-run-1',
       answer: {
-        status: 'ANSWERED', shortVerdict: '第一份规则的旧答案', explanation: '不应出现。', citations: [], exceptions: [],
-        confidence: 'HIGH', official: false, confirmedRulingId: null, confirmedRulingVersion: null,
-        clarification: null, warnings: [],
+        language: 'zh-CN',
+        status: 'ANSWERED', shortVerdict: '第一份规则的旧答案', explanation: '不应出现。',
+        citations: [answerCitation()], exceptions: [], confidence: 'HIGH', answerBasis: 'DIRECT_RULE',
+        source: 'UPLOADED', clarification: null, recovery: null, warnings: [],
       },
+      conversationTurnId: null,
+      rulingReference: answerRulingReference(),
     }))
     await flushPromises()
 
@@ -110,12 +112,14 @@ describe('LessonQuestionsView', () => {
       if (path.endsWith('/answers') && init?.method === 'POST') {
         answerRequests.push(JSON.parse(String(init.body)) as Record<string, unknown>)
         return Response.json({
-          assistantRunId: `answer-run-${answerRequests.length}`,
           answer: {
+            language: 'zh-CN',
             status: 'ANSWERED', shortVerdict: '完成放置后结算。', explanation: '规则书给出了这个顺序。',
-            citations: [], exceptions: [], confidence: 'HIGH', answerBasis: 'DIRECT_RULE', official: false,
-            confirmedRulingId: null, confirmedRulingVersion: null, clarification: null, warnings: [],
+            citations: [answerCitation()], exceptions: [], confidence: 'HIGH', answerBasis: 'DIRECT_RULE', source: 'UPLOADED',
+            clarification: null, recovery: null, warnings: [],
           },
+          conversationTurnId: null,
+          rulingReference: answerRulingReference(),
         })
       }
       return new Response(null, { status: 404 })
@@ -155,13 +159,16 @@ describe('LessonQuestionsView', () => {
       if (path.endsWith('/answers') && init?.method === 'POST') {
         answerRequests.push(JSON.parse(String(init.body)) as Record<string, unknown>)
         return Response.json({
-          assistantRunId: '11111111-1111-4111-8111-111111111111',
           answer: {
+            language: 'en',
             status: 'ANSWERED', shortVerdict: 'Score after resolving the objective.',
-            explanation: 'The cited sequence resolves the objective before scoring.', citations: [], exceptions: [],
-            confidence: 'HIGH', answerBasis: 'DIRECT_RULE', official: false, confirmedRulingId: null,
-            confirmedRulingVersion: null, clarification: null, warnings: [],
+            explanation: 'The cited sequence resolves the objective before scoring.',
+            citations: [answerCitation()], exceptions: [],
+            confidence: 'HIGH', answerBasis: 'DIRECT_RULE', source: 'UPLOADED',
+            clarification: null, recovery: null, warnings: [],
           },
+          conversationTurnId: null,
+          rulingReference: answerRulingReference(),
         })
       }
       return new Response(null, { status: 404 })
@@ -205,9 +212,10 @@ describe('LessonQuestionsView', () => {
       question: '刚才什么时候结算？',
       learningIntent: null,
       answer: {
+        language: 'zh-CN',
         status: 'ANSWERED', shortVerdict: '完成计分后结算。', explanation: '规则书给出了这个顺序。',
-        citations: [], exceptions: [], confidence: 'HIGH', answerBasis: 'DIRECT_RULE', official: false,
-        confirmedRulingId: null, confirmedRulingVersion: null, clarification: null, warnings: [],
+        citations: [answerCitation()], exceptions: [], confidence: 'HIGH', answerBasis: 'DIRECT_RULE', source: 'UPLOADED',
+        clarification: null, recovery: null, warnings: [],
       },
     }])
     rememberLessonAnswerThread(sessionStorage, {
@@ -216,9 +224,10 @@ describe('LessonQuestionsView', () => {
       question: 'Bob 的私有问题',
       learningIntent: null,
       answer: {
-        status: 'ANSWERED', shortVerdict: 'Bob 的私有答案', explanation: '', citations: [], exceptions: [],
-        confidence: 'HIGH', official: false, confirmedRulingId: null, confirmedRulingVersion: null,
-        clarification: null, warnings: [],
+        language: 'zh-CN',
+        status: 'ANSWERED', shortVerdict: 'Bob 的私有答案', explanation: '',
+        citations: [answerCitation()], exceptions: [], confidence: 'HIGH', answerBasis: 'DIRECT_RULE', source: 'UPLOADED',
+        clarification: null, recovery: null, warnings: [],
       },
     }])
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
@@ -249,7 +258,7 @@ describe('LessonQuestionsView', () => {
     expect(wrapper.text()).not.toContain('刚才什么时候结算？')
     expect(sessionStorage.length).toBe(1)
     expect(Array.from({ length: sessionStorage.length }, (_, index) => sessionStorage.key(index)))
-      .toContain('rulepilot:lesson-answer-thread:v1:bob:plan-1:version-plan-1:zh-CN')
+      .toContain('rulepilot:lesson-answer-thread:v2:bob:plan-1:version-plan-1:zh-CN')
     wrapper.unmount()
   })
 
@@ -443,6 +452,18 @@ function catalogPresentationFixture(gameName: string) {
     publicationYear: 2024, bggId: 42, thumbnailUrl: 'https://example.test/catalog-cover.jpg',
     minPlayers: 1, maxPlayers: 5, playingTimeMinutes: 60, minimumAge: 10,
     bggUrl: 'https://boardgamegeek.com/boardgame/42',
+  }
+}
+
+function answerCitation() {
+  return { heading: '结算顺序', excerpt: '完成当前步骤后结算。', pageFrom: 2, pageTo: 2 }
+}
+
+function answerRulingReference() {
+  return {
+    citationIds: ['11111111-1111-4111-8111-111111111111'],
+    confirmedRulingId: null,
+    confirmedRulingVersion: null,
   }
 }
 

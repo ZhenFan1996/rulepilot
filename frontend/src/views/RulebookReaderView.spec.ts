@@ -31,11 +31,17 @@ describe('RulebookReaderView', () => {
       if (path.endsWith('/api/auth/csrf')) return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
       if (path.endsWith('/api/v1/document-versions/version-1/answers') && options?.method === 'POST') {
         return Response.json({
-          assistantRunId: 'answer-run-1',
           answer: {
+            language: 'zh-CN',
             status: 'ANSWERED', shortVerdict: '先放置玩家牌。', explanation: '这是开局的第一步。',
-            citations: [], exceptions: [], confidence: 'HIGH', answerBasis: 'DIRECT_RULE', official: false,
-            confirmedRulingId: null, confirmedRulingVersion: null, clarification: null, warnings: [],
+            citations: [answerCitation()], exceptions: [], confidence: 'HIGH', answerBasis: 'DIRECT_RULE', source: 'UPLOADED',
+            clarification: null, recovery: null, warnings: [],
+          },
+          conversationTurnId: null,
+          rulingReference: {
+            citationIds: ['11111111-1111-4111-8111-111111111111'],
+            confirmedRulingId: null,
+            confirmedRulingVersion: null,
           },
         })
       }
@@ -89,13 +95,14 @@ describe('RulebookReaderView', () => {
   })
 
   it('confirms before clearing only the current browser thread and preserves the draft', async () => {
-    sessionStorage.setItem('rulepilot:lesson-answer-thread:v1:player:rulebook%3Aversion-1:version-1:zh-CN', JSON.stringify([{
+    sessionStorage.setItem('rulepilot:lesson-answer-thread:v2:player:rulebook%3Aversion-1:version-1:zh-CN', JSON.stringify([{
       question: '上一轮什么时候结束？',
       learningIntent: null,
       answer: {
-        status: 'ANSWERED', shortVerdict: '完成当前行动后结束。', explanation: '', citations: [], exceptions: [],
-        confidence: 'HIGH', official: false, confirmedRulingId: null, confirmedRulingVersion: null,
-        clarification: null, warnings: [],
+        language: 'zh-CN',
+        status: 'ANSWERED', shortVerdict: '完成当前行动后结束。', explanation: '',
+        citations: [answerCitation()], exceptions: [], confidence: 'HIGH', answerBasis: 'DIRECT_RULE', source: 'UPLOADED',
+        clarification: null, recovery: null, warnings: [],
       },
     }]))
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
@@ -147,3 +154,7 @@ describe('RulebookReaderView', () => {
     wrapper.unmount()
   })
 })
+
+function answerCitation() {
+  return { heading: '设置顺序', excerpt: '玩家先放置牌。', pageFrom: 2, pageTo: 2 }
+}
