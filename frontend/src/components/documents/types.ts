@@ -1,3 +1,5 @@
+import type { OfficialImportFailureKind, OfficialImportRecovery } from '@/lib/playerJourney'
+
 export interface GameResponse {
   game: { id: string; name: string }
   editions: Array<{ id: string; name: string; language: string }>
@@ -170,6 +172,9 @@ export interface OfficialRulebookImportJob {
   editionId?: string | null
   editionName?: string | null
   sourceDomain: string
+  officialSourceUrl?: string
+  sourceType?: 'BASE_RULEBOOK' | 'EXPANSION_RULEBOOK' | 'OFFICIAL_FAQ' | 'OFFICIAL_ERRATA'
+  learningGoal?: string | null
   stage: OfficialImportStage
   downloadedBytes: number
   totalBytes: number | null
@@ -179,6 +184,7 @@ export interface OfficialRulebookImportJob {
   teachingHandoffState: TeachingHandoffState
   teachingPreparationRunId: string | null
   teachingErrorCode: string | null
+  recovery?: OfficialImportRecovery
   reused: boolean
 }
 
@@ -191,4 +197,10 @@ export interface OfficialImportCopy extends Record<OfficialImportStage, string> 
   TEACHING_FAILED: string
   DOCUMENT_FAILED: string
   background: string
+  failureTitle: string
+  failureDetail: Record<OfficialImportFailureKind, string>
+  chooseAnotherSource: string
+  useLocalUpload: string
+  retryOriginalSource: string
+  openOriginalSource: string
 }

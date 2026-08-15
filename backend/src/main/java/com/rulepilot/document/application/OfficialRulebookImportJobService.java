@@ -167,6 +167,26 @@ public class OfficialRulebookImportJobService implements RulebookTeachingHandoff
                 .orElseThrow(() -> new IllegalArgumentException("official rulebook import job does not exist"));
     }
 
+    public Launch retryImport(UUID jobId, String ownerUsername) {
+        String owner = checkedOwner(ownerUsername);
+        OfficialRulebookImportJob failed = requireOwned(jobId, owner);
+        OfficialRulebookImportRecovery recovery = OfficialRulebookImportRecovery.forJob(failed);
+        if (!recovery.canRetryOriginalSource()) {
+            throw new IllegalStateException("official rulebook source is not retryable");
+        }
+        boolean teachingRequested = failed.teachingHandoff().state() != TeachingHandoffState.NOT_REQUESTED;
+        return enqueue(new Command(
+                failed.editionId(),
+                failed.title(),
+                failed.sourceType(),
+                failed.sourceUrl(),
+                true,
+                teachingRequested,
+                failed.teachingHandoff().learningGoal(),
+                OfficialRulebookImportIdentity.SourceClaim.unknown(),
+                failed.editionId() != null), owner);
+    }
+
     public List<OfficialRulebookImportJob> recentOwned(String ownerUsername) {
         return jobs.findRecentOwned(checkedOwner(ownerUsername), 12);
     }

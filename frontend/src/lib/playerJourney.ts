@@ -15,6 +15,27 @@ export type TeachingHandoffState =
   | 'LAUNCHED'
   | 'FAILED'
 
+export type OfficialImportRecoveryState = 'RUNNING' | 'SUCCEEDED' | 'FAILED'
+
+export type OfficialImportFailureKind =
+  | 'NONE'
+  | 'TEMPORARY_SOURCE'
+  | 'BROWSER_HANDOFF'
+  | 'INVALID_SOURCE'
+  | 'CAPACITY'
+  | 'INTERRUPTED'
+  | 'OTHER'
+
+export interface OfficialImportRecovery {
+  state: OfficialImportRecoveryState
+  failureKind: OfficialImportFailureKind
+  busy: boolean
+  canChooseAnotherSource: boolean
+  canUseLocalUpload: boolean
+  canRetryOriginalSource: boolean
+  canOpenSourceInBrowser: boolean
+}
+
 export interface PlayerJourneyImportJob {
   id: string
   stage: OfficialImportStage
@@ -25,6 +46,7 @@ export interface PlayerJourneyImportJob {
   teachingHandoffState: TeachingHandoffState
   teachingPreparationRunId: string | null
   teachingErrorCode?: string | null
+  recovery?: OfficialImportRecovery
   updatedAt?: string
 }
 
@@ -162,7 +184,14 @@ export function derivePlayerJourney(input: PlayerJourneyInput): PlayerJourneyPro
   }
 
   if (input.importJob?.stage === 'FAILED') {
-    return failed('IMPORT_RULEBOOK', input.importJob.errorCode, availableSections, totalSections, latestActivity, canReadRulebook)
+    return failed(
+      input.importJob.recovery?.canRetryOriginalSource ? 'IMPORT_RULEBOOK' : null,
+      input.importJob.errorCode,
+      availableSections,
+      totalSections,
+      latestActivity,
+      canReadRulebook,
+    )
   }
   if (input.importJob?.teachingHandoffState === 'FAILED') {
     return failed(
@@ -284,7 +313,7 @@ function projection(input: Omit<PlayerJourneyProjection, 'canAskQuestions'>): Pl
 }
 
 function failed(
-  retryAction: Exclude<PlayerJourneyRetryAction, null>,
+  retryAction: PlayerJourneyRetryAction,
   errorCode: string | null,
   availableSections: number,
   totalSections: number | null,

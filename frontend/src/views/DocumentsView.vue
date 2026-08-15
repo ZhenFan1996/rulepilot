@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import AppShell from '@/components/AppShell.vue'
@@ -71,6 +71,8 @@ interface RulebookIntakeSnapshot {
 
 interface RulebookUploadPanelHandle {
   clearSelectedFileInput: () => void
+  focusOfficialSource: () => void
+  openLocalFilePicker: () => void
   openOfficialDetails: () => void
 }
 
@@ -106,6 +108,7 @@ const learningGoal = ref('')
 const loading = ref(true)
 const uploading = ref(false)
 const importingOfficial = ref(false)
+const retryingOfficialImport = ref(false)
 const officialImportJob = ref<OfficialRulebookImportJob | null>(null)
 const deletingDocumentId = ref('')
 const documentToDelete = ref<DocumentResponse | null>(null)
@@ -175,7 +178,7 @@ let initialResourcesReady = false
 let recoveredContextKey = ''
 let officialImportPollGeneration = 0
 let officialImportScopeJobId = ''
-let routeImportTransitionJobId = ''
+let routeImportTransitionJobId: string | null = null
 let activeOfficialImportController: AbortController | null = null
 let officialImportPollTimer: ReturnType<typeof setTimeout> | null = null
 let resolveOfficialImportDelay: ((current: boolean) => void) | null = null
@@ -260,6 +263,18 @@ const officialImportCopy = computed<OfficialImportCopy>(() => locale.value === '
   WAITING_FOR_DOCUMENT: '规则书已下载，正在读取页面与建立检索', LAUNCHING: '规则书已可阅读，正在启动讲解',
   LAUNCHED: '讲解任务已经进入后台', TEACHING_FAILED: '规则书已可阅读，但讲解任务需要重试', DOCUMENT_FAILED: '规则书读取失败，讲解无法开始',
   background: '在任意页面打开“后台任务”都能找回这次进度。',
+  failureTitle: '规则书导入需要处理',
+  failureDetail: {
+    NONE: '这次导入已经结束，请重新选择来源或改用本地文件。',
+    TEMPORARY_SOURCE: '来源暂时无法连接。你可以重试原来源，也可以立即换来源或上传本地文件。',
+    BROWSER_HANDOFF: '这个来源需要在浏览器里完成登录、隐私选择或下载；也可以改用本地文件。',
+    INVALID_SOURCE: '下载的内容不是可安全导入的规则书文件。请选择真实 PDF、连续规则页或本地文件。',
+    CAPACITY: '当前导入队列暂时已满。可以稍后重试原来源，或先改用本地文件。',
+    INTERRUPTED: '应用重启中断了这次导入。可以重试原来源，也可以换来源或上传本地文件。',
+    OTHER: '这次导入没有完成。请选择另一个来源或上传本地文件。',
+  },
+  chooseAnotherSource: '重新选择来源', useLocalUpload: '改用本地上传',
+  retryOriginalSource: '重试原来源', openOriginalSource: '在来源网站继续',
 } : {
   title: 'Preparing the rulebook and guide in the background', safe: 'You can leave this page; download, verification, reading, and guide generation will continue.',
   QUEUED: 'Waiting to download', CONNECTING: 'Connecting to source', DOWNLOADING: 'Downloading rulebook content',
@@ -269,6 +284,18 @@ const officialImportCopy = computed<OfficialImportCopy>(() => locale.value === '
   WAITING_FOR_DOCUMENT: 'Rulebook downloaded; reading pages and building retrieval data', LAUNCHING: 'Rulebook readable; starting the guide',
   LAUNCHED: 'The guide task is now running in the background', TEACHING_FAILED: 'Rulebook readable, but the guide task needs a retry', DOCUMENT_FAILED: 'Rulebook reading failed, so the guide could not start',
   background: 'Open Background work from any page to return to this progress.',
+  failureTitle: 'Rulebook import needs attention',
+  failureDetail: {
+    NONE: 'This import has ended. Choose another source or use a local file.',
+    TEMPORARY_SOURCE: 'The source is temporarily unavailable. Retry it, choose another source, or upload a local file.',
+    BROWSER_HANDOFF: 'This source requires an in-browser sign-in, privacy choice, or download. You can also use a local file.',
+    INVALID_SOURCE: 'The downloaded content is not a safely importable rulebook. Choose a real PDF, ordered rule pages, or a local file.',
+    CAPACITY: 'The import queue is temporarily full. Retry later or use a local file now.',
+    INTERRUPTED: 'An application restart interrupted this import. Retry it, choose another source, or upload a local file.',
+    OTHER: 'This import did not finish. Choose another source or upload a local file.',
+  },
+  chooseAnotherSource: 'Choose another source', useLocalUpload: 'Use local upload',
+  retryOriginalSource: 'Retry original source', openOriginalSource: 'Continue on source site',
 })
 const officialImportIdentityErrorCopy = computed(() => locale.value === 'zh-CN' ? {
   changed: '提交前目录或来源身份发生了变化。请重新比较游戏、版本和语言后再次确认。',
@@ -277,12 +304,20 @@ const officialImportIdentityErrorCopy = computed(() => locale.value === 'zh-CN' 
   changed: 'The catalog or source identity changed before submission. Compare the game, edition, and language again, then reconfirm.',
   active: 'This URL is already being imported for another edition. Wait for that import to finish, or keep the current game and guide goal and use a local upload.',
 })
+const officialImportBusy = computed(() => {
+  const job = officialImportJob.value
+  if (!job) return false
+  if (job.recovery) return job.recovery.busy
+  if (job.stage === 'FAILED') return false
+  return job.stage !== 'COMPLETED'
+    || ['WAITING_FOR_DOCUMENT', 'LAUNCHING'].includes(job.teachingHandoffState)
+})
 const canUpload = computed(() => Boolean(
   (file.value || photographedPages.value.length)
   && !preparingPhotos.value
   && !uploading.value
   && !importingOfficial.value
-  && !officialImportJob.value
+  && !officialImportBusy.value
   && !preparingVersionId.value
   && intakeReady.value,
 ))
@@ -292,7 +327,7 @@ const canImportOfficial = computed(() => Boolean(
   && (!editionId.value || officialImportIdentityConfirmed.value)
   && !uploading.value
   && !importingOfficial.value
-  && !officialImportJob.value
+  && !officialImportBusy.value
   && !preparingVersionId.value
   && intakeReady.value,
 ))
@@ -331,10 +366,11 @@ const intakeDraftAreas = computed(() => {
 })
 const hasUnsavedIntake = computed(() => intakeDraftAreas.value.length > 0)
 const intakeMutationPending = computed(() => (
-  preparingPhotos.value || uploading.value || importingOfficial.value || launchingTeaching.value
+  preparingPhotos.value || uploading.value || importingOfficial.value
+  || retryingOfficialImport.value || launchingTeaching.value
 ))
 const intakeControlsDisabled = computed(() => Boolean(
-  loading.value || !intakeReady.value || intakeMutationPending.value || officialImportJob.value || preparingVersionId.value,
+  loading.value || !intakeReady.value || intakeMutationPending.value || officialImportBusy.value || preparingVersionId.value,
 ))
 const protectsIntakeNavigation = computed(() => hasUnsavedIntake.value || intakeMutationPending.value)
 const navigationCopy = computed(() => intakeMutationPending.value ? {
@@ -1248,6 +1284,8 @@ async function uploadRulebook() {
   message.value = t('documents.uploading')
   errorMessage.value = ''
   try {
+    await detachFailedOfficialImport()
+    message.value = t('documents.uploading')
     const selectedFile = file.value
     const selectedPhotos = [...photographedPages.value]
     const csrf = await csrfToken()
@@ -1331,6 +1369,8 @@ async function importOfficialRulebook() {
   message.value = t('documents.officialImport.downloading')
   errorMessage.value = ''
   try {
+    await detachFailedOfficialImport()
+    message.value = t('documents.officialImport.downloading')
     const selectedCandidate = selectedOfficialCandidate.value
     const discoveryIdentity = officialImportDiscoveryIdentity.value
     const csrf = await csrfToken()
@@ -1375,7 +1415,7 @@ async function importOfficialRulebook() {
       try {
         await router.replace({ query: { ...route.query, importJob: acceptedJob.id } })
       } finally {
-        routeImportTransitionJobId = ''
+        routeImportTransitionJobId = null
       }
     }
     accepted = true
@@ -1402,14 +1442,14 @@ async function recoverOfficialImport(jobId: string, requestIdentityGeneration: n
     const job = await fetchOfficialImport(jobId, controller.signal)
     if (!isCurrentOfficialImport(generation, jobId, requestIdentityGeneration, controller)) return
     activeOfficialImportController = null
-    officialImportJob.value = job
+    acceptOfficialImportJob(job)
     if (officialImportSettled(job)) {
       const finished = await finishOfficialImport(job, generation, requestIdentityGeneration)
       if (!finished && isCurrentOfficialImport(generation, jobId, requestIdentityGeneration)) {
         void waitForOfficialImport(jobId, generation, requestIdentityGeneration)
       }
     }
-    else if (job.stage === 'FAILED') errorMessage.value = t('documents.officialImport.error')
+    else if (job.stage === 'FAILED') return
     else void waitForOfficialImport(jobId, generation, requestIdentityGeneration)
   } catch {
     if (!isCurrentOfficialImport(generation, jobId, requestIdentityGeneration)
@@ -1428,7 +1468,7 @@ function startOfficialImportPolling(
   cancelOfficialImportPolling()
   const generation = officialImportPollGeneration
   officialImportScopeJobId = job.id
-  officialImportJob.value = job
+  acceptOfficialImportJob(job)
   if (officialImportSettled(job)) {
     void finishOfficialImport(job, generation, requestIdentityGeneration).then((finished) => {
       if (!finished && isCurrentOfficialImport(generation, job.id, requestIdentityGeneration)) {
@@ -1438,7 +1478,6 @@ function startOfficialImportPolling(
     return
   }
   if (job.stage === 'FAILED') {
-    errorMessage.value = t('documents.officialImport.error')
     return
   }
   void waitForOfficialImport(job.id, generation, requestIdentityGeneration)
@@ -1465,14 +1504,13 @@ async function waitForOfficialImport(
       const job = await fetchOfficialImport(jobId, controller.signal)
       if (!isCurrentOfficialImport(generation, jobId, requestIdentityGeneration, controller)) return
       activeOfficialImportController = null
-      officialImportJob.value = job
+      acceptOfficialImportJob(job)
       if (officialImportSettled(job)) {
         if (await finishOfficialImport(job, generation, requestIdentityGeneration)) return
         if (!isCurrentOfficialImport(generation, jobId, requestIdentityGeneration)) return
         continue
       }
       if (job.stage === 'FAILED') {
-        errorMessage.value = t('documents.officialImport.error')
         return
       }
     } catch {
@@ -1525,6 +1563,119 @@ function cancelOfficialImportPolling() {
 function officialImportSettled(job: OfficialRulebookImportJob) {
   return job.stage === 'COMPLETED'
     && ['LAUNCHED', 'FAILED', 'NOT_REQUESTED'].includes(job.teachingHandoffState)
+}
+
+const officialImportSourceTypes = new Set([
+  'BASE_RULEBOOK', 'EXPANSION_RULEBOOK', 'OFFICIAL_FAQ', 'OFFICIAL_ERRATA',
+])
+
+function acceptOfficialImportJob(job: OfficialRulebookImportJob) {
+  officialImportJob.value = job
+  if (job.stage === 'FAILED') restoreFailedOfficialImportContext(job)
+}
+
+function restoreFailedOfficialImportContext(job: OfficialRulebookImportJob) {
+  clearSelectedFile()
+  clearPhotographedPages()
+  if (job.editionId) editionId.value = job.editionId
+  title.value = job.rulebookTitle?.trim() || job.title.trim()
+  learningGoal.value = job.learningGoal?.trim() ?? ''
+  if (job.sourceType && officialImportSourceTypes.has(job.sourceType)) {
+    sourceType.value = job.sourceType
+  }
+  officialSourceUrl.value = ''
+  officialImportIdentityConfirmed.value = false
+  officialImportRightsConfirmed.value = false
+  selectedRulebookCandidate.value = null
+  selectedRulebookDiscoveryIdentity.value = null
+  message.value = ''
+  errorMessage.value = ''
+  resetIntakeBaseline()
+}
+
+async function detachFailedOfficialImport() {
+  const failedJob = officialImportJob.value
+  if (failedJob?.stage !== 'FAILED') return
+  cancelOfficialImportPolling()
+  if (routeImportJobId.value === failedJob.id) {
+    const query = { ...route.query }
+    delete query.importJob
+    routeImportTransitionJobId = ''
+    try {
+      await router.replace({ query })
+    } finally {
+      routeImportTransitionJobId = null
+    }
+  }
+  officialImportJob.value = null
+  message.value = ''
+  errorMessage.value = ''
+}
+
+function resetFailedOfficialImportSourceInputs() {
+  clearSelectedFile()
+  clearPhotographedPages()
+  officialSourceUrl.value = ''
+  officialImportIdentityConfirmed.value = false
+  officialImportRightsConfirmed.value = false
+  selectedRulebookCandidate.value = null
+  selectedRulebookDiscoveryIdentity.value = null
+}
+
+async function chooseAnotherOfficialSource() {
+  resetFailedOfficialImportSourceInputs()
+  await detachFailedOfficialImport()
+  await nextTick()
+  uploadPanel.value?.focusOfficialSource()
+}
+
+async function useLocalUploadAfterOfficialFailure() {
+  resetFailedOfficialImportSourceInputs()
+  await detachFailedOfficialImport()
+  await nextTick()
+  uploadPanel.value?.openLocalFilePicker()
+}
+
+async function retryOriginalOfficialImport() {
+  const failedJob = officialImportJob.value
+  if (failedJob?.stage !== 'FAILED'
+    || !failedJob.recovery?.canRetryOriginalSource
+    || retryingOfficialImport.value) return
+  retryingOfficialImport.value = true
+  errorMessage.value = ''
+  try {
+    const csrf = await csrfToken()
+    const response = await checkedFetch(
+      `/api/v1/documents/official-imports/${encodeURIComponent(failedJob.id)}/retry`, {
+        method: 'POST', headers: { [csrf.headerName]: csrf.token },
+      },
+    )
+    if (!response.ok) throw new Error(t('documents.officialImport.error'))
+    const retriedJob = await response.json() as OfficialRulebookImportJob
+    if (!retriedJob.id || retriedJob.id === failedJob.id) {
+      throw new Error(t('documents.officialImport.error'))
+    }
+    cancelOfficialImportPolling()
+    if (retriedJob.stage === 'FAILED') {
+      acceptOfficialImportJob(retriedJob)
+    } else {
+      officialImportJob.value = retriedJob
+      resetFailedOfficialImportSourceInputs()
+      title.value = ''
+      resetIntakeBaseline()
+    }
+    routeImportTransitionJobId = retriedJob.id
+    try {
+      await router.replace({ query: { ...route.query, importJob: retriedJob.id } })
+    } finally {
+      routeImportTransitionJobId = null
+    }
+    if (retriedJob.stage !== 'FAILED') startOfficialImportPolling(retriedJob, identityGeneration)
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : t('documents.officialImport.error')
+  } finally {
+    retryingOfficialImport.value = false
+  }
 }
 
 async function finishOfficialImport(
@@ -1631,7 +1782,7 @@ onMounted(() => {
   void load()
 })
 watch(routeImportJobId, () => {
-  if (routeImportJobId.value && routeImportJobId.value === routeImportTransitionJobId) return
+  if (routeImportTransitionJobId !== null && routeImportJobId.value === routeImportTransitionJobId) return
   recoveredContextKey = ''
   cancelOfficialImportPolling()
   officialImportJob.value = null
@@ -1725,12 +1876,16 @@ onBeforeUnmount(() => {
         <RulebookStatusCard
           :official-import-job="officialImportJob"
           :official-import-copy="officialImportCopy"
+          :retrying-official-import="retryingOfficialImport"
           :message="message"
           :preparing-version-id="preparingVersionId"
           :preparation-elapsed-label="preparationElapsedLabel()"
           :error-message="errorMessage"
           :processing-version-id="processingVersionId"
           :processing-percentage="progress[processingVersionId]?.percentage ?? 0"
+          @choose-source="chooseAnotherOfficialSource"
+          @use-local-upload="useLocalUploadAfterOfficialFailure"
+          @retry-original="retryOriginalOfficialImport"
         />
       </section>
 

@@ -238,6 +238,47 @@ test('uses verified source capability for every desktop source-selection action'
     .toHaveValue('https://publisher.example/asset/42')
 })
 
+test('releases a terminal import and restores a safe edition-aware intake draft on desktop', async ({ page }) => {
+  await mockOnboardingApis(page, {
+    recommendations: [hotGame],
+    suggestions: [candidate],
+    recoveredOfficialImport: {
+      id: 'failed-import', title: 'Catalog Game', rulebookTitle: 'Preserved FAQ',
+      editionId: 'edition-1', editionName: 'BGG 基础版', sourceDomain: 'publisher.example',
+      officialSourceUrl: 'https://publisher.example/not-a-rulebook', sourceType: 'OFFICIAL_FAQ',
+      learningGoal: '先讲设置，再讲容易遗漏的例外。',
+      stage: 'FAILED', downloadedBytes: 512, totalBytes: 4096, documentVersionId: null,
+      duplicate: false, errorCode: 'INVALID_PDF_SOURCE', reused: false,
+      teachingHandoffState: 'FAILED', teachingPreparationRunId: null, teachingErrorCode: 'IMPORT_FAILED',
+      recovery: {
+        state: 'FAILED', failureKind: 'INVALID_SOURCE', busy: false,
+        canChooseAnotherSource: true, canUseLocalUpload: true,
+        canRetryOriginalSource: false, canOpenSourceInBrowser: false,
+      },
+    },
+  })
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto('/teach?importJob=failed-import')
+
+  await expect(page.getByText(/下载的内容不是可安全导入的规则书文件/)).toBeVisible()
+  await expect(page.locator('#rulebook-file')).toBeEnabled()
+  await expect(page.locator('input[maxlength="160"]')).toHaveValue('Preserved FAQ')
+  await expect(page.locator('select').filter({ has: page.locator('option[value="edition-1"]') })).toHaveValue('edition-1')
+  await expect(page.getByLabel('这是什么资料？')).toHaveValue('OFFICIAL_FAQ')
+  await expect(page.locator('textarea')).toHaveValue('先讲设置，再讲容易遗漏的例外。')
+  await expect(page.locator('input[type="url"]')).toHaveValue('')
+  await expect(page.locator('input[type="checkbox"]:checked')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '重新选择来源' })).toBeVisible()
+  await expect(page.getByRole('button', { name: '改用本地上传' })).toBeVisible()
+  await expect(page.getByRole('button', { name: '重试原来源' })).toHaveCount(0)
+
+  await page.getByRole('button', { name: '重新选择来源' }).click()
+  await expect(page).toHaveURL('/teach')
+  await expect(page.getByText(/下载的内容不是可安全导入的规则书文件/)).toHaveCount(0)
+  await expect(page.locator('input[maxlength="160"]')).toHaveValue('Preserved FAQ')
+  await expect(page.getByRole('textbox', { name: /规则书来源链接/ })).toBeFocused()
+})
+
 test('keeps manual onboarding and the ready guide usable when BGG fails on mobile', async ({ page }) => {
   await mockOnboardingApis(page, { recommendations: null, suggestions: null })
   await page.setViewportSize({ width: 390, height: 844 })
@@ -268,6 +309,7 @@ async function mockOnboardingApis(page: Page, options: {
   onBggImport?: () => void
   onBggLink?: (body: Record<string, unknown>) => void
   rulebookCandidates?: Array<Record<string, unknown>>
+  recoveredOfficialImport?: Record<string, unknown>
 }) {
   await page.route('**/api/**', async (route) => {
     const request = route.request()
@@ -397,6 +439,11 @@ async function mockOnboardingApis(page: Page, options: {
         downloadedBytes: 0, totalBytes: 4096, documentVersionId: null, duplicate: false, errorCode: null, reused: false,
         teachingHandoffState: 'WAITING_FOR_DOCUMENT', teachingPreparationRunId: null, teachingErrorCode: null,
       } })
+    }
+    if (options.recoveredOfficialImport
+      && path === `/api/v1/documents/official-imports/${options.recoveredOfficialImport.id}`
+      && request.method() === 'GET') {
+      return route.fulfill({ json: options.recoveredOfficialImport })
     }
     if (path === '/api/v1/documents/official-imports/import-job-1' && request.method() === 'GET') {
       return route.fulfill({ json: {

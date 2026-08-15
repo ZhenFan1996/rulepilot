@@ -54,6 +54,7 @@ const emit = defineEmits<{
 const { locale, t } = useLocale()
 const officialDetails = ref<HTMLDetailsElement | null>(null)
 const rulebookFileInput = ref<HTMLInputElement | null>(null)
+const officialSourceInput = ref<HTMLInputElement | null>(null)
 
 function openOfficialDetails() {
   if (officialDetails.value) officialDetails.value.open = true
@@ -66,7 +67,16 @@ function clearSelectedFileInput() {
   if (rulebookFileInput.value) rulebookFileInput.value.value = ''
 }
 
-defineExpose({ clearSelectedFileInput, openOfficialDetails })
+function focusOfficialSource() {
+  openOfficialDetails()
+  officialSourceInput.value?.focus()
+}
+
+function openLocalFilePicker() {
+  rulebookFileInput.value?.click()
+}
+
+defineExpose({ clearSelectedFileInput, focusOfficialSource, openLocalFilePicker, openOfficialDetails })
 </script>
 
 <template>
@@ -128,7 +138,7 @@ defineExpose({ clearSelectedFileInput, openOfficialDetails })
       <summary class="cursor-pointer text-sm font-semibold text-ink/55">{{ t('documents.advanced') }}</summary>
       <div class="mt-4 stack-y-lg">
         <label class="block text-sm font-semibold">{{ t('documents.source.label') }}
-          <input v-model="officialSourceUrl" :disabled="intakeControlsDisabled" type="url" inputmode="url" maxlength="2000" placeholder="https://publisher.example.com/rulebook.pdf" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-4 py-3 font-normal outline-none focus:border-copper disabled:opacity-50">
+          <input ref="officialSourceInput" v-model="officialSourceUrl" :disabled="intakeControlsDisabled" type="url" inputmode="url" maxlength="2000" placeholder="https://publisher.example.com/rulebook.pdf" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-4 py-3 font-normal outline-none focus:border-copper disabled:opacity-50">
           <span class="mt-1 block text-xs font-normal leading-5 text-ink/45">{{ t('documents.source.hint') }}</span>
         </label>
         <div class="rounded-lg border border-indigo/15 bg-indigo/[0.035] p-4">

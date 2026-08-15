@@ -131,10 +131,45 @@ class UserRuleDocumentControllerTest {
         assertThat(response.rulebookTitle()).isEqualTo("Example Rules");
         assertThat(response.editionId()).isEqualTo(editionId);
         assertThat(response.sourceDomain()).isEqualTo("publisher.example");
+        assertThat(response.sourceType()).isEqualTo(DocumentSourceType.BASE_RULEBOOK);
+        assertThat(response.learningGoal()).isEqualTo("重点讲清开局和第一轮。");
         assertThat(response.stage()).isEqualTo(OfficialRulebookImportJob.Stage.QUEUED);
+        assertThat(response.recovery()).satisfies(recovery -> {
+            assertThat(recovery.busy()).isTrue();
+            assertThat(recovery.canChooseAnotherSource()).isFalse();
+            assertThat(recovery.canRetryOriginalSource()).isFalse();
+        });
         assertThat(response.teachingHandoffState())
                 .isEqualTo(OfficialRulebookImportJob.TeachingHandoffState.WAITING_FOR_DOCUMENT);
         verify(imports).enqueue(command, "alice");
+    }
+
+    @Test
+    void retriesARecoverableOfficialImportThroughTheOwnedFailedJob() {
+        OfficialRulebookImportJobService imports = mock(OfficialRulebookImportJobService.class);
+        UserRuleDocumentController controller = new UserRuleDocumentController(
+                mock(UploadRuleDocumentService.class),
+                mock(PhotographedRulebookUploadService.class),
+                mock(RuleDocumentRemovalService.class),
+                mock(RuleDocumentMetadataSuggestionService.class),
+                mock(RuleDocumentMetadataConfirmationService.class),
+                imports,
+                mock(UploadedRulebookTeachingHandoffService.class),
+                mock(CatalogEditionLookup.class));
+        UUID failedJobId = UUID.randomUUID();
+        UUID retryJobId = UUID.randomUUID();
+        Instant now = Instant.parse("2026-08-16T00:00:00Z");
+        var retryJob = OfficialRulebookImportJob.queued(
+                retryJobId, "alice", null, "Example Rules", DocumentSourceType.BASE_RULEBOOK,
+                "https://publisher.example/rules.pdf", true, "先讲设置。", now);
+        when(imports.retryImport(failedJobId, "alice"))
+                .thenReturn(new OfficialRulebookImportJobService.Launch(retryJob, false));
+
+        var response = controller.retryOfficialRulebookImport(failedJobId, () -> "alice");
+
+        assertThat(response.id()).isEqualTo(retryJobId);
+        assertThat(response.learningGoal()).isEqualTo("先讲设置。");
+        verify(imports).retryImport(failedJobId, "alice");
     }
 
     @Test

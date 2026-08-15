@@ -26,6 +26,8 @@ import {
   acceptJourneyRun,
   derivePlayerJourney,
   playerJourneyPollDelay,
+  type OfficialImportFailureKind,
+  type OfficialImportRecovery,
   type PlayerJourneyDocumentProgress,
   type PlayerJourneyImportJob,
   type PlayerJourneyLesson,
@@ -111,7 +113,7 @@ const { locale } = useLocale()
 
 const copy = computed(() => locale.value === 'zh-CN' ? {
   eyebrow: '从推荐到答疑', title: `已选《${props.game.name}》`, preparing: '正在加入“我的桌游”并寻找可审阅的规则书…',
-  finding: '桌游已保存，正在检索出版社、BGG、集石和可信规则库（已等待 {seconds} 秒，通常几秒，偶尔约 30 秒）…', found: '选择一份规则书', detail: '优先展示出版社来源，也会保留社区与可信规则库结果。请核对语言和版本；只有已核验的 PDF 或连续规则页可以导入。',
+  finding: '桌游已保存，正在检索出版社、BGG、集石和可信规则库（已等待 {seconds} 秒，通常几秒，偶尔约 30 秒）…', found: '选择并核对来源', detail: '优先展示出版社来源，也会保留社区与可信规则库结果。请核对语言和版本；只有已核验的 PDF 或连续规则页可以导入。',
   noImportableTitle: '暂未找到可直接导入的规则书', noImportableDetail: '当前结果只能继续查找文件或核对桌游信息；也可以改用公开链接或本地上传。',
   identityOnlyTitle: '仅用于核对桌游身份', identityOnlyDetail: '这些页面没有可导入的规则书文件，不属于规则书选择。',
   sources: { PUBLISHER: '出版社 / 权利方来源', TRUSTED_REPOSITORY: '可信规则库', COMMUNITY_PLATFORM: '社区规则书来源（如 BGG / 集石）', PUBLIC_WEB: '公开来源（请重点核对）' },
@@ -124,6 +126,16 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   browserRequired: '已经找到这份文件，但来源网站要求在浏览器里完成隐私选择、刷新临时链接或登录。打开原始下载页取得 PDF 后，回到 RulePilot 上传即可继续；桌游、版本和讲解偏好都已保留。',
   sourcePageHandoff: '这个结果不是可直接导入的规则书文档。请在来源网站继续查找或核对语言和版本，取得 PDF 后回到 RulePilot 上传；桌游和讲解偏好都已保留。',
   browserAction: '在来源网站继续下载',
+  chooseAnotherSource: '重新选择来源', retryOriginalSource: '重试原来源',
+  importFailureDetail: {
+    NONE: '这次规则书导入已经结束。请选择另一个来源，或改用公开链接 / 本地文件。',
+    TEMPORARY_SOURCE: '规则书来源暂时无法连接。你可以重试原来源，也可以立即换来源或上传本地文件。',
+    BROWSER_HANDOFF: '来源网站需要你在浏览器里完成登录、隐私选择或下载。桌游与版本仍保留，可以继续下载或换来源。',
+    INVALID_SOURCE: '下载的内容不是可安全导入的规则书文件。请选择真实 PDF、连续规则页或本地文件。',
+    CAPACITY: '当前导入队列暂时已满。可以稍后重试原来源，或先改用本地文件。',
+    INTERRUPTED: '应用重启中断了这次导入。可以重试原来源，也可以换来源或上传本地文件。',
+    OTHER: '这次规则书导入没有完成。请选择另一个来源，或改用公开链接 / 本地文件。',
+  } satisfies Record<OfficialImportFailureKind, string>,
   unavailable: '当前没有找到可审阅的规则书来源。你仍可粘贴公开 PDF 链接或上传自己的规则书。',
   login: '登录后即可保留这次选择并继续找规则书。', loginAction: '打开桌游详情并继续',
   error: '这一步暂时没有完成；推荐对话和已选桌游不会受影响。', partialFailure: '已生成的章节仍可阅读，但后台生成或核对没有完整结束。可以安全重试，现有内容不会丢失。', retry: '重试当前步骤', close: '关闭小窗', change: '换一款',
@@ -141,7 +153,7 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   bytes: (done: string, total: string) => `${done} / ${total}`, pages: (done: number, total: number) => `第 ${done} / ${total} 页`, chapters: (done: number, total: number | null) => total ? `已有 ${done} / ${total} 章可读` : `已有 ${done} 章可读`,
 } : {
   eyebrow: 'Recommendation to Q&A', title: `${props.game.name} selected`, preparing: 'Adding the game to My Games and finding reviewable rulebooks…',
-  finding: 'Game saved. Searching publishers, BGG, Gstone, and trusted repositories ({seconds}s elapsed; usually a few seconds, occasionally about 30s)…', found: 'Choose a rulebook', detail: 'Publisher sources come first, with useful community and trusted-repository results preserved. Review language and edition; only verified PDFs or ordered rule pages can be imported.',
+  finding: 'Game saved. Searching publishers, BGG, Gstone, and trusted repositories ({seconds}s elapsed; usually a few seconds, occasionally about 30s)…', found: 'Choose and verify a source', detail: 'Publisher sources come first, with useful community and trusted-repository results preserved. Review language and edition; only verified PDFs or ordered rule pages can be imported.',
   noImportableTitle: 'No directly importable rulebook yet', noImportableDetail: 'The current results can only continue the file search or confirm game identity. You can also use a public URL or local upload.',
   identityOnlyTitle: 'Game identity references only', identityOnlyDetail: 'These pages do not contain an importable rulebook and are not rulebook choices.',
   sources: { PUBLISHER: 'Publisher / rights-holder', TRUSTED_REPOSITORY: 'Trusted rules repository', COMMUNITY_PLATFORM: 'Community rulebook source (such as BGG / Gstone)', PUBLIC_WEB: 'Public source (review carefully)' },
@@ -154,6 +166,16 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   browserRequired: 'The file was found, but its source requires an in-browser privacy choice, refreshed temporary link, or sign-in. Download it there, then return to upload it; the game, edition, and guide preferences are preserved.',
   sourcePageHandoff: 'This result is not a directly importable rulebook document. Continue the search or review language and edition on the source site, then return to upload the PDF; the game and guide preferences are preserved.',
   browserAction: 'Continue on the source site',
+  chooseAnotherSource: 'Choose another source', retryOriginalSource: 'Retry original source',
+  importFailureDetail: {
+    NONE: 'This rulebook import has ended. Choose another source or use a public link / local file.',
+    TEMPORARY_SOURCE: 'The rulebook source is temporarily unavailable. Retry it, choose another source, or upload a local file.',
+    BROWSER_HANDOFF: 'The source requires an in-browser sign-in, privacy choice, or download. Your game and edition remain selected.',
+    INVALID_SOURCE: 'The downloaded content is not a safely importable rulebook. Choose a real PDF, ordered rule pages, or a local file.',
+    CAPACITY: 'The import queue is temporarily full. Retry later or use a local file now.',
+    INTERRUPTED: 'An application restart interrupted this import. Retry it, choose another source, or upload a local file.',
+    OTHER: 'This rulebook import did not finish. Choose another source or use a public link / local file.',
+  } satisfies Record<OfficialImportFailureKind, string>,
   unavailable: 'No reviewable rulebook source was found. You can still paste a public PDF URL or upload your own rulebook.',
   login: 'Sign in to keep this selection and continue to its rulebook.', loginAction: 'Open game details and continue',
   error: 'This step did not complete. The conversation and selected game are unaffected.', partialFailure: 'Published chapters remain readable, but background generation or review did not finish. You can retry safely without losing existing content.', retry: 'Retry this step', close: 'Close', change: 'Choose another game',
@@ -239,6 +261,10 @@ const projection = computed(() => derivePlayerJourney({
   lesson: lesson.value,
 }))
 const currentPhaseText = computed(() => copy.value.phase[projection.value.phase])
+const importFailureDetail = computed(() => {
+  if (importJob.value?.stage !== 'FAILED') return ''
+  return copy.value.importFailureDetail[importJob.value.recovery?.failureKind ?? 'OTHER']
+})
 const journeyDetail = computed(() => {
   if (importJob.value?.stage === 'DOWNLOADING' && importJob.value.downloadedBytes > 0) {
     const done = formatBytes(importJob.value.downloadedBytes)
@@ -528,7 +554,8 @@ async function refreshJourney(request = sequence) {
       if (!incoming || request !== sequence) return
       currentJob = acceptImportJob(currentJob, normalizeImportJob(incoming)) as OfficialImportJob
       importJob.value = currentJob
-      if (currentJob.stage === 'FAILED' && currentJob.errorCode === 'SOURCE_BROWSER_REQUIRED') {
+      pollingWarning.value = false
+      if (currentJob.stage === 'FAILED' && currentJob.recovery?.canOpenSourceInBrowser) {
         state.value = 'browser-required'
         persistJourney()
         return
@@ -622,7 +649,7 @@ async function retryJourney() {
     const action = projection.value.retryAction
     if (action === 'BIND_GAME') return await prepare()
     if (action === 'DISCOVER_RULEBOOK') return await discover()
-    if (action === 'IMPORT_RULEBOOK') return await enqueueImport()
+    if (action === 'IMPORT_RULEBOOK') return await retryOriginalImport()
     if (action === 'PREPARE_TEACHING') {
       const currentJob = importJob.value
       if (!currentJob?.documentVersionId) throw new Error('document version unavailable')
@@ -658,6 +685,65 @@ async function retryJourney() {
     retrying.value = false
     persistJourney()
   }
+}
+
+function clearImportDownstreamState() {
+  clearJourneyTimer()
+  closeDocumentProgress()
+  documentProgressStreamRetryAt = 0
+  documentProgressStreamRetryAttempt = 0
+  documentReadyRefreshPending = false
+  importJob.value = null
+  documentProgress.value = null
+  preparationRun.value = null
+  preparationRunId.value = null
+  plan.value = null
+  teachingRun.value = null
+  teachingRunId.value = null
+  lesson.value = null
+  pollingWarning.value = false
+  ensuredLessonPlans.clear()
+}
+
+function reviewAnotherSource() {
+  sequence += 1
+  clearImportDownstreamState()
+  selected.value = null
+  openedSource.value = null
+  consent.value = false
+  identityConfirmed.value = false
+  identityNotice.value = ''
+  state.value = candidates.value.length ? 'review' : 'finding'
+  persistJourney()
+  if (!candidates.value.length) void discover(sequence)
+}
+
+async function retryOriginalImport() {
+  const failedJob = importJob.value
+  if (failedJob?.stage !== 'FAILED' || !failedJob.recovery?.canRetryOriginalSource) return
+  const request = sequence
+  const token = await csrfToken()
+  const response = await fetch(
+    `/api/v1/documents/official-imports/${encodeURIComponent(failedJob.id)}/retry`, {
+      method: 'POST', credentials: 'include', headers: { [token.headerName]: token.token },
+    },
+  )
+  if (request !== sequence) return
+  if (response.status === 401 || response.status === 403) return requireLogin()
+  if (!response.ok) throw new Error('official import retry failed')
+  const retriedJob = normalizeImportJob(await response.json() as OfficialImportJob)
+  if (!retriedJob.id || retriedJob.id === failedJob.id) {
+    throw new Error('official import retry response is invalid')
+  }
+  clearImportDownstreamState()
+  importJob.value = retriedJob
+  preparationRunId.value = retriedJob.teachingPreparationRunId
+  state.value = retriedJob.stage === 'FAILED' && retriedJob.recovery?.canOpenSourceInBrowser
+    ? 'browser-required'
+    : 'journey'
+  persistJourney()
+  notifyBackgroundWorkChanged()
+  if (retriedJob.stage !== 'FAILED') scheduleJourney(0)
 }
 
 async function launchLesson(planId: string, clearFailedRun: boolean) {
@@ -794,7 +880,44 @@ function normalizeImportJob(job: OfficialImportJob): OfficialImportJob {
     totalBytes: job.totalBytes === undefined ? null : job.totalBytes,
     teachingHandoffState: job.teachingHandoffState ?? 'NOT_REQUESTED',
     teachingPreparationRunId: job.teachingPreparationRunId ?? null,
+    recovery: normalizeImportRecovery(job),
     duplicate: Boolean(job.duplicate),
+  }
+}
+
+const officialImportFailureKinds = new Set<OfficialImportFailureKind>([
+  'NONE', 'TEMPORARY_SOURCE', 'BROWSER_HANDOFF', 'INVALID_SOURCE',
+  'CAPACITY', 'INTERRUPTED', 'OTHER',
+])
+
+function normalizeImportRecovery(job: OfficialImportJob): OfficialImportRecovery {
+  if (job.stage === 'FAILED') {
+    const recovery = job.recovery
+    if (recovery?.state === 'FAILED') {
+      const failureKind = officialImportFailureKinds.has(recovery.failureKind)
+        ? recovery.failureKind
+        : 'OTHER'
+      return {
+        state: 'FAILED', failureKind, busy: false,
+        canChooseAnotherSource: recovery.canChooseAnotherSource === true,
+        canUseLocalUpload: recovery.canUseLocalUpload === true,
+        canRetryOriginalSource: recovery.canRetryOriginalSource === true,
+        canOpenSourceInBrowser: recovery.canOpenSourceInBrowser === true,
+      }
+    }
+    const browserHandoff = job.errorCode === 'SOURCE_BROWSER_REQUIRED'
+    return {
+      state: 'FAILED', failureKind: browserHandoff ? 'BROWSER_HANDOFF' : 'OTHER', busy: false,
+      canChooseAnotherSource: true, canUseLocalUpload: true,
+      canRetryOriginalSource: false, canOpenSourceInBrowser: browserHandoff,
+    }
+  }
+  const settled = job.stage === 'COMPLETED'
+    && ['LAUNCHED', 'FAILED', 'NOT_REQUESTED'].includes(job.teachingHandoffState ?? 'NOT_REQUESTED')
+  return {
+    state: settled ? 'SUCCEEDED' : 'RUNNING', failureKind: 'NONE', busy: !settled,
+    canChooseAnotherSource: false, canUseLocalUpload: false,
+    canRetryOriginalSource: false, canOpenSourceInBrowser: false,
   }
 }
 
@@ -863,8 +986,10 @@ function restoreJourney() {
       teachingRunId.value = stored.teachingRunId ?? null
       consent.value = true
       identityConfirmed.value = true
-      state.value = 'journey'
-      scheduleJourney(0)
+      state.value = importJob.value.stage === 'FAILED' && importJob.value.recovery?.canOpenSourceInBrowser
+        ? 'browser-required'
+        : 'journey'
+      if (state.value === 'journey') scheduleJourney(0)
     } else {
       state.value = candidates.value.length ? 'review' : 'finding'
       if (!candidates.value.length) void discover()
@@ -997,8 +1122,19 @@ onBeforeUnmount(() => {
           <button type="button" class="mt-3 min-h-11 rounded-lg border border-indigo/25 px-4 font-semibold text-indigo" @click="emit('open-rulebook', journeyStatus)">{{ copy.readRulebook }}</button>
         </div>
         <div v-if="projection.state === 'failed' || projection.canReadLesson && projection.retryAction" class="mt-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800" role="alert">
-          <p>{{ projection.canReadLesson ? copy.partialFailure : copy.error }}<span v-if="projection.errorCode" class="mt-1 block font-mono text-xs">{{ projection.errorCode }}</span></p>
-          <button type="button" :disabled="retrying" class="mt-2 min-h-11 font-semibold underline disabled:opacity-40" @click="retryJourney">{{ copy.retry }}</button>
+          <template v-if="importJob?.stage === 'FAILED'">
+            <p class="leading-6">{{ importFailureDetail }}</p>
+            <div class="mt-3 flex flex-wrap gap-3">
+              <button v-if="importJob.recovery?.canChooseAnotherSource !== false" type="button" class="min-h-11 rounded-lg bg-indigo px-4 font-semibold text-white" @click="reviewAnotherSource">{{ copy.chooseAnotherSource }}</button>
+              <RouterLink v-if="importJob.recovery?.canUseLocalUpload !== false" :to="manualRoute" class="inline-flex min-h-11 items-center rounded-lg border border-indigo/25 px-4 font-semibold text-indigo underline" @click="reviewAnotherSource">{{ copy.manual }} →</RouterLink>
+              <a v-if="importJob.recovery?.canOpenSourceInBrowser && selected" :href="selected.url" target="_blank" rel="noopener noreferrer" class="inline-flex min-h-11 items-center font-semibold text-indigo underline">{{ copy.browserAction }} ↗</a>
+              <button v-if="importJob.recovery?.canRetryOriginalSource" type="button" :disabled="retrying" class="min-h-11 rounded-lg border border-red-300 px-4 font-semibold disabled:opacity-40" @click="retryJourney">{{ copy.retryOriginalSource }}</button>
+            </div>
+          </template>
+          <template v-else>
+            <p>{{ projection.canReadLesson ? copy.partialFailure : copy.error }}<span v-if="projection.errorCode" class="mt-1 block font-mono text-xs">{{ projection.errorCode }}</span></p>
+            <button v-if="projection.retryAction" type="button" :disabled="retrying" class="mt-2 min-h-11 font-semibold underline disabled:opacity-40" @click="retryJourney">{{ copy.retry }}</button>
+          </template>
         </div>
         <div v-if="projection.canReadLesson" class="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm leading-6 text-emerald-900">
           <p>{{ projection.state === 'complete' ? copy.complete : copy.readable }}</p>
@@ -1027,7 +1163,8 @@ onBeforeUnmount(() => {
       <div v-else-if="state === 'browser-required'" class="text-sm leading-6 text-ink/65" role="status">
         <p>{{ copy.browserRequired }}</p>
         <a v-if="selected" :href="selected.url" target="_blank" rel="noopener noreferrer" class="mt-3 inline-flex min-h-11 items-center font-semibold text-indigo underline">{{ copy.browserAction }} ↗</a>
-        <RouterLink :to="manualRoute" class="ml-4 inline-flex min-h-11 items-center font-semibold text-indigo underline">{{ copy.manual }} →</RouterLink>
+        <RouterLink :to="manualRoute" class="ml-4 inline-flex min-h-11 items-center font-semibold text-indigo underline" @click="reviewAnotherSource">{{ copy.manual }} →</RouterLink>
+        <button type="button" class="ml-4 inline-flex min-h-11 items-center font-semibold text-indigo underline" @click="reviewAnotherSource">{{ copy.chooseAnotherSource }}</button>
       </div>
 
       <div v-else class="text-sm text-danger" role="alert">

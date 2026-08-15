@@ -8,6 +8,7 @@ import com.rulepilot.document.application.RuleDocumentMetadataConfirmationServic
 import com.rulepilot.document.application.RuleDocumentMetadataConfirmationService.Confirmation;
 import com.rulepilot.document.application.OfficialRulebookImportJobService;
 import com.rulepilot.document.application.OfficialRulebookImportIdentity;
+import com.rulepilot.document.application.OfficialRulebookImportRecovery;
 import com.rulepilot.document.domain.OfficialRulebookImportJob;
 import com.rulepilot.document.application.UploadRuleDocumentService;
 import com.rulepilot.document.application.UploadedRulebookTeachingHandoffService;
@@ -192,6 +193,14 @@ public class UserRuleDocumentController {
         return officialImportResponse(officialImports.requireOwned(jobId, principal.getName()), false);
     }
 
+    @PostMapping("/official-imports/{jobId}/retry")
+    @ResponseStatus(HttpStatus.ACCEPTED)
+    OfficialRulebookImportJobResponse retryOfficialRulebookImport(
+            @PathVariable UUID jobId, Principal principal) {
+        var launch = officialImports.retryImport(jobId, principal.getName());
+        return officialImportResponse(launch.job(), launch.reused());
+    }
+
     @PostMapping("/official-imports/{jobId}/teaching-retry")
     @ResponseStatus(HttpStatus.ACCEPTED)
     OfficialRulebookImportJobResponse retryOfficialRulebookTeaching(
@@ -336,6 +345,9 @@ public class UserRuleDocumentController {
             UUID editionId,
             String editionName,
             String sourceDomain,
+            String officialSourceUrl,
+            DocumentSourceType sourceType,
+            String learningGoal,
             OfficialRulebookImportJob.Stage stage,
             long downloadedBytes,
             Long totalBytes,
@@ -350,6 +362,7 @@ public class UserRuleDocumentController {
             java.time.Instant teachingHandoffUpdatedAt,
             java.time.Instant createdAt,
             java.time.Instant updatedAt,
+            OfficialRulebookImportRecovery recovery,
             boolean reused) {
 
         static OfficialRulebookImportJobResponse from(
@@ -363,6 +376,9 @@ public class UserRuleDocumentController {
                     job.editionId(),
                     edition == null ? null : edition.name(),
                     java.net.URI.create(job.sourceUrl()).getHost(),
+                    job.sourceUrl(),
+                    job.sourceType(),
+                    job.teachingHandoff().learningGoal(),
                     job.stage(),
                     job.downloadedBytes(),
                     job.totalBytes(),
@@ -377,6 +393,7 @@ public class UserRuleDocumentController {
                     job.teachingHandoff().updatedAt(),
                     job.createdAt(),
                     job.updatedAt(),
+                    OfficialRulebookImportRecovery.forJob(job),
                     reused);
         }
     }

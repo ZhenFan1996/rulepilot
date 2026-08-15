@@ -459,6 +459,62 @@ class OfficialRulebookImportJobServiceTest {
     }
 
     @Test
+    void retriesOnlyATemporaryFailedSourceAsANewJobWithTheOriginalTeachingContext() {
+        FakeJobs jobs = new FakeJobs();
+        var failed = OfficialRulebookImportJob.queued(
+                UUID.randomUUID(),
+                "alice",
+                automaticTeachingCommand().editionId(),
+                "Example Rules",
+                DocumentSourceType.OFFICIAL_FAQ,
+                SOURCE,
+                true,
+                "重点讲清开局和第一轮。",
+                NOW);
+        jobs.insert(failed);
+        jobs.fail(failed.id(), "SOURCE_UNAVAILABLE", NOW);
+        TaskExecutor executor = mock(TaskExecutor.class);
+        var service = service(jobs, mock(OfficialRulebookImportService.class), executor);
+
+        var retry = service.retryImport(failed.id(), "alice");
+
+        assertThat(retry.reused()).isFalse();
+        assertThat(retry.job().id()).isNotEqualTo(failed.id());
+        assertThat(retry.job()).satisfies(job -> {
+            assertThat(job.stage()).isEqualTo(OfficialRulebookImportJob.Stage.QUEUED);
+            assertThat(job.editionId()).isEqualTo(failed.editionId());
+            assertThat(job.title()).isEqualTo("Example Rules");
+            assertThat(job.sourceType()).isEqualTo(DocumentSourceType.OFFICIAL_FAQ);
+            assertThat(job.sourceUrl()).isEqualTo(SOURCE);
+            assertThat(job.teachingHandoff().learningGoal()).isEqualTo("重点讲清开局和第一轮。");
+        });
+        verify(executor).execute(any());
+    }
+
+    @Test
+    void refusesToRetryAnInvalidSourceOrANonTerminalJob() {
+        FakeJobs jobs = new FakeJobs();
+        var invalid = OfficialRulebookImportJob.queued(
+                UUID.randomUUID(), "alice", null, "Invalid Rules",
+                DocumentSourceType.BASE_RULEBOOK, SOURCE, NOW);
+        jobs.insert(invalid);
+        jobs.fail(invalid.id(), "INVALID_PDF_SOURCE", NOW);
+        var running = OfficialRulebookImportJob.queued(
+                UUID.randomUUID(), "alice", null, "Running Rules",
+                DocumentSourceType.BASE_RULEBOOK, "https://publisher.example/running.pdf", NOW);
+        jobs.insert(running);
+        var service = service(
+                jobs, mock(OfficialRulebookImportService.class), mock(TaskExecutor.class));
+
+        assertThatThrownBy(() -> service.retryImport(invalid.id(), "alice"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("not retryable");
+        assertThatThrownBy(() -> service.retryImport(running.id(), "alice"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("not retryable");
+    }
+
+    @Test
     void retriesTheExistingDurableTeachingHandoffWithoutDownloadingTheRulebookAgain() {
         FakeJobs jobs = new FakeJobs();
         UUID versionId = UUID.randomUUID();

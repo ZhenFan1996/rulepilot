@@ -862,6 +862,80 @@ describe('RecommendationRulebookHandoff', () => {
       'https://boardgamegeek.com/file/download_redirect/c66d839e5ef882cf86295abc25caef76456ef0ed43746421/wingspan-rules.pdf',
     )
     expect(wrapper.text()).toContain('本地上传')
+    const chooseAnother = wrapper.findAll('button').find(button => button.text() === '重新选择来源')
+    expect(chooseAnother).toBeDefined()
+    await chooseAnother!.trigger('click')
+    expect(wrapper.text()).toContain('选择并核对来源')
+    expect(wrapper.text()).toContain('展翅翱翔')
+    expect(wrapper.findAll('input[type="checkbox"]')
+      .every(input => !(input.element as HTMLInputElement).checked)).toBe(true)
+  })
+
+  it('retries a temporary import through the owned failed job instead of submitting the source again', async () => {
+    const requests: Array<{ path: string; options?: RequestInit }> = []
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, options?: RequestInit) => {
+      const path = String(input)
+      requests.push({ path, options })
+      if (path === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      if (path === '/api/v1/bgg/games/266192/import') return Response.json({
+        game: { id: 'game-1', name: '展翅翱翔' },
+        edition: { id: 'edition-1', name: 'BGG 版本', language: 'zh-CN' },
+        alreadyImported: false,
+      })
+      if (path.startsWith('/api/v1/documents/rulebook-candidates?')) return Response.json({
+        configured: true,
+        identity: discoveryIdentity,
+        candidates: [{
+          title: 'Publisher rules', url: 'https://publisher.example/rules.pdf', publisher: 'Publisher',
+          language: 'zh-CN', languageVerified: true, edition: 'Base game',
+          sourceDomain: 'publisher.example', officialDomainVerified: true,
+          sourceType: 'PUBLISHER', acquisitionMode: 'DIRECT_PDF', ...confirmedDocumentCapability,
+        }],
+      })
+      if (path === '/api/v1/documents/official-imports') return Response.json({
+        id: 'failed-import', stage: 'QUEUED', downloadedBytes: 0, totalBytes: null,
+        documentVersionId: null, duplicate: false, errorCode: null,
+        teachingHandoffState: 'WAITING_FOR_DOCUMENT', teachingPreparationRunId: null,
+      }, { status: 202 })
+      if (path === '/api/v1/documents/official-imports/failed-import') return Response.json({
+        id: 'failed-import', stage: 'FAILED', downloadedBytes: 0, totalBytes: null,
+        documentVersionId: null, duplicate: false, errorCode: 'SOURCE_UNAVAILABLE',
+        teachingHandoffState: 'FAILED', teachingPreparationRunId: null,
+        recovery: {
+          state: 'FAILED', failureKind: 'TEMPORARY_SOURCE', busy: false,
+          canChooseAnotherSource: true, canUseLocalUpload: true,
+          canRetryOriginalSource: true, canOpenSourceInBrowser: false,
+        },
+      })
+      if (path === '/api/v1/documents/official-imports/failed-import/retry' && options?.method === 'POST') {
+        return Response.json({
+          id: 'retried-import', stage: 'QUEUED', downloadedBytes: 0, totalBytes: null,
+          documentVersionId: null, duplicate: false, errorCode: null,
+          teachingHandoffState: 'WAITING_FOR_DOCUMENT', teachingPreparationRunId: null,
+        }, { status: 202 })
+      }
+      if (path === '/api/v1/documents/official-imports/retried-import') return Response.json({
+        id: 'retried-import', stage: 'QUEUED', downloadedBytes: 0, totalBytes: null,
+        documentVersionId: null, duplicate: false, errorCode: null,
+        teachingHandoffState: 'WAITING_FOR_DOCUMENT', teachingPreparationRunId: null,
+      })
+      return new Response(null, { status: 404 })
+    }))
+    const { wrapper } = await mountHandoff()
+    await flushPromises()
+    await wrapper.get('button[aria-pressed="false"]').trigger('click')
+    await confirmIdentityAndRights(wrapper)
+    await wrapper.findAll('button').find(button => button.text() === '下载规则书并生成讲解')!.trigger('click')
+
+    await vi.waitFor(() => expect(wrapper.text()).toContain('规则书来源暂时无法连接'))
+    await wrapper.findAll('button').find(button => button.text() === '重试原来源')!.trigger('click')
+    await flushPromises()
+
+    expect(requests.filter(request => request.path === '/api/v1/documents/official-imports')).toHaveLength(1)
+    expect(requests.find(request => request.path === '/api/v1/documents/official-imports/failed-import/retry')?.options)
+      .toMatchObject({ method: 'POST', headers: { 'X-CSRF-TOKEN': 'csrf' } })
+    expect(wrapper.text()).toContain('规则书下载已排队')
+    wrapper.unmount()
   })
 
   it('does not download when discovery is unavailable and preserves a manual edition-aware fallback', async () => {

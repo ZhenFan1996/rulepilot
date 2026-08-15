@@ -13,6 +13,13 @@ const props = defineProps<{
   errorMessage: string
   processingVersionId: string
   processingPercentage: number
+  retryingOfficialImport?: boolean
+}>()
+
+const emit = defineEmits<{
+  'choose-source': []
+  'use-local-upload': []
+  'retry-original': []
 }>()
 
 const { t } = useLocale()
@@ -45,16 +52,23 @@ const officialImportStage = computed(() => {
   }
   return props.officialImportCopy[job.stage]
 })
+
+const failedRecovery = computed(() => {
+  const job = props.officialImportJob
+  return job?.stage === 'FAILED' ? job.recovery ?? null : null
+})
+
+const failureKind = computed(() => failedRecovery.value?.failureKind ?? 'OTHER')
 </script>
 
 <template>
-  <section v-if="officialImportJob" class="mt-5 rounded-xl border border-copper/20 bg-paper p-5 text-left" role="status" aria-live="polite">
+  <section v-if="officialImportJob" class="mt-5 rounded-xl border bg-paper p-5 text-left" :class="officialImportJob.stage === 'FAILED' ? 'border-red-200' : 'border-copper/20'" role="status" aria-live="polite">
     <div class="flex items-start justify-between gap-4">
       <div class="min-w-0">
-        <p class="tabletop-kicker">{{ officialImportCopy.title }}</p>
+        <p class="tabletop-kicker">{{ officialImportJob.stage === 'FAILED' ? officialImportCopy.failureTitle : officialImportCopy.title }}</p>
         <h2 class="mt-1 truncate font-display text-xl font-semibold">{{ officialImportJob.title }}</h2>
         <p class="mt-2 text-sm font-semibold text-copper">{{ officialImportStage }}</p>
-        <p class="mt-1 text-xs leading-5 text-ink/50">{{ officialImportCopy.safe }}</p>
+        <p v-if="officialImportJob.stage !== 'FAILED'" class="mt-1 text-xs leading-5 text-ink/50">{{ officialImportCopy.safe }}</p>
       </div>
       <span v-if="officialImportBytes" class="shrink-0 text-xs font-semibold text-indigo">{{ officialImportBytes }}</span>
     </div>
@@ -63,6 +77,16 @@ const officialImportStage = computed(() => {
     </div>
     <div v-else-if="officialImportJob.stage !== 'COMPLETED' && officialImportJob.stage !== 'FAILED'" class="mt-4 flex gap-1.5" aria-hidden="true">
       <span v-for="index in 6" :key="index" class="h-1.5 flex-1 rounded-full" :class="index <= ['QUEUED', 'CONNECTING', 'DOWNLOADING', 'COMPRESSING', 'VERIFYING_FILE', 'SAVING'].indexOf(officialImportJob.stage) + 1 ? 'bg-copper' : 'bg-ink/10'" />
+    </div>
+    <div v-if="officialImportJob.stage === 'FAILED'" class="mt-4 rounded-lg bg-red-50 px-4 py-3 text-sm leading-6 text-red-800" role="alert">
+      <p>{{ officialImportCopy.failureDetail[failureKind] }}</p>
+      <p class="mt-1 text-xs text-red-700/75">{{ officialImportJob.sourceDomain }}</p>
+      <div class="mt-3 flex flex-wrap gap-3">
+        <button v-if="failedRecovery?.canChooseAnotherSource !== false" type="button" class="min-h-11 rounded-lg bg-indigo px-4 font-semibold text-white" @click="emit('choose-source')">{{ officialImportCopy.chooseAnotherSource }}</button>
+        <button v-if="failedRecovery?.canUseLocalUpload !== false" type="button" class="min-h-11 rounded-lg border border-indigo/25 px-4 font-semibold text-indigo" @click="emit('use-local-upload')">{{ officialImportCopy.useLocalUpload }}</button>
+        <button v-if="failedRecovery?.canRetryOriginalSource" type="button" :disabled="retryingOfficialImport" class="min-h-11 rounded-lg border border-red-300 px-4 font-semibold text-red-800 disabled:opacity-40" @click="emit('retry-original')">{{ officialImportCopy.retryOriginalSource }}</button>
+        <a v-if="failedRecovery?.canOpenSourceInBrowser && officialImportJob.officialSourceUrl" :href="officialImportJob.officialSourceUrl" target="_blank" rel="noopener noreferrer" class="inline-flex min-h-11 items-center font-semibold text-indigo underline">{{ officialImportCopy.openOriginalSource }} ↗</a>
+      </div>
     </div>
     <p class="mt-3 border-t border-ink/8 pt-3 text-xs text-ink/45">{{ officialImportCopy.background }}</p>
   </section>

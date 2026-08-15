@@ -883,6 +883,114 @@ describe('DocumentsView recoverable lesson handoff', () => {
     wrapper.unmount()
   })
 
+  it('releases a recovered failed import while preserving teaching context and resetting unsafe inputs', async () => {
+    const failedJob = {
+      id: 'job-failed', title: 'Catalog Game', rulebookTitle: 'Preserved Rules',
+      editionId: 'edition-1', editionName: 'Opaque Edition', sourceDomain: 'publisher.example',
+      sourceType: 'OFFICIAL_FAQ', learningGoal: '先讲设置，再讲容易遗漏的例外。',
+      stage: 'FAILED', downloadedBytes: 512, totalBytes: 4096, documentVersionId: null,
+      duplicate: false, errorCode: 'INVALID_PDF_SOURCE', reused: false,
+      teachingHandoffState: 'FAILED', teachingPreparationRunId: null, teachingErrorCode: 'IMPORT_FAILED',
+      recovery: {
+        state: 'FAILED', failureKind: 'INVALID_SOURCE', busy: false,
+        canChooseAnotherSource: true, canUseLocalUpload: true,
+        canRetryOriginalSource: false, canOpenSourceInBrowser: false,
+      },
+    }
+    const applicationFetch = mockApplicationFetch(
+      () => 'READY', 'COMPLETED', [], undefined, undefined, () => response(failedJob),
+    )
+    const fetchMock = vi.fn(async (input: string | URL | Request, options?: RequestInit) => {
+      if (String(input).includes('/api/v1/games')) return response([{
+        game: { id: 'game-1', name: 'Catalog Game' },
+        editions: [{ id: 'edition-1', name: 'Opaque Edition', language: 'en' }],
+        bggMetadata: null,
+      }])
+      return applicationFetch(input, options)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('EventSource', FakeEventSource)
+
+    const { wrapper, router } = await mountDocuments('/teach?importJob=job-failed')
+    await vi.waitFor(() => expect(wrapper.text()).toContain('下载的内容不是可安全导入的规则书文件'))
+
+    expect(wrapper.get('#rulebook-file').attributes('disabled')).toBeUndefined()
+    expect((wrapper.get('input[maxlength="160"]').element as HTMLInputElement).value).toBe('Preserved Rules')
+    expect(wrapper.findAll('select').some(select => select.element.value === 'edition-1')).toBe(true)
+    expect(wrapper.findAll('select').some(select => select.element.value === 'OFFICIAL_FAQ')).toBe(true)
+    expect((wrapper.get('textarea').element as HTMLTextAreaElement).value)
+      .toBe('先讲设置，再讲容易遗漏的例外。')
+    expect((wrapper.get('input[type="url"]').element as HTMLInputElement).value).toBe('')
+    expect(wrapper.findAll('input[type="checkbox"]')
+      .every(input => !(input.element as HTMLInputElement).checked)).toBe(true)
+    expect(wrapper.text()).toContain('重新选择来源')
+    expect(wrapper.text()).toContain('改用本地上传')
+    expect(wrapper.text()).not.toContain('重试原来源')
+
+    await wrapper.findAll('button').find(button => button.text() === '重新选择来源')!.trigger('click')
+    await flushPromises()
+    expect(router.currentRoute.value.query.importJob).toBeUndefined()
+    expect(wrapper.text()).not.toContain('下载的内容不是可安全导入的规则书文件')
+    expect((wrapper.get('input[maxlength="160"]').element as HTMLInputElement).value).toBe('Preserved Rules')
+    wrapper.unmount()
+  })
+
+  it('routes an allowed original-source retry through the failed job and tracks the new job', async () => {
+    const failedJob = {
+      id: 'job-temporary', title: 'Catalog Game', rulebookTitle: 'Preserved Rules',
+      editionId: 'edition-1', editionName: 'Opaque Edition', sourceDomain: 'publisher.example',
+      officialSourceUrl: 'https://publisher.example/rules.pdf', sourceType: 'BASE_RULEBOOK',
+      learningGoal: 'Keep this teaching goal', stage: 'FAILED', downloadedBytes: 0, totalBytes: null,
+      documentVersionId: null, duplicate: false, errorCode: 'SOURCE_UNAVAILABLE', reused: false,
+      teachingHandoffState: 'FAILED', teachingPreparationRunId: null, teachingErrorCode: 'IMPORT_FAILED',
+      recovery: {
+        state: 'FAILED', failureKind: 'TEMPORARY_SOURCE', busy: false,
+        canChooseAnotherSource: true, canUseLocalUpload: true,
+        canRetryOriginalSource: true, canOpenSourceInBrowser: false,
+      },
+    }
+    const retriedJob = {
+      ...failedJob,
+      id: 'job-retried', stage: 'QUEUED', errorCode: null,
+      teachingHandoffState: 'WAITING_FOR_DOCUMENT', teachingErrorCode: null,
+      recovery: {
+        state: 'RUNNING', failureKind: 'NONE', busy: true,
+        canChooseAnotherSource: false, canUseLocalUpload: false,
+        canRetryOriginalSource: false, canOpenSourceInBrowser: false,
+      },
+    }
+    const applicationFetch = mockApplicationFetch(
+      () => 'READY', 'COMPLETED', [], undefined, undefined, () => response(failedJob),
+    )
+    const retryRequests: RequestInit[] = []
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, options?: RequestInit) => {
+      const path = String(input)
+      if (path.includes('/api/v1/games')) return response([{
+        game: { id: 'game-1', name: 'Catalog Game' },
+        editions: [{ id: 'edition-1', name: 'Opaque Edition', language: 'en' }],
+        bggMetadata: null,
+      }])
+      if (path.endsWith('/official-imports/job-temporary/retry') && options?.method === 'POST') {
+        retryRequests.push(options)
+        return response(retriedJob, 202)
+      }
+      return applicationFetch(input, options)
+    }))
+    vi.stubGlobal('EventSource', FakeEventSource)
+
+    const { wrapper, router } = await mountDocuments('/teach?importJob=job-temporary')
+    await vi.waitFor(() => expect(wrapper.text()).toContain('来源暂时无法连接'))
+    await wrapper.findAll('button').find(button => button.text() === '重试原来源')!.trigger('click')
+    await flushPromises()
+
+    expect(retryRequests).toHaveLength(1)
+    expect(retryRequests[0]).toMatchObject({ method: 'POST', headers: { 'X-CSRF-TOKEN': 'csrf' } })
+    expect(router.currentRoute.value.query.importJob).toBe('job-retried')
+    expect(wrapper.text()).toContain('等待下载')
+    expect(wrapper.text()).not.toContain('来源暂时无法连接')
+    wrapper.unmount()
+  })
+
   it('aborts only the recovered import read on unmount and ignores its late settlement', async () => {
     let releaseImport!: (value: Response) => void
     const importResponse = new Promise<Response>((resolve) => { releaseImport = resolve })
