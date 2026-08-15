@@ -1103,6 +1103,7 @@ const messages = {
 } as const
 
 export type TranslationKey = keyof typeof messages['zh-CN']
+export type TranslationCatalog = Readonly<Record<TranslationKey, string>>
 type Variables = Record<string, string | number>
 
 function preferredLocale(): AppLocale {
@@ -1113,13 +1114,13 @@ function preferredLocale(): AppLocale {
 }
 
 const activeLocale = ref<AppLocale>(preferredLocale())
-const englishMessages = ref<Record<TranslationKey, string> | null>(null)
-let englishMessagesPromise: Promise<Record<TranslationKey, string>> | undefined
+const englishMessages = ref<TranslationCatalog | null>(null)
+let englishMessagesPromise: Promise<TranslationCatalog> | undefined
 
 export function preloadLocale(value: AppLocale) {
   if (value !== 'en' || englishMessages.value) return Promise.resolve()
   englishMessagesPromise ??= import('./locale.en').then((module) => {
-    const catalog = module.default as Record<TranslationKey, string>
+    const catalog: TranslationCatalog = module.default
     englishMessages.value = catalog
     return catalog
   })

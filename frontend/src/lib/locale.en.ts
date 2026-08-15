@@ -1,4 +1,6 @@
-export default {
+import type { TranslationCatalog } from './locale'
+
+const englishMessages = {
     'language.zh': '中文',
     'language.en': 'English',
     'language.switch': 'Switch language',
@@ -1091,4 +1093,6 @@ export default {
     'home.browseCatalog': 'Browse the full catalog',
     'home.source': 'Game data from BGG',
     'home.footer': 'Every rule conclusion in a guide opens the rulebook page you confirmed.',
-} as const
+} as const satisfies TranslationCatalog
+
+export default englishMessages
