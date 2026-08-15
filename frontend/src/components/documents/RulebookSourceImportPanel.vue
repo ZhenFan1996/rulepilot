@@ -1,0 +1,119 @@
+<script setup lang="ts">
+import { useLocale } from '@/lib/locale'
+import { playerFacingLanguageName } from '@/lib/playerFacingLanguage'
+import type {
+  RulebookCandidate,
+  RulebookDiscoveryCopy,
+  RulebookDiscoveryStatus,
+  SelectedEditionContext,
+} from './types'
+
+const props = defineProps<{
+  selectedEdition: SelectedEditionContext | null
+  status: RulebookDiscoveryStatus
+  candidates: RulebookCandidate[]
+  copy: RulebookDiscoveryCopy
+}>()
+
+const emit = defineEmits<{
+  discover: []
+  choose: [candidate: RulebookCandidate]
+}>()
+
+const { locale, t } = useLocale()
+
+function candidateLanguage(candidate: RulebookCandidate) {
+  const name = playerFacingLanguageName(candidate.language, locale.value)
+  if (!candidate.language) return name
+  return `${name}（${candidate.languageVerified
+    ? props.copy.languageVerified
+    : props.copy.languageReview}）`
+}
+</script>
+
+<template>
+  <div v-if="selectedEdition" class="mt-7 flex items-center gap-4 rounded-xl border border-copper/20 bg-copper/5 p-4 text-left">
+    <img
+      v-if="selectedEdition.bggMetadata?.thumbnailUrl"
+      :src="selectedEdition.bggMetadata.thumbnailUrl"
+      :alt="t('documents.game.selectedCover', { game: selectedEdition.game.name })"
+      class="h-20 w-16 shrink-0 rounded-lg bg-paper object-contain"
+      referrerpolicy="no-referrer"
+    >
+    <div class="min-w-0 flex-1">
+      <p class="text-xs font-bold uppercase tracking-[0.12em] text-copper">{{ t('documents.game.selectedEyebrow') }}</p>
+      <h2 class="mt-1 truncate font-display text-xl font-semibold">{{ selectedEdition.game.name }}</h2>
+      <p class="mt-1 text-sm text-ink/55">{{ t('documents.game.selectedEdition', { edition: selectedEdition.edition.name }) }}</p>
+      <a
+        v-if="selectedEdition.bggMetadata?.bggUrl"
+        :href="selectedEdition.bggMetadata.bggUrl"
+        target="_blank"
+        rel="noopener noreferrer"
+        class="mt-1 inline-block text-xs font-semibold text-indigo"
+      >{{ t('documents.game.selectedSource') }} ↗</a>
+    </div>
+  </div>
+
+  <div v-if="selectedEdition" class="mt-4 text-left">
+    <button
+      type="button"
+      :disabled="status === 'loading'"
+      class="min-h-11 rounded-xl bg-indigo px-5 text-sm font-semibold text-white disabled:opacity-50"
+      @click="emit('discover')"
+    >
+      {{ status === 'loading' ? copy.loading : copy.action }}
+    </button>
+    <ol
+      v-if="status === 'loading'"
+      class="mt-4 grid gap-2 rounded-xl border border-indigo/15 bg-indigo/[0.035] p-4 text-sm sm:grid-cols-3"
+      role="status"
+    >
+      <li v-for="(step, index) in copy.searchSteps" :key="step" class="flex items-center gap-2 text-ink/60">
+        <span class="grid size-6 shrink-0 place-items-center rounded-full bg-indigo/10 text-xs font-bold text-indigo">{{ index + 1 }}</span>
+        <span>{{ step }}</span>
+      </li>
+    </ol>
+    <section
+      v-if="status === 'success'"
+      class="mt-4 rounded-xl border border-indigo/15 bg-paper p-4 sm:p-5"
+      aria-live="polite"
+    >
+      <h2 class="font-display text-xl font-semibold">{{ copy.title }}</h2>
+      <p class="mt-1 text-xs leading-5 text-ink/50">{{ copy.detail }}</p>
+      <ul v-if="candidates.length" class="mt-4 stack-y-md">
+        <li v-for="candidate in candidates" :key="candidate.url" class="rounded-lg border border-ink/10 bg-canvas p-4">
+          <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div class="min-w-0">
+              <p class="font-semibold">{{ candidate.title }}</p>
+              <p class="mt-1 break-all text-xs text-ink/45">{{ candidate.sourceDomain }}</p>
+              <p class="mt-2 text-xs leading-5 text-ink/55">
+                {{ copy.publisher }}: {{ candidate.publisher || '—' }} · {{ copy.language }}: {{ candidateLanguage(candidate) }} · {{ copy.edition }}: {{ candidate.edition || '—' }}
+              </p>
+              <p class="mt-1 text-xs font-semibold" :class="candidate.sourceType === 'PUBLIC_WEB' ? 'text-amber-700' : 'text-emerald-700'">
+                {{ copy.sources[candidate.sourceType] }}
+              </p>
+              <p class="mt-1 text-xs text-ink/45">
+                {{ candidate.acquisitionMode === 'DIRECT_PDF' ? copy.direct : candidate.acquisitionMode === 'IMAGE_GALLERY' ? copy.gallery : copy.page }}
+              </p>
+            </div>
+            <button
+              type="button"
+              class="min-h-11 shrink-0 rounded-lg border border-indigo/30 px-4 text-sm font-semibold text-indigo"
+              @click="emit('choose', candidate)"
+            >
+              {{ candidate.acquisitionMode === 'SOURCE_PAGE' ? copy.open : copy.use }}
+            </button>
+          </div>
+        </li>
+      </ul>
+      <p v-else class="mt-4 text-sm text-ink/55">{{ copy.empty }}</p>
+    </section>
+    <p
+      v-else-if="status === 'unavailable'"
+      class="mt-3 rounded-lg bg-amber-50 px-4 py-3 text-sm text-amber-900"
+      role="status"
+    >
+      {{ copy.unavailable }}
+    </p>
+  </div>
+</template>

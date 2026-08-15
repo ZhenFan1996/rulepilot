@@ -1,9 +1,25 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { RouterLink, useRoute, useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 
 import AppShell from '@/components/AppShell.vue'
 import DestructiveActionDialog from '@/components/DestructiveActionDialog.vue'
+import RulebookDocumentList from '@/components/documents/RulebookDocumentList.vue'
+import RulebookSourceImportPanel from '@/components/documents/RulebookSourceImportPanel.vue'
+import RulebookStatusCard from '@/components/documents/RulebookStatusCard.vue'
+import RulebookUploadPanel from '@/components/documents/RulebookUploadPanel.vue'
+import type {
+  BggSuggestion,
+  BggSuggestionState,
+  DocumentResponse,
+  GameResponse,
+  OfficialImportCopy,
+  OfficialRulebookImportJob,
+  PhotographedPage,
+  RulebookCandidate,
+  RulebookDiscoveryCopy,
+  RulebookDiscoveryStatus,
+} from '@/components/documents/types'
 import { notifyLoginRequired } from '@/lib/authSession'
 import {
   mergeDocumentProgress,
@@ -20,66 +36,8 @@ import { playerFacingLanguageName } from '@/lib/playerFacingLanguage'
 import { notifyTeachingLaunched, type TeachingLaunch } from '@/lib/teachingLaunch'
 
 interface CsrfResponse { headerName: string; token: string }
-interface GameResponse {
-  game: { id: string; name: string }
-  editions: Array<{ id: string; name: string; language: string }>
-  bggMetadata?: null | { thumbnailUrl: string; bggUrl: string }
-}
-interface DocumentResponse {
-  document: { id: string; gameEditionId: string | null; title: string; officialSourceUrl: string | null; officialCoverUrl: string | null }
-  latestVersion: { id: string; originalFilename: string; size: number; status: string }
-}
-interface BggSuggestion {
-  bggId: number
-  name: string
-  publicationYear: number | null
-  coverUrl: string
-  minPlayers: number | null
-  maxPlayers: number | null
-  playingTimeMinutes: number | null
-  minimumAge: number | null
-  normalizedTitleMatch: boolean
-  bggUrl: string
-}
-interface BggSuggestionState {
-  status: 'loading' | 'success' | 'error'
-  candidates: BggSuggestion[]
-  selectedBggId: number | null
-  linkStatus: 'idle' | 'confirming' | 'linked' | 'error'
-  linkAlreadyImported: boolean
-}
 interface BggLinkResponse { alreadyImported: boolean }
-interface RulebookCandidate {
-  title: string
-  url: string
-  publisher: string
-  language: string
-  edition: string
-  sourceDomain: string
-  officialDomainVerified: boolean
-  languageVerified?: boolean
-  sourceType: 'PUBLISHER' | 'TRUSTED_REPOSITORY' | 'COMMUNITY_PLATFORM' | 'PUBLIC_WEB'
-  acquisitionMode: 'DIRECT_PDF' | 'IMAGE_GALLERY' | 'SOURCE_PAGE'
-}
 interface RulebookCandidateResponse { configured: boolean; candidates: RulebookCandidate[] }
-interface OfficialRulebookImportJob {
-  id: string
-  title: string
-  rulebookTitle?: string
-  editionId?: string | null
-  editionName?: string | null
-  sourceDomain: string
-  stage: 'QUEUED' | 'CONNECTING' | 'DOWNLOADING' | 'COMPRESSING' | 'VERIFYING_FILE' | 'SAVING' | 'COMPLETED' | 'FAILED'
-  downloadedBytes: number
-  totalBytes: number | null
-  documentVersionId: string | null
-  duplicate: boolean
-  errorCode: string | null
-  teachingHandoffState: 'NOT_REQUESTED' | 'WAITING_FOR_DOCUMENT' | 'LAUNCHING' | 'LAUNCHED' | 'FAILED'
-  teachingPreparationRunId: string | null
-  teachingErrorCode: string | null
-  reused: boolean
-}
 interface TeachingPlanResponse { id: string; documentVersionId: string }
 interface TeachingPreparationLaunch { assistantRunId: string; state: string; reused: boolean }
 interface TeachingPreparationRun {
@@ -95,11 +53,6 @@ interface ModelConfigurationResponse {
   providers: Array<{ id: string; configured: boolean; visionCapable: boolean }>
   assignments: { teaching: string; visual: string }
 }
-interface PhotographedPage {
-  id: string
-  file: File
-  previewUrl: string
-}
 interface RulebookIntakeSnapshot {
   editionId: string
   learningGoal: string
@@ -107,6 +60,15 @@ interface RulebookIntakeSnapshot {
   officialSourceUrl: string
   sourceType: string
   title: string
+}
+
+interface RulebookUploadPanelHandle {
+  clearSelectedFileInput: () => void
+  openOfficialDetails: () => void
+}
+
+interface RulebookDocumentListHandle {
+  focusTarget: () => HTMLElement | null
 }
 
 class PreparationFailedError extends Error {}
@@ -120,8 +82,8 @@ const editionId = ref('')
 const documents = ref<DocumentResponse[]>([])
 const bggSuggestionStates = ref<Record<string, BggSuggestionState>>({})
 const rulebookCandidates = ref<RulebookCandidate[]>([])
-const rulebookDiscoveryStatus = ref<'idle' | 'loading' | 'success' | 'unavailable' | 'error'>('idle')
-const officialDetails = ref<HTMLDetailsElement | null>(null)
+const rulebookDiscoveryStatus = ref<RulebookDiscoveryStatus>('idle')
+const uploadPanel = ref<RulebookUploadPanelHandle | null>(null)
 const file = ref<File | null>(null)
 const photographedPages = ref<PhotographedPage[]>([])
 const preparingPhotos = ref(false)
@@ -137,9 +99,8 @@ const officialImportJob = ref<OfficialRulebookImportJob | null>(null)
 const deletingDocumentId = ref('')
 const documentToDelete = ref<DocumentResponse | null>(null)
 const deleteError = ref('')
-const documentListHeading = ref<HTMLElement | null>(null)
+const documentList = ref<RulebookDocumentListHandle | null>(null)
 const restoreAfterDocumentDelete = ref(false)
-const rulebookFileInput = ref<HTMLInputElement | null>(null)
 const intakeReady = ref(false)
 const intakeBaseline = ref<RulebookIntakeSnapshot>({
   editionId: '', learningGoal: '', officialImportRightsConfirmed: false,
@@ -226,7 +187,7 @@ const selectedEditionContext = computed(() => {
   }
   return null
 })
-const rulebookDiscoveryCopy = computed(() => locale.value === 'zh-CN' ? {
+const rulebookDiscoveryCopy = computed<RulebookDiscoveryCopy>(() => locale.value === 'zh-CN' ? {
   action: '帮我找规则书', loading: '正在检索多个可信来源…', title: '找到这些规则书来源',
   detail: '会优先找出版社，也会补查 BGG、集石与可信规则库。来源页会在新窗口打开；PDF 直链和已识别的连续规则页图片都可以在确认后导入。',
   unavailable: '当前模型未开启联网搜索。你仍可粘贴公开 PDF 链接或上传本地文件。',
@@ -247,7 +208,7 @@ const rulebookDiscoveryCopy = computed(() => locale.value === 'zh-CN' ? {
   publisher: 'Provider', language: 'Language', languageVerified: 'stated by the source', languageReview: 'verify on the source page', edition: 'Edition',
   searchSteps: ['Verify BGG identity and edition', 'Search publishers, distributors, and localizers', 'Check BGG, Gstone, and trusted repositories'],
 })
-const officialImportCopy = computed(() => locale.value === 'zh-CN' ? {
+const officialImportCopy = computed<OfficialImportCopy>(() => locale.value === 'zh-CN' ? {
   title: '规则书与讲解正在后台准备', safe: '可以离开这一页；下载、核验、规则书读取和讲解生成都会继续。',
   QUEUED: '等待下载', CONNECTING: '正在连接来源', DOWNLOADING: '正在下载规则书内容',
   COMPRESSING: '文件超过普通导入上限，正在安全压缩 PDF',
@@ -339,15 +300,6 @@ const visualProvider = computed(() => modelConfiguration.value?.providers.find(
 ))
 const visualVisionCapable = computed(() => visualProvider.value?.visionCapable === true)
 
-function documentStatusLabel(status: string) {
-  return {
-    UPLOADED: t('documents.status.uploaded'),
-    EXTRACTING: t('documents.status.extracting'),
-    READY: t('documents.status.ready'),
-    FAILED: t('documents.status.failed'),
-  }[status] ?? t('documents.status.processing')
-}
-
 function bggSuggestionState(documentId: string) {
   return bggSuggestionStates.value[documentId]
 }
@@ -431,13 +383,6 @@ async function confirmBggSuggestion(documentId: string) {
   }
 }
 
-function candidatePlayerLabel(candidate: BggSuggestion) {
-  if (candidate.minPlayers == null || candidate.maxPlayers == null) return ''
-  return candidate.minPlayers === candidate.maxPlayers
-    ? t('documents.bgg.playersExact', { players: candidate.minPlayers })
-    : t('documents.bgg.playersRange', { min: candidate.minPlayers, max: candidate.maxPlayers })
-}
-
 function progressMessage(snapshot: ProcessingSnapshot) {
   if (snapshot.stage === 'EXTRACTING') return t('documents.progress.extracting')
   if (snapshot.stage === 'RENDERING' && snapshot.totalPages > 0) {
@@ -506,18 +451,7 @@ function chooseRulebookCandidate(candidate: RulebookCandidate) {
   officialSourceUrl.value = candidate.url
   if (!title.value.trim()) title.value = candidate.title
   officialImportRightsConfirmed.value = false
-  if (officialDetails.value) officialDetails.value.open = true
-  if (typeof officialDetails.value?.scrollIntoView === 'function') {
-    officialDetails.value.scrollIntoView({ behavior: 'smooth', block: 'start' })
-  }
-}
-
-function candidateLanguage(candidate: RulebookCandidate) {
-  const name = playerFacingLanguageName(candidate.language, locale.value)
-  if (!candidate.language) return name
-  return `${name}（${candidate.languageVerified
-    ? rulebookDiscoveryCopy.value.languageVerified
-    : rulebookDiscoveryCopy.value.languageReview}）`
+  uploadPanel.value?.openOfficialDetails()
 }
 
 async function load() {
@@ -633,7 +567,7 @@ function selectFile(event: Event) {
 
 function clearSelectedFile() {
   file.value = null
-  if (rulebookFileInput.value) rulebookFileInput.value.value = ''
+  uploadPanel.value?.clearSelectedFileInput()
 }
 
 async function addPhotographedPages(event: Event) {
@@ -1567,35 +1501,6 @@ async function finishOfficialImport(
   return true
 }
 
-function officialImportProgress() {
-  const job = officialImportJob.value
-  if (!job || job.stage !== 'DOWNLOADING' || !job.totalBytes) return null
-  return Math.min(100, Math.round(job.downloadedBytes / job.totalBytes * 100))
-}
-
-function officialImportBytes() {
-  const job = officialImportJob.value
-  if (!job || job.downloadedBytes <= 0) return ''
-  const format = (bytes: number) => bytes < 1024 * 1024
-    ? `${Math.max(1, Math.round(bytes / 1024))} KB`
-    : `${(bytes / 1024 / 1024).toFixed(1)} MB`
-  return job.totalBytes ? `${format(job.downloadedBytes)} / ${format(job.totalBytes)}` : format(job.downloadedBytes)
-}
-
-function officialImportStage() {
-  const job = officialImportJob.value
-  if (!job) return ''
-  if (job.stage === 'COMPLETED' && job.teachingHandoffState === 'FAILED') {
-    return job.teachingErrorCode === 'DOCUMENT_PROCESSING_FAILED'
-      ? officialImportCopy.value.DOCUMENT_FAILED
-      : officialImportCopy.value.TEACHING_FAILED
-  }
-  if (job.stage === 'COMPLETED' && job.teachingHandoffState !== 'NOT_REQUESTED') {
-    return officialImportCopy.value[job.teachingHandoffState]
-  }
-  return officialImportCopy.value[job.stage]
-}
-
 function requestDeleteRulebook(entry: DocumentResponse) {
   if (deletingDocumentId.value || preparingVersionId.value) return
   documentToDelete.value = entry
@@ -1613,7 +1518,7 @@ function cancelDeleteRulebook() {
 function documentDeleteRestoreTarget() {
   if (!restoreAfterDocumentDelete.value) return null
   restoreAfterDocumentDelete.value = false
-  return documentListHeading.value
+  return documentList.value?.focusTarget() ?? null
 }
 
 async function confirmDeleteRulebook() {
@@ -1689,261 +1594,70 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
-        <div v-if="selectedEditionContext" class="mt-7 flex items-center gap-4 rounded-xl border border-copper/20 bg-copper/5 p-4 text-left">
-          <img v-if="selectedEditionContext.bggMetadata?.thumbnailUrl" :src="selectedEditionContext.bggMetadata.thumbnailUrl" :alt="t('documents.game.selectedCover', { game: selectedEditionContext.game.name })" class="h-20 w-16 shrink-0 rounded-lg bg-paper object-contain" referrerpolicy="no-referrer">
-          <div class="min-w-0 flex-1">
-            <p class="text-xs font-bold uppercase tracking-[0.12em] text-copper">{{ t('documents.game.selectedEyebrow') }}</p>
-            <h2 class="mt-1 truncate font-display text-xl font-semibold">{{ selectedEditionContext.game.name }}</h2>
-            <p class="mt-1 text-sm text-ink/55">{{ t('documents.game.selectedEdition', { edition: selectedEditionContext.edition.name }) }}</p>
-            <a v-if="selectedEditionContext.bggMetadata?.bggUrl" :href="selectedEditionContext.bggMetadata.bggUrl" target="_blank" rel="noopener noreferrer" class="mt-1 inline-block text-xs font-semibold text-indigo">{{ t('documents.game.selectedSource') }} ↗</a>
-          </div>
-        </div>
+        <RulebookSourceImportPanel
+          :selected-edition="selectedEditionContext"
+          :status="rulebookDiscoveryStatus"
+          :candidates="rulebookCandidates"
+          :copy="rulebookDiscoveryCopy"
+          @discover="discoverOfficialRulebooks"
+          @choose="chooseRulebookCandidate"
+        />
 
-        <div v-if="selectedEditionContext" class="mt-4 text-left">
-          <button type="button" :disabled="rulebookDiscoveryStatus === 'loading'" class="min-h-11 rounded-xl bg-indigo px-5 text-sm font-semibold text-white disabled:opacity-50" @click="discoverOfficialRulebooks">
-            {{ rulebookDiscoveryStatus === 'loading' ? rulebookDiscoveryCopy.loading : rulebookDiscoveryCopy.action }}
-          </button>
-          <ol v-if="rulebookDiscoveryStatus === 'loading'" class="mt-4 grid gap-2 rounded-xl border border-indigo/15 bg-indigo/[0.035] p-4 text-sm sm:grid-cols-3" role="status">
-            <li v-for="(step, index) in rulebookDiscoveryCopy.searchSteps" :key="step" class="flex items-center gap-2 text-ink/60">
-              <span class="grid size-6 shrink-0 place-items-center rounded-full bg-indigo/10 text-xs font-bold text-indigo">{{ index + 1 }}</span>
-              <span>{{ step }}</span>
-            </li>
-          </ol>
-          <section v-if="rulebookDiscoveryStatus === 'success'" class="mt-4 rounded-xl border border-indigo/15 bg-paper p-4 sm:p-5" aria-live="polite">
-            <h2 class="font-display text-xl font-semibold">{{ rulebookDiscoveryCopy.title }}</h2>
-            <p class="mt-1 text-xs leading-5 text-ink/50">{{ rulebookDiscoveryCopy.detail }}</p>
-            <ul v-if="rulebookCandidates.length" class="mt-4 stack-y-md">
-              <li v-for="candidate in rulebookCandidates" :key="candidate.url" class="rounded-lg border border-ink/10 bg-canvas p-4">
-                <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                  <div class="min-w-0">
-                    <p class="font-semibold">{{ candidate.title }}</p>
-                    <p class="mt-1 break-all text-xs text-ink/45">{{ candidate.sourceDomain }}</p>
-                    <p class="mt-2 text-xs leading-5 text-ink/55">{{ rulebookDiscoveryCopy.publisher }}: {{ candidate.publisher || '—' }} · {{ rulebookDiscoveryCopy.language }}: {{ candidateLanguage(candidate) }} · {{ rulebookDiscoveryCopy.edition }}: {{ candidate.edition || '—' }}</p>
-                    <p class="mt-1 text-xs font-semibold" :class="candidate.sourceType === 'PUBLIC_WEB' ? 'text-amber-700' : 'text-emerald-700'">{{ rulebookDiscoveryCopy.sources[candidate.sourceType] }}</p>
-                    <p class="mt-1 text-xs text-ink/45">{{ candidate.acquisitionMode === 'DIRECT_PDF' ? rulebookDiscoveryCopy.direct : candidate.acquisitionMode === 'IMAGE_GALLERY' ? rulebookDiscoveryCopy.gallery : rulebookDiscoveryCopy.page }}</p>
-                  </div>
-                  <button type="button" class="min-h-11 shrink-0 rounded-lg border border-indigo/30 px-4 text-sm font-semibold text-indigo" @click="chooseRulebookCandidate(candidate)">{{ candidate.acquisitionMode === 'SOURCE_PAGE' ? rulebookDiscoveryCopy.open : rulebookDiscoveryCopy.use }}</button>
-                </div>
-              </li>
-            </ul>
-            <p v-else class="mt-4 text-sm text-ink/55">{{ rulebookDiscoveryCopy.empty }}</p>
-          </section>
-          <p v-else-if="rulebookDiscoveryStatus === 'unavailable'" class="mt-3 rounded-lg bg-amber-50 px-4 py-3 text-sm text-amber-900" role="status">{{ rulebookDiscoveryCopy.unavailable }}</p>
-        </div>
+        <RulebookUploadPanel
+          ref="uploadPanel"
+          v-model:title="title"
+          v-model:official-source-url="officialSourceUrl"
+          v-model:official-import-rights-confirmed="officialImportRightsConfirmed"
+          v-model:edition-id="editionId"
+          v-model:learning-goal="learningGoal"
+          v-model:source-type="sourceType"
+          :file="file"
+          :photographed-pages="photographedPages"
+          :preparing-photos="preparingPhotos"
+          :intake-controls-disabled="intakeControlsDisabled"
+          :intake-draft-areas="intakeDraftAreas"
+          :intake-draft-copy="intakeDraftCopy"
+          :edition-options="editionOptions"
+          :model-configuration-available="Boolean(modelConfiguration)"
+          :visual-vision-capable="visualVisionCapable"
+          :can-import-official="canImportOfficial"
+          :importing-official="importingOfficial"
+          :can-upload="canUpload"
+          :preparing-version-id="preparingVersionId"
+          :uploading="uploading"
+          @submit="uploadRulebook"
+          @select-file="selectFile"
+          @add-photos="addPhotographedPages"
+          @move-photo="movePhotographedPage"
+          @remove-photo="removePhotographedPage"
+          @import-official="importOfficialRulebook"
+        />
 
-        <form class="tabletop-panel player-board mt-8 p-5 text-left sm:p-7" @submit.prevent="uploadRulebook">
-          <div v-if="hasUnsavedIntake" data-testid="rulebook-intake-unsaved" class="mb-5 rounded-lg bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900" role="status">
-            <strong>{{ intakeDraftCopy.status(intakeDraftAreas.join(locale === 'zh-CN' ? '、' : ', ')) }}</strong>
-            <span class="mt-1 block text-xs leading-5">{{ intakeDraftCopy.memoryOnly }}</span>
-          </div>
-          <p class="text-sm font-semibold text-ink/65">{{ t('documents.capture.label') }}</p>
-          <div class="mt-3 grid gap-3 sm:grid-cols-3">
-            <label for="rulebook-file" class="group flex min-h-32 flex-col rounded-xl border border-dashed border-ink/25 bg-canvas p-4 transition" :class="intakeControlsDisabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer hover:border-copper/60 hover:bg-copper/5'">
-              <svg class="h-6 w-6 text-copper" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M14.5 2.75H6.75a2 2 0 0 0-2 2v14.5a2 2 0 0 0 2 2h10.5a2 2 0 0 0 2-2V8.75z" /><path d="M14 2.75v6h5.25M8 13h8M8 16.5h6" /></svg>
-              <span class="mt-auto font-display text-lg font-semibold">{{ t('documents.capture.pdf.title') }}</span>
-              <span class="mt-1 text-sm leading-5 text-ink/45">{{ file?.name ?? t('documents.capture.pdf.detail') }}</span>
-            </label>
-            <label for="rulebook-camera" class="flex min-h-32 flex-col rounded-xl border border-ink/12 bg-paper p-4 text-ink transition" :class="intakeControlsDisabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer hover:border-copper/60 hover:bg-copper/[0.1]'">
-              <svg class="h-6 w-6 text-copper" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4.75 7.75h3l1.25-2h6l1.25 2h3a1.75 1.75 0 0 1 1.75 1.75v8.75A1.75 1.75 0 0 1 19.25 20H4.75A1.75 1.75 0 0 1 3 18.25V9.5a1.75 1.75 0 0 1 1.75-1.75Z" /><circle cx="12" cy="13.5" r="3.25" /></svg>
-              <span class="mt-auto font-display text-lg font-semibold">{{ t('documents.capture.camera.title') }}</span>
-              <span class="mt-1 text-sm leading-5 text-ink/45">{{ t('documents.capture.camera.detail') }}</span>
-            </label>
-            <label for="rulebook-gallery" class="flex min-h-32 flex-col rounded-xl border border-ink/12 bg-paper p-4 text-ink transition" :class="intakeControlsDisabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer hover:border-indigo/50 hover:bg-indigo/[0.1]'">
-              <svg class="h-6 w-6 text-indigo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3.5" y="4" width="17" height="16" rx="2" /><circle cx="8.5" cy="9" r="1.25" /><path d="m5.5 17 4.3-4.3 3.1 3.1 2.1-2.1L18.5 17" /></svg>
-              <span class="mt-auto font-display text-lg font-semibold">{{ t('documents.capture.gallery.title') }}</span>
-              <span class="mt-1 text-sm leading-5 text-ink/45">{{ t('documents.capture.gallery.detail') }}</span>
-            </label>
-          </div>
-          <input id="rulebook-file" ref="rulebookFileInput" :disabled="intakeControlsDisabled" accept="application/pdf,.pdf" type="file" class="sr-only" @change="selectFile">
-          <input id="rulebook-camera" :disabled="intakeControlsDisabled" accept="image/*" capture="environment" type="file" class="sr-only" :aria-label="t('documents.capture.cameraAlt')" @change="addPhotographedPages">
-          <input id="rulebook-gallery" :disabled="intakeControlsDisabled" accept="image/*" multiple type="file" class="sr-only" :aria-label="t('documents.capture.galleryAlt')" @change="addPhotographedPages">
-
-          <div v-if="photographedPages.length" class="mt-4 rounded-xl border border-ink/10 bg-canvas p-3 sm:p-4">
-            <div class="flex flex-wrap items-baseline justify-between gap-2">
-              <p class="font-semibold">{{ t('documents.capture.photoCount', { count: photographedPages.length }) }}</p>
-              <p class="text-xs leading-5 text-ink/45">{{ t('documents.capture.photoHint') }}</p>
-            </div>
-            <ol class="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
-              <li v-for="(page, index) in photographedPages" :key="page.id" class="overflow-hidden rounded-lg border border-ink/10 bg-paper">
-                <img :src="page.previewUrl" :alt="t('documents.capture.photoPage', { position: index + 1 })" class="aspect-[3/4] w-full object-cover">
-                <div class="flex items-center justify-between gap-1 px-2 py-2">
-                  <span class="text-xs font-semibold text-ink/60">{{ t('documents.capture.photoPage', { position: index + 1 }) }}</span>
-                  <span class="flex gap-1">
-                    <button type="button" :disabled="intakeControlsDisabled || index === 0" class="rounded px-1.5 py-0.5 text-sm text-ink/55 hover:bg-canvas disabled:opacity-25" :aria-label="t('documents.capture.moveEarlier', { position: index + 1 })" @click="movePhotographedPage(index, -1)">←</button>
-                    <button type="button" :disabled="intakeControlsDisabled || index === photographedPages.length - 1" class="rounded px-1.5 py-0.5 text-sm text-ink/55 hover:bg-canvas disabled:opacity-25" :aria-label="t('documents.capture.moveLater', { position: index + 1 })" @click="movePhotographedPage(index, 1)">→</button>
-                    <button type="button" :disabled="intakeControlsDisabled" class="rounded px-1.5 py-0.5 text-sm text-red-700 hover:bg-red-50 disabled:opacity-25" :aria-label="t('documents.capture.remove', { position: index + 1 })" @click="removePhotographedPage(index)">×</button>
-                  </span>
-                </div>
-              </li>
-            </ol>
-          </div>
-          <p v-else-if="file" class="mt-3 text-sm text-ink/45">{{ t('documents.file.change') }} · {{ t('documents.file.limit') }}</p>
-          <p v-if="preparingPhotos" class="mt-4 rounded-lg bg-copper/8 px-4 py-3 text-sm text-copper" role="status">{{ t('documents.capture.preparing') }}</p>
-
-          <label class="mt-4 block text-sm font-semibold">{{ t('documents.title.label') }} <span class="font-normal text-ink/40">{{ t('documents.optional') }}</span>
-            <input v-model="title" :disabled="intakeControlsDisabled" maxlength="160" :placeholder="t('documents.title.placeholder')" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-4 py-3 font-normal outline-none focus:border-copper disabled:opacity-50">
-            <span v-if="photographedPages.length" class="mt-1 block text-xs font-normal leading-5 text-ink/45">{{ t('documents.title.photoHint') }}</span>
-          </label>
-
-          <details ref="officialDetails" class="mt-4 border-t border-ink/10 pt-4">
-            <summary class="cursor-pointer text-sm font-semibold text-ink/55">{{ t('documents.advanced') }}</summary>
-            <div class="mt-4 stack-y-lg">
-              <label class="block text-sm font-semibold">{{ t('documents.source.label') }}
-                <input v-model="officialSourceUrl" :disabled="intakeControlsDisabled" type="url" inputmode="url" maxlength="2000" placeholder="https://publisher.example.com/rulebook.pdf" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-4 py-3 font-normal outline-none focus:border-copper disabled:opacity-50">
-                <span class="mt-1 block text-xs font-normal leading-5 text-ink/45">{{ t('documents.source.hint') }}</span>
-              </label>
-              <div class="rounded-lg border border-indigo/15 bg-indigo/[0.035] p-4">
-                <p class="text-sm font-semibold">{{ t('documents.officialImport.title') }}</p>
-                <p class="mt-1 text-xs leading-5 text-ink/50">{{ t('documents.officialImport.detail') }}</p>
-                <label class="mt-3 flex items-start gap-3 text-sm leading-6 text-ink/65">
-                  <input v-model="officialImportRightsConfirmed" :disabled="intakeControlsDisabled" type="checkbox" class="mt-1 h-5 w-5 shrink-0 accent-indigo">
-                  <span>{{ t('documents.officialImport.consent') }}</span>
-                </label>
-                <button type="button" :disabled="!canImportOfficial" class="mt-3 min-h-11 rounded-lg bg-indigo px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40" @click="importOfficialRulebook">{{ importingOfficial ? t('documents.officialImport.importing') : t('documents.officialImport.action') }}</button>
-              </div>
-
-              <label v-if="editionOptions.length" class="block text-sm font-semibold">{{ t('documents.game.label') }}
-                <select v-model="editionId" :disabled="intakeControlsDisabled" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-4 py-3 font-normal disabled:opacity-50">
-                  <option value="">{{ t('documents.game.none') }}</option>
-                  <option v-for="edition in editionOptions" :key="edition.id" :value="edition.id">{{ edition.label }}</option>
-                </select>
-              </label>
-              <p v-else class="text-sm leading-6 text-ink/55">{{ t('documents.game.missing') }} <RouterLink :to="{ name: 'catalog' }" class="font-semibold text-indigo underline">{{ t('documents.game.organize') }}</RouterLink>{{ t('documents.game.missingTail') }}</p>
-
-              <div v-if="modelConfiguration && !visualVisionCapable" class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-950" role="status">
-                <p><span class="font-semibold">{{ t('documents.visual.warningLead') }}</span>{{ t('documents.visual.warningBody') }}</p>
-                <RouterLink :to="{ name: 'model-settings' }" class="mt-1 inline-block font-semibold text-indigo underline underline-offset-2">{{ t('documents.visual.settings') }}</RouterLink>
-              </div>
-
-              <label class="block text-sm font-semibold">{{ t('documents.learningGoal.label') }} <span class="font-normal text-ink/40">{{ t('documents.optional') }}</span>
-                <textarea v-model="learningGoal" :disabled="intakeControlsDisabled" maxlength="500" rows="3" :placeholder="t('documents.learningGoal.placeholder')" class="mt-2 w-full resize-y rounded-lg border border-ink/15 bg-canvas px-4 py-3 font-normal leading-6 outline-none focus:border-copper disabled:opacity-50" />
-                <span class="mt-1 block text-xs font-normal leading-5 text-ink/45">{{ t('documents.learningGoal.hint') }}</span>
-              </label>
-
-              <label class="block text-sm font-semibold">{{ t('documents.sourceType') }}
-                <select v-model="sourceType" :disabled="intakeControlsDisabled" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-3 py-2.5 disabled:opacity-50">
-                  <option value="BASE_RULEBOOK">{{ t('documents.type.base') }}</option>
-                  <option value="EXPANSION_RULEBOOK">{{ t('documents.type.expansion') }}</option>
-                  <option value="OFFICIAL_FAQ">{{ t('documents.type.faq') }}</option>
-                  <option value="OFFICIAL_ERRATA">{{ t('documents.type.errata') }}</option>
-                </select>
-              </label>
-            </div>
-          </details>
-
-          <button :disabled="!canUpload" class="mt-5 w-full rounded-lg bg-copper px-5 py-3.5 font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40">
-            {{ preparingVersionId ? t('documents.submitPreparing') : uploading ? t('documents.submitUploading') : t('documents.submit') }}
-          </button>
-        </form>
-
-        <section v-if="officialImportJob" class="mt-5 rounded-xl border border-copper/20 bg-paper p-5 text-left" role="status" aria-live="polite">
-          <div class="flex items-start justify-between gap-4">
-            <div class="min-w-0">
-              <p class="tabletop-kicker">{{ officialImportCopy.title }}</p>
-              <h2 class="mt-1 truncate font-display text-xl font-semibold">{{ officialImportJob.title }}</h2>
-              <p class="mt-2 text-sm font-semibold text-copper">{{ officialImportStage() }}</p>
-              <p class="mt-1 text-xs leading-5 text-ink/50">{{ officialImportCopy.safe }}</p>
-            </div>
-            <span v-if="officialImportBytes()" class="shrink-0 text-xs font-semibold text-indigo">{{ officialImportBytes() }}</span>
-          </div>
-          <div v-if="officialImportProgress() !== null" class="mt-4 h-2 overflow-hidden rounded-full bg-ink/10" :aria-label="`${officialImportProgress()}%`">
-            <div class="h-full rounded-full bg-copper transition-[width]" :style="{ width: `${officialImportProgress()}%` }" />
-          </div>
-          <div v-else-if="officialImportJob.stage !== 'COMPLETED' && officialImportJob.stage !== 'FAILED'" class="mt-4 flex gap-1.5" aria-hidden="true">
-            <span v-for="index in 6" :key="index" class="h-1.5 flex-1 rounded-full" :class="index <= ['QUEUED', 'CONNECTING', 'DOWNLOADING', 'COMPRESSING', 'VERIFYING_FILE', 'SAVING'].indexOf(officialImportJob.stage) + 1 ? 'bg-copper' : 'bg-ink/10'" />
-          </div>
-          <p class="mt-3 border-t border-ink/8 pt-3 text-xs text-ink/45">{{ officialImportCopy.background }}</p>
-        </section>
-
-        <p v-if="message && !preparingVersionId" class="mt-5 rounded-lg bg-indigo/5 px-4 py-3 text-sm text-indigo" aria-live="polite">{{ message }}</p>
-        <div v-if="preparingVersionId" class="mt-5 rounded-xl border border-indigo/15 bg-indigo/5 p-4 text-left" role="status" aria-live="polite">
-          <div class="flex items-start justify-between gap-4">
-            <div>
-              <p class="font-semibold text-ink">{{ t('documents.organizing') }}</p>
-              <p class="mt-1 text-sm leading-6 text-ink/60">{{ message }}</p>
-            </div>
-            <span class="shrink-0 text-xs font-medium text-indigo">{{ preparationElapsedLabel() }}</span>
-          </div>
-          <p class="mt-3 border-t border-indigo/10 pt-3 text-xs leading-5 text-ink/45">{{ t('documents.background') }}</p>
-        </div>
-        <p v-if="errorMessage" class="mt-5 rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">{{ errorMessage }}</p>
-        <div v-if="processingVersionId" class="mx-auto mt-4 h-1.5 max-w-md overflow-hidden rounded-full bg-ink/10">
-          <div class="h-full bg-copper transition-all" :style="{ width: `${progress[processingVersionId]?.percentage ?? 0}%` }" />
-        </div>
+        <RulebookStatusCard
+          :official-import-job="officialImportJob"
+          :official-import-copy="officialImportCopy"
+          :message="message"
+          :preparing-version-id="preparingVersionId"
+          :preparation-elapsed-label="preparationElapsedLabel()"
+          :error-message="errorMessage"
+          :processing-version-id="processingVersionId"
+          :processing-percentage="progress[processingVersionId]?.percentage ?? 0"
+        />
       </section>
 
-      <section class="mt-14 border-t border-ink/10 pt-8">
-        <div class="flex items-center justify-between gap-4">
-          <div>
-            <h2 ref="documentListHeading" tabindex="-1" class="font-display text-2xl font-semibold outline-none">{{ t('documents.list.title') }}</h2>
-            <p class="mt-1 text-sm text-ink/45">{{ t('documents.list.description') }}</p>
-          </div>
-          <RouterLink :to="{ name: 'catalog' }" class="shrink-0 text-sm font-semibold text-indigo">{{ t('documents.list.manage') }}</RouterLink>
-        </div>
-        <p v-if="loading" class="mt-5 text-sm text-ink/45">{{ t('documents.list.loading') }}</p>
-        <div v-else-if="documents.length === 0" class="mt-5 rounded-xl border border-dashed border-ink/20 p-8 text-center">
-          <p class="font-semibold">{{ t('documents.empty.title') }}</p>
-          <p class="mt-2 text-sm text-ink/45">{{ t('documents.empty.description') }}</p>
-        </div>
-        <ul v-else class="mt-5 divide-y divide-ink/10 border-y border-ink/10">
-          <li v-for="entry in documents" :key="entry.document.id" class="py-5">
-            <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-              <div class="min-w-0">
-                <p class="truncate font-semibold">{{ entry.document.title }}</p>
-                <p class="mt-1 text-sm text-ink/45">
-                  {{ documentStatusLabel(entry.latestVersion.status) }} · {{ Math.ceil(entry.latestVersion.size / 1024) }} KiB
-                </p>
-              </div>
-              <div class="flex shrink-0 flex-wrap gap-2">
-                <button v-if="entry.latestVersion.status === 'READY'" type="button" :disabled="bggSuggestionState(entry.document.id)?.status === 'loading' || Boolean(deletingDocumentId)" class="min-h-11 rounded-lg border border-indigo/20 px-4 py-2.5 text-sm font-semibold text-indigo hover:border-indigo/50 disabled:opacity-40" @click="loadBggSuggestions(entry.document.id)">{{ bggSuggestionState(entry.document.id)?.status === 'loading' ? t('documents.bgg.loading') : t('documents.bgg.open') }}</button>
-                <RouterLink v-if="entry.latestVersion.status === 'READY'" :to="{ name: 'rulebook-reader', params: { versionId: entry.latestVersion.id } }" class="inline-flex min-h-11 items-center rounded-lg bg-indigo px-4 py-2.5 text-sm font-semibold text-white">{{ t('documents.read') }}</RouterLink>
-                <button v-if="entry.latestVersion.status === 'READY'" :disabled="Boolean(preparingVersionId) || Boolean(deletingDocumentId)" class="rounded-lg border border-ink/15 px-4 py-2.5 text-sm font-semibold hover:border-copper/50 disabled:opacity-40" @click="startLesson(entry.latestVersion.id).catch((error: unknown) => errorMessage = error instanceof Error ? error.message : t('documents.error'))">{{ t('documents.start') }}</button>
-                <button type="button" :disabled="Boolean(preparingVersionId) || Boolean(deletingDocumentId)" class="rounded-lg px-3 py-2.5 text-sm font-semibold text-ink/45 hover:bg-red-50 hover:text-red-700 disabled:opacity-40" @click="requestDeleteRulebook(entry)">{{ deletingDocumentId === entry.document.id ? t('documents.deleting') : t('documents.delete') }}</button>
-              </div>
-            </div>
-            <div v-if="bggSuggestionState(entry.document.id)" class="mt-4 rounded-xl border border-indigo/15 bg-indigo/[0.035] p-4">
-              <p v-if="bggSuggestionState(entry.document.id)?.status === 'loading'" class="text-sm text-ink/55" role="status">{{ t('documents.bgg.loadingDetail') }}</p>
-              <div v-else-if="bggSuggestionState(entry.document.id)?.status === 'error'" role="alert">
-                <p class="text-sm leading-6 text-red-700">{{ t('documents.bgg.error') }}</p>
-                <button type="button" class="mt-3 min-h-11 rounded-lg border border-red-200 px-4 py-2 text-sm font-semibold text-red-700" @click="loadBggSuggestions(entry.document.id)">{{ t('documents.bgg.retry') }}</button>
-              </div>
-              <div v-else-if="bggSuggestionState(entry.document.id)?.candidates.length === 0">
-                <p class="text-sm font-semibold">{{ t('documents.bgg.noneTitle') }}</p>
-                <p class="mt-1 text-sm leading-6 text-ink/50">{{ t('documents.bgg.noneDetail') }}</p>
-              </div>
-              <template v-else>
-                <p class="text-sm font-semibold">{{ bggSuggestionState(entry.document.id)!.candidates.length === 1 ? t('documents.bgg.oneTitle') : t('documents.bgg.manyTitle', { count: bggSuggestionState(entry.document.id)!.candidates.length }) }}</p>
-                <p class="mt-1 text-xs leading-5 text-ink/50">{{ t('documents.bgg.review') }}</p>
-                <ul class="mt-4 grid gap-3 lg:grid-cols-2">
-                  <li v-for="candidate in bggSuggestionState(entry.document.id)!.candidates" :key="candidate.bggId" class="flex gap-3 rounded-lg border bg-paper p-3" :class="bggSuggestionState(entry.document.id)?.selectedBggId === candidate.bggId ? 'border-indigo/50 ring-1 ring-indigo/20' : 'border-ink/10'">
-                    <img v-if="candidate.coverUrl" :src="candidate.coverUrl" :alt="t('documents.bgg.coverAlt', { name: candidate.name })" class="h-24 w-20 shrink-0 rounded object-contain" loading="lazy">
-                    <div class="min-w-0 flex-1">
-                      <div class="flex flex-wrap items-center gap-2">
-                        <p class="font-semibold">{{ candidate.name }}<span v-if="candidate.publicationYear" class="font-normal text-ink/45"> · {{ candidate.publicationYear }}</span></p>
-                        <span v-if="candidate.normalizedTitleMatch" class="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-800">{{ t('documents.bgg.titleMatch') }}</span>
-                      </div>
-                      <p v-if="candidatePlayerLabel(candidate) || candidate.playingTimeMinutes" class="mt-1 text-xs text-ink/50">
-                        {{ [candidatePlayerLabel(candidate), candidate.playingTimeMinutes ? t('documents.bgg.minutes', { minutes: candidate.playingTimeMinutes }) : ''].filter(Boolean).join(' · ') }}
-                      </p>
-                      <div class="mt-3 flex flex-wrap items-center gap-3">
-                        <button type="button" class="min-h-11 rounded-lg bg-indigo px-3 py-2 text-sm font-semibold text-white" :aria-pressed="bggSuggestionState(entry.document.id)?.selectedBggId === candidate.bggId" @click="selectBggSuggestion(entry.document.id, candidate.bggId)">{{ bggSuggestionState(entry.document.id)?.selectedBggId === candidate.bggId ? t('documents.bgg.selected') : t('documents.bgg.select') }}</button>
-                        <a :href="candidate.bggUrl" target="_blank" rel="noopener noreferrer" class="py-2 text-xs font-semibold text-indigo underline underline-offset-2">{{ t('documents.bgg.view') }}</a>
-                      </div>
-                    </div>
-                  </li>
-                </ul>
-                <div v-if="bggSuggestionState(entry.document.id)?.selectedBggId" class="mt-4 rounded-lg bg-indigo/8 px-3 py-3">
-                  <p class="text-sm leading-6 text-indigo">{{ t('documents.bgg.handoff') }}</p>
-                  <button v-if="bggSuggestionState(entry.document.id)?.linkStatus !== 'linked'" type="button" :disabled="bggSuggestionState(entry.document.id)?.linkStatus === 'confirming'" class="mt-3 min-h-11 rounded-lg bg-ink px-4 py-2 text-sm font-semibold text-paper disabled:opacity-50" @click="confirmBggSuggestion(entry.document.id)">{{ bggSuggestionState(entry.document.id)?.linkStatus === 'confirming' ? t('documents.bgg.confirming') : t('documents.bgg.confirm') }}</button>
-                  <p v-if="bggSuggestionState(entry.document.id)?.linkStatus === 'error'" class="mt-2 text-sm text-red-700" role="alert">{{ t('documents.bgg.linkError') }}</p>
-                  <p v-if="bggSuggestionState(entry.document.id)?.linkStatus === 'linked'" class="mt-2 text-sm font-semibold text-emerald-800" role="status">{{ bggSuggestionState(entry.document.id)?.linkAlreadyImported ? t('documents.bgg.reused') : t('documents.bgg.linked') }}</p>
-                </div>
-                <p class="mt-4 text-[11px] text-ink/40">{{ t('documents.bgg.attribution') }}</p>
-              </template>
-            </div>
-          </li>
-        </ul>
-      </section>
+      <RulebookDocumentList
+        ref="documentList"
+        :loading="loading"
+        :documents="documents"
+        :suggestion-states="bggSuggestionStates"
+        :deleting-document-id="deletingDocumentId"
+        :preparing-version-id="preparingVersionId"
+        @load-suggestions="loadBggSuggestions"
+        @select-suggestion="selectBggSuggestion"
+        @confirm-suggestion="confirmBggSuggestion"
+        @start-lesson="startLesson($event).catch((error: unknown) => errorMessage = error instanceof Error ? error.message : t('documents.error'))"
+        @request-delete="requestDeleteRulebook"
+      />
 
       <DestructiveActionDialog
         :open="Boolean(documentToDelete)"
