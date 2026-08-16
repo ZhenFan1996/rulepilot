@@ -350,9 +350,17 @@ async function opaqueSurface(locator: Locator) {
     && appearance.height > 0
 }
 
-test.skip(!enabled, 'Runs only through the credentialed production recommendation workflow')
+function requiresPersistedPublicationActivity(importReused: boolean) {
+  return !importReused
+}
+
+test('requires new publication activity telemetry only for a fresh production import', () => {
+  expect(requiresPersistedPublicationActivity(false)).toBe(true)
+  expect(requiresPersistedPublicationActivity(true)).toBe(false)
+})
 
 test('recommendation becomes one readable, taught, and answerable production journey', async ({ page }) => {
+  test.skip(!enabled, 'Runs only through the credentialed production recommendation workflow')
   test.setTimeout(40 * 60_000)
   const username = process.env.RULEPILOT_RECOMMENDATION_USER
   const password = process.env.RULEPILOT_RECOMMENDATION_PASSWORD
@@ -618,10 +626,12 @@ test('recommendation becomes one readable, taught, and answerable production jou
     }
     expect(report.preparationRunCreatedAt, 'The production probe did not observe the real preparation Run')
       .not.toBeNull()
-    expect(report.firstCitedPublicationActivityAt,
-      'The production probe did not observe a persisted source-cited publication activity').not.toBeNull()
-    expect(report.persistedPreparationToFirstCitedActivityMs,
-      'The real preparation-to-first-cited activity duration could not be computed').not.toBeNull()
+    if (requiresPersistedPublicationActivity(completedJob.reused)) {
+      expect(report.firstCitedPublicationActivityAt,
+        'A fresh production import did not persist a source-cited publication activity').not.toBeNull()
+      expect(report.persistedPreparationToFirstCitedActivityMs,
+        'The fresh preparation-to-first-cited activity duration could not be computed').not.toBeNull()
+    }
     if (report.pdfDownloadCompleteMs !== null) {
       report.pdfDownloadToTeachingStartMs = Math.max(
         0,
