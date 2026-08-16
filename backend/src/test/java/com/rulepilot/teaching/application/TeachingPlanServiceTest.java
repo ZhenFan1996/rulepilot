@@ -53,6 +53,62 @@ import org.mockito.ArgumentCaptor;
 class TeachingPlanServiceTest {
 
     @Test
+    void refreshesVisualFactsBeforeAStoredPlanIsReused() {
+        UUID documentVersionId = UUID.randomUUID();
+        UUID assistantRunId = UUID.randomUUID();
+        List<PageView> visualPages = List.of(
+                new PageView(1, "", 0),
+                new PageView(2, "", 0));
+        DocumentProcessing documents = mock(DocumentProcessing.class);
+        DocumentVersionScopeLookup scopes = mock(DocumentVersionScopeLookup.class);
+        VisualRulebookCataloger visualCataloger = mock(VisualRulebookCataloger.class);
+        when(scopes.findVersion(documentVersionId)).thenReturn(Optional.of(new VersionScope(
+                documentVersionId, null, "READY", "alice", "Example Rules")));
+        when(documents.pages(documentVersionId)).thenReturn(visualPages);
+        TeachingPlanService service = new TeachingPlanService(
+                documents,
+                scopes,
+                mock(CatalogEditionLookup.class),
+                visualCataloger,
+                mock(com.rulepilot.teaching.TeachingOutlineModel.class),
+                mock(AuditedAgentInvocations.class),
+                new TeachingPlanFactory(),
+                mock(TeachingPlanRepository.class),
+                mock(TeachingPlanPublication.class));
+
+        service.refreshVisualEvidence(documentVersionId, "alice", assistantRunId);
+
+        verify(visualCataloger).catalogVisualPages(
+                documentVersionId, visualPages, "Example Rules", "alice", assistantRunId);
+    }
+
+    @Test
+    void leavesTextRulebookEvidenceUntouchedDuringAPlanRetry() {
+        UUID documentVersionId = UUID.randomUUID();
+        DocumentProcessing documents = mock(DocumentProcessing.class);
+        DocumentVersionScopeLookup scopes = mock(DocumentVersionScopeLookup.class);
+        VisualRulebookCataloger visualCataloger = mock(VisualRulebookCataloger.class);
+        when(scopes.findVersion(documentVersionId)).thenReturn(Optional.of(new VersionScope(
+                documentVersionId, null, "READY", "alice", "Example Rules")));
+        when(documents.pages(documentVersionId)).thenReturn(List.of(
+                new PageView(1, "Take one action.", 16)));
+        TeachingPlanService service = new TeachingPlanService(
+                documents,
+                scopes,
+                mock(CatalogEditionLookup.class),
+                visualCataloger,
+                mock(com.rulepilot.teaching.TeachingOutlineModel.class),
+                mock(AuditedAgentInvocations.class),
+                new TeachingPlanFactory(),
+                mock(TeachingPlanRepository.class),
+                mock(TeachingPlanPublication.class));
+
+        service.refreshVisualEvidence(documentVersionId, "alice", UUID.randomUUID());
+
+        verifyNoInteractions(visualCataloger);
+    }
+
+    @Test
     void requiresAWholeGameSemanticOutlineBeforePublishingAVisualPlan() {
         UUID documentVersionId = UUID.randomUUID();
         UUID editionId = UUID.randomUUID();

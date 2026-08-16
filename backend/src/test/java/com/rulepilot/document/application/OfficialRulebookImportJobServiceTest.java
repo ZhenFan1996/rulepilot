@@ -15,6 +15,7 @@ import static org.mockito.Mockito.when;
 
 import com.rulepilot.catalog.CatalogEditionLookup;
 import com.rulepilot.catalog.CatalogEditionLanguageConfirmation;
+import com.rulepilot.document.RulebookTeachingEvidenceFreshness;
 import com.rulepilot.document.domain.DocumentSourceType;
 import com.rulepilot.document.domain.DocumentVersion;
 import com.rulepilot.document.domain.OfficialRulebookImportJob;
@@ -452,6 +453,75 @@ class OfficialRulebookImportJobServiceTest {
         assertThat(launch.job().id()).isEqualTo(completed.id());
         assertThat(launch.job().teachingHandoff().state()).isEqualTo(TeachingHandoffState.WAITING_FOR_DOCUMENT);
         verifyNoInteractions(executor, imports);
+    }
+
+    @Test
+    void restartsTeachingWhenAReusedVisualRulebookHasStaleDerivedEvidence() {
+        FakeJobs jobs = new FakeJobs();
+        UUID editionId = automaticTeachingCommand().editionId();
+        UUID documentVersionId = UUID.randomUUID();
+        UUID oldPreparationRunId = UUID.randomUUID();
+        var completed = OfficialRulebookImportJob.queued(
+                UUID.randomUUID(), "alice", editionId, "Example Rules",
+                DocumentSourceType.BASE_RULEBOOK, SOURCE, true, null, NOW);
+        jobs.insert(completed);
+        jobs.complete(completed.id(), documentVersionId, false, NOW);
+        jobs.claimReadyTeachingForDocument(documentVersionId, 1, NOW);
+        jobs.completeTeachingLaunch(completed.id(), oldPreparationRunId, NOW);
+        RulebookTeachingEvidenceFreshness freshness = mock(RulebookTeachingEvidenceFreshness.class);
+        when(freshness.requiresRefresh(documentVersionId, oldPreparationRunId, "alice"))
+                .thenReturn(true);
+        OfficialRulebookImportService imports = mock(OfficialRulebookImportService.class);
+        TaskExecutor executor = mock(TaskExecutor.class);
+        OfficialRulebookImportJobService service = new OfficialRulebookImportJobService(
+                jobs,
+                mock(RuleDocumentRepository.class),
+                imports,
+                executor,
+                (edition, language) -> false,
+                catalog(editionId, GAME_ID, "Opaque Edition", "en"),
+                freshness,
+                Clock.fixed(NOW, ZoneOffset.UTC));
+
+        var launch = service.enqueue(automaticTeachingCommand(), "alice");
+
+        assertThat(launch.reused()).isTrue();
+        assertThat(launch.job().teachingHandoff().state())
+                .isEqualTo(TeachingHandoffState.WAITING_FOR_DOCUMENT);
+        assertThat(launch.job().teachingHandoff().preparationRunId()).isNull();
+        verify(freshness).requiresRefresh(documentVersionId, oldPreparationRunId, "alice");
+        verifyNoInteractions(executor, imports);
+    }
+
+    @Test
+    void keepsAReusedTeachingHandoffWhenItsDerivedEvidenceIsCurrent() {
+        FakeJobs jobs = new FakeJobs();
+        UUID editionId = automaticTeachingCommand().editionId();
+        UUID documentVersionId = UUID.randomUUID();
+        UUID preparationRunId = UUID.randomUUID();
+        var completed = OfficialRulebookImportJob.queued(
+                UUID.randomUUID(), "alice", editionId, "Example Rules",
+                DocumentSourceType.BASE_RULEBOOK, SOURCE, true, null, NOW);
+        jobs.insert(completed);
+        jobs.complete(completed.id(), documentVersionId, false, NOW);
+        jobs.claimReadyTeachingForDocument(documentVersionId, 1, NOW);
+        jobs.completeTeachingLaunch(completed.id(), preparationRunId, NOW);
+        RulebookTeachingEvidenceFreshness freshness = mock(RulebookTeachingEvidenceFreshness.class);
+        OfficialRulebookImportJobService service = new OfficialRulebookImportJobService(
+                jobs,
+                mock(RuleDocumentRepository.class),
+                mock(OfficialRulebookImportService.class),
+                mock(TaskExecutor.class),
+                (edition, language) -> false,
+                catalog(editionId, GAME_ID, "Opaque Edition", "en"),
+                freshness,
+                Clock.fixed(NOW, ZoneOffset.UTC));
+
+        var launch = service.enqueue(automaticTeachingCommand(), "alice");
+
+        assertThat(launch.job().teachingHandoff().state()).isEqualTo(TeachingHandoffState.LAUNCHED);
+        assertThat(launch.job().teachingHandoff().preparationRunId()).isEqualTo(preparationRunId);
+        verify(freshness).requiresRefresh(documentVersionId, preparationRunId, "alice");
     }
 
     @Test

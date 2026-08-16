@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -185,6 +186,10 @@ class TeachingPlanLauncherTest {
                 documentVersionId, learningGoal, "alice", received.id());
         verify(lessons).launchImmediately(existingPlan, "alice");
         verify(runs).advance(received.id(), 3, AssistantRunState.COMPLETED, "Teaching plan is ready");
+        var ordered = inOrder(plans, lessons);
+        ordered.verify(plans).refreshVisualEvidence(documentVersionId, "alice", received.id());
+        ordered.verify(plans).latest(documentVersionId, "alice");
+        ordered.verify(lessons).launchImmediately(existingPlan, "alice");
     }
 
     @Test

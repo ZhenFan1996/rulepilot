@@ -94,6 +94,7 @@ public class TeachingPlanLauncher {
                     current.id(), current.revision(), AssistantRunState.LESSON_PLANNING,
                     "Reading rulebook pages and organizing the lesson");
             RunSnapshot planningRun = current;
+            plans.refreshVisualEvidence(documentVersionId, ownerUsername, planningRun.id());
             long planResolutionStartedAt = System.nanoTime();
             var planResolution = recordPhase("plan-resolution", planResolutionStartedAt, () -> plans.latest(
                             documentVersionId, ownerUsername)

@@ -4,6 +4,7 @@ import com.rulepilot.catalog.CatalogEditionLookup;
 import com.rulepilot.catalog.CatalogEditionLookup.EditionReference;
 import com.rulepilot.catalog.CatalogEditionLanguageConfirmation;
 import com.rulepilot.document.RulebookTeachingHandoffs;
+import com.rulepilot.document.RulebookTeachingEvidenceFreshness;
 import com.rulepilot.document.domain.DocumentSourceType;
 import com.rulepilot.document.domain.OfficialRulebookImportJob;
 import com.rulepilot.document.domain.OfficialRulebookImportJob.TeachingHandoffState;
@@ -37,6 +38,7 @@ public class OfficialRulebookImportJobService implements RulebookTeachingHandoff
     private final TaskExecutor executor;
     private final CatalogEditionLanguageConfirmation editionLanguages;
     private final CatalogEditionLookup catalog;
+    private final RulebookTeachingEvidenceFreshness teachingEvidenceFreshness;
     private final Clock clock;
 
     @Autowired
@@ -46,8 +48,17 @@ public class OfficialRulebookImportJobService implements RulebookTeachingHandoff
             OfficialRulebookImportService imports,
             @Qualifier("officialRulebookImportExecutor") TaskExecutor executor,
             CatalogEditionLanguageConfirmation editionLanguages,
-            CatalogEditionLookup catalog) {
-        this(jobs, documents, imports, executor, editionLanguages, catalog, Clock.systemUTC());
+            CatalogEditionLookup catalog,
+            RulebookTeachingEvidenceFreshness teachingEvidenceFreshness) {
+        this(
+                jobs,
+                documents,
+                imports,
+                executor,
+                editionLanguages,
+                catalog,
+                teachingEvidenceFreshness,
+                Clock.systemUTC());
     }
 
     OfficialRulebookImportJobService(
@@ -57,7 +68,15 @@ public class OfficialRulebookImportJobService implements RulebookTeachingHandoff
             TaskExecutor executor,
             CatalogEditionLookup catalog,
             Clock clock) {
-        this(jobs, documents, imports, executor, (editionId, language) -> false, catalog, clock);
+        this(
+                jobs,
+                documents,
+                imports,
+                executor,
+                (editionId, language) -> false,
+                catalog,
+                RulebookTeachingEvidenceFreshness.alwaysCurrent(),
+                clock);
     }
 
     OfficialRulebookImportJobService(
@@ -68,12 +87,33 @@ public class OfficialRulebookImportJobService implements RulebookTeachingHandoff
             CatalogEditionLanguageConfirmation editionLanguages,
             CatalogEditionLookup catalog,
             Clock clock) {
+        this(
+                jobs,
+                documents,
+                imports,
+                executor,
+                editionLanguages,
+                catalog,
+                RulebookTeachingEvidenceFreshness.alwaysCurrent(),
+                clock);
+    }
+
+    OfficialRulebookImportJobService(
+            OfficialRulebookImportJobRepository jobs,
+            RuleDocumentRepository documents,
+            OfficialRulebookImportService imports,
+            TaskExecutor executor,
+            CatalogEditionLanguageConfirmation editionLanguages,
+            CatalogEditionLookup catalog,
+            RulebookTeachingEvidenceFreshness teachingEvidenceFreshness,
+            Clock clock) {
         this.jobs = jobs;
         this.documents = documents;
         this.imports = imports;
         this.executor = executor;
         this.editionLanguages = editionLanguages;
         this.catalog = catalog;
+        this.teachingEvidenceFreshness = teachingEvidenceFreshness;
         this.clock = clock;
     }
 
@@ -286,9 +326,21 @@ public class OfficialRulebookImportJobService implements RulebookTeachingHandoff
 
     private OfficialRulebookImportJob ensureTeachingRequested(
             OfficialRulebookImportJob job, Command command) {
-        if (!command.startTeaching()
-                || job.teachingHandoff().state() != TeachingHandoffState.NOT_REQUESTED
-                        && job.teachingHandoff().state() != TeachingHandoffState.FAILED) {
+        if (!command.startTeaching()) {
+            return job;
+        }
+        if (job.teachingHandoff().state() == TeachingHandoffState.LAUNCHED
+                && job.documentVersionId() != null
+                && teachingEvidenceFreshness.requiresRefresh(
+                        job.documentVersionId(),
+                        job.teachingHandoff().preparationRunId(),
+                        job.ownerUsername())) {
+            jobs.retryTeaching(
+                    job.id(), job.teachingHandoff().preparationRunId(), Instant.now(clock));
+            return requireOwned(job.id(), job.ownerUsername());
+        }
+        if (job.teachingHandoff().state() != TeachingHandoffState.NOT_REQUESTED
+                && job.teachingHandoff().state() != TeachingHandoffState.FAILED) {
             return job;
         }
         jobs.requestTeaching(job.id(), command.learningGoal(), Instant.now(clock));

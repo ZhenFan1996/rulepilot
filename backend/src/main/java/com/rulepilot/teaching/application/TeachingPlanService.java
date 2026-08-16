@@ -258,6 +258,29 @@ public class TeachingPlanService {
                 outline), outline.gameTitle());
     }
 
+    void refreshVisualEvidence(
+            UUID documentVersionId,
+            String createdBy,
+            UUID assistantRunId) {
+        var scope = documentScopes.findVersion(documentVersionId)
+                .filter(found -> found.createdBy().equals(createdBy))
+                .orElseThrow(() -> new IllegalArgumentException("rule document does not exist"));
+        if (!"READY".equals(scope.processingStatus())) {
+            throw new IllegalArgumentException("rule document is not ready for teaching");
+        }
+        var documentPages = documents.pages(documentVersionId);
+        boolean visualOnly = !documentPages.isEmpty()
+                && documentPages.stream().allMatch(page -> page.text() == null || page.text().isBlank());
+        if (visualOnly) {
+            visualCataloger.catalogVisualPages(
+                    documentVersionId,
+                    documentPages,
+                    scope.documentTitle(),
+                    createdBy,
+                    assistantRunId);
+        }
+    }
+
     private static boolean hasStructuredSourceDependencies(List<PageInput> pages) {
         return pages.stream().anyMatch(page -> !page.sourceDependencies().isEmpty());
     }
