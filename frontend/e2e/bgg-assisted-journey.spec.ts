@@ -136,6 +136,77 @@ test('covers attributed discovery, official PDF intake, and explicit metadata co
   await expect(page).toHaveURL('/lesson/plan-1/questions')
 })
 
+test('keeps requested and displayed rulebook pages atomic across slow, failed, and out-of-order images', async ({ page }) => {
+  let releaseSecond!: () => void
+  let releaseThird!: () => void
+  const secondGate = new Promise<void>((resolve) => { releaseSecond = resolve })
+  const thirdGate = new Promise<void>((resolve) => { releaseThird = resolve })
+  let fourthAttempts = 0
+  await mockOnboardingApis(page, { recommendations: [hotGame], suggestions: [candidate] })
+  await page.route('**/api/v1/document-versions/version-1/pages', route => route.fulfill({ json: [
+    { pageNumber: 1, text: 'First opaque rule page.', characterCount: 23 },
+    { pageNumber: 2, text: 'Second opaque rule page.', characterCount: 24 },
+    { pageNumber: 3, text: 'Third opaque rule page.', characterCount: 23 },
+    { pageNumber: 4, text: 'Fourth opaque rule page.', characterCount: 24 },
+  ] }))
+  await page.route('**/api/v1/document-versions/version-1/pages/*/image', async (route) => {
+    const match = new URL(route.request().url()).pathname.match(/\/pages\/(\d+)\/image$/)
+    const pageNumber = Number(match?.[1])
+    if (pageNumber === 2) await secondGate
+    if (pageNumber === 3) await thirdGate
+    if (pageNumber === 4 && ++fourthAttempts === 1) return route.fulfill({ status: 503 })
+    await route.fulfill({
+      status: 200,
+      contentType: 'image/svg+xml',
+      body: `<svg xmlns="http://www.w3.org/2000/svg" width="800" height="1100"><rect width="100%" height="100%" fill="#fffaf2"/><text x="60" y="100" font-size="42">PAGE ${pageNumber}</text></svg>`,
+    }).catch(() => undefined)
+  })
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  await page.setViewportSize({ width: 1440, height: 900 })
+
+  await page.goto('/rulebooks/version-1')
+  const displayedImage = page.getByTestId('rulebook-page-image')
+  const pageStatus = page.getByTestId('rulebook-page-status')
+  await expect(displayedImage).toHaveAttribute('alt', '规则书第 1 页')
+  await expect(pageStatus).toContainText('第 1 页已显示')
+
+  await page.locator('button[data-page-number="2"]').click()
+  await expect(pageStatus).toContainText('正在加载第 2 页')
+  await expect(displayedImage).toHaveCount(0)
+  await expect(page.locator('button[data-page-number="2"]')).toHaveAttribute('aria-busy', 'true')
+
+  await page.locator('button[data-page-number="3"]').click()
+  await expect(pageStatus).toContainText('正在加载第 3 页')
+  releaseSecond()
+  await expect(pageStatus).toContainText('正在加载第 3 页')
+  await expect(displayedImage).toHaveCount(0)
+
+  releaseThird()
+  await expect(displayedImage).toHaveAttribute('src', '/api/v1/document-versions/version-1/pages/3/image')
+  await expect(displayedImage).toHaveAttribute('alt', '规则书第 3 页')
+  await expect(page.locator('button[data-page-number="3"]')).toHaveAttribute('aria-current', 'page')
+
+  await page.locator('button[data-page-number="4"]').click()
+  await expect(pageStatus).toContainText('第 4 页暂时无法显示')
+  await expect(pageStatus).toHaveAttribute('role', 'alert')
+  await expect(displayedImage).toHaveCount(0)
+  await expect(page.getByRole('link', { name: '在新标签页打开原页' })).toHaveAttribute(
+    'href', '/api/v1/document-versions/version-1/pages/4/image',
+  )
+  await page.getByRole('button', { name: '重试这一页' }).click()
+  await expect(displayedImage).toHaveAttribute('alt', '规则书第 4 页')
+
+  await page.locator('button[data-page-number="4"]').focus()
+  await page.keyboard.press('Home')
+  await expect(page.locator('button[data-page-number="1"]')).toBeFocused()
+  await expect(displayedImage).toHaveAttribute('alt', '规则书第 1 页')
+  const persistedPageImage = await page.evaluate(() => JSON.stringify({
+    local: { ...localStorage },
+    session: { ...sessionStorage },
+  }))
+  expect(persistedPageImage).not.toContain('/pages/')
+})
+
 test('keeps the game identity and primary action in proportion on mobile', async ({ page }) => {
   await mockOnboardingApis(page, { recommendations: [hotGame], suggestions: [candidate] })
   await page.setViewportSize({ width: 390, height: 844 })

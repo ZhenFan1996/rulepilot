@@ -77,6 +77,7 @@ describe('RulebookReaderView', () => {
 
     expect(wrapper.text()).toContain('测试规则书')
     expect(wrapper.text()).toContain('2 页')
+    await wrapper.get('[data-testid="rulebook-page-loader"]').trigger('load')
     expect(wrapper.get('img[alt="规则书第 1 页"]').attributes('src'))
       .toBe('/api/v1/document-versions/version-1/pages/1/image')
     expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/teaching-plans'))).toBe(false)
@@ -92,6 +93,53 @@ describe('RulebookReaderView', () => {
       question: '开局先做什么？', language: 'zh-CN',
     })
     expect(wrapper.text()).toContain('先放置玩家牌。')
+  })
+
+  it('does not announce a requested page as displayed until that exact image has loaded', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const path = String(input)
+      if (path.endsWith('/api/v1/document-versions/version-1/pages')) return Response.json([
+        { pageNumber: 5, text: 'Current page', characterCount: 700 },
+        { pageNumber: 6, text: 'Requested page', characterCount: 810 },
+      ])
+      if (path.endsWith('/api/v1/documents')) return Response.json([{
+        document: { title: 'Opaque Rulebook' },
+        latestVersion: { id: 'version-1', status: 'READY', originalFilename: 'rules.pdf' },
+      }])
+      if (path.endsWith('/api/auth/session')) return Response.json({ username: 'player' })
+      return new Response(null, { status: 404 })
+    }))
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: '/teach', name: 'teach', component: { template: '<div />' } },
+        { path: '/rulebooks/:versionId', name: 'rulebook-reader', component: RulebookReaderView },
+      ],
+    })
+    await router.push('/rulebooks/version-1')
+    await router.isReady()
+    const wrapper = mount(RulebookReaderView, {
+      global: {
+        plugins: [router],
+        stubs: { AppShell: { template: '<div><slot /></div>' }, BackgroundWorkCenter: true },
+      },
+    })
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="rulebook-page-status"]').text()).toContain('正在加载第 5 页')
+    await wrapper.get('[data-testid="rulebook-page-loader"]').trigger('load')
+    expect(wrapper.get('[data-testid="rulebook-page-image"]').attributes('alt')).toBe('规则书第 5 页')
+
+    await wrapper.get('button[data-page-number="6"]').trigger('click')
+    expect(wrapper.find('[data-testid="rulebook-page-image"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="rulebook-page-status"]').text()).toContain('正在加载第 6 页')
+    expect(wrapper.get('button[data-page-number="6"]').attributes('aria-busy')).toBe('true')
+    expect(wrapper.find('img[alt="规则书第 6 页"]').exists()).toBe(false)
+
+    await wrapper.get('[data-testid="rulebook-page-loader"]').trigger('load')
+    expect(wrapper.get('[data-testid="rulebook-page-image"]').attributes('alt')).toBe('规则书第 6 页')
+    expect(wrapper.get('button[data-page-number="6"]').attributes('aria-current')).toBe('page')
+    wrapper.unmount()
   })
 
   it('confirms before clearing only the current browser thread and preserves the draft', async () => {

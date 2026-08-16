@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, onMounted, onUnmounted, ref, watch } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 
 import AppShell from '@/components/AppShell.vue'
 import ConversationResetDialog from '@/components/ConversationResetDialog.vue'
 import LessonAnswerPanel from '@/components/LessonAnswerPanel.vue'
+import RulebookPageViewer from '@/components/RulebookPageViewer.vue'
 import { useConfirmedRuling } from '@/composables/useConfirmedRuling'
 import { useLessonAnswers, type CsrfResponse } from '@/composables/useLessonAnswers'
 import { useLessonQuestionInput } from '@/composables/useLessonQuestionInput'
@@ -32,7 +33,6 @@ const workspaceId = computed(() => `rulebook:${versionId.value}`)
 const title = ref('')
 const filename = ref('')
 const pages = ref<RulebookPage[]>([])
-const selectedPage = ref(1)
 const loading = ref(true)
 const errorMessage = ref('')
 const username = ref('')
@@ -42,7 +42,6 @@ const cardOcrOpen = ref(false)
 const answerPanel = ref<{ focusQuestion?: () => void } | null>(null)
 const resetDialogOpen = ref(false)
 const restoreAfterReset = ref(false)
-const readerTop = ref<HTMLElement | null>(null)
 const answersDialog = ref<HTMLElement | null>(null)
 let loadSequence = 0
 let disposed = false
@@ -54,15 +53,13 @@ useModalFocus({
 })
 
 const copy = computed(() => locale.value === 'zh-CN' ? {
-  back: '返回规则书', eyebrow: '原规则书', pages: `${pages.value.length} 页`, page: (value: number) => `第 ${value} 页`,
+  back: '返回规则书', eyebrow: '原规则书', pages: `${pages.value.length} 页`,
   loading: '正在打开规则书…', error: '暂时无法打开这本规则书。', retry: '重试',
   answer: '基于这本规则书答疑', close: '关闭答疑', hint: '讲解不是必经步骤；你可以边读边问。',
-  imageAlt: (value: number) => `规则书第 ${value} 页`, extracted: (count: number) => `已识别 ${count} 个字符`,
 } : {
-  back: 'Back to rulebooks', eyebrow: 'Original rulebook', pages: `${pages.value.length} pages`, page: (value: number) => `Page ${value}`,
+  back: 'Back to rulebooks', eyebrow: 'Original rulebook', pages: `${pages.value.length} pages`,
   loading: 'Opening the rulebook…', error: 'This rulebook cannot be opened right now.', retry: 'Retry',
   answer: 'Ask from this rulebook', close: 'Close questions', hint: 'A generated lesson is optional. Read and ask as you go.',
-  imageAlt: (value: number) => `Rulebook page ${value}`, extracted: (count: number) => `${count} characters indexed`,
 })
 
 function isCurrentLoad(sequence: number, target: string) {
@@ -199,7 +196,6 @@ async function loadRulebook() {
     pages.value = loadedPages
     title.value = matched.document.title
     filename.value = matched.latestVersion.originalFilename
-    selectedPage.value = Math.min(Math.max(selectedPage.value, 1), loadedPages.length)
     if (sessionResponse.ok) {
       const session = await sessionResponse.json() as { username?: unknown }
       username.value = typeof session.username === 'string' ? session.username.trim() : ''
@@ -211,12 +207,6 @@ async function loadRulebook() {
   } finally {
     if (isCurrentLoad(sequence, target)) loading.value = false
   }
-}
-
-async function selectPage(pageNumber: number) {
-  selectedPage.value = pageNumber
-  await nextTick()
-  readerTop.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
 }
 
 function updateOnline() { online.value = navigator.onLine }
@@ -257,32 +247,13 @@ onUnmounted(() => {
         </div>
       </header>
 
-      <div ref="readerTop" class="mx-auto grid max-w-[100rem] scroll-mt-20 gap-4 px-3 py-4 sm:px-6 lg:grid-cols-[12rem_minmax(0,1fr)]">
-        <p v-if="loading" class="col-span-full rounded-xl bg-paper p-8 text-center text-sm text-ink/55" role="status">{{ copy.loading }}</p>
-        <section v-else-if="errorMessage" class="col-span-full rounded-xl border border-red-200 bg-paper p-8 text-center" role="alert">
+      <div class="mx-auto max-w-[100rem] px-3 py-4 sm:px-6">
+        <p v-if="loading" class="rounded-xl bg-paper p-8 text-center text-sm text-ink/55" role="status">{{ copy.loading }}</p>
+        <section v-else-if="errorMessage" class="rounded-xl border border-red-200 bg-paper p-8 text-center" role="alert">
           <p class="font-semibold">{{ errorMessage }}</p>
           <button type="button" class="mt-4 min-h-11 rounded-lg bg-indigo px-5 text-sm font-semibold text-white" @click="loadRulebook">{{ copy.retry }}</button>
         </section>
-        <template v-else>
-          <aside class="order-2 lg:order-1">
-            <p class="tabletop-kicker px-1">{{ copy.eyebrow }}</p>
-            <ol class="mt-3 grid grid-cols-4 gap-2 sm:grid-cols-6 lg:grid-cols-2">
-              <li v-for="page in pages" :key="page.pageNumber">
-                <button type="button" class="w-full rounded-lg border bg-paper px-2 py-3 text-left text-xs transition" :class="selectedPage === page.pageNumber ? 'border-copper ring-2 ring-copper/20' : 'border-ink/10 hover:border-indigo/30'" @click="selectPage(page.pageNumber)">
-                  <span class="block font-bold">{{ copy.page(page.pageNumber) }}</span>
-                  <span class="mt-1 block text-[0.65rem] text-ink/40">{{ copy.extracted(page.characterCount) }}</span>
-                </button>
-              </li>
-            </ol>
-          </aside>
-
-          <section class="order-1 min-w-0 lg:order-2" aria-live="polite">
-            <div class="mx-auto max-w-5xl rounded-lg bg-white p-2 shadow-2xl shadow-ink/20 sm:p-4">
-              <img :src="`/api/v1/document-versions/${encodeURIComponent(versionId)}/pages/${selectedPage}/image`" :alt="copy.imageAlt(selectedPage)" class="mx-auto h-auto max-h-[calc(100vh-9rem)] w-auto max-w-full object-contain">
-            </div>
-            <p class="mx-auto mt-3 max-w-5xl text-center text-xs text-ink/50">{{ copy.page(selectedPage) }} · {{ copy.hint }}</p>
-          </section>
-        </template>
+        <RulebookPageViewer v-else :version-id="versionId" :pages="pages" :eyebrow="copy.eyebrow" :hint="copy.hint" />
       </div>
 
       <button v-if="!answersOpen && !loading && !errorMessage" type="button" class="fixed bottom-5 right-4 z-30 min-h-12 rounded-full bg-copper px-5 text-sm font-bold text-white shadow-xl sm:right-6" @click="answersOpen = true">{{ copy.answer }}</button>
