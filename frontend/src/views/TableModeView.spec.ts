@@ -52,13 +52,29 @@ describe('TableModeView answer status', () => {
     finishAnswer!(Response.json({
       conversationTurnId: 'turn-1',
       answer: {
-        status: 'ANSWERED_WITH_WARNING', shortVerdict: '先结算这个效果。', explanation: '引用的条目要求先结算。', citations: [], exceptions: [],
-        confidence: 'LOW', clarification: null, warnings: [{ type: 'LOW_CONFIDENCE' }],
+        status: 'ANSWERED_WITH_WARNING', shortVerdict: '先结算这个效果。', explanation: '引用的条目要求先结算。',
+        citations: [{ heading: '结算顺序', excerpt: '先结算当前效果，再继续行动。', pageFrom: 8, pageTo: 8 }],
+        exceptions: [], confidence: 'LOW', answerBasis: 'DIRECT_RULE', language: 'zh-CN', source: 'UPLOADED',
+        clarification: null, recovery: null, warnings: [{ type: 'LOW_CONFIDENCE' }],
+        timingResolutions: [{
+          timingContext: '两个效果同时触发',
+          resolutionOrder: '先处理当前玩家的效果，再按顺时针继续',
+          orderSource: '当前玩家选择规则',
+          basis: 'CURRENT_PLAYER_CHOOSES',
+        }],
+        conceptComparisons: [{
+          leftConcept: '触发', leftDefinition: '条件满足时进入待结算状态',
+          rightConcept: '结算', rightDefinition: '实际执行效果',
+          commonGround: '都属于同一次效果处理', keyDifference: '触发先发生，结算随后执行',
+          practicalBoundary: '触发时只登记效果，结算时才改变桌面状态', basis: 'ACTION_WINDOW',
+        }],
       },
     }))
     await flushPromises()
 
     expect(wrapper.text()).toContain('这条结论的依据还不够稳妥，请结合规则原文确认。')
+    expect(wrapper.get('[data-testid="player-facing-structured-answer-details"]').text()).toContain('先处理当前玩家的效果，再按顺时针继续')
+    expect(wrapper.get('[data-testid="player-facing-structured-answer-details"]').text()).toContain('都属于同一次效果处理')
     expect(wrapper.text()).not.toContain('模型')
     wrapper.unmount()
   })

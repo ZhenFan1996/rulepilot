@@ -12,6 +12,7 @@ import com.rulepilot.assistant.QuestionUnderstanding;
 import com.rulepilot.assistant.QuestionUnderstanding.QuestionContext;
 import com.rulepilot.assistant.RuleAnswering;
 import com.rulepilot.assistant.RuleAnswerModel;
+import com.rulepilot.assistant.RuleAnswerModel.AnswerAid;
 import com.rulepilot.assistant.RuleAnswerModel.ModelDraft;
 import com.rulepilot.assistant.RuleAnswerModel.ModelRequest;
 import com.rulepilot.assistant.RuleAnswerModel.QuestionInterpretationRequest;
@@ -33,6 +34,7 @@ import com.rulepilot.assistant.domain.StructuredRuleAnswer;
 import com.rulepilot.assistant.domain.UnderstoodQuestion;
 import com.rulepilot.document.RuleDataVersion;
 import com.rulepilot.retrieval.AnswerEvidenceRetriever;
+import com.rulepilot.retrieval.AnswerRetrievalQueryRewriter;
 import com.rulepilot.retrieval.HybridRuleSearch;
 import com.rulepilot.retrieval.RuleEvidenceLookup;
 import com.rulepilot.retrieval.VisualRulebookPageFactSearch;
@@ -127,7 +129,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                 visualFacts,
                 evidenceLookup,
                 new AuditedAnswerRetrievalInvocations(invocations),
-                new ModelAnswerRetrievalQueryRewriter(modelGateway));
+                AnswerRetrievalQueryRewriter.none());
         this.evidenceRefiner = evidenceRefiner;
         this.modelRequestFactory = new AnswerModelRequestFactory();
         this.cache = cache;
@@ -495,370 +497,50 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                     draftResult.failureMessage());
         }
         ModelDraft draft = draftResult.draft();
-        List<RuleWalkthroughStep> walkthroughSteps;
+        boolean modelRepairUsed = draftResult.modelRepairs() > 0;
+        StructuredDetails details;
         try {
-            walkthroughSteps = resolveWalkthrough(assistantRunId, modelRequest, draft);
-        } catch (RuntimeException rejectedWalkthrough) {
-            draftResult = draftComposer.repairAfterWalkthroughFailure(
+            details = resolveStructuredDetails(assistantRunId, modelRequest, draft);
+        } catch (RuntimeException rejectedDetails) {
+            if (modelRepairUsed) {
+                return invalidStructuredDetails(context.documentVersionId(), modelRequest.answerAid());
+            }
+            draftResult = repairSelectedStructuredDetails(
                     assistantRunId, username, gameSessionId, modelRequest, draft);
             if (!draftResult.ready()) {
                 return safe(context.documentVersionId(), draftResult.failureStatus(), draftResult.failureMessage());
             }
+            modelRepairUsed = true;
             draft = draftResult.draft();
             try {
-                walkthroughSteps = resolveWalkthrough(assistantRunId, modelRequest, draft);
-            } catch (RuntimeException repeatedWalkthroughFailure) {
-                return safe(
-                        context.documentVersionId(),
-                        AnswerStatus.INVALID_MODEL_OUTPUT,
-                        "分步讲解未通过顺序标记或引用校验。");
-            }
-        }
-        List<RuleSituationCheck> situationChecks;
-        List<RuleDecisionBranch> decisionBranches;
-        List<RuleExceptionClause> exceptionClauses;
-        List<RuleTermDefinition> termDefinitions;
-        List<RuleWorkedExample> workedExamples;
-        List<com.rulepilot.assistant.domain.RulePriorityResolution> priorityResolutions;
-        List<com.rulepilot.assistant.domain.RuleTimingResolution> timingResolutions;
-        List<com.rulepilot.assistant.domain.RuleTieResolution> tieResolutions;
-        List<com.rulepilot.assistant.domain.RuleScopeResolution> scopeResolutions;
-        List<com.rulepilot.assistant.domain.RuleConceptComparison> conceptComparisons;
-        List<com.rulepilot.assistant.domain.RuleOption> ruleOptions;
-        try {
-            decisionBranches = resolveDecisionTable(assistantRunId, modelRequest, draft);
-        } catch (RuntimeException rejectedDecisionTable) {
-            draftResult = draftComposer.repairAfterDecisionTableFailure(
-                    assistantRunId, username, gameSessionId, modelRequest, draft);
-            if (!draftResult.ready()) {
-                return safe(context.documentVersionId(), draftResult.failureStatus(), draftResult.failureMessage());
-            }
-            draft = draftResult.draft();
-            try {
-                walkthroughSteps = resolveWalkthrough(assistantRunId, modelRequest, draft);
-                decisionBranches = resolveDecisionTable(assistantRunId, modelRequest, draft);
-            } catch (RuntimeException repeatedDecisionTableFailure) {
-                return safe(
-                        context.documentVersionId(),
-                        AnswerStatus.INVALID_MODEL_OUTPUT,
-                        "条件分支未通过结果来源或引用校验。");
-            }
-        }
-        try {
-            exceptionClauses = resolveExceptionClauses(assistantRunId, modelRequest, draft);
-        } catch (RuntimeException rejectedExceptionClauses) {
-            draftResult = draftComposer.repairAfterExceptionClauseFailure(
-                    assistantRunId, username, gameSessionId, modelRequest, draft);
-            if (!draftResult.ready()) {
-                return safe(context.documentVersionId(), draftResult.failureStatus(), draftResult.failureMessage());
-            }
-            draft = draftResult.draft();
-            try {
-                walkthroughSteps = resolveWalkthrough(assistantRunId, modelRequest, draft);
-                decisionBranches = resolveDecisionTable(assistantRunId, modelRequest, draft);
-                exceptionClauses = resolveExceptionClauses(assistantRunId, modelRequest, draft);
-            } catch (RuntimeException repeatedExceptionFailure) {
-                return safe(
-                        context.documentVersionId(),
-                        AnswerStatus.INVALID_MODEL_OUTPUT,
-                        "例外和限制未通过条件、效果或引用校验。");
-            }
-        }
-        try {
-            termDefinitions = resolveTermDefinitions(assistantRunId, modelRequest, draft);
-        } catch (RuntimeException rejectedDefinitions) {
-            draftResult = draftComposer.repairAfterTermDefinitionFailure(
-                    assistantRunId, username, gameSessionId, modelRequest, draft);
-            if (!draftResult.ready()) {
-                return safe(context.documentVersionId(), draftResult.failureStatus(), draftResult.failureMessage());
-            }
-            draft = draftResult.draft();
-            try {
-                walkthroughSteps = resolveWalkthrough(assistantRunId, modelRequest, draft);
-                decisionBranches = resolveDecisionTable(assistantRunId, modelRequest, draft);
-                exceptionClauses = resolveExceptionClauses(assistantRunId, modelRequest, draft);
-                termDefinitions = resolveTermDefinitions(assistantRunId, modelRequest, draft);
-            } catch (RuntimeException repeatedDefinitionFailure) {
-                return safe(
-                        context.documentVersionId(),
-                        AnswerStatus.INVALID_MODEL_OUTPUT,
-                        "术语定义未通过定义边界或引用校验。");
-            }
-        }
-        try {
-            workedExamples = resolveWorkedExamples(assistantRunId, modelRequest, draft);
-        } catch (RuntimeException rejectedExamples) {
-            draftResult = draftComposer.repairAfterWorkedExampleFailure(
-                    assistantRunId, username, gameSessionId, modelRequest, draft);
-            if (!draftResult.ready()) {
-                return safe(context.documentVersionId(), draftResult.failureStatus(), draftResult.failureMessage());
-            }
-            draft = draftResult.draft();
-            try {
-                walkthroughSteps = resolveWalkthrough(assistantRunId, modelRequest, draft);
-                decisionBranches = resolveDecisionTable(assistantRunId, modelRequest, draft);
-                exceptionClauses = resolveExceptionClauses(assistantRunId, modelRequest, draft);
-                termDefinitions = resolveTermDefinitions(assistantRunId, modelRequest, draft);
-                workedExamples = resolveWorkedExamples(assistantRunId, modelRequest, draft);
-            } catch (RuntimeException repeatedExampleFailure) {
-                return safe(
-                        context.documentVersionId(),
-                        AnswerStatus.INVALID_MODEL_OUTPUT,
-                        "规则示例未通过起始状态、动作、结果或引用校验。");
-            }
-        }
-        try {
-            priorityResolutions = resolveRulePriority(assistantRunId, modelRequest, draft);
-        } catch (RuntimeException rejectedPriority) {
-            draftResult = draftComposer.repairAfterRulePriorityFailure(
-                    assistantRunId, username, gameSessionId, modelRequest, draft);
-            if (!draftResult.ready()) {
-                return safe(context.documentVersionId(), draftResult.failureStatus(), draftResult.failureMessage());
-            }
-            draft = draftResult.draft();
-            try {
-                walkthroughSteps = resolveWalkthrough(assistantRunId, modelRequest, draft);
-                decisionBranches = resolveDecisionTable(assistantRunId, modelRequest, draft);
-                exceptionClauses = resolveExceptionClauses(assistantRunId, modelRequest, draft);
-                termDefinitions = resolveTermDefinitions(assistantRunId, modelRequest, draft);
-                workedExamples = resolveWorkedExamples(assistantRunId, modelRequest, draft);
-                priorityResolutions = resolveRulePriority(assistantRunId, modelRequest, draft);
-            } catch (RuntimeException repeatedPriorityFailure) {
-                return safe(
-                        context.documentVersionId(),
-                        AnswerStatus.INVALID_MODEL_OUTPUT,
-                        "规则冲突检查未通过适用范围、优先级或引用校验。");
-            }
-        }
-        try {
-            timingResolutions = resolveTiming(assistantRunId, modelRequest, draft);
-        } catch (RuntimeException rejectedTiming) {
-            draftResult = draftComposer.repairAfterTimingFailure(
-                    assistantRunId, username, gameSessionId, modelRequest, draft);
-            if (!draftResult.ready()) {
-                return safe(context.documentVersionId(), draftResult.failureStatus(), draftResult.failureMessage());
-            }
-            draft = draftResult.draft();
-            try {
-                walkthroughSteps = resolveWalkthrough(assistantRunId, modelRequest, draft);
-                decisionBranches = resolveDecisionTable(assistantRunId, modelRequest, draft);
-                exceptionClauses = resolveExceptionClauses(assistantRunId, modelRequest, draft);
-                termDefinitions = resolveTermDefinitions(assistantRunId, modelRequest, draft);
-                workedExamples = resolveWorkedExamples(assistantRunId, modelRequest, draft);
-                priorityResolutions = resolveRulePriority(assistantRunId, modelRequest, draft);
-                timingResolutions = resolveTiming(assistantRunId, modelRequest, draft);
-            } catch (RuntimeException repeatedTimingFailure) {
-                return safe(
-                        context.documentVersionId(),
-                        AnswerStatus.INVALID_MODEL_OUTPUT,
-                        "时序裁决未通过情境、顺序、来源或引用校验。");
-            }
-        }
-        try {
-            tieResolutions = resolveTies(assistantRunId, modelRequest, draft);
-        } catch (RuntimeException rejectedTie) {
-            draftResult = draftComposer.repairAfterTieFailure(
-                    assistantRunId, username, gameSessionId, modelRequest, draft);
-            if (!draftResult.ready()) {
-                return safe(context.documentVersionId(), draftResult.failureStatus(), draftResult.failureMessage());
-            }
-            draft = draftResult.draft();
-            try {
-                walkthroughSteps = resolveWalkthrough(assistantRunId, modelRequest, draft);
-                decisionBranches = resolveDecisionTable(assistantRunId, modelRequest, draft);
-                exceptionClauses = resolveExceptionClauses(assistantRunId, modelRequest, draft);
-                termDefinitions = resolveTermDefinitions(assistantRunId, modelRequest, draft);
-                workedExamples = resolveWorkedExamples(assistantRunId, modelRequest, draft);
-                priorityResolutions = resolveRulePriority(assistantRunId, modelRequest, draft);
-                timingResolutions = resolveTiming(assistantRunId, modelRequest, draft);
-                tieResolutions = resolveTies(assistantRunId, modelRequest, draft);
-            } catch (RuntimeException repeatedTieFailure) {
-                return safe(
-                        context.documentVersionId(),
-                        AnswerStatus.INVALID_MODEL_OUTPUT,
-                        "平局判定未通过步骤、最终结果或引用校验。");
-            }
-        }
-        try {
-            scopeResolutions = resolveScope(assistantRunId, modelRequest, draft);
-        } catch (RuntimeException rejectedScope) {
-            draftResult = draftComposer.repairAfterScopeFailure(
-                    assistantRunId, username, gameSessionId, modelRequest, draft);
-            if (!draftResult.ready()) {
-                return safe(context.documentVersionId(), draftResult.failureStatus(), draftResult.failureMessage());
-            }
-            draft = draftResult.draft();
-            try {
-                walkthroughSteps = resolveWalkthrough(assistantRunId, modelRequest, draft);
-                decisionBranches = resolveDecisionTable(assistantRunId, modelRequest, draft);
-                exceptionClauses = resolveExceptionClauses(assistantRunId, modelRequest, draft);
-                termDefinitions = resolveTermDefinitions(assistantRunId, modelRequest, draft);
-                workedExamples = resolveWorkedExamples(assistantRunId, modelRequest, draft);
-                priorityResolutions = resolveRulePriority(assistantRunId, modelRequest, draft);
-                timingResolutions = resolveTiming(assistantRunId, modelRequest, draft);
-                tieResolutions = resolveTies(assistantRunId, modelRequest, draft);
-                scopeResolutions = resolveScope(assistantRunId, modelRequest, draft);
-            } catch (RuntimeException repeatedScopeFailure) {
-                return safe(
-                        context.documentVersionId(),
-                        AnswerStatus.INVALID_MODEL_OUTPUT,
-                        "规则适用范围未通过条件、当前局面或引用校验。");
-            }
-        }
-        try {
-            conceptComparisons = resolveConceptComparisons(assistantRunId, modelRequest, draft);
-        } catch (RuntimeException rejectedComparison) {
-            draftResult = draftComposer.repairAfterConceptComparisonFailure(
-                    assistantRunId, username, gameSessionId, modelRequest, draft);
-            if (!draftResult.ready()) {
-                return safe(context.documentVersionId(), draftResult.failureStatus(), draftResult.failureMessage());
-            }
-            draft = draftResult.draft();
-            try {
-                walkthroughSteps = resolveWalkthrough(assistantRunId, modelRequest, draft);
-                decisionBranches = resolveDecisionTable(assistantRunId, modelRequest, draft);
-                exceptionClauses = resolveExceptionClauses(assistantRunId, modelRequest, draft);
-                termDefinitions = resolveTermDefinitions(assistantRunId, modelRequest, draft);
-                workedExamples = resolveWorkedExamples(assistantRunId, modelRequest, draft);
-                priorityResolutions = resolveRulePriority(assistantRunId, modelRequest, draft);
-                timingResolutions = resolveTiming(assistantRunId, modelRequest, draft);
-                tieResolutions = resolveTies(assistantRunId, modelRequest, draft);
-                scopeResolutions = resolveScope(assistantRunId, modelRequest, draft);
-                conceptComparisons = resolveConceptComparisons(assistantRunId, modelRequest, draft);
-            } catch (RuntimeException repeatedComparisonFailure) {
-                return safe(
-                        context.documentVersionId(),
-                        AnswerStatus.INVALID_MODEL_OUTPUT,
-                        "规则概念对比未通过定义、边界或引用校验。");
-            }
-        }
-        try {
-            situationChecks = resolveSituationChecks(assistantRunId, modelRequest, draft);
-        } catch (RuntimeException rejectedSituationCheck) {
-            draftResult = draftComposer.repairAfterSituationCheckFailure(
-                    assistantRunId, username, gameSessionId, modelRequest, draft);
-            if (!draftResult.ready()) {
-                return safe(context.documentVersionId(), draftResult.failureStatus(), draftResult.failureMessage());
-            }
-            draft = draftResult.draft();
-            try {
-                walkthroughSteps = resolveWalkthrough(assistantRunId, modelRequest, draft);
-                decisionBranches = resolveDecisionTable(assistantRunId, modelRequest, draft);
-                exceptionClauses = resolveExceptionClauses(assistantRunId, modelRequest, draft);
-                termDefinitions = resolveTermDefinitions(assistantRunId, modelRequest, draft);
-                workedExamples = resolveWorkedExamples(assistantRunId, modelRequest, draft);
-                priorityResolutions = resolveRulePriority(assistantRunId, modelRequest, draft);
-                timingResolutions = resolveTiming(assistantRunId, modelRequest, draft);
-                tieResolutions = resolveTies(assistantRunId, modelRequest, draft);
-                scopeResolutions = resolveScope(assistantRunId, modelRequest, draft);
-                conceptComparisons = resolveConceptComparisons(assistantRunId, modelRequest, draft);
-                situationChecks = resolveSituationChecks(assistantRunId, modelRequest, draft);
-            } catch (RuntimeException repeatedSituationFailure) {
-                return safe(
-                        context.documentVersionId(),
-                        AnswerStatus.INVALID_MODEL_OUTPUT,
-                        "局面条件未通过玩家输入或引用校验。");
-            }
-        }
-        List<RuleCalculation> calculations;
-        try {
-            calculations = resolveCalculations(assistantRunId, modelRequest, draft);
-        } catch (RuntimeException rejectedCalculation) {
-            draftResult = draftComposer.repairAfterCalculationFailure(
-                    assistantRunId, username, gameSessionId, modelRequest, draft);
-            if (!draftResult.ready()) {
-                return safe(context.documentVersionId(), draftResult.failureStatus(), draftResult.failureMessage());
-            }
-            draft = draftResult.draft();
-            try {
-                walkthroughSteps = resolveWalkthrough(assistantRunId, modelRequest, draft);
-                decisionBranches = resolveDecisionTable(assistantRunId, modelRequest, draft);
-                exceptionClauses = resolveExceptionClauses(assistantRunId, modelRequest, draft);
-                termDefinitions = resolveTermDefinitions(assistantRunId, modelRequest, draft);
-                workedExamples = resolveWorkedExamples(assistantRunId, modelRequest, draft);
-                priorityResolutions = resolveRulePriority(assistantRunId, modelRequest, draft);
-                timingResolutions = resolveTiming(assistantRunId, modelRequest, draft);
-                tieResolutions = resolveTies(assistantRunId, modelRequest, draft);
-                scopeResolutions = resolveScope(assistantRunId, modelRequest, draft);
-                conceptComparisons = resolveConceptComparisons(assistantRunId, modelRequest, draft);
-                situationChecks = resolveSituationChecks(assistantRunId, modelRequest, draft);
-                calculations = resolveCalculations(assistantRunId, modelRequest, draft);
-            } catch (RuntimeException repeatedCalculationFailure) {
-                return safe(
-                        context.documentVersionId(),
-                        AnswerStatus.INVALID_MODEL_OUTPUT,
-                        "规则计算未通过输入来源或表达式校验。");
-            }
-        }
-        try {
-            ruleOptions = resolveRuleOptions(assistantRunId, modelRequest, draft);
-        } catch (RuntimeException rejectedOptions) {
-            draftResult = draftComposer.repairAfterRuleOptionFailure(
-                    assistantRunId, username, gameSessionId, modelRequest, draft);
-            if (!draftResult.ready()) {
-                return safe(context.documentVersionId(), draftResult.failureStatus(), draftResult.failureMessage());
-            }
-            draft = draftResult.draft();
-            try {
-                walkthroughSteps = resolveWalkthrough(assistantRunId, modelRequest, draft);
-                decisionBranches = resolveDecisionTable(assistantRunId, modelRequest, draft);
-                exceptionClauses = resolveExceptionClauses(assistantRunId, modelRequest, draft);
-                termDefinitions = resolveTermDefinitions(assistantRunId, modelRequest, draft);
-                workedExamples = resolveWorkedExamples(assistantRunId, modelRequest, draft);
-                priorityResolutions = resolveRulePriority(assistantRunId, modelRequest, draft);
-                timingResolutions = resolveTiming(assistantRunId, modelRequest, draft);
-                tieResolutions = resolveTies(assistantRunId, modelRequest, draft);
-                scopeResolutions = resolveScope(assistantRunId, modelRequest, draft);
-                conceptComparisons = resolveConceptComparisons(assistantRunId, modelRequest, draft);
-                situationChecks = resolveSituationChecks(assistantRunId, modelRequest, draft);
-                calculations = resolveCalculations(assistantRunId, modelRequest, draft);
-                ruleOptions = resolveRuleOptions(assistantRunId, modelRequest, draft);
-            } catch (RuntimeException repeatedOptionFailure) {
-                return safe(
-                        context.documentVersionId(),
-                        AnswerStatus.INVALID_MODEL_OUTPUT,
-                        "规则选项清单未通过完整性、选择语义或引用校验。");
+                details = resolveStructuredDetails(assistantRunId, modelRequest, draft);
+            } catch (RuntimeException repeatedDetailsFailure) {
+                return invalidStructuredDetails(context.documentVersionId(), modelRequest.answerAid());
             }
         }
         StructuredRuleAnswer answer;
         try {
-            verifyPermissionRuling(assistantRunId, modelRequest, draft);
-            verifySourceEvidence(assistantRunId, modelRequest, draft);
-            answer = publicationValidator.publish(
-                    context.documentVersionId(), draft, evidence, calculations, situationChecks, walkthroughSteps,
-                    decisionBranches, exceptionClauses, termDefinitions, workedExamples, priorityResolutions,
-                    timingResolutions, tieResolutions, scopeResolutions, conceptComparisons, ruleOptions);
-        } catch (RuntimeException exception) {
+            answer = publishValidated(
+                    assistantRunId, context.documentVersionId(), modelRequest, draft, evidence, details);
+        } catch (RuntimeException rejectedPublication) {
+            if (modelRepairUsed) {
+                return safe(
+                        context.documentVersionId(),
+                        AnswerStatus.INVALID_MODEL_OUTPUT,
+                        "回答在一次有针对性的修订后仍未通过结构或引用校验。");
+            }
             draftResult = draftComposer.repairAfterPublicationFailure(
                     assistantRunId, username, gameSessionId, modelRequest, draft);
             if (!draftResult.ready()) {
-                return safe(
-                        context.documentVersionId(),
-                        draftResult.failureStatus(),
-                        draftResult.failureMessage());
+                return safe(context.documentVersionId(), draftResult.failureStatus(), draftResult.failureMessage());
             }
+            modelRepairUsed = true;
             draft = draftResult.draft();
             try {
-                walkthroughSteps = resolveWalkthrough(assistantRunId, modelRequest, draft);
-                decisionBranches = resolveDecisionTable(assistantRunId, modelRequest, draft);
-                exceptionClauses = resolveExceptionClauses(assistantRunId, modelRequest, draft);
-                termDefinitions = resolveTermDefinitions(assistantRunId, modelRequest, draft);
-                workedExamples = resolveWorkedExamples(assistantRunId, modelRequest, draft);
-                priorityResolutions = resolveRulePriority(assistantRunId, modelRequest, draft);
-                timingResolutions = resolveTiming(assistantRunId, modelRequest, draft);
-                tieResolutions = resolveTies(assistantRunId, modelRequest, draft);
-                scopeResolutions = resolveScope(assistantRunId, modelRequest, draft);
-                conceptComparisons = resolveConceptComparisons(assistantRunId, modelRequest, draft);
-                situationChecks = resolveSituationChecks(assistantRunId, modelRequest, draft);
-                calculations = resolveCalculations(assistantRunId, modelRequest, draft);
-                ruleOptions = resolveRuleOptions(assistantRunId, modelRequest, draft);
-                verifyPermissionRuling(assistantRunId, modelRequest, draft);
-                verifySourceEvidence(assistantRunId, modelRequest, draft);
-                answer = publicationValidator.publish(
-                        context.documentVersionId(), draft, evidence, calculations, situationChecks, walkthroughSteps,
-                        decisionBranches, exceptionClauses, termDefinitions, workedExamples, priorityResolutions,
-                        timingResolutions, tieResolutions, scopeResolutions, conceptComparisons, ruleOptions);
-            } catch (RuntimeException repairFailure) {
+                details = resolveStructuredDetails(assistantRunId, modelRequest, draft);
+                answer = publishValidated(
+                        assistantRunId, context.documentVersionId(), modelRequest, draft, evidence, details);
+            } catch (RuntimeException repeatedPublicationFailure) {
                 return safe(
                         context.documentVersionId(),
                         AnswerStatus.INVALID_MODEL_OUTPUT,
@@ -881,7 +563,8 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                     modelRequest,
                     draft,
                     answer,
-                    evidence);
+                    evidence,
+                    !modelRepairUsed);
         } catch (RuleAnswerModelTimeoutException exception) {
             return safe(context.documentVersionId(), AnswerStatus.MODEL_TIMEOUT, "局部重讲超时，可以稍后重试或直接查看规则引用。");
         } catch (AgentExecutionStoppedException exception) {
@@ -900,6 +583,124 @@ public class StructuredRuleAnswerService implements RuleAnswering {
         }
         return answer;
     }
+
+    /** Resolves the complete structured envelope once; unselected aids were already removed from the draft. */
+    private StructuredDetails resolveStructuredDetails(
+            UUID assistantRunId, ModelRequest modelRequest, ModelDraft draft) {
+        return new StructuredDetails(
+                resolveCalculations(assistantRunId, modelRequest, draft),
+                resolveSituationChecks(assistantRunId, modelRequest, draft),
+                resolveWalkthrough(assistantRunId, modelRequest, draft),
+                resolveDecisionTable(assistantRunId, modelRequest, draft),
+                resolveExceptionClauses(assistantRunId, modelRequest, draft),
+                resolveTermDefinitions(assistantRunId, modelRequest, draft),
+                resolveWorkedExamples(assistantRunId, modelRequest, draft),
+                resolveRulePriority(assistantRunId, modelRequest, draft),
+                resolveTiming(assistantRunId, modelRequest, draft),
+                resolveTies(assistantRunId, modelRequest, draft),
+                resolveScope(assistantRunId, modelRequest, draft),
+                resolveConceptComparisons(assistantRunId, modelRequest, draft),
+                resolveRuleOptions(assistantRunId, modelRequest, draft));
+    }
+
+    private AnswerDraftComposer.Result repairSelectedStructuredDetails(
+            UUID assistantRunId,
+            String username,
+            UUID gameSessionId,
+            ModelRequest modelRequest,
+            ModelDraft rejectedDraft) {
+        return switch (modelRequest.answerAid()) {
+            case WALKTHROUGH -> draftComposer.repairAfterWalkthroughFailure(
+                    assistantRunId, username, gameSessionId, modelRequest, rejectedDraft);
+            case DECISION_TABLE -> draftComposer.repairAfterDecisionTableFailure(
+                    assistantRunId, username, gameSessionId, modelRequest, rejectedDraft);
+            case EXCEPTIONS -> draftComposer.repairAfterExceptionClauseFailure(
+                    assistantRunId, username, gameSessionId, modelRequest, rejectedDraft);
+            case DEFINITIONS -> draftComposer.repairAfterTermDefinitionFailure(
+                    assistantRunId, username, gameSessionId, modelRequest, rejectedDraft);
+            case EXAMPLE -> draftComposer.repairAfterWorkedExampleFailure(
+                    assistantRunId, username, gameSessionId, modelRequest, rejectedDraft);
+            case RULE_PRIORITY -> draftComposer.repairAfterRulePriorityFailure(
+                    assistantRunId, username, gameSessionId, modelRequest, rejectedDraft);
+            case TIMING -> draftComposer.repairAfterTimingFailure(
+                    assistantRunId, username, gameSessionId, modelRequest, rejectedDraft);
+            case TIE -> draftComposer.repairAfterTieFailure(
+                    assistantRunId, username, gameSessionId, modelRequest, rejectedDraft);
+            case SCOPE -> draftComposer.repairAfterScopeFailure(
+                    assistantRunId, username, gameSessionId, modelRequest, rejectedDraft);
+            case CONCEPT_COMPARISON -> draftComposer.repairAfterConceptComparisonFailure(
+                    assistantRunId, username, gameSessionId, modelRequest, rejectedDraft);
+            case CALCULATION -> draftComposer.repairAfterCalculationFailure(
+                    assistantRunId, username, gameSessionId, modelRequest, rejectedDraft);
+            case OPTIONS -> draftComposer.repairAfterRuleOptionFailure(
+                    assistantRunId, username, gameSessionId, modelRequest, rejectedDraft);
+            case NONE, SOURCE, PERMISSION, VISUAL -> AnswerDraftComposer.Result.failure(
+                    AnswerStatus.INVALID_MODEL_OUTPUT,
+                    "回答附加结构与已确认的问题计划不一致。");
+        };
+    }
+
+    private StructuredRuleAnswer publishValidated(
+            UUID assistantRunId,
+            UUID documentVersionId,
+            ModelRequest modelRequest,
+            ModelDraft draft,
+            List<HybridEvidenceHit> evidence,
+            StructuredDetails details) {
+        verifyPermissionRuling(assistantRunId, modelRequest, draft);
+        verifySourceEvidence(assistantRunId, modelRequest, draft);
+        return publicationValidator.publish(
+                documentVersionId,
+                draft,
+                evidence,
+                details.calculations(),
+                details.situationChecks(),
+                details.walkthroughSteps(),
+                details.decisionBranches(),
+                details.exceptionClauses(),
+                details.termDefinitions(),
+                details.workedExamples(),
+                details.priorityResolutions(),
+                details.timingResolutions(),
+                details.tieResolutions(),
+                details.scopeResolutions(),
+                details.conceptComparisons(),
+                details.ruleOptions());
+    }
+
+    private StructuredRuleAnswer invalidStructuredDetails(UUID documentVersionId, AnswerAid selectedAid) {
+        String label = switch (selectedAid) {
+            case WALKTHROUGH -> "分步讲解";
+            case DECISION_TABLE -> "条件分支";
+            case EXCEPTIONS -> "例外和限制";
+            case DEFINITIONS -> "术语定义";
+            case EXAMPLE -> "规则示例";
+            case RULE_PRIORITY -> "规则优先级";
+            case TIMING -> "时序裁决";
+            case TIE -> "平局判定";
+            case SCOPE -> "规则适用范围";
+            case CONCEPT_COMPARISON -> "规则概念对比";
+            case CALCULATION -> "规则计算";
+            case OPTIONS -> "规则选项清单";
+            case NONE, SOURCE, PERMISSION, VISUAL -> "回答附加结构";
+        };
+        return safe(documentVersionId, AnswerStatus.INVALID_MODEL_OUTPUT, label + "在一次修订后仍未通过结构或引用校验。");
+    }
+
+    private record StructuredDetails(
+            List<RuleCalculation> calculations,
+            List<RuleSituationCheck> situationChecks,
+            List<RuleWalkthroughStep> walkthroughSteps,
+            List<RuleDecisionBranch> decisionBranches,
+            List<RuleExceptionClause> exceptionClauses,
+            List<RuleTermDefinition> termDefinitions,
+            List<RuleWorkedExample> workedExamples,
+            List<com.rulepilot.assistant.domain.RulePriorityResolution> priorityResolutions,
+            List<com.rulepilot.assistant.domain.RuleTimingResolution> timingResolutions,
+            List<com.rulepilot.assistant.domain.RuleTieResolution> tieResolutions,
+            List<com.rulepilot.assistant.domain.RuleScopeResolution> scopeResolutions,
+            List<com.rulepilot.assistant.domain.RuleConceptComparison> conceptComparisons,
+            List<com.rulepilot.assistant.domain.RuleOption> ruleOptions) {}
 
     private QuestionInterpretationRequest interpretationRequest(
             UnderstoodQuestion deterministic, QuestionContext context) {

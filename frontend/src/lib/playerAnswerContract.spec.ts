@@ -80,17 +80,16 @@ describe('playerAnswerContract', () => {
     })).toBe(false)
   })
 
-  it('rejects internal identifiers, action names, prompts, and diagnostics in visible prose', () => {
-    const leaks = [
-      'Retry assistantRunId 11111111-1111-4111-8111-111111111111.',
-      'Call repairRuleTimingResolutions.',
-      'The schema output validation failed.',
-      '模型输出校验失败，请检查系统提示词。',
-      'Use evidence [E1].',
-    ]
-
-    for (const leak of leaks) {
-      expect(isPlayerFacingRuleAnswer({ ...answered, explanation: leak })).toBe(false)
+  it('does not reinterpret valid published prose with a browser-side keyword blacklist', () => {
+    const naturalPublishedAnswer = {
+      ...answered,
+      explanation: '规则书把这段写成 JSON 示例；引用 E1 只是正文里的玩家标签，不是浏览器协议。',
+      citations: [{
+        ...answered.citations[0],
+        excerpt: 'The assistant token and source marker are names printed on the card.',
+      }],
     }
+
+    expect(parsePlayerFacingRuleAnswer(naturalPublishedAnswer)).toEqual(naturalPublishedAnswer)
   })
 })

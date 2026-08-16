@@ -1,5 +1,8 @@
 package com.rulepilot.teaching.adapter.out.persistence;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.json.JsonMapper;
 import com.rulepilot.teaching.application.TeachingPlanRepository;
 import com.rulepilot.teaching.domain.TeachingPlan;
 import com.rulepilot.teaching.domain.TeachingPlan.PlannedSection;
@@ -9,6 +12,7 @@ import jakarta.persistence.EntityManager;
 import jakarta.persistence.Id;
 import jakarta.persistence.PersistenceContext;
 import jakarta.persistence.Table;
+import org.hibernate.annotations.ColumnTransformer;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
@@ -130,6 +134,8 @@ public class JpaTeachingPlanRepository implements TeachingPlanRepository {
 @Table(name = "teaching_plan")
 class TeachingPlanEntity {
 
+    private static final ObjectMapper JSON = JsonMapper.builder().findAndAddModules().build();
+
     @Id
     UUID id;
 
@@ -145,6 +151,10 @@ class TeachingPlanEntity {
     @Column(nullable = false, columnDefinition = "text")
     String premise;
 
+    @ColumnTransformer(write = "?::jsonb")
+    @Column(name = "whole_game_context", nullable = false, columnDefinition = "jsonb")
+    String wholeGameContext;
+
     @Column(name = "created_by", nullable = false)
     String createdBy;
 
@@ -159,6 +169,7 @@ class TeachingPlanEntity {
         this.learningGoal = plan.learningGoal();
         this.gameTitle = plan.gameTitle();
         this.premise = plan.premise();
+        this.wholeGameContext = writeContext(plan.wholeGameContext());
         this.createdBy = plan.createdBy();
         this.createdAt = plan.createdAt();
     }
@@ -170,9 +181,27 @@ class TeachingPlanEntity {
                 learningGoal,
                 gameTitle,
                 premise,
+                readContext(wholeGameContext, premise),
                 sections,
                 createdBy,
                 createdAt);
+    }
+
+    private static String writeContext(TeachingPlan.WholeGameContext context) {
+        try {
+            return JSON.writeValueAsString(context);
+        } catch (JsonProcessingException failure) {
+            throw new IllegalArgumentException("cannot persist whole-game teaching context", failure);
+        }
+    }
+
+    private static TeachingPlan.WholeGameContext readContext(String value, String premise) {
+        if (value == null || value.isBlank()) return TeachingPlan.WholeGameContext.legacy(premise);
+        try {
+            return JSON.readValue(value, TeachingPlan.WholeGameContext.class);
+        } catch (JsonProcessingException failure) {
+            throw new IllegalStateException("cannot read whole-game teaching context", failure);
+        }
     }
 }
 

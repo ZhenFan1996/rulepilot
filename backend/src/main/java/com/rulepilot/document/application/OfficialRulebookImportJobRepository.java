@@ -25,6 +25,13 @@ public interface OfficialRulebookImportJobRepository {
 
     boolean retryTeaching(UUID jobId, UUID expectedPreparationRunId, Instant now);
 
+    boolean dismissTeaching(
+            UUID jobId,
+            String ownerUsername,
+            OfficialRulebookImportJob.TeachingHandoffState expectedState,
+            UUID expectedPreparationRunId,
+            Instant now);
+
     List<OfficialRulebookImportJob> claimReadyTeaching(int limit, Instant now);
 
     List<OfficialRulebookImportJob> claimReadyTeachingForDocument(

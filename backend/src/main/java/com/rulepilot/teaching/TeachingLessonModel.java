@@ -181,8 +181,37 @@ public interface TeachingLessonModel {
             List<EvidenceInput> evidence,
             List<PageImageInput> pageImages,
             List<String> requiredRuleIntents,
+            List<TeachingUnitInput> teachingUnits,
             String modelConfigurationOwner,
-            String chapterScope) {
+            String chapterScope,
+            WholeGameContextInput wholeGameContext) {
+
+        public SectionRequest(
+                String topicKey,
+                String title,
+                String objective,
+                List<String> coverageTags,
+                List<PriorSectionContext> priorSections,
+                List<EvidenceInput> evidence,
+                List<PageImageInput> pageImages,
+                List<String> requiredRuleIntents,
+                List<TeachingUnitInput> teachingUnits,
+                String modelConfigurationOwner,
+                String chapterScope) {
+            this(
+                    topicKey,
+                    title,
+                    objective,
+                    coverageTags,
+                    priorSections,
+                    evidence,
+                    pageImages,
+                    requiredRuleIntents,
+                    teachingUnits,
+                    modelConfigurationOwner,
+                    chapterScope,
+                    WholeGameContextInput.unavailable());
+        }
 
         public SectionRequest(
                 String topicKey,
@@ -198,6 +227,7 @@ public interface TeachingLessonModel {
                     coverageTags,
                     priorSections,
                     evidence,
+                    List.of(),
                     List.of(),
                     List.of(),
                     null,
@@ -221,8 +251,34 @@ public interface TeachingLessonModel {
                     evidence,
                     pageImages,
                     List.of(),
+                    List.of(),
                     null,
                     "");
+        }
+
+        public SectionRequest(
+                String topicKey,
+                String title,
+                String objective,
+                List<String> coverageTags,
+                List<PriorSectionContext> priorSections,
+                List<EvidenceInput> evidence,
+                List<PageImageInput> pageImages,
+                List<String> requiredRuleIntents,
+                String modelConfigurationOwner,
+                String chapterScope) {
+            this(
+                    topicKey,
+                    title,
+                    objective,
+                    coverageTags,
+                    priorSections,
+                    evidence,
+                    pageImages,
+                    requiredRuleIntents,
+                    List.of(),
+                    modelConfigurationOwner,
+                    chapterScope);
         }
 
         public SectionRequest {
@@ -233,10 +289,13 @@ public interface TeachingLessonModel {
                     || priorSections == null || priorSections.size() > 2
                     || evidence == null || evidence.isEmpty()
                     || pageImages == null || pageImages.size() > 2
-                    || requiredRuleIntents == null || requiredRuleIntents.size() > 8
+                    || requiredRuleIntents == null || requiredRuleIntents.size() > 32
                     || requiredRuleIntents.stream()
                             .anyMatch(intent -> intent == null || intent.isBlank() || intent.length() > 300)
-                    || chapterScope == null || chapterScope.length() > 4_000) {
+                    || teachingUnits == null || teachingUnits.size() > 16
+                    || teachingUnits.stream().anyMatch(java.util.Objects::isNull)
+                    || chapterScope == null || chapterScope.length() > 4_000
+                    || wholeGameContext == null) {
                 throw new IllegalArgumentException("teaching model request is invalid");
             }
             coverageTags = List.copyOf(coverageTags);
@@ -244,7 +303,91 @@ public interface TeachingLessonModel {
             evidence = List.copyOf(evidence);
             pageImages = List.copyOf(pageImages);
             requiredRuleIntents = requiredRuleIntents.stream().map(String::strip).distinct().toList();
+            teachingUnits = List.copyOf(teachingUnits);
             chapterScope = chapterScope.strip();
+        }
+    }
+
+    /** One grouping decision made by the outline Agent, not a fixed lesson-template category. */
+    record TeachingUnitInput(String unitId, List<String> sourceIdentifiers, List<UUID> directEvidenceIds) {
+        public TeachingUnitInput(String unitId, List<String> sourceIdentifiers) {
+            this(unitId, sourceIdentifiers, List.of());
+        }
+
+        public TeachingUnitInput {
+            if (unitId == null || unitId.isBlank() || unitId.length() > 80
+                    || sourceIdentifiers == null || sourceIdentifiers.isEmpty() || sourceIdentifiers.size() > 16
+                    || sourceIdentifiers.stream().anyMatch(identifier -> identifier == null
+                            || identifier.isBlank() || identifier.length() > 160)
+                    || directEvidenceIds == null || directEvidenceIds.size() > 72
+                    || directEvidenceIds.stream().anyMatch(java.util.Objects::isNull)) {
+                throw new IllegalArgumentException("teaching unit input is invalid");
+            }
+            unitId = unitId.strip();
+            sourceIdentifiers = sourceIdentifiers.stream().map(String::strip).distinct().toList();
+            directEvidenceIds = directEvidenceIds.stream().distinct().toList();
+        }
+    }
+
+    /** Same immutable source-bound orientation is sent to every independently generated chapter. */
+    record WholeGameContextInput(
+            String summary,
+            List<GlobalConceptInput> concepts,
+            List<TopicDependencyInput> topicDependencies,
+            boolean evidenceBound) {
+        public WholeGameContextInput {
+            if (summary == null || summary.isBlank() || summary.length() > 2_400
+                    || concepts == null || concepts.size() > 32 || concepts.stream().anyMatch(java.util.Objects::isNull)
+                    || topicDependencies == null || topicDependencies.size() > 32
+                    || topicDependencies.stream().anyMatch(java.util.Objects::isNull)
+                    || (evidenceBound && concepts.isEmpty())) {
+                throw new IllegalArgumentException("whole-game model input is invalid");
+            }
+            summary = summary.strip();
+            concepts = List.copyOf(concepts);
+            topicDependencies = List.copyOf(topicDependencies);
+        }
+
+        public static WholeGameContextInput unavailable() {
+            return new WholeGameContextInput(
+                    "No source-bound whole-game context is available for this legacy request.",
+                    List.of(),
+                    List.of(),
+                    false);
+        }
+    }
+
+    record GlobalConceptInput(
+            String conceptId,
+            String label,
+            String explanation,
+            List<String> sourceIdentifiers,
+            List<Integer> sourcePageNumbers,
+            List<String> relatedTopicKeys,
+            List<String> prerequisiteConceptIds) {
+        public GlobalConceptInput {
+            if (conceptId == null || conceptId.isBlank() || label == null || label.isBlank()
+                    || explanation == null || explanation.isBlank()
+                    || sourceIdentifiers == null || sourceIdentifiers.isEmpty()
+                    || sourcePageNumbers == null || sourcePageNumbers.isEmpty()
+                    || relatedTopicKeys == null || relatedTopicKeys.isEmpty()
+                    || prerequisiteConceptIds == null) {
+                throw new IllegalArgumentException("whole-game concept input is invalid");
+            }
+            sourceIdentifiers = List.copyOf(sourceIdentifiers);
+            sourcePageNumbers = List.copyOf(sourcePageNumbers);
+            relatedTopicKeys = List.copyOf(relatedTopicKeys);
+            prerequisiteConceptIds = List.copyOf(prerequisiteConceptIds);
+        }
+    }
+
+    record TopicDependencyInput(String prerequisiteTopicKey, String dependentTopicKey, String reason) {
+        public TopicDependencyInput {
+            if (prerequisiteTopicKey == null || prerequisiteTopicKey.isBlank()
+                    || dependentTopicKey == null || dependentTopicKey.isBlank()
+                    || reason == null || reason.isBlank()) {
+                throw new IllegalArgumentException("whole-game dependency input is invalid");
+            }
         }
     }
 
@@ -299,17 +442,36 @@ public interface TeachingLessonModel {
             TeachingMove kind,
             String text,
             List<UUID> citationIds,
+            List<String> teachingUnitIds,
             VisualFocusDraft visualFocus) {
         public StepDraft {
             citationIds = citationIds == null ? List.of() : List.copyOf(citationIds);
+            if (teachingUnitIds != null && (teachingUnitIds.size() > 8 || teachingUnitIds.stream()
+                    .anyMatch(unitId -> unitId == null || unitId.isBlank() || unitId.length() > 80))) {
+                throw new IllegalArgumentException("teaching step unit references are invalid");
+            }
+            teachingUnitIds = teachingUnitIds == null ? List.of() : teachingUnitIds.stream()
+                    .filter(unitId -> unitId != null && !unitId.isBlank())
+                    .map(String::strip)
+                    .distinct()
+                    .toList();
+        }
+
+        public StepDraft(
+                String heading,
+                TeachingMove kind,
+                String text,
+                List<UUID> citationIds,
+                VisualFocusDraft visualFocus) {
+            this(heading, kind, text, citationIds, List.of(), visualFocus);
         }
 
         public StepDraft(String heading, TeachingMove kind, String text, List<UUID> citationIds) {
-            this(heading, kind, text, citationIds, null);
+            this(heading, kind, text, citationIds, List.of(), null);
         }
 
         public StepDraft(String text, List<UUID> citationIds) {
-            this("照着做", TeachingMove.DO, text, citationIds, null);
+            this("照着做", TeachingMove.DO, text, citationIds, List.of(), null);
         }
     }
 
@@ -322,8 +484,8 @@ public interface TeachingLessonModel {
             int width,
             int height) {
         public VisualFocusDraft {
-            label = label == null ? "" : label.strip();
-            visibleDescription = visibleDescription == null ? "" : visibleDescription.strip();
+            label = label == null ? "" : label;
+            visibleDescription = visibleDescription == null ? "" : visibleDescription;
             if (visibleDescription.length() > 240) {
                 throw new IllegalArgumentException("visual focus description is too long");
             }
@@ -345,7 +507,8 @@ public interface TeachingLessonModel {
         int objectiveTokens = estimateTokens(request.objective());
         int requiredRuleTokens = request.requiredRuleIntents().isEmpty()
                 ? 0
-                : estimateTokens(request.requiredRuleIntents().toString());
+                : estimateTokens(request.requiredRuleIntents().toString())
+                        + estimateTokens(request.teachingUnits().toString());
         int evidenceTokens = estimateTokens(request.evidence().toString());
         int chapterScopeTokens = estimateTokens(request.chapterScope());
         int continuityTokens = request.priorSections().isEmpty()
@@ -353,7 +516,8 @@ public interface TeachingLessonModel {
                 : estimateTokens(request.priorSections().toString());
         int revisionTokens = estimateTokens(revision);
         int otherRequestTokens = estimateTokens(
-                request.title() + " " + request.coverageTags() + " " + request.pageImages().size());
+                request.title() + " " + request.coverageTags() + " " + request.pageImages().size()
+                        + " " + request.wholeGameContext());
         int totalTokens = objectiveTokens
                 + requiredRuleTokens
                 + evidenceTokens

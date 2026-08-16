@@ -740,7 +740,7 @@ class VisualLessonEnricherTest {
     }
 
     @Test
-    void accepts_a_vision_crop_from_a_cited_page_when_translation_has_no_text_anchor() {
+    void skips_a_vision_crop_with_an_untranslated_label_without_rewriting_the_cited_step() {
         UUID version = UUID.randomUUID();
         UUID chunk = UUID.randomUUID();
         RulebookUnderstanding EnglishSource = new RulebookUnderstanding(
@@ -763,10 +763,12 @@ class VisualLessonEnricherTest {
                         ignored -> EnglishSource, images, new VisualRegionCandidateSelector(), locator)
                 .enrich(version, lesson(chunk));
 
-        assertThat(enriched.sections().getFirst().steps())
-                .anySatisfy(step -> assertThat(step.visualFocus())
-                        .isEqualTo(new IllustratedLesson.VisualFocus(
-                                2, "放置探测器", "一枚探测器标记位于弧形轨道上", 640, 700, 180, 120)));
+        assertThat(enriched.sections().getFirst().steps()).singleElement().satisfies(step -> {
+            assertThat(step.kind()).isEqualTo(IllustratedLesson.TeachingMove.DO);
+            assertThat(step.visualFocus()).isNull();
+            assertThat(step.heading()).isEqualTo("放置探测器");
+            assertThat(step.text()).isEqualTo("把探测器放到轨道上。");
+        });
     }
 
     @Test
@@ -808,6 +810,7 @@ class VisualLessonEnricherTest {
     void replaces_an_overly_broad_existing_visual_with_a_compact_crop_for_the_same_rule() {
         UUID chunk = UUID.randomUUID();
         IllustratedLesson source = lessonWithOverlyBroadVisual(chunk);
+        String originalText = source.sections().getFirst().steps().getFirst().text();
         var result = new VisualLessonEnricher(
                         ignored -> understanding(),
                         (ignored, pages) -> List.of(new DocumentPageImages.PageImage(
@@ -821,24 +824,26 @@ class VisualLessonEnricherTest {
         assertThat(step.kind()).isEqualTo(IllustratedLesson.TeachingMove.VISUAL);
         assertThat(step.visualFocus()).isEqualTo(new IllustratedLesson.VisualFocus(
                 2, "轨道与探测器", "一枚圆形探测器标记位于弧形轨道旁", 320, 420, 260, 180));
-        assertThat(step.text()).isEqualTo("把探测器放到轨道上。");
+        assertThat(step.text()).isEqualTo(originalText);
     }
 
     @Test
-    void restores_the_original_rule_text_when_an_overly_broad_visual_has_no_compact_replacement() {
+    void discards_an_overly_broad_visual_without_rewriting_the_original_step_text() {
         UUID chunk = UUID.randomUUID();
+        IllustratedLesson source = lessonWithOverlyBroadVisual(chunk);
+        String originalText = source.sections().getFirst().steps().getFirst().text();
         var result = new VisualLessonEnricher(
                         ignored -> understanding(),
                         (ignored, pages) -> List.of(new DocumentPageImages.PageImage(
                                 2, "image/png", new byte[] {1}, 1_000, 1_000)),
                         new VisualRegionCandidateSelector(),
                         request -> java.util.Optional.empty())
-                .enrichWithReport(UUID.randomUUID(), lessonWithOverlyBroadVisual(chunk), "owner");
+                .enrichWithReport(UUID.randomUUID(), source, "owner");
 
         var step = result.lesson().sections().getFirst().steps().getFirst();
         assertThat(step.kind()).isEqualTo(IllustratedLesson.TeachingMove.DO);
         assertThat(step.visualFocus()).isNull();
-        assertThat(step.text()).isEqualTo("把探测器放到轨道上。");
+        assertThat(step.text()).isEqualTo(originalText);
     }
 
     @Test
@@ -908,7 +913,7 @@ class VisualLessonEnricherTest {
                     .containsExactly(3, 2, 3, 2);
             assertThat(request.candidates().getFirst().sourceText()).isEqualTo("Cited page 3 visual context");
             return java.util.Optional.of(new VisualRegionLocator.LocatedRegion(
-                    3, "Launch", "发射台旁有一枚探测器和指向轨道的箭头", 100, 200, 300, 160, List.of(chunk)));
+                    3, "发射探测器", "发射台旁有一枚探测器和指向轨道的箭头", 100, 200, 300, 160, List.of(chunk)));
         };
 
         var enriched = new VisualLessonEnricher(

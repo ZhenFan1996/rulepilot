@@ -8,7 +8,7 @@ import java.util.regex.Pattern;
  * Presentation boundary for untrusted lesson output.
  *
  * <p>The application no longer rewrites model prose. A malformed draft is returned unchanged so schema validation can
- * request one model repair; semantic wording is reviewed by the Critic.</p>
+ * request one model repair. Optional semantic evaluation is separate from synchronous publication.</p>
  */
 final class LessonDraftPresentationNormalizer {
 

@@ -100,7 +100,7 @@ public class LessonQualityEvaluator {
                         : section.coverageTags().contains("source_coverage"))
                 .toList();
         long required = sourceSections.stream()
-                .mapToLong(section -> section.retrievalQueries().size())
+                .mapToLong(section -> TeachingUnitContract.sourceIdentifiers(section.retrievalQueries()).size())
                 .sum();
         long available = sourceSections.stream()
                 .mapToLong(planned -> coveredSourceGroups(planned, lesson, false))
@@ -122,7 +122,7 @@ public class LessonQualityEvaluator {
                 status,
                 "来源规则组已核对 " + reviewed + " / " + required,
                 sourceInventoryUnavailable
-                        ? "来源义务清单仍不完整，或至少一个开局、行动、结束、计分、必要例外没有可用来源；"
+                        ? "来源义务清单仍不完整，或至少一个由规划 Agent 识别的必要教学单元没有可用来源；"
                                 + "即使已有章节带引用，也不能把整局标为完整。"
                         : available < required
                         ? "有 " + (required - available) + " 个从规则页清点出的规则组，尚未逐项在带原始标识和"
@@ -153,45 +153,15 @@ public class LessonQualityEvaluator {
                 || (requireReview && section.evidenceStatus() != EvidenceStatus.SUPPORTED)) {
             return 0;
         }
-        return planned.retrievalQueries().stream()
-                .filter(query -> section.steps().stream().anyMatch(step -> {
-                    if (step.sourcePages().isEmpty()) return false;
-                    if (!planned.sourcePageNumbers().isEmpty()
-                            && step.sourcePages().stream().noneMatch(planned.sourcePageNumbers()::contains)) {
-                        return false;
-                    }
-                    String visibleStep = normalized(step.heading() + " " + step.text());
-                    return containsSourceIdentifier(visibleStep, normalized(query));
-                }))
-                .count();
-    }
-
-    private boolean containsSourceIdentifier(String text, String identifier) {
-        if (identifier.isBlank()) return false;
-        boolean ascii = identifier.codePoints().allMatch(codePoint -> codePoint < 128);
-        if (!ascii) return text.contains(identifier);
-        int firstWordCharacter = java.util.stream.IntStream.range(0, identifier.length())
-                .filter(index -> Character.isLetterOrDigit(identifier.charAt(index)))
-                .findFirst()
-                .orElse(-1);
-        int lastWordCharacter = java.util.stream.IntStream.iterate(
-                        identifier.length() - 1, index -> index >= 0, index -> index - 1)
-                .filter(index -> Character.isLetterOrDigit(identifier.charAt(index)))
-                .findFirst()
-                .orElse(-1);
-        if (firstWordCharacter < 0 || lastWordCharacter < 0) return text.contains(identifier);
-        int from = 0;
-        while (from <= text.length() - identifier.length()) {
-            int match = text.indexOf(identifier, from);
-            if (match < 0) return false;
-            int left = match + firstWordCharacter - 1;
-            int right = match + lastWordCharacter + 1;
-            boolean leftBoundary = left < 0 || !Character.isLetterOrDigit(text.charAt(left));
-            boolean rightBoundary = right >= text.length() || !Character.isLetterOrDigit(text.charAt(right));
-            if (leftBoundary && rightBoundary) return true;
-            from = match + 1;
-        }
-        return false;
+        boolean citesOwnerPage = planned.sourcePageNumbers().isEmpty()
+                || section.steps().stream()
+                        .flatMap(step -> step.sourcePages().stream())
+                        .anyMatch(planned.sourcePageNumbers()::contains);
+        if (!citesOwnerPage) return 0;
+        // SUPPORTED is the durable receipt from TeachingSectionCandidateValidator. Re-inferring the outline Agent's
+        // unit ownership from translated player prose would reject correct lessons whenever the source and output
+        // languages differ, and would duplicate the directEvidenceIds gate already crossed before publication.
+        return TeachingUnitContract.sourceIdentifiers(planned.retrievalQueries()).size();
     }
 
     private QualityCheck sourceAvailability(TeachingPlan plan) {
@@ -199,12 +169,12 @@ public class LessonQualityEvaluator {
                 .filter(section -> section.coverageTags().contains("source_dependency"))
                 .toList();
         List<String> sources = dependencies.stream()
-                .flatMap(section -> section.retrievalQueries().stream()
+                .flatMap(section -> TeachingUnitContract.sourceIdentifiers(section.retrievalQueries()).stream()
                         .map(title -> sourceReference(section.sourcePageNumbers(), title)))
                 .distinct()
                 .toList();
         long sourceCount = dependencies.stream()
-                .flatMap(section -> section.retrievalQueries().stream())
+                .flatMap(section -> TeachingUnitContract.sourceIdentifiers(section.retrievalQueries()).stream())
                 .map(this::normalized)
                 .distinct()
                 .count();

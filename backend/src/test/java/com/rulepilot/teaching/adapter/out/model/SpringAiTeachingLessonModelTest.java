@@ -19,6 +19,7 @@ import com.rulepilot.teaching.TeachingLessonModel.ModelInvocation;
 import com.rulepilot.teaching.TeachingLessonModel.PageImageInput;
 import com.rulepilot.teaching.TeachingLessonModel.SectionDraft;
 import com.rulepilot.teaching.TeachingLessonModel.SectionRequest;
+import com.rulepilot.teaching.TeachingLessonModel.TeachingUnitInput;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.List;
 import java.util.UUID;
@@ -418,6 +419,96 @@ class SpringAiTeachingLessonModelTest {
         SectionDraft draft = new FakeTeachingLessonModel().compose(request);
         assertThat(model.estimatedOutputTokens(request, draft))
                 .isLessThan(estimatedTokens(draft.toString()));
+    }
+
+    @Test
+    void exposesRetrievalBoundUnitEvidenceAsModelCitationReferencesRatherThanInternalIds() {
+        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        SpringAiTeachingLessonModel model = new SpringAiTeachingLessonModel(
+                configuration, new FakeTeachingLessonModel(), mock(VersionedAgentPrompts.class));
+        UUID anchor = UUID.randomUUID();
+        UUID continuation = UUID.randomUUID();
+        SectionRequest request = new SectionRequest(
+                "turn",
+                "执行回合",
+                "按规则完成这一回合",
+                List.of("turn"),
+                List.of(),
+                List.of(
+                        new EvidenceInput(anchor, "TURN", "Turn", "Start the turn.", 4, 4),
+                        new EvidenceInput(continuation, "TURN", "Turn continued", "Then pass play.", 4, 4)),
+                List.of(),
+                List.of("complete the planned turn unit"),
+                List.of(new TeachingUnitInput(
+                        "turn-sequence", List.of("Turn"), List.of(anchor, continuation))),
+                "player",
+                "1. 执行回合 — 按规则完成这一回合");
+
+        List<SpringAiTeachingLessonModel.ModelTeachingUnit> modelUnits = model.modelTeachingUnits(request);
+
+        assertThat(modelUnits).containsExactly(new SpringAiTeachingLessonModel.ModelTeachingUnit(
+                "turn-sequence", List.of("Turn"), List.of("E1", "E2")));
+        assertThat(modelUnits.toString())
+                .doesNotContain(anchor.toString())
+                .doesNotContain(continuation.toString());
+    }
+
+    @Test
+    void rendersExactPlannedUnitIdsAndShortEvidenceReferencesIntoTheProviderPrompt() {
+        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        VersionedAgentPrompts prompts = mock(VersionedAgentPrompts.class);
+        ChatModel chatModel = mock(ChatModel.class);
+        when(configuration.usesFake(Role.TEACHING)).thenReturn(false);
+        when(configuration.providerFor(Role.TEACHING)).thenReturn("deepseek");
+        when(configuration.providerFor(Role.TEACHING, "player")).thenReturn("deepseek");
+        when(configuration.usesDeepSeekNonThinkingGeneration(Role.TEACHING, null)).thenReturn(true);
+        when(configuration.usesDeepSeekNonThinkingGeneration(Role.TEACHING, "player")).thenReturn(true);
+        when(configuration.modelNameFor(Role.TEACHING, null)).thenReturn("deepseek-v4-flash");
+        when(configuration.modelNameFor(Role.TEACHING, "player")).thenReturn("deepseek-v4-flash");
+        when(configuration.modelFor(Role.TEACHING, null)).thenReturn(chatModel);
+        when(configuration.modelFor(Role.TEACHING, "player")).thenReturn(chatModel);
+        OpenAiChatOptions defaults = OpenAiChatOptions.builder()
+                .apiKey("test-key")
+                .baseUrl("https://provider.example/v1")
+                .model("deepseek-chat")
+                .build();
+        when(chatModel.getDefaultOptions()).thenReturn(defaults);
+        when(chatModel.getOptions()).thenReturn(defaults);
+        when(prompts.teachingRuntimeSystem()).thenReturn("Teach only from evidence.");
+        when(prompts.teachingUser()).thenReturn("units={teachingUnits}\nevidence={evidence}");
+        when(chatModel.call(any(Prompt.class))).thenReturn(response("""
+                {"title":"Turn","visualKind":"REFERENCE_CARD","visualCaption":"Turn sequence",
+                 "visualCitationIds":["E1"],"steps":[{"heading":"Start","kind":"DO",
+                 "text":"Start the turn.","citationIds":["E1"],
+                 "teachingUnitIds":["turn-sequence"],"visualFocus":null}]}
+                """));
+        SpringAiTeachingLessonModel model = new SpringAiTeachingLessonModel(
+                configuration, new FakeTeachingLessonModel(), prompts);
+        UUID anchor = UUID.randomUUID();
+        UUID continuation = UUID.randomUUID();
+        SectionRequest request = new SectionRequest(
+                "turn",
+                "执行回合",
+                "按规则完成这一回合",
+                List.of("turn"),
+                List.of(),
+                List.of(
+                        new EvidenceInput(anchor, "TURN", "Turn", "Start the turn.", 4, 4),
+                        new EvidenceInput(continuation, "TURN", "Turn continued", "Then pass play.", 4, 4)),
+                List.of(),
+                List.of("complete the planned turn unit"),
+                List.of(new TeachingUnitInput(
+                        "turn-sequence", List.of("Turn"), List.of(anchor, continuation))),
+                "player",
+                "1. 执行回合 — 按规则完成这一回合");
+
+        model.compose(request);
+
+        ArgumentCaptor<Prompt> sent = ArgumentCaptor.forClass(Prompt.class);
+        verify(chatModel).call(sent.capture());
+        assertThat(sent.getValue().getUserMessage().getText())
+                .contains("unitId=turn-sequence", "directEvidenceIds=[E1, E2]")
+                .doesNotContain(anchor.toString(), continuation.toString());
     }
 
     private int estimatedTokens(String value) {

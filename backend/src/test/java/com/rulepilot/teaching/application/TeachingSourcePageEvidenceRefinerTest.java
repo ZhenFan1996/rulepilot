@@ -241,6 +241,38 @@ class TeachingSourcePageEvidenceRefinerTest {
         assertThat(result.evidence().stream().filter(source -> source.pageFrom() == 5)).hasSize(4);
     }
 
+    @Test
+    void prioritizesEveryAgentPlannedSourceAnchorBeforePageDiversityTruncation() {
+        RuleEvidence searchHit = evidence(UUID.randomUUID(), 2, "A useful nearby clause without the planned anchor.");
+        List<RuleEvidence> canonical = new java.util.ArrayList<>();
+        canonical.add(searchHit);
+        for (int index = 1; index <= 5; index++) {
+            canonical.add(evidence(UUID.randomUUID(), 2, "Nearby clause " + index + "."));
+        }
+        RuleEvidence plannedAnchor = evidence(
+                UUID.randomUUID(), 2, "R-omega is the independently planned conditional relation.");
+        canonical.add(plannedAnchor);
+        TeachingPlan plan = planWithUnit("R-omega", List.of(2));
+
+        var result = refiner(scopes(), tools(canonical), new RecordingInvocations())
+                .refine(plan, plan.sections().getFirst(), runId, verified(1, searchHit));
+
+        assertThat(result.state()).isEqualTo(TeachingSectionEvidenceRetriever.State.VERIFIED);
+        assertThat(result.evidence()).contains(plannedAnchor);
+    }
+
+    @Test
+    void marksTheChapterInvalidBeforeCompositionWhenItsPlannedAnchorIsAbsent() {
+        RuleEvidence unrelated = evidence(UUID.randomUUID(), 2, "A different relation is present.");
+        TeachingPlan plan = planWithUnit("R-missing", List.of(2));
+
+        var result = refiner(scopes(), tools(List.of(unrelated)), new RecordingInvocations())
+                .refine(plan, plan.sections().getFirst(), runId, verified(1, unrelated));
+
+        assertThat(result.state()).isEqualTo(TeachingSectionEvidenceRetriever.State.INVALID);
+        assertThat(result.evidence()).isEmpty();
+    }
+
     private TeachingSourcePageEvidenceRefiner refiner(
             NativeToolScopes scopes, AssistantReadTools tools, RecordingInvocations invocations) {
         return new TeachingSourcePageEvidenceRefiner(
@@ -262,6 +294,34 @@ class TeachingSourcePageEvidenceRefinerTest {
                         false,
                         List.of("setup starting items"),
                         List.of("setup"),
+                        sourcePages)),
+                "player",
+                Instant.now());
+    }
+
+    private TeachingPlan planWithUnit(String sourceIdentifier, List<Integer> sourcePages) {
+        var slot = new com.rulepilot.teaching.TeachingOutlineModel.SourceCoverageSlotDraft(
+                "opaque-source",
+                com.rulepilot.teaching.TeachingOutlineModel.SourceCoverageRole.SUPPORTING_RULE,
+                sourceIdentifier,
+                sourcePages,
+                "setup",
+                "agent-owned-unit",
+                com.rulepilot.teaching.TeachingOutlineModel.SourceCoverageAvailability.SOURCED);
+        return new TeachingPlan(
+                UUID.randomUUID(),
+                versionId,
+                "Test game",
+                "Teach one grounded section.",
+                List.of(new PlannedSection(
+                        1,
+                        "setup",
+                        "Setup",
+                        "Teach the Agent-owned relation without a fixed chapter template.",
+                        true,
+                        false,
+                        TeachingUnitContract.encodeUnits(List.of(slot)),
+                        List.of(TeachingSourceCoverageContract.CONTRACT_VERSION_TAG),
                         sourcePages)),
                 "player",
                 Instant.now());

@@ -56,6 +56,7 @@ class TeachingPlanSchemaMigrationTest {
                         "learning_goal",
                         "game_title",
                         "premise",
+                        "whole_game_context",
                         "created_by",
                         "created_at")
                 .doesNotContain("player_count", "beginner_count", "duration_minutes");

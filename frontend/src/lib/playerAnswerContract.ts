@@ -1,7 +1,5 @@
 import type { AppLocale } from '@/lib/locale'
 
-const INTERNAL_PROTOCOL_PATTERN = /[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}|\bchunk(?:id)?\b|(?:证据|引用|evidence|source)\s*\[?E\d+\]?|\[E\d+\]|\[[0-9a-f]{8}\]|\b(?:assistantRunId|conversationTurnId|documentVersionId|citationIds?)\b|\b(?:native|repair)[A-Z][A-Za-z]+\b|\b(?:hybridRuleSearch|calculateRuleMath|checkRule[A-Z][A-Za-z]+|buildRule[A-Z][A-Za-z]+|traceRuleDependencies|defineRuleTerms|illustrateRule|resolveRule[A-Z][A-Za-z]+|compareRuleConcepts|listRuleOptions|showRuleEvidence)\b|\b(?:ANSWERED_WITH_WARNING|CLARIFICATION_REQUIRED|INSUFFICIENT_EVIDENCE|INVALID_MODEL_OUTPUT|MODEL_TIMEOUT|VERSION_CONFLICT)\b|\b(?:system|assistant|user)[ _-]?prompt\b|(?:系统|助手|用户)(?:提示词|提示)|(?:模型输出|模型响应|结构化输出)(?:校验|验证|解析|错误|失败|无效|未通过|不合法)?|\b(?:model|schema|json|yaml)[ _-]?(?:output|response|validation|parse|parsing|error|failure|invalid)\b/iu
-
 /** The only rule-source fields allowed inside player-visible answer content. */
 export interface PlayerRuleCitation {
   heading: string
@@ -162,7 +160,7 @@ export function isPlayerFacingRuleAnswer(value: unknown): value is PlayerFacingR
     || !(value.answerBasis === undefined || value.answerBasis === null
       || value.answerBasis === 'DIRECT_RULE' || value.answerBasis === 'GROUNDED_APPLICATION')) return false
   const answer = value as unknown as PlayerFacingRuleAnswer
-  return hasValidOutcomeShape(answer) && !containsInternalProtocol(answer)
+  return hasValidOutcomeShape(answer)
 }
 
 /** Validates and projects an untrusted payload so unknown/internal fields cannot enter UI or browser state. */
@@ -306,55 +304,6 @@ function hasValidOutcomeShape(answer: PlayerFacingRuleAnswer) {
     && !hasStructuredDetails
     && (answer.status === 'INSUFFICIENT_EVIDENCE' || answer.citations.length === 0)
     && (answer.status === 'CLARIFICATION_REQUIRED') === Boolean(answer.clarification?.trim())
-}
-
-function containsInternalProtocol(answer: PlayerFacingRuleAnswer) {
-  const text = [
-    answer.shortVerdict,
-    answer.explanation,
-    ...answer.exceptions,
-    answer.clarification ?? '',
-    answer.recovery?.message ?? '',
-    answer.recovery?.actionLabel ?? '',
-    answer.recovery?.draft ?? '',
-  ]
-  answer.citations.forEach(citation => text.push(citation.heading, citation.excerpt))
-  answer.calculations?.forEach(value => text.push(value.expression, value.result))
-  answer.situationChecks?.forEach(value => text.push(value.requirement, value.playerFact))
-  answer.walkthroughSteps?.forEach(value => text.push(value.instruction, value.explanation))
-  answer.decisionBranches?.forEach(value => text.push(value.condition, value.outcome))
-  answer.exceptionClauses?.forEach(value => text.push(value.condition, value.effect))
-  answer.termDefinitions?.forEach(value => text.push(value.term, value.definition, value.boundary))
-  answer.workedExamples?.forEach(value => text.push(value.setup, value.action, value.outcome))
-  answer.priorityResolutions?.forEach(value => text.push(
-    value.baseRule, value.competingRule, value.resolution,
-  ))
-  answer.timingResolutions?.forEach(value => text.push(
-    value.timingContext, value.resolutionOrder, value.orderSource,
-  ))
-  answer.tieResolutions?.forEach(value => text.push(
-    value.tieContext, ...value.resolutionSteps, value.finalOutcome,
-  ))
-  answer.scopeResolutions?.forEach(value => text.push(
-    value.ruleContext, value.governingCondition, value.currentSituation, value.effect,
-  ))
-  answer.conceptComparisons?.forEach(value => text.push(
-    value.leftConcept,
-    value.leftDefinition,
-    value.rightConcept,
-    value.rightDefinition,
-    value.commonGround,
-    value.keyDifference,
-    value.practicalBoundary,
-  ))
-  answer.ruleOptions?.forEach(value => text.push(
-    value.decisionContext,
-    value.selectionRule,
-    value.optionName,
-    value.availabilityCondition,
-    value.result,
-  ))
-  return INTERNAL_PROTOCOL_PATTERN.test(text.join('\n'))
 }
 
 export function isAnswerRulingReference(value: unknown): value is AnswerRulingReference {

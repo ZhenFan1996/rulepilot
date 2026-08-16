@@ -123,6 +123,30 @@ class JpaUploadedRulebookTeachingHandoffStore implements UploadedRulebookTeachin
     }
 
     @Override
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public boolean dismissOwned(
+            UUID handoffId,
+            String ownerUsername,
+            State expectedState,
+            UUID expectedPreparationRunId) {
+        String runCondition = expectedPreparationRunId == null
+                ? "and handoff.preparationRunId is null"
+                : "and handoff.preparationRunId = :expectedRunId";
+        var delete = entityManager.createQuery(
+                """
+                delete from UploadedRulebookTeachingHandoffEntity handoff
+                where handoff.id = :handoffId
+                  and handoff.ownerUsername = :owner
+                  and handoff.state = :expectedState
+                """ + runCondition);
+        delete.setParameter("handoffId", handoffId)
+                .setParameter("owner", ownerUsername)
+                .setParameter("expectedState", expectedState.name());
+        if (expectedPreparationRunId != null) delete.setParameter("expectedRunId", expectedPreparationRunId);
+        return delete.executeUpdate() == 1;
+    }
+
+    @Override
     public List<Snapshot> findRecentOwned(String ownerUsername, int limit) {
         return entityManager
                 .createQuery(

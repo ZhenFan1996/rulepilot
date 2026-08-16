@@ -15,6 +15,7 @@ import com.rulepilot.assistant.AgentExecutionControl.ActivityType;
 import com.rulepilot.assistant.AssistantReadTools;
 import com.rulepilot.assistant.AssistantReadTools.RuleEvidenceContext;
 import com.rulepilot.assistant.AuditedAgentInvocations;
+import com.rulepilot.assistant.GeneratedContentCritic.ReviewRisk;
 import com.rulepilot.assistant.NativeToolAgent;
 import com.rulepilot.assistant.NativeToolAgent.RunRequest;
 import com.rulepilot.assistant.NativeToolAgent.RunResult;
@@ -25,6 +26,7 @@ import com.rulepilot.assistant.QuestionUnderstanding.PriorCitationReference;
 import com.rulepilot.assistant.QuestionUnderstanding.PriorTurnReference;
 import com.rulepilot.assistant.RuleAnswerModel.ModelDraft;
 import com.rulepilot.assistant.RuleAnswerModel.ModelRequest;
+import com.rulepilot.assistant.RuleAnswerModel.PlayerFacingField;
 import com.rulepilot.assistant.RuleAnswerModel.EvidenceInput;
 import com.rulepilot.assistant.RuleAnswerModel.EvidenceNeed;
 import com.rulepilot.assistant.RuleAnswerModel.AnswerContext;
@@ -81,6 +83,577 @@ import org.springframework.context.annotation.AnnotationConfigApplicationContext
 class AnswerEvidenceAgentRealRulebookEvaluationTest {
 
     private final ObjectMapper mapper = JsonMapper.builder().findAndAddModules().build();
+
+    @Test
+    void recordsOnePaidMixedCoverageAnswerCanaryWithoutOverwritingPriorEvidence() throws Exception {
+        assumeTrue("true".equalsIgnoreCase(System.getenv("RULEPILOT_REAL_ANSWER_LEAN_CANARY")));
+        String phase = requiredEnvironment("RULEPILOT_ANSWER_CANARY_PHASE");
+        assumeTrue(phase.matches("[a-z0-9-]{2,32}"), "canary phase must be a safe bounded label");
+        Path root = Path.of(System.getProperty("user.dir")).getParent();
+        JsonNode inventory = mapper.readTree(root.resolve(".local/public-corpus/source-preflight.json").toFile());
+        Path rulebook = rulebookForTitle(root, inventory, "Root: Learning to Play");
+        ProviderConfiguration configured = provider("deepseek");
+        Path rawOutput = root.resolve(".local/agent-evaluation/answer-lean-canary-" + phase + "-raw.jsonl");
+        Path summaryOutput = root.resolve(".local/agent-evaluation/answer-lean-canary-" + phase + ".json");
+        assumeTrue(!Files.exists(rawOutput) && !Files.exists(summaryOutput),
+                "canary evidence already exists; choose a new phase label instead of overwriting it");
+
+        String question = "这款游戏怎么赢？规则书有没有保证获胜的最佳开局？";
+        long started = System.nanoTime();
+        BoundaryAnswer run = runBoundaryAnswer(
+                rulebook,
+                configured,
+                question,
+                2,
+                rawOutput,
+                "mixed-supported-and-unsupported");
+        long wallLatencyMs = Duration.ofNanos(System.nanoTime() - started).toMillis();
+
+        Map<String, Object> summary = new LinkedHashMap<>(boundarySummary(run));
+        summary.put("schemaVersion", 1);
+        summary.put("generatedAt", Instant.now().toString());
+        summary.put("phase", phase);
+        summary.put("question", question);
+        summary.put("publishedAnswer", visibleAnswer(run.answer()));
+        summary.put("wallLatencyMs", wallLatencyMs);
+        summary.put("sameVersionOnly", run.refined().evidence().stream()
+                .map(hit -> hit.evidence().documentVersionId())
+                .distinct()
+                .count() == 1);
+        String visible = visibleText(run.answer());
+        boolean localUncertainty = visible.contains("当前")
+                && (visible.contains("不能确认")
+                        || visible.contains("无法确认")
+                        || visible.contains("还不能确认")
+                        || visible.contains("不能从现有")
+                        || visible.contains("无法从现有")
+                        || visible.contains("不能从当前")
+                        || visible.contains("无法从当前")
+                        || visible.contains("不能从这些摘录")
+                        || visible.contains("无法从这些摘录"));
+        boolean usefulClarification = visible.contains("？")
+                || visible.contains("?")
+                || visible.contains("如果你能指出")
+                || visible.contains("如果你能告诉我")
+                || visible.contains("请告诉我具体")
+                || visible.contains("请提供具体");
+        boolean wholeRulebookNegative = visible.contains("规则书本身没有")
+                || visible.contains("规则书未提供")
+                || visible.contains("规则书没有提供")
+                || visible.contains("规则书只描述")
+                || visible.contains("规则书只说明")
+                || visible.contains("规则书未提到");
+        summary.put("localUncertainty", localUncertainty);
+        summary.put("usefulClarification", usefulClarification);
+        summary.put("wholeRulebookNegative", wholeRulebookNegative);
+        Files.writeString(
+                summaryOutput,
+                mapper.writerWithDefaultPrettyPrinter().writeValueAsString(summary) + "\n",
+                StandardCharsets.UTF_8,
+                StandardOpenOption.CREATE_NEW);
+
+        assertThat(summary).containsEntry("sameVersionOnly", true);
+        assertThat(run.audited().rawAnswerProviderResponses).isNotEmpty();
+        if (phase.startsWith("after")) {
+            assertThat(run.answer().status().publishesConclusion()).isTrue();
+            assertThat(localUncertainty).isTrue();
+            assertThat(usefulClarification).isTrue();
+            assertThat(wholeRulebookNegative).isFalse();
+            assertThat(summary).containsEntry("prosePreserved", true);
+        }
+    }
+
+    @Test
+    void recordsOnePaidFieldLocalRepairWithRawDomainAndPlayerVisibleEvidence() throws Exception {
+        assumeTrue("true".equalsIgnoreCase(System.getenv("RULEPILOT_REAL_ANSWER_REPAIR_CANARY")));
+        String phase = requiredEnvironment("RULEPILOT_ANSWER_CANARY_PHASE");
+        assumeTrue(phase.matches("[a-z0-9-]{2,32}"), "canary phase must be a safe bounded label");
+        Path root = Path.of(System.getProperty("user.dir")).getParent();
+        JsonNode inventory = mapper.readTree(root.resolve(".local/public-corpus/source-preflight.json").toFile());
+        Path rulebook = rulebookForTitle(root, inventory, "Root: Learning to Play");
+        ProviderConfiguration configured = provider("deepseek");
+        Path rawOutput = root.resolve(
+                ".local/agent-evaluation/answer-player-repair-canary-" + phase + "-raw.json");
+        Path summaryOutput = root.resolve(
+                ".local/agent-evaluation/answer-player-repair-canary-" + phase + ".json");
+        assumeTrue(!Files.exists(rawOutput) && !Files.exists(summaryOutput),
+                "repair canary evidence already exists; choose a new phase label instead of overwriting it");
+
+        UUID versionId = UUID.nameUUIDFromBytes(
+                ("answer-player-repair:" + phase).getBytes(StandardCharsets.UTF_8));
+        PdfRulebookEvidence corpus = new PdfRulebookEvidence(rulebook, versionId);
+        HybridEvidenceHit evidence = corpus.hit(2);
+        String question = "达到多少胜利点会赢？规则书有没有保证获胜的最佳开局？";
+        ModelRequest request = modelRequest(
+                question,
+                List.of(evidence),
+                PlayerLocale.ZH_CN,
+                Set.of(EvidenceNeed.DIRECT_RULE, EvidenceNeed.ADVICE));
+        ModelDraft previous = new ModelDraft(
+                "达到30点胜利点即可获胜。",
+                "当前规则页说明，达到30点胜利点即可获胜。规则书未提供保证获胜的最佳开局。",
+                List.of(evidence.evidence().chunkId()),
+                List.of(),
+                "HIGH");
+        AnswerPlayerFacingRepairPolicy.RepairPlan repairPlan =
+                AnswerPlayerFacingRepairPolicy.planFor(request, previous);
+        assertThat(repairPlan.editableFields()).containsExactly(PlayerFacingField.EXPLANATION);
+
+        DirectAuditedInvocations audited = new DirectAuditedInvocations();
+        RuleAnswerRateLimiter limiter = mock(RuleAnswerRateLimiter.class);
+        when(limiter.acquireModel(any(String.class), any(), any(String.class))).thenReturn(() -> {});
+        AnswerModelGateway gateway = new AnswerModelGateway(answerModel(configured, audited), limiter, audited);
+        long started = System.nanoTime();
+        ModelDraft repaired = gateway.revisePlayerFacing(
+                UUID.randomUUID(),
+                "agent-evaluation",
+                null,
+                request,
+                previous,
+                repairPlan.feedback(),
+                repairPlan.editableFields(),
+                "repairPlayerFacingRuleAnswer",
+                "Player-facing source scope repaired");
+        long latencyMs = Duration.ofNanos(System.nanoTime() - started).toMillis();
+
+        AnswerDraftPublicationPolicy.Preparation preparation =
+                AnswerDraftPublicationPolicy.prepare(request, repaired);
+        assertThat(preparation.ready())
+                .as("repair must pass the deterministic publication boundary; failure=%s, draft=%s",
+                        preparation.failureMessage(), repaired)
+                .isTrue();
+        StructuredRuleAnswer published = publishBoundaryAnswer(
+                versionId, request, preparation.draft(), List.of(evidence));
+        PlayerFacingRuleAnswer player = PlayerFacingAnswerPresenter.present(
+                published, question, PlayerLocale.ZH_CN);
+        String providerText = (String) audited.rawAnswerProviderResponses.getLast().get("text");
+        JsonNode providerPatch = mapper.readTree(providerText);
+        String providerExplanation = providerPatch.path("explanation").asText();
+        Set<String> providerFields = new LinkedHashSet<>();
+        providerPatch.fieldNames().forEachRemaining(providerFields::add);
+
+        Map<String, Object> raw = new LinkedHashMap<>();
+        raw.put("provider", configured.provider());
+        raw.put("model", configured.model());
+        raw.put("question", question);
+        raw.put("evidencePage", evidence.evidence().pageFrom());
+        raw.put("previousDraft", previous);
+        raw.put("editableFields", repairPlan.editableFields());
+        raw.put("repairFeedback", repairPlan.feedback());
+        raw.put("providerResponses", List.copyOf(audited.rawAnswerProviderResponses));
+        raw.put("promptSizes", List.copyOf(audited.answerPromptSizes));
+        raw.put("mergedDomainDrafts", List.copyOf(audited.rawAnswerDrafts));
+        raw.put("publishedAnswer", visibleAnswer(published));
+        raw.put("playerVisibleAnswer", player);
+        Files.writeString(
+                rawOutput,
+                mapper.writerWithDefaultPrettyPrinter().writeValueAsString(raw) + "\n",
+                StandardCharsets.UTF_8,
+                StandardOpenOption.CREATE_NEW);
+
+        boolean localBoundary = containsLocalizedEvidenceBoundary(repaired.explanation());
+        boolean wholeRulebookNegative = containsWholeRulebookNegative(repaired.explanation());
+        Map<String, Object> summary = new LinkedHashMap<>();
+        summary.put("schemaVersion", 1);
+        summary.put("generatedAt", Instant.now().toString());
+        summary.put("phase", phase);
+        summary.put("question", question);
+        summary.put("editableFields", repairPlan.editableFields());
+        summary.put("modelCalls", audited.modelCalls);
+        summary.put("providerModelCalls", audited.answerPromptSizes.size());
+        summary.put("toolCalls", audited.toolCalls);
+        summary.put("latencyMs", latencyMs);
+        summary.put("sameAgentRepair", true);
+        summary.put("providerReturnedOnlyEditableField", providerFields.equals(Set.of("explanation")));
+        summary.put("providerRawPatchToDomainExplanationExact",
+                providerExplanation.equals(repaired.explanation()));
+        summary.put("lockedVerdictPreserved", previous.shortVerdict().equals(repaired.shortVerdict()));
+        summary.put("lockedCitationsPreserved", previous.citationIds().equals(repaired.citationIds()));
+        summary.put("lockedMetadataPreserved", previous.confidence().equals(repaired.confidence())
+                && previous.answerBasis().equals(repaired.answerBasis()));
+        summary.put("domainToPublishedCoreExact", repaired.shortVerdict().equals(published.shortVerdict())
+                && repaired.explanation().equals(published.explanation()));
+        summary.put("publishedToPlayerCoreExact", published.shortVerdict().equals(player.shortVerdict())
+                && published.explanation().equals(player.explanation()));
+        summary.put("localizedEvidenceBoundary", localBoundary);
+        summary.put("wholeRulebookNegative", wholeRulebookNegative);
+        summary.put("publishedAnswer", visibleAnswer(published));
+        summary.put("playerVisibleAnswer", player);
+        Files.writeString(
+                summaryOutput,
+                mapper.writerWithDefaultPrettyPrinter().writeValueAsString(summary) + "\n",
+                StandardCharsets.UTF_8,
+                StandardOpenOption.CREATE_NEW);
+
+        assertThat(published.status().publishesConclusion()).isTrue();
+        assertThat(repaired.shortVerdict()).isEqualTo(previous.shortVerdict());
+        assertThat(repaired.citationIds()).isEqualTo(previous.citationIds());
+        assertThat(providerExplanation).isEqualTo(repaired.explanation());
+        assertThat(repaired.explanation()).contains("30");
+        assertThat(localBoundary).isTrue();
+        assertThat(wholeRulebookNegative).isFalse();
+        assertThat(audited.modelCalls).isEqualTo(1);
+        assertThat(audited.toolCalls).isZero();
+        assertThat(audited.answerPromptSizes).singleElement().satisfies(prompt ->
+                assertThat((Integer) prompt.get("systemChars")).isLessThan(2_500));
+        assertThat(published.shortVerdict()).isEqualTo(player.shortVerdict());
+        assertThat(published.explanation()).isEqualTo(player.explanation());
+    }
+
+    @Test
+    void recordsOnePaidDirectRuleAnswerCanaryWithoutOverwritingPriorEvidence() throws Exception {
+        assumeTrue("true".equalsIgnoreCase(System.getenv("RULEPILOT_REAL_ANSWER_SCENARIO_CANARY")));
+        String phase = requiredEnvironment("RULEPILOT_ANSWER_CANARY_PHASE");
+        assumeTrue(phase.matches("[a-z0-9-]{2,32}"), "canary phase must be a safe bounded label");
+        Path root = Path.of(System.getProperty("user.dir")).getParent();
+        JsonNode inventory = mapper.readTree(root.resolve(".local/public-corpus/source-preflight.json").toFile());
+        Path rulebook = rulebookForTitle(root, inventory, "Root: Learning to Play");
+        ProviderConfiguration configured = provider("deepseek");
+        Path rawOutput = root.resolve(".local/agent-evaluation/answer-direct-canary-" + phase + "-raw.jsonl");
+        Path summaryOutput = root.resolve(".local/agent-evaluation/answer-direct-canary-" + phase + ".json");
+        assumeTrue(!Files.exists(rawOutput) && !Files.exists(summaryOutput),
+                "direct canary evidence already exists; choose a new phase label instead of overwriting it");
+
+        String question = "这款游戏有哪两种获胜方式？";
+        long started = System.nanoTime();
+        BoundaryAnswer run = runBoundaryAnswer(
+                rulebook,
+                configured,
+                question,
+                2,
+                rawOutput,
+                "direct-victory-rule");
+        long wallLatencyMs = Duration.ofNanos(System.nanoTime() - started).toMillis();
+
+        Map<String, Object> summary = new LinkedHashMap<>(boundarySummary(run));
+        summary.put("schemaVersion", 1);
+        summary.put("generatedAt", Instant.now().toString());
+        summary.put("phase", phase);
+        summary.put("question", question);
+        summary.put("publishedAnswer", visibleAnswer(run.answer()));
+        summary.put("wallLatencyMs", wallLatencyMs);
+        String visible = visibleText(run.answer());
+        summary.put("naturalAnswerChars", visible.length());
+        summary.put("containsLocalAbstention", visible.contains("当前摘录") || visible.contains("无法确认"));
+        Files.writeString(
+                summaryOutput,
+                mapper.writerWithDefaultPrettyPrinter().writeValueAsString(summary) + "\n",
+                StandardCharsets.UTF_8,
+                StandardOpenOption.CREATE_NEW);
+
+        assertThat(run.answer().status().publishesConclusion()).isTrue();
+        assertThat(run.plan().evidenceNeeds())
+                .contains(EvidenceNeed.DIRECT_RULE, EvidenceNeed.COMPLETE_LIST)
+                .doesNotContain(EvidenceNeed.ADVICE);
+        assertThat(run.answer().citations()).anyMatch(citation -> citation.pageFrom() == 2);
+        assertThat(visible).contains("30").containsAnyOf("统治卡", "dominance");
+        assertThat(visible.length()).isBetween(80, 1_700);
+        assertThat(summary).containsEntry("prosePreserved", true);
+        assertThat(run.audited().modelCalls).isLessThanOrEqualTo(3);
+        assertThat(run.audited().rawAnswerDrafts).hasSize(1);
+    }
+
+    @Test
+    void recordsOnePaidStraightClauseAnswerWithTwoProviderCallsAndNoToolLoop() throws Exception {
+        assumeTrue("true".equalsIgnoreCase(System.getenv("RULEPILOT_REAL_ANSWER_SCENARIO_CANARY")));
+        String phase = requiredEnvironment("RULEPILOT_ANSWER_CANARY_PHASE");
+        assumeTrue(phase.matches("[a-z0-9-]{2,32}"), "canary phase must be a safe bounded label");
+        Path root = Path.of(System.getProperty("user.dir")).getParent();
+        JsonNode inventory = mapper.readTree(root.resolve(".local/public-corpus/source-preflight.json").toFile());
+        Path rulebook = rulebookForTitle(root, inventory, "Root: Learning to Play");
+        ProviderConfiguration configured = provider("deepseek");
+        Path rawOutput = root.resolve(".local/agent-evaluation/answer-straight-canary-" + phase + "-raw.jsonl");
+        Path summaryOutput = root.resolve(".local/agent-evaluation/answer-straight-canary-" + phase + ".json");
+        assumeTrue(!Files.exists(rawOutput) && !Files.exists(summaryOutput),
+                "straight canary evidence already exists; choose a new phase label instead of overwriting it");
+
+        String question = "达到多少胜利点会赢？";
+        long started = System.nanoTime();
+        BoundaryAnswer run = runBoundaryAnswer(
+                rulebook,
+                configured,
+                question,
+                2,
+                rawOutput,
+                "straight-victory-threshold");
+        long wallLatencyMs = Duration.ofNanos(System.nanoTime() - started).toMillis();
+        PlayerFacingRuleAnswer player = PlayerFacingAnswerPresenter.present(
+                run.answer(), question, PlayerLocale.ZH_CN);
+
+        Map<String, Object> summary = new LinkedHashMap<>(boundarySummary(run));
+        summary.put("schemaVersion", 1);
+        summary.put("generatedAt", Instant.now().toString());
+        summary.put("phase", phase);
+        summary.put("question", question);
+        summary.put("publishedAnswer", visibleAnswer(run.answer()));
+        summary.put("playerVisibleAnswer", player);
+        summary.put("wallLatencyMs", wallLatencyMs);
+        summary.put("playerVisibleCorePreserved", run.answer().shortVerdict().equals(player.shortVerdict())
+                && run.answer().explanation().equals(player.explanation()));
+        Files.writeString(
+                summaryOutput,
+                mapper.writerWithDefaultPrettyPrinter().writeValueAsString(summary) + "\n",
+                StandardCharsets.UTF_8,
+                StandardOpenOption.CREATE_NEW);
+
+        assertThat(run.answer().status().publishesConclusion()).isTrue();
+        assertThat(run.plan().evidenceNeeds()).contains(EvidenceNeed.DIRECT_RULE).doesNotContain(EvidenceNeed.ADVICE);
+        assertThat(visibleText(run.answer())).contains("30");
+        assertThat(run.audited().rawNativeTurns).isEmpty();
+        assertThat(run.audited().toolCalls).isZero();
+        assertThat(run.audited().rawAnswerDrafts).hasSize(1);
+        assertThat(run.audited().answerPromptSizes).hasSize(2);
+        assertThat(run.audited().modelCalls).isEqualTo(2);
+        assertThat(summary)
+                .containsEntry("providerModelCalls", 2)
+                .containsEntry("sameAgentAnswerRepairs", 0)
+                .containsEntry("prosePreserved", true)
+                .containsEntry("providerRawToPublishedVerdictPreserved", true)
+                .containsEntry("providerRawToPublishedExplanationPreserved", true)
+                .containsEntry("playerVisibleCorePreserved", true);
+    }
+
+    @Test
+    void recordsOnePaidAmbiguousFollowUpCanaryWithoutStartingRetrievalOrComposition() throws Exception {
+        assumeTrue("true".equalsIgnoreCase(System.getenv("RULEPILOT_REAL_ANSWER_SCENARIO_CANARY")));
+        String phase = requiredEnvironment("RULEPILOT_ANSWER_CANARY_PHASE");
+        assumeTrue(phase.matches("[a-z0-9-]{2,32}"), "canary phase must be a safe bounded label");
+        Path root = Path.of(System.getProperty("user.dir")).getParent();
+        Path rawOutput = root.resolve(".local/agent-evaluation/answer-ambiguity-canary-" + phase + "-raw.json");
+        Path summaryOutput = root.resolve(".local/agent-evaluation/answer-ambiguity-canary-" + phase + ".json");
+        assumeTrue(!Files.exists(rawOutput) && !Files.exists(summaryOutput),
+                "ambiguity canary evidence already exists; choose a new phase label instead of overwriting it");
+        ProviderConfiguration configured = provider("deepseek");
+        DirectAuditedInvocations audited = new DirectAuditedInvocations();
+        RuleAnswerRateLimiter limiter = mock(RuleAnswerRateLimiter.class);
+        when(limiter.acquireModel(any(String.class), any(), any(String.class))).thenReturn(() -> {});
+        AnswerModelGateway gateway = new AnswerModelGateway(answerModel(configured, audited), limiter, audited);
+        UUID versionId = UUID.nameUUIDFromBytes(
+                ("answer-ambiguity:" + phase).getBytes(StandardCharsets.UTF_8));
+        String question = "这个什么时候触发？";
+        UnderstoodQuestion deterministic = question(versionId, question);
+        QuestionContext context = new QuestionContext(versionId, null, null, PlayerLocale.ZH_CN);
+
+        long started = System.nanoTime();
+        QuestionInterpretationDraft providerDraft = gateway
+                .interpretQuestion(
+                        UUID.randomUUID(),
+                        "agent-evaluation",
+                        null,
+                        new QuestionInterpretationRequest(
+                                question,
+                                "",
+                                "",
+                                "",
+                                deterministic.type(),
+                                deterministic.missingContext(),
+                                null,
+                                PlayerLocale.ZH_CN))
+                .orElseThrow(() -> new AssertionError("provider did not return an ambiguity interpretation"));
+        AnswerQuestionInterpretationPolicy.Interpretation interpretation =
+                new AnswerQuestionInterpretationPolicy()
+                        .applyWithPlan(deterministic, context, providerDraft)
+                        .orElseThrow(() -> new AssertionError("ambiguity interpretation failed deterministic policy"));
+        StructuredRuleAnswer answer = AnswerOutcomePolicy.clarification(
+                interpretation.question(), PlayerLocale.ZH_CN);
+        PlayerFacingRuleAnswer playerAnswer = PlayerFacingAnswerPresenter.present(
+                answer, question, PlayerLocale.ZH_CN);
+        long latencyMs = Duration.ofNanos(System.nanoTime() - started).toMillis();
+
+        Map<String, Object> raw = new LinkedHashMap<>();
+        raw.put("provider", configured.provider());
+        raw.put("model", configured.model());
+        raw.put("question", question);
+        raw.put("providerResponses", List.copyOf(audited.rawAnswerProviderResponses));
+        raw.put("promptSizes", List.copyOf(audited.answerPromptSizes));
+        raw.put("acceptedInterpretation", providerDraft);
+        Files.writeString(
+                rawOutput,
+                mapper.writerWithDefaultPrettyPrinter().writeValueAsString(raw) + "\n",
+                StandardCharsets.UTF_8,
+                StandardOpenOption.CREATE_NEW);
+        Map<String, Object> summary = new LinkedHashMap<>();
+        summary.put("schemaVersion", 1);
+        summary.put("generatedAt", Instant.now().toString());
+        summary.put("phase", phase);
+        summary.put("question", question);
+        summary.put("answer", visibleAnswer(answer));
+        summary.put("playerVisibleAnswer", playerAnswer);
+        summary.put("rawClarificationToPlayerExact", answer.clarification().equals(playerAnswer.clarification()));
+        summary.put("modelCalls", audited.modelCalls);
+        summary.put("toolCalls", audited.toolCalls);
+        summary.put("answerModelDrafts", audited.rawAnswerDrafts.size());
+        summary.put("latencyMs", latencyMs);
+        Files.writeString(
+                summaryOutput,
+                mapper.writerWithDefaultPrettyPrinter().writeValueAsString(summary) + "\n",
+                StandardCharsets.UTF_8,
+                StandardOpenOption.CREATE_NEW);
+
+        assertThat(answer.status().name()).isEqualTo("CLARIFICATION_REQUIRED");
+        assertThat(answer.clarification()).contains("具体指什么", "卡牌", "行动", "效果");
+        assertThat(playerAnswer.clarification()).isEqualTo(answer.clarification());
+        assertThat(audited.modelCalls).isEqualTo(1);
+        assertThat(audited.toolCalls).isZero();
+        assertThat(audited.rawAnswerDrafts).isEmpty();
+        assertThat(audited.rawNativeTurns).isEmpty();
+    }
+
+    @Test
+    void recordsThreePaidImaginativeAnswerCanariesWithRawDomainAndPlayerVisibleEvidence() throws Exception {
+        assumeTrue("true".equalsIgnoreCase(System.getenv("RULEPILOT_REAL_ANSWER_IMAGINATIVE_CANARY")));
+        String phase = requiredEnvironment("RULEPILOT_ANSWER_CANARY_PHASE");
+        assumeTrue(phase.matches("[a-z0-9-]{2,32}"), "canary phase must be a safe bounded label");
+        Path root = Path.of(System.getProperty("user.dir")).getParent();
+        JsonNode inventory = mapper.readTree(root.resolve(".local/public-corpus/source-preflight.json").toFile());
+        Path rulebook = rulebookForTitle(root, inventory, "Root: Learning to Play");
+        ProviderConfiguration configured = provider("deepseek");
+        Path rawOutput = root.resolve(
+                ".local/agent-evaluation/answer-imaginative-canary-" + phase + "-raw.jsonl");
+        Path summaryOutput = root.resolve(
+                ".local/agent-evaluation/answer-imaginative-canary-" + phase + ".json");
+        assumeTrue(!Files.exists(rawOutput) && !Files.exists(summaryOutput),
+                "imaginative canary evidence already exists; choose a new phase label instead of overwriting it");
+
+        List<ImaginativeAnswerCase> cases = List.of(
+                new ImaginativeAnswerCase(
+                        "colloquial-false-premise",
+                        "哎我是不是记串了：不是攒到20分就立刻赢吗？要是我硬说这是规则，请你先纠错，再告诉我真正的全部获胜方式。",
+                        2),
+                new ImaginativeAnswerCase(
+                        "fact-plus-guaranteed-strategy",
+                        "我今晚第一次带朋友玩：先用大白话告诉我每个阵营靠什么得分，再给我一套‘照抄就稳赢’的前三步开局。规则书没写的部分请别装懂。",
+                        2),
+                new ImaginativeAnswerCase(
+                        "roleplay-grounded-scope-and-timing",
+                        "请扮演‘林地最高法院’，按【裁决】【理由】【边界】回答：我们只有两名玩家，我已经在开局拿到统治卡，所以现在就能打出并靠它获胜，对吧？请分别判断‘两人能不能用统治卡’‘开局能不能打’‘不靠统治卡正常怎么赢’。",
+                        22));
+
+        Map<String, BoundaryAnswer> runs = new LinkedHashMap<>();
+        Map<String, PlayerFacingRuleAnswer> playerAnswers = new LinkedHashMap<>();
+        List<Map<String, Object>> results = new ArrayList<>();
+        for (ImaginativeAnswerCase case_ : cases) {
+            long started = System.nanoTime();
+            BoundaryAnswer run = runBoundaryAnswer(
+                    rulebook,
+                    configured,
+                    case_.question(),
+                    case_.initialPage(),
+                    rawOutput,
+                    case_.caseId());
+            long wallLatencyMs = Duration.ofNanos(System.nanoTime() - started).toMillis();
+            PlayerFacingRuleAnswer playerAnswer = PlayerFacingAnswerPresenter.present(
+                    run.answer(), case_.question(), PlayerLocale.ZH_CN);
+            ReviewRisk reviewRisk = run.answer().status().publishesConclusion()
+                    ? AnswerCritiquePolicy.reviewRisk(
+                            question(run.answer().documentVersionId(), case_.question()),
+                            new QuestionContext(run.answer().documentVersionId()),
+                            run.modelRequest(),
+                            run.answer())
+                    : null;
+            String playerText = (playerAnswer.shortVerdict() + " " + playerAnswer.explanation()).strip();
+            Map<String, Object> result = new LinkedHashMap<>(boundarySummary(run));
+            result.put("caseId", case_.caseId());
+            result.put("question", case_.question());
+            result.put("wallLatencyMs", wallLatencyMs);
+            result.put("questionPlan", run.plan());
+            result.put("providerRawDraft", run.providerRawDraft());
+            result.put("preparedDomainDraft", run.preparedDraft());
+            result.put("publishedDomainAnswer", run.answer());
+            result.put("playerVisibleAnswer", playerAnswer);
+            result.put("playerVisibleCorePreserved", run.answer().shortVerdict().equals(playerAnswer.shortVerdict())
+                    && run.answer().explanation().equals(playerAnswer.explanation()));
+            result.put("reviewRisk", reviewRisk == null ? "NOT_REVIEWABLE" : reviewRisk.name());
+            result.put("fallback", !playerAnswer.status().publishesConclusion());
+            result.put("sameVersionOnly", run.refined().evidence().stream()
+                    .allMatch(hit -> run.answer().documentVersionId().equals(hit.evidence().documentVersionId())));
+            result.put("wholeRulebookNegative", containsWholeRulebookNegative(playerText));
+            result.put("localizedEvidenceBoundary", containsLocalizedEvidenceBoundary(playerText));
+            result.put("usefulClarification", containsUsefulClarification(playerText));
+            results.add(result);
+            runs.put(case_.caseId(), run);
+            playerAnswers.put(case_.caseId(), playerAnswer);
+        }
+
+        Map<String, Object> summary = new LinkedHashMap<>();
+        summary.put("schemaVersion", 1);
+        summary.put("generatedAt", Instant.now().toString());
+        summary.put("phase", phase);
+        summary.put("provider", configured.provider());
+        summary.put("model", configured.model());
+        summary.put("results", results);
+        summary.put("controls", Map.of(
+                "rawEvidenceStoredLocallyOnly", true,
+                "productionVocabularySpecialCasesAdded", false,
+                "playerVisiblePresenterApplied", true,
+                "riskDerivedFromPublishedAnswer", true));
+        Files.writeString(
+                summaryOutput,
+                mapper.writerWithDefaultPrettyPrinter().writeValueAsString(summary) + "\n",
+                StandardCharsets.UTF_8,
+                StandardOpenOption.CREATE_NEW);
+
+        BoundaryAnswer falsePremise = runs.get("colloquial-false-premise");
+        String falsePremiseText = visibleText(falsePremise.answer());
+        assertThat(falsePremise.answer().status().publishesConclusion()).isTrue();
+        assertThat(falsePremise.plan().evidenceNeeds())
+                .contains(EvidenceNeed.DIRECT_RULE, EvidenceNeed.COMPLETE_LIST);
+        assertThat(falsePremise.answer().citations()).anyMatch(citation -> citation.pageFrom() == 2);
+        assertThat(falsePremiseText).contains("30").containsAnyOf("统治卡", "支配卡", "dominance");
+        assertThat(containsWholeRulebookNegative(falsePremiseText)).isFalse();
+        ReviewRisk falsePremiseRisk = AnswerCritiquePolicy.reviewRisk(
+                question(falsePremise.answer().documentVersionId(), falsePremise.answer().shortVerdict()),
+                new QuestionContext(falsePremise.answer().documentVersionId()),
+                falsePremise.modelRequest(),
+                falsePremise.answer());
+        assertThat(falsePremiseRisk).isEqualTo(
+                falsePremise.answer().citations().size() == 1 ? ReviewRisk.STANDARD : ReviewRisk.HIGH_IMPACT);
+
+        BoundaryAnswer mixed = runs.get("fact-plus-guaranteed-strategy");
+        String mixedText = visibleText(mixed.answer());
+        assertThat(mixed.answer().status().publishesConclusion()).isTrue();
+        assertThat(mixed.plan().evidenceNeeds()).contains(EvidenceNeed.DIRECT_RULE, EvidenceNeed.ADVICE);
+        assertThat(mixed.answer().citations()).isNotEmpty();
+        assertThat(mixedText).containsAnyOf("得分", "胜利点");
+        assertThat(containsLocalizedEvidenceBoundary(mixedText)).isTrue();
+        assertThat(containsUsefulClarification(mixedText)).isTrue();
+        assertThat(containsWholeRulebookNegative(mixedText)).isFalse();
+
+        BoundaryAnswer grounded = runs.get("roleplay-grounded-scope-and-timing");
+        PlayerFacingRuleAnswer groundedPlayer = playerAnswers.get("roleplay-grounded-scope-and-timing");
+        String groundedText = visibleText(grounded.answer());
+        assertThat(grounded.answer().status().publishesConclusion()).isTrue();
+        assertThat(groundedPlayer.status().publishesConclusion()).isTrue();
+        assertThat(grounded.plan().subquestions()).hasSizeGreaterThanOrEqualTo(3);
+        assertThat(grounded.answer().citations())
+                .anyMatch(citation -> citation.pageFrom() == 2)
+                .anyMatch(citation -> citation.pageFrom() == 21)
+                .anyMatch(citation -> citation.pageFrom() == 22);
+        assertThat(groundedText)
+                .containsAnyOf("两名", "两人", "二人", "2人", "两个玩家")
+                .containsAnyOf("开局", "早期")
+                .contains("30")
+                .contains("裁决", "理由", "边界");
+        assertThat(AnswerCritiquePolicy.reviewRisk(
+                        question(grounded.answer().documentVersionId(), grounded.answer().shortVerdict()),
+                        new QuestionContext(grounded.answer().documentVersionId()),
+                        grounded.modelRequest(),
+                        grounded.answer()))
+                .isEqualTo(ReviewRisk.HIGH_IMPACT);
+        assertThat(containsWholeRulebookNegative(groundedText)).isFalse();
+
+        assertThat(results).allSatisfy(result -> assertThat(result)
+                .containsEntry("fallback", false)
+                .containsEntry("sameVersionOnly", true)
+                .containsEntry("playerVisibleCorePreserved", true)
+                .containsEntry("prosePreserved", true)
+                .containsEntry("providerRawToPublishedVerdictPreserved", true)
+                .containsEntry("providerRawToPublishedExplanationPreserved", true));
+        assertThat(playerAnswers.values()).allSatisfy(player -> {
+            assertThat(player.status().publishesConclusion()).isTrue();
+            assertThat(player.citations()).isNotEmpty();
+        });
+    }
 
     @Test
     void refinesCompoundEvidenceAcrossTwoRealRulebooksAndRejectsACrossRulebookNeed() throws Exception {
@@ -485,7 +1058,7 @@ class AnswerEvidenceAgentRealRulebookEvaluationTest {
                 ready(corpus.hit(initialPage)));
 
         ModelRequest request = modelRequest(
-                understood.normalizedQuestion(), refined.evidence(), PlayerLocale.ZH_CN, plan.evidenceNeeds());
+                understood.normalizedQuestion(), refined.evidence(), PlayerLocale.ZH_CN, plan);
         AnswerDraftComposer.Result prepared = new AnswerDraftComposer(modelGateway)
                 .compose(runId, "agent-evaluation", null, request);
         StructuredRuleAnswer answer;
@@ -493,8 +1066,7 @@ class AnswerEvidenceAgentRealRulebookEvaluationTest {
             answer = AnswerOutcomePolicy.safeFailure(versionId, prepared.failureStatus(), prepared.failureMessage());
         } else {
             try {
-                answer = new AnswerPublicationValidator(new PolicyEvidenceVerifier())
-                        .publish(versionId, prepared.draft(), refined.evidence());
+                answer = publishBoundaryAnswer(versionId, request, prepared.draft(), refined.evidence());
             } catch (RuntimeException invalidDraft) {
                 answer = AnswerOutcomePolicy.safeFailure(
                         versionId,
@@ -510,6 +1082,7 @@ class AnswerEvidenceAgentRealRulebookEvaluationTest {
         raw.put("model", provider.model());
         raw.put("question", playerQuestion);
         raw.put("answerProviderVisibleResponses", List.copyOf(audited.rawAnswerProviderResponses));
+        raw.put("answerPromptSizes", List.copyOf(audited.answerPromptSizes));
         raw.put("questionInterpretations", List.copyOf(audited.rawQuestionInterpretations));
         raw.put("acceptedEvidenceNeeds", plan.evidenceNeeds());
         raw.put("nativeVisibleTurns", List.copyOf(audited.rawNativeTurns));
@@ -527,7 +1100,40 @@ class AnswerEvidenceAgentRealRulebookEvaluationTest {
                 StandardCharsets.UTF_8,
                 StandardOpenOption.CREATE,
                 StandardOpenOption.APPEND);
-        return new BoundaryAnswer(plan, refined, answer, audited, latencyMs);
+        return new BoundaryAnswer(
+                plan,
+                request,
+                refined,
+                answer,
+                prepared.ready() ? prepared.draft() : null,
+                audited.lastAnswerDraft,
+                audited,
+                latencyMs);
+    }
+
+    /** Uses the same selected-aid resolvers as the production publication boundary. */
+    private StructuredRuleAnswer publishBoundaryAnswer(
+            UUID versionId,
+            ModelRequest request,
+            ModelDraft draft,
+            List<HybridEvidenceHit> evidence) {
+        return new AnswerPublicationValidator(new PolicyEvidenceVerifier()).publish(
+                versionId,
+                draft,
+                evidence,
+                new AnswerCalculationResolver().resolve(request, draft),
+                new AnswerSituationCheckResolver().resolve(request, draft),
+                new AnswerWalkthroughResolver().resolve(request, draft),
+                new AnswerDecisionTableResolver().resolve(request, draft),
+                new AnswerExceptionClauseResolver().resolve(request, draft),
+                new AnswerTermDefinitionResolver().resolve(request, draft),
+                new AnswerWorkedExampleResolver().resolve(request, draft),
+                new AnswerRulePriorityResolver().resolve(request, draft),
+                new AnswerTimingResolver().resolve(request, draft),
+                new AnswerTieResolver().resolve(request, draft),
+                new AnswerScopeResolver().resolve(request, draft),
+                new AnswerConceptComparisonResolver().resolve(request, draft),
+                new AnswerRuleOptionResolver().resolve(request, draft));
     }
 
     private Map<String, Object> boundarySummary(BoundaryAnswer run) {
@@ -541,11 +1147,75 @@ class AnswerEvidenceAgentRealRulebookEvaluationTest {
         summary.put("nativeModelTurns", run.audited().rawNativeTurns.size());
         summary.put("questionInterpretations", run.audited().rawQuestionInterpretations.size());
         summary.put("answerModelDrafts", run.audited().rawAnswerDrafts.size());
+        summary.put("sameAgentAnswerRepairs", Math.max(0, run.audited().rawAnswerDrafts.size() - 1));
+        summary.put("answerPromptSizes", List.copyOf(run.audited().answerPromptSizes));
         summary.put("modelCalls", run.audited().modelCalls);
+        summary.put("providerModelCalls", run.audited().answerPromptSizes.size()
+                + run.audited().rawNativeTurns.size());
+        long interpretationPrompts = run.audited().answerPromptSizes.stream()
+                .filter(prompt -> "INTERPRETATION".equals(prompt.get("kind")))
+                .count();
+        summary.put("interpretationContractRepairs", Math.max(
+                0L, interpretationPrompts - run.audited().rawQuestionInterpretations.size()));
         summary.put("toolCalls", run.audited().toolCalls);
         summary.put("latencyMs", run.latencyMs());
         summary.put("withinLatencyBudget", run.latencyMs() < 120_000);
+        summary.put("answerBasis", run.answer().answerBasis() == null
+                ? "NONE"
+                : run.answer().answerBasis().name());
+        if (run.preparedDraft() != null && run.answer().status().publishesConclusion()) {
+            summary.put("rawVerdictChars", run.preparedDraft().shortVerdict().length());
+            summary.put("publishedVerdictChars", run.answer().shortVerdict().length());
+            summary.put("rawExplanationChars", run.preparedDraft().explanation().length());
+            summary.put("publishedExplanationChars", run.answer().explanation().length());
+            summary.put("rawStructuredItems", structuredItems(run.preparedDraft()));
+            summary.put("publishedStructuredItems", structuredItems(run.answer()));
+            summary.put("prosePreserved", run.preparedDraft().shortVerdict().equals(run.answer().shortVerdict())
+                    && run.preparedDraft().explanation().equals(run.answer().explanation()));
+        }
+        if (run.providerRawDraft() != null && run.answer().status().publishesConclusion()) {
+            summary.put("providerRawVerdictChars", run.providerRawDraft().shortVerdict().length());
+            summary.put("providerRawExplanationChars", run.providerRawDraft().explanation().length());
+            summary.put("providerRawToPublishedVerdictPreserved",
+                    run.providerRawDraft().shortVerdict().equals(run.answer().shortVerdict()));
+            summary.put("providerRawToPublishedExplanationPreserved",
+                    run.providerRawDraft().explanation().equals(run.answer().explanation()));
+        }
         return Map.copyOf(summary);
+    }
+
+    private int structuredItems(ModelDraft draft) {
+        return draft.calculations().size()
+                + draft.situationChecks().size()
+                + draft.walkthroughSteps().size()
+                + draft.decisionBranches().size()
+                + draft.exceptionClauses().size()
+                + draft.termDefinitions().size()
+                + draft.workedExamples().size()
+                + draft.priorityResolutions().size()
+                + draft.timingResolutions().size()
+                + draft.tieResolutions().size()
+                + draft.scopeResolutions().size()
+                + draft.conceptComparisons().size()
+                + draft.ruleOptions().size()
+                + draft.exceptions().size();
+    }
+
+    private int structuredItems(StructuredRuleAnswer answer) {
+        return answer.calculations().size()
+                + answer.situationChecks().size()
+                + answer.walkthroughSteps().size()
+                + answer.decisionBranches().size()
+                + answer.exceptionClauses().size()
+                + answer.termDefinitions().size()
+                + answer.workedExamples().size()
+                + answer.priorityResolutions().size()
+                + answer.timingResolutions().size()
+                + answer.tieResolutions().size()
+                + answer.scopeResolutions().size()
+                + answer.conceptComparisons().size()
+                + answer.ruleOptions().size()
+                + answer.exceptions().size();
     }
 
     private ModelRequest modelRequest(String question, List<HybridEvidenceHit> evidence) {
@@ -574,6 +1244,30 @@ class AnswerEvidenceAgentRealRulebookEvaluationTest {
                         hit.evidence().pageFrom(),
                         hit.evidence().pageTo())).toList(),
                 evidenceNeeds);
+    }
+
+    private ModelRequest modelRequest(
+            String question,
+            List<HybridEvidenceHit> evidence,
+            PlayerLocale outputLanguage,
+            AnswerQuestionPlan plan) {
+        return new ModelRequest(
+                question,
+                QuestionType.RULE_QUERY,
+                new AnswerContext(null, null, outputLanguage),
+                evidence.stream().map(hit -> new EvidenceInput(
+                        hit.evidence().chunkId(),
+                        hit.evidence().sectionType(),
+                        hit.evidence().heading(),
+                        hit.evidence().excerpt(),
+                        hit.evidence().pageFrom(),
+                        hit.evidence().pageTo())).toList(),
+                plan.evidenceNeeds(),
+                plan.answerAid(),
+                plan.subquestions().stream()
+                        .map(subquestion -> new com.rulepilot.assistant.RuleAnswerModel.PlannedSubquestion(
+                                subquestion.text(), subquestion.evidenceNeeds()))
+                        .toList());
     }
 
     private StructuredRuleAnswer publishIfReady(
@@ -608,15 +1302,77 @@ class AnswerEvidenceAgentRealRulebookEvaluationTest {
     }
 
     private Map<String, Object> visibleAnswer(StructuredRuleAnswer answer) {
-        return Map.of(
-                "status", answer.status().name(),
-                "shortVerdict", answer.shortVerdict(),
-                "explanation", answer.explanation(),
-                "citationPages", answer.citations().stream().map(citation -> citation.pageFrom()).distinct().toList());
+        Map<String, Object> visible = new LinkedHashMap<>();
+        visible.put("status", answer.status().name());
+        visible.put("shortVerdict", answer.shortVerdict());
+        visible.put("explanation", answer.explanation());
+        visible.put("citationPages", answer.citations().stream()
+                .map(citation -> citation.pageFrom())
+                .distinct()
+                .toList());
+        if (answer.clarification() != null && !answer.clarification().isBlank()) {
+            visible.put("clarification", answer.clarification());
+        }
+        return Map.copyOf(visible);
     }
 
     private String visibleText(StructuredRuleAnswer answer) {
         return (answer.shortVerdict() + " " + answer.explanation()).replaceAll("\\s+", " ").strip();
+    }
+
+    private boolean containsWholeRulebookNegative(String prose) {
+        String normalized = prose == null ? "" : prose.toLowerCase(Locale.ROOT);
+        return List.of(
+                        "规则书没有",
+                        "规则书中没有",
+                        "规则书里没有",
+                        "规则书未提供",
+                        "规则书未提及",
+                        "规则书未提到",
+                        "规则书未说明",
+                        "规则书不包含",
+                        "规则书只描述",
+                        "规则书只说明",
+                        "the rulebook does not",
+                        "the rulebook doesn't",
+                        "the rulebook has no",
+                        "the rulebook provides no",
+                        "the rulebook contains no")
+                .stream()
+                .anyMatch(normalized::contains);
+    }
+
+    private boolean containsLocalizedEvidenceBoundary(String prose) {
+        String normalized = prose == null ? "" : prose.toLowerCase(Locale.ROOT);
+        boolean local = normalized.contains("当前")
+                || normalized.contains("现有摘录")
+                || normalized.contains("这些摘录")
+                || normalized.contains("currently supplied")
+                || normalized.contains("current excerpts");
+        boolean uncertain = normalized.contains("无法确认")
+                || normalized.contains("不能确认")
+                || normalized.contains("不足以确认")
+                || normalized.contains("无法从现有")
+                || normalized.contains("不能从现有")
+                || normalized.contains("无法从当前")
+                || normalized.contains("不能从当前")
+                || normalized.contains("无法从这些摘录")
+                || normalized.contains("不能从这些摘录")
+                || normalized.contains("cannot confirm")
+                || normalized.contains("not enough to confirm");
+        return local && uncertain;
+    }
+
+    private boolean containsUsefulClarification(String prose) {
+        String normalized = prose == null ? "" : prose.toLowerCase(Locale.ROOT);
+        return normalized.contains("？")
+                || normalized.contains("?")
+                || normalized.contains("如果你能告诉我")
+                || normalized.contains("如果你能指出")
+                || normalized.contains("你希望我继续核对")
+                || normalized.contains("请告诉我具体")
+                || normalized.contains("which specific")
+                || normalized.contains("if you can name");
     }
 
     private boolean answerCovers(CaseConfiguration case_, StructuredRuleAnswer answer) {
@@ -1061,6 +1817,7 @@ class AnswerEvidenceAgentRealRulebookEvaluationTest {
             @Override
             public org.springframework.ai.chat.model.ChatResponse call(
                     org.springframework.ai.chat.prompt.Prompt prompt) {
+                audited.recordAnswerPrompt(prompt);
                 var response = delegate.call(prompt);
                 String text = response == null || response.getResult() == null || response.getResult().getOutput() == null
                         ? ""
@@ -1196,8 +1953,11 @@ class AnswerEvidenceAgentRealRulebookEvaluationTest {
 
     private record BoundaryAnswer(
             AnswerQuestionPlan plan,
+            ModelRequest modelRequest,
             AnswerEvidenceRetriever.Result refined,
             StructuredRuleAnswer answer,
+            ModelDraft preparedDraft,
+            ModelDraft providerRawDraft,
             DirectAuditedInvocations audited,
             long latencyMs) {}
 
@@ -1216,6 +1976,8 @@ class AnswerEvidenceAgentRealRulebookEvaluationTest {
             LearningIntent expectedIntent,
             String interactionTag) {}
 
+    private record ImaginativeAnswerCase(String caseId, String question, int initialPage) {}
+
     private static final class DirectAuditedInvocations implements AuditedAgentInvocations {
         private int modelCalls;
         private int toolCalls;
@@ -1226,13 +1988,27 @@ class AnswerEvidenceAgentRealRulebookEvaluationTest {
         private final List<String> trace = new ArrayList<>();
         private final List<Map<String, Object>> rawNativeTurns = new ArrayList<>();
         private final List<Map<String, Object>> rawAnswerProviderResponses = new ArrayList<>();
+        private final List<Map<String, Object>> answerPromptSizes = new ArrayList<>();
         private final List<Map<String, Object>> rawQuestionInterpretations = new ArrayList<>();
         private final List<Map<String, Object>> rawAnswerDrafts = new ArrayList<>();
+        private ModelDraft lastAnswerDraft;
 
         private void recordAnswerProviderResponse(String text) {
             rawAnswerProviderResponses.add(Map.of(
                     "responseIndex", rawAnswerProviderResponses.size() + 1,
                     "text", text));
+        }
+
+        private void recordAnswerPrompt(org.springframework.ai.chat.prompt.Prompt prompt) {
+            String contents = prompt == null ? "" : prompt.getContents();
+            int systemChars = prompt == null || prompt.getInstructions().isEmpty()
+                    ? 0
+                    : prompt.getInstructions().getFirst().getText().length();
+            answerPromptSizes.add(Map.of(
+                    "callIndex", answerPromptSizes.size() + 1,
+                    "kind", contents.contains("<validated_subquestions>") ? "COMPOSE_OR_REPAIR" : "INTERPRETATION",
+                    "systemChars", systemChars,
+                    "totalChars", contents.length()));
         }
 
         @Override
@@ -1264,6 +2040,7 @@ class AnswerEvidenceAgentRealRulebookEvaluationTest {
                     && optional.orElse(null) instanceof QuestionInterpretationDraft interpretation) {
                 recordQuestionInterpretation(operation, interpretation);
             } else if (result instanceof ModelDraft draft) {
+                lastAnswerDraft = draft;
                 Map<String, Object> visible = new LinkedHashMap<>();
                 visible.put("operation", operation);
                 visible.put("draft", draft);

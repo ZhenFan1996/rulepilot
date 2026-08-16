@@ -130,7 +130,8 @@ public interface TeachingOutlineModel {
             String premise,
             List<TopicDraft> topics,
             List<SourceCoverageSlotDraft> sourceCoverageSlots,
-            boolean sourceCoverageInventoryComplete) {
+            boolean sourceCoverageInventoryComplete,
+            WholeGameUnderstandingDraft wholeGameUnderstanding) {
 
         private static final int MAX_SOURCE_COVERAGE_SLOTS = 128;
 
@@ -147,10 +148,90 @@ public interface TeachingOutlineModel {
             }
             topics = topics == null ? List.of() : List.copyOf(topics);
             sourceCoverageSlots = sourceCoverageSlots == null ? List.of() : List.copyOf(sourceCoverageSlots);
+            wholeGameUnderstanding = wholeGameUnderstanding == null
+                    ? new WholeGameUnderstandingDraft(premise, List.of(), List.of())
+                    : wholeGameUnderstanding;
+        }
+
+        public OutlineDraft(
+                String gameTitle,
+                String premise,
+                List<TopicDraft> topics,
+                List<SourceCoverageSlotDraft> sourceCoverageSlots,
+                boolean sourceCoverageInventoryComplete) {
+            this(gameTitle, premise, topics, sourceCoverageSlots, sourceCoverageInventoryComplete, null);
         }
 
         public OutlineDraft(String gameTitle, String premise, List<TopicDraft> topics) {
             this(gameTitle, premise, topics, List.of(), false);
+        }
+    }
+
+    /** The shared, source-bound mental model that must exist before chapter generation can fan out. */
+    record WholeGameUnderstandingDraft(
+            String summary,
+            List<GlobalConceptDraft> concepts,
+            List<TopicDependencyDraft> topicDependencies) {
+        public WholeGameUnderstandingDraft {
+            if (summary == null || summary.isBlank() || summary.length() > 2_400
+                    || concepts == null || concepts.size() > 32 || concepts.stream().anyMatch(java.util.Objects::isNull)
+                    || topicDependencies == null || topicDependencies.size() > 32
+                    || topicDependencies.stream().anyMatch(java.util.Objects::isNull)) {
+                throw new IllegalArgumentException("whole-game teaching understanding is invalid");
+            }
+            summary = summary.strip();
+            concepts = List.copyOf(concepts);
+            topicDependencies = List.copyOf(topicDependencies);
+        }
+    }
+
+    /** One Agent-chosen global concept; labels and dimensions come from the active rulebook, not a fixed checklist. */
+    record GlobalConceptDraft(
+            String conceptId,
+            String label,
+            String explanation,
+            List<String> sourceIdentifiers,
+            List<Integer> sourcePageNumbers,
+            List<String> relatedTopicKeys,
+            List<String> prerequisiteConceptIds) {
+        public GlobalConceptDraft {
+            if (conceptId == null || conceptId.isBlank() || conceptId.length() > 80
+                    || !conceptId.matches("[a-z0-9]+(?:-[a-z0-9]+)*")
+                    || label == null || label.isBlank() || label.length() > 160
+                    || explanation == null || explanation.isBlank() || explanation.length() > 800
+                    || sourceIdentifiers == null || sourceIdentifiers.isEmpty() || sourceIdentifiers.size() > 16
+                    || sourceIdentifiers.stream().anyMatch(identifier -> identifier == null
+                            || identifier.isBlank() || identifier.length() > 160)
+                    || sourcePageNumbers == null || sourcePageNumbers.isEmpty() || sourcePageNumbers.size() > 10
+                    || sourcePageNumbers.stream().anyMatch(page -> page == null || page < 1)
+                    || relatedTopicKeys == null || relatedTopicKeys.isEmpty() || relatedTopicKeys.size() > 16
+                    || relatedTopicKeys.stream().anyMatch(topic -> topic == null || topic.isBlank() || topic.length() > 100)
+                    || prerequisiteConceptIds == null || prerequisiteConceptIds.size() > 16
+                    || prerequisiteConceptIds.stream().anyMatch(concept -> concept == null
+                            || concept.isBlank() || concept.length() > 80)) {
+                throw new IllegalArgumentException("whole-game teaching concept is invalid");
+            }
+            conceptId = conceptId.strip();
+            label = label.strip();
+            explanation = explanation.strip();
+            sourceIdentifiers = sourceIdentifiers.stream().map(String::strip).distinct().toList();
+            sourcePageNumbers = sourcePageNumbers.stream().distinct().toList();
+            relatedTopicKeys = relatedTopicKeys.stream().map(String::strip).distinct().toList();
+            prerequisiteConceptIds = prerequisiteConceptIds.stream().map(String::strip).distinct().toList();
+        }
+    }
+
+    /** A pedagogical ordering decision made after the Agent has understood the whole active rulebook. */
+    record TopicDependencyDraft(String prerequisiteTopicKey, String dependentTopicKey, String reason) {
+        public TopicDependencyDraft {
+            if (prerequisiteTopicKey == null || prerequisiteTopicKey.isBlank() || prerequisiteTopicKey.length() > 100
+                    || dependentTopicKey == null || dependentTopicKey.isBlank() || dependentTopicKey.length() > 100
+                    || reason == null || reason.isBlank() || reason.length() > 400) {
+                throw new IllegalArgumentException("whole-game topic dependency is invalid");
+            }
+            prerequisiteTopicKey = prerequisiteTopicKey.strip();
+            dependentTopicKey = dependentTopicKey.strip();
+            reason = reason.strip();
         }
     }
 
@@ -161,26 +242,52 @@ public interface TeachingOutlineModel {
             String sourceIdentifier,
             List<Integer> sourcePageNumbers,
             String ownerTopicKey,
+            String teachingUnitId,
             SourceCoverageAvailability availability) {
         public SourceCoverageSlotDraft {
+            teachingUnitId = teachingUnitId == null || teachingUnitId.isBlank() ? slotId : teachingUnitId;
             if (slotId == null || slotId.isBlank() || slotId.length() > 80
-                    || !slotId.matches("[a-z0-9]+(?:-[a-z0-9]+)*")
-                    || role == null
-                    || sourceIdentifier == null || sourceIdentifier.isBlank() || sourceIdentifier.length() > 160
-                    || sourceIdentifier.codePoints().anyMatch(Character::isISOControl)
-                    || sourcePageNumbers == null || sourcePageNumbers.size() > 5
-                    || sourcePageNumbers.stream().anyMatch(page -> page == null || page < 1)
-                    || ownerTopicKey == null || ownerTopicKey.isBlank() || ownerTopicKey.length() > 100
-                    || availability == null) {
-                throw new IllegalArgumentException("teaching source coverage slot is invalid");
-            }
+                    || !slotId.matches("[a-z0-9]+(?:-[a-z0-9]+)*"))
+                throw new IllegalArgumentException("teaching source slotId is invalid");
+            if (role == null) throw new IllegalArgumentException("teaching source slot role is missing");
+            if (sourceIdentifier == null || sourceIdentifier.isBlank() || sourceIdentifier.length() > 160
+                    || sourceIdentifier.codePoints().anyMatch(Character::isISOControl))
+                throw new IllegalArgumentException("teaching source slot identifier is invalid");
+            if (sourcePageNumbers == null || sourcePageNumbers.size() > 5
+                    || sourcePageNumbers.stream().anyMatch(page -> page == null || page < 1))
+                throw new IllegalArgumentException("teaching source slot pages are invalid");
+            if (ownerTopicKey == null || ownerTopicKey.isBlank() || ownerTopicKey.length() > 100)
+                throw new IllegalArgumentException("teaching source slot owner is invalid");
+            if (teachingUnitId == null || teachingUnitId.isBlank() || teachingUnitId.length() > 80
+                    || !teachingUnitId.matches("[a-z0-9]+(?:-[a-z0-9]+)*"))
+                throw new IllegalArgumentException("teaching source slot teachingUnitId is invalid");
+            // A slot with an omitted status still claims a direct page anchor. Treat that structural omission as the
+            // least-privileged usable state and let the source contract prove the exact identifier on the bound page.
+            // Explicit external or unresolved gaps remain model-owned values and are never promoted here.
+            availability = availability == null ? SourceCoverageAvailability.SOURCED : availability;
             slotId = slotId.strip();
             sourceIdentifier = sourceIdentifier.strip();
             sourcePageNumbers = sourcePageNumbers.stream().distinct().toList();
             ownerTopicKey = ownerTopicKey.strip();
+            teachingUnitId = teachingUnitId.strip();
             if (availability != SourceCoverageAvailability.UNRESOLVED && sourcePageNumbers.isEmpty()) {
                 throw new IllegalArgumentException("sourced teaching coverage slots require a source page");
             }
+        }
+
+        /**
+         * Compatibility constructor for source ledgers created before teaching units were explicit. Each old slot is
+         * treated as one independently planned unit; new model output may deliberately group closely coupled slots by
+         * returning the same {@code teachingUnitId}.
+         */
+        public SourceCoverageSlotDraft(
+                String slotId,
+                SourceCoverageRole role,
+                String sourceIdentifier,
+                List<Integer> sourcePageNumbers,
+                String ownerTopicKey,
+                SourceCoverageAvailability availability) {
+            this(slotId, role, sourceIdentifier, sourcePageNumbers, ownerTopicKey, slotId, availability);
         }
     }
 
@@ -213,7 +320,7 @@ public interface TeachingOutlineModel {
             if (title == null || title.isBlank() || title.length() > 160
                     || objective == null || objective.isBlank() || objective.length() > 600
                     || (key != null && key.length() > 100)
-                    || (retrievalQueries != null && (retrievalQueries.size() > 8 || retrievalQueries.stream()
+                    || (retrievalQueries != null && (retrievalQueries.size() > 32 || retrievalQueries.stream()
                             .anyMatch(query -> query == null || query.isBlank() || query.length() > 300)))
                     || (sourcePageNumbers != null && (sourcePageNumbers.size() > 5 || sourcePageNumbers.stream()
                             .anyMatch(pageNumber -> pageNumber == null || pageNumber < 1)))) {

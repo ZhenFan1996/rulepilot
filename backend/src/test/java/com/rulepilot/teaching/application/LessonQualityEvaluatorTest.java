@@ -122,7 +122,7 @@ class LessonQualityEvaluatorTest {
     }
 
     @Test
-    void reportsVisibleSourceRuleGroupsSeparatelyFromChapterCount() {
+    void reportsTheValidatedPlanUnitReceiptSeparatelyFromChapterCountAndReviewState() {
         UUID versionId = UUID.randomUUID();
         List<String> ruleGroups = List.of(
                 "turn start", "ordinary action", "alternative action", "movement",
@@ -164,9 +164,9 @@ class LessonQualityEvaluatorTest {
                 .filteredOn(check -> check.type() == CheckType.SOURCE_RULE_GROUP_COVERAGE)
                 .singleElement()
                 .satisfies(check -> {
-                    assertThat(check.status()).isEqualTo(CheckStatus.FAIL);
+                    assertThat(check.status()).isEqualTo(CheckStatus.NOT_EVALUATED);
                     assertThat(check.summary()).isEqualTo("来源规则组已核对 0 / 8");
-                    assertThat(check.detail()).contains("逐项", "不能把整章通过自动算成全部规则组已核对");
+                    assertThat(check.detail()).contains("已有引用", "未通过");
                 });
 
         LessonSection supported = new LessonSection(
@@ -179,16 +179,15 @@ class LessonQualityEvaluatorTest {
                 citedDraft.visualKind(),
                 citedDraft.visualCaption(),
                 citedDraft.steps());
-        var falselyAggregatedLesson = new IllustratedLesson(
+        var supportedReceiptLesson = new IllustratedLesson(
                 UUID.randomUUID(), plan.id(), LessonStatus.COMPLETE, List.of(supported), "test", Instant.now());
 
-        assertThat(new LessonQualityEvaluator().evaluate(plan, falselyAggregatedLesson).checks())
+        assertThat(new LessonQualityEvaluator().evaluate(plan, supportedReceiptLesson).checks())
                 .filteredOn(check -> check.type() == CheckType.SOURCE_RULE_GROUP_COVERAGE)
                 .singleElement()
                 .satisfies(check -> {
-                    assertThat(check.status()).isEqualTo(CheckStatus.FAIL);
-                    assertThat(check.summary()).isEqualTo("来源规则组已核对 0 / 8");
-                    assertThat(check.detail()).contains("逐项", "原始标识", "来源页");
+                    assertThat(check.status()).isEqualTo(CheckStatus.PASS);
+                    assertThat(check.summary()).isEqualTo("来源规则组已核对 8 / 8");
                 });
 
         List<LessonStep> individuallyBoundSteps = java.util.stream.IntStream.range(0, ruleGroups.size())
@@ -280,7 +279,7 @@ class LessonQualityEvaluatorTest {
     }
 
     @Test
-    void doesNotCountAnAsciiRuleGroupIdentifierEmbeddedInsideAnotherWord() {
+    void aSupportedReceiptStillRequiresACitationToThePlannedOwnerPage() {
         UUID planId = UUID.randomUUID();
         var planned = new com.rulepilot.teaching.domain.TeachingPlan.PlannedSection(
                 1,
@@ -314,7 +313,7 @@ class LessonQualityEvaluatorTest {
                         "Weekend marker",
                         TeachingMove.WATCH,
                         "Only inspect the weekend marker.",
-                        List.of(2),
+                        List.of(9),
                         List.of(UUID.randomUUID()))));
         var lesson = new IllustratedLesson(
                 UUID.randomUUID(), planId, LessonStatus.COMPLETE, List.of(falseMatch), "test", Instant.now());

@@ -29,7 +29,9 @@ class VersionedAgentPromptsTest {
                         "once overall",
                         "coverage_checklist contains source_coverage",
                         "or source_contract_v1",
-                        "preserve that exact original-language identifier",
+                        "Source identifiers are internal evidence locators",
+                        "directEvidenceIds is",
+                        "retrieval-bound evidence allow-list",
                         "coverage_checklist contains source_dependency",
                         "procedure is not present in the current document",
                         "sole exception for plainly naming a cited missing source",
@@ -53,38 +55,45 @@ class VersionedAgentPromptsTest {
     void answerRuntimeLoadsOnlyTheSelectedStructuredAidFamily() {
         assertThat(prompts.answerSystem("NONE"))
                 .contains(
-                        "Use only supplied evidence",
-                        "Focused answer-aid routing revision v55",
-                        "at most one primary structured aid family",
-                        "situationChecks` must always be empty",
-                        "Source-authored advice boundary revision v56",
-                        "Player-facing answer progression revision v57",
-                        "must add a material condition, reason, boundary, or application detail",
-                        "Do not restate the same complete",
-                        "rule sequence in `shortVerdict`, `explanation`, and a walkthrough",
-                        "Question and source authority revision v58",
-                        "current player question",
-                        "page hint is only a retrieval locator",
-                        "Advertising copy, contents or listings, placeholders")
-                .doesNotContain("Cited-tie-resolution revision v37", "Cited-worked-example revision v34");
+                        "Use only supplied evidence for factual claims",
+                        "Treat validated subquestions independently",
+                        "fully answer every supported part",
+                        "ask one precise, useful source-locating question",
+                        "must end with exactly one direct clarification question",
+                        "A search miss or an excerpt's silence is never proof",
+                        "A neighboring or merely related excerpt is not a citation",
+                        "leave their current satisfaction",
+                        "do not convert objectives, scoring routes, or legal actions into advice",
+                        "Use at most the one structured aid family selected by `answerAid`",
+                        "Return no markdown, analysis, chain of thought")
+                .doesNotContain(
+                        "revision v",
+                        "Cited-tie-resolution revision v37",
+                        "Cited-worked-example revision v34")
+                .hasSizeLessThan(8_000);
 
         assertThat(prompts.answerSystem("TIE"))
                 .contains("Cited-tie-resolution revision v37")
-                .doesNotContain("Cited-rule-options revision v40", "Cited-worked-example revision v34");
+                .doesNotContain("Cited-rule-options revision v40", "Cited-worked-example revision v34")
+                .hasSizeLessThan(10_000);
         assertThat(prompts.answerSystem("EXAMPLE"))
                 .contains("Cited-worked-example revision v34")
-                .doesNotContain("Cited-decision-table revision v28", "Cited-tie-resolution revision v37");
+                .doesNotContain("Cited-decision-table revision v28", "Cited-tie-resolution revision v37")
+                .hasSizeLessThan(10_000);
 
         assertThat(prompts.answerUser())
                 .contains(
                         "{questionType}",
                         "{evidenceNeeds}",
+                        "{subquestions}",
                         "{answerAid}",
                         "{referenceBinding}",
                         "{currentRuleObjects}",
                         "{pageHints}",
                         "Page locator hints only identify",
                         "candidate pages",
+                        "Never turn excerpt silence or",
+                        "Do not ask the player whether the rulebook contains the missing advice",
                         "{evidence}")
                 .doesNotContain("{lessonSection}", "{playerCount}");
     }

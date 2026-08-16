@@ -32,7 +32,7 @@ import org.junit.jupiter.api.Test;
 class AnswerPostPublicationReviewerTest {
 
     @Test
-    void retriesOneEvidenceBackedCorrectionWhenTheFirstRevisionIncorrectlyDeclaresInsufficiency() {
+    void appliesAtMostOneEvidenceBackedCorrection() {
         UUID versionId = UUID.randomUUID();
         RuleEvidenceHit source = new RuleEvidenceHit(
                 UUID.randomUUID(),
@@ -67,9 +67,7 @@ class AnswerPostPublicationReviewerTest {
                             @Override
                             public ModelDraft revise(
                                     ModelRequest request, ModelDraft previousDraft, List<String> feedback) {
-                                if (revisions.getAndIncrement() == 0) {
-                                    return new ModelDraft(false, "incorrectly declined", null, null, List.of(), List.of(), null);
-                                }
+                                revisions.incrementAndGet();
                                 return new ModelDraft(
                                         "You may end only with two complete rows and no disabled locations.",
                                         "After the trigger, finish the current round so every player has the same number of turns.",
@@ -106,8 +104,8 @@ class AnswerPostPublicationReviewerTest {
 
         assertThat(result.accepted()).isTrue();
         assertThat(result.answer().shortVerdict()).contains("no disabled locations");
-        assertThat(revisions).hasValue(2);
-        assertThat(reviews).hasValue(2);
+        assertThat(revisions).hasValue(1);
+        assertThat(reviews).hasValue(1);
     }
 
     @Test
@@ -208,7 +206,7 @@ class AnswerPostPublicationReviewerTest {
     }
 
     @Test
-    void withholdsAHighImpactConclusionWhenTheCriticIsUnavailable() {
+    void preservesTheDeterministicallyValidatedAnswerWhenTheOptionalCriticIsUnavailable() {
         UUID versionId = UUID.randomUUID();
         RuleEvidenceHit source = new RuleEvidenceHit(
                 UUID.randomUUID(), versionId, "ACTIONS", "Action timing", "Take the main action once.", 4, 4, 0.9);
@@ -239,13 +237,14 @@ class AnswerPostPublicationReviewerTest {
                 answer,
                 List.of(evidence));
 
-        assertThat(result.accepted()).isFalse();
-        assertThat(result.failureStatus()).isEqualTo(AnswerStatus.INVALID_MODEL_OUTPUT);
-        assertThat(result.failureMessage()).contains("事实复核");
+        assertThat(result.accepted()).isTrue();
+        assertThat(result.answer().status()).isEqualTo(AnswerStatus.ANSWERED_WITH_WARNING);
+        assertThat(result.answer().citations()).extracting(RuleCitation::chunkId)
+                .containsExactly(source.chunkId());
     }
 
     @Test
-    void withholdsARevisedHighImpactConclusionWhenItsSecondReviewIsUnavailable() {
+    void doesNotRunASecondCriticAfterAValidatedCorrection() {
         UUID versionId = UUID.randomUUID();
         RuleEvidenceHit source = new RuleEvidenceHit(
                 UUID.randomUUID(),
@@ -310,10 +309,9 @@ class AnswerPostPublicationReviewerTest {
                 answer,
                 List.of(evidence));
 
-        assertThat(result.accepted()).isFalse();
-        assertThat(result.failureStatus()).isEqualTo(AnswerStatus.INVALID_MODEL_OUTPUT);
-        assertThat(result.failureMessage()).contains("复核");
-        assertThat(reviews).hasValue(2);
+        assertThat(result.accepted()).isTrue();
+        assertThat(result.answer().shortVerdict()).contains("eighteen points");
+        assertThat(reviews).hasValue(1);
     }
 
     private static StructuredRuleAnswer answer(UUID versionId, RuleEvidenceHit source) {

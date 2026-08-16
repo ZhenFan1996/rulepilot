@@ -28,6 +28,7 @@ final class AnswerDraftComposer {
             UUID gameSessionId,
             ModelRequest modelRequest) {
         ModelDraft draft;
+        int modelRepairs = 0;
         try {
             draft = modelGateway.compose(assistantRunId, username, gameSessionId, modelRequest);
         } catch (RuleAnswerModelTimeoutException exception) {
@@ -44,21 +45,33 @@ final class AnswerDraftComposer {
                     AnswerStatus.INVALID_MODEL_OUTPUT,
                     "回答生成结果未通过结构或引用校验。");
         }
+        draft = AnswerStructuredDraftPolicy.retainSelected(modelRequest, draft).draft();
         if (!draft.answerable()) {
             draft = reconsiderEvidenceBackedAbstention(
                     assistantRunId, username, gameSessionId, modelRequest, draft);
+            modelRepairs++;
+            if (draft != null) {
+                draft = AnswerStructuredDraftPolicy.retainSelected(modelRequest, draft).draft();
+            }
         }
-        if (!draft.answerable()) {
+        if (draft == null || !draft.answerable()) {
             return Result.failure(
                     AnswerStatus.INSUFFICIENT_EVIDENCE,
                     "现有证据未能直接回答这个问题。");
         }
         draft = AnswerDraftPublicationPolicy.removePeripheralEndgameCitations(modelRequest, draft);
-        List<String> playerFacingRepair = AnswerPlayerFacingRepairPolicy.feedbackFor(modelRequest, draft);
-        if (!playerFacingRepair.isEmpty()) {
+        AnswerPlayerFacingRepairPolicy.RepairPlan playerFacingRepair =
+                AnswerPlayerFacingRepairPolicy.planFor(modelRequest, draft);
+        if (playerFacingRepair.required()) {
+            if (modelRepairs > 0) {
+                return Result.failure(
+                        AnswerStatus.INVALID_MODEL_OUTPUT,
+                        "回答在一次有针对性的修订后仍包含内部标记。");
+            }
             try {
                 draft = revisePlayerFacingDraft(
                         assistantRunId, username, gameSessionId, modelRequest, draft, playerFacingRepair);
+                modelRepairs++;
             } catch (RuleAnswerModelTimeoutException exception) {
                 return Result.failure(
                         AnswerStatus.MODEL_TIMEOUT,
@@ -71,10 +84,9 @@ final class AnswerDraftComposer {
             if (draft == null || !draft.answerable()) {
                 return Result.failure(
                         AnswerStatus.INSUFFICIENT_EVIDENCE,
-                        AnswerRepairOutcomePolicy.insufficientRepairMessage(playerFacingRepair));
+                        AnswerRepairOutcomePolicy.insufficientRepairMessage(playerFacingRepair.feedback()));
             }
-            draft = AnswerDraftSafetyPolicy.normalizeDanglingPunctuation(draft);
-            draft = AnswerDraftSafetyPolicy.normalizeInternalEvidenceReferences(draft);
+            draft = AnswerStructuredDraftPolicy.retainSelected(modelRequest, draft).draft();
             Optional<AnswerRepairOutcomePolicy.PublicationFailure> failure =
                     AnswerRepairOutcomePolicy.publicationFailure(modelRequest, draft);
             if (failure.isPresent()) {
@@ -85,7 +97,7 @@ final class AnswerDraftComposer {
         if (!preparation.ready()) {
             return Result.failure(preparation.failureStatus(), preparation.failureMessage());
         }
-        return Result.ready(preparation.draft(), preparation.warnings());
+        return Result.ready(preparation.draft(), preparation.warnings(), modelRepairs);
     }
 
     Result repairAfterPublicationFailure(
@@ -663,27 +675,36 @@ final class AnswerDraftComposer {
             UUID gameSessionId,
             ModelRequest modelRequest,
             ModelDraft previousDraft,
-            List<String> feedback) {
-        return modelGateway.revise(
+            AnswerPlayerFacingRepairPolicy.RepairPlan repairPlan) {
+        return modelGateway.revisePlayerFacing(
                 assistantRunId,
                 username,
                 gameSessionId,
                 modelRequest,
                 previousDraft,
-                feedback,
+                repairPlan.feedback(),
+                repairPlan.editableFields(),
                 "repairPlayerFacingRuleAnswer",
                 "Ambiguous visual identity or internal evidence language repaired");
     }
 
     record Result(
-            ModelDraft draft, List<AnswerWarning> warnings, AnswerStatus failureStatus, String failureMessage) {
+            ModelDraft draft,
+            List<AnswerWarning> warnings,
+            AnswerStatus failureStatus,
+            String failureMessage,
+            int modelRepairs) {
 
         static Result ready(ModelDraft draft, List<AnswerWarning> warnings) {
-            return new Result(draft, List.copyOf(warnings), null, null);
+            return ready(draft, warnings, 1);
+        }
+
+        static Result ready(ModelDraft draft, List<AnswerWarning> warnings, int modelRepairs) {
+            return new Result(draft, List.copyOf(warnings), null, null, modelRepairs);
         }
 
         static Result failure(AnswerStatus status, String message) {
-            return new Result(null, List.of(), status, message);
+            return new Result(null, List.of(), status, message, 0);
         }
 
         boolean ready() {

@@ -111,7 +111,11 @@ final class VisualLessonSectionEnricher {
         }
         VisualLessonMergePolicy.MergedVisualSection merged = mergePolicy.mergeVisualIntoSupportedSteps(section, accepted);
         if (merged.addedCount() == 0) {
-            return Result.rejected(section, VisualLessonEnricher.Outcome.REJECTED_UNKNOWN_EVIDENCE);
+            return Result.rejected(
+                    section,
+                    merged.claimConflictCount() > 0
+                            ? VisualLessonEnricher.Outcome.REJECTED_CLAIM_CONFLICT
+                            : VisualLessonEnricher.Outcome.REJECTED_UNKNOWN_EVIDENCE);
         }
         VisualLessonMergePolicy.DistinctVisualSection distinct =
                 mergePolicy.keepDistinctVisuals(section, merged.section(), acceptedVisuals);

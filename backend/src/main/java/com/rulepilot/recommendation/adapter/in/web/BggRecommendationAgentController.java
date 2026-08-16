@@ -504,7 +504,7 @@ public class BggRecommendationAgentController {
             return new RecommendedGameResponse(
                     CatalogGameResponse.from(game, taxonomy, locale, presentation),
                     game.matches().stream().map(value -> localizeTaxonomyText(value, taxonomy)).toList(),
-                    game.tradeoffs().stream().map(value -> localizeTaxonomyText(value, taxonomy)).toList(),
+                    game.tradeoffs(),
                     game.reasons().stream()
                             .map(reason -> RecommendationReasonResponse.from(reason, taxonomy))
                             .toList(),
@@ -652,7 +652,9 @@ public class BggRecommendationAgentController {
                 LocalizedTaxonomy taxonomy) {
             return new RecommendationReasonResponse(
                     reason.kind().name().toLowerCase(Locale.ROOT),
-                    localizeTaxonomyText(reason.text(), taxonomy),
+                    reason.kind() == BoardGameRecommendationAgent.ReasonKind.BGG_FACT
+                            ? localizeTaxonomyText(reason.text(), taxonomy)
+                            : reason.text(),
                     reason.sourceIndexes());
         }
     }

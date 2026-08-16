@@ -328,7 +328,7 @@ public class VisualLessonEnrichmentService {
     private String outcomeSummary(VisualLessonEnricher.Outcome outcome) {
         return switch (outcome) {
             case ADDED -> "已找到可核对的局部图示";
-            case ADDED_WITH_CLAIM_CONFLICT -> "图中信息与讲解正文存在冲突；已保留截图并把本节标记为待复核";
+            case ADDED_WITH_CLAIM_CONFLICT -> "已采用无冲突图示；冲突截图已跳过，正文保持不变";
             case ALREADY_PRESENT -> "已有可核对的局部图示，无需重复处理";
             case NO_CITED_CANDIDATE, NO_PAGE_IMAGE -> "此步骤没有可引用的规则书图片，已保留文字讲解";
             case LOCATOR_RETURNED_NONE -> "视觉模型未找到可用的局部图示，已保留文字讲解";
@@ -349,6 +349,7 @@ public class VisualLessonEnrichmentService {
             case REJECTED_OUTSIDE_CANDIDATE, REJECTED_UNKNOWN_EVIDENCE -> "截图没有对应当前规则的可核对依据，未采用";
             case REJECTED_DUPLICATE -> "截图与已有讲解重复，未采用";
             case REJECTED_STEP_MISMATCH -> "截图与当前规则步骤不一致，未采用";
+            case REJECTED_CLAIM_CONFLICT -> "截图与已验证正文冲突，未采用；正文保持不变";
         };
     }
 
@@ -365,7 +366,9 @@ public class VisualLessonEnrichmentService {
     private static final class VisualEnrichmentCancelled extends RuntimeException {}
 
     private ActivityOutcome activityOutcome(VisualLessonEnricher.Outcome outcome) {
-        return outcome == VisualLessonEnricher.Outcome.ADDED || outcome == VisualLessonEnricher.Outcome.ALREADY_PRESENT
+        return outcome == VisualLessonEnricher.Outcome.ADDED
+                        || outcome == VisualLessonEnricher.Outcome.ADDED_WITH_CLAIM_CONFLICT
+                        || outcome == VisualLessonEnricher.Outcome.ALREADY_PRESENT
                 ? ActivityOutcome.SUCCEEDED
                 : ActivityOutcome.REJECTED;
     }

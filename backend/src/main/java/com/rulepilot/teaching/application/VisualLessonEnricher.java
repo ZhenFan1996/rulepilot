@@ -227,7 +227,7 @@ public class VisualLessonEnricher {
     private String outcomeSummary(int sectionPosition, Outcome outcome) {
         return switch (outcome) {
             case ADDED -> "第 " + sectionPosition + " 节已加入可核对的局部规则书截图";
-            case ADDED_WITH_CLAIM_CONFLICT -> "第 " + sectionPosition + " 节的图中信息与讲解正文存在冲突，已保留内容并标记为待复核";
+            case ADDED_WITH_CLAIM_CONFLICT -> "第 " + sectionPosition + " 节已加入无冲突图示；冲突截图已跳过，正文保持不变";
             case ALREADY_PRESENT -> "第 " + sectionPosition + " 节已有局部规则书截图，无需重复处理";
             case NO_CITED_CANDIDATE -> "第 " + sectionPosition + " 节没有可引用的图片候选区域";
             case NO_PAGE_IMAGE -> "第 " + sectionPosition + " 节的候选页没有可用图片";
@@ -252,6 +252,7 @@ public class VisualLessonEnricher {
             case REJECTED_UNKNOWN_EVIDENCE -> "第 " + sectionPosition + " 节的截图没有对应规则依据，已跳过";
             case REJECTED_DUPLICATE -> "第 " + sectionPosition + " 节的截图与前文高度重复，已保留原规则步骤";
             case REJECTED_STEP_MISMATCH -> "第 " + sectionPosition + " 节的截图没有直接对应当前步骤，已保留原规则步骤";
+            case REJECTED_CLAIM_CONFLICT -> "第 " + sectionPosition + " 节的截图与已验证正文冲突，已跳过截图并保留正文";
         };
     }
 
@@ -328,7 +329,8 @@ public class VisualLessonEnricher {
         REJECTED_OUTSIDE_CANDIDATE,
         REJECTED_UNKNOWN_EVIDENCE,
         REJECTED_DUPLICATE,
-        REJECTED_STEP_MISMATCH
+        REJECTED_STEP_MISMATCH,
+        REJECTED_CLAIM_CONFLICT
     }
 
     private record SectionResult(LessonSection section, SectionOutcome outcome) {}

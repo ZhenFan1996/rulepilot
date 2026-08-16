@@ -43,7 +43,7 @@ describe('useLessonGenerationPresentation', () => {
     expect(presentation.readingCurrentLastChapter.value).toBe(true)
     expect(presentation.processedGenerationChapters.value).toBe(1)
     expect(presentation.generationProgressWidth.value).toBe('50%')
-    expect(presentation.currentGenerationText.value).toContain('starter guide')
+    expect(presentation.currentGenerationText.value).toContain('chapter 1 “Setup” is now readable')
     expect(presentation.generationElapsed.value).toBe('3:30')
   })
 

@@ -16,9 +16,13 @@ final class AnswerRepairOutcomePolicy {
     }
 
     static Optional<PublicationFailure> publicationFailure(ModelRequest request, ModelDraft draft) {
-        if (AnswerDraftSafetyPolicy.containsInternalEvidenceReference(draft)) {
+        if (AnswerDraftSafetyPolicy.containsInternalCoreReference(draft)) {
             return Optional.of(new PublicationFailure(
                     AnswerStatus.INVALID_MODEL_OUTPUT, "回答包含内部证据标识，未向玩家发布。"));
+        }
+        if (AnswerSourceScopeRepairPolicy.requiresRepair(request, draft)) {
+            return Optional.of(new PublicationFailure(
+                    AnswerStatus.INVALID_MODEL_OUTPUT, "回答仍把局部证据缺口扩大成了整本规则书的结论。"));
         }
         return Optional.empty();
     }

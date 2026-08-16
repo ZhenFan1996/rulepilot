@@ -5,7 +5,6 @@ import com.rulepilot.retrieval.evidence.RuleEvidenceHit;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 import java.util.List;
-import java.util.Locale;
 import java.util.UUID;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Repository;
@@ -14,20 +13,13 @@ import org.springframework.stereotype.Repository;
 @Profile("!test")
 public class PostgresFullTextRuleSearch implements FullTextRuleSearchRepository {
 
-    private static final int MAX_FALLBACK_TERMS = 24;
-
     @PersistenceContext
     private EntityManager entityManager;
 
     @Override
     @SuppressWarnings("unchecked")
     public List<RuleEvidenceHit> search(UUID documentVersionId, String query, int limit) {
-        List<RuleEvidenceHit> exact = execute(documentVersionId, query, limit);
-        if (!exact.isEmpty()) {
-            return exact;
-        }
-        String fallback = fallbackQuery(query);
-        return fallback.equals(query) ? exact : execute(documentVersionId, fallback, limit);
+        return execute(documentVersionId, query, limit);
     }
 
     @SuppressWarnings("unchecked")
@@ -54,17 +46,6 @@ public class PostgresFullTextRuleSearch implements FullTextRuleSearchRepository 
                 .setParameter("limit", limit)
                 .getResultList();
         return rows.stream().map(this::toHit).toList();
-    }
-
-    static String fallbackQuery(String query) {
-        List<String> terms = java.util.Arrays.stream(query.strip().split("\\s+"))
-                .map(term -> term.replaceAll("[^\\p{L}\\p{N}_-]", ""))
-                .filter(term -> term.length() > 2)
-                .map(term -> term.toLowerCase(Locale.ROOT))
-                .distinct()
-                .limit(MAX_FALLBACK_TERMS)
-                .toList();
-        return terms.size() < 2 ? query : String.join(" OR ", terms);
     }
 
     private RuleEvidenceHit toHit(Object[] row) {

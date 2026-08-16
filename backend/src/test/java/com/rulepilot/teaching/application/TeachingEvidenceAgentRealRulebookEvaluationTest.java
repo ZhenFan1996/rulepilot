@@ -180,6 +180,233 @@ class TeachingEvidenceAgentRealRulebookEvaluationTest {
         });
     }
 
+    @Test
+    void publishesOneRealSectionThroughTheSimplifiedCriticalPath() throws Exception {
+        assumeTrue("true".equalsIgnoreCase(System.getenv("RULEPILOT_REAL_TEACHING_CRITICAL_PATH_CANARY")));
+        Path root = Path.of(System.getProperty("user.dir")).getParent();
+        JsonNode manifest = mapper.readTree(root.resolve(".local/agent-evaluation/manifest.json").toFile());
+        JsonNode inventory = mapper.readTree(root.resolve(".local/public-corpus/source-preflight.json").toFile());
+        String requestedCase = System.getenv("RULEPILOT_TEACHING_VALUE_CASE");
+        String caseId = requestedCase == null || requestedCase.isBlank() ? "rr-text-001" : requestedCase;
+        JsonNode caseNode = java.util.stream.StreamSupport.stream(
+                        evaluationCases().path("cases").spliterator(), false)
+                .filter(candidate -> caseId.equals(candidate.path("caseId").asText()))
+                .findFirst()
+                .orElseThrow(() -> new IllegalArgumentException("unknown teaching canary case: " + caseId));
+        CaseConfiguration configured = caseFor(root, manifest, inventory, caseNode, provider("deepseek"));
+
+        Map<String, Object> result = runCriticalPathCanary(root, configured);
+        Path output = root.resolve(".local/agent-evaluation/teaching-critical-path-canary.json");
+        Files.writeString(output, mapper.writerWithDefaultPrettyPrinter().writeValueAsString(Map.of(
+                "schemaVersion", 1,
+                "generatedAt", Instant.now().toString(),
+                "result", result)) + "\n", StandardCharsets.UTF_8);
+
+        assertThat(result)
+                .containsEntry("caseId", caseId)
+                .containsEntry("provider", "deepseek")
+                .containsEntry("evidenceStatus", EvidenceStatus.SUPPORTED.name())
+                .containsEntry("semanticEntailmentReviewed", false)
+                .containsEntry("criticCalls", 0)
+                .containsEntry("toolCalls", 1)
+                .containsEntry("toolLoopModelCalls", 0)
+                .containsEntry("sourceCitationsPresent", true)
+                .containsEntry("expectedSourcePageUsed", true)
+                .containsEntry("contentPreservedAtPublication", true)
+                .containsEntry("withinLatencyBudget", true);
+        assertThat((Integer) result.get("sectionModelCalls")).isBetween(1, 2);
+        assertThat((Integer) result.get("stepCount")).isGreaterThanOrEqualTo(4);
+        assertThat(((Number) result.get("distinctTeachingMoveCount")).longValue()).isGreaterThanOrEqualTo(3);
+        assertThat((Integer) result.get("visibleCharacterCount")).isGreaterThanOrEqualTo(300);
+        Map<?, ?> fieldPreservation = (Map<?, ?>) result.get("fieldPreservation");
+        assertThat(fieldPreservation.get("rawStructuredToNormalizerRecordEqual")).isEqualTo(true);
+        assertThat(fieldPreservation.get("allStepTextExactThroughPublication")).isEqualTo(true);
+        assertThat(fieldPreservation.get("onlyLifecycleStatusChangedAtPublication")).isEqualTo(true);
+    }
+
+    private Map<String, Object> runCriticalPathCanary(Path root, CaseConfiguration case_) throws IOException {
+        UUID versionId = UUID.nameUUIDFromBytes(("teaching-critical-path:" + case_.caseId())
+                .getBytes(StandardCharsets.UTF_8));
+        UUID runId = UUID.randomUUID();
+        PdfTeachingEvidence corpus = new PdfTeachingEvidence(case_.pdf(), versionId);
+        TeachingPlan plan = plan(versionId, case_.caseNode(), case_.sourcePages());
+        PlannedSection planned = plan.sections().getFirst();
+        var initial = new TeachingSectionEvidenceRetriever.Result(
+                List.of(corpus.first(case_.initialPage())),
+                1,
+                TeachingSectionEvidenceRetriever.State.VERIFIED);
+        DirectAuditedInvocations toolAudit = new DirectAuditedInvocations();
+        DirectAuditedInvocations compositionAudit = new DirectAuditedInvocations();
+        List<String> rawResponses = new ArrayList<>();
+        RecordingTeachingLessonModel teachingModel = new RecordingTeachingLessonModel(
+                teachingModel(case_.provider(), rawResponses));
+
+        long started = System.nanoTime();
+        var refined = refiner(corpus, toolAudit, versionId, runId)
+                .refine(plan, planned, runId, initial);
+        TeachingSectionDraftCandidate candidate = sectionComposer(teachingModel, compositionAudit)
+                .compose(plan, planned, List.of(), refined.evidence(), runId, 0, false);
+        LessonSection published = new TeachingBaseSectionPublicationPolicy().publish(candidate);
+        long latencyMs = Duration.ofNanos(System.nanoTime() - started).toMillis();
+        String visibleText = visibleSectionText(published);
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("caseId", case_.caseId());
+        result.put("provider", case_.provider().provider());
+        result.put("qualityScope", "one ending-resolution chapter; this is not a complete multi-chapter lesson evaluation");
+        result.put("objective", planned.objective());
+        result.put("publicationBoundary", "schema + citation scope/version + visual geometry + quantitative checks");
+        result.put("evidenceStatus", published.evidenceStatus().name());
+        result.put("evidenceStatusMeaning", "passed deterministic publication checks; no independent semantic Critic ran");
+        result.put("semanticEntailmentReviewed", false);
+        result.put("toolCalls", toolAudit.toolCalls.get());
+        result.put("toolOperations", List.copyOf(toolAudit.toolOperations));
+        result.put("toolLoopModelCalls", toolAudit.modelCalls.get());
+        result.put("sectionModelCalls", compositionAudit.modelCalls.get());
+        result.put("totalModelCalls", toolAudit.modelCalls.get() + compositionAudit.modelCalls.get());
+        result.put("criticCalls", toolAudit.criticCalls.get() + compositionAudit.criticCalls.get());
+        result.put("latencyMs", latencyMs);
+        result.put("withinLatencyBudget", latencyMs < 120_000);
+        result.put("rawProviderResponses", List.copyOf(rawResponses));
+        result.put("draftAttempts", teachingModel.drafts().stream().map(this::visibleDraft).toList());
+        result.put("validatedCandidate", visibleSection(candidate.section()));
+        result.put("publishedSection", visibleSection(published));
+        result.put("contentPreservedAtPublication", sameSectionContent(candidate.section(), published));
+        result.put("fieldPreservation", fieldPreservation(
+                teachingModel.drafts().getLast(), candidate.draft(), candidate.section(), published));
+        result.put("apiAndUiMapping", Map.of(
+                "api", "IllustratedLessonController and PublicLessonController serialize the domain lesson directly",
+                "uiRenderedFields", List.of(
+                        "section.position", "section.title", "section.visualCaption", "step.position",
+                        "step.heading", "step.kind", "step.text", "step.sourcePages", "step.visualFocus"),
+                "uiUnrenderedReaderFields", List.of(
+                        "section.topicKey", "section.coverageTags", "section.required", "section.evidenceStatus",
+                        "section.visualKind", "section.visualSourcePages", "section.visualSourceChunkIds",
+                        "step.sourceChunkIds")));
+        result.put("sourceCitationsPresent", published.steps().stream()
+                .allMatch(step -> !step.sourceChunkIds().isEmpty() && !step.sourcePages().isEmpty()));
+        result.put("expectedSourcePage", case_.expectedPage());
+        result.put("expectedSourcePageUsed", usesExpectedPage(case_, published));
+        result.put("initialEvidence", visibleEvidence(initial.evidence()));
+        result.put("refinedEvidence", visibleEvidence(refined.evidence()));
+        result.put("stepCount", published.steps().size());
+        result.put("distinctTeachingMoveCount", published.steps().stream()
+                .map(step -> step.kind().name())
+                .distinct()
+                .count());
+        result.put("visibleCharacterCount", visibleText.length());
+        result.put("historicalBefore", historicalCriticalPathBaseline(root, case_.caseId()));
+        return Map.copyOf(result);
+    }
+
+    private Map<String, Object> historicalCriticalPathBaseline(Path root, String caseId) throws IOException {
+        Path input = root.resolve(".local/agent-evaluation/teaching-tool-value-generated-sections.json");
+        if (!Files.isRegularFile(input)) return Map.of("available", false);
+        JsonNode result = java.util.stream.StreamSupport.stream(
+                        mapper.readTree(input.toFile()).path("results").spliterator(), false)
+                .filter(candidate -> caseId.equals(candidate.path("caseId").asText()))
+                .findFirst()
+                .orElse(null);
+        if (result == null) return Map.of("available", false);
+        Map<String, Object> baseline = new LinkedHashMap<>();
+        baseline.put("available", true);
+        baseline.put("latencyMs", result.path("withToolsLatencyMs").asLong());
+        baseline.put("toolCalls", result.path("toolCalls").asInt());
+        baseline.put("toolLoopModelCalls", result.path("toolLoopModelCalls").asInt());
+        baseline.put("sectionModelCalls", result.path("toolSectionModelCalls").asInt());
+        baseline.put("criticCalls", result.path("criticCalls").asInt());
+        baseline.put("reviewCorrectionModelCalls", result.path("reviewCorrectionModelCalls").asInt());
+        baseline.put("validatedCandidate", result.path("citedDraftWithTools"));
+        baseline.put("publishedSection", result.path("withTools"));
+        baseline.put("contentPreservedByCritic", result.path("citedDraftWithTools")
+                .equals(result.path("withTools")));
+        return Map.copyOf(baseline);
+    }
+
+    private boolean sameSectionContent(LessonSection candidate, LessonSection published) {
+        return candidate.position() == published.position()
+                && candidate.topicKey().equals(published.topicKey())
+                && candidate.coverageTags().equals(published.coverageTags())
+                && candidate.title().equals(published.title())
+                && candidate.required() == published.required()
+                && candidate.visualKind() == published.visualKind()
+                && candidate.visualCaption().equals(published.visualCaption())
+                && candidate.visualSourcePages().equals(published.visualSourcePages())
+                && candidate.visualSourceChunkIds().equals(published.visualSourceChunkIds())
+                && candidate.steps().equals(published.steps());
+    }
+
+    private Map<String, Object> fieldPreservation(
+            SectionDraft raw,
+            SectionDraft normalized,
+            LessonSection candidate,
+            LessonSection published) {
+        List<Map<String, Object>> stepMappings = java.util.stream.IntStream.range(0, raw.steps().size())
+                .mapToObj(index -> {
+                    StepDraft rawStep = raw.steps().get(index);
+                    StepDraft normalizedStep = normalized.steps().get(index);
+                    var candidateStep = candidate.steps().get(index);
+                    var publishedStep = published.steps().get(index);
+                    Map<String, Object> mapping = new LinkedHashMap<>();
+                    mapping.put("position", index + 1);
+                    mapping.put("headingExact", rawStep.heading().equals(normalizedStep.heading())
+                            && rawStep.heading().equals(candidateStep.heading())
+                            && rawStep.heading().equals(publishedStep.heading()));
+                    mapping.put("textExact", rawStep.text().equals(normalizedStep.text())
+                            && rawStep.text().equals(candidateStep.text())
+                            && rawStep.text().equals(publishedStep.text()));
+                    mapping.put("kindExact", rawStep.kind() == normalizedStep.kind()
+                            && rawStep.kind() == candidateStep.kind()
+                            && rawStep.kind() == publishedStep.kind());
+                    mapping.put("citationIdsExact", rawStep.citationIds().equals(normalizedStep.citationIds())
+                            && rawStep.citationIds().equals(candidateStep.sourceChunkIds())
+                            && rawStep.citationIds().equals(publishedStep.sourceChunkIds()));
+                    mapping.put("visualFocusExact", sameVisualFocus(rawStep.visualFocus(), candidateStep.visualFocus())
+                            && sameVisualFocus(rawStep.visualFocus(), publishedStep.visualFocus()));
+                    mapping.put("rawTextLength", rawStep.text().length());
+                    mapping.put("publishedTextLength", publishedStep.text().length());
+                    return Map.copyOf(mapping);
+                })
+                .toList();
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("rawStructuredToNormalizerRecordEqual", raw.equals(normalized));
+        result.put("titleExact", raw.title().equals(normalized.title())
+                && raw.title().equals(candidate.title())
+                && raw.title().equals(published.title()));
+        result.put("captionExact", raw.visualCaption().equals(normalized.visualCaption())
+                && raw.visualCaption().equals(candidate.visualCaption())
+                && raw.visualCaption().equals(published.visualCaption()));
+        result.put("visualKindExact", raw.visualKind() == normalized.visualKind()
+                && raw.visualKind() == candidate.visualKind()
+                && raw.visualKind() == published.visualKind());
+        result.put("visualCitationIdsExact", raw.visualCitationIds().equals(normalized.visualCitationIds())
+                && raw.visualCitationIds().equals(candidate.visualSourceChunkIds())
+                && raw.visualCitationIds().equals(published.visualSourceChunkIds()));
+        result.put("stepCountExact", raw.steps().size() == normalized.steps().size()
+                && raw.steps().size() == candidate.steps().size()
+                && raw.steps().size() == published.steps().size());
+        result.put("allStepTextExactThroughPublication", stepMappings.stream()
+                .allMatch(mapping -> Boolean.TRUE.equals(mapping.get("textExact"))));
+        result.put("onlyLifecycleStatusChangedAtPublication", sameSectionContent(candidate, published)
+                && candidate.evidenceStatus() == EvidenceStatus.CITED_DRAFT
+                && published.evidenceStatus() == EvidenceStatus.SUPPORTED);
+        result.put("steps", stepMappings);
+        return Map.copyOf(result);
+    }
+
+    private boolean sameVisualFocus(
+            com.rulepilot.teaching.TeachingLessonModel.VisualFocusDraft draft,
+            com.rulepilot.teaching.domain.IllustratedLesson.VisualFocus focus) {
+        if (draft == null || focus == null) return draft == null && focus == null;
+        return draft.pageNumber() == focus.pageNumber()
+                && draft.label().equals(focus.label())
+                && draft.visibleDescription().equals(focus.visibleDescription())
+                && draft.x() == focus.x()
+                && draft.y() == focus.y()
+                && draft.width() == focus.width()
+                && draft.height() == focus.height();
+    }
+
     private Map<String, Object> compareTeachingSection(CaseConfiguration case_) throws IOException {
         UUID versionId = UUID.nameUUIDFromBytes(("teaching-value:" + case_.caseId())
                 .getBytes(StandardCharsets.UTF_8));
@@ -377,28 +604,71 @@ class TeachingEvidenceAgentRealRulebookEvaluationTest {
     }
 
     private Map<String, Object> visibleSection(com.rulepilot.teaching.domain.IllustratedLesson.LessonSection section) {
-        return Map.of(
-                "title", section.title(),
-                "visualCaption", section.visualCaption(),
-                "steps", section.steps().stream().map(step -> Map.of(
-                        "heading", step.heading(),
-                        "kind", step.kind().name(),
-                        "text", step.text(),
-                        "citationPages", step.sourcePages())).toList());
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("position", section.position());
+        result.put("topicKey", section.topicKey());
+        result.put("coverageTags", section.coverageTags());
+        result.put("title", section.title());
+        result.put("required", section.required());
+        result.put("evidenceStatus", section.evidenceStatus().name());
+        result.put("visualKind", section.visualKind().name());
+        result.put("visualCaption", section.visualCaption());
+        result.put("visualSourcePages", section.visualSourcePages());
+        result.put("visualSourceChunkIds", section.visualSourceChunkIds());
+        result.put("steps", section.steps().stream().map(step -> {
+            Map<String, Object> visible = new LinkedHashMap<>();
+            visible.put("position", step.position());
+            visible.put("heading", step.heading());
+            visible.put("kind", step.kind().name());
+            visible.put("text", step.text());
+            visible.put("sourcePages", step.sourcePages());
+            visible.put("sourceChunkIds", step.sourceChunkIds());
+            visible.put("visualFocus", visibleFocus(step.visualFocus()));
+            return visible;
+        }).toList());
+        return result;
     }
 
     private Map<String, Object> visibleDraft(SectionDraft draft) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("title", draft.title() == null ? "" : draft.title());
+        result.put("visualKind", draft.visualKind() == null ? "" : draft.visualKind().name());
+        result.put("visualCaption", draft.visualCaption() == null ? "" : draft.visualCaption());
+        result.put("visualCitationIds", draft.visualCitationIds());
+        result.put("steps", draft.steps().stream().map(step -> {
+            if (step == null) return Map.<String, Object>of("invalid", true);
+            Map<String, Object> visible = new LinkedHashMap<>();
+            visible.put("heading", step.heading() == null ? "" : step.heading());
+            visible.put("kind", step.kind() == null ? "" : step.kind().name());
+            visible.put("text", step.text() == null ? "" : step.text());
+            visible.put("citationIds", step.citationIds());
+            visible.put("visualFocus", visibleFocus(step.visualFocus()));
+            return visible;
+        }).toList());
+        return result;
+    }
+
+    private Map<String, Object> visibleFocus(Object focus) {
+        if (focus == null) return Map.of();
+        if (focus instanceof com.rulepilot.teaching.TeachingLessonModel.VisualFocusDraft draft) {
+            return Map.of(
+                    "pageNumber", draft.pageNumber(),
+                    "label", draft.label(),
+                    "visibleDescription", draft.visibleDescription(),
+                    "x", draft.x(),
+                    "y", draft.y(),
+                    "width", draft.width(),
+                    "height", draft.height());
+        }
+        var domain = (com.rulepilot.teaching.domain.IllustratedLesson.VisualFocus) focus;
         return Map.of(
-                "title", draft.title() == null ? "" : draft.title(),
-                "visualCaption", draft.visualCaption() == null ? "" : draft.visualCaption(),
-                "visualCitationCount", draft.visualCitationIds().size(),
-                "steps", draft.steps().stream().map(step -> step == null
-                        ? Map.of("invalid", true)
-                        : Map.of(
-                                "heading", step.heading() == null ? "" : step.heading(),
-                                "kind", step.kind() == null ? "" : step.kind().name(),
-                                "text", step.text() == null ? "" : step.text(),
-                                "citationCount", step.citationIds().size())).toList());
+                "pageNumber", domain.pageNumber(),
+                "label", domain.label(),
+                "visibleDescription", domain.visibleDescription(),
+                "x", domain.x(),
+                "y", domain.y(),
+                "width", domain.width(),
+                "height", domain.height());
     }
 
     private String visibleSectionText(com.rulepilot.teaching.domain.IllustratedLesson.LessonSection section) {
@@ -552,6 +822,9 @@ class TeachingEvidenceAgentRealRulebookEvaluationTest {
             ProviderConfiguration provider, List<String> rawResponses) {
         ChatModel chatModel = recordingChatModel(provider, Duration.ofSeconds(120), rawResponses);
         RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        when(configuration.providerFor(RuntimeModelConfiguration.Role.TEACHING))
+                .thenReturn(provider.provider());
+        when(configuration.providerFor(RuntimeModelConfiguration.Role.VISUAL)).thenReturn("fake");
         when(configuration.modelFor(RuntimeModelConfiguration.Role.TEACHING, "agent-evaluation"))
                 .thenReturn(chatModel);
         when(configuration.providerFor(RuntimeModelConfiguration.Role.TEACHING, "agent-evaluation"))

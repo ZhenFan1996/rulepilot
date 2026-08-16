@@ -340,11 +340,16 @@ class BggRecommendationAgentControllerTest {
                 List.of(new RecommendedGame(
                         new Game(ranked, details),
                         List.of("支持 4 人游玩", "与参考游戏共有的 BGG 机制/类型：Animals、Card Drafting"),
-                        List.of(),
-                        List.of(new RecommendationReason(
-                                ReasonKind.BGG_FACT,
-                                "与参考游戏共有的 BGG 机制/类型：Animals、Card Drafting",
-                                List.of())),
+                        List.of("Card Drafting 这里只是模型原文中的术语，不应在 DTO 层被字符串改写。"),
+                        List.of(
+                                new RecommendationReason(
+                                        ReasonKind.PREFERENCE_INFERENCE,
+                                        "模型原文保留 Animals 与 Card Drafting；它支持 4 人且标注 40–70 分钟。",
+                                        List.of()),
+                                new RecommendationReason(
+                                        ReasonKind.BGG_FACT,
+                                        "BGG 机制/类型标签：Animals、Card Drafting",
+                                        List.of())),
                         List.of(new CandidateClaim(
                                 266192,
                                 "playerCount",
@@ -390,8 +395,17 @@ class BggRecommendationAgentControllerTest {
             assertThat(game.game().publishers()).containsExactly("Stonemaier Games");
             assertThat(game.matches())
                     .containsExactly("支持 4 人游玩", "与参考游戏共有的 BGG 机制/类型：动物、卡牌轮抽");
-            assertThat(game.reasons()).singleElement().satisfies(reason ->
-                    assertThat(reason.text()).isEqualTo("与参考游戏共有的 BGG 机制/类型：动物、卡牌轮抽"));
+            assertThat(game.reasons()).first().satisfies(reason -> {
+                assertThat(reason.kind()).isEqualTo("preference_inference");
+                assertThat(reason.text()).isEqualTo(
+                        "模型原文保留 Animals 与 Card Drafting；它支持 4 人且标注 40–70 分钟。");
+            });
+            assertThat(game.reasons()).last().satisfies(reason -> {
+                assertThat(reason.kind()).isEqualTo("bgg_fact");
+                assertThat(reason.text()).isEqualTo("BGG 机制/类型标签：动物、卡牌轮抽");
+            });
+            assertThat(game.tradeoffs())
+                    .containsExactly("Card Drafting 这里只是模型原文中的术语，不应在 DTO 层被字符串改写。");
             assertThat(game.fitClaims()).singleElement().satisfies(claim -> {
                 assertThat(claim.subject()).isEqualTo("playerCount");
                 assertThat(claim.strength()).isEqualTo("hard");

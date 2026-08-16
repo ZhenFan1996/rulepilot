@@ -53,7 +53,7 @@ test('keeps the recovery actions usable without horizontal overflow on a phone',
   expect(overlap).toBe(false)
 })
 
-test('restores the reading position after leaving a long page and going back', async ({ page }) => {
+test('restores the same reading neighborhood after asynchronous home content remounts', async ({ page }) => {
   const games = Array.from({ length: 12 }, (_, index) => ({
     rank: index + 1,
     bggId: 9000 + index,
@@ -80,5 +80,13 @@ test('restores the reading position after leaving a long page and going back', a
 
   await page.goBack()
   await expect(page).toHaveURL('/')
-  await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(savedPosition)
+  await expect(page.getByRole('heading', { name: '随机抽三盒' })).toBeVisible()
+  await expect.poll(() => page.evaluate(position => {
+    const reachable = Math.min(
+      position,
+      Math.max(0, document.documentElement.scrollHeight - window.innerHeight),
+    )
+    return Math.abs(window.scrollY - reachable)
+  }, savedPosition)).toBeLessThanOrEqual(64)
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(600)
 })

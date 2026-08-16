@@ -115,9 +115,9 @@ final class AnswerQuestionInterpretationPolicy {
         for (PlannedSubquestion subquestion : proposed) {
             String span = normalize(subquestion.questionSpan());
             AnswerQuestionPlan.QuestionOwner owner;
-            if (!span.isBlank() && current.contains(span)) {
+            if (containsGroundedSpan(current, span)) {
                 owner = AnswerQuestionPlan.QuestionOwner.CURRENT_QUESTION;
-            } else if (!span.isBlank() && !reference.isBlank() && reference.contains(span)) {
+            } else if (containsGroundedSpan(reference, span)) {
                 owner = AnswerQuestionPlan.QuestionOwner.BOUND_REFERENCE;
             } else {
                 return Optional.empty();
@@ -136,7 +136,7 @@ final class AnswerQuestionInterpretationPolicy {
                         .filter(subquestion -> subquestion.owner() == AnswerQuestionPlan.QuestionOwner.CURRENT_QUESTION)
                         .map(AnswerQuestionPlan.Subquestion::text)
                         .map(this::normalize)
-                        .anyMatch(span -> span.contains(object)));
+                        .anyMatch(span -> containsGroundedSpan(span, object)));
         if (!coversEveryCurrentObject) return Optional.empty();
         List<AnswerQuestionPlan.Subquestion> currentFirst = accepted.stream()
                 .sorted(java.util.Comparator.comparingInt(subquestion ->
@@ -216,6 +216,33 @@ final class AnswerQuestionInterpretationPolicy {
                 .replaceAll("\\s+", " ")
                 .strip()
                 .toLowerCase(Locale.ROOT);
+    }
+
+    /**
+     * A model-extracted span remains grounded when it only omits quotation marks around the player's exact words.
+     * The original player text is retained; this comparison never rewrites answer prose or accepts lexical changes.
+     */
+    private boolean containsGroundedSpan(String containingText, String proposedSpan) {
+        if (proposedSpan == null || proposedSpan.isBlank()) return false;
+        if (containingText != null && containingText.contains(proposedSpan)) return true;
+        String unquotedText = withoutQuotationMarks(containingText);
+        String unquotedSpan = withoutQuotationMarks(proposedSpan);
+        return !unquotedSpan.isBlank() && unquotedText.contains(unquotedSpan);
+    }
+
+    private String withoutQuotationMarks(String value) {
+        if (value == null || value.isBlank()) return "";
+        StringBuilder result = new StringBuilder(value.length());
+        value.codePoints().forEach(codePoint -> {
+            int type = Character.getType(codePoint);
+            if (codePoint != '\''
+                    && codePoint != '"'
+                    && type != Character.INITIAL_QUOTE_PUNCTUATION
+                    && type != Character.FINAL_QUOTE_PUNCTUATION) {
+                result.appendCodePoint(codePoint);
+            }
+        });
+        return result.toString();
     }
 
     record Interpretation(

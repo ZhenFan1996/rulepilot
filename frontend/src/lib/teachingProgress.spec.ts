@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest'
 import {
   mergeTeachingRunProgress,
   processedTeachingChapterCount,
+  recentTeachingActivitySteps,
+  recentTeachingPreparationActivitySteps,
   supportedTeachingChapterCount,
   teachingActivityCursor,
   teachingActivityText,
@@ -55,13 +57,13 @@ describe('teaching progress', () => {
     ]
     const snapshot = run('run-1', activities)
 
-    expect(teachingActivityText(plan, activities, activities[0])).toBe('正在依据规则书编写“完成开局设置”')
+    expect(teachingActivityText(plan, activities, activities[0])).toBe('正在依据规则书编写第 1 章“完成开局设置”')
     expect(processedTeachingChapterCount(snapshot)).toBe(2)
     expect(supportedTeachingChapterCount(snapshot)).toBe(1)
     expect(teachingRemainingTimeText(plan, run('run-1', []), Date.parse('2026-07-21T00:02:00Z')))
       .toContain('第一节完成后')
     expect(teachingActivityText(plan, activities, activities[0], 'en'))
-      .toBe('Writing “完成开局设置” from the rulebook')
+      .toBe('Writing chapter 1 “完成开局设置” from the rulebook')
     expect(teachingRemainingTimeText(plan, run('run-1', []), Date.parse('2026-07-21T00:02:00Z'), 'en'))
       .toContain('After the first chapter is ready')
   })
@@ -75,13 +77,66 @@ describe('teaching progress', () => {
     ]
 
     expect(teachingActivityText(plan, activities, activities[0]))
-      .toBe('正在打开“完成开局设置”绑定的规则书原页')
+      .toBe('正在读取第 1 章“完成开局设置”引用的规则书页面')
     expect(teachingActivityText(plan, activities, activities[2]))
       .toContain('基础讲解已可读')
     expect(teachingActivityText(plan, activities, activities[3]))
       .toBe('基础讲解已可读，正在一次性读取后续页面要点')
     expect(teachingActivityText(plan, activities, activities[3], 'en'))
       .toContain('Starter guide ready')
+  })
+
+  it('turns real chapter operations into a concrete player-visible generation sequence', () => {
+    const activities = [
+      activity(1, 'readTeachingSourcePages|1', 'SUCCEEDED'),
+      activity(2, 'composeTeachingSection|1', 'SUCCEEDED'),
+      activity(3, 'validateTeachingSection|1|0', 'SUCCEEDED'),
+      activity(4, 'publishTeachingSection|1', 'SUCCEEDED', 'Teaching section published: CITED_BASE_SECTION_PUBLISHED'),
+      activity(5, 'reviewGeneratedContent', 'SUCCEEDED'),
+    ]
+
+    const steps = recentTeachingActivitySteps(plan, activities)
+
+    expect(steps.map(step => step.text)).toEqual([
+      '正在读取第 1 章“完成开局设置”引用的规则书页面',
+      '正在依据规则书编写第 1 章“完成开局设置”',
+      '第 1 章“完成开局设置”已完成引用、结构与数量校验',
+      '第 1 章“完成开局设置”已经可以阅读',
+    ])
+    expect(steps.map(step => step.outcome)).toEqual([
+      'SUCCEEDED', 'SUCCEEDED', 'SUCCEEDED', 'SUCCEEDED',
+    ])
+    expect(JSON.stringify(steps)).not.toMatch(/readTeachingSourcePages|composeTeachingSection|reviewGeneratedContent/)
+  })
+
+  it('shows real chapter-planning work before the first teaching run exists', () => {
+    const activities = [
+      activity(1, 'organizeTeachingOutline', 'RUNNING'),
+      activity(2, 'refineTeachingOutlineCoverage', 'SUCCEEDED'),
+      activity(3, 'internalOutlineTelemetry', 'SUCCEEDED'),
+    ]
+
+    const steps = recentTeachingPreparationActivitySteps(activities)
+
+    expect(steps.map(step => step.text)).toEqual([
+      '正在通读规则书，先形成整局认识再规划讲解章节',
+      '正在检查章节规划有没有漏掉规则内容',
+    ])
+    expect(JSON.stringify(steps)).not.toMatch(/organizeTeachingOutline|refineTeachingOutlineCoverage|internalOutlineTelemetry/)
+  })
+
+  it('shows a repair only when the backend actually emitted one', () => {
+    const activities = [
+      activity(1, 'composeTeachingSection|2', 'SUCCEEDED'),
+      activity(2, 'validateTeachingSection|2|0', 'REJECTED'),
+      activity(3, 'reviseTeachingSection|2', 'RUNNING'),
+    ]
+
+    expect(recentTeachingActivitySteps(plan, activities).map(step => step.text)).toEqual([
+      '正在依据规则书编写第 2 章“走完第一轮”',
+      '第 2 章“走完第一轮”需要局部修正后再发布',
+      '校验发现局部问题，正在修正第 2 章“走完第一轮”',
+    ])
   })
 })
 

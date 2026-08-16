@@ -16,10 +16,6 @@ import com.rulepilot.catalog.BoardGameRecommendationCatalog.Ranking;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration;
 import com.rulepilot.modelconfig.adapter.out.ChatModelFactory;
 import com.rulepilot.recommendation.BoardGameRecommendationModel;
-import com.rulepilot.recommendation.BoardGameRecommendationModel.PreferenceInterpretation;
-import com.rulepilot.recommendation.BoardGameRecommendationModel.PreferenceInterpretationRequest;
-import com.rulepilot.recommendation.BoardGameRecommendationModel.PreferenceReview;
-import com.rulepilot.recommendation.BoardGameRecommendationModel.PreferenceReviewRequest;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.CandidateDiscovery;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.CandidateLead;
@@ -875,30 +871,6 @@ class BoardGameRecommendationAgentRealConversationEvaluationTest {
             @Override
             public boolean configured() {
                 return delegate.configured();
-            }
-
-            @Override
-            public boolean preferenceReviewConfigured() {
-                return delegate.preferenceReviewConfigured();
-            }
-
-            @Override
-            public boolean preferenceInterpretationConfigured() {
-                return delegate.preferenceInterpretationConfigured();
-            }
-
-            @Override
-            public PreferenceInterpretation interpretPreferences(PreferenceInterpretationRequest request) {
-                PreferenceInterpretation interpretation = delegate.interpretPreferences(request);
-                capture.record(interpretation.rawTurn());
-                return interpretation;
-            }
-
-            @Override
-            public PreferenceReview reviewPreferences(PreferenceReviewRequest request) {
-                PreferenceReview review = delegate.reviewPreferences(request);
-                capture.record(review.rawTurn());
-                return review;
             }
 
             @Override

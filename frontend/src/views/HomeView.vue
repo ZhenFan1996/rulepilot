@@ -18,7 +18,6 @@ interface HotGame {
 }
 
 const { locale, t } = useLocale()
-const journeyStepKeys = ['home.journey.step1', 'home.journey.step2', 'home.journey.step3'] as const
 const hotGames = ref<HotGame[]>([])
 const gameError = ref<boolean | null>(null)
 const randomOffset = ref(0)
@@ -116,17 +115,6 @@ onBeforeUnmount(() => {
             fetchpriority="high"
           >
         </figure>
-      </section>
-
-      <section
-        class="player-board p-5 sm:p-8"
-        aria-labelledby="home-journey-title"
-        data-testid="home-player-journey"
-      >
-        <h2 id="home-journey-title" class="home-section-title">{{ t('home.journey.title') }}</h2>
-        <ol class="mt-6 grid list-decimal gap-4 pl-5 sm:grid-cols-3">
-          <li v-for="key in journeyStepKeys" :key="key"><h3 class="font-semibold leading-6">{{ t(key) }}</h3></li>
-        </ol>
       </section>
 
       <section class="home-hot" aria-labelledby="hot-games-title">

@@ -104,6 +104,46 @@ class AnswerQuestionInterpretationPolicyTest {
     }
 
     @Test
+    void acceptsAnExactPlayerSpanWhenTheModelOnlyOmitsQuotationMarks() {
+        String question = "先回答规则，再给我一套‘照抄就稳赢’的前三步开局。";
+        QuestionInterpretationDraft draft = new QuestionInterpretationDraft(
+                QuestionType.RULE_QUERY,
+                ReferenceBinding.CURRENT_QUESTION,
+                List.of("前三步开局"),
+                Set.of(),
+                null,
+                com.rulepilot.assistant.RuleAnswerModel.AnswerAid.NONE,
+                List.of(
+                        new PlannedSubquestion("先回答规则", Set.of(EvidenceNeed.DIRECT_RULE)),
+                        new PlannedSubquestion("给我一套照抄就稳赢的前三步开局", Set.of(EvidenceNeed.ADVICE))));
+
+        assertThat(policy.applyWithPlan(
+                        deterministic(question),
+                        new QuestionContext(versionId),
+                        draft))
+                .hasValueSatisfying(interpretation -> assertThat(interpretation.plan().subquestions())
+                        .extracting(AnswerQuestionPlan.Subquestion::text)
+                        .containsExactly("先回答规则", "给我一套照抄就稳赢的前三步开局"));
+    }
+
+    @Test
+    void stillRejectsLexicalChangesInsideAQuotedPlayerSpan() {
+        String question = "给我一套‘照抄就稳赢’的前三步开局。";
+        QuestionInterpretationDraft draft = new QuestionInterpretationDraft(
+                QuestionType.RULE_QUERY,
+                ReferenceBinding.CURRENT_QUESTION,
+                List.of(),
+                Set.of(),
+                List.of(new PlannedSubquestion("给我一套照抄就必胜的前三步开局", Set.of(EvidenceNeed.ADVICE))));
+
+        assertThat(policy.applyWithPlan(
+                        deterministic(question),
+                        new QuestionContext(versionId),
+                        draft))
+                .isEmpty();
+    }
+
+    @Test
     void requiresClarificationBindingAndMissingContextToAgree() {
         QuestionInterpretationDraft ambiguous = new QuestionInterpretationDraft(
                 QuestionType.SITUATION_QUERY,

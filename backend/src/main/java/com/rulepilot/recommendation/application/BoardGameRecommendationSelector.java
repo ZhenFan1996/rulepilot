@@ -61,7 +61,7 @@ class BoardGameRecommendationSelector {
             List<Game> references,
             boolean chinese,
             Research research) {
-        return present(selected, profile, references, chinese, research, Map.of());
+        return present(selected, profile, references, chinese, research, Map.of(), Map.of());
     }
 
     List<RecommendedGame> present(
@@ -71,6 +71,17 @@ class BoardGameRecommendationSelector {
             boolean chinese,
             Research research,
             Map<Integer, PreferenceLink> preferenceLinks) {
+        return present(selected, profile, references, chinese, research, preferenceLinks, Map.of());
+    }
+
+    List<RecommendedGame> present(
+            List<Game> selected,
+            RecommendationProfile profile,
+            List<Game> references,
+            boolean chinese,
+            Research research,
+            Map<Integer, PreferenceLink> preferenceLinks,
+            Map<Integer, CandidateNarrative> narratives) {
         return selected.stream()
                 .map(game -> present(
                         game,
@@ -78,7 +89,8 @@ class BoardGameRecommendationSelector {
                         sharedTaxonomy(game, references),
                         chinese,
                         research,
-                        preferenceLinks.get(game.ranking().bggId())))
+                        preferenceLinks.get(game.ranking().bggId()),
+                        narratives.get(game.ranking().bggId())))
                 .toList();
     }
 
@@ -108,7 +120,8 @@ class BoardGameRecommendationSelector {
             List<String> sharedTaxonomy,
             boolean chinese,
             Research research,
-            PreferenceLink preferenceLink) {
+            PreferenceLink preferenceLink,
+            CandidateNarrative narrative) {
         Details details = game.details();
         List<CandidateClaim> fitClaims = fitClaims(game, profile, chinese);
         List<String> matches = new ArrayList<>();
@@ -167,6 +180,12 @@ class BoardGameRecommendationSelector {
         List<RecommendationReason> reasons = new ArrayList<>(matches.stream()
                 .map(text -> new RecommendationReason(ReasonKind.BGG_FACT, text, List.of()))
                 .toList());
+        if (narrative != null) {
+            reasons.addFirst(new RecommendationReason(
+                    ReasonKind.PREFERENCE_INFERENCE,
+                    narrative.why(),
+                    List.of()));
+        }
         if (preferenceLink != null) {
             reasons.add(new RecommendationReason(
                     ReasonKind.PREFERENCE_INFERENCE,
@@ -175,7 +194,9 @@ class BoardGameRecommendationSelector {
         }
         List<RecommendationReason> researchReasons = researchReasons(research, game.ranking().bggId());
         reasons.addAll(researchReasons);
-        List<String> tradeoffs = researchReasons.isEmpty() && !taxonomyLabels.isEmpty()
+        List<String> tradeoffs = narrative != null && !narrative.tradeoff().isBlank()
+                ? List.of(narrative.tradeoff())
+                : researchReasons.isEmpty() && !taxonomyLabels.isEmpty()
                 ? List.of(chinese
                         ? "BGG 标签只能说明机制分类，不能证明实际互动感或等待时间；在意这点时请继续点名比较。"
                         : "BGG tags describe mechanisms, not actual interaction or downtime; ask for a named comparison if that matters.")
@@ -678,6 +699,19 @@ class BoardGameRecommendationSelector {
                     || taxonomyTerms.size() > 2) {
                 throw new IllegalArgumentException("recommendation preference link is invalid");
             }
+        }
+    }
+
+    record CandidateNarrative(
+            String why,
+            String tradeoff,
+            List<CandidateObservation> evidence) {
+
+        CandidateNarrative {
+            if (why == null || why.isBlank() || tradeoff == null || evidence == null || evidence.isEmpty()) {
+                throw new IllegalArgumentException("candidate narrative is incomplete");
+            }
+            evidence = List.copyOf(evidence);
         }
     }
 

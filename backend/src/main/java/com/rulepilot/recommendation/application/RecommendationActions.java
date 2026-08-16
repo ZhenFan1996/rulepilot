@@ -8,6 +8,7 @@ import static com.rulepilot.recommendation.application.BoardGameRecommendationAg
 import static com.rulepilot.recommendation.application.BoardGameRecommendationAgent.LOOKUP_TOOL;
 import static com.rulepilot.recommendation.application.BoardGameRecommendationAgent.NO_MATCH_TOOL;
 import static com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RECOMMEND_TOOL;
+import static com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RECOMMENDATION_NARRATIVE_SUBJECTS;
 import static com.rulepilot.recommendation.application.BoardGameRecommendationAgent.REPLY_TOOL;
 import static com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RESEARCH_TOOL;
 import static com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RESOLVE_TOOL;
@@ -67,7 +68,11 @@ import org.slf4j.LoggerFactory;
 /** Implements the eleven allow-listed recommendation actions over application-owned tools. */
 final class RecommendationActions {
 
-    private static final int MAX_RECOMMENDATION_MESSAGE_CHARACTERS = 240;
+    private static final int MAX_RECOMMENDATION_MESSAGE_CHARACTERS = 1_200;
+    private static final Set<String> OPTIONAL_PREFERENCE_LINK_ISSUES = Set.of(
+            "PREFERENCE_LINK_EVIDENCE_NOT_GROUNDED",
+            "PREFERENCE_LINK_QUOTE_NOT_GROUNDED",
+            "PREFERENCE_LINK_TAXONOMY_NOT_VERIFIED");
     private static final Logger LOGGER = LoggerFactory.getLogger(BoardGameRecommendationAgent.class);
 
     private final BoardGameRecommendationTools tools;
@@ -102,7 +107,7 @@ final class RecommendationActions {
             JsonNode arguments = json.readTree(call.argumentsJson());
             return switch (call.name()) {
                 case REPLY_TOOL -> reply(arguments, state, request, locale);
-                case ASK_TOOL -> ask(arguments, state, request, locale);
+                case ASK_TOOL -> ask(arguments, state, locale);
                 case RESOLVE_TOOL -> resolve(arguments, state, request, progress);
                 case SEARCH_TOOL -> search(arguments, state, request, progress);
                 case BROWSE_TOOL -> browse(arguments, state, request, progress);
@@ -119,9 +124,11 @@ final class RecommendationActions {
             return ActionOutcome.terminal(runtime.unavailable(state, locale, "RUN_DEADLINE_EXCEEDED"));
         } catch (JsonProcessingException | InvalidAction exception) {
             String code = exception instanceof InvalidAction invalid ? invalid.code : "INVALID_JSON";
+            if (!ASK_TOOL.equals(call.name())) state.clarificationBlockedByExecutionFailure = true;
             return rejected(state, code, invalidActionGuidance(code));
         } catch (RuntimeException exception) {
             LOGGER.warn("Recommendation action {} failed ({})", call.name(), exception.getClass().getSimpleName());
+            if (!ASK_TOOL.equals(call.name())) state.clarificationBlockedByExecutionFailure = true;
             return rejected(state, "ACTION_UNAVAILABLE", "The action failed. Choose another useful action or respond transparently.");
         }
     }
@@ -166,20 +173,26 @@ final class RecommendationActions {
     private ActionOutcome ask(
             JsonNode arguments,
             RecommendationAgentState state,
-            ConversationRequest request,
             String locale) {
-        requireObject(arguments, Set.of("question"), Set.of("preferenceUpdates"));
-        evidenceReview.applyPreferenceUpdates(arguments, state, request);
+        requireObject(arguments, Set.of("question"), Set.of("options", "preferenceUpdates"));
+        if (arguments.has("preferenceUpdates")) {
+            state.actions.add("IGNORED_CLARIFICATION_PREFERENCE_UPDATES");
+        }
         String question = publishableMessage(
                 text(arguments.path("question"), 1, 500),
                 PlayerFacingMessagePolicy.Purpose.QUESTION);
+        List<ClarificationOption> options = arguments.has("options")
+                ? strings(arguments.path("options"), 2, 3, 1, 60).stream()
+                        .map(option -> new ClarificationOption(option, option))
+                        .toList()
+                : List.of();
         state.actions.add("ASK_USER");
         return ActionOutcome.terminal(response(
                 Outcome.NEEDS_CLARIFICATION,
                 question,
                 state,
                 locale,
-                new Clarification(PreferenceField.CONVERSATION, question, List.of()),
+                new Clarification(PreferenceField.CONVERSATION, question, options),
                 List.of()));
     }
 
@@ -187,7 +200,16 @@ final class RecommendationActions {
             JsonNode arguments,
             RecommendationAgentState state,
             String locale) {
-        requireObject(arguments, Set.of("candidateBggIds", "subjects"), Set.of());
+        requireObject(
+                arguments,
+                Set.of(
+                        "message",
+                        "decision",
+                        "decisionMode",
+                        "decisionEvidenceIds",
+                        "candidateBggIds",
+                        "subjects"),
+                Set.of());
         List<Integer> candidateIds = ids(arguments.path("candidateBggIds"), 2, 5);
         if (new LinkedHashSet<>(candidateIds).size() != candidateIds.size()) {
             throw new InvalidAction("COMPARISON_CANDIDATES_DUPLICATED");
@@ -199,10 +221,59 @@ final class RecommendationActions {
         if (!state.comparisonSubjectIds.containsAll(candidateIds)) {
             throw new InvalidAction("COMPARISON_CANDIDATE_NOT_IN_CONVERSATION");
         }
-        List<String> subjects = strings(arguments.path("subjects"), 1, 3, 1, 40);
-        if (new LinkedHashSet<>(subjects).size() != subjects.size()
-                || subjects.stream().anyMatch(subject -> !COMPARISON_SUBJECTS.contains(subject))) {
+        List<String> requestedSubjects = strings(arguments.path("subjects"), 1, 8, 1, 40);
+        if (new LinkedHashSet<>(requestedSubjects).size() != requestedSubjects.size()
+                || requestedSubjects.stream().anyMatch(subject -> !COMPARISON_SUBJECTS.contains(subject))) {
             throw new InvalidAction("COMPARISON_SUBJECT_INVALID");
+        }
+        List<String> subjects = requestedSubjects.size() > 3
+                ? requestedSubjects.subList(0, 3)
+                : requestedSubjects;
+        if (requestedSubjects.size() > 3) {
+            state.actions.add("DROPPED_EXCESS_COMPARISON_SUBJECTS");
+        }
+
+        String message = publishableMessage(
+                text(arguments.path("message"), 1, 800),
+                PlayerFacingMessagePolicy.Purpose.CONVERSATION);
+        String decision = publishableMessage(
+                text(arguments.path("decision"), 1, 500),
+                PlayerFacingMessagePolicy.Purpose.CONVERSATION);
+        String decisionMode = text(arguments.path("decisionMode"), 1, 40);
+        if (!Set.of("OBSERVED_ONLY", "QUALIFIED_HYPOTHESIS").contains(decisionMode)) {
+            throw new InvalidAction("COMPARISON_DECISION_MODE_INVALID");
+        }
+        List<String> decisionEvidenceIds = strings(
+                arguments.path("decisionEvidenceIds"), 1, 8, 3, 80);
+        if (decisionEvidenceIds.size() > 4) {
+            throw new InvalidAction("COMPARISON_DECISION_EVIDENCE_TOO_MANY");
+        }
+        if (new LinkedHashSet<>(decisionEvidenceIds).size() != decisionEvidenceIds.size()) {
+            throw new InvalidAction("COMPARISON_DECISION_EVIDENCE_DUPLICATED");
+        }
+        Map<String, CandidateObservation> observations = games.stream()
+                .flatMap(game -> selector.observations(game).stream())
+                .collect(java.util.stream.Collectors.toUnmodifiableMap(
+                        CandidateObservation::id,
+                        observation -> observation));
+        List<CandidateObservation> decisionEvidence = decisionEvidenceIds.stream()
+                .map(observations::get)
+                .toList();
+        if (decisionEvidence.stream().anyMatch(Objects::isNull)) {
+            throw new InvalidAction("COMPARISON_DECISION_EVIDENCE_WRONG_CANDIDATE");
+        }
+        if (decisionEvidence.stream().anyMatch(observation -> !subjects.contains(observation.attribute()))) {
+            throw new InvalidAction("COMPARISON_DECISION_EVIDENCE_NOT_SELECTED_SUBJECT");
+        }
+        String visibleComparison = message + "\n" + decision;
+        if (decisionEvidence.stream().anyMatch(observation -> !visibleComparison.contains(observation.value()))) {
+            throw new InvalidAction("COMPARISON_DECISION_EVIDENCE_VALUE_NOT_VISIBLE");
+        }
+        if (decisionEvidence.stream().anyMatch(observation -> {
+            Game evidenceGame = state.verified.get(observation.bggId());
+            return evidenceGame == null || !mentionsObservedTitle(visibleComparison, evidenceGame);
+        })) {
+            throw new InvalidAction("COMPARISON_DECISION_CANDIDATE_NOT_VISIBLE");
         }
 
         List<ComparisonCandidate> candidates = games.stream()
@@ -224,12 +295,9 @@ final class RecommendationActions {
                 .toList();
         state.comparison = new CandidateComparison(candidates, axes);
         state.actions.add("COMPARE_CANDIDATES");
-        String message = runtime.chinese(locale)
-                ? "好，我把这几款放在同一张桌上对照。能确认的事实直接列出；资料不够的地方明确标成待核对，不拿分类标签硬猜桌感。"
-                : "I put these candidates side by side. Verified facts are shown directly; gaps stay marked as unknown instead of turning taxonomy into a guess about play feel.";
         return ActionOutcome.terminal(response(
                 Outcome.CONVERSATION,
-                message,
+                message + " " + decision,
                 state,
                 locale,
                 null,
@@ -364,7 +432,10 @@ final class RecommendationActions {
         int requestedCandidateCount = Math.max(limit, properties.resultCount());
         int catalogLimit = Math.min(
                 runtime.maximumRecommendationResults(),
-                requestedCandidateCount + Math.min(unavailableCandidateIds.size(), runtime.maximumRecommendationResults()));
+                requestedCandidateCount
+                        + Math.min(
+                                Math.max(properties.resultCount(), unavailableCandidateIds.size()),
+                                runtime.maximumRecommendationResults()));
         progress.accept(ProgressStage.SEARCHING_BGG_CATALOG);
         state.catalogCalls++;
         CatalogObservation result = runtime.withinDeadline(
@@ -508,9 +579,8 @@ final class RecommendationActions {
                 Set.of("message", "selections"),
                 Set.of("referenceBggIds", "preferenceUpdates"));
         evidenceReview.applyPreferenceUpdates(arguments, state, request);
-        String proposedMessage = publishableMessage(
-                text(arguments.path("message"), 1, MAX_RECOMMENDATION_MESSAGE_CHARACTERS),
-                PlayerFacingMessagePolicy.Purpose.RECOMMENDATION_CONNECTIVE);
+        String proposedMessage = text(
+                arguments.path("message"), 1, MAX_RECOMMENDATION_MESSAGE_CHARACTERS);
         List<Integer> rawReferenceIds = arguments.has("referenceBggIds")
                 ? ids(arguments.path("referenceBggIds"), 0, MAX_VERIFIED_GAMES)
                 : List.of();
@@ -518,17 +588,22 @@ final class RecommendationActions {
             throw new InvalidAction("REFERENCE_ID_NOT_VERIFIED");
         }
         JsonNode selections = arguments.path("selections");
-        if (!selections.isArray()
-                || selections.isEmpty()
-                || selections.size() > runtime.maximumRecommendationResults()) {
+        if (!selections.isArray()) {
+            throw new InvalidAction("SELECTIONS_ARRAY_REQUIRED");
+        }
+        if (selections.isEmpty() || selections.size() > state.maximumRecommendationResults) {
             throw new InvalidAction("SELECTION_COUNT_INVALID");
         }
         List<Game> selected = new ArrayList<>();
         Map<Integer, BoardGameRecommendationSelector.PreferenceLink> preferenceLinks = new LinkedHashMap<>();
+        Map<Integer, BoardGameRecommendationSelector.CandidateNarrative> narratives = new LinkedHashMap<>();
         Map<String, String> userEvidence = evidenceReview.preferenceEvidence(request);
         Set<Integer> seen = new LinkedHashSet<>();
         for (JsonNode selection : selections) {
-            requireObject(selection, Set.of("bggId"), Set.of("preferenceLink"));
+            requireObject(
+                    selection,
+                    Set.of("bggId"),
+                    Set.of("preferenceLink", "narrativeMode", "why", "tradeoff", "evidenceIds"));
             int id = integer(selection.path("bggId"), 1, Integer.MAX_VALUE, "BGG_ID_INVALID");
             if (!seen.add(id)) throw new InvalidAction("DUPLICATE_SELECTION");
             Game game = state.verified.get(id);
@@ -542,10 +617,19 @@ final class RecommendationActions {
             }
             if (!selector.eligible(game, state.profile)) throw new InvalidAction("FINAL_ID_FAILS_HARD_GATES");
             selected.add(game);
+            BoardGameRecommendationSelector.CandidateNarrative narrative = validatedCandidateNarrative(
+                    selection,
+                    game);
+            if (narrative != null) narratives.put(id, narrative);
             if (selection.has("preferenceLink")) {
-                preferenceLinks.put(
-                        id,
-                        validatedPreferenceLink(selection.path("preferenceLink"), game, userEvidence));
+                try {
+                    preferenceLinks.put(
+                            id,
+                            validatedPreferenceLink(selection.path("preferenceLink"), game, userEvidence));
+                } catch (InvalidAction invalid) {
+                    if (!OPTIONAL_PREFERENCE_LINK_ISSUES.contains(invalid.code)) throw invalid;
+                    state.actions.add("DROPPED_OPTIONAL_PREFERENCE_LINK:" + invalid.code);
+                }
             }
         }
         Set<Integer> selectedIds = selected.stream()
@@ -557,16 +641,18 @@ final class RecommendationActions {
                 .filter(id -> !selectedIds.contains(id))
                 .limit(2)
                 .toList();
-        boolean messageNamesCardGame = state.verified.entrySet().stream()
+        Set<Integer> alreadyVisibleIds = new LinkedHashSet<>(request.shownBggIds());
+        request.knownGames().forEach(game -> alreadyVisibleIds.add(game.bggId()));
+        boolean messageNamesUnselectedGame = state.verified.entrySet().stream()
                 .anyMatch(entry -> !referenceIds.contains(entry.getKey())
+                        && !selectedIds.contains(entry.getKey())
+                        && !alreadyVisibleIds.contains(entry.getKey())
                         && mentionsObservedTitle(proposedMessage, entry.getValue()));
-        String message = proposedMessage;
-        if (messageNamesCardGame) {
-            state.actions.add("SANITIZED_CARD_MESSAGE");
-            message = runtime.chinese(locale)
-                    ? "我按你刚补充的线索挑了几款经过核对、方向略有不同的候选；具体差异都在卡片里，你可以继续告诉我更喜欢哪一类。"
-                    : "I picked a few verified options in different directions from what you just added. The cards hold the details, and you can tell me which direction feels closer.";
-        }
+        if (messageNamesUnselectedGame) throw new InvalidAction("MESSAGE_NAMES_UNSELECTED_GAME");
+        String message = publishableGroundedRecommendationMessage(
+                proposedMessage,
+                selected.size() == narratives.size(),
+                state);
         progress.accept(ProgressStage.COMPOSING_RESPONSE);
         state.actions.add("RECOMMEND_GAMES");
         List<Game> references = referenceIds.stream().map(state.verified::get).toList();
@@ -576,7 +662,8 @@ final class RecommendationActions {
                 references,
                 runtime.chinese(locale),
                 state.research,
-                Map.copyOf(preferenceLinks));
+                Map.copyOf(preferenceLinks),
+                Map.copyOf(narratives));
         return ActionOutcome.terminal(response(
                 Outcome.RECOMMENDATIONS,
                 message,
@@ -584,6 +671,74 @@ final class RecommendationActions {
                 locale,
                 null,
                 games));
+    }
+
+    private String publishableGroundedRecommendationMessage(
+            String message,
+            boolean everyCandidateHasGroundedNarrative,
+            RecommendationAgentState state) {
+        var issue = PlayerFacingMessagePolicy.issue(
+                message,
+                PlayerFacingMessagePolicy.Purpose.RECOMMENDATION_CONNECTIVE);
+        if (issue.isEmpty()) return message;
+        if (issue.get() == PlayerFacingMessagePolicy.Issue.RAW_MARKUP
+                && everyCandidateHasGroundedNarrative) {
+            state.actions.add("PRESERVED_GROUNDED_RECOMMENDATION_WITH_MARKUP");
+            return message;
+        }
+        throw new InvalidAction("PLAYER_MESSAGE_" + issue.get().name());
+    }
+
+    private BoardGameRecommendationSelector.CandidateNarrative validatedCandidateNarrative(
+            JsonNode selection,
+            Game game) {
+        boolean hasNarrative = selection.has("why")
+                || selection.has("tradeoff")
+                || selection.has("evidenceIds")
+                || selection.has("narrativeMode");
+        if (!hasNarrative) return null;
+        if (!selection.has("why") || !selection.has("evidenceIds")) {
+            throw new InvalidAction("CANDIDATE_NARRATIVE_INCOMPLETE");
+        }
+        String why = publishableMessage(
+                text(selection.path("why"), 8, 500),
+                PlayerFacingMessagePolicy.Purpose.CONVERSATION);
+        String tradeoff = selection.has("tradeoff")
+                ? publishableMessage(
+                        text(selection.path("tradeoff"), 4, 320),
+                        PlayerFacingMessagePolicy.Purpose.CONVERSATION)
+                : "";
+        String narrativeMode = selection.has("narrativeMode")
+                ? text(selection.path("narrativeMode"), 1, 40)
+                : "";
+        if (!narrativeMode.isEmpty() && !"OBSERVED_ONLY".equals(narrativeMode)) {
+            throw new InvalidAction("CANDIDATE_NARRATIVE_MODE_INVALID");
+        }
+        List<String> evidenceIds = strings(selection.path("evidenceIds"), 1, 5, 3, 80);
+        Map<String, CandidateObservation> observations = selector.observations(game).stream()
+                .collect(java.util.stream.Collectors.toUnmodifiableMap(
+                        CandidateObservation::id,
+                        observation -> observation));
+        if (evidenceIds.stream().anyMatch(id -> !observations.containsKey(id))) {
+            throw new InvalidAction("CANDIDATE_NARRATIVE_EVIDENCE_WRONG_CANDIDATE");
+        }
+        if (!narrativeMode.isEmpty()
+                && evidenceIds.stream()
+                        .map(observations::get)
+                        .anyMatch(observation -> !RECOMMENDATION_NARRATIVE_SUBJECTS.contains(
+                                observation.attribute()))) {
+            throw new InvalidAction("CANDIDATE_NARRATIVE_EVIDENCE_NOT_DIRECT_FIT");
+        }
+        if (!narrativeMode.isEmpty()
+                && evidenceIds.stream()
+                        .map(observations::get)
+                        .anyMatch(observation -> !why.contains(observation.value()))) {
+            throw new InvalidAction("CANDIDATE_NARRATIVE_EVIDENCE_VALUE_NOT_VISIBLE");
+        }
+        return new BoardGameRecommendationSelector.CandidateNarrative(
+                why,
+                tradeoff,
+                evidenceIds.stream().map(observations::get).toList());
     }
 
     private BoardGameRecommendationSelector.PreferenceLink validatedPreferenceLink(
@@ -637,16 +792,26 @@ final class RecommendationActions {
 
     private String invalidActionGuidance(String code) {
         return switch (code) {
-            case "MESSAGE_NAMES_CARD_GAME", "REPLY_RECOMMENDATION_REQUIRES_CARDS" ->
-                "New candidate recommendations must use recommend_games so the UI can render verified cards. Its brief connective message may name a declared reference game, but no candidate; cards contain candidate names and facts.";
+            case "REPLY_RECOMMENDATION_REQUIRES_CARDS" ->
+                "New candidate recommendations must use recommend_games so the UI can render verified cards.";
+            case "MESSAGE_NAMES_UNSELECTED_GAME" ->
+                "The recommendation message may discuss selected cards and declared references, but not introduce an unselected game. Remove only that unsupported mention and keep the grounded explanation.";
+            case "CANDIDATE_NARRATIVE_INCOMPLETE" ->
+                "Each candidate narrative needs why plus one or more candidate-scoped evidenceIds. tradeoff is optional.";
+            case "SELECTIONS_ARRAY_REQUIRED" ->
+                "selections must be a native JSON array of selection objects. Never quote or JSON-encode the array as a string.";
+            case "CANDIDATE_NARRATIVE_EVIDENCE_WRONG_CANDIDATE" ->
+                "Every candidate narrative evidenceId must come from that same selected game's observation map. Do not move evidence across candidates.";
+            case "CANDIDATE_NARRATIVE_MODE_INVALID" ->
+                "Recommendation cards use OBSERVED_ONLY literal facts. Ask a candidate-changing clarification or state the local evidence gap instead of predicting table feel.";
+            case "CANDIDATE_NARRATIVE_EVIDENCE_VALUE_NOT_VISIBLE" ->
+                "Repeat every cited candidate observation value exactly in why. Do not translate or paraphrase taxonomy, and omit an unused evidenceId.";
+            case "CANDIDATE_NARRATIVE_EVIDENCE_NOT_DIRECT_FIT" ->
+                "Recommendation why may cite only this candidate's playerCount, durationMinutes, or complexity observations. Taxonomy is displayed separately and cannot justify a predicted experience.";
             case "PREFERENCE_EVIDENCE_NOT_GROUNDED" ->
                 "Use the exact evidenceId shown beside the user-authored message that states this hard constraint, or continue without changing the typed profile.";
-            case "PREFERENCE_EVIDENCE_NOT_SUPPORTED" ->
-                "The cited message does not directly support that typed hard constraint. Keep qualitative or negative preferences in conversation context and continue without changing the typed profile.";
-            case "PREFERENCE_IS_CONTEXTUAL" ->
-                "The application retained this as a reversible contextual assumption instead of a confirmed hard constraint. Continue naturally without retrying the update or asking solely to fill the profile.";
-            case "PREFERENCE_REVIEW_UNAVAILABLE" ->
-                "Preference evidence review was unavailable. Continue without changing the typed profile; do not guess or retry the same update.";
+            case "PREFERENCE_EVIDENCE_CLASSIFICATION_INVALID" ->
+                "Use DIRECT/DIRECT for an explicitly stated constraint. Only an exact player count strongly implied by a fully described group may use CONTEXTUAL/COMPLETE_GROUP_INFERENCE; otherwise omit the typed update.";
             case "PREFERENCE_LINK_EVIDENCE_NOT_GROUNDED" ->
                 "Use an exact user-authored evidenceId from recentConversation, or omit preferenceLink when no qualitative preference is grounded.";
             case "PREFERENCE_LINK_QUOTE_NOT_GROUNDED" ->
@@ -667,6 +832,18 @@ final class RecommendationActions {
                 "Return a complete player-facing sentence; do not end at a comma, colon, open delimiter, or unfinished long line.";
             case "NO_MATCH_RELAXATION_NOT_ACTIONABLE" ->
                 "Choose exactly one relaxSubject from the current report_no_match schema; it must unlock a verified candidate while every other hard constraint stays unchanged.";
+            case "COMPARISON_DECISION_EVIDENCE_WRONG_CANDIDATE" ->
+                "Use decisionEvidenceIds only from the compared candidates' current observation maps.";
+            case "COMPARISON_DECISION_EVIDENCE_TOO_MANY" ->
+                "Choose one to four observation IDs that directly justify decision. Do not cite every fact discussed in message.";
+            case "COMPARISON_DECISION_EVIDENCE_DUPLICATED" ->
+                "Use each decisionEvidenceId at most once.";
+            case "COMPARISON_DECISION_EVIDENCE_NOT_SELECTED_SUBJECT" ->
+                "Every decisionEvidenceId must use an attribute included in this action's selected subjects.";
+            case "COMPARISON_DECISION_EVIDENCE_VALUE_NOT_VISIBLE" ->
+                "Show every cited decision observation value exactly in message or decision so the player can see the complete basis.";
+            case "COMPARISON_DECISION_CANDIDATE_NOT_VISIBLE" ->
+                "Name each candidate whose observation is cited by decisionEvidenceIds in message or decision.";
             default -> "Correct the action arguments using the supplied JSON schema and current runMemory.";
         };
     }
@@ -865,7 +1042,7 @@ final class RecommendationActions {
 
     private String text(JsonNode node, int minimum, int maximum) {
         if (!node.isTextual()) throw new InvalidAction("TEXT_ARGUMENT_REQUIRED");
-        String value = node.asText().strip().replaceAll("\\s+", " ");
+        String value = node.asText().strip();
         if (value.length() < minimum || value.length() > maximum) throw new InvalidAction("TEXT_LENGTH_INVALID");
         return value;
     }

@@ -3,9 +3,14 @@
   <section_objective>{objective}</section_objective>
   <coverage_checklist>{coverage}</coverage_checklist>
   <required_rule_intents>{requiredRules}</required_rule_intents>
+  <teaching_units>{teachingUnits}</teaching_units>
   <visual_evidence available="{visualEvidenceAvailable}" attached_rulebook_pages="{visualPages}" />
   <output_language>Simplified Chinese with readable official game terms</output_language>
 </task>
+
+<source_bound_whole_game_orientation>
+{wholeGameContext}
+</source_bound_whole_game_orientation>
 
 <untrusted_prior_section_continuity_data>
 {continuity}

@@ -27,9 +27,9 @@ import org.springframework.stereotype.Service;
 public class TeachingSourcePageEvidenceRefiner implements TeachingEvidenceRefiner {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(TeachingSourcePageEvidenceRefiner.class);
-    private static final int MAX_EVIDENCE_PER_SECTION = 10;
+    private static final int MAX_EVIDENCE_PER_SECTION = 16;
     private static final int MAX_EVIDENCE_CHUNKS_PER_PAGE = 4;
-    private static final int MAX_OBSERVED_EVIDENCE = 24;
+    private static final int MAX_OBSERVED_EVIDENCE = 32;
 
     private final NativeToolScopes scopes;
     private final AssistantReadTools tools;
@@ -84,6 +84,7 @@ public class TeachingSourcePageEvidenceRefiner implements TeachingEvidenceRefine
         }
         return mergeCanonicalEvidence(
                 plan.documentVersionId(),
+                planned,
                 deterministic,
                 observed,
                 Set.copyOf(plannedSourcePages),
@@ -92,6 +93,7 @@ public class TeachingSourcePageEvidenceRefiner implements TeachingEvidenceRefine
 
     private TeachingSectionEvidenceRetriever.Result mergeCanonicalEvidence(
             UUID documentVersionId,
+            TeachingPlan.PlannedSection planned,
             TeachingSectionEvidenceRetriever.Result deterministic,
             List<RuleEvidence> observed,
             Set<Integer> allowedPages,
@@ -119,7 +121,14 @@ public class TeachingSourcePageEvidenceRefiner implements TeachingEvidenceRefine
         }
         List<RuleEvidence> prioritized = new ArrayList<>(deterministic.evidence());
         prioritized.addAll(canonicalExtras);
-        List<RuleEvidence> selected = selectPageDiverseEvidence(prioritized);
+        List<String> plannedSourceIdentifiers = TeachingUnitContract.decodeUnits(planned.retrievalQueries()).stream()
+                .flatMap(unit -> unit.sourceIdentifiers().stream())
+                .distinct()
+                .toList();
+        List<RuleEvidence> selected = selectSourceCompleteEvidence(prioritized, plannedSourceIdentifiers);
+        if (!coversEverySourceIdentifier(selected, plannedSourceIdentifiers)) {
+            return invalid(totalToolCalls);
+        }
         boolean verified = evidenceVerifier.verify(new VerificationRequest(
                         documentVersionId,
                         selected.stream().map(this::verifierEvidence).toList(),
@@ -136,7 +145,21 @@ public class TeachingSourcePageEvidenceRefiner implements TeachingEvidenceRefine
                 List.of(), totalToolCalls, TeachingSectionEvidenceRetriever.State.INVALID);
     }
 
-    private List<RuleEvidence> selectPageDiverseEvidence(List<RuleEvidence> prioritized) {
+    private List<RuleEvidence> selectSourceCompleteEvidence(
+            List<RuleEvidence> prioritized, List<String> sourceIdentifiers) {
+        LinkedHashMap<UUID, RuleEvidence> selected = new LinkedHashMap<>();
+        for (String identifier : sourceIdentifiers) {
+            prioritized.stream()
+                    .filter(source -> TeachingPlannedUnitCoveragePolicy.containsIdentifier(
+                            source.heading() + " " + source.excerpt(), identifier))
+                    .findFirst()
+                    .ifPresent(source -> {
+                        if (selected.size() < MAX_EVIDENCE_PER_SECTION) {
+                            selected.putIfAbsent(source.chunkId(), source);
+                        }
+                    });
+        }
+
         Map<String, List<RuleEvidence>> evidenceByPage = new LinkedHashMap<>();
         for (RuleEvidence source : prioritized) {
             String pageKey = source.pageFrom() + ":" + source.pageTo();
@@ -145,15 +168,21 @@ public class TeachingSourcePageEvidenceRefiner implements TeachingEvidenceRefine
                 pageEvidence.add(source);
             }
         }
-        List<RuleEvidence> selected = new ArrayList<>();
         for (int rank = 0; rank < MAX_EVIDENCE_CHUNKS_PER_PAGE; rank++) {
             for (List<RuleEvidence> pageEvidence : evidenceByPage.values()) {
                 if (rank >= pageEvidence.size()) continue;
-                selected.add(pageEvidence.get(rank));
-                if (selected.size() == MAX_EVIDENCE_PER_SECTION) return List.copyOf(selected);
+                RuleEvidence source = pageEvidence.get(rank);
+                selected.putIfAbsent(source.chunkId(), source);
+                if (selected.size() == MAX_EVIDENCE_PER_SECTION) return List.copyOf(selected.values());
             }
         }
-        return List.copyOf(selected);
+        return List.copyOf(selected.values());
+    }
+
+    private boolean coversEverySourceIdentifier(List<RuleEvidence> evidence, List<String> sourceIdentifiers) {
+        return sourceIdentifiers.stream().allMatch(identifier -> evidence.stream().anyMatch(source ->
+                TeachingPlannedUnitCoveragePolicy.containsIdentifier(
+                        source.heading() + " " + source.excerpt(), identifier)));
     }
 
     private List<Integer> plannedSourcePages(TeachingPlan.PlannedSection planned) {

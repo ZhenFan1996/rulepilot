@@ -434,6 +434,7 @@ function hasStructuredAnswerDetails(answer: StructuredRuleAnswer) {
                 <div v-for="item in turn.answer.conceptComparisons" :key="`${item.leftConcept}-${item.rightConcept}`" class="mt-2 rounded-lg bg-canvas px-3 py-2">
                   <span class="text-xs font-semibold text-indigo">{{ comparisonBasisLabel(item.basis) }}</span>
                   <div class="mt-2 grid gap-2 sm:grid-cols-2"><p><span class="font-semibold text-ink">{{ item.leftConcept }}：</span>{{ item.leftDefinition }}</p><p><span class="font-semibold text-ink">{{ item.rightConcept }}：</span>{{ item.rightDefinition }}</p></div>
+                  <p class="mt-2"><span class="font-semibold text-ink">{{ t('lesson.answer.comparison.common') }}：</span>{{ item.commonGround }}</p>
                   <p class="mt-2"><span class="font-semibold text-ink">{{ t('lesson.answer.comparison.keyDifference') }}：</span>{{ item.keyDifference }}</p>
                   <p class="text-ink/60"><span class="font-semibold text-ink">{{ t('lesson.answer.comparison.boundary') }}：</span>{{ item.practicalBoundary }}</p>
                 </div>

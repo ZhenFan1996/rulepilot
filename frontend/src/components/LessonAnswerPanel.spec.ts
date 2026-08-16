@@ -918,9 +918,12 @@ describe('LessonAnswerPanel', () => {
     const wrapper = mount(LessonAnswerPanel, {
       props: {
         ...baseProps,
-        answer: comparisonAnswer,
-        answeredQuestion: 'Influence 和 Goodwill 有什么区别？',
-        answerTurns: [{ question: 'Influence 和 Goodwill 有什么区别？', answer: comparisonAnswer, learningIntent: null }],
+        answer: answered,
+        answeredQuestion: '什么时候结算？',
+        answerTurns: [
+          { question: 'Influence 和 Goodwill 有什么区别？', answer: comparisonAnswer, learningIntent: null },
+          { question: '什么时候结算？', answer: answered, learningIntent: null },
+        ],
       },
       global: { stubs: { VoiceQuestionCapture: true } },
     })
@@ -928,6 +931,8 @@ describe('LessonAnswerPanel', () => {
     expect(wrapper.text()).toContain('这两个规则概念有什么区别')
     expect(wrapper.text()).toContain('Influence')
     expect(wrapper.text()).toContain('Goodwill')
+    expect(wrapper.text()).toContain('两者使用同一实体标记')
+    expect(wrapper.text()).toContain('两者都约束进入动作')
     expect(wrapper.text()).toContain('Goodwill 不能作为 Influence 花费')
     expect(wrapper.text()).toContain('起草时花 Influence；终局计算 Goodwill')
     expect(wrapper.text()).toContain('适用范围不同')

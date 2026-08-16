@@ -11,8 +11,11 @@ import static org.mockito.Mockito.when;
 import com.rulepilot.assistant.PlayerLocale;
 import com.rulepilot.assistant.RuleAnswerModel.AnswerAid;
 import com.rulepilot.assistant.RuleAnswerModel.AnswerContext;
+import com.rulepilot.assistant.RuleAnswerModel.CalculationRequest;
 import com.rulepilot.assistant.RuleAnswerModel.EvidenceInput;
+import com.rulepilot.assistant.RuleAnswerModel.ModelDraft;
 import com.rulepilot.assistant.RuleAnswerModel.ModelRequest;
+import com.rulepilot.assistant.RuleAnswerModel.PlayerFacingField;
 import com.rulepilot.assistant.RuleAnswerModel.QuestionInterpretationRequest;
 import com.rulepilot.assistant.RuleAnswerModel.EvidenceNeed;
 import com.rulepilot.assistant.RuleAnswerModel.ReferenceBinding;
@@ -74,26 +77,27 @@ class SpringAiRuleAnswerModelTest {
         verify(fixture.chatModel).call(prompt.capture());
         assertThat(prompt.getValue().getInstructions())
                 .extracting(message -> message.getText())
-                .anySatisfy(text -> assertThat(text)
-                        .contains(
-                                "NEEDS_CLARIFICATION",
-                                "prior grounded conversation turn",
-                                "never current rule evidence",
-                                "subquestions",
-                                "evidenceNeeds",
-                                "copied verbatim",
-                                "teaching move",
-                                "learningIntent",
-                                "GENERAL_QUESTION",
-                                "fallback hint",
-                                "PREVIOUS_QUESTION even if deterministicMissingContext",
-                                "MUST contain between one and four",
-                                "Use CALCULATION whenever",
-                                "which of two proposed totals",
-                                "current player message is authoritative",
-                                "ruleObjectSpans",
-                                "pageHints",
-                                "not evidence, not a citation"));
+                .anySatisfy(text -> {
+                    assertThat(text.length()).isLessThan(6_000);
+                    assertThat(text).contains(
+                            "NEEDS_CLARIFICATION",
+                            "same-version grounded turn",
+                            "never current rule evidence",
+                            "subquestions",
+                            "evidenceNeeds",
+                            "exact verbatim",
+                            "Teaching intent",
+                            "learningIntent",
+                            "GENERAL_QUESTION",
+                            "deterministic fallback",
+                            "MUST contain one to four",
+                            "Use CALCULATION",
+                            "which of two proposed totals",
+                            "current player message is authoritative",
+                            "ruleObjectSpans",
+                            "pageHints",
+                            "locator, never evidence");
+                });
     }
 
     @Test
@@ -154,9 +158,10 @@ class SpringAiRuleAnswerModelTest {
                                 "actually express guidance",
                                 "objective, scoring rule, or legal action",
                                 "never a learningIntent",
-                                "active game and rulebook",
-                                "victory conditions separate from advice",
-                                "winning alone never creates an ADVICE need"));
+                                "application-scoped game or rulebook",
+                                "score or threshold needed to win",
+                                "without COMPLETE_LIST",
+                                "Winning alone never creates ADVICE"));
     }
 
     @Test
@@ -305,6 +310,66 @@ class SpringAiRuleAnswerModelTest {
         verify(chatModel).call(prompt.capture());
         assertThat(((OpenAiChatOptions) prompt.getValue().getOptions()).getTemperature())
                 .isEqualTo(0.42);
+    }
+
+    @Test
+    void repairsPlayerProseOnceWithTheLeanFieldPatchAndPreservesStructuredDetails() {
+        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        ChatModel chatModel = mock(ChatModel.class);
+        VersionedAgentPrompts prompts = mock(VersionedAgentPrompts.class);
+        UUID citation = UUID.randomUUID();
+        when(configuration.usesFake(Role.ANSWER)).thenReturn(false);
+        when(configuration.modelFor(Role.ANSWER)).thenReturn(chatModel);
+        when(chatModel.getDefaultOptions()).thenReturn(ToolCallingChatOptions.builder().build());
+        when(chatModel.getOptions()).thenReturn(ToolCallingChatOptions.builder().build());
+        when(prompts.answerSystem("NONE")).thenReturn("LEGACY_COMPOSE_PROMPT_SHOULD_NOT_APPEAR");
+        when(prompts.answerUser()).thenReturn("LEGACY_COMPOSE_USER_SHOULD_NOT_APPEAR");
+        ChatResponse repairResponse = new ChatResponse(List.of(new Generation(new AssistantMessage("""
+                {"explanation":"The current excerpts cannot confirm a guaranteed opening."}
+                """))));
+        when(chatModel.call(any(Prompt.class))).thenReturn(repairResponse);
+        SpringAiRuleAnswerModel model = new SpringAiRuleAnswerModel(
+                configuration, new FakeRuleAnswerModel(), prompts, 0.42, 0.0);
+        ModelRequest request = new ModelRequest(
+                "How do I score, and is there a guaranteed opening?",
+                QuestionType.RULE_QUERY,
+                new AnswerContext(null, null, PlayerLocale.EN),
+                List.of(new EvidenceInput(citation, "RULE", "Scoring", "Score one point.", 2, 2)));
+        ModelDraft previous = new ModelDraft(
+                true,
+                null,
+                "Supported score.",
+                "The rulebook has no guaranteed opening.",
+                List.of(citation),
+                List.of(),
+                "HIGH",
+                "DIRECT_RULE",
+                List.of(new CalculationRequest("1 + 1")));
+
+        ModelDraft repaired = model.revisePlayerFacing(
+                request,
+                previous,
+                List.of("SOURCE_SCOPE HARD FAILURE: localize the unsupported branch."),
+                Set.of(PlayerFacingField.EXPLANATION),
+                null);
+
+        assertThat(repaired.shortVerdict()).isEqualTo("Supported score.");
+        assertThat(repaired.explanation()).isEqualTo("The current excerpts cannot confirm a guaranteed opening.");
+        assertThat(repaired.citationIds()).containsExactly(citation);
+        assertThat(repaired.calculations()).containsExactly(new CalculationRequest("1 + 1"));
+        ArgumentCaptor<Prompt> captured = ArgumentCaptor.forClass(Prompt.class);
+        verify(chatModel, times(1)).call(captured.capture());
+        assertThat(captured.getValue().getContents())
+                .contains(
+                        "one focused player-facing repair turn",
+                        "SOURCE_SCOPE HARD FAILURE",
+                        "The rulebook has no guaranteed opening",
+                        "Score one point")
+                .doesNotContain(
+                        "Supported score.",
+                        "LEGACY_COMPOSE_PROMPT_SHOULD_NOT_APPEAR",
+                        "LEGACY_COMPOSE_USER_SHOULD_NOT_APPEAR");
+        assertThat(captured.getValue().getInstructions().getFirst().getText().length()).isLessThan(2_500);
     }
 
     @Test

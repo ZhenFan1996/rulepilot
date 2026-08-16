@@ -3,10 +3,16 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 
 import AppShell from '@/components/AppShell.vue'
+import PlayerFacingStructuredAnswerDetails from '@/components/PlayerFacingStructuredAnswerDetails.vue'
 import PlayerWorkStatusText from '@/components/PlayerWorkStatusText.vue'
 import { notifyLoginRequired } from '@/lib/authSession'
 import { playerFacingTitle } from '@/lib/lessonPresentation'
 import { playerFacingCitationExcerpt } from '@/lib/playerFacingCitation'
+import {
+  parsePlayerFacingRuleAnswer,
+  type PlayerFacingRuleAnswer,
+  type PlayerRuleCitation,
+} from '@/lib/playerAnswerContract'
 import { playerWorkStatus } from '@/lib/playerWorkStatus'
 
 interface TeachingPlan {
@@ -19,29 +25,10 @@ interface GameSession {
   id: string
 }
 
-interface Citation {
-  heading: string
-  excerpt: string
-  pageFrom: number
-  pageTo: number
-}
-
-interface RuleAnswer {
-  status: 'ANSWERED' | 'ANSWERED_WITH_WARNING' | 'CLARIFICATION_REQUIRED' | 'INSUFFICIENT_EVIDENCE' | 'MODEL_TIMEOUT' | 'INVALID_MODEL_OUTPUT' | 'VERSION_CONFLICT'
-  shortVerdict: string
-  explanation: string
-  citations: Citation[]
-  exceptions: string[]
-  confidence: 'HIGH' | 'MEDIUM' | 'LOW'
-  answerBasis?: 'DIRECT_RULE' | 'GROUNDED_APPLICATION' | null
-  clarification: string | null
-  warnings: Array<{ type: 'INDIRECT_CITATION' | 'LOW_CONFIDENCE' | 'REVIEW_UNRESOLVED' | 'REVIEW_UNAVAILABLE' }>
-}
-
 interface ConversationTurn {
   id: string
   question: string
-  answer: RuleAnswer
+  answer: PlayerFacingRuleAnswer
   createdAt: string
   feedback: FeedbackRating | null
 }
@@ -126,7 +113,11 @@ async function loadConversation() {
     { credentials: 'include' },
   )
   if (!response.ok) throw new Error('无法恢复本次问答记录。')
-  turns.value = (await response.json()) as ConversationTurn[]
+  const payload = await response.json() as unknown
+  if (!Array.isArray(payload)) throw new Error('无法恢复本次问答记录。')
+  const restored = payload.map(parseConversationTurn)
+  if (restored.some(turn => turn === null)) throw new Error('无法恢复本次问答记录。')
+  turns.value = restored.filter((turn): turn is ConversationTurn => turn !== null)
   feedbackByTurn.value = Object.fromEntries(
     turns.value
       .filter((turn) => turn.feedback !== null)
@@ -177,8 +168,13 @@ async function ask() {
       body: JSON.stringify({ question: text, gameSessionId: session.value.id }),
     })
     if (!response.ok) throw new Error('这次裁定没有完成，请重试。')
-    const creation = (await response.json()) as { answer: RuleAnswer; conversationTurnId: string }
-    turns.value.push({ id: creation.conversationTurnId, question: text, answer: creation.answer, createdAt: new Date().toISOString(), feedback: null })
+    const creation = await response.json() as unknown
+    if (!isRecord(creation) || typeof creation.conversationTurnId !== 'string') {
+      throw new Error('这次裁定返回了无法显示的内容，请重试。')
+    }
+    const answer = parsePlayerFacingRuleAnswer(creation.answer)
+    if (!answer) throw new Error('这次裁定返回了无法显示的内容，请重试。')
+    turns.value.push({ id: creation.conversationTurnId, question: text, answer, createdAt: new Date().toISOString(), feedback: null })
     question.value = ''
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '提问失败。'
@@ -209,25 +205,46 @@ async function submitFeedback(turnId: string, rating: FeedbackRating) {
   }
 }
 
-function pages(citation: Citation) {
+function parseConversationTurn(value: unknown): ConversationTurn | null {
+  if (!isRecord(value)
+    || typeof value.id !== 'string'
+    || typeof value.question !== 'string'
+    || typeof value.createdAt !== 'string'
+    || !(value.feedback === null || value.feedback === 'HELPFUL' || value.feedback === 'UNCLEAR' || value.feedback === 'INCORRECT')) return null
+  const answer = parsePlayerFacingRuleAnswer(value.answer)
+  if (!answer) return null
+  return {
+    id: value.id,
+    question: value.question,
+    answer,
+    createdAt: value.createdAt,
+    feedback: value.feedback,
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function pages(citation: PlayerRuleCitation) {
   return citation.pageFrom === citation.pageTo ? `第 ${citation.pageFrom} 页` : `第 ${citation.pageFrom}–${citation.pageTo} 页`
 }
 
-function answerBasisLabel(answerBasis: RuleAnswer['answerBasis']) {
+function answerBasisLabel(answerBasis: PlayerFacingRuleAnswer['answerBasis']) {
   return answerBasis === 'GROUNDED_APPLICATION' ? '按规则回答当前问题' : '规则原文直接裁定'
 }
 
-function answerBasisDescription(answerBasis: RuleAnswer['answerBasis']) {
+function answerBasisDescription(answerBasis: PlayerFacingRuleAnswer['answerBasis']) {
   return answerBasis === 'GROUNDED_APPLICATION'
     ? '这条结论只把已引用规则用于你问题中明确写出的条件；不会读取或猜测桌面状态。'
     : '这条结论可由下方引用的规则原文直接核对。'
 }
 
-function publishesConclusion(status: RuleAnswer['status']) {
+function publishesConclusion(status: PlayerFacingRuleAnswer['status']) {
   return status === 'ANSWERED' || status === 'ANSWERED_WITH_WARNING'
 }
 
-function warningMessage(type: RuleAnswer['warnings'][number]['type']) {
+function warningMessage(type: PlayerFacingRuleAnswer['warnings'][number]['type']) {
   if (type === 'INDIRECT_CITATION') return '引用属于当前规则书，但可能不是这个条件下最直接的规则。'
   if (type === 'LOW_CONFIDENCE') return '这条结论的依据还不够稳妥，请结合规则原文确认。'
   if (type === 'REVIEW_UNRESOLVED') return '进一步核对后仍有一处不影响主结论的疑点，请结合规则原文确认。'
@@ -282,6 +299,7 @@ onUnmounted(() => {
                 <p class="mt-3 text-sm font-semibold text-copper">{{ answerBasisLabel(latestTurn.answer.answerBasis) }}</p>
                 <p class="mt-2 text-sm leading-6 text-ink/60">{{ answerBasisDescription(latestTurn.answer.answerBasis) }}</p>
                 <p class="mt-3 leading-7 text-ink/70"><span class="font-semibold text-ink">套用到当前问题：</span>{{ latestTurn.answer.explanation }}</p>
+                <PlayerFacingStructuredAnswerDetails :answer="latestTurn.answer" />
                 <ul v-if="latestTurn.answer.exceptions.length" class="mt-3 list-disc stack-y-xs pl-5 text-sm leading-6 text-ink/65">
                   <li v-for="item in latestTurn.answer.exceptions" :key="item">{{ item }}</li>
                 </ul>
@@ -329,6 +347,23 @@ onUnmounted(() => {
                 <p class="text-panel-text/55">{{ turn.question }}</p>
                 <p v-if="turn.answer.status === 'ANSWERED_WITH_WARNING'" class="mt-1 text-xs font-semibold text-amber-200">带核对提醒</p>
                 <p class="mt-1 font-semibold">{{ turn.answer.shortVerdict }}</p>
+                <details class="mt-2">
+                  <summary class="cursor-pointer text-xs font-semibold text-amber-200">查看完整裁定</summary>
+                  <div class="mt-3 rounded-xl bg-paper p-3 text-ink">
+                    <p v-if="turn.answer.clarification" class="rounded-lg bg-amber-50 p-2 text-amber-900">{{ turn.answer.clarification }}</p>
+                    <p v-if="turn.answer.explanation" class="leading-6 text-ink/70">{{ turn.answer.explanation }}</p>
+                    <PlayerFacingStructuredAnswerDetails :answer="turn.answer" />
+                    <ul v-if="turn.answer.exceptions.length" class="mt-3 list-disc pl-5 text-ink/65">
+                      <li v-for="item in turn.answer.exceptions" :key="item">{{ item }}</li>
+                    </ul>
+                    <div v-if="turn.answer.citations.length" class="mt-3 stack-y-sm border-t border-ink/10 pt-3">
+                      <div v-for="(citation, citationIndex) in turn.answer.citations" :key="`${citation.heading}-${citationIndex}`">
+                        <p class="font-semibold">{{ citation.heading }} · {{ pages(citation) }}</p>
+                        <p class="mt-1 text-ink/60">{{ playerFacingCitationExcerpt(citation.excerpt) }}</p>
+                      </div>
+                    </div>
+                  </div>
+                </details>
               </li>
             </ol>
           </details>

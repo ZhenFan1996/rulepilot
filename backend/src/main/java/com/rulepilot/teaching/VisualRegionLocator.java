@@ -203,8 +203,7 @@ public interface VisualRegionLocator {
                     || supportedStepPositions.stream().anyMatch(position -> position == null || position < 1)) {
                 throw new IllegalArgumentException("located visual region is invalid");
             }
-            label = label.strip();
-            visibleDescription = visibleDescription == null ? "" : visibleDescription.strip();
+            visibleDescription = visibleDescription == null ? "" : visibleDescription;
             supportedEvidenceIds = List.copyOf(supportedEvidenceIds);
             supportedStepPositions = List.copyOf(supportedStepPositions);
         }

@@ -18,7 +18,7 @@ class VisualLessonMergePolicyTest {
     private final VisualLessonMergePolicy policy = new VisualLessonMergePolicy(new VisualReaderCropPolicy());
 
     @Test
-    void restoresCitedProseAndDropsBroadVisualMetadata() {
+    void dropsOnlyBroadVisualMetadataAndPreservesTheExactPlayerFacingText() {
         UUID evidence = UUID.randomUUID();
         LessonStep broad = new LessonStep(
                 1,
@@ -34,19 +34,22 @@ class VisualLessonMergePolicyTest {
         LessonSection section = restored.sections().getFirst();
         assertThat(section.steps().getFirst())
                 .extracting(LessonStep::kind, LessonStep::text, LessonStep::visualFocus)
-                .containsExactly(TeachingMove.DO, "把探测器放到轨道上。", null);
+                .containsExactly(
+                        TeachingMove.DO,
+                        "图中可见旧的整页组件总览。结合图片完成这一步：把探测器放到轨道上。",
+                        null);
         assertThat(section.visualSourcePages()).isEmpty();
         assertThat(section.visualSourceChunkIds()).isEmpty();
     }
 
     @Test
-    void bindsARegionToItsExactCitedStepWithReadableVisualText() {
+    void bindsARegionWithoutChangingOriginalStepOrVisualModelProse() {
         UUID evidence = UUID.randomUUID();
         LessonSection source = section(List.of(ruleStep(evidence)), List.of(), List.of());
         LocatedRegion region = new LocatedRegion(
                 2,
-                "Probe track",
-                "圆形探测器标记位于弧形刻度旁，箭头指向前进方向。",
+                " 轨道与探测器 ",
+                " 圆形探测器标记位于弧形刻度旁，箭头指向前进方向。 ",
                 120,
                 220,
                 180,
@@ -65,8 +68,8 @@ class VisualLessonMergePolicyTest {
                         "把探测器放到轨道上。",
                         new VisualFocus(
                                 2,
-                                "放置探测器",
-                                "圆形探测器标记位于弧形刻度旁，箭头指向前进方向",
+                                " 轨道与探测器 ",
+                                " 圆形探测器标记位于弧形刻度旁，箭头指向前进方向。 ",
                                 120,
                                 220,
                         180,
@@ -74,7 +77,28 @@ class VisualLessonMergePolicyTest {
     }
 
     @Test
-    void keeps_a_contradicting_crop_but_downgrades_a_supported_section_for_review() {
+    void skipsAnInvalidVisualLabelInsteadOfReplacingItWithLessonProse() {
+        UUID evidence = UUID.randomUUID();
+        LessonSection source = section(List.of(ruleStep(evidence)), List.of(), List.of());
+        LocatedRegion region = new LocatedRegion(
+                2,
+                "Probe track",
+                "圆形探测器标记位于弧形刻度旁。",
+                120,
+                220,
+                180,
+                120,
+                List.of(evidence),
+                List.of(1));
+
+        VisualLessonMergePolicy.MergedVisualSection merged = policy.mergeVisualIntoSupportedSteps(source, List.of(region));
+
+        assertThat(merged.addedCount()).isZero();
+        assertThat(merged.section()).isEqualTo(source);
+    }
+
+    @Test
+    void rejectsOnlyAContradictingCropAndKeepsTheValidatedSectionUntouched() {
         UUID evidence = UUID.randomUUID();
         LessonSection supported = new LessonSection(
                 1,
@@ -104,12 +128,9 @@ class VisualLessonMergePolicyTest {
         VisualLessonMergePolicy.MergedVisualSection merged =
                 policy.mergeVisualIntoSupportedSteps(supported, List.of(contradiction));
 
-        assertThat(merged.addedCount()).isEqualTo(1);
+        assertThat(merged.addedCount()).isZero();
         assertThat(merged.claimConflictCount()).isEqualTo(1);
-        assertThat(merged.section().evidenceStatus())
-                .isEqualTo(IllustratedLesson.EvidenceStatus.CITED_DRAFT);
-        assertThat(merged.section().steps().getFirst().visualFocus().visibleDescription())
-                .contains("总计 12 分");
+        assertThat(merged.section()).isEqualTo(supported);
     }
 
     @Test

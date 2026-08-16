@@ -26,7 +26,8 @@ final class TeachingEvidenceRetrievalPolicy {
 
     static List<String> queries(TeachingPlan.PlannedSection topic, int limit) {
         Stream<String> queries = Stream.concat(
-                topic.retrievalQueries().stream(), objectiveQueries(topic.objective()).stream());
+                TeachingUnitContract.sourceIdentifiers(topic.retrievalQueries()).stream(),
+                objectiveQueries(topic.objective()).stream());
         return queries.map(String::strip).filter(query -> !query.isBlank()).distinct().limit(limit).toList();
     }
 

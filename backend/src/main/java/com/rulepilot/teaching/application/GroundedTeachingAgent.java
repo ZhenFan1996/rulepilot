@@ -41,7 +41,7 @@ import org.springframework.stereotype.Component;
 public class GroundedTeachingAgent {
 
     private static final Logger log = LoggerFactory.getLogger(GroundedTeachingAgent.class);
-    static final String GENERATOR_VERSION = "adaptive-teaching-v57-source-coverage-contract";
+    static final String GENERATOR_VERSION = "adaptive-teaching-v58-whole-game-context";
     private static final Set<String> REUSABLE_GENERATOR_VERSIONS =
             Set.of(GENERATOR_VERSION);
     private final AssistantReadTools tools;
@@ -50,6 +50,8 @@ public class GroundedTeachingAgent {
     private final TeachingSectionEvidenceRetriever evidenceRetriever;
     private final TeachingEvidenceRefiner evidenceRefiner;
     private final TeachingSectionDraftComposer sectionDraftComposer;
+    private final TeachingBaseSectionPublicationPolicy basePublication =
+            new TeachingBaseSectionPublicationPolicy();
     private final TeachingLessonAssemblyPolicy lessonAssembly = new TeachingLessonAssemblyPolicy();
     private final TeachingPublishedLessonReviewer publishedLessonReviewer;
     private final int maxToolCalls;
@@ -202,9 +204,9 @@ public class GroundedTeachingAgent {
     }
 
     /**
-     * Completes the compatibility workflow in one call. The production launcher uses
-     * {@link #createBase(TeachingPlan, UUID, IllustratedLesson, Consumer)} so a player can read
-     * source-cited chapters before optional visual work and whole-lesson review finish.
+     * Completes the compatibility review workflow in one call. The production launcher uses
+     * {@link #createBase(TeachingPlan, UUID, IllustratedLesson, Consumer)} so a player receives
+     * deterministically validated chapters without waiting for an optional model review.
      */
     public IllustratedLesson create(TeachingPlan plan, UUID assistantRunId) {
         return create(plan, assistantRunId, null);
@@ -239,7 +241,7 @@ public class GroundedTeachingAgent {
     }
 
     /**
-     * Publishes through the first source-cited section before the longer remaining-section and review work is queued.
+     * Publishes through the first source-cited section before the remaining sections are queued.
      * An evidence-insufficient early topic is persisted truthfully, then startup advances in plan order until useful
      * cited content exists or every topic is known to be insufficient.
      * The returned continuation is process-local on purpose: an application restart fails the owning Assistant Run,
@@ -251,12 +253,20 @@ public class GroundedTeachingAgent {
             IllustratedLesson previousLesson,
             Consumer<IllustratedLesson> progressPublisher) {
         if (progressPublisher == null) throw new IllegalArgumentException("lesson progress publisher is required");
+        TeachingWholeGameUnderstandingPolicy.validateBeforeChapterGeneration(plan);
+        if (TeachingWholeGameUnderstandingPolicy.requiresValidatedContext(plan)) {
+            invocations.record(
+                    assistantRunId,
+                    ActivityType.VALIDATION,
+                    "validateWholeGameTeachingContext",
+                    ActivityOutcome.SUCCEEDED,
+                    "Source-bound whole-game understanding completed before chapter generation");
+        }
         UUID lessonId = UUID.randomUUID();
         Instant createdAt = Instant.now();
         Map<String, LessonSection> reusable = reusableSections(plan, previousLesson);
         int queriesPerTopic = baseQueryBudget(plan);
         List<LessonSection> sections = new ArrayList<>();
-        List<TeachingSectionDraftCandidate> reviewCandidates = new ArrayList<>();
         for (TeachingPlan.PlannedSection planned : plan.sections()) {
             SectionOutcome outcome = baseSection(
                     plan,
@@ -266,7 +276,6 @@ public class GroundedTeachingAgent {
                     assistantRunId,
                     queriesPerTopic);
             sections.add(outcome.section());
-            if (outcome.reviewCandidate() != null) reviewCandidates.add(outcome.reviewCandidate());
             publishProgress(progressPublisher, lessonId, plan, sections, createdAt);
             recordPublication(
                     assistantRunId,
@@ -283,8 +292,7 @@ public class GroundedTeachingAgent {
                 createdAt,
                 reusable,
                 queriesPerTopic,
-                sections,
-                reviewCandidates);
+                sections);
     }
 
     IllustratedLesson continueBase(
@@ -300,7 +308,6 @@ public class GroundedTeachingAgent {
         Map<String, LessonSection> reusable = continuation.reusableSections;
         int queriesPerTopic = continuation.queriesPerTopic;
         List<LessonSection> sections = continuation.sections;
-        List<TeachingSectionDraftCandidate> reviewCandidates = continuation.reviewCandidates;
         List<TeachingPlan.PlannedSection> remaining = plan.sections().subList(sections.size(), plan.sections().size());
         if (!remaining.isEmpty()) {
             // The first section is already durable before this method runs. A progressive visual plan can therefore
@@ -328,9 +335,6 @@ public class GroundedTeachingAgent {
                     while (completed.containsKey(sections.size() + 1)) {
                         SectionOutcome contiguous = completed.remove(sections.size() + 1);
                         sections.add(contiguous.section());
-                        if (contiguous.reviewCandidate() != null) {
-                            reviewCandidates.add(contiguous.reviewCandidate());
-                        }
                         publishProgress(progressPublisher, lessonId, plan, sections, createdAt);
                         recordPublication(
                                 assistantRunId,
@@ -340,15 +344,6 @@ public class GroundedTeachingAgent {
                     }
                 }
             }
-        }
-        IllustratedLesson readableDraft = lesson(lessonId, plan, sections, createdAt);
-        if (readableDraft.status() == LessonStatus.DRAFT_READY && !reviewCandidates.isEmpty()) {
-            publishedLessonReviewer.review(
-                    plan,
-                    reviewCandidates,
-                    sections,
-                    assistantRunId,
-                    () -> progressPublisher.accept(lesson(lessonId, plan, sections, createdAt)));
         }
         return lesson(lessonId, plan, sections, createdAt);
     }
@@ -361,7 +356,6 @@ public class GroundedTeachingAgent {
         private final Map<String, LessonSection> reusableSections;
         private final int queriesPerTopic;
         private final List<LessonSection> sections;
-        private final List<TeachingSectionDraftCandidate> reviewCandidates;
 
         private BaseLessonContinuation(
                 TeachingPlan plan,
@@ -370,8 +364,7 @@ public class GroundedTeachingAgent {
                 Instant createdAt,
                 Map<String, LessonSection> reusableSections,
                 int queriesPerTopic,
-                List<LessonSection> sections,
-                List<TeachingSectionDraftCandidate> reviewCandidates) {
+                List<LessonSection> sections) {
             this.plan = plan;
             this.assistantRunId = assistantRunId;
             this.lessonId = lessonId;
@@ -379,11 +372,10 @@ public class GroundedTeachingAgent {
             this.reusableSections = reusableSections;
             this.queriesPerTopic = queriesPerTopic;
             this.sections = sections;
-            this.reviewCandidates = reviewCandidates;
         }
 
         boolean hasRemainingWork() {
-            return sections.size() < plan.sections().size() || !reviewCandidates.isEmpty();
+            return sections.size() < plan.sections().size();
         }
     }
 
@@ -451,8 +443,11 @@ public class GroundedTeachingAgent {
                     assistantRunId,
                     sectionIndex,
                     mode.includeVisualEvidence() && planned.visualEvidenceRecommended());
+            LessonSection published = mode.publishAfterDeterministicValidation()
+                    ? basePublication.publish(composed)
+                    : composed.section();
             return new SectionOutcome(
-                    planned.position(), planned, composed.section(), composed, resolution.toolCalls(),
+                    planned.position(), planned, published, composed, resolution.toolCalls(),
                     ActivityOutcome.SUCCEEDED, mode.publishedCategory());
         } catch (AgentExecutionStoppedException stopped) {
             throw stopped;
@@ -570,12 +565,14 @@ public class GroundedTeachingAgent {
     private record GenerationMode(
             boolean bindVisualPageEvidence,
             boolean includeVisualEvidence,
+            boolean publishAfterDeterministicValidation,
             String noEvidenceCategory,
             String invalidEvidenceCategory,
             String publishedCategory,
             String withheldCategory) {
         private static final GenerationMode PROGRESSIVE_BASE = new GenerationMode(
                 true,
+                false,
                 true,
                 "NO_VALID_BASE_EVIDENCE",
                 "NO_VALID_BASE_EVIDENCE",
@@ -584,6 +581,7 @@ public class GroundedTeachingAgent {
         private static final GenerationMode COMPATIBILITY_COMPLETE = new GenerationMode(
                 false,
                 true,
+                false,
                 "NO_RETRIEVED_EVIDENCE",
                 "RETRIEVED_EVIDENCE_INVALID",
                 "CITED_DRAFT_PUBLISHED",

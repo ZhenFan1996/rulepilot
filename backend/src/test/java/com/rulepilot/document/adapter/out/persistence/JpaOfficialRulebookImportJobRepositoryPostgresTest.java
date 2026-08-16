@@ -264,6 +264,62 @@ class JpaOfficialRulebookImportJobRepositoryPostgresTest {
                 .containsEntry("teaching_preparation_run_id", newerRunId);
     }
 
+    @Test
+    void dismissesOnlyTheExactOwnedFailedPreparationAndKeepsTheOfficialImport() {
+        Instant now = Instant.parse("2026-08-10T03:00:00Z");
+        UUID versionId = insertDocument("dismiss", "READY", now);
+        UUID jobId = insertCompletedTeachingJob(versionId, now);
+        UUID failedRunId = UUID.randomUUID();
+        insertPreparationRun(failedRunId, versionId, "FAILED", now);
+        inTransaction(repository -> repository.claimReadyTeachingForDocument(
+                versionId, 1, now.plusSeconds(1)));
+        inTransaction(repository -> repository.completeTeachingLaunch(
+                jobId, failedRunId, now.plusSeconds(2)));
+
+        boolean wrongOwner = inTransactionReturning(repository -> repository.dismissTeaching(
+                jobId,
+                "mallory",
+                OfficialRulebookImportJob.TeachingHandoffState.LAUNCHED,
+                failedRunId,
+                now.plusSeconds(3)));
+        boolean staleRun = inTransactionReturning(repository -> repository.dismissTeaching(
+                jobId,
+                "official-handoff-player",
+                OfficialRulebookImportJob.TeachingHandoffState.LAUNCHED,
+                UUID.randomUUID(),
+                now.plusSeconds(4)));
+        boolean dismissed = inTransactionReturning(repository -> repository.dismissTeaching(
+                jobId,
+                "official-handoff-player",
+                OfficialRulebookImportJob.TeachingHandoffState.LAUNCHED,
+                failedRunId,
+                now.plusSeconds(5)));
+
+        assertThat(wrongOwner).isFalse();
+        assertThat(staleRun).isFalse();
+        assertThat(dismissed).isTrue();
+        assertThat(jdbc.queryForMap(
+                        """
+                        SELECT teaching_handoff_state, teaching_learning_goal,
+                               teaching_preparation_run_id, teaching_error_code,
+                               teaching_handoff_updated_at, document_version_id
+                        FROM official_rulebook_import_job
+                        WHERE id = ?
+                        """,
+                        jobId))
+                .containsEntry("teaching_handoff_state", "NOT_REQUESTED")
+                .containsEntry("teaching_learning_goal", null)
+                .containsEntry("teaching_preparation_run_id", null)
+                .containsEntry("teaching_error_code", null)
+                .containsEntry("teaching_handoff_updated_at", null)
+                .containsEntry("document_version_id", versionId);
+        assertThat(jdbc.queryForObject(
+                        "SELECT count(*) FROM document_version WHERE id = ?",
+                        Integer.class,
+                        versionId))
+                .isOne();
+    }
+
     private static UUID insertFailedDocument(Instant now) {
         return insertDocument("unusable", "FAILED", now);
     }

@@ -56,8 +56,10 @@ final class TeachingDraftRecoveryPolicy {
                 request.evidence(),
                 List.of(),
                 request.requiredRuleIntents(),
+                request.teachingUnits(),
                 request.modelConfigurationOwner(),
-                request.chapterScope());
+                request.chapterScope(),
+                request.wholeGameContext());
     }
 
     /** Keeps presentation metadata across a schema-only text fallback without changing any rule claim. */

@@ -41,6 +41,7 @@ import com.rulepilot.assistant.domain.AnswerStatus;
 import com.rulepilot.assistant.domain.AnswerWarning;
 import com.rulepilot.assistant.domain.MissingQuestionContext;
 import com.rulepilot.assistant.domain.QuestionType;
+import com.rulepilot.assistant.domain.RuleCitation;
 import com.rulepilot.assistant.domain.StructuredRuleAnswer;
 import com.rulepilot.document.RuleDataVersion;
 import com.rulepilot.retrieval.AnswerEvidenceRetriever;
@@ -158,6 +159,27 @@ class StructuredRuleAnswerServiceTest {
         assertThat(reviewed.get().claims()).singleElement()
                 .extracting(claim -> claim.citationIds())
                 .isEqualTo(List.of(source.chunkId()));
+    }
+
+    @Test
+    void preservesACompleteSupportedAnswerAndLocalizesOnlyTheMissingSubquestion() {
+        RuleEvidenceHit source = source("The game ends immediately when a player reaches twenty points.");
+        String explanation = "Reach twenty points to end the game immediately. "
+                + "The currently available rule excerpt cannot confirm a guaranteed opening; "
+                + "which role and opening phase do you want advice for?";
+
+        StructuredRuleAnswer answer = service(
+                        search(source),
+                        request -> draft(source, "Reach twenty points to win.", explanation))
+                .answer(
+                        "How do I win, and what opening guarantees victory?",
+                        new QuestionContext(versionId, null, null, PlayerLocale.EN));
+
+        assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
+        assertThat(answer.shortVerdict()).isEqualTo("Reach twenty points to win.");
+        assertThat(answer.explanation()).isEqualTo(explanation);
+        assertThat(answer.citations()).extracting(RuleCitation::chunkId)
+                .containsExactly(source.chunkId());
     }
 
     @Test
@@ -293,6 +315,72 @@ class StructuredRuleAnswerServiceTest {
     }
 
     @Test
+    void preservesTheValidatedCoreAndDropsAnUnselectedMalformedAidWithoutRevision() {
+        RuleEvidenceHit source = source("The active player may move one space.");
+        AtomicInteger revisions = new AtomicInteger();
+        String explanation = "The cited rule grants one move and states the limit directly.";
+        PlanningModel model = planningModel(
+                AnswerAid.NONE,
+                Set.of(EvidenceNeed.DIRECT_RULE),
+                request -> new ModelDraft(
+                        true,
+                        null,
+                        "You may move one space.",
+                        explanation,
+                        List.of(source.chunkId()),
+                        List.of(),
+                        "HIGH",
+                        "DIRECT_RULE",
+                        List.of(),
+                        List.of(),
+                        List.of(new WalkthroughStepRequest(
+                                "internal chunkId marker", "", "NOT_AN_ORDER", List.of(UUID.randomUUID()))),
+                        List.of(),
+                        List.of(),
+                        List.of(),
+                        List.of(),
+                        List.of(),
+                        List.of(),
+                        List.of(),
+                        List.of(),
+                        List.of(),
+                        List.of()),
+                (request, previous, feedback) -> {
+                    revisions.incrementAndGet();
+                    return previous;
+                });
+
+        StructuredRuleAnswer answer = service(search(source), model).answer(
+                "How far may the active player move?", new QuestionContext(versionId));
+
+        assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
+        assertThat(answer.shortVerdict()).isEqualTo("You may move one space.");
+        assertThat(answer.explanation()).isEqualTo(explanation);
+        assertThat(answer.walkthroughSteps()).isEmpty();
+        assertThat(revisions).hasValue(0);
+    }
+
+    @Test
+    void neverStartsASecondRepairWhenCompositionAlreadyUsedTheOneRepairBudget() {
+        RuleEvidenceHit source = source("Pay the cost before resolving the effect.");
+        AtomicInteger revisions = new AtomicInteger();
+        PlanningModel model = planningModel(
+                AnswerAid.WALKTHROUGH,
+                Set.of(EvidenceNeed.SEQUENCE),
+                request -> draft(source, "Pay first.", "The internal chunkId says to resolve next."),
+                (request, previous, feedback) -> {
+                    revisions.incrementAndGet();
+                    return draft(source, "Pay first.", "The cited rule says to resolve next.");
+                });
+
+        StructuredRuleAnswer answer = service(search(source), model).answer(
+                "How do I pay the cost before resolving the effect?", new QuestionContext(versionId));
+
+        assertThat(answer.status()).isEqualTo(AnswerStatus.INVALID_MODEL_OUTPUT);
+        assertThat(revisions).hasValue(1);
+    }
+
+    @Test
     void semanticClarificationStopsBeforeRetrievalAndComposition() {
         AtomicBoolean retrievalCalled = new AtomicBoolean();
         AtomicInteger composeCalls = new AtomicInteger();
@@ -336,7 +424,7 @@ class StructuredRuleAnswerServiceTest {
     }
 
     @Test
-    void appliesOneCriticCorrectionThenReviewsTheRevisedAnswer() {
+    void appliesOneCriticCorrectionWithoutRepeatingTheCritic() {
         RuleEvidenceHit source = source("The active player may move one space.");
         AtomicInteger revisions = new AtomicInteger();
         RuleAnswerModel model = new RuleAnswerModel() {
@@ -367,11 +455,11 @@ class StructuredRuleAnswerServiceTest {
         assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
         assertThat(answer.shortVerdict()).isEqualTo("Move one space.");
         assertThat(revisions).hasValue(1);
-        assertThat(reviews).hasValue(2);
+        assertThat(reviews).hasValue(1);
     }
 
     @Test
-    void withholdsAConclusionWhenTheSemanticCriticIsUnavailable() {
+    void preservesAValidatedConclusionWhenTheOptionalSemanticCriticIsUnavailable() {
         RuleEvidenceHit source = source("The active player may move one space.");
         GeneratedContentCritic critic = (request, risk) -> {
             throw new IllegalStateException("critic unavailable");
@@ -383,9 +471,10 @@ class StructuredRuleAnswerServiceTest {
                         critic)
                 .answer("How far may I move?", new QuestionContext(versionId));
 
-        assertThat(answer.status()).isEqualTo(AnswerStatus.INVALID_MODEL_OUTPUT);
-        assertThat(answer.shortVerdict()).contains("事实复核");
-        assertThat(answer.citations()).isEmpty();
+        assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED_WITH_WARNING);
+        assertThat(answer.shortVerdict()).isEqualTo("Move one space.");
+        assertThat(answer.citations()).extracting(RuleCitation::chunkId)
+                .containsExactly(source.chunkId());
     }
 
     @Test

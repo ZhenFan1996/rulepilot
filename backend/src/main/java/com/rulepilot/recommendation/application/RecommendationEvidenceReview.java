@@ -1,15 +1,10 @@
 package com.rulepilot.recommendation.application;
 
-import static com.rulepilot.recommendation.application.RecommendationReActLoop.MAX_MODEL_CALLS;
-
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.rulepilot.catalog.BggGameType;
-import com.rulepilot.recommendation.BoardGameRecommendationModel;
-import com.rulepilot.recommendation.BoardGameRecommendationModel.PreferenceEvidence;
-import com.rulepilot.recommendation.BoardGameRecommendationModel.PreferenceEvidenceStatus;
-import com.rulepilot.recommendation.BoardGameRecommendationModel.PreferenceProposal;
-import com.rulepilot.recommendation.BoardGameRecommendationModel.PreferenceReviewRequest;
 import com.rulepilot.recommendation.ConstraintRange;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ConversationRequest;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.DialogueMessage;
@@ -19,7 +14,6 @@ import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.Rec
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.UserModelView;
 import com.rulepilot.recommendation.application.RecommendationActions.InvalidAction;
 import com.rulepilot.recommendation.application.RecommendationAgentState.ContextualPreference;
-import com.rulepilot.recommendation.application.RecommendationAgentState.PreferenceReviewKey;
 import java.math.BigDecimal;
 import java.text.Normalizer;
 import java.util.ArrayList;
@@ -30,10 +24,8 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
-/** Reviews and applies only player-grounded recommendation preference evidence. */
+/** Applies typed preference updates only after deterministic value and user-evidence validation. */
 final class RecommendationEvidenceReview {
 
     private static final int MAX_PROFILE_UPDATES = 5;
@@ -46,17 +38,10 @@ final class RecommendationEvidenceReview {
             "maxWeight",
             "type",
             "interaction");
-    private static final Logger LOGGER = LoggerFactory.getLogger(BoardGameRecommendationAgent.class);
-
-    private final BoardGameRecommendationModel model;
     private final ObjectMapper json;
     private final RecommendationReActLoop runtime;
 
-    RecommendationEvidenceReview(
-            BoardGameRecommendationModel model,
-            ObjectMapper json,
-            RecommendationReActLoop runtime) {
-        this.model = model;
+    RecommendationEvidenceReview(ObjectMapper json, RecommendationReActLoop runtime) {
         this.json = json;
         this.runtime = runtime;
     }
@@ -72,19 +57,11 @@ final class RecommendationEvidenceReview {
             return;
         }
         RecommendationProfile current = state.profile;
-        PreferenceReviewGate review = reviewPreferenceEvidence(updates, current, request, state);
         try {
-            state.profile = updatedProfile(updates, current, request, review);
+            state.profile = updatedProfile(updates, current, request);
         } catch (InvalidAction invalid) {
-            if (!Set.of(
-                            "PREFERENCE_IS_CONTEXTUAL",
-                            "PREFERENCE_EVIDENCE_NOT_SUPPORTED",
-                            "PREFERENCE_REVIEW_UNAVAILABLE")
-                    .contains(invalid.code)) {
-                throw invalid;
-            }
             if (!"PREFERENCE_IS_CONTEXTUAL".equals(invalid.code)) {
-                state.actions.add("REJECTED_PREFERENCE_UPDATE:" + invalid.code);
+                throw invalid;
             }
             return;
         }
@@ -119,32 +96,41 @@ final class RecommendationEvidenceReview {
             RecommendationAgentState state,
             ConversationRequest request,
             boolean strictStructure) {
-        if (updates.isEmpty() || updates.size() > MAX_PROFILE_UPDATES) {
-            if (strictStructure) throw new InvalidAction("EMPTY_PREFERENCE_UPDATE");
-            state.actions.add("REJECTED_PREFERENCE_UPDATE:EMPTY_PREFERENCE_UPDATE");
-            return "EMPTY_PREFERENCE_UPDATE";
+        if (updates.isEmpty()) return "";
+        if (updates.size() > MAX_PROFILE_UPDATES) {
+            if (strictStructure) throw new InvalidAction("TOO_MANY_PREFERENCE_UPDATES");
+            state.actions.add("REJECTED_PREFERENCE_UPDATE:TOO_MANY_PREFERENCE_UPDATES");
+            return "TOO_MANY_PREFERENCE_UPDATES";
         }
         if (strictStructure) {
             // Validate the whole shape before committing any field so a malformed sibling cannot leave
             // a partially applied state. Semantic decisions below are intentionally per field.
             updatedProfileFromList(
-                    updates,
+                    preferencePayloads(updates),
                     state.profile,
-                    request,
-                    PreferenceReviewGate.withoutReview());
+                    request);
+            for (JsonNode update : updates) {
+                preferenceClassification(update, request);
+            }
         }
         boolean updated = false;
         boolean redundant = false;
         Set<String> seen = new LinkedHashSet<>();
         List<String> warnings = new ArrayList<>();
-        PreferenceReviewGate review = reviewPreferenceEvidence(updates, state.profile, request, state);
         for (JsonNode update : updates) {
             try {
+                PreferenceEvidenceClassification classification = preferenceClassification(update, request);
                 String field = text(update.path("field"), 1, 40);
                 if (!seen.add(field)) throw new InvalidAction("PREFERENCE_FIELD_INVALID");
+                if (classification.contextual()) {
+                    recordContextualPreference(update, state, request, classification.reason());
+                    continue;
+                }
                 RecommendationProfile current = state.profile;
                 state.profile = updatedProfileFromList(
-                        json.createArrayNode().add(update), current, request, review);
+                        json.createArrayNode().add(preferencePayload(update)),
+                        current,
+                        request);
                 if (state.profile.equals(current)) {
                     redundant = true;
                 } else {
@@ -152,9 +138,7 @@ final class RecommendationEvidenceReview {
                 }
             } catch (InvalidAction invalid) {
                 if ("PREFERENCE_IS_CONTEXTUAL".equals(invalid.code)) continue;
-                if (strictStructure
-                        && !Set.of("PREFERENCE_EVIDENCE_NOT_SUPPORTED", "PREFERENCE_REVIEW_UNAVAILABLE")
-                                .contains(invalid.code)) {
+                if (strictStructure) {
                     throw invalid;
                 }
                 if (!warnings.contains(invalid.code)) {
@@ -171,13 +155,175 @@ final class RecommendationEvidenceReview {
         return String.join(",", warnings);
     }
 
+    private ArrayNode preferencePayloads(JsonNode updates) {
+        ArrayNode payloads = json.createArrayNode();
+        for (JsonNode update : updates) {
+            requireObject(
+                    update,
+                    Set.of("field", "value", "evidence"),
+                    Set.of("evidenceStatus", "evidenceReason"));
+            payloads.add(preferencePayload(update));
+        }
+        return payloads;
+    }
+
+    private ObjectNode preferencePayload(JsonNode update) {
+        ObjectNode payload = json.createObjectNode();
+        payload.set("field", update.path("field"));
+        payload.set("value", update.path("value"));
+        payload.set("evidence", update.path("evidence"));
+        return payload;
+    }
+
+    private PreferenceEvidenceClassification preferenceClassification(
+            JsonNode update,
+            ConversationRequest request) {
+        requireObject(
+                update,
+                Set.of("field", "value", "evidence"),
+                Set.of("evidenceStatus", "evidenceReason"));
+        String status = update.has("evidenceStatus")
+                ? text(update.path("evidenceStatus"), 1, 20)
+                : "DIRECT";
+        String reason = update.has("evidenceReason")
+                ? text(update.path("evidenceReason"), 1, 40)
+                : "DIRECT";
+        if ("DIRECT".equals(status) && "DIRECT".equals(reason)) {
+            return new PreferenceEvidenceClassification(false, reason);
+        }
+        if (request != null && directlyStatesNumericPreference(update, request)) {
+            return new PreferenceEvidenceClassification(false, "DIRECT");
+        }
+        if (!"CONTEXTUAL".equals(status) || !"COMPLETE_GROUP_INFERENCE".equals(reason)) {
+            throw new InvalidAction("PREFERENCE_EVIDENCE_CLASSIFICATION_INVALID");
+        }
+        String field = text(update.path("field"), 1, 40);
+        JsonNode value = update.path("value");
+        boolean exactPlayerCount = "players".equals(field) && value.canConvertToInt()
+                || "playerCount".equals(field)
+                        && value.isObject()
+                        && value.path("minimum").canConvertToInt()
+                        && value.path("maximum").canConvertToInt()
+                        && value.path("minimum").intValue() == value.path("maximum").intValue();
+        if (!exactPlayerCount) {
+            throw new InvalidAction("PREFERENCE_EVIDENCE_CLASSIFICATION_INVALID");
+        }
+        if (request != null && !preferenceEvidence(request).containsKey(update.path("evidence").asText())) {
+            throw new InvalidAction("PREFERENCE_EVIDENCE_NOT_GROUNDED");
+        }
+        return new PreferenceEvidenceClassification(true, reason);
+    }
+
+    private boolean directlyStatesNumericPreference(JsonNode update, ConversationRequest request) {
+        String evidence = preferenceEvidence(request).get(update.path("evidence").asText());
+        if (evidence == null) return false;
+        List<String> numbers = numericTokens(evidence);
+        String field = update.path("field").asText();
+        JsonNode value = update.path("value");
+        return switch (field) {
+            case "players", "maxMinutes" -> value.canConvertToInt()
+                    && containsInteger(numbers, value.intValue());
+            case "playerCount", "durationMinutes" -> value.isObject()
+                    && containsIntegerBounds(numbers, value);
+            case "maxWeight" -> value.isNumber()
+                    && containsDecimal(numbers, value.decimalValue());
+            case "complexity" -> value.isObject()
+                    && containsDecimalBounds(numbers, value);
+            default -> false;
+        };
+    }
+
+    private List<String> numericTokens(String text) {
+        List<String> values = new ArrayList<>();
+        StringBuilder current = new StringBuilder();
+        boolean decimalPointSeen = false;
+        for (int index = 0; index < text.length(); index++) {
+            char character = text.charAt(index);
+            if (Character.isDigit(character)) {
+                current.append(character);
+                continue;
+            }
+            if ((character == '.' || character == '．')
+                    && !decimalPointSeen
+                    && !current.isEmpty()
+                    && index + 1 < text.length()
+                    && Character.isDigit(text.charAt(index + 1))) {
+                current.append('.');
+                decimalPointSeen = true;
+                continue;
+            }
+            if (!current.isEmpty()) {
+                values.add(current.toString());
+                current.setLength(0);
+                decimalPointSeen = false;
+            }
+        }
+        if (!current.isEmpty()) values.add(current.toString());
+        return List.copyOf(values);
+    }
+
+    private boolean containsIntegerBounds(List<String> numbers, JsonNode range) {
+        JsonNode minimum = range.path("minimum");
+        JsonNode maximum = range.path("maximum");
+        return (!minimum.isNumber() || containsInteger(numbers, minimum.intValue()))
+                && (!maximum.isNumber() || containsInteger(numbers, maximum.intValue()))
+                && (minimum.isNumber() || maximum.isNumber());
+    }
+
+    private boolean containsDecimalBounds(List<String> numbers, JsonNode range) {
+        JsonNode minimum = range.path("minimum");
+        JsonNode maximum = range.path("maximum");
+        return (!minimum.isNumber() || containsDecimal(numbers, minimum.decimalValue()))
+                && (!maximum.isNumber() || containsDecimal(numbers, maximum.decimalValue()))
+                && (minimum.isNumber() || maximum.isNumber());
+    }
+
+    private boolean containsInteger(List<String> numbers, int expected) {
+        String canonical = Integer.toString(expected);
+        return numbers.stream().anyMatch(value -> !value.contains(".") && canonical.equals(value));
+    }
+
+    private boolean containsDecimal(List<String> numbers, BigDecimal expected) {
+        return numbers.stream().anyMatch(value -> {
+            try {
+                return new BigDecimal(value).compareTo(expected) == 0;
+            } catch (NumberFormatException exception) {
+                return false;
+            }
+        });
+    }
+
+    private void recordContextualPreference(
+            JsonNode update,
+            RecommendationAgentState state,
+            ConversationRequest request,
+            String reason) {
+        String evidenceId = text(update.path("evidence"), 1, 160);
+        String evidenceText = preferenceEvidence(request).get(evidenceId);
+        if (evidenceText == null) throw new InvalidAction("PREFERENCE_EVIDENCE_NOT_GROUNDED");
+        String field = text(update.path("field"), 1, 40);
+        JsonNode value = update.path("value");
+        int players = "players".equals(field)
+                ? integer(value, 1, 20, "PLAYERS_OUT_OF_RANGE")
+                : integer(value.path("minimum"), 1, 20, "PLAYERS_OUT_OF_RANGE");
+        String contextualField = "players".equals(field) ? field : "playerCount";
+        state.contextualPreferences.put(
+                contextualField,
+                new ContextualPreference(
+                        contextualField,
+                        Integer.toString(players),
+                        evidenceId,
+                        evidenceText,
+                        reason));
+        state.actions.add("RECORD_CONTEXTUAL_PREFERENCE");
+    }
+
     private RecommendationProfile updatedProfile(
             JsonNode arguments,
             RecommendationProfile current,
-            ConversationRequest request,
-            PreferenceReviewGate review) {
+            ConversationRequest request) {
         if (arguments != null && arguments.isArray()) {
-            return updatedProfileFromList(arguments, current, request, review);
+            return updatedProfileFromList(arguments, current, request);
         }
         requireObject(arguments, Set.of(), PROFILE_FIELDS);
         if (arguments.isEmpty()) throw new InvalidAction("EMPTY_PREFERENCE_UPDATE");
@@ -197,7 +343,7 @@ final class RecommendationEvidenceReview {
                     : integerConstraintRange(
                             update.path("value"), 1, 20, evidence, request, "PLAYERS_OUT_OF_RANGE");
             if (!sameRange(playerCount, proposed)) {
-                requirePreferenceEvidence("playerCount", update.path("value"), evidence, request, review);
+                requirePreferenceEvidence(evidence, request);
                 playerCount = proposed;
             }
         }
@@ -205,8 +351,7 @@ final class RecommendationEvidenceReview {
             JsonNode update = preference(arguments.path("players"));
             int players = integer(update.path("value"), 1, 20, "PLAYERS_OUT_OF_RANGE");
             if (playerCount == null || !playerCount.exact() || !Objects.equals(playerCount.minimum(), players)) {
-                requirePreferenceEvidence(
-                        "players", update.path("value"), text(update.path("evidence"), 1, 160), request, review);
+                requirePreferenceEvidence(text(update.path("evidence"), 1, 160), request);
                 playerCount = exactIntegerConstraint(players, text(update.path("evidence"), 1, 160), request);
             }
         }
@@ -218,7 +363,7 @@ final class RecommendationEvidenceReview {
                     : integerConstraintRange(
                             update.path("value"), 5, 1_440, evidence, request, "DURATION_OUT_OF_RANGE");
             if (!sameRange(durationMinutes, proposed)) {
-                requirePreferenceEvidence("durationMinutes", update.path("value"), evidence, request, review);
+                requirePreferenceEvidence(evidence, request);
                 durationMinutes = proposed;
             }
         }
@@ -230,8 +375,7 @@ final class RecommendationEvidenceReview {
                     ? null
                     : maximumIntegerConstraint(maxMinutes, text(update.path("evidence"), 1, 160), request);
             if (!sameRange(durationMinutes, proposed)) {
-                requirePreferenceEvidence(
-                        "maxMinutes", update.path("value"), text(update.path("evidence"), 1, 160), request, review);
+                requirePreferenceEvidence(text(update.path("evidence"), 1, 160), request);
                 durationMinutes = proposed;
             }
         }
@@ -243,7 +387,7 @@ final class RecommendationEvidenceReview {
                     : decimalConstraintRange(
                             update.path("value"), BigDecimal.ZERO, new BigDecimal("5"), evidence, request);
             if (!sameRange(complexity, proposed)) {
-                requirePreferenceEvidence("complexity", update.path("value"), evidence, request, review);
+                requirePreferenceEvidence(evidence, request);
                 complexity = proposed;
             }
         }
@@ -258,8 +402,7 @@ final class RecommendationEvidenceReview {
                     ? null
                     : maximumDecimalConstraint(maxWeight, text(update.path("evidence"), 1, 160), request);
             if (!sameRange(complexity, proposed)) {
-                requirePreferenceEvidence(
-                        "maxWeight", update.path("value"), text(update.path("evidence"), 1, 160), request, review);
+                requirePreferenceEvidence(text(update.path("evidence"), 1, 160), request);
                 complexity = proposed;
             }
         }
@@ -268,8 +411,7 @@ final class RecommendationEvidenceReview {
             BggGameType value = enumValue(
                     BggGameType.class, update.path("value"), "GAME_TYPE_INVALID");
             if (current.type() != value) {
-                requirePreferenceEvidence(
-                        "type", update.path("value"), text(update.path("evidence"), 1, 160), request, review);
+                requirePreferenceEvidence(text(update.path("evidence"), 1, 160), request);
             }
             type = value;
         }
@@ -278,8 +420,7 @@ final class RecommendationEvidenceReview {
             InteractionPreference value = enumValue(
                     InteractionPreference.class, update.path("value"), "INTERACTION_INVALID");
             if (current.interaction() != value) {
-                requirePreferenceEvidence(
-                        "interaction", update.path("value"), text(update.path("evidence"), 1, 160), request, review);
+                requirePreferenceEvidence(text(update.path("evidence"), 1, 160), request);
             }
             interaction = value;
         }
@@ -289,8 +430,7 @@ final class RecommendationEvidenceReview {
     private RecommendationProfile updatedProfileFromList(
             JsonNode updates,
             RecommendationProfile current,
-            ConversationRequest request,
-            PreferenceReviewGate review) {
+            ConversationRequest request) {
         if (updates.isEmpty() || updates.size() > MAX_PROFILE_UPDATES) {
             throw new InvalidAction("EMPTY_PREFERENCE_UPDATE");
         }
@@ -311,7 +451,7 @@ final class RecommendationEvidenceReview {
                             : integerConstraintRange(
                                     value, 1, 20, evidence, request, "PLAYERS_OUT_OF_RANGE");
                     if (!sameRange(result.playerCount(), proposed)) {
-                        requirePreferenceEvidence(field, value, evidence, request, review);
+                        requirePreferenceEvidence(evidence, request);
                     }
                     yield new RecommendationProfile(
                             sameRange(result.playerCount(), proposed) ? result.playerCount() : proposed,
@@ -322,7 +462,7 @@ final class RecommendationEvidenceReview {
                     if (result.playerCount() == null
                             || !result.playerCount().exact()
                             || !Objects.equals(result.playerCount().minimum(), players)) {
-                        requirePreferenceEvidence(field, value, evidence, request, review);
+                        requirePreferenceEvidence(evidence, request);
                     }
                     yield new RecommendationProfile(
                             result.playerCount() != null
@@ -338,7 +478,7 @@ final class RecommendationEvidenceReview {
                             : integerConstraintRange(
                                     value, 5, 1_440, evidence, request, "DURATION_OUT_OF_RANGE");
                     if (!sameRange(result.durationMinutes(), proposed)) {
-                        requirePreferenceEvidence(field, value, evidence, request, review);
+                        requirePreferenceEvidence(evidence, request);
                     }
                     yield new RecommendationProfile(
                             result.playerCount(),
@@ -352,7 +492,7 @@ final class RecommendationEvidenceReview {
                             ? null
                             : maximumIntegerConstraint(minutes, evidence, request);
                     if (!sameRange(result.durationMinutes(), proposed)) {
-                        requirePreferenceEvidence(field, value, evidence, request, review);
+                        requirePreferenceEvidence(evidence, request);
                     }
                     yield new RecommendationProfile(
                             result.playerCount(),
@@ -365,7 +505,7 @@ final class RecommendationEvidenceReview {
                             : decimalConstraintRange(
                                     value, BigDecimal.ZERO, new BigDecimal("5"), evidence, request);
                     if (!sameRange(result.complexity(), proposed)) {
-                        requirePreferenceEvidence(field, value, evidence, request, review);
+                        requirePreferenceEvidence(evidence, request);
                     }
                     yield new RecommendationProfile(
                             result.playerCount(), result.durationMinutes(),
@@ -383,7 +523,7 @@ final class RecommendationEvidenceReview {
                             ? null
                             : maximumDecimalConstraint(weight, evidence, request);
                     if (!sameRange(result.complexity(), proposed)) {
-                        requirePreferenceEvidence(field, value, evidence, request, review);
+                        requirePreferenceEvidence(evidence, request);
                     }
                     yield new RecommendationProfile(
                             result.playerCount(), result.durationMinutes(),
@@ -394,7 +534,7 @@ final class RecommendationEvidenceReview {
                     BggGameType preference = enumValue(
                             BggGameType.class, value, "GAME_TYPE_INVALID");
                     if (result.type() != preference) {
-                        requirePreferenceEvidence(field, value, evidence, request, review);
+                        requirePreferenceEvidence(evidence, request);
                     }
                     yield new RecommendationProfile(
                             result.playerCount(), result.durationMinutes(), result.complexity(),
@@ -404,7 +544,7 @@ final class RecommendationEvidenceReview {
                     InteractionPreference preference = enumValue(
                             InteractionPreference.class, value, "INTERACTION_INVALID");
                     if (result.interaction() != preference) {
-                        requirePreferenceEvidence(field, value, evidence, request, review);
+                        requirePreferenceEvidence(evidence, request);
                     }
                     yield new RecommendationProfile(
                             result.playerCount(), result.durationMinutes(), result.complexity(), result.type(), preference);
@@ -526,181 +666,6 @@ final class RecommendationEvidenceReview {
                 && current.strength() == proposed.strength();
     }
 
-    private boolean sameWeight(BigDecimal current, BigDecimal proposed) {
-        return current != null && proposed != null && current.compareTo(proposed) == 0;
-    }
-
-    private PreferenceReviewGate reviewPreferenceEvidence(
-            JsonNode updates,
-            RecommendationProfile current,
-            ConversationRequest request,
-            RecommendationAgentState state) {
-        List<PreferenceReviewKey> allProposed = proposedPreferenceChanges(updates, current, request);
-        if (allProposed.isEmpty()) return PreferenceReviewGate.withoutReview();
-        Set<PreferenceReviewKey> existingContextual = state.contextualPreferences.values().stream()
-                .map(value -> new PreferenceReviewKey(value.field(), value.value(), value.evidenceId()))
-                .collect(java.util.stream.Collectors.toUnmodifiableSet());
-        List<PreferenceReviewKey> proposed = allProposed.stream()
-                .filter(item -> !existingContextual.contains(item))
-                .filter(item -> !state.rejectedPreferenceUpdates.contains(item))
-                .toList();
-        if (proposed.isEmpty()) {
-            return new PreferenceReviewGate(Set.of(), existingContextual, false, false);
-        }
-        if (!model.preferenceReviewConfigured(state.modelConfigurationOwner)) {
-            return PreferenceReviewGate.withoutReview();
-        }
-        if (state.modelCalls >= MAX_MODEL_CALLS) {
-            state.actions.add("PREFERENCE_REVIEW_UNAVAILABLE");
-            return PreferenceReviewGate.reviewFailed();
-        }
-        List<PreferenceEvidence> evidence = preferenceEvidence(request).entrySet().stream()
-                .map(entry -> new PreferenceEvidence(entry.getKey(), entry.getValue()))
-                .toList();
-        List<PreferenceProposal> proposals = java.util.stream.IntStream.range(0, proposed.size())
-                .mapToObj(index -> {
-                    PreferenceReviewKey item = proposed.get(index);
-                    return new PreferenceProposal(index, item.field(), item.value(), item.evidenceId());
-                })
-                .toList();
-        try {
-            state.modelCalls++;
-            var review = runtime.withinDeadline(
-                    state,
-                    () -> model.reviewPreferences(
-                            new PreferenceReviewRequest(evidence, proposals),
-                            state.modelConfigurationOwner));
-            if (review.decisions().size() != proposals.size()) {
-                throw new IllegalStateException("preference review decision count does not match proposals");
-            }
-            Set<PreferenceReviewKey> direct = java.util.stream.IntStream.range(0, proposed.size())
-                    .filter(index -> review.decisions().get(index).status() == PreferenceEvidenceStatus.DIRECT)
-                    .mapToObj(proposed::get)
-                    .collect(java.util.stream.Collectors.toUnmodifiableSet());
-            Set<PreferenceReviewKey> contextual = java.util.stream.IntStream.range(0, proposed.size())
-                    .filter(index -> review.decisions().get(index).status() == PreferenceEvidenceStatus.CONTEXTUAL)
-                    .mapToObj(proposed::get)
-                    .collect(java.util.stream.Collectors.toUnmodifiableSet());
-            for (int index = 0; index < proposed.size(); index++) {
-                PreferenceReviewKey item = proposed.get(index);
-                if (review.decisions().get(index).status() == PreferenceEvidenceStatus.UNSUPPORTED) {
-                    state.rejectedPreferenceUpdates.add(item);
-                    continue;
-                }
-                if (review.decisions().get(index).status() != PreferenceEvidenceStatus.CONTEXTUAL) continue;
-                state.contextualPreferences.put(
-                        item.field(),
-                        new ContextualPreference(
-                                item.field(),
-                                item.value(),
-                                item.evidenceId(),
-                                preferenceEvidence(request).get(item.evidenceId()),
-                                review.decisions().get(index).reason()));
-            }
-            state.actions.add("REVIEW_PREFERENCE_EVIDENCE");
-            if (!contextual.isEmpty()) state.actions.add("RECORD_CONTEXTUAL_PREFERENCE");
-            Set<PreferenceReviewKey> allContextual = new LinkedHashSet<>(existingContextual);
-            allContextual.addAll(contextual);
-            return new PreferenceReviewGate(direct, allContextual, false, false);
-        } catch (RuntimeException exception) {
-            LOGGER.warn(
-                    "Recommendation preference evidence review failed ({})",
-                    exception.getClass().getSimpleName());
-            state.actions.add("PREFERENCE_REVIEW_UNAVAILABLE");
-            return PreferenceReviewGate.reviewFailed();
-        }
-    }
-
-    private List<PreferenceReviewKey> proposedPreferenceChanges(
-            JsonNode updates,
-            RecommendationProfile current,
-            ConversationRequest request) {
-        Map<String, String> evidence = preferenceEvidence(request);
-        if (updates == null || updates.isNull()) return List.of();
-        List<PreferenceReviewKey> proposed = new ArrayList<>();
-        if (updates.isArray()) {
-            for (JsonNode update : updates) {
-                if (!update.isObject()) continue;
-                addPreferenceReviewKey(
-                        proposed,
-                        update.path("field").asText(""),
-                        update.path("value"),
-                        update.path("evidence").asText(""),
-                        current,
-                        evidence);
-            }
-        } else if (updates.isObject()) {
-            for (String field : PROFILE_FIELDS) {
-                if (!updates.has(field) || !updates.path(field).isObject()) continue;
-                JsonNode update = updates.path(field);
-                addPreferenceReviewKey(
-                        proposed,
-                        field,
-                        update.path("value"),
-                        update.path("evidence").asText(""),
-                        current,
-                        evidence);
-            }
-        }
-        return proposed.stream().distinct().limit(MAX_PROFILE_UPDATES).toList();
-    }
-
-    private void addPreferenceReviewKey(
-            List<PreferenceReviewKey> proposed,
-            String field,
-            JsonNode value,
-            String evidenceId,
-            RecommendationProfile current,
-            Map<String, String> evidence) {
-        if (!PROFILE_FIELDS.contains(field)
-                || evidenceId.isBlank()
-                || !evidence.containsKey(evidenceId)
-                || !preferenceMayChange(field, value, current)) {
-            return;
-        }
-        proposed.add(new PreferenceReviewKey(field, canonicalPreferenceValue(value), evidenceId));
-    }
-
-    private boolean preferenceMayChange(
-            String field,
-            JsonNode value,
-            RecommendationProfile current) {
-        return switch (field) {
-            case "playerCount" -> !canonicalRange(current.playerCount()).equals(canonicalPreferenceValue(value));
-            case "players" -> !value.canConvertToInt()
-                    || !Objects.equals(current.players(), value.intValue());
-            case "durationMinutes" -> !canonicalRange(current.durationMinutes()).equals(canonicalPreferenceValue(value));
-            case "maxMinutes" -> !value.canConvertToInt()
-                    || !Objects.equals(current.maxMinutes(), value.intValue());
-            case "complexity" -> !canonicalRange(current.complexity()).equals(canonicalPreferenceValue(value));
-            case "maxWeight" -> !value.isNumber()
-                    || !sameWeight(current.maxWeight(), value.decimalValue());
-            case "type" -> !value.isTextual()
-                    || !current.type().name().equals(value.textValue());
-            case "interaction" -> !value.isTextual()
-                    || !current.interaction().name().equals(value.textValue());
-            default -> false;
-        };
-    }
-
-    private String canonicalPreferenceValue(JsonNode value) {
-        if (value == null || value.isNull()) return "*..*";
-        if (value != null && value.isNumber()) {
-            return value.decimalValue().stripTrailingZeros().toPlainString();
-        }
-        if (value != null && value.isObject()) {
-            return canonicalBound(value.path("minimum")) + ".." + canonicalBound(value.path("maximum"));
-        }
-        return value.asText("").strip();
-    }
-
-    private String canonicalBound(JsonNode value) {
-        if (value == null || value.isMissingNode() || value.isNull()) return "*";
-        return value.isNumber()
-                ? value.decimalValue().stripTrailingZeros().toPlainString()
-                : "?";
-    }
-
     private String canonicalRange(ConstraintRange<? extends Number> range) {
         if (range == null) return "*..*";
         return canonicalNumber(range.minimum()) + ".." + canonicalNumber(range.maximum());
@@ -713,24 +678,9 @@ final class RecommendationEvidenceReview {
                 : value.toString();
     }
 
-    private void requirePreferenceEvidence(
-            String field,
-            JsonNode value,
-            String evidenceId,
-            ConversationRequest request,
-            PreferenceReviewGate review) {
+    private void requirePreferenceEvidence(String evidenceId, ConversationRequest request) {
         if (!preferenceEvidence(request).containsKey(evidenceId)) {
             throw new InvalidAction("PREFERENCE_EVIDENCE_NOT_GROUNDED");
-        }
-        PreferenceReviewKey key = new PreferenceReviewKey(field, canonicalPreferenceValue(value), evidenceId);
-        if (!review.bypass() && review.contextual().contains(key)) {
-            throw new InvalidAction("PREFERENCE_IS_CONTEXTUAL");
-        }
-        if (review.unavailable()) {
-            throw new InvalidAction("PREFERENCE_REVIEW_UNAVAILABLE");
-        }
-        if (!review.bypass() && !review.direct().contains(key)) {
-            throw new InvalidAction("PREFERENCE_EVIDENCE_NOT_SUPPORTED");
         }
     }
 
@@ -856,7 +806,7 @@ final class RecommendationEvidenceReview {
     }
 
     private String contextualPreferenceLabel(ContextualPreference value, String locale) {
-        if ("players".equals(value.field())) {
+        if ("players".equals(value.field()) || "playerCount".equals(value.field())) {
             return runtime.chinese(locale)
                     ? "暂按 " + value.value() + " 人理解（尚未确认为硬条件）"
                     : "Working with " + value.value() + " players for now (not a confirmed hard constraint)";
@@ -910,23 +860,5 @@ final class RecommendationEvidenceReview {
         return checked.length() <= maximum ? checked : checked.substring(0, maximum);
     }
 
-    private record PreferenceReviewGate(
-            Set<PreferenceReviewKey> direct,
-            Set<PreferenceReviewKey> contextual,
-            boolean bypass,
-            boolean unavailable) {
-
-        private PreferenceReviewGate {
-            direct = Set.copyOf(direct);
-            contextual = Set.copyOf(contextual);
-        }
-
-        private static PreferenceReviewGate withoutReview() {
-            return new PreferenceReviewGate(Set.of(), Set.of(), true, false);
-        }
-
-        private static PreferenceReviewGate reviewFailed() {
-            return new PreferenceReviewGate(Set.of(), Set.of(), false, true);
-        }
-    }
+    private record PreferenceEvidenceClassification(boolean contextual, String reason) {}
 }

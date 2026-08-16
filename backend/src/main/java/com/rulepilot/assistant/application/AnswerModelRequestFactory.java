@@ -50,6 +50,12 @@ final class AnswerModelRequestFactory {
                 questionPlan == null ? Set.of() : questionPlan.evidenceNeeds(),
                 questionPlan == null
                         ? com.rulepilot.assistant.RuleAnswerModel.AnswerAid.forLearningIntent(context.learningIntent())
-                        : questionPlan.answerAid());
+                        : questionPlan.answerAid(),
+                questionPlan == null
+                        ? List.of()
+                        : questionPlan.subquestions().stream()
+                                .map(subquestion -> new com.rulepilot.assistant.RuleAnswerModel.PlannedSubquestion(
+                                        subquestion.text(), subquestion.evidenceNeeds()))
+                                .toList());
     }
 }

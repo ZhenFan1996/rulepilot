@@ -83,6 +83,21 @@ class TeachingQuantitativeClaimPolicyTest {
                 .doesNotThrowAnyException();
     }
 
+    @Test
+    void acceptsAChineseRewardOrdinalWhenTheCitedEnglishRuleStatesTheSameOrdinal() {
+        var evidence = evidence(
+                "The second highest strength gains the second reward. In a 4-player game, "
+                        + "the third highest strength receives the third reward.");
+
+        assertThatCode(() -> validate(
+                        List.of(new Claim(
+                                1,
+                                "计分：四人游戏中，战力第三高的玩家获得第三个奖励。",
+                                List.of(sourceId))),
+                        evidence))
+                .doesNotThrowAnyException();
+    }
+
     private void validate(List<Claim> claims, RuleEvidence evidence) {
         var planned = new TeachingPlan.PlannedSection(
                 1,
