@@ -284,6 +284,9 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
         try {
             return normalizeTeachingPageBindings(request, summarizeTeachingOnce(request, owner, ""));
         } catch (RuntimeException failure) {
+            // The cataloger already splits a rejected multi-page ledger into single-page requests. Repairing the
+            // whole batch here can consume its complete deadline before that more precise fallback can begin.
+            if (request.pages().size() > 1) throw failure;
             firstFailure = failure;
         }
         try {
