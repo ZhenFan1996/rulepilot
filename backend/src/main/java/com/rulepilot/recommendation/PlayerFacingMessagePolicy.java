@@ -62,8 +62,11 @@ public final class PlayerFacingMessagePolicy {
         if (DANGLING_ENDINGS.contains(last) || CLOSING_FOR.containsKey((char) last)) {
             return Optional.of(Issue.INCOMPLETE);
         }
-        if (purpose == Purpose.QUESTION && last != '?' && last != '？') {
-            return Optional.of(Issue.INCOMPLETE);
+        if (purpose == Purpose.QUESTION) {
+            long questionMarks = checked.codePoints()
+                    .filter(value -> value == '?' || value == '？')
+                    .count();
+            if (questionMarks != 1) return Optional.of(Issue.INCOMPLETE);
         }
         if (checked.codePointCount(0, checked.length()) >= 40
                 && !TERMINAL_ENDINGS.contains(last)

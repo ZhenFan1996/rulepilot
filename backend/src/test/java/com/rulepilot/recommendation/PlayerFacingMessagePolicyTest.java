@@ -18,6 +18,10 @@ class PlayerFacingMessagePolicyTest {
                         "Which constraint matters most for the next comparison?",
                         Purpose.QUESTION))
                 .isEmpty();
+        assertThat(PlayerFacingMessagePolicy.issue(
+                        "你更想转向对抗游戏，还是轻松的派对游戏？这个区别会直接改变候选范围。",
+                        Purpose.QUESTION))
+                .isEmpty();
         assertThat(PlayerFacingMessagePolicy.issue("谢谢，这个修正很有用。", Purpose.CONVERSATION))
                 .isEmpty();
     }
@@ -34,6 +38,10 @@ class PlayerFacingMessagePolicyTest {
                 .contains(Issue.INCOMPLETE);
         assertThat(PlayerFacingMessagePolicy.issue(
                         "Which one should we keep",
+                        Purpose.QUESTION))
+                .contains(Issue.INCOMPLETE);
+        assertThat(PlayerFacingMessagePolicy.issue(
+                        "你更在意时长吗？还是更在意人数？",
                         Purpose.QUESTION))
                 .contains(Issue.INCOMPLETE);
     }
