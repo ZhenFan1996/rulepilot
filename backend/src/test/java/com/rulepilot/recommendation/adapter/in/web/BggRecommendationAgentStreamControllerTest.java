@@ -31,8 +31,25 @@ import org.junit.jupiter.api.Test;
 import org.springframework.core.task.SyncTaskExecutor;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 class BggRecommendationAgentStreamControllerTest {
+
+    @Test
+    void keepsAThirtyFiveSecondTransportEnvelopeAroundTheThirtySecondAgentBudget() {
+        BoardGameRecommendationAgent agent = mock(BoardGameRecommendationAgent.class);
+        BggRecommendationPresentation presentation = mock(BggRecommendationPresentation.class);
+        var controller = new BggRecommendationAgentStreamController(
+                agent, presentation, ignored -> {});
+
+        SseEmitter emitter = controller.converse(
+                new BggRecommendationAgentController.RecommendationConversationRequest(null, "四人区控"),
+                "zh-CN",
+                () -> "player");
+
+        assertThat(emitter.getTimeout()).isEqualTo(35_000L);
+        verify(agent, never()).converse(any(), any(), any(), any());
+    }
 
     @Test
     void acknowledgesTheTurnBeforeQueuedRecommendationWorkCanStart() throws Exception {

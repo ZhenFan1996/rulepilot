@@ -12,7 +12,7 @@ class BggRecommendationAgentStreamConfiguration {
         var executor = new ThreadPoolTaskExecutor();
         executor.setCorePoolSize(2);
         executor.setMaxPoolSize(8);
-        // A queued conversational turn cannot honor the 20-second player budget. Start it now or reject it.
+        // A queued conversational turn cannot honor the 30-second player budget. Start it now or reject it.
         executor.setQueueCapacity(0);
         executor.setThreadNamePrefix("bgg-recommendation-stream-");
         executor.initialize();

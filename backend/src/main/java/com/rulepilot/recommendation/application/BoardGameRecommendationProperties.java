@@ -26,8 +26,8 @@ public record BoardGameRecommendationProperties(
         if (timeout == null
                 || timeout.isZero()
                 || timeout.isNegative()
-                || timeout.compareTo(Duration.ofSeconds(20)) > 0) {
-            throw new IllegalArgumentException("recommendation timeout must be positive and no longer than 20 seconds");
+                || timeout.compareTo(Duration.ofSeconds(30)) > 0) {
+            throw new IllegalArgumentException("recommendation timeout must be positive and no longer than 30 seconds");
         }
     }
 }
