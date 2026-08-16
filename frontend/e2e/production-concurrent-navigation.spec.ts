@@ -28,10 +28,11 @@ async function login(browser: Browser, credentials: Credentials) {
   const context = await browser.newContext()
   const page = await context.newPage()
   await page.goto('/login')
+  const homeUrl = new URL('/', page.url()).toString()
   await page.locator('input[name="username"]').fill(credentials.username)
   await page.locator('input[name="password"]').fill(credentials.password)
   await page.locator('form button[type="submit"]').click()
-  await expect(page).toHaveURL(/\/account$/)
+  await expect(page).toHaveURL(homeUrl)
   return { context, page }
 }
 
