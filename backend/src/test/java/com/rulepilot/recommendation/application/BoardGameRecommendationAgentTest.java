@@ -242,13 +242,13 @@ class BoardGameRecommendationAgentTest {
     }
 
     @Test
-    void overfetchesBroadCandidatesBeforeApplyingHardGatesSoTheRequestedSlateIsNotStarved() {
+    void floorsTheModelBrowseLimitAtTheExplicitCountBeforeApplyingHardGates() {
         TrackingCatalog catalog = catalogWithSixShortGames();
         ScriptedModel model = new ScriptedModel(List.of(
                 ignored -> action(
                         "browse-with-hard-duration",
                         BoardGameRecommendationAgent.BROWSE_TOOL,
-                        "{\"limit\":3}"),
+                        "{\"limit\":1}"),
                 request -> {
                     assertThat(catalog.maximumRequested)
                             .as("the catalog page must leave room for candidates rejected by deterministic hard gates")
@@ -256,6 +256,12 @@ class BoardGameRecommendationAgentTest {
                     assertThat(request.messages().getLast().content())
                             .contains("64", "65", "66")
                             .doesNotContain("\"recommendableBggIds\":[60");
+                    assertThat(request.tools().stream()
+                                    .filter(tool -> BoardGameRecommendationAgent.RECOMMEND_TOOL.equals(tool.name()))
+                            .findFirst()
+                            .orElseThrow()
+                            .inputSchema())
+                            .contains("\"minItems\":3,\"maxItems\":3");
                     return action(
                             "recommend-three-after-hard-filter",
                             BoardGameRecommendationAgent.RECOMMEND_TOOL,
@@ -1846,7 +1852,15 @@ class BoardGameRecommendationAgentTest {
                             .inputSchema())
                             .contains(
                                     "\"selections\":{\"type\":\"array\"",
-                                    "\"minItems\":1,\"maxItems\":2");
+                                    "\"minItems\":2,\"maxItems\":2");
+                    return action(
+                            "too-few-selections",
+                            BoardGameRecommendationAgent.RECOMMEND_TOOL,
+                            "{\"message\":\"先看 Glass Orchard。\",\"selections\":["
+                                    + "{\"bggId\":60,\"why\":\"标注时长为 40–55 分钟。\",\"evidenceIds\":[\"B60:durationMinutes\"]}]}");
+                },
+                request -> {
+                    assertThat(request.messages().getLast().content()).contains("SELECTION_COUNT_INVALID");
                     return action(
                             "too-many-selections",
                             BoardGameRecommendationAgent.RECOMMEND_TOOL,
@@ -1875,6 +1889,39 @@ class BoardGameRecommendationAgentTest {
                 "SEARCH_BGG_BY_NAME",
                 "LOOKUP_BGG_CANDIDATES",
                 "REJECTED_ACTION:SELECTION_COUNT_INVALID",
+                "REJECTED_ACTION:SELECTION_COUNT_INVALID",
+                "RECOMMEND_GAMES");
+    }
+
+    @Test
+    void dropsUnusedCandidateNarrativeEvidenceWithoutDiscardingTheGroundedAction() {
+        TrackingCatalog catalog = catalogWithThreeShortGames();
+        ScriptedModel model = new ScriptedModel(List.of(
+                ignored -> action(
+                        "inspect-one",
+                        BoardGameRecommendationAgent.SEARCH_TOOL,
+                        "{\"titles\":[\"Glass Orchard\"]}"),
+                ignored -> action(
+                        "recommend-with-one-unused-evidence-id",
+                        BoardGameRecommendationAgent.RECOMMEND_TOOL,
+                        "{\"message\":\"Glass Orchard 的时长边界可以直接核对。\",\"selections\":[{"
+                                + "\"bggId\":60,\"narrativeMode\":\"OBSERVED_ONLY\","
+                                + "\"why\":\"Glass Orchard 的标注时长原值是 40..55。\","
+                                + "\"tradeoff\":\"现有直接事实不能证明实际桌感。\","
+                                + "\"evidenceIds\":[\"B60:durationMinutes\",\"B60:complexity\"]}]}")));
+
+        var response = agent(model, catalog, noResearch()).converse(
+                new ConversationRequest(RecommendationProfile.empty(), "给我一个时长可直接核对的桌游。"),
+                "zh-CN");
+
+        assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
+        assertThat(response.games()).singleElement().satisfies(game ->
+                assertThat(game.reasons().getFirst().text())
+                        .isEqualTo("Glass Orchard 的标注时长原值是 40..55。"));
+        assertThat(response.harness().actions()).containsExactly(
+                "SEARCH_BGG_BY_NAME",
+                "LOOKUP_BGG_CANDIDATES",
+                "DROPPED_UNUSED_CANDIDATE_NARRATIVE_EVIDENCE",
                 "RECOMMEND_GAMES");
     }
 
@@ -2020,6 +2067,40 @@ class BoardGameRecommendationAgentTest {
                 "SEARCH_BGG_BY_NAME",
                 "LOOKUP_BGG_CANDIDATES",
                 "PRESERVED_GROUNDED_RECOMMENDATION_WITH_MARKUP",
+                "RECOMMEND_GAMES");
+    }
+
+    @Test
+    void keepsGroundedCandidateCardsWhenTheSynthesisIntroducesTheCardsWithAColon() {
+        TrackingCatalog catalog = catalog();
+        String rawMessage = "这款游戏符合时长边界，具体依据和取舍如下：";
+        ScriptedModel model = new ScriptedModel(List.of(
+                ignored -> action(
+                        "search",
+                        BoardGameRecommendationAgent.SEARCH_TOOL,
+                        "{\"titles\":[\"Glass Orchard\"]}"),
+                ignored -> action(
+                        "grounded-card-connector",
+                        BoardGameRecommendationAgent.RECOMMEND_TOOL,
+                        "{\"message\":\"" + rawMessage + "\",\"selections\":[{\"bggId\":60,"
+                                + "\"narrativeMode\":\"OBSERVED_ONLY\","
+                                + "\"why\":\"Glass Orchard 的标注时长原值是 40..55。\","
+                                + "\"tradeoff\":\"这只能证明标注时长，不能保证每桌都在 55 分钟内结束。\","
+                                + "\"evidenceIds\":[\"B60:durationMinutes\"]}]}")));
+
+        var response = agent(model, catalog, noResearch()).converse(
+                new ConversationRequest(RecommendationProfile.empty(), "推荐一款短局并说清理由。"),
+                "zh-CN");
+
+        assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
+        assertThat(response.assistantMessage()).isEqualTo(rawMessage);
+        assertThat(response.games()).singleElement().satisfies(game ->
+                assertThat(game.reasons().getFirst().text())
+                        .isEqualTo("Glass Orchard 的标注时长原值是 40..55。"));
+        assertThat(response.harness().actions()).containsExactly(
+                "SEARCH_BGG_BY_NAME",
+                "LOOKUP_BGG_CANDIDATES",
+                "PRESERVED_GROUNDED_RECOMMENDATION_CONNECTIVE",
                 "RECOMMEND_GAMES");
     }
 
