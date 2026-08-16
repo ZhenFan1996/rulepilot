@@ -32,7 +32,7 @@ public class BoardGameRecommendationAgent {
     static final String COMPARE_TOOL = "compare_candidates";
     static final String NO_MATCH_TOOL = "report_no_match";
     static final String RECOMMEND_TOOL = "recommend_games";
-    static final String PROMPT_VERSION = "recommendation-agent-v2-grounded-decisions";
+    static final String PROMPT_VERSION = "recommendation-agent-v3-natural-contract";
 
     static final Set<String> COMPARISON_SUBJECTS = Set.of(
             "playerCount",
@@ -49,11 +49,6 @@ public class BoardGameRecommendationAgent {
             "publishers",
             "reportedExperience",
             "rulebookFact");
-
-    static final Set<String> RECOMMENDATION_NARRATIVE_SUBJECTS = Set.of(
-            "playerCount",
-            "durationMinutes",
-            "complexity");
 
     private final RecommendationReActLoop loop;
 

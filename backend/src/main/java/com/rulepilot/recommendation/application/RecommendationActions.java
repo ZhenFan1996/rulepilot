@@ -8,7 +8,6 @@ import static com.rulepilot.recommendation.application.BoardGameRecommendationAg
 import static com.rulepilot.recommendation.application.BoardGameRecommendationAgent.LOOKUP_TOOL;
 import static com.rulepilot.recommendation.application.BoardGameRecommendationAgent.NO_MATCH_TOOL;
 import static com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RECOMMEND_TOOL;
-import static com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RECOMMENDATION_NARRATIVE_SUBJECTS;
 import static com.rulepilot.recommendation.application.BoardGameRecommendationAgent.REPLY_TOOL;
 import static com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RESEARCH_TOOL;
 import static com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RESOLVE_TOOL;
@@ -30,7 +29,6 @@ import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Research;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Source;
 import com.rulepilot.recommendation.CandidateClaim;
 import com.rulepilot.recommendation.CandidateObservation;
-import com.rulepilot.recommendation.PlayerFacingMessagePolicy;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.CandidateComparison;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.Clarification;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ClarificationOption;
@@ -53,7 +51,6 @@ import com.rulepilot.recommendation.application.BoardGameRecommendationTools.Ref
 import com.rulepilot.recommendation.application.BoardGameRecommendationTools.ResearchObservation;
 import com.rulepilot.recommendation.application.BoardGameRecommendationTools.ToolStatus;
 import com.rulepilot.recommendation.application.RecommendationAgentState.NamedGamePurpose;
-import java.math.BigDecimal;
 import java.text.Normalizer;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -148,9 +145,7 @@ final class RecommendationActions {
             String locale) {
         requireObject(arguments, Set.of("message"), Set.of("referencedBggIds", "preferenceUpdates"));
         evidenceReview.applyPreferenceUpdates(arguments, state, request);
-        String message = publishableMessage(
-                text(arguments.path("message"), 1, 1_200),
-                PlayerFacingMessagePolicy.Purpose.CONVERSATION);
+        String message = text(arguments.path("message"), 1, 1_200);
         List<Integer> referencedIds = arguments.has("referencedBggIds")
                 ? ids(arguments.path("referencedBggIds"), 0, 5)
                 : List.of();
@@ -185,9 +180,7 @@ final class RecommendationActions {
             String locale) {
         requireObject(arguments, Set.of("question"), Set.of("options", "preferenceUpdates"));
         evidenceReview.applyPreferenceUpdatesForRead(arguments, state, request);
-        String question = publishableMessage(
-                text(arguments.path("question"), 1, 500),
-                PlayerFacingMessagePolicy.Purpose.QUESTION);
+        String question = text(arguments.path("question"), 1, 500);
         List<ClarificationOption> options = arguments.has("options")
                 ? strings(arguments.path("options"), 2, 3, 1, 60).stream()
                         .map(option -> new ClarificationOption(option, option))
@@ -207,20 +200,8 @@ final class RecommendationActions {
             JsonNode arguments,
             RecommendationAgentState state,
             String locale) {
-        requireObject(
-                arguments,
-                Set.of(
-                        "message",
-                        "decision",
-                        "decisionMode",
-                        "decisionEvidenceIds",
-                        "candidateBggIds",
-                        "subjects"),
-                Set.of());
+        requireObject(arguments, Set.of("message", "candidateBggIds", "subjects"), Set.of());
         List<Integer> candidateIds = ids(arguments.path("candidateBggIds"), 2, 5);
-        if (new LinkedHashSet<>(candidateIds).size() != candidateIds.size()) {
-            throw new InvalidAction("COMPARISON_CANDIDATES_DUPLICATED");
-        }
         List<Game> games = candidateIds.stream().map(state.verified::get).toList();
         if (games.stream().anyMatch(Objects::isNull)) {
             throw new InvalidAction("COMPARISON_CANDIDATE_NOT_VERIFIED");
@@ -228,60 +209,11 @@ final class RecommendationActions {
         if (!state.comparisonSubjectIds.containsAll(candidateIds)) {
             throw new InvalidAction("COMPARISON_CANDIDATE_NOT_IN_CONVERSATION");
         }
-        List<String> requestedSubjects = strings(arguments.path("subjects"), 1, 8, 1, 40);
-        if (new LinkedHashSet<>(requestedSubjects).size() != requestedSubjects.size()
-                || requestedSubjects.stream().anyMatch(subject -> !COMPARISON_SUBJECTS.contains(subject))) {
+        List<String> subjects = strings(arguments.path("subjects"), 1, 3, 1, 40);
+        if (subjects.stream().anyMatch(subject -> !COMPARISON_SUBJECTS.contains(subject))) {
             throw new InvalidAction("COMPARISON_SUBJECT_INVALID");
         }
-        List<String> subjects = requestedSubjects.size() > 3
-                ? requestedSubjects.subList(0, 3)
-                : requestedSubjects;
-        if (requestedSubjects.size() > 3) {
-            state.actions.add("DROPPED_EXCESS_COMPARISON_SUBJECTS");
-        }
-
-        String message = publishableMessage(
-                text(arguments.path("message"), 1, 800),
-                PlayerFacingMessagePolicy.Purpose.CONVERSATION);
-        String decision = publishableMessage(
-                text(arguments.path("decision"), 1, 500),
-                PlayerFacingMessagePolicy.Purpose.CONVERSATION);
-        String decisionMode = text(arguments.path("decisionMode"), 1, 40);
-        if (!Set.of("OBSERVED_ONLY", "QUALIFIED_HYPOTHESIS").contains(decisionMode)) {
-            throw new InvalidAction("COMPARISON_DECISION_MODE_INVALID");
-        }
-        List<String> decisionEvidenceIds = strings(
-                arguments.path("decisionEvidenceIds"), 1, 8, 3, 80);
-        if (decisionEvidenceIds.size() > 4) {
-            throw new InvalidAction("COMPARISON_DECISION_EVIDENCE_TOO_MANY");
-        }
-        if (new LinkedHashSet<>(decisionEvidenceIds).size() != decisionEvidenceIds.size()) {
-            throw new InvalidAction("COMPARISON_DECISION_EVIDENCE_DUPLICATED");
-        }
-        Map<String, CandidateObservation> observations = games.stream()
-                .flatMap(game -> selector.observations(game).stream())
-                .collect(java.util.stream.Collectors.toUnmodifiableMap(
-                        CandidateObservation::id,
-                        observation -> observation));
-        List<CandidateObservation> decisionEvidence = decisionEvidenceIds.stream()
-                .map(observations::get)
-                .toList();
-        if (decisionEvidence.stream().anyMatch(Objects::isNull)) {
-            throw new InvalidAction("COMPARISON_DECISION_EVIDENCE_WRONG_CANDIDATE");
-        }
-        if (decisionEvidence.stream().anyMatch(observation -> !subjects.contains(observation.attribute()))) {
-            throw new InvalidAction("COMPARISON_DECISION_EVIDENCE_NOT_SELECTED_SUBJECT");
-        }
-        String visibleComparison = message + "\n" + decision;
-        if (decisionEvidence.stream().anyMatch(observation -> !visibleComparison.contains(observation.value()))) {
-            throw new InvalidAction("COMPARISON_DECISION_EVIDENCE_VALUE_NOT_VISIBLE");
-        }
-        if (decisionEvidence.stream().anyMatch(observation -> {
-            Game evidenceGame = state.verified.get(observation.bggId());
-            return evidenceGame == null || !mentionsObservedTitle(visibleComparison, evidenceGame);
-        })) {
-            throw new InvalidAction("COMPARISON_DECISION_CANDIDATE_NOT_VISIBLE");
-        }
+        String message = text(arguments.path("message"), 1, 1_200);
 
         List<ComparisonCandidate> candidates = games.stream()
                 .map(game -> new ComparisonCandidate(
@@ -304,7 +236,7 @@ final class RecommendationActions {
         state.actions.add("COMPARE_CANDIDATES");
         return ActionOutcome.terminal(response(
                 Outcome.CONVERSATION,
-                message + " " + decision,
+                message,
                 state,
                 locale,
                 null,
@@ -620,7 +552,7 @@ final class RecommendationActions {
             requireObject(
                     selection,
                     Set.of("bggId"),
-                    Set.of("preferenceLink", "narrativeMode", "why", "tradeoff", "internalEvidenceIds"));
+                    Set.of("preferenceLink", "why", "tradeoff", "internalEvidenceIds"));
             int id = integer(selection.path("bggId"), 1, Integer.MAX_VALUE, "BGG_ID_INVALID");
             if (!seen.add(id)) throw new InvalidAction("DUPLICATE_SELECTION");
             Game game = state.verified.get(id);
@@ -634,11 +566,14 @@ final class RecommendationActions {
             }
             if (!selector.eligible(game, state.profile)) throw new InvalidAction("FINAL_ID_FAILS_HARD_GATES");
             selected.add(game);
-            BoardGameRecommendationSelector.CandidateNarrative narrative = validatedCandidateNarrative(
-                    selection,
-                    game,
-                    state);
-            if (narrative != null) narratives.put(id, narrative);
+            try {
+                BoardGameRecommendationSelector.CandidateNarrative narrative = validatedCandidateNarrative(
+                        selection,
+                        game);
+                if (narrative != null) narratives.put(id, narrative);
+            } catch (InvalidAction invalid) {
+                state.actions.add("DROPPED_OPTIONAL_CANDIDATE_NARRATIVE:" + invalid.code);
+            }
             if (selection.has("preferenceLink")) {
                 try {
                     preferenceLinks.put(
@@ -659,18 +594,7 @@ final class RecommendationActions {
                 .filter(id -> !selectedIds.contains(id))
                 .limit(2)
                 .toList();
-        Set<Integer> alreadyVisibleIds = new LinkedHashSet<>(request.shownBggIds());
-        request.knownGames().forEach(game -> alreadyVisibleIds.add(game.bggId()));
-        boolean messageNamesUnselectedGame = state.verified.entrySet().stream()
-                .anyMatch(entry -> !referenceIds.contains(entry.getKey())
-                        && !selectedIds.contains(entry.getKey())
-                        && !alreadyVisibleIds.contains(entry.getKey())
-                        && mentionsObservedTitle(proposedMessage, entry.getValue()));
-        if (messageNamesUnselectedGame) throw new InvalidAction("MESSAGE_NAMES_UNSELECTED_GAME");
-        String message = publishableGroundedRecommendationMessage(
-                proposedMessage,
-                selected.size() == narratives.size(),
-                state);
+        String message = proposedMessage;
         boolean hasShortfall = state.explicitRecommendationCount != null
                 && availableCount < state.explicitRecommendationCount;
         List<ClarificationOption> shortfallOptions = validatedShortfallOptions(
@@ -749,67 +673,26 @@ final class RecommendationActions {
             if (!allowedSubjects.contains(subject) || !subjects.add(subject)) {
                 throw new InvalidAction("SHORTFALL_RELAXATION_INVALID");
             }
-            String reply = publishableMessage(
-                    text(option.path("reply"), 4, 120),
-                    PlayerFacingMessagePolicy.Purpose.CONVERSATION);
+            String reply = text(option.path("reply"), 4, 120);
             optionsForPlayer.add(new ClarificationOption(reply, reply));
         }
         return List.copyOf(optionsForPlayer);
     }
 
-    private String publishableGroundedRecommendationMessage(
-            String message,
-            boolean everyCandidateHasGroundedNarrative,
-            RecommendationAgentState state) {
-        var issue = PlayerFacingMessagePolicy.issue(
-                message,
-                PlayerFacingMessagePolicy.Purpose.RECOMMENDATION_CONNECTIVE);
-        if (issue.isEmpty()) return message;
-        if (issue.get() == PlayerFacingMessagePolicy.Issue.RAW_MARKUP
-                && everyCandidateHasGroundedNarrative) {
-            state.actions.add("PRESERVED_GROUNDED_RECOMMENDATION_WITH_MARKUP");
-            return message;
-        }
-        if (issue.get() == PlayerFacingMessagePolicy.Issue.INCOMPLETE
-                && everyCandidateHasGroundedNarrative
-                && endsWithCardConnector(message)) {
-            state.actions.add("PRESERVED_GROUNDED_RECOMMENDATION_CONNECTIVE");
-            return message;
-        }
-        throw new InvalidAction("PLAYER_MESSAGE_" + issue.get().name());
-    }
-
-    private static boolean endsWithCardConnector(String message) {
-        String checked = message.strip();
-        return checked.endsWith(":") || checked.endsWith("：");
-    }
-
     private BoardGameRecommendationSelector.CandidateNarrative validatedCandidateNarrative(
             JsonNode selection,
-            Game game,
-            RecommendationAgentState state) {
+            Game game) {
         boolean hasNarrative = selection.has("why")
                 || selection.has("tradeoff")
-                || selection.has("internalEvidenceIds")
-                || selection.has("narrativeMode");
+                || selection.has("internalEvidenceIds");
         if (!hasNarrative) return null;
         if (!selection.has("why") || !selection.has("internalEvidenceIds")) {
             throw new InvalidAction("CANDIDATE_NARRATIVE_INCOMPLETE");
         }
-        String why = publishableMessage(
-                text(selection.path("why"), 8, 500),
-                PlayerFacingMessagePolicy.Purpose.CONVERSATION);
+        String why = text(selection.path("why"), 8, 500);
         String tradeoff = selection.has("tradeoff")
-                ? publishableMessage(
-                        text(selection.path("tradeoff"), 4, 320),
-                        PlayerFacingMessagePolicy.Purpose.CONVERSATION)
+                ? text(selection.path("tradeoff"), 4, 320)
                 : "";
-        String narrativeMode = selection.has("narrativeMode")
-                ? text(selection.path("narrativeMode"), 1, 40)
-                : "";
-        if (!narrativeMode.isEmpty() && !"OBSERVED_ONLY".equals(narrativeMode)) {
-            throw new InvalidAction("CANDIDATE_NARRATIVE_MODE_INVALID");
-        }
         List<String> internalEvidenceIds = strings(selection.path("internalEvidenceIds"), 1, 5, 3, 80);
         Map<String, CandidateObservation> observations = selector.observations(game).stream()
                 .collect(java.util.stream.Collectors.toUnmodifiableMap(
@@ -824,161 +707,12 @@ final class RecommendationActions {
                 .limit(5)
                 .toList();
         if (!visibleInternalIds.isEmpty()) {
-            throw new InvalidAction(
-                    "CANDIDATE_NARRATIVE_INTERNAL_EVIDENCE_ID_VISIBLE",
-                    "Remove internal evidence marker(s) from player-visible why/tradeoff: "
-                            + String.join(", ", visibleInternalIds)
-                            + ". Keep the internalEvidenceIds array unchanged and keep the cited numeric values as natural prose. Do not replace the removed marker with taxonomy, play-feel, or fit claims.");
-        }
-        List<CandidateObservation> citedEvidence = internalEvidenceIds.stream().map(observations::get).toList();
-        if (narrativeMode.isEmpty()) {
-            return new BoardGameRecommendationSelector.CandidateNarrative(
-                    why,
-                    tradeoff,
-                    citedEvidence);
-        }
-        List<CandidateObservation> visibleEvidence = citedEvidence.stream()
-                .filter(observation -> observationValueVisible(why, observation))
-                .toList();
-        if (visibleEvidence.isEmpty()) {
-            throw new InvalidAction("CANDIDATE_NARRATIVE_EVIDENCE_VALUE_NOT_VISIBLE");
-        }
-        if (visibleEvidence.stream().anyMatch(observation -> !RECOMMENDATION_NARRATIVE_SUBJECTS.contains(
-                        observation.attribute()))) {
-            throw new InvalidAction("CANDIDATE_NARRATIVE_EVIDENCE_NOT_DIRECT_FIT");
-        }
-        List<BigDecimal> ungrounded = ungroundedNumericValues(
-                why,
-                game,
-                visibleEvidence,
-                state.profile);
-        if (!ungrounded.isEmpty()) {
-            String unsupported = ungrounded.stream()
-                    .limit(5)
-                    .map(value -> value.stripTrailingZeros().toPlainString())
-                    .collect(java.util.stream.Collectors.joining(", "));
-            throw new InvalidAction(
-                    "CANDIDATE_NARRATIVE_NUMERIC_VALUE_UNGROUNDED",
-                    "Unsupported numeric value(s) in why: " + unsupported
-                            + ". Keep cited candidate values and confirmed hard profile bounds. Remove only the unsupported number; do not rewrite the grounded explanation.");
-        }
-        if (visibleEvidence.size() < citedEvidence.size()) {
-            state.actions.add("DROPPED_UNUSED_CANDIDATE_NARRATIVE_EVIDENCE");
+            throw new InvalidAction("CANDIDATE_NARRATIVE_INTERNAL_EVIDENCE_ID_VISIBLE");
         }
         return new BoardGameRecommendationSelector.CandidateNarrative(
                 why,
                 tradeoff,
-                visibleEvidence);
-    }
-
-    private boolean observationValueVisible(String narrative, CandidateObservation observation) {
-        if (narrative.contains(observation.value())) return true;
-        List<BigDecimal> expected = numericValues(observation.value());
-        return !expected.isEmpty() && containsNumericSequence(numericValues(narrative), expected);
-    }
-
-    private boolean containsNumericSequence(List<BigDecimal> actual, List<BigDecimal> expected) {
-        if (expected.size() > actual.size()) return false;
-        for (int start = 0; start <= actual.size() - expected.size(); start++) {
-            boolean matches = true;
-            for (int offset = 0; offset < expected.size(); offset++) {
-                if (actual.get(start + offset).compareTo(expected.get(offset)) != 0) {
-                    matches = false;
-                    break;
-                }
-            }
-            if (matches) return true;
-        }
-        return false;
-    }
-
-    private List<BigDecimal> ungroundedNumericValues(
-            String narrative,
-            Game game,
-            List<CandidateObservation> visibleEvidence,
-            BoardGameRecommendationAgent.RecommendationProfile profile) {
-        List<BigDecimal> grounded = new ArrayList<>();
-        visibleEvidence.stream()
-                .map(CandidateObservation::value)
-                .map(this::numericValues)
-                .forEach(grounded::addAll);
-        grounded.addAll(numericValues(game.details().name()));
-        grounded.addAll(numericValues(game.ranking().sourceName()));
-        addConfirmedProfileValues(grounded, profile);
-        if (visibleEvidence.stream().anyMatch(value -> "complexity".equals(value.attribute()))) {
-            grounded.add(new BigDecimal("5"));
-        }
-        return numericValues(narrative).stream()
-                .filter(value -> grounded.stream().noneMatch(candidate -> candidate.compareTo(value) == 0))
-                .distinct()
-                .toList();
-    }
-
-    private void addConfirmedProfileValues(
-            List<BigDecimal> grounded,
-            BoardGameRecommendationAgent.RecommendationProfile profile) {
-        if (profile.playerCount() != null && profile.playerCount().hard()) {
-            if (profile.playerCount().minimum() != null) {
-                grounded.add(BigDecimal.valueOf(profile.playerCount().minimum()));
-            }
-            if (profile.playerCount().maximum() != null) {
-                grounded.add(BigDecimal.valueOf(profile.playerCount().maximum()));
-            }
-        }
-        if (profile.durationMinutes() != null && profile.durationMinutes().hard()) {
-            if (profile.durationMinutes().minimum() != null) {
-                grounded.add(BigDecimal.valueOf(profile.durationMinutes().minimum()));
-            }
-            if (profile.durationMinutes().maximum() != null) {
-                grounded.add(BigDecimal.valueOf(profile.durationMinutes().maximum()));
-            }
-        }
-        if (profile.complexity() != null && profile.complexity().hard()) {
-            if (profile.complexity().minimum() != null) {
-                grounded.add(profile.complexity().minimum());
-            }
-            if (profile.complexity().maximum() != null) {
-                grounded.add(profile.complexity().maximum());
-            }
-        }
-    }
-
-    private List<BigDecimal> numericValues(String text) {
-        String normalized = Normalizer.normalize(text == null ? "" : text, Normalizer.Form.NFKC);
-        List<BigDecimal> values = new ArrayList<>();
-        StringBuilder current = new StringBuilder();
-        boolean decimalPointSeen = false;
-        for (int index = 0; index < normalized.length(); index++) {
-            char character = normalized.charAt(index);
-            if (character >= '0' && character <= '9') {
-                current.append(character);
-                continue;
-            }
-            if (character == '.'
-                    && !decimalPointSeen
-                    && !current.isEmpty()
-                    && index + 1 < normalized.length()
-                    && normalized.charAt(index + 1) >= '0'
-                    && normalized.charAt(index + 1) <= '9') {
-                current.append(character);
-                decimalPointSeen = true;
-                continue;
-            }
-            addNumericValue(values, current);
-            decimalPointSeen = false;
-        }
-        addNumericValue(values, current);
-        return List.copyOf(values);
-    }
-
-    private void addNumericValue(List<BigDecimal> values, StringBuilder current) {
-        if (current.isEmpty()) return;
-        try {
-            values.add(new BigDecimal(current.toString()));
-        } catch (NumberFormatException ignored) {
-            // An incomplete numeric token is not evidence and remains unavailable to the narrative.
-        }
-        current.setLength(0);
+                internalEvidenceIds.stream().map(observations::get).toList());
     }
 
     private BoardGameRecommendationSelector.PreferenceLink validatedPreferenceLink(
@@ -1034,8 +768,6 @@ final class RecommendationActions {
         return switch (code) {
             case "REPLY_RECOMMENDATION_REQUIRES_CARDS" ->
                 "New candidate recommendations must use recommend_games so the UI can render verified cards.";
-            case "MESSAGE_NAMES_UNSELECTED_GAME" ->
-                "The recommendation message may discuss selected cards and declared references, but not introduce an unselected game. Remove only that unsupported mention and keep the grounded explanation.";
             case "CANDIDATE_NARRATIVE_INCOMPLETE" ->
                 "Each candidate narrative needs why plus one or more candidate-scoped internalEvidenceIds. tradeoff is optional.";
             case "SELECTIONS_ARRAY_REQUIRED" ->
@@ -1052,14 +784,6 @@ final class RecommendationActions {
                 "Every candidate narrative evidenceId must come from that same selected game's observation map. Do not move evidence across candidates.";
             case "CANDIDATE_NARRATIVE_INTERNAL_EVIDENCE_ID_VISIBLE" ->
                 "Evidence IDs belong only in internalEvidenceIds. Remove them from player-visible why/tradeoff while preserving the natural cited values; do not add taxonomy or experience claims.";
-            case "CANDIDATE_NARRATIVE_MODE_INVALID" ->
-                "Recommendation cards use OBSERVED_ONLY literal facts. Ask a candidate-changing clarification or state the local evidence gap instead of predicting table feel.";
-            case "CANDIDATE_NARRATIVE_EVIDENCE_VALUE_NOT_VISIBLE" ->
-                "Show every cited candidate observation value in why. Natural range separators are allowed, but keep every number in the same order and omit an unused evidenceId.";
-            case "CANDIDATE_NARRATIVE_NUMERIC_VALUE_UNGROUNDED" ->
-                "A number in why is neither present in visible cited candidate observations nor a confirmed hard profile bound. Remove or correct only that unsupported number; do not rewrite the grounded explanation.";
-            case "CANDIDATE_NARRATIVE_EVIDENCE_NOT_DIRECT_FIT" ->
-                "Recommendation why may cite only this candidate's playerCount, durationMinutes, or complexity observations. Taxonomy is displayed separately and cannot justify a predicted experience.";
             case "PREFERENCE_EVIDENCE_NOT_GROUNDED" ->
                 "Use the exact evidenceId shown beside the user-authored message that states this hard constraint, or continue without changing the typed profile.";
             case "PREFERENCE_EVIDENCE_CLASSIFICATION_INVALID" ->
@@ -1076,35 +800,10 @@ final class RecommendationActions {
                 "inspect_candidate_titles is only for your own new recommendation hypotheses. Resolve the intact player-authored title first with resolve_bgg_game, then inspect separate candidate titles.";
             case "FINAL_ID_FAILS_HARD_GATES", "FINAL_ID_IS_COMPARISON_REFERENCE" ->
                 "Select only IDs listed in runMemory.recommendableBggIds; those IDs already satisfy the current typed hard gates.";
-            case "PLAYER_MESSAGE_RAW_MARKUP" ->
-                "Return complete plain text without Markdown, code fences, headings, or list syntax.";
-            case "PLAYER_MESSAGE_UNBALANCED_DELIMITER" ->
-                "Return a complete player-facing message with every quote and delimiter closed.";
-            case "PLAYER_MESSAGE_INCOMPLETE" ->
-                "Return a complete player-facing sentence; do not end at a comma, colon, open delimiter, or unfinished long line.";
             case "NO_MATCH_RELAXATION_NOT_ACTIONABLE" ->
                 "Choose exactly one relaxSubject from the current report_no_match schema; it must unlock a verified candidate while every other hard constraint stays unchanged.";
-            case "COMPARISON_DECISION_EVIDENCE_WRONG_CANDIDATE" ->
-                "Use decisionEvidenceIds only from the compared candidates' current observation maps.";
-            case "COMPARISON_DECISION_EVIDENCE_TOO_MANY" ->
-                "Choose one to four observation IDs that directly justify decision. Do not cite every fact discussed in message.";
-            case "COMPARISON_DECISION_EVIDENCE_DUPLICATED" ->
-                "Use each decisionEvidenceId at most once.";
-            case "COMPARISON_DECISION_EVIDENCE_NOT_SELECTED_SUBJECT" ->
-                "Every decisionEvidenceId must use an attribute included in this action's selected subjects.";
-            case "COMPARISON_DECISION_EVIDENCE_VALUE_NOT_VISIBLE" ->
-                "Show every cited decision observation value exactly in message or decision so the player can see the complete basis.";
-            case "COMPARISON_DECISION_CANDIDATE_NOT_VISIBLE" ->
-                "Name each candidate whose observation is cited by decisionEvidenceIds in message or decision.";
             default -> "Correct the action arguments using the supplied JSON schema and current runMemory.";
         };
-    }
-
-    private String publishableMessage(String message, PlayerFacingMessagePolicy.Purpose purpose) {
-        PlayerFacingMessagePolicy.issue(message, purpose).ifPresent(issue -> {
-            throw new InvalidAction("PLAYER_MESSAGE_" + issue.name());
-        });
-        return message;
     }
 
     private ConversationResponse response(
