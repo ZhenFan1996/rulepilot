@@ -32,8 +32,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
 import java.util.function.ToIntFunction;
@@ -486,21 +487,21 @@ class BoundedNativeToolAgentTest {
     }
 
     @Test
-    void interruptsABlockingReadToolAtTheRunDeadlineWithoutPublishingItsObservation() {
+    void interruptsABlockingReadToolAtTheRunDeadlineWithoutPublishingItsObservation() throws Exception {
         AgentExecutionControl execution = mock(AgentExecutionControl.class);
         UUID runId = UUID.randomUUID();
         Instant deadlineAt = Instant.now().plusMillis(250);
         ToolScope scope = new ToolScope("player", UUID.randomUUID(), runId, deadlineAt);
         when(execution.budget(runId)).thenReturn(new BudgetSnapshot(
                 40, 24, 16, 24_000, 0, 0, 0, deadlineAt, null));
-        AtomicBoolean interrupted = new AtomicBoolean();
+        CountDownLatch interrupted = new CountDownLatch(1);
         NativeAgentTool blockingTool = new TestTool("search_rule_evidence", false, false) {
             @Override
             public ToolObservation execute(String argumentsJson, ToolScope ignoredScope) {
                 try {
                     Thread.sleep(Duration.ofMinutes(5));
                 } catch (InterruptedException stopped) {
-                    interrupted.set(true);
+                    interrupted.countDown();
                     Thread.currentThread().interrupt();
                 }
                 return super.execute(argumentsJson, ignoredScope);
@@ -525,7 +526,7 @@ class BoundedNativeToolAgentTest {
             assertThat(result.reason()).isEqualTo("TIMEOUT");
             assertThat(result.toolCalls()).isZero();
             assertThat(result.observations()).isEmpty();
-            assertThat(interrupted).isTrue();
+            assertThat(interrupted.await(1, TimeUnit.SECONDS)).isTrue();
         }
     }
 
