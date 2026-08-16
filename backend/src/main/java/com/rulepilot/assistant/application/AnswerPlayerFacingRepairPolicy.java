@@ -49,6 +49,11 @@ final class AnswerPlayerFacingRepairPolicy {
             editableFields.addAll(sourceScopeFields);
             feedback.addAll(AnswerSourceScopeRepairPolicy.feedbackFor(request, draft));
         }
+        List<String> citationFeedback = AnswerCitationCoveragePolicy.repairFeedback(request, draft);
+        if (!citationFeedback.isEmpty()) {
+            editableFields.add(PlayerFacingField.CITATION_IDS);
+            feedback.addAll(citationFeedback);
+        }
         return new RepairPlan(editableFields, feedback);
     }
 

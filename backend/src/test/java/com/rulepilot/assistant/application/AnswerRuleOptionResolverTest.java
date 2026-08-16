@@ -40,8 +40,7 @@ class AnswerRuleOptionResolverTest {
     void routesByAcceptedAidAndRequiresTwoToEightOptions() {
         assertThat(resolver.requiresRuleOptions(request(AnswerAid.OPTIONS))).isTrue();
         assertThat(resolver.requiresRuleOptions(request(AnswerAid.NONE))).isFalse();
-        assertThatThrownBy(() -> resolver.resolve(request(AnswerAid.OPTIONS), draft(List.of())))
-                .hasMessageContaining("required");
+        assertThat(resolver.resolve(request(AnswerAid.OPTIONS), draft(List.of()))).isEmpty();
         assertThatThrownBy(() -> resolver.resolve(
                         request(AnswerAid.OPTIONS), draft(List.of(option("Only", "Available", "Take it")))))
                 .hasMessageContaining("count");

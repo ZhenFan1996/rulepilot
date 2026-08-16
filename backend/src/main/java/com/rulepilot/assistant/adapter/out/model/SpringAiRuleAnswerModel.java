@@ -478,6 +478,9 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
         if (editableFields.contains(PlayerFacingField.EXCEPTIONS)) {
             rejected.put("exceptions", previousDraft.exceptions());
         }
+        if (editableFields.contains(PlayerFacingField.CITATION_IDS)) {
+            rejected.put("citationIds", previousDraft.citationIds());
+        }
         return Map.copyOf(rejected);
     }
 
@@ -505,7 +508,8 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
             return new PlayerFacingRepairDraft(
                     expected.contains("shortVerdict") ? requiredText(root, "shortVerdict") : null,
                     expected.contains("explanation") ? requiredText(root, "explanation") : null,
-                    expected.contains("exceptions") ? stringList(root, "exceptions") : null);
+                    expected.contains("exceptions") ? stringList(root, "exceptions") : null,
+                    expected.contains("citationIds") ? uuidList(root, "citationIds") : null);
         } catch (IOException exception) {
             throw new IllegalStateException("player-facing repair is not valid JSON", exception);
         }
@@ -516,6 +520,7 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
         if (editableFields.contains(PlayerFacingField.SHORT_VERDICT)) names.add("shortVerdict");
         if (editableFields.contains(PlayerFacingField.EXPLANATION)) names.add("explanation");
         if (editableFields.contains(PlayerFacingField.EXCEPTIONS)) names.add("exceptions");
+        if (editableFields.contains(PlayerFacingField.CITATION_IDS)) names.add("citationIds");
         return Set.copyOf(names);
     }
 
@@ -542,10 +547,30 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
         return List.copyOf(values);
     }
 
+    private List<UUID> uuidList(JsonNode root, String field) {
+        JsonNode value = root.get(field);
+        if (value == null || !value.isArray() || value.isEmpty()) {
+            throw new IllegalStateException("player-facing repair omitted " + field);
+        }
+        List<UUID> values = new java.util.ArrayList<>();
+        value.forEach(item -> {
+            if (!item.isTextual()) {
+                throw new IllegalStateException("player-facing repair returned a non-text citation ID");
+            }
+            try {
+                values.add(UUID.fromString(item.textValue()));
+            } catch (IllegalArgumentException invalidId) {
+                throw new IllegalStateException("player-facing repair returned an invalid citation ID", invalidId);
+            }
+        });
+        return List.copyOf(new LinkedHashSet<>(values));
+    }
+
     private record PlayerFacingRepairDraft(
             String shortVerdict,
             String explanation,
-            List<String> exceptions) {
+            List<String> exceptions,
+            List<UUID> citationIds) {
 
         ModelDraft mergeWith(ModelDraft previous, Set<PlayerFacingField> editableFields) {
             requireReturnedFields(editableFields);
@@ -554,7 +579,9 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
                     previous.insufficiencyReason(),
                     editableFields.contains(PlayerFacingField.SHORT_VERDICT) ? shortVerdict : previous.shortVerdict(),
                     editableFields.contains(PlayerFacingField.EXPLANATION) ? explanation : previous.explanation(),
-                    previous.citationIds(),
+                    editableFields.contains(PlayerFacingField.CITATION_IDS)
+                            ? citationIds
+                            : previous.citationIds(),
                     editableFields.contains(PlayerFacingField.EXCEPTIONS) ? exceptions : previous.exceptions(),
                     previous.confidence(),
                     previous.answerBasis(),
@@ -584,6 +611,10 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
             }
             if (editableFields.contains(PlayerFacingField.EXCEPTIONS) && exceptions == null) {
                 throw new IllegalStateException("player-facing repair omitted exceptions");
+            }
+            if (editableFields.contains(PlayerFacingField.CITATION_IDS)
+                    && (citationIds == null || citationIds.isEmpty())) {
+                throw new IllegalStateException("player-facing repair omitted citationIds");
             }
         }
     }

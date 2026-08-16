@@ -373,6 +373,57 @@ class SpringAiRuleAnswerModelTest {
     }
 
     @Test
+    void repairsOnlyCitationOwnershipWhileKeepingAllPlayerProseByteExact() {
+        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        ChatModel chatModel = mock(ChatModel.class);
+        VersionedAgentPrompts prompts = mock(VersionedAgentPrompts.class);
+        UUID existingCitation = UUID.randomUUID();
+        UUID quotedCitation = UUID.randomUUID();
+        when(configuration.usesFake(Role.ANSWER)).thenReturn(false);
+        when(configuration.modelFor(Role.ANSWER)).thenReturn(chatModel);
+        when(chatModel.getDefaultOptions()).thenReturn(ToolCallingChatOptions.builder().build());
+        when(chatModel.getOptions()).thenReturn(ToolCallingChatOptions.builder().build());
+        ChatResponse repairResponse = new ChatResponse(List.of(new Generation(new AssistantMessage(
+                "{\"citationIds\":[\"" + existingCitation + "\",\"" + quotedCitation + "\"]}"))));
+        when(chatModel.call(any(Prompt.class))).thenReturn(repairResponse);
+        SpringAiRuleAnswerModel model = new SpringAiRuleAnswerModel(
+                configuration, new FakeRuleAnswerModel(), prompts, 0.42, 0.0);
+        String explanation = "The rule states: \u201cA player wins immediately at thirty points.\u201d";
+        ModelRequest request = new ModelRequest(
+                "How does a player win?",
+                QuestionType.RULE_QUERY,
+                new AnswerContext(null, null, PlayerLocale.EN),
+                List.of(
+                        new EvidenceInput(
+                                existingCitation, "RULE", "Overview", "Turns proceed clockwise.", 1, 1),
+                        new EvidenceInput(
+                                quotedCitation,
+                                "RULE",
+                                "Victory",
+                                "A player wins immediately at thirty points.",
+                                2,
+                                2)));
+        ModelDraft previous = new ModelDraft(
+                "Reach thirty points.", explanation, List.of(existingCitation), List.of(), "HIGH");
+
+        ModelDraft repaired = model.revisePlayerFacing(
+                request,
+                previous,
+                List.of("CITATION_OWNERSHIP: include the quoted source."),
+                Set.of(PlayerFacingField.CITATION_IDS),
+                null);
+
+        assertThat(repaired.shortVerdict()).isEqualTo(previous.shortVerdict());
+        assertThat(repaired.explanation()).isEqualTo(explanation);
+        assertThat(repaired.citationIds()).containsExactly(existingCitation, quotedCitation);
+        ArgumentCaptor<Prompt> captured = ArgumentCaptor.forClass(Prompt.class);
+        verify(chatModel).call(captured.capture());
+        assertThat(captured.getValue().getContents())
+                .contains("citationIds", existingCitation.toString(), quotedCitation.toString())
+                .doesNotContain(explanation);
+    }
+
+    @Test
     void rejectsInvalidConfiguredTemperatures() {
         RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
         VersionedAgentPrompts prompts = mock(VersionedAgentPrompts.class);

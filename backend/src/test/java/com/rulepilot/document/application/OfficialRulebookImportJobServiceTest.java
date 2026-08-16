@@ -23,7 +23,9 @@ import com.rulepilot.document.domain.OfficialRulebookImportJob.TeachingHandoffSt
 import com.rulepilot.document.domain.ProcessingStatus;
 import com.rulepilot.document.domain.RuleDocument;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
+import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -72,10 +74,80 @@ class OfficialRulebookImportJobServiceTest {
                 OfficialRulebookImportJob.Stage.CONNECTING,
                 OfficialRulebookImportJob.Stage.DOWNLOADING,
                 OfficialRulebookImportJob.Stage.DOWNLOADING,
-                OfficialRulebookImportJob.Stage.DOWNLOADING,
                 OfficialRulebookImportJob.Stage.VERIFYING_FILE,
                 OfficialRulebookImportJob.Stage.SAVING,
                 OfficialRulebookImportJob.Stage.COMPLETED);
+    }
+
+    @Test
+    void coalescesFastDownloadProgressInsteadOfMakingTheNetworkWaitForEveryDatabaseWrite() {
+        FakeJobs jobs = new FakeJobs();
+        OfficialRulebookImportService imports = mock(OfficialRulebookImportService.class);
+        long totalBytes = 20L * 1024 * 1024;
+        doAnswer(invocation -> {
+            OfficialRulebookSourceFetcher.ProgressListener progress = invocation.getArgument(6);
+            progress.downloadStarted(totalBytes);
+            for (long downloaded = 256 * 1024; downloaded <= totalBytes; downloaded += 256 * 1024) {
+                progress.downloaded(downloaded, totalBytes);
+            }
+            progress.downloadCompleted();
+            progress.verifying();
+            progress.saving();
+            return uploadResult(UUID.randomUUID());
+        }).when(imports).importRulebook(
+                any(), anyString(), any(), anyString(), anyBoolean(), anyString(), any());
+        OfficialRulebookImportJobService service = service(jobs, imports, Runnable::run);
+
+        var launch = service.enqueue(command(), "alice");
+
+        long downloadWrites = jobs.stages.stream()
+                .filter(stage -> stage == OfficialRulebookImportJob.Stage.DOWNLOADING)
+                .count();
+        assertThat(downloadWrites).isBetween(2L, 7L);
+        assertThat(service.requireOwned(launch.job().id(), "alice")).satisfies(completed -> {
+            assertThat(completed.downloadedBytes()).isEqualTo(totalBytes);
+            assertThat(completed.totalBytes()).isEqualTo(totalBytes);
+            assertThat(completed.downloadCompletedAt()).isEqualTo(NOW);
+        });
+    }
+
+    @Test
+    void stillPersistsSlowDownloadProgressAtLeastOncePerSecond() {
+        FakeJobs jobs = new FakeJobs();
+        OfficialRulebookImportService imports = mock(OfficialRulebookImportService.class);
+        MutableClock clock = new MutableClock(NOW);
+        doAnswer(invocation -> {
+            OfficialRulebookSourceFetcher.ProgressListener progress = invocation.getArgument(6);
+            progress.downloadStarted(512L * 1024);
+            progress.downloaded(256L * 1024, 512L * 1024);
+            assertThat(jobs.downloadWriteCount()).isEqualTo(1);
+            clock.advance(Duration.ofMillis(1_100));
+            progress.downloaded(512L * 1024, 512L * 1024);
+            assertThat(jobs.downloadWriteCount()).isEqualTo(2);
+            progress.downloadCompleted();
+            progress.verifying();
+            progress.saving();
+            return uploadResult(UUID.randomUUID());
+        }).when(imports).importRulebook(
+                any(), anyString(), any(), anyString(), anyBoolean(), anyString(), any());
+        var service = new OfficialRulebookImportJobService(
+                jobs,
+                mock(RuleDocumentRepository.class),
+                imports,
+                Runnable::run,
+                (editionId, language) -> false,
+                catalog(
+                        UUID.fromString("11111111-1111-1111-1111-111111111111"),
+                        GAME_ID,
+                        "Opaque Edition",
+                        "en"),
+                clock);
+
+        var launch = service.enqueue(command(), "alice");
+
+        assertThat(jobs.downloadWriteCount()).isEqualTo(2);
+        assertThat(service.requireOwned(launch.job().id(), "alice").downloadedBytes())
+                .isEqualTo(512L * 1024);
     }
 
     @Test
@@ -675,6 +747,10 @@ class OfficialRulebookImportJobServiceTest {
         private final Map<UUID, OfficialRulebookImportJob> values = new LinkedHashMap<>();
         private final List<OfficialRulebookImportJob.Stage> stages = new ArrayList<>();
 
+        private long downloadWriteCount() {
+            return stages.stream().filter(stage -> stage == OfficialRulebookImportJob.Stage.DOWNLOADING).count();
+        }
+
         @Override public void insert(OfficialRulebookImportJob job) { values.put(job.id(), job); }
 
         @Override
@@ -870,6 +946,34 @@ class OfficialRulebookImportJobServiceTest {
                     job.id(), job.ownerUsername(), job.editionId(), job.title(), job.sourceType(), job.sourceUrl(),
                     stage, downloadedBytes, totalBytes, documentVersionId, duplicate, errorCode,
                     job.downloadCompletedAt(), teachingHandoff, job.createdAt(), updatedAt, completedAt);
+        }
+    }
+
+    private static final class MutableClock extends Clock {
+
+        private Instant current;
+
+        private MutableClock(Instant current) {
+            this.current = current;
+        }
+
+        private void advance(Duration duration) {
+            current = current.plus(duration);
+        }
+
+        @Override
+        public ZoneId getZone() {
+            return ZoneOffset.UTC;
+        }
+
+        @Override
+        public Clock withZone(ZoneId zone) {
+            return this;
+        }
+
+        @Override
+        public Instant instant() {
+            return current;
         }
     }
 }

@@ -24,6 +24,10 @@ final class AnswerRepairOutcomePolicy {
             return Optional.of(new PublicationFailure(
                     AnswerStatus.INVALID_MODEL_OUTPUT, "回答仍把局部证据缺口扩大成了整本规则书的结论。"));
         }
+        if (!AnswerCitationCoveragePolicy.missingQuotedSourceIds(request, draft).isEmpty()) {
+            return Optional.of(new PublicationFailure(
+                    AnswerStatus.INVALID_MODEL_OUTPUT, "回答中的直接引文没有归属到对应的规则证据。"));
+        }
         return Optional.empty();
     }
 

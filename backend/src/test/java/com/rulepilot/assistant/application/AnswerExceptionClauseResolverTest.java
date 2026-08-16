@@ -40,8 +40,7 @@ class AnswerExceptionClauseResolverTest {
     void selectionDependsOnAnswerAidRatherThanExceptionWordsInTheQuestion() {
         assertThat(resolver.requiresExceptionClauses(request(AnswerAid.EXCEPTIONS))).isTrue();
         assertThat(resolver.requiresExceptionClauses(request(AnswerAid.NONE))).isFalse();
-        assertThatThrownBy(() -> resolver.resolve(request(AnswerAid.EXCEPTIONS), draft(List.of())))
-                .hasMessageContaining("required");
+        assertThat(resolver.resolve(request(AnswerAid.EXCEPTIONS), draft(List.of()))).isEmpty();
         assertThatThrownBy(() -> resolver.resolve(
                         request(AnswerAid.NONE),
                         draft(List.of(clause("Only at night", "The action is prohibited.", first)))))

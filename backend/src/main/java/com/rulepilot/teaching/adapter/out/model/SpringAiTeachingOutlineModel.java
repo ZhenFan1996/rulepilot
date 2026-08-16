@@ -15,11 +15,13 @@ import com.rulepilot.teaching.application.TeachingSourceCoverageContract;
 import jakarta.annotation.PreDestroy;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.text.Normalizer;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Locale;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -212,6 +214,9 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
         } catch (InvalidSourceCoverage invalidSource) {
             return repairSourceIdentifiers(request, role, owner, invalidSource);
         } catch (InvalidWholeGameUnderstanding invalidContext) {
+            if (!unownedExactConceptSources(request, invalidContext.outline).isEmpty()) {
+                return repairConceptSourceOwnership(request, role, owner, invalidContext);
+            }
             return repairWholeGameUnderstanding(request, role, owner, invalidContext);
         } catch (RuntimeException failure) {
             if (isTimeout(failure) || System.nanoTime() - startedAt > MAX_REPAIR_ELAPSED_NANOS) throw failure;
@@ -230,6 +235,63 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
             failure.addSuppressed(firstFailure);
             throw failure;
         }
+    }
+
+    private OutlineDraft repairConceptSourceOwnership(
+            OutlineRequest request,
+            Role role,
+            String owner,
+            InvalidWholeGameUnderstanding failure) {
+        OutlineDraft current = failure.outline;
+        String missingBindings = unownedExactConceptSources(request, current).stream()
+                .map(binding -> "concept=" + binding.conceptId()
+                        + " | sourceIdentifier=" + binding.sourceIdentifier()
+                        + " | pages=" + binding.sourcePageNumbers()
+                        + " | relatedTopics=" + binding.relatedTopicKeys())
+                .collect(java.util.stream.Collectors.joining("\n"));
+        String feedback = """
+                The shared whole-game understanding found exact rulebook sources that the chapter/source ledger did
+                not assign to any plan-owned teaching unit. This is a source-ownership gap, not a prose or concept
+                wording problem. Preserve the valid mental model and existing coverage. Add each listed exact source
+                to an Agent-chosen teaching unit and appropriate chapter; create or reorder a chapter only when that
+                is the clearest teaching structure. Do not drop the concept merely to satisfy the contract. Do not
+                invent or rewrite source identifiers.
+                Missing plan-owned concept sources:
+                """ + missingBindings;
+        return organizeOnce(request, role, owner, ownershipRefinementInstruction(current, feedback));
+    }
+
+    private List<UnownedConceptSource> unownedExactConceptSources(
+            OutlineRequest request, OutlineDraft outline) {
+        if (request == null || outline == null || outline.wholeGameUnderstanding() == null) return List.of();
+        List<UnownedConceptSource> result = new ArrayList<>();
+        for (GlobalConceptDraft concept : outline.wholeGameUnderstanding().concepts()) {
+            for (String identifier : concept.sourceIdentifiers()) {
+                boolean owned = outline.sourceCoverageSlots().stream()
+                        .filter(slot -> slot.availability() == SourceCoverageAvailability.SOURCED)
+                        .anyMatch(slot -> sourceIdentity(slot.sourceIdentifier()).equals(sourceIdentity(identifier)));
+                if (!owned && exactSourceExists(request, concept.sourcePageNumbers(), identifier)) {
+                    result.add(new UnownedConceptSource(
+                            concept.conceptId(), identifier, concept.sourcePageNumbers(), concept.relatedTopicKeys()));
+                }
+            }
+        }
+        return List.copyOf(result);
+    }
+
+    private boolean exactSourceExists(OutlineRequest request, List<Integer> sourcePages, String identifier) {
+        String expected = sourceIdentity(identifier);
+        return !expected.isBlank() && request.pages().stream()
+                .filter(page -> sourcePages.contains(page.pageNumber()))
+                .map(page -> sourceIdentity(page.text()))
+                .anyMatch(page -> page.contains(expected));
+    }
+
+    private String sourceIdentity(String value) {
+        return Normalizer.normalize(value == null ? "" : value, Normalizer.Form.NFKC)
+                .strip()
+                .replaceAll("\\s+", " ")
+                .toLowerCase(Locale.ROOT);
     }
 
     private OutlineDraft repairWholeGameUnderstanding(
@@ -603,6 +665,12 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
             }
         }
     }
+
+    private record UnownedConceptSource(
+            String conceptId,
+            String sourceIdentifier,
+            List<Integer> sourcePageNumbers,
+            List<String> relatedTopicKeys) {}
 
     private record WholeGameConceptPatchDraft(
             String conceptId,

@@ -11,10 +11,12 @@ import com.rulepilot.assistant.RuleAnswerModel.AnswerContext;
 import com.rulepilot.assistant.RuleAnswerModel.EvidenceInput;
 import com.rulepilot.assistant.RuleAnswerModel.ModelDraft;
 import com.rulepilot.assistant.RuleAnswerModel.ModelRequest;
+import com.rulepilot.assistant.RuleAnswerModel.PlayerFacingField;
 import com.rulepilot.assistant.RuleAnswerModel.RetrievalQueryRequest;
 import com.rulepilot.assistant.domain.QuestionType;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
@@ -138,6 +140,40 @@ class AnswerModelGatewayTest {
         assertThat(providerOwner).hasValue("alice");
         assertThat(compositionOwner).hasValue("alice");
         assertThat(limiter.requests).containsExactly(new PermitRequest("alice", sessionId, "alice-provider"));
+    }
+
+    @Test
+    void locksEveryFieldThatWasNotExplicitlyRejectedForPlayerFacingRepair() {
+        UUID retainedCitation = UUID.randomUUID();
+        ModelDraft previous = new ModelDraft(
+                "原裁定。", "原解释。", List.of(retainedCitation), List.of("原例外。"), "HIGH");
+        ModelDraft providerRepair = new ModelDraft(
+                "不应改动的裁定。",
+                "修复后的解释。",
+                List.of(UUID.randomUUID()),
+                List.of("不应改动的例外。"),
+                "LOW");
+        AnswerModelGateway gateway = new AnswerModelGateway(
+                model(draft("unused"), providerRepair, List.of()),
+                new RecordingRateLimiter(),
+                new RecordingInvocations());
+
+        ModelDraft repaired = gateway.revisePlayerFacing(
+                runId,
+                "alice",
+                sessionId,
+                request(),
+                previous,
+                List.of("Only repair the explanation."),
+                Set.of(PlayerFacingField.EXPLANATION),
+                "repairPlayerFacingRuleAnswer",
+                "Answer repaired");
+
+        assertThat(repaired.shortVerdict()).isEqualTo(previous.shortVerdict());
+        assertThat(repaired.explanation()).isEqualTo(providerRepair.explanation());
+        assertThat(repaired.exceptions()).isEqualTo(previous.exceptions());
+        assertThat(repaired.citationIds()).isEqualTo(previous.citationIds());
+        assertThat(repaired.confidence()).isEqualTo(previous.confidence());
     }
 
     private RuleAnswerModel model(ModelDraft composition, ModelDraft revision, List<String> rewrittenQueries) {

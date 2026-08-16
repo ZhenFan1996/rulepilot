@@ -17,9 +17,35 @@ export RULEPILOT_RECOMMENDATION_PAID_CANARY=true
 export RULEPILOT_RECOMMENDATION_CANARY_PROVIDER="${RULEPILOT_RECOMMENDATION_CANARY_PROVIDER:-qwen}"
 export RULEPILOT_RECOMMENDATION_CANARY_LABEL="${RULEPILOT_RECOMMENDATION_CANARY_LABEL:-current}"
 
+case "$RULEPILOT_RECOMMENDATION_CANARY_PROVIDER" in
+	qwen)
+		if [ -z "${QWEN_API_KEY:-}" ]; then
+			echo "FAIL QWEN_API_KEY is required for the authorized paid recommendation canary"
+			exit 2
+		fi
+		;;
+	deepseek)
+		if [ -z "${DEEPSEEK_API_KEY:-}" ]; then
+			echo "FAIL DEEPSEEK_API_KEY is required for the authorized paid recommendation canary"
+			exit 2
+		fi
+		;;
+	*)
+		echo "FAIL unsupported recommendation canary provider: $RULEPILOT_RECOMMENDATION_CANARY_PROVIDER"
+		exit 2
+		;;
+esac
+
+if [ "${RULEPILOT_RECOMMENDATION_CANARY_SCENARIO:-}" = "creator-alias" ] && [ -z "${OPENAI_API_KEY:-}" ]; then
+	echo "FAIL OPENAI_API_KEY is required for the creator-alias public-discovery canary"
+	exit 2
+fi
+
 cd "$ROOT_DIR/backend"
 if [ "${RULEPILOT_RECOMMENDATION_CANARY_SCENARIO:-}" = "comparison-only" ]; then
-	./mvnw -q '-Dtest=BoardGameRecommendationAgentPaidCanaryTest#preservesAStructuredObservedComparisonDecisionWithoutFlatteningTheNaturalAnswer' test
+	./mvnw -q '-Dtest=BoardGameRecommendationAgentPaidCanaryTest#preservesANaturalComparisonWithoutASeparateDecisionReviewTurn' test
+elif [ "${RULEPILOT_RECOMMENDATION_CANARY_SCENARIO:-}" = "creator-alias" ]; then
+	./mvnw -q '-Dtest=BoardGameRecommendationAgentPaidCanaryTest#resolvesAPlayerCreatorAliasThroughTheRealPublicDiscoveryTool' test
 elif [ "${RULEPILOT_RECOMMENDATION_CANARY_SCENARIO:-}" = "imaginative" ]; then
 	./mvnw -q '-Dtest=BoardGameRecommendationAgentPaidCanaryTest#keepsImaginativePreferencesSoftAndAppliesOnlyExplicitMidConversationCorrections' test
 elif [ "${RULEPILOT_RECOMMENDATION_CANARY_SCENARIO:-}" = "production-two-turn" ]; then

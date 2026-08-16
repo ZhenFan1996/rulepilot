@@ -1,6 +1,7 @@
 package com.rulepilot.teaching.application;
 
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.rulepilot.assistant.AssistantReadTools.RuleEvidence;
@@ -19,6 +20,27 @@ class TeachingQuantitativeClaimPolicyTest {
 
     private final UUID versionId = UUID.randomUUID();
     private final UUID sourceId = UUID.randomUUID();
+
+    @Test
+    void doesNotTreatAReferentialChineseOtherAsAnUnsupportedNumericClaim() {
+        assertThat(TeachingQuantitativeClaimPolicy.numbers("保留另一张牌作为参考。")).isEmpty();
+    }
+
+    @Test
+    void stillExtractsExplicitChineseCountsAcrossDifferentClassifiers() {
+        assertThat(TeachingQuantitativeClaimPolicy.numbers("每位玩家抽一张牌，再获得两枚标记。"))
+                .containsExactlyInAnyOrder("1", "2");
+    }
+
+    @Test
+    void treatsOrdinaryEnglishTimesAsRepetitionRatherThanAnArithmeticProduct() {
+        RuleEvidence evidence = evidence("Take one card. Repeat this process 4 more times, for a total of 5 cards.");
+
+        assertThatCode(() -> validateNonAggregate(
+                        List.of(new Claim(1, "执行：抽一张牌，再重复4次，总共5张。", List.of(sourceId))),
+                        evidence))
+                .doesNotThrowAnyException();
+    }
 
     @Test
     void rejectsANumberThatDoesNotExistInTheClaimsOwnCitedEvidence() {
@@ -114,6 +136,25 @@ class TeachingQuantitativeClaimPolicyTest {
                 "按来源结算。",
                 List.of(sourceId),
                 List.of(new StepDraft("计分", TeachingMove.LEDGER, claims.getFirst().text(), List.of(sourceId))));
+        TeachingQuantitativeClaimPolicy.validate(planned, draft, claims, Map.of(sourceId, evidence));
+    }
+
+    private void validateNonAggregate(List<Claim> claims, RuleEvidence evidence) {
+        var planned = new TeachingPlan.PlannedSection(
+                1,
+                "procedure",
+                "流程",
+                "Teach this procedure.",
+                true,
+                false,
+                List.of("core_loop"),
+                List.of("procedure"));
+        SectionDraft draft = new SectionDraft(
+                "流程",
+                VisualKind.REFERENCE_CARD,
+                "按来源执行。",
+                List.of(sourceId),
+                List.of(new StepDraft("执行", TeachingMove.DO, claims.getFirst().text(), List.of(sourceId))));
         TeachingQuantitativeClaimPolicy.validate(planned, draft, claims, Map.of(sourceId, evidence));
     }
 

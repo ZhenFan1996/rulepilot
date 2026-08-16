@@ -17,7 +17,9 @@ class OfficialRulebookImportConfiguration {
             throw new IllegalArgumentException("official rulebook import queue capacity must be between 1 and 40");
         }
         var executor = new ThreadPoolTaskExecutor();
-        executor.setCorePoolSize(1);
+        // The old 1-core/2-max setup queued ordinary second imports and only used the second worker after the queue
+        // filled. Two workers keep the already-approved peak concurrency while removing that avoidable queue wait.
+        executor.setCorePoolSize(2);
         executor.setMaxPoolSize(2);
         executor.setQueueCapacity(queueCapacity);
         executor.setThreadNamePrefix("official-rulebook-import-");

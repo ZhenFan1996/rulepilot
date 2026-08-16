@@ -825,7 +825,7 @@ describe('RecommendationRulebookHandoff', () => {
           })
         }
         if (path === '/api/v1/assistant-runs/preparation-stream') {
-          return Response.json(runSnapshot('preparation-stream', 'DOCUMENT_READINESS'))
+          return Response.json(runSnapshot('preparation-stream', 'LESSON_PLANNING'))
         }
         return new Response(null, { status: 404 })
       }))
@@ -858,6 +858,15 @@ describe('RecommendationRulebookHandoff', () => {
       const status = wrapper.get('[data-testid="player-work-status"]')
       expect(status.text()).toBe('正在组织讲解')
       expect(status.attributes('data-player-work-capability')).toBe('rulebook')
+      const generationSteps = wrapper.get('[data-testid="recommendation-teaching-generation-steps"]')
+      expect(generationSteps.text()).toContain('通读整本规则书，形成整局认识并规划章节')
+      expect(generationSteps.text()).toContain('读取每一章需要引用的规则书页面')
+      expect(generationSteps.text()).toContain('依据原文编写玩家可以直接照做的讲解')
+      expect(generationSteps.text()).toContain('校验引用、章节结构与数量边界，通过后逐章发布')
+      expect(generationSteps.text()).toContain('正在通读整本规则书，形成整局认识并规划讲解章节')
+      expect(wrapper.text()).toContain('规划中')
+      expect(wrapper.text()).not.toContain('84%')
+      expect(wrapper.find('[role="progressbar"]').exists()).toBe(false)
     } finally {
       wrapper?.unmount()
       vi.useRealTimers()

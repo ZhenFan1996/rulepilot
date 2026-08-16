@@ -35,6 +35,10 @@ boundary: do not offer possible meanings and do not tell the player to infer or 
 {repair}
 
 <final_response_checks>
+- Build the top-level `citationIds` after the prose is final. For every factual sentence, quotation, named source page,
+  and structured item, identify the supplied evidence object it actually uses and include that object's exact ID.
+  Do not substitute a nearby or related ID, and do not omit a second source merely because the first source controls
+  the overall ruling.
 - If any supported subquestion coexists with an unsupported subquestion, keep answerable=true, keep shortVerdict on the
   supported ruling, and describe only what the current supplied excerpts cannot confirm. Never turn excerpt silence or
   search results into a claim about what the whole rulebook lacks.

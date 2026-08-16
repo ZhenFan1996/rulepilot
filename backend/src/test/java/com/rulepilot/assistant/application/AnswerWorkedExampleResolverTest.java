@@ -43,8 +43,7 @@ class AnswerWorkedExampleResolverTest {
     void followsTheAcceptedAidInsteadOfInspectingExampleWording() {
         ModelRequest selected = request(AnswerAid.EXAMPLE);
         assertThat(resolver.requiresWorkedExamples(selected)).isTrue();
-        assertThatThrownBy(() -> resolver.resolve(selected, draft(List.of())))
-                .hasMessageContaining("required");
+        assertThat(resolver.resolve(selected, draft(List.of()))).isEmpty();
 
         ModelRequest notSelected = request(AnswerAid.NONE);
         assertThat(resolver.requiresWorkedExamples(notSelected)).isFalse();

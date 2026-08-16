@@ -36,9 +36,11 @@ final class AnswerQuestionInterpretationPolicy {
         String groundingText = groundingText(deterministic, context, draft.referenceBinding());
         List<String> groundedTerms = groundedTerms(draft.terms(), groundingText);
         if (groundedTerms.size() != draft.terms().size()) return Optional.empty();
+        boolean allRuleObjectsGrounded = draft.ruleObjectSpans().stream()
+                .allMatch(span -> containsGroundedSpan(groundingText, span));
+        if (!allRuleObjectsGrounded) return Optional.empty();
         List<String> currentRuleObjects = groundedCurrentRuleObjects(
                 draft.ruleObjectSpans(), deterministic.originalQuestion());
-        if (currentRuleObjects.size() != draft.ruleObjectSpans().size()) return Optional.empty();
         List<AnswerQuestionPlan.PageHint> pageHints = groundedPageHints(
                 draft.pageHints(), deterministic.originalQuestion());
         if (pageHints.size() != draft.pageHints().size()) return Optional.empty();

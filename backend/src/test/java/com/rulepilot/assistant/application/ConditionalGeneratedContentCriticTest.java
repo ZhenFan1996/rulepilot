@@ -29,14 +29,32 @@ class ConditionalGeneratedContentCriticTest {
     private final UUID chunkId = UUID.randomUUID();
 
     @Test
-    void skipsStandardContentOutsideEvaluationMode() {
+    void skipsEveryRiskClassOutsideExplicitEvaluationMode() {
         AtomicInteger calls = new AtomicInteger();
         var critic = critic(false, request -> {
             calls.incrementAndGet();
             return new CritiqueDraft(List.of());
         });
 
-        var review = critic.review(request(), ReviewRisk.STANDARD);
+        for (ReviewRisk risk : ReviewRisk.values()) {
+            var review = critic.review(request(), risk);
+            assertThat(review.performed()).as("runtime review for %s", risk).isFalse();
+            assertThat(review.accepted()).as("runtime result for %s", risk).isTrue();
+        }
+        assertThat(calls).hasValue(0);
+    }
+
+    @Test
+    void disabledRuntimeReviewCannotRejectAnAnswerForCriticSpecificRequestShape() {
+        AtomicInteger calls = new AtomicInteger();
+        var critic = critic(false, request -> {
+            calls.incrementAndGet();
+            return new CritiqueDraft(List.of());
+        });
+        ReviewRequest noCriticClaims = new ReviewRequest(
+                UUID.randomUUID(), ContentType.ANSWER, List.of(), List.of(new Evidence(chunkId, "Rule.")));
+
+        var review = critic.review(noCriticClaims, ReviewRisk.HIGH_IMPACT);
 
         assertThat(review.performed()).isFalse();
         assertThat(review.accepted()).isTrue();
@@ -44,19 +62,16 @@ class ConditionalGeneratedContentCriticTest {
     }
 
     @Test
-    void reviewsLowConfidenceHighImpactAndEvaluationTrafficExactlyOnce() {
-        for (var scenario : List.of(
-                new Scenario(false, ReviewRisk.LOW_CONFIDENCE),
-                new Scenario(false, ReviewRisk.HIGH_IMPACT),
-                new Scenario(true, ReviewRisk.STANDARD))) {
+    void explicitEvaluationReviewsEveryRiskClassExactlyOnceWhenNoIssueIsFound() {
+        for (ReviewRisk risk : ReviewRisk.values()) {
             AtomicInteger calls = new AtomicInteger();
-            var critic = critic(scenario.evaluationMode(), request -> {
+            var critic = critic(true, request -> {
                 calls.incrementAndGet();
                 return new CritiqueDraft(List.of());
             });
 
-            assertThat(critic.review(request(), scenario.risk()).performed()).isTrue();
-            assertThat(calls).hasValue(1);
+            assertThat(critic.review(request(), risk).performed()).as("evaluation review for %s", risk).isTrue();
+            assertThat(calls).as("evaluation calls for %s", risk).hasValue(1);
         }
     }
 
@@ -439,8 +454,6 @@ class ConditionalGeneratedContentCriticTest {
                         chunkId,
                         "During this interval, the vek keeper must not seal more than four luma for each nari.")));
     }
-
-    private record Scenario(boolean evaluationMode, ReviewRisk risk) {}
 
     private record FidelityScenario(ClaimAspect aspect, IssueType type, String claim, String evidence) {}
 }

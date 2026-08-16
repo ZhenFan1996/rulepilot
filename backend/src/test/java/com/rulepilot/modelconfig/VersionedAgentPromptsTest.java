@@ -37,7 +37,8 @@ class VersionedAgentPromptsTest {
                         "sole exception for plainly naming a cited missing source",
                         "Return only the requested JSON schema",
                         "no unsupported next-player handoff")
-                .doesNotContain("revision v", "maximum step count", "allotted step count");
+                .doesNotContain("revision v", "maximum step count", "allotted step count")
+                .hasSizeLessThan(8_500);
 
         assertThat(prompts.teachingUser())
                 .contains(

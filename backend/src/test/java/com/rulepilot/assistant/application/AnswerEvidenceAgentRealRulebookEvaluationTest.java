@@ -35,6 +35,8 @@ import com.rulepilot.assistant.RuleAnswerModel.QuestionInterpretationDraft;
 import com.rulepilot.assistant.RuleAnswerModel.ReferenceBinding;
 import com.rulepilot.assistant.PlayerLocale;
 import com.rulepilot.assistant.adapter.out.model.FakeRuleAnswerModel;
+import com.rulepilot.assistant.adapter.out.model.FakeContentCriticModel;
+import com.rulepilot.assistant.adapter.out.model.SpringAiContentCriticModel;
 import com.rulepilot.assistant.adapter.out.model.SpringAiNativeToolModel;
 import com.rulepilot.assistant.adapter.out.model.SpringAiRuleAnswerModel;
 import com.rulepilot.assistant.domain.QuestionType;
@@ -656,6 +658,94 @@ class AnswerEvidenceAgentRealRulebookEvaluationTest {
     }
 
     @Test
+    void recordsProductionHighImpactAnswerWithoutASynchronousCritic() throws Exception {
+        assumeTrue("true".equalsIgnoreCase(System.getenv("RULEPILOT_REAL_ANSWER_CRITIC_CANARY")));
+        String phase = requiredEnvironment("RULEPILOT_ANSWER_CANARY_PHASE");
+        assumeTrue(phase.matches("[a-z0-9-]{2,32}"), "canary phase must be a safe bounded label");
+        Path root = Path.of(System.getProperty("user.dir")).getParent();
+        JsonNode inventory = mapper.readTree(root.resolve(".local/public-corpus/source-preflight.json").toFile());
+        Path rulebook = rulebookForTitle(root, inventory, "Root: Learning to Play");
+        ProviderConfiguration configured = provider("deepseek");
+        Path answerRawOutput = root.resolve(
+                ".local/agent-evaluation/answer-high-impact-critic-" + phase + "-answer-raw.jsonl");
+        Path rawOutput = root.resolve(
+                ".local/agent-evaluation/answer-high-impact-critic-" + phase + "-raw.json");
+        Path summaryOutput = root.resolve(
+                ".local/agent-evaluation/answer-high-impact-critic-" + phase + ".json");
+        assumeTrue(!Files.exists(answerRawOutput) && !Files.exists(rawOutput) && !Files.exists(summaryOutput),
+                "critic canary evidence already exists; choose a new phase label instead of overwriting it");
+
+        String question = "请扮演‘林地最高法院’：我们只有两名玩家，我开局拿到统治卡，现在就能打出并靠它获胜吗？也请说明不靠统治卡怎么赢。";
+        BoundaryAnswer run = runBoundaryAnswer(
+                rulebook, configured, question, 22, answerRawOutput, "high-impact-scope-timing");
+        ReviewRisk risk = AnswerCritiquePolicy.reviewRisk(
+                question(run.answer().documentVersionId(), question),
+                new QuestionContext(run.answer().documentVersionId()),
+                run.modelRequest(),
+                run.answer());
+        List<String> rawCriticResponses = new ArrayList<>();
+        DirectAuditedInvocations criticInvocations = new DirectAuditedInvocations();
+        var critic = contentCritic(configured, rawCriticResponses, criticInvocations);
+        long started = System.nanoTime();
+        var review = critic.review(
+                AnswerCritiquePolicy.request(
+                        UUID.randomUUID(),
+                        question(run.answer().documentVersionId(), question),
+                        new QuestionContext(run.answer().documentVersionId()),
+                        run.modelRequest(),
+                        run.answer(),
+                        run.refined().evidence()),
+                risk,
+                "agent-evaluation");
+        long criticLatencyMs = Duration.ofNanos(System.nanoTime() - started).toMillis();
+
+        Map<String, Object> summary = new LinkedHashMap<>(boundarySummary(run));
+        summary.put("schemaVersion", 1);
+        summary.put("generatedAt", Instant.now().toString());
+        summary.put("phase", phase);
+        summary.put("question", question);
+        summary.put("reviewRisk", risk.name());
+        summary.put("criticPerformed", review.performed());
+        summary.put("criticIssues", review.issues());
+        summary.put("criticProviderCalls", rawCriticResponses.size());
+        summary.put("criticLatencyMs", criticLatencyMs);
+        summary.put("totalProviderCalls",
+                run.audited().answerPromptSizes.size()
+                        + run.audited().rawNativeTurns.size()
+                        + rawCriticResponses.size());
+        summary.put("productionCriticSkipped", !review.performed() && rawCriticResponses.isEmpty());
+        summary.put("candidatePlayerAnswer", PlayerFacingAnswerPresenter.present(
+                run.answer(), question, PlayerLocale.ZH_CN));
+        Files.writeString(
+                rawOutput,
+                mapper.writerWithDefaultPrettyPrinter().writeValueAsString(Map.of(
+                                "providerResponses", rawCriticResponses,
+                                "review", review))
+                        + "\n",
+                StandardCharsets.UTF_8,
+                StandardOpenOption.CREATE_NEW);
+        Files.writeString(
+                summaryOutput,
+                mapper.writerWithDefaultPrettyPrinter().writeValueAsString(summary) + "\n",
+                StandardCharsets.UTF_8,
+                StandardOpenOption.CREATE_NEW);
+
+        assertThat(run.answer().status().publishesConclusion()).isTrue();
+        assertThat(risk).isEqualTo(ReviewRisk.HIGH_IMPACT);
+        assertThat(review.performed()).isFalse();
+        assertThat(rawCriticResponses).isEmpty();
+        assertThat(run.answer().citations())
+                .anyMatch(citation -> citation.pageFrom() == 2)
+                .anyMatch(citation -> citation.pageFrom() == 21)
+                .anyMatch(citation -> citation.pageFrom() == 22);
+        assertThat(summary)
+                .containsEntry("productionCriticSkipped", true)
+                .containsEntry("prosePreserved", true)
+                .containsEntry("providerRawToPublishedVerdictPreserved", true)
+                .containsEntry("providerRawToPublishedExplanationPreserved", true);
+    }
+
+    @Test
     void refinesCompoundEvidenceAcrossTwoRealRulebooksAndRejectsACrossRulebookNeed() throws Exception {
         assumeTrue("true".equalsIgnoreCase(System.getenv("RULEPILOT_REAL_ANSWER_AGENT_EVAL")));
         Path root = Path.of(System.getProperty("user.dir")).getParent();
@@ -1011,6 +1101,18 @@ class AnswerEvidenceAgentRealRulebookEvaluationTest {
             int initialPage,
             Path rawOutput,
             String caseId) throws Exception {
+        return runBoundaryAnswer(
+                rulebook, provider, playerQuestion, initialPage, rawOutput, caseId, null);
+    }
+
+    private BoundaryAnswer runBoundaryAnswer(
+            Path rulebook,
+            ProviderConfiguration provider,
+            String playerQuestion,
+            int initialPage,
+            Path rawOutput,
+            String caseId,
+            PriorTurnScenario priorScenario) throws Exception {
         UUID versionId = UUID.nameUUIDFromBytes(
                 ("answer-boundary:" + provider.provider() + ':' + caseId).getBytes(StandardCharsets.UTF_8));
         UUID runId = UUID.randomUUID();
@@ -1021,9 +1123,24 @@ class AnswerEvidenceAgentRealRulebookEvaluationTest {
         when(limiter.acquireModel(any(String.class), any(), any(String.class))).thenReturn(() -> {});
         AnswerModelGateway modelGateway = new AnswerModelGateway(model, limiter, audited);
         UnderstoodQuestion deterministic = question(versionId, playerQuestion);
-        QuestionContext questionContext = new QuestionContext(versionId);
+        PlayerLocale outputLanguage = PlayerLocale.forQuestion(playerQuestion, PlayerLocale.ZH_CN);
+        PriorTurnReference priorTurn = priorScenario == null
+                ? null
+                : new PriorTurnReference(
+                        versionId,
+                        priorScenario.question(),
+                        priorScenario.groundedVerdict(),
+                        List.of(new PriorCitationReference(
+                                corpus.hit(priorScenario.citationPage()).evidence().chunkId(),
+                                versionId,
+                                priorScenario.citationPage(),
+                                priorScenario.citationPage())));
+        QuestionContext suppliedContext = priorScenario == null
+                ? new QuestionContext(versionId, null, null, outputLanguage)
+                : new QuestionContext(versionId, priorScenario.question(), null, outputLanguage, priorTurn);
         AnswerQuestionPlan plan = AnswerQuestionPlan.fallback(deterministic);
         UnderstoodQuestion understood = deterministic;
+        LearningIntent plannedLearningIntent = suppliedContext.learningIntent();
         var interpreted = modelGateway
                 .interpretQuestion(
                         runId,
@@ -1031,20 +1148,22 @@ class AnswerEvidenceAgentRealRulebookEvaluationTest {
                         null,
                         new QuestionInterpretationRequest(
                                 playerQuestion,
-                                "",
-                                "",
-                                "",
+                                suppliedContext.previousQuestion(),
+                                priorTurn == null ? "" : priorTurn.question(),
+                                priorTurn == null ? "" : priorTurn.groundedVerdict(),
                                 deterministic.type(),
                                 deterministic.missingContext(),
                                 null,
-                                PlayerLocale.ZH_CN))
+                                outputLanguage))
                 .flatMap(draft -> new AnswerQuestionInterpretationPolicy()
-                        .applyWithPlan(deterministic, questionContext, draft));
+                        .applyWithPlan(deterministic, suppliedContext, draft));
         if (interpreted.isPresent()) {
             AnswerQuestionInterpretationPolicy.Interpretation accepted = interpreted.orElseThrow();
             understood = accepted.question();
             if (accepted.plan() != null) plan = accepted.plan();
+            plannedLearningIntent = accepted.learningIntent();
         }
+        QuestionContext questionContext = suppliedContext.withLearningIntent(plannedLearningIntent);
         ToolScope scope = new ToolScope("agent-evaluation", versionId, runId, Instant.now().plusSeconds(90));
         AnswerEvidenceAgent evidenceAgent = answerAgent(provider, corpus, audited, scope);
         long started = System.nanoTime();
@@ -1057,8 +1176,8 @@ class AnswerEvidenceAgentRealRulebookEvaluationTest {
                 plan,
                 ready(corpus.hit(initialPage)));
 
-        ModelRequest request = modelRequest(
-                understood.normalizedQuestion(), refined.evidence(), PlayerLocale.ZH_CN, plan);
+        ModelRequest request = new AnswerModelRequestFactory()
+                .create(understood, questionContext, refined.evidence(), plan);
         AnswerDraftComposer.Result prepared = new AnswerDraftComposer(modelGateway)
                 .compose(runId, "agent-evaluation", null, request);
         StructuredRuleAnswer answer;
@@ -1081,6 +1200,7 @@ class AnswerEvidenceAgentRealRulebookEvaluationTest {
         raw.put("provider", provider.provider());
         raw.put("model", provider.model());
         raw.put("question", playerQuestion);
+        raw.put("priorTurn", priorScenario);
         raw.put("answerProviderVisibleResponses", List.copyOf(audited.rawAnswerProviderResponses));
         raw.put("answerPromptSizes", List.copyOf(audited.answerPromptSizes));
         raw.put("questionInterpretations", List.copyOf(audited.rawQuestionInterpretations));
@@ -1490,113 +1610,137 @@ class AnswerEvidenceAgentRealRulebookEvaluationTest {
     }
 
     @Test
-    void resolvesGroundedMultiTurnReferencesAcrossTwoRealRulebooks() throws Exception {
+    void recordsOnePaidGroundedFollowUpThroughThePlayerVisibleAnswer() throws Exception {
         assumeTrue("true".equalsIgnoreCase(System.getenv("RULEPILOT_REAL_CONTEXT_AGENT_EVAL")));
+        String phase = requiredEnvironment("RULEPILOT_ANSWER_CANARY_PHASE");
+        assumeTrue(phase.matches("[a-z0-9-]{2,32}"), "canary phase must be a safe bounded label");
         Path root = Path.of(System.getProperty("user.dir")).getParent();
-        JsonNode manifest = mapper.readTree(root.resolve(".local/agent-evaluation/manifest.json").toFile());
         JsonNode inventory = mapper.readTree(root.resolve(".local/public-corpus/source-preflight.json").toFile());
-        JsonNode answerCases = mapper.readTree(root.resolve(
-                ".local/agent-evaluation/answer-agent-cases.json").toFile());
-        JsonNode contextCases = mapper.readTree(root.resolve(
-                ".local/agent-evaluation/context-agent-cases.json").toFile());
+        Path rulebook = rulebookForTitle(root, inventory, "Root: Learning to Play");
+        ProviderConfiguration configured = provider("deepseek");
+        Path rawOutput = root.resolve(
+                ".local/agent-evaluation/answer-context-canary-" + phase + "-raw.jsonl");
+        Path summaryOutput = root.resolve(
+                ".local/agent-evaluation/answer-context-canary-" + phase + ".json");
+        assumeTrue(!Files.exists(rawOutput) && !Files.exists(summaryOutput),
+                "context canary evidence already exists; choose a new phase label instead of overwriting it");
 
-        List<Map<String, Object>> results = new ArrayList<>();
-        for (JsonNode contextCase : contextCases.path("cases")) {
-            JsonNode answerCase = java.util.stream.StreamSupport.stream(
-                            answerCases.path("cases").spliterator(), false)
-                    .filter(candidate -> contextCase.path("caseId").asText().equals(candidate.path("caseId").asText()))
-                    .findFirst()
-                    .orElseThrow();
-            CaseConfiguration configured = caseFor(
-                    root,
-                    manifest,
-                    inventory,
-                    answerCase,
-                    provider(contextCase.path("provider").asText()));
-            results.add(runFollowUpCase(configured, contextCase));
-        }
+        String question = "那我们只有两个人时，它还算可以等到10分再打吗？请用法官口吻说明为什么，并告诉我不用它怎么赢。";
+        PriorTurnScenario prior = new PriorTurnScenario(
+                "统治卡什么时候能打？",
+                "达到至少10分后，可在日光阶段打出统治卡并改变胜利条件。",
+                21);
+        BoundaryAnswer run = runBoundaryAnswer(
+                rulebook,
+                configured,
+                question,
+                22,
+                rawOutput,
+                "grounded-follow-up-" + phase,
+                prior);
+        UnderstoodQuestion understood = question(run.answer().documentVersionId(), question);
+        QuestionContext reviewContext = new QuestionContext(
+                run.answer().documentVersionId(), prior.question(), null, PlayerLocale.ZH_CN);
+        ReviewRisk reviewRisk = AnswerCritiquePolicy.reviewRisk(
+                understood, reviewContext, run.modelRequest(), run.answer());
+        List<String> rawCriticResponses = new ArrayList<>();
+        long criticStarted = System.nanoTime();
+        var review = contentCritic(configured, rawCriticResponses, new DirectAuditedInvocations())
+                .review(
+                        AnswerCritiquePolicy.request(
+                                UUID.randomUUID(),
+                                understood,
+                                reviewContext,
+                                run.modelRequest(),
+                                run.answer(),
+                                run.refined().evidence()),
+                        reviewRisk,
+                        "agent-evaluation");
+        long criticLatencyMs = Duration.ofNanos(System.nanoTime() - criticStarted).toMillis();
+        RuleAnswerRateLimiter limiter = mock(RuleAnswerRateLimiter.class);
+        when(limiter.acquireModel(any(String.class), any(), any(String.class))).thenReturn(() -> {});
+        AnswerPostPublicationReviewer.Result reviewed = new AnswerPostPublicationReviewer(
+                        (request, risk) -> review,
+                        new AnswerModelGateway(answerModel(configured, run.audited()), limiter, run.audited()),
+                        new AnswerPublicationValidator(new PolicyEvidenceVerifier()))
+                .review(
+                        UUID.randomUUID(),
+                        understood,
+                        reviewContext,
+                        "agent-evaluation",
+                        null,
+                        run.modelRequest(),
+                        run.preparedDraft(),
+                        run.answer(),
+                        run.refined().evidence());
+        assertThat(reviewed.accepted()).isTrue();
+        StructuredRuleAnswer published = reviewed.answer();
+        PlayerFacingRuleAnswer player = PlayerFacingAnswerPresenter.present(
+                published, question, PlayerLocale.ZH_CN);
 
-        Path output = root.resolve(".local/agent-evaluation/context-agent-real-rulebooks.json");
-        Files.writeString(output, mapper.writerWithDefaultPrettyPrinter().writeValueAsString(Map.of(
-                "schemaVersion", 1,
-                "generatedAt", Instant.now().toString(),
-                "results", results,
-                "controls", Map.of(
-                        "priorAnswerIsEvidence", false,
-                        "orphanedRunsReplayIncompleteCalls", false,
-                        "providerDowngradeKeepsDeterministicEvidence", true,
-                        "staleSchemaRejectedBeforeToolExecution", true))) + "\n", StandardCharsets.UTF_8);
+        Map<String, Object> summary = new LinkedHashMap<>(boundarySummary(run));
+        summary.put("schemaVersion", 1);
+        summary.put("generatedAt", Instant.now().toString());
+        summary.put("phase", phase);
+        summary.put("question", question);
+        summary.put("priorTurn", prior);
+        summary.put("referenceBinding", run.plan().referenceBinding().name());
+        summary.put("reviewRisk", reviewRisk.name());
+        summary.put("criticProviderCalls", rawCriticResponses.size());
+        summary.put("criticLatencyMs", criticLatencyMs);
+        summary.put("totalProviderCalls",
+                run.audited().answerPromptSizes.size()
+                        + run.audited().rawNativeTurns.size()
+                        + rawCriticResponses.size());
+        summary.put("criticIssues", review.issues());
+        summary.put("sameAgentAnswerRepairs", Math.max(0, run.audited().rawAnswerDrafts.size() - 1));
+        summary.put("publishedAnswer", visibleAnswer(published));
+        summary.put("playerVisibleAnswer", player);
+        summary.put("domainToPlayerCoreExact", published.shortVerdict().equals(player.shortVerdict())
+                && published.explanation().equals(player.explanation()));
+        summary.put("lastProviderDraftToPublishedCoreExact",
+                run.audited().lastAnswerDraft.shortVerdict().equals(published.shortVerdict())
+                        && run.audited().lastAnswerDraft.explanation().equals(published.explanation()));
+        summary.put("providerRawToPublishedVerdictPreserved",
+                run.audited().lastAnswerDraft.shortVerdict().equals(published.shortVerdict()));
+        summary.put("providerRawToPublishedExplanationPreserved",
+                run.audited().lastAnswerDraft.explanation().equals(published.explanation()));
+        summary.put("prosePreserved",
+                run.audited().lastAnswerDraft.shortVerdict().equals(published.shortVerdict())
+                        && run.audited().lastAnswerDraft.explanation().equals(published.explanation()));
+        summary.put("sameVersionOnly", run.refined().evidence().stream()
+                .allMatch(hit -> published.documentVersionId().equals(hit.evidence().documentVersionId())));
+        Files.writeString(
+                summaryOutput,
+                mapper.writerWithDefaultPrettyPrinter().writeValueAsString(summary) + "\n",
+                StandardCharsets.UTF_8,
+                StandardOpenOption.CREATE_NEW);
+        Files.writeString(
+                rawOutput,
+                mapper.writeValueAsString(Map.of(
+                                "criticProviderResponses", rawCriticResponses,
+                                "criticReview", review,
+                                "publishedAfterReview", visibleAnswer(published)))
+                        + "\n",
+                StandardCharsets.UTF_8,
+                StandardOpenOption.APPEND);
 
-        assertThat(results).hasSize(2).allSatisfy(result -> {
-            assertThat((Integer) result.get("addedEvidence")).isGreaterThan(0);
-            assertThat((Integer) result.get("toolCalls")).isGreaterThan(0);
-            assertThat(result).containsEntry("freshCanonicalExpectedPage", true)
-                    .containsEntry("sameVersionOnly", true)
-                    .containsEntry("toolPortfolioRegistered", true)
-                    .containsEntry("withinLatencyBudget", true);
-        });
-
-    }
-
-    private Map<String, Object> runFollowUpCase(CaseConfiguration case_, JsonNode contextCase) throws IOException {
-        UUID versionId = UUID.nameUUIDFromBytes(case_.caseId().getBytes(StandardCharsets.UTF_8));
-        UUID runId = UUID.randomUUID();
-        PdfRulebookEvidence corpus = new PdfRulebookEvidence(case_.pdf(), versionId);
-        HybridEvidenceHit expectedPrior = corpus.hit(case_.expectedPage());
-        PriorTurnReference prior = new PriorTurnReference(
-                versionId,
-                contextCase.path("priorQuestion").asText(),
-                contextCase.path("priorVerdict").asText(),
-                List.of(new PriorCitationReference(
-                        expectedPrior.evidence().chunkId(),
-                        versionId,
-                        expectedPrior.evidence().pageFrom(),
-                        expectedPrior.evidence().pageTo())));
-        DirectAuditedInvocations audited = new DirectAuditedInvocations();
-        ToolScope scope = new ToolScope("agent-evaluation", versionId, runId, Instant.now().plusSeconds(90));
-        AnswerEvidenceAgent agent = answerAgent(case_.provider(), corpus, audited, scope);
-        AnswerEvidenceRetriever.Result deterministic = ready(corpus.hit(case_.initialPage()));
-        boolean refinementRequired = AnswerEvidenceRefinementPolicy.requiresRefinement(
-                question(versionId, contextCase.path("followUp").asText()),
-                new QuestionContext(versionId, prior.question(), null, null, prior),
-                deterministic);
-        long started = System.nanoTime();
-
-        AnswerEvidenceRetriever.Result refined = agent.refine(
-                runId,
-                question(versionId, contextCase.path("followUp").asText()),
-                new QuestionContext(versionId, prior.question(), null, null, prior),
-                "agent-evaluation",
-                null,
-                deterministic);
-
-        long latencyMs = Duration.ofNanos(System.nanoTime() - started).toMillis();
-        boolean expectedPage = refined.evidence().stream().anyMatch(hit ->
-                hit.evidence().pageFrom() == case_.expectedPage()
-                        && case_.expectedTerms().stream().allMatch(term ->
-                                hit.evidence().excerpt().toLowerCase(Locale.ROOT).contains(term)));
-        List<String> tags = new ArrayList<>();
-        contextCase.path("interactionTags").forEach(tag -> tags.add(tag.asText()));
-        Map<String, Object> result = new java.util.LinkedHashMap<>();
-        result.put("caseId", case_.caseId());
-        result.put("provider", case_.provider().provider());
-        result.put("interactionTags", List.copyOf(tags));
-        result.put("naturalTurnCount", 3);
-        result.put("model", case_.provider().model());
-        result.put("addedEvidence", refined.evidence().size() - deterministic.evidence().size());
-        result.put("toolCalls", audited.toolCalls);
-        result.put("modelCalls", audited.modelCalls);
-        result.put("nativeRuns", audited.nativeRuns);
-        result.put("nativeRunReason", audited.lastRunReason);
-        result.put("refinementRequired", refinementRequired);
-        result.put("toolPortfolioRegistered",
-                audited.registeredToolPortfolio.equals(audited.requestedToolPortfolio));
-        result.put("freshCanonicalExpectedPage", expectedPage);
-        result.put("sameVersionOnly", refined.evidence().stream()
-                .allMatch(hit -> versionId.equals(hit.evidence().documentVersionId())));
-        result.put("latencyMs", latencyMs);
-        result.put("withinLatencyBudget", latencyMs < 90_000);
-        return Map.copyOf(result);
+        String visible = visibleText(published);
+        assertThat(run.plan().referenceBinding())
+                .isIn(ReferenceBinding.PREVIOUS_QUESTION, ReferenceBinding.PRIOR_GROUNDED_TURN);
+        assertThat(run.plan().boundReferenceQuestion()).isEqualTo(prior.question());
+        assertThat(published.status().publishesConclusion()).isTrue();
+        assertThat(visible).contains("两人", "统治卡", "30");
+        assertThat(published.citations()).anyMatch(citation -> citation.pageFrom() == 22);
+        assertThat(published.citations()).anyMatch(citation -> citation.pageFrom() == 2);
+        assertThat(run.audited().rawAnswerDrafts).isNotEmpty();
+        assertThat(summary)
+                .containsEntry("prosePreserved", true)
+                .containsEntry("providerRawToPublishedVerdictPreserved", true)
+                .containsEntry("providerRawToPublishedExplanationPreserved", true)
+                .containsEntry("domainToPlayerCoreExact", true)
+                .containsEntry("lastProviderDraftToPublishedCoreExact", true)
+                .containsEntry("sameVersionOnly", true);
     }
 
     private Map<String, Object> runCase(CaseConfiguration case_, Path rawOutput) throws IOException {
@@ -1862,6 +2006,62 @@ class AnswerEvidenceAgentRealRulebookEvaluationTest {
         }
     }
 
+    private com.rulepilot.assistant.GeneratedContentCritic contentCritic(
+            ProviderConfiguration provider,
+            List<String> rawResponses,
+            DirectAuditedInvocations audited) {
+        ChatModel delegate = new ChatModelFactory(ObservationRegistry.NOOP, Duration.ofSeconds(120))
+                .create(provider.provider(), provider.apiKey(), provider.baseUrl(), provider.model());
+        ChatModel recording = new ChatModel() {
+            @Override
+            public org.springframework.ai.chat.model.ChatResponse call(
+                    org.springframework.ai.chat.prompt.Prompt prompt) {
+                var response = delegate.call(prompt);
+                String text = response == null || response.getResult() == null || response.getResult().getOutput() == null
+                        ? ""
+                        : response.getResult().getOutput().getText();
+                rawResponses.add(text == null ? "" : text);
+                return response;
+            }
+
+            @Override
+            public org.springframework.ai.chat.prompt.ChatOptions getDefaultOptions() {
+                return delegate.getDefaultOptions();
+            }
+
+            @Override
+            public org.springframework.ai.chat.prompt.ChatOptions getOptions() {
+                return delegate.getOptions();
+            }
+        };
+        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        when(configuration.modelFor(RuntimeModelConfiguration.Role.CRITIC)).thenReturn(recording);
+        when(configuration.modelFor(RuntimeModelConfiguration.Role.CRITIC, "agent-evaluation")).thenReturn(recording);
+        when(configuration.providerFor(RuntimeModelConfiguration.Role.CRITIC)).thenReturn(provider.provider());
+        when(configuration.providerFor(RuntimeModelConfiguration.Role.CRITIC, "agent-evaluation"))
+                .thenReturn(provider.provider());
+        when(configuration.modelNameFor(RuntimeModelConfiguration.Role.CRITIC)).thenReturn(provider.model());
+        when(configuration.modelNameFor(RuntimeModelConfiguration.Role.CRITIC, "agent-evaluation"))
+                .thenReturn(provider.model());
+        when(configuration.usesFake(RuntimeModelConfiguration.Role.CRITIC)).thenReturn(false);
+        when(configuration.usesFake(RuntimeModelConfiguration.Role.CRITIC, "agent-evaluation")).thenReturn(false);
+        when(configuration.usesDeepSeekNonThinkingGeneration(RuntimeModelConfiguration.Role.CRITIC))
+                .thenReturn("deepseek".equals(provider.provider()));
+        when(configuration.usesDeepSeekNonThinkingGeneration(
+                        RuntimeModelConfiguration.Role.CRITIC, "agent-evaluation"))
+                .thenReturn("deepseek".equals(provider.provider()));
+        VersionedAgentPrompts prompts;
+        try (AnnotationConfigApplicationContext context = new AnnotationConfigApplicationContext()) {
+            context.register(VersionedAgentPrompts.class);
+            context.refresh();
+            prompts = context.getBean(VersionedAgentPrompts.class);
+        }
+        return new ConditionalGeneratedContentCritic(
+                new SpringAiContentCriticModel(configuration, new FakeContentCriticModel(), prompts),
+                audited,
+                false);
+    }
+
     private CaseConfiguration caseFor(
             Path root,
             JsonNode manifest,
@@ -1977,6 +2177,8 @@ class AnswerEvidenceAgentRealRulebookEvaluationTest {
             String interactionTag) {}
 
     private record ImaginativeAnswerCase(String caseId, String question, int initialPage) {}
+
+    private record PriorTurnScenario(String question, String groundedVerdict, int citationPage) {}
 
     private static final class DirectAuditedInvocations implements AuditedAgentInvocations {
         private int modelCalls;

@@ -2,6 +2,7 @@ package com.rulepilot.recommendation.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -20,7 +21,10 @@ import com.rulepilot.recommendation.BoardGameRecommendationModel;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.ToolCall;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.Turn;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch;
+import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.CandidateDiscovery;
+import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.DiscoveryRequest;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Research;
+import com.rulepilot.recommendation.adapter.out.research.ResponsesApiBoardGameRecommendationWebResearch;
 import com.rulepilot.recommendation.adapter.out.model.SpringAiBoardGameRecommendationModel;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ConversationRequest;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.DialogueMessage;
@@ -42,9 +46,12 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.ValueOperations;
 
 /**
  * One-provider paid canaries for the recommendation critical path. They deliberately stay
@@ -446,7 +453,109 @@ class BoardGameRecommendationAgentPaidCanaryTest {
     }
 
     @Test
-    void preservesAStructuredObservedComparisonDecisionWithoutFlatteningTheNaturalAnswer() throws Exception {
+    void resolvesAPlayerCreatorAliasThroughTheRealPublicDiscoveryTool() throws Exception {
+        assumeTrue("true".equalsIgnoreCase(System.getenv("RULEPILOT_RECOMMENDATION_PAID_CANARY")));
+        String provider = environment("RULEPILOT_RECOMMENDATION_CANARY_PROVIDER", "qwen")
+                .toLowerCase(Locale.ROOT);
+        String prefix = provider.toUpperCase(Locale.ROOT);
+        Capture capture = new Capture(provider, environment(prefix + "_MODEL", null));
+        BoardGameRecommendationModel model = model(
+                provider,
+                environment(prefix + "_API_KEY", null),
+                environment(prefix + "_BASE_URL", null),
+                environment(prefix + "_MODEL", null),
+                capture);
+
+        @SuppressWarnings("unchecked")
+        ValueOperations<String, String> cache = mock(ValueOperations.class);
+        StringRedisTemplate redis = mock(StringRedisTemplate.class);
+        when(redis.opsForValue()).thenReturn(cache);
+        when(cache.increment(anyString())).thenReturn(1L);
+        String webModel = System.getenv("WEB_SEARCH_MODEL");
+        if (webModel == null || webModel.isBlank()) webModel = environment("OPENAI_MODEL", null);
+        var actualResearch = new ResponsesApiBoardGameRecommendationWebResearch(
+                json,
+                redis,
+                true,
+                environment("OPENAI_API_KEY", null),
+                environment("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+                webModel,
+                Duration.ofSeconds(25),
+                Duration.ofDays(1),
+                20,
+                1);
+        AtomicReference<DiscoveryRequest> discoveryRequest = new AtomicReference<>();
+        AtomicReference<CandidateDiscovery> discoveryResult = new AtomicReference<>();
+        BoardGameRecommendationWebResearch research = new BoardGameRecommendationWebResearch() {
+            @Override
+            public boolean configured() {
+                return actualResearch.configured();
+            }
+
+            @Override
+            public Optional<Research> research(Request request) {
+                return actualResearch.research(request);
+            }
+
+            @Override
+            public Optional<CandidateDiscovery> discover(DiscoveryRequest request) {
+                discoveryRequest.set(request);
+                Optional<CandidateDiscovery> result = actualResearch.discover(request);
+                result.ifPresent(discoveryResult::set);
+                return result;
+            }
+        };
+        var properties = new BoardGameRecommendationProperties(
+                8, 3, new BigDecimal("0.66"), Duration.ofSeconds(30));
+        var agent = new BoardGameRecommendationAgent(
+                model,
+                new BoardGameRecommendationTools(new CanaryCatalog(), research),
+                new BoardGameRecommendationSelector(properties),
+                properties,
+                json);
+
+        List<Map<String, Object>> visibleTurns = new ArrayList<>();
+        try {
+            String request = "我想玩复杂哥设计的桌游，给我两款。";
+            long started = System.nanoTime();
+            var response = agent.converse(
+                    new ConversationRequest(RecommendationProfile.empty(), request),
+                    "zh-CN");
+            visibleTurns.add(visible("real-creator-alias-discovery", response, elapsed(started)));
+
+            assertThat(discoveryRequest.get()).isNotNull();
+            assertThat(discoveryRequest.get().query()).isNotBlank();
+            assertThat(discoveryResult.get()).isNotNull();
+            assertThat(discoveryResult.get().sources()).isNotEmpty();
+            assertThat(discoveryResult.get().candidates())
+                    .extracting(BoardGameRecommendationWebResearch.CandidateLead::name)
+                    .containsAnyOf("On Mars", "Lisboa");
+            assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
+            assertThat(response.games()).hasSize(2);
+            assertThat(response.games())
+                    .extracting(entry -> entry.game().ranking().sourceName())
+                    .containsExactlyInAnyOrder("On Mars", "Lisboa");
+            assertThat(response.games()).allSatisfy(entry ->
+                    assertThat(entry.game().details().designers()).contains("Vital Lacerda"));
+            assertThat(response.profile()).isEqualTo(RecommendationProfile.empty());
+            assertThat(response.harness().webResearchCalls()).isEqualTo(1);
+            assertThat(response.harness().actions())
+                    .contains("DISCOVER_CANDIDATES", "SEARCH_BGG_BY_NAME", "LOOKUP_BGG_CANDIDATES", "RECOMMEND_GAMES")
+                    .noneMatch(action -> action.startsWith("FALLBACK_") || action.equals("RUN_DEADLINE_EXCEEDED"));
+            assertThat(response.harness().fallbackUsed()).isFalse();
+            assertRecommendationNarrativesPreserved(capture.lastToolCall(), response);
+
+            writeArtifact(capture, visibleTurns, null);
+        } catch (Throwable failure) {
+            writeArtifact(capture, visibleTurns, failure.getClass().getSimpleName());
+            throw failure;
+        } finally {
+            agent.stopBoundedCalls();
+        }
+    }
+
+    @Test
+    void preservesANaturalComparisonWithoutASeparateDecisionReviewTurn() throws Exception {
         assumeTrue("true".equalsIgnoreCase(System.getenv("RULEPILOT_RECOMMENDATION_PAID_CANARY")));
         String provider = environment("RULEPILOT_RECOMMENDATION_CANARY_PROVIDER", "qwen")
                 .toLowerCase(Locale.ROOT);
@@ -469,7 +578,7 @@ class BoardGameRecommendationAgentPaidCanaryTest {
 
         List<Map<String, Object>> visibleTurns = new ArrayList<>();
         try {
-            String requestText = "比较 River Market 和 Harbor Chorus 的时长、复杂度与机制，并直接告诉我怎么选。自然分析可以说明机制标签不能证明哪些体验；最后只给一个选择规则，只按已核对的复杂度数值决定，不要再给基于机制或桌感的另一种选择。";
+            String requestText = "比较 River Market 和 Harbor Chorus 的时长、复杂度与机制，并自然地告诉我各自适合什么选择。事实和你的判断要分清楚。";
             long started = System.nanoTime();
             var response = agent.converse(
                     new ConversationRequest(
@@ -492,25 +601,24 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                     .extracting(BoardGameRecommendationAgent.ComparisonAxis::subject)
                     .contains("durationMinutes", "complexity", "mechanics");
             assertThat(response.harness().modelCalls())
-                    .as("one evidence-local self-repair is allowed; repeated review or fallback is not")
-                    .isBetween(1, 2);
+                    .as("a verified comparison should not need a separate decision-review turn")
+                    .isEqualTo(1);
             assertThat(response.harness().actions())
                     .doesNotContain("REJECTED_REPEATED_ACTION", "REPLY_TO_USER");
             assertThat(response.harness().fallbackUsed()).isFalse();
 
             JsonNode rawAction = json.readTree(capture.lastArguments(BoardGameRecommendationAgent.COMPARE_TOOL));
-            assertThat(rawAction.path("decisionMode").asText()).isEqualTo("OBSERVED_ONLY");
-            assertThat(rawAction.path("decisionEvidenceIds").isArray()).isTrue();
-            assertThat(rawAction.path("decisionEvidenceIds").size()).isGreaterThan(0);
+            assertThat(rawAction.has("decision")).isFalse();
+            assertThat(rawAction.has("decisionMode")).isFalse();
+            assertThat(rawAction.has("decisionEvidenceIds")).isFalse();
             assertThat(rawAction.path("candidateBggIds").size()).isEqualTo(2);
             assertThat(rawAction.path("subjects").size()).isEqualTo(3);
 
             String rawMessage = rawAction.path("message").asText();
-            String rawDecision = rawAction.path("decision").asText();
             String visible = response.assistantMessage();
             assertThat(visible)
-                    .as("validated free prose and the evidence-bound decision must reach the player verbatim")
-                    .isEqualTo(rawMessage + " " + rawDecision);
+                    .as("the model's validated natural comparison must reach the player verbatim")
+                    .isEqualTo(rawMessage);
             assertThat(visible.codePointCount(0, visible.length()))
                     .as("the evidence boundary must not flatten the comparison into a generic sentence")
                     .isGreaterThanOrEqualTo(70);
@@ -747,8 +855,8 @@ class BoardGameRecommendationAgentPaidCanaryTest {
         assertThat(call.name()).isEqualTo(BoardGameRecommendationAgent.RECOMMEND_TOOL);
         JsonNode selections = json.readTree(call.argumentsJson()).path("selections");
         for (JsonNode selection : selections) {
-            assertThat(selection.path("narrativeMode").asText())
-                    .isEqualTo("OBSERVED_ONLY");
+            assertThat(selection.path("internalEvidenceIds").isArray()).isTrue();
+            assertThat(selection.path("internalEvidenceIds").isEmpty()).isFalse();
             int bggId = selection.path("bggId").asInt();
             var visible = response.games().stream()
                     .filter(entry -> entry.game().ranking().bggId() == bggId)
@@ -918,6 +1026,22 @@ class BoardGameRecommendationAgentPaidCanaryTest {
             String weight,
             List<String> categories,
             List<String> mechanics) {
+        return game(
+                id, name, minPlayers, maxPlayers, minMinutes, maxMinutes,
+                weight, categories, mechanics, List.of("Canary Designer"));
+    }
+
+    private static Game game(
+            int id,
+            String name,
+            int minPlayers,
+            int maxPlayers,
+            int minMinutes,
+            int maxMinutes,
+            String weight,
+            List<String> categories,
+            List<String> mechanics,
+            List<String> designers) {
         Ranking ranking = new Ranking(
                 id,
                 name,
@@ -946,7 +1070,7 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                 2,
                 500,
                 List.of(),
-                List.of("Canary Designer"),
+                designers,
                 List.of("Canary Publisher"));
         return new Game(ranking, details);
     }
@@ -1008,7 +1132,9 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                     game(104, "Lantern Route", 2, 4, 25, 40, "1.9", List.of("Family"), List.of("Push Your Luck", "Network and Route Building")),
                     game(105, "Harbor Chorus", 3, 6, 30, 45, "2.4", List.of("Party Game"), List.of("Simultaneous Action Selection", "Voting")),
                     game(106, "Quiet Foundry", 1, 4, 40, 45, "2.7", List.of("Strategy"), List.of("Deck Building", "Hand Management")),
-                    game(107, "Cedar Pact", 3, 5, 35, 70, "2.6", List.of("Strategy"), List.of("Negotiation", "Auction/Bidding")));
+                    game(107, "Cedar Pact", 3, 5, 35, 70, "2.6", List.of("Strategy"), List.of("Negotiation", "Auction/Bidding")),
+                    game(184267, "On Mars", 1, 4, 90, 150, "4.7", List.of("Strategy"), List.of("Worker Placement", "Hand Management"), List.of("Vital Lacerda")),
+                    game(161533, "Lisboa", 1, 4, 60, 120, "4.6", List.of("Strategy"), List.of("Area Majority / Influence", "Hand Management"), List.of("Vital Lacerda")));
             games = values.stream().collect(java.util.stream.Collectors.toUnmodifiableMap(
                     value -> value.ranking().bggId(), value -> value));
             names = values.stream().collect(java.util.stream.Collectors.toUnmodifiableMap(

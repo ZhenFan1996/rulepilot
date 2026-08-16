@@ -172,7 +172,8 @@ public interface RuleAnswerModel {
     enum PlayerFacingField {
         SHORT_VERDICT,
         EXPLANATION,
-        EXCEPTIONS
+        EXCEPTIONS,
+        CITATION_IDS
     }
 
     /** One bounded player-facing shape selected by the semantic planning stage. */

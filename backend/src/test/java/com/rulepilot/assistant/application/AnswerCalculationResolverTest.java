@@ -61,6 +61,24 @@ class AnswerCalculationResolverTest {
     }
 
     @Test
+    void rejectsAnOmittedCalculationWhenTheAcceptedPlanRequiresRecomputation() {
+        ModelDraft omitted = new ModelDraft(
+                true,
+                null,
+                "You score 10 points.",
+                "Two complete sets score 10 points.",
+                List.of(citedId),
+                List.of(),
+                "HIGH",
+                "GROUNDED_APPLICATION");
+
+        assertThatThrownBy(() -> resolver.resolve(
+                        request("I have 8 resources. How many points?", "Each set of 3 scores 5 points."),
+                        omitted))
+                .hasMessageContaining("required");
+    }
+
+    @Test
     void rejectsAPlayerFacingTotalThatDisagreesWithTheRecomputedResult() {
         ModelDraft inconsistent = new ModelDraft(
                 true,

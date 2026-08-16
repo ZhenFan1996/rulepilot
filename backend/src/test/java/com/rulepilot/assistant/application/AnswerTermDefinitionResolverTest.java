@@ -36,11 +36,10 @@ class AnswerTermDefinitionResolverTest {
     }
 
     @Test
-    void requiresStructuredDefinitionsForDefineIntent() {
-        assertThatThrownBy(() -> resolver.resolve(
+    void allowsTheSelectedPresentationAidToStayEmptyWhenTheCoreAlreadyAnswers() {
+        assertThat(resolver.resolve(
                         request("Please explain this term", LearningIntent.DEFINE), draft(List.of())))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("required");
+                .isEmpty();
     }
 
     @Test

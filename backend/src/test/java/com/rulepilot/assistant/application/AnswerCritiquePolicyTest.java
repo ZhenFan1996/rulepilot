@@ -9,6 +9,7 @@ import com.rulepilot.assistant.GeneratedContentCritic.Review;
 import com.rulepilot.assistant.PlayerLocale;
 import com.rulepilot.assistant.RuleAnswerModel;
 import com.rulepilot.assistant.RuleAnswerModel.EvidenceNeed;
+import com.rulepilot.assistant.RuleAnswerModel.PlayerFacingField;
 import com.rulepilot.assistant.QuestionUnderstanding.QuestionContext;
 import com.rulepilot.assistant.domain.AnswerBasis;
 import com.rulepilot.assistant.domain.AnswerConfidence;
@@ -108,7 +109,8 @@ class AnswerCritiquePolicyTest {
                         "Natural paraphrase");
         assertThat(request.claims()).extracting(GeneratedContentCritic.Claim::text)
                 .containsExactly(
-                        "Direct verdict.\nGrounded explanation.",
+                        "Direct verdict.",
+                        "Grounded explanation.",
                         "Cited exception.",
                         "Calculation: 8 / 2 = 4",
                         "Walkthrough; orderBasis=RULE_ORDER; instruction=Pay first.; explanation=Then resolve.");
@@ -127,6 +129,31 @@ class AnswerCritiquePolicyTest {
         assertThat(AnswerCritiquePolicy.revisionFeedback(review)).containsExactly(
                 "CONTRADICTION: Reverse the claimed order.",
                 "MISSING_EXCEPTION: Add the cited exception.");
+    }
+
+    @Test
+    void mapsCriticClaimsToOnlyThePlayerFieldsThatMayBeRepaired() {
+        Review playerFacing = new Review(true, List.of(
+                new Issue(IssueType.CONTRADICTION, 1, List.of(chunkId), "Correct the core conclusion."),
+                new Issue(IssueType.OVERREACH, 2, List.of(chunkId), "Correct the detailed explanation."),
+                new Issue(IssueType.MISSING_EXCEPTION, 3, List.of(chunkId), "Correct the cited exception.")));
+        Review structuredOnly = new Review(true, List.of(
+                new Issue(IssueType.OVERREACH, 4, List.of(chunkId), "The calculation is not supported.")));
+
+        assertThat(AnswerCritiquePolicy.editablePlayerFacingFields(answer(), playerFacing))
+                .containsExactlyInAnyOrder(
+                        PlayerFacingField.SHORT_VERDICT,
+                        PlayerFacingField.EXPLANATION,
+                        PlayerFacingField.EXCEPTIONS);
+        assertThat(AnswerCritiquePolicy.hasStructuredClaimIssues(answer(), playerFacing)).isFalse();
+        assertThat(AnswerCritiquePolicy.playerFacingRevisionFeedback(answer(), playerFacing))
+                .containsExactly(
+                        "CONTRADICTION: Correct the core conclusion.",
+                        "OVERREACH: Correct the detailed explanation.",
+                        "MISSING_EXCEPTION: Correct the cited exception.");
+        assertThat(AnswerCritiquePolicy.editablePlayerFacingFields(answer(), structuredOnly)).isEmpty();
+        assertThat(AnswerCritiquePolicy.hasStructuredClaimIssues(answer(), structuredOnly)).isTrue();
+        assertThat(AnswerCritiquePolicy.playerFacingRevisionFeedback(answer(), structuredOnly)).isEmpty();
     }
 
     @Test

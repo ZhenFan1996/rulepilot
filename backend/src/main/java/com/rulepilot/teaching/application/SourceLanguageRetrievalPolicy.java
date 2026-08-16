@@ -13,6 +13,13 @@ public final class SourceLanguageRetrievalPolicy {
     private SourceLanguageRetrievalPolicy() {}
 
     public static void validate(OutlineRequest request, OutlineDraft outline) {
+        if (outline != null && !outline.sourceCoverageSlots().isEmpty()) {
+            // Topic queries are optional model hints once the outline owns a canonical source ledger. Revalidate that
+            // ledger here before ignoring query wording so translated player-facing planning cannot weaken the exact
+            // source-identifier boundary.
+            TeachingSourceCoverageContract.requireCompleteSourceContract(request, outline);
+            return;
+        }
         if (!isLatinDominant(request)) return;
         String source = request.pages().stream()
                 .map(page -> page.text().toLowerCase(Locale.ROOT))

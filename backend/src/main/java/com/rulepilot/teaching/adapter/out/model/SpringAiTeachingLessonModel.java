@@ -14,8 +14,10 @@ import com.rulepilot.teaching.TeachingLessonModel.ModelInvocation;
 import com.rulepilot.teaching.TeachingLessonModel.VisualFocusDraft;
 import com.rulepilot.teaching.domain.IllustratedLesson.VisualKind;
 import com.rulepilot.teaching.domain.IllustratedLesson.TeachingMove;
+import java.text.BreakIterator;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 import java.util.stream.IntStream;
@@ -320,17 +322,18 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
         Map<String, UUID> evidenceIds = evidenceIds(request);
         ChatClient.ChatClientRequestSpec prompt = ChatClient.create(models.modelFor(role, owner)).prompt();
         Map<String, Object> providerOptions = providerOptions(role, owner);
-        if (!providerOptions.isEmpty()) {
+        boolean deepSeek = "deepseek".equals(resolvedProvider(role, owner));
+        if (deepSeek || !providerOptions.isEmpty()) {
             OpenAiChatOptions.Builder options = OpenAiChatOptions.builder();
             options.model(models.modelNameFor(role, owner));
             options.temperature(temperature);
-            options.extraBody(providerOptions);
+            if (!providerOptions.isEmpty()) options.extraBody(providerOptions);
             if (usesQwen(role, owner)) {
                 options.responseFormat(ResponseFormat.builder()
                         .type(ResponseFormat.Type.JSON_SCHEMA)
                         .jsonSchema(qwenTeachingSchema())
                         .build());
-            } else if (models.usesDeepSeekNonThinkingGeneration(role, owner)) {
+            } else if (deepSeek) {
                 options.responseFormat(ResponseFormat.builder()
                         .type(ResponseFormat.Type.JSON_OBJECT)
                         .build());
@@ -510,11 +513,24 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
                             "E" + (index + 1),
                             evidence.sectionType(),
                             evidence.heading(),
-                            evidence.excerpt(),
+                            readableEvidence(evidence.excerpt()),
                             evidence.pageFrom(),
                             evidence.pageTo());
                 })
                 .toList();
+    }
+
+    static String readableEvidence(String excerpt) {
+        if (excerpt == null || excerpt.isEmpty()) return excerpt;
+        BreakIterator sentences = BreakIterator.getSentenceInstance(Locale.ENGLISH);
+        sentences.setText(excerpt);
+        StringBuilder readable = new StringBuilder(excerpt.length() + 16);
+        int start = sentences.first();
+        for (int end = sentences.next(); end != BreakIterator.DONE; start = end, end = sentences.next()) {
+            if (!readable.isEmpty()) readable.append('\n');
+            readable.append(excerpt, start, end);
+        }
+        return readable.isEmpty() ? excerpt : readable.toString();
     }
 
     private Map<String, UUID> evidenceIds(SectionRequest request) {

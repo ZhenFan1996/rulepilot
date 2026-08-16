@@ -70,10 +70,13 @@ public class ConditionalGeneratedContentCritic implements GeneratedContentCritic
 
     @Override
     public Review review(ReviewRequest request, ReviewRisk risk, String ownerUsername) {
-        validateRequest(request);
-        if (!evaluationMode && risk != ReviewRisk.LOW_CONFIDENCE && risk != ReviewRisk.HIGH_IMPACT) {
+        // Real-model review is an opt-in evaluation tool. The deterministic publication boundary has already
+        // validated schema, evidence identity, source ownership, and citations before this optional semantic pass;
+        // no measured production case has justified adding one or two serial model calls to the player response.
+        if (!evaluationMode) {
             return new Review(false, List.of());
         }
+        validateRequest(request);
         String operation = switch (request.reviewMode()) {
             case OBJECTIVE_COVERAGE -> "reviewObjectiveCoverage";
             case POST_PUBLICATION -> "reviewPublishedTeachingLesson";

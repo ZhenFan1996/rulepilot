@@ -12,19 +12,23 @@ import com.rulepilot.assistant.RuleAnswerModel.AnswerContext;
 import com.rulepilot.assistant.RuleAnswerModel.EvidenceInput;
 import com.rulepilot.assistant.RuleAnswerModel.ModelDraft;
 import com.rulepilot.assistant.RuleAnswerModel.ModelRequest;
+import com.rulepilot.assistant.RuleAnswerModel.PlayerFacingField;
 import com.rulepilot.assistant.domain.AnswerBasis;
 import com.rulepilot.assistant.domain.AnswerConfidence;
 import com.rulepilot.assistant.domain.AnswerStatus;
 import com.rulepilot.assistant.domain.QuestionType;
 import com.rulepilot.assistant.domain.RuleCitation;
+import com.rulepilot.assistant.domain.RuleWalkthroughStep;
 import com.rulepilot.assistant.domain.StructuredRuleAnswer;
 import com.rulepilot.assistant.domain.UnderstoodQuestion;
+import com.rulepilot.assistant.domain.WalkthroughOrderBasis;
 import com.rulepilot.retrieval.evidence.HybridEvidenceHit;
 import com.rulepilot.retrieval.evidence.RuleEvidenceHit;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 import java.util.function.ToIntFunction;
 import org.junit.jupiter.api.Test;
@@ -314,6 +318,122 @@ class AnswerPostPublicationReviewerTest {
         assertThat(reviews).hasValue(1);
     }
 
+    @Test
+    void isolatesARejectedOptionalAidWithoutRewritingValidatedCoreProse() {
+        UUID versionId = UUID.randomUUID();
+        RuleEvidenceHit source = new RuleEvidenceHit(
+                UUID.randomUUID(), versionId, "TURN", "Turn order", "Pay first, then resolve.", 6, 6, 0.9);
+        HybridEvidenceHit evidence = new HybridEvidenceHit(source, 0.1, 1, null, false);
+        StructuredRuleAnswer answer = withWalkthrough(answer(versionId, source), source.chunkId());
+        AtomicInteger modelCalls = new AtomicInteger();
+        AnswerPostPublicationReviewer reviewer = new AnswerPostPublicationReviewer(
+                (request, risk) -> new GeneratedContentCritic.Review(
+                        true,
+                        List.of(new GeneratedContentCritic.Issue(
+                                GeneratedContentCritic.IssueType.OVERREACH,
+                                3,
+                                List.of(source.chunkId()),
+                                "The optional walkthrough is not supported."))),
+                new AnswerModelGateway(request -> {
+                    modelCalls.incrementAndGet();
+                    throw new AssertionError("an optional-aid defect must not regenerate core prose");
+                }, unlimitedRateLimiter(), immediateInvocations()),
+                new AnswerPublicationValidator(verifiedEvidence()));
+
+        AnswerPostPublicationReviewer.Result result = reviewer.review(
+                UUID.randomUUID(),
+                understood(versionId),
+                new QuestionContext(versionId),
+                "player",
+                null,
+                request(source),
+                new ModelDraft(
+                        answer.shortVerdict(),
+                        answer.explanation(),
+                        List.of(source.chunkId()),
+                        List.of(),
+                        "HIGH"),
+                answer,
+                List.of(evidence));
+
+        assertThat(result.accepted()).isTrue();
+        assertThat(result.answer().shortVerdict()).isEqualTo(answer.shortVerdict());
+        assertThat(result.answer().explanation()).isEqualTo(answer.explanation());
+        assertThat(result.answer().citations()).isEqualTo(answer.citations());
+        assertThat(result.answer().walkthroughSteps()).isEmpty();
+        assertThat(result.answer().status()).isEqualTo(AnswerStatus.ANSWERED_WITH_WARNING);
+        assertThat(modelCalls).hasValue(0);
+    }
+
+    @Test
+    void repairsOnlyRejectedCoreFieldsAndKeepsValidatedOptionalAidExact() {
+        UUID versionId = UUID.randomUUID();
+        RuleEvidenceHit source = new RuleEvidenceHit(
+                UUID.randomUUID(), versionId, "TURN", "Turn order", "Pay first, then resolve.", 6, 6, 0.9);
+        HybridEvidenceHit evidence = new HybridEvidenceHit(source, 0.1, 1, null, false);
+        StructuredRuleAnswer answer = withWalkthrough(answer(versionId, source), source.chunkId());
+        AtomicReference<Set<PlayerFacingField>> editable = new AtomicReference<>();
+        AtomicInteger revisions = new AtomicInteger();
+        AnswerPostPublicationReviewer reviewer = new AnswerPostPublicationReviewer(
+                (request, risk) -> new GeneratedContentCritic.Review(
+                        true,
+                        List.of(new GeneratedContentCritic.Issue(
+                                GeneratedContentCritic.IssueType.CONTRADICTION,
+                                1,
+                                List.of(source.chunkId()),
+                                "Correct the core order."))),
+                new AnswerModelGateway(
+                        new RuleAnswerModel() {
+                            @Override
+                            public ModelDraft compose(ModelRequest request) {
+                                throw new AssertionError("reviewer must use player-facing repair");
+                            }
+
+                            @Override
+                            public ModelDraft revisePlayerFacing(
+                                    ModelRequest request,
+                                    ModelDraft previousDraft,
+                                    List<String> feedback,
+                                    Set<PlayerFacingField> editableFields,
+                                    String ownerUsername) {
+                                revisions.incrementAndGet();
+                                editable.set(editableFields);
+                                return new ModelDraft(
+                                        "Pay before resolving.",
+                                        "The cited rule gives that order explicitly.",
+                                        List.of(source.chunkId()),
+                                        List.of(),
+                                        "HIGH");
+                            }
+                        },
+                        unlimitedRateLimiter(),
+                        immediateInvocations()),
+                new AnswerPublicationValidator(verifiedEvidence()));
+
+        AnswerPostPublicationReviewer.Result result = reviewer.review(
+                UUID.randomUUID(),
+                understood(versionId),
+                new QuestionContext(versionId),
+                "player",
+                null,
+                request(source),
+                new ModelDraft(
+                        answer.shortVerdict(),
+                        answer.explanation(),
+                        List.of(source.chunkId()),
+                        List.of(),
+                        "HIGH"),
+                answer,
+                List.of(evidence));
+
+        assertThat(result.accepted()).isTrue();
+        assertThat(result.answer().shortVerdict()).isEqualTo("Pay before resolving.");
+        assertThat(result.answer().explanation()).isEqualTo(answer.explanation());
+        assertThat(result.answer().walkthroughSteps()).isEqualTo(answer.walkthroughSteps());
+        assertThat(editable.get()).containsExactly(PlayerFacingField.SHORT_VERDICT);
+        assertThat(revisions).hasValue(1);
+    }
+
     private static StructuredRuleAnswer answer(UUID versionId, RuleEvidenceHit source) {
         return new StructuredRuleAnswer(
                 versionId,
@@ -335,6 +455,40 @@ class AnswerPostPublicationReviewerTest {
                 null,
                 null,
                 null);
+    }
+
+    private static StructuredRuleAnswer withWalkthrough(StructuredRuleAnswer source, UUID citationId) {
+        return new StructuredRuleAnswer(
+                source.documentVersionId(),
+                source.status(),
+                source.shortVerdict(),
+                source.explanation(),
+                source.citations(),
+                source.exceptions(),
+                source.confidence(),
+                source.answerBasis(),
+                source.official(),
+                source.confirmedRulingId(),
+                source.confirmedRulingVersion(),
+                source.clarification(),
+                source.warnings(),
+                source.calculations(),
+                source.situationChecks(),
+                List.of(new RuleWalkthroughStep(
+                        "Pay first.",
+                        "Then resolve.",
+                        WalkthroughOrderBasis.RULE_ORDER,
+                        List.of(citationId))),
+                source.decisionBranches(),
+                source.exceptionClauses(),
+                source.termDefinitions(),
+                source.workedExamples(),
+                source.priorityResolutions(),
+                source.timingResolutions(),
+                source.tieResolutions(),
+                source.scopeResolutions(),
+                source.conceptComparisons(),
+                source.ruleOptions());
     }
 
     private static UnderstoodQuestion understood(UUID versionId) {

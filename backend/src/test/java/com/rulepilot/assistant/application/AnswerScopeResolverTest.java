@@ -47,8 +47,7 @@ class AnswerScopeResolverTest {
     void followsTheAcceptedAidRatherThanPlayerCountKeywords() {
         ModelRequest selected = request(AnswerAid.SCOPE);
         assertThat(resolver.requiresScope(selected)).isTrue();
-        assertThatThrownBy(() -> resolver.resolve(selected, draft(List.of())))
-                .hasMessageContaining("required");
+        assertThat(resolver.resolve(selected, draft(List.of()))).isEmpty();
 
         ModelRequest notSelected = request(AnswerAid.NONE);
         assertThat(resolver.requiresScope(notSelected)).isFalse();

@@ -284,7 +284,7 @@ class AnswerQuestionInterpretationPolicyTest {
     }
 
     @Test
-    void rejectsAReferenceObjectOrPageHintSubstitutedFromEarlierContext() {
+    void isolatesAReferenceObjectFromCurrentFocusButStillRejectsItsPageHint() {
         String current = "On page 47, what does the cobalt spindle do?";
         String previous = "What does the amber lattice do on page 12?";
         QuestionContext context = new QuestionContext(versionId, previous, null, PlayerLocale.EN);
@@ -309,8 +309,32 @@ class AnswerQuestionInterpretationPolicyTest {
                 com.rulepilot.assistant.RuleAnswerModel.AnswerAid.NONE,
                 List.of(new PlannedSubquestion(current, Set.of(EvidenceNeed.DIRECT_RULE))));
 
-        assertThat(policy.applyWithPlan(deterministic(current), context, substitutedObject)).isEmpty();
+        assertThat(policy.applyWithPlan(deterministic(current), context, substitutedObject))
+                .hasValueSatisfying(interpretation -> {
+                    assertThat(interpretation.plan().referenceBinding()).isEqualTo(ReferenceBinding.PREVIOUS_QUESTION);
+                    assertThat(interpretation.plan().boundReferenceQuestion()).isEqualTo(previous);
+                    assertThat(interpretation.plan().currentRuleObjectSpans()).isEmpty();
+                });
         assertThat(policy.applyWithPlan(deterministic(current), context, substitutedPage)).isEmpty();
+    }
+
+    @Test
+    void stillRejectsARuleObjectInventedOutsideTheCurrentAndBoundQuestions() {
+        String current = "Does it still apply with two players?";
+        String previous = "When can the amber lattice release its marker?";
+        QuestionContext context = new QuestionContext(versionId, previous, null, PlayerLocale.EN);
+        QuestionInterpretationDraft invented = new QuestionInterpretationDraft(
+                QuestionType.RULE_QUERY,
+                ReferenceBinding.PREVIOUS_QUESTION,
+                List.of("amber lattice"),
+                List.of("invented cobalt spindle"),
+                List.of(),
+                Set.of(),
+                null,
+                com.rulepilot.assistant.RuleAnswerModel.AnswerAid.SCOPE,
+                List.of(new PlannedSubquestion(current, Set.of(EvidenceNeed.DIRECT_RULE, EvidenceNeed.CONDITION))));
+
+        assertThat(policy.applyWithPlan(deterministic(current), context, invented)).isEmpty();
     }
 
     private UnderstoodQuestion deterministic(String question) {

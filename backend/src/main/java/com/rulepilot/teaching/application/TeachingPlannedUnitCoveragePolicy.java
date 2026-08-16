@@ -4,6 +4,7 @@ import com.rulepilot.assistant.AssistantReadTools.RuleEvidence;
 import com.rulepilot.teaching.TeachingLessonModel.SectionDraft;
 import com.rulepilot.teaching.TeachingLessonModel.StepDraft;
 import com.rulepilot.teaching.TeachingLessonModel.TeachingUnitInput;
+import com.rulepilot.teaching.domain.IllustratedLesson.TeachingMove;
 import java.text.Normalizer;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -34,8 +35,16 @@ final class TeachingPlannedUnitCoveragePolicy {
         }
 
         Map<String, List<StepDraft>> stepsByUnit = new LinkedHashMap<>();
+        Set<String> independentlyCoveredUnits = draft.steps().stream()
+                .filter(step -> step.teachingUnitIds().size() == 1)
+                .map(step -> step.teachingUnitIds().getFirst())
+                .collect(Collectors.toCollection(LinkedHashSet::new));
         for (StepDraft step : draft.steps()) {
             if (step.teachingUnitIds().size() > 1) {
+                if (step.kind() == TeachingMove.CHECK
+                        && independentlyCoveredUnits.containsAll(step.teachingUnitIds())) {
+                    continue;
+                }
                 throw new IllegalArgumentException(
                         "one teaching step cannot absorb multiple independently planned teaching units");
             }

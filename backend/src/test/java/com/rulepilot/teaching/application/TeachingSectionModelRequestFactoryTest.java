@@ -8,6 +8,7 @@ import com.rulepilot.teaching.VisualRulebookPageFacts;
 import com.rulepilot.teaching.domain.TeachingPlan;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -25,7 +26,7 @@ class TeachingSectionModelRequestFactoryTest {
                 true,
                 false,
                 List.of(TeachingUnitContract.encode(
-                        new TeachingUnitContract.Unit("flow-unit", List.of("R-anchor")))),
+                        new TeachingUnitContract.Unit("flow-unit", Map.of("R-anchor", List.of(2))))),
                 List.of("source_coverage"),
                 List.of(2));
         TeachingPlan plan = new TeachingPlan(
@@ -36,15 +37,23 @@ class TeachingSectionModelRequestFactoryTest {
                 UUID.randomUUID(), versionId, "RULE", "Continuation", "The procedure continues here.", 2, 2);
         RuleEvidence unrelatedPage = new RuleEvidence(
                 UUID.randomUUID(), versionId, "RULE", "Other", "Another page's procedure.", 3, 3);
+        RuleEvidence misleadingCrossReference = new RuleEvidence(
+                UUID.randomUUID(), versionId, "RULE", "R-anchor", "See R-anchor on its canonical page.", 1, 1);
 
         var request = new TeachingSectionModelRequestFactory(VisualRulebookPageFacts.empty())
-                .create(plan, section, List.of(), List.of(anchor, continuation, unrelatedPage), false, false);
+                .create(
+                        plan,
+                        section,
+                        List.of(),
+                        List.of(misleadingCrossReference, anchor, continuation, unrelatedPage),
+                        false,
+                        false);
 
         assertThat(request.teachingUnits()).singleElement().satisfies(unit -> {
             assertThat(unit.sourceIdentifiers()).containsExactly("R-anchor");
             assertThat(unit.directEvidenceIds())
                     .containsExactly(anchor.chunkId(), continuation.chunkId())
-                    .doesNotContain(unrelatedPage.chunkId());
+                    .doesNotContain(misleadingCrossReference.chunkId(), unrelatedPage.chunkId());
         });
     }
 
