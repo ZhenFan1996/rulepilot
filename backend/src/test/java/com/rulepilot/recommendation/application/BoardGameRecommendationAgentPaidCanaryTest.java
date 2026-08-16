@@ -56,6 +56,94 @@ class BoardGameRecommendationAgentPaidCanaryTest {
     private final ObjectMapper json = JsonMapper.builder().findAndAddModules().build();
 
     @Test
+    void preservesDirectBoundsAcrossTheProductionTwoTurnJourney() throws Exception {
+        assumeTrue("true".equalsIgnoreCase(System.getenv("RULEPILOT_RECOMMENDATION_PAID_CANARY")));
+        String provider = environment("RULEPILOT_RECOMMENDATION_CANARY_PROVIDER", "qwen")
+                .toLowerCase(Locale.ROOT);
+        String prefix = provider.toUpperCase(Locale.ROOT);
+        Capture capture = new Capture(provider, environment(prefix + "_MODEL", null));
+        BoardGameRecommendationModel model = model(
+                provider,
+                environment(prefix + "_API_KEY", null),
+                environment(prefix + "_BASE_URL", null),
+                environment(prefix + "_MODEL", null),
+                capture);
+        var properties = new BoardGameRecommendationProperties(
+                8, 3, new BigDecimal("0.66"), Duration.ofSeconds(30));
+        var agent = new BoardGameRecommendationAgent(
+                model,
+                new BoardGameRecommendationTools(new CanaryCatalog(), noResearch()),
+                new BoardGameRecommendationSelector(properties),
+                properties,
+                json);
+
+        List<Map<String, Object>> visibleTurns = new ArrayList<>();
+        try {
+            String openingPrompt = "嗨，今晚五个人聚会，最近合作玩得有点腻，但我还没想清楚换什么方向。你会先怎么帮我挑？";
+            long openingStarted = System.nanoTime();
+            var opening = agent.converse(
+                    new ConversationRequest(RecommendationProfile.empty(), openingPrompt),
+                    "zh-CN");
+            visibleTurns.add(visible("production-opening", opening, elapsed(openingStarted)));
+            assertThat(opening.harness().fallbackUsed()).isFalse();
+
+            String recommendationPrompt = "我想换成能谈判、互相骗一骗的；有两个新手，90 分钟内。你直接挑三款吧。";
+            List<DialogueMessage> transcript = List.of(
+                    new DialogueMessage("user", openingPrompt),
+                    new DialogueMessage("assistant", opening.assistantMessage()),
+                    new DialogueMessage("user", recommendationPrompt));
+            List<KnownGame> known = opening.games().stream()
+                    .map(entry -> new KnownGame(
+                            entry.game().ranking().bggId(),
+                            entry.game().details().name(),
+                            entry.game().ranking().sourceName()))
+                    .toList();
+            List<Integer> shown = opening.games().stream()
+                    .map(entry -> entry.game().ranking().bggId())
+                    .toList();
+            long recommendationStarted = System.nanoTime();
+            var recommendation = agent.converse(
+                    new ConversationRequest(
+                            opening.profile(),
+                            recommendationPrompt,
+                            List.of(),
+                            transcript,
+                            null,
+                            known,
+                            shown),
+                    "zh-CN");
+            visibleTurns.add(visible(
+                    "production-explicit-three",
+                    recommendation,
+                    elapsed(recommendationStarted)));
+
+            assertThat(recommendation.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
+            assertThat(recommendation.profile().playerCount().minimum()).isEqualTo(5);
+            assertThat(recommendation.profile().playerCount().maximum()).isEqualTo(5);
+            assertThat(recommendation.profile().durationMinutes().minimum()).isNull();
+            assertThat(recommendation.profile().durationMinutes().maximum()).isEqualTo(90);
+            assertThat(recommendation.games()).hasSize(3).allSatisfy(entry -> {
+                assertThat(entry.game().details().minPlayers()).isLessThanOrEqualTo(5);
+                assertThat(entry.game().details().maxPlayers()).isGreaterThanOrEqualTo(5);
+                assertThat(entry.game().details().maximumPlayTimeMinutes()).isLessThanOrEqualTo(90);
+                assertThat(entry.reasons().getFirst().kind())
+                        .isEqualTo(BoardGameRecommendationAgent.ReasonKind.PREFERENCE_INFERENCE);
+                assertThat(entry.tradeoffs()).isNotEmpty();
+            });
+            assertThat(recommendation.harness().actions()).contains("RECOMMEND_GAMES");
+            assertThat(recommendation.harness().fallbackUsed()).isFalse();
+            assertThat(recommendation.harness().modelCalls()).isLessThanOrEqualTo(3);
+
+            writeArtifact(capture, visibleTurns, null);
+        } catch (Throwable failure) {
+            writeArtifact(capture, visibleTurns, failure.getClass().getSimpleName());
+            throw failure;
+        } finally {
+            agent.stopBoundedCalls();
+        }
+    }
+
+    @Test
     void honorsAnExplicitResultCountWithGroundedNaturalCards() throws Exception {
         assumeTrue("true".equalsIgnoreCase(System.getenv("RULEPILOT_RECOMMENDATION_PAID_CANARY")));
         String provider = environment("RULEPILOT_RECOMMENDATION_CANARY_PROVIDER", "qwen")
@@ -836,10 +924,11 @@ class BoardGameRecommendationAgentPaidCanaryTest {
             List<Game> values = List.of(
                     game(101, "River Market", 2, 4, 30, 45, "2.2", List.of("Family"), List.of("Open Drafting", "Set Collection")),
                     game(102, "Signal Grove", 3, 5, 45, 60, "2.8", List.of("Strategy"), List.of("Cooperative Game", "Communication Limits")),
-                    game(103, "Clockwork Gallery", 3, 4, 50, 60, "2.9", List.of("Strategy"), List.of("Worker Placement", "Contracts")),
+                    game(103, "Clockwork Gallery", 3, 5, 50, 60, "2.9", List.of("Strategy"), List.of("Worker Placement", "Contracts")),
                     game(104, "Lantern Route", 2, 4, 25, 40, "1.9", List.of("Family"), List.of("Push Your Luck", "Network and Route Building")),
                     game(105, "Harbor Chorus", 3, 6, 30, 45, "2.4", List.of("Party Game"), List.of("Simultaneous Action Selection", "Voting")),
-                    game(106, "Quiet Foundry", 1, 4, 40, 45, "2.7", List.of("Strategy"), List.of("Deck Building", "Hand Management")));
+                    game(106, "Quiet Foundry", 1, 4, 40, 45, "2.7", List.of("Strategy"), List.of("Deck Building", "Hand Management")),
+                    game(107, "Cedar Pact", 3, 5, 35, 70, "2.6", List.of("Strategy"), List.of("Negotiation", "Auction/Bidding")));
             games = values.stream().collect(java.util.stream.Collectors.toUnmodifiableMap(
                     value -> value.ranking().bggId(), value -> value));
             names = values.stream().collect(java.util.stream.Collectors.toUnmodifiableMap(
