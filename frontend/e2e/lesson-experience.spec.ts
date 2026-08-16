@@ -121,16 +121,19 @@ test('keeps the tabletop guide and agent workspace usable on mobile', async ({ p
   await page.route('**/api/v1/document-versions/version-1/answers', (route) => {
     answerRequest = route.request().postDataJSON() as Record<string, unknown>
     return route.fulfill({ json: {
-      assistantRunId: 'answer-run-1',
       answer: {
-        status: 'ANSWERED', shortVerdict: 'Use the cited setup order.',
-        explanation: 'The uploaded rulebook places the lighthouse card at the route start.',
+        language: 'zh-CN', status: 'ANSWERED', shortVerdict: '按规则书给出的设置顺序放置。',
+        explanation: '规则书要求把灯塔牌放在航线起点。',
         citations: [{
-          chunkId: 'chunk-1', sectionType: 'SETUP', heading: 'Setup',
+          heading: '设置',
           excerpt: 'Place the lighthouse card at the route start.', pageFrom: 2, pageTo: 2,
         }],
-        exceptions: [], confidence: 'HIGH', answerBasis: 'DIRECT_RULE', official: false,
-        confirmedRulingId: null, confirmedRulingVersion: null, clarification: null, warnings: [],
+        exceptions: [], confidence: 'HIGH', answerBasis: 'DIRECT_RULE', source: 'UPLOADED',
+        clarification: null, recovery: null, warnings: [],
+      },
+      conversationTurnId: null,
+      rulingReference: {
+        citationIds: ['chunk-1'], confirmedRulingId: null, confirmedRulingVersion: null,
       },
     } })
   })
@@ -156,7 +159,7 @@ test('keeps the tabletop guide and agent workspace usable on mobile', async ({ p
   await expect(page.getByRole('textbox', { name: '向规则书提问' })).toBeVisible()
   await page.getByRole('textbox', { name: '向规则书提问' }).fill('灯塔牌放在哪里？')
   await page.getByRole('button', { name: '提交问题' }).click()
-  await expect(page.getByText('Use the cited setup order.')).toBeVisible()
+  await expect(page.getByText('按规则书给出的设置顺序放置。')).toBeVisible()
   await expect(page.getByText('第 2 页')).toBeVisible()
   expect(answerRequest).toMatchObject({
     question: '灯塔牌放在哪里？',
@@ -175,14 +178,58 @@ test('keeps the tabletop guide and agent workspace usable on mobile', async ({ p
   expect(hasHorizontalOverflow).toBe(false)
 })
 
+test('shows immediate Q&A feedback and preserves verified evidence at the eight-second soft boundary', async ({ page }) => {
+  await page.clock.install()
+  await page.addInitScript(() => {
+    sessionStorage.setItem('rulepilot:public-answer-thread:v2:account:player:plan-1:zh-CN', JSON.stringify([{
+      question: '上一轮什么时候结算？',
+      answer: {
+        answer: {
+          status: 'ANSWERED', shortVerdict: '上一条已核对结论', explanation: null,
+          citations: [{ heading: '结算顺序', pageFrom: 2, pageTo: 2 }], exceptions: [], confidence: 'HIGH',
+          answerBasis: 'DIRECT_RULE', clarification: null, warnings: [],
+        },
+        visualAids: [], examples: [],
+      },
+    }]))
+  })
+  await mockSharedApis(page)
+  await page.route('**/api/public/lessons/plan-1?language=*', route => route.fulfill({
+    json: {
+      teachingPlanId: 'plan-1', documentVersionId: 'version-1', rulebookTitle: 'Lantern Relay Rules',
+      officialSourceUrl: null, gameCover: null, contentLanguage: 'zh-CN',
+      lesson: { id: 'lesson-1', teachingPlanId: 'plan-1', status: 'COMPLETE', sections },
+    },
+  }))
+  let answerRequests = 0
+  await page.route('**/api/public/lessons/plan-1/answers', () => { answerRequests += 1 })
+
+  await page.goto('/read/plan-1/questions')
+  await expect(page.getByText('上一条已核对结论')).toBeVisible()
+  await page.locator('#public-question').fill('这一轮是否有例外？')
+  await page.getByRole('button', { name: '问规则书' }).click()
+
+  await expect(page.getByText('问题已收到，正在等待这次答疑结果…')).toBeVisible({ timeout: 1_000 })
+  expect(answerRequests).toBe(1)
+  await page.clock.fastForward(8_000)
+  await expect(page.getByTestId('public-answer-soft-budget')).toContainText('上一条已核对答案和引用仍保留在下方')
+  await expect(page.getByTestId('public-answer-soft-budget')).toContainText('当前问题还需核对原文与结论')
+  await expect(page.getByText('上一条已核对结论')).toBeVisible()
+
+  await page.getByRole('button', { name: '停止等待' }).click()
+  await expect(page.locator('#public-question')).toHaveValue('这一轮是否有例外？')
+  await expect(page.getByText('这次未完成的结果不会替换当前页面')).toBeVisible()
+})
+
 test('confirms browser-only Q&A reset and preserves the unsent question with stable focus', async ({ page }) => {
   await page.addInitScript(() => {
-    sessionStorage.setItem('rulepilot:public-answer-thread:account:player:plan-1:zh-CN', JSON.stringify([{
+    sessionStorage.setItem('rulepilot:public-answer-thread:v2:account:player:plan-1:zh-CN', JSON.stringify([{
       question: '上一轮什么时候结束？',
       answer: {
         answer: {
           status: 'ANSWERED', shortVerdict: '完成当前行动后结束。', explanation: null,
-          citations: [], exceptions: [], confidence: 'HIGH', clarification: null, warnings: [],
+          citations: [{ heading: '结算顺序', pageFrom: 2, pageTo: 2 }], exceptions: [], confidence: 'HIGH',
+          answerBasis: 'DIRECT_RULE', clarification: null, warnings: [],
         },
         visualAids: [], examples: [],
       },
@@ -225,6 +272,6 @@ test('confirms browser-only Q&A reset and preserves the unsent question with sta
   await expect(page.getByText('上一轮什么时候结束？')).toHaveCount(0)
   await expect(question).toHaveValue('这句尚未发送')
   await expect(question).toBeFocused()
-  expect(await page.evaluate(() => sessionStorage.getItem('rulepilot:public-answer-thread:account:player:plan-1:zh-CN')))
+  expect(await page.evaluate(() => sessionStorage.getItem('rulepilot:public-answer-thread:v2:account:player:plan-1:zh-CN')))
     .toBeNull()
 })

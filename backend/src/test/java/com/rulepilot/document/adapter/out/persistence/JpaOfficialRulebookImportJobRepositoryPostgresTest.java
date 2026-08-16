@@ -3,6 +3,7 @@ package com.rulepilot.document.adapter.out.persistence;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.rulepilot.document.domain.OfficialRulebookImportJob;
+import com.rulepilot.document.domain.RuleDocument;
 import jakarta.persistence.EntityManager;
 import java.sql.DriverManager;
 import java.sql.SQLException;
@@ -59,6 +60,7 @@ class JpaOfficialRulebookImportJobRepositoryPostgresTest {
                 .build();
         sessionFactory = new MetadataSources(registry)
                 .addAnnotatedClass(OfficialRulebookImportJobEntity.class)
+                .addAnnotatedClass(RuleDocumentEntity.class)
                 .addAnnotatedClass(DocumentVersionEntity.class)
                 .buildMetadata()
                 .buildSessionFactory();
@@ -75,7 +77,7 @@ class JpaOfficialRulebookImportJobRepositoryPostgresTest {
         jdbc.update("DELETE FROM official_rulebook_import_job");
         jdbc.update("DELETE FROM assistant_run WHERE owner_username = 'official-handoff-player'");
         jdbc.update("DELETE FROM document_version WHERE object_key LIKE 'official-handoff-test/%'");
-        jdbc.update("DELETE FROM rule_document WHERE created_by = 'official-handoff-player'");
+        jdbc.update("DELETE FROM rule_document WHERE created_by IN ('official-handoff-player', 'other-identity-player')");
     }
 
     @Test
@@ -120,6 +122,40 @@ class JpaOfficialRulebookImportJobRepositoryPostgresTest {
                 "APPLICATION_RESTARTED",
                 recoveredAt,
                 recoveredAt);
+    }
+
+    @Test
+    void resolvesTheLatestPersistedBindingForAnExactOwnerAndSource() {
+        String source = "https://publisher.example/shared-identity.pdf";
+        Instant firstAt = Instant.parse("2026-08-10T01:15:00Z");
+        Instant latestAt = firstAt.plusSeconds(30);
+        insertSourceIdentityJob(source, "FAILED", firstAt);
+        UUID latestId = insertSourceIdentityJob(source, "QUEUED", latestAt);
+        insertSourceIdentityJob("https://publisher.example/other.pdf", "QUEUED", latestAt.plusSeconds(5));
+
+        var found = inTransactionReturning(repository ->
+                repository.findLatestOwnedBySource("postgres-regression-player", source));
+
+        assertThat(found).get().extracting(OfficialRulebookImportJob::id).isEqualTo(latestId);
+    }
+
+    @Test
+    void resolvesTheLatestPersistedDocumentForAnExactOwnerAndOfficialSource() {
+        String source = "https://publisher.example/document-identity.pdf";
+        Instant firstAt = Instant.parse("2026-08-10T01:20:00Z");
+        Instant latestAt = firstAt.plusSeconds(30);
+        insertSourceIdentityDocument("official-handoff-player", source, firstAt);
+        UUID latestId = insertSourceIdentityDocument("official-handoff-player", source, latestAt);
+        insertSourceIdentityDocument(
+                "official-handoff-player",
+                "https://publisher.example/other-document.pdf",
+                latestAt.plusSeconds(5));
+        insertSourceIdentityDocument("other-identity-player", source, latestAt.plusSeconds(10));
+
+        var found = inDocumentTransactionReturning(repository ->
+                repository.findLatestOwnedByOfficialSource("official-handoff-player", source));
+
+        assertThat(found).get().extracting(RuleDocument::id).isEqualTo(latestId);
     }
 
     @Test
@@ -230,6 +266,47 @@ class JpaOfficialRulebookImportJobRepositoryPostgresTest {
 
     private static UUID insertFailedDocument(Instant now) {
         return insertDocument("unusable", "FAILED", now);
+    }
+
+    private static UUID insertSourceIdentityJob(String source, String stage, Instant createdAt) {
+        UUID jobId = UUID.randomUUID();
+        boolean terminal = "FAILED".equals(stage);
+        OffsetDateTime timestamp = OffsetDateTime.ofInstant(createdAt, ZoneOffset.UTC);
+        jdbc.update(
+                """
+                INSERT INTO official_rulebook_import_job (
+                    id, owner_username, title, source_type, source_url, stage,
+                    downloaded_bytes, error_code, teaching_handoff_state,
+                    created_at, updated_at, completed_at
+                ) VALUES (?, 'postgres-regression-player', 'Identity review rules', 'BASE_RULEBOOK', ?, ?,
+                          0, ?, 'NOT_REQUESTED', ?, ?, ?)
+                """,
+                jobId,
+                source,
+                stage,
+                terminal ? "SOURCE_UNAVAILABLE" : null,
+                timestamp,
+                timestamp,
+                terminal ? timestamp : null);
+        return jobId;
+    }
+
+    private static UUID insertSourceIdentityDocument(
+            String owner, String officialSourceUrl, Instant createdAt) {
+        UUID documentId = UUID.randomUUID();
+        jdbc.update(
+                """
+                INSERT INTO rule_document (
+                    id, game_edition_id, title, source_type, official_source_url,
+                    created_by, created_at
+                ) VALUES (?, NULL, ?, 'BASE_RULEBOOK', ?, ?, ?)
+                """,
+                documentId,
+                "Identity review rules " + documentId,
+                officialSourceUrl,
+                owner,
+                OffsetDateTime.ofInstant(createdAt, ZoneOffset.UTC));
+        return documentId;
     }
 
     private static UUID insertDocument(String label, String status, Instant now) {
@@ -386,6 +463,23 @@ class JpaOfficialRulebookImportJobRepositoryPostgresTest {
         }
     }
 
+    private static <T> T inDocumentTransactionReturning(DocumentRepositoryResult<T> work) {
+        EntityManager entityManager = sessionFactory.createEntityManager();
+        JpaRuleDocumentRepository repository = new JpaRuleDocumentRepository(entityManager);
+        var transaction = entityManager.getTransaction();
+        try {
+            transaction.begin();
+            T result = work.run(repository);
+            transaction.commit();
+            return result;
+        } catch (RuntimeException exception) {
+            if (transaction.isActive()) transaction.rollback();
+            throw exception;
+        } finally {
+            entityManager.close();
+        }
+    }
+
     private static void enableProductionExtensions() {
         try (var connection = DriverManager.getConnection(
                         POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());
@@ -404,6 +498,11 @@ class JpaOfficialRulebookImportJobRepositoryPostgresTest {
     @FunctionalInterface
     private interface RepositoryResult<T> {
         T run(JpaOfficialRulebookImportJobRepository repository);
+    }
+
+    @FunctionalInterface
+    private interface DocumentRepositoryResult<T> {
+        T run(JpaRuleDocumentRepository repository);
     }
 
     private record FailedImportRow(

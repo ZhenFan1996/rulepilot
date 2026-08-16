@@ -1,6 +1,7 @@
 package com.rulepilot.teaching.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.rulepilot.assistant.AuditedAgentInvocations;
 import com.rulepilot.document.DocumentPageImages;
@@ -24,6 +25,7 @@ import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IdentifierLocation;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.ModelExecutionIdentity;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.ProgressiveTeachingStartDraft;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.SourceDependency;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.TeachingPageRole;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.TeachingPageSketch;
 import com.rulepilot.teaching.VisualRulebookPageFacts;
@@ -44,6 +46,7 @@ import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.IntStream;
 import java.util.function.Supplier;
 import java.util.function.ToIntFunction;
 import javax.imageio.ImageIO;
@@ -52,7 +55,7 @@ import org.junit.jupiter.api.Test;
 class VisualRulebookCatalogerTest {
 
     @Test
-    void progressiveStartReadsEightPagesAsFivePlusThreeAndPersistsOnlyTheSelectedPage() {
+    void progressiveStartReadsEightPagesAsFivePlusThreeAndPersistsOnlyTheSelectedEarlyJourneyPage() {
         UUID documentVersionId = UUID.randomUUID();
         InMemoryFacts facts = new InMemoryFacts();
         List<List<Integer>> storageReads = new java.util.ArrayList<>();
@@ -75,7 +78,7 @@ class VisualRulebookCatalogerTest {
                 modelCalls.incrementAndGet();
                 assertThat(request.pages()).extracting(image -> image.pageNumber())
                         .containsExactly(1, 2, 3, 4, 5, 6, 7, 8);
-                return Optional.of(progressiveStart(4));
+                return Optional.of(progressiveStart(2));
             }
 
             @Override
@@ -129,8 +132,8 @@ class VisualRulebookCatalogerTest {
         assertThat(facts.find(documentVersionId, Set.of(1, 2, 3, 4, 5, 6, 7, 8)))
                 .singleElement()
                 .satisfies(fact -> {
-                    assertThat(fact.pageNumber()).isEqualTo(4);
-                    assertThat(fact.factualSummary()).contains("补满市场");
+                    assertThat(fact.pageNumber()).isEqualTo(2);
+                    assertThat(fact.factualSummary()).contains("摆好市场");
                     assertThat(fact.iconInventoryComplete()).isFalse();
                 });
     }
@@ -300,7 +303,7 @@ class VisualRulebookCatalogerTest {
                         throw new IllegalStateException("provider rejected page four");
                     }
                     return new VisualRulebookPageCatalogModel.CatalogDraft(request.pages().stream()
-                            .map(page -> new VisualRulebookPageCatalogModel.PageSummary(
+                            .map(page -> teachingSummary(
                                     page.pageNumber(),
                                     "PAGE " + page.pageNumber(),
                                     "A visible rule on page " + page.pageNumber(),
@@ -309,18 +312,15 @@ class VisualRulebookCatalogerTest {
                 },
                 facts);
 
-        List<PageInput> inputs = cataloger.catalogVisualPages(
-                documentVersionId,
-                List.of(page(1), page(2), page(3), page(4)),
-                "Example game",
-                "owner",
-                null);
+        assertThatThrownBy(() -> cataloger.catalogVisualPages(
+                        documentVersionId,
+                        List.of(page(1), page(2), page(3), page(4)),
+                        "Example game",
+                        "owner",
+                        null))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("rule-group inventory is incomplete");
 
-        assertThat(inputs).extracting(PageInput::pageNumber).containsExactly(1, 2, 3, 4);
-        assertThat(inputs.getFirst().text()).contains("PAGE 1", "A visible rule on page 1");
-        assertThat(inputs.get(1).text()).contains("PAGE 2", "A visible rule on page 2");
-        assertThat(inputs.get(2).text()).contains("PAGE 3", "A visible rule on page 3");
-        assertThat(inputs.getLast().text()).contains("No factual visual claim", "page 4");
         assertThat(facts.find(documentVersionId, Set.of(1, 2, 3, 4)))
                 .extracting(PageFact::pageNumber)
                 .containsExactly(1, 2, 3);
@@ -341,7 +341,7 @@ class VisualRulebookCatalogerTest {
                         throw new IllegalArgumentException("first page response was truncated");
                     }
                     return new VisualRulebookPageCatalogModel.CatalogDraft(request.pages().stream()
-                            .map(page -> new VisualRulebookPageCatalogModel.PageSummary(
+                            .map(page -> teachingSummary(
                                     page.pageNumber(),
                                     "PAGE " + page.pageNumber(),
                                     "Visible rule on page " + page.pageNumber(),
@@ -362,6 +362,144 @@ class VisualRulebookCatalogerTest {
         assertThat(facts.find(documentVersionId, Set.of(1, 2, 3)))
                 .extracting(PageFact::pageNumber)
                 .containsExactly(1, 2, 3);
+    }
+
+    @Test
+    void retriesACompletePageInventoryOnceWhenTheBatchResponseAdmitsItWasPartial() {
+        UUID documentVersionId = UUID.randomUUID();
+        InMemoryFacts facts = new InMemoryFacts();
+        AtomicInteger calls = new AtomicInteger();
+        VisualRulebookCataloger cataloger = cataloger(
+                (id, pages) -> List.of(
+                        new DocumentPageImages.PageImage(1, "image/png", new byte[] {1}, 100, 120)),
+                request -> {
+                    boolean complete = calls.incrementAndGet() == 2;
+                    return new CatalogDraft(List.of(new PageSummary(
+                            1,
+                            "MOVE; BUILD",
+                            "MOVE: 当前玩家按照可见条件移动。\nBUILD: 当前玩家按照可见条件建造。",
+                            List.of("MOVE", "BUILD"),
+                            List.of(),
+                            List.of(),
+                            false,
+                            List.of(),
+                            List.of("MOVE", "BUILD"),
+                            complete)));
+                },
+                facts);
+
+        List<PageInput> inputs = cataloger.catalogVisualPages(
+                documentVersionId, List.of(page(1)), "Example game", "owner", null);
+
+        assertThat(calls).hasValue(2);
+        assertThat(inputs).singleElement().satisfies(input -> {
+            assertThat(input.sourceRuleGroupIdentifiers()).containsExactly("MOVE", "BUILD");
+            assertThat(input.sourceRuleGroupInventoryComplete()).isTrue();
+        });
+    }
+
+    @Test
+    void completeRetryReplacesCurrentIncompleteLedgerWithoutDiscardingPriorVisualAudit() {
+        UUID documentVersionId = UUID.randomUUID();
+        InMemoryFacts facts = new InMemoryFacts();
+        VisualAnchor priorAnchor = new VisualAnchor(
+                "diagram", "Prior board map", "A previously localized board map.", 40, 50, 300, 220);
+        IconOccurrence priorIcon = new IconOccurrence(
+                "resource",
+                "Resource",
+                "A previously verified circular resource mark.",
+                "",
+                "",
+                IconMeaningStatus.UNEXPLAINED,
+                80,
+                90,
+                40,
+                40);
+        facts.merge(documentVersionId, List.of(new PageFact(
+                1,
+                "OLD PARTIAL",
+                "An earlier full-page observation admitted that it was partial.",
+                List.of("old"),
+                List.of(priorAnchor),
+                List.of(priorIcon),
+                true,
+                PageFact.CURRENT_SCHEMA_VERSION,
+                List.of(new SourceDependency("Obsolete leaflet", List.of("setup"))),
+                List.of("OLD PARTIAL"),
+                false)));
+        AtomicInteger calls = new AtomicInteger();
+        VisualRulebookCataloger cataloger = cataloger(
+                (id, pages) -> List.of(
+                        new DocumentPageImages.PageImage(1, "image/png", new byte[] {1}, 100, 120)),
+                request -> {
+                    calls.incrementAndGet();
+                    return new CatalogDraft(List.of(new PageSummary(
+                            1,
+                            "MOVE; BUILD",
+                            "MOVE: Move one pawn.\nBUILD: Place one building.",
+                            List.of("move", "build"),
+                            List.of(),
+                            List.of(),
+                            false,
+                            List.of(new SourceDependency("First Session Guide", List.of("setup"))),
+                            List.of("MOVE", "BUILD"),
+                            true)));
+                },
+                facts);
+
+        List<PageInput> inputs = cataloger.catalogVisualPages(
+                documentVersionId, List.of(page(1)), "Example game", "owner", null);
+
+        assertThat(calls).hasValue(1);
+        assertThat(inputs).singleElement().satisfies(input -> {
+            assertThat(input.sourceRuleGroupIdentifiers()).containsExactly("MOVE", "BUILD");
+            assertThat(input.sourceRuleGroupInventoryComplete()).isTrue();
+            assertThat(input.text()).contains("MOVE: Move one pawn.", "BUILD: Place one building.")
+                    .doesNotContain("earlier full-page observation");
+        });
+        assertThat(facts.find(documentVersionId, Set.of(1))).singleElement().satisfies(fact -> {
+            assertThat(fact.printedTerms()).isEqualTo("MOVE; BUILD");
+            assertThat(fact.factualSummary()).doesNotContain("earlier full-page observation");
+            assertThat(fact.visualAnchors()).containsExactly(priorAnchor);
+            assertThat(fact.iconOccurrences()).containsExactly(priorIcon);
+            assertThat(fact.iconInventoryComplete()).isTrue();
+            assertThat(fact.sourceDependencies())
+                    .containsExactly(new SourceDependency("First Session Guide", List.of("setup")));
+            assertThat(fact.ruleGroupIdentifiers()).containsExactly("MOVE", "BUILD");
+            assertThat(fact.ruleGroupInventoryComplete()).isTrue();
+        });
+    }
+
+    @Test
+    void stopsTeachingPreparationWhenTheSinglePageRetryStillAdmitsAPartialInventory() {
+        UUID documentVersionId = UUID.randomUUID();
+        InMemoryFacts facts = new InMemoryFacts();
+        AtomicInteger calls = new AtomicInteger();
+        VisualRulebookCataloger cataloger = cataloger(
+                (id, pages) -> List.of(
+                        new DocumentPageImages.PageImage(1, "image/png", new byte[] {1}, 100, 120)),
+                request -> {
+                    calls.incrementAndGet();
+                    return new CatalogDraft(List.of(new PageSummary(
+                            1,
+                            "MOVE",
+                            "Only one visible relation was returned.",
+                            List.of("MOVE"),
+                            List.of(),
+                            List.of(),
+                            false,
+                            List.of(),
+                            List.of("MOVE"),
+                            false)));
+                },
+                facts);
+
+        assertThatThrownBy(() -> cataloger.catalogVisualPages(
+                        documentVersionId, List.of(page(1)), "Example game", "owner", null))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("rule-group inventory is incomplete");
+        assertThat(calls).hasValue(2);
+        assertThat(facts.find(documentVersionId, Set.of(1))).isEmpty();
     }
 
     @Test
@@ -413,12 +551,11 @@ class VisualRulebookCatalogerTest {
                         1, "image/png", new byte[] {1}, 100, 120)),
                 request -> {
                     modelCalls.incrementAndGet();
-                    return new VisualRulebookPageCatalogModel.CatalogDraft(List.of(
-                            new VisualRulebookPageCatalogModel.PageSummary(
-                                    1,
-                                    "CURRENT",
-                                    "新转录保留完整的条件、动作和结果。",
-                                    List.of("current"))));
+                    return new VisualRulebookPageCatalogModel.CatalogDraft(List.of(teachingSummary(
+                            1,
+                            "CURRENT",
+                            "新转录保留完整的条件、动作和结果。",
+                            List.of("current"))));
                 },
                 facts);
 
@@ -447,7 +584,7 @@ class VisualRulebookCatalogerTest {
                 request -> {
                     requestedBatches.add(request.pages().stream().map(page -> page.pageNumber()).toList());
                     return new VisualRulebookPageCatalogModel.CatalogDraft(request.pages().stream()
-                            .map(page -> new VisualRulebookPageCatalogModel.PageSummary(
+                            .map(page -> teachingSummary(
                                     page.pageNumber(), "PAGE " + page.pageNumber(), "Visible rule", List.of("page")))
                             .toList());
                 },
@@ -482,7 +619,7 @@ class VisualRulebookCatalogerTest {
                         activeRequests.decrementAndGet();
                     }
                     return new VisualRulebookPageCatalogModel.CatalogDraft(request.pages().stream()
-                            .map(page -> new VisualRulebookPageCatalogModel.PageSummary(
+                            .map(page -> teachingSummary(
                                     page.pageNumber(),
                                     "PAGE " + page.pageNumber(),
                                     "Visible rule " + page.pageNumber(),
@@ -527,7 +664,7 @@ class VisualRulebookCatalogerTest {
                         }
                     }
                     return new VisualRulebookPageCatalogModel.CatalogDraft(request.pages().stream()
-                            .map(image -> new VisualRulebookPageCatalogModel.PageSummary(
+                            .map(image -> teachingSummary(
                                     image.pageNumber(),
                                     "PAGE " + image.pageNumber(),
                                     "Visible rule " + image.pageNumber(),
@@ -538,14 +675,16 @@ class VisualRulebookCatalogerTest {
                 1,
                 Duration.ofMillis(40));
 
-        cataloger.catalogVisualPages(
-                documentVersionId,
-                List.of(
-                        page(1), page(2), page(3), page(4), page(5),
-                        page(6), page(7), page(8), page(9), page(10)),
-                "Example game",
-                "owner",
-                null);
+        assertThatThrownBy(() -> cataloger.catalogVisualPages(
+                        documentVersionId,
+                        List.of(
+                                page(1), page(2), page(3), page(4), page(5),
+                                page(6), page(7), page(8), page(9), page(10)),
+                        "Example game",
+                        "owner",
+                        null))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("rule-group inventory is incomplete");
 
         assertThat(facts.find(documentVersionId, Set.of(1, 2, 3, 4, 5, 6, 7, 8, 9, 10)))
                 .extracting(PageFact::pageNumber)
@@ -1016,7 +1155,7 @@ class VisualRulebookCatalogerTest {
                 return new CatalogDraft(request.pages().stream()
                         .filter(image -> !requested.equals(List.of(1, 2, 3, 4, 5, 6, 7, 8))
                                 || image.pageNumber() != 5)
-                        .map(image -> new PageSummary(
+                        .map(image -> teachingSummary(
                                 image.pageNumber(),
                                 "PAGE " + image.pageNumber(),
                                 "Visible rule " + image.pageNumber(),
@@ -1066,7 +1205,7 @@ class VisualRulebookCatalogerTest {
 
             @Override
             public CatalogDraft summarizeForTeaching(CatalogRequest request) {
-                return new CatalogDraft(List.of(new PageSummary(
+                return new CatalogDraft(List.of(teachingSummary(
                         1, "TURN", "The active player takes one action.", List.of("turn"))));
             }
 
@@ -1117,13 +1256,33 @@ class VisualRulebookCatalogerTest {
     void preservesBothExactCatalogBlocksWithoutSemanticTokenRewriting() {
         String merged = VisualRulebookCataloger.mergeIdentifierFactsWithSharedRules(
                 "A-01: Move one space.\nA-02: Draw one card.",
-                "Move one space. Draw one card. Items may occupy any slot. Fill upper slots from left to right.");
+                "Move one space. Draw one card. Items may occupy any slot. Fill upper slots from left to right.",
+                true);
 
         assertThat(merged)
                 .contains("A-01: Move one space.", "A-02: Draw one card.", "Items may occupy any slot.",
                         "Fill upper slots from left to right.", "Move one space. Draw one card.");
-        assertThat(VisualRulebookCataloger.mergeIdentifierFactsWithSharedRules("same block", "same block"))
+        assertThat(VisualRulebookCataloger.mergeIdentifierFactsWithSharedRules("same block", "same block", true))
                 .isEqualTo("same block");
+        assertThat(VisualRulebookCataloger.mergeIdentifierFactsWithSharedRules(
+                        "A-01: Cell-specific fact.", "Shared page fact.", false))
+                .startsWith("A-01: Cell-specific fact.")
+                .endsWith("Shared page fact.");
+    }
+
+    @Test
+    void denseIdentifierCellsCannotEvictCompleteSharedRuleBindings() {
+        String cellFacts = IntStream.rangeClosed(1, 4)
+                .mapToObj(index -> "CELL-" + index + ": " + "C".repeat(790))
+                .collect(java.util.stream.Collectors.joining("\n"));
+        String completePageFacts = "P".repeat(900)
+                + "\nMOVE: Move one pawn."
+                + "\nBUILD: Place one building.";
+
+        String merged = VisualRulebookCataloger.mergeIdentifierFactsWithSharedRules(cellFacts, completePageFacts, true);
+
+        assertThat(merged).contains("MOVE: Move one pawn.", "BUILD: Place one building.");
+        assertThat(merged.length()).isLessThanOrEqualTo(4_000);
     }
 
     @Test
@@ -1131,7 +1290,17 @@ class VisualRulebookCatalogerTest {
         UUID documentVersionId = UUID.randomUUID();
         InMemoryFacts facts = new InMemoryFacts();
         facts.merge(documentVersionId, List.of(new PageFact(
-                1, "SETUP", "Visible setup instruction.", List.of("setup"), List.of())));
+                1,
+                "SETUP",
+                "SETUP: Visible setup instruction.",
+                List.of("setup"),
+                List.of(),
+                List.of(),
+                false,
+                PageFact.CURRENT_SCHEMA_VERSION,
+                List.of(),
+                List.of("SETUP"),
+                true)));
         AtomicInteger modelCalls = new AtomicInteger();
         VisualRulebookCataloger cataloger = cataloger(
                 (id, pages) -> {
@@ -1157,7 +1326,7 @@ class VisualRulebookCatalogerTest {
         VisualRulebookPageCatalogModel model = new VisualRulebookPageCatalogModel() {
             @Override
             public CatalogDraft summarize(CatalogRequest request) {
-                return new CatalogDraft(List.of(new PageSummary(
+                return new CatalogDraft(List.of(teachingSummary(
                         1,
                         "A-01; A-02; B#03; B#04",
                         "A dense reference catalog is visible.",
@@ -1248,6 +1417,26 @@ class VisualRulebookCatalogerTest {
     }
 
     private static ProgressiveTeachingStartDraft progressiveStart(int selectedPage) {
+        PageSummary selectedFacts = switch (selectedPage) {
+            case 2 -> progressiveSelectedSummary(
+                    2,
+                    "SETUP MARKET",
+                    "开始第一回合前，按照页面所示位置摆好市场。",
+                    List.of("SETUP MARKET", "setup"),
+                    "market");
+            case 3 -> progressiveSelectedSummary(
+                    3,
+                    "TAKE CARDS",
+                    "当前玩家从可用区域选择并拿取卡牌。",
+                    List.of("TAKE CARDS", "turn"),
+                    "take cards");
+            default -> progressiveSelectedSummary(
+                    selectedPage,
+                    "REFILL MARKET",
+                    "回合结束后，当前玩家按照页面所示顺序补满市场。",
+                    List.of("REFILL MARKET", "refill"),
+                    "refill");
+        };
         return new ProgressiveTeachingStartDraft(
                 List.of(
                         new TeachingPageSketch(1, TeachingPageRole.NON_GAMEPLAY, "Example game", List.of(), List.of()),
@@ -1258,11 +1447,7 @@ class VisualRulebookCatalogerTest {
                         new TeachingPageSketch(6, TeachingPageRole.GAMEPLAY_RULES, "Game end", List.of("end"), List.of("end")),
                         new TeachingPageSketch(7, TeachingPageRole.GAMEPLAY_RULES, "Scoring", List.of("score"), List.of("scoring")),
                         new TeachingPageSketch(8, TeachingPageRole.NON_GAMEPLAY, "Credits", List.of(), List.of())),
-                new PageSummary(
-                        selectedPage,
-                        "REFILL MARKET",
-                        "回合结束后，当前玩家按照页面所示顺序补满市场。",
-                        List.of("REFILL MARKET", "refill")));
+                selectedFacts);
     }
 
     private static byte[] renderedPage() throws IOException {
@@ -1276,9 +1461,57 @@ class VisualRulebookCatalogerTest {
         return new PageFact(
                 pageNumber,
                 term,
-                "Visible " + term + " rule.",
+                term + ": Visible " + term + " rule.",
                 List.of(term),
-                List.of(new VisualAnchor("diagram", term, "Visible " + term + " diagram.", 10, 10, 100, 100)));
+                List.of(new VisualAnchor("diagram", term, "Visible " + term + " diagram.", 10, 10, 100, 100)),
+                List.of(),
+                false,
+                PageFact.CURRENT_SCHEMA_VERSION,
+                List.of(),
+                List.of(term),
+                true);
+    }
+
+    private static PageSummary teachingSummary(
+            int pageNumber, String printedTerms, String factualSummary, List<String> keywords) {
+        List<String> ruleGroups = java.util.Arrays.stream(printedTerms.split(";"))
+                .map(String::strip)
+                .filter(value -> !value.isBlank())
+                .limit(16)
+                .toList();
+        String boundFacts = ruleGroups.stream()
+                .map(identifier -> identifier + ": " + factualSummary)
+                .collect(java.util.stream.Collectors.joining("\n"));
+        return new PageSummary(
+                pageNumber,
+                printedTerms,
+                boundFacts,
+                keywords,
+                List.of(),
+                List.of(),
+                false,
+                List.of(),
+                ruleGroups,
+                true);
+    }
+
+    private static PageSummary progressiveSelectedSummary(
+            int pageNumber,
+            String printedTerms,
+            String factualSummary,
+            List<String> keywords,
+            String ruleGroupIdentifier) {
+        return new PageSummary(
+                pageNumber,
+                printedTerms,
+                ruleGroupIdentifier + ": " + factualSummary,
+                keywords,
+                List.of(),
+                List.of(),
+                false,
+                List.of(),
+                List.of(ruleGroupIdentifier),
+                true);
     }
 
     private static final class InMemoryFacts implements VisualRulebookPageFacts {

@@ -104,14 +104,21 @@ describe('DocumentsView recoverable lesson handoff', () => {
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, options?: RequestInit) => {
       if (String(input).includes('/api/v1/documents/rulebook-candidates')) return response({
         configured: true,
+        identity: {
+          editionId: 'edition-1', gameName: 'Catalog Game', editionName: 'BGG 基础版', language: 'und',
+        },
         candidates: [{
           title: 'Catalog Game Rules', url: 'https://publisher.example/rules.pdf', publisher: 'Publisher',
           language: 'zh-CN', edition: 'First', sourceDomain: 'publisher.example', officialDomainVerified: true,
           sourceType: 'PUBLISHER', acquisitionMode: 'DIRECT_PDF',
+          capability: 'DIRECT_DOCUMENT', capabilityEvidence: ['DOCUMENT_RESPONSE_CONFIRMED'],
+          capabilityCheckedAt: '2026-08-15T12:00:00Z', nextAction: 'IMPORT_DOCUMENT',
         }, {
           title: 'BGG 文件页', url: 'https://boardgamegeek.com/filepage/123/rules', publisher: '',
           language: 'zh-CN', edition: 'First', sourceDomain: 'boardgamegeek.com', officialDomainVerified: false,
           sourceType: 'COMMUNITY_PLATFORM', acquisitionMode: 'SOURCE_PAGE',
+          capability: 'DOCUMENT_LISTING', capabilityEvidence: ['KNOWN_DOCUMENT_LISTING_ROUTE'],
+          capabilityCheckedAt: '2026-08-15T12:00:00Z', nextAction: 'CONTINUE_ON_SOURCE',
         }],
       })
       if (String(input).includes('/api/v1/games')) return response([{
@@ -139,15 +146,20 @@ describe('DocumentsView recoverable lesson handoff', () => {
     await flushPromises()
     expect(wrapper.text()).toContain('Catalog Game Rules')
     expect(wrapper.text()).toContain('出版社 / 权利方来源')
-    await wrapper.findAll('button').find(button => button.text() === '打开来源页')!.trigger('click')
+    await wrapper.findAll('button').find(button => button.text() === '继续查找文件')!.trigger('click')
     expect(openSource).toHaveBeenCalledWith(
       'https://boardgamegeek.com/filepage/123/rules', '_blank', 'noopener,noreferrer',
     )
     expect((wrapper.get('input[type="url"]').element as HTMLInputElement).value).toBe('')
     await wrapper.findAll('button').find(button => button.text() === '选择并继续核对')!.trigger('click')
     expect((wrapper.get('input[type="url"]').element as HTMLInputElement).value).toBe('https://publisher.example/rules.pdf')
-    expect((wrapper.get('input[type="checkbox"]').element as HTMLInputElement).checked).toBe(false)
-    await wrapper.get('input[type="checkbox"]').setValue(true)
+    const confirmations = wrapper.findAll('input[type="checkbox"]')
+    expect(confirmations).toHaveLength(2)
+    expect(wrapper.text()).toContain('目录语言未知，不能用来源语言静默替换')
+    expect(confirmations.every(input => !(input.element as HTMLInputElement).checked)).toBe(true)
+    await confirmations[0]!.setValue(true)
+    expect(wrapper.findAll('button').find(button => button.text() === '下载规则书并生成讲解')!.attributes('disabled')).toBeDefined()
+    await confirmations[1]!.setValue(true)
     await wrapper.findAll('button').find(button => button.text() === '下载规则书并生成讲解')!.trigger('click')
     const importRequest = await vi.waitFor(() => {
       const request = fetchMock.mock.calls.find(([input, options]) =>
@@ -156,13 +168,81 @@ describe('DocumentsView recoverable lesson handoff', () => {
       return request
     })
     expect(JSON.parse(String(importRequest?.[1]?.body))).toMatchObject({
-      editionId: 'edition-1', startTeaching: true,
+      editionId: 'edition-1',
+      discoveredForEditionId: 'edition-1',
+      sourceEdition: 'First',
+      sourceLanguage: null,
+      sourceLanguageVerified: false,
+      identityConfirmed: true,
+      startTeaching: true,
     })
     await vi.advanceTimersByTimeAsync(1_000)
     await flushPromises()
     expect(readPendingRulebookLessons(localStorage, 'player')).toEqual([])
     expect(wrapper.text()).toContain('已进入“我的讲解”')
     wrapper.unmount()
+  })
+
+  it('uses monotonic elapsed time and exposes bounded zero-result recovery', async () => {
+    let now = 1_000
+    let discoveryTick: (() => void) | undefined
+    let releaseDiscovery!: (response: Response) => void
+    const pendingDiscovery = new Promise<Response>((resolve) => { releaseDiscovery = resolve })
+    const applicationFetch = mockApplicationFetch(() => 'READY')
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, options?: RequestInit) => {
+      const path = String(input)
+      if (path.includes('/api/v1/documents/rulebook-candidates')) return pendingDiscovery
+      if (path.includes('/api/v1/games')) return response([{
+        game: { id: 'game-1', name: 'Opaque Atlas' },
+        editions: [{ id: 'edition-1', name: 'First', language: 'en' }],
+        bggMetadata: null,
+      }])
+      return applicationFetch(input, options)
+    }))
+    vi.stubGlobal('EventSource', FakeEventSource)
+
+    const { wrapper } = await mountDocuments('/teach?editionId=edition-1')
+    await flushPromises()
+    const nowSpy = vi.spyOn(performance, 'now').mockImplementation(() => now)
+    vi.stubGlobal('setInterval', vi.fn((callback: TimerHandler) => {
+      discoveryTick = callback as () => void
+      return 42
+    }))
+    vi.stubGlobal('clearInterval', vi.fn())
+
+    try {
+      await wrapper.findAll('button').find(button => button.text().includes('帮我找规则书'))!.trigger('click')
+      await vi.waitFor(() => expect(discoveryTick).toBeDefined())
+      expect(wrapper.text()).toContain('已等待 0 秒')
+
+      now = 62_000
+      discoveryTick!()
+      await wrapper.vm.$nextTick()
+      expect(wrapper.text()).toContain('已等待 61 秒')
+
+      releaseDiscovery(response({
+        configured: true,
+        identity: { editionId: 'edition-1', gameName: 'Opaque Atlas', editionName: 'First', language: 'en' },
+        candidates: [],
+        discovery: {
+          completion: 'TIMED_OUT', elapsedMs: 30_005, totalBudgetMs: 30_000,
+          providers: [
+            { provider: 'CATALOG', state: 'FINISHED', elapsedMs: 25 },
+            { provider: 'SOURCE_INSPECTION', state: 'SKIPPED', elapsedMs: 0 },
+            { provider: 'WEB_SEARCH', state: 'TIMED_OUT', elapsedMs: 29_975 },
+          ],
+        },
+      }))
+      await flushPromises()
+
+      expect(wrapper.get('[data-testid="rulebook-discovery-summary"]').text()).toContain('联网搜索: 已超时')
+      expect(wrapper.text()).toContain('本次查找已到达最长等待时间')
+      expect(wrapper.findAll('button').some(button => button.text() === '继续查找')).toBe(true)
+      expect(wrapper.get('a[href="#rulebook-file"]').text()).toBe('上传本地规则书')
+    } finally {
+      wrapper.unmount()
+      nowSpy.mockRestore()
+    }
   })
 
   it('treats a failed terminal progress event as failure and never starts teaching', async () => {
@@ -804,6 +884,11 @@ describe('DocumentsView recoverable lesson handoff', () => {
       rightsConfirmed: true,
       startTeaching: true,
       learningGoal: null,
+      discoveredForEditionId: null,
+      sourceEdition: null,
+      sourceLanguage: null,
+      sourceLanguageVerified: false,
+      identityConfirmed: false,
     })
     expect(importOptions?.headers).toEqual({
       'Content-Type': 'application/json',
@@ -857,6 +942,183 @@ describe('DocumentsView recoverable lesson handoff', () => {
 
     expect(router.currentRoute.value.query.importJob).toBeUndefined()
     expect(wrapper.text()).toContain('已进入“我的讲解”')
+    wrapper.unmount()
+  })
+
+  it('releases a recovered failed import while preserving teaching context and resetting unsafe inputs', async () => {
+    const failedJob = {
+      id: 'job-failed', title: 'Catalog Game', rulebookTitle: 'Preserved Rules',
+      editionId: 'edition-1', editionName: 'Opaque Edition', sourceDomain: 'publisher.example',
+      sourceType: 'OFFICIAL_FAQ', learningGoal: '先讲设置，再讲容易遗漏的例外。',
+      stage: 'FAILED', downloadedBytes: 512, totalBytes: 4096, documentVersionId: null,
+      duplicate: false, errorCode: 'INVALID_PDF_SOURCE', reused: false,
+      teachingHandoffState: 'FAILED', teachingPreparationRunId: null, teachingErrorCode: 'IMPORT_FAILED',
+      recovery: {
+        state: 'FAILED', failureKind: 'INVALID_SOURCE', busy: false,
+        canChooseAnotherSource: true, canUseLocalUpload: true,
+        canRetryOriginalSource: false, canOpenSourceInBrowser: false,
+      },
+    }
+    const applicationFetch = mockApplicationFetch(
+      () => 'READY', 'COMPLETED', [], undefined, undefined, () => response(failedJob),
+    )
+    const fetchMock = vi.fn(async (input: string | URL | Request, options?: RequestInit) => {
+      if (String(input).includes('/api/v1/games')) return response([{
+        game: { id: 'game-1', name: 'Catalog Game' },
+        editions: [{ id: 'edition-1', name: 'Opaque Edition', language: 'en' }],
+        bggMetadata: null,
+      }])
+      return applicationFetch(input, options)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('EventSource', FakeEventSource)
+
+    const { wrapper, router } = await mountDocuments('/teach?importJob=job-failed')
+    await vi.waitFor(() => expect(wrapper.text()).toContain('下载的内容不是可安全导入的规则书文件'))
+
+    expect(wrapper.get('#rulebook-file').attributes('disabled')).toBeUndefined()
+    expect((wrapper.get('input[maxlength="160"]').element as HTMLInputElement).value).toBe('Preserved Rules')
+    expect(wrapper.findAll('select').some(select => select.element.value === 'edition-1')).toBe(true)
+    expect(wrapper.findAll('select').some(select => select.element.value === 'OFFICIAL_FAQ')).toBe(true)
+    expect((wrapper.get('textarea').element as HTMLTextAreaElement).value)
+      .toBe('先讲设置，再讲容易遗漏的例外。')
+    expect((wrapper.get('input[type="url"]').element as HTMLInputElement).value).toBe('')
+    expect(wrapper.findAll('input[type="checkbox"]')
+      .every(input => !(input.element as HTMLInputElement).checked)).toBe(true)
+    expect(wrapper.text()).toContain('重新选择来源')
+    expect(wrapper.text()).toContain('改用本地上传')
+    expect(wrapper.text()).not.toContain('重试原来源')
+
+    await wrapper.findAll('button').find(button => button.text() === '重新选择来源')!.trigger('click')
+    await flushPromises()
+    expect(router.currentRoute.value.query.importJob).toBeUndefined()
+    expect(wrapper.text()).not.toContain('下载的内容不是可安全导入的规则书文件')
+    expect((wrapper.get('input[maxlength="160"]').element as HTMLInputElement).value).toBe('Preserved Rules')
+    wrapper.unmount()
+  })
+
+  it('routes an allowed original-source retry through the failed job and tracks the new job', async () => {
+    const failedJob = {
+      id: 'job-temporary', title: 'Catalog Game', rulebookTitle: 'Preserved Rules',
+      editionId: 'edition-1', editionName: 'Opaque Edition', sourceDomain: 'publisher.example',
+      officialSourceUrl: 'https://publisher.example/rules.pdf', sourceType: 'BASE_RULEBOOK',
+      learningGoal: 'Keep this teaching goal', stage: 'FAILED', downloadedBytes: 0, totalBytes: null,
+      documentVersionId: null, duplicate: false, errorCode: 'SOURCE_UNAVAILABLE', reused: false,
+      teachingHandoffState: 'FAILED', teachingPreparationRunId: null, teachingErrorCode: 'IMPORT_FAILED',
+      recovery: {
+        state: 'FAILED', failureKind: 'TEMPORARY_SOURCE', busy: false,
+        canChooseAnotherSource: true, canUseLocalUpload: true,
+        canRetryOriginalSource: true, canOpenSourceInBrowser: false,
+      },
+    }
+    const retriedJob = {
+      ...failedJob,
+      id: 'job-retried', stage: 'QUEUED', errorCode: null,
+      teachingHandoffState: 'WAITING_FOR_DOCUMENT', teachingErrorCode: null,
+      recovery: {
+        state: 'RUNNING', failureKind: 'NONE', busy: true,
+        canChooseAnotherSource: false, canUseLocalUpload: false,
+        canRetryOriginalSource: false, canOpenSourceInBrowser: false,
+      },
+    }
+    const applicationFetch = mockApplicationFetch(
+      () => 'READY', 'COMPLETED', [], undefined, undefined, () => response(failedJob),
+    )
+    const retryRequests: RequestInit[] = []
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, options?: RequestInit) => {
+      const path = String(input)
+      if (path.includes('/api/v1/games')) return response([{
+        game: { id: 'game-1', name: 'Catalog Game' },
+        editions: [{ id: 'edition-1', name: 'Opaque Edition', language: 'en' }],
+        bggMetadata: null,
+      }])
+      if (path.endsWith('/official-imports/job-temporary/retry') && options?.method === 'POST') {
+        retryRequests.push(options)
+        return response(retriedJob, 202)
+      }
+      return applicationFetch(input, options)
+    }))
+    vi.stubGlobal('EventSource', FakeEventSource)
+
+    const { wrapper, router } = await mountDocuments('/teach?importJob=job-temporary')
+    await vi.waitFor(() => expect(wrapper.text()).toContain('来源暂时无法连接'))
+    await wrapper.findAll('button').find(button => button.text() === '重试原来源')!.trigger('click')
+    await flushPromises()
+
+    expect(retryRequests).toHaveLength(1)
+    expect(retryRequests[0]).toMatchObject({ method: 'POST', headers: { 'X-CSRF-TOKEN': 'csrf' } })
+    expect(router.currentRoute.value.query.importJob).toBe('job-retried')
+    expect(wrapper.text()).toContain('等待下载')
+    expect(wrapper.text()).not.toContain('来源暂时无法连接')
+    wrapper.unmount()
+  })
+
+  it('does not let a late old-job poll reclaim the page after a newer local upload', async () => {
+    vi.useFakeTimers()
+    let oldJobReads = 0
+    let oldPollSignal: AbortSignal | undefined
+    let releaseLateOldPoll!: (value: Response) => void
+    const lateOldPoll = new Promise<Response>((resolve) => { releaseLateOldPoll = resolve })
+    const applicationFetch = mockApplicationFetch(() => 'READY')
+    const fetchMock = vi.fn(async (input: string | URL | Request, options?: RequestInit) => {
+      const path = String(input)
+      if (path.endsWith('/api/v1/documents/official-imports/job-old')) {
+        oldJobReads += 1
+        if (oldJobReads === 1) return new Response(null, { status: 503 })
+        oldPollSignal = options?.signal ?? undefined
+        return lateOldPoll
+      }
+      if (path.endsWith('/api/v1/documents') && options?.method === 'POST') {
+        return response({ duplicate: false, version: { id: 'version-new', status: 'READY' } }, 201)
+      }
+      return applicationFetch(input, options)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('EventSource', FakeEventSource)
+
+    const { wrapper, router } = await mountDocuments('/teach?importJob=job-old')
+    await flushPromises()
+    expect(oldJobReads).toBe(1)
+    expect(wrapper.text()).toContain('暂时没有收到最新读取进度，正在重新连接')
+    expect(wrapper.get('#rulebook-file').attributes('disabled')).toBeUndefined()
+
+    await vi.advanceTimersByTimeAsync(1_000)
+    await flushPromises()
+    expect(oldJobReads).toBe(2)
+    expect(oldPollSignal?.aborted).toBe(false)
+
+    const input = wrapper.get('#rulebook-file')
+    Object.defineProperty(input.element, 'files', {
+      configurable: true,
+      value: [new File(['%PDF-1.7'], 'new-local-rules.pdf', { type: 'application/pdf' })],
+    })
+    await input.trigger('change')
+    await wrapper.get('form.tabletop-panel').trigger('submit')
+    await flushPromises()
+
+    expect(fetchMock.mock.calls.filter(([request, options]) =>
+      String(request).endsWith('/api/v1/documents') && options?.method === 'POST')).toHaveLength(1)
+    expect(router.currentRoute.value.query.importJob).toBeUndefined()
+    expect(wrapper.text()).toContain('你可以离开这里，处理会在后台继续')
+    expect(oldPollSignal?.aborted).toBe(true)
+
+    releaseLateOldPoll(response({
+      id: 'job-old', title: 'Old remote rules', sourceDomain: 'old-source.example',
+      stage: 'QUEUED', downloadedBytes: 0, totalBytes: null, documentVersionId: null,
+      duplicate: false, errorCode: null, reused: false,
+      teachingHandoffState: 'WAITING_FOR_DOCUMENT', teachingPreparationRunId: null,
+      teachingErrorCode: null,
+      recovery: {
+        state: 'RUNNING', failureKind: 'NONE', busy: true,
+        canChooseAnotherSource: false, canUseLocalUpload: false,
+        canRetryOriginalSource: false, canOpenSourceInBrowser: false,
+      },
+    }))
+    await flushPromises()
+
+    expect(oldJobReads).toBe(2)
+    expect(wrapper.text()).not.toContain('Old remote rules')
+    expect(wrapper.get('#rulebook-file').attributes('disabled')).toBeUndefined()
     wrapper.unmount()
   })
 

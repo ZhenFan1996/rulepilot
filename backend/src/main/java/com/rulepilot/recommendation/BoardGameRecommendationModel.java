@@ -130,11 +130,22 @@ public interface BoardGameRecommendationModel {
         }
     }
 
-    record Turn(String text, List<ToolCall> toolCalls) {
+    record Turn(String text, List<ToolCall> toolCalls, CompletionStatus completionStatus) {
+        public Turn(String text, List<ToolCall> toolCalls) {
+            this(text, toolCalls, CompletionStatus.COMPLETE);
+        }
+
         public Turn {
             text = text == null ? "" : text;
             toolCalls = toolCalls == null ? List.of() : List.copyOf(toolCalls);
+            completionStatus = completionStatus == null ? CompletionStatus.UNKNOWN : completionStatus;
         }
+    }
+
+    enum CompletionStatus {
+        COMPLETE,
+        OUTPUT_LIMIT,
+        UNKNOWN
     }
 
     record PreferenceEvidence(String id, String text) {

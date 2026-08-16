@@ -233,7 +233,7 @@ public interface TeachingLessonModel {
                     || priorSections == null || priorSections.size() > 2
                     || evidence == null || evidence.isEmpty()
                     || pageImages == null || pageImages.size() > 2
-                    || requiredRuleIntents == null || requiredRuleIntents.size() > 5
+                    || requiredRuleIntents == null || requiredRuleIntents.size() > 8
                     || requiredRuleIntents.stream()
                             .anyMatch(intent -> intent == null || intent.isBlank() || intent.length() > 300)
                     || chapterScope == null || chapterScope.length() > 4_000) {

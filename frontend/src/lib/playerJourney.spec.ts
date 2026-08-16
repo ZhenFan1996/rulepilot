@@ -127,6 +127,32 @@ describe('derivePlayerJourney', () => {
     })
   })
 
+  it('offers original-source retry only when the server recovery policy allows it', () => {
+    const baseFailure = importJob({
+      stage: 'FAILED', errorCode: 'INVALID_PDF_SOURCE',
+      recovery: {
+        state: 'FAILED', failureKind: 'INVALID_SOURCE', busy: false,
+        canChooseAnotherSource: true, canUseLocalUpload: true,
+        canRetryOriginalSource: false, canOpenSourceInBrowser: false,
+      },
+    })
+    expect(derivePlayerJourney(input({ gameBound: true, importJob: baseFailure }))).toMatchObject({
+      phase: 'FAILED', state: 'failed', retryAction: null,
+    })
+    expect(derivePlayerJourney(input({
+      gameBound: true,
+      importJob: {
+        ...baseFailure,
+        errorCode: 'SOURCE_UNAVAILABLE',
+        recovery: {
+          ...baseFailure.recovery!, failureKind: 'TEMPORARY_SOURCE', canRetryOriginalSource: true,
+        },
+      },
+    }))).toMatchObject({
+      phase: 'FAILED', state: 'failed', retryAction: 'IMPORT_RULEBOOK',
+    })
+  })
+
   it('makes the first published chapter readable while generation continues', () => {
     expect(derivePlayerJourney(input({
       gameBound: true,

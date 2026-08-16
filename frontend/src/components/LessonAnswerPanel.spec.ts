@@ -5,17 +5,17 @@ import LessonAnswerPanel from './LessonAnswerPanel.vue'
 import { setLocale } from '@/lib/locale'
 
 const answered = {
+  language: 'zh-CN' as const,
   status: 'ANSWERED' as const,
   shortVerdict: '先完成结算，再记录本轮结果。',
   explanation: '规则书把结算放在本轮结束之后。',
-  citations: [{ chunkId: 'chunk-1', sectionType: 'RULE', heading: '回合结束', excerpt: '结算本轮。', pageFrom: 4, pageTo: 4 }],
+  citations: [{ heading: '回合结束', excerpt: '结算本轮。', pageFrom: 4, pageTo: 4 }],
   exceptions: ['除非效果明确打断结算。'],
   confidence: 'HIGH' as const,
   answerBasis: 'GROUNDED_APPLICATION' as const,
-  official: false,
-  confirmedRulingId: null,
-  confirmedRulingVersion: null,
+  source: 'UPLOADED' as const,
   clarification: null,
+  recovery: null,
   warnings: [],
 }
 
@@ -27,6 +27,7 @@ const baseProps = {
   activeLearningIntent: null,
   answerLoading: false,
   answerError: '',
+  answerOutcome: 'none' as const,
   online: true,
   ruling: null,
   rulingSaving: false,
@@ -65,6 +66,31 @@ describe('LessonAnswerPanel', () => {
     expect(wrapper.emitted('voiceTranscript')).toEqual([['语音问题']])
   })
 
+  it('shows a readable legacy visual citation without its internal evidence instructions', () => {
+    const visualAnswer = {
+      ...answered,
+      citations: [{
+        heading: '目标计分',
+        pageFrom: 4,
+        pageTo: 4,
+        excerpt: 'Visual-transcribed rule evidence. Only the statements under Visible rule facts are rule evidence. '
+          + 'Do not derive a per-item value from a worked total.\nVisible rule facts: 每张完成的目标卡得 2 分。',
+      }],
+    }
+    const wrapper = mount(LessonAnswerPanel, {
+      props: {
+        ...baseProps,
+        answer: visualAnswer,
+        answeredQuestion: '目标卡怎么计分？',
+        answerTurns: [{ question: '目标卡怎么计分？', answer: visualAnswer, learningIntent: null }],
+      },
+      global: { stubs: { VoiceQuestionCapture: true } },
+    })
+
+    expect(wrapper.text()).toContain('每张完成的目标卡得 2 分。')
+    expect(wrapper.text()).not.toMatch(/Visual-transcribed|Do not derive|Visible rule facts/)
+  })
+
   it('disables thread reset while a ruling edit or save makes clearing unsafe', () => {
     const wrapper = mount(LessonAnswerPanel, {
       props: {
@@ -90,7 +116,10 @@ describe('LessonAnswerPanel', () => {
         answerTurns: [{ question: '什么时候结算？', answer: answered, learningIntent: null }],
         ruling: {
           id: 'ruling-1', shortVerdict: answered.shortVerdict, explanation: answered.explanation,
-          citations: answered.citations, exceptions: answered.exceptions, confidence: 'HIGH', status: 'CONFIRMED', version: 3,
+          citations: answered.citations.map(citation => ({
+            ...citation, chunkId: 'chunk-1', sectionType: 'RULE',
+          })),
+          exceptions: answered.exceptions, confidence: 'HIGH', status: 'CONFIRMED', version: 3,
         },
       },
     })
@@ -99,8 +128,9 @@ describe('LessonAnswerPanel', () => {
     expect(wrapper.text()).toContain('回合结束')
     expect(wrapper.text()).toContain('第 4 页')
     expect(wrapper.text()).toContain('按规则回答当前问题')
-    expect(wrapper.text()).toContain('这条答案如何得出')
-    expect(wrapper.text()).toContain('这不是额外规则')
+    expect(wrapper.text()).toContain('规则书把结算放在本轮结束之后')
+    expect(wrapper.text()).not.toContain('这条答案如何得出')
+    expect(wrapper.text()).not.toContain('这不是额外规则')
     expect(wrapper.text()).toContain('直接核对规则依据')
     expect(wrapper.get('form').element.parentElement?.className).toContain('lg:sticky')
     expect(wrapper.get('article[aria-live="polite"]').element.parentElement?.className).toContain('min-w-0')
@@ -117,6 +147,59 @@ describe('LessonAnswerPanel', () => {
     expect(wrapper.emitted('update:edited-verdict')).toEqual([['更新后的裁定']])
     expect(wrapper.emitted('update:edited-explanation')).toEqual([['更新后的解释']])
     expect(wrapper.emitted('saveRulingRevision')).toHaveLength(1)
+  })
+
+  it('shows one progressive player answer instead of repeating a verdict as explanation and steps', () => {
+    const repetitiveAnswer = {
+      ...answered,
+      shortVerdict: '轮到你时，打出一张人格牌，然后执行该牌行动。',
+      explanation: '先选择并打出人格牌，再执行这张牌的行动。',
+      walkthroughSteps: [
+        { instruction: '打出一张人格牌。', explanation: '轮到你时选择并打出一张人格牌。', orderBasis: 'RULE_ORDER' as const },
+        { instruction: '执行该牌行动。', explanation: '打出后执行这张牌的行动。', orderBasis: 'RULE_ORDER' as const },
+      ],
+    }
+    const wrapper = mount(LessonAnswerPanel, {
+      props: {
+        ...baseProps,
+        answer: repetitiveAnswer,
+        answeredQuestion: '基本回合怎么走？',
+        answerTurns: [{ question: '基本回合怎么走？', answer: repetitiveAnswer, learningIntent: null }],
+      },
+      global: { stubs: { VoiceQuestionCapture: true } },
+    })
+
+    expect(wrapper.text()).toContain(repetitiveAnswer.shortVerdict)
+    expect(wrapper.text()).not.toContain(repetitiveAnswer.explanation)
+    expect(wrapper.text()).not.toContain('照这个顺序做')
+    expect(wrapper.text()).not.toContain('这条答案如何得出')
+    expect(wrapper.text()).toContain('直接核对规则依据')
+  })
+
+  it('keeps a non-repeated walkthrough and every material condition visible', () => {
+    const proceduralAnswer = {
+      ...answered,
+      shortVerdict: '执行 Architect 行动。',
+      explanation: '移动后可以建造房屋。',
+      walkthroughSteps: [
+        { instruction: '先移动殖民者。', explanation: '移动总步数不能超过殖民者数量。', orderBasis: 'RULE_ORDER' as const },
+        { instruction: '再建造房屋。', explanation: '每座房屋都要支付对应费用。', orderBasis: 'RULE_ORDER' as const },
+      ],
+    }
+    const wrapper = mount(LessonAnswerPanel, {
+      props: {
+        ...baseProps,
+        answer: proceduralAnswer,
+        answeredQuestion: 'Architect 具体怎么执行？',
+        answerTurns: [{ question: 'Architect 具体怎么执行？', answer: proceduralAnswer, learningIntent: null }],
+      },
+      global: { stubs: { VoiceQuestionCapture: true } },
+    })
+
+    expect(wrapper.text()).toContain('移动后可以建造房屋')
+    expect(wrapper.text()).toContain('照这个顺序做')
+    expect(wrapper.text()).toContain('移动总步数不能超过殖民者数量')
+    expect(wrapper.text()).toContain('每座房屋都要支付对应费用')
   })
 
   it('lets the player challenge a conclusion through a fresh verified retrieval', async () => {
@@ -151,7 +234,7 @@ describe('LessonAnswerPanel', () => {
 
     expect(wrapper.text()).toContain('规则计算')
     expect(wrapper.text()).toContain('floor(8 / 3) * 5 = 10')
-    expect(wrapper.text()).toContain('确定性计算器复核')
+    expect(wrapper.text()).toContain('下方计算过程便于直接复核结果')
   })
 
   it('shows cited term meanings and their confusion boundaries', () => {
@@ -443,12 +526,15 @@ describe('LessonAnswerPanel', () => {
     expect(wrapper.findAll('button').some(button => button.text() === '解决了')).toBe(false)
   })
 
-  it('does not present placeholder stages as live Agent progress', () => {
+  it('shows one honest answer status without presenting placeholder implementation progress', () => {
     const waiting = mount(LessonAnswerPanel, {
       props: { ...baseProps, answerLoading: true },
       global: { stubs: { VoiceQuestionCapture: true } },
     })
 
+    const waitingStatus = waiting.get('[data-testid="player-work-status"]')
+    expect(waitingStatus.text()).toBe('正在核对回答')
+    expect(waitingStatus.attributes('data-player-work-terminality')).toBe('active')
     expect(waiting.text()).toContain('问题已收到，正在等待这次答疑的最新进度')
     expect(waiting.text()).not.toContain('对齐问题与规则书术语')
     expect(waiting.text()).not.toContain('查找规则书原文')
@@ -472,6 +558,7 @@ describe('LessonAnswerPanel', () => {
       props: { ...baseProps, answerLoading: true },
       global: { stubs: { VoiceQuestionCapture: true } },
     })
+    expect(english.get('[data-testid="player-work-status"]').text()).toBe('Checking answer')
     expect(english.text()).toContain('Question received. Waiting for the latest verified progress')
   })
 
@@ -491,6 +578,46 @@ describe('LessonAnswerPanel', () => {
     await wrapper.findAll('button').find(button => button.text() === '停止等待')!.trigger('click')
 
     expect(wrapper.emitted('cancelAnswer')).toHaveLength(1)
+
+    await wrapper.setProps({
+      answerLoading: false,
+      answerError: '已停止等待；未完成结果不会替换当前页面。',
+      answerOutcome: 'cancelled',
+    })
+    const stopped = wrapper.get('[data-testid="player-work-status"]')
+    expect(stopped.text()).toBe('已取消')
+    expect(stopped.attributes('data-player-work-outcome')).toBe('cancelled')
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false)
+  })
+
+  it('marks the soft budget without presenting the unfinished answer as a result', async () => {
+    const prior = {
+      ...answered,
+      citations: [{
+        heading: '结算时机', excerpt: '先完成本次结算。', pageFrom: 4, pageTo: 4,
+      }],
+    }
+    const wrapper = mount(LessonAnswerPanel, {
+      props: {
+        ...baseProps,
+        question: '如果结算被打断呢？',
+        answerLoading: true,
+        answerElapsedSeconds: 8,
+        answerSoftBudgetReached: true,
+        answerTurns: [{ question: '什么时候结算？', answer: prior, learningIntent: null }],
+      },
+      global: { stubs: { VoiceQuestionCapture: true } },
+    })
+
+    expect(wrapper.text()).toContain('上一条已核对答案和引用仍保留在上方')
+    expect(wrapper.text()).toContain('当前问题还在核对原文与结论')
+    expect(wrapper.text()).toContain('8 秒')
+    expect(wrapper.text()).not.toContain('如果结算被打断呢？：先完成结算')
+
+    await wrapper.setProps({ question: 'What if scoring is interrupted?' })
+    expect(wrapper.get('[data-testid="answer-soft-budget"]').text())
+      .toContain('The previous verified answer and citations remain above')
+    expect(wrapper.get('[data-testid="answer-soft-budget"]').text()).toContain('8 seconds')
   })
 
   it('localizes the personal answer thread when the player selects English', () => {
@@ -512,7 +639,7 @@ describe('LessonAnswerPanel', () => {
 
     expect(wrapper.text()).toContain('Ask the rulebook')
     expect(wrapper.text()).toContain('Ask a question')
-    expect(wrapper.text()).toContain('How this answer was reached')
+    expect(wrapper.text()).not.toContain('How this answer was reached')
     expect(wrapper.text()).toContain('Applied to your question')
     expect(wrapper.text()).toContain('Page 4')
     expect(wrapper.text()).toContain('Review this answer and its sources')
@@ -526,7 +653,7 @@ describe('LessonAnswerPanel', () => {
 
   it('shows the first rule source immediately and distinguishes medium confidence from high', () => {
     const secondCitation = {
-      chunkId: 'chunk-2', sectionType: 'RULE', heading: '计分顺序',
+      heading: '计分顺序',
       excerpt: '完成目标后计算分数。', pageFrom: 7, pageTo: 8,
     }
     const mediumAnswer = {
@@ -576,11 +703,12 @@ describe('LessonAnswerPanel', () => {
     })
 
     expect(wrapper.text()).toContain('先完成结算')
-    expect(wrapper.text()).toContain('模型对这条结论的把握较低')
+    expect(wrapper.text()).toContain('这条结论的依据还不够稳妥')
+    expect(wrapper.text()).not.toContain('模型')
     expect(wrapper.text()).toContain('回合结束')
   })
 
-  it('turns insufficient evidence into an actionable refinement and exposes the support run id', async () => {
+  it('turns insufficient evidence into an actionable refinement without exposing an internal run id', async () => {
     const insufficient = {
       ...answered,
       status: 'INSUFFICIENT_EVIDENCE' as const,
@@ -589,6 +717,11 @@ describe('LessonAnswerPanel', () => {
       citations: [],
       exceptions: [],
       confidence: 'LOW' as const,
+      recovery: {
+        message: '请补充规则中的具体对象名称、发生时机或页码。',
+        actionLabel: '回到问题补充信息',
+        draft: '',
+      },
     }
     const wrapper = mount(LessonAnswerPanel, {
       attachTo: document.body,
@@ -598,19 +731,62 @@ describe('LessonAnswerPanel', () => {
         answer: insufficient,
         answeredQuestion: '这个效果什么时候发生？',
         answerTurns: [{ question: '这个效果什么时候发生？', answer: insufficient, learningIntent: null }],
-        answerRunId: '11111111-1111-4111-8111-111111111111',
         agentTrace: [{ sequence: 1, kind: 'verification', label: '没有找到足够依据', status: 'stopped' }],
       },
       global: { stubs: { VoiceQuestionCapture: true } },
     })
 
     expect(wrapper.text()).toContain('规则中的具体对象名称')
-    expect(wrapper.text()).toContain('本次回答编号')
-    expect(wrapper.text()).toContain('11111111-1111-4111-8111-111111111111')
+    expect(wrapper.text()).not.toContain('本次回答编号')
+    expect(wrapper.text()).not.toContain('11111111-1111-4111-8111-111111111111')
+    expect(wrapper.text()).not.toContain('没有找到足够依据')
+    expect(wrapper.find('[data-confidence]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('上传的规则书')
 
     await wrapper.findAll('button').find(button => button.text() === '回到问题补充信息')!.trigger('click')
     expect(document.activeElement).toBe(wrapper.get('#lesson-question').element)
     wrapper.unmount()
+  })
+
+  it('uses the current-turn recovery language even when the surrounding UI is Chinese', async () => {
+    setLocale('zh-CN')
+    const failure = {
+      ...answered,
+      language: 'en' as const,
+      status: 'MODEL_TIMEOUT' as const,
+      shortVerdict: "I couldn't finish checking the rule in time.",
+      explanation: '',
+      citations: [],
+      exceptions: [],
+      confidence: 'LOW' as const,
+      recovery: {
+        message: 'Your question is still here. Review or edit it, then try again.',
+        actionLabel: 'Review and try again',
+        draft: 'When does the cobalt spindle resolve?',
+      },
+    }
+    const wrapper = mount(LessonAnswerPanel, {
+      props: {
+        ...baseProps,
+        question: 'When does the cobalt spindle resolve?',
+        answer: failure,
+        answeredQuestion: 'When does the cobalt spindle resolve?',
+        answerTurns: [{
+          question: 'When does the cobalt spindle resolve?', answer: failure, learningIntent: null,
+        }],
+      },
+      global: { stubs: { VoiceQuestionCapture: true } },
+    })
+
+    expect(wrapper.text()).toContain('Your question is still here')
+    expect(wrapper.text()).toContain('Review and try again')
+    expect(wrapper.text()).not.toContain('这次没有在时限内')
+    expect(wrapper.find('[data-confidence]').exists()).toBe(false)
+
+    await wrapper.findAll('button').find(button => button.text() === 'Review and try again')!.trigger('click')
+
+    expect(wrapper.emitted('update:question')).toEqual([['When does the cobalt spindle resolve?']])
+    expect(wrapper.emitted('ask')).toBeUndefined()
   })
 
   it('keeps a localized clarification actionable without publishing a conclusion', async () => {
@@ -623,6 +799,11 @@ describe('LessonAnswerPanel', () => {
       exceptions: [],
       confidence: 'LOW' as const,
       clarification: '你说的“这个”具体指什么？请写出规则书里的名称。',
+      recovery: {
+        message: '你说的“这个”具体指什么？请写出规则书里的名称。',
+        actionLabel: '补充这项信息',
+        draft: '我指的是：',
+      },
     }
     const wrapper = mount(LessonAnswerPanel, {
       attachTo: document.body,
@@ -654,6 +835,11 @@ describe('LessonAnswerPanel', () => {
       exceptions: [],
       confidence: 'LOW' as const,
       clarification: '你说的“这个”具体指什么？',
+      recovery: {
+        message: '你说的“这个”具体指什么？',
+        actionLabel: '补充这项信息',
+        draft: '我指的是：',
+      },
     }
     const wrapper = mount(LessonAnswerPanel, {
       props: {

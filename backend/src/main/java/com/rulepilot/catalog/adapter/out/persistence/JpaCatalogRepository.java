@@ -49,6 +49,18 @@ public class JpaCatalogRepository implements CatalogRepository {
     }
 
     @Override
+    public boolean confirmEditionLanguageIfUnknown(UUID editionId, String language) {
+        int updated = entityManager.createQuery(
+                        "update CatalogGameEditionEntity edition set edition.language = :language "
+                                + "where edition.id = :editionId and lower(edition.language) = 'und'")
+                .setParameter("language", language)
+                .setParameter("editionId", editionId)
+                .executeUpdate();
+        if (updated > 0) entityManager.clear();
+        return updated == 1;
+    }
+
+    @Override
     public Expansion save(Expansion expansion) {
         entityManager.persist(new ExpansionEntity(expansion));
         expansion.compatibleEditionIds().forEach(editionId -> entityManager.persist(

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import type {
   LessonQualityReport,
   MediaConsistencyReport,
@@ -19,7 +20,7 @@ interface LessonDirectorySection {
   title: string
 }
 
-defineProps<{
+const props = defineProps<{
   lessonStatus: 'COMPLETE' | 'DRAFT_READY' | 'INCOMPLETE'
   sections: LessonDirectorySection[]
   currentIndex: number
@@ -40,6 +41,8 @@ defineProps<{
   mediaModeAvailable: (mode: MediaMode) => boolean
 }>()
 
+const blockingCheck = computed(() => props.quality?.checks.find(check => check.status === 'FAIL') ?? null)
+
 const emit = defineEmits<{
   selectSection: [index: number]
   selectMediaMode: [mode: MediaMode]
@@ -54,12 +57,12 @@ const { t } = useLocale()
     <div class="hidden items-end justify-between lg:flex">
       <div>
         <p class="text-xs font-medium text-copper">{{ t('lesson.sidebar.directory') }}</p>
-        <h1 class="mt-2 font-display text-2xl font-semibold">{{ lessonStillGrowing ? t('lesson.sidebar.completedChapters') : lessonStatus === 'DRAFT_READY' ? t('lesson.sidebar.baseGuide') : t('lesson.sidebar.completeGuide') }}</h1>
+        <h1 class="mt-2 font-display text-2xl font-semibold">{{ quality?.status === 'BLOCKED' ? t('lesson.sidebar.blockedGuide') : lessonStillGrowing ? t('lesson.sidebar.completedChapters') : lessonStatus === 'DRAFT_READY' ? t('lesson.sidebar.baseGuide') : t('lesson.sidebar.completeGuide') }}</h1>
       </div>
       <span class="text-sm font-semibold text-copper">{{ progressPercent }}%</span>
     </div>
 
-    <details v-if="quality && !generationActive" class="mt-4 hidden rounded-2xl border border-ink/10 bg-paper/70 p-3 lg:block">
+    <details v-if="quality && !generationActive" :open="quality.status === 'BLOCKED'" class="mt-4 hidden rounded-2xl border border-ink/10 bg-paper/70 p-3 lg:block">
       <summary class="cursor-pointer list-none text-sm font-semibold">
         <span class="flex items-center justify-between gap-3">
           <span>{{ t('lesson.sidebar.quality.title') }}</span>
@@ -74,7 +77,13 @@ const { t } = useLocale()
       </ul>
     </details>
 
-    <div v-if="lessonStatus === 'DRAFT_READY' && !generationActive" class="mt-3 hidden rounded-2xl border border-indigo/20 bg-indigo/5 p-3 text-sm text-indigo lg:block">
+    <div v-if="quality?.status === 'BLOCKED' && blockingCheck && !generationActive" class="mt-3 rounded-2xl border border-red-300/70 bg-red-50 p-3 text-sm text-red-950" role="alert">
+      <p class="font-semibold">{{ t('lesson.sidebar.blockedGuide') }}</p>
+      <p class="mt-1 text-xs font-semibold leading-5">{{ blockingCheck.summary }}</p>
+      <p class="mt-1 text-xs leading-5 text-red-900/75">{{ blockingCheck.detail }}</p>
+    </div>
+
+    <div v-if="lessonStatus === 'DRAFT_READY' && quality?.status !== 'BLOCKED' && !generationActive" class="mt-3 hidden rounded-2xl border border-indigo/20 bg-indigo/5 p-3 text-sm text-indigo lg:block">
       <p class="font-semibold">{{ t('lesson.sidebar.draft.title') }}</p>
       <p class="mt-1 text-xs leading-5 text-ink/60">{{ t('lesson.sidebar.draft.detail', { supported: supportedSectionCount, total: sections.length }) }}</p>
       <button

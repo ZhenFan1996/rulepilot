@@ -68,6 +68,34 @@ describe('lessonAnswerThread', () => {
     expect(readLessonAnswerThread(sessionStorage, alice)).toEqual([])
   })
 
+  it('projects browser turns onto the player contract before storing or restoring them', () => {
+    const internalId = '11111111-1111-4111-8111-111111111111'
+    const base = turn('When does the cobalt spindle resolve?')
+    const unsafeEnvelope = {
+      ...base,
+      answer: {
+        ...base.answer,
+        documentVersionId: internalId,
+        citations: [{
+          heading: 'Timing', excerpt: 'Resolve after the gate closes.', pageFrom: 3, pageTo: 3,
+          chunkId: internalId, sectionType: 'TIMING',
+        }],
+      },
+    }
+
+    rememberLessonAnswerThread(sessionStorage, alice, [unsafeEnvelope])
+
+    const stored = sessionStorage.getItem(sessionStorage.key(0)!) ?? ''
+    const restored = readLessonAnswerThread(sessionStorage, alice)
+    expect(stored).not.toContain('documentVersionId')
+    expect(stored).not.toContain('chunkId')
+    expect(stored).not.toContain('sectionType')
+    expect(stored).not.toContain(internalId)
+    expect(restored[0]?.answer.citations).toEqual([{
+      heading: 'Timing', excerpt: 'Resolve after the gate closes.', pageFrom: 3, pageTo: 3,
+    }])
+  })
+
   it('round-trips bounded verified calculation displays', () => {
     const scope = { ...alice, documentVersionId: 'version-calc' }
     const base = turn('我有8个资源，能得多少分？')
@@ -347,17 +375,17 @@ function turn(question: string, learningIntent: LearningIntent | null = null) {
     question,
     learningIntent,
     answer: {
+      language: 'zh-CN' as const,
       status: 'ANSWERED' as const,
       shortVerdict: '先完成结算。',
       explanation: '规则书这样规定。',
-      citations: [],
+      citations: [{ heading: '结算顺序', excerpt: '先完成结算。', pageFrom: 2, pageTo: 2 }],
       exceptions: [],
       confidence: 'HIGH' as const,
       answerBasis: 'DIRECT_RULE' as const,
-      official: false,
-      confirmedRulingId: null,
-      confirmedRulingVersion: null,
+      source: 'UPLOADED' as const,
       clarification: null,
+      recovery: null,
       warnings: [],
     },
   }

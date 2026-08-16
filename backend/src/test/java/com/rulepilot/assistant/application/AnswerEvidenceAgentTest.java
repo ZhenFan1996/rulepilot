@@ -25,6 +25,7 @@ import com.rulepilot.assistant.RuleAnswerModel.ReferenceBinding;
 import com.rulepilot.assistant.application.RuleAnswerRateLimiter.Permit;
 import com.rulepilot.assistant.domain.QuestionType;
 import com.rulepilot.assistant.domain.UnderstoodQuestion;
+import com.rulepilot.retrieval.AnswerEvidenceRetriever;
 import com.rulepilot.retrieval.RuleEvidenceLookup;
 import com.rulepilot.retrieval.evidence.HybridEvidenceHit;
 import com.rulepilot.retrieval.evidence.RuleEvidenceHit;
@@ -223,6 +224,39 @@ class AnswerEvidenceAgentTest {
         assertThat(captured.get().requiredToolsBeforeCompletion()).isEmpty();
         assertThat(captured.get().playerRequest())
                 .contains("evidence needs: ", "RELATIONSHIP", "VISUAL_REFERENCE");
+        verify(permit).close();
+    }
+
+    @Test
+    void requiresAnExactPageAuditForAConcreteCalculation() {
+        AtomicReference<RunRequest> captured = new AtomicReference<>();
+        Permit permit = mock(Permit.class);
+        AnswerEvidenceAgent agent = new AnswerEvidenceAgent(
+                capturingFallbackAgent(captured), emptyLookup(), scopes(), limiter(permit));
+        AnswerQuestionPlan calculation = new AnswerQuestionPlan(
+                List.of(new AnswerQuestionPlan.Subquestion(
+                        "I have two cards and nine spaces; what is the total?",
+                        Set.of(EvidenceNeed.DIRECT_RULE))),
+                true,
+                AnswerAid.CALCULATION,
+                ReferenceBinding.CURRENT_QUESTION);
+
+        agent.refine(
+                runId,
+                question("I have two cards and nine spaces; what is the total?"),
+                new QuestionContext(versionId),
+                "player",
+                null,
+                calculation,
+                ready(hit(UUID.randomUUID(), "Scoring", "Each matching space scores one point.")));
+
+        assertThat(captured.get().requiredToolsBeforeCompletion()).containsExactly("read_rule_pages");
+        assertThat(captured.get().systemPrompt()).contains(
+                "aggregation unit",
+                "per-item or per-category scope",
+                "multiplier",
+                "worked example",
+                "consistency check");
         verify(permit).close();
     }
 

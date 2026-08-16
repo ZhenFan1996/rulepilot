@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -13,6 +14,7 @@ import com.rulepilot.modelconfig.RuntimeModelConfiguration.Role;
 import com.rulepilot.modelconfig.VersionedAgentPrompts;
 import com.rulepilot.teaching.TeachingOutlineModel.OutlineRequest;
 import com.rulepilot.teaching.TeachingOutlineModel.OutlineDraft;
+import com.rulepilot.teaching.TeachingOutlineModel.OutlineGenerationException;
 import com.rulepilot.teaching.TeachingOutlineModel.PageImageInput;
 import com.rulepilot.teaching.TeachingOutlineModel.PageInput;
 import com.rulepilot.teaching.TeachingOutlineModel.TopicDraft;
@@ -117,6 +119,45 @@ class SpringAiTeachingOutlineModelTest {
     }
 
     @Test
+    void translatesRepeatedStructuredOutputFailuresAtTheModelBoundary() {
+        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        VersionedAgentPrompts prompts = mock(VersionedAgentPrompts.class);
+        ChatModel chatModel = mock(ChatModel.class);
+        when(configuration.usesFake(Role.TEACHING, "player")).thenReturn(false);
+        when(configuration.modelFor(Role.TEACHING, "player")).thenReturn(chatModel);
+        when(chatModel.getDefaultOptions()).thenReturn(ToolCallingChatOptions.builder().build());
+        when(chatModel.getOptions()).thenReturn(ToolCallingChatOptions.builder().build());
+        when(prompts.teachingOutlineSystem()).thenReturn("Return a bounded outline.");
+        when(prompts.teachingOutlineUser()).thenReturn("{pages}\n{repair}");
+        when(prompts.structuredOutputRepair()).thenReturn("Repair the invalid structure.");
+        when(chatModel.call(any(Prompt.class))).thenReturn(new ChatResponse(List.of(new Generation(
+                new AssistantMessage("""
+                        {"gameTitle":"Game","premise":"Premise","topics":[{
+                          "key":"invalid","title":"","objective":"Teach one source relation.",
+                          "required":true,"visualEvidenceRecommended":true,
+                          "retrievalQueries":["OPAQUE"],"coverageTags":["core_loop"],
+                          "sourcePageNumbers":[1]
+                        }]}
+                        """)))));
+        SpringAiTeachingOutlineModel model = new SpringAiTeachingOutlineModel(
+                configuration, prompts, new FakeTeachingOutlineModel());
+
+        try {
+            assertThatThrownBy(() -> model.organize(new OutlineRequest(
+                            List.of(new PageInput(1, "OPAQUE source relation")),
+                            List.of(),
+                            "player")))
+                    .isInstanceOf(OutlineGenerationException.class)
+                    .hasMessageContaining("no valid outline")
+                    .hasCauseInstanceOf(RuntimeException.class);
+        } finally {
+            model.close();
+        }
+
+        verify(chatModel, times(2)).call(any(Prompt.class));
+    }
+
+    @Test
     void givesOwnershipRefinementTheEntireCurrentOutlineInsteadOfOnlyTheConflictSummary() {
         OutlineDraft outline = new OutlineDraft(
                 "Game",
@@ -168,10 +209,25 @@ class SpringAiTeachingOutlineModelTest {
         when(chatModel.call(any(Prompt.class))).thenReturn(new ChatResponse(List.of(new Generation(
                 new AssistantMessage("""
                         {"gameTitle":"Game","premise":"Premise","topics":[{
-                          "key":"setup","title":"开局","objective":"说明开局。","required":true,
-                          "visualEvidenceRecommended":false,"retrievalQueries":["SETUP"],
-                          "coverageTags":["setup"],"sourcePageNumbers":[1]
-                        }]}
+                          "key":"playable","title":"可开局规则","objective":"说明全部有来源的必要规则。","required":true,
+                          "visualEvidenceRecommended":false,
+                          "retrievalQueries":["S-0","T-0","A-0","F-0","P-0","E-0"],
+                          "coverageTags":["setup","core_loop","legal_action","end","scoring","necessary_exception"],
+                          "sourcePageNumbers":[1]
+                        }],"sourceCoverageSlots":[
+                          {"slotId":"setup","role":"SETUP","sourceIdentifier":"S-0",
+                           "sourcePageNumbers":[1],"ownerTopicKey":"playable","availability":"SOURCED"},
+                          {"slotId":"flow","role":"CORE_LOOP","sourceIdentifier":"T-0",
+                           "sourcePageNumbers":[1],"ownerTopicKey":"playable","availability":"SOURCED"},
+                          {"slotId":"action","role":"LEGAL_ACTION","sourceIdentifier":"A-0",
+                           "sourcePageNumbers":[1],"ownerTopicKey":"playable","availability":"SOURCED"},
+                          {"slotId":"ending","role":"ENDING","sourceIdentifier":"F-0",
+                           "sourcePageNumbers":[1],"ownerTopicKey":"playable","availability":"SOURCED"},
+                          {"slotId":"scoring","role":"SCORING","sourceIdentifier":"P-0",
+                           "sourcePageNumbers":[1],"ownerTopicKey":"playable","availability":"SOURCED"},
+                          {"slotId":"exception","role":"NECESSARY_EXCEPTION","sourceIdentifier":"E-0",
+                           "sourcePageNumbers":[1],"ownerTopicKey":"playable","availability":"SOURCED"}
+                        ],"sourceCoverageInventoryComplete":true}
                         """)))));
         SpringAiTeachingOutlineModel model = new SpringAiTeachingOutlineModel(
                 configuration, prompts, new FakeTeachingOutlineModel());
@@ -179,7 +235,10 @@ class SpringAiTeachingOutlineModelTest {
         try {
             model.organize(new OutlineRequest(
 
-                    List.of(new PageInput(1, "SETUP: Give each player a board.")),
+                    List.of(new PageInput(
+                            1,
+                            "S-0 starts play. T-0 advances play. A-0 is a legal choice. "
+                                    + "F-0 ends play. P-0 resolves the result. E-0 changes A-0 conditionally.")),
                     List.of(),
                     "先让我能带大家开局，再重点讲行动怎么衔接。",
                     "player"));

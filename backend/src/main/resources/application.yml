@@ -200,6 +200,8 @@ rulepilot:
   answer:
     provider: ${ANSWER_PROVIDER:fake}
     model-provider: ${ANSWER_MODEL_PROVIDER:gemini}
+    agent:
+      timeout: ${ANSWER_AGENT_TIMEOUT:PT30S}
     temperature: ${ANSWER_TEMPERATURE:0.15}
     interpretation-temperature: ${ANSWER_INTERPRETATION_TEMPERATURE:0.0}
     cache-retention: ${ANSWER_CACHE_RETENTION:PT6H}
@@ -287,7 +289,7 @@ rulepilot:
       model-candidate-limit: ${BGG_RECOMMENDATION_MODEL_CANDIDATE_LIMIT:8}
       result-count: ${BGG_RECOMMENDATION_RESULT_COUNT:3}
       diversity-overlap-limit: ${BGG_RECOMMENDATION_DIVERSITY_OVERLAP_LIMIT:0.66}
-      timeout: ${BGG_RECOMMENDATION_AGENT_TIMEOUT:PT55S}
+      timeout: ${BGG_RECOMMENDATION_AGENT_TIMEOUT:PT20S}
       web-research:
         enabled: ${BGG_RECOMMENDATION_WEB_RESEARCH_ENABLED:false}
         api-key: ${WEB_SEARCH_API_KEY:${QWEN_API_KEY:}}
@@ -303,6 +305,10 @@ rulepilot:
     base-url: ${RULEBOOK_DISCOVERY_BASE_URL:${WEB_SEARCH_BASE_URL:${QWEN_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}}}
     model: ${RULEBOOK_DISCOVERY_MODEL:qwen3.7-max}
     timeout: ${RULEBOOK_DISCOVERY_TIMEOUT:PT30S}
+    catalog-provider-budget: ${RULEBOOK_DISCOVERY_CATALOG_PROVIDER_BUDGET:PT6S}
+    source-inspection-provider-budget: ${RULEBOOK_DISCOVERY_SOURCE_INSPECTION_PROVIDER_BUDGET:PT6S}
+    web-search-provider-budget: ${RULEBOOK_DISCOVERY_WEB_SEARCH_PROVIDER_BUDGET:PT18S}
+    total-budget: ${RULEBOOK_DISCOVERY_TOTAL_BUDGET:PT30S}
     cache-ttl: ${RULEBOOK_DISCOVERY_CACHE_TTL:P30D}
     negative-cache-ttl: ${RULEBOOK_DISCOVERY_NEGATIVE_CACHE_TTL:PT10M}
     hourly-limit: ${RULEBOOK_DISCOVERY_HOURLY_LIMIT:30}

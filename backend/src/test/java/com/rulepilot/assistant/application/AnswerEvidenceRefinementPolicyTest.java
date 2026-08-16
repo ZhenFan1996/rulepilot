@@ -8,6 +8,7 @@ import com.rulepilot.assistant.RuleAnswerModel.EvidenceNeed;
 import com.rulepilot.assistant.RuleAnswerModel.ReferenceBinding;
 import com.rulepilot.assistant.domain.QuestionType;
 import com.rulepilot.assistant.domain.UnderstoodQuestion;
+import com.rulepilot.retrieval.AnswerEvidenceRetriever;
 import com.rulepilot.retrieval.evidence.HybridEvidenceHit;
 import com.rulepilot.retrieval.evidence.RuleEvidenceHit;
 import java.util.List;
@@ -42,6 +43,19 @@ class AnswerEvidenceRefinementPolicyTest {
         assertThat(AnswerEvidenceRefinementPolicy.requiresRefinement(
                         question, context, directPlan(), ready()))
                 .isFalse();
+    }
+
+    @Test
+    void refinesAConcreteCalculationEvenWhenItsEvidenceNeedIsDirectRule() {
+        AnswerQuestionPlan calculation = new AnswerQuestionPlan(
+                List.of(subquestion(EvidenceNeed.DIRECT_RULE)),
+                true,
+                AnswerAid.CALCULATION,
+                ReferenceBinding.CURRENT_QUESTION);
+
+        assertThat(AnswerEvidenceRefinementPolicy.requiresRefinement(
+                        question, context, calculation, ready()))
+                .isTrue();
     }
 
     @Test

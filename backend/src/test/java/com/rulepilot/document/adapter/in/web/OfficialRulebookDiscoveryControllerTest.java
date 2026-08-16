@@ -5,6 +5,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import com.rulepilot.document.application.OfficialRulebookDiscoveryService;
+import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -17,6 +18,8 @@ class OfficialRulebookDiscoveryControllerTest {
         OfficialRulebookDiscoveryService discovery = mock(OfficialRulebookDiscoveryService.class);
         when(discovery.discover(editionId, "en")).thenReturn(new OfficialRulebookDiscoveryService.Result(
                 true,
+                new OfficialRulebookDiscoveryService.DiscoveryIdentity(
+                        editionId, "Opaque Game", "First", "en"),
                 List.of(new OfficialRulebookDiscoveryService.Candidate(
                         "Official Rules",
                         "https://publisher.example/rules.pdf",
@@ -25,18 +28,65 @@ class OfficialRulebookDiscoveryControllerTest {
                         "First",
                         "publisher.example",
                         true,
+                        true,
                         OfficialRulebookDiscoveryService.SourceType.PUBLISHER,
-                        OfficialRulebookDiscoveryService.AcquisitionMode.DIRECT_PDF))));
+                        OfficialRulebookDiscoveryService.AcquisitionMode.DIRECT_PDF,
+                        OfficialRulebookDiscoveryService.SourceCapability.DIRECT_DOCUMENT,
+                        List.of(OfficialRulebookDiscoveryService.CapabilityEvidence.DOCUMENT_RESPONSE_CONFIRMED),
+                        Instant.parse("2026-08-15T12:00:00Z"))),
+                new OfficialRulebookDiscoveryService.DiscoverySummary(
+                        OfficialRulebookDiscoveryService.DiscoveryCompletion.PARTIAL,
+                        12_345,
+                        30_000,
+                        List.of(
+                                new OfficialRulebookDiscoveryService.ProviderProgress(
+                                        OfficialRulebookDiscoveryService.DiscoveryProvider.CATALOG,
+                                        OfficialRulebookDiscoveryService.DiscoveryProviderState.FINISHED,
+                                        1_200),
+                                new OfficialRulebookDiscoveryService.ProviderProgress(
+                                        OfficialRulebookDiscoveryService.DiscoveryProvider.SOURCE_INSPECTION,
+                                        OfficialRulebookDiscoveryService.DiscoveryProviderState.SKIPPED,
+                                        0),
+                                new OfficialRulebookDiscoveryService.ProviderProgress(
+                                        OfficialRulebookDiscoveryService.DiscoveryProvider.WEB_SEARCH,
+                                        OfficialRulebookDiscoveryService.DiscoveryProviderState.TIMED_OUT,
+                                        11_000)))));
 
         var response = new OfficialRulebookDiscoveryController(discovery).discover(editionId, "en");
 
         assertThat(response.configured()).isTrue();
+        assertThat(response.identity()).satisfies(identity -> {
+            assertThat(identity.editionId()).isEqualTo(editionId);
+            assertThat(identity.gameName()).isEqualTo("Opaque Game");
+            assertThat(identity.editionName()).isEqualTo("First");
+            assertThat(identity.language()).isEqualTo("en");
+        });
         assertThat(response.candidates()).singleElement().satisfies(candidate -> {
             assertThat(candidate.sourceDomain()).isEqualTo("publisher.example");
             assertThat(candidate.officialDomainVerified()).isTrue();
+            assertThat(candidate.languageVerified()).isTrue();
             assertThat(candidate.sourceType()).isEqualTo(OfficialRulebookDiscoveryService.SourceType.PUBLISHER);
             assertThat(candidate.acquisitionMode())
                     .isEqualTo(OfficialRulebookDiscoveryService.AcquisitionMode.DIRECT_PDF);
+            assertThat(candidate.capability())
+                    .isEqualTo(OfficialRulebookDiscoveryService.SourceCapability.DIRECT_DOCUMENT);
+            assertThat(candidate.capabilityEvidence())
+                    .containsExactly(OfficialRulebookDiscoveryService.CapabilityEvidence.DOCUMENT_RESPONSE_CONFIRMED);
+            assertThat(candidate.capabilityCheckedAt()).isEqualTo(Instant.parse("2026-08-15T12:00:00Z"));
+            assertThat(candidate.nextAction())
+                    .isEqualTo(OfficialRulebookDiscoveryService.SourceAction.IMPORT_DOCUMENT);
+        });
+        assertThat(response.discovery()).satisfies(summary -> {
+            assertThat(summary.completion())
+                    .isEqualTo(OfficialRulebookDiscoveryService.DiscoveryCompletion.PARTIAL);
+            assertThat(summary.elapsedMs()).isEqualTo(12_345);
+            assertThat(summary.totalBudgetMs()).isEqualTo(30_000);
+            assertThat(summary.providers())
+                    .extracting(OfficialRulebookDiscoveryController.ProviderProgressResponse::provider)
+                    .containsExactly(
+                            OfficialRulebookDiscoveryService.DiscoveryProvider.CATALOG,
+                            OfficialRulebookDiscoveryService.DiscoveryProvider.SOURCE_INSPECTION,
+                            OfficialRulebookDiscoveryService.DiscoveryProvider.WEB_SEARCH);
         });
     }
 }

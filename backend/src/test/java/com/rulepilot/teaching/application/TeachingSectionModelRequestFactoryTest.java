@@ -50,6 +50,42 @@ class TeachingSectionModelRequestFactoryTest {
         assertThat(request.chapterScope()).contains("【当前章节】第1章《开局准备》");
     }
 
+    @Test
+    void passesAllEightSourceInventoriedRuleGroupsToTheTeachingModel() {
+        UUID versionId = UUID.randomUUID();
+        UUID chunkId = UUID.randomUUID();
+        List<String> ruleGroups = List.of(
+                "move", "build", "trade", "copy", "recruit", "produce", "score", "pass");
+        TeachingPlan plan = new TeachingPlan(
+                UUID.randomUUID(),
+                versionId,
+                "Game",
+                "Premise",
+                List.of(new TeachingPlan.PlannedSection(
+                        1,
+                        "actions",
+                        "可执行行动",
+                        "逐项讲清来源页上每一种行动。",
+                        true,
+                        false,
+                        ruleGroups,
+                        List.of("setup", "core_loop", "end", "scoring"))),
+                "player",
+                Instant.now());
+        RuleEvidence evidence = new RuleEvidence(
+                chunkId, versionId, "ACTIONS", "Available actions", "Choose one action.", 4, 4);
+
+        var request = new TeachingSectionModelRequestFactory(VisualRulebookPageFacts.empty()).create(
+                plan,
+                plan.sections().getFirst(),
+                List.of(),
+                List.of(evidence),
+                false,
+                false);
+
+        assertThat(request.requiredRuleIntents()).containsExactlyElementsOf(ruleGroups);
+    }
+
     private TeachingPlan plan(UUID versionId) {
         return new TeachingPlan(
                 UUID.randomUUID(),

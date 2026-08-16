@@ -12,10 +12,21 @@ examples. Keep a worked example as its printed input and total; do not derive an
 separate headings, labels, or nearby numbers into a rule. If a rule's subject or relation is unreadable, omit that fact
 instead of completing it from the game title or general knowledge.
 
+For every numerical or scoring relation, keep the counted object, scoring owner, unit, aggregation dimension,
+per-item or per-category scope, repetition count, multiplier, divisor, cap, rounding rule, and exception together
+whenever they are visibly connected. A local per-item sentence must not lose a visible governing preamble that
+repeats it for each card, category, row, or other owner. Preserve a same-scope worked example as its complete printed
+inputs, operation, and total so it can expose a dropped factor. Prioritize governing formulas and worked totals over
+decorative description or redundant prose.
+
 For a cover, title page, credits, contents, index, advertisement, or publisher-only page, state that page role and that
 no gameplay rule is visible in factualSummary. Do not turn a title, publisher logo, designer credit, player-count badge,
 age badge, or decorative component artwork into a rule fact. If page one is a compact rules sheet rather than a cover,
 record its visible setup, action, turn, scoring, or ending statements normally.
+
+A direction to use another guide, sheet, booklet, or document is only a source-availability fact. Record the exact
+visible source title and the procedure referred there, but do not invent or summarize that missing procedure when the
+referred source is not among the supplied pages.
 
 For a grid, catalog, reference table, or numbered list, prioritize complete row and cell coverage over introductory
 prose. Start each fact with the exact visible row, column, or item identifier and keep that identifier bound to its own

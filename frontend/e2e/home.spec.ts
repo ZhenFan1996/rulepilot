@@ -20,8 +20,12 @@ test('uses the full illustrated-hero rhythm while BGG hot and random games lead 
   await mockHomeGames(page)
   await page.goto('/')
 
+  await expect(page).toHaveURL('/')
   await expect(page).toHaveTitle(/RulePilot/)
   await expect(page.getByRole('heading', { level: 1 })).toContainText('规则书递过来')
+  await expect(page.getByTestId('home-player-journey')).toContainText('从一句局况，到能开桌')
+  await expect(page.getByTestId('home-player-journey').getByRole('listitem')).toHaveCount(3)
+  await expect(page.getByRole('link', { name: '登录', exact: true })).toHaveCount(1)
   await expect(page.locator('a[href="/teach"]:visible').first()).toBeVisible()
   await expect(page.locator('a[href="/discover"]:visible').first()).toBeVisible()
   await expect(page.locator('img[src="/illustrations/home-screenprint-friends.webp"]')).toBeVisible()
@@ -54,6 +58,9 @@ test('keeps hot games, random picks, and the primary journey usable on a mobile 
   await page.setViewportSize({ width: 390, height: 844 })
   await page.goto('/')
 
+  await expect(page).toHaveURL('/')
+  await expect(page.getByTestId('home-player-journey')).toContainText('从一句局况，到能开桌')
+  await expect(page.getByRole('link', { name: '登录', exact: true })).toHaveCount(1)
   await expect(page.locator('a[href="/teach"]:visible').first()).toBeVisible()
   await expect(page.locator('img[src="/illustrations/home-screenprint-friends.webp"]')).toBeVisible()
   await expect(page.getByRole('heading', { name: 'BGG 热门桌游' })).toBeVisible()
@@ -113,6 +120,8 @@ test('keeps hot games, random picks, and the primary journey usable on a mobile 
 })
 
 test('loads the rulebook workflow through its lazy route boundary', async ({ page }) => {
+  await page.route('**/api/auth/session', route => route.fulfill({ status: 401, json: {} }))
+  await page.route('**/api/v1/**', route => route.fulfill({ status: 503, json: {} }))
   await page.goto('/')
 
   const teachLink = page.locator('a[href="/teach"]:visible').first()
@@ -121,4 +130,43 @@ test('loads the rulebook workflow through its lazy route boundary', async ({ pag
 
   await expect(page).toHaveURL('/teach')
   await expect(page.getByRole('heading', { level: 1 })).toHaveText(/\S+/)
+})
+
+test('gives a signed-out direct guides visit one return-aware recovery action', async ({ page }, testInfo) => {
+  await page.route('**/api/auth/session', route => route.fulfill({ status: 401, json: {} }))
+  await page.route('**/api/v1/**', route => route.fulfill({ status: 401, json: {} }))
+  await page.goto('/lessons?filter=pending')
+
+  await expect(page).toHaveURL('/lessons?filter=pending')
+  const gate = page.getByTestId('signed-out-guides-gate')
+  await expect(gate.getByRole('heading', { name: '登录后查看你的讲解' })).toBeVisible()
+  await expect(page.locator('a[href^="/login"]:visible')).toHaveCount(1)
+  await expect(gate.getByRole('link', { name: '登录后继续' }))
+    .toHaveAttribute('href', '/login?redirect=/lessons?filter=pending')
+  await expect(page.locator('main a[href="/teach"]')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '重新加载' })).toHaveCount(0)
+  await expect(page.getByText('当前页面已保留')).toHaveCount(0)
+  await page.screenshot({ path: testInfo.outputPath('signed-out-guides.png'), fullPage: true })
+})
+
+test('keeps the signed-in root journey stable across a history round trip', async ({ page }) => {
+  await page.route('**/api/auth/session', route => route.fulfill({ json: { username: 'player', roles: ['USER'] } }))
+  await page.route('**/api/v1/**', route => route.fulfill({ status: 503, json: {} }))
+  await page.route('**/api/v1/bgg/recommendations?*', route => route.fulfill({ json: homeGames }))
+  await page.goto('/')
+
+  await expect(page).toHaveURL('/')
+  await expect(page.getByText('player，新游戏带来了吗？')).toBeVisible()
+  await expect(page.getByTestId('home-player-journey').getByRole('listitem')).toHaveCount(3)
+  await expect(page.getByRole('link', { name: '登录', exact: true })).toHaveCount(0)
+
+  const discover = page.locator('a[href="/discover"]:visible').first()
+  await discover.focus()
+  await page.keyboard.press('Enter')
+  await expect(page).toHaveURL('/discover')
+  await page.goBack()
+
+  await expect(page).toHaveURL('/')
+  await expect(page.getByTestId('home-player-journey')).toContainText('按引用开桌')
+  await expect(page.getByRole('heading', { level: 1 })).toContainText('规则书递过来')
 })

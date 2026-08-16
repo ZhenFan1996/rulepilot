@@ -24,6 +24,7 @@ export function useLessonQuestionInput(options: UseLessonQuestionInputOptions) {
   async function requestLearningHelp(intent: LearningIntent) {
     const prompt = groundedLearningPrompt(t, intent, options.learningAnchorQuestion())
     options.question.value = prompt
+    if (intent === 'SIMPLIFY' || intent === 'VERIFY') return
     await options.submitQuestion(prompt, intent)
   }
 

@@ -3,6 +3,16 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 
 import type { RecommendationGame, RecommendationProfile } from '@/components/gameRecommendationTypes'
+import PlayerWorkStatusText from '@/components/PlayerWorkStatusText.vue'
+import RulebookIdentityConfirmation from '@/components/documents/RulebookIdentityConfirmation.vue'
+import type {
+  RulebookCandidate,
+  RulebookCapabilityEvidence,
+  RulebookDiscoveryIdentity,
+  RulebookDiscoverySummary,
+  RulebookSourceAction,
+  RulebookSourceCapability,
+} from '@/components/documents/types'
 import { notifyLoginRequired } from '@/lib/authSession'
 import { notifyBackgroundWorkChanged } from '@/lib/backgroundWorkRefresh'
 import {
@@ -11,12 +21,20 @@ import {
 } from '@/lib/documentProgress'
 import { acceptProgressiveLesson, teachingRunIsActive } from '@/lib/liveLesson'
 import { useLocale } from '@/lib/locale'
+import { playerFacingLanguageName } from '@/lib/playerFacingLanguage'
+import { playerWorkStatus, type PlayerWorkStage } from '@/lib/playerWorkStatus'
+import {
+  monotonicElapsedSeconds,
+  normalizeRulebookDiscoverySummary,
+} from '@/lib/rulebookDiscovery'
 import { notifyTeachingLaunched } from '@/lib/teachingLaunch'
 import {
   acceptImportJob,
   acceptJourneyRun,
   derivePlayerJourney,
   playerJourneyPollDelay,
+  type OfficialImportFailureKind,
+  type OfficialImportRecovery,
   type PlayerJourneyDocumentProgress,
   type PlayerJourneyImportJob,
   type PlayerJourneyLesson,
@@ -28,25 +46,15 @@ import { teachingActivityText, type TeachingActivity } from '@/lib/teachingProgr
 
 interface ImportedGame {
   game: { id: string; name: string }
-  edition: { id: string; name: string }
+  edition: { id: string; name: string; language: string }
   alreadyImported: boolean
-}
-
-interface RulebookCandidate {
-  title: string
-  url: string
-  publisher: string
-  language: string
-  edition: string
-  sourceDomain: string
-  officialDomainVerified: boolean
-  sourceType: 'PUBLISHER' | 'TRUSTED_REPOSITORY' | 'COMMUNITY_PLATFORM' | 'PUBLIC_WEB'
-  acquisitionMode: 'DIRECT_PDF' | 'IMAGE_GALLERY' | 'SOURCE_PAGE'
 }
 
 interface RulebookCandidateResponse {
   configured: boolean
+  identity: RulebookDiscoveryIdentity
   candidates: RulebookCandidate[]
+  discovery?: unknown
 }
 
 interface OfficialImportJob extends PlayerJourneyImportJob {
@@ -89,6 +97,7 @@ interface IllustratedLesson extends PlayerJourneyLesson {
 
 interface CsrfResponse { headerName: string; token: string }
 interface LaunchResponse { assistantRunId: string; state: string; reused: boolean }
+interface RulebookIdentityProblem { code?: string }
 
 export interface RecommendationJourneyStatus {
   projection: PlayerJourneyProjection
@@ -112,14 +121,38 @@ const { locale } = useLocale()
 
 const copy = computed(() => locale.value === 'zh-CN' ? {
   eyebrow: '从推荐到答疑', title: `已选《${props.game.name}》`, preparing: '正在加入“我的桌游”并寻找可审阅的规则书…',
-  finding: '桌游已保存，正在检索出版社、BGG、集石和可信规则库（已等待 {seconds} 秒，通常几秒，偶尔约 30 秒）…', found: '选择一份规则书', detail: '优先展示出版社来源，也会保留社区与可信规则库结果。请核对语言和版本；PDF 直链与已识别的连续规则页图片都可直接导入。',
+  finding: '桌游已保存，正在查找出版社、BGG、集石和可信规则库（已等待 {seconds} 秒，通常几秒，偶尔约 30 秒）…', found: '选择并核对来源', detail: '优先展示出版社来源，也会保留社区与可信规则库结果。请核对语言和版本；只有已核验的 PDF 或连续规则页可以导入。',
+  noImportableTitle: '暂未找到可直接导入的规则书', noImportableDetail: '当前结果只能继续查找文件或核对桌游信息；也可以改用公开链接或本地上传。',
+  identityOnlyTitle: '仅用于核对桌游身份', identityOnlyDetail: '这些页面没有可导入的规则书文件，不属于规则书选择。',
   sources: { PUBLISHER: '出版社 / 权利方来源', TRUSTED_REPOSITORY: '可信规则库', COMMUNITY_PLATFORM: '社区规则书来源（如 BGG / 集石）', PUBLIC_WEB: '公开来源（请重点核对）' },
-  direct: 'PDF 可直接核验并下载', gallery: '连续规则页图片，可合成为 PDF', page: '来源页，需要继续查找文件', publisher: '发布者', language: '语言', edition: '版本', unknown: '未标明', choose: '选择这份', selected: '已选择', open: '打开来源页',
+  capabilities: { DIRECT_DOCUMENT: '已核验为可下载文档', CONTIGUOUS_RULE_PAGES: '已核验为连续规则页', DOCUMENT_LISTING: '仅确认是文档列表页', GAME_INFO_ONLY: '仅有桌游信息，没有规则书文件', UNVERIFIED_PAGE: '尚未核验出可导入文档' },
+  direct: 'PDF 可直接核验并下载', gallery: '连续规则页图片，可合成为 PDF', page: '来源页，需要继续查找文件', publisher: '发布者', language: '语言', languageVerified: '来源已明确标注', languageReview: '需在来源页核对', edition: '版本', unknown: '未标明', choose: '选择这份', selected: '已选择', continueListing: '继续查找文件', reviewUnverified: '审阅来源页',
   consent: '我确认该链接来自有权提供这份规则书的来源，并授权 RulePilot 下载用于我的个人讲解。',
+  identityChanged: '提交前目录或来源身份发生了变化。请重新比较上面的游戏、版本和语言后再次确认。',
+  identityActive: '这个链接正在为另一个版本导入。请等待那次导入结束，或改用公开链接 / 本地上传；当前桌游选择不会丢失。',
   import: '下载规则书并生成讲解', manual: '改用公开链接或本地上传',
+  retryDiscovery: '继续查找',
+  discoveryTerminal: {
+    PARTIAL: '部分来源未在本次预算内完成；下面只保留已经核验的结果。',
+    TIMED_OUT: '本次查找已到达最长等待时间，尚未找到可审阅结果。',
+    FAILED: '部分来源没有完成查找，尚未找到可审阅结果。',
+  },
+  discoveryTiming: (elapsed: number, budget: number) => `本次查找用时 ${elapsed} 秒，最长等待 ${budget} 秒。`,
+  discoveryProviders: { CATALOG: '规则书目录', SOURCE_INSPECTION: '来源核验', WEB_SEARCH: '联网搜索' },
+  discoveryProviderStates: { FINISHED: '已完成', TIMED_OUT: '已超时', FAILED: '失败', SKIPPED: '未使用', UNAVAILABLE: '未配置' },
   browserRequired: '已经找到这份文件，但来源网站要求在浏览器里完成隐私选择、刷新临时链接或登录。打开原始下载页取得 PDF 后，回到 RulePilot 上传即可继续；桌游、版本和讲解偏好都已保留。',
-  sourcePageHandoff: '这是经过核对的来源页面，但搜索结果没有提供可验证的 PDF 直链。请在来源网站核对语言和版本并下载 PDF，再回到 RulePilot 上传；桌游和讲解偏好都已保留。',
+  sourcePageHandoff: '这个结果不是可直接导入的规则书文档。请在来源网站继续查找或核对语言和版本，取得 PDF 后回到 RulePilot 上传；桌游和讲解偏好都已保留。',
   browserAction: '在来源网站继续下载',
+  chooseAnotherSource: '重新选择来源', retryOriginalSource: '重试原来源',
+  importFailureDetail: {
+    NONE: '这次规则书导入已经结束。请选择另一个来源，或改用公开链接 / 本地文件。',
+    TEMPORARY_SOURCE: '规则书来源暂时无法连接。你可以重试原来源，也可以立即换来源或上传本地文件。',
+    BROWSER_HANDOFF: '来源网站需要你在浏览器里完成登录、隐私选择或下载。桌游与版本仍保留，可以继续下载或换来源。',
+    INVALID_SOURCE: '下载的内容不是可安全导入的规则书文件。请选择真实 PDF、连续规则页或本地文件。',
+    CAPACITY: '当前导入队列暂时已满。可以稍后重试原来源，或先改用本地文件。',
+    INTERRUPTED: '应用重启中断了这次导入。可以重试原来源，也可以换来源或上传本地文件。',
+    OTHER: '这次规则书导入没有完成。请选择另一个来源，或改用公开链接 / 本地文件。',
+  } satisfies Record<OfficialImportFailureKind, string>,
   unavailable: '当前没有找到可审阅的规则书来源。你仍可粘贴公开 PDF 链接或上传自己的规则书。',
   login: '登录后即可保留这次选择并继续找规则书。', loginAction: '打开桌游详情并继续',
   error: '这一步暂时没有完成；推荐对话和已选桌游不会受影响。', partialFailure: '已生成的章节仍可阅读，但后台生成或核对没有完整结束。可以安全重试，现有内容不会丢失。', retry: '重试当前步骤', close: '关闭小窗', change: '换一款',
@@ -132,19 +165,43 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   phase: {
     GAME_BINDING: '正在把推荐结果加入“我的桌游”', RULEBOOK_DISCOVERY: '正在寻找可审阅的规则书来源', SOURCE_REVIEW: '等待你核对规则书语言和版本',
     IMPORT_QUEUED: '规则书下载已排队', IMPORT_CONNECTING: '正在连接规则书来源', IMPORT_DOWNLOADING: '正在下载规则书', IMPORT_COMPRESSING: '文件较大，正在压缩 PDF', IMPORT_VERIFYING: '正在核验文件确实是可读取的 PDF', IMPORT_SAVING: '正在保存规则书并绑定到这款桌游',
-    DOCUMENT_PROCESSING: '正在提取规则、生成页面并建立检索结构', TEACHING_PREPARATION_QUEUED: '规则书已就绪，讲解准备任务正在排队', TEACHING_PREPARING: '正在通读规则书并组织讲解章节', LESSON_GENERATION_QUEUED: '讲解大纲已完成，正文生成正在排队', LESSON_GENERATING: '正在逐章生成、引用并核对讲解', LESSON_READABLE: '第一批讲解内容已经可以阅读', LESSON_COMPLETE: '完整讲解已经生成', FAILED: '当前步骤需要处理',
+    DOCUMENT_PROCESSING: '正在读取规则文字并准备原文页面', TEACHING_PREPARATION_QUEUED: '规则书已就绪，讲解准备任务正在排队', TEACHING_PREPARING: '正在通读规则书并组织讲解章节', LESSON_GENERATION_QUEUED: '讲解大纲已完成，正文生成正在排队', LESSON_GENERATING: '正在逐章生成、引用并核对讲解', LESSON_READABLE: '第一批讲解内容已经可以阅读', LESSON_COMPLETE: '完整讲解已经生成', FAILED: '当前步骤需要处理',
   },
   bytes: (done: string, total: string) => `${done} / ${total}`, pages: (done: number, total: number) => `第 ${done} / ${total} 页`, chapters: (done: number, total: number | null) => total ? `已有 ${done} / ${total} 章可读` : `已有 ${done} 章可读`,
 } : {
   eyebrow: 'Recommendation to Q&A', title: `${props.game.name} selected`, preparing: 'Adding the game to My Games and finding reviewable rulebooks…',
-  finding: 'Game saved. Searching publishers, BGG, Gstone, and trusted repositories ({seconds}s elapsed; usually a few seconds, occasionally about 30s)…', found: 'Choose a rulebook', detail: 'Publisher sources come first, with useful community and trusted-repository results preserved. Review language and edition; direct PDFs and recognized ordered page-image documents can both be imported.',
+  finding: 'Game saved. Searching publishers, BGG, Gstone, and trusted repositories ({seconds}s elapsed; usually a few seconds, occasionally about 30s)…', found: 'Choose and verify a source', detail: 'Publisher sources come first, with useful community and trusted-repository results preserved. Review language and edition; only verified PDFs or ordered rule pages can be imported.',
+  noImportableTitle: 'No directly importable rulebook yet', noImportableDetail: 'The current results can only continue the file search or confirm game identity. You can also use a public URL or local upload.',
+  identityOnlyTitle: 'Game identity references only', identityOnlyDetail: 'These pages do not contain an importable rulebook and are not rulebook choices.',
   sources: { PUBLISHER: 'Publisher / rights-holder', TRUSTED_REPOSITORY: 'Trusted rules repository', COMMUNITY_PLATFORM: 'Community rulebook source (such as BGG / Gstone)', PUBLIC_WEB: 'Public source (review carefully)' },
-  direct: 'Direct PDF ready for verification', gallery: 'Ordered rulebook pages; RulePilot can build the PDF', page: 'Source page; continue there', publisher: 'Provider', language: 'Language', edition: 'Edition', unknown: 'Not stated', choose: 'Choose this one', selected: 'Selected', open: 'Open source page',
+  capabilities: { DIRECT_DOCUMENT: 'Confirmed downloadable document', CONTIGUOUS_RULE_PAGES: 'Confirmed ordered rule pages', DOCUMENT_LISTING: 'Document listing only', GAME_INFO_ONLY: 'Game information only; no rulebook file', UNVERIFIED_PAGE: 'No importable document verified' },
+  direct: 'Direct PDF ready for verification', gallery: 'Ordered rulebook pages; RulePilot can build the PDF', page: 'Source page; continue there', publisher: 'Provider', language: 'Language', languageVerified: 'stated by the source', languageReview: 'verify on the source page', edition: 'Edition', unknown: 'Not stated', choose: 'Choose this one', selected: 'Selected', continueListing: 'Continue finding a file', reviewUnverified: 'Review source page',
   consent: 'I confirm that this source may provide the rulebook and authorize RulePilot to download it for my personal guide.',
+  identityChanged: 'The catalog or source identity changed before submission. Compare the game, edition, and language above, then reconfirm.',
+  identityActive: 'This URL is already being imported for another edition. Wait for it to finish or use a public URL / local upload; the selected game remains intact.',
   import: 'Download and generate guide', manual: 'Use a public URL or local upload',
+  retryDiscovery: 'Search again',
+  discoveryTerminal: {
+    PARTIAL: 'Some sources did not finish within this search budget. Only verified results are shown below.',
+    TIMED_OUT: 'This search reached its time budget without a reviewable result.',
+    FAILED: 'Some source checks failed and no reviewable result is available yet.',
+  },
+  discoveryTiming: (elapsed: number, budget: number) => `Search finished in ${elapsed}s with a ${budget}s maximum budget.`,
+  discoveryProviders: { CATALOG: 'Rulebook catalog', SOURCE_INSPECTION: 'Source verification', WEB_SEARCH: 'Web search' },
+  discoveryProviderStates: { FINISHED: 'finished', TIMED_OUT: 'timed out', FAILED: 'failed', SKIPPED: 'not needed', UNAVAILABLE: 'not configured' },
   browserRequired: 'The file was found, but its source requires an in-browser privacy choice, refreshed temporary link, or sign-in. Download it there, then return to upload it; the game, edition, and guide preferences are preserved.',
-  sourcePageHandoff: 'This source page was verified, but search did not expose a verifiable PDF URL. Review the language and edition there, download the PDF, then return to upload it; the game and guide preferences are preserved.',
+  sourcePageHandoff: 'This result is not a directly importable rulebook document. Continue the search or review language and edition on the source site, then return to upload the PDF; the game and guide preferences are preserved.',
   browserAction: 'Continue on the source site',
+  chooseAnotherSource: 'Choose another source', retryOriginalSource: 'Retry original source',
+  importFailureDetail: {
+    NONE: 'This rulebook import has ended. Choose another source or use a public link / local file.',
+    TEMPORARY_SOURCE: 'The rulebook source is temporarily unavailable. Retry it, choose another source, or upload a local file.',
+    BROWSER_HANDOFF: 'The source requires an in-browser sign-in, privacy choice, or download. Your game and edition remain selected.',
+    INVALID_SOURCE: 'The downloaded content is not a safely importable rulebook. Choose a real PDF, ordered rule pages, or a local file.',
+    CAPACITY: 'The import queue is temporarily full. Retry later or use a local file now.',
+    INTERRUPTED: 'An application restart interrupted this import. Retry it, choose another source, or upload a local file.',
+    OTHER: 'This rulebook import did not finish. Choose another source or use a public link / local file.',
+  } satisfies Record<OfficialImportFailureKind, string>,
   unavailable: 'No reviewable rulebook source was found. You can still paste a public PDF URL or upload your own rulebook.',
   login: 'Sign in to keep this selection and continue to its rulebook.', loginAction: 'Open game details and continue',
   error: 'This step did not complete. The conversation and selected game are unaffected.', partialFailure: 'Published chapters remain readable, but background generation or review did not finish. You can retry safely without losing existing content.', retry: 'Retry this step', close: 'Close', change: 'Choose another game',
@@ -157,16 +214,20 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   phase: {
     GAME_BINDING: 'Adding the recommendation to My Games', RULEBOOK_DISCOVERY: 'Finding reviewable rulebook sources', SOURCE_REVIEW: 'Waiting for your language and edition review',
     IMPORT_QUEUED: 'Rulebook download is queued', IMPORT_CONNECTING: 'Connecting to the rulebook source', IMPORT_DOWNLOADING: 'Downloading the rulebook', IMPORT_COMPRESSING: 'Compressing the oversized PDF', IMPORT_VERIFYING: 'Verifying that the file is a readable PDF', IMPORT_SAVING: 'Saving and linking the rulebook to this game',
-    DOCUMENT_PROCESSING: 'Extracting rules, rendering pages, and building retrieval data', TEACHING_PREPARATION_QUEUED: 'The rulebook is ready and guide preparation is queued', TEACHING_PREPARING: 'Reading the rules and organizing guide chapters', LESSON_GENERATION_QUEUED: 'The outline is ready and chapter generation is queued', LESSON_GENERATING: 'Generating, citing, and reviewing the guide chapter by chapter', LESSON_READABLE: 'The first guide content is ready to read', LESSON_COMPLETE: 'The complete guide is ready', FAILED: 'This step needs attention',
+    DOCUMENT_PROCESSING: 'Reading the rules and preparing the original pages', TEACHING_PREPARATION_QUEUED: 'The rulebook is ready and guide preparation is queued', TEACHING_PREPARING: 'Reading the rules and organizing guide chapters', LESSON_GENERATION_QUEUED: 'The outline is ready and chapter generation is queued', LESSON_GENERATING: 'Generating, citing, and reviewing the guide chapter by chapter', LESSON_READABLE: 'The first guide content is ready to read', LESSON_COMPLETE: 'The complete guide is ready', FAILED: 'This step needs attention',
   },
   bytes: (done: string, total: string) => `${done} / ${total}`, pages: (done: number, total: number) => `Page ${done} / ${total}`, chapters: (done: number, total: number | null) => total ? `${done} / ${total} chapters readable` : `${done} chapters readable`,
 })
 
 const imported = ref<ImportedGame | null>(null)
 const candidates = ref<RulebookCandidate[]>([])
+const discoveryIdentity = ref<RulebookDiscoveryIdentity | null>(null)
+const discoverySummary = ref<RulebookDiscoverySummary | null>(null)
 const selected = ref<RulebookCandidate | null>(null)
 const openedSource = ref<RulebookCandidate | null>(null)
 const consent = ref(false)
+const identityConfirmed = ref(false)
+const identityNotice = ref('')
 const state = ref<'preparing' | 'finding' | 'review' | 'unavailable' | 'login' | 'error' | 'browser-required' | 'journey'>('preparing')
 const findingSeconds = ref(0)
 const importJob = ref<OfficialImportJob | null>(null)
@@ -182,6 +243,7 @@ const retrying = ref(false)
 let csrf: CsrfResponse | null = null
 let sequence = 0
 let findingClock: ReturnType<typeof setInterval> | null = null
+let findingStartedAt: number | null = null
 let journeyTimer: ReturnType<typeof setTimeout> | null = null
 let refreshingJourney = false
 let documentProgressSource: EventSource | null = null
@@ -191,13 +253,36 @@ let documentProgressStreamRetryAttempt = 0
 let documentReadyRefreshPending = false
 const ensuredLessonPlans = new Set<string>()
 
+const hasImportableCandidate = computed(() => candidates.value.some(isImportableCandidate))
+const sourceCandidates = computed(() => candidates.value.filter(candidate => candidate.capability !== 'GAME_INFO_ONLY'))
+const identityCandidates = computed(() => candidates.value.filter(candidate => candidate.capability === 'GAME_INFO_ONLY'))
 const canImport = computed(() => Boolean(
   selected.value
-  && selected.value.acquisitionMode !== 'SOURCE_PAGE'
+  && isImportableCandidate(selected.value)
   && consent.value
+  && identityConfirmed.value
   && state.value === 'review',
 ))
+const identityTarget = computed<RulebookDiscoveryIdentity | null>(() => imported.value ? {
+  editionId: imported.value.edition.id,
+  gameName: imported.value.game.name,
+  editionName: imported.value.edition.name,
+  language: imported.value.edition.language,
+} : null)
 const findingText = computed(() => copy.value.finding.replace('{seconds}', String(findingSeconds.value)))
+const discoveryNotice = computed(() => {
+  const summary = discoverySummary.value
+  if (!summary || summary.completion === 'COMPLETE') return ''
+  return copy.value.discoveryTerminal[summary.completion]
+})
+const discoveryTiming = computed(() => {
+  const summary = discoverySummary.value
+  if (!summary) return ''
+  return copy.value.discoveryTiming(
+    Math.max(1, Math.ceil(summary.elapsedMs / 1_000)),
+    Math.max(1, Math.ceil(summary.totalBudgetMs / 1_000)),
+  )
+})
 const manualRoute = computed(() => ({
   name: 'teach' as const,
   query: imported.value ? { editionId: imported.value.edition.id, onboarding: 'recommendation-agent' } : {},
@@ -216,7 +301,50 @@ const projection = computed(() => derivePlayerJourney({
   teachingRun: teachingRun.value,
   lesson: lesson.value,
 }))
-const currentPhaseText = computed(() => copy.value.phase[projection.value.phase])
+const currentPhaseDetail = computed(() => copy.value.phase[projection.value.phase])
+const currentWorkStatus = computed(() => {
+  const current = projection.value
+  let stage: PlayerWorkStage
+  if (current.phase === 'GAME_BINDING' || current.phase === 'RULEBOOK_DISCOVERY') stage = 'FINDING_RULEBOOK'
+  else if (current.phase === 'SOURCE_REVIEW') stage = 'WAITING_FOR_PLAYER'
+  else if (current.phase.startsWith('IMPORT_')) stage = 'ACQUIRING_RULEBOOK'
+  else if (current.phase === 'DOCUMENT_PROCESSING') stage = 'READING_RULEBOOK'
+  else if (current.phase === 'LESSON_READABLE') stage = 'GUIDE_READABLE'
+  else if (current.phase === 'LESSON_COMPLETE') stage = 'GUIDE_COMPLETE'
+  else if (current.phase === 'FAILED') stage = current.retryAction ? 'NEEDS_ACTION' : 'FAILED'
+  else stage = 'ORGANIZING_GUIDE'
+
+  const capability = current.canReadLesson ? 'guide' : current.canReadRulebook ? 'rulebook' : 'none'
+  const readiness = current.phase === 'LESSON_COMPLETE'
+    ? 'complete'
+    : current.canReadLesson || current.canReadRulebook ? 'usable' : 'unavailable'
+  const terminality = current.state === 'waiting'
+    ? 'waiting'
+    : current.state === 'active' || current.state === 'ready' && !current.retryAction ? 'active' : 'terminal'
+  const outcome = current.retryAction
+    ? 'needs-action'
+    : current.state === 'failed' ? 'failed' : 'none'
+  return playerWorkStatus(stage, { capability, readiness, terminality, outcome }, locale.value)
+})
+const sourceWorkStatus = computed(() => {
+  if (state.value === 'error') {
+    return playerWorkStatus('NEEDS_ACTION', {
+      capability: 'none', readiness: 'unavailable', terminality: 'terminal', outcome: 'needs-action',
+    }, locale.value)
+  }
+  if (state.value === 'review' || state.value === 'unavailable' || state.value === 'browser-required') {
+    return playerWorkStatus('WAITING_FOR_PLAYER', {
+      capability: 'none', readiness: 'unavailable', terminality: 'waiting', outcome: 'none',
+    }, locale.value)
+  }
+  return playerWorkStatus('FINDING_RULEBOOK', {
+    capability: 'none', readiness: 'unavailable', terminality: 'active', outcome: 'none',
+  }, locale.value)
+})
+const importFailureDetail = computed(() => {
+  if (importJob.value?.stage !== 'FAILED') return ''
+  return copy.value.importFailureDetail[importJob.value.recovery?.failureKind ?? 'OTHER']
+})
 const journeyDetail = computed(() => {
   if (importJob.value?.stage === 'DOWNLOADING' && importJob.value.downloadedBytes > 0) {
     const done = formatBytes(importJob.value.downloadedBytes)
@@ -327,7 +455,7 @@ async function prepare() {
     if (request !== sequence) return
     if (response.status === 401 || response.status === 403) return requireLogin()
     if (!response.ok) throw new Error('selection failed')
-    imported.value = await response.json() as ImportedGame
+    imported.value = normalizeImportedGame(await response.json() as ImportedGame)
     persistJourney()
     await discover(request)
   } catch {
@@ -338,9 +466,8 @@ async function prepare() {
 async function discover(request = sequence) {
   if (!imported.value || request !== sequence) return
   state.value = 'finding'
-  findingSeconds.value = 0
-  if (findingClock) clearInterval(findingClock)
-  findingClock = setInterval(() => { findingSeconds.value += 1 }, 1000)
+  discoverySummary.value = null
+  startFindingClock()
   try {
     const parameters = new URLSearchParams({ editionId: imported.value.edition.id, language: locale.value })
     const response = await fetch(`/api/v1/documents/rulebook-candidates?${parameters.toString()}`, { credentials: 'include' })
@@ -348,29 +475,103 @@ async function discover(request = sequence) {
     if (response.status === 401 || response.status === 403) return requireLogin()
     if (!response.ok) throw new Error('discovery failed')
     const result = await response.json() as RulebookCandidateResponse
-    candidates.value = result.candidates
-    state.value = result.configured && result.candidates.length ? 'review' : 'unavailable'
+    if (result.identity?.editionId !== imported.value.edition.id) throw new Error('discovery identity mismatch')
+    discoveryIdentity.value = result.identity
+    candidates.value = result.candidates.map(normalizeRulebookCandidate)
+    discoverySummary.value = normalizeRulebookDiscoverySummary(result.discovery)
+    state.value = result.configured && candidates.value.length ? 'review' : 'unavailable'
     persistJourney()
   } catch {
     if (request === sequence) state.value = 'error'
   } finally {
-    if (request === sequence && findingClock) {
-      clearInterval(findingClock)
-      findingClock = null
-    }
+    if (request === sequence) stopFindingClock(true)
   }
 }
 
+function startFindingClock() {
+  stopFindingClock(false)
+  findingSeconds.value = 0
+  findingStartedAt = performance.now()
+  findingClock = setInterval(updateFindingElapsed, 1_000)
+}
+
+function updateFindingElapsed() {
+  if (findingStartedAt === null) return
+  findingSeconds.value = monotonicElapsedSeconds(findingStartedAt)
+}
+
+function stopFindingClock(updateElapsed: boolean) {
+  if (updateElapsed) updateFindingElapsed()
+  if (findingClock !== null) clearInterval(findingClock)
+  findingClock = null
+  findingStartedAt = null
+}
+
 function choose(candidate: RulebookCandidate) {
-  if (candidate.acquisitionMode === 'SOURCE_PAGE') {
+  if (candidate.capability === 'DOCUMENT_LISTING' || candidate.capability === 'UNVERIFIED_PAGE') {
     openedSource.value = candidate
     window.open(candidate.url, '_blank', 'noopener,noreferrer')
     return
   }
+  if (!isImportableCandidate(candidate)) return
   openedSource.value = null
   selected.value = candidate
   consent.value = false
+  identityConfirmed.value = false
+  identityNotice.value = ''
   persistJourney()
+}
+
+function isImportableCandidate(candidate: RulebookCandidate) {
+  return candidate.capability === 'DIRECT_DOCUMENT' && candidate.acquisitionMode === 'DIRECT_PDF'
+    || candidate.capability === 'CONTIGUOUS_RULE_PAGES' && candidate.acquisitionMode === 'IMAGE_GALLERY'
+}
+
+function candidateActionLabel(candidate: RulebookCandidate) {
+  if (isImportableCandidate(candidate)) return selected.value?.url === candidate.url ? copy.value.selected : copy.value.choose
+  return candidate.capability === 'DOCUMENT_LISTING' ? copy.value.continueListing : copy.value.reviewUnverified
+}
+
+function nextAction(capability: RulebookSourceCapability): RulebookSourceAction {
+  if (capability === 'DIRECT_DOCUMENT') return 'IMPORT_DOCUMENT'
+  if (capability === 'CONTIGUOUS_RULE_PAGES') return 'IMPORT_PAGE_SEQUENCE'
+  if (capability === 'DOCUMENT_LISTING') return 'CONTINUE_ON_SOURCE'
+  if (capability === 'GAME_INFO_ONLY') return 'USE_FOR_IDENTITY_ONLY'
+  return 'REVIEW_OR_UPLOAD'
+}
+
+function normalizeRulebookCandidate(candidate: RulebookCandidate): RulebookCandidate {
+  const allowedCapabilities: RulebookSourceCapability[] = [
+    'DIRECT_DOCUMENT', 'CONTIGUOUS_RULE_PAGES', 'DOCUMENT_LISTING', 'GAME_INFO_ONLY', 'UNVERIFIED_PAGE',
+  ]
+  const requestedCapability = allowedCapabilities.includes(candidate.capability)
+    ? candidate.capability
+    : 'UNVERIFIED_PAGE'
+  const consistent = requestedCapability === 'DIRECT_DOCUMENT'
+    ? candidate.acquisitionMode === 'DIRECT_PDF'
+    : requestedCapability === 'CONTIGUOUS_RULE_PAGES'
+      ? candidate.acquisitionMode === 'IMAGE_GALLERY'
+      : candidate.acquisitionMode === 'SOURCE_PAGE'
+  const capability: RulebookSourceCapability = consistent ? requestedCapability : 'UNVERIFIED_PAGE'
+  const evidence: RulebookCapabilityEvidence[] = Array.isArray(candidate.capabilityEvidence)
+    && candidate.capabilityEvidence.length
+    ? candidate.capabilityEvidence
+    : ['CANDIDATE_ONLY']
+  return {
+    ...candidate,
+    acquisitionMode: capability === 'DIRECT_DOCUMENT' ? 'DIRECT_PDF'
+      : capability === 'CONTIGUOUS_RULE_PAGES' ? 'IMAGE_GALLERY' : 'SOURCE_PAGE',
+    capability,
+    capabilityEvidence: evidence,
+    capabilityCheckedAt: typeof candidate.capabilityCheckedAt === 'string' ? candidate.capabilityCheckedAt : '',
+    nextAction: nextAction(capability),
+  }
+}
+
+function candidateLanguage(candidate: RulebookCandidate) {
+  const name = playerFacingLanguageName(candidate.language, locale.value)
+  if (!candidate.language) return name
+  return `${name}（${candidate.languageVerified ? copy.value.languageVerified : copy.value.languageReview}）`
 }
 
 async function importAndTeach() {
@@ -397,15 +598,31 @@ async function enqueueImport() {
         rightsConfirmed: true,
         startTeaching: true,
         learningGoal: null,
+        discoveredForEditionId: discoveryIdentity.value?.editionId ?? null,
+        sourceEdition: candidate.edition || null,
+        sourceLanguage: candidate.languageVerified ? candidate.language : null,
+        sourceLanguageVerified: candidate.languageVerified === true,
+        identityConfirmed: identityConfirmed.value,
       }),
     })
     if (request !== sequence) return
     if (response.status === 401 || response.status === 403) return requireLogin()
+    if (response.status === 409) {
+      const problem = await response.json().catch(() => ({})) as RulebookIdentityProblem
+      identityConfirmed.value = false
+      identityNotice.value = problem.code === 'RULEBOOK_ACTIVE_IMPORT_CONFLICT'
+        ? copy.value.identityActive
+        : copy.value.identityChanged
+      state.value = 'review'
+      return
+    }
     if (!response.ok) throw new Error('import failed')
     const incoming = normalizeImportJob(await response.json() as OfficialImportJob)
     importJob.value = acceptImportJob(importJob.value?.id === incoming.id ? importJob.value : null, incoming) as OfficialImportJob
     preparationRunId.value = incoming.teachingPreparationRunId
     consent.value = true
+    identityConfirmed.value = true
+    identityNotice.value = ''
     pollingWarning.value = false
     persistJourney()
     notifyBackgroundWorkChanged()
@@ -433,7 +650,8 @@ async function refreshJourney(request = sequence) {
       if (!incoming || request !== sequence) return
       currentJob = acceptImportJob(currentJob, normalizeImportJob(incoming)) as OfficialImportJob
       importJob.value = currentJob
-      if (currentJob.stage === 'FAILED' && currentJob.errorCode === 'SOURCE_BROWSER_REQUIRED') {
+      pollingWarning.value = false
+      if (currentJob.stage === 'FAILED' && currentJob.recovery?.canOpenSourceInBrowser) {
         state.value = 'browser-required'
         persistJourney()
         return
@@ -527,7 +745,7 @@ async function retryJourney() {
     const action = projection.value.retryAction
     if (action === 'BIND_GAME') return await prepare()
     if (action === 'DISCOVER_RULEBOOK') return await discover()
-    if (action === 'IMPORT_RULEBOOK') return await enqueueImport()
+    if (action === 'IMPORT_RULEBOOK') return await retryOriginalImport()
     if (action === 'PREPARE_TEACHING') {
       const currentJob = importJob.value
       if (!currentJob?.documentVersionId) throw new Error('document version unavailable')
@@ -563,6 +781,65 @@ async function retryJourney() {
     retrying.value = false
     persistJourney()
   }
+}
+
+function clearImportDownstreamState() {
+  clearJourneyTimer()
+  closeDocumentProgress()
+  documentProgressStreamRetryAt = 0
+  documentProgressStreamRetryAttempt = 0
+  documentReadyRefreshPending = false
+  importJob.value = null
+  documentProgress.value = null
+  preparationRun.value = null
+  preparationRunId.value = null
+  plan.value = null
+  teachingRun.value = null
+  teachingRunId.value = null
+  lesson.value = null
+  pollingWarning.value = false
+  ensuredLessonPlans.clear()
+}
+
+function reviewAnotherSource() {
+  sequence += 1
+  clearImportDownstreamState()
+  selected.value = null
+  openedSource.value = null
+  consent.value = false
+  identityConfirmed.value = false
+  identityNotice.value = ''
+  state.value = candidates.value.length ? 'review' : 'finding'
+  persistJourney()
+  if (!candidates.value.length) void discover(sequence)
+}
+
+async function retryOriginalImport() {
+  const failedJob = importJob.value
+  if (failedJob?.stage !== 'FAILED' || !failedJob.recovery?.canRetryOriginalSource) return
+  const request = sequence
+  const token = await csrfToken()
+  const response = await fetch(
+    `/api/v1/documents/official-imports/${encodeURIComponent(failedJob.id)}/retry`, {
+      method: 'POST', credentials: 'include', headers: { [token.headerName]: token.token },
+    },
+  )
+  if (request !== sequence) return
+  if (response.status === 401 || response.status === 403) return requireLogin()
+  if (!response.ok) throw new Error('official import retry failed')
+  const retriedJob = normalizeImportJob(await response.json() as OfficialImportJob)
+  if (!retriedJob.id || retriedJob.id === failedJob.id) {
+    throw new Error('official import retry response is invalid')
+  }
+  clearImportDownstreamState()
+  importJob.value = retriedJob
+  preparationRunId.value = retriedJob.teachingPreparationRunId
+  state.value = retriedJob.stage === 'FAILED' && retriedJob.recovery?.canOpenSourceInBrowser
+    ? 'browser-required'
+    : 'journey'
+  persistJourney()
+  notifyBackgroundWorkChanged()
+  if (retriedJob.stage !== 'FAILED') scheduleJourney(0)
 }
 
 async function launchLesson(planId: string, clearFailedRun: boolean) {
@@ -656,15 +933,20 @@ function clearJourneyTimer() {
 
 function resetJourneyState() {
   clearJourneyTimer()
+  stopFindingClock(false)
   closeDocumentProgress()
   documentProgressStreamRetryAt = 0
   documentProgressStreamRetryAttempt = 0
   documentReadyRefreshPending = false
   imported.value = null
   candidates.value = []
+  discoveryIdentity.value = null
+  discoverySummary.value = null
   selected.value = null
   openedSource.value = null
   consent.value = false
+  identityConfirmed.value = false
+  identityNotice.value = ''
   importJob.value = null
   documentProgress.value = null
   preparationRun.value = null
@@ -677,6 +959,18 @@ function resetJourneyState() {
   ensuredLessonPlans.clear()
 }
 
+function normalizeImportedGame(game: ImportedGame): ImportedGame {
+  return {
+    ...game,
+    edition: {
+      ...game.edition,
+      language: typeof game.edition.language === 'string' && game.edition.language.trim()
+        ? game.edition.language
+        : 'und',
+    },
+  }
+}
+
 function normalizeImportJob(job: OfficialImportJob): OfficialImportJob {
   return {
     ...job,
@@ -684,7 +978,44 @@ function normalizeImportJob(job: OfficialImportJob): OfficialImportJob {
     totalBytes: job.totalBytes === undefined ? null : job.totalBytes,
     teachingHandoffState: job.teachingHandoffState ?? 'NOT_REQUESTED',
     teachingPreparationRunId: job.teachingPreparationRunId ?? null,
+    recovery: normalizeImportRecovery(job),
     duplicate: Boolean(job.duplicate),
+  }
+}
+
+const officialImportFailureKinds = new Set<OfficialImportFailureKind>([
+  'NONE', 'TEMPORARY_SOURCE', 'BROWSER_HANDOFF', 'INVALID_SOURCE',
+  'CAPACITY', 'INTERRUPTED', 'OTHER',
+])
+
+function normalizeImportRecovery(job: OfficialImportJob): OfficialImportRecovery {
+  if (job.stage === 'FAILED') {
+    const recovery = job.recovery
+    if (recovery?.state === 'FAILED') {
+      const failureKind = officialImportFailureKinds.has(recovery.failureKind)
+        ? recovery.failureKind
+        : 'OTHER'
+      return {
+        state: 'FAILED', failureKind, busy: false,
+        canChooseAnotherSource: recovery.canChooseAnotherSource === true,
+        canUseLocalUpload: recovery.canUseLocalUpload === true,
+        canRetryOriginalSource: recovery.canRetryOriginalSource === true,
+        canOpenSourceInBrowser: recovery.canOpenSourceInBrowser === true,
+      }
+    }
+    const browserHandoff = job.errorCode === 'SOURCE_BROWSER_REQUIRED'
+    return {
+      state: 'FAILED', failureKind: browserHandoff ? 'BROWSER_HANDOFF' : 'OTHER', busy: false,
+      canChooseAnotherSource: true, canUseLocalUpload: true,
+      canRetryOriginalSource: false, canOpenSourceInBrowser: browserHandoff,
+    }
+  }
+  const settled = job.stage === 'COMPLETED'
+    && ['LAUNCHED', 'FAILED', 'NOT_REQUESTED'].includes(job.teachingHandoffState ?? 'NOT_REQUESTED')
+  return {
+    state: settled ? 'SUCCEEDED' : 'RUNNING', failureKind: 'NONE', busy: !settled,
+    canChooseAnotherSource: false, canUseLocalUpload: false,
+    canRetryOriginalSource: false, canOpenSourceInBrowser: false,
   }
 }
 
@@ -711,6 +1042,8 @@ function persistJourney() {
     sessionStorage.setItem(storageKey(), JSON.stringify({
       imported: imported.value,
       candidates: candidates.value,
+      discoveryIdentity: discoveryIdentity.value,
+      discoverySummary: discoverySummary.value,
       selected: selected.value,
       importJob: importJob.value,
       preparationRunId: preparationRunId.value,
@@ -729,22 +1062,35 @@ function restoreJourney() {
     const stored = JSON.parse(raw) as {
       imported?: ImportedGame
       candidates?: RulebookCandidate[]
+      discoveryIdentity?: RulebookDiscoveryIdentity
+      discoverySummary?: unknown
       selected?: RulebookCandidate
       importJob?: OfficialImportJob
       preparationRunId?: string
       teachingRunId?: string
     }
     if (!stored.imported) return false
-    imported.value = stored.imported
-    candidates.value = Array.isArray(stored.candidates) ? stored.candidates : []
-    selected.value = stored.selected ?? null
+    const restoredImported = normalizeImportedGame(stored.imported)
+    imported.value = restoredImported
+    discoveryIdentity.value = stored.discoveryIdentity?.editionId === restoredImported.edition.id
+      ? stored.discoveryIdentity
+      : null
+    discoverySummary.value = normalizeRulebookDiscoverySummary(stored.discoverySummary)
+    candidates.value = Array.isArray(stored.candidates)
+      ? stored.candidates.map(normalizeRulebookCandidate)
+      : []
+    const restoredSelection = stored.selected ? normalizeRulebookCandidate(stored.selected) : null
+    selected.value = restoredSelection && isImportableCandidate(restoredSelection) ? restoredSelection : null
     if (stored.importJob?.id) {
       importJob.value = normalizeImportJob(stored.importJob)
       preparationRunId.value = stored.preparationRunId ?? stored.importJob.teachingPreparationRunId
       teachingRunId.value = stored.teachingRunId ?? null
       consent.value = true
-      state.value = 'journey'
-      scheduleJourney(0)
+      identityConfirmed.value = true
+      state.value = importJob.value.stage === 'FAILED' && importJob.value.recovery?.canOpenSourceInBrowser
+        ? 'browser-required'
+        : 'journey'
+      if (state.value === 'journey') scheduleJourney(0)
     } else {
       state.value = candidates.value.length ? 'review' : 'finding'
       if (!candidates.value.length) void discover()
@@ -769,7 +1115,7 @@ onBeforeUnmount(() => {
   sequence += 1
   clearJourneyTimer()
   closeDocumentProgress()
-  if (findingClock) clearInterval(findingClock)
+  stopFindingClock(false)
 })
 </script>
 
@@ -786,40 +1132,89 @@ onBeforeUnmount(() => {
     </div>
 
     <div class="p-4 sm:p-5">
-      <p v-if="state === 'preparing' || state === 'finding'" class="flex items-center gap-3 text-sm text-ink/65" role="status">
+      <PlayerWorkStatusText
+        v-if="state !== 'journey' && state !== 'login'"
+        :status="sourceWorkStatus"
+        class="mb-2 text-sm font-semibold text-copper"
+        role="status"
+      />
+
+      <p v-if="state === 'preparing' || state === 'finding'" class="flex items-center gap-3 text-sm text-ink/65">
         <span class="size-2 animate-pulse rounded-full bg-copper" aria-hidden="true" />
         {{ state === 'preparing' ? copy.preparing : findingText }}
       </p>
 
       <template v-else-if="state === 'review'">
-        <h4 class="font-display text-lg font-semibold">{{ copy.found }}</h4>
-        <p class="mt-1 text-xs leading-5 text-ink/50">{{ copy.detail }}</p>
+        <h4 class="font-display text-lg font-semibold">{{ hasImportableCandidate ? copy.found : copy.noImportableTitle }}</h4>
+        <p class="mt-1 text-xs leading-5 text-ink/50">{{ hasImportableCandidate ? copy.detail : copy.noImportableDetail }}</p>
+        <div
+          v-if="discoveryNotice && discoverySummary"
+          data-testid="rulebook-discovery-summary"
+          class="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-950"
+          role="status"
+        >
+          <p>{{ discoveryNotice }} {{ discoveryTiming }}</p>
+          <ul class="mt-2 flex flex-wrap gap-x-4 gap-y-1">
+            <li v-for="provider in discoverySummary.providers" :key="provider.provider">
+              {{ copy.discoveryProviders[provider.provider] }}：{{ copy.discoveryProviderStates[provider.state] }}
+            </li>
+          </ul>
+        </div>
         <ol class="mt-4 grid grid-cols-2 gap-2 text-xs sm:grid-cols-5" :aria-label="copy.progress">
           <li v-for="milestone in milestones" :key="milestone.label" :data-fact-confirmed="milestone.done ? 'true' : 'false'" class="rounded-lg border px-2.5 py-2" :class="milestone.done ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : milestone.active ? 'border-copper/30 bg-copper/5 font-semibold text-copper' : 'border-ink/8 bg-paper text-ink/40'">
             <span class="mr-1" aria-hidden="true">{{ milestone.done ? '✓' : milestone.active ? '●' : '○' }}</span>{{ milestone.label }}
           </li>
         </ol>
         <ul class="mt-4 stack-y-md">
-          <li v-for="candidate in candidates" :key="candidate.url" class="rounded-xl border bg-paper p-4" :class="selected?.url === candidate.url ? 'border-copper/60 ring-2 ring-copper/10' : 'border-ink/10'">
+          <li v-for="candidate in sourceCandidates" :key="candidate.url" :data-capability="candidate.capability" class="rounded-xl border bg-paper p-4" :class="selected?.url === candidate.url ? 'border-copper/60 ring-2 ring-copper/10' : 'border-ink/10'">
             <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
               <div class="min-w-0">
                 <p class="font-semibold">{{ candidate.title }}</p>
                 <a :href="candidate.url" target="_blank" rel="noopener noreferrer" class="mt-1 block break-all text-xs font-semibold text-indigo underline underline-offset-2">{{ candidate.sourceDomain }} ↗</a>
-                <p class="mt-2 text-xs leading-5 text-ink/55">{{ copy.publisher }}：{{ candidate.publisher || copy.unknown }} · {{ copy.language }}：{{ candidate.language || copy.unknown }} · {{ copy.edition }}：{{ candidate.edition || copy.unknown }}</p>
+                <p class="mt-2 text-xs leading-5 text-ink/55">{{ copy.publisher }}：{{ candidate.publisher || copy.unknown }} · {{ copy.language }}：{{ candidateLanguage(candidate) }} · {{ copy.edition }}：{{ candidate.edition || copy.unknown }}</p>
                 <p class="mt-1 text-xs font-semibold" :class="candidate.sourceType === 'PUBLIC_WEB' ? 'text-amber-700' : 'text-emerald-700'">{{ copy.sources[candidate.sourceType] }}</p>
                 <p class="mt-1 text-xs text-ink/45">{{ candidate.acquisitionMode === 'DIRECT_PDF' ? copy.direct : candidate.acquisitionMode === 'IMAGE_GALLERY' ? copy.gallery : copy.page }}</p>
+                <p class="mt-1 text-xs font-semibold text-indigo">{{ copy.capabilities[candidate.capability] }}</p>
               </div>
-              <button type="button" class="min-h-11 shrink-0 rounded-lg border border-copper/35 px-4 text-sm font-semibold text-copper" :aria-pressed="candidate.acquisitionMode !== 'SOURCE_PAGE' ? selected?.url === candidate.url : undefined" @click="choose(candidate)">{{ candidate.acquisitionMode === 'SOURCE_PAGE' ? copy.open : selected?.url === candidate.url ? copy.selected : copy.choose }}</button>
+              <button v-if="candidate.capability !== 'GAME_INFO_ONLY'" type="button" class="min-h-11 shrink-0 rounded-lg border border-copper/35 px-4 text-sm font-semibold text-copper" :aria-pressed="isImportableCandidate(candidate) ? selected?.url === candidate.url : undefined" @click="choose(candidate)">{{ candidateActionLabel(candidate) }}</button>
             </div>
           </li>
         </ul>
+        <div v-if="!hasImportableCandidate" class="mt-4 flex flex-wrap gap-x-4 gap-y-2">
+          <button type="button" class="inline-flex min-h-11 items-center text-sm font-semibold text-indigo underline" @click="discover()">{{ copy.retryDiscovery }} →</button>
+          <RouterLink :to="manualRoute" class="inline-flex min-h-11 items-center text-sm font-semibold text-indigo underline">{{ copy.manual }} →</RouterLink>
+        </div>
+        <section v-if="identityCandidates.length" class="mt-5 border-t border-ink/10 pt-4" :aria-label="copy.identityOnlyTitle">
+          <h5 class="text-sm font-semibold text-ink/70">{{ copy.identityOnlyTitle }}</h5>
+          <p class="mt-1 text-xs leading-5 text-ink/50">{{ copy.identityOnlyDetail }}</p>
+          <ul class="mt-3 stack-y-sm">
+            <li v-for="candidate in identityCandidates" :key="candidate.url" :data-capability="candidate.capability" class="rounded-lg border border-ink/10 bg-paper p-3 text-xs">
+              <p class="font-semibold text-ink/70">{{ candidate.title }}</p>
+              <a :href="candidate.url" target="_blank" rel="noopener noreferrer" class="mt-1 block break-all font-semibold text-indigo underline underline-offset-2">{{ candidate.sourceDomain }} ↗</a>
+              <p class="mt-1 text-ink/50">{{ copy.capabilities[candidate.capability] }}</p>
+            </li>
+          </ul>
+        </section>
         <div v-if="openedSource" class="mt-4 rounded-xl border border-indigo/15 bg-indigo/5 p-4 text-sm leading-6 text-ink/65" role="status">
           <p>{{ copy.sourcePageHandoff }}</p>
           <a :href="openedSource.url" target="_blank" rel="noopener noreferrer" class="mt-3 inline-flex min-h-11 items-center font-semibold text-indigo underline">{{ copy.browserAction }} ↗</a>
           <RouterLink :to="manualRoute" class="ml-4 inline-flex min-h-11 items-center font-semibold text-indigo underline">{{ copy.manual }} →</RouterLink>
         </div>
         <div v-if="selected" class="mt-4 rounded-xl border border-indigo/15 bg-indigo/5 p-4">
-          <label class="flex items-start gap-3 text-sm leading-6 text-ink/65">
+          <RulebookIdentityConfirmation
+            v-if="identityTarget"
+            v-model="identityConfirmed"
+            :target="identityTarget"
+            :source-context="discoveryIdentity"
+            :source="{
+              edition: selected.edition,
+              language: selected.language,
+              languageVerified: selected.languageVerified === true,
+            }"
+            :disabled="retrying"
+          />
+          <p v-if="identityNotice" class="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-950" role="alert">{{ identityNotice }}</p>
+          <label class="mt-3 flex items-start gap-3 text-sm leading-6 text-ink/65">
             <input v-model="consent" type="checkbox" class="mt-1 size-5 shrink-0 accent-indigo">
             <span>{{ copy.consent }}</span>
           </label>
@@ -831,7 +1226,12 @@ onBeforeUnmount(() => {
         <div class="flex items-start justify-between gap-4">
           <div>
             <p class="text-xs font-bold uppercase tracking-[0.12em] text-copper">{{ copy.current }}</p>
-            <p class="mt-1 text-sm font-semibold text-ink" role="status">{{ currentPhaseText }}</p>
+            <PlayerWorkStatusText
+              :status="currentWorkStatus"
+              class="mt-1 text-sm font-semibold text-ink"
+              role="status"
+            />
+            <p class="mt-1 text-xs leading-5 text-ink/55">{{ currentPhaseDetail }}</p>
             <p v-if="journeyDetail" class="mt-1 text-xs leading-5 text-ink/50">{{ journeyDetail }}</p>
           </div>
           <span class="font-mono text-sm font-semibold text-copper">{{ projection.progress }}%</span>
@@ -851,8 +1251,19 @@ onBeforeUnmount(() => {
           <button type="button" class="mt-3 min-h-11 rounded-lg border border-indigo/25 px-4 font-semibold text-indigo" @click="emit('open-rulebook', journeyStatus)">{{ copy.readRulebook }}</button>
         </div>
         <div v-if="projection.state === 'failed' || projection.canReadLesson && projection.retryAction" class="mt-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800" role="alert">
-          <p>{{ projection.canReadLesson ? copy.partialFailure : copy.error }}<span v-if="projection.errorCode" class="mt-1 block font-mono text-xs">{{ projection.errorCode }}</span></p>
-          <button type="button" :disabled="retrying" class="mt-2 min-h-11 font-semibold underline disabled:opacity-40" @click="retryJourney">{{ copy.retry }}</button>
+          <template v-if="importJob?.stage === 'FAILED'">
+            <p class="leading-6">{{ importFailureDetail }}</p>
+            <div class="mt-3 flex flex-wrap gap-3">
+              <button v-if="importJob.recovery?.canChooseAnotherSource !== false" type="button" class="min-h-11 rounded-lg bg-indigo px-4 font-semibold text-white" @click="reviewAnotherSource">{{ copy.chooseAnotherSource }}</button>
+              <RouterLink v-if="importJob.recovery?.canUseLocalUpload !== false" :to="manualRoute" class="inline-flex min-h-11 items-center rounded-lg border border-indigo/25 px-4 font-semibold text-indigo underline" @click="reviewAnotherSource">{{ copy.manual }} →</RouterLink>
+              <a v-if="importJob.recovery?.canOpenSourceInBrowser && selected" :href="selected.url" target="_blank" rel="noopener noreferrer" class="inline-flex min-h-11 items-center font-semibold text-indigo underline">{{ copy.browserAction }} ↗</a>
+              <button v-if="importJob.recovery?.canRetryOriginalSource" type="button" :disabled="retrying" class="min-h-11 rounded-lg border border-red-300 px-4 font-semibold disabled:opacity-40" @click="retryJourney">{{ copy.retryOriginalSource }}</button>
+            </div>
+          </template>
+          <template v-else>
+            <p>{{ projection.canReadLesson ? copy.partialFailure : copy.error }}</p>
+            <button v-if="projection.retryAction" type="button" :disabled="retrying" class="mt-2 min-h-11 font-semibold underline disabled:opacity-40" @click="retryJourney">{{ copy.retry }}</button>
+          </template>
         </div>
         <div v-if="projection.canReadLesson" class="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm leading-6 text-emerald-900">
           <p>{{ projection.state === 'complete' ? copy.complete : copy.readable }}</p>
@@ -874,14 +1285,27 @@ onBeforeUnmount(() => {
 
       <div v-else-if="state === 'unavailable'" class="text-sm leading-6 text-ink/65" role="status">
         <p>{{ copy.unavailable }}</p>
-        <button type="button" class="mt-3 inline-flex min-h-11 items-center font-semibold text-indigo underline" @click="discover()">{{ copy.retry }} →</button>
+        <div
+          v-if="discoveryNotice && discoverySummary"
+          data-testid="rulebook-discovery-summary"
+          class="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-950"
+        >
+          <p>{{ discoveryNotice }} {{ discoveryTiming }}</p>
+          <ul class="mt-2 flex flex-wrap gap-x-4 gap-y-1">
+            <li v-for="provider in discoverySummary.providers" :key="provider.provider">
+              {{ copy.discoveryProviders[provider.provider] }}：{{ copy.discoveryProviderStates[provider.state] }}
+            </li>
+          </ul>
+        </div>
+        <button type="button" class="mt-3 inline-flex min-h-11 items-center font-semibold text-indigo underline" @click="discover()">{{ copy.retryDiscovery }} →</button>
         <RouterLink :to="manualRoute" class="ml-4 inline-flex min-h-11 items-center font-semibold text-indigo underline">{{ copy.manual }} →</RouterLink>
       </div>
 
       <div v-else-if="state === 'browser-required'" class="text-sm leading-6 text-ink/65" role="status">
         <p>{{ copy.browserRequired }}</p>
         <a v-if="selected" :href="selected.url" target="_blank" rel="noopener noreferrer" class="mt-3 inline-flex min-h-11 items-center font-semibold text-indigo underline">{{ copy.browserAction }} ↗</a>
-        <RouterLink :to="manualRoute" class="ml-4 inline-flex min-h-11 items-center font-semibold text-indigo underline">{{ copy.manual }} →</RouterLink>
+        <RouterLink :to="manualRoute" class="ml-4 inline-flex min-h-11 items-center font-semibold text-indigo underline" @click="reviewAnotherSource">{{ copy.manual }} →</RouterLink>
+        <button type="button" class="ml-4 inline-flex min-h-11 items-center font-semibold text-indigo underline" @click="reviewAnotherSource">{{ copy.chooseAnotherSource }}</button>
       </div>
 
       <div v-else class="text-sm text-danger" role="alert">

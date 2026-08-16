@@ -6,6 +6,7 @@ import com.rulepilot.assistant.EvidenceVerifier;
 import com.rulepilot.assistant.EvidenceVerifier.Verification;
 import com.rulepilot.assistant.EvidenceVerifier.VerificationStatus;
 import com.rulepilot.assistant.domain.AnswerStatus;
+import com.rulepilot.retrieval.AnswerEvidenceRetriever;
 import com.rulepilot.retrieval.evidence.HybridEvidenceHit;
 import com.rulepilot.retrieval.evidence.RuleEvidenceHit;
 import java.util.List;
@@ -14,6 +15,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.Test;
 
 class AnswerEvidenceAdmissionGateTest {
+
+    private static final String VISUAL_PLACEHOLDER =
+            "This rulebook page is visual evidence. Text extraction was unavailable; inspect the rendered page image.";
 
     private final UUID documentVersionId = UUID.randomUUID();
 
@@ -79,6 +83,35 @@ class AnswerEvidenceAdmissionGateTest {
         assertThat(admission.ready()).isTrue();
         assertThat(admission.evidence()).containsExactly(evidence);
         assertThat(admission.failureStatus()).isNull();
+    }
+
+    @Test
+    void doesNotAdmitAnExtractionPlaceholderAsRuleEvidence() {
+        AtomicBoolean verified = new AtomicBoolean();
+        HybridEvidenceHit placeholder = new HybridEvidenceHit(
+                new RuleEvidenceHit(
+                        UUID.randomUUID(),
+                        documentVersionId,
+                        "GENERAL",
+                        "Rendered page",
+                        VISUAL_PLACEHOLDER,
+                        17,
+                        17,
+                        0.9),
+                0.9,
+                1,
+                null,
+                false);
+
+        AnswerEvidenceAdmissionGate.Admission admission = gate(request -> {
+                    verified.set(true);
+                    return verified();
+                })
+                .admit(documentVersionId, result(List.of(placeholder), AnswerEvidenceRetriever.State.READY));
+
+        assertThat(admission.ready()).isFalse();
+        assertThat(admission.failureStatus()).isEqualTo(AnswerStatus.INSUFFICIENT_EVIDENCE);
+        assertThat(verified).isFalse();
     }
 
     private AnswerEvidenceAdmissionGate gate(EvidenceVerifier verifier) {

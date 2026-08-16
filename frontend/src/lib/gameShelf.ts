@@ -1,4 +1,6 @@
 import { playerFacingTitle } from '@/lib/lessonPresentation'
+import type { AppLocale } from '@/lib/locale'
+import { playerFacingLanguageName } from '@/lib/playerFacingLanguage'
 
 export interface ShelfCatalogEntry {
   game: { id: string; name: string }
@@ -101,6 +103,7 @@ interface BuildShelfOptions {
   preparationRuns?: ShelfPreparationRun[]
   plansAvailability?: ShelfPlansAvailability
   preparationsAvailability?: ShelfPlansAvailability
+  locale?: AppLocale
 }
 
 const ready = new Set(['READY'])
@@ -117,6 +120,7 @@ export function buildPersonalShelf(
   const preparationById = new Map((options.preparationRuns ?? []).map(run => [run.id, run]))
   const plansAvailability = options.plansAvailability ?? 'READY'
   const preparationsAvailability = options.preparationsAvailability ?? 'READY'
+  const locale = options.locale ?? 'zh-CN'
   const editionLookup = new Map<string, { entry: ShelfCatalogEntry; edition: ShelfCatalogEntry['editions'][number] }>()
   for (const entry of catalog) {
     for (const edition of entry.editions) editionLookup.set(edition.id, { entry, edition })
@@ -142,7 +146,7 @@ export function buildPersonalShelf(
       title,
       coverUrl: metadata?.thumbnailUrl || document.document.officialCoverUrl || null,
       coverAttributionUrl: metadata?.bggUrl || null,
-      editionLabel: assignment ? editionLabel(assignment.edition) : null,
+      editionLabel: assignment ? editionLabel(assignment.edition, locale) : null,
       players: playerLabel(metadata),
       playtimeMinutes: metadata?.playingTimeMinutes ?? null,
       minimumAge: metadata?.minimumAge ?? null,
@@ -195,7 +199,7 @@ export function buildPersonalShelf(
       title: playerFacingTitle(assignment?.entry.game.name ?? job.title ?? job.rulebookTitle),
       coverUrl: metadata?.thumbnailUrl || null,
       coverAttributionUrl: metadata?.bggUrl || null,
-      editionLabel: assignment ? editionLabel(assignment.edition) : job.editionName,
+      editionLabel: assignment ? editionLabel(assignment.edition, locale) : job.editionName,
       players: playerLabel(metadata),
       playtimeMinutes: metadata?.playingTimeMinutes ?? null,
       minimumAge: metadata?.minimumAge ?? null,
@@ -314,9 +318,9 @@ export function hasPendingShelfWork(
   })
 }
 
-function editionLabel(edition: ShelfCatalogEntry['editions'][number]) {
+function editionLabel(edition: ShelfCatalogEntry['editions'][number], locale: AppLocale) {
   const year = edition.publicationYear ? ` · ${edition.publicationYear}` : ''
-  return `${edition.name} · ${edition.language}${year}`
+  return `${edition.name} · ${playerFacingLanguageName(edition.language, locale)}${year}`
 }
 
 function playerLabel(metadata: ShelfCatalogEntry['bggMetadata']) {

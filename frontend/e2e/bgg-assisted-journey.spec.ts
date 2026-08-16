@@ -25,6 +25,11 @@ const candidate = {
   bggUrl: 'https://boardgamegeek.com/boardgame/42',
 }
 
+const directCapability = {
+  capability: 'DIRECT_DOCUMENT', capabilityEvidence: ['DOCUMENT_RESPONSE_CONFIRMED'],
+  capabilityCheckedAt: '2026-08-15T12:00:00Z', nextAction: 'IMPORT_DOCUMENT',
+}
+
 test('covers attributed discovery, official PDF intake, and explicit metadata confirmation on desktop', async ({ page }) => {
   let officialImport: Record<string, unknown> | null = null
   let bggImportCount = 0
@@ -84,6 +89,9 @@ test('covers attributed discovery, official PDF intake, and explicit metadata co
   const officialButton = page.getByRole('button', { name: '下载规则书并生成讲解' })
   await expect(officialButton).toBeDisabled()
   await expect(page.getByRole('textbox', { name: /规则书来源链接/ })).toHaveValue('https://publisher.example/rules.pdf')
+  await expect(page.getByText('目录语言未知，不能用来源语言静默替换')).toBeVisible()
+  await page.getByRole('checkbox', { name: /我已比较以上游戏、版本和语言/ }).check()
+  await expect(officialButton).toBeDisabled()
   await page.getByRole('checkbox', { name: /我确认该来源有权提供这份规则书/ }).check()
   await expect(officialButton).toBeEnabled()
   await officialButton.click()
@@ -95,6 +103,11 @@ test('covers attributed discovery, official PDF intake, and explicit metadata co
     rightsConfirmed: true,
     startTeaching: true,
     learningGoal: null,
+    discoveredForEditionId: 'edition-1',
+    sourceEdition: 'First',
+    sourceLanguage: 'zh-CN',
+    sourceLanguageVerified: true,
+    identityConfirmed: true,
   })
   await expect(page.getByText('规则书与讲解正在后台准备')).toBeVisible()
   await expect(page.getByText('正在下载规则书内容')).toBeVisible()
@@ -121,6 +134,77 @@ test('covers attributed discovery, official PDF intake, and explicit metadata co
   await expect(page.getByRole('link', { name: '打开讲解' })).toHaveAttribute('href', '/lesson/plan-1')
   await page.getByRole('link', { name: '规则答疑' }).click()
   await expect(page).toHaveURL('/lesson/plan-1/questions')
+})
+
+test('keeps requested and displayed rulebook pages atomic across slow, failed, and out-of-order images', async ({ page }) => {
+  let releaseSecond!: () => void
+  let releaseThird!: () => void
+  const secondGate = new Promise<void>((resolve) => { releaseSecond = resolve })
+  const thirdGate = new Promise<void>((resolve) => { releaseThird = resolve })
+  let fourthAttempts = 0
+  await mockOnboardingApis(page, { recommendations: [hotGame], suggestions: [candidate] })
+  await page.route('**/api/v1/document-versions/version-1/pages', route => route.fulfill({ json: [
+    { pageNumber: 1, text: 'First opaque rule page.', characterCount: 23 },
+    { pageNumber: 2, text: 'Second opaque rule page.', characterCount: 24 },
+    { pageNumber: 3, text: 'Third opaque rule page.', characterCount: 23 },
+    { pageNumber: 4, text: 'Fourth opaque rule page.', characterCount: 24 },
+  ] }))
+  await page.route('**/api/v1/document-versions/version-1/pages/*/image', async (route) => {
+    const match = new URL(route.request().url()).pathname.match(/\/pages\/(\d+)\/image$/)
+    const pageNumber = Number(match?.[1])
+    if (pageNumber === 2) await secondGate
+    if (pageNumber === 3) await thirdGate
+    if (pageNumber === 4 && ++fourthAttempts === 1) return route.fulfill({ status: 503 })
+    await route.fulfill({
+      status: 200,
+      contentType: 'image/svg+xml',
+      body: `<svg xmlns="http://www.w3.org/2000/svg" width="800" height="1100"><rect width="100%" height="100%" fill="#fffaf2"/><text x="60" y="100" font-size="42">PAGE ${pageNumber}</text></svg>`,
+    }).catch(() => undefined)
+  })
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  await page.setViewportSize({ width: 1440, height: 900 })
+
+  await page.goto('/rulebooks/version-1')
+  const displayedImage = page.getByTestId('rulebook-page-image')
+  const pageStatus = page.getByTestId('rulebook-page-status')
+  await expect(displayedImage).toHaveAttribute('alt', '规则书第 1 页')
+  await expect(pageStatus).toContainText('第 1 页已显示')
+
+  await page.locator('button[data-page-number="2"]').click()
+  await expect(pageStatus).toContainText('正在加载第 2 页')
+  await expect(displayedImage).toHaveCount(0)
+  await expect(page.locator('button[data-page-number="2"]')).toHaveAttribute('aria-busy', 'true')
+
+  await page.locator('button[data-page-number="3"]').click()
+  await expect(pageStatus).toContainText('正在加载第 3 页')
+  releaseSecond()
+  await expect(pageStatus).toContainText('正在加载第 3 页')
+  await expect(displayedImage).toHaveCount(0)
+
+  releaseThird()
+  await expect(displayedImage).toHaveAttribute('src', '/api/v1/document-versions/version-1/pages/3/image')
+  await expect(displayedImage).toHaveAttribute('alt', '规则书第 3 页')
+  await expect(page.locator('button[data-page-number="3"]')).toHaveAttribute('aria-current', 'page')
+
+  await page.locator('button[data-page-number="4"]').click()
+  await expect(pageStatus).toContainText('第 4 页暂时无法显示')
+  await expect(pageStatus).toHaveAttribute('role', 'alert')
+  await expect(displayedImage).toHaveCount(0)
+  await expect(page.getByRole('link', { name: '在新标签页打开原页' })).toHaveAttribute(
+    'href', '/api/v1/document-versions/version-1/pages/4/image',
+  )
+  await page.getByRole('button', { name: '重试这一页' }).click()
+  await expect(displayedImage).toHaveAttribute('alt', '规则书第 4 页')
+
+  await page.locator('button[data-page-number="4"]').focus()
+  await page.keyboard.press('Home')
+  await expect(page.locator('button[data-page-number="1"]')).toBeFocused()
+  await expect(displayedImage).toHaveAttribute('alt', '规则书第 1 页')
+  const persistedPageImage = await page.evaluate(() => JSON.stringify({
+    local: { ...localStorage },
+    session: { ...sessionStorage },
+  }))
+  expect(persistedPageImage).not.toContain('/pages/')
 })
 
 test('keeps the game identity and primary action in proportion on mobile', async ({ page }) => {
@@ -163,6 +247,183 @@ test('keeps the game identity and primary action in proportion on mobile', async
   expect(proportions.primaryBottom).toBeLessThan(proportions.viewportHeight)
 })
 
+test('uses verified source capability for every desktop source-selection action', async ({ page }) => {
+  await mockOnboardingApis(page, {
+    recommendations: [hotGame],
+    suggestions: [candidate],
+    rulebookCandidates: [{
+      title: 'Opaque confirmed response', url: 'https://publisher.example/asset/42', publisher: 'Opaque Studio',
+      language: 'en', edition: 'First', sourceDomain: 'publisher.example', officialDomainVerified: true,
+      languageVerified: true, sourceType: 'PUBLISHER', acquisitionMode: 'DIRECT_PDF', ...directCapability,
+    }, {
+      title: 'Opaque page sequence', url: 'https://pages.example/viewer/42', publisher: 'Opaque Studio',
+      language: 'en', edition: 'First', sourceDomain: 'pages.example', officialDomainVerified: true,
+      languageVerified: true, sourceType: 'PUBLISHER', acquisitionMode: 'IMAGE_GALLERY',
+      capability: 'CONTIGUOUS_RULE_PAGES', capabilityEvidence: ['ORDERED_PAGE_SEQUENCE_CONFIRMED'],
+      capabilityCheckedAt: '2026-08-15T12:00:00Z', nextAction: 'IMPORT_PAGE_SEQUENCE',
+    }, {
+      title: 'Opaque document collection', url: 'https://listing.example/files', publisher: 'Opaque Studio',
+      language: 'en', edition: 'First', sourceDomain: 'listing.example', officialDomainVerified: true,
+      sourceType: 'PUBLISHER', acquisitionMode: 'SOURCE_PAGE', capability: 'DOCUMENT_LISTING',
+      capabilityEvidence: ['DOWNLOADABLE_DOCUMENT_LINKS_OBSERVED'],
+      capabilityCheckedAt: '2026-08-15T12:00:00Z', nextAction: 'CONTINUE_ON_SOURCE',
+    }, {
+      title: 'Rules PDF download', url: 'https://catalog.example/not-a-document.pdf', publisher: 'Opaque Studio',
+      language: 'en', edition: 'First', sourceDomain: 'catalog.example', officialDomainVerified: true,
+      sourceType: 'PUBLISHER', acquisitionMode: 'SOURCE_PAGE', capability: 'GAME_INFO_ONLY',
+      capabilityEvidence: ['EXPLICIT_EMPTY_DOCUMENT_COLLECTION'],
+      capabilityCheckedAt: '2026-08-15T12:00:00Z', nextAction: 'USE_FOR_IDENTITY_ONLY',
+    }, {
+      title: 'Opaque protected page', url: 'https://review.example/login', publisher: 'Opaque Studio',
+      language: 'en', edition: 'First', sourceDomain: 'review.example', officialDomainVerified: true,
+      sourceType: 'PUBLISHER', acquisitionMode: 'SOURCE_PAGE', capability: 'UNVERIFIED_PAGE',
+      capabilityEvidence: ['ACCESS_REQUIRES_LOGIN'], capabilityCheckedAt: '2026-08-15T12:00:00Z',
+      nextAction: 'REVIEW_OR_UPLOAD',
+    }],
+  })
+  await page.addInitScript(() => {
+    Object.defineProperty(window, '__openedRulebookSources', { value: [], writable: true })
+    window.open = ((url?: string | URL) => {
+      ;(window as Window & { __openedRulebookSources: string[] }).__openedRulebookSources.push(String(url))
+      return null
+    }) as typeof window.open
+  })
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto('/teach?editionId=edition-1&onboarding=selected-game')
+
+  await page.getByRole('button', { name: '帮我找规则书' }).click()
+  await expect(page.locator('[data-capability="DIRECT_DOCUMENT"] button')).toHaveText('选择并继续核对')
+  await expect(page.locator('[data-capability="CONTIGUOUS_RULE_PAGES"] button')).toHaveText('选择并继续核对')
+  await expect(page.locator('[data-capability="DOCUMENT_LISTING"] button')).toHaveText('继续查找文件')
+  await expect(page.locator('[data-capability="UNVERIFIED_PAGE"] button')).toHaveText('审阅来源页')
+  await expect(page.locator('[data-capability="GAME_INFO_ONLY"] button')).toHaveCount(0)
+
+  await page.locator('[data-capability="DOCUMENT_LISTING"] button').click()
+  await page.locator('[data-capability="UNVERIFIED_PAGE"] button').click()
+  await expect.poll(() => page.evaluate(() =>
+    (window as Window & { __openedRulebookSources: string[] }).__openedRulebookSources,
+  )).toEqual(['https://listing.example/files', 'https://review.example/login'])
+
+  await page.locator('[data-capability="DIRECT_DOCUMENT"] button').click()
+  await expect(page.getByRole('textbox', { name: /规则书来源链接/ }))
+    .toHaveValue('https://publisher.example/asset/42')
+})
+
+test('keeps source discovery honest through a bounded partial terminal state on desktop', async ({ page }) => {
+  let releaseDiscovery!: () => void
+  const discoveryGate = new Promise<void>((resolve) => { releaseDiscovery = resolve })
+  await mockOnboardingApis(page, {
+    recommendations: [hotGame],
+    suggestions: [candidate],
+    rulebookDiscoveryGate: discoveryGate,
+    rulebookCandidates: [{
+      title: 'Opaque document collection', url: 'https://listing.example/files', publisher: 'Opaque Studio',
+      language: 'en', edition: 'First', sourceDomain: 'listing.example', officialDomainVerified: true,
+      sourceType: 'PUBLISHER', acquisitionMode: 'SOURCE_PAGE', capability: 'DOCUMENT_LISTING',
+      capabilityEvidence: ['DOWNLOADABLE_DOCUMENT_LINKS_OBSERVED'],
+      capabilityCheckedAt: '2026-08-15T12:00:00Z', nextAction: 'CONTINUE_ON_SOURCE',
+    }],
+    rulebookDiscoverySummary: {
+      completion: 'PARTIAL', elapsedMs: 18_025, totalBudgetMs: 30_000,
+      providers: [
+        { provider: 'CATALOG', state: 'FINISHED', elapsedMs: 35 },
+        { provider: 'SOURCE_INSPECTION', state: 'FINISHED', elapsedMs: 120 },
+        { provider: 'WEB_SEARCH', state: 'TIMED_OUT', elapsedMs: 18_000 },
+      ],
+    },
+  })
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto('/teach?editionId=edition-1&onboarding=selected-game')
+
+  await page.getByRole('button', { name: '帮我找规则书' }).click()
+  await expect(page.getByRole('button', { name: /已等待 1 秒/ })).toBeVisible({ timeout: 3_000 })
+  releaseDiscovery()
+  await expect(page.getByTestId('rulebook-discovery-summary')).toContainText('部分来源未在本次预算内完成')
+  await expect(page.getByTestId('rulebook-discovery-summary')).toContainText('联网搜索: 已超时')
+  await expect(page.locator('[data-capability="DOCUMENT_LISTING"] button')).toHaveText('继续查找文件')
+  await expect(page.getByRole('button', { name: '继续查找', exact: true })).toBeVisible()
+  await expect(page.getByRole('link', { name: '上传本地规则书' })).toHaveAttribute('href', '#rulebook-file')
+})
+
+test('releases a terminal import and restores a safe edition-aware intake draft on desktop', async ({ page }) => {
+  await mockOnboardingApis(page, {
+    recommendations: [hotGame],
+    suggestions: [candidate],
+    recoveredOfficialImport: {
+      id: 'failed-import', title: 'Catalog Game', rulebookTitle: 'Preserved FAQ',
+      editionId: 'edition-1', editionName: 'BGG 基础版', sourceDomain: 'publisher.example',
+      officialSourceUrl: 'https://publisher.example/not-a-rulebook', sourceType: 'OFFICIAL_FAQ',
+      learningGoal: '先讲设置，再讲容易遗漏的例外。',
+      stage: 'FAILED', downloadedBytes: 512, totalBytes: 4096, documentVersionId: null,
+      duplicate: false, errorCode: 'INVALID_PDF_SOURCE', reused: false,
+      teachingHandoffState: 'FAILED', teachingPreparationRunId: null, teachingErrorCode: 'IMPORT_FAILED',
+      recovery: {
+        state: 'FAILED', failureKind: 'INVALID_SOURCE', busy: false,
+        canChooseAnotherSource: true, canUseLocalUpload: true,
+        canRetryOriginalSource: false, canOpenSourceInBrowser: false,
+      },
+    },
+  })
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto('/teach?importJob=failed-import')
+
+  await expect(page.getByText(/下载的内容不是可安全导入的规则书文件/)).toBeVisible()
+  await expect(page.locator('#rulebook-file')).toBeEnabled()
+  await expect(page.locator('input[maxlength="160"]')).toHaveValue('Preserved FAQ')
+  await expect(page.locator('select').filter({ has: page.locator('option[value="edition-1"]') })).toHaveValue('edition-1')
+  await expect(page.getByLabel('这是什么资料？')).toHaveValue('OFFICIAL_FAQ')
+  await expect(page.locator('textarea')).toHaveValue('先讲设置，再讲容易遗漏的例外。')
+  await expect(page.locator('input[type="url"]')).toHaveValue('')
+  await expect(page.locator('input[type="checkbox"]:checked')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '重新选择来源' })).toBeVisible()
+  await expect(page.getByRole('button', { name: '改用本地上传' })).toBeVisible()
+  await expect(page.getByRole('button', { name: '重试原来源' })).toHaveCount(0)
+
+  await page.getByRole('button', { name: '重新选择来源' }).click()
+  await expect(page).toHaveURL('/teach')
+  await expect(page.getByText(/下载的内容不是可安全导入的规则书文件/)).toHaveCount(0)
+  await expect(page.locator('input[maxlength="160"]')).toHaveValue('Preserved FAQ')
+  await expect(page.getByRole('textbox', { name: /规则书来源链接/ })).toBeFocused()
+})
+
+test('keeps a newer local upload in control when an old import poll is late on desktop', async ({ page }) => {
+  let oldJobReads = 0
+  let localUploads = 0
+  await mockOnboardingApis(page, {
+    recommendations: [hotGame],
+    suggestions: [candidate],
+    recoveredOfficialImport: {
+      id: 'old-import', title: 'Old remote rules', sourceDomain: 'old-source.example',
+      stage: 'QUEUED', downloadedBytes: 0, totalBytes: null, documentVersionId: null,
+      duplicate: false, errorCode: null, reused: false,
+      teachingHandoffState: 'WAITING_FOR_DOCUMENT', teachingPreparationRunId: null,
+      teachingErrorCode: null,
+    },
+    recoveredOfficialImportStatus: 503,
+    onRecoveredOfficialImportRead: () => { oldJobReads += 1 },
+    onDocumentUpload: () => { localUploads += 1 },
+  })
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto('/teach?importJob=old-import')
+
+  await expect(page.getByText(/暂时没有收到最新读取进度，正在重新连接/)).toBeVisible()
+  await expect(page.locator('#rulebook-file')).toBeEnabled()
+  expect(oldJobReads).toBe(1)
+
+  await page.locator('#rulebook-file').setInputFiles({
+    name: 'new-local-rules.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.7'),
+  })
+  await page.getByRole('button', { name: '上传规则书并生成讲解', exact: true }).click()
+
+  await expect.poll(() => localUploads).toBe(1)
+  await expect(page).toHaveURL('/teach')
+  await expect(page.getByText(/你可以离开这里，处理会在后台继续/)).toBeVisible()
+  await page.waitForTimeout(1_250)
+  expect(oldJobReads).toBe(1)
+  await expect(page.getByText('Old remote rules')).toHaveCount(0)
+  await expect(page.locator('#rulebook-file')).toBeEnabled()
+})
+
 test('keeps manual onboarding and the ready guide usable when BGG fails on mobile', async ({ page }) => {
   await mockOnboardingApis(page, { recommendations: null, suggestions: null })
   await page.setViewportSize({ width: 390, height: 844 })
@@ -192,6 +453,13 @@ async function mockOnboardingApis(page: Page, options: {
   onOfficialImport?: (body: Record<string, unknown>) => void
   onBggImport?: () => void
   onBggLink?: (body: Record<string, unknown>) => void
+  rulebookCandidates?: Array<Record<string, unknown>>
+  rulebookDiscoveryGate?: Promise<void>
+  rulebookDiscoverySummary?: Record<string, unknown>
+  recoveredOfficialImport?: Record<string, unknown>
+  recoveredOfficialImportStatus?: number
+  onRecoveredOfficialImportRead?: () => void
+  onDocumentUpload?: () => void
 }) {
   await page.route('**/api/**', async (route) => {
     const request = route.request()
@@ -282,17 +550,36 @@ async function mockOnboardingApis(page: Page, options: {
       } })
     }
     if (path === '/api/v1/documents/rulebook-candidates') {
+      if (options.rulebookDiscoveryGate) await options.rulebookDiscoveryGate
       return route.fulfill({ json: {
         configured: true,
-        candidates: [{
+        identity: {
+          editionId: 'edition-1', gameName: 'Catalog Game', editionName: 'BGG 基础版', language: 'und',
+        },
+        candidates: options.rulebookCandidates ?? [{
           title: 'Catalog Game Rules', url: 'https://publisher.example/rules.pdf', publisher: 'Publisher',
-          language: 'zh-CN', edition: 'First', sourceDomain: 'publisher.example', officialDomainVerified: true,
+          language: 'zh-CN', languageVerified: true, edition: 'First', sourceDomain: 'publisher.example', officialDomainVerified: true,
           sourceType: 'PUBLISHER', acquisitionMode: 'DIRECT_PDF',
+          ...directCapability,
         }],
+        discovery: options.rulebookDiscoverySummary ?? {
+          completion: 'COMPLETE', elapsedMs: 120, totalBudgetMs: 30_000,
+          providers: [
+            { provider: 'CATALOG', state: 'FINISHED', elapsedMs: 20 },
+            { provider: 'SOURCE_INSPECTION', state: 'FINISHED', elapsedMs: 80 },
+            { provider: 'WEB_SEARCH', state: 'SKIPPED', elapsedMs: 0 },
+          ],
+        },
       } })
     }
     if (path === '/api/v1/documents' && request.method() === 'GET') {
       return route.fulfill({ json: [readyDocument] })
+    }
+    if (path === '/api/v1/documents' && request.method() === 'POST') {
+      options.onDocumentUpload?.()
+      return route.fulfill({ status: 201, json: {
+        duplicate: false, version: { id: 'local-version', status: 'READY' },
+      } })
     }
     if (path === '/api/v1/documents/upload-teaching-handoffs' && request.method() === 'GET') {
       return route.fulfill({ json: [] })
@@ -317,6 +604,15 @@ async function mockOnboardingApis(page: Page, options: {
         downloadedBytes: 0, totalBytes: 4096, documentVersionId: null, duplicate: false, errorCode: null, reused: false,
         teachingHandoffState: 'WAITING_FOR_DOCUMENT', teachingPreparationRunId: null, teachingErrorCode: null,
       } })
+    }
+    if (options.recoveredOfficialImport
+      && path === `/api/v1/documents/official-imports/${options.recoveredOfficialImport.id}`
+      && request.method() === 'GET') {
+      options.onRecoveredOfficialImportRead?.()
+      if (options.recoveredOfficialImportStatus) {
+        return route.fulfill({ status: options.recoveredOfficialImportStatus })
+      }
+      return route.fulfill({ json: options.recoveredOfficialImport })
     }
     if (path === '/api/v1/documents/official-imports/import-job-1' && request.method() === 'GET') {
       return route.fulfill({ json: {

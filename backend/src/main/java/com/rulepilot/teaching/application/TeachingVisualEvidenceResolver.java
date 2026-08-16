@@ -94,7 +94,7 @@ final class TeachingVisualEvidenceResolver {
                 .flatMap(section -> section.sourcePageNumbers().stream())
                 .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
         visualFacts.find(plan.documentVersionId(), requested).stream()
-                .filter(fact -> fact.schemaVersion() == VisualRulebookPageFacts.PageFact.CURRENT_SCHEMA_VERSION)
+                .filter(VisualRulebookCatalogPolicy::hasReusableCompleteRuleLedger)
                 .map(VisualRulebookPageFacts.PageFact::pageNumber)
                 .forEach(requested::remove);
         if (requested.isEmpty()) return;
@@ -125,7 +125,7 @@ final class TeachingVisualEvidenceResolver {
                     .map(VisualRulebookCatalogPolicy::toPageFact)
                     .toList();
             if (!interpreted.isEmpty()) {
-                visualFacts.merge(plan.documentVersionId(), interpreted);
+                persistInterpretedFacts(plan.documentVersionId(), interpreted);
                 log.info(
                         "Progressive Teaching continuation stored visual facts for document {} pages {}",
                         plan.documentVersionId(),
@@ -189,6 +189,7 @@ final class TeachingVisualEvidenceResolver {
             List<RuleEvidence> pageEvidence,
             List<RuleEvidence> enriched,
             UUID assistantRunId) {
+        boolean progressive = ProgressiveVisualTeachingPlanPolicy.isProgressive(plan);
         Map<Integer, AssistantReadTools.RulePageImage> images = new LinkedHashMap<>();
         pageEvidence.stream()
                 .filter(TeachingVisualEvidenceSelector::isVisualPageEvidence)
@@ -207,17 +208,15 @@ final class TeachingVisualEvidenceResolver {
                         "inspectRequiredVisualPage|" + planned.position() + "|" + image.pageNumber(),
                         800,
                         requiredPageInterpretationSummary(plan),
-                        () -> ProgressiveVisualTeachingPlanPolicy.isProgressive(plan)
+                        () -> progressive
                                 ? visualCatalog.summarizeForTeaching(request)
                                 : visualCatalog.summarize(request),
                         result -> estimateTokens(result.toString()));
                 interpreted.addAll(catalog.pages().stream()
-                        .map(summary -> new VisualRulebookPageFacts.PageFact(
-                                summary.pageNumber(),
-                                summary.printedTerms(),
-                                summary.factualSummary(),
-                                summary.keywords(),
-                                summary.visualAnchors()))
+                        .map(summary -> progressive
+                                ? VisualRulebookCatalogPolicy.teachingStartupFact(summary)
+                                : VisualRulebookCatalogPolicy.requireCompleteRuleLedger(summary))
+                        .map(VisualRulebookCatalogPolicy::toPageFact)
                         .toList());
             } catch (AgentExecutionStoppedException stopped) {
                 throw stopped;
@@ -230,7 +229,7 @@ final class TeachingVisualEvidenceResolver {
             }
         }
         if (interpreted.isEmpty()) return enriched;
-        visualFacts.merge(plan.documentVersionId(), interpreted);
+        persistInterpretedFacts(plan.documentVersionId(), interpreted);
         log.info(
                 "Teaching topic {} added on-demand visual facts for pages {}",
                 planned.topicKey(),
@@ -249,6 +248,7 @@ final class TeachingVisualEvidenceResolver {
         if (pages.isEmpty()) return evidence;
         Map<Integer, String> factsByPage = Stream.concat(
                         visualFacts.find(documentVersionId, pages).stream(), supplementalFacts.stream())
+                .filter(VisualRulebookCatalogPolicy::hasReusableCompleteRuleLedger)
                 .collect(Collectors.toUnmodifiableMap(
                         VisualRulebookPageFacts.PageFact::pageNumber,
                         VisualRulebookPageFacts.PageFact::transcribedRuleEvidenceText,
@@ -269,6 +269,30 @@ final class TeachingVisualEvidenceResolver {
                             source.pageImages());
                 })
                 .toList();
+    }
+
+    private void persistInterpretedFacts(
+            UUID documentVersionId, List<VisualRulebookPageFacts.PageFact> interpreted) {
+        if (interpreted.stream().anyMatch(fact -> !VisualRulebookCatalogPolicy.hasReusableCompleteRuleLedger(fact))) {
+            throw new IllegalArgumentException("teaching visual page fact does not contain a reusable complete rule ledger");
+        }
+        Set<Integer> pages = interpreted.stream()
+                .map(VisualRulebookPageFacts.PageFact::pageNumber)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        Map<Integer, VisualRulebookPageFacts.PageFact> existing = visualFacts.find(documentVersionId, pages).stream()
+                .collect(Collectors.toMap(
+                        VisualRulebookPageFacts.PageFact::pageNumber,
+                        java.util.function.Function.identity(),
+                        (first, ignored) -> first));
+        List<VisualRulebookPageFacts.PageFact> durable = interpreted.stream()
+                .map(observation -> {
+                    VisualRulebookPageFacts.PageFact prior = existing.get(observation.pageNumber());
+                    return prior == null
+                            ? observation
+                            : VisualRulebookCatalogPolicy.mergePersistedPageFact(prior, observation);
+                })
+                .toList();
+        visualFacts.merge(documentVersionId, durable);
     }
 
     private int evidenceTokens(List<RuleEvidence> evidence) {

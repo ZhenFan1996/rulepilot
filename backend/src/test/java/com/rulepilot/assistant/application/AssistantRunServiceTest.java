@@ -56,6 +56,7 @@ class AssistantRunServiceTest {
                 16,
                 24_000,
                 Duration.ofMinutes(2),
+                Duration.ofSeconds(30),
                 72,
                 40,
                 300_000,
@@ -75,7 +76,7 @@ class AssistantRunServiceTest {
                 .containsExactly(
                         org.assertj.core.groups.Tuple.tuple(40, 300_000, Duration.ofMinutes(30)),
                         org.assertj.core.groups.Tuple.tuple(192, 600_000, Duration.ofMinutes(30)),
-                        org.assertj.core.groups.Tuple.tuple(16, 24_000, Duration.ofMinutes(2)));
+                        org.assertj.core.groups.Tuple.tuple(16, 24_000, Duration.ofSeconds(30)));
     }
 
     @Test
@@ -135,6 +136,7 @@ class AssistantRunServiceTest {
                 16,
                 24_000,
                 Duration.ofMinutes(2),
+                Duration.ofSeconds(30),
                 72,
                 40,
                 300_000,
@@ -225,6 +227,7 @@ class AssistantRunServiceTest {
                 16,
                 24_000,
                 Duration.ofMinutes(2),
+                Duration.ofSeconds(30),
                 72,
                 40,
                 300_000,

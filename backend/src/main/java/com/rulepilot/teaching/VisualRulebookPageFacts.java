@@ -1,6 +1,7 @@
 package com.rulepilot.teaching;
 
 import com.rulepilot.retrieval.VisualTranscribedRuleEvidence;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.SourceDependency;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
@@ -48,7 +49,10 @@ public interface VisualRulebookPageFacts {
             List<VisualAnchor> visualAnchors,
             List<IconOccurrence> iconOccurrences,
             boolean iconInventoryComplete,
-            int schemaVersion) {
+            int schemaVersion,
+            List<SourceDependency> sourceDependencies,
+            List<String> ruleGroupIdentifiers,
+            boolean ruleGroupInventoryComplete) {
 
         // Schema 23 records the crop-review rectangle after it has been projected back to source-page coordinates.
         // Schema 22 facts were cataloged before the application published that refined rectangle and must be rebuilt.
@@ -59,10 +63,28 @@ public interface VisualRulebookPageFacts {
         // Schema 26 preserves dense-page tile facts and binds each visible list/grid identifier to its own rule.
         // Schema 27 verifies ambiguous cell pictograms against labeled reference artwork from the active document.
         // Schema 28 retains shared rules alongside independently bound cells on dense catalog pages.
-        public static final int CURRENT_SCHEMA_VERSION = 28;
+        // Schema 29 rebuilds page ledgers with numerical aggregation owners, multipliers, and worked formulas intact.
+        // Schema 30 retains every independently inventoried visual rule group for source-coverage review.
+        // Schema 31 persists explicitly named external-source dependencies separately from executable page rules.
+        // Schema 32 persists the complete page-owned gameplay rule-group inventory used by teaching coverage gates.
+        // Schema 33 rejects summaries that would lose a bound rule-group fact at the durable 4,000-character edge.
+        // Schema 34 embeds validated, page- and rule-group-bound quantity observations in the factual ledger while
+        // preserving their original short source spans and refusing unsafe arithmetic.
+        public static final int CURRENT_SCHEMA_VERSION = 34;
 
         public PageFact(int pageNumber, String printedTerms, String factualSummary, List<String> keywords) {
-            this(pageNumber, printedTerms, factualSummary, keywords, List.of(), List.of(), false, CURRENT_SCHEMA_VERSION);
+            this(
+                    pageNumber,
+                    printedTerms,
+                    factualSummary,
+                    keywords,
+                    List.of(),
+                    List.of(),
+                    false,
+                    CURRENT_SCHEMA_VERSION,
+                    List.of(),
+                    List.of(),
+                    false);
         }
 
         public PageFact(
@@ -79,7 +101,10 @@ public interface VisualRulebookPageFacts {
                     visualAnchors,
                     List.of(),
                     false,
-                    CURRENT_SCHEMA_VERSION);
+                    CURRENT_SCHEMA_VERSION,
+                    List.of(),
+                    List.of(),
+                    false);
         }
 
         public PageFact(
@@ -89,19 +114,81 @@ public interface VisualRulebookPageFacts {
                 List<String> keywords,
                 List<VisualAnchor> visualAnchors,
                 int schemaVersion) {
-            this(pageNumber, printedTerms, factualSummary, keywords, visualAnchors, List.of(), false, schemaVersion);
+            this(
+                    pageNumber,
+                    printedTerms,
+                    factualSummary,
+                    keywords,
+                    visualAnchors,
+                    List.of(),
+                    false,
+                    schemaVersion,
+                    List.of(),
+                    List.of(),
+                    false);
+        }
+
+        public PageFact(
+                int pageNumber,
+                String printedTerms,
+                String factualSummary,
+                List<String> keywords,
+                List<VisualAnchor> visualAnchors,
+                List<IconOccurrence> iconOccurrences,
+                boolean iconInventoryComplete,
+                int schemaVersion) {
+            this(
+                    pageNumber,
+                    printedTerms,
+                    factualSummary,
+                    keywords,
+                    visualAnchors,
+                    iconOccurrences,
+                    iconInventoryComplete,
+                    schemaVersion,
+                    List.of(),
+                    List.of(),
+                    false);
+        }
+
+        public PageFact(
+                int pageNumber,
+                String printedTerms,
+                String factualSummary,
+                List<String> keywords,
+                List<VisualAnchor> visualAnchors,
+                List<IconOccurrence> iconOccurrences,
+                boolean iconInventoryComplete,
+                int schemaVersion,
+                List<SourceDependency> sourceDependencies) {
+            this(
+                    pageNumber,
+                    printedTerms,
+                    factualSummary,
+                    keywords,
+                    visualAnchors,
+                    iconOccurrences,
+                    iconInventoryComplete,
+                    schemaVersion,
+                    sourceDependencies,
+                    List.of(),
+                    false);
         }
 
         public PageFact {
             if (pageNumber < 1 || printedTerms == null || printedTerms.isBlank() || factualSummary == null
                     || factualSummary.isBlank() || keywords == null || keywords.isEmpty() || visualAnchors == null
-                    || iconOccurrences == null) {
+                    || iconOccurrences == null || sourceDependencies == null) {
                 throw new IllegalArgumentException("visual page fact is invalid");
             }
             if (printedTerms.length() > 2_000 || factualSummary.length() > 4_000 || keywords.size() > 12
                     || keywords.stream().anyMatch(keyword -> keyword == null || keyword.isBlank() || keyword.length() > 120)
                     || visualAnchors.size() > 8
-                    || iconOccurrences.size() > 32) {
+                    || iconOccurrences.size() > 32
+                    || sourceDependencies.size() > 4
+                    || ruleGroupIdentifiers == null || ruleGroupIdentifiers.size() > 16
+                    || ruleGroupIdentifiers.stream()
+                            .anyMatch(identifier -> identifier == null || identifier.isBlank() || identifier.length() > 120)) {
                 throw new IllegalArgumentException("visual page fact is too large");
             }
             if (schemaVersion < 1 || schemaVersion > CURRENT_SCHEMA_VERSION) {
@@ -112,6 +199,13 @@ public interface VisualRulebookPageFacts {
             keywords = keywords.stream().map(String::strip).distinct().toList();
             visualAnchors = visualAnchors.stream().distinct().toList();
             iconOccurrences = iconOccurrences.stream().distinct().toList();
+            sourceDependencies = sourceDependencies.stream().distinct().toList();
+            ruleGroupIdentifiers = ruleGroupIdentifiers.stream().map(String::strip).distinct().toList();
+            if (ruleGroupInventoryComplete
+                    && !VisualSourceRuleGroupLedger.hasExactFactBindings(ruleGroupIdentifiers, factualSummary)) {
+                throw new IllegalArgumentException(
+                        "complete rule-group inventory requires one exact non-empty fact per identifier");
+            }
         }
 
         public String evidenceText() {

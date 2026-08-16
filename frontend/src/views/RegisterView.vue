@@ -4,7 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 
 import ProductMark from '@/components/ProductMark.vue'
 import LanguageSwitcher from '@/components/LanguageSwitcher.vue'
-import { safeAuthReturnPath } from '@/lib/authSession'
+import { safeKnownAuthReturnPath } from '@/lib/authSession'
 import { useLocale } from '@/lib/locale'
 
 interface CsrfResponse { headerName: string; token: string }
@@ -29,7 +29,7 @@ const failure = ref<RegistrationFailure | null>(null)
 const usernameInput = ref<HTMLInputElement | null>(null)
 const confirmationInput = ref<HTMLInputElement | null>(null)
 const errorSummary = ref<HTMLElement | null>(null)
-const returnPath = computed(() => safeAuthReturnPath(route.query.redirect))
+const returnPath = computed(() => safeKnownAuthReturnPath(router, route.query.redirect))
 const loginTarget = computed(() => returnPath.value
   ? { name: 'login', query: { redirect: returnPath.value } }
   : { name: 'login' })
@@ -109,7 +109,7 @@ async function register() {
     await exposeFailure(nextFailure)
     return
   }
-  await router.replace(returnPath.value ?? { name: 'account' })
+  await router.replace(returnPath.value ?? { name: 'home' })
 }
 </script>
 

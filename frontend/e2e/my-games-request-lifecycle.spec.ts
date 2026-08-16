@@ -8,7 +8,7 @@ test('keeps the selected game visible from durable import through rulebook and g
   await page.goto('/catalog')
   await expect(page.getByRole('heading', { name: 'Catalog Game', exact: true })).toBeVisible()
   await expect(page.getByText('规则书正在加入')).toBeVisible()
-  await expect(page.getByText('讲解正在准备')).toBeVisible()
+  await expect(page.getByText('正在组织讲解', { exact: true })).toBeVisible()
   await expect(page.getByRole('link', { name: /查看准备进度/ })).toHaveAttribute('href', '/games/game-1')
   expect(await hasHorizontalOverflow(page)).toBe(false)
 
@@ -22,8 +22,10 @@ test('keeps the selected game visible from durable import through rulebook and g
   stage = 'DOCUMENT'
   await page.reload()
   await expect(page.getByText('Official Rules')).toBeVisible()
-  await expect(page.getByText('规则书可用')).toBeVisible()
-  await expect(page.getByText('讲解任务已持久化，正在后台准备')).toBeVisible()
+  await expect(page.getByTestId('player-work-status').filter({ hasText: '规则书可读' })).toBeVisible()
+  const preparationStatus = page.getByTestId('player-work-status').filter({ hasText: '正在组织讲解' })
+  await expect(preparationStatus).toBeVisible()
+  await expect(preparationStatus).toHaveAttribute('data-player-work-readiness', 'usable')
   await expect(page.getByRole('link', { name: '开始讲解' })).toHaveCount(0)
 
   stage = 'GUIDE'
@@ -170,7 +172,9 @@ test('refreshes workspace relationships without repeating optional BGG enrichmen
 
   await page.clock.install()
   await page.goto('/games/game-1')
-  await expect(page.getByText('讲解任务已持久化，正在后台准备')).toBeVisible()
+  const preparationStatus = page.getByTestId('player-work-status').filter({ hasText: '正在组织讲解' })
+  await expect(preparationStatus).toBeVisible()
+  await expect(preparationStatus).toHaveAttribute('data-player-work-readiness', 'usable')
   await expect(page.getByText('One presentation read')).toBeVisible()
   expect(bggReads).toBe(1)
   stage = 'GUIDE'
@@ -234,7 +238,8 @@ test('shows an exact failed preparation and stops claiming or observing backgrou
 
   await page.clock.install()
   await page.goto('/games/game-1')
-  await expect(page.getByText('讲解准备需要处理')).toBeVisible()
+  await expect(page.getByTestId('player-work-status').filter({ hasText: '需要处理' })).toBeVisible()
+  await expect(page.getByText('讲解准备没有完成')).toBeVisible()
   await expect(page.getByText('讲解任务已持久化，正在后台准备')).toHaveCount(0)
   await expect(page.getByRole('link', { name: /去我的讲解重试/ })).toHaveAttribute('href', '/lessons')
   const settledImportReads = importReads

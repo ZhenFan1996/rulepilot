@@ -27,6 +27,34 @@ const game = {
   bggUrl: 'https://boardgamegeek.com/boardgame/266192',
 }
 
+const discoveryIdentity = {
+  editionId: 'edition-1',
+  gameName: '展翅翱翔',
+  editionName: 'BGG 版本',
+  language: 'und',
+}
+
+const confirmedDocumentCapability = {
+  capability: 'DIRECT_DOCUMENT',
+  capabilityEvidence: ['DOCUMENT_RESPONSE_CONFIRMED'],
+  capabilityCheckedAt: '2026-08-15T12:00:00Z',
+  nextAction: 'IMPORT_DOCUMENT',
+} as const
+
+const confirmedGalleryCapability = {
+  capability: 'CONTIGUOUS_RULE_PAGES',
+  capabilityEvidence: ['ORDERED_PAGE_SEQUENCE_CONFIRMED'],
+  capabilityCheckedAt: '2026-08-15T12:00:00Z',
+  nextAction: 'IMPORT_PAGE_SEQUENCE',
+} as const
+
+const documentListingCapability = {
+  capability: 'DOCUMENT_LISTING',
+  capabilityEvidence: ['KNOWN_DOCUMENT_LISTING_ROUTE'],
+  capabilityCheckedAt: '2026-08-15T12:00:00Z',
+  nextAction: 'CONTINUE_ON_SOURCE',
+} as const
+
 function runSnapshot(id: string, state: string) {
   return {
     run: {
@@ -96,12 +124,68 @@ describe('RecommendationRulebookHandoff', () => {
     const wrapper = mount(RecommendationRulebookHandoff, {
       props: {
         game,
-        profile: { players: 5, maxMinutes: 90, maxWeight: 3, type: 'all', interaction: 'any' },
+        profile: {
+          type: 'all',
+          interaction: 'any',
+          playerCount: { minimum: 5, maximum: 5, strength: 'hard', sourceText: 'five players', confirmedTurn: 1 },
+          durationMinutes: { minimum: null, maximum: 90, strength: 'hard', sourceText: 'up to 90 minutes', confirmedTurn: 1 },
+          complexity: { minimum: null, maximum: 3, strength: 'hard', sourceText: 'complexity at most 3', confirmedTurn: 1 },
+        },
       },
       global: { plugins: [router] },
     })
     return { wrapper, router }
   }
+
+  async function confirmIdentityAndRights(wrapper: Awaited<ReturnType<typeof mountHandoff>>['wrapper']) {
+    const confirmations = wrapper.findAll('input[type="checkbox"]')
+    expect(confirmations).toHaveLength(2)
+    await confirmations[0]!.setValue(true)
+    await confirmations[1]!.setValue(true)
+  }
+
+  it('derives source-search elapsed time from a monotonic clock after timer throttling', async () => {
+    let now = 1_000
+    let findingTick: (() => void) | undefined
+    let releaseDiscovery!: (value: Response) => void
+    const discoveryResponse = new Promise<Response>((resolve) => { releaseDiscovery = resolve })
+    const nowSpy = vi.spyOn(performance, 'now').mockImplementation(() => now)
+    vi.stubGlobal('setInterval', vi.fn((callback: TimerHandler) => {
+      findingTick = callback as () => void
+      return 41
+    }))
+    vi.stubGlobal('clearInterval', vi.fn())
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const path = String(input)
+      if (path === '/api/auth/csrf') {
+        return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      }
+      if (path === '/api/v1/bgg/games/266192/import') return Response.json({
+        game: { id: 'game-1', name: '展翅翱翔' },
+        edition: { id: 'edition-1', name: 'BGG 版本', language: 'zh-CN' },
+        alreadyImported: false,
+      })
+      if (path.startsWith('/api/v1/documents/rulebook-candidates?')) return discoveryResponse
+      return new Response(null, { status: 404 })
+    }))
+
+    const { wrapper } = await mountHandoff()
+    try {
+      await vi.waitFor(() => expect(findingTick).toBeDefined())
+      expect(wrapper.text()).toContain('已等待 0 秒')
+
+      now = 62_000
+      findingTick!()
+      await wrapper.vm.$nextTick()
+
+      expect(wrapper.text()).toContain('已等待 61 秒')
+    } finally {
+      releaseDiscovery(Response.json({ configured: true, identity: discoveryIdentity, candidates: [] }))
+      await flushPromises()
+      wrapper.unmount()
+      nowSpy.mockRestore()
+    }
+  })
 
   it('keeps selection, candidate review, consent, download, and teaching recovery in one flow', async () => {
     const openSource = vi.fn()
@@ -109,6 +193,7 @@ describe('RecommendationRulebookHandoff', () => {
     window.addEventListener(BACKGROUND_WORK_CHANGED_EVENT, backgroundWorkChanged)
     vi.stubGlobal('open', openSource)
     const requests: Array<{ path: string; options?: RequestInit }> = []
+    let importAttempts = 0
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, options?: RequestInit) => {
       const path = String(input)
       requests.push({ path, options })
@@ -120,16 +205,19 @@ describe('RecommendationRulebookHandoff', () => {
       })
       if (path.startsWith('/api/v1/documents/rulebook-candidates?')) return Response.json({
         configured: true,
+        identity: discoveryIdentity,
         candidates: [{
           title: 'Wingspan Rulebook',
           url: 'https://publisher.example/files/wingspan-rulebook.pdf',
           publisher: 'Stonemaier Games',
-          language: 'English',
+          language: 'en',
+          languageVerified: true,
           edition: 'Base game',
           sourceDomain: 'publisher.example',
           officialDomainVerified: true,
           sourceType: 'PUBLISHER',
           acquisitionMode: 'DIRECT_PDF',
+          ...confirmedDocumentCapability,
         }, {
           title: 'BGG files',
           url: 'https://boardgamegeek.com/filepage/123/rules',
@@ -140,13 +228,20 @@ describe('RecommendationRulebookHandoff', () => {
           officialDomainVerified: false,
           sourceType: 'COMMUNITY_PLATFORM',
           acquisitionMode: 'SOURCE_PAGE',
+          ...documentListingCapability,
         }],
       })
       if (path === '/api/auth/session') return Response.json({ username: 'player', roles: ['USER'] })
-      if (path === '/api/v1/documents/official-imports') return Response.json({
-        id: 'import-1', stage: 'QUEUED', documentVersionId: null, duplicate: false, errorCode: null,
-        teachingHandoffState: 'WAITING_FOR_DOCUMENT', teachingPreparationRunId: null,
-      }, { status: 202 })
+      if (path === '/api/v1/documents/official-imports') {
+        importAttempts += 1
+        if (importAttempts === 1) {
+          return Response.json({ code: 'RULEBOOK_CONFIRMATION_REQUIRED' }, { status: 409 })
+        }
+        return Response.json({
+          id: 'import-1', stage: 'QUEUED', documentVersionId: null, duplicate: false, errorCode: null,
+          teachingHandoffState: 'WAITING_FOR_DOCUMENT', teachingPreparationRunId: null,
+        }, { status: 202 })
+      }
       if (path === '/api/v1/documents/official-imports/import-1') return Response.json({
         id: 'import-1', stage: 'COMPLETED', documentVersionId: 'version-1', duplicate: false, errorCode: null,
         teachingHandoffState: 'LAUNCHED', teachingPreparationRunId: 'preparation-run-1',
@@ -170,27 +265,40 @@ describe('RecommendationRulebookHandoff', () => {
 
     expect(wrapper.text()).toContain('已选《展翅翱翔》')
     expect(wrapper.text()).toContain('Wingspan Rulebook')
-    expect(wrapper.text()).toContain('English')
+    expect(wrapper.text()).toContain('英文（来源已明确标注）')
     expect(wrapper.text()).toContain('出版社 / 权利方来源')
+    const reviewStatus = wrapper.get('[data-testid="player-work-status"]')
+    expect(reviewStatus.text()).toBe('等待你继续')
+    expect(reviewStatus.attributes('data-player-work-terminality')).toBe('waiting')
     expect(requests.find(request => request.path === '/api/v1/bgg/games/266192/import')?.options).toMatchObject({
       method: 'POST',
       headers: { 'X-CSRF-TOKEN': 'csrf' },
     })
 
-    await wrapper.findAll('button').find(button => button.text() === '打开来源页')!.trigger('click')
+    await wrapper.findAll('button').find(button => button.text() === '继续查找文件')!.trigger('click')
     expect(openSource).toHaveBeenCalledWith(
       'https://boardgamegeek.com/filepage/123/rules', '_blank', 'noopener,noreferrer',
     )
-    expect(wrapper.text()).toContain('搜索结果没有提供可验证的 PDF 直链')
+    expect(wrapper.text()).toContain('这个结果不是可直接导入的规则书文档')
     expect(wrapper.find('input[type="checkbox"]').exists()).toBe(false)
 
     await wrapper.get('button[aria-pressed="false"]').trigger('click')
     const importButton = wrapper.findAll('button').find(button => button.text() === '下载规则书并生成讲解')!
     expect(importButton.attributes('disabled')).toBeDefined()
-    await wrapper.get('input[type="checkbox"]').setValue(true)
+    await confirmIdentityAndRights(wrapper)
     expect(importButton.attributes('disabled')).toBeUndefined()
     expect(requests.some(request => request.path === '/api/v1/documents/official-imports')).toBe(false)
 
+    await importButton.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('提交前目录或来源身份发生了变化')
+    expect(wrapper.text()).toContain('展翅翱翔')
+    const reconfirmations = wrapper.findAll('input[type="checkbox"]')
+    expect(reconfirmations).toHaveLength(2)
+    expect((reconfirmations[0]!.element as HTMLInputElement).checked).toBe(false)
+    expect((reconfirmations[1]!.element as HTMLInputElement).checked).toBe(true)
+    await reconfirmations[0]!.setValue(true)
     await importButton.trigger('click')
     await flushPromises()
 
@@ -203,6 +311,11 @@ describe('RecommendationRulebookHandoff', () => {
       rightsConfirmed: true,
       startTeaching: true,
       learningGoal: null,
+      discoveredForEditionId: 'edition-1',
+      sourceEdition: 'Base game',
+      sourceLanguage: 'en',
+      sourceLanguageVerified: true,
+      identityConfirmed: true,
     })
     expect(readPendingRulebookLessons(localStorage, 'player')).toEqual([])
     expect(backgroundWorkChanged).toHaveBeenCalledTimes(1)
@@ -212,6 +325,105 @@ describe('RecommendationRulebookHandoff', () => {
     expect(wrapper.text()).toContain('切换为规则答疑')
     expect(wrapper.get('a[href="/catalog"]').text()).toContain('我的桌游')
     window.removeEventListener(BACKGROUND_WORK_CHANGED_EVENT, backgroundWorkChanged)
+  })
+
+  it('keeps listings and unverified pages actionable without presenting game information as a rulebook', async () => {
+    const openSource = vi.fn()
+    const requests: string[] = []
+    vi.stubGlobal('open', openSource)
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const path = String(input)
+      requests.push(path)
+      if (path === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      if (path === '/api/v1/bgg/games/266192/import') return Response.json({
+        game: { id: 'game-1', name: '展翅翱翔' },
+        edition: { id: 'edition-1', name: 'BGG 版本' },
+        alreadyImported: false,
+      })
+      if (path.startsWith('/api/v1/documents/rulebook-candidates?')) return Response.json({
+        configured: true,
+        identity: discoveryIdentity,
+        discovery: {
+          completion: 'PARTIAL', elapsedMs: 18_025, totalBudgetMs: 30_000,
+          providers: [
+            { provider: 'CATALOG', state: 'FINISHED', elapsedMs: 25 },
+            { provider: 'SOURCE_INSPECTION', state: 'FINISHED', elapsedMs: 80 },
+            { provider: 'WEB_SEARCH', state: 'TIMED_OUT', elapsedMs: 18_000 },
+          ],
+        },
+        candidates: [{
+          title: 'Opaque file listing', url: 'https://listing.example/files', publisher: 'Opaque Studio',
+          language: 'en', edition: 'First', sourceDomain: 'listing.example', officialDomainVerified: true,
+          sourceType: 'PUBLISHER', acquisitionMode: 'SOURCE_PAGE', ...documentListingCapability,
+        }, {
+          title: 'Opaque catalog entry', url: 'https://catalog.example/game', publisher: 'Opaque Studio',
+          language: 'en', edition: 'First', sourceDomain: 'catalog.example', officialDomainVerified: true,
+          sourceType: 'PUBLISHER', acquisitionMode: 'SOURCE_PAGE',
+          capability: 'GAME_INFO_ONLY', capabilityEvidence: ['EXPLICIT_EMPTY_DOCUMENT_COLLECTION'],
+          capabilityCheckedAt: '2026-08-15T12:00:00Z', nextAction: 'USE_FOR_IDENTITY_ONLY',
+        }, {
+          title: 'Opaque protected page', url: 'https://review.example/login', publisher: 'Opaque Studio',
+          language: 'en', edition: 'First', sourceDomain: 'review.example', officialDomainVerified: true,
+          sourceType: 'PUBLISHER', acquisitionMode: 'SOURCE_PAGE',
+          capability: 'UNVERIFIED_PAGE', capabilityEvidence: ['ACCESS_REQUIRES_LOGIN'],
+          capabilityCheckedAt: '2026-08-15T12:00:00Z', nextAction: 'REVIEW_OR_UPLOAD',
+        }],
+      })
+      return new Response(null, { status: 404 })
+    }))
+
+    const { wrapper } = await mountHandoff()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('暂未找到可直接导入的规则书')
+    expect(wrapper.get('[data-testid="rulebook-discovery-summary"]').text()).toContain('联网搜索：已超时')
+    expect(wrapper.findAll('button').some(button => button.text().includes('继续查找'))).toBe(true)
+    expect(wrapper.get('[data-capability="GAME_INFO_ONLY"]').find('button').exists()).toBe(false)
+    expect(wrapper.get('section[aria-label="仅用于核对桌游身份"]').text()).toContain('Opaque catalog entry')
+    expect(wrapper.find('input[type="checkbox"]').exists()).toBe(false)
+    const manualFallback = wrapper.findAll('a').find(link => link.text().includes('本地上传'))
+    expect(manualFallback?.attributes('href')).toBe('/teach?editionId=edition-1&onboarding=recommendation-agent')
+
+    await wrapper.get('[data-capability="DOCUMENT_LISTING"] button').trigger('click')
+    await wrapper.get('[data-capability="UNVERIFIED_PAGE"] button').trigger('click')
+    expect(openSource).toHaveBeenNthCalledWith(
+      1, 'https://listing.example/files', '_blank', 'noopener,noreferrer',
+    )
+    expect(openSource).toHaveBeenNthCalledWith(
+      2, 'https://review.example/login', '_blank', 'noopener,noreferrer',
+    )
+    expect(requests).not.toContain('/api/v1/documents/official-imports')
+  })
+
+  it('fails old session candidates closed when capability evidence is missing', async () => {
+    const openSource = vi.fn()
+    vi.stubGlobal('open', openSource)
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 500 })))
+    const legacyCandidate = {
+      title: 'Legacy PDF candidate', url: 'https://legacy.example/rules.pdf', publisher: 'Legacy Studio',
+      language: 'en', edition: 'First', sourceDomain: 'legacy.example', officialDomainVerified: true,
+      sourceType: 'PUBLISHER', acquisitionMode: 'DIRECT_PDF',
+    }
+    sessionStorage.setItem('rulepilot:recommendation-journey:266192', JSON.stringify({
+      imported: {
+        game: { id: 'game-1', name: '展翅翱翔' },
+        edition: { id: 'edition-1', name: 'BGG 版本' },
+        alreadyImported: false,
+      },
+      candidates: [legacyCandidate],
+      selected: legacyCandidate,
+    }))
+
+    const { wrapper } = await mountHandoff()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('暂未找到可直接导入的规则书')
+    expect(wrapper.get('[data-capability="UNVERIFIED_PAGE"] button').text()).toBe('审阅来源页')
+    expect(wrapper.find('input[type="checkbox"]').exists()).toBe(false)
+    await wrapper.get('[data-capability="UNVERIFIED_PAGE"] button').trigger('click')
+    expect(openSource).toHaveBeenCalledWith(
+      'https://legacy.example/rules.pdf', '_blank', 'noopener,noreferrer',
+    )
   })
 
   it('imports an ordered community page-image rulebook as part of the same teaching handoff', async () => {
@@ -227,6 +439,7 @@ describe('RecommendationRulebookHandoff', () => {
       })
       if (path.startsWith('/api/v1/documents/rulebook-candidates?')) return Response.json({
         configured: true,
+        identity: discoveryIdentity,
         candidates: [{
           title: '官方规则书',
           url: 'https://www.gstonegames.com/game/doc-1234.html',
@@ -237,6 +450,7 @@ describe('RecommendationRulebookHandoff', () => {
           officialDomainVerified: false,
           sourceType: 'COMMUNITY_PLATFORM',
           acquisitionMode: 'IMAGE_GALLERY',
+          ...confirmedGalleryCapability,
         }],
       })
       if (path === '/api/auth/session') return Response.json({ username: 'player', roles: ['USER'] })
@@ -268,16 +482,24 @@ describe('RecommendationRulebookHandoff', () => {
     expect(wrapper.text()).toContain('连续规则页图片，可合成为 PDF')
     expect(wrapper.text()).toContain('社区规则书来源（如 BGG / 集石）')
     await wrapper.get('button[aria-pressed="false"]').trigger('click')
-    await wrapper.get('input[type="checkbox"]').setValue(true)
+    await confirmIdentityAndRights(wrapper)
     await wrapper.findAll('button').find(button => button.text() === '下载规则书并生成讲解')!.trigger('click')
     await flushPromises()
 
     const request = requests.find(candidate => candidate.path === '/api/v1/documents/official-imports')
-    expect(JSON.parse(String(request?.options?.body))).toMatchObject({
+    const requestBody = JSON.parse(String(request?.options?.body)) as Record<string, unknown>
+    expect(requestBody).toMatchObject({
       title: '官方规则书',
       officialSourceUrl: 'https://www.gstonegames.com/game/doc-1234.html',
       rightsConfirmed: true,
       startTeaching: true,
+    })
+    expect(requestBody).toMatchObject({
+      discoveredForEditionId: 'edition-1',
+      sourceEdition: '基础版',
+      sourceLanguage: null,
+      sourceLanguageVerified: false,
+      identityConfirmed: true,
     })
     await vi.waitFor(() => expect(wrapper.text()).toContain('完整讲解已经生成'))
   })
@@ -293,10 +515,12 @@ describe('RecommendationRulebookHandoff', () => {
       })
       if (path.startsWith('/api/v1/documents/rulebook-candidates?')) return Response.json({
         configured: true,
+        identity: discoveryIdentity,
         candidates: [{
           title: 'Wingspan Rulebook', url: 'https://publisher.example/wingspan.pdf', publisher: 'Stonemaier Games',
           language: 'English', edition: 'Base game', sourceDomain: 'publisher.example', officialDomainVerified: true,
           sourceType: 'PUBLISHER', acquisitionMode: 'DIRECT_PDF',
+          ...confirmedDocumentCapability,
         }],
       })
       if (path === '/api/v1/documents/official-imports') return Response.json({
@@ -325,7 +549,7 @@ describe('RecommendationRulebookHandoff', () => {
     await flushPromises()
 
     await wrapper.get('button[aria-pressed="false"]').trigger('click')
-    await wrapper.get('input[type="checkbox"]').setValue(true)
+    await confirmIdentityAndRights(wrapper)
     await wrapper.findAll('button').find(button => button.text() === '下载规则书并生成讲解')!.trigger('click')
 
     await vi.waitFor(
@@ -352,10 +576,12 @@ describe('RecommendationRulebookHandoff', () => {
       })
       if (path.startsWith('/api/v1/documents/rulebook-candidates?')) return Response.json({
         configured: true,
+        identity: discoveryIdentity,
         candidates: [{
           title: 'Wingspan Rulebook', url: 'https://publisher.example/wingspan.pdf', publisher: 'Stonemaier Games',
           language: 'English', edition: 'Base game', sourceDomain: 'publisher.example', officialDomainVerified: true,
           sourceType: 'PUBLISHER', acquisitionMode: 'DIRECT_PDF',
+          ...confirmedDocumentCapability,
         }],
       })
       if (path === '/api/v1/documents/official-imports') return Response.json({
@@ -382,9 +608,11 @@ describe('RecommendationRulebookHandoff', () => {
     const { wrapper } = await mountHandoff()
     await flushPromises()
     await wrapper.get('button[aria-pressed="false"]').trigger('click')
-    await wrapper.get('input[type="checkbox"]').setValue(true)
+    await confirmIdentityAndRights(wrapper)
     await wrapper.findAll('button').find(button => button.text() === '下载规则书并生成讲解')!.trigger('click')
-    await vi.waitFor(() => expect(wrapper.text()).toContain('TEACHING_PREPARATION_FAILED'))
+    await vi.waitFor(() => expect(wrapper.text()).toContain('需要处理'))
+    expect(wrapper.text()).not.toContain('TEACHING_PREPARATION_FAILED')
+    expect(wrapper.get('[data-testid="player-work-status"]').text()).toBe('需要处理')
 
     await wrapper.findAll('button').find(button => button.text() === '重试当前步骤')!.trigger('click')
     await vi.waitFor(
@@ -411,10 +639,12 @@ describe('RecommendationRulebookHandoff', () => {
       })
       if (path.startsWith('/api/v1/documents/rulebook-candidates?')) return Response.json({
         configured: true,
+        identity: discoveryIdentity,
         candidates: [{
           title: 'Wingspan Rulebook', url: 'https://publisher.example/wingspan.pdf', publisher: 'Stonemaier Games',
           language: 'English', edition: 'Base game', sourceDomain: 'publisher.example', officialDomainVerified: true,
           sourceType: 'PUBLISHER', acquisitionMode: 'DIRECT_PDF',
+          ...confirmedDocumentCapability,
         }],
       })
       if (path === '/api/v1/documents/official-imports') return Response.json({
@@ -443,11 +673,15 @@ describe('RecommendationRulebookHandoff', () => {
     const { wrapper } = await mountHandoff()
     await flushPromises()
     await wrapper.get('button[aria-pressed="false"]').trigger('click')
-    await wrapper.get('input[type="checkbox"]').setValue(true)
+    await confirmIdentityAndRights(wrapper)
     await wrapper.findAll('button').find(button => button.text() === '下载规则书并生成讲解')!.trigger('click')
 
     await vi.waitFor(() => expect(wrapper.text()).toContain('已生成的章节仍可阅读'))
-    expect(wrapper.text()).toContain('REVIEW_UNAVAILABLE')
+    const status = wrapper.get('[data-testid="player-work-status"]')
+    expect(status.text()).toBe('基础讲解可读')
+    expect(status.attributes('data-player-work-readiness')).toBe('usable')
+    expect(status.attributes('data-player-work-outcome')).toBe('needs-action')
+    expect(wrapper.text()).not.toContain('REVIEW_UNAVAILABLE')
     expect(wrapper.text()).toContain('打开已生成的讲解')
     await wrapper.findAll('button').find(button => button.text() === '重试当前步骤')!.trigger('click')
     await vi.waitFor(() => expect(wrapper.text()).toContain('完整讲解已经生成'))
@@ -590,6 +824,9 @@ describe('RecommendationRulebookHandoff', () => {
       await flushPromises()
       expect(importReads).toBe(2)
       expect(wrapper.text()).toContain('正在通读规则书并组织讲解章节')
+      const status = wrapper.get('[data-testid="player-work-status"]')
+      expect(status.text()).toBe('正在组织讲解')
+      expect(status.attributes('data-player-work-capability')).toBe('rulebook')
     } finally {
       wrapper?.unmount()
       vi.useRealTimers()
@@ -650,6 +887,7 @@ describe('RecommendationRulebookHandoff', () => {
       })
       if (path.startsWith('/api/v1/documents/rulebook-candidates?')) return Response.json({
         configured: true,
+        identity: discoveryIdentity,
         candidates: [{
           title: 'Wingspan community rules',
           url: 'https://boardgamegeek.com/file/download_redirect/c66d839e5ef882cf86295abc25caef76456ef0ed43746421/wingspan-rules.pdf',
@@ -660,6 +898,7 @@ describe('RecommendationRulebookHandoff', () => {
           officialDomainVerified: false,
           sourceType: 'COMMUNITY_PLATFORM',
           acquisitionMode: 'DIRECT_PDF',
+          ...confirmedDocumentCapability,
         }],
       })
       if (path === '/api/auth/session') return Response.json({ username: 'player', roles: ['USER'] })
@@ -678,7 +917,7 @@ describe('RecommendationRulebookHandoff', () => {
     await flushPromises()
 
     await wrapper.get('button[aria-pressed="false"]').trigger('click')
-    await wrapper.get('input[type="checkbox"]').setValue(true)
+    await confirmIdentityAndRights(wrapper)
     await wrapper.findAll('button').find(button => button.text() === '下载规则书并生成讲解')!.trigger('click')
     await flushPromises()
 
@@ -688,6 +927,80 @@ describe('RecommendationRulebookHandoff', () => {
       'https://boardgamegeek.com/file/download_redirect/c66d839e5ef882cf86295abc25caef76456ef0ed43746421/wingspan-rules.pdf',
     )
     expect(wrapper.text()).toContain('本地上传')
+    const chooseAnother = wrapper.findAll('button').find(button => button.text() === '重新选择来源')
+    expect(chooseAnother).toBeDefined()
+    await chooseAnother!.trigger('click')
+    expect(wrapper.text()).toContain('选择并核对来源')
+    expect(wrapper.text()).toContain('展翅翱翔')
+    expect(wrapper.findAll('input[type="checkbox"]')
+      .every(input => !(input.element as HTMLInputElement).checked)).toBe(true)
+  })
+
+  it('retries a temporary import through the owned failed job instead of submitting the source again', async () => {
+    const requests: Array<{ path: string; options?: RequestInit }> = []
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, options?: RequestInit) => {
+      const path = String(input)
+      requests.push({ path, options })
+      if (path === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      if (path === '/api/v1/bgg/games/266192/import') return Response.json({
+        game: { id: 'game-1', name: '展翅翱翔' },
+        edition: { id: 'edition-1', name: 'BGG 版本', language: 'zh-CN' },
+        alreadyImported: false,
+      })
+      if (path.startsWith('/api/v1/documents/rulebook-candidates?')) return Response.json({
+        configured: true,
+        identity: discoveryIdentity,
+        candidates: [{
+          title: 'Publisher rules', url: 'https://publisher.example/rules.pdf', publisher: 'Publisher',
+          language: 'zh-CN', languageVerified: true, edition: 'Base game',
+          sourceDomain: 'publisher.example', officialDomainVerified: true,
+          sourceType: 'PUBLISHER', acquisitionMode: 'DIRECT_PDF', ...confirmedDocumentCapability,
+        }],
+      })
+      if (path === '/api/v1/documents/official-imports') return Response.json({
+        id: 'failed-import', stage: 'QUEUED', downloadedBytes: 0, totalBytes: null,
+        documentVersionId: null, duplicate: false, errorCode: null,
+        teachingHandoffState: 'WAITING_FOR_DOCUMENT', teachingPreparationRunId: null,
+      }, { status: 202 })
+      if (path === '/api/v1/documents/official-imports/failed-import') return Response.json({
+        id: 'failed-import', stage: 'FAILED', downloadedBytes: 0, totalBytes: null,
+        documentVersionId: null, duplicate: false, errorCode: 'SOURCE_UNAVAILABLE',
+        teachingHandoffState: 'FAILED', teachingPreparationRunId: null,
+        recovery: {
+          state: 'FAILED', failureKind: 'TEMPORARY_SOURCE', busy: false,
+          canChooseAnotherSource: true, canUseLocalUpload: true,
+          canRetryOriginalSource: true, canOpenSourceInBrowser: false,
+        },
+      })
+      if (path === '/api/v1/documents/official-imports/failed-import/retry' && options?.method === 'POST') {
+        return Response.json({
+          id: 'retried-import', stage: 'QUEUED', downloadedBytes: 0, totalBytes: null,
+          documentVersionId: null, duplicate: false, errorCode: null,
+          teachingHandoffState: 'WAITING_FOR_DOCUMENT', teachingPreparationRunId: null,
+        }, { status: 202 })
+      }
+      if (path === '/api/v1/documents/official-imports/retried-import') return Response.json({
+        id: 'retried-import', stage: 'QUEUED', downloadedBytes: 0, totalBytes: null,
+        documentVersionId: null, duplicate: false, errorCode: null,
+        teachingHandoffState: 'WAITING_FOR_DOCUMENT', teachingPreparationRunId: null,
+      })
+      return new Response(null, { status: 404 })
+    }))
+    const { wrapper } = await mountHandoff()
+    await flushPromises()
+    await wrapper.get('button[aria-pressed="false"]').trigger('click')
+    await confirmIdentityAndRights(wrapper)
+    await wrapper.findAll('button').find(button => button.text() === '下载规则书并生成讲解')!.trigger('click')
+
+    await vi.waitFor(() => expect(wrapper.text()).toContain('规则书来源暂时无法连接'))
+    await wrapper.findAll('button').find(button => button.text() === '重试原来源')!.trigger('click')
+    await flushPromises()
+
+    expect(requests.filter(request => request.path === '/api/v1/documents/official-imports')).toHaveLength(1)
+    expect(requests.find(request => request.path === '/api/v1/documents/official-imports/failed-import/retry')?.options)
+      .toMatchObject({ method: 'POST', headers: { 'X-CSRF-TOKEN': 'csrf' } })
+    expect(wrapper.text()).toContain('规则书下载已排队')
+    wrapper.unmount()
   })
 
   it('does not download when discovery is unavailable and preserves a manual edition-aware fallback', async () => {
@@ -699,7 +1012,9 @@ describe('RecommendationRulebookHandoff', () => {
         edition: { id: 'edition-1', name: 'BGG 版本' },
         alreadyImported: true,
       })
-      if (path.startsWith('/api/v1/documents/rulebook-candidates?')) return Response.json({ configured: false, candidates: [] })
+      if (path.startsWith('/api/v1/documents/rulebook-candidates?')) {
+        return Response.json({ configured: false, identity: discoveryIdentity, candidates: [] })
+      }
       return new Response(null, { status: 500 })
     }))
     const { wrapper } = await mountHandoff()

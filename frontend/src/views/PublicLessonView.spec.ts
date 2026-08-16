@@ -50,7 +50,8 @@ function publicAnswerPayload(verdict: string) {
   return {
     answer: {
       status: 'ANSWERED', shortVerdict: verdict, explanation: null, warnings: [],
-      citations: [], exceptions: [], confidence: 'HIGH', clarification: null,
+      citations: [{ heading: '规则依据', pageFrom: 2, pageTo: 2 }], exceptions: [], confidence: 'HIGH',
+      answerBasis: 'DIRECT_RULE', clarification: null,
     },
     visualAids: [], examples: [],
   }
@@ -61,6 +62,7 @@ describe('PublicLessonView', () => {
     setLocale('zh-CN')
     localStorage.clear()
     sessionStorage.clear()
+    vi.useRealTimers()
     vi.unstubAllGlobals()
   })
 
@@ -214,7 +216,7 @@ describe('PublicLessonView', () => {
     expect(wrapper.text()).toContain('按规则回答当前问题')
     expect(wrapper.text()).toContain('这条答案如何得出')
     expect(wrapper.text()).toContain('floor(8 / 3) * 5 = 10')
-    expect(wrapper.text()).toContain('确定性计算器复核')
+    expect(wrapper.text()).toContain('下方计算过程便于直接复核结果')
     expect(wrapper.text()).toContain('当前局面条件')
     expect(wrapper.text()).toContain('尚未提供')
     expect(wrapper.text()).toContain('照这个顺序做')
@@ -303,6 +305,44 @@ describe('PublicLessonView', () => {
     expect(wrapper.findAll('button').some(button => button.text() === '停止等待')).toBe(false)
   })
 
+  it('keeps a verified public answer visible at the eight-second soft boundary without publishing unfinished text', async () => {
+    vi.useFakeTimers()
+    const lesson = publicLessonPayload('plan-1', 'Wingspan Rules')
+    let answerRequests = 0
+    vi.stubGlobal('fetch', vi.fn((input: string | URL | Request, init?: RequestInit) => {
+      const path = String(input)
+      if (path.includes('/api/auth/session')) return Promise.resolve(new Response(null, { status: 401 }))
+      if (path.endsWith('/icon-glossary')) return Promise.resolve(new Response(null, { status: 404 }))
+      if (path.endsWith('/answers') && init?.method === 'POST') {
+        answerRequests += 1
+        if (answerRequests === 1) return Promise.resolve(Response.json(publicAnswerPayload('上一条已核对结论')))
+        return new Promise<Response>(() => undefined)
+      }
+      return Promise.resolve(Response.json(lesson))
+    }))
+    const router = createPublicLessonRouter()
+    await router.push('/read/plan-1/questions')
+    await router.isReady()
+    const wrapper = mount(PublicLessonView, { global: { plugins: [router] } })
+    await flushPromises()
+
+    await wrapper.get('#public-question').setValue('第一条问题')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    await wrapper.get('#public-question').setValue('第二条还在核对的问题')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(8_000)
+
+    expect(wrapper.text()).toContain('上一条已核对结论')
+    expect(wrapper.get('[data-testid="public-answer-soft-budget"]').text())
+      .toContain('上一条已核对答案和引用仍保留在下方')
+    expect(wrapper.get('[data-testid="public-answer-soft-budget"]').text())
+      .toContain('当前问题还需核对原文与结论')
+    expect(wrapper.text()).not.toContain('第二条未完成答复')
+    wrapper.unmount()
+  })
+
   it('turns clarification and insufficient evidence into focused, editable next steps', async () => {
     const lesson = {
       teachingPlanId: 'plan-1', documentVersionId: 'version-1', rulebookTitle: 'Wingspan Rules',
@@ -347,8 +387,7 @@ describe('PublicLessonView', () => {
     await wrapper.get('form').trigger('submit')
     await flushPromises()
 
-    const confidence = wrapper.get('[data-confidence="LOW"]')
-    expect(confidence.classes()).toContain('bg-red-50')
+    expect(wrapper.find('[data-confidence="LOW"]').exists()).toBe(false)
     expect(wrapper.text()).toContain('“这个”具体指规则书里的哪个对象')
     await wrapper.findAll('button').find(button => button.text() === '补充这项信息')!.trigger('click')
     expect((wrapper.get('#public-question').element as HTMLTextAreaElement).value).toBe('我指的是：')
@@ -366,6 +405,68 @@ describe('PublicLessonView', () => {
     wrapper.unmount()
   })
 
+  it('uses the current English question for anonymous failure and transport recovery under a Chinese UI', async () => {
+    const internalId = '11111111-1111-4111-8111-111111111111'
+    const lesson = publicLessonPayload('plan-1', 'Opaque Rules')
+    let answerRequests = 0
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const path = String(input)
+      if (path.includes('/api/auth/session')) return new Response(null, { status: 401 })
+      if (path.endsWith('/icon-glossary')) return new Response(null, { status: 404 })
+      if (path.endsWith('/answers') && init?.method === 'POST') {
+        answerRequests += 1
+        if (answerRequests > 1) return new Response(null, { status: 503 })
+        return Response.json({
+          assistantRunId: internalId,
+          schemaDiagnostic: 'internal response envelope',
+          answer: {
+            status: 'MODEL_TIMEOUT',
+            shortVerdict: "I couldn't finish checking the rule in time.",
+            explanation: '', citations: [], exceptions: [], confidence: 'LOW', answerBasis: null,
+            clarification: null, warnings: [],
+            documentVersionId: internalId,
+          },
+          visualAids: [], examples: [],
+        })
+      }
+      return Response.json(lesson)
+    }))
+    const router = createPublicLessonRouter()
+    await router.push('/read/plan-1/questions')
+    await router.isReady()
+    const wrapper = mount(PublicLessonView, { global: { plugins: [router] } })
+    await flushPromises()
+
+    await wrapper.get('#public-question').setValue('When does the cobalt spindle resolve?')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain("I couldn't finish checking the rule in time.")
+    expect(wrapper.text().match(/I couldn't finish checking the rule in time\./g)).toHaveLength(1)
+    expect(wrapper.text()).toContain('Your question is still here. Review or edit it, then try again.')
+    expect(wrapper.text()).toContain('Review and try again')
+    expect(wrapper.text()).not.toContain('没有在时限内完成')
+    expect(wrapper.find('[data-confidence="LOW"]').exists()).toBe(false)
+    const storedAnswer = Array.from({ length: sessionStorage.length }, (_, index) =>
+      sessionStorage.getItem(sessionStorage.key(index) ?? '') ?? '').join('\n')
+    expect(storedAnswer).not.toMatch(/assistantRunId|schemaDiagnostic|documentVersionId|11111111/)
+
+    await wrapper.findAll('button').find(button => button.text() === 'Review and try again')!.trigger('click')
+    expect(answerRequests).toBe(1)
+    expect((wrapper.get('#public-question').element as HTMLTextAreaElement).value)
+      .toBe('When does the cobalt spindle resolve?')
+
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    expect(answerRequests).toBe(2)
+    expect(wrapper.text()).toContain("I couldn't send this question. It is still here; review it and try again.")
+    expect(wrapper.text()).not.toMatch(/public answer unavailable|503|schema/i)
+    expect((wrapper.get('#public-question').element as HTMLTextAreaElement).value)
+      .toBe('When does the cobalt spindle resolve?')
+    wrapper.unmount()
+  })
+
   it('isolates a public answer thread by signed-in reader and clears only that reader’s current guide', async () => {
     const lesson = {
       teachingPlanId: 'plan-1', documentVersionId: 'version-1', rulebookTitle: 'Wingspan Rules', officialSourceUrl: null, gameCover: null,
@@ -376,13 +477,14 @@ describe('PublicLessonView', () => {
       answer: {
         answer: {
           status: 'ANSWERED', shortVerdict: verdict, explanation: null, warnings: [],
-          citations: [], exceptions: [], confidence: 'HIGH', clarification: null,
+          citations: [{ heading: '规则依据', pageFrom: 2, pageTo: 2 }], exceptions: [], confidence: 'HIGH',
+          answerBasis: 'DIRECT_RULE', clarification: null,
         },
         visualAids: [], examples: [],
       },
     })
-    const aliceKey = 'rulepilot:public-answer-thread:account:alice:plan-1:zh-CN'
-    const bobKey = 'rulepilot:public-answer-thread:account:bob:plan-1:zh-CN'
+    const aliceKey = 'rulepilot:public-answer-thread:v2:account:alice:plan-1:zh-CN'
+    const bobKey = 'rulepilot:public-answer-thread:v2:account:bob:plan-1:zh-CN'
     sessionStorage.setItem(aliceKey, JSON.stringify([storedTurn('Alice 的问题', 'Alice 的答复')]))
     sessionStorage.setItem(bobKey, JSON.stringify([storedTurn('Bob 的问题', 'Bob 的答复')]))
 
@@ -463,7 +565,8 @@ describe('PublicLessonView', () => {
         return Response.json({
           answer: {
             status: 'ANSWERED', shortVerdict: 'Place the mat in front of you.', explanation: 'It starts your personal play area.', warnings: [],
-            citations: [{ heading: 'Setup', pageFrom: 2, pageTo: 2 }], exceptions: [], confidence: 'MEDIUM', clarification: null,
+            citations: [{ heading: 'Setup', pageFrom: 2, pageTo: 2 }], exceptions: [], confidence: 'MEDIUM',
+            answerBasis: 'DIRECT_RULE', clarification: null,
           }, visualAids: [], examples: [],
         })
       }
@@ -522,7 +625,7 @@ describe('PublicLessonView', () => {
       answer: publicAnswerPayload('Alice 的已保存答案'),
     }
     sessionStorage.setItem(
-      'rulepilot:public-answer-thread:account:alice:plan-1:zh-CN',
+      'rulepilot:public-answer-thread:v2:account:alice:plan-1:zh-CN',
       JSON.stringify([storedTurn]),
     )
 

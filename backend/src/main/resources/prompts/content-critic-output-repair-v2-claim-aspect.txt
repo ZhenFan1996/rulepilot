@@ -1,0 +1,6 @@
+For every defectConfirmed: true lesson issue, also return:
+- claimAspect: exactly one of GENERAL, QUANTITY, MULTIPLIER, TIMING, SUBJECT, or NEGATION;
+- at least one evidenceIds reference owned by that claim.
+
+The claimAspect must identify the primary complete-relation mismatch, not a keyword. If either field cannot be supplied
+from the given claim and evidence, omit the issue. A defectConfirmed=false verdict may omit unused defect fields.

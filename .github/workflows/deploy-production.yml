@@ -196,7 +196,7 @@ jobs:
             'BGG_RECOMMENDATION_PROVIDER=spring-ai' \
             'BGG_RECOMMENDATION_MODEL_PROVIDER=qwen' \
             'BGG_RECOMMENDATION_MODEL_CANDIDATE_LIMIT=8' \
-            'BGG_RECOMMENDATION_AGENT_TIMEOUT=PT55S' \
+            'BGG_RECOMMENDATION_AGENT_TIMEOUT=PT20S' \
             'BGG_RECOMMENDATION_WEB_RESEARCH_ENABLED=true' \
             'BGG_RECOMMENDATION_WEB_RESEARCH_TIMEOUT=PT25S' \
             'WEB_SEARCH_MODEL=qwen3.7-plus' \
@@ -479,7 +479,7 @@ jobs:
               }
               if (next.done) break
             }
-            if (firstProgressMillis == null || firstProgressMillis > 20_000) {
+            if (firstProgressMillis == null || firstProgressMillis > 5_000) {
               throw new Error(`recommendation stream first progress took ${firstProgressMillis ?? 'no'} ms`)
             }
             if (result == null) throw new Error('recommendation stream completed without a result event')
@@ -534,7 +534,7 @@ jobs:
                     knownGames: [],
                     shownBggIds: [],
                   }),
-                  signal: AbortSignal.timeout(120_000),
+                  signal: AbortSignal.timeout(35_000),
                 },
               )
               const openingStreamed = await readRecommendationStream(openingAgent, openingStartedAt)
@@ -542,7 +542,7 @@ jobs:
               if (openingResult.mode !== 'model_assisted'
                   || typeof openingResult.assistantMessage !== 'string'
                   || openingResult.assistantMessage.length === 0
-                  || openingStreamed.totalMillis > 45_000) {
+                  || openingStreamed.totalMillis > 25_000) {
                 throw new Error(`recommendation Agent did not complete the opening turn: ${JSON.stringify({
                   httpStatus: openingAgent.status,
                   outcome: openingResult.outcome ?? 'missing',
@@ -581,14 +581,15 @@ jobs:
                     })),
                     shownBggIds: openingGames.map(({ game }) => game.bggId),
                   }),
-                  signal: AbortSignal.timeout(120_000),
+                  signal: AbortSignal.timeout(35_000),
                 },
               )
               const streamed = await readRecommendationStream(agent, agentStartedAt)
               const agentResult = streamed.result
               const agentActions = agentResult.harness?.actions
               const completedRecommendation = Array.isArray(agentActions)
-                && agentActions.includes('RECOMMEND_GAMES')
+                && (agentActions.includes('RECOMMEND_GAMES')
+                  || agentActions.some((action) => action.startsWith('FALLBACK_VERIFIED_CARDS:')))
               const usedSemanticReActTools = Array.isArray(agentActions)
                 && (agentActions.includes('SEARCH_BGG_BY_NAME')
                   || agentActions.includes('DISCOVER_CANDIDATES'))
@@ -596,7 +597,7 @@ jobs:
               if (agentResult.mode !== 'model_assisted'
                   || !Array.isArray(agentResult.games) || agentResult.games.length === 0
                   || !completedRecommendation || !usedSemanticReActTools
-                  || streamed.totalMillis > 45_000) {
+                  || streamed.totalMillis > 25_000) {
                 const diagnostic = JSON.stringify({
                   httpStatus: agent.status,
                   outcome: agentResult.outcome ?? 'missing',

@@ -7,7 +7,12 @@ import com.rulepilot.assistant.NativeToolScopes;
 import com.rulepilot.assistant.NativeToolAgent.RunRequest;
 import com.rulepilot.assistant.NativeToolAgent.RunStatus;
 import com.rulepilot.assistant.QuestionUnderstanding.QuestionContext;
+import com.rulepilot.assistant.RuleAnswerModel.ReferenceBinding;
 import com.rulepilot.assistant.domain.UnderstoodQuestion;
+import com.rulepilot.retrieval.AnswerEvidencePolicy;
+import com.rulepilot.retrieval.AnswerEvidenceRetriever;
+import com.rulepilot.retrieval.AnswerEvidenceSelectionPolicy;
+import com.rulepilot.retrieval.AnswerRetrievalPlanner;
 import com.rulepilot.retrieval.RuleEvidenceLookup;
 import com.rulepilot.retrieval.evidence.HybridEvidenceHit;
 import com.rulepilot.retrieval.evidence.RuleEvidenceHit;
@@ -63,9 +68,17 @@ public class AnswerEvidenceAgent implements AnswerEvidenceRefiner {
             source cues such as worked example, for example, 示例, or 例如. A cue is only a retrieval hint: acquire the
             complete cited setup, action, and outcome, and do not turn that example into a general rule. For a compound question,
             check every requested condition, sequence, exception, and complete-list obligation separately. A result
+            requested as a concrete calculation requires an exact-page check of the governing numerical clause. Keep
+            the counted object, aggregation unit, per-item or per-category scope, repetition count, multiplier, cap,
+            and exception together. When that page supplies a worked example in the same scope, use its stated inputs,
+            operation, and total as a consistency check; never detach a local per-item sentence from its governing
+            preamble or silently discard a multiplier. A result
             count does not prove coverage: if a broad search misses one obligation, search that obligation again with
             the player's distinctive wording before reading the best candidate page. Only after every obligation has
             a confirmed page observation may you return exactly EVIDENCE_READY. Do not invent identifiers or scope.
+            The current player question is authoritative. Selected reference context may resolve an omitted subject,
+            but it may not replace an object explicitly named in the current question. A player-supplied page number
+            is only a scoped locator to inspect, never evidence that the page entails the requested rule.
             """;
 
     private final NativeToolAgent nativeAgent;
@@ -204,7 +217,9 @@ public class AnswerEvidenceAgent implements AnswerEvidenceRefiner {
 
     private Set<String> requiredEvidenceTools(AnswerQuestionPlan questionPlan, QuestionContext context) {
         if (usesPriorPages(questionPlan, context)) return Set.of("read_rule_pages");
-        if (requiresSourceAuthoredAdvice(questionPlan)) return Set.of("read_rule_pages");
+        if (requiresSourceAuthoredAdvice(questionPlan) || requiresNumericalScopeAudit(questionPlan)) {
+            return Set.of("read_rule_pages");
+        }
         return Set.of();
     }
 
@@ -223,6 +238,10 @@ public class AnswerEvidenceAgent implements AnswerEvidenceRefiner {
     private boolean requiresSourceAuthoredAdvice(AnswerQuestionPlan questionPlan) {
         return questionPlan.evidenceNeeds().contains(
                 com.rulepilot.assistant.RuleAnswerModel.EvidenceNeed.ADVICE);
+    }
+
+    private boolean requiresNumericalScopeAudit(AnswerQuestionPlan questionPlan) {
+        return questionPlan.answerAid() == com.rulepilot.assistant.RuleAnswerModel.AnswerAid.CALCULATION;
     }
 
     private AnswerEvidenceRetriever.Result mergeCanonicalEvidence(
@@ -274,7 +293,11 @@ public class AnswerEvidenceAgent implements AnswerEvidenceRefiner {
         List<List<HybridEvidenceHit>> confirmedPageGroups = canonicalPageGroups(
                 exactPageObservationGroups, hydratedById, merged);
         List<HybridEvidenceHit> selected = AnswerEvidenceSelectionPolicy.select(
-                merged, observed, Set.of(), questionPlan, confirmedPageGroups);
+                merged,
+                observed,
+                Set.of(),
+                AnswerRetrievalInputMapper.plan(questionPlan),
+                confirmedPageGroups);
         return new AnswerEvidenceRetriever.Result(selected, AnswerEvidenceRetriever.State.READY);
     }
 
@@ -314,12 +337,14 @@ public class AnswerEvidenceAgent implements AnswerEvidenceRefiner {
             QuestionContext context,
             AnswerQuestionPlan questionPlan,
             List<HybridEvidenceHit> evidence) {
-        StringBuilder request = new StringBuilder("Player question: ")
-                .append(bounded(question.normalizedQuestion(), 800));
-        if (context.previousQuestion() != null && !context.previousQuestion().isBlank()) {
-            request.append("\nPrevious question: ").append(bounded(context.previousQuestion(), 500));
+        StringBuilder request = new StringBuilder("Current player question (authoritative): ")
+                .append(bounded(question.originalQuestion(), 800));
+        if (questionPlan.boundReferenceQuestion() != null) {
+            request.append("\nSelected reference question (reference resolution only): ")
+                    .append(bounded(questionPlan.boundReferenceQuestion(), 500));
         }
-        if (context.priorTurnReference() != null) {
+        if (questionPlan.referenceBinding() == ReferenceBinding.PRIOR_GROUNDED_TURN
+                && context.priorTurnReference() != null) {
             request.append("\nPrior grounded reference hint (not current evidence): ")
                     .append(bounded(context.priorTurnReference().groundedVerdict(), 500));
             for (var citation : context.priorTurnReference().citations()) {
@@ -356,8 +381,20 @@ public class AnswerEvidenceAgent implements AnswerEvidenceRefiner {
         for (AnswerQuestionPlan.Subquestion subquestion : questionPlan.subquestions()) {
             request.append("\n- exact span: ")
                     .append(bounded(subquestion.text(), 300))
+                    .append(" | owner: ")
+                    .append(subquestion.owner())
                     .append(" | evidence needs: ")
                     .append(subquestion.evidenceNeeds());
+        }
+        if (!questionPlan.currentRuleObjectSpans().isEmpty()) {
+            request.append("\nCurrent-question rule objects that must not be substituted: ")
+                    .append(questionPlan.currentRuleObjectSpans());
+        }
+        if (!questionPlan.pageHints().isEmpty()) {
+            request.append("\nPlayer page locators (hints only, not claims): ")
+                    .append(questionPlan.pageHints().stream()
+                            .map(AnswerQuestionPlan.PageHint::pageNumber)
+                            .toList());
         }
         if (questionPlan.evidenceNeeds().contains(
                 com.rulepilot.assistant.RuleAnswerModel.EvidenceNeed.ADVICE)) {

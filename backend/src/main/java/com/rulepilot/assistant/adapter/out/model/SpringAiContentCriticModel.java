@@ -1,6 +1,8 @@
 package com.rulepilot.assistant.adapter.out.model;
 
 import com.rulepilot.assistant.ContentCriticModel;
+import com.rulepilot.assistant.GeneratedContentCritic.ClaimAspect;
+import com.rulepilot.assistant.GeneratedContentCritic.ContentType;
 import com.rulepilot.assistant.GeneratedContentCritic.Issue;
 import com.rulepilot.assistant.GeneratedContentCritic.IssueType;
 import com.rulepilot.assistant.GeneratedContentCritic.ReviewMode;
@@ -11,7 +13,9 @@ import com.rulepilot.modelconfig.VersionedAgentPrompts;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.model.ChatModel;
@@ -124,19 +128,34 @@ public class SpringAiContentCriticModel implements ContentCriticModel {
         if (draft == null) throw new IllegalArgumentException("critic returned no draft");
         return new CritiqueDraft(draft.issues().stream()
                 .filter(issue -> Boolean.TRUE.equals(issue.defectConfirmed()))
-                .map(issue -> confirmedIssue(issue, evidenceIds))
+                .map(issue -> confirmedIssue(request, issue, evidenceIds))
                 .toList());
     }
 
-    private Issue confirmedIssue(ModelIssue issue, Map<String, UUID> evidenceIds) {
+    private Issue confirmedIssue(ReviewRequest request, ModelIssue issue, Map<String, UUID> evidenceIds) {
         if (issue.type() == null || issue.claimPosition() < 1
                 || issue.summary() == null || issue.summary().isBlank()) {
             throw new IllegalArgumentException("confirmed critic issue is incomplete");
         }
+        ClaimAspect claimAspect = issue.claimAspect();
+        if (request.contentType() == ContentType.LESSON && claimAspect == null) {
+            throw new IllegalArgumentException("confirmed lesson critic issue is missing claimAspect");
+        }
+        List<UUID> resolvedEvidence = resolveReferences(issue.evidenceIds(), evidenceIds);
+        if (request.contentType() == ContentType.LESSON) {
+            Set<UUID> claimEvidence = request.claims().stream()
+                    .filter(claim -> claim.position() == issue.claimPosition())
+                    .flatMap(claim -> claim.citationIds().stream())
+                    .collect(Collectors.toUnmodifiableSet());
+            if (resolvedEvidence.stream().noneMatch(claimEvidence::contains)) {
+                throw new IllegalArgumentException("confirmed lesson critic issue has no claim-bound evidence");
+            }
+        }
         return new Issue(
                 issue.type(),
+                claimAspect == null ? ClaimAspect.GENERAL : claimAspect,
                 issue.claimPosition(),
-                resolveReferences(issue.evidenceIds(), evidenceIds),
+                resolvedEvidence,
                 issue.summary());
     }
 
@@ -244,6 +263,7 @@ public class SpringAiContentCriticModel implements ContentCriticModel {
     private record ModelIssue(
             Boolean defectConfirmed,
             IssueType type,
+            ClaimAspect claimAspect,
             int claimPosition,
             List<String> evidenceIds,
             String summary) {

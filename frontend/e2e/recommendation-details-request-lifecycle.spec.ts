@@ -35,7 +35,9 @@ test('cancels a delayed recommendation-detail request when the modal closes', as
   await page.route('**/api/**', async route => {
     const request = route.request()
     const url = new URL(request.url())
-    if (url.pathname === '/api/auth/session') return route.fulfill({ status: 401, json: {} })
+    if (url.pathname === '/api/auth/session') {
+      return route.fulfill({ json: { username: 'player', roles: ['USER'] } })
+    }
     if (url.pathname === '/api/auth/csrf') return route.fulfill({ json: { headerName: 'X-CSRF-TOKEN', token: 'csrf' } })
     if (url.pathname === '/api/v1/bgg/recommendation-agent/stream') {
       const payload = {
@@ -72,7 +74,7 @@ test('cancels a delayed recommendation-detail request when the modal closes', as
   })
 
   await page.goto('/discover')
-  await page.getByLabel('和推荐 Agent 聊聊').fill('给我一个候选')
+  await page.getByLabel('聊聊你想玩的游戏').fill('给我一个候选')
   await page.getByRole('button', { name: '发送', exact: true }).click()
   await expect(page.getByRole('button', { name: '查看完整资料：候选游戏' })).toBeVisible()
   await page.getByRole('button', { name: '查看完整资料：候选游戏' }).click()

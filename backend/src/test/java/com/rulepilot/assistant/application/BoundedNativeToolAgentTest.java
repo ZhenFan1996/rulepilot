@@ -3,9 +3,11 @@ package com.rulepilot.assistant.application;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.json.JsonMapper;
 import com.rulepilot.assistant.AgentExecutionControl;
+import com.rulepilot.assistant.AgentExecutionControl.BudgetSnapshot;
 import com.rulepilot.assistant.AgentExecutionControl.ActivityOutcome;
 import com.rulepilot.assistant.AgentExecutionControl.ActivityType;
 import com.rulepilot.assistant.AgentExecutionStoppedException;
@@ -21,6 +23,7 @@ import com.rulepilot.assistant.NativeToolAgent.RunStatus;
 import com.rulepilot.assistant.NativeToolModel;
 import com.rulepilot.assistant.NativeToolModel.ModelToolCall;
 import com.rulepilot.assistant.NativeToolModel.ModelTurn;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -29,6 +32,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
 import java.util.function.ToIntFunction;
@@ -478,6 +484,50 @@ class BoundedNativeToolAgentTest {
         assertThat(result.status()).isEqualTo(RunStatus.FALLBACK);
         assertThat(result.reason()).isEqualTo("CANCELLED");
         assertThat(result.toolCalls()).isZero();
+    }
+
+    @Test
+    void interruptsABlockingReadToolAtTheRunDeadlineWithoutPublishingItsObservation() throws Exception {
+        AgentExecutionControl execution = mock(AgentExecutionControl.class);
+        UUID runId = UUID.randomUUID();
+        Instant deadlineAt = Instant.now().plusMillis(250);
+        ToolScope scope = new ToolScope("player", UUID.randomUUID(), runId, deadlineAt);
+        when(execution.budget(runId)).thenReturn(new BudgetSnapshot(
+                40, 24, 16, 24_000, 0, 0, 0, deadlineAt, null));
+        CountDownLatch interrupted = new CountDownLatch(1);
+        NativeAgentTool blockingTool = new TestTool("search_rule_evidence", false, false) {
+            @Override
+            public ToolObservation execute(String argumentsJson, ToolScope ignoredScope) {
+                try {
+                    Thread.sleep(Duration.ofMinutes(5));
+                } catch (InterruptedException stopped) {
+                    interrupted.countDown();
+                    Thread.currentThread().interrupt();
+                }
+                return super.execute(argumentsJson, ignoredScope);
+            }
+        };
+        var mapper = JsonMapper.builder().findAndAddModules().build();
+
+        try (var calls = Executors.newVirtualThreadPerTaskExecutor()) {
+            AgentInvocationDeadline guard = new AgentInvocationDeadline(
+                    execution, calls, Duration.ofMillis(20));
+            BoundedNativeToolAgent agent = new BoundedNativeToolAgent(
+                    new QueueModel(turn(call("call-1", blockingTool.name(), "{}"))),
+                    new NativeAgentToolRegistry(List.of(blockingTool), mapper, ignored -> true),
+                    execution,
+                    new RecordingInvocations(),
+                    mapper,
+                    guard);
+
+            var result = agent.run(request(scope, 3));
+
+            assertThat(result.status()).isEqualTo(RunStatus.FALLBACK);
+            assertThat(result.reason()).isEqualTo("TIMEOUT");
+            assertThat(result.toolCalls()).isZero();
+            assertThat(result.observations()).isEmpty();
+            assertThat(interrupted.await(1, TimeUnit.SECONDS)).isTrue();
+        }
     }
 
     @Test

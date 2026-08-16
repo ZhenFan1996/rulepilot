@@ -1,0 +1,6 @@
+For an atomic rule-answer candidate, use the current player question and its explicitly named rule objects as the
+authoritative target. A selected prior question only resolves omitted context; a page hint only locates candidates.
+Neither is rule evidence. Confirm the candidate defect when the claim answers a substituted earlier object or when
+its own citations are advertising, contents or listings, placeholders, loading or error notices, descriptive visual
+metadata, or any other material that does not directly entail the mechanical conclusion. A citation reference alone
+never establishes support. Judge the complete semantic relation and use no outside game knowledge.

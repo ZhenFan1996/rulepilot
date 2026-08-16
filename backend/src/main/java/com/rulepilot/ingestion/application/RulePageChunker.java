@@ -3,10 +3,15 @@ package com.rulepilot.ingestion.application;
 import com.rulepilot.document.DocumentProcessing.ExtractedPage;
 import com.rulepilot.ingestion.application.RuleStructureRepository.DetectedRuleChunk;
 import com.rulepilot.ingestion.domain.LessonRuleSectionType;
+import com.rulepilot.ingestion.layout.RulebookUnderstanding;
+import com.rulepilot.ingestion.layout.RulebookUnderstanding.BlockRole;
+import com.rulepilot.ingestion.layout.RulebookUnderstanding.PageBlock;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import java.util.regex.Pattern;
 import org.springframework.stereotype.Component;
 
@@ -22,6 +27,10 @@ public class RulePageChunker {
     private static final Pattern SENTENCE_BREAK = Pattern.compile("(?<=[.!?。！？;；:：])\\s+");
 
     public List<DetectedRuleChunk> chunk(List<ExtractedPage> pages) {
+        return chunk(pages, null);
+    }
+
+    List<DetectedRuleChunk> chunk(List<ExtractedPage> pages, RulebookUnderstanding understanding) {
         if (pages == null || pages.isEmpty()) {
             throw new IllegalArgumentException("extracted pages are required");
         }
@@ -36,10 +45,17 @@ public class RulePageChunker {
                         page.pageNumber()));
                 continue;
             }
-            String heading = heading(text, page.pageNumber());
-            String sectionType = weakSectionType(text);
-            for (String content : split(text)) {
-                chunks.add(new DetectedRuleChunk(sectionType, heading, content, page.pageNumber()));
+            List<PageBlock> pageBlocks = understanding == null
+                    ? List.of()
+                    : understanding.pageBlocks().stream()
+                            .filter(block -> block.pageNumber() == page.pageNumber())
+                            .sorted(Comparator.comparingInt(PageBlock::readingOrder))
+                            .toList();
+            for (LocalSection section : localSections(text, page.pageNumber(), pageBlocks)) {
+                String sectionType = weakSectionType(section.content());
+                for (String content : split(section.content())) {
+                    chunks.add(new DetectedRuleChunk(sectionType, section.heading(), content, page.pageNumber()));
+                }
             }
         }
         if (chunks.isEmpty()) {
@@ -71,6 +87,102 @@ public class RulePageChunker {
             chunks.add(current.toString());
         }
         return chunks;
+    }
+
+    private List<LocalSection> localSections(String text, int pageNumber, List<PageBlock> pageBlocks) {
+        if (pageBlocks.stream().anyMatch(block -> block.role() == BlockRole.HEADING)) {
+            return positionedSections(text, pageNumber, pageBlocks);
+        }
+        return paragraphSections(text, pageNumber);
+    }
+
+    private List<LocalSection> positionedSections(String text, int pageNumber, List<PageBlock> pageBlocks) {
+        List<LocalSection> sections = new ArrayList<>();
+        String currentHeading = heading(text, pageNumber);
+        StringBuilder current = new StringBuilder();
+        for (PageBlock block : pageBlocks) {
+            if (block.role() == BlockRole.FOOTER) continue;
+            if (block.role() == BlockRole.HEADING) {
+                if (!current.isEmpty()) {
+                    sections.add(new LocalSection(currentHeading, current.toString()));
+                    current.setLength(0);
+                }
+                currentHeading = boundedHeading(block.text());
+            }
+            if (!current.isEmpty()) current.append('\n');
+            current.append(block.text());
+        }
+        if (!current.isEmpty()) sections.add(new LocalSection(currentHeading, current.toString()));
+        return sections.isEmpty()
+                ? List.of(new LocalSection(heading(text, pageNumber), text))
+                : List.copyOf(sections);
+    }
+
+    private List<LocalSection> paragraphSections(String text, int pageNumber) {
+        List<LocalSection> sections = new ArrayList<>();
+        String currentHeading = heading(text, pageNumber);
+        StringBuilder current = new StringBuilder();
+        for (String rawParagraph : PARAGRAPH_BREAK.split(text)) {
+            String paragraph = rawParagraph.replaceAll("[\\t ]+", " ").strip();
+            if (paragraph.isEmpty()) continue;
+            String localHeading = headingAtParagraphStart(paragraph);
+            if (localHeading != null) {
+                if (!current.isEmpty()) {
+                    sections.add(new LocalSection(currentHeading, current.toString()));
+                    current.setLength(0);
+                }
+                currentHeading = localHeading;
+            }
+            if (!current.isEmpty()) current.append("\n\n");
+            current.append(paragraph);
+        }
+        if (!current.isEmpty()) sections.add(new LocalSection(currentHeading, current.toString()));
+        return sections.isEmpty()
+                ? List.of(new LocalSection(heading(text, pageNumber), text))
+                : List.copyOf(sections);
+    }
+
+    private String headingAtParagraphStart(String paragraph) {
+        String firstLine = paragraph.lines()
+                .map(String::strip)
+                .filter(line -> !line.isEmpty())
+                .findFirst()
+                .orElse("");
+        if (!looksLikeHeading(firstLine)) return null;
+        return boundedHeading(firstLine);
+    }
+
+    private String boundedHeading(String heading) {
+        String withoutColon = heading.replaceFirst("[：:]$", "").strip();
+        return withoutColon.length() <= MAX_HEADING_CHARACTERS
+                ? withoutColon
+                : withoutColon.substring(0, MAX_HEADING_CHARACTERS).strip();
+    }
+
+    private boolean looksLikeHeading(String line) {
+        String candidate = line == null ? "" : line.strip();
+        if (candidate.length() < 2 || candidate.length() > MAX_HEADING_CHARACTERS
+                || candidate.matches(".*[.!?。！？;,；，]$")) {
+            return false;
+        }
+        String withoutColon = candidate.replaceFirst("[：:]$", "").strip();
+        long letterCount = withoutColon.codePoints().filter(Character::isLetter).count();
+        if (letterCount < 2) return false;
+        if (withoutColon.codePoints().anyMatch(codePoint -> Character.UnicodeScript.of(codePoint)
+                == Character.UnicodeScript.HAN)) {
+            return withoutColon.codePointCount(0, withoutColon.length()) <= 32;
+        }
+        String letters = withoutColon.replaceAll("[^\\p{L}]", "");
+        if (!letters.isBlank() && letters.equals(letters.toUpperCase(Locale.ROOT))) return true;
+        List<String> significantWords = Arrays.stream(withoutColon.split("\\s+"))
+                .map(word -> word.replaceAll("^[^\\p{L}]+|[^\\p{L}]+$", ""))
+                .filter(word -> word.length() > 2)
+                .filter(word -> !Set.of("and", "for", "from", "into", "the", "with").contains(
+                        word.toLowerCase(Locale.ROOT)))
+                .toList();
+        return !significantWords.isEmpty()
+                && significantWords.size() <= 10
+                && significantWords.stream().allMatch(word -> Character.isUpperCase(word.codePointAt(0)));
     }
 
     private List<String> boundedUnits(String paragraph) {
@@ -120,4 +232,6 @@ public class RulePageChunker {
                 .findFirst()
                 .orElse("GENERAL");
     }
+
+    private record LocalSection(String heading, String content) {}
 }

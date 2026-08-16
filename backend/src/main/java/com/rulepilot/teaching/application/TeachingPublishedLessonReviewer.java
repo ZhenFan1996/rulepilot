@@ -19,7 +19,7 @@ import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-/** Applies one bounded whole-lesson factual review without withholding an already cited draft. */
+/** Applies one bounded whole-lesson review and withholds any defect that the Critic actually confirmed. */
 final class TeachingPublishedLessonReviewer {
 
     private static final Logger log = LoggerFactory.getLogger(TeachingPublishedLessonReviewer.class);
@@ -29,6 +29,7 @@ final class TeachingPublishedLessonReviewer {
     private final AuditedAgentInvocations invocations;
     private final TeachingSectionDraftComposer sectionDraftComposer;
     private final TeachingReviewCorrectionPolicy reviewCorrectionPolicy;
+    private final TeachingLessonAssemblyPolicy lessonAssembly = new TeachingLessonAssemblyPolicy();
 
     TeachingPublishedLessonReviewer(
             GeneratedContentCritic critic,
@@ -54,7 +55,8 @@ final class TeachingPublishedLessonReviewer {
                 assistantRunId,
                 progressPublisher,
                 MAX_POST_PUBLICATION_REVIEW_PASSES,
-                new CorrectionBudget());
+                new CorrectionBudget(),
+                false);
     }
 
     private boolean reviewBatch(
@@ -64,25 +66,51 @@ final class TeachingPublishedLessonReviewer {
             UUID assistantRunId,
             Runnable progressPublisher,
             int remainingPasses,
-            CorrectionBudget correctionBudget) {
+            CorrectionBudget correctionBudget,
+            boolean acceptanceRequired) {
         LessonReviewPlanner.LessonReviewBatch batch = LessonReviewPlanner.plan(plan, candidates, assistantRunId);
         GeneratedContentCritic.Review review;
         try {
             review = critic.review(batch.request(), ReviewRisk.HIGH_IMPACT, plan.createdBy());
         } catch (AgentExecutionStoppedException stopped) {
-            candidates.forEach(candidate -> recordPublication(
-                    assistantRunId,
-                    candidate.planned(),
-                    ActivityOutcome.SUCCEEDED,
-                    "POST_PUBLICATION_REVIEW_DEFERRED_RETAINING_CITED_DRAFT"));
+            if (acceptanceRequired) {
+                withholdCandidates(
+                        candidates,
+                        sections,
+                        assistantRunId,
+                        progressPublisher,
+                        "POST_PUBLICATION_REVIEW_UNAVAILABLE_WITHHELD_UNVERIFIED_CORRECTION");
+            } else {
+                resolveInitialReviewFailure(
+                        candidates,
+                        sections,
+                        assistantRunId,
+                        progressPublisher,
+                        "POST_PUBLICATION_REVIEW_DEFERRED_RETAINING_CITED_DRAFT",
+                        "POST_PUBLICATION_REVIEW_UNAVAILABLE_WITHHELD_QUANTITATIVE_DRAFT");
+            }
             return true;
         } catch (RuntimeException reviewFailure) {
-            log.warn("Whole-lesson factual review retained cited draft: {}", reviewFailure.getMessage());
-            candidates.forEach(candidate -> recordPublication(
-                    assistantRunId,
-                    candidate.planned(),
-                    ActivityOutcome.SUCCEEDED,
-                    "POST_PUBLICATION_REVIEW_RETAINED_CITED_DRAFT"));
+            if (acceptanceRequired) {
+                log.warn("Whole-lesson acceptance review withheld unverified correction: {}", reviewFailure.getMessage());
+                withholdCandidates(
+                        candidates,
+                        sections,
+                        assistantRunId,
+                        progressPublisher,
+                        "POST_PUBLICATION_REVIEW_FAILED_WITHHELD_UNVERIFIED_CORRECTION");
+            } else {
+                log.warn(
+                        "Whole-lesson factual review retained only non-quantitative cited drafts: {}",
+                        reviewFailure.getMessage());
+                resolveInitialReviewFailure(
+                        candidates,
+                        sections,
+                        assistantRunId,
+                        progressPublisher,
+                        "POST_PUBLICATION_REVIEW_RETAINED_CITED_DRAFT",
+                        "POST_PUBLICATION_REVIEW_FAILED_WITHHELD_QUANTITATIVE_DRAFT");
+            }
             return true;
         }
 
@@ -104,16 +132,17 @@ final class TeachingPublishedLessonReviewer {
                     && !correctionBudget.tryStart(reviewCorrectionPolicy, correctionKind);
             if (!issues.isEmpty() && correctionBudgetExhausted) {
                 log.info(
-                        "Whole-lesson review defers {} correction for topic {} after its immediate budget",
+                        "Whole-lesson review withholds {} defect for topic {} after its correction budget",
                         correctionKind == TeachingReviewCorrectionPolicy.CorrectionKind.CHAPTER_SCOPE
                                 ? "chapter-scope"
                                 : "factual",
                         candidate.planned().topicKey());
-                recordPublication(
+                withholdCandidate(
+                        candidate,
+                        sections,
                         assistantRunId,
-                        candidate.planned(),
-                        ActivityOutcome.SUCCEEDED,
-                        "POST_PUBLICATION_REVIEW_DEFERRED_FOR_INCREMENTAL_REVIEW");
+                        "POST_PUBLICATION_REVIEW_BUDGET_EXHAUSTED_WITHHELD_CONFIRMED_DEFECT");
+                progressPublisher.run();
                 continue;
             }
             try {
@@ -138,22 +167,27 @@ final class TeachingPublishedLessonReviewer {
                                 : "POST_PUBLICATION_REVIEW_PENDING");
                 progressPublisher.run();
             } catch (AgentExecutionStoppedException stopped) {
-                recordPublication(
+                List<TeachingSectionDraftCandidate> defectiveCandidates = candidates.stream()
+                        .filter(pending -> !issuesBySection.getOrDefault(pending.sectionIndex(), List.of()).isEmpty())
+                        .toList();
+                withholdCandidates(
+                        defectiveCandidates,
+                        sections,
                         assistantRunId,
-                        candidate.planned(),
-                        ActivityOutcome.SUCCEEDED,
-                        "POST_PUBLICATION_REVIEW_DEFERRED_RETAINING_CITED_DRAFT");
+                        progressPublisher,
+                        "POST_PUBLICATION_CORRECTION_STOPPED_WITHHELD_CONFIRMED_DEFECT");
                 return true;
             } catch (RuntimeException correctionFailure) {
                 log.warn(
-                        "Whole-lesson review retained cited draft for topic {}: {}",
+                        "Whole-lesson review withheld confirmed defect for topic {}: {}",
                         candidate.planned().topicKey(),
                         correctionFailure.getMessage());
-                recordPublication(
+                withholdCandidate(
+                        candidate,
+                        sections,
                         assistantRunId,
-                        candidate.planned(),
-                        ActivityOutcome.SUCCEEDED,
-                        "POST_PUBLICATION_REVIEW_RETAINED_CITED_DRAFT");
+                        "POST_PUBLICATION_CORRECTION_FAILED_WITHHELD_CONFIRMED_DEFECT");
+                progressPublisher.run();
             }
         }
         if (!correctedCandidates.isEmpty() && remainingPasses > 1) {
@@ -164,9 +198,65 @@ final class TeachingPublishedLessonReviewer {
                     assistantRunId,
                     progressPublisher,
                     remainingPasses - 1,
-                    correctionBudget);
+                    correctionBudget,
+                    true);
+        }
+        if (!correctedCandidates.isEmpty()) {
+            withholdCandidates(
+                    correctedCandidates,
+                    sections,
+                    assistantRunId,
+                    progressPublisher,
+                    "POST_PUBLICATION_REVIEW_LIMIT_WITHHELD_UNVERIFIED_CORRECTION");
         }
         return true;
+    }
+
+    private void withholdCandidates(
+            List<TeachingSectionDraftCandidate> candidates,
+            List<LessonSection> sections,
+            UUID assistantRunId,
+            Runnable progressPublisher,
+            String category) {
+        candidates.forEach(candidate -> withholdCandidate(candidate, sections, assistantRunId, category));
+        if (!candidates.isEmpty()) progressPublisher.run();
+    }
+
+    private void resolveInitialReviewFailure(
+            List<TeachingSectionDraftCandidate> candidates,
+            List<LessonSection> sections,
+            UUID assistantRunId,
+            Runnable progressPublisher,
+            String retainedCategory,
+            String withheldCategory) {
+        List<TeachingSectionDraftCandidate> quantitative = candidates.stream()
+                .filter(candidate -> TeachingQuantitativeReviewPolicy.requiresCompleteReviewEvidence(
+                        candidate.planned(), candidate.draft()))
+                .toList();
+        Set<Integer> quantitativeIndexes = quantitative.stream()
+                .map(TeachingSectionDraftCandidate::sectionIndex)
+                .collect(Collectors.toSet());
+        candidates.stream()
+                .filter(candidate -> !quantitativeIndexes.contains(candidate.sectionIndex()))
+                .forEach(candidate -> recordPublication(
+                        assistantRunId,
+                        candidate.planned(),
+                        ActivityOutcome.SUCCEEDED,
+                        retainedCategory));
+        withholdCandidates(quantitative, sections, assistantRunId, progressPublisher, withheldCategory);
+    }
+
+    private void withholdCandidate(
+            TeachingSectionDraftCandidate candidate,
+            List<LessonSection> sections,
+            UUID assistantRunId,
+            String category) {
+        sections.set(candidate.sectionIndex(), lessonAssembly.insufficient(candidate.planned()));
+        recordPublication(
+                assistantRunId,
+                candidate.planned(),
+                ActivityOutcome.REJECTED,
+                category);
     }
 
     private TeachingSectionDraftCandidate supportedCandidate(TeachingPlan plan, TeachingSectionDraftCandidate candidate) {

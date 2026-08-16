@@ -3,8 +3,11 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 
 import AppShell from '@/components/AppShell.vue'
+import PlayerWorkStatusText from '@/components/PlayerWorkStatusText.vue'
 import { notifyLoginRequired } from '@/lib/authSession'
 import { playerFacingTitle } from '@/lib/lessonPresentation'
+import { playerFacingCitationExcerpt } from '@/lib/playerFacingCitation'
+import { playerWorkStatus } from '@/lib/playerWorkStatus'
 
 interface TeachingPlan {
   id: string
@@ -17,7 +20,6 @@ interface GameSession {
 }
 
 interface Citation {
-  chunkId: string
   heading: string
   excerpt: string
   pageFrom: number
@@ -75,6 +77,12 @@ const stageMessage = computed(() => {
   if (elapsedSeconds.value < 8) return '正在规则书里查找相关条目…'
   return '正在核对结论与出处；可以留在此页等待。'
 })
+const answerWorkStatus = computed(() => playerWorkStatus('CHECKING_ANSWER', {
+  capability: turns.value.length > 0 ? 'answer' : 'rulebook',
+  readiness: turns.value.length > 0 ? 'usable' : 'unavailable',
+  terminality: 'active',
+  outcome: 'none',
+}, 'zh-CN'))
 
 function storageKey() {
   return `rulepilot:table-session:${planId.value}`
@@ -221,9 +229,9 @@ function publishesConclusion(status: RuleAnswer['status']) {
 
 function warningMessage(type: RuleAnswer['warnings'][number]['type']) {
   if (type === 'INDIRECT_CITATION') return '引用属于当前规则书，但可能不是这个条件下最直接的规则。'
-  if (type === 'LOW_CONFIDENCE') return '模型对这条结论把握较低，请结合规则原文确认。'
-  if (type === 'REVIEW_UNRESOLVED') return '事实审查仍有非关键疑点，请结合规则原文核对。'
-  return '引用检查已通过，但自动事实审查暂时无法完成。'
+  if (type === 'LOW_CONFIDENCE') return '这条结论的依据还不够稳妥，请结合规则原文确认。'
+  if (type === 'REVIEW_UNRESOLVED') return '进一步核对后仍有一处不影响主结论的疑点，请结合规则原文确认。'
+  return '引用的规则页已经核对，但进一步复核暂时没有完成。'
 }
 
 onMounted(() => void loadTable())
@@ -259,7 +267,7 @@ onUnmounted(() => {
 
         <template v-else>
           <div class="rounded-2xl border border-white/10 bg-white/5 p-4 text-sm leading-6 text-panel-text/70">
-            回答只参考这款桌游的当前规则书版本。人数、轮次、阶段和当前玩家不会影响检索或结论；若问题依赖某个条件，请直接写在问题里。
+            回答只参考这款桌游的当前规则书版本。人数、轮次、阶段和当前玩家不会自动成为回答条件；若问题依赖某个条件，请直接写在问题里。
           </div>
 
           <article v-if="latestTurn" class="mt-5 overflow-hidden rounded-3xl bg-paper text-ink elevation-2xl-black" aria-live="polite">
@@ -282,9 +290,9 @@ onUnmounted(() => {
             <details v-if="latestTurn.answer.citations.length" class="border-t border-indigo/15 bg-indigo/5 p-5">
               <summary class="cursor-pointer font-semibold text-indigo">查看规则出处</summary>
               <div class="mt-3 stack-y-md">
-                <div v-for="citation in latestTurn.answer.citations" :key="citation.chunkId" class="rounded-xl bg-paper p-3 text-sm">
+                <div v-for="(citation, citationIndex) in latestTurn.answer.citations" :key="`${citation.heading}-${citation.pageFrom}-${citation.pageTo}-${citationIndex}`" class="rounded-xl bg-paper p-3 text-sm">
                   <p class="font-semibold">{{ citation.heading }} · {{ pages(citation) }}</p>
-                  <p class="mt-1 leading-6 text-ink/60">{{ citation.excerpt }}</p>
+                  <p class="mt-1 leading-6 text-ink/60">{{ playerFacingCitationExcerpt(citation.excerpt) }}</p>
                 </div>
               </div>
             </details>
@@ -333,7 +341,13 @@ onUnmounted(() => {
           <input id="table-question" v-model="question" maxlength="800" :disabled="asking" class="min-h-12 min-w-0 flex-1 rounded-xl border border-white/15 bg-white/10 px-4 text-base text-white placeholder:text-white/35 focus:border-amber-200 focus:outline-none" placeholder="要查哪条规则？">
           <button :disabled="asking || !question.trim()" class="min-h-12 rounded-xl bg-amber-300 px-5 font-bold text-ink disabled:opacity-40">{{ asking ? `${elapsedSeconds}s` : '查规则' }}</button>
         </form>
-        <p v-if="asking" class="mx-auto mt-2 max-w-3xl text-xs text-panel-text/60" role="status">{{ stageMessage }}</p>
+        <div v-if="asking" class="mx-auto mt-2 max-w-3xl" role="status">
+          <PlayerWorkStatusText
+            :status="answerWorkStatus"
+            class="text-sm font-semibold text-amber-200"
+          />
+          <p class="mt-0.5 text-xs text-panel-text/60">{{ stageMessage }}</p>
+        </div>
       </div>
     </div>
   </AppShell>

@@ -1,0 +1,120 @@
+package com.rulepilot.retrieval;
+
+import java.util.List;
+import java.util.Set;
+import java.util.stream.Collectors;
+
+/** Bounded source obligations that retrieval may satisfy without receiving an assistant model contract. */
+public record AnswerRetrievalPlan(
+        List<Subquestion> subquestions,
+        boolean calculationCoverageRequired,
+        ReferenceBinding referenceBinding,
+        String boundReferenceQuestion,
+        List<String> currentRuleObjectSpans,
+        List<PageHint> pageHints) {
+
+    public AnswerRetrievalPlan {
+        if (subquestions == null || subquestions.isEmpty() || subquestions.size() > 4) {
+            throw new IllegalArgumentException("answer retrieval plan is invalid");
+        }
+        subquestions = List.copyOf(subquestions);
+        referenceBinding = referenceBinding == null ? ReferenceBinding.CURRENT_QUESTION : referenceBinding;
+        boundReferenceQuestion = boundReferenceQuestion == null || boundReferenceQuestion.isBlank()
+                ? null
+                : boundReferenceQuestion.strip();
+        currentRuleObjectSpans = currentRuleObjectSpans == null
+                ? List.of()
+                : currentRuleObjectSpans.stream().map(String::strip).distinct().toList();
+        pageHints = pageHints == null ? List.of() : pageHints.stream().distinct().toList();
+        if (currentRuleObjectSpans.size() > 4
+                || currentRuleObjectSpans.stream()
+                        .anyMatch(value -> value.isBlank() || value.length() > 120)
+                || pageHints.size() > 4) {
+            throw new IllegalArgumentException("answer retrieval focus is invalid");
+        }
+    }
+
+    public AnswerRetrievalPlan(List<Subquestion> subquestions, boolean calculationCoverageRequired) {
+        this(
+                subquestions,
+                calculationCoverageRequired,
+                ReferenceBinding.CURRENT_QUESTION,
+                null,
+                List.of(),
+                List.of());
+    }
+
+    static AnswerRetrievalPlan fallback(AnswerRetrievalQuestion question) {
+        if (question == null) throw new IllegalArgumentException("answer retrieval question is required");
+        return new AnswerRetrievalPlan(
+                List.of(new Subquestion(question.currentQuestion(), Set.of(EvidenceNeed.DIRECT_RULE))),
+                false);
+    }
+
+    public Set<EvidenceNeed> evidenceNeeds() {
+        return subquestions.stream()
+                .flatMap(subquestion -> subquestion.evidenceNeeds().stream())
+                .collect(Collectors.toUnmodifiableSet());
+    }
+
+    public boolean visualRequested() {
+        return evidenceNeeds().contains(EvidenceNeed.VISUAL_REFERENCE);
+    }
+
+    public boolean expandedCoverageRequired() {
+        return calculationCoverageRequired
+                || subquestions.size() > 1
+                || evidenceNeeds().contains(EvidenceNeed.COMPLETE_LIST);
+    }
+
+    public record Subquestion(String text, Set<EvidenceNeed> evidenceNeeds, QuestionOwner owner) {
+        public Subquestion {
+            if (text == null || text.isBlank() || text.length() > 300
+                    || evidenceNeeds == null || evidenceNeeds.isEmpty() || evidenceNeeds.size() > 3
+                    || owner == null) {
+                throw new IllegalArgumentException("answer retrieval subquestion is invalid");
+            }
+            text = text.strip();
+            evidenceNeeds = Set.copyOf(evidenceNeeds);
+        }
+
+        public Subquestion(String text, Set<EvidenceNeed> evidenceNeeds) {
+            this(text, evidenceNeeds, QuestionOwner.CURRENT_QUESTION);
+        }
+    }
+
+    public enum QuestionOwner {
+        CURRENT_QUESTION,
+        BOUND_REFERENCE
+    }
+
+    public enum ReferenceBinding {
+        CURRENT_QUESTION,
+        PREVIOUS_QUESTION,
+        PRIOR_GROUNDED_TURN
+    }
+
+    /** Scoped page locator from the current question; the locator itself carries no rule authority. */
+    public record PageHint(String questionSpan, int pageNumber) {
+        public PageHint {
+            if (questionSpan == null || questionSpan.isBlank() || questionSpan.length() > 120
+                    || pageNumber < 1 || pageNumber > 10_000) {
+                throw new IllegalArgumentException("answer retrieval page hint is invalid");
+            }
+            questionSpan = questionSpan.strip();
+        }
+    }
+
+    public enum EvidenceNeed {
+        DIRECT_RULE,
+        CONDITION,
+        SEQUENCE,
+        EXCEPTION,
+        DEFINITION,
+        RELATIONSHIP,
+        VISUAL_REFERENCE,
+        COMPLETE_LIST,
+        ADVICE,
+        PRIOR_TURN
+    }
+}

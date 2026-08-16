@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.rulepilot.document.DocumentProcessing.ExtractedPage;
 import com.rulepilot.document.DocumentProcessing.ExtractedTextBlock;
+import com.rulepilot.ingestion.application.RuleStructureRepository.DetectedRuleChunk;
 import com.rulepilot.ingestion.layout.RulebookUnderstanding;
 import java.util.List;
 import java.util.Optional;
@@ -28,12 +29,14 @@ class RuleStructureServiceTest {
 
         assertThat(repository.understanding.pageBlocks()).hasSize(2);
         assertThat(repository.understanding.coverageLedger()).hasSameSizeAs(repository.understanding.inventory());
+        assertThat(repository.chunks).extracting(DetectedRuleChunk::heading).containsExactly("SETUP");
         assertThat(service.understanding(versionId).inventory()).hasSize(2);
     }
 
     private static final class CapturingRepository implements RuleStructureRepository {
 
         private RulebookUnderstanding understanding;
+        private List<DetectedRuleChunk> chunks;
 
         @Override
         public void replace(
@@ -41,6 +44,7 @@ class RuleStructureServiceTest {
                 List<DetectedRuleSection> sections,
                 List<DetectedRuleChunk> chunks,
                 RulebookUnderstanding understanding) {
+            this.chunks = chunks;
             this.understanding = understanding;
         }
 

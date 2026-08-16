@@ -53,7 +53,7 @@ class SpringAiRuleAnswerModelTest {
     void interpretsQuestionContextAsBoundedStructuredAgentOutput() {
         Fixture fixture = fixture("""
                 {"questionType":"LESSON_STEP_FOLLOW_UP","referenceBinding":"PRIOR_GROUNDED_TURN",
-                 "terms":["红色标记","这样"],"missingContext":[],
+                 "terms":["红色标记","这样"],"ruleObjectSpans":[],"pageHints":[],"missingContext":[],
                  "learningIntent":"EXAMPLE","answerAid":"EXAMPLE",
                  "subquestions":[
                    {"questionSpan":"红色标记什么时候触发？","evidenceNeeds":["PRIOR_TURN"]},
@@ -87,14 +87,49 @@ class SpringAiRuleAnswerModelTest {
                                 "GENERAL_QUESTION",
                                 "fallback hint",
                                 "PREVIOUS_QUESTION even if deterministicMissingContext",
-                                "MUST contain between one and four"));
+                                "MUST contain between one and four",
+                                "Use CALCULATION whenever",
+                                "which of two proposed totals",
+                                "current player message is authoritative",
+                                "ruleObjectSpans",
+                                "pageHints",
+                                "not evidence, not a citation"));
+    }
+
+    @Test
+    void preservesAnExplicitCurrentRuleObjectAndKeepsItsPageHintAsLocatorOnly() {
+        Fixture fixture = fixture("""
+                {"questionType":"RULE_QUERY","referenceBinding":"CURRENT_QUESTION",
+                 "terms":["cobalt spindle","page 47"],
+                 "ruleObjectSpans":["cobalt spindle"],
+                 "pageHints":[{"questionSpan":"page 47","pageNumber":47}],
+                 "missingContext":[],"learningIntent":"SOURCE","answerAid":"SOURCE",
+                 "subquestions":[{"questionSpan":"What does the cobalt spindle do on page 47?","evidenceNeeds":["DIRECT_RULE"]}]}
+                """);
+
+        var result = fixture.model.interpretQuestion(new QuestionInterpretationRequest(
+                "What does the cobalt spindle do on page 47?",
+                "How does the amber lattice score?",
+                "",
+                "",
+                QuestionType.RULE_QUERY,
+                Set.of(),
+                PlayerLocale.EN));
+
+        assertThat(result).hasValueSatisfying(draft -> {
+            assertThat(draft.ruleObjectSpans()).containsExactly("cobalt spindle");
+            assertThat(draft.pageHints()).singleElement().satisfies(hint -> {
+                assertThat(hint.questionSpan()).isEqualTo("page 47");
+                assertThat(hint.pageNumber()).isEqualTo(47);
+            });
+        });
     }
 
     @Test
     void interpretsNaturalStrategyLanguageAsAnAdviceEvidenceNeed() {
         Fixture fixture = fixture("""
                 {"questionType":"RULE_QUERY","referenceBinding":"CURRENT_QUESTION","terms":["策略"],
-                 "missingContext":[],"learningIntent":null,"answerAid":"NONE",
+                 "ruleObjectSpans":[],"pageHints":[],"missingContext":[],"learningIntent":null,"answerAid":"NONE",
                  "subquestions":[{"questionSpan":"有没有赢的策略？","evidenceNeeds":["ADVICE"]}]}
                 """);
 
@@ -129,12 +164,12 @@ class SpringAiRuleAnswerModelTest {
         Fixture fixture = fixture(
                 """
                 {"questionType":"RULE_QUERY","referenceBinding":"CURRENT_QUESTION","terms":["策略"],
-                 "missingContext":[],"learningIntent":"ADVICE","answerAid":"NONE",
+                 "ruleObjectSpans":[],"pageHints":[],"missingContext":[],"learningIntent":"ADVICE","answerAid":"NONE",
                  "subquestions":[{"questionSpan":"有没有赢的策略？","evidenceNeeds":["ADVICE"]}]}
                 """,
                 """
                 {"questionType":"RULE_QUERY","referenceBinding":"CURRENT_QUESTION","terms":["策略"],
-                 "missingContext":[],"learningIntent":null,"answerAid":"NONE",
+                 "ruleObjectSpans":[],"pageHints":[],"missingContext":[],"learningIntent":null,"answerAid":"NONE",
                  "subquestions":[{"questionSpan":"有没有赢的策略？","evidenceNeeds":["ADVICE"]}]}
                 """);
 
@@ -164,12 +199,12 @@ class SpringAiRuleAnswerModelTest {
         Fixture fixture = fixture(
                 """
                 {"questionType":"RULE_QUERY","referenceBinding":"CURRENT_QUESTION","terms":["when"],
-                 "missingContext":[],"learningIntent":null,"answerAid":"TIMING",
+                 "ruleObjectSpans":[],"pageHints":[],"missingContext":[],"learningIntent":null,"answerAid":"TIMING",
                  "subquestions":[{"questionSpan":"when does Daylight end","evidenceNeeds":["TIMING"]}]}
                 """,
                 """
                 {"questionType":"RULE_QUERY","referenceBinding":"CURRENT_QUESTION","terms":["when"],
-                 "missingContext":[],"learningIntent":null,"answerAid":"TIMING",
+                 "ruleObjectSpans":[],"pageHints":[],"missingContext":[],"learningIntent":null,"answerAid":"TIMING",
                  "subquestions":[{"questionSpan":"when does Daylight end","evidenceNeeds":["SEQUENCE"]}]}
                 """);
 
@@ -204,7 +239,7 @@ class SpringAiRuleAnswerModelTest {
     void rejectsQuestionInterpretationWithFieldsOutsideTheVersionedContract() {
         Fixture fixture = fixture("""
                 {"questionType":"RULE_QUERY","referenceBinding":"CURRENT_QUESTION","terms":[],
-                 "missingContext":[],"answerAid":"NONE","subquestions":[{"questionSpan":"它也是这样吗？","evidenceNeeds":["DIRECT_RULE"]}],
+                 "ruleObjectSpans":[],"pageHints":[],"missingContext":[],"answerAid":"NONE","subquestions":[{"questionSpan":"它也是这样吗？","evidenceNeeds":["DIRECT_RULE"]}],
                  "answer":"invented rule fact"}
                 """);
 
@@ -215,7 +250,7 @@ class SpringAiRuleAnswerModelTest {
     void requestsJsonModeAndDisablesThinkingForDeepSeekInterpretation() {
         Fixture fixture = fixture("""
                 {"questionType":"RULE_QUERY","referenceBinding":"PREVIOUS_QUESTION","terms":[],
-                 "missingContext":[],"learningIntent":"SOURCE","answerAid":"SOURCE",
+                 "ruleObjectSpans":[],"pageHints":[],"missingContext":[],"learningIntent":"SOURCE","answerAid":"SOURCE",
                  "subquestions":[{"questionSpan":"这条规则在规则书哪里？","evidenceNeeds":["DIRECT_RULE"]}]}
                 """, true);
 

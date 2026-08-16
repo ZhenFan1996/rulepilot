@@ -1,6 +1,7 @@
 package com.rulepilot.document.adapter.in.web;
 
 import com.rulepilot.document.application.OfficialRulebookDiscoveryService;
+import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.context.annotation.Profile;
@@ -25,10 +26,51 @@ public class OfficialRulebookDiscoveryController {
             @RequestParam UUID editionId, @RequestParam(required = false) String language) {
         var result = discovery.discover(editionId, language);
         return new DiscoveryResponse(
-                result.configured(), result.candidates().stream().map(CandidateResponse::from).toList());
+                result.configured(),
+                DiscoveryIdentityResponse.from(result.identity()),
+                result.candidates().stream().map(CandidateResponse::from).toList(),
+                DiscoverySummaryResponse.from(result.discovery()));
     }
 
-    record DiscoveryResponse(boolean configured, List<CandidateResponse> candidates) {}
+    record DiscoveryResponse(
+            boolean configured,
+            DiscoveryIdentityResponse identity,
+            List<CandidateResponse> candidates,
+            DiscoverySummaryResponse discovery) {}
+
+    record DiscoverySummaryResponse(
+            OfficialRulebookDiscoveryService.DiscoveryCompletion completion,
+            long elapsedMs,
+            long totalBudgetMs,
+            List<ProviderProgressResponse> providers) {
+        static DiscoverySummaryResponse from(OfficialRulebookDiscoveryService.DiscoverySummary summary) {
+            return new DiscoverySummaryResponse(
+                    summary.completion(),
+                    summary.elapsedMs(),
+                    summary.totalBudgetMs(),
+                    summary.providers().stream().map(ProviderProgressResponse::from).toList());
+        }
+    }
+
+    record ProviderProgressResponse(
+            OfficialRulebookDiscoveryService.DiscoveryProvider provider,
+            OfficialRulebookDiscoveryService.DiscoveryProviderState state,
+            long elapsedMs) {
+        static ProviderProgressResponse from(OfficialRulebookDiscoveryService.ProviderProgress progress) {
+            return new ProviderProgressResponse(progress.provider(), progress.state(), progress.elapsedMs());
+        }
+    }
+
+    record DiscoveryIdentityResponse(
+            UUID editionId,
+            String gameName,
+            String editionName,
+            String language) {
+        static DiscoveryIdentityResponse from(OfficialRulebookDiscoveryService.DiscoveryIdentity identity) {
+            return new DiscoveryIdentityResponse(
+                    identity.editionId(), identity.gameName(), identity.editionName(), identity.language());
+        }
+    }
 
     record CandidateResponse(
             String title,
@@ -38,8 +80,13 @@ public class OfficialRulebookDiscoveryController {
             String edition,
             String sourceDomain,
             boolean officialDomainVerified,
+            boolean languageVerified,
             OfficialRulebookDiscoveryService.SourceType sourceType,
-            OfficialRulebookDiscoveryService.AcquisitionMode acquisitionMode) {
+            OfficialRulebookDiscoveryService.AcquisitionMode acquisitionMode,
+            OfficialRulebookDiscoveryService.SourceCapability capability,
+            List<OfficialRulebookDiscoveryService.CapabilityEvidence> capabilityEvidence,
+            Instant capabilityCheckedAt,
+            OfficialRulebookDiscoveryService.SourceAction nextAction) {
         static CandidateResponse from(OfficialRulebookDiscoveryService.Candidate candidate) {
             return new CandidateResponse(
                     candidate.title(),
@@ -49,8 +96,13 @@ public class OfficialRulebookDiscoveryController {
                     candidate.edition(),
                     candidate.sourceDomain(),
                     candidate.officialDomainVerified(),
+                    candidate.languageVerified(),
                     candidate.sourceType(),
-                    candidate.acquisitionMode());
+                    candidate.acquisitionMode(),
+                    candidate.capability(),
+                    candidate.capabilityEvidence(),
+                    candidate.capabilityCheckedAt(),
+                    candidate.nextAction());
         }
     }
 }

@@ -1,0 +1,10 @@
+For rule-answer review, treat the current player question and its explicitly named rule objects as the authoritative
+objective. A selected earlier question may resolve omitted context only and must not replace an explicit current
+object. A page hint is only a retrieval locator, not evidence that a rule is present. A search hit or citation ID is
+not proof by itself.
+
+A mechanical claim is supported only when its own cited direct rule clause or admitted current visual transcription
+entails the actor, action, object, condition, quantity, timing, modality, result, exception, and scope it states.
+Advertising copy, contents or listings, placeholders, loading or error notices, and descriptive visual metadata do
+not entail gameplay rules. Confirm UNSUPPORTED_CLAIM or OVERREACH when a material answer conclusion relies on such a
+source or substitutes an earlier rule object; do not invent the missing rule from outside knowledge.

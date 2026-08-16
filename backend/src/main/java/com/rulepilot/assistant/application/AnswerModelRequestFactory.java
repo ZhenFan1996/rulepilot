@@ -22,12 +22,21 @@ final class AnswerModelRequestFactory {
             List<HybridEvidenceHit> evidence,
             AnswerQuestionPlan questionPlan) {
         return new ModelRequest(
-                question.normalizedQuestion(),
+                question.originalQuestion(),
                 question.type(),
                 new AnswerContext(
-                        context.previousQuestion(),
+                        questionPlan == null ? null : questionPlan.boundReferenceQuestion(),
                         context.learningIntent(),
-                        context.outputLanguage()),
+                        context.outputLanguage(),
+                        questionPlan == null
+                                ? com.rulepilot.assistant.RuleAnswerModel.ReferenceBinding.CURRENT_QUESTION
+                                : questionPlan.referenceBinding(),
+                        questionPlan == null ? List.of() : questionPlan.currentRuleObjectSpans(),
+                        questionPlan == null
+                                ? List.of()
+                                : questionPlan.pageHints().stream()
+                                        .map(AnswerQuestionPlan.PageHint::pageNumber)
+                                        .toList()),
                 evidence.stream()
                         .map(HybridEvidenceHit::evidence)
                         .map(hit -> new EvidenceInput(

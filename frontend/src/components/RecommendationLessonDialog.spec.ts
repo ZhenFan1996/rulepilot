@@ -13,9 +13,11 @@ const plan = {
   ],
 }
 
-function section(position: number, title: string) {
+type EvidenceStatus = 'SUPPORTED' | 'CITED_DRAFT' | 'INSUFFICIENT_EVIDENCE'
+
+function section(position: number, title: string, evidenceStatus: EvidenceStatus = 'SUPPORTED') {
   return {
-    position, topicKey: `TOPIC_${position}`, coverageTags: [], title, required: true, evidenceStatus: 'SUPPORTED',
+    position, topicKey: `TOPIC_${position}`, coverageTags: [], title, required: true, evidenceStatus,
     visualKind: 'FLOW_DIAGRAM', visualCaption: '', visualSourcePages: [position], visualSourceChunkIds: [`chunk-${position}`],
     steps: [{ position: 1, heading: title, kind: 'DO', text: `${title}内容`, sourcePages: [position], visualFocus: null }],
   }
@@ -164,7 +166,7 @@ describe('RecommendationLessonDialog', () => {
     expect(wrapper.get('[data-testid="recommendation-lesson-backdrop"]').classes()).toContain('z-[100]')
     expect(wrapper.get('[data-testid="recommendation-lesson-surface"]').attributes('style'))
       .toContain('background-color: var(--color-canvas); opacity: 1')
-    expect(wrapper.text()).toContain('已有 1 / 3 章可以阅读')
+    expect(wrapper.text()).toContain('已有 1 / 3 章通过规则核对')
     expect(wrapper.get('[data-testid="chapter-list-stub"]').text()).toBe('目标')
 
     await vi.advanceTimersByTimeAsync(1_500)
@@ -211,6 +213,37 @@ describe('RecommendationLessonDialog', () => {
     await flushPromises()
     expect(runReads).toBe(2)
     expect(wrapper.get('[data-testid="chapter-list-stub"]').text()).toBe('目标')
+    wrapper.unmount()
+  })
+
+  it('counts only independently supported chapters as executable progress', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const path = String(input)
+      if (path === '/api/v1/teaching-plans/plan-1') return Response.json(plan)
+      if (path.includes('/illustrated-lessons/latest')) {
+        return Response.json({
+          id: 'lesson-1',
+          teachingPlanId: 'plan-1',
+          status: 'DRAFT_READY',
+          sections: [
+            section(1, '已核对', 'SUPPORTED'),
+            section(2, '仍在核对', 'CITED_DRAFT'),
+            section(3, '证据不足', 'INSUFFICIENT_EVIDENCE'),
+          ],
+        })
+      }
+      if (path.includes('/assistant-runs/latest')) return Response.json(runFor('plan-1'))
+      return new Response(null, { status: 404 })
+    }))
+    const wrapper = mount(RecommendationLessonDialog, {
+      props: { open: true, planId: 'plan-1' },
+      global: { stubs: { LessonChapterList: ChapterListStub, teleport: true } },
+    })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('已有 1 / 3 章通过规则核对')
+    expect(wrapper.text()).not.toContain('3 / 3')
+    expect(wrapper.get('[data-testid="recommendation-lesson-progress"]').attributes('style')).toContain('width: 33%')
     wrapper.unmount()
   })
 

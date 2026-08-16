@@ -253,6 +253,18 @@ final class AnswerPublicationValidator {
         }
         String completeAnswer = shortVerdict + "\n" + explanation + "\n"
                 + String.join("\n", draft.exceptions()) + "\n"
+                + calculations.stream()
+                        .map(calculation -> calculation.expression() + "\n" + calculation.result())
+                        .collect(java.util.stream.Collectors.joining("\n")) + "\n"
+                + situationChecks.stream()
+                        .map(check -> check.requirement() + "\n" + check.playerFact())
+                        .collect(java.util.stream.Collectors.joining("\n")) + "\n"
+                + walkthroughSteps.stream()
+                        .map(step -> step.instruction() + "\n" + step.explanation())
+                        .collect(java.util.stream.Collectors.joining("\n")) + "\n"
+                + decisionBranches.stream()
+                        .map(branch -> branch.condition() + "\n" + branch.outcome())
+                        .collect(java.util.stream.Collectors.joining("\n")) + "\n"
                 + exceptionClauses.stream()
                         .map(clause -> clause.condition() + "\n" + clause.effect())
                         .collect(java.util.stream.Collectors.joining("\n")) + "\n"
@@ -291,7 +303,9 @@ final class AnswerPublicationValidator {
                                 + option.optionName() + "\n" + option.availabilityCondition() + "\n"
                                 + option.result())
                         .collect(java.util.stream.Collectors.joining("\n"));
-        if (AnswerDraftSafetyPolicy.containsInternalEvidenceReference(completeAnswer)) {
+        List<UUID> evidenceIds = evidence.stream().map(hit -> hit.evidence().chunkId()).toList();
+        if (AnswerDraftSafetyPolicy.containsInternalEvidenceReference(completeAnswer)
+                || AnswerDraftSafetyPolicy.containsKnownEvidenceReference(completeAnswer, evidenceIds)) {
             throw new IllegalArgumentException("player-facing answer contains internal evidence references");
         }
         List<EvidenceClaim> claims = new java.util.ArrayList<>();
@@ -350,7 +364,7 @@ final class AnswerPublicationValidator {
             var source = hit.evidence();
             return new RuleCitation(
                     source.chunkId(), source.documentVersionId(), source.sectionType(), source.heading(),
-                    source.excerpt(), source.pageFrom(), source.pageTo());
+                    AnswerCitationPresentationPolicy.excerpt(source.excerpt()), source.pageFrom(), source.pageTo());
         }).toList();
         AnswerConfidence confidence = AnswerConfidence.valueOf(draft.confidence().toUpperCase(Locale.ROOT));
         AnswerBasis answerBasis = AnswerBasis.fromModelValue(draft.answerBasis());

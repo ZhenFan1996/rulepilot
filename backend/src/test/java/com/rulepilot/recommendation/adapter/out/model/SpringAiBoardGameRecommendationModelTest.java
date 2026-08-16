@@ -8,6 +8,7 @@ import static org.mockito.Mockito.when;
 
 import com.rulepilot.modelconfig.RuntimeModelConfiguration;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.Message;
+import com.rulepilot.recommendation.BoardGameRecommendationModel.CompletionStatus;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.PreferenceInterpretationRequest;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.PreferenceEvidence;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.PreferenceEvidenceStatus;
@@ -19,6 +20,7 @@ import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.metadata.ChatGenerationMetadata;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
@@ -47,29 +49,39 @@ class SpringAiBoardGameRecommendationModelTest {
                         "function",
                         "interpret_preference_evidence",
                         "{\"preferences\":["
-                                + "{\"field\":\"players\",\"value\":3,\"evidenceId\":\"U1\","
+                                + "{\"field\":\"playerCount\",\"value\":{\"minimum\":3,\"maximum\":3},\"evidenceId\":\"U1\","
                                 + "\"status\":\"CONTEXTUAL\",\"reason\":\"COMPLETE_GROUP_INFERENCE\"},"
-                                + "{\"field\":\"maxMinutes\",\"value\":60,\"evidenceId\":\"U2\","
+                                + "{\"field\":\"durationMinutes\",\"value\":{\"minimum\":null,\"maximum\":60},\"evidenceId\":\"U2\","
+                                + "\"status\":\"DIRECT\",\"reason\":\"DIRECT\"},"
+                                + "{\"field\":\"complexity\",\"value\":null,\"evidenceId\":\"U3\","
                                 + "\"status\":\"DIRECT\",\"reason\":\"DIRECT\"}]}")))
                 .build();
-        when(chatModel.call(any(Prompt.class))).thenReturn(new ChatResponse(List.of(new Generation(output))));
+        when(chatModel.call(any(Prompt.class))).thenReturn(new ChatResponse(List.of(new Generation(
+                output,
+                ChatGenerationMetadata.builder().finishReason("tool_calls").build()))));
         var adapter = new SpringAiBoardGameRecommendationModel(configuration, 0.8);
 
         var interpretation = adapter.interpretPreferences(new PreferenceInterpretationRequest(
                 List.of(
                         new PreferenceEvidence("U1", "周末想带爸妈玩一局"),
-                        new PreferenceEvidence("U2", "最多 60 分钟")),
+                        new PreferenceEvidence("U2", "最多 60 分钟"),
+                        new PreferenceEvidence("U3", "复杂度不限")),
                 List.of()));
 
         assertThat(interpretation.preferences()).satisfiesExactly(
                 preference -> {
-                    assertThat(preference.field()).isEqualTo("players");
-                    assertThat(preference.value()).isEqualTo("3");
+                    assertThat(preference.field()).isEqualTo("playerCount");
+                    assertThat(preference.value()).isEqualTo("3..3");
                     assertThat(preference.decision().status()).isEqualTo(PreferenceEvidenceStatus.CONTEXTUAL);
                 },
                 preference -> {
-                    assertThat(preference.field()).isEqualTo("maxMinutes");
-                    assertThat(preference.value()).isEqualTo("60");
+                    assertThat(preference.field()).isEqualTo("durationMinutes");
+                    assertThat(preference.value()).isEqualTo("*..60");
+                    assertThat(preference.decision().status()).isEqualTo(PreferenceEvidenceStatus.DIRECT);
+                },
+                preference -> {
+                    assertThat(preference.field()).isEqualTo("complexity");
+                    assertThat(preference.value()).isEqualTo("*..*");
                     assertThat(preference.decision().status()).isEqualTo(PreferenceEvidenceStatus.DIRECT);
                 });
         ArgumentCaptor<Prompt> prompt = ArgumentCaptor.forClass(Prompt.class);
@@ -103,7 +115,9 @@ class SpringAiBoardGameRecommendationModelTest {
                                 + "{\"index\":0,\"status\":\"CONTEXTUAL\",\"reason\":\"COMPLETE_GROUP_INFERENCE\"},"
                                 + "{\"index\":1,\"status\":\"DIRECT\",\"reason\":\"DIRECT\"}]}")))
                 .build();
-        when(chatModel.call(any(Prompt.class))).thenReturn(new ChatResponse(List.of(new Generation(output))));
+        when(chatModel.call(any(Prompt.class))).thenReturn(new ChatResponse(List.of(new Generation(
+                output,
+                ChatGenerationMetadata.builder().finishReason("tool_calls").build()))));
         var adapter = new SpringAiBoardGameRecommendationModel(configuration, 0.7);
 
         var review = adapter.reviewPreferences(new PreferenceReviewRequest(
@@ -111,8 +125,8 @@ class SpringAiBoardGameRecommendationModelTest {
                         new PreferenceEvidence("U1", "周末想带爸妈玩一局"),
                         new PreferenceEvidence("U2", "一共 4 个人")),
                 List.of(
-                        new PreferenceProposal(0, "players", "3", "U1"),
-                        new PreferenceProposal(1, "players", "4", "U2"))));
+                        new PreferenceProposal(0, "playerCount", "3..3", "U1"),
+                        new PreferenceProposal(1, "playerCount", "4..4", "U2"))));
 
         assertThat(review.decisions()).extracting(value -> value.status())
                 .containsExactly(PreferenceEvidenceStatus.CONTEXTUAL, PreferenceEvidenceStatus.DIRECT);
@@ -190,7 +204,9 @@ class SpringAiBoardGameRecommendationModelTest {
                 .toolCalls(List.of(new AssistantMessage.ToolCall(
                         "call-1", "function", "reply_to_user", "{\"message\":\"你好\",\"referencedBggIds\":[]}")))
                 .build();
-        when(chatModel.call(any(Prompt.class))).thenReturn(new ChatResponse(List.of(new Generation(output))));
+        when(chatModel.call(any(Prompt.class))).thenReturn(new ChatResponse(List.of(new Generation(
+                output,
+                ChatGenerationMetadata.builder().finishReason("tool_calls").build()))));
         var adapter = new SpringAiBoardGameRecommendationModel(configuration, 0.45);
 
         var turn = adapter.next(new Request(
@@ -202,6 +218,7 @@ class SpringAiBoardGameRecommendationModelTest {
                 1_200));
 
         assertThat(adapter.configured()).isTrue();
+        assertThat(turn.completionStatus()).isEqualTo(CompletionStatus.COMPLETE);
         assertThat(turn.toolCalls()).singleElement().satisfies(call -> {
             assertThat(call.name()).isEqualTo("reply_to_user");
             assertThat(call.argumentsJson()).contains("你好");
@@ -217,5 +234,40 @@ class SpringAiBoardGameRecommendationModelTest {
                 .containsExactlyInAnyOrderEntriesOf(java.util.Map.of("enable_thinking", false));
         assertThat(options.getToolCallbacks()).singleElement().satisfies(callback ->
                 assertThat(callback.getToolDefinition().name()).isEqualTo("reply_to_user"));
+    }
+
+    @Test
+    void exposesProviderOutputLimitsToTheAgentInsteadOfTreatingAValidLookingPayloadAsComplete() {
+        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        ChatModel chatModel = mock(ChatModel.class);
+        when(configuration.modelFor(RuntimeModelConfiguration.Role.RECOMMENDATION)).thenReturn(chatModel);
+        when(configuration.providerFor(RuntimeModelConfiguration.Role.RECOMMENDATION)).thenReturn("qwen");
+        when(configuration.modelNameFor(RuntimeModelConfiguration.Role.RECOMMENDATION)).thenReturn("qwen3.7-plus");
+        when(chatModel.getDefaultOptions()).thenReturn(OpenAiChatOptions.builder()
+                .apiKey("test-key")
+                .baseUrl("https://provider.example/v1")
+                .model("qwen3.7-plus")
+                .build());
+        AssistantMessage output = AssistantMessage.builder()
+                .content("")
+                .toolCalls(List.of(new AssistantMessage.ToolCall(
+                        "limited-1",
+                        "function",
+                        "reply_to_user",
+                        "{\"message\":\"A syntactically valid but incomplete reply\"}")))
+                .build();
+        when(chatModel.call(any(Prompt.class))).thenReturn(new ChatResponse(List.of(new Generation(
+                output,
+                ChatGenerationMetadata.builder().finishReason("max_tokens").build()))));
+        var adapter = new SpringAiBoardGameRecommendationModel(configuration);
+
+        var turn = adapter.next(new Request(
+                List.of(Message.system("Use actions."), Message.user("Compare them.")),
+                List.of(new ToolSpec("reply_to_user", "Reply naturally", "{\"type\":\"object\"}")),
+                600));
+
+        assertThat(turn.completionStatus()).isEqualTo(CompletionStatus.OUTPUT_LIMIT);
+        assertThat(turn.toolCalls()).singleElement().satisfies(call ->
+                assertThat(call.name()).isEqualTo("reply_to_user"));
     }
 }

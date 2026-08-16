@@ -46,6 +46,20 @@ test('keeps a retryable registration on the same retained destination', async ({
   await expect(signInInstead).toHaveAttribute('href', '/login?redirect=/lessons?filter=pending')
 })
 
+test('falls back to the root journey after login when a local return route has retired', async ({ page }) => {
+  await mockAuthenticationJourney(page)
+  await page.goto('/login?redirect=/retired-player-route?view=ready')
+
+  await expect(page.getByTestId('auth-return-context')).toHaveCount(0)
+  await page.getByLabel('用户名').fill('returning-player')
+  await page.locator('input[name="password"]').fill('test-password')
+  await page.getByRole('button', { name: '登录', exact: true }).click()
+
+  await expect(page).toHaveURL('/')
+  await expect(page.getByRole('heading', { level: 1 })).toContainText('规则书递过来')
+  await expect(page).not.toHaveURL('/account')
+})
+
 async function mockAuthenticationJourney(page: Page, options: { registrationStatus?: number } = {}) {
   let signedIn = false
   await page.route('**/api/auth/session', route => route.fulfill(signedIn

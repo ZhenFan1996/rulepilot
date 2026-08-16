@@ -12,6 +12,34 @@ describe('LessonsView', () => {
     vi.useRealTimers()
   })
 
+  it('shows one route-owned sign-in recovery instead of reload and upload noise', async () => {
+    const loginRequired = vi.fn()
+    window.addEventListener(LOGIN_REQUIRED_EVENT, loginRequired)
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 401 })))
+    const router = createMemoryRouter()
+    await router.push('/lessons?filter=pending')
+    await router.isReady()
+    const wrapper = mount(LessonsView, {
+      global: { plugins: [router], stubs: { BackgroundWorkCenter: true } },
+    })
+    await flushPromises()
+
+    const gate = wrapper.get('[data-testid="signed-out-guides-gate"]')
+    expect(router.currentRoute.value.fullPath).toBe('/lessons?filter=pending')
+    expect(gate.get('h2').text()).toBe('登录后查看你的讲解')
+    expect(gate.text()).toContain('登录后回到这里')
+    expect(wrapper.findAll('a[href="/login?redirect=/lessons?filter=pending"]')).toHaveLength(1)
+    expect(wrapper.find('main a[href="/teach"]').exists()).toBe(false)
+    expect(wrapper.findAll('button').some(button => button.text() === '重新加载')).toBe(false)
+    expect(wrapper.text()).not.toContain('当前页面已保留')
+    expect(loginRequired).toHaveBeenCalled()
+    expect(loginRequired.mock.calls.every(([event]) =>
+      (event as CustomEvent).detail?.showReminder === false)).toBe(true)
+
+    window.removeEventListener(LOGIN_REQUIRED_EVENT, loginRequired)
+    wrapper.unmount()
+  })
+
   it('shows a persisted selected game before plan creation and replaces it with the real guide', async () => {
     vi.useFakeTimers()
     let planReads = 0
@@ -54,7 +82,7 @@ describe('LessonsView', () => {
     const pending = wrapper.get('[data-testid="pending-guide-journey"]')
     expect(pending.text()).toContain('花砖物语')
     expect(pending.text()).toContain('azul_rules_cn_final.pdf')
-    expect(pending.text()).toContain('正在建立讲解计划')
+    expect(pending.get('[data-testid="player-work-status"]').text()).toBe('正在组织讲解')
     expect(wrapper.text()).not.toContain('还没有讲解计划')
 
     await vi.advanceTimersByTimeAsync(4_000)
@@ -130,11 +158,11 @@ describe('LessonsView', () => {
     const wrapper = mount(LessonsView, { global: { plugins: [router], stubs: { BackgroundWorkCenter: true } } })
     await flushPromises()
 
-    expect(wrapper.get('[data-testid="pending-guide-journey"]').text()).toContain('正在建立讲解计划')
+    expect(wrapper.get('[data-testid="pending-guide-journey"] [data-testid="player-work-status"]').text()).toBe('正在组织讲解')
 
     await vi.advanceTimersByTimeAsync(4_000)
     await flushPromises()
-    expect(wrapper.get('[data-testid="pending-guide-journey"]').text()).toContain('正在建立讲解计划')
+    expect(wrapper.get('[data-testid="pending-guide-journey"] [data-testid="player-work-status"]').text()).toBe('正在组织讲解')
     expect(runReads).toBe(1)
     expect(wrapper.text()).not.toContain('立即阅读完整讲解')
 
@@ -143,7 +171,7 @@ describe('LessonsView', () => {
     expect(runReads).toBe(2)
     expect(lessonReads).toBe(2)
     expect(wrapper.find('[data-testid="pending-guide-journey"]').exists()).toBe(false)
-    expect(wrapper.text()).toContain('可读，核对中')
+    expect(wrapper.text()).toContain('正在补充图片或核对细节')
     expect(wrapper.text()).toContain('立即阅读完整讲解')
     wrapper.unmount()
   })
@@ -180,7 +208,8 @@ describe('LessonsView', () => {
     const pending = wrapper.get('[data-testid="pending-guide-journey"]')
     expect(pending.text()).toContain('星际探险')
     expect(pending.text()).toContain('rules_v4_final.pdf')
-    expect(pending.text()).toContain('规则书已保存，正在读取页面与建立检索')
+    expect(pending.get('[data-testid="player-work-status"]').text()).toBe('读取规则书')
+    expect(pending.text()).not.toContain('建立检索')
     expect(pending.text()).not.toContain('先读规则书')
     expect(wrapper.text()).toContain('已进入我的讲解')
     wrapper.unmount()
@@ -240,8 +269,8 @@ describe('LessonsView', () => {
 
     expect(retryBody).toEqual({ expectedPreparationRunId: 'prep-upload-failed' })
     expect(directPreparationStarts).toBe(0)
-    expect(wrapper.get('[data-testid="pending-guide-journey"]').text())
-      .toContain('规则书已保存，正在读取页面与建立检索')
+    expect(wrapper.get('[data-testid="pending-guide-journey"] [data-testid="player-work-status"]').text())
+      .toBe('读取规则书')
     wrapper.unmount()
   })
 
@@ -299,7 +328,7 @@ describe('LessonsView', () => {
 
     const pending = wrapper.get('[data-testid="pending-guide-journey"]')
     expect(pending.text()).toContain('花砖物语')
-    expect(pending.text()).toContain('任务需要处理')
+    expect(pending.get('[data-testid="player-work-status"]').text()).toBe('需要处理')
     expect(pending.find('.animate-pulse').exists()).toBe(false)
     const retry = pending.findAll('button').find(button => button.text().includes('重新准备讲解'))
     expect(retry).toBeDefined()
@@ -310,8 +339,8 @@ describe('LessonsView', () => {
     expect(retryBody).toEqual({ expectedPreparationRunId: 'prep-1' })
     expect(directPreparationStarts).toBe(0)
     const restarted = wrapper.get('[data-testid="pending-guide-journey"]')
-    expect(restarted.text()).toContain('规则书已保存，正在读取页面与建立检索')
-    expect(restarted.text()).not.toContain('任务需要处理')
+    expect(restarted.get('[data-testid="player-work-status"]').text()).toBe('读取规则书')
+    expect(restarted.text()).not.toContain('需要处理')
     expect(restarted.find('.animate-pulse').exists()).toBe(true)
     wrapper.unmount()
   })
@@ -377,16 +406,18 @@ describe('LessonsView', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('任务已经交给后台')
-    expect(wrapper.text()).toContain('可读，核对中')
+    const status = wrapper.get('[data-testid="player-work-status"]')
+    expect(status.text()).toBe('正在补充图片或核对细节')
+    expect(status.attributes('data-player-work-readiness')).toBe('usable')
     expect(wrapper.text()).toContain('基础讲解已可用，正在核对“完成开局设置”的细节')
     expect(wrapper.text()).toContain('已处理 1/1 节')
-    expect(wrapper.text()).toContain('已完成 2 次内容处理')
+    expect(wrapper.text()).not.toMatch(/模型调用|model calls|次内容处理/)
     expect(wrapper.text()).toContain('完整基础讲解已经可读')
     expect(wrapper.text()).toContain('立即阅读完整讲解')
     expect(wrapper.text()).not.toContain('目录已生成')
     await vi.advanceTimersByTimeAsync(1500)
     await flushPromises()
-    expect(wrapper.text()).toContain('可读，核对中')
+    expect(wrapper.text()).toContain('正在补充图片或核对细节')
     expect(wrapper.text()).toContain('立即阅读完整讲解')
     const progressPaths = fetchMock.mock.calls
       .map(([input]) => String(input))
@@ -453,11 +484,13 @@ describe('LessonsView', () => {
     expect(retry).toBeDefined()
     await retry!.trigger('click')
     await flushPromises()
-    expect(wrapper.text()).toContain('已完成 1 次内容处理')
+    expect(wrapper.get('[data-testid="player-work-status"]').text()).toBe('正在组织讲解')
+    expect(wrapper.text()).not.toContain('次内容处理')
 
     await vi.advanceTimersByTimeAsync(1000)
     await flushPromises()
-    expect(wrapper.text()).toContain('已完成 2 次内容处理')
+    expect(wrapper.get('[data-testid="player-work-status"]').text()).toBe('正在组织讲解')
+    expect(wrapper.text()).not.toContain('次内容处理')
     expect(runReads).toBeGreaterThanOrEqual(4)
     wrapper.unmount()
   })
@@ -493,12 +526,14 @@ describe('LessonsView', () => {
 
     await vi.advanceTimersByTimeAsync(1500)
     await flushPromises()
-    expect(wrapper.text()).toContain('已完成 1 次内容处理')
+    expect(wrapper.get('[data-testid="player-work-status"]').text()).toBe('正在组织讲解')
+    expect(wrapper.text()).not.toContain('次内容处理')
     expect(wrapper.text()).toContain('正在自动重试')
 
     await vi.advanceTimersByTimeAsync(1500)
     await flushPromises()
-    expect(wrapper.text()).toContain('已完成 2 次内容处理')
+    expect(wrapper.get('[data-testid="player-work-status"]').text()).toBe('正在组织讲解')
+    expect(wrapper.text()).not.toContain('次内容处理')
     expect(wrapper.text()).not.toContain('正在自动重试')
     wrapper.unmount()
   })
@@ -546,6 +581,8 @@ describe('LessonsView', () => {
     expect(wrapper.findAll('h2').filter((heading) => heading.text() === 'Ahoy').length).toBe(1)
     expect(wrapper.findAll('h2').filter((heading) => heading.text() === 'Root').length).toBe(0)
     expect(wrapper.text()).toContain('同一本规则书的 1 个历史版本已收起。')
+    expect(wrapper.text()).toContain('讲解已生成')
+    expect(wrapper.text()).not.toContain('讲解已经通过规则依据核对')
 
     const pending = wrapper.findAll('button').find((button) => button.text().includes('待处理 1'))
     expect(pending).toBeDefined()
@@ -704,6 +741,8 @@ describe('LessonsView', () => {
     window.dispatchEvent(new Event(LOGIN_REQUIRED_EVENT))
     await vi.waitFor(() => expect(wrapper.text()).toContain('当前账户讲解'))
     expect(oldSignals.every(signal => signal.aborted)).toBe(true)
+    expect(wrapper.get('[data-testid="player-work-status"]').text()).toBe('需要处理')
+    expect(wrapper.text()).not.toContain('讲解完成')
     expect(wrapper.text()).not.toContain('旧账户讲解')
     expect(sessionReads).toBe(1)
 

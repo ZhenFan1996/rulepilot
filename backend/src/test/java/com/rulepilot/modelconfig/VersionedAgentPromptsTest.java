@@ -24,6 +24,15 @@ class VersionedAgentPromptsTest {
                         "current-section evidence",
                         "directly support the whole claim",
                         "complete tie handling",
+                        "aggregation dimension",
+                        "per card, per player, per category",
+                        "once overall",
+                        "coverage_checklist contains source_coverage",
+                        "or source_contract_v1",
+                        "preserve that exact original-language identifier",
+                        "coverage_checklist contains source_dependency",
+                        "procedure is not present in the current document",
+                        "sole exception for plainly naming a cited missing source",
                         "Return only the requested JSON schema",
                         "no unsupported next-player handoff")
                 .doesNotContain("revision v", "maximum step count", "allotted step count");
@@ -48,7 +57,15 @@ class VersionedAgentPromptsTest {
                         "Focused answer-aid routing revision v55",
                         "at most one primary structured aid family",
                         "situationChecks` must always be empty",
-                        "Source-authored advice boundary revision v56")
+                        "Source-authored advice boundary revision v56",
+                        "Player-facing answer progression revision v57",
+                        "must add a material condition, reason, boundary, or application detail",
+                        "Do not restate the same complete",
+                        "rule sequence in `shortVerdict`, `explanation`, and a walkthrough",
+                        "Question and source authority revision v58",
+                        "current player question",
+                        "page hint is only a retrieval locator",
+                        "Advertising copy, contents or listings, placeholders")
                 .doesNotContain("Cited-tie-resolution revision v37", "Cited-worked-example revision v34");
 
         assertThat(prompts.answerSystem("TIE"))
@@ -59,7 +76,16 @@ class VersionedAgentPromptsTest {
                 .doesNotContain("Cited-decision-table revision v28", "Cited-tie-resolution revision v37");
 
         assertThat(prompts.answerUser())
-                .contains("{questionType}", "{evidenceNeeds}", "{answerAid}", "{evidence}")
+                .contains(
+                        "{questionType}",
+                        "{evidenceNeeds}",
+                        "{answerAid}",
+                        "{referenceBinding}",
+                        "{currentRuleObjects}",
+                        "{pageHints}",
+                        "Page locator hints only identify",
+                        "candidate pages",
+                        "{evidence}")
                 .doesNotContain("{lessonSection}", "{playerCount}");
     }
 
@@ -77,8 +103,19 @@ class VersionedAgentPromptsTest {
                         "CHAPTER_SCOPE_DUPLICATION",
                         "at most 12 issues",
                         "setup, legal actions, timing, scoring, game end",
+                        "aggregation owner",
+                        "worked total",
+                        "claimAspect",
+                        "QUANTITY",
+                        "MULTIPLIER",
+                        "TIMING",
+                        "SUBJECT",
+                        "NEGATION",
                         "defectConfirmed=true",
                         "empty issues array",
+                        "explicitly named rule objects",
+                        "page hint is only a retrieval locator",
+                        "Advertising copy, contents or listings, placeholders",
                         "Return only the requested JSON schema")
                 .doesNotContain("revision v", "keyword checklist", "ATOMIC_CONFIRMATION");
 
@@ -87,16 +124,43 @@ class VersionedAgentPromptsTest {
                 .contains(
                         "defectConfirmed=false",
                         "defectConfirmed=true",
+                        "claim-position/type/claimAspect",
                         "complete claim",
                         "current-turn/later-turn distinction",
                         "{claims}",
                         "{evidence}");
+        assertThat(prompts.atomicCriticSystem())
+                .contains(
+                        "authoritative target",
+                        "page hint only locates candidates",
+                        "descriptive visual",
+                        "metadata",
+                        "does not directly entail the mechanical conclusion");
+        assertThat(prompts.objectiveCoverageCriticSystem())
+                .contains("claimAspect", "MISSING_CRITICAL_RULE", "evidenceIds");
         assertThat(prompts.structuredOutputRepair()).contains("schema-valid object only");
         assertThat(prompts.criticOutputRepair()).contains(
                 "Return {\"issues\":[]}",
                 "defectConfirmed: true",
+                "claimAspect",
+                "at least one evidenceIds reference owned by that claim",
                 "exactly one allowed issue type",
                 "Never place a supported");
+
+        assertThat(prompts.teachingOutlineSystem()).contains(
+                "quantitative relationship",
+                "aggregation owner",
+                "worked example",
+                "Source-dependency planning revision v17",
+                "source_dependency",
+                "missing_setup_source",
+                "must not also receive the setup tag",
+                "Source coverage contract revision v18",
+                "sourceCoverageInventoryComplete",
+                "sourceCoverageSlots",
+                "LEGAL_ACTION",
+                "NECESSARY_EXCEPTION",
+                "ownerTopicKey");
     }
 
     @Test

@@ -2,6 +2,8 @@ package com.rulepilot.assistant.application;
 
 import com.rulepilot.assistant.EvidenceVerifier.VerificationStatus;
 import com.rulepilot.assistant.domain.AnswerStatus;
+import com.rulepilot.retrieval.AnswerEvidenceRetriever;
+import com.rulepilot.retrieval.AnswerEvidencePolicy;
 import com.rulepilot.retrieval.evidence.HybridEvidenceHit;
 import java.util.List;
 import java.util.UUID;
@@ -22,7 +24,9 @@ final class AnswerEvidenceAdmissionGate {
         if (retrievalResult.state() == AnswerEvidenceRetriever.State.UNAVAILABLE) {
             return Admission.rejected(AnswerStatus.INVALID_MODEL_OUTPUT, "规则检索暂时不可用，尚未生成答案。");
         }
-        List<HybridEvidenceHit> evidence = retrievalResult.evidence();
+        List<HybridEvidenceHit> evidence = retrievalResult.evidence().stream()
+                .filter(hit -> !AnswerEvidencePolicy.isVisualPlaceholder(hit))
+                .toList();
         if (evidence.isEmpty()) {
             return Admission.rejected(AnswerStatus.INSUFFICIENT_EVIDENCE, "没有找到可引用的规则依据。");
         }

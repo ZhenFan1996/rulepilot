@@ -1,16 +1,100 @@
 package com.rulepilot.teaching.adapter.out.persistence;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import com.rulepilot.teaching.VisualRulebookPageFacts.PageFact;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.SourceDependency;
 import com.rulepilot.teaching.VisualRulebookPageFacts.IconMeaningStatus;
 import com.rulepilot.teaching.VisualRulebookPageFacts.IconOccurrence;
 import com.rulepilot.teaching.VisualRulebookPageFacts.VisualAnchor;
+import com.rulepilot.retrieval.VisualRulebookPageFactSearch.RuleFactStatus;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.Query;
 import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
+import org.springframework.test.util.ReflectionTestUtils;
 
 class JpaVisualRulebookPageFactsTest {
+
+    @Test
+    void searchesOnlyTheCurrentVisualFactSchema() {
+        EntityManager entityManager = mock(EntityManager.class);
+        Query query = mock(Query.class);
+        ArgumentCaptor<String> sql = ArgumentCaptor.forClass(String.class);
+        when(entityManager.createNativeQuery(sql.capture())).thenReturn(query);
+        when(query.setParameter(anyString(), any())).thenReturn(query);
+        when(query.getResultList()).thenReturn(List.of());
+        JpaVisualRulebookPageFacts repository = new JpaVisualRulebookPageFacts();
+        ReflectionTestUtils.setField(repository, "entityManager", entityManager);
+
+        repository.search(UUID.randomUUID(), "MOVE", 2);
+
+        assertThat(sql.getValue())
+                .contains(
+                        "schema_version = :schemaVersion",
+                        "rule_group_identifiers",
+                        "rule_group_inventory_complete");
+        verify(query).setParameter("schemaVersion", PageFact.CURRENT_SCHEMA_VERSION);
+    }
+
+    @Test
+    void mapsCompleteRuleGroupInventoriesIntoTypedAnswerEvidenceReadiness() {
+        UUID documentVersionId = UUID.randomUUID();
+        JpaVisualRulebookPageFacts repository = new JpaVisualRulebookPageFacts();
+        EntityManager entityManager = mock(EntityManager.class);
+        ReflectionTestUtils.setField(repository, "entityManager", entityManager);
+        var currentRuleFact = new PageFact(
+                7,
+                "Cobalt spindle",
+                "Cobalt spindle: The cobalt spindle returns after the final pulse.",
+                List.of("cobalt spindle"),
+                List.of(),
+                List.of(),
+                false,
+                PageFact.CURRENT_SCHEMA_VERSION,
+                List.of(),
+                List.of("Cobalt spindle"),
+                true);
+        var noRuleContent = new PageFact(
+                8,
+                "Panel",
+                "A descriptive panel has no rule group.",
+                List.of("panel"),
+                List.of(),
+                List.of(),
+                false,
+                PageFact.CURRENT_SCHEMA_VERSION,
+                List.of(),
+                List.of(),
+                true);
+        var incomplete = new PageFact(
+                9,
+                "Pending",
+                "The page inventory is not complete.",
+                List.of("pending"));
+        var jpaQuery = mock(jakarta.persistence.TypedQuery.class);
+        when(entityManager.createQuery(anyString(), org.mockito.ArgumentMatchers.eq(VisualRulebookPageFactEntity.class)))
+                .thenReturn(jpaQuery);
+        when(jpaQuery.setParameter(anyString(), any())).thenReturn(jpaQuery);
+        when(jpaQuery.getResultList()).thenReturn(List.of(
+                new VisualRulebookPageFactEntity(documentVersionId, currentRuleFact),
+                new VisualRulebookPageFactEntity(documentVersionId, noRuleContent),
+                new VisualRulebookPageFactEntity(documentVersionId, incomplete)));
+
+        assertThat(repository.findByPageNumbers(documentVersionId, java.util.Set.of(7, 8, 9)))
+                .extracting(match -> match.pageNumber() + ":" + match.ruleFactStatus())
+                .containsExactly(
+                        "7:" + RuleFactStatus.CURRENT_RULE_FACTS,
+                        "8:" + RuleFactStatus.NO_RULE_CONTENT,
+                        "9:" + RuleFactStatus.FACTS_INCOMPLETE);
+    }
 
     @Test
     void preservesExactPrintedIdentifiersForCandidateDisambiguation() {
@@ -23,6 +107,13 @@ class JpaVisualRulebookPageFactsTest {
         assertThat(JpaVisualRulebookPageFacts.searchTerms(
                         "Is clearing three matching wildlife tokens optional and how often can you do this?"))
                 .isEqualTo("clearing:* | three:* | matching:* | wildlife:* | token:* | optional:* | often:*");
+    }
+
+    @Test
+    void removesRetrievalScaffoldingWithoutDroppingDocumentSpecificTerms() {
+        assertThat(JpaVisualRulebookPageFacts.searchTerms(
+                        "How does RECOVER work? direct rule clause"))
+                .isEqualTo("recover:*");
     }
 
     @Test
@@ -95,5 +186,45 @@ class JpaVisualRulebookPageFactsTest {
 
         assertThat(restored.iconOccurrences()).containsExactly(icon);
         assertThat(restored.iconInventoryComplete()).isTrue();
+    }
+
+    @Test
+    void preserves_external_source_dependencies_as_structured_evidence() {
+        var dependency = new SourceDependency("First Session Booklet", List.of("setup"));
+        var original = new PageFact(
+                3,
+                "PLAY A CARD",
+                "当前页指向另一份开局资料。",
+                List.of("PLAY A CARD"),
+                List.of(),
+                List.of(),
+                false,
+                PageFact.CURRENT_SCHEMA_VERSION,
+                List.of(dependency));
+
+        var restored = new VisualRulebookPageFactEntity(UUID.randomUUID(), original).toDomain();
+
+        assertThat(restored.sourceDependencies()).containsExactly(dependency);
+    }
+
+    @Test
+    void preserves_the_complete_page_owned_rule_group_inventory() {
+        var original = new PageFact(
+                3,
+                "MOVE; BUILD",
+                "MOVE: 移动有一条完整的可见规则。\nBUILD: 建造有一条完整的可见规则。",
+                List.of("MOVE", "BUILD"),
+                List.of(),
+                List.of(),
+                false,
+                PageFact.CURRENT_SCHEMA_VERSION,
+                List.of(),
+                List.of("MOVE", "BUILD"),
+                true);
+
+        var restored = new VisualRulebookPageFactEntity(UUID.randomUUID(), original).toDomain();
+
+        assertThat(restored.ruleGroupIdentifiers()).containsExactly("MOVE", "BUILD");
+        assertThat(restored.ruleGroupInventoryComplete()).isTrue();
     }
 }

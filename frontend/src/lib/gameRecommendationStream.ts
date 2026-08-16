@@ -5,13 +5,27 @@ import type {
 
 type StreamEvent = { event: string; data: string }
 
+export class RecommendationRequestError extends Error {
+  constructor(readonly status: number) {
+    super('recommendation unavailable')
+    this.name = 'RecommendationRequestError'
+  }
+}
+
+export class RecommendationStreamError extends Error {
+  constructor(readonly code: string) {
+    super('recommendation stream did not complete')
+    this.name = 'RecommendationStreamError'
+  }
+}
+
 export async function streamGameRecommendation(
   url: string,
   init: RequestInit,
   onProgress: (update: RecommendationProgressUpdate) => void,
 ) {
   const response = await fetch(url, init)
-  if (!response.ok) throw new Error('recommendation unavailable')
+  if (!response.ok) throw new RecommendationRequestError(response.status)
   const contentType = response.headers.get('content-type') ?? ''
   if (contentType.includes('application/json')) {
     return await response.json() as RecommendationAgentResponse
@@ -29,7 +43,8 @@ export async function streamGameRecommendation(
     } else if (event.event === 'result') {
       result = JSON.parse(event.data) as RecommendationAgentResponse
     } else if (event.event === 'error') {
-      throw new Error('recommendation unavailable')
+      const payload = JSON.parse(event.data) as { code?: unknown }
+      throw new RecommendationStreamError(typeof payload.code === 'string' ? payload.code : 'recommendation_unavailable')
     }
   }
 

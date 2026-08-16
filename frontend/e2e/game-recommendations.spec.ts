@@ -116,15 +116,16 @@ function officialImportJob(preparationRunId = 'preparation-run-1') {
 }
 
 const ruleAnswer = {
+  language: 'zh-CN',
   status: 'ANSWERED',
   shortVerdict: '获得食物后，再发动该栖息地中从右到左的棕色能力。',
   explanation: '规则书把获得食物写在发动棕色能力之前，因此按这个顺序结算。',
   citations: [{
-    chunkId: 'answer-chunk-1', sectionType: 'TURN', heading: '获得食物',
+    heading: '获得食物',
     excerpt: '获得食物后，依次发动栖息地中的棕色能力。', pageFrom: 7, pageTo: 7,
   }],
-  exceptions: [], confidence: 'HIGH', answerBasis: 'DIRECT_RULE', official: true,
-  confirmedRulingId: null, confirmedRulingVersion: null, clarification: null, warnings: [],
+  exceptions: [], confidence: 'HIGH', answerBasis: 'DIRECT_RULE', source: 'OFFICIAL',
+  clarification: null, recovery: null, warnings: [],
 }
 
 async function mockPublicDiscovery(
@@ -172,7 +173,13 @@ async function mockPublicDiscovery(
     return route.fulfill({ json: [] })
   })
   await page.route('**/api/v1/bgg/recommendation-agent**', async route => {
-    const body = route.request().postDataJSON() as {
+    const request = route.request()
+    const requestUrl = new URL(request.url())
+    if (request.method() === 'GET' && requestUrl.pathname.endsWith('/recommendation-agent/session')) {
+      await route.fulfill({ status: 204 })
+      return
+    }
+    const body = request.postDataJSON() as {
       profile: { players: number | null; maxMinutes: number | null; maxWeight: number | null }
       message: string
       focusedBggId: number | null
@@ -275,7 +282,7 @@ async function mockPublicDiscovery(
   })
   await page.route('**/api/v1/bgg/games/266192/import', route => route.fulfill({ json: {
     game: { id: 'game-1', name: '展翅翱翔' },
-    edition: { id: 'edition-1', name: 'BGG 基础版' },
+    edition: { id: 'edition-1', name: 'BGG 基础版', language: 'und' },
     alreadyImported: false,
   } }))
   await page.route('**/api/v1/bgg/games/266192?*', route => route.fulfill({ json: {
@@ -290,11 +297,16 @@ async function mockPublicDiscovery(
   } }))
   await page.route('**/api/v1/documents/rulebook-candidates?*', route => route.fulfill({ json: {
     configured: true,
+    identity: {
+      editionId: 'edition-1', gameName: '展翅翱翔', editionName: 'BGG 基础版', language: 'und',
+    },
     candidates: [{
       title: 'Wingspan Rulebook', url: 'https://publisher.example/wingspan.pdf',
-      publisher: 'Stonemaier Games', language: 'English', edition: 'Base game',
+      publisher: 'Stonemaier Games', language: 'en', languageVerified: true, edition: 'Base game',
       sourceDomain: 'publisher.example', officialDomainVerified: true,
       sourceType: 'PUBLISHER', acquisitionMode: 'DIRECT_PDF',
+      capability: 'DIRECT_DOCUMENT', capabilityEvidence: ['DOCUMENT_RESPONSE_CONFIRMED'],
+      capabilityCheckedAt: '2026-08-15T12:00:00Z', nextAction: 'IMPORT_DOCUMENT',
     }],
   } }))
   await page.route('**/api/v1/documents/official-imports', route => {
@@ -360,6 +372,11 @@ async function mockPublicDiscovery(
     { pageNumber: 2, text: 'Goal', characterCount: 960 },
     { pageNumber: 7, text: 'Gain food, then activate brown powers.', characterCount: 1100 },
   ] }))
+  await page.route('**/api/v1/document-versions/version-1/pages/*/image', route => route.fulfill({
+    status: 200,
+    contentType: 'image/svg+xml',
+    body: '<svg xmlns="http://www.w3.org/2000/svg" width="800" height="1100"/>',
+  }))
   await page.route('**/api/v1/assistant-runs/preparation-run-1', route => {
     const snapshot = assistantRun(
       'preparation-run-1',
@@ -406,10 +423,9 @@ async function mockPublicDiscovery(
   } }))
   await page.route('**/api/v1/document-versions/version-1/answers/conversation?*', route => route.fulfill({ json: [] }))
   await page.route('**/api/v1/document-versions/version-1/answers', route => route.fulfill({ json: {
-    assistantRunId: 'answer-run-1', answer: ruleAnswer, conversationTurnId: 'turn-1',
-  } }))
-  await page.route('**/api/v1/assistant-runs/answer-run-1', route => route.fulfill({ json: {
-    run: { id: 'answer-run-1', subjectId: 'version-1', createdAt: new Date().toISOString() }, activities: [],
+    answer: ruleAnswer, conversationTurnId: 'turn-1', rulingReference: {
+      citationIds: ['answer-chunk-1'], confirmedRulingId: null, confirmedRulingVersion: null,
+    },
   } }))
   return {
     publishPlan: () => { planPublished = true },
@@ -428,7 +444,7 @@ async function mockPublicDiscovery(
 }
 
 test('keeps full-catalog browsing separate from the conversational recommendation journey', async ({ page }) => {
-  await mockPublicDiscovery(page)
+  await mockPublicDiscovery(page, true)
   await page.goto('/discover/catalog')
 
   await expect(page.getByRole('heading', { level: 1 })).toContainText('按自己的节奏慢慢挑')
@@ -461,7 +477,7 @@ test('keeps full-catalog browsing separate from the conversational recommendatio
 
   const firstAgentRequest = page.waitForRequest(request => request.url().includes('/api/v1/bgg/recommendation-agent')
     && request.headers()['x-csrf-token'] === 'csrf')
-  const composer = page.getByLabel('和推荐 Agent 聊聊')
+  const composer = page.getByLabel('聊聊你想玩的游戏')
   await composer.fill('4 个人，90 分钟内，想要中等策略；朋友聚会，希望热闹但不要尴尬')
   await page.getByRole('button', { name: '发送', exact: true }).click()
   await firstAgentRequest
@@ -477,6 +493,153 @@ test('keeps full-catalog browsing separate from the conversational recommendatio
   await expect(page.getByText('发行商资料提供了分步教学流程')).toBeVisible()
   await expect(page.getByRole('link', { name: /publisher\.example/ })).toHaveAttribute('rel', /noopener/)
   await expect(page.getByText('目前记下的偏好')).toBeVisible()
+})
+
+test('acknowledges a recommendation turn immediately and exposes honest remaining work at eight seconds', async ({ page }) => {
+  await page.clock.install()
+  await mockPublicDiscovery(page, true)
+  await page.unroute('**/api/v1/bgg/recommendation-agent**')
+  await page.route('**/api/v1/bgg/recommendation-agent/session', route => route.fulfill({ status: 204 }))
+  let recommendationRequests = 0
+  await page.route('**/api/v1/bgg/recommendation-agent/stream?*', () => { recommendationRequests += 1 })
+  await page.goto('/discover')
+
+  await page.getByLabel('聊聊你想玩的游戏').fill('想找一款有探索感、但规则不太重的游戏')
+  await page.getByRole('button', { name: '发送' }).click()
+
+  await expect(page.getByTestId('player-work-status')).toHaveText('正在查找桌游', { timeout: 1_000 })
+  await expect.poll(() => recommendationRequests, { timeout: 1_000 }).toBe(1)
+  await page.clock.fastForward(8_000)
+  await expect(page.getByTestId('recommendation-soft-budget')).toContainText('目前还没有足以展示的新候选')
+  await expect(page.getByTestId('recommendation-soft-budget')).toContainText('还需核对目录事实与匹配取舍')
+  await expect(page.getByText('想找一款有探索感、但规则不太重的游戏')).toBeVisible()
+})
+
+test('keeps a pasted 501-character recommendation intact and sends exactly 500 characters', async ({ page }) => {
+  await mockPublicDiscovery(page, true)
+  await page.route('**/api/v1/bgg/recommendation-agent/session', route => route.fulfill({ status: 204 }))
+  let submittedTurns = 0
+  page.on('request', (request) => {
+    const url = new URL(request.url())
+    if (request.method() === 'POST' && url.pathname === '/api/v1/bgg/recommendation-agent/stream') {
+      submittedTurns += 1
+    }
+  })
+  await page.goto('/discover')
+
+  const composer = page.getByLabel('聊聊你想玩的游戏')
+  const send = page.getByRole('button', { name: '发送', exact: true })
+  const overLimit = '界'.repeat(501)
+  await composer.fill(overLimit)
+
+  await expect(composer).toHaveValue(overLimit)
+  await expect(page.getByText('请删减 1 个字后再发送')).toBeVisible()
+  await expect(page.getByText('501 / 500')).toBeVisible()
+  await expect(send).toBeDisabled()
+  const form = page.locator('form').filter({ has: composer })
+  await form.evaluate(element => element.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
+  expect(submittedTurns).toBe(0)
+
+  const accepted = '😀'.repeat(500)
+  await composer.fill(accepted)
+  await expect(page.getByText('500 / 500')).toBeVisible()
+  await expect(send).toBeEnabled()
+  const acceptedRequest = page.waitForRequest((request) => {
+    const url = new URL(request.url())
+    return request.method() === 'POST' && url.pathname === '/api/v1/bgg/recommendation-agent/stream'
+  })
+  await send.click()
+  const request = await acceptedRequest
+
+  expect((request.postDataJSON() as { message: string }).message).toBe(accepted)
+  expect(submittedTurns).toBe(1)
+})
+
+test('restores the server conversation and unsent draft after sign-in and browser Back', async ({ page }) => {
+  let authenticated = false
+  let serverSession: Record<string, unknown> | null = null
+  await mockPublicDiscovery(page)
+  await page.route('**/api/auth/session', route => authenticated
+    ? route.fulfill({ json: { username: 'player', roles: ['USER'] } })
+    : route.fulfill({ status: 401 }))
+  await page.route('**/api/auth/login', route => {
+    authenticated = true
+    return route.fulfill({ status: 204 })
+  })
+  await page.route('**/api/v1/bgg/recommendation-agent/session', route => serverSession
+    ? route.fulfill({ json: serverSession })
+    : route.fulfill({ status: 204 }))
+  await page.route('**/api/v1/bgg/recommendation-agent/stream?*', async route => {
+    const request = route.request().postDataJSON() as {
+      clientTurnId: string
+      message: string
+    }
+    const conversationId = 'f0b0d56b-50aa-4e4c-a720-935c13ecda7c'
+    const profile = {
+      type: 'strategy', interaction: 'any',
+      playerCount: { minimum: 3, maximum: 4, strength: 'hard', sourceText: '3–4 人', confirmedTurn: 1 },
+      durationMinutes: { minimum: 120, maximum: 180, strength: 'hard', sourceText: '120–180 分钟', confirmedTurn: 1 },
+      complexity: null,
+    }
+    const latestResponse = {
+      conversationId, revision: 1, clientTurnId: request.clientTurnId, replayed: false, responseLocale: 'zh-CN',
+      outcome: 'recommendations', mode: 'model_assisted', assistantMessage: '服务端保存了完整对话和候选。',
+      profile, clarification: null, sourceCount: 179737, candidatesEvaluated: 1,
+      games: [{ game: catalog.games[0], matches: ['支持 3–4 人', '符合 120–180 分钟区间'], tradeoffs: [] }],
+    }
+    serverSession = {
+      conversationId,
+      revision: 1,
+      profile,
+      transcript: [
+        { role: 'user', text: request.message },
+        { role: 'assistant', text: latestResponse.assistantMessage },
+      ],
+      knownGames: [{ bggId: 266192, name: '展翅翱翔', originalName: 'Wingspan' }],
+      shownBggIds: [266192],
+      processing: false,
+      processingSince: null,
+      latestResponse: { ...latestResponse, replayed: true },
+    }
+    await route.fulfill({
+      contentType: 'text/event-stream',
+      body: `event: result\ndata: ${JSON.stringify(latestResponse)}\n\n`,
+    })
+  })
+
+  await page.goto('/discover')
+  const composer = page.getByLabel('聊聊你想玩的游戏')
+  await composer.fill('登录前写好的 3–4 人条件')
+  await page.getByRole('button', { name: '发送', exact: true }).click()
+  await page.getByRole('link', { name: '登录并继续' }).click()
+  await expect(page).toHaveURL('/login?redirect=/discover')
+  await page.getByLabel('用户名').fill('Player')
+  await page.getByLabel('密码').fill('correct horse battery staple')
+  await page.getByRole('button', { name: '登录', exact: true }).click()
+  await expect(page).toHaveURL('/discover')
+  await expect(composer).toHaveValue('登录前写好的 3–4 人条件')
+
+  await composer.fill('想找 3–4 人、120–180 分钟的策略游戏')
+  await page.getByRole('button', { name: '发送', exact: true }).click()
+  await expect(page.getByText('服务端保存了完整对话和候选。')).toBeVisible()
+  await expect(page.getByText('支持 3–4 人')).toBeVisible()
+  await composer.fill('这句草稿尚未发送')
+  await page.getByRole('link', { name: /打开完整桌游目录/ }).click()
+  await expect(page).toHaveURL('/discover/catalog')
+  await page.evaluate(() => {
+    for (const key of Object.keys(sessionStorage)) {
+      if (key.startsWith('rulepilot:recommendation-conversation:')) sessionStorage.removeItem(key)
+    }
+  })
+
+  await page.goBack()
+  await expect(page).toHaveURL('/discover')
+  await expect(page.getByText('想找 3–4 人、120–180 分钟的策略游戏')).toHaveCount(1)
+  await expect(page.getByText('服务端保存了完整对话和候选。')).toHaveCount(1)
+  await expect(page.getByText('支持 3–4 人')).toBeVisible()
+  await expect(page.getByText('3–4 人', { exact: true })).toBeVisible()
+  await expect(page.getByText('120–180 分钟', { exact: true })).toBeVisible()
+  await expect(page.getByLabel('聊聊你想玩的游戏')).toHaveValue('这句草稿尚未发送')
 })
 
 test('keeps full-catalog discovery usable without horizontal overflow at 390 px', async ({ page }) => {
@@ -497,12 +660,13 @@ test('shows streamed rulebook readiness without waiting for the next recommendat
   const progress = await mockPublicDiscovery(page, true, true, false, true)
   await page.goto('/discover')
 
-  await page.getByLabel('和推荐 Agent 聊聊').fill('4 个人，90 分钟内，想要中等策略')
+  await page.getByLabel('聊聊你想玩的游戏').fill('4 个人，90 分钟内，想要中等策略')
   await page.getByRole('button', { name: '发送', exact: true }).click()
   await page.getByRole('button', { name: '选这款，找规则书' }).click()
   const journey = page.getByTestId('player-journey-surface')
   await journey.getByRole('button', { name: '选择这份' }).click()
-  await journey.getByRole('checkbox', { name: /我确认该链接来自有权提供/ }).check()
+  await journey.getByRole('checkbox', { name: /我已比较以上游戏、版本和语言/ }).check()
+  await journey.getByRole('checkbox', { name: /确认该链接来自有权提供/ }).check()
   await journey.getByRole('button', { name: '下载规则书并生成讲解' }).click()
 
   await expect(journey.getByText('第 4 / 12 页')).toBeVisible()
@@ -517,10 +681,10 @@ test('shows streamed rulebook readiness without waiting for the next recommendat
 
 test('keeps a corrected reference title in conversational context on mobile', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 })
-  await mockPublicDiscovery(page)
+  await mockPublicDiscovery(page, true)
   await page.goto('/discover')
 
-  const composer = page.getByLabel('和推荐 Agent 聊聊')
+  const composer = page.getByLabel('聊聊你想玩的游戏')
   await composer.fill('我想玩和马赛克花园类似机制的游戏')
   await page.getByRole('button', { name: '发送', exact: true }).click()
   await expect(page.getByText(/你知道它的原文名吗/)).toBeVisible()
@@ -561,7 +725,7 @@ test('stops closed reader transport while the durable guide remains reopenable',
   await mockPublicDiscovery(page, true)
   await page.goto('/discover')
 
-  await page.getByLabel('和推荐 Agent 聊聊').fill('4 个人，90 分钟内，想要中等策略')
+  await page.getByLabel('聊聊你想玩的游戏').fill('4 个人，90 分钟内，想要中等策略')
   await page.getByRole('button', { name: '发送', exact: true }).click()
   await expect(page.getByText('支持 4 人游玩')).toBeVisible()
   await page.getByRole('button', { name: '选这款，找规则书' }).click()
@@ -569,7 +733,8 @@ test('stops closed reader transport while the durable guide remains reopenable',
   const journey = page.getByTestId('player-journey-surface')
   await expect(journey.getByText('Wingspan Rulebook')).toBeVisible()
   await journey.getByRole('button', { name: '选择这份' }).click()
-  await journey.getByRole('checkbox', { name: /我确认该链接来自有权提供/ }).check()
+  await journey.getByRole('checkbox', { name: /我已比较以上游戏、版本和语言/ }).check()
+  await journey.getByRole('checkbox', { name: /确认该链接来自有权提供/ }).check()
   await journey.getByRole('button', { name: '下载规则书并生成讲解' }).click()
   await expect(journey.getByText('讲解已经完整生成并通过后台收尾。')).toBeVisible({ timeout: 8_000 })
 
@@ -706,7 +871,7 @@ test('keeps recommendation, rulebook reading, progressive teaching, and grounded
   await mockPublicDiscovery(page, true)
   await page.goto('/discover')
 
-  const recommendationComposer = page.getByLabel('和推荐 Agent 聊聊')
+  const recommendationComposer = page.getByLabel('聊聊你想玩的游戏')
   await recommendationComposer.fill('4 个人，90 分钟内，想要中等策略；朋友聚会，希望热闹但不要尴尬')
   await page.getByRole('button', { name: '发送', exact: true }).click()
   await expect(page.getByText('支持 4 人游玩')).toBeVisible()
@@ -728,7 +893,8 @@ test('keeps recommendation, rulebook reading, progressive teaching, and grounded
   await page.getByRole('button', { name: '选择这份' }).click()
   const handoff = page.getByRole('button', { name: '下载规则书并生成讲解' })
   await expect(handoff).toBeDisabled()
-  await page.getByRole('checkbox', { name: /我确认该链接来自有权提供/ }).check()
+  await page.getByRole('checkbox', { name: /我已比较以上游戏、版本和语言/ }).check()
+  await page.getByRole('checkbox', { name: /确认该链接来自有权提供/ }).check()
 
   const officialImport = page.waitForRequest(request => request.url().endsWith('/api/v1/documents/official-imports'))
   await handoff.click()
@@ -741,6 +907,11 @@ test('keeps recommendation, rulebook reading, progressive teaching, and grounded
     rightsConfirmed: true,
     startTeaching: true,
     learningGoal: null,
+    discoveredForEditionId: 'edition-1',
+    sourceEdition: 'Base game',
+    sourceLanguage: 'en',
+    sourceLanguageVerified: true,
+    identityConfirmed: true,
   })
   await expect(page).toHaveURL(/\/discover$/)
 
@@ -756,7 +927,7 @@ test('keeps recommendation, rulebook reading, progressive teaching, and grounded
   await rulebook.getByRole('button', { name: '关闭规则书' }).click()
 
   const journeyDock = page.getByTestId('player-journey-dock')
-  await expect(journeyDock).toContainText('讲解已经可以阅读', { timeout: 8_000 })
+  await expect(journeyDock).toContainText('基础讲解可读', { timeout: 8_000 })
   await journeyDock.click()
   const lesson = page.getByRole('dialog', { name: '生成讲解阅读器' })
   await expectOpaqueSurface(page.getByTestId('recommendation-lesson-surface'))
@@ -809,13 +980,14 @@ test('hands persisted recommendation work to global guides before the preparatio
   await mockPublicDiscovery(page, true, true)
   await page.goto('/discover')
 
-  await page.getByLabel('和推荐 Agent 聊聊').fill('4 个人，90 分钟内，想要中等策略')
+  await page.getByLabel('聊聊你想玩的游戏').fill('4 个人，90 分钟内，想要中等策略')
   await page.getByRole('button', { name: '发送', exact: true }).click()
   await expect(page.getByText('支持 4 人游玩')).toBeVisible()
   await page.getByRole('button', { name: '选这款，找规则书' }).click()
   const journey = page.getByTestId('player-journey-surface')
   await journey.getByRole('button', { name: '选择这份' }).click()
-  await journey.getByRole('checkbox', { name: /我确认该链接来自有权提供/ }).check()
+  await journey.getByRole('checkbox', { name: /我已比较以上游戏、版本和语言/ }).check()
+  await journey.getByRole('checkbox', { name: /确认该链接来自有权提供/ }).check()
   await journey.getByRole('button', { name: '下载规则书并生成讲解' }).click()
 
   const workTrigger = page.getByTestId('background-work-trigger-desktop')
@@ -824,13 +996,15 @@ test('hands persisted recommendation work to global guides before the preparatio
   await workTrigger.click()
   const workCenter = page.getByRole('dialog', { name: '后台任务' })
   await expect(workCenter.getByText('展翅翱翔')).toBeVisible()
-  await expect(workCenter.getByText('正在读取规则并建立讲解结构')).toBeVisible()
+  await expect(workCenter.getByText('正在组织讲解')).toBeVisible()
+  await expect(workCenter.getByText('建立讲解结构')).toHaveCount(0)
 
   await workCenter.getByRole('link', { name: /打开讲解中心/ }).click()
   await expect(page).toHaveURL(/\/lessons$/)
   const pending = page.getByTestId('pending-guide-journey')
   await expect(pending.getByRole('heading', { name: '展翅翱翔' })).toBeVisible()
-  await expect(pending.getByText('规则书已可用，正在建立讲解计划并启动逐章生成')).toBeVisible()
+  await expect(pending.getByText('正在组织讲解')).toBeVisible()
+  await expect(pending.getByText('规则书已可读，正在准备讲解')).toBeVisible()
   expect(lessonLaunchRequests).toBe(0)
 })
 
@@ -838,13 +1012,14 @@ test('recovers persisted recommendation work after a full refresh without journe
   await mockPublicDiscovery(page, true, true)
   await page.goto('/discover')
 
-  await page.getByLabel('和推荐 Agent 聊聊').fill('4 个人，90 分钟内，想要中等策略')
+  await page.getByLabel('聊聊你想玩的游戏').fill('4 个人，90 分钟内，想要中等策略')
   await page.getByRole('button', { name: '发送', exact: true }).click()
   await expect(page.getByText('支持 4 人游玩')).toBeVisible()
   await page.getByRole('button', { name: '选这款，找规则书' }).click()
   const journey = page.getByTestId('player-journey-surface')
   await journey.getByRole('button', { name: '选择这份' }).click()
-  await journey.getByRole('checkbox', { name: /我确认该链接来自有权提供/ }).check()
+  await journey.getByRole('checkbox', { name: /我已比较以上游戏、版本和语言/ }).check()
+  await journey.getByRole('checkbox', { name: /确认该链接来自有权提供/ }).check()
   await journey.getByRole('button', { name: '下载规则书并生成讲解' }).click()
   await expect(page.getByTestId('background-work-trigger-desktop').locator('span').filter({ hasText: '1' })).toBeVisible()
 
@@ -856,33 +1031,37 @@ test('recovers persisted recommendation work after a full refresh without journe
   await workTrigger.click()
   const workCenter = page.getByRole('dialog', { name: '后台任务' })
   await expect(workCenter.getByText('展翅翱翔')).toBeVisible()
-  await expect(workCenter.getByText('正在读取规则并建立讲解结构')).toBeVisible()
+  await expect(workCenter.getByText('正在组织讲解')).toBeVisible()
+  await expect(workCenter.getByText('建立讲解结构')).toHaveCount(0)
   await workCenter.getByRole('link', { name: /打开讲解中心/ }).click()
 
   await expect(page).toHaveURL(/\/lessons$/)
   const pending = page.getByTestId('pending-guide-journey')
   await expect(pending.getByRole('heading', { name: '展翅翱翔' })).toBeVisible()
-  await expect(pending.getByText('规则书已可用，正在建立讲解计划并启动逐章生成')).toBeVisible()
+  await expect(pending.getByText('正在组织讲解')).toBeVisible()
+  await expect(pending.getByText('规则书已可读，正在准备讲解')).toBeVisible()
 })
 
 test('advances My Guides from plan startup to the first readable chapter without a manual refresh', async ({ page }) => {
   const preparation = await mockPublicDiscovery(page, true, true)
   await page.goto('/discover')
 
-  await page.getByLabel('和推荐 Agent 聊聊').fill('4 个人，90 分钟内，想要中等策略')
+  await page.getByLabel('聊聊你想玩的游戏').fill('4 个人，90 分钟内，想要中等策略')
   await page.getByRole('button', { name: '发送', exact: true }).click()
   await expect(page.getByText('支持 4 人游玩')).toBeVisible()
   await page.getByRole('button', { name: '选这款，找规则书' }).click()
   const journey = page.getByTestId('player-journey-surface')
   await journey.getByRole('button', { name: '选择这份' }).click()
-  await journey.getByRole('checkbox', { name: /我确认该链接来自有权提供/ }).check()
+  await journey.getByRole('checkbox', { name: /我已比较以上游戏、版本和语言/ }).check()
+  await journey.getByRole('checkbox', { name: /确认该链接来自有权提供/ }).check()
   await journey.getByRole('button', { name: '下载规则书并生成讲解' }).click()
   await journey.getByRole('button', { name: '关闭小窗' }).click()
   await page.goto('/lessons')
 
   const pending = page.getByTestId('pending-guide-journey')
   await expect(pending.getByRole('heading', { name: '展翅翱翔' })).toBeVisible()
-  await expect(pending.getByText('规则书已可用，正在建立讲解计划并启动逐章生成')).toBeVisible()
+  await expect(pending.getByText('正在组织讲解')).toBeVisible()
+  await expect(pending.getByText('规则书已可读，正在准备讲解')).toBeVisible()
 
   const previousPlanReads = preparation.planReads()
   preparation.publishPlan()
@@ -890,11 +1069,11 @@ test('advances My Guides from plan startup to the first readable chapter without
   await expect(pending).toBeVisible()
   await expect(page.getByText('等待开始')).toHaveCount(0)
   await expect(page.getByText('还没有可读的讲解')).toHaveCount(0)
-  await expect(page.getByRole('link', { name: '立即阅读完整讲解' })).toHaveCount(0)
+  await expect(page.getByRole('link', { name: '阅读已完成章节' })).toHaveCount(0)
 
   preparation.publishFirstLesson()
-  await expect(page.getByText('可读，核对中')).toBeVisible({ timeout: 4_000 })
-  await expect(page.getByRole('link', { name: '立即阅读完整讲解' })).toBeVisible()
+  await expect(page.getByText('基础讲解可读')).toBeVisible({ timeout: 4_000 })
+  await expect(page.getByRole('link', { name: '阅读已完成章节' })).toBeVisible()
   await expect(pending).toHaveCount(0)
 })
 
@@ -902,13 +1081,14 @@ test('keeps one global task while completed preparation hands off to a Teaching 
   const preparation = await mockPublicDiscovery(page, true, true)
   await page.goto('/discover')
 
-  await page.getByLabel('和推荐 Agent 聊聊').fill('4 个人，90 分钟内，想要中等策略')
+  await page.getByLabel('聊聊你想玩的游戏').fill('4 个人，90 分钟内，想要中等策略')
   await page.getByRole('button', { name: '发送', exact: true }).click()
   await expect(page.getByText('支持 4 人游玩')).toBeVisible()
   await page.getByRole('button', { name: '选这款，找规则书' }).click()
   const journey = page.getByTestId('player-journey-surface')
   await journey.getByRole('button', { name: '选择这份' }).click()
-  await journey.getByRole('checkbox', { name: /我确认该链接来自有权提供/ }).check()
+  await journey.getByRole('checkbox', { name: /我已比较以上游戏、版本和语言/ }).check()
+  await journey.getByRole('checkbox', { name: /确认该链接来自有权提供/ }).check()
   await journey.getByRole('button', { name: '下载规则书并生成讲解' }).click()
   await journey.getByRole('button', { name: '关闭小窗' }).click()
 
@@ -916,7 +1096,7 @@ test('keeps one global task while completed preparation hands off to a Teaching 
   await expect(workTrigger.locator('span').filter({ hasText: '1' })).toBeVisible()
   await workTrigger.click()
   const workCenter = page.getByRole('dialog', { name: '后台任务' })
-  await expect(workCenter.getByText('正在读取规则并建立讲解结构')).toBeVisible()
+  await expect(workCenter.getByText('正在组织讲解')).toBeVisible()
 
   preparation.publishPlan()
   preparation.completePreparation()
@@ -932,13 +1112,14 @@ test('recovers the preparation-to-Teaching bridge after a storage-free browser r
   const preparation = await mockPublicDiscovery(page, true, true)
   await page.goto('/discover')
 
-  await page.getByLabel('和推荐 Agent 聊聊').fill('4 个人，90 分钟内，想要中等策略')
+  await page.getByLabel('聊聊你想玩的游戏').fill('4 个人，90 分钟内，想要中等策略')
   await page.getByRole('button', { name: '发送', exact: true }).click()
   await expect(page.getByText('支持 4 人游玩')).toBeVisible()
   await page.getByRole('button', { name: '选这款，找规则书' }).click()
   const journey = page.getByTestId('player-journey-surface')
   await journey.getByRole('button', { name: '选择这份' }).click()
-  await journey.getByRole('checkbox', { name: /我确认该链接来自有权提供/ }).check()
+  await journey.getByRole('checkbox', { name: /我已比较以上游戏、版本和语言/ }).check()
+  await journey.getByRole('checkbox', { name: /确认该链接来自有权提供/ }).check()
   await journey.getByRole('button', { name: '下载规则书并生成讲解' }).click()
   await journey.getByRole('button', { name: '关闭小窗' }).click()
 
@@ -951,7 +1132,7 @@ test('recovers the preparation-to-Teaching bridge after a storage-free browser r
   await expect(workTrigger.locator('span').filter({ hasText: '1' })).toBeVisible()
   await workTrigger.click()
   const workCenter = page.getByRole('dialog', { name: '后台任务' })
-  await expect(workCenter.getByText('规则书已就绪，正在启动讲解任务')).toBeVisible()
+  await expect(workCenter.getByText('正在组织讲解')).toBeVisible()
   await expect(workCenter.getByText('展翅翱翔')).toHaveCount(1)
   await expect(workCenter.getByText('当前没有后台任务')).toHaveCount(0)
 
@@ -966,15 +1147,17 @@ test('retries failed preparation through the original import without downloading
   const recovery = await mockPublicDiscovery(page, true, true, true)
   await page.goto('/discover')
 
-  await page.getByLabel('和推荐 Agent 聊聊').fill('4 个人，90 分钟内，想要中等策略')
+  await page.getByLabel('聊聊你想玩的游戏').fill('4 个人，90 分钟内，想要中等策略')
   await page.getByRole('button', { name: '发送', exact: true }).click()
   await expect(page.getByText('支持 4 人游玩')).toBeVisible()
   await page.getByRole('button', { name: '选这款，找规则书' }).click()
   const journey = page.getByTestId('player-journey-surface')
   await journey.getByRole('button', { name: '选择这份' }).click()
-  await journey.getByRole('checkbox', { name: /我确认该链接来自有权提供/ }).check()
+  await journey.getByRole('checkbox', { name: /我已比较以上游戏、版本和语言/ }).check()
+  await journey.getByRole('checkbox', { name: /确认该链接来自有权提供/ }).check()
   await journey.getByRole('button', { name: '下载规则书并生成讲解' }).click()
-  await expect(journey.getByText('TEACHING_PREPARATION_FAILED')).toBeVisible()
+  await expect(journey.getByTestId('player-work-status')).toHaveText('需要处理')
+  await expect(journey.getByText('TEACHING_PREPARATION_FAILED')).toHaveCount(0)
 
   recovery.publishPlan()
   recovery.publishFirstLesson()
@@ -994,20 +1177,21 @@ test('keeps the readable-guide continuation legible and focus-safe at 320 and 39
   await mockPublicDiscovery(page, true)
   await page.goto('/discover')
 
-  await page.getByLabel('和推荐 Agent 聊聊').fill('4 个人，90 分钟内，想要中等策略')
+  await page.getByLabel('聊聊你想玩的游戏').fill('4 个人，90 分钟内，想要中等策略')
   await page.getByRole('button', { name: '发送', exact: true }).click()
   await expect(page.getByText('支持 4 人游玩')).toBeVisible()
   await page.getByRole('button', { name: '选这款，找规则书' }).click()
   const journey = page.getByTestId('player-journey-surface')
   await journey.getByRole('button', { name: '选择这份' }).click()
-  await journey.getByRole('checkbox', { name: /我确认该链接来自有权提供/ }).check()
+  await journey.getByRole('checkbox', { name: /我已比较以上游戏、版本和语言/ }).check()
+  await journey.getByRole('checkbox', { name: /确认该链接来自有权提供/ }).check()
   await journey.getByRole('button', { name: '下载规则书并生成讲解' }).click()
   await journey.getByRole('button', { name: '关闭小窗' }).click()
 
   const continuation = page.getByTestId('player-journey-continuation')
   const readGuide = page.getByTestId('player-journey-dock')
   const viewProgress = page.getByTestId('player-journey-progress-button')
-  await expect(readGuide).toContainText('讲解已经可以阅读', { timeout: 8_000 })
+  await expect(readGuide).toContainText('基础讲解可读', { timeout: 8_000 })
   await expect(readGuide).toContainText('打开讲解')
   await expect(viewProgress).toHaveText('查看进度')
 

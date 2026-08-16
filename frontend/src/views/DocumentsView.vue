@@ -1,9 +1,27 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { RouterLink, useRoute, useRouter } from 'vue-router'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 
 import AppShell from '@/components/AppShell.vue'
 import DestructiveActionDialog from '@/components/DestructiveActionDialog.vue'
+import RulebookDocumentList from '@/components/documents/RulebookDocumentList.vue'
+import RulebookSourceImportPanel from '@/components/documents/RulebookSourceImportPanel.vue'
+import RulebookStatusCard from '@/components/documents/RulebookStatusCard.vue'
+import RulebookUploadPanel from '@/components/documents/RulebookUploadPanel.vue'
+import type {
+  BggSuggestion,
+  BggSuggestionState,
+  DocumentResponse,
+  GameResponse,
+  OfficialImportCopy,
+  OfficialRulebookImportJob,
+  PhotographedPage,
+  RulebookCandidate,
+  RulebookDiscoveryIdentity,
+  RulebookDiscoveryCopy,
+  RulebookDiscoveryStatus,
+  RulebookDiscoverySummary,
+} from '@/components/documents/types'
 import { notifyLoginRequired } from '@/lib/authSession'
 import {
   mergeDocumentProgress,
@@ -16,68 +34,22 @@ import {
   type PendingRulebookLesson,
 } from '@/lib/pendingRulebookLesson'
 import { useLocale } from '@/lib/locale'
+import { playerFacingLanguageName } from '@/lib/playerFacingLanguage'
+import {
+  monotonicElapsedSeconds,
+  normalizeRulebookDiscoverySummary,
+} from '@/lib/rulebookDiscovery'
 import { notifyTeachingLaunched, type TeachingLaunch } from '@/lib/teachingLaunch'
 
 interface CsrfResponse { headerName: string; token: string }
-interface GameResponse {
-  game: { id: string; name: string }
-  editions: Array<{ id: string; name: string; language: string }>
-  bggMetadata?: null | { thumbnailUrl: string; bggUrl: string }
-}
-interface DocumentResponse {
-  document: { id: string; gameEditionId: string | null; title: string; officialSourceUrl: string | null; officialCoverUrl: string | null }
-  latestVersion: { id: string; originalFilename: string; size: number; status: string }
-}
-interface BggSuggestion {
-  bggId: number
-  name: string
-  publicationYear: number | null
-  coverUrl: string
-  minPlayers: number | null
-  maxPlayers: number | null
-  playingTimeMinutes: number | null
-  minimumAge: number | null
-  normalizedTitleMatch: boolean
-  bggUrl: string
-}
-interface BggSuggestionState {
-  status: 'loading' | 'success' | 'error'
-  candidates: BggSuggestion[]
-  selectedBggId: number | null
-  linkStatus: 'idle' | 'confirming' | 'linked' | 'error'
-  linkAlreadyImported: boolean
-}
 interface BggLinkResponse { alreadyImported: boolean }
-interface RulebookCandidate {
-  title: string
-  url: string
-  publisher: string
-  language: string
-  edition: string
-  sourceDomain: string
-  officialDomainVerified: boolean
-  sourceType: 'PUBLISHER' | 'TRUSTED_REPOSITORY' | 'COMMUNITY_PLATFORM' | 'PUBLIC_WEB'
-  acquisitionMode: 'DIRECT_PDF' | 'IMAGE_GALLERY' | 'SOURCE_PAGE'
+interface RulebookCandidateResponse {
+  configured: boolean
+  identity: RulebookDiscoveryIdentity
+  candidates: RulebookCandidate[]
+  discovery?: unknown
 }
-interface RulebookCandidateResponse { configured: boolean; candidates: RulebookCandidate[] }
-interface OfficialRulebookImportJob {
-  id: string
-  title: string
-  rulebookTitle?: string
-  editionId?: string | null
-  editionName?: string | null
-  sourceDomain: string
-  stage: 'QUEUED' | 'CONNECTING' | 'DOWNLOADING' | 'COMPRESSING' | 'VERIFYING_FILE' | 'SAVING' | 'COMPLETED' | 'FAILED'
-  downloadedBytes: number
-  totalBytes: number | null
-  documentVersionId: string | null
-  duplicate: boolean
-  errorCode: string | null
-  teachingHandoffState: 'NOT_REQUESTED' | 'WAITING_FOR_DOCUMENT' | 'LAUNCHING' | 'LAUNCHED' | 'FAILED'
-  teachingPreparationRunId: string | null
-  teachingErrorCode: string | null
-  reused: boolean
-}
+interface RulebookIdentityProblem { code?: string }
 interface TeachingPlanResponse { id: string; documentVersionId: string }
 interface TeachingPreparationLaunch { assistantRunId: string; state: string; reused: boolean }
 interface TeachingPreparationRun {
@@ -93,18 +65,25 @@ interface ModelConfigurationResponse {
   providers: Array<{ id: string; configured: boolean; visionCapable: boolean }>
   assignments: { teaching: string; visual: string }
 }
-interface PhotographedPage {
-  id: string
-  file: File
-  previewUrl: string
-}
 interface RulebookIntakeSnapshot {
   editionId: string
   learningGoal: string
+  officialImportIdentityConfirmed: boolean
   officialImportRightsConfirmed: boolean
   officialSourceUrl: string
   sourceType: string
   title: string
+}
+
+interface RulebookUploadPanelHandle {
+  clearSelectedFileInput: () => void
+  focusOfficialSource: () => void
+  openLocalFilePicker: () => void
+  openOfficialDetails: () => void
+}
+
+interface RulebookDocumentListHandle {
+  focusTarget: () => HTMLElement | null
 }
 
 class PreparationFailedError extends Error {}
@@ -118,29 +97,35 @@ const editionId = ref('')
 const documents = ref<DocumentResponse[]>([])
 const bggSuggestionStates = ref<Record<string, BggSuggestionState>>({})
 const rulebookCandidates = ref<RulebookCandidate[]>([])
-const rulebookDiscoveryStatus = ref<'idle' | 'loading' | 'success' | 'unavailable' | 'error'>('idle')
-const officialDetails = ref<HTMLDetailsElement | null>(null)
+const rulebookDiscoveryIdentity = ref<RulebookDiscoveryIdentity | null>(null)
+const selectedRulebookCandidate = ref<RulebookCandidate | null>(null)
+const selectedRulebookDiscoveryIdentity = ref<RulebookDiscoveryIdentity | null>(null)
+const rulebookDiscoveryStatus = ref<RulebookDiscoveryStatus>('idle')
+const rulebookDiscoveryElapsedSeconds = ref(0)
+const rulebookDiscoverySummary = ref<RulebookDiscoverySummary | null>(null)
+const uploadPanel = ref<RulebookUploadPanelHandle | null>(null)
 const file = ref<File | null>(null)
 const photographedPages = ref<PhotographedPage[]>([])
 const preparingPhotos = ref(false)
 const title = ref('')
 const officialSourceUrl = ref('')
 const officialImportRightsConfirmed = ref(false)
+const officialImportIdentityConfirmed = ref(false)
 const sourceType = ref('BASE_RULEBOOK')
 const learningGoal = ref('')
 const loading = ref(true)
 const uploading = ref(false)
 const importingOfficial = ref(false)
+const retryingOfficialImport = ref(false)
 const officialImportJob = ref<OfficialRulebookImportJob | null>(null)
 const deletingDocumentId = ref('')
 const documentToDelete = ref<DocumentResponse | null>(null)
 const deleteError = ref('')
-const documentListHeading = ref<HTMLElement | null>(null)
+const documentList = ref<RulebookDocumentListHandle | null>(null)
 const restoreAfterDocumentDelete = ref(false)
-const rulebookFileInput = ref<HTMLInputElement | null>(null)
 const intakeReady = ref(false)
 const intakeBaseline = ref<RulebookIntakeSnapshot>({
-  editionId: '', learningGoal: '', officialImportRightsConfirmed: false,
+  editionId: '', learningGoal: '', officialImportIdentityConfirmed: false, officialImportRightsConfirmed: false,
   officialSourceUrl: '', sourceType: 'BASE_RULEBOOK', title: '',
 })
 const launchingTeaching = ref(false)
@@ -201,7 +186,7 @@ let initialResourcesReady = false
 let recoveredContextKey = ''
 let officialImportPollGeneration = 0
 let officialImportScopeJobId = ''
-let routeImportTransitionJobId = ''
+let routeImportTransitionJobId: string | null = null
 let activeOfficialImportController: AbortController | null = null
 let officialImportPollTimer: ReturnType<typeof setTimeout> | null = null
 let resolveOfficialImportDelay: ((current: boolean) => void) | null = null
@@ -210,11 +195,14 @@ let activePreparationController: AbortController | null = null
 let preparationPollTimer: ReturnType<typeof setTimeout> | null = null
 let resolvePreparationDelay: ((current: boolean) => void) | null = null
 let preparationClock: ReturnType<typeof setInterval> | null = null
+let rulebookDiscoveryRequest = 0
+let rulebookDiscoveryClock: ReturnType<typeof setInterval> | null = null
+let rulebookDiscoveryStartedAt: number | null = null
 let photographedPageSequence = 0
 
 const editionOptions = computed(() => games.value.flatMap((entry) => entry.editions.map((edition) => ({
   id: edition.id,
-  label: `${entry.game.name} · ${edition.name}${edition.language ? ` · ${edition.language}` : ''}`,
+  label: `${entry.game.name} · ${edition.name} · ${playerFacingLanguageName(edition.language, locale.value)}`,
 }))))
 const routeImportJobId = computed(() => typeof route.query.importJob === 'string' ? route.query.importJob : '')
 const selectedEditionContext = computed(() => {
@@ -224,61 +212,153 @@ const selectedEditionContext = computed(() => {
   }
   return null
 })
-const rulebookDiscoveryCopy = computed(() => locale.value === 'zh-CN' ? {
-  action: '帮我找规则书', loading: '正在检索多个可信来源…', title: '找到这些规则书来源',
+const officialImportIdentityTarget = computed<RulebookDiscoveryIdentity | null>(() => {
+  const selected = selectedEditionContext.value
+  return selected ? {
+    editionId: selected.edition.id,
+    gameName: selected.game.name,
+    editionName: selected.edition.name,
+    language: selected.edition.language,
+  } : null
+})
+const selectedOfficialCandidate = computed(() => {
+  const selected = selectedRulebookCandidate.value
+  return selected?.url === officialSourceUrl.value.trim() ? selected : null
+})
+const officialImportSourceIdentity = computed(() => {
+  const candidate = selectedOfficialCandidate.value
+  return candidate ? {
+    edition: candidate.edition,
+    language: candidate.language,
+    languageVerified: candidate.languageVerified === true,
+  } : null
+})
+const officialImportDiscoveryIdentity = computed(() => (
+  selectedOfficialCandidate.value ? selectedRulebookDiscoveryIdentity.value : null
+))
+const rulebookDiscoveryCopy = computed<RulebookDiscoveryCopy>(() => locale.value === 'zh-CN' ? {
+  action: '帮我找规则书', loading: '正在查找多个可信来源…', title: '找到这些规则书来源',
+  elapsed: (seconds: number) => `已等待 ${seconds} 秒`,
   detail: '会优先找出版社，也会补查 BGG、集石与可信规则库。来源页会在新窗口打开；PDF 直链和已识别的连续规则页图片都可以在确认后导入。',
-  unavailable: '当前模型未开启联网搜索。你仍可粘贴公开 PDF 链接或上传本地文件。',
+  unavailable: '当前没有找到可审阅的规则书来源。你仍可继续查找、粘贴公开 PDF 链接或上传本地文件。',
   empty: '没有找到可信的规则书来源。请改用公开链接或本地上传。',
   error: '规则书搜索暂时不可用，手动入口仍可使用。',
+  retrySearch: '继续查找',
+  terminalTiming: (elapsed: number, budget: number) => `本次查找用时 ${elapsed} 秒，最长等待 ${budget} 秒。`,
+  terminal: {
+    PARTIAL: '部分来源未在本次预算内完成；下面只保留已经核验的结果。',
+    TIMED_OUT: '本次查找已到达最长等待时间，尚未找到可审阅结果。',
+    FAILED: '部分来源没有完成查找，尚未找到可审阅结果。',
+  },
+  providers: { CATALOG: '规则书目录', SOURCE_INSPECTION: '来源核验', WEB_SEARCH: '联网搜索' },
+  providerStates: { FINISHED: '已完成', TIMED_OUT: '已超时', FAILED: '失败', SKIPPED: '未使用', UNAVAILABLE: '未配置' },
   sources: { PUBLISHER: '出版社 / 权利方来源', TRUSTED_REPOSITORY: '可信规则库', COMMUNITY_PLATFORM: '社区规则书来源（如 BGG / 集石）', PUBLIC_WEB: '公开来源（请重点核对）' },
-  direct: 'PDF 可直接核验并下载', gallery: '连续规则页图片，可合成为 PDF', page: '来源页，需要继续查找文件', use: '选择并继续核对', open: '打开来源页',
-  publisher: '发布者', language: '语言', edition: '版本',
+  capabilities: { DIRECT_DOCUMENT: '已核验为可下载文档', CONTIGUOUS_RULE_PAGES: '已核验为连续规则页', DOCUMENT_LISTING: '仅确认是文档列表页', GAME_INFO_ONLY: '仅有桌游信息，没有规则书文件', UNVERIFIED_PAGE: '尚未核验出可导入文档' },
+  noImportableTitle: '暂未找到可直接导入的规则书', noImportableDetail: '这些结果只能用于继续查找或核对桌游信息；你也可以直接上传本地规则书。',
+  identityOnlyTitle: '仅用于核对桌游身份', identityOnlyDetail: '这些页面没有可导入的规则书文件，不属于规则书选择。',
+  direct: 'PDF 可直接核验并下载', gallery: '连续规则页图片，可合成为 PDF', page: '来源页，需要继续查找文件', use: '选择并继续核对',
+  continueListing: '继续查找文件', reviewUnverified: '审阅来源页', localUpload: '上传本地规则书',
+  publisher: '发布者', language: '语言', languageVerified: '来源已明确标注', languageReview: '需在来源页核对', edition: '版本',
   searchSteps: ['核对 BGG 身份与版本', '搜索出版社、发行方与本地化方', '补查 BGG、集石和可信规则库'],
 } : {
   action: 'Find a rulebook', loading: 'Searching multiple trusted sources…', title: 'Rulebook sources found',
+  elapsed: (seconds: number) => `${seconds}s elapsed`,
   detail: 'Publisher sources come first, followed by BGG, Gstone, and trusted repositories. Source pages open separately; direct PDFs and recognized ordered page-image documents can be imported after confirmation.',
-  unavailable: 'Web search is not enabled for the current model. You can still paste a public PDF URL or upload a local file.',
+  unavailable: 'No reviewable rulebook source was found. Search again, paste a public PDF URL, or upload a local file.',
   empty: 'No credible rulebook source was found. Use a public URL or local upload instead.',
   error: 'Rulebook search is temporarily unavailable. Manual options still work.',
+  retrySearch: 'Search again',
+  terminalTiming: (elapsed: number, budget: number) => `Search finished in ${elapsed}s with a ${budget}s maximum budget.`,
+  terminal: {
+    PARTIAL: 'Some sources did not finish within this search budget. Only verified results are shown below.',
+    TIMED_OUT: 'This search reached its time budget without a reviewable result.',
+    FAILED: 'Some source checks failed and no reviewable result is available yet.',
+  },
+  providers: { CATALOG: 'Rulebook catalog', SOURCE_INSPECTION: 'Source verification', WEB_SEARCH: 'Web search' },
+  providerStates: { FINISHED: 'finished', TIMED_OUT: 'timed out', FAILED: 'failed', SKIPPED: 'not needed', UNAVAILABLE: 'not configured' },
   sources: { PUBLISHER: 'Publisher / rights-holder', TRUSTED_REPOSITORY: 'Trusted rules repository', COMMUNITY_PLATFORM: 'Community rulebook source (such as BGG / Gstone)', PUBLIC_WEB: 'Public source (review carefully)' },
-  direct: 'Direct PDF ready for verification', gallery: 'Ordered rulebook pages; RulePilot can build the PDF', page: 'Source page; continue there', use: 'Choose and review', open: 'Open source page',
-  publisher: 'Provider', language: 'Language', edition: 'Edition',
+  capabilities: { DIRECT_DOCUMENT: 'Confirmed downloadable document', CONTIGUOUS_RULE_PAGES: 'Confirmed ordered rule pages', DOCUMENT_LISTING: 'Document listing only', GAME_INFO_ONLY: 'Game information only; no rulebook file', UNVERIFIED_PAGE: 'No importable document verified' },
+  noImportableTitle: 'No directly importable rulebook yet', noImportableDetail: 'These results can only continue the search or confirm game identity. You can also upload a local rulebook.',
+  identityOnlyTitle: 'Game identity references only', identityOnlyDetail: 'These pages do not contain an importable rulebook and are not rulebook choices.',
+  direct: 'Direct PDF ready for verification', gallery: 'Ordered rulebook pages; RulePilot can build the PDF', page: 'Source page; continue there', use: 'Choose and review',
+  continueListing: 'Continue finding a file', reviewUnverified: 'Review source page', localUpload: 'Upload a local rulebook',
+  publisher: 'Provider', language: 'Language', languageVerified: 'stated by the source', languageReview: 'verify on the source page', edition: 'Edition',
   searchSteps: ['Verify BGG identity and edition', 'Search publishers, distributors, and localizers', 'Check BGG, Gstone, and trusted repositories'],
 })
-const officialImportCopy = computed(() => locale.value === 'zh-CN' ? {
+const officialImportCopy = computed<OfficialImportCopy>(() => locale.value === 'zh-CN' ? {
   title: '规则书与讲解正在后台准备', safe: '可以离开这一页；下载、核验、规则书读取和讲解生成都会继续。',
   QUEUED: '等待下载', CONNECTING: '正在连接来源', DOWNLOADING: '正在下载规则书内容',
   COMPRESSING: '文件超过普通导入上限，正在安全压缩 PDF',
   VERIFYING_FILE: '正在核验文件格式与大小', SAVING: '正在保存并交给规则书读取',
   COMPLETED: '下载完成，正在衔接规则书读取', FAILED: '下载失败，需要重新选择来源',
-  WAITING_FOR_DOCUMENT: '规则书已下载，正在读取页面与建立检索', LAUNCHING: '规则书已可阅读，正在启动讲解',
+  WAITING_FOR_DOCUMENT: '规则书已下载，正在整理规则文字和原文页面', LAUNCHING: '规则书已可阅读，正在启动讲解',
   LAUNCHED: '讲解任务已经进入后台', TEACHING_FAILED: '规则书已可阅读，但讲解任务需要重试', DOCUMENT_FAILED: '规则书读取失败，讲解无法开始',
   background: '在任意页面打开“后台任务”都能找回这次进度。',
+  failureTitle: '规则书导入需要处理',
+  failureDetail: {
+    NONE: '这次导入已经结束，请重新选择来源或改用本地文件。',
+    TEMPORARY_SOURCE: '来源暂时无法连接。你可以重试原来源，也可以立即换来源或上传本地文件。',
+    BROWSER_HANDOFF: '这个来源需要在浏览器里完成登录、隐私选择或下载；也可以改用本地文件。',
+    INVALID_SOURCE: '下载的内容不是可安全导入的规则书文件。请选择真实 PDF、连续规则页或本地文件。',
+    CAPACITY: '当前导入队列暂时已满。可以稍后重试原来源，或先改用本地文件。',
+    INTERRUPTED: '应用重启中断了这次导入。可以重试原来源，也可以换来源或上传本地文件。',
+    OTHER: '这次导入没有完成。请选择另一个来源或上传本地文件。',
+  },
+  chooseAnotherSource: '重新选择来源', useLocalUpload: '改用本地上传',
+  retryOriginalSource: '重试原来源', openOriginalSource: '在来源网站继续',
 } : {
   title: 'Preparing the rulebook and guide in the background', safe: 'You can leave this page; download, verification, reading, and guide generation will continue.',
   QUEUED: 'Waiting to download', CONNECTING: 'Connecting to source', DOWNLOADING: 'Downloading rulebook content',
   COMPRESSING: 'Compressing the PDF to the safe import limit',
   VERIFYING_FILE: 'Verifying file format and size', SAVING: 'Saving and handing off for reading',
   COMPLETED: 'Download complete; handing off to rulebook reading', FAILED: 'Download failed; choose another source',
-  WAITING_FOR_DOCUMENT: 'Rulebook downloaded; reading pages and building retrieval data', LAUNCHING: 'Rulebook readable; starting the guide',
+  WAITING_FOR_DOCUMENT: 'Rulebook downloaded; organizing rule text and original pages', LAUNCHING: 'Rulebook readable; starting the guide',
   LAUNCHED: 'The guide task is now running in the background', TEACHING_FAILED: 'Rulebook readable, but the guide task needs a retry', DOCUMENT_FAILED: 'Rulebook reading failed, so the guide could not start',
   background: 'Open Background work from any page to return to this progress.',
+  failureTitle: 'Rulebook import needs attention',
+  failureDetail: {
+    NONE: 'This import has ended. Choose another source or use a local file.',
+    TEMPORARY_SOURCE: 'The source is temporarily unavailable. Retry it, choose another source, or upload a local file.',
+    BROWSER_HANDOFF: 'This source requires an in-browser sign-in, privacy choice, or download. You can also use a local file.',
+    INVALID_SOURCE: 'The downloaded content is not a safely importable rulebook. Choose a real PDF, ordered rule pages, or a local file.',
+    CAPACITY: 'The import queue is temporarily full. Retry later or use a local file now.',
+    INTERRUPTED: 'An application restart interrupted this import. Retry it, choose another source, or upload a local file.',
+    OTHER: 'This import did not finish. Choose another source or upload a local file.',
+  },
+  chooseAnotherSource: 'Choose another source', useLocalUpload: 'Use local upload',
+  retryOriginalSource: 'Retry original source', openOriginalSource: 'Continue on source site',
+})
+const officialImportIdentityErrorCopy = computed(() => locale.value === 'zh-CN' ? {
+  changed: '提交前目录或来源身份发生了变化。请重新比较游戏、版本和语言后再次确认。',
+  active: '这个链接正在为另一个版本导入。请等待那次导入结束后再试，或保留当前游戏与讲解目标并改用本地上传。',
+} : {
+  changed: 'The catalog or source identity changed before submission. Compare the game, edition, and language again, then reconfirm.',
+  active: 'This URL is already being imported for another edition. Wait for that import to finish, or keep the current game and guide goal and use a local upload.',
+})
+const officialImportBusy = computed(() => {
+  const job = officialImportJob.value
+  if (!job) return false
+  if (job.recovery) return job.recovery.busy
+  if (job.stage === 'FAILED') return false
+  return job.stage !== 'COMPLETED'
+    || ['WAITING_FOR_DOCUMENT', 'LAUNCHING'].includes(job.teachingHandoffState)
 })
 const canUpload = computed(() => Boolean(
   (file.value || photographedPages.value.length)
   && !preparingPhotos.value
   && !uploading.value
   && !importingOfficial.value
-  && !officialImportJob.value
+  && !officialImportBusy.value
   && !preparingVersionId.value
   && intakeReady.value,
 ))
 const canImportOfficial = computed(() => Boolean(
   officialSourceUrl.value.trim()
   && officialImportRightsConfirmed.value
+  && (!editionId.value || officialImportIdentityConfirmed.value)
   && !uploading.value
   && !importingOfficial.value
-  && !officialImportJob.value
+  && !officialImportBusy.value
   && !preparingVersionId.value
   && intakeReady.value,
 ))
@@ -286,6 +366,7 @@ function currentIntakeSnapshot(): RulebookIntakeSnapshot {
   return {
     editionId: editionId.value,
     learningGoal: learningGoal.value,
+    officialImportIdentityConfirmed: officialImportIdentityConfirmed.value,
     officialImportRightsConfirmed: officialImportRightsConfirmed.value,
     officialSourceUrl: officialSourceUrl.value,
     sourceType: sourceType.value,
@@ -307,6 +388,7 @@ const intakeDraftAreas = computed(() => {
     ...(title.value.trim() !== baseline.title.trim() || sourceType.value !== baseline.sourceType
       ? [intakeDraftCopy.value.details] : []),
     ...(officialSourceUrl.value.trim() !== baseline.officialSourceUrl.trim()
+      || officialImportIdentityConfirmed.value !== baseline.officialImportIdentityConfirmed
       || officialImportRightsConfirmed.value !== baseline.officialImportRightsConfirmed
       ? [intakeDraftCopy.value.source] : []),
     ...(editionId.value !== baseline.editionId ? [intakeDraftCopy.value.game] : []),
@@ -315,10 +397,11 @@ const intakeDraftAreas = computed(() => {
 })
 const hasUnsavedIntake = computed(() => intakeDraftAreas.value.length > 0)
 const intakeMutationPending = computed(() => (
-  preparingPhotos.value || uploading.value || importingOfficial.value || launchingTeaching.value
+  preparingPhotos.value || uploading.value || importingOfficial.value
+  || retryingOfficialImport.value || launchingTeaching.value
 ))
 const intakeControlsDisabled = computed(() => Boolean(
-  loading.value || !intakeReady.value || intakeMutationPending.value || officialImportJob.value || preparingVersionId.value,
+  loading.value || !intakeReady.value || intakeMutationPending.value || officialImportBusy.value || preparingVersionId.value,
 ))
 const protectsIntakeNavigation = computed(() => hasUnsavedIntake.value || intakeMutationPending.value)
 const navigationCopy = computed(() => intakeMutationPending.value ? {
@@ -336,15 +419,6 @@ const visualProvider = computed(() => modelConfiguration.value?.providers.find(
   (provider) => provider.id === modelConfiguration.value?.assignments.visual,
 ))
 const visualVisionCapable = computed(() => visualProvider.value?.visionCapable === true)
-
-function documentStatusLabel(status: string) {
-  return {
-    UPLOADED: t('documents.status.uploaded'),
-    EXTRACTING: t('documents.status.extracting'),
-    READY: t('documents.status.ready'),
-    FAILED: t('documents.status.failed'),
-  }[status] ?? t('documents.status.processing')
-}
 
 function bggSuggestionState(documentId: string) {
   return bggSuggestionStates.value[documentId]
@@ -429,13 +503,6 @@ async function confirmBggSuggestion(documentId: string) {
   }
 }
 
-function candidatePlayerLabel(candidate: BggSuggestion) {
-  if (candidate.minPlayers == null || candidate.maxPlayers == null) return ''
-  return candidate.minPlayers === candidate.maxPlayers
-    ? t('documents.bgg.playersExact', { players: candidate.minPlayers })
-    : t('documents.bgg.playersRange', { min: candidate.minPlayers, max: candidate.maxPlayers })
-}
-
 function progressMessage(snapshot: ProcessingSnapshot) {
   if (snapshot.stage === 'EXTRACTING') return t('documents.progress.extracting')
   if (snapshot.stage === 'RENDERING' && snapshot.totalPages > 0) {
@@ -480,34 +547,70 @@ async function loadDocuments(signal?: AbortSignal) {
 
 async function discoverOfficialRulebooks() {
   if (!editionId.value) return
+  const request = ++rulebookDiscoveryRequest
+  const requestedEditionId = editionId.value
   rulebookDiscoveryStatus.value = 'loading'
+  rulebookDiscoverySummary.value = null
   rulebookCandidates.value = []
+  rulebookDiscoveryIdentity.value = null
+  startRulebookDiscoveryClock()
   try {
-    const parameters = new URLSearchParams({ editionId: editionId.value, language: locale.value })
+    const parameters = new URLSearchParams({ editionId: requestedEditionId, language: locale.value })
     const response = await checkedFetch(`/api/v1/documents/rulebook-candidates?${parameters.toString()}`)
     if (!response.ok) throw new Error(rulebookDiscoveryCopy.value.error)
     const result = await response.json() as RulebookCandidateResponse
+    if (request !== rulebookDiscoveryRequest
+      || editionId.value !== requestedEditionId
+      || result.identity?.editionId !== requestedEditionId) return
+    rulebookDiscoveryIdentity.value = result.identity
     rulebookCandidates.value = result.candidates
+    rulebookDiscoverySummary.value = normalizeRulebookDiscoverySummary(result.discovery)
     rulebookDiscoveryStatus.value = result.configured ? 'success' : 'unavailable'
   } catch (error) {
+    if (request !== rulebookDiscoveryRequest) return
     errorMessage.value = error instanceof Error ? error.message : rulebookDiscoveryCopy.value.error
     rulebookDiscoveryStatus.value = 'error'
+  } finally {
+    if (request === rulebookDiscoveryRequest) stopRulebookDiscoveryClock(true)
   }
+}
+
+function startRulebookDiscoveryClock() {
+  stopRulebookDiscoveryClock(false)
+  rulebookDiscoveryElapsedSeconds.value = 0
+  rulebookDiscoveryStartedAt = performance.now()
+  rulebookDiscoveryClock = setInterval(updateRulebookDiscoveryElapsed, 1_000)
+}
+
+function updateRulebookDiscoveryElapsed() {
+  if (rulebookDiscoveryStartedAt === null) return
+  rulebookDiscoveryElapsedSeconds.value = monotonicElapsedSeconds(rulebookDiscoveryStartedAt)
+}
+
+function stopRulebookDiscoveryClock(updateElapsed: boolean) {
+  if (updateElapsed) updateRulebookDiscoveryElapsed()
+  if (rulebookDiscoveryClock !== null) clearInterval(rulebookDiscoveryClock)
+  rulebookDiscoveryClock = null
+  rulebookDiscoveryStartedAt = null
 }
 
 function chooseRulebookCandidate(candidate: RulebookCandidate) {
   if (intakeControlsDisabled.value) return
-  if (candidate.acquisitionMode === 'SOURCE_PAGE') {
+  if (candidate.capability === 'DOCUMENT_LISTING' || candidate.capability === 'UNVERIFIED_PAGE') {
     window.open(candidate.url, '_blank', 'noopener,noreferrer')
     return
   }
+  if (candidate.capability === 'GAME_INFO_ONLY') return
+  const importable = candidate.capability === 'DIRECT_DOCUMENT' && candidate.acquisitionMode === 'DIRECT_PDF'
+    || candidate.capability === 'CONTIGUOUS_RULE_PAGES' && candidate.acquisitionMode === 'IMAGE_GALLERY'
+  if (!importable) return
   officialSourceUrl.value = candidate.url
   if (!title.value.trim()) title.value = candidate.title
+  selectedRulebookCandidate.value = candidate
+  selectedRulebookDiscoveryIdentity.value = rulebookDiscoveryIdentity.value
+  officialImportIdentityConfirmed.value = false
   officialImportRightsConfirmed.value = false
-  if (officialDetails.value) officialDetails.value.open = true
-  if (typeof officialDetails.value?.scrollIntoView === 'function') {
-    officialDetails.value.scrollIntoView({ behavior: 'smooth', block: 'start' })
-  }
+  uploadPanel.value?.openOfficialDetails()
 }
 
 async function load() {
@@ -623,7 +726,7 @@ function selectFile(event: Event) {
 
 function clearSelectedFile() {
   file.value = null
-  if (rulebookFileInput.value) rulebookFileInput.value.value = ''
+  uploadPanel.value?.clearSelectedFileInput()
 }
 
 async function addPhotographedPages(event: Event) {
@@ -727,6 +830,7 @@ function discardIntakeDraft() {
   const baseline = intakeBaseline.value
   editionId.value = baseline.editionId
   learningGoal.value = baseline.learningGoal
+  officialImportIdentityConfirmed.value = baseline.officialImportIdentityConfirmed
   officialImportRightsConfirmed.value = baseline.officialImportRightsConfirmed
   officialSourceUrl.value = baseline.officialSourceUrl
   sourceType.value = baseline.sourceType
@@ -1239,6 +1343,8 @@ async function uploadRulebook() {
   message.value = t('documents.uploading')
   errorMessage.value = ''
   try {
+    await releaseOfficialImportScope()
+    message.value = t('documents.uploading')
     const selectedFile = file.value
     const selectedPhotos = [...photographedPages.value]
     const csrf = await csrfToken()
@@ -1264,6 +1370,7 @@ async function uploadRulebook() {
     clearPhotographedPages()
     title.value = ''
     officialSourceUrl.value = ''
+    officialImportIdentityConfirmed.value = false
     officialImportRightsConfirmed.value = false
     resetIntakeBaseline()
     const leavingAfterAcceptance = navigationDialogOpen.value
@@ -1321,6 +1428,10 @@ async function importOfficialRulebook() {
   message.value = t('documents.officialImport.downloading')
   errorMessage.value = ''
   try {
+    await releaseOfficialImportScope()
+    message.value = t('documents.officialImport.downloading')
+    const selectedCandidate = selectedOfficialCandidate.value
+    const discoveryIdentity = officialImportDiscoveryIdentity.value
     const csrf = await csrfToken()
     const response = await checkedFetch('/api/v1/documents/official-imports', {
       method: 'POST',
@@ -1333,14 +1444,27 @@ async function importOfficialRulebook() {
         rightsConfirmed: officialImportRightsConfirmed.value,
         startTeaching: true,
         learningGoal: learningGoal.value.trim() || null,
+        discoveredForEditionId: discoveryIdentity?.editionId ?? null,
+        sourceEdition: selectedCandidate?.edition || null,
+        sourceLanguage: selectedCandidate?.languageVerified ? selectedCandidate.language : null,
+        sourceLanguageVerified: selectedCandidate?.languageVerified === true,
+        identityConfirmed: editionId.value ? officialImportIdentityConfirmed.value : false,
       }),
     })
+    if (response.status === 409) {
+      const problem = await response.json().catch(() => ({})) as RulebookIdentityProblem
+      officialImportIdentityConfirmed.value = false
+      throw new Error(problem.code === 'RULEBOOK_ACTIVE_IMPORT_CONFLICT'
+        ? officialImportIdentityErrorCopy.value.active
+        : officialImportIdentityErrorCopy.value.changed)
+    }
     if (!response.ok) throw new Error(t('documents.officialImport.error'))
     const acceptedJob = await response.json() as OfficialRulebookImportJob
     if (!acceptedJob.id) throw new Error(t('documents.officialImport.error'))
     officialImportJob.value = acceptedJob
     title.value = ''
     officialSourceUrl.value = ''
+    officialImportIdentityConfirmed.value = false
     officialImportRightsConfirmed.value = false
     resetIntakeBaseline()
     const navigationWasRequested = navigationDialogOpen.value
@@ -1350,7 +1474,7 @@ async function importOfficialRulebook() {
       try {
         await router.replace({ query: { ...route.query, importJob: acceptedJob.id } })
       } finally {
-        routeImportTransitionJobId = ''
+        routeImportTransitionJobId = null
       }
     }
     accepted = true
@@ -1377,14 +1501,14 @@ async function recoverOfficialImport(jobId: string, requestIdentityGeneration: n
     const job = await fetchOfficialImport(jobId, controller.signal)
     if (!isCurrentOfficialImport(generation, jobId, requestIdentityGeneration, controller)) return
     activeOfficialImportController = null
-    officialImportJob.value = job
+    acceptOfficialImportJob(job)
     if (officialImportSettled(job)) {
       const finished = await finishOfficialImport(job, generation, requestIdentityGeneration)
       if (!finished && isCurrentOfficialImport(generation, jobId, requestIdentityGeneration)) {
         void waitForOfficialImport(jobId, generation, requestIdentityGeneration)
       }
     }
-    else if (job.stage === 'FAILED') errorMessage.value = t('documents.officialImport.error')
+    else if (job.stage === 'FAILED') return
     else void waitForOfficialImport(jobId, generation, requestIdentityGeneration)
   } catch {
     if (!isCurrentOfficialImport(generation, jobId, requestIdentityGeneration)
@@ -1403,7 +1527,7 @@ function startOfficialImportPolling(
   cancelOfficialImportPolling()
   const generation = officialImportPollGeneration
   officialImportScopeJobId = job.id
-  officialImportJob.value = job
+  acceptOfficialImportJob(job)
   if (officialImportSettled(job)) {
     void finishOfficialImport(job, generation, requestIdentityGeneration).then((finished) => {
       if (!finished && isCurrentOfficialImport(generation, job.id, requestIdentityGeneration)) {
@@ -1413,7 +1537,6 @@ function startOfficialImportPolling(
     return
   }
   if (job.stage === 'FAILED') {
-    errorMessage.value = t('documents.officialImport.error')
     return
   }
   void waitForOfficialImport(job.id, generation, requestIdentityGeneration)
@@ -1440,14 +1563,13 @@ async function waitForOfficialImport(
       const job = await fetchOfficialImport(jobId, controller.signal)
       if (!isCurrentOfficialImport(generation, jobId, requestIdentityGeneration, controller)) return
       activeOfficialImportController = null
-      officialImportJob.value = job
+      acceptOfficialImportJob(job)
       if (officialImportSettled(job)) {
         if (await finishOfficialImport(job, generation, requestIdentityGeneration)) return
         if (!isCurrentOfficialImport(generation, jobId, requestIdentityGeneration)) return
         continue
       }
       if (job.stage === 'FAILED') {
-        errorMessage.value = t('documents.officialImport.error')
         return
       }
     } catch {
@@ -1502,6 +1624,123 @@ function officialImportSettled(job: OfficialRulebookImportJob) {
     && ['LAUNCHED', 'FAILED', 'NOT_REQUESTED'].includes(job.teachingHandoffState)
 }
 
+const officialImportSourceTypes = new Set([
+  'BASE_RULEBOOK', 'EXPANSION_RULEBOOK', 'OFFICIAL_FAQ', 'OFFICIAL_ERRATA',
+])
+
+function acceptOfficialImportJob(job: OfficialRulebookImportJob) {
+  officialImportJob.value = job
+  if (job.stage === 'FAILED') restoreFailedOfficialImportContext(job)
+}
+
+function restoreFailedOfficialImportContext(job: OfficialRulebookImportJob) {
+  clearSelectedFile()
+  clearPhotographedPages()
+  if (job.editionId) editionId.value = job.editionId
+  title.value = job.rulebookTitle?.trim() || job.title.trim()
+  learningGoal.value = job.learningGoal?.trim() ?? ''
+  if (job.sourceType && officialImportSourceTypes.has(job.sourceType)) {
+    sourceType.value = job.sourceType
+  }
+  officialSourceUrl.value = ''
+  officialImportIdentityConfirmed.value = false
+  officialImportRightsConfirmed.value = false
+  selectedRulebookCandidate.value = null
+  selectedRulebookDiscoveryIdentity.value = null
+  message.value = ''
+  errorMessage.value = ''
+  resetIntakeBaseline()
+}
+
+async function detachFailedOfficialImport() {
+  const failedJob = officialImportJob.value
+  if (failedJob?.stage !== 'FAILED') return
+  await releaseOfficialImportScope()
+}
+
+async function releaseOfficialImportScope() {
+  cancelOfficialImportPolling()
+  if (routeImportJobId.value) {
+    const query = { ...route.query }
+    delete query.importJob
+    routeImportTransitionJobId = ''
+    try {
+      await router.replace({ query })
+    } finally {
+      routeImportTransitionJobId = null
+    }
+  }
+  officialImportJob.value = null
+  message.value = ''
+  errorMessage.value = ''
+}
+
+function resetFailedOfficialImportSourceInputs() {
+  clearSelectedFile()
+  clearPhotographedPages()
+  officialSourceUrl.value = ''
+  officialImportIdentityConfirmed.value = false
+  officialImportRightsConfirmed.value = false
+  selectedRulebookCandidate.value = null
+  selectedRulebookDiscoveryIdentity.value = null
+}
+
+async function chooseAnotherOfficialSource() {
+  resetFailedOfficialImportSourceInputs()
+  await detachFailedOfficialImport()
+  await nextTick()
+  uploadPanel.value?.focusOfficialSource()
+}
+
+async function useLocalUploadAfterOfficialFailure() {
+  resetFailedOfficialImportSourceInputs()
+  await detachFailedOfficialImport()
+  await nextTick()
+  uploadPanel.value?.openLocalFilePicker()
+}
+
+async function retryOriginalOfficialImport() {
+  const failedJob = officialImportJob.value
+  if (failedJob?.stage !== 'FAILED'
+    || !failedJob.recovery?.canRetryOriginalSource
+    || retryingOfficialImport.value) return
+  retryingOfficialImport.value = true
+  errorMessage.value = ''
+  try {
+    const csrf = await csrfToken()
+    const response = await checkedFetch(
+      `/api/v1/documents/official-imports/${encodeURIComponent(failedJob.id)}/retry`, {
+        method: 'POST', headers: { [csrf.headerName]: csrf.token },
+      },
+    )
+    if (!response.ok) throw new Error(t('documents.officialImport.error'))
+    const retriedJob = await response.json() as OfficialRulebookImportJob
+    if (!retriedJob.id || retriedJob.id === failedJob.id) {
+      throw new Error(t('documents.officialImport.error'))
+    }
+    cancelOfficialImportPolling()
+    if (retriedJob.stage === 'FAILED') {
+      acceptOfficialImportJob(retriedJob)
+    } else {
+      officialImportJob.value = retriedJob
+      resetFailedOfficialImportSourceInputs()
+      title.value = ''
+      resetIntakeBaseline()
+    }
+    routeImportTransitionJobId = retriedJob.id
+    try {
+      await router.replace({ query: { ...route.query, importJob: retriedJob.id } })
+    } finally {
+      routeImportTransitionJobId = null
+    }
+    if (retriedJob.stage !== 'FAILED') startOfficialImportPolling(retriedJob, identityGeneration)
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : t('documents.officialImport.error')
+  } finally {
+    retryingOfficialImport.value = false
+  }
+}
+
 async function finishOfficialImport(
   job: OfficialRulebookImportJob,
   generation: number,
@@ -1551,35 +1790,6 @@ async function finishOfficialImport(
   return true
 }
 
-function officialImportProgress() {
-  const job = officialImportJob.value
-  if (!job || job.stage !== 'DOWNLOADING' || !job.totalBytes) return null
-  return Math.min(100, Math.round(job.downloadedBytes / job.totalBytes * 100))
-}
-
-function officialImportBytes() {
-  const job = officialImportJob.value
-  if (!job || job.downloadedBytes <= 0) return ''
-  const format = (bytes: number) => bytes < 1024 * 1024
-    ? `${Math.max(1, Math.round(bytes / 1024))} KB`
-    : `${(bytes / 1024 / 1024).toFixed(1)} MB`
-  return job.totalBytes ? `${format(job.downloadedBytes)} / ${format(job.totalBytes)}` : format(job.downloadedBytes)
-}
-
-function officialImportStage() {
-  const job = officialImportJob.value
-  if (!job) return ''
-  if (job.stage === 'COMPLETED' && job.teachingHandoffState === 'FAILED') {
-    return job.teachingErrorCode === 'DOCUMENT_PROCESSING_FAILED'
-      ? officialImportCopy.value.DOCUMENT_FAILED
-      : officialImportCopy.value.TEACHING_FAILED
-  }
-  if (job.stage === 'COMPLETED' && job.teachingHandoffState !== 'NOT_REQUESTED') {
-    return officialImportCopy.value[job.teachingHandoffState]
-  }
-  return officialImportCopy.value[job.stage]
-}
-
 function requestDeleteRulebook(entry: DocumentResponse) {
   if (deletingDocumentId.value || preparingVersionId.value) return
   documentToDelete.value = entry
@@ -1597,7 +1807,7 @@ function cancelDeleteRulebook() {
 function documentDeleteRestoreTarget() {
   if (!restoreAfterDocumentDelete.value) return null
   restoreAfterDocumentDelete.value = false
-  return documentListHeading.value
+  return documentList.value?.focusTarget() ?? null
 }
 
 async function confirmDeleteRulebook() {
@@ -1635,14 +1845,33 @@ onMounted(() => {
   void load()
 })
 watch(routeImportJobId, () => {
-  if (routeImportJobId.value && routeImportJobId.value === routeImportTransitionJobId) return
+  if (routeImportTransitionJobId !== null && routeImportJobId.value === routeImportTransitionJobId) return
   recoveredContextKey = ''
   cancelOfficialImportPolling()
   officialImportJob.value = null
   void recoverCurrentContext(latestInitialLoad)
 })
+watch(editionId, () => {
+  officialImportIdentityConfirmed.value = false
+  rulebookDiscoveryRequest += 1
+  stopRulebookDiscoveryClock(false)
+  rulebookDiscoveryElapsedSeconds.value = 0
+  rulebookDiscoverySummary.value = null
+  rulebookDiscoveryIdentity.value = null
+  rulebookCandidates.value = []
+  rulebookDiscoveryStatus.value = 'idle'
+})
+watch(officialSourceUrl, (value) => {
+  officialImportIdentityConfirmed.value = false
+  if (selectedRulebookCandidate.value?.url !== value.trim()) {
+    selectedRulebookCandidate.value = null
+    selectedRulebookDiscoveryIdentity.value = null
+  }
+})
 onBeforeUnmount(() => {
   disposed = true
+  rulebookDiscoveryRequest += 1
+  stopRulebookDiscoveryClock(false)
   latestInitialLoad++
   activeInitialController?.abort()
   activeInitialController = null
@@ -1673,261 +1902,80 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
-        <div v-if="selectedEditionContext" class="mt-7 flex items-center gap-4 rounded-xl border border-copper/20 bg-copper/5 p-4 text-left">
-          <img v-if="selectedEditionContext.bggMetadata?.thumbnailUrl" :src="selectedEditionContext.bggMetadata.thumbnailUrl" :alt="t('documents.game.selectedCover', { game: selectedEditionContext.game.name })" class="h-20 w-16 shrink-0 rounded-lg bg-paper object-contain" referrerpolicy="no-referrer">
-          <div class="min-w-0 flex-1">
-            <p class="text-xs font-bold uppercase tracking-[0.12em] text-copper">{{ t('documents.game.selectedEyebrow') }}</p>
-            <h2 class="mt-1 truncate font-display text-xl font-semibold">{{ selectedEditionContext.game.name }}</h2>
-            <p class="mt-1 text-sm text-ink/55">{{ t('documents.game.selectedEdition', { edition: selectedEditionContext.edition.name }) }}</p>
-            <a v-if="selectedEditionContext.bggMetadata?.bggUrl" :href="selectedEditionContext.bggMetadata.bggUrl" target="_blank" rel="noopener noreferrer" class="mt-1 inline-block text-xs font-semibold text-indigo">{{ t('documents.game.selectedSource') }} ↗</a>
-          </div>
-        </div>
+        <RulebookSourceImportPanel
+          :selected-edition="selectedEditionContext"
+          :status="rulebookDiscoveryStatus"
+          :candidates="rulebookCandidates"
+          :elapsed-seconds="rulebookDiscoveryElapsedSeconds"
+          :discovery-summary="rulebookDiscoverySummary"
+          :copy="rulebookDiscoveryCopy"
+          @discover="discoverOfficialRulebooks"
+          @choose="chooseRulebookCandidate"
+        />
 
-        <div v-if="selectedEditionContext" class="mt-4 text-left">
-          <button type="button" :disabled="rulebookDiscoveryStatus === 'loading'" class="min-h-11 rounded-xl bg-indigo px-5 text-sm font-semibold text-white disabled:opacity-50" @click="discoverOfficialRulebooks">
-            {{ rulebookDiscoveryStatus === 'loading' ? rulebookDiscoveryCopy.loading : rulebookDiscoveryCopy.action }}
-          </button>
-          <ol v-if="rulebookDiscoveryStatus === 'loading'" class="mt-4 grid gap-2 rounded-xl border border-indigo/15 bg-indigo/[0.035] p-4 text-sm sm:grid-cols-3" role="status">
-            <li v-for="(step, index) in rulebookDiscoveryCopy.searchSteps" :key="step" class="flex items-center gap-2 text-ink/60">
-              <span class="grid size-6 shrink-0 place-items-center rounded-full bg-indigo/10 text-xs font-bold text-indigo">{{ index + 1 }}</span>
-              <span>{{ step }}</span>
-            </li>
-          </ol>
-          <section v-if="rulebookDiscoveryStatus === 'success'" class="mt-4 rounded-xl border border-indigo/15 bg-paper p-4 sm:p-5" aria-live="polite">
-            <h2 class="font-display text-xl font-semibold">{{ rulebookDiscoveryCopy.title }}</h2>
-            <p class="mt-1 text-xs leading-5 text-ink/50">{{ rulebookDiscoveryCopy.detail }}</p>
-            <ul v-if="rulebookCandidates.length" class="mt-4 stack-y-md">
-              <li v-for="candidate in rulebookCandidates" :key="candidate.url" class="rounded-lg border border-ink/10 bg-canvas p-4">
-                <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                  <div class="min-w-0">
-                    <p class="font-semibold">{{ candidate.title }}</p>
-                    <p class="mt-1 break-all text-xs text-ink/45">{{ candidate.sourceDomain }}</p>
-                    <p class="mt-2 text-xs leading-5 text-ink/55">{{ rulebookDiscoveryCopy.publisher }}: {{ candidate.publisher || '—' }} · {{ rulebookDiscoveryCopy.language }}: {{ candidate.language || '—' }} · {{ rulebookDiscoveryCopy.edition }}: {{ candidate.edition || '—' }}</p>
-                    <p class="mt-1 text-xs font-semibold" :class="candidate.sourceType === 'PUBLIC_WEB' ? 'text-amber-700' : 'text-emerald-700'">{{ rulebookDiscoveryCopy.sources[candidate.sourceType] }}</p>
-                    <p class="mt-1 text-xs text-ink/45">{{ candidate.acquisitionMode === 'DIRECT_PDF' ? rulebookDiscoveryCopy.direct : candidate.acquisitionMode === 'IMAGE_GALLERY' ? rulebookDiscoveryCopy.gallery : rulebookDiscoveryCopy.page }}</p>
-                  </div>
-                  <button type="button" class="min-h-11 shrink-0 rounded-lg border border-indigo/30 px-4 text-sm font-semibold text-indigo" @click="chooseRulebookCandidate(candidate)">{{ candidate.acquisitionMode === 'SOURCE_PAGE' ? rulebookDiscoveryCopy.open : rulebookDiscoveryCopy.use }}</button>
-                </div>
-              </li>
-            </ul>
-            <p v-else class="mt-4 text-sm text-ink/55">{{ rulebookDiscoveryCopy.empty }}</p>
-          </section>
-          <p v-else-if="rulebookDiscoveryStatus === 'unavailable'" class="mt-3 rounded-lg bg-amber-50 px-4 py-3 text-sm text-amber-900" role="status">{{ rulebookDiscoveryCopy.unavailable }}</p>
-        </div>
+        <RulebookUploadPanel
+          ref="uploadPanel"
+          v-model:title="title"
+          v-model:official-source-url="officialSourceUrl"
+          v-model:official-import-identity-confirmed="officialImportIdentityConfirmed"
+          v-model:official-import-rights-confirmed="officialImportRightsConfirmed"
+          v-model:edition-id="editionId"
+          v-model:learning-goal="learningGoal"
+          v-model:source-type="sourceType"
+          :file="file"
+          :photographed-pages="photographedPages"
+          :preparing-photos="preparingPhotos"
+          :intake-controls-disabled="intakeControlsDisabled"
+          :intake-draft-areas="intakeDraftAreas"
+          :intake-draft-copy="intakeDraftCopy"
+          :edition-options="editionOptions"
+          :identity-target="officialImportIdentityTarget"
+          :identity-source-context="officialImportDiscoveryIdentity"
+          :identity-source="officialImportSourceIdentity"
+          :model-configuration-available="Boolean(modelConfiguration)"
+          :visual-vision-capable="visualVisionCapable"
+          :can-import-official="canImportOfficial"
+          :importing-official="importingOfficial"
+          :can-upload="canUpload"
+          :preparing-version-id="preparingVersionId"
+          :uploading="uploading"
+          @submit="uploadRulebook"
+          @select-file="selectFile"
+          @add-photos="addPhotographedPages"
+          @move-photo="movePhotographedPage"
+          @remove-photo="removePhotographedPage"
+          @import-official="importOfficialRulebook"
+        />
 
-        <form class="tabletop-panel player-board mt-8 p-5 text-left sm:p-7" @submit.prevent="uploadRulebook">
-          <div v-if="hasUnsavedIntake" data-testid="rulebook-intake-unsaved" class="mb-5 rounded-lg bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900" role="status">
-            <strong>{{ intakeDraftCopy.status(intakeDraftAreas.join(locale === 'zh-CN' ? '、' : ', ')) }}</strong>
-            <span class="mt-1 block text-xs leading-5">{{ intakeDraftCopy.memoryOnly }}</span>
-          </div>
-          <p class="text-sm font-semibold text-ink/65">{{ t('documents.capture.label') }}</p>
-          <div class="mt-3 grid gap-3 sm:grid-cols-3">
-            <label for="rulebook-file" class="group flex min-h-32 flex-col rounded-xl border border-dashed border-ink/25 bg-canvas p-4 transition" :class="intakeControlsDisabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer hover:border-copper/60 hover:bg-copper/5'">
-              <svg class="h-6 w-6 text-copper" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M14.5 2.75H6.75a2 2 0 0 0-2 2v14.5a2 2 0 0 0 2 2h10.5a2 2 0 0 0 2-2V8.75z" /><path d="M14 2.75v6h5.25M8 13h8M8 16.5h6" /></svg>
-              <span class="mt-auto font-display text-lg font-semibold">{{ t('documents.capture.pdf.title') }}</span>
-              <span class="mt-1 text-sm leading-5 text-ink/45">{{ file?.name ?? t('documents.capture.pdf.detail') }}</span>
-            </label>
-            <label for="rulebook-camera" class="flex min-h-32 flex-col rounded-xl border border-ink/12 bg-paper p-4 text-ink transition" :class="intakeControlsDisabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer hover:border-copper/60 hover:bg-copper/[0.1]'">
-              <svg class="h-6 w-6 text-copper" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4.75 7.75h3l1.25-2h6l1.25 2h3a1.75 1.75 0 0 1 1.75 1.75v8.75A1.75 1.75 0 0 1 19.25 20H4.75A1.75 1.75 0 0 1 3 18.25V9.5a1.75 1.75 0 0 1 1.75-1.75Z" /><circle cx="12" cy="13.5" r="3.25" /></svg>
-              <span class="mt-auto font-display text-lg font-semibold">{{ t('documents.capture.camera.title') }}</span>
-              <span class="mt-1 text-sm leading-5 text-ink/45">{{ t('documents.capture.camera.detail') }}</span>
-            </label>
-            <label for="rulebook-gallery" class="flex min-h-32 flex-col rounded-xl border border-ink/12 bg-paper p-4 text-ink transition" :class="intakeControlsDisabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer hover:border-indigo/50 hover:bg-indigo/[0.1]'">
-              <svg class="h-6 w-6 text-indigo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3.5" y="4" width="17" height="16" rx="2" /><circle cx="8.5" cy="9" r="1.25" /><path d="m5.5 17 4.3-4.3 3.1 3.1 2.1-2.1L18.5 17" /></svg>
-              <span class="mt-auto font-display text-lg font-semibold">{{ t('documents.capture.gallery.title') }}</span>
-              <span class="mt-1 text-sm leading-5 text-ink/45">{{ t('documents.capture.gallery.detail') }}</span>
-            </label>
-          </div>
-          <input id="rulebook-file" ref="rulebookFileInput" :disabled="intakeControlsDisabled" accept="application/pdf,.pdf" type="file" class="sr-only" @change="selectFile">
-          <input id="rulebook-camera" :disabled="intakeControlsDisabled" accept="image/*" capture="environment" type="file" class="sr-only" :aria-label="t('documents.capture.cameraAlt')" @change="addPhotographedPages">
-          <input id="rulebook-gallery" :disabled="intakeControlsDisabled" accept="image/*" multiple type="file" class="sr-only" :aria-label="t('documents.capture.galleryAlt')" @change="addPhotographedPages">
-
-          <div v-if="photographedPages.length" class="mt-4 rounded-xl border border-ink/10 bg-canvas p-3 sm:p-4">
-            <div class="flex flex-wrap items-baseline justify-between gap-2">
-              <p class="font-semibold">{{ t('documents.capture.photoCount', { count: photographedPages.length }) }}</p>
-              <p class="text-xs leading-5 text-ink/45">{{ t('documents.capture.photoHint') }}</p>
-            </div>
-            <ol class="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
-              <li v-for="(page, index) in photographedPages" :key="page.id" class="overflow-hidden rounded-lg border border-ink/10 bg-paper">
-                <img :src="page.previewUrl" :alt="t('documents.capture.photoPage', { position: index + 1 })" class="aspect-[3/4] w-full object-cover">
-                <div class="flex items-center justify-between gap-1 px-2 py-2">
-                  <span class="text-xs font-semibold text-ink/60">{{ t('documents.capture.photoPage', { position: index + 1 }) }}</span>
-                  <span class="flex gap-1">
-                    <button type="button" :disabled="intakeControlsDisabled || index === 0" class="rounded px-1.5 py-0.5 text-sm text-ink/55 hover:bg-canvas disabled:opacity-25" :aria-label="t('documents.capture.moveEarlier', { position: index + 1 })" @click="movePhotographedPage(index, -1)">←</button>
-                    <button type="button" :disabled="intakeControlsDisabled || index === photographedPages.length - 1" class="rounded px-1.5 py-0.5 text-sm text-ink/55 hover:bg-canvas disabled:opacity-25" :aria-label="t('documents.capture.moveLater', { position: index + 1 })" @click="movePhotographedPage(index, 1)">→</button>
-                    <button type="button" :disabled="intakeControlsDisabled" class="rounded px-1.5 py-0.5 text-sm text-red-700 hover:bg-red-50 disabled:opacity-25" :aria-label="t('documents.capture.remove', { position: index + 1 })" @click="removePhotographedPage(index)">×</button>
-                  </span>
-                </div>
-              </li>
-            </ol>
-          </div>
-          <p v-else-if="file" class="mt-3 text-sm text-ink/45">{{ t('documents.file.change') }} · {{ t('documents.file.limit') }}</p>
-          <p v-if="preparingPhotos" class="mt-4 rounded-lg bg-copper/8 px-4 py-3 text-sm text-copper" role="status">{{ t('documents.capture.preparing') }}</p>
-
-          <label class="mt-4 block text-sm font-semibold">{{ t('documents.title.label') }} <span class="font-normal text-ink/40">{{ t('documents.optional') }}</span>
-            <input v-model="title" :disabled="intakeControlsDisabled" maxlength="160" :placeholder="t('documents.title.placeholder')" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-4 py-3 font-normal outline-none focus:border-copper disabled:opacity-50">
-            <span v-if="photographedPages.length" class="mt-1 block text-xs font-normal leading-5 text-ink/45">{{ t('documents.title.photoHint') }}</span>
-          </label>
-
-          <details ref="officialDetails" class="mt-4 border-t border-ink/10 pt-4">
-            <summary class="cursor-pointer text-sm font-semibold text-ink/55">{{ t('documents.advanced') }}</summary>
-            <div class="mt-4 stack-y-lg">
-              <label class="block text-sm font-semibold">{{ t('documents.source.label') }}
-                <input v-model="officialSourceUrl" :disabled="intakeControlsDisabled" type="url" inputmode="url" maxlength="2000" placeholder="https://publisher.example.com/rulebook.pdf" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-4 py-3 font-normal outline-none focus:border-copper disabled:opacity-50">
-                <span class="mt-1 block text-xs font-normal leading-5 text-ink/45">{{ t('documents.source.hint') }}</span>
-              </label>
-              <div class="rounded-lg border border-indigo/15 bg-indigo/[0.035] p-4">
-                <p class="text-sm font-semibold">{{ t('documents.officialImport.title') }}</p>
-                <p class="mt-1 text-xs leading-5 text-ink/50">{{ t('documents.officialImport.detail') }}</p>
-                <label class="mt-3 flex items-start gap-3 text-sm leading-6 text-ink/65">
-                  <input v-model="officialImportRightsConfirmed" :disabled="intakeControlsDisabled" type="checkbox" class="mt-1 h-5 w-5 shrink-0 accent-indigo">
-                  <span>{{ t('documents.officialImport.consent') }}</span>
-                </label>
-                <button type="button" :disabled="!canImportOfficial" class="mt-3 min-h-11 rounded-lg bg-indigo px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40" @click="importOfficialRulebook">{{ importingOfficial ? t('documents.officialImport.importing') : t('documents.officialImport.action') }}</button>
-              </div>
-
-              <label v-if="editionOptions.length" class="block text-sm font-semibold">{{ t('documents.game.label') }}
-                <select v-model="editionId" :disabled="intakeControlsDisabled" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-4 py-3 font-normal disabled:opacity-50">
-                  <option value="">{{ t('documents.game.none') }}</option>
-                  <option v-for="edition in editionOptions" :key="edition.id" :value="edition.id">{{ edition.label }}</option>
-                </select>
-              </label>
-              <p v-else class="text-sm leading-6 text-ink/55">{{ t('documents.game.missing') }} <RouterLink :to="{ name: 'catalog' }" class="font-semibold text-indigo underline">{{ t('documents.game.organize') }}</RouterLink>{{ t('documents.game.missingTail') }}</p>
-
-              <div v-if="modelConfiguration && !visualVisionCapable" class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-950" role="status">
-                <p><span class="font-semibold">{{ t('documents.visual.warningLead') }}</span>{{ t('documents.visual.warningBody') }}</p>
-                <RouterLink :to="{ name: 'model-settings' }" class="mt-1 inline-block font-semibold text-indigo underline underline-offset-2">{{ t('documents.visual.settings') }}</RouterLink>
-              </div>
-
-              <label class="block text-sm font-semibold">{{ t('documents.learningGoal.label') }} <span class="font-normal text-ink/40">{{ t('documents.optional') }}</span>
-                <textarea v-model="learningGoal" :disabled="intakeControlsDisabled" maxlength="500" rows="3" :placeholder="t('documents.learningGoal.placeholder')" class="mt-2 w-full resize-y rounded-lg border border-ink/15 bg-canvas px-4 py-3 font-normal leading-6 outline-none focus:border-copper disabled:opacity-50" />
-                <span class="mt-1 block text-xs font-normal leading-5 text-ink/45">{{ t('documents.learningGoal.hint') }}</span>
-              </label>
-
-              <label class="block text-sm font-semibold">{{ t('documents.sourceType') }}
-                <select v-model="sourceType" :disabled="intakeControlsDisabled" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-3 py-2.5 disabled:opacity-50">
-                  <option value="BASE_RULEBOOK">{{ t('documents.type.base') }}</option>
-                  <option value="EXPANSION_RULEBOOK">{{ t('documents.type.expansion') }}</option>
-                  <option value="OFFICIAL_FAQ">{{ t('documents.type.faq') }}</option>
-                  <option value="OFFICIAL_ERRATA">{{ t('documents.type.errata') }}</option>
-                </select>
-              </label>
-            </div>
-          </details>
-
-          <button :disabled="!canUpload" class="mt-5 w-full rounded-lg bg-copper px-5 py-3.5 font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40">
-            {{ preparingVersionId ? t('documents.submitPreparing') : uploading ? t('documents.submitUploading') : t('documents.submit') }}
-          </button>
-        </form>
-
-        <section v-if="officialImportJob" class="mt-5 rounded-xl border border-copper/20 bg-paper p-5 text-left" role="status" aria-live="polite">
-          <div class="flex items-start justify-between gap-4">
-            <div class="min-w-0">
-              <p class="tabletop-kicker">{{ officialImportCopy.title }}</p>
-              <h2 class="mt-1 truncate font-display text-xl font-semibold">{{ officialImportJob.title }}</h2>
-              <p class="mt-2 text-sm font-semibold text-copper">{{ officialImportStage() }}</p>
-              <p class="mt-1 text-xs leading-5 text-ink/50">{{ officialImportCopy.safe }}</p>
-            </div>
-            <span v-if="officialImportBytes()" class="shrink-0 text-xs font-semibold text-indigo">{{ officialImportBytes() }}</span>
-          </div>
-          <div v-if="officialImportProgress() !== null" class="mt-4 h-2 overflow-hidden rounded-full bg-ink/10" :aria-label="`${officialImportProgress()}%`">
-            <div class="h-full rounded-full bg-copper transition-[width]" :style="{ width: `${officialImportProgress()}%` }" />
-          </div>
-          <div v-else-if="officialImportJob.stage !== 'COMPLETED' && officialImportJob.stage !== 'FAILED'" class="mt-4 flex gap-1.5" aria-hidden="true">
-            <span v-for="index in 6" :key="index" class="h-1.5 flex-1 rounded-full" :class="index <= ['QUEUED', 'CONNECTING', 'DOWNLOADING', 'COMPRESSING', 'VERIFYING_FILE', 'SAVING'].indexOf(officialImportJob.stage) + 1 ? 'bg-copper' : 'bg-ink/10'" />
-          </div>
-          <p class="mt-3 border-t border-ink/8 pt-3 text-xs text-ink/45">{{ officialImportCopy.background }}</p>
-        </section>
-
-        <p v-if="message && !preparingVersionId" class="mt-5 rounded-lg bg-indigo/5 px-4 py-3 text-sm text-indigo" aria-live="polite">{{ message }}</p>
-        <div v-if="preparingVersionId" class="mt-5 rounded-xl border border-indigo/15 bg-indigo/5 p-4 text-left" role="status" aria-live="polite">
-          <div class="flex items-start justify-between gap-4">
-            <div>
-              <p class="font-semibold text-ink">{{ t('documents.organizing') }}</p>
-              <p class="mt-1 text-sm leading-6 text-ink/60">{{ message }}</p>
-            </div>
-            <span class="shrink-0 text-xs font-medium text-indigo">{{ preparationElapsedLabel() }}</span>
-          </div>
-          <p class="mt-3 border-t border-indigo/10 pt-3 text-xs leading-5 text-ink/45">{{ t('documents.background') }}</p>
-        </div>
-        <p v-if="errorMessage" class="mt-5 rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">{{ errorMessage }}</p>
-        <div v-if="processingVersionId" class="mx-auto mt-4 h-1.5 max-w-md overflow-hidden rounded-full bg-ink/10">
-          <div class="h-full bg-copper transition-all" :style="{ width: `${progress[processingVersionId]?.percentage ?? 0}%` }" />
-        </div>
+        <RulebookStatusCard
+          :official-import-job="officialImportJob"
+          :official-import-copy="officialImportCopy"
+          :retrying-official-import="retryingOfficialImport"
+          :message="message"
+          :preparing-version-id="preparingVersionId"
+          :preparation-elapsed-label="preparationElapsedLabel()"
+          :error-message="errorMessage"
+          :processing-version-id="processingVersionId"
+          :processing-percentage="progress[processingVersionId]?.percentage ?? 0"
+          @choose-source="chooseAnotherOfficialSource"
+          @use-local-upload="useLocalUploadAfterOfficialFailure"
+          @retry-original="retryOriginalOfficialImport"
+        />
       </section>
 
-      <section class="mt-14 border-t border-ink/10 pt-8">
-        <div class="flex items-center justify-between gap-4">
-          <div>
-            <h2 ref="documentListHeading" tabindex="-1" class="font-display text-2xl font-semibold outline-none">{{ t('documents.list.title') }}</h2>
-            <p class="mt-1 text-sm text-ink/45">{{ t('documents.list.description') }}</p>
-          </div>
-          <RouterLink :to="{ name: 'catalog' }" class="shrink-0 text-sm font-semibold text-indigo">{{ t('documents.list.manage') }}</RouterLink>
-        </div>
-        <p v-if="loading" class="mt-5 text-sm text-ink/45">{{ t('documents.list.loading') }}</p>
-        <div v-else-if="documents.length === 0" class="mt-5 rounded-xl border border-dashed border-ink/20 p-8 text-center">
-          <p class="font-semibold">{{ t('documents.empty.title') }}</p>
-          <p class="mt-2 text-sm text-ink/45">{{ t('documents.empty.description') }}</p>
-        </div>
-        <ul v-else class="mt-5 divide-y divide-ink/10 border-y border-ink/10">
-          <li v-for="entry in documents" :key="entry.document.id" class="py-5">
-            <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-              <div class="min-w-0">
-                <p class="truncate font-semibold">{{ entry.document.title }}</p>
-                <p class="mt-1 text-sm text-ink/45">
-                  {{ documentStatusLabel(entry.latestVersion.status) }} · {{ Math.ceil(entry.latestVersion.size / 1024) }} KiB
-                </p>
-              </div>
-              <div class="flex shrink-0 flex-wrap gap-2">
-                <button v-if="entry.latestVersion.status === 'READY'" type="button" :disabled="bggSuggestionState(entry.document.id)?.status === 'loading' || Boolean(deletingDocumentId)" class="min-h-11 rounded-lg border border-indigo/20 px-4 py-2.5 text-sm font-semibold text-indigo hover:border-indigo/50 disabled:opacity-40" @click="loadBggSuggestions(entry.document.id)">{{ bggSuggestionState(entry.document.id)?.status === 'loading' ? t('documents.bgg.loading') : t('documents.bgg.open') }}</button>
-                <RouterLink v-if="entry.latestVersion.status === 'READY'" :to="{ name: 'rulebook-reader', params: { versionId: entry.latestVersion.id } }" class="inline-flex min-h-11 items-center rounded-lg bg-indigo px-4 py-2.5 text-sm font-semibold text-white">{{ t('documents.read') }}</RouterLink>
-                <button v-if="entry.latestVersion.status === 'READY'" :disabled="Boolean(preparingVersionId) || Boolean(deletingDocumentId)" class="rounded-lg border border-ink/15 px-4 py-2.5 text-sm font-semibold hover:border-copper/50 disabled:opacity-40" @click="startLesson(entry.latestVersion.id).catch((error: unknown) => errorMessage = error instanceof Error ? error.message : t('documents.error'))">{{ t('documents.start') }}</button>
-                <button type="button" :disabled="Boolean(preparingVersionId) || Boolean(deletingDocumentId)" class="rounded-lg px-3 py-2.5 text-sm font-semibold text-ink/45 hover:bg-red-50 hover:text-red-700 disabled:opacity-40" @click="requestDeleteRulebook(entry)">{{ deletingDocumentId === entry.document.id ? t('documents.deleting') : t('documents.delete') }}</button>
-              </div>
-            </div>
-            <div v-if="bggSuggestionState(entry.document.id)" class="mt-4 rounded-xl border border-indigo/15 bg-indigo/[0.035] p-4">
-              <p v-if="bggSuggestionState(entry.document.id)?.status === 'loading'" class="text-sm text-ink/55" role="status">{{ t('documents.bgg.loadingDetail') }}</p>
-              <div v-else-if="bggSuggestionState(entry.document.id)?.status === 'error'" role="alert">
-                <p class="text-sm leading-6 text-red-700">{{ t('documents.bgg.error') }}</p>
-                <button type="button" class="mt-3 min-h-11 rounded-lg border border-red-200 px-4 py-2 text-sm font-semibold text-red-700" @click="loadBggSuggestions(entry.document.id)">{{ t('documents.bgg.retry') }}</button>
-              </div>
-              <div v-else-if="bggSuggestionState(entry.document.id)?.candidates.length === 0">
-                <p class="text-sm font-semibold">{{ t('documents.bgg.noneTitle') }}</p>
-                <p class="mt-1 text-sm leading-6 text-ink/50">{{ t('documents.bgg.noneDetail') }}</p>
-              </div>
-              <template v-else>
-                <p class="text-sm font-semibold">{{ bggSuggestionState(entry.document.id)!.candidates.length === 1 ? t('documents.bgg.oneTitle') : t('documents.bgg.manyTitle', { count: bggSuggestionState(entry.document.id)!.candidates.length }) }}</p>
-                <p class="mt-1 text-xs leading-5 text-ink/50">{{ t('documents.bgg.review') }}</p>
-                <ul class="mt-4 grid gap-3 lg:grid-cols-2">
-                  <li v-for="candidate in bggSuggestionState(entry.document.id)!.candidates" :key="candidate.bggId" class="flex gap-3 rounded-lg border bg-paper p-3" :class="bggSuggestionState(entry.document.id)?.selectedBggId === candidate.bggId ? 'border-indigo/50 ring-1 ring-indigo/20' : 'border-ink/10'">
-                    <img v-if="candidate.coverUrl" :src="candidate.coverUrl" :alt="t('documents.bgg.coverAlt', { name: candidate.name })" class="h-24 w-20 shrink-0 rounded object-contain" loading="lazy">
-                    <div class="min-w-0 flex-1">
-                      <div class="flex flex-wrap items-center gap-2">
-                        <p class="font-semibold">{{ candidate.name }}<span v-if="candidate.publicationYear" class="font-normal text-ink/45"> · {{ candidate.publicationYear }}</span></p>
-                        <span v-if="candidate.normalizedTitleMatch" class="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-800">{{ t('documents.bgg.titleMatch') }}</span>
-                      </div>
-                      <p v-if="candidatePlayerLabel(candidate) || candidate.playingTimeMinutes" class="mt-1 text-xs text-ink/50">
-                        {{ [candidatePlayerLabel(candidate), candidate.playingTimeMinutes ? t('documents.bgg.minutes', { minutes: candidate.playingTimeMinutes }) : ''].filter(Boolean).join(' · ') }}
-                      </p>
-                      <div class="mt-3 flex flex-wrap items-center gap-3">
-                        <button type="button" class="min-h-11 rounded-lg bg-indigo px-3 py-2 text-sm font-semibold text-white" :aria-pressed="bggSuggestionState(entry.document.id)?.selectedBggId === candidate.bggId" @click="selectBggSuggestion(entry.document.id, candidate.bggId)">{{ bggSuggestionState(entry.document.id)?.selectedBggId === candidate.bggId ? t('documents.bgg.selected') : t('documents.bgg.select') }}</button>
-                        <a :href="candidate.bggUrl" target="_blank" rel="noopener noreferrer" class="py-2 text-xs font-semibold text-indigo underline underline-offset-2">{{ t('documents.bgg.view') }}</a>
-                      </div>
-                    </div>
-                  </li>
-                </ul>
-                <div v-if="bggSuggestionState(entry.document.id)?.selectedBggId" class="mt-4 rounded-lg bg-indigo/8 px-3 py-3">
-                  <p class="text-sm leading-6 text-indigo">{{ t('documents.bgg.handoff') }}</p>
-                  <button v-if="bggSuggestionState(entry.document.id)?.linkStatus !== 'linked'" type="button" :disabled="bggSuggestionState(entry.document.id)?.linkStatus === 'confirming'" class="mt-3 min-h-11 rounded-lg bg-ink px-4 py-2 text-sm font-semibold text-paper disabled:opacity-50" @click="confirmBggSuggestion(entry.document.id)">{{ bggSuggestionState(entry.document.id)?.linkStatus === 'confirming' ? t('documents.bgg.confirming') : t('documents.bgg.confirm') }}</button>
-                  <p v-if="bggSuggestionState(entry.document.id)?.linkStatus === 'error'" class="mt-2 text-sm text-red-700" role="alert">{{ t('documents.bgg.linkError') }}</p>
-                  <p v-if="bggSuggestionState(entry.document.id)?.linkStatus === 'linked'" class="mt-2 text-sm font-semibold text-emerald-800" role="status">{{ bggSuggestionState(entry.document.id)?.linkAlreadyImported ? t('documents.bgg.reused') : t('documents.bgg.linked') }}</p>
-                </div>
-                <p class="mt-4 text-[11px] text-ink/40">{{ t('documents.bgg.attribution') }}</p>
-              </template>
-            </div>
-          </li>
-        </ul>
-      </section>
+      <RulebookDocumentList
+        ref="documentList"
+        :loading="loading"
+        :documents="documents"
+        :suggestion-states="bggSuggestionStates"
+        :deleting-document-id="deletingDocumentId"
+        :preparing-version-id="preparingVersionId"
+        @load-suggestions="loadBggSuggestions"
+        @select-suggestion="selectBggSuggestion"
+        @confirm-suggestion="confirmBggSuggestion"
+        @start-lesson="startLesson($event).catch((error: unknown) => errorMessage = error instanceof Error ? error.message : t('documents.error'))"
+        @request-delete="requestDeleteRulebook"
+      />
 
       <DestructiveActionDialog
         :open="Boolean(documentToDelete)"

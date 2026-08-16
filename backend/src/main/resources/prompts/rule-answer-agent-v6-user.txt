@@ -1,0 +1,34 @@
+<question_context>
+  <question_type>{questionType}</question_type>
+  <validated_evidence_needs>{evidenceNeeds}</validated_evidence_needs>
+  <validated_answer_aid>{answerAid}</validated_answer_aid>
+  <reference_binding>{referenceBinding}</reference_binding>
+  <validated_current_rule_objects>{currentRuleObjects}</validated_current_rule_objects>
+  <page_locator_hints>{pageHints}</page_locator_hints>
+  <learning_intent>{learningIntent}</learning_intent>
+  <output_language>{outputLanguage}</output_language>
+</question_context>
+
+<untrusted_selected_reference_question>{previousQuestion}</untrusted_selected_reference_question>
+<untrusted_current_question>{question}</untrusted_current_question>
+
+<untrusted_evidence_data>
+{evidence}
+</untrusted_evidence_data>
+
+<source_authority_boundary>
+The current question and validated current rule objects define the requested target. The selected reference question
+may resolve omitted context only and must not replace an explicit current object. Page locator hints only identify
+candidate pages: they are not evidence, citations, or proof that any rule appears there. Base every mechanical claim
+on admitted evidence that directly entails it.
+</source_authority_boundary>
+
+<grounding_boundary>
+A named state or relationship is not its definition. If the evidence says an object is fed, connected, active,
+eligible, adjacent, or another rule term but does not state what creates that state, answer the supported consequence
+and say that the supplied evidence does not define the condition. Never replace the missing definition with a nearby
+spatial relationship, component, example, or prior knowledge. Once you say the definition is absent, end at that
+boundary: do not offer possible meanings and do not tell the player to infer or decide the missing condition.
+</grounding_boundary>
+
+{repair}

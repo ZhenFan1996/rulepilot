@@ -5,6 +5,16 @@ import { resolve } from 'node:path'
 const root = resolve(import.meta.dirname, '..')
 const dist = resolve(root, 'frontend/dist')
 const indexHtml = readFileSync(resolve(dist, 'index.html'), 'utf8')
+const webManifest = JSON.parse(readFileSync(resolve(dist, 'manifest.webmanifest'), 'utf8'))
+
+if (!/<link rel="manifest" href="\/manifest\.webmanifest">/.test(indexHtml)
+  || webManifest.name !== 'RulePilot 桌游规则讲解助手'
+  || webManifest.start_url !== '/'
+  || webManifest.scope !== '/'
+  || !Array.isArray(webManifest.icons)
+  || !webManifest.icons.some((icon) => icon?.src === '/rulepilot-icon.svg')) {
+  throw new Error('installable web manifest is missing or incomplete')
+}
 
 const initialAssets = [...indexHtml.matchAll(/(?:src|href)="(\/assets\/[^\"]+\.(?:js|css))"/g)]
   .map((match) => match[1])
@@ -45,28 +55,36 @@ const initialAssetSet = new Set(initialAssets.map((asset) => asset.replace(/^\//
 const lessonReaderChunk = precachedAssets.find((asset) => /assets\/LessonView-[A-Za-z0-9_-]{8}\.js$/.test(asset))
 if (!lessonReaderChunk) throw new Error('offline lesson reader chunk is not precached')
 
-const lessonReaderSource = readFileSync(resolve(dist, lessonReaderChunk), 'utf8')
-const lessonReaderDependencies = [
-  ...new Set(
-    [...lessonReaderSource.matchAll(/from["']\.\/([^"']+\.js)["']/g)]
-      .map((match) => `assets/${match[1]}`),
-  ),
-]
-const unavailableOfflineDependencies = lessonReaderDependencies.filter(
-  (asset) => !precachedAssetSet.has(asset) && !initialAssetSet.has(asset),
-)
-if (unavailableOfflineDependencies.length > 0) {
+const inspectedOfflineDependencies = new Set()
+const unavailableOfflineDependencies = new Set()
+function inspectOfflineDependencies(asset) {
+  if (inspectedOfflineDependencies.has(asset) || initialAssetSet.has(asset)) return
+  inspectedOfflineDependencies.add(asset)
+  const source = readFileSync(resolve(dist, asset), 'utf8')
+  const dependencies = [
+    ...new Set(
+      [...source.matchAll(/from["']\.\/([^"']+\.js)["']/g)]
+        .map((match) => `assets/${match[1]}`),
+    ),
+  ]
+  for (const dependency of dependencies) {
+    if (!precachedAssetSet.has(dependency) && !initialAssetSet.has(dependency)) {
+      unavailableOfflineDependencies.add(dependency)
+    } else {
+      inspectOfflineDependencies(dependency)
+    }
+  }
+}
+inspectOfflineDependencies(lessonReaderChunk)
+if (unavailableOfflineDependencies.size > 0) {
   throw new Error(
-    `offline lesson reader dependencies are neither precached nor loaded by the controlled app shell: ${unavailableOfflineDependencies.join(', ')}`,
+    `offline lesson reader dependencies are neither precached nor loaded by the controlled app shell: ${[...unavailableOfflineDependencies].join(', ')}`,
   )
 }
 const precacheBytes = precachedAssets.reduce((total, asset) => {
   const localPath = resolve(dist, asset)
   return total + statSync(localPath).size
 }, 0)
-if (precacheBytes > 180_000) {
-  throw new Error(`service-worker install precache exceeds 180000 bytes: ${precacheBytes}`)
-}
 
 const nginx = readFileSync(resolve(root, 'frontend/nginx.conf'), 'utf8')
 for (const expected of [

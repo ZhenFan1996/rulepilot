@@ -9,8 +9,12 @@ import com.rulepilot.teaching.domain.LessonQualityReport.CheckType;
 import com.rulepilot.teaching.domain.LessonQualityReport.OverallStatus;
 import com.rulepilot.teaching.domain.LessonQualityReport.QualityCheck;
 import com.rulepilot.teaching.domain.TeachingPlan;
+import java.text.Normalizer;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
+import java.util.Set;
 import org.springframework.stereotype.Component;
 
 @Component
@@ -19,6 +23,13 @@ public class LessonQualityEvaluator {
     public LessonQualityReport evaluate(TeachingPlan plan, IllustratedLesson lesson) {
         List<QualityCheck> checks = new ArrayList<>();
         checks.add(requiredCoverage(plan, lesson));
+        if (plan.sections().stream().anyMatch(section -> section.coverageTags().contains("source_coverage")
+                || section.coverageTags().contains(TeachingSourceCoverageContract.CONTRACT_VERSION_TAG))) {
+            checks.add(sourceRuleGroupCoverage(plan, lesson));
+        }
+        if (plan.sections().stream().anyMatch(section -> section.coverageTags().contains("source_dependency"))) {
+            checks.add(sourceAvailability(plan));
+        }
         checks.add(citationSupport(lesson));
         checks.add(setupExecutability(lesson));
         checks.add(endAndScoring(lesson));
@@ -54,11 +65,12 @@ public class LessonQualityEvaluator {
         return new QualityCheck(
                 CheckType.REQUIRED_SECTION_COVERAGE,
                 status,
-                "必需章节 " + available + " / " + required,
+                "必需章节已核对 " + reviewed + " / " + required,
                 available < required
-                        ? "仍有必需章节缺少可引用的规则证据。"
+                        ? "有 " + (required - available) + " 个必需章节缺少可引用的规则证据。"
                         : reviewed < required
-                                ? "完整基础讲解已经可读，其中 " + reviewed + " 章已完成二次核对。"
+                                ? available + " 个必需章节已有引用，但还有 " + (required - reviewed)
+                                        + " 个未完成独立事实核对；不能确认整套讲解可以独立开桌。"
                                 : "所有必需章节都有规则证据并已完成核对。");
     }
 
@@ -78,6 +90,166 @@ public class LessonQualityEvaluator {
                 cited + " / " + supportedSteps.size() + " 个有规则内容的步骤带来源页码；目标为至少 95%。");
     }
 
+    private QualityCheck sourceRuleGroupCoverage(TeachingPlan plan, IllustratedLesson lesson) {
+        boolean sourceContract = plan.sections().stream()
+                .anyMatch(section -> section.coverageTags()
+                        .contains(TeachingSourceCoverageContract.CONTRACT_VERSION_TAG));
+        List<TeachingPlan.PlannedSection> sourceSections = plan.sections().stream()
+                .filter(section -> sourceContract
+                        ? ownsContractSlot(section)
+                        : section.coverageTags().contains("source_coverage"))
+                .toList();
+        long required = sourceSections.stream()
+                .mapToLong(section -> section.retrievalQueries().size())
+                .sum();
+        long available = sourceSections.stream()
+                .mapToLong(planned -> coveredSourceGroups(planned, lesson, false))
+                .sum();
+        long reviewed = sourceSections.stream()
+                .mapToLong(planned -> coveredSourceGroups(planned, lesson, true))
+                .sum();
+        boolean sourceInventoryUnavailable = sourceContract && plan.sections().stream()
+                .anyMatch(section -> section.coverageTags().contains(
+                                TeachingSourceCoverageContract.INCOMPLETE_INVENTORY_TAG)
+                        || section.coverageTags().contains(TeachingSourceCoverageContract.UNSOURCED_TAG));
+        CheckStatus status = sourceInventoryUnavailable
+                ? CheckStatus.FAIL
+                : available < required
+                ? CheckStatus.FAIL
+                : reviewed < required ? CheckStatus.NOT_EVALUATED : CheckStatus.PASS;
+        return new QualityCheck(
+                CheckType.SOURCE_RULE_GROUP_COVERAGE,
+                status,
+                "来源规则组已核对 " + reviewed + " / " + required,
+                sourceInventoryUnavailable
+                        ? "来源义务清单仍不完整，或至少一个开局、行动、结束、计分、必要例外没有可用来源；"
+                                + "即使已有章节带引用，也不能把整局标为完整。"
+                        : available < required
+                        ? "有 " + (required - available) + " 个从规则页清点出的规则组，尚未逐项在带原始标识和"
+                                + "来源页的讲解步骤中出现；不能把整章通过自动算成全部规则组已核对。"
+                        : reviewed < required
+                                ? available + " 个来源规则组已有引用，但还有 " + (required - reviewed)
+                                        + " 个未通过逐项完整证据窗口的独立核对；"
+                                        + "不能确认全部可读规则组均已进入讲解。"
+                                : "每个从规则页清点出的可读规则组，都以原始标识和同页引用进入讲解并通过独立核对。");
+    }
+
+    private boolean ownsContractSlot(TeachingPlan.PlannedSection section) {
+        return java.util.Arrays.stream(com.rulepilot.teaching.TeachingOutlineModel.SourceCoverageRole.values())
+                .map(TeachingSourceCoverageContract::roleTag)
+                .anyMatch(section.coverageTags()::contains);
+    }
+
+    private long coveredSourceGroups(
+            TeachingPlan.PlannedSection planned,
+            IllustratedLesson lesson,
+            boolean requireReview) {
+        LessonSection section = lesson.sections().stream()
+                .filter(candidate -> candidate.topicKey().equals(planned.topicKey()))
+                .findFirst()
+                .orElse(null);
+        if (section == null
+                || !hasCitedEvidence(section)
+                || (requireReview && section.evidenceStatus() != EvidenceStatus.SUPPORTED)) {
+            return 0;
+        }
+        return planned.retrievalQueries().stream()
+                .filter(query -> section.steps().stream().anyMatch(step -> {
+                    if (step.sourcePages().isEmpty()) return false;
+                    if (!planned.sourcePageNumbers().isEmpty()
+                            && step.sourcePages().stream().noneMatch(planned.sourcePageNumbers()::contains)) {
+                        return false;
+                    }
+                    String visibleStep = normalized(step.heading() + " " + step.text());
+                    return containsSourceIdentifier(visibleStep, normalized(query));
+                }))
+                .count();
+    }
+
+    private boolean containsSourceIdentifier(String text, String identifier) {
+        if (identifier.isBlank()) return false;
+        boolean ascii = identifier.codePoints().allMatch(codePoint -> codePoint < 128);
+        if (!ascii) return text.contains(identifier);
+        int firstWordCharacter = java.util.stream.IntStream.range(0, identifier.length())
+                .filter(index -> Character.isLetterOrDigit(identifier.charAt(index)))
+                .findFirst()
+                .orElse(-1);
+        int lastWordCharacter = java.util.stream.IntStream.iterate(
+                        identifier.length() - 1, index -> index >= 0, index -> index - 1)
+                .filter(index -> Character.isLetterOrDigit(identifier.charAt(index)))
+                .findFirst()
+                .orElse(-1);
+        if (firstWordCharacter < 0 || lastWordCharacter < 0) return text.contains(identifier);
+        int from = 0;
+        while (from <= text.length() - identifier.length()) {
+            int match = text.indexOf(identifier, from);
+            if (match < 0) return false;
+            int left = match + firstWordCharacter - 1;
+            int right = match + lastWordCharacter + 1;
+            boolean leftBoundary = left < 0 || !Character.isLetterOrDigit(text.charAt(left));
+            boolean rightBoundary = right >= text.length() || !Character.isLetterOrDigit(text.charAt(right));
+            if (leftBoundary && rightBoundary) return true;
+            from = match + 1;
+        }
+        return false;
+    }
+
+    private QualityCheck sourceAvailability(TeachingPlan plan) {
+        List<TeachingPlan.PlannedSection> dependencies = plan.sections().stream()
+                .filter(section -> section.coverageTags().contains("source_dependency"))
+                .toList();
+        List<String> sources = dependencies.stream()
+                .flatMap(section -> section.retrievalQueries().stream()
+                        .map(title -> sourceReference(section.sourcePageNumbers(), title)))
+                .distinct()
+                .toList();
+        long sourceCount = dependencies.stream()
+                .flatMap(section -> section.retrievalQueries().stream())
+                .map(this::normalized)
+                .distinct()
+                .count();
+        Set<String> missingResponsibilities = new LinkedHashSet<>();
+        dependencies.stream()
+                .flatMap(section -> section.coverageTags().stream())
+                .filter(tag -> tag.startsWith("missing_") && tag.endsWith("_source"))
+                .map(tag -> tag.substring("missing_".length(), tag.length() - "_source".length()))
+                .map(this::responsibilityLabel)
+                .forEach(missingResponsibilities::add);
+        String missingDetail = missingResponsibilities.isEmpty()
+                ? "当前文档不包含这些被引用资料中的具体规则。"
+                : "当前文档不包含" + String.join("、", missingResponsibilities) + "。";
+        return new QualityCheck(
+                CheckType.SOURCE_AVAILABILITY,
+                CheckStatus.FAIL,
+                "当前规则书还缺 " + sourceCount + " 份被明确引用的资料",
+                String.join("；", sources) + "；这些名称只证明来源依赖存在，" + missingDetail
+                        + "需要合法补充相应资料后才能核对并补齐讲解。");
+    }
+
+    private String sourceReference(List<Integer> pages, String title) {
+        String pageLabel = pages.isEmpty()
+                ? "来源页"
+                : "第 " + pages.stream().map(String::valueOf).collect(java.util.stream.Collectors.joining("、")) + " 页";
+        return pageLabel + "指向 " + title;
+    }
+
+    private String responsibilityLabel(String tag) {
+        return switch (tag) {
+            case "setup" -> "开局步骤";
+            case "core_loop" -> "核心回合流程";
+            case "end" -> "结束规则";
+            case "scoring" -> "计分规则";
+            default -> "对应规则";
+        };
+    }
+
+    private String normalized(String value) {
+        return Normalizer.normalize(value == null ? "" : value, Normalizer.Form.NFKC)
+                .toLowerCase(Locale.ROOT)
+                .replaceAll("\\s+", " ")
+                .strip();
+    }
+
     private QualityCheck setupExecutability(IllustratedLesson lesson) {
         var setup = section(lesson, "setup");
         boolean executable = setup != null
@@ -88,12 +260,15 @@ public class LessonQualityEvaluator {
         return new QualityCheck(
                 CheckType.SETUP_EXECUTABILITY,
                 !executable ? CheckStatus.FAIL : reviewed ? CheckStatus.PASS : CheckStatus.NOT_EVALUATED,
-                executable ? "Setup 具备可执行步骤" : "Setup 尚不可执行",
+                !executable
+                        ? "Setup 尚不可执行"
+                        : reviewed ? "Setup 可执行性已核对" : "Setup 有引用，待核对可执行性",
                 !executable
                         ? "需要补充并引用按顺序可执行的开局布置步骤。"
                         : reviewed
                                 ? "Setup 包含有页码依据且已核对的执行步骤。"
-                                : "Setup 已有带页码的执行步骤，可以使用，细节仍在二次核对。");
+                                : "Setup 步骤带有来源页码，但尚未完成独立事实与缺项核对；"
+                                        + "不能确认仅照这些步骤即可完成开局。");
     }
 
     private QualityCheck endAndScoring(IllustratedLesson lesson) {
@@ -110,11 +285,14 @@ public class LessonQualityEvaluator {
         return new QualityCheck(
                 CheckType.END_AND_SCORING_COMPLETENESS,
                 !missing.isEmpty() ? CheckStatus.FAIL : reviewed ? CheckStatus.PASS : CheckStatus.NOT_EVALUATED,
-                missing.isEmpty() ? "结束与计分完整" : "结束与计分仍有缺口",
+                !missing.isEmpty()
+                        ? "结束与计分仍有缺口"
+                        : reviewed ? "结束与计分已核对" : "结束与计分待核对",
                 missing.isEmpty()
                         ? reviewed
-                                ? "结束条件、最终计分和同分处理均有证据并已核对。"
-                                : "结束条件与最终计分已有引用，可以使用，细节仍在二次核对。"
+                                ? "结束条件与最终计分均有证据并已完成独立核对。"
+                                : "结束与计分章节已有引用，但尚未完成独立事实与缺项核对；"
+                                        + "不能确认聚合方式、例外或适用的同分规则已经完整。"
                         : "缺少：" + missing.stream().map(this::label).collect(java.util.stream.Collectors.joining("、")));
     }
 

@@ -97,6 +97,87 @@ class TeachingPlanFactoryTest {
                 .contains(List.of("setup"), List.of("core_loop"), List.of("end", "scoring"));
     }
 
+    @Test
+    void preservesUpToEightSourceDerivedRuleGroupsAsRequiredSectionIntents() {
+        List<String> ruleGroups = List.of(
+                "move", "build", "trade", "copy", "recruit", "produce", "score", "pass");
+        var outline = new OutlineDraft(
+                "Game",
+                "Premise",
+                List.of(new TopicDraft(
+                        "all-rules",
+                        "Available actions",
+                        "Teach every visibly distinct action on this source page.",
+                        true,
+                        true,
+                        ruleGroups,
+                        List.of("setup", "core_loop", "end", "scoring"))));
+
+        var plan = new TeachingPlanFactory().create(UUID.randomUUID(), "player", outline);
+
+        assertThat(plan.sections()).singleElement().satisfies(section ->
+                assertThat(section.retrievalQueries()).containsExactlyElementsOf(ruleGroups));
+    }
+
+    @Test
+    void acceptsAnExplicitMissingSourceAsAnUnmetCoreObligationWithoutRelabelingItAsCovered() {
+        var outline = new OutlineDraft(
+                "Game",
+                "Premise",
+                List.of(
+                        new TopicDraft(
+                                "missing-setup-source",
+                                "当前规则书还需要的资料",
+                                "The current source points to another setup guide.",
+                                true,
+                                true,
+                                List.of("Quick Start Guide"),
+                                List.of("source_dependency", "missing_setup_source"),
+                                List.of(1)),
+                        topic("actions", "Take actions", false, List.of("core_loop")),
+                        topic("finish", "Finish and score", false, List.of("end", "scoring"))));
+
+        var plan = new TeachingPlanFactory().create(UUID.randomUUID(), "player", outline);
+
+        assertThat(plan.sections().getFirst().coverageTags())
+                .containsExactly("source_dependency", "missing_setup_source")
+                .doesNotContain("setup");
+    }
+
+    @Test
+    void rejectsAMissingSourceMarkerThatHasNoSourceDependencyTopic() {
+        var outline = new OutlineDraft(
+                "Game",
+                "Premise",
+                List.of(
+                        topic("unsupported-marker", "Missing setup", false, List.of("missing_setup_source")),
+                        topic("actions", "Take actions", false, List.of("core_loop")),
+                        topic("finish", "Finish and score", false, List.of("end", "scoring"))));
+
+        assertThatThrownBy(() -> new TeachingPlanFactory().create(UUID.randomUUID(), "player", outline))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("omitted setup");
+    }
+
+    @Test
+    void rejectsASourceDependencyThatAlsoClaimsTheMissingProcedureIsCovered() {
+        var outline = new OutlineDraft(
+                "Game",
+                "Premise",
+                List.of(
+                        topic(
+                                "contradictory-source",
+                                "Missing setup",
+                                true,
+                                List.of("source_dependency", "missing_setup_source", "setup")),
+                        topic("actions", "Take actions", false, List.of("core_loop")),
+                        topic("finish", "Finish and score", false, List.of("end", "scoring"))));
+
+        assertThatThrownBy(() -> new TeachingPlanFactory().create(UUID.randomUUID(), "player", outline))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("source dependency cannot claim covered core rules");
+    }
+
     private TopicDraft topic(String key, String title, boolean visualEvidenceRecommended, List<String> tags) {
         return new TopicDraft(
                 key, title, "Explain " + title, true, visualEvidenceRecommended, List.of(title), tags);

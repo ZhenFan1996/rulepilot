@@ -10,7 +10,10 @@ import { LOGIN_REQUIRED_EVENT, notifySessionCleared } from '@/lib/authSession'
 import { clearBackgroundWorkStorage } from '@/lib/backgroundTeachingStatus'
 import { useLocale } from '@/lib/locale'
 
-withDefaults(defineProps<{ immersive?: boolean }>(), { immersive: false })
+withDefaults(defineProps<{ immersive?: boolean; loginActionOwned?: boolean }>(), {
+  immersive: false,
+  loginActionOwned: false,
+})
 defineSlots<{ default(props: { username: string }): unknown }>()
 const emit = defineEmits<{
   sessionIdentity: [username: string]
@@ -99,10 +102,11 @@ function clearSessionIdentity() {
   emit('sessionIdentity', '')
 }
 
-function showLoginReminder() {
+function showLoginReminder(event: Event) {
   sessionController.abort()
   clearSessionIdentity()
-  loginReminderVisible.value = true
+  loginReminderVisible.value = !(event instanceof CustomEvent
+    && (event.detail as { showReminder?: unknown } | null)?.showReminder === false)
 }
 
 function updateBackgroundWorkStatus(activeCount: number, finishedCount: number) {
@@ -195,7 +199,7 @@ onBeforeUnmount(() => {
           <span aria-hidden="true">{{ isDark ? '☀' : '◐' }}</span>
         </button>
         <button v-if="username" class="mt-1 flex min-h-10 w-full items-center rounded-lg px-3 text-sm text-[#f5f0e8]/55 hover:bg-white/7 hover:text-[#f5f0e8]" @click="logout">{{ t('shell.signOut') }}</button>
-        <RouterLink v-else :to="loginTarget" class="mt-1 flex min-h-10 items-center rounded-lg px-3 text-sm text-[#f5f0e8]/55 hover:bg-white/7 hover:text-[#f5f0e8]">{{ t('shell.signIn') }}</RouterLink>
+        <RouterLink v-else-if="!loginActionOwned" :to="loginTarget" class="mt-1 flex min-h-10 items-center rounded-lg px-3 text-sm text-[#f5f0e8]/55 hover:bg-white/7 hover:text-[#f5f0e8]">{{ t('shell.signIn') }}</RouterLink>
       </div>
     </aside>
 
@@ -203,7 +207,7 @@ onBeforeUnmount(() => {
       <RouterLink :to="{ name: 'home' }" :aria-label="t('shell.homeAria')"><ProductMark /></RouterLink>
       <div class="flex min-w-0 items-center gap-1.5">
         <RouterLink v-if="username" :to="{ name: 'account' }" class="max-w-16 truncate text-sm font-semibold text-ink/60 max-[480px]:hidden">{{ username }}</RouterLink>
-        <RouterLink v-else :to="loginTarget" class="inline-flex min-h-11 items-center rounded-lg px-2 text-sm font-semibold text-indigo">{{ t('shell.signIn') }}</RouterLink>
+        <RouterLink v-else-if="!loginActionOwned" :to="loginTarget" class="inline-flex min-h-11 items-center rounded-lg px-2 text-sm font-semibold text-indigo">{{ t('shell.signIn') }}</RouterLink>
         <button
           v-if="username && !immersive"
           type="button"
@@ -225,7 +229,7 @@ onBeforeUnmount(() => {
     </header>
 
     <main id="main-content" tabindex="-1" class="app-main min-h-screen pb-20 lg:pb-0" :aria-label="t('shell.mainContent')">
-      <aside v-if="loginReminderVisible" class="border-b border-copper/25 bg-copper/10 px-4 py-3 sm:px-8" role="status">
+      <aside v-if="loginReminderVisible && !loginActionOwned" class="border-b border-copper/25 bg-copper/10 px-4 py-3 sm:px-8" role="status">
         <div class="mx-auto flex max-w-7xl items-start gap-3">
           <div class="min-w-0 flex-1">
             <p class="font-semibold">{{ t('shell.loginReminder.title') }}</p>

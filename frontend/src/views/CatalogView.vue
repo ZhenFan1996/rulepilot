@@ -5,6 +5,7 @@ import { RouterLink } from 'vue-router'
 import AppShell from '@/components/AppShell.vue'
 import { notifyLoginRequired } from '@/lib/authSession'
 import { useLocale } from '@/lib/locale'
+import { playerFacingLanguageName } from '@/lib/playerFacingLanguage'
 
 interface CsrfResponse {
   headerName: string
@@ -361,7 +362,7 @@ onMounted(() => Promise.all([loadCatalog(), loadBggStatus()]))
               </div>
               <ul class="mt-5 divide-y divide-ink/10 text-sm text-ink/60">
                 <li v-for="edition in selectedGame.editions" :key="edition.id" class="flex items-center justify-between gap-3 py-2">
-                  <span>{{ edition.name }} · {{ edition.language }}<span v-if="edition.publicationYear"> · {{ edition.publicationYear }}</span></span>
+                  <span>{{ edition.name }} · {{ playerFacingLanguageName(edition.language, locale) }}<span v-if="edition.publicationYear"> · {{ edition.publicationYear }}</span></span>
                   <RouterLink :to="{ name: 'teach', query: { editionId: edition.id } }" class="shrink-0 font-semibold text-indigo">{{ t('catalog.upload') }}</RouterLink>
                 </li>
               </ul>
@@ -374,7 +375,7 @@ onMounted(() => Promise.all([loadCatalog(), loadBggStatus()]))
                 <legend class="text-sm font-semibold">{{ t('catalog.expansion.compatible') }}</legend>
                 <label v-for="edition in selectedGame.editions" :key="edition.id" class="flex items-center gap-2 text-sm text-ink/65">
                   <input v-model="compatibleEditionIds" type="checkbox" :value="edition.id">
-                  {{ edition.name }} · {{ edition.language }}
+                  {{ edition.name }} · {{ playerFacingLanguageName(edition.language, locale) }}
                 </label>
                 <p v-if="selectedGame.editions.length === 0" class="text-sm text-ink/45">{{ t('catalog.expansion.needEdition') }}</p>
               </fieldset>

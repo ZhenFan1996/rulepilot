@@ -8,6 +8,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rulepilot.assistant.RuleAnswering;
 import com.rulepilot.assistant.PlayerLocale;
 import com.rulepilot.teaching.domain.IllustratedLesson;
@@ -151,7 +152,7 @@ class PublicLessonQuestionServiceTest {
     }
 
     @Test
-    void requestsAnEnglishAnswerFromFreshRulebookEvidence() {
+    void requestsAnEnglishAnswerFromTheCurrentTurnEvenWhenTheUiLanguageIsChinese() {
         UUID planId = UUID.randomUUID();
         UUID versionId = UUID.randomUUID();
         UUID citedChunk = UUID.randomUUID();
@@ -165,7 +166,7 @@ class PublicLessonQuestionServiceTest {
 
         var result = service.answer(
                 planId,
-                new PublicLessonQuestionService.QuestionRequest("Where does the marker go?", null, "en"));
+                new PublicLessonQuestionService.QuestionRequest("Where does the marker go?", null, "zh-CN"));
 
         assertThat(result).hasValueSatisfying(value -> {
             assertThat(value.answer().shortVerdict()).isEqualTo("Place the marker first.");
@@ -176,6 +177,11 @@ class PublicLessonQuestionServiceTest {
                         .isEqualTo("圆形标记位于带箭头的起始格旁");
             });
             assertThat(value.examples()).isEmpty();
+            try {
+                assertThat(new ObjectMapper().writeValueAsString(value)).doesNotContain("assistantRunId");
+            } catch (com.fasterxml.jackson.core.JsonProcessingException exception) {
+                throw new AssertionError(exception);
+            }
         });
     }
 

@@ -13,6 +13,8 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import com.rulepilot.catalog.CatalogEditionLookup;
+import com.rulepilot.catalog.CatalogEditionLanguageConfirmation;
 import com.rulepilot.document.domain.DocumentSourceType;
 import com.rulepilot.document.domain.DocumentVersion;
 import com.rulepilot.document.domain.OfficialRulebookImportJob;
@@ -37,6 +39,7 @@ class OfficialRulebookImportJobServiceTest {
 
     private static final Instant NOW = Instant.parse("2026-08-09T00:00:00Z");
     private static final String SOURCE = "https://publisher.example/rules.pdf";
+    private static final UUID GAME_ID = UUID.fromString("22222222-2222-2222-2222-222222222222");
 
     @Test
     void persistsRealDownloadStagesAndCompletesWithTheUploadedVersion() {
@@ -105,6 +108,257 @@ class OfficialRulebookImportJobServiceTest {
         assertThat(launch.job().teachingHandoff().state()).isEqualTo(TeachingHandoffState.WAITING_FOR_DOCUMENT);
         assertThat(launch.job().teachingHandoff().learningGoal()).isEqualTo("重点讲清开局和第一轮。");
         verify(executor).execute(any());
+    }
+
+    @Test
+    void confirmsOnlyAnExplicitlyReviewedCanonicalSourceLanguageAgainstTheBoundEdition() {
+        FakeJobs jobs = new FakeJobs();
+        OfficialRulebookImportService imports = mock(OfficialRulebookImportService.class);
+        TaskExecutor executor = mock(TaskExecutor.class);
+        CatalogEditionLanguageConfirmation languages = mock(CatalogEditionLanguageConfirmation.class);
+        UUID editionId = UUID.fromString("11111111-1111-1111-1111-111111111111");
+        OfficialRulebookImportJobService service = service(
+                jobs, imports, executor, languages, catalog(editionId, GAME_ID, "Opaque Edition", "und"));
+        var command = new OfficialRulebookImportJobService.Command(
+                editionId,
+                "Example Rules",
+                DocumentSourceType.BASE_RULEBOOK,
+                SOURCE,
+                true,
+                true,
+                null,
+                new OfficialRulebookImportIdentity.SourceClaim(
+                        editionId, "Opaque Edition", "zh_cn", true),
+                true);
+
+        service.enqueue(command, "alice");
+
+        verify(languages).confirmIfUnknown(editionId, "zh-CN");
+        verify(executor).execute(any());
+    }
+
+    @Test
+    void requiresConfirmationInsteadOfCollapsingUnknownEditionAndLanguageIntoTheCatalog() {
+        FakeJobs jobs = new FakeJobs();
+        OfficialRulebookImportService imports = mock(OfficialRulebookImportService.class);
+        TaskExecutor executor = mock(TaskExecutor.class);
+        CatalogEditionLanguageConfirmation languages = mock(CatalogEditionLanguageConfirmation.class);
+        UUID editionId = UUID.randomUUID();
+        OfficialRulebookImportJobService service = service(
+                jobs, imports, executor, languages, catalog(editionId, GAME_ID, "Opaque Edition", "und"));
+        var command = new OfficialRulebookImportJobService.Command(
+                editionId,
+                "Example Rules",
+                DocumentSourceType.BASE_RULEBOOK,
+                SOURCE,
+                true,
+                true,
+                null,
+                new OfficialRulebookImportIdentity.SourceClaim(editionId, null, null, false),
+                false);
+
+        assertThatThrownBy(() -> service.enqueue(command, "alice"))
+                .isInstanceOfSatisfying(OfficialRulebookImportIdentityException.class, failure -> {
+                    assertThat(failure.code()).isEqualTo(
+                            OfficialRulebookImportIdentityException.Code.CONFIRMATION_REQUIRED);
+                    assertThat(failure.review().issues()).contains(
+                            OfficialRulebookImportIdentity.Issue.SOURCE_EDITION_UNKNOWN,
+                            OfficialRulebookImportIdentity.Issue.CATALOG_LANGUAGE_UNKNOWN,
+                            OfficialRulebookImportIdentity.Issue.SOURCE_LANGUAGE_UNKNOWN);
+                });
+        verifyNoInteractions(languages, executor, imports);
+    }
+
+    @Test
+    void rejectsAHumanLanguageLabelThatWasNotAVerifiedLanguageTag() {
+        UUID editionId = UUID.randomUUID();
+        OfficialRulebookImportJobService service = service(
+                new FakeJobs(),
+                mock(OfficialRulebookImportService.class),
+                mock(TaskExecutor.class),
+                mock(CatalogEditionLanguageConfirmation.class),
+                catalog(editionId, GAME_ID, "Opaque Edition", "en"));
+        assertThatThrownBy(() -> service.enqueue(
+                        new OfficialRulebookImportJobService.Command(
+                                editionId,
+                                "Example Rules",
+                                DocumentSourceType.BASE_RULEBOOK,
+                                SOURCE,
+                                true,
+                                true,
+                                null,
+                                new OfficialRulebookImportIdentity.SourceClaim(
+                                        editionId, "Opaque Edition", "English", true),
+                                true),
+                        "alice"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("language tag");
+    }
+
+    @Test
+    void neverReusesAnActiveSourceBoundToAnotherEdition() {
+        FakeJobs jobs = new FakeJobs();
+        UUID firstEditionId = UUID.randomUUID();
+        UUID selectedEditionId = UUID.randomUUID();
+        var active = OfficialRulebookImportJob.queued(
+                UUID.randomUUID(), "alice", firstEditionId, "First Rules",
+                DocumentSourceType.BASE_RULEBOOK, SOURCE, NOW);
+        jobs.insert(active);
+        OfficialRulebookImportService imports = mock(OfficialRulebookImportService.class);
+        TaskExecutor executor = mock(TaskExecutor.class);
+        CatalogEditionLookup catalog = id -> {
+            if (id.equals(firstEditionId)) {
+                return Optional.of(new CatalogEditionLookup.EditionReference(
+                        firstEditionId, GAME_ID, "Opaque Game", "First Edition", "en", java.util.Set.of()));
+            }
+            if (id.equals(selectedEditionId)) {
+                return Optional.of(new CatalogEditionLookup.EditionReference(
+                        selectedEditionId, GAME_ID, "Opaque Game", "Second Edition", "en", java.util.Set.of()));
+            }
+            return Optional.empty();
+        };
+        OfficialRulebookImportJobService service = service(
+                jobs, imports, executor, mock(CatalogEditionLanguageConfirmation.class), catalog);
+        var command = new OfficialRulebookImportJobService.Command(
+                selectedEditionId,
+                "Second Rules",
+                DocumentSourceType.BASE_RULEBOOK,
+                SOURCE,
+                true,
+                true,
+                "Preserve this teaching preference",
+                new OfficialRulebookImportIdentity.SourceClaim(
+                        selectedEditionId, "Second Edition", "en", true),
+                true);
+
+        assertThatThrownBy(() -> service.enqueue(command, "alice"))
+                .isInstanceOfSatisfying(OfficialRulebookImportIdentityException.class, failure -> {
+                    assertThat(failure.code()).isEqualTo(
+                            OfficialRulebookImportIdentityException.Code.ACTIVE_IMPORT_CONFLICT);
+                    assertThat(failure.review().issues())
+                            .contains(OfficialRulebookImportIdentity.Issue.PERSISTED_EDITION_CONFLICT);
+                });
+        verifyNoInteractions(executor, imports);
+    }
+
+    @Test
+    void requiresReviewBeforeCreatingANewBindingForASourcePersistedUnderAnotherEdition() {
+        FakeJobs jobs = new FakeJobs();
+        UUID firstEditionId = UUID.randomUUID();
+        UUID selectedEditionId = UUID.randomUUID();
+        var completed = OfficialRulebookImportJob.queued(
+                UUID.randomUUID(), "alice", firstEditionId, "First Rules",
+                DocumentSourceType.BASE_RULEBOOK, SOURCE, NOW.minusSeconds(30));
+        jobs.insert(completed);
+        jobs.complete(completed.id(), UUID.randomUUID(), false, NOW.minusSeconds(20));
+        OfficialRulebookImportService imports = mock(OfficialRulebookImportService.class);
+        TaskExecutor executor = mock(TaskExecutor.class);
+        CatalogEditionLookup catalog = id -> {
+            if (id.equals(firstEditionId)) {
+                return Optional.of(new CatalogEditionLookup.EditionReference(
+                        firstEditionId, GAME_ID, "Opaque Game", "First Edition", "en", java.util.Set.of()));
+            }
+            if (id.equals(selectedEditionId)) {
+                return Optional.of(new CatalogEditionLookup.EditionReference(
+                        selectedEditionId, GAME_ID, "Opaque Game", "Second Edition", "en", java.util.Set.of()));
+            }
+            return Optional.empty();
+        };
+        OfficialRulebookImportJobService service = service(
+                jobs, imports, executor, mock(CatalogEditionLanguageConfirmation.class), catalog);
+        var unconfirmed = new OfficialRulebookImportJobService.Command(
+                selectedEditionId,
+                "Second Rules",
+                DocumentSourceType.BASE_RULEBOOK,
+                SOURCE,
+                true,
+                true,
+                "Keep the second-edition teaching goal",
+                new OfficialRulebookImportIdentity.SourceClaim(
+                        selectedEditionId, "Second Edition", "en", true),
+                false);
+
+        assertThatThrownBy(() -> service.enqueue(unconfirmed, "alice"))
+                .isInstanceOfSatisfying(OfficialRulebookImportIdentityException.class, failure ->
+                        assertThat(failure.review().issues())
+                                .containsExactly(OfficialRulebookImportIdentity.Issue.PERSISTED_EDITION_CONFLICT));
+        verifyNoInteractions(executor, imports);
+
+        var confirmed = new OfficialRulebookImportJobService.Command(
+                selectedEditionId,
+                "Second Rules",
+                DocumentSourceType.BASE_RULEBOOK,
+                SOURCE,
+                true,
+                true,
+                "Keep the second-edition teaching goal",
+                unconfirmed.sourceIdentity(),
+                true);
+        var launch = service.enqueue(confirmed, "alice");
+
+        assertThat(launch.reused()).isFalse();
+        assertThat(launch.job().editionId()).isEqualTo(selectedEditionId);
+        assertThat(launch.job().teachingHandoff().learningGoal())
+                .isEqualTo("Keep the second-edition teaching goal");
+        verify(executor).execute(any());
+        verifyNoInteractions(imports);
+    }
+
+    @Test
+    void includesAManuallyPersistedDocumentInTheIdentityReview() {
+        FakeJobs jobs = new FakeJobs();
+        RuleDocumentRepository documents = mock(RuleDocumentRepository.class);
+        UUID firstEditionId = UUID.randomUUID();
+        UUID selectedEditionId = UUID.randomUUID();
+        when(documents.findLatestOwnedByOfficialSource("alice", SOURCE)).thenReturn(Optional.of(
+                RuleDocument.create(
+                        firstEditionId,
+                        "Manually saved rules",
+                        DocumentSourceType.BASE_RULEBOOK,
+                        SOURCE,
+                        null,
+                        "alice",
+                        NOW.minusSeconds(60))));
+        CatalogEditionLookup catalog = id -> {
+            if (id.equals(firstEditionId)) {
+                return Optional.of(new CatalogEditionLookup.EditionReference(
+                        firstEditionId, GAME_ID, "Opaque Game", "First Edition", "en", java.util.Set.of()));
+            }
+            if (id.equals(selectedEditionId)) {
+                return Optional.of(new CatalogEditionLookup.EditionReference(
+                        selectedEditionId, GAME_ID, "Opaque Game", "Second Edition", "en", java.util.Set.of()));
+            }
+            return Optional.empty();
+        };
+        OfficialRulebookImportJobService service = service(
+                jobs,
+                documents,
+                mock(OfficialRulebookImportService.class),
+                mock(TaskExecutor.class),
+                mock(CatalogEditionLanguageConfirmation.class),
+                catalog);
+        var command = new OfficialRulebookImportJobService.Command(
+                selectedEditionId,
+                "Second Rules",
+                DocumentSourceType.BASE_RULEBOOK,
+                SOURCE,
+                true,
+                false,
+                null,
+                new OfficialRulebookImportIdentity.SourceClaim(
+                        selectedEditionId, "Second Edition", "en", true),
+                false);
+
+        assertThatThrownBy(() -> service.enqueue(command, "alice"))
+                .isInstanceOfSatisfying(OfficialRulebookImportIdentityException.class, failure -> {
+                    assertThat(failure.review().issues())
+                            .containsExactly(OfficialRulebookImportIdentity.Issue.PERSISTED_EDITION_CONFLICT);
+                    assertThat(failure.review().persisted()).singleElement().satisfies(persisted -> {
+                        assertThat(persisted.source())
+                                .isEqualTo(OfficialRulebookImportIdentity.PersistedSource.DOCUMENT);
+                        assertThat(persisted.editionId()).isEqualTo(firstEditionId);
+                    });
+                });
     }
 
     @Test
@@ -205,6 +459,62 @@ class OfficialRulebookImportJobServiceTest {
     }
 
     @Test
+    void retriesOnlyATemporaryFailedSourceAsANewJobWithTheOriginalTeachingContext() {
+        FakeJobs jobs = new FakeJobs();
+        var failed = OfficialRulebookImportJob.queued(
+                UUID.randomUUID(),
+                "alice",
+                automaticTeachingCommand().editionId(),
+                "Example Rules",
+                DocumentSourceType.OFFICIAL_FAQ,
+                SOURCE,
+                true,
+                "重点讲清开局和第一轮。",
+                NOW);
+        jobs.insert(failed);
+        jobs.fail(failed.id(), "SOURCE_UNAVAILABLE", NOW);
+        TaskExecutor executor = mock(TaskExecutor.class);
+        var service = service(jobs, mock(OfficialRulebookImportService.class), executor);
+
+        var retry = service.retryImport(failed.id(), "alice");
+
+        assertThat(retry.reused()).isFalse();
+        assertThat(retry.job().id()).isNotEqualTo(failed.id());
+        assertThat(retry.job()).satisfies(job -> {
+            assertThat(job.stage()).isEqualTo(OfficialRulebookImportJob.Stage.QUEUED);
+            assertThat(job.editionId()).isEqualTo(failed.editionId());
+            assertThat(job.title()).isEqualTo("Example Rules");
+            assertThat(job.sourceType()).isEqualTo(DocumentSourceType.OFFICIAL_FAQ);
+            assertThat(job.sourceUrl()).isEqualTo(SOURCE);
+            assertThat(job.teachingHandoff().learningGoal()).isEqualTo("重点讲清开局和第一轮。");
+        });
+        verify(executor).execute(any());
+    }
+
+    @Test
+    void refusesToRetryAnInvalidSourceOrANonTerminalJob() {
+        FakeJobs jobs = new FakeJobs();
+        var invalid = OfficialRulebookImportJob.queued(
+                UUID.randomUUID(), "alice", null, "Invalid Rules",
+                DocumentSourceType.BASE_RULEBOOK, SOURCE, NOW);
+        jobs.insert(invalid);
+        jobs.fail(invalid.id(), "INVALID_PDF_SOURCE", NOW);
+        var running = OfficialRulebookImportJob.queued(
+                UUID.randomUUID(), "alice", null, "Running Rules",
+                DocumentSourceType.BASE_RULEBOOK, "https://publisher.example/running.pdf", NOW);
+        jobs.insert(running);
+        var service = service(
+                jobs, mock(OfficialRulebookImportService.class), mock(TaskExecutor.class));
+
+        assertThatThrownBy(() -> service.retryImport(invalid.id(), "alice"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("not retryable");
+        assertThatThrownBy(() -> service.retryImport(running.id(), "alice"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("not retryable");
+    }
+
+    @Test
     void retriesTheExistingDurableTeachingHandoffWithoutDownloadingTheRulebookAgain() {
         FakeJobs jobs = new FakeJobs();
         UUID versionId = UUID.randomUUID();
@@ -272,8 +582,63 @@ class OfficialRulebookImportJobServiceTest {
 
     private OfficialRulebookImportJobService service(
             FakeJobs jobs, OfficialRulebookImportService imports, TaskExecutor executor) {
+        return service(
+                jobs,
+                mock(RuleDocumentRepository.class),
+                imports,
+                executor,
+                (editionId, language) -> false,
+                catalog(
+                        UUID.fromString("11111111-1111-1111-1111-111111111111"),
+                        GAME_ID,
+                        "Opaque Edition",
+                        "en"));
+    }
+
+    private OfficialRulebookImportJobService service(
+            FakeJobs jobs,
+            OfficialRulebookImportService imports,
+            TaskExecutor executor,
+            CatalogEditionLanguageConfirmation languages) {
+        return service(
+                jobs,
+                mock(RuleDocumentRepository.class),
+                imports,
+                executor,
+                languages,
+                catalog(
+                        UUID.fromString("11111111-1111-1111-1111-111111111111"),
+                        GAME_ID,
+                        "Opaque Edition",
+                        "en"));
+    }
+
+    private OfficialRulebookImportJobService service(
+            FakeJobs jobs,
+            RuleDocumentRepository documents,
+            OfficialRulebookImportService imports,
+            TaskExecutor executor,
+            CatalogEditionLanguageConfirmation languages,
+            CatalogEditionLookup catalog) {
         return new OfficialRulebookImportJobService(
-                jobs, imports, executor, Clock.fixed(NOW, ZoneOffset.UTC));
+                jobs, documents, imports, executor, languages, catalog, Clock.fixed(NOW, ZoneOffset.UTC));
+    }
+
+    private OfficialRulebookImportJobService service(
+            FakeJobs jobs,
+            OfficialRulebookImportService imports,
+            TaskExecutor executor,
+            CatalogEditionLanguageConfirmation languages,
+            CatalogEditionLookup catalog) {
+        return service(jobs, mock(RuleDocumentRepository.class), imports, executor, languages, catalog);
+    }
+
+    private CatalogEditionLookup catalog(
+            UUID editionId, UUID gameId, String editionName, String language) {
+        return requested -> requested.equals(editionId)
+                ? Optional.of(new CatalogEditionLookup.EditionReference(
+                        editionId, gameId, "Opaque Game", editionName, language, java.util.Set.of()))
+                : Optional.empty();
     }
 
     private OfficialRulebookImportJobService.Command command() {
@@ -282,14 +647,18 @@ class OfficialRulebookImportJobServiceTest {
     }
 
     private OfficialRulebookImportJobService.Command automaticTeachingCommand() {
+        UUID editionId = UUID.fromString("11111111-1111-1111-1111-111111111111");
         return new OfficialRulebookImportJobService.Command(
-                UUID.fromString("11111111-1111-1111-1111-111111111111"),
+                editionId,
                 "Example Rules",
                 DocumentSourceType.BASE_RULEBOOK,
                 SOURCE,
                 true,
                 true,
-                "重点讲清开局和第一轮。");
+                "重点讲清开局和第一轮。",
+                new OfficialRulebookImportIdentity.SourceClaim(
+                        editionId, "Opaque Edition", "en", true),
+                true);
     }
 
     private UploadRuleDocumentService.UploadResult uploadResult(UUID versionId) {
@@ -319,6 +688,14 @@ class OfficialRulebookImportJobServiceTest {
                     .filter(job -> job.ownerUsername().equals(ownerUsername))
                     .filter(job -> job.sourceUrl().equals(sourceUrl) && !job.stage().terminal())
                     .findFirst();
+        }
+
+        @Override
+        public Optional<OfficialRulebookImportJob> findLatestOwnedBySource(String ownerUsername, String sourceUrl) {
+            return values.values().stream()
+                    .filter(job -> job.ownerUsername().equals(ownerUsername))
+                    .filter(job -> job.sourceUrl().equals(sourceUrl))
+                    .reduce((first, second) -> second);
         }
 
         @Override

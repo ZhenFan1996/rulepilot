@@ -3,6 +3,7 @@ package com.rulepilot.teaching.application;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.rulepilot.assistant.GeneratedContentCritic.Issue;
+import com.rulepilot.assistant.GeneratedContentCritic.ClaimAspect;
 import com.rulepilot.assistant.GeneratedContentCritic.IssueType;
 import java.util.List;
 import java.util.UUID;
@@ -40,12 +41,16 @@ class TeachingReviewCorrectionPolicyTest {
     @Test
     void passesCriticIssuesToTheRepairModelWithoutHardCodedGameSemantics() {
         List<String> feedback = policy.correctionFeedback(List.of(
-                issue(IssueType.UNSUPPORTED_CLAIM, 2, "The source does not state the introductory timing."),
+                issue(
+                        IssueType.UNSUPPORTED_CLAIM,
+                        ClaimAspect.TIMING,
+                        2,
+                        "The source does not state the introductory timing."),
                 issue(IssueType.CHAPTER_SCOPE_DUPLICATION, 4, "This detail belongs to a later chapter.")));
 
         assertThat(feedback).singleElement().satisfies(value -> {
             assertThat(value).contains(
-                    "UNSUPPORTED_CLAIM claim=2",
+                    "UNSUPPORTED_CLAIM aspect=TIMING claim=2",
                     "CHAPTER_SCOPE_DUPLICATION claim=4",
                     "Return a complete replacement section",
                     "supplied evidence",
@@ -83,7 +88,21 @@ class TeachingReviewCorrectionPolicyTest {
         assertThat(diagnostic).isEqualTo("CRITIC_CONTRADICTION@1,5+MISSING_EXCEPTION@3");
     }
 
+    @Test
+    void keepsTheConfirmedClaimAspectInPlayerSafeDiagnostics() {
+        String diagnostic = policy.criticDiagnostic(List.of(
+                issue(IssueType.CONTRADICTION, ClaimAspect.SUBJECT, 2, "owner"),
+                issue(IssueType.CONTRADICTION, ClaimAspect.TIMING, 4, "interval"),
+                issue(IssueType.CONTRADICTION, ClaimAspect.SUBJECT, 6, "recipient")));
+
+        assertThat(diagnostic).isEqualTo("CRITIC_CONTRADICTION_SUBJECT@2,6+CONTRADICTION_TIMING@4");
+    }
+
     private Issue issue(IssueType type, int claimPosition, String summary) {
         return new Issue(type, claimPosition, List.of(UUID.randomUUID()), summary);
+    }
+
+    private Issue issue(IssueType type, ClaimAspect aspect, int claimPosition, String summary) {
+        return new Issue(type, aspect, claimPosition, List.of(UUID.randomUUID()), summary);
     }
 }

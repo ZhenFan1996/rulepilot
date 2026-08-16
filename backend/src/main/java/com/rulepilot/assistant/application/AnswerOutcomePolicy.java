@@ -21,84 +21,46 @@ final class AnswerOutcomePolicy {
     private AnswerOutcomePolicy() {}
 
     static RuleAnswering.AnswerResult publicReaderAnswer(UUID assistantRunId, StructuredRuleAnswer answer) {
+        return publicReaderAnswer(assistantRunId, answer, "", PlayerLocale.ZH_CN);
+    }
+
+    static RuleAnswering.AnswerResult publicReaderAnswer(
+            UUID assistantRunId,
+            StructuredRuleAnswer answer,
+            String currentQuestion,
+            PlayerLocale requestedLanguage) {
+        PlayerFacingRuleAnswer presented = PlayerFacingAnswerPresenter.present(
+                answer, currentQuestion, requestedLanguage);
         return new RuleAnswering.AnswerResult(
                 assistantRunId,
                 new RuleAnswering.Answer(
-                        answer.status().name(),
-                        answer.shortVerdict(),
-                        answer.explanation(),
-                        answer.citations().stream()
+                        presented.status().name(),
+                        presented.shortVerdict(),
+                        presented.explanation(),
+                        presented.citations().stream()
                                 .map(citation -> new RuleAnswering.Citation(
                                         citation.heading(), citation.pageFrom(), citation.pageTo()))
                                 .toList(),
-                        answer.exceptions(),
-                        answer.confidence().name(),
-                        answer.answerBasis() == null ? null : answer.answerBasis().name(),
-                        answer.clarification(),
-                        answer.warnings().stream()
+                        presented.exceptions(),
+                        presented.confidence().name(),
+                        presented.answerBasis() == null ? null : presented.answerBasis().name(),
+                        presented.clarification(),
+                        presented.warnings().stream()
                                 .map(warning -> new RuleAnswering.Warning(warning.type().name()))
                                 .toList(),
-                        answer.calculations().stream()
-                                .map(calculation -> new RuleAnswering.Calculation(
-                                        calculation.expression(), calculation.result()))
-                                .toList(),
-                        answer.situationChecks().stream()
-                                .map(check -> new RuleAnswering.SituationCheck(
-                                        check.requirement(), check.status().name(), check.playerFact()))
-                                .toList(),
-                        answer.walkthroughSteps().stream()
-                                .map(step -> new RuleAnswering.WalkthroughStep(
-                                        step.instruction(), step.explanation(), step.orderBasis().name()))
-                                .toList(),
-                        answer.decisionBranches().stream()
-                                .map(branch -> new RuleAnswering.DecisionBranch(
-                                        branch.condition(), branch.outcome(), branch.basis().name()))
-                                .toList(),
-                        answer.exceptionClauses().stream()
-                                .map(clause -> new RuleAnswering.ExceptionClause(
-                                        clause.condition(), clause.effect()))
-                                .toList(),
-                        answer.termDefinitions().stream()
-                                .map(definition -> new RuleAnswering.TermDefinition(
-                                        definition.term(), definition.definition(), definition.boundary()))
-                                .toList(),
-                        answer.workedExamples().stream()
-                                .map(example -> new RuleAnswering.WorkedExample(
-                                        example.setup(), example.action(), example.outcome(), example.basis().name()))
-                                .toList(),
-                        answer.priorityResolutions().stream()
-                                .map(resolution -> new RuleAnswering.RulePriorityResolution(
-                                        resolution.baseRule(), resolution.competingRule(), resolution.resolution(),
-                                        resolution.basis().name()))
-                                .toList(),
-                        answer.timingResolutions().stream()
-                                .map(resolution -> new RuleAnswering.RuleTimingResolution(
-                                        resolution.timingContext(), resolution.resolutionOrder(),
-                                        resolution.orderSource(), resolution.basis().name()))
-                                .toList(),
-                        answer.tieResolutions().stream()
-                                .map(resolution -> new RuleAnswering.RuleTieResolution(
-                                        resolution.tieContext(), resolution.resolutionSteps(),
-                                        resolution.finalOutcome(), resolution.basis().name()))
-                                .toList(),
-                        answer.scopeResolutions().stream()
-                                .map(resolution -> new RuleAnswering.RuleScopeResolution(
-                                        resolution.ruleContext(), resolution.governingCondition(),
-                                        resolution.currentSituation(), resolution.matchStatus().name(),
-                                        resolution.effect(), resolution.basis().name()))
-                                .toList(),
-                        answer.conceptComparisons().stream()
-                                .map(comparison -> new RuleAnswering.RuleConceptComparison(
-                                        comparison.leftConcept(), comparison.leftDefinition(),
-                                        comparison.rightConcept(), comparison.rightDefinition(),
-                                        comparison.commonGround(), comparison.keyDifference(),
-                                        comparison.practicalBoundary(), comparison.basis().name()))
-                                .toList(),
-                        answer.ruleOptions().stream()
-                                .map(option -> new RuleAnswering.RuleOption(
-                                        option.decisionContext(), option.selectionRule(), option.optionName(),
-                                        option.availabilityCondition(), option.result(), option.basis().name()))
-                                .toList()),
+                        presented.calculations(),
+                        presented.situationChecks(),
+                        presented.walkthroughSteps(),
+                        presented.decisionBranches(),
+                        presented.exceptionClauses(),
+                        presented.termDefinitions(),
+                        presented.workedExamples(),
+                        presented.priorityResolutions(),
+                        presented.timingResolutions(),
+                        presented.tieResolutions(),
+                        presented.scopeResolutions(),
+                        presented.conceptComparisons(),
+                        presented.ruleOptions()),
                 answer.citations().stream()
                         .map(RuleCitation::chunkId)
                         .collect(Collectors.toUnmodifiableSet()));
@@ -195,7 +157,7 @@ final class AnswerOutcomePolicy {
                         source.documentVersionId(),
                         source.sectionType(),
                         source.heading(),
-                        source.excerpt(),
+                        AnswerCitationPresentationPolicy.excerpt(source.excerpt()),
                         source.pageFrom(),
                         source.pageTo()))
                 .distinct()

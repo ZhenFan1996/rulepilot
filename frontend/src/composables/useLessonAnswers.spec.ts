@@ -41,14 +41,19 @@ describe('useLessonAnswers', () => {
     setLocale('zh-CN')
   })
 
-  it('localizes a failed secure-session request in the active player language', async () => {
-    setLocale('en')
+  it('uses an English current question for a secure-session failure under a Chinese UI', async () => {
+    setLocale('zh-CN')
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 503 })))
     const answers = createAnswers()
+    answers.question.value = 'When does this resolve?'
 
-    await answers.submitQuestion('When does this resolve?', null)
+    await answers.submitQuestion(answers.question.value, null)
 
-    expect(answers.answerError.value).toBe('We could not establish a secure session. Please try again shortly.')
+    expect(answers.answerError.value).toBe(
+      "I couldn't establish a secure session. Your question is still here; review it and try again.",
+    )
+    expect(answers.answerOutcome.value).toBe('failed')
+    expect(answers.question.value).toBe('When does this resolve?')
   })
 
   it('localizes an unavailable answer after a secure session is established', async () => {
@@ -60,17 +65,43 @@ describe('useLessonAnswers', () => {
 
     await answers.submitQuestion('When does this resolve?', null)
 
-    expect(answers.answerError.value).toBe('We cannot answer that question right now. Please try again shortly.')
+    expect(answers.answerError.value).toBe(
+      'The rules answer service is unavailable right now. Your question is still here; review it and try again.',
+    )
   })
 
-  it('localizes an unexpected request failure instead of leaking a Chinese fallback', async () => {
+  it('uses a Chinese current question for an unexpected transport failure under an English UI', async () => {
     setLocale('en')
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue({}))
     const answers = createAnswers()
+    answers.question.value = '青色棱柱什么时候结算？'
 
-    await answers.submitQuestion('When does this resolve?', null)
+    await answers.submitQuestion(answers.question.value, null)
 
-    expect(answers.answerError.value).toBe('Your question could not be sent. Please try again shortly.')
+    expect(answers.answerError.value).toBe('这次没有成功发送问题。问题仍保留在这里；检查后可以直接重试。')
+    expect(answers.question.value).toBe('青色棱柱什么时候结算？')
+  })
+
+  it('rejects a malformed answer envelope without exposing schema or runtime diagnostics', async () => {
+    setLocale('zh-CN')
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(Response.json({ headerName: 'X-CSRF-TOKEN', token: 'token' }))
+      .mockResolvedValueOnce(Response.json({
+        schemaDiagnostic: 'citations is required by PlayerFacingRuleAnswer',
+        answer: { status: 'INVALID_MODEL_OUTPUT' },
+      })))
+    const answers = createAnswers()
+    answers.question.value = 'Can the cobalt spindle move now?'
+
+    await answers.submitQuestion(answers.question.value, null)
+
+    expect(answers.answer.value).toBeNull()
+    expect(answers.answerTurns.value).toEqual([])
+    expect(answers.answerError.value).toBe(
+      'The rules answer service is unavailable right now. Your question is still here; review it and try again.',
+    )
+    expect(answers.answerError.value).not.toMatch(/schema|citations|PlayerFacingRuleAnswer|undefined/i)
+    expect(answers.question.value).toBe('Can the cobalt spindle move now?')
   })
 
   it('aborts a slow answer while preserving the editable question and prior thread', async () => {
@@ -87,10 +118,11 @@ describe('useLessonAnswers', () => {
     }))
     const answers = createAnswers()
     const prior = {
+      language: 'en' as const,
       status: 'ANSWERED' as const,
       shortVerdict: 'Resolve it after scoring.', explanation: 'The cited order puts scoring first.',
-      citations: [], exceptions: [], confidence: 'HIGH' as const, official: false,
-      confirmedRulingId: null, confirmedRulingVersion: null, clarification: null, warnings: [],
+      citations: [], exceptions: [], confidence: 'HIGH' as const, source: 'UPLOADED' as const,
+      clarification: null, recovery: null, warnings: [],
     }
     answers.restoreConversation([{ question: 'When does it resolve?', answer: prior, learningIntent: null }])
     answers.question.value = 'What if scoring is interrupted?'
@@ -105,50 +137,120 @@ describe('useLessonAnswers', () => {
     expect(answers.question.value).toBe('What if scoring is interrupted?')
     expect(answers.answerTurns.value).toHaveLength(1)
     expect(answers.answerError.value).toBe('Stopped waiting. This unfinished result will not replace the current page. You can edit the question and send it again.')
+    expect(answers.answerOutcome.value).toBe('cancelled')
     expect(answers.agentTrace.value).toEqual([])
   })
 
-  it('keeps the completed run id available for player support and audit', async () => {
+  it('exposes the eight-second soft boundary and cancels a known server run with the same secure session', async () => {
+    vi.useFakeTimers()
     const runId = '11111111-1111-4111-8111-111111111111'
+    let answerSignal: AbortSignal | undefined
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input)
+      if (path === '/api/auth/csrf') {
+        return Promise.resolve(Response.json({ headerName: 'X-CSRF-TOKEN', token: 'token' }))
+      }
+      if (path.includes('/answers') && init?.method === 'POST') {
+        answerSignal = init.signal ?? undefined
+        return new Promise<Response>((_resolve, reject) => {
+          answerSignal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')))
+        })
+      }
+      if (path.includes('/assistant-runs/latest')) {
+        return Promise.resolve(Response.json({
+          ...answerRunDetails('document-1', 'readRulePages'),
+          run: {
+            ...answerRunDetails('document-1', 'readRulePages').run,
+            id: runId,
+            createdAt: new Date().toISOString(),
+          },
+        }))
+      }
+      if (path === `/api/v1/assistant-runs/${runId}/cancellation`) {
+        return Promise.resolve(new Response(null, { status: 202 }))
+      }
+      return Promise.resolve(new Response(null, { status: 404 }))
+    }))
+    const answers = createAnswers()
+    answers.question.value = 'What if the prior timing clause applies?'
+
+    const pending = answers.submitQuestion(answers.question.value, null)
+    expect(answers.answerLoading.value).toBe(true)
+    expect(answers.answerElapsedSeconds.value).toBe(0)
+    expect(answers.answerSoftBudgetReached.value).toBe(false)
+    await vi.advanceTimersByTimeAsync(8_000)
+
+    expect(answers.answerElapsedSeconds.value).toBe(8)
+    expect(answers.answerSoftBudgetReached.value).toBe(true)
+    answers.cancelAnswer()
+    await vi.advanceTimersByTimeAsync(0)
+    await pending
+
+    expect(answerSignal?.aborted).toBe(true)
+    expect(vi.mocked(fetch).mock.calls).toContainEqual([
+      `/api/v1/assistant-runs/${runId}/cancellation`,
+      expect.objectContaining({
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'X-CSRF-TOKEN': 'token' },
+      }),
+    ])
+  })
+
+  it('keeps completed audit identities outside the player answer state', async () => {
+    const internalId = '11111111-1111-4111-8111-111111111111'
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input)
       if (path === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'token' })
       if (path.includes('/answers')) {
         return Response.json({
-          assistantRunId: runId,
+          assistantRunId: internalId,
           answer: {
-            status: 'INSUFFICIENT_EVIDENCE', shortVerdict: 'Not enough evidence.', explanation: '', citations: [],
-            exceptions: [], confidence: 'LOW', official: false, confirmedRulingId: null,
-            confirmedRulingVersion: null, clarification: null, warnings: [],
+            language: 'en',
+            status: 'INSUFFICIENT_EVIDENCE', shortVerdict: 'Not enough evidence.', explanation: '', citations: [{
+              heading: 'Timing', excerpt: 'The timing clause is incomplete.', pageFrom: 4, pageTo: 4,
+              chunkId: internalId, sectionType: 'TIMING',
+            }],
+            exceptions: [], confidence: 'LOW', source: 'UPLOADED', clarification: null,
+            recovery: {
+              message: 'Add the exact object or timing.', actionLabel: 'Add detail', draft: '',
+            },
+            warnings: [],
+            documentVersionId: internalId,
           },
+          rulingReference: {
+            citationIds: [internalId], confirmedRulingId: null, confirmedRulingVersion: null,
+          },
+          conversationTurnId: null,
         })
       }
-      return Response.json({ run: { id: runId, subjectId: 'document-1', createdAt: '2026-08-03T00:00:00Z' }, activities: [] })
+      return new Response(null, { status: 404 })
     }))
     const answers = createAnswers()
 
     await answers.submitQuestion('When does this resolve?', null)
 
-    expect(answers.answerRunId.value).toBe(runId)
+    expect('answerRunId' in answers).toBe(false)
+    expect(answers.answerRulingReference.value).toEqual({
+      citationIds: [internalId], confirmedRulingId: null, confirmedRulingVersion: null,
+    })
+    expect(JSON.stringify(answers.answer.value)).not.toContain('assistantRunId')
+    expect(JSON.stringify(answers.answer.value)).not.toContain('documentVersionId')
+    expect(JSON.stringify(answers.answer.value)).not.toContain(internalId)
+    expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).includes('/assistant-runs/'))).toBe(false)
   })
 
   it('sends a verification challenge with the exact previous question as retrieval context', async () => {
     const answerRequests: Array<Record<string, unknown>> = []
-    let answerNumber = 0
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = String(input)
       if (path === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'token' })
       if (path.includes('/answers') && init?.method === 'POST') {
         answerRequests.push(JSON.parse(String(init.body)) as Record<string, unknown>)
-        answerNumber += 1
-        return Response.json({
-          assistantRunId: `${answerNumber}1111111-1111-4111-8111-111111111111`,
-          answer: {
+        return Response.json(answerCreation({
             status: 'ANSWERED', shortVerdict: 'Verified.', explanation: 'Supported.', citations: [],
-            exceptions: [], confidence: 'HIGH', official: false, confirmedRulingId: null,
-            confirmedRulingVersion: null, clarification: null, warnings: [],
-          },
-        })
+            exceptions: [], confidence: 'HIGH', source: 'UPLOADED', clarification: null, warnings: [],
+          }))
       }
       return new Response(null, { status: 404 })
     }))
@@ -171,14 +273,10 @@ describe('useLessonAnswers', () => {
       if (path === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'token' })
       if (path.includes('/answers') && init?.method === 'POST') {
         requestBody = JSON.parse(String(init.body)) as Record<string, unknown>
-        return Response.json({
-          assistantRunId: '11111111-1111-4111-8111-111111111111',
-          answer: {
+        return Response.json(answerCreation({
             status: 'ANSWERED', shortVerdict: 'Verified.', explanation: 'Supported.', citations: [],
-            exceptions: [], confidence: 'HIGH', official: false, confirmedRulingId: null,
-            confirmedRulingVersion: null, clarification: null, warnings: [],
-          },
-        })
+            exceptions: [], confidence: 'HIGH', source: 'UPLOADED', clarification: null, warnings: [],
+          }))
       }
       return new Response(null, { status: 404 })
     }))
@@ -202,16 +300,13 @@ describe('useLessonAnswers', () => {
       if (path.includes('/answers') && init?.method === 'POST') {
         answerRequests.push(JSON.parse(String(init.body)) as Record<string, unknown>)
         answerNumber += 1
-        return Response.json({
-          assistantRunId: `${answerNumber}2222222-2222-4222-8222-222222222222`,
-          answer: {
+        return Response.json(answerCreation({
             status: answerNumber === 1 ? 'CLARIFICATION_REQUIRED' : 'ANSWERED',
             shortVerdict: answerNumber === 1 ? 'Please identify the object.' : 'It triggers after scoring.',
             explanation: '', citations: [], exceptions: [], confidence: answerNumber === 1 ? 'LOW' : 'HIGH',
-            official: false, confirmedRulingId: null, confirmedRulingVersion: null,
+            source: 'UPLOADED',
             clarification: answerNumber === 1 ? 'What does “this” refer to?' : null, warnings: [],
-          },
-        })
+          }))
       }
       return new Response(null, { status: 404 })
     }))
@@ -231,10 +326,11 @@ describe('useLessonAnswers', () => {
   it('restores a bounded thread as visible answer context without reviving execution state', () => {
     const answers = createAnswers()
     const restored = {
+      language: 'en' as const,
       status: 'ANSWERED' as const,
       shortVerdict: 'Resolve it after scoring.', explanation: 'The cited sequence puts it afterward.',
-      citations: [], exceptions: [], confidence: 'HIGH' as const, official: false,
-      confirmedRulingId: null, confirmedRulingVersion: null, clarification: null, warnings: [],
+      citations: [], exceptions: [], confidence: 'HIGH' as const, source: 'UPLOADED' as const,
+      clarification: null, recovery: null, warnings: [],
     }
 
     answers.restoreConversation([{ question: 'When does it resolve?', answer: restored, learningIntent: null }])
@@ -243,7 +339,7 @@ describe('useLessonAnswers', () => {
     expect(answers.answeredQuestion.value).toBe('When does it resolve?')
     expect(answers.answer.value?.shortVerdict).toBe('Resolve it after scoring.')
     expect(answers.question.value).toBe('')
-    expect(answers.answerRunId.value).toBe('')
+    expect(answers.answerRulingReference.value).toBeNull()
     expect(answers.agentTrace.value).toEqual([])
   })
 
@@ -280,72 +376,75 @@ describe('useLessonAnswers', () => {
     vi.useRealTimers()
   })
 
-  it('aborts a completed-answer final trace when read transport is cancelled', async () => {
-    let finalSignal: AbortSignal | undefined
-    let resolveFinal!: (response: Response) => void
-    const runId = '11111111-1111-4111-8111-111111111111'
-    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+  it('does not fetch completed audit details after the player answer arrives', async () => {
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
       const path = String(input)
       if (path === '/api/auth/csrf') {
         return Promise.resolve(Response.json({ headerName: 'X-CSRF-TOKEN', token: 'token' }))
       }
       if (path.includes('/answers')) {
-        return Promise.resolve(Response.json({
-          assistantRunId: runId,
-          answer: answerFixture('Completed answer.'),
-        }))
+        return Promise.resolve(Response.json(answerCreation(answerFixture('Completed answer.'))))
       }
-      finalSignal = init?.signal ?? undefined
-      return new Promise<Response>((resolve) => { resolveFinal = resolve })
+      return Promise.resolve(new Response(null, { status: 404 }))
     }))
     const answers = createAnswers()
 
     await answers.submitQuestion('When does this resolve?', null)
-    await vi.waitFor(() => expect(finalSignal).toBeDefined())
-    answers.cancelReadTransport()
-    expect(finalSignal?.aborted).toBe(true)
 
-    resolveFinal(Response.json(answerRunDetails('document-1', 'nativeModelTurn|1')))
-    await Promise.resolve()
+    expect(vi.mocked(fetch).mock.calls.filter(([input]) => String(input).includes('/assistant-runs/'))).toEqual([])
     expect(answers.agentTrace.value).toEqual([])
     expect(answers.answer.value?.shortVerdict).toBe('Completed answer.')
-  })
-
-  it('rejects final trace payloads whose run or document identity does not match', async () => {
-    const runId = '11111111-1111-4111-8111-111111111111'
-    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
-      const path = String(input)
-      if (path === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'token' })
-      if (path.includes('/answers')) {
-        return Response.json({ assistantRunId: runId, answer: answerFixture('Verified answer.') })
-      }
-      return Response.json({
-        ...answerRunDetails('another-document', 'nativeModelTurn|1'),
-        run: { id: 'another-run', subjectId: 'another-document', createdAt: '2026-08-03T00:00:00Z' },
-      })
-    }))
-    const answers = createAnswers()
-
-    await answers.submitQuestion('When does this resolve?', null)
-    await vi.waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).includes(runId))).toBe(true))
-
-    expect(answers.agentTrace.value).toEqual([])
   })
 })
 
 function answerFixture(shortVerdict: string) {
   return {
+    language: 'en' as const,
     status: 'ANSWERED' as const,
     shortVerdict,
     explanation: 'Supported.',
-    citations: [],
+    citations: [{
+      heading: 'Timing', excerpt: 'Resolve after scoring.', pageFrom: 2, pageTo: 2,
+    }],
     exceptions: [],
     confidence: 'HIGH' as const,
-    official: false,
-    confirmedRulingId: null,
-    confirmedRulingVersion: null,
+    answerBasis: 'DIRECT_RULE' as const,
+    source: 'UPLOADED' as const,
     clarification: null,
+    recovery: null,
     warnings: [],
+  }
+}
+
+function emptyRulingReference() {
+  return { citationIds: [], confirmedRulingId: null, confirmedRulingVersion: null }
+}
+
+function answerCreation(answer: ReturnType<typeof answerFixture> | Record<string, unknown>) {
+  const playerAnswer = answer as Record<string, unknown>
+  const publishesConclusion = playerAnswer.status === 'ANSWERED'
+    || playerAnswer.status === 'ANSWERED_WITH_WARNING'
+  const citations = publishesConclusion
+    && Array.isArray(playerAnswer.citations)
+    && playerAnswer.citations.length === 0
+    ? [{ heading: 'Timing', excerpt: 'Resolve after scoring.', pageFrom: 2, pageTo: 2 }]
+    : playerAnswer.citations
+  return {
+    answer: {
+      ...playerAnswer,
+      language: playerAnswer.language ?? 'en',
+      citations,
+      answerBasis: publishesConclusion ? playerAnswer.answerBasis ?? 'DIRECT_RULE' : null,
+      recovery: publishesConclusion
+        ? null
+        : playerAnswer.recovery ?? {
+            message: 'Add the missing detail and try again.',
+            actionLabel: 'Add detail',
+            draft: playerAnswer.status === 'CLARIFICATION_REQUIRED' ? 'I mean: ' : '',
+          },
+    },
+    rulingReference: emptyRulingReference(),
+    conversationTurnId: null,
   }
 }
 

@@ -32,7 +32,7 @@ describe('LoginView', () => {
     wrapper.unmount()
   })
 
-  it('does not expose or follow an external redirect value', async () => {
+  it('falls back to the player entry instead of account for an invalid redirect value', async () => {
     vi.stubGlobal('fetch', successfulLoginFetch())
     const router = memoryRouter()
     await router.push('/login?redirect=https://example.com')
@@ -47,7 +47,25 @@ describe('LoginView', () => {
     await wrapper.get('form').trigger('submit')
     await flushPromises()
 
-    expect(router.currentRoute.value.fullPath).toBe('/account')
+    expect(router.currentRoute.value.fullPath).toBe('/')
+    wrapper.unmount()
+  })
+
+  it('falls back to the player entry when a once-local return route no longer exists', async () => {
+    vi.stubGlobal('fetch', successfulLoginFetch())
+    const router = memoryRouter()
+    await router.push('/login?redirect=/retired-player-area')
+    await router.isReady()
+    const wrapper = mount(LoginView, { attachTo: document.body, global: { plugins: [router] } })
+
+    expect(wrapper.find('[data-testid="auth-return-context"]').exists()).toBe(false)
+    expect(wrapper.get('a[href="/register"]')).toBeTruthy()
+    await wrapper.get('input[name="username"]').setValue('alice')
+    await wrapper.get('input[name="password"]').setValue('test-password')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    expect(router.currentRoute.value.fullPath).toBe('/')
     wrapper.unmount()
   })
 
@@ -124,6 +142,7 @@ function memoryRouter() {
     routes: [
       { path: '/login', name: 'login', component: LoginView },
       { path: '/lessons', name: 'lessons', component: { template: '<p>lessons</p>' } },
+      { path: '/catalog', name: 'catalog', component: { template: '<p>catalog</p>' } },
       { path: '/account', name: 'account', component: { template: '<p>account</p>' } },
       { path: '/', name: 'home', component: { template: '<p>home</p>' } },
       { path: '/register', name: 'register', component: { template: '<p>register</p>' } },

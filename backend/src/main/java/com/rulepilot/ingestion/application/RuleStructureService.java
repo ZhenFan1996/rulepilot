@@ -37,11 +37,12 @@ public class RuleStructureService implements RuleStructureCatalog, RulebookUnder
 
     @Transactional
     public void organize(UUID documentVersionId, List<DocumentProcessing.ExtractedPage> pages) {
+        var understanding = understandingBuilder.build(pages);
         repository.replace(
                 documentVersionId,
                 classifier.classify(pages),
-                chunker.chunk(pages),
-                understandingBuilder.build(pages));
+                chunker.chunk(pages, understanding),
+                understanding);
     }
 
     @Transactional(readOnly = true)

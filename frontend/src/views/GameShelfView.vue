@@ -29,7 +29,7 @@ import {
 } from '@/lib/gameShelfSnapshot'
 import { useLocale } from '@/lib/locale'
 
-const { t } = useLocale()
+const { locale, t } = useLocale()
 const catalog = ref<ShelfCatalogEntry[]>([])
 const documents = ref<ShelfDocument[]>([])
 const imports = ref<ShelfImportJob[]>([])
@@ -64,6 +64,7 @@ const shelf = computed(() => buildPersonalShelf(catalog.value, documents.value, 
   preparationRuns: preparationRuns.value,
   plansAvailability: guideAvailability.value,
   preparationsAvailability: preparationsAvailability.value,
+  locale: locale.value,
 }))
 const filteredShelf = computed(() => {
   const keyword = search.value.trim().toLocaleLowerCase()

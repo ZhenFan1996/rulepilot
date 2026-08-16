@@ -5,6 +5,7 @@ import com.rulepilot.teaching.domain.TeachingPlan;
 import com.rulepilot.teaching.domain.TeachingPlan.PlannedSection;
 import java.time.Instant;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
@@ -50,7 +51,7 @@ public class TeachingPlanFactory {
                             topic.required(),
                             topic.visualEvidenceRecommended(),
                             normalizedQueries(topic.retrievalQueries()),
-                            normalizedTags(topic.coverageTags()),
+                            planTags(outline, topic),
                             topic.sourcePageNumbers());
                 })
                 .toList();
@@ -71,17 +72,38 @@ public class TeachingPlanFactory {
                 || outline.topics().isEmpty() || outline.topics().size() > MAX_TOPICS) {
             throw new IllegalArgumentException("model did not produce a usable teaching outline");
         }
+        TeachingSourceCoverageContract.validateStructure(outline);
         Set<String> keys = new HashSet<>();
         Set<String> covered = new HashSet<>();
+        Set<String> explicitlyMissing = new HashSet<>();
         for (int index = 0; index < outline.topics().size(); index++) {
             var topic = outline.topics().get(index);
             if (!keys.add(normalizedKey(topic.key(), index + 1))) {
                 throw new IllegalArgumentException("teaching topic keys must be unique");
             }
             normalizedQueries(topic.retrievalQueries());
-            covered.addAll(normalizedTags(topic.coverageTags()));
+            List<String> tags = normalizedTags(topic.coverageTags());
+            covered.addAll(tags);
+            if (tags.contains("source_dependency")) {
+                if (CORE_COVERAGE.stream().anyMatch(tags::contains)) {
+                    throw new IllegalArgumentException(
+                            "source dependency cannot claim covered core rules");
+                }
+                boolean unknownMissingTag = tags.stream()
+                        .filter(tag -> tag.startsWith("missing_") && tag.endsWith("_source"))
+                        .anyMatch(tag -> CORE_COVERAGE.stream()
+                                .noneMatch(core -> tag.equals("missing_" + core + "_source")));
+                if (unknownMissingTag) {
+                    throw new IllegalArgumentException("source dependency has an unknown missing coverage tag");
+                }
+                CORE_COVERAGE.stream()
+                        .filter(tag -> tags.contains("missing_" + tag + "_source"))
+                        .forEach(explicitlyMissing::add);
+            }
         }
-        if (!covered.containsAll(CORE_COVERAGE)) {
+        Set<String> accountedFor = new HashSet<>(covered);
+        accountedFor.addAll(explicitlyMissing);
+        if (!accountedFor.containsAll(CORE_COVERAGE)) {
             throw new IllegalArgumentException("teaching outline omitted setup, core loop, ending, or scoring coverage");
         }
     }
@@ -101,6 +123,12 @@ public class TeachingPlanFactory {
                 .toList();
     }
 
+    private List<String> planTags(OutlineDraft outline, com.rulepilot.teaching.TeachingOutlineModel.TopicDraft topic) {
+        LinkedHashSet<String> tags = new LinkedHashSet<>(normalizedTags(topic.coverageTags()));
+        tags.addAll(TeachingSourceCoverageContract.metadataForTopic(outline, topic));
+        return List.copyOf(tags);
+    }
+
     private List<String> normalizedQueries(List<String> values) {
         if (values == null || values.isEmpty()) {
             throw new IllegalArgumentException("every teaching topic needs at least one retrieval question");
@@ -110,7 +138,7 @@ public class TeachingPlanFactory {
                 .map(String::strip)
                 .filter(value -> value.length() <= 300)
                 .distinct()
-                .limit(4)
+                .limit(8)
                 .toList();
     }
 

@@ -70,7 +70,7 @@ public record TeachingPlan(
                     || topicKey == null || topicKey.isBlank() || topicKey.length() > 80
                     || title == null || title.isBlank() || title.length() > 160
                     || objective == null || objective.isBlank() || objective.length() > 600
-                    || retrievalQueries == null || retrievalQueries.isEmpty() || retrievalQueries.size() > 5
+                    || retrievalQueries == null || retrievalQueries.isEmpty() || retrievalQueries.size() > 8
                     || retrievalQueries.stream().anyMatch(query -> query == null || query.isBlank() || query.length() > 300)
                     || coverageTags == null
                     || sourcePageNumbers == null || sourcePageNumbers.size() > 5

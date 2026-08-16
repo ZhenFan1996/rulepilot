@@ -5,7 +5,7 @@ import { useRoute, useRouter } from 'vue-router'
 import ProductMark from '@/components/ProductMark.vue'
 import LanguageSwitcher from '@/components/LanguageSwitcher.vue'
 import { useLocale } from '@/lib/locale'
-import { safeAuthReturnPath } from '@/lib/authSession'
+import { safeKnownAuthReturnPath } from '@/lib/authSession'
 
 interface CsrfResponse {
   headerName: string
@@ -29,7 +29,7 @@ const isSubmitting = ref(false)
 const failure = ref<LoginFailure | null>(null)
 const usernameInput = ref<HTMLInputElement | null>(null)
 const errorSummary = ref<HTMLElement | null>(null)
-const returnPath = computed(() => safeAuthReturnPath(route.query.redirect))
+const returnPath = computed(() => safeKnownAuthReturnPath(router, route.query.redirect))
 const registerTarget = computed(() => returnPath.value
   ? { name: 'register', query: { redirect: returnPath.value } }
   : { name: 'register' })
@@ -85,7 +85,7 @@ async function login() {
     await exposeFailure(nextFailure)
     return
   }
-  await router.replace(returnPath.value ?? { name: 'account' })
+  await router.replace(returnPath.value ?? { name: 'home' })
 }
 </script>
 

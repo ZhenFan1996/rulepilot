@@ -32,6 +32,7 @@ import com.rulepilot.assistant.domain.RuleWalkthroughStep;
 import com.rulepilot.assistant.domain.StructuredRuleAnswer;
 import com.rulepilot.assistant.domain.UnderstoodQuestion;
 import com.rulepilot.document.RuleDataVersion;
+import com.rulepilot.retrieval.AnswerEvidenceRetriever;
 import com.rulepilot.retrieval.HybridRuleSearch;
 import com.rulepilot.retrieval.RuleEvidenceLookup;
 import com.rulepilot.retrieval.VisualRulebookPageFactSearch;
@@ -58,7 +59,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(StructuredRuleAnswerService.class);
     // Context-resolved questions use a new semantic identity, so earlier answer-cache entries are stale.
-    private static final String ANSWER_POLICY_VERSION = "answer-v111-agent-question-planning";
+    private static final String ANSWER_POLICY_VERSION = "answer-v114-intent-owned-retrieval";
     private final QuestionUnderstanding understanding;
     private final AnswerModelGateway modelGateway;
     private final AnswerQuestionInterpretationPolicy questionInterpretation;
@@ -116,12 +117,17 @@ public class StructuredRuleAnswerService implements RuleAnswering {
             AuditedAgentInvocations invocations,
             ObservationRegistry observations,
             MeterRegistry metrics,
-            AnswerEvidenceRefiner evidenceRefiner) {
+            AnswerEvidenceRefiner evidenceRefiner,
+            AgentInvocationDeadline deadline) {
         this.understanding = understanding;
-        this.modelGateway = new AnswerModelGateway(model, rateLimiter, invocations);
+        this.modelGateway = new AnswerModelGateway(model, rateLimiter, invocations, deadline);
         this.questionInterpretation = new AnswerQuestionInterpretationPolicy();
         this.evidenceRetriever = new AnswerEvidenceRetriever(
-                retrieval, visualFacts, evidenceLookup, invocations, modelGateway);
+                retrieval,
+                visualFacts,
+                evidenceLookup,
+                new AuditedAnswerRetrievalInvocations(invocations),
+                new ModelAnswerRetrievalQueryRewriter(modelGateway));
         this.evidenceRefiner = evidenceRefiner;
         this.modelRequestFactory = new AnswerModelRequestFactory();
         this.cache = cache;
@@ -160,6 +166,43 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                 "rulepilot.answer.question.interpretations", "result", "accepted");
         this.fallbackQuestionInterpretations = metrics.counter(
                 "rulepilot.answer.question.interpretations", "result", "fallback");
+    }
+
+    public StructuredRuleAnswerService(
+            QuestionUnderstanding understanding,
+            HybridRuleSearch retrieval,
+            VisualRulebookPageFactSearch visualFacts,
+            RuleEvidenceLookup evidenceLookup,
+            RuleAnswerModel model,
+            RuleAnswerCache cache,
+            RuleAnswerRateLimiter rateLimiter,
+            RuleDataVersion ruleDataVersion,
+            ConfirmedRulingLookup confirmedRulings,
+            EvidenceVerifier evidenceVerifier,
+            GeneratedContentCritic critic,
+            AssistantRuns runs,
+            AuditedAgentInvocations invocations,
+            ObservationRegistry observations,
+            MeterRegistry metrics,
+            AnswerEvidenceRefiner evidenceRefiner) {
+        this(
+                understanding,
+                retrieval,
+                visualFacts,
+                evidenceLookup,
+                model,
+                cache,
+                rateLimiter,
+                ruleDataVersion,
+                confirmedRulings,
+                evidenceVerifier,
+                critic,
+                runs,
+                invocations,
+                observations,
+                metrics,
+                evidenceRefiner,
+                AgentInvocationDeadline.unbounded());
     }
 
     public StructuredRuleAnswerService(
@@ -263,16 +306,18 @@ public class StructuredRuleAnswerService implements RuleAnswering {
             String previousQuestion,
             PlayerLocale outputLanguage,
             RuleAnswering.PublicLearningIntent learningIntent) {
+        PlayerLocale turnLanguage = PlayerLocale.forQuestion(question, outputLanguage);
         AnswerCreation creation = answerWithRun(
                 question,
                 new QuestionContext(
                         documentVersionId,
                         previousQuestion,
                         learningIntent == null ? null : LearningIntent.valueOf(learningIntent.name()),
-                        outputLanguage),
+                        turnLanguage),
                 "public-reader",
                 null);
-        return AnswerOutcomePolicy.publicReaderAnswer(creation.assistantRunId(), creation.answer());
+        return AnswerOutcomePolicy.publicReaderAnswer(
+                creation.assistantRunId(), creation.answer(), question, turnLanguage);
     }
 
     public AnswerCreation evaluateWithRun(
@@ -318,7 +363,11 @@ public class StructuredRuleAnswerService implements RuleAnswering {
             return new AnswerCreation(run.id(), answer);
         } catch (AgentExecutionStoppedException stopped) {
             runLifecycle.fail(run, "AGENT_" + stopped.reason().name(), "Question workflow stopped by execution budget", stopped);
-            throw stopped;
+            AnswerStatus status = stopped.reason() == AgentExecutionStoppedException.StopReason.TIMEOUT
+                    ? AnswerStatus.MODEL_TIMEOUT
+                    : AnswerStatus.INVALID_MODEL_OUTPUT;
+            return new AnswerCreation(
+                    run.id(), safe(context.documentVersionId(), status, "答疑执行已在应用预算边界安全停止。"));
         } catch (RuntimeException exception) {
             runLifecycle.fail(run, "QUESTION_WORKFLOW_FAILED", "Question workflow failed safely", exception);
             throw exception;
@@ -342,6 +391,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
             UUID gameSessionId,
             UUID assistantRunId,
             boolean useCache) {
+        context = context.withOutputLanguage(PlayerLocale.forQuestion(question, context.outputLanguage()));
         UnderstoodQuestion deterministic = understanding.understand(question, context);
         UnderstoodQuestion understood = deterministic;
         AnswerQuestionPlan questionPlan = AnswerQuestionPlan.fallback(deterministic);
@@ -383,10 +433,10 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                 assistantRunId,
                 ActivityType.TOOL,
                 "searchConfirmedRulings",
-                estimateTokens(interpretedQuestion.normalizedQuestion()),
+                estimateTokens(interpretedQuestion.originalQuestion()),
                 "Confirmed ruling lookup completed",
                 () -> confirmedRulings.find(
-                        resolvedContext.documentVersionId(), Set.of(), interpretedQuestion.normalizedQuestion(), username),
+                        resolvedContext.documentVersionId(), Set.of(), interpretedQuestion.originalQuestion(), username),
                 result -> result.isPresent() ? 32 : 0);
         if (confirmed.isPresent()) {
             confirmedRulingHits.increment();
@@ -403,7 +453,11 @@ public class StructuredRuleAnswerService implements RuleAnswering {
             cacheMisses.increment();
         }
         AnswerEvidenceRetriever.Result retrievalResult = evidenceRetriever.retrieve(
-                assistantRunId, interpretedQuestion, context, username, questionPlan);
+                assistantRunId,
+                AnswerRetrievalInputMapper.question(interpretedQuestion),
+                AnswerRetrievalInputMapper.context(context),
+                username,
+                AnswerRetrievalInputMapper.plan(questionPlan));
         if (evidenceRefiner != null) {
             retrievalResult = evidenceRefiner.refine(
                     assistantRunId,
@@ -834,6 +888,10 @@ public class StructuredRuleAnswerService implements RuleAnswering {
             throw exception;
         }
         if (!reviewResult.accepted()) {
+            if (reviewResult.failureStatus() == AnswerStatus.INSUFFICIENT_EVIDENCE) {
+                return AnswerOutcomePolicy.insufficientWithSources(
+                        context.documentVersionId(), reviewResult.failureMessage(), evidence);
+            }
             return safe(context.documentVersionId(), reviewResult.failureStatus(), reviewResult.failureMessage());
         }
         answer = reviewResult.answer();

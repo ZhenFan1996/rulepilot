@@ -65,7 +65,7 @@ class HttpGstoneRulebookCatalogLookupTest {
                 .satisfies(candidate -> {
                     assertThat(candidate.title()).isEqualTo("目录游戏 · 集石规则页");
                     assertThat(candidate.url()).isEqualTo("https://www.gstonegames.com/game/info-1234.html");
-                    assertThat(candidate.language()).isEqualTo("zh-CN");
+                    assertThat(candidate.language()).isBlank();
                 });
     }
 

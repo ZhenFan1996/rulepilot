@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 
+import PlayerWorkStatusText from '@/components/PlayerWorkStatusText.vue'
 import TabletopGlyph from '@/components/TabletopGlyph.vue'
 import { useModalFocus } from '@/composables/useModalFocus'
 import {
@@ -33,6 +34,15 @@ import {
 import { mergeDocumentProgress } from '@/lib/documentProgress'
 import { playerFacingTitle } from '@/lib/lessonPresentation'
 import { useLocale } from '@/lib/locale'
+import {
+  playerWorkStatus,
+  type PlayerCapability,
+  type PlayerReadiness,
+  type PlayerTerminality,
+  type PlayerWorkOutcome,
+  type PlayerWorkStage,
+  type PlayerWorkStatus,
+} from '@/lib/playerWorkStatus'
 import { TEACHING_LAUNCHED_EVENT, teachingLaunchDetail } from '@/lib/teachingLaunch'
 
 const props = defineProps<{ username: string }>()
@@ -48,8 +58,9 @@ interface WorkItem {
   id: string
   kind: 'download' | 'rulebook' | 'lesson'
   title: string
-  stage: string
+  status: PlayerWorkStatus
   detail: string
+  context: string
   state: WorkState
   progress: number | null
   target: { name: string; query?: Record<string, string> }
@@ -95,12 +106,15 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   queued: '等待下载', connecting: '正在连接规则书来源', downloading: '正在下载规则书内容', compressing: '文件较大，正在压缩 PDF', verifying: '正在核验 PDF',
   saving: '正在保存并交给规则书读取', uploaded: '等待开始读取', extracting: '正在提取规则文字',
   validating: '正在核验规则书文件', rendering: '正在生成规则书页面', structuring: '正在整理章节与图例',
-  chunking: '正在建立可检索规则段落', embedding: '正在建立规则语义索引', indexing: '正在完成规则索引', teaching: '正在组织讲解',
+  chunking: '正在整理规则内容', embedding: '正在整理规则内容', indexing: '正在完成规则书读取', teaching: '正在组织讲解',
   rulebookFailed: '规则书读取失败，讲解无法开始',
   waitingForTeaching: '规则书已保存，读取完成后会自动开始讲解', launchingTeaching: '规则书已就绪，正在启动讲解任务',
   teachingLaunched: '规则书已保存，讲解任务已交给后台', teachingLaunchFailed: '规则书已保存，但自动讲解没有启动',
   preparationReceived: '讲解任务已接收', preparationReading: '正在确认规则书可以用于讲解',
-  preparationPlanning: '正在读取规则并建立讲解结构', preparationFailed: '讲解准备失败，可在讲解中心重试',
+  preparationPlanning: '正在整理讲解结构', preparationFailed: '讲解准备没有完成，可在讲解中心重试',
+  teachingPlanningEvidence: '正在确定各章节需要核对的规则', teachingRetrieving: '正在查找各章节需要的规则依据',
+  teachingVerifying: '正在逐条核对讲解与规则依据', teachingComposing: '正在把规则整理成可读的讲解',
+  teachingPackaging: '正在补充规则页与图示', teachingReviewing: '正在复核讲解中的规则结论',
   bytes: (done: string, total: string) => `${done} / ${total}`, pages: (done: number, total: number) => `第 ${done} / ${total} 页`,
   browserRequired: '需要在来源网站刷新链接或登录',
   openRulebooks: '打开规则书', openLessons: '打开讲解中心',
@@ -111,16 +125,56 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   queued: 'Waiting to download', connecting: 'Connecting to rulebook source', downloading: 'Downloading rulebook content', compressing: 'Compressing the oversized PDF', verifying: 'Verifying PDF',
   saving: 'Saving and handing off for reading', uploaded: 'Waiting to read', extracting: 'Extracting searchable rules',
   validating: 'Validating the rulebook file', rendering: 'Rendering rulebook pages', structuring: 'Organizing chapters and visual references',
-  chunking: 'Building searchable rule passages', embedding: 'Building the rule meaning index', indexing: 'Finishing the rule index', teaching: 'Organizing the lesson',
+  chunking: 'Organizing rulebook content', embedding: 'Organizing rulebook content', indexing: 'Finishing rulebook reading', teaching: 'Organizing the guide',
   rulebookFailed: 'Rulebook reading failed, so the guide could not start',
   waitingForTeaching: 'Rulebook saved; the guide will start automatically when reading completes', launchingTeaching: 'Rulebook ready; starting the guide task',
   teachingLaunched: 'Rulebook saved; guide work was handed to the background', teachingLaunchFailed: 'Rulebook saved, but the automatic guide did not start',
   preparationReceived: 'Guide task received', preparationReading: 'Confirming that the rulebook is ready for a guide',
-  preparationPlanning: 'Reading the rules and building the guide structure', preparationFailed: 'Guide preparation failed; retry from the lesson center',
+  preparationPlanning: 'Organizing the guide structure', preparationFailed: 'Guide preparation did not finish; retry from the guide center',
+  teachingPlanningEvidence: 'Deciding which rules each section must verify', teachingRetrieving: 'Finding rule evidence for each section',
+  teachingVerifying: 'Checking each guide claim against the rules', teachingComposing: 'Turning the rules into a readable guide',
+  teachingPackaging: 'Adding rule pages and visual references', teachingReviewing: 'Reviewing the guide\'s rule claims',
   bytes: (done: string, total: string) => `${done} / ${total}`, pages: (done: number, total: number) => `Page ${done} / ${total}`,
   browserRequired: 'Refresh the link or sign in on the source site',
   openRulebooks: 'Open rulebooks', openLessons: 'Open lesson center',
 })
+
+function workStatus(
+  stage: PlayerWorkStage,
+  capability: PlayerCapability,
+  readiness: PlayerReadiness,
+  terminality: PlayerTerminality,
+  outcome: PlayerWorkOutcome = 'none',
+) {
+  return playerWorkStatus(stage, { capability, readiness, terminality, outcome }, locale.value)
+}
+
+function importPlayerStatus(
+  job: RulebookImportJob,
+  documentStatus: string | undefined,
+  state: WorkState,
+) {
+  const rulebookUsable = documentStatus === 'READY'
+  if (state === 'failed') {
+    return workStatus(
+      'NEEDS_ACTION',
+      rulebookUsable ? 'rulebook' : 'none',
+      rulebookUsable ? 'usable' : 'unavailable',
+      'terminal',
+      'needs-action',
+    )
+  }
+  if (job.stage !== 'COMPLETED') {
+    return workStatus('ACQUIRING_RULEBOOK', 'none', 'unavailable', 'active')
+  }
+  if (job.teachingHandoffState === 'WAITING_FOR_DOCUMENT' || documentStatus && documentStatus !== 'READY') {
+    return workStatus('READING_RULEBOOK', 'none', 'unavailable', 'active')
+  }
+  if (job.teachingHandoffState === 'LAUNCHING' || job.teachingHandoffState === 'LAUNCHED') {
+    return workStatus('ORGANIZING_GUIDE', 'rulebook', 'usable', 'active')
+  }
+  return workStatus('RULEBOOK_READY', 'rulebook', 'usable', 'terminal')
+}
 
 function formatBytes(value: number) {
   if (value < 1024 * 1024) return `${Math.max(1, Math.round(value / 1024))} KB`
@@ -205,6 +259,20 @@ function preparationStage(state: string) {
   }[state] ?? copy.value.teaching
 }
 
+function teachingStateDetail(state: string | undefined) {
+  return {
+    RECEIVED: copy.value.preparationReceived,
+    DOCUMENT_READINESS: copy.value.preparationReading,
+    LESSON_PLANNING: copy.value.preparationPlanning,
+    RETRIEVAL_PLANNING: copy.value.teachingPlanningEvidence,
+    RETRIEVING: copy.value.teachingRetrieving,
+    VERIFYING_EVIDENCE: copy.value.teachingVerifying,
+    LESSON_COMPOSITION: copy.value.teachingComposing,
+    MEDIA_PACKAGING: copy.value.teachingPackaging,
+    CRITIQUING: copy.value.teachingReviewing,
+  }[state ?? ''] ?? copy.value.safe
+}
+
 function documentStage(progress: DocumentProgress | undefined, status: string) {
   const stage = progress?.stage ?? status
   return {
@@ -248,17 +316,19 @@ const workItems = computed<WorkItem[]>(() => {
       const progress = job.stage === 'DOWNLOADING' && job.totalBytes
         ? Math.min(100, Math.round(job.downloadedBytes / job.totalBytes * 100))
         : job.stage === 'COMPLETED' ? 100 : null
-      const detail = job.stage === 'FAILED' && job.errorCode === 'SOURCE_BROWSER_REQUIRED'
+      const context = job.stage === 'FAILED' && job.errorCode === 'SOURCE_BROWSER_REQUIRED'
         ? copy.value.browserRequired
         : job.stage === 'DOWNLOADING' && job.downloadedBytes > 0
         ? job.totalBytes
           ? copy.value.bytes(formatBytes(job.downloadedBytes), formatBytes(job.totalBytes))
           : formatBytes(job.downloadedBytes)
         : job.sourceDomain
+      const state = importState(job, documentFailed)
       return {
         id: `import:${job.id}`, kind: 'download', title: job.title,
-        stage: documentFailed ? copy.value.rulebookFailed : importStage(job), detail,
-        state: importState(job, documentFailed),
+        status: importPlayerStatus(job, document?.latestVersion.status, state),
+        detail: documentFailed ? copy.value.rulebookFailed : importStage(job), context,
+        state,
         progress, target: { name: 'teach', query: { importJob: job.id } }, updatedAt: job.updatedAt,
       }
     })
@@ -276,21 +346,25 @@ const workItems = computed<WorkItem[]>(() => {
       const progress = documentProgress.value[entry.latestVersion.id]
       return {
         id: `document:${entry.latestVersion.id}`, kind: 'rulebook', title: entry.document.title,
-        stage: documentStage(progress, entry.latestVersion.status),
-        detail: progress?.stage === 'RENDERING' && progress.totalPages > 0
+        status: workStatus('READING_RULEBOOK', 'none', 'unavailable', 'active'),
+        detail: documentStage(progress, entry.latestVersion.status),
+        context: progress?.stage === 'RENDERING' && progress.totalPages > 0
           ? copy.value.pages(progress.processedPages, progress.totalPages) : '',
         state: 'active', progress: progress?.percentage ?? null, target: { name: 'teach' },
       }
     })
   const teachingItems = activeTeaching.value.map((item): WorkItem => ({
     id: `teaching:${item.runId}`, kind: 'lesson', title: item.gameTitle,
-    stage: copy.value.teaching, detail: teachingStates.value[item.runId] ?? copy.value.safe,
+    status: workStatus('ORGANIZING_GUIDE', 'rulebook', 'usable', 'active'),
+    detail: teachingStateDetail(teachingStates.value[item.runId]), context: '',
     state: 'active', progress: null, target: { name: 'lessons' },
   }))
   const finishedTeachingItems = completedTeaching.value.map((item): WorkItem => ({
     id: `teaching-finished:${item.runId}`, kind: 'lesson', title: item.gameTitle,
-    stage: item.terminalState && item.terminalState !== 'COMPLETED' ? copy.value.failed : copy.value.done,
-    detail: '', state: item.terminalState && item.terminalState !== 'COMPLETED' ? 'failed' : 'complete',
+    status: item.terminalState && item.terminalState !== 'COMPLETED'
+      ? workStatus('NEEDS_ACTION', 'rulebook', 'usable', 'terminal', 'needs-action')
+      : workStatus('GUIDE_COMPLETE', 'guide', 'complete', 'terminal'),
+    detail: '', context: '', state: item.terminalState && item.terminalState !== 'COMPLETED' ? 'failed' : 'complete',
     progress: item.terminalState && item.terminalState !== 'COMPLETED' ? null : 100,
     target: { name: 'lessons' },
   }))
@@ -298,8 +372,9 @@ const workItems = computed<WorkItem[]>(() => {
       id: `teaching-transition:${transition.id}`,
       kind: 'lesson',
       title: transition.title,
-      stage: copy.value.launchingTeaching,
-      detail: '',
+      status: workStatus('ORGANIZING_GUIDE', 'rulebook', 'usable', 'active'),
+      detail: copy.value.launchingTeaching,
+      context: '',
       state: 'active',
       progress: null,
       target: { name: 'lessons' },
@@ -309,13 +384,17 @@ const workItems = computed<WorkItem[]>(() => {
     const runState = runId ? preparationStates.value[runId] : undefined
     if (!runId || !runState || runState === 'COMPLETED') return []
     if (dismissedImportIds.value.has(job.id) && terminalTeachingStates.has(runState)) return []
+    const failed = terminalTeachingStates.has(runState)
     return [{
       id: `teaching-preparation:${runId}`,
       kind: 'lesson',
       title: job.title,
-      stage: preparationStage(runState),
-      detail: '',
-      state: terminalTeachingStates.has(runState) ? 'failed' : 'active',
+      status: failed
+        ? workStatus('NEEDS_ACTION', 'rulebook', 'usable', 'terminal', 'needs-action')
+        : workStatus('ORGANIZING_GUIDE', 'rulebook', 'usable', 'active'),
+      detail: preparationStage(runState),
+      context: '',
+      state: failed ? 'failed' : 'active',
       progress: null,
       target: { name: 'lessons' },
       updatedAt: job.updatedAt,
@@ -334,7 +413,7 @@ const workItems = computed<WorkItem[]>(() => {
       const documentSnapshot = documentProgress.value[handoff.documentVersionId]
       const documentFailed = documentStatus === 'FAILED'
       const failed = uploadedTeachingHandoffFailed(handoff)
-      const stage = documentFailed || handoff.errorCode === 'DOCUMENT_PROCESSING_FAILED'
+      const detail = documentFailed || handoff.errorCode === 'DOCUMENT_PROCESSING_FAILED'
         ? copy.value.rulebookFailed
         : failed
           ? copy.value.preparationFailed
@@ -347,8 +426,19 @@ const workItems = computed<WorkItem[]>(() => {
         id: `uploaded-teaching:${handoff.id}`,
         kind: handoff.state === 'WAITING_FOR_DOCUMENT' || documentFailed ? 'rulebook' : 'lesson',
         title: handoff.title,
-        stage,
-        detail: handoff.rulebookTitle !== handoff.title ? handoff.rulebookTitle : '',
+        status: failed
+          ? workStatus(
+              'NEEDS_ACTION',
+              documentStatus === 'READY' ? 'rulebook' : 'none',
+              documentStatus === 'READY' ? 'usable' : 'unavailable',
+              'terminal',
+              'needs-action',
+            )
+          : handoff.state === 'WAITING_FOR_DOCUMENT'
+            ? workStatus('READING_RULEBOOK', 'none', 'unavailable', 'active')
+            : workStatus('ORGANIZING_GUIDE', 'rulebook', 'usable', 'active'),
+        detail,
+        context: handoff.rulebookTitle !== handoff.title ? handoff.rulebookTitle : '',
         state: failed ? 'failed' : 'active',
         progress: handoff.state === 'WAITING_FOR_DOCUMENT' ? documentSnapshot?.percentage ?? null : null,
         target: { name: handoff.state === 'WAITING_FOR_DOCUMENT' || documentFailed ? 'teach' : 'lessons' },
@@ -942,8 +1032,12 @@ function safelyStore(key: string, value: unknown) {
                 <div class="min-w-0 flex-1">
                   <p class="text-xs font-bold uppercase tracking-[0.1em] text-ink/40">{{ item.kind === 'download' ? copy.download : item.kind === 'rulebook' ? copy.rulebook : copy.lesson }}</p>
                   <p class="mt-1 truncate font-semibold">{{ item.title }}</p>
-                  <p class="mt-1 text-sm text-ink/60">{{ item.stage }}</p>
-                  <p v-if="item.detail" class="mt-1 text-xs text-ink/45">{{ item.detail }}</p>
+                  <PlayerWorkStatusText
+                    :status="item.status"
+                    class="mt-1 text-sm font-semibold text-ink/70"
+                  />
+                  <p v-if="item.detail" class="mt-1 text-xs leading-5 text-ink/50">{{ item.detail }}</p>
+                  <p v-if="item.context" class="mt-1 text-xs text-ink/45">{{ item.context }}</p>
                   <div v-if="item.progress !== null" class="mt-3 h-1.5 overflow-hidden rounded-full bg-ink/10" :aria-label="`${item.progress}%`">
                     <div class="h-full rounded-full bg-copper transition-[width]" :style="{ width: `${item.progress}%` }" />
                   </div>

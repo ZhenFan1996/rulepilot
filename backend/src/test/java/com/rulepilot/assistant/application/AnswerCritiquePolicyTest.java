@@ -51,7 +51,14 @@ class AnswerCritiquePolicyTest {
         assertThat(request.contentType()).isEqualTo(GeneratedContentCritic.ContentType.ANSWER);
         assertThat(request.taskContext().objective()).contains(question().normalizedQuestion());
         assertThat(request.taskContext().requiredCoverage())
-                .contains("actor", "condition", "selected structured aid", "Natural paraphrase");
+                .contains(
+                        "actor",
+                        "condition",
+                        "selected structured aid",
+                        "aggregation unit",
+                        "multiplier",
+                        "worked example",
+                        "Natural paraphrase");
         assertThat(request.claims()).extracting(GeneratedContentCritic.Claim::text)
                 .containsExactly(
                         "Direct verdict.\nGrounded explanation.",
@@ -73,6 +80,24 @@ class AnswerCritiquePolicyTest {
         assertThat(AnswerCritiquePolicy.revisionFeedback(review)).containsExactly(
                 "CONTRADICTION: Reverse the claimed order.",
                 "MISSING_EXCEPTION: Add the cited exception.");
+    }
+
+    @Test
+    void keepsTheCurrentQuestionAuthoritativeWhenResolvedContextContainsAnEarlierObject() {
+        UnderstoodQuestion question = new UnderstoodQuestion(
+                versionId,
+                "Does the cobalt spindle return now?",
+                "How many marks does the amber lattice award? Follow-up: Does the cobalt spindle return now?",
+                QuestionType.RULE_QUERY,
+                List.of("cobalt spindle"),
+                Set.of());
+
+        GeneratedContentCritic.ReviewRequest request = AnswerCritiquePolicy.request(
+                UUID.randomUUID(), question, context(), answer(), List.of(evidence()));
+
+        assertThat(request.taskContext().objective())
+                .contains("Does the cobalt spindle return now?")
+                .doesNotContain("amber lattice");
     }
 
     private UnderstoodQuestion question() {

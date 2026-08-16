@@ -100,7 +100,7 @@ describe('AppShell', () => {
     vi.advanceTimersByTime(4000)
     await flushPromises()
 
-    expect(wrapper.text()).toContain('已完成')
+    expect(wrapper.text()).toContain('讲解完成')
     expect(wrapper.text()).not.toContain('生成成功')
     expect(fetchMock.mock.calls.filter(([input]) => String(input).includes('/api/v1/teaching-plans'))).toHaveLength(1)
 
@@ -192,7 +192,7 @@ describe('AppShell', () => {
     await vi.advanceTimersByTimeAsync(4000)
     await flushPromises()
 
-    expect(wrapper.text()).toContain('已完成')
+    expect(wrapper.text()).toContain('讲解完成')
     wrapper.unmount()
   })
 
@@ -268,7 +268,9 @@ describe('AppShell', () => {
     await trigger.trigger('click')
 
     expect(wrapper.text()).toContain('规则书已保存，读取完成后会自动开始讲解')
-    expect(wrapper.text()).toContain('正在读取规则并建立讲解结构')
+    expect(wrapper.text()).toContain('读取规则书')
+    expect(wrapper.text()).toContain('正在组织讲解')
+    expect(wrapper.text()).not.toContain('建立讲解结构')
     expect(wrapper.text()).toContain('卡坦岛规则书')
     expect(wrapper.text()).toContain('展翅翱翔规则书')
     expect(wrapper.findAll('ol li')).toHaveLength(2)
@@ -347,7 +349,8 @@ describe('AppShell', () => {
 
     await wrapper.get('[data-testid="background-work-trigger-desktop"]').trigger('click')
     expect(wrapper.text()).toContain('失败的官方讲解')
-    expect(wrapper.text()).toContain('讲解准备失败')
+    expect(wrapper.text()).toContain('需要处理')
+    expect(wrapper.text()).toContain('讲解准备没有完成，可在讲解中心重试')
 
     await wrapper.findAll('button').find(button => button.text() === '清除已结束任务')!.trigger('click')
     expect(wrapper.text()).not.toContain('失败的官方讲解')
@@ -417,7 +420,8 @@ describe('AppShell', () => {
     await vi.advanceTimersByTimeAsync(4000)
     await flushPromises()
     expect(wrapper.text()).toContain('仍在准备的讲解')
-    expect(wrapper.text()).toContain('讲解准备失败')
+    expect(wrapper.text()).toContain('需要处理')
+    expect(wrapper.text()).toContain('讲解准备没有完成，可在讲解中心重试')
     wrapper.unmount()
   })
 
@@ -562,6 +566,29 @@ describe('AppShell', () => {
     wrapper.unmount()
   })
 
+  it('leaves authentication recovery to one page-owned region when requested', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 401 })))
+    const router = createAppShellRouter()
+    await router.push('/lessons?filter=pending')
+    await router.isReady()
+    const wrapper = mount(AppShell, {
+      props: { loginActionOwned: true },
+      slots: {
+        default: '<a data-testid="owned-login-action" href="/login?redirect=/lessons?filter=pending">登录后继续</a>',
+      },
+      global: { plugins: [router] },
+    })
+    await flushPromises()
+
+    notifyLoginRequired()
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.findAll('a[href^="/login"]')).toHaveLength(1)
+    expect(wrapper.get('[data-testid="owned-login-action"]').text()).toBe('登录后继续')
+    expect(wrapper.text()).not.toContain('当前页面已保留')
+    wrapper.unmount()
+  })
+
   it('clears account-owned notices and the active route state after logout succeeds', async () => {
     const sessionCleared = vi.fn()
     window.addEventListener(SESSION_CLEARED_EVENT, sessionCleared)
@@ -644,6 +671,7 @@ function createAppShellRouter() {
     history: createMemoryHistory(),
     routes: [
       { path: '/', name: 'home', component: { template: '<div />' } },
+      { path: '/discover', name: 'game-recommendations', component: { template: '<div />' } },
       { path: '/library', name: 'public-library', component: { template: '<div />' } },
       { path: '/catalog', name: 'catalog', component: { template: '<div />' } },
       { path: '/teach', name: 'teach', component: { template: '<div />' } },

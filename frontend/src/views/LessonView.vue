@@ -467,7 +467,8 @@ async function refreshVisualEnrichment() {
   }
 }
 
-function terminalGenerationMessage(state: string) {
+function terminalGenerationMessage(state: string, availableSectionCount: number) {
+  if (availableSectionCount === 0) return t('lesson.generation.finished.noReadable')
   if (state === 'COMPLETED') return t('lesson.generation.finished.complete')
   if (state === 'INSUFFICIENT_EVIDENCE' || state === 'DEGRADED') {
     return t('lesson.generation.finished.incomplete')
@@ -533,7 +534,8 @@ async function refreshGeneration() {
     }
 
     if (wasActive && !generationActive.value) {
-      generationFinishedMessage.value = terminalGenerationMessage(acceptedRun?.run.state ?? '')
+      const terminalState = acceptedRun?.run.state ?? ''
+      generationFinishedMessage.value = terminalGenerationMessage(terminalState, acceptedLesson.sections.length)
       await loadSupportingContent(targetPlanId, request)
       if (!isCurrentLessonLoad(request, targetPlanId)) return
       await refreshVisualEnrichment()
@@ -643,12 +645,12 @@ onUnmounted(() => {
         :elapsed="generationElapsed"
         :processed-chapter-count="processedGenerationChapters"
         :supported-chapter-count="supportedGenerationChapters"
-        :model-call-count="teachingRun?.budget.usedModelCalls ?? 0"
         :progress-width="generationProgressWidth"
         :remaining-time="generationRemainingTime"
         :activities="recentGenerationActivities"
         :refresh-failed="Boolean(generationRefreshError)"
         :finished-message="generationFinishedMessage"
+        :finished-complete="teachingRun?.run.state === 'COMPLETED' && Boolean(lesson?.sections.length)"
       />
 
       <LessonOfflineKnowledgePanel v-if="!online && offlineKnowledge.length" :entries="offlineKnowledge" />

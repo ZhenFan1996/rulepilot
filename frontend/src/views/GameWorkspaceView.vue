@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 
 import AppShell from '@/components/AppShell.vue'
+import PlayerWorkStatusText from '@/components/PlayerWorkStatusText.vue'
 import TabletopGlyph from '@/components/TabletopGlyph.vue'
 import { notifyLoginRequired } from '@/lib/authSession'
 import {
@@ -28,6 +29,8 @@ import {
   type RichBggDetails,
 } from '@/lib/gameShelfSnapshot'
 import { useLocale } from '@/lib/locale'
+import { playerFacingLanguageName } from '@/lib/playerFacingLanguage'
+import { playerWorkStatus } from '@/lib/playerWorkStatus'
 
 const route = useRoute()
 const { locale } = useLocale()
@@ -100,19 +103,19 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   back: '返回我的游戏', eyebrow: '桌游工作区', error: '暂时无法读取这款桌游。', notFound: '这款桌游不在你的“我的桌游”中。', retry: '重试',
   rating: 'BGG 评分', weight: '复杂度', designers: '设计师', publishers: '出版社', mechanics: '机制', categories: '类别',
   evidence: 'BGG 信息用于识别、推荐与展示；规则讲解和答疑只引用已处理的规则书。', editions: '版本、规则书与讲解',
-  editionEmpty: '这个版本还没有规则书。', addRulebook: '找规则书', processing: '规则书处理中', failed: '规则书需要处理', ready: '规则书可用',
+  editionEmpty: '这个版本还没有规则书。', addRulebook: '找规则书',
   openGuide: '打开讲解', ask: '规则答疑', generate: '开始讲解', source: '官方来源', bgg: '查看 BGG 原始资料',
-  importQueued: '已加入“我的桌游”，规则书下载正在排队', importDownloading: '正在下载并绑定这本规则书', importSaving: '正在保存并绑定规则书', importReading: '规则书已保存，正在提取和建立检索', importFailed: '规则书导入需要处理',
-  guidePreparing: '讲解任务已持久化，正在后台准备', guideFailed: '讲解准备需要处理', recoverGuide: '去我的讲解重试', guideChecking: '正在核对是否已有讲解；现有规则书仍可使用。',
+  importQueued: '已加入“我的桌游”，规则书下载正在排队', importDownloading: '正在下载并绑定这本规则书', importSaving: '正在保存并绑定规则书', importReading: '规则书已保存，正在读取规则内容', importFailed: '规则书导入需要处理',
+  guidePreparing: '讲解任务已持久化，正在后台准备', guideFailed: '讲解准备没有完成', recoverGuide: '去我的讲解重试', guideChecking: '正在核对是否已有讲解；现有规则书仍可使用。',
   membershipUnavailable: '暂时无法确认这款桌游是否已加入“我的桌游”。',
 } : {
   back: 'Back to my games', eyebrow: 'Game workspace', error: 'This game is unavailable right now.', notFound: 'This game is not in My Games.', retry: 'Try again',
   rating: 'BGG rating', weight: 'Complexity', designers: 'Designers', publishers: 'Publishers', mechanics: 'Mechanics', categories: 'Categories',
   evidence: 'BGG data supports identification, recommendations, and presentation. Teaching and Q&A cite only processed rulebooks.', editions: 'Editions, rulebooks, and guides',
-  editionEmpty: 'This edition has no rulebook yet.', addRulebook: 'Find rulebook', processing: 'Processing rulebook', failed: 'Rulebook needs attention', ready: 'Rulebook ready',
+  editionEmpty: 'This edition has no rulebook yet.', addRulebook: 'Find rulebook',
   openGuide: 'Open guide', ask: 'Ask rules', generate: 'Start teaching', source: 'Official source', bgg: 'View original BGG data',
-  importQueued: 'Added to My Games; the rulebook download is queued', importDownloading: 'Downloading and linking this rulebook', importSaving: 'Saving and linking this rulebook', importReading: 'Rulebook saved; extracting rules and building retrieval', importFailed: 'Rulebook import needs attention',
-  guidePreparing: 'Guide work is persisted and continues in the background', guideFailed: 'Guide preparation needs attention', recoverGuide: 'Retry in My Guides', guideChecking: 'Checking for an existing guide. The rulebook remains usable.',
+  importQueued: 'Added to My Games; the rulebook download is queued', importDownloading: 'Downloading and linking this rulebook', importSaving: 'Saving and linking this rulebook', importReading: 'Rulebook saved; reading its contents', importFailed: 'Rulebook import needs attention',
+  guidePreparing: 'Guide work is persisted and continues in the background', guideFailed: 'Guide preparation did not finish', recoverGuide: 'Retry in My Guides', guideChecking: 'Checking for an existing guide. The rulebook remains usable.',
   membershipUnavailable: 'We cannot confirm whether this game is in My Games right now.',
 })
 
@@ -157,10 +160,20 @@ function preparationStage(runId: string) {
   return 'CHECKING'
 }
 
-function statusLabel(status: string) {
-  if (status === 'READY') return copy.value.ready
-  if (status === 'FAILED') return copy.value.failed
-  return copy.value.processing
+function documentWorkStatus(status: string) {
+  if (status === 'READY') {
+    return playerWorkStatus('RULEBOOK_READY', {
+      capability: 'rulebook', readiness: 'usable', terminality: 'terminal', outcome: 'none',
+    }, locale.value)
+  }
+  if (status === 'FAILED') {
+    return playerWorkStatus('NEEDS_ACTION', {
+      capability: 'none', readiness: 'unavailable', terminality: 'terminal', outcome: 'needs-action',
+    }, locale.value)
+  }
+  return playerWorkStatus('READING_RULEBOOK', {
+    capability: 'none', readiness: 'unavailable', terminality: 'active', outcome: 'none',
+  }, locale.value)
 }
 
 function importStage(job: ShelfImportJob) {
@@ -189,6 +202,54 @@ function importGuideFailed(job: ShelfImportJob) {
   return job.teachingHandoffState === 'LAUNCHED'
     && Boolean(job.teachingPreparationRunId)
     && preparationStage(job.teachingPreparationRunId!) === 'FAILED'
+}
+
+function importWorkStatus(job: ShelfImportJob) {
+  const preparation = job.teachingPreparationRunId
+    ? preparationStage(job.teachingPreparationRunId)
+    : null
+  const rulebookReady = job.stage === 'COMPLETED' && Boolean(job.documentVersionId)
+  if (job.stage === 'FAILED' || job.teachingHandoffState === 'FAILED' || preparation === 'FAILED') {
+    return playerWorkStatus('NEEDS_ACTION', {
+      capability: rulebookReady ? 'rulebook' : 'none',
+      readiness: rulebookReady ? 'usable' : 'unavailable',
+      terminality: 'terminal',
+      outcome: 'needs-action',
+    }, locale.value)
+  }
+  if (job.stage !== 'COMPLETED') {
+    return playerWorkStatus('ACQUIRING_RULEBOOK', {
+      capability: 'none', readiness: 'unavailable', terminality: 'active', outcome: 'none',
+    }, locale.value)
+  }
+  if (job.teachingHandoffState === 'WAITING_FOR_DOCUMENT') {
+    return playerWorkStatus('READING_RULEBOOK', {
+      capability: 'none', readiness: 'unavailable', terminality: 'active', outcome: 'none',
+    }, locale.value)
+  }
+  if (job.teachingHandoffState === 'LAUNCHING' || preparation === 'PREPARING') {
+    return playerWorkStatus('ORGANIZING_GUIDE', {
+      capability: 'rulebook', readiness: 'usable', terminality: 'active', outcome: 'none',
+    }, locale.value)
+  }
+  return playerWorkStatus('RULEBOOK_READY', {
+    capability: 'rulebook', readiness: 'usable', terminality: 'terminal', outcome: 'none',
+  }, locale.value)
+}
+
+function guidePreparationWorkStatus(document: ShelfDocument) {
+  const state = documentGuidePreparation(document)
+  if (state === 'PREPARING') {
+    return playerWorkStatus('ORGANIZING_GUIDE', {
+      capability: 'rulebook', readiness: 'usable', terminality: 'active', outcome: 'none',
+    }, locale.value)
+  }
+  if (state === 'FAILED') {
+    return playerWorkStatus('NEEDS_ACTION', {
+      capability: 'rulebook', readiness: 'usable', terminality: 'terminal', outcome: 'needs-action',
+    }, locale.value)
+  }
+  return null
 }
 
 async function checkedFetch(path: string, signal: AbortSignal) {
@@ -636,14 +697,15 @@ onBeforeUnmount(() => {
           <div class="mt-5 stack-y-xl">
             <article v-for="edition in game.editions" :key="edition.id" class="tabletop-panel player-board p-5 sm:p-6">
               <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <div><h3 class="font-display text-2xl font-semibold">{{ edition.name }}</h3><p class="mt-1 text-sm text-ink/45">{{ edition.language }}<span v-if="edition.publicationYear"> · {{ edition.publicationYear }}</span></p></div>
+                <div><h3 class="font-display text-2xl font-semibold">{{ edition.name }}</h3><p class="mt-1 text-sm text-ink/45">{{ playerFacingLanguageName(edition.language, locale) }}<span v-if="edition.publicationYear"> · {{ edition.publicationYear }}</span></p></div>
                 <RouterLink :to="{ name: 'teach', query: { editionId: edition.id, onboarding: 'selected-game' } }" class="inline-flex min-h-11 items-center justify-center rounded-xl bg-copper px-5 text-sm font-semibold text-white">{{ copy.addRulebook }}</RouterLink>
               </div>
 
               <ul v-if="editionImports(edition.id).length" class="mt-5 stack-y-md" aria-live="polite">
                 <li v-for="job in editionImports(edition.id)" :key="job.id" class="rounded-xl border border-copper/20 bg-copper/5 p-4">
                   <p class="font-semibold">{{ job.rulebookTitle }}</p>
-                  <p class="mt-1 text-sm text-copper">{{ importStage(job) }}</p>
+                  <PlayerWorkStatusText :status="importWorkStatus(job)" class="mt-1 text-sm font-semibold text-copper" />
+                  <p class="mt-1 text-xs leading-5 text-ink/55">{{ importStage(job) }}</p>
                   <p v-if="importGuideStage(job)" class="mt-1 text-xs leading-5 text-ink/55">
                     {{ importGuideStage(job) }}
                     <RouterLink v-if="importGuideFailed(job)" :to="{ name: 'lessons' }" class="ml-2 font-semibold text-red-800 underline decoration-red-300 underline-offset-2">{{ copy.recoverGuide }}</RouterLink>
@@ -655,14 +717,19 @@ onBeforeUnmount(() => {
               <ul v-else-if="editionDocuments(edition.id).length" class="mt-5 stack-y-md">
                 <li v-for="document in editionDocuments(edition.id)" :key="document.document.id" class="rounded-xl border border-ink/10 bg-canvas p-4">
                   <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                    <div><p class="font-semibold">{{ document.document.title }}</p><p class="mt-1 text-xs text-ink/45">{{ statusLabel(document.latestVersion.status) }}</p></div>
+                    <div>
+                      <p class="font-semibold">{{ document.document.title }}</p>
+                      <PlayerWorkStatusText :status="documentWorkStatus(document.latestVersion.status)" class="mt-1 text-xs font-semibold text-ink/55" />
+                    </div>
                     <div class="flex flex-wrap gap-2">
                       <template v-if="documentPlans(document)[0]">
                         <RouterLink :to="{ name: 'lesson', params: { planId: documentPlans(document)[0]!.id } }" class="min-h-10 rounded-lg bg-ink px-4 py-2.5 text-sm font-semibold text-canvas">{{ copy.openGuide }}</RouterLink>
                         <RouterLink :to="{ name: 'lesson-questions', params: { planId: documentPlans(document)[0]!.id } }" class="min-h-10 rounded-lg border border-indigo/25 px-4 py-2.5 text-sm font-semibold text-indigo">{{ copy.ask }}</RouterLink>
                       </template>
-                      <span v-else-if="documentGuidePreparation(document) === 'PREPARING'" class="inline-flex min-h-10 items-center rounded-lg border border-copper/20 bg-copper/5 px-4 py-2.5 text-sm font-semibold text-copper">{{ copy.guidePreparing }}</span>
-                      <RouterLink v-else-if="documentGuidePreparation(document) === 'FAILED'" :to="{ name: 'lessons' }" class="inline-flex min-h-10 items-center rounded-lg border border-red-200 bg-red-50 px-4 py-2.5 text-sm font-semibold text-red-800 transition hover:border-red-400">{{ copy.guideFailed }} · {{ copy.recoverGuide }}</RouterLink>
+                      <PlayerWorkStatusText v-else-if="documentGuidePreparation(document) === 'PREPARING'" :status="guidePreparationWorkStatus(document)!" as="span" class="inline-flex min-h-10 items-center rounded-lg border border-copper/20 bg-copper/5 px-4 py-2.5 text-sm font-semibold text-copper" />
+                      <RouterLink v-else-if="documentGuidePreparation(document) === 'FAILED'" :to="{ name: 'lessons' }" class="inline-flex min-h-10 items-center gap-1 rounded-lg border border-red-200 bg-red-50 px-4 py-2.5 text-sm font-semibold text-red-800 transition hover:border-red-400">
+                        <PlayerWorkStatusText :status="guidePreparationWorkStatus(document)!" as="span" /> · {{ copy.guideFailed }} · {{ copy.recoverGuide }}
+                      </RouterLink>
                       <span v-else-if="documentGuidePreparation(document) === 'CHECKING'" class="inline-flex min-h-10 items-center rounded-lg border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm font-semibold text-amber-950">{{ copy.guideChecking }}</span>
                       <RouterLink v-else-if="document.latestVersion.status === 'READY' && plansStatus === 'READY' && importsStatus === 'READY' && preparationsStatus === 'READY'" :to="{ name: 'teach', query: { editionId: edition.id } }" class="min-h-10 rounded-lg border border-ink/15 px-4 py-2.5 text-sm font-semibold">{{ copy.generate }}</RouterLink>
                       <a v-if="document.document.officialSourceUrl" :href="document.document.officialSourceUrl" target="_blank" rel="noopener noreferrer" class="min-h-10 px-2 py-2.5 text-sm font-semibold text-indigo">{{ copy.source }} ↗</a>
