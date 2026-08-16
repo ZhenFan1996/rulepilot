@@ -196,7 +196,7 @@ jobs:
             'BGG_RECOMMENDATION_PROVIDER=spring-ai' \
             'BGG_RECOMMENDATION_MODEL_PROVIDER=qwen' \
             'BGG_RECOMMENDATION_MODEL_CANDIDATE_LIMIT=8' \
-            'BGG_RECOMMENDATION_AGENT_TIMEOUT=PT20S' \
+            'BGG_RECOMMENDATION_AGENT_TIMEOUT=PT30S' \
             'BGG_RECOMMENDATION_WEB_RESEARCH_ENABLED=true' \
             'BGG_RECOMMENDATION_WEB_RESEARCH_TIMEOUT=PT25S' \
             'WEB_SEARCH_MODEL=qwen3.7-plus' \
@@ -485,6 +485,12 @@ jobs:
             if (result == null) throw new Error('recommendation stream completed without a result event')
             return { result, firstProgressMillis, totalMillis: Date.now() - startedAt }
           }
+          const hasBudgetDegradation = (result) => {
+            const actions = Array.isArray(result?.harness?.actions) ? result.harness.actions : []
+            return result?.outcome === 'unavailable'
+              || actions.some((action) => action.includes('PREFERENCE_REVIEW_UNAVAILABLE')
+                || action.includes('RUN_DEADLINE_EXCEEDED'))
+          }
           // This path invokes paid models. Run it once; application budgets and diagnostics make failure actionable.
           for (let attempt = 1; attempt <= 1; attempt += 1) {
             try {
@@ -534,20 +540,24 @@ jobs:
                     knownGames: [],
                     shownBggIds: [],
                   }),
-                  signal: AbortSignal.timeout(35_000),
+                  signal: AbortSignal.timeout(45_000),
                 },
               )
               const openingStreamed = await readRecommendationStream(openingAgent, openingStartedAt)
               const openingResult = openingStreamed.result
+              const openingActions = Array.isArray(openingResult.harness?.actions)
+                ? openingResult.harness.actions
+                : []
               if (openingResult.mode !== 'model_assisted'
                   || typeof openingResult.assistantMessage !== 'string'
                   || openingResult.assistantMessage.length === 0
-                  || openingStreamed.totalMillis > 25_000) {
+                  || hasBudgetDegradation(openingResult)
+                  || openingStreamed.totalMillis > 35_000) {
                 throw new Error(`recommendation Agent did not complete the opening turn: ${JSON.stringify({
                   httpStatus: openingAgent.status,
                   outcome: openingResult.outcome ?? 'missing',
                   totalMillis: openingStreamed.totalMillis,
-                  actions: Array.isArray(openingResult.harness?.actions) ? openingResult.harness.actions : [],
+                  actions: openingActions,
                 })}`)
               }
               const openingGames = Array.isArray(openingResult.games) ? openingResult.games : []
@@ -581,7 +591,7 @@ jobs:
                     })),
                     shownBggIds: openingGames.map(({ game }) => game.bggId),
                   }),
-                  signal: AbortSignal.timeout(35_000),
+                  signal: AbortSignal.timeout(45_000),
                 },
               )
               const streamed = await readRecommendationStream(agent, agentStartedAt)
@@ -597,7 +607,8 @@ jobs:
               if (agentResult.mode !== 'model_assisted'
                   || !Array.isArray(agentResult.games) || agentResult.games.length === 0
                   || !completedRecommendation || !usedSemanticReActTools
-                  || streamed.totalMillis > 25_000) {
+                  || hasBudgetDegradation(agentResult)
+                  || streamed.totalMillis > 35_000) {
                 const diagnostic = JSON.stringify({
                   httpStatus: agent.status,
                   outcome: agentResult.outcome ?? 'missing',

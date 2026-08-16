@@ -28,7 +28,7 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 public class BggRecommendationAgentStreamController {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(BggRecommendationAgentStreamController.class);
-    private static final long STREAM_TIMEOUT_MILLIS = 25_000;
+    private static final long STREAM_TIMEOUT_MILLIS = 35_000;
 
     private final BoardGameRecommendationAgent agent;
     private final BggRecommendationPresentation presentation;
