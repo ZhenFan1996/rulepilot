@@ -108,7 +108,7 @@ final class RecommendationActions {
             JsonNode arguments = json.readTree(call.argumentsJson());
             return switch (call.name()) {
                 case REPLY_TOOL -> reply(arguments, state, request, locale);
-                case ASK_TOOL -> ask(arguments, state, locale);
+                case ASK_TOOL -> ask(arguments, state, request, locale);
                 case RESOLVE_TOOL -> resolve(arguments, state, request, progress);
                 case SEARCH_TOOL -> search(arguments, state, request, progress);
                 case BROWSE_TOOL -> browse(arguments, state, request, progress);
@@ -174,11 +174,10 @@ final class RecommendationActions {
     private ActionOutcome ask(
             JsonNode arguments,
             RecommendationAgentState state,
+            ConversationRequest request,
             String locale) {
         requireObject(arguments, Set.of("question"), Set.of("options", "preferenceUpdates"));
-        if (arguments.has("preferenceUpdates")) {
-            state.actions.add("IGNORED_CLARIFICATION_PREFERENCE_UPDATES");
-        }
+        evidenceReview.applyPreferenceUpdatesForRead(arguments, state, request);
         String question = publishableMessage(
                 text(arguments.path("question"), 1, 500),
                 PlayerFacingMessagePolicy.Purpose.QUESTION);
@@ -759,7 +758,7 @@ final class RecommendationActions {
                         observation.attribute()))) {
             throw new InvalidAction("CANDIDATE_NARRATIVE_EVIDENCE_NOT_DIRECT_FIT");
         }
-        if (hasUngroundedNumericValue(why, game, visibleEvidence)) {
+        if (hasUngroundedNumericValue(why, game, visibleEvidence, state.profile)) {
             throw new InvalidAction("CANDIDATE_NARRATIVE_NUMERIC_VALUE_UNGROUNDED");
         }
         if (visibleEvidence.size() < citedEvidence.size()) {
@@ -795,7 +794,8 @@ final class RecommendationActions {
     private boolean hasUngroundedNumericValue(
             String narrative,
             Game game,
-            List<CandidateObservation> visibleEvidence) {
+            List<CandidateObservation> visibleEvidence,
+            BoardGameRecommendationAgent.RecommendationProfile profile) {
         List<BigDecimal> grounded = new ArrayList<>();
         visibleEvidence.stream()
                 .map(CandidateObservation::value)
@@ -803,11 +803,41 @@ final class RecommendationActions {
                 .forEach(grounded::addAll);
         grounded.addAll(numericValues(game.details().name()));
         grounded.addAll(numericValues(game.ranking().sourceName()));
+        addConfirmedProfileValues(grounded, profile);
         if (visibleEvidence.stream().anyMatch(value -> "complexity".equals(value.attribute()))) {
             grounded.add(new BigDecimal("5"));
         }
         return numericValues(narrative).stream()
                 .anyMatch(value -> grounded.stream().noneMatch(candidate -> candidate.compareTo(value) == 0));
+    }
+
+    private void addConfirmedProfileValues(
+            List<BigDecimal> grounded,
+            BoardGameRecommendationAgent.RecommendationProfile profile) {
+        if (profile.playerCount() != null && profile.playerCount().hard()) {
+            if (profile.playerCount().minimum() != null) {
+                grounded.add(BigDecimal.valueOf(profile.playerCount().minimum()));
+            }
+            if (profile.playerCount().maximum() != null) {
+                grounded.add(BigDecimal.valueOf(profile.playerCount().maximum()));
+            }
+        }
+        if (profile.durationMinutes() != null && profile.durationMinutes().hard()) {
+            if (profile.durationMinutes().minimum() != null) {
+                grounded.add(BigDecimal.valueOf(profile.durationMinutes().minimum()));
+            }
+            if (profile.durationMinutes().maximum() != null) {
+                grounded.add(BigDecimal.valueOf(profile.durationMinutes().maximum()));
+            }
+        }
+        if (profile.complexity() != null && profile.complexity().hard()) {
+            if (profile.complexity().minimum() != null) {
+                grounded.add(profile.complexity().minimum());
+            }
+            if (profile.complexity().maximum() != null) {
+                grounded.add(profile.complexity().maximum());
+            }
+        }
     }
 
     private List<BigDecimal> numericValues(String text) {
@@ -914,7 +944,7 @@ final class RecommendationActions {
             case "CANDIDATE_NARRATIVE_EVIDENCE_VALUE_NOT_VISIBLE" ->
                 "Show every cited candidate observation value in why. Natural range separators are allowed, but keep every number in the same order and omit an unused evidenceId.";
             case "CANDIDATE_NARRATIVE_NUMERIC_VALUE_UNGROUNDED" ->
-                "A number in why is not present in the visible cited candidate observations. Remove or correct only that unsupported number; do not rewrite the grounded explanation.";
+                "A number in why is neither present in the visible cited candidate observations nor a confirmed hard profile bound. Remove or correct only that unsupported number; do not rewrite the grounded explanation.";
             case "CANDIDATE_NARRATIVE_EVIDENCE_NOT_DIRECT_FIT" ->
                 "Recommendation why may cite only this candidate's playerCount, durationMinutes, or complexity observations. Taxonomy is displayed separately and cannot justify a predicted experience.";
             case "PREFERENCE_EVIDENCE_NOT_GROUNDED" ->
