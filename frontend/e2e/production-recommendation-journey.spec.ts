@@ -144,6 +144,7 @@ interface ProductionJourneyReport {
   sourceMode: string | null
   importRequestCount: number
   importReused: boolean | null
+  teachingEvidenceRefreshRequested: boolean
   importDuplicate: boolean | null
   downloadedBytes: number | null
   importMs: number | null
@@ -262,6 +263,8 @@ async function waitForFirstCitedLesson(
   versionId: string,
   preparationRunId: string,
   importStartedAt: number,
+  requireCurrentPublicationActivity: boolean,
+  currentHandoffAt: string | null,
 ): Promise<FirstCitedLessonObservation> {
   const deadline = Date.now() + 20 * 60_000
   let plan: TeachingPlanResponse | null = null
@@ -278,15 +281,6 @@ async function waitForFirstCitedLesson(
       if (details.run.state !== 'RECEIVED' && teachingPreparationStartedMs === null) {
         teachingPreparationStartedMs = elapsed(importStartedAt)
       }
-      const firstPublication = details.activities
-        .filter(activity =>
-        activity.operation.startsWith('publishTeachingSection|')
-        && activity.outcome === 'SUCCEEDED'
-        && (activity.summary.includes('CITED_BASE_SECTION_PUBLISHED')
-          || activity.summary.includes('CITED_DRAFT_PUBLISHED')
-          || activity.summary.includes('REUSED_VERIFIED_SECTION')))
-        .sort((left, right) => Date.parse(left.occurredAt) - Date.parse(right.occurredAt))[0]
-      if (firstPublication) firstCitedPublicationActivityAt = firstPublication.occurredAt
       if (details.run.state === 'FAILED') {
         throw new Error(`Teaching preparation failed with ${details.run.lastErrorCode ?? 'UNKNOWN_PREPARATION_ERROR'}`)
       }
@@ -300,6 +294,29 @@ async function waitForFirstCitedLesson(
       if (planResponse.ok()) plan = await planResponse.json() as TeachingPlanResponse
     }
     if (plan) {
+      const teachingRunResponse = await request.get(
+        `/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=${encodeURIComponent(plan.id)}`,
+      )
+      expect([200, 404], `Teaching run returned HTTP ${teachingRunResponse.status()}`)
+        .toContain(teachingRunResponse.status())
+      if (teachingRunResponse.ok()) {
+        const teachingDetails = await teachingRunResponse.json() as RunDetailsResponse
+        const handoffTimestamp = currentHandoffAt ? Date.parse(currentHandoffAt) : Number.NEGATIVE_INFINITY
+        const firstPublication = teachingDetails.activities
+          .filter(activity =>
+            activity.operation.startsWith('publishTeachingSection|')
+            && activity.outcome === 'SUCCEEDED'
+            && (activity.summary.includes('CITED_BASE_SECTION_PUBLISHED')
+              || activity.summary.includes('CITED_DRAFT_PUBLISHED')
+              || activity.summary.includes('REUSED_VERIFIED_SECTION'))
+            && (!requireCurrentPublicationActivity
+              || Date.parse(activity.occurredAt) >= handoffTimestamp))
+          .sort((left, right) => Date.parse(left.occurredAt) - Date.parse(right.occurredAt))[0]
+        if (firstPublication) firstCitedPublicationActivityAt = firstPublication.occurredAt
+        if (teachingDetails.run.state === 'FAILED') {
+          throw new Error(`Teaching generation failed with ${teachingDetails.run.lastErrorCode ?? 'UNKNOWN_TEACHING_ERROR'}`)
+        }
+      }
       const lessonResponse = await request.get(
         `/api/v1/teaching-plans/${encodeURIComponent(plan.id)}/illustrated-lessons/latest`,
       )
@@ -308,7 +325,8 @@ async function waitForFirstCitedLesson(
       if (lessonResponse.ok()) {
         const lesson = await lessonResponse.json() as LessonMilestoneResponse
         if (lesson.sections.some(section =>
-          section.evidenceStatus === 'SUPPORTED' || section.evidenceStatus === 'CITED_DRAFT')) {
+          section.evidenceStatus === 'SUPPORTED' || section.evidenceStatus === 'CITED_DRAFT')
+          && (!requireCurrentPublicationActivity || firstCitedPublicationActivityAt !== null)) {
           return {
             teachingPreparationStartedMs: teachingPreparationStartedMs ?? elapsed(importStartedAt),
             firstCitedLessonMs: elapsed(importStartedAt),
@@ -351,14 +369,24 @@ async function opaqueSurface(locator: Locator) {
 }
 
 function requiresPersistedPublicationActivity(
-  report: Pick<ProductionJourneyReport, 'importReused'>,
+  report: Pick<ProductionJourneyReport, 'importReused' | 'teachingEvidenceRefreshRequested'>,
 ) {
-  return !report.importReused
+  return !report.importReused || report.teachingEvidenceRefreshRequested
 }
 
-test('requires new publication activity telemetry only for a fresh production import', () => {
-  expect(requiresPersistedPublicationActivity({ importReused: false })).toBe(true)
-  expect(requiresPersistedPublicationActivity({ importReused: true })).toBe(false)
+test('requires current publication telemetry for fresh imports and stale-evidence refreshes', () => {
+  expect(requiresPersistedPublicationActivity({
+    importReused: false,
+    teachingEvidenceRefreshRequested: false,
+  })).toBe(true)
+  expect(requiresPersistedPublicationActivity({
+    importReused: true,
+    teachingEvidenceRefreshRequested: true,
+  })).toBe(true)
+  expect(requiresPersistedPublicationActivity({
+    importReused: true,
+    teachingEvidenceRefreshRequested: false,
+  })).toBe(false)
 })
 
 test('recommendation becomes one readable, taught, and answerable production journey', async ({ page }) => {
@@ -401,7 +429,8 @@ test('recommendation becomes one readable, taught, and answerable production jou
     documentEditionMatchesSelection: false, myGuidesEntryVisibleBeforeLesson: false, myGuidesPlanListed: false,
     planGameTitleMatchesSelection: false, recommendationMs: null, detailsDialogOpenedAndClosed: false,
     discoveryMs: null, sourceDomain: null, sourceUrl: null, sourceMode: null, importRequestCount: 0,
-    importReused: null, importDuplicate: null, downloadedBytes: null, importMs: null,
+    importReused: null, teachingEvidenceRefreshRequested: false,
+    importDuplicate: null, downloadedBytes: null, importMs: null,
     downloadCompletedAt: null, importCompletedAt: null, teachingHandoffUpdatedAt: null,
     persistedDownloadToImportCompleteMs: null, persistedImportCompleteToHandoffMs: null,
     persistedDownloadToHandoffMs: null,
@@ -527,6 +556,10 @@ test('recommendation becomes one readable, taught, and answerable production jou
     expect(importResponse.status()).toBe(202)
     const launchedJob = await importResponse.json() as ImportJob
     report.importReused = launchedJob.reused
+    report.teachingEvidenceRefreshRequested = launchedJob.reused
+      && launchedJob.teachingPreparationRunId === null
+      && (launchedJob.teachingHandoffState === 'WAITING_FOR_DOCUMENT'
+        || launchedJob.teachingHandoffState === 'LAUNCHING')
     report.importEditionMatchesSelection = launchedJob.editionId === boundGame.edition.id
       && observedImportRequest?.editionId === boundGame.edition.id
       && observedImportRequest?.discoveredForEditionId === boundGame.edition.id
@@ -607,6 +640,8 @@ test('recommendation becomes one readable, taught, and answerable production jou
       completedJob.documentVersionId!,
       completedJob.teachingPreparationRunId!,
       importStartedAt,
+      requiresPersistedPublicationActivity(report),
+      completedJob.teachingHandoffUpdatedAt,
     )
     report.teachingPreparationStartedMs = firstCitedLesson.teachingPreparationStartedMs
     report.firstCitedLessonMs = firstCitedLesson.firstCitedLessonMs
