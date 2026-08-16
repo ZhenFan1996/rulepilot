@@ -50,6 +50,11 @@ public class BoardGameRecommendationAgent {
             "reportedExperience",
             "rulebookFact");
 
+    static final Set<String> RECOMMENDATION_NARRATIVE_SUBJECTS = Set.of(
+            "playerCount",
+            "durationMinutes",
+            "complexity");
+
     private final RecommendationReActLoop loop;
 
     public BoardGameRecommendationAgent(

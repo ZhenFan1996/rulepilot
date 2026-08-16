@@ -20,6 +20,8 @@ final class RecommendationAgentState {
 
     final long startedAtNanos;
     final String modelConfigurationOwner;
+    final Integer explicitRecommendationCount;
+    final int maximumRecommendationResults;
     RecommendationProfile profile;
     final Set<Integer> excludedIds;
     final Set<Integer> previouslyShownIds = new LinkedHashSet<>();
@@ -27,7 +29,6 @@ final class RecommendationAgentState {
     final Map<Integer, String> candidateNames = new LinkedHashMap<>();
     final Map<Integer, Game> verified = new LinkedHashMap<>();
     final Map<String, ContextualPreference> contextualPreferences = new LinkedHashMap<>();
-    final Set<PreferenceReviewKey> rejectedPreferenceUpdates = new LinkedHashSet<>();
     final Set<Integer> targetGameIds = new LinkedHashSet<>();
     final Set<Integer> comparisonReferenceIds = new LinkedHashSet<>();
     final Set<Integer> comparisonSubjectIds = new LinkedHashSet<>();
@@ -41,6 +42,7 @@ final class RecommendationAgentState {
     boolean catalogBrowseAttempted;
     boolean discoveryAttempted;
     boolean discoveryProducedVerifiedGames;
+    boolean clarificationBlockedByExecutionFailure;
     String webResearchFailureCode = "";
     int modelCalls;
     int actionCalls;
@@ -52,11 +54,16 @@ final class RecommendationAgentState {
             ConversationRequest request,
             long startedAtNanos,
             String modelConfigurationOwner,
-            boolean webResearchConfigured) {
+            boolean webResearchConfigured,
+            int maximumRecommendationResults) {
         this.startedAtNanos = startedAtNanos;
         this.modelConfigurationOwner = modelConfigurationOwner == null || modelConfigurationOwner.isBlank()
                 ? null
                 : modelConfigurationOwner.strip();
+        var explicitCount = ExplicitRecommendationQuantity.from(
+                request.message(), maximumRecommendationResults);
+        explicitRecommendationCount = explicitCount.isPresent() ? explicitCount.getAsInt() : null;
+        this.maximumRecommendationResults = explicitCount.orElse(maximumRecommendationResults);
         profile = request.profile();
         excludedIds = new LinkedHashSet<>(request.excludedBggIds());
         previouslyShownIds.addAll(request.shownBggIds());
@@ -102,13 +109,15 @@ final class RecommendationAgentState {
 
     void reconsiderSelectionAfterPreferenceUpdate() {
         // Verified BGG facts remain valid, but every selection/retrieval decision derived from the old
-        // profile is provisional. Reopen bounded candidate reads and discard fit research whose question
-        // may have been framed around the superseded preference set.
+        // profile is provisional. Previously shown cards become eligible again under the corrected profile;
+        // only explicit exclusions remain excluded. Reopen bounded candidate reads and discard fit research
+        // whose question may have been framed around the superseded preference set.
         boolean selectionWorkObserved = titleInspectionAttempted
                 || catalogBrowseAttempted
                 || discoveryAttempted
                 || !verified.isEmpty()
                 || !research.games().isEmpty();
+        previouslyShownIds.clear();
         titleInspectionAttempted = false;
         catalogBrowseAttempted = false;
         discoveryAttempted = false;
@@ -128,8 +137,6 @@ final class RecommendationAgentState {
         String checked = value.strip().replaceAll("\\s+", " ");
         return checked.length() <= maximum ? checked : checked.substring(0, maximum);
     }
-
-    record PreferenceReviewKey(String field, String value, String evidenceId) {}
 
     record ContextualPreference(
             String field,
