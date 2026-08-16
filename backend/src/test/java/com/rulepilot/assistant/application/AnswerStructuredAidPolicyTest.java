@@ -32,11 +32,15 @@ class AnswerStructuredAidPolicyTest {
     }
 
     @Test
-    void requiresExactlyTheAidSelectedByTheSemanticPlan() {
+    void permitsAnOmittedSelectedPresentationAidButRejectsAnUnselectedPayload() {
         ModelRequest timing = request("任意问题", AnswerAid.TIMING);
 
+        AnswerStructuredAidPolicy.validateSelection(timing, AnswerAid.TIMING, true, "timing resolutions");
         assertThatThrownBy(() -> AnswerStructuredAidPolicy.validateSelection(
-                        timing, AnswerAid.TIMING, true, "timing resolutions"))
+                        request("任意问题", AnswerAid.CALCULATION),
+                        AnswerAid.CALCULATION,
+                        true,
+                        "calculations"))
                 .hasMessageContaining("required");
         assertThatThrownBy(() -> AnswerStructuredAidPolicy.validateSelection(
                         timing, AnswerAid.TIE, false, "tie resolutions"))

@@ -45,8 +45,7 @@ class AnswerTieResolverTest {
     void routingUsesAnswerAidAndOrderedBasisRequiresAtLeastTwoSteps() {
         assertThat(resolver.requiresTie(request(AnswerAid.TIE))).isTrue();
         assertThat(resolver.requiresTie(request(AnswerAid.NONE))).isFalse();
-        assertThatThrownBy(() -> resolver.resolve(request(AnswerAid.TIE), draft(List.of())))
-                .hasMessageContaining("required");
+        assertThat(resolver.resolve(request(AnswerAid.TIE), draft(List.of()))).isEmpty();
         assertThatThrownBy(() -> resolver.resolve(
                         request(AnswerAid.NONE),
                         draft(List.of(tie("Context", List.of("A", "B"), "Outcome")))))

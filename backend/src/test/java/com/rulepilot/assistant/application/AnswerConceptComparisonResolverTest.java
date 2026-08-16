@@ -41,8 +41,7 @@ class AnswerConceptComparisonResolverTest {
     void followsTheAcceptedAidRatherThanTryingToParseThePlayersNouns() {
         ModelRequest selected = request(AnswerAid.CONCEPT_COMPARISON);
         assertThat(resolver.requiresConceptComparison(selected)).isTrue();
-        assertThatThrownBy(() -> resolver.resolve(selected, draft(List.of())))
-                .hasMessageContaining("required");
+        assertThat(resolver.resolve(selected, draft(List.of()))).isEmpty();
 
         ModelRequest notSelected = request(AnswerAid.NONE);
         assertThat(resolver.requiresConceptComparison(notSelected)).isFalse();

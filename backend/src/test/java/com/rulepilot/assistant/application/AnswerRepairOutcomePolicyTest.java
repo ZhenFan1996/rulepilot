@@ -33,10 +33,34 @@ class AnswerRepairOutcomePolicyTest {
     }
 
     @Test
-    void leavesSemanticPublicationJudgmentToTheCritic() {
+    void leavesUnquotedSemanticClaimsOutsideDeterministicStringHeuristics() {
         assertThat(AnswerRepairOutcomePolicy.publicationFailure(
                 request(), draft("Direct verdict.", "A possibly incorrect semantic claim.")))
                 .isEmpty();
+    }
+
+    @Test
+    void rejectsARepairThatStillOmitsTheSourceOfAnExplicitQuotation() {
+        UUID quotedSourceId = UUID.randomUUID();
+        String clause = "A player wins immediately after reaching thirty points.";
+        ModelRequest request = new ModelRequest(
+                "How does a player win?",
+                QuestionType.RULE_QUERY,
+                new AnswerContext(null, null, PlayerLocale.EN),
+                List.of(
+                        new EvidenceInput(citationId, "RULE", "Overview", "Turns proceed clockwise.", 1, 1),
+                        new EvidenceInput(quotedSourceId, "RULE", "Victory", clause, 2, 2)));
+        ModelDraft draft = new ModelDraft(
+                "Reach thirty points.",
+                "The rule states: \u201c" + clause + "\u201d",
+                List.of(citationId),
+                List.of(),
+                "HIGH");
+
+        assertThat(AnswerRepairOutcomePolicy.publicationFailure(request, draft))
+                .contains(new AnswerRepairOutcomePolicy.PublicationFailure(
+                        AnswerStatus.INVALID_MODEL_OUTPUT,
+                        "回答中的直接引文没有归属到对应的规则证据。"));
     }
 
     private ModelDraft draft(String verdict, String explanation) {

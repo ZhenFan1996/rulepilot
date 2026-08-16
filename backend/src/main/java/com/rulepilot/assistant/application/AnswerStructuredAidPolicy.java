@@ -21,7 +21,13 @@ final class AnswerStructuredAidPolicy {
 
     static void validateSelection(ModelRequest request, AnswerAid aid, boolean empty, String label) {
         boolean required = required(request, aid);
-        if (required && empty) throw new IllegalArgumentException(label + " is required by the accepted answer plan");
+        // Most answer aids are presentation enhancements, not evidence and not part of the player-facing core. The
+        // planner may select one that the composing model does not need after seeing the excerpts, so omission must
+        // not invalidate an otherwise cited answer. Calculation is different: it is a recomputable factual result and
+        // remains part of the hard answer contract when selected.
+        if (required && aid == AnswerAid.CALCULATION && empty) {
+            throw new IllegalArgumentException(label + " are required by the answer plan");
+        }
         if (!required && !empty) throw new IllegalArgumentException(label + " was not selected by the answer plan");
     }
 

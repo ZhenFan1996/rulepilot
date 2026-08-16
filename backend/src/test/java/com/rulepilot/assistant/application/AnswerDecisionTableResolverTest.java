@@ -42,9 +42,9 @@ class AnswerDecisionTableResolverTest {
     @Test
     void followsTheAcceptedAnswerAidInsteadOfInferringFromQuestionWording() {
         assertThat(resolver.requiresDecisionTable(request("What does this icon mean?", first))).isTrue();
-        assertThatThrownBy(() -> resolver.resolve(
+        assertThat(resolver.resolve(
                         request("What happens if the supply is empty?", first), draft(List.of())))
-                .hasMessageContaining("required");
+                .isEmpty();
 
         ModelRequest noAid = request(AnswerAid.NONE, "What happens in each case?", first);
         assertThat(resolver.requiresDecisionTable(noAid)).isFalse();

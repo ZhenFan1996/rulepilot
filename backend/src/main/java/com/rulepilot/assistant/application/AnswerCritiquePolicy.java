@@ -9,6 +9,7 @@ import com.rulepilot.assistant.GeneratedContentCritic.ReviewRisk;
 import com.rulepilot.assistant.GeneratedContentCritic.TaskContext;
 import com.rulepilot.assistant.QuestionUnderstanding.QuestionContext;
 import com.rulepilot.assistant.RuleAnswerModel.ModelRequest;
+import com.rulepilot.assistant.RuleAnswerModel.PlayerFacingField;
 import com.rulepilot.assistant.domain.AnswerBasis;
 import com.rulepilot.assistant.domain.AnswerConfidence;
 import com.rulepilot.assistant.domain.RuleCitation;
@@ -16,7 +17,9 @@ import com.rulepilot.assistant.domain.StructuredRuleAnswer;
 import com.rulepilot.assistant.domain.UnderstoodQuestion;
 import com.rulepilot.retrieval.evidence.HybridEvidenceHit;
 import java.util.ArrayList;
+import java.util.EnumSet;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 /** Prepares an optional semantic, evidence-grounded review for generated answers. */
@@ -132,7 +135,8 @@ final class AnswerCritiquePolicy {
 
     private static List<Claim> claims(StructuredRuleAnswer answer, List<UUID> answerCitations) {
         List<Claim> claims = new ArrayList<>();
-        add(claims, answer.shortVerdict() + "\n" + answer.explanation(), answerCitations);
+        add(claims, answer.shortVerdict(), answerCitations);
+        add(claims, answer.explanation(), answerCitations);
         answer.exceptions().forEach(value -> add(claims, value, answerCitations));
         answer.calculations().forEach(value -> add(
                 claims, "Calculation: " + value.expression() + " = " + value.result(), answerCitations));
@@ -208,5 +212,36 @@ final class AnswerCritiquePolicy {
         return review.issues().stream()
                 .map(issue -> issue.type().name() + ": " + issue.summary())
                 .toList();
+    }
+
+    static List<String> playerFacingRevisionFeedback(
+            StructuredRuleAnswer answer, Review review) {
+        int lastPlayerFacingClaim = 2 + answer.exceptions().size();
+        return review.issues().stream()
+                .filter(issue -> issue.claimPosition() >= 1 && issue.claimPosition() <= lastPlayerFacingClaim)
+                .map(issue -> issue.type().name() + ": " + issue.summary())
+                .toList();
+    }
+
+    static Set<PlayerFacingField> editablePlayerFacingFields(
+            StructuredRuleAnswer answer, Review review) {
+        EnumSet<PlayerFacingField> editable = EnumSet.noneOf(PlayerFacingField.class);
+        int lastPlayerFacingClaim = 2 + answer.exceptions().size();
+        for (GeneratedContentCritic.Issue issue : review.issues()) {
+            if (issue.claimPosition() == 1) {
+                editable.add(PlayerFacingField.SHORT_VERDICT);
+            } else if (issue.claimPosition() == 2) {
+                editable.add(PlayerFacingField.EXPLANATION);
+            } else if (issue.claimPosition() > 2 && issue.claimPosition() <= lastPlayerFacingClaim) {
+                editable.add(PlayerFacingField.EXCEPTIONS);
+            }
+        }
+        return Set.copyOf(editable);
+    }
+
+    static boolean hasStructuredClaimIssues(StructuredRuleAnswer answer, Review review) {
+        int lastPlayerFacingClaim = 2 + answer.exceptions().size();
+        return review.issues().stream()
+                .anyMatch(issue -> issue.claimPosition() > lastPlayerFacingClaim);
     }
 }

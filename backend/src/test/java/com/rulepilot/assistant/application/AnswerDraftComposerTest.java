@@ -44,7 +44,7 @@ class AnswerDraftComposerTest {
     }
 
     @Test
-    void repairsAnUnsafeSourceWideClaimThroughTheModelAndPublishesTheRepairVerbatim() {
+    void repairsOnlyTheUnsafeSourceWideFieldAndLocksTheCompliantExplanation() {
         UUID chunkId = UUID.randomUUID();
         AtomicInteger revisions = new AtomicInteger();
         ModelDraft repaired = new ModelDraft(
@@ -77,7 +77,9 @@ class AnswerDraftComposerTest {
                 UUID.randomUUID(), "player", null, adviceRequest(chunkId));
 
         assertThat(result.ready()).isTrue();
-        assertThat(result.draft()).isEqualTo(repaired);
+        assertThat(result.draft().shortVerdict()).isEqualTo(repaired.shortVerdict());
+        assertThat(result.draft().explanation()).isEqualTo("当前提供的规则摘录无法确认最佳开局。");
+        assertThat(result.draft().citationIds()).containsExactly(chunkId);
         assertThat(result.warnings()).isEmpty();
         assertThat(result.modelRepairs()).isEqualTo(1);
         assertThat(revisions).hasValue(1);
@@ -114,6 +116,60 @@ class AnswerDraftComposerTest {
         assertThat(result.ready()).isFalse();
         assertThat(result.failureStatus()).isEqualTo(com.rulepilot.assistant.domain.AnswerStatus.INVALID_MODEL_OUTPUT);
         assertThat(result.draft()).isNull();
+        assertThat(revisions).hasValue(1);
+    }
+
+    @Test
+    void repairsOnlyCitationIdsWhenPlayerProseQuotesAnUnattributedSuppliedSource() {
+        UUID overviewId = UUID.randomUUID();
+        UUID victoryId = UUID.randomUUID();
+        String clause = "A player wins immediately after reaching thirty points.";
+        String explanation = "The rule states: \u201c" + clause + "\u201d";
+        AtomicInteger revisions = new AtomicInteger();
+        ModelRequest request = new ModelRequest(
+                "How does a player win?",
+                QuestionType.RULE_QUERY,
+                new AnswerContext(null, null, PlayerLocale.EN),
+                List.of(
+                        new EvidenceInput(overviewId, "RULE", "Overview", "Turns proceed clockwise.", 1, 1),
+                        new EvidenceInput(victoryId, "RULE", "Victory", clause, 2, 2)));
+        RuleAnswerModel model = new RuleAnswerModel() {
+            @Override
+            public ModelDraft compose(ModelRequest ignored) {
+                return new ModelDraft(
+                        "Reach thirty points.",
+                        explanation,
+                        List.of(overviewId),
+                        List.of(),
+                        "HIGH");
+            }
+
+            @Override
+            public ModelDraft revise(ModelRequest ignored, ModelDraft previous, List<String> feedback) {
+                revisions.incrementAndGet();
+                assertThat(feedback).singleElement().asString()
+                        .contains("CITATION_OWNERSHIP", victoryId.toString());
+                return new ModelDraft(
+                        "Do not replace this locked verdict.",
+                        "Do not replace this locked explanation.",
+                        List.of(overviewId, victoryId),
+                        List.of("Do not add an exception."),
+                        "LOW");
+            }
+        };
+        AnswerDraftComposer composer = new AnswerDraftComposer(new AnswerModelGateway(
+                model, new PermissiveRateLimiter(), new ImmediateAuditedAgentInvocations()));
+
+        AnswerDraftComposer.Result result = composer.compose(
+                UUID.randomUUID(), "player", null, request);
+
+        assertThat(result.ready()).isTrue();
+        assertThat(result.draft().shortVerdict()).isEqualTo("Reach thirty points.");
+        assertThat(result.draft().explanation()).isEqualTo(explanation);
+        assertThat(result.draft().exceptions()).isEmpty();
+        assertThat(result.draft().citationIds()).containsExactly(overviewId, victoryId);
+        assertThat(result.draft().confidence()).isEqualTo("HIGH");
+        assertThat(result.modelRepairs()).isEqualTo(1);
         assertThat(revisions).hasValue(1);
     }
 

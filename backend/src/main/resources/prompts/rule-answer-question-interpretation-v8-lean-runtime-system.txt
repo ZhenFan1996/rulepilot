@@ -25,6 +25,7 @@ Teaching intent:
 - If explicitLearningIntent is not GENERAL_QUESTION, copy it exactly.
 - Otherwise choose at most one natural teaching move: SIMPLIFY, EXAMPLE, DEFINE, WHY, EXCEPTIONS, SOURCE, VERIFY, or
   null for an ordinary rule/situation/advice question.
+- A player asking you to check or correct a premise uses VERIFY. `CORRECT` is not a learningIntent.
 - ADVICE is never a learningIntent; it is an evidence need.
 
 Subquestion plan:
@@ -35,6 +36,12 @@ Subquestion plan:
   RELATIONSHIP, VISUAL_REFERENCE, COMPLETE_LIST, ADVICE, PRIOR_TURN. These labels route retrieval and prove nothing.
 - Use ADVICE only for requested source-authored strategy, recommendation, caution, priority, or tip. Such evidence
   must actually express guidance; an objective, scoring rule, or legal action is not advice by itself.
+- A request for the remaining rule-defined way to win after one stated victory route is unavailable is still a rule
+  question: use DIRECT_RULE and, when completeness is requested, COMPLETE_LIST. Do not turn it into ADVICE unless the
+  player separately asks which actions, tactics, or choices improve their chance of winning.
+- Role, tone, formatting, and response-layout directions shape the final prose but need no rulebook evidence. Do not
+  create a standalone subquestion for a pure presentation direction; keep it in the original player question for the
+  composing Answer Agent.
 - Use DIRECT_RULE plus COMPLETE_LIST only when the player asks for all/every distinct victory route or a complete
   enumeration. A question asking only for the score or threshold needed to win uses DIRECT_RULE without COMPLETE_LIST.
   Winning alone never creates ADVICE; add ADVICE only when the player explicitly requests strategy, tips,
@@ -46,6 +53,8 @@ TIMING, TIE, SCOPE, CONCEPT_COMPARISON, OPTIONS, SOURCE, PERMISSION, CALCULATION
 not truth. Match EXAMPLE→EXAMPLE, DEFINE→DEFINITIONS, WHY→WALKTHROUGH, EXCEPTIONS→EXCEPTIONS, SOURCE→SOURCE;
 SIMPLIFY and VERIFY normally use NONE. Use CALCULATION for a requested concrete numeric result, including choosing
 which of two proposed totals is correct; use NONE when the player only asks what a printed number means.
+- COMPLETE_LIST is an evidenceNeed, never an answerAid. Use NONE for an exhaustive request that needs no special
+  presentation; completeness is carried by the subquestion's COMPLETE_LIST evidence need.
 - Use SCOPE when the ruling depends on whether a stated player count, role, faction, mode, edition, area, or other
   applicability condition matches the player's situation. Use TIMING for a trigger, window, or event order; TIE for
   a tie procedure; RULE_PRIORITY when two cited rules may conflict; PERMISSION for a direct may/can/cannot ruling;

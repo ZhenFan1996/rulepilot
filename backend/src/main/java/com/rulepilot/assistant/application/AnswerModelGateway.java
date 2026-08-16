@@ -91,7 +91,7 @@ final class AnswerModelGateway {
             String successSummary) {
         RuleAnswerRateLimiter.Permit permit = acquire(username, gameSessionId);
         try {
-            return invocations.invoke(
+            ModelDraft repaired = invocations.invoke(
                     runId,
                     ActivityType.MODEL,
                     operation,
@@ -102,9 +102,45 @@ final class AnswerModelGateway {
                             () -> model.revisePlayerFacing(
                                     request, previousDraft, feedback, editableFields, username)),
                     result -> estimateTokens(result.toString()));
+            return lockUnselectedPlayerFacingFields(previousDraft, repaired, editableFields);
         } finally {
             permit.close();
         }
+    }
+
+    private ModelDraft lockUnselectedPlayerFacingFields(
+            ModelDraft previous, ModelDraft repaired, Set<PlayerFacingField> editableFields) {
+        if (repaired == null || !repaired.answerable()) return repaired;
+        return new ModelDraft(
+                previous.answerable(),
+                previous.insufficiencyReason(),
+                editableFields.contains(PlayerFacingField.SHORT_VERDICT)
+                        ? repaired.shortVerdict()
+                        : previous.shortVerdict(),
+                editableFields.contains(PlayerFacingField.EXPLANATION)
+                        ? repaired.explanation()
+                        : previous.explanation(),
+                editableFields.contains(PlayerFacingField.CITATION_IDS)
+                        ? repaired.citationIds()
+                        : previous.citationIds(),
+                editableFields.contains(PlayerFacingField.EXCEPTIONS)
+                        ? repaired.exceptions()
+                        : previous.exceptions(),
+                previous.confidence(),
+                previous.answerBasis(),
+                previous.calculations(),
+                previous.situationChecks(),
+                previous.walkthroughSteps(),
+                previous.decisionBranches(),
+                previous.exceptionClauses(),
+                previous.termDefinitions(),
+                previous.workedExamples(),
+                previous.priorityResolutions(),
+                previous.timingResolutions(),
+                previous.tieResolutions(),
+                previous.scopeResolutions(),
+                previous.conceptComparisons(),
+                previous.ruleOptions());
     }
 
     List<String> rewriteRetrievalQueries(

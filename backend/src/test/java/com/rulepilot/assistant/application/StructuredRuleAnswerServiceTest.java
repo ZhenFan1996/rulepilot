@@ -156,9 +156,8 @@ class StructuredRuleAnswerServiceTest {
         assertThat(composed.get().evidence()).singleElement()
                 .extracting(input -> input.chunkId())
                 .isEqualTo(source.chunkId());
-        assertThat(reviewed.get().claims()).singleElement()
-                .extracting(claim -> claim.citationIds())
-                .isEqualTo(List.of(source.chunkId()));
+        assertThat(reviewed.get().claims()).hasSize(2).allSatisfy(claim ->
+                assertThat(claim.citationIds()).containsExactly(source.chunkId()));
     }
 
     @Test
@@ -294,7 +293,7 @@ class StructuredRuleAnswerServiceTest {
     }
 
     @Test
-    void rejectsASelectedAidThatRemainsMissingAfterOneBoundedRepair() {
+    void publishesTheValidatedCoreWhenASelectedPresentationAidIsMissing() {
         RuleEvidenceHit source = source("Pay the cost before resolving the effect.");
         AtomicInteger revisions = new AtomicInteger();
         PlanningModel model = planningModel(
@@ -310,8 +309,88 @@ class StructuredRuleAnswerServiceTest {
         StructuredRuleAnswer answer = service(search(source), model).answer(
                 "How do I pay the cost before resolving the effect?", new QuestionContext(versionId));
 
-        assertThat(answer.status()).isEqualTo(AnswerStatus.INVALID_MODEL_OUTPUT);
-        assertThat(revisions).hasValue(1);
+        assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
+        assertThat(answer.shortVerdict()).isEqualTo("Pay first.");
+        assertThat(answer.explanation()).isEqualTo("Then resolve.");
+        assertThat(answer.walkthroughSteps()).isEmpty();
+        assertThat(revisions).hasValue(0);
+    }
+
+    @Test
+    void isolatesAMalformedSelectedPresentationAidWithoutChangingTheCitedCore() {
+        RuleEvidenceHit source = source("Pay the cost before resolving the effect.");
+        AtomicInteger revisions = new AtomicInteger();
+        String verdict = "Pay first, then resolve.";
+        String explanation = "The cited rule puts payment before the effect.";
+        PlanningModel model = planningModel(
+                AnswerAid.WALKTHROUGH,
+                Set.of(EvidenceNeed.SEQUENCE),
+                request -> new ModelDraft(
+                        true,
+                        null,
+                        verdict,
+                        explanation,
+                        List.of(source.chunkId()),
+                        List.of(),
+                        "HIGH",
+                        "DIRECT_RULE",
+                        List.of(),
+                        List.of(),
+                        List.of(new WalkthroughStepRequest(
+                                "Pay.", "Resolve later.", "NOT_AN_ORDER", List.of(source.chunkId())))),
+                (request, previous, feedback) -> {
+                    revisions.incrementAndGet();
+                    return previous;
+                });
+
+        StructuredRuleAnswer answer = service(search(source), model).answer(
+                "How do I pay the cost before resolving the effect?", new QuestionContext(versionId));
+
+        assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
+        assertThat(answer.shortVerdict()).isEqualTo(verdict);
+        assertThat(answer.explanation()).isEqualTo(explanation);
+        assertThat(answer.walkthroughSteps()).isEmpty();
+        assertThat(revisions).hasValue(0);
+    }
+
+    @Test
+    void isolatesAnInternalReferenceInASelectedOptionalAidWithoutRepairingCoreProse() {
+        RuleEvidenceHit source = source("Pay the cost before resolving the effect.");
+        AtomicInteger revisions = new AtomicInteger();
+        String verdict = "Pay first, then resolve.";
+        String explanation = "The cited rule puts payment before the effect.";
+        PlanningModel model = planningModel(
+                AnswerAid.WALKTHROUGH,
+                Set.of(EvidenceNeed.SEQUENCE),
+                request -> new ModelDraft(
+                        true,
+                        null,
+                        verdict,
+                        explanation,
+                        List.of(source.chunkId()),
+                        List.of(),
+                        "HIGH",
+                        "DIRECT_RULE",
+                        List.of(),
+                        List.of(),
+                        List.of(new WalkthroughStepRequest(
+                                "Pay first.",
+                                "Then resolve according to internal citationIds.",
+                                "RULE_ORDER",
+                                List.of(source.chunkId())))),
+                (request, previous, feedback) -> {
+                    revisions.incrementAndGet();
+                    return previous;
+                });
+
+        StructuredRuleAnswer answer = service(search(source), model).answer(
+                "How do I pay the cost before resolving the effect?", new QuestionContext(versionId));
+
+        assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
+        assertThat(answer.shortVerdict()).isEqualTo(verdict);
+        assertThat(answer.explanation()).isEqualTo(explanation);
+        assertThat(answer.walkthroughSteps()).isEmpty();
+        assertThat(revisions).hasValue(0);
     }
 
     @Test
@@ -361,7 +440,7 @@ class StructuredRuleAnswerServiceTest {
     }
 
     @Test
-    void neverStartsASecondRepairWhenCompositionAlreadyUsedTheOneRepairBudget() {
+    void preservesARepairedCoreWithoutSpendingASecondCallOnAnOmittedPresentationAid() {
         RuleEvidenceHit source = source("Pay the cost before resolving the effect.");
         AtomicInteger revisions = new AtomicInteger();
         PlanningModel model = planningModel(
@@ -376,7 +455,10 @@ class StructuredRuleAnswerServiceTest {
         StructuredRuleAnswer answer = service(search(source), model).answer(
                 "How do I pay the cost before resolving the effect?", new QuestionContext(versionId));
 
-        assertThat(answer.status()).isEqualTo(AnswerStatus.INVALID_MODEL_OUTPUT);
+        assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
+        assertThat(answer.shortVerdict()).isEqualTo("Pay first.");
+        assertThat(answer.explanation()).isEqualTo("The cited rule says to resolve next.");
+        assertThat(answer.walkthroughSteps()).isEmpty();
         assertThat(revisions).hasValue(1);
     }
 

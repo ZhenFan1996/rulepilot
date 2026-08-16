@@ -111,6 +111,60 @@ class AnswerPlayerFacingRepairPolicyTest {
     }
 
     @Test
+    void requestsCitationOnlyRepairForAnUnattributedVerbatimSourceQuotation() {
+        UUID quotedSourceId = UUID.randomUUID();
+        String quotedClause = "A player wins immediately after reaching thirty points.";
+        ModelRequest request = new ModelRequest(
+                "How does a player win?",
+                QuestionType.RULE_QUERY,
+                new AnswerContext(null, null, PlayerLocale.EN),
+                List.of(
+                        new EvidenceInput(citationId, "RULE", "Overview", "Turns proceed clockwise.", 1, 1),
+                        new EvidenceInput(quotedSourceId, "RULE", "Victory", quotedClause, 2, 2)));
+        ModelDraft draft = new ModelDraft(
+                "Reach thirty points.",
+                "The rule states: \u201c" + quotedClause + "\u201d",
+                List.of(citationId),
+                List.of(),
+                "HIGH");
+
+        AnswerPlayerFacingRepairPolicy.RepairPlan plan =
+                AnswerPlayerFacingRepairPolicy.planFor(request, draft);
+
+        assertThat(plan.editableFields()).containsExactly(PlayerFacingField.CITATION_IDS);
+        assertThat(plan.feedback()).singleElement().asString()
+                .contains("CITATION_OWNERSHIP", quotedSourceId.toString(), "Preserve all prose");
+        assertThat(draft.explanation()).isEqualTo("The rule states: \u201c" + quotedClause + "\u201d");
+    }
+
+    @Test
+    void doesNotGuessCitationCoverageFromAnUnquotedParaphraseOrAShortLabel() {
+        UUID otherSourceId = UUID.randomUUID();
+        ModelRequest request = new ModelRequest(
+                "How does a player win?",
+                QuestionType.RULE_QUERY,
+                new AnswerContext(null, null, PlayerLocale.EN),
+                List.of(
+                        new EvidenceInput(citationId, "RULE", "Overview", "Turns proceed clockwise.", 1, 1),
+                        new EvidenceInput(
+                                otherSourceId,
+                                "RULE",
+                                "Victory",
+                                "A player wins immediately after reaching thirty points.",
+                                2,
+                                2)));
+        ModelDraft paraphrase = new ModelDraft(
+                "Reach thirty points.",
+                "Reaching thirty points ends the game. The printed label is \u201cVictory\u201d.",
+                List.of(citationId),
+                List.of(),
+                "HIGH");
+
+        assertThat(AnswerCitationCoveragePolicy.missingQuotedSourceIds(request, paraphrase)).isEmpty();
+        assertThat(AnswerPlayerFacingRepairPolicy.planFor(request, paraphrase).required()).isFalse();
+    }
+
+    @Test
     void doesNothingWithoutValidInputsOrLeakage() {
         assertThat(AnswerPlayerFacingRepairPolicy.feedbackFor(null, draft("Plain.", "Plain."))).isEmpty();
         assertThat(AnswerPlayerFacingRepairPolicy.feedbackFor(request(), null)).isEmpty();

@@ -43,8 +43,7 @@ class AnswerTimingResolverTest {
     void followsTheAcceptedAidRatherThanSimultaneousEffectKeywords() {
         ModelRequest selected = request(AnswerAid.TIMING);
         assertThat(resolver.requiresTiming(selected)).isTrue();
-        assertThatThrownBy(() -> resolver.resolve(selected, draft(List.of())))
-                .hasMessageContaining("required");
+        assertThat(resolver.resolve(selected, draft(List.of()))).isEmpty();
 
         ModelRequest notSelected = request(AnswerAid.NONE);
         assertThat(resolver.requiresTiming(notSelected)).isFalse();

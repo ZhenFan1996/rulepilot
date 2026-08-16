@@ -42,8 +42,9 @@ class AnswerWalkthroughResolverTest {
     void followsTheAcceptedAidInsteadOfQuestionKeywords() {
         ModelRequest selected = request(AnswerAid.WALKTHROUGH, first);
         assertThat(resolver.requiresWalkthrough(selected)).isTrue();
-        assertThatThrownBy(() -> resolver.resolve(selected, draft(List.of())))
-                .hasMessageContaining("required");
+        assertThat(resolver.resolve(selected, draft(List.of())))
+                .as("a selected presentation aid remains optional when the cited core already answers the player")
+                .isEmpty();
 
         ModelRequest notSelected = request(AnswerAid.NONE, first);
         assertThat(resolver.requiresWalkthrough(notSelected)).isFalse();

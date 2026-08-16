@@ -39,8 +39,7 @@ class AnswerRulePriorityResolverTest {
     void selectionComesFromAnswerAidRatherThanConflictVocabulary() {
         assertThat(resolver.requiresRulePriority(request(AnswerAid.RULE_PRIORITY))).isTrue();
         assertThat(resolver.requiresRulePriority(request(AnswerAid.NONE))).isFalse();
-        assertThatThrownBy(() -> resolver.resolve(request(AnswerAid.RULE_PRIORITY), draft(List.of())))
-                .hasMessageContaining("required");
+        assertThat(resolver.resolve(request(AnswerAid.RULE_PRIORITY), draft(List.of()))).isEmpty();
         assertThatThrownBy(() -> resolver.resolve(
                         request(AnswerAid.NONE),
                         draft(List.of(priority("Base", "Special", "Use special")))))

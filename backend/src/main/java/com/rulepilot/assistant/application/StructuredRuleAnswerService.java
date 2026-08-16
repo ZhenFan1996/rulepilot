@@ -155,7 +155,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
         this.sourceEvidenceResolver = new AnswerSourceEvidenceResolver();
         this.permissionResolver = new AnswerPermissionResolver();
         this.postPublicationReviewer = new AnswerPostPublicationReviewer(
-                critic, modelGateway, publicationValidator, calculationResolver, situationCheckResolver, invocations);
+                critic, modelGateway, publicationValidator);
         this.runLifecycle = new AnswerRunLifecycle(runs);
         this.invocations = invocations;
         this.observations = observations;
@@ -503,7 +503,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
             details = resolveStructuredDetails(assistantRunId, modelRequest, draft);
         } catch (RuntimeException rejectedDetails) {
             if (modelRepairUsed) {
-                return invalidStructuredDetails(context.documentVersionId(), modelRequest.answerAid());
+                return invalidCalculation(context.documentVersionId());
             }
             draftResult = repairSelectedStructuredDetails(
                     assistantRunId, username, gameSessionId, modelRequest, draft);
@@ -515,7 +515,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
             try {
                 details = resolveStructuredDetails(assistantRunId, modelRequest, draft);
             } catch (RuntimeException repeatedDetailsFailure) {
-                return invalidStructuredDetails(context.documentVersionId(), modelRequest.answerAid());
+                return invalidCalculation(context.documentVersionId());
             }
         }
         StructuredRuleAnswer answer;
@@ -587,20 +587,36 @@ public class StructuredRuleAnswerService implements RuleAnswering {
     /** Resolves the complete structured envelope once; unselected aids were already removed from the draft. */
     private StructuredDetails resolveStructuredDetails(
             UUID assistantRunId, ModelRequest modelRequest, ModelDraft draft) {
-        return new StructuredDetails(
-                resolveCalculations(assistantRunId, modelRequest, draft),
-                resolveSituationChecks(assistantRunId, modelRequest, draft),
-                resolveWalkthrough(assistantRunId, modelRequest, draft),
-                resolveDecisionTable(assistantRunId, modelRequest, draft),
-                resolveExceptionClauses(assistantRunId, modelRequest, draft),
-                resolveTermDefinitions(assistantRunId, modelRequest, draft),
-                resolveWorkedExamples(assistantRunId, modelRequest, draft),
-                resolveRulePriority(assistantRunId, modelRequest, draft),
-                resolveTiming(assistantRunId, modelRequest, draft),
-                resolveTies(assistantRunId, modelRequest, draft),
-                resolveScope(assistantRunId, modelRequest, draft),
-                resolveConceptComparisons(assistantRunId, modelRequest, draft),
-                resolveRuleOptions(assistantRunId, modelRequest, draft));
+        if (modelRequest.answerAid() != AnswerAid.CALCULATION
+                && !AnswerDraftSafetyPolicy.containsInternalCoreReference(draft)
+                && AnswerDraftSafetyPolicy.containsInternalEvidenceReference(draft)) {
+            LOGGER.warn(
+                    "Ignoring optional {} presentation containing an internal reference while preserving the validated answer core",
+                    modelRequest.answerAid());
+            return StructuredDetails.empty();
+        }
+        try {
+            return new StructuredDetails(
+                    resolveCalculations(assistantRunId, modelRequest, draft),
+                    resolveSituationChecks(assistantRunId, modelRequest, draft),
+                    resolveWalkthrough(assistantRunId, modelRequest, draft),
+                    resolveDecisionTable(assistantRunId, modelRequest, draft),
+                    resolveExceptionClauses(assistantRunId, modelRequest, draft),
+                    resolveTermDefinitions(assistantRunId, modelRequest, draft),
+                    resolveWorkedExamples(assistantRunId, modelRequest, draft),
+                    resolveRulePriority(assistantRunId, modelRequest, draft),
+                    resolveTiming(assistantRunId, modelRequest, draft),
+                    resolveTies(assistantRunId, modelRequest, draft),
+                    resolveScope(assistantRunId, modelRequest, draft),
+                    resolveConceptComparisons(assistantRunId, modelRequest, draft),
+                    resolveRuleOptions(assistantRunId, modelRequest, draft));
+        } catch (RuntimeException rejectedAid) {
+            if (modelRequest.answerAid() == AnswerAid.CALCULATION) throw rejectedAid;
+            LOGGER.warn(
+                    "Ignoring invalid optional {} presentation while preserving the validated answer core",
+                    modelRequest.answerAid());
+            return StructuredDetails.empty();
+        }
     }
 
     private AnswerDraftComposer.Result repairSelectedStructuredDetails(
@@ -609,35 +625,13 @@ public class StructuredRuleAnswerService implements RuleAnswering {
             UUID gameSessionId,
             ModelRequest modelRequest,
             ModelDraft rejectedDraft) {
-        return switch (modelRequest.answerAid()) {
-            case WALKTHROUGH -> draftComposer.repairAfterWalkthroughFailure(
-                    assistantRunId, username, gameSessionId, modelRequest, rejectedDraft);
-            case DECISION_TABLE -> draftComposer.repairAfterDecisionTableFailure(
-                    assistantRunId, username, gameSessionId, modelRequest, rejectedDraft);
-            case EXCEPTIONS -> draftComposer.repairAfterExceptionClauseFailure(
-                    assistantRunId, username, gameSessionId, modelRequest, rejectedDraft);
-            case DEFINITIONS -> draftComposer.repairAfterTermDefinitionFailure(
-                    assistantRunId, username, gameSessionId, modelRequest, rejectedDraft);
-            case EXAMPLE -> draftComposer.repairAfterWorkedExampleFailure(
-                    assistantRunId, username, gameSessionId, modelRequest, rejectedDraft);
-            case RULE_PRIORITY -> draftComposer.repairAfterRulePriorityFailure(
-                    assistantRunId, username, gameSessionId, modelRequest, rejectedDraft);
-            case TIMING -> draftComposer.repairAfterTimingFailure(
-                    assistantRunId, username, gameSessionId, modelRequest, rejectedDraft);
-            case TIE -> draftComposer.repairAfterTieFailure(
-                    assistantRunId, username, gameSessionId, modelRequest, rejectedDraft);
-            case SCOPE -> draftComposer.repairAfterScopeFailure(
-                    assistantRunId, username, gameSessionId, modelRequest, rejectedDraft);
-            case CONCEPT_COMPARISON -> draftComposer.repairAfterConceptComparisonFailure(
-                    assistantRunId, username, gameSessionId, modelRequest, rejectedDraft);
-            case CALCULATION -> draftComposer.repairAfterCalculationFailure(
-                    assistantRunId, username, gameSessionId, modelRequest, rejectedDraft);
-            case OPTIONS -> draftComposer.repairAfterRuleOptionFailure(
-                    assistantRunId, username, gameSessionId, modelRequest, rejectedDraft);
-            case NONE, SOURCE, PERMISSION, VISUAL -> AnswerDraftComposer.Result.failure(
+        if (modelRequest.answerAid() != AnswerAid.CALCULATION) {
+            return AnswerDraftComposer.Result.failure(
                     AnswerStatus.INVALID_MODEL_OUTPUT,
                     "回答附加结构与已确认的问题计划不一致。");
-        };
+        }
+        return draftComposer.repairAfterCalculationFailure(
+                assistantRunId, username, gameSessionId, modelRequest, rejectedDraft);
     }
 
     private StructuredRuleAnswer publishValidated(
@@ -668,23 +662,8 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                 details.ruleOptions());
     }
 
-    private StructuredRuleAnswer invalidStructuredDetails(UUID documentVersionId, AnswerAid selectedAid) {
-        String label = switch (selectedAid) {
-            case WALKTHROUGH -> "分步讲解";
-            case DECISION_TABLE -> "条件分支";
-            case EXCEPTIONS -> "例外和限制";
-            case DEFINITIONS -> "术语定义";
-            case EXAMPLE -> "规则示例";
-            case RULE_PRIORITY -> "规则优先级";
-            case TIMING -> "时序裁决";
-            case TIE -> "平局判定";
-            case SCOPE -> "规则适用范围";
-            case CONCEPT_COMPARISON -> "规则概念对比";
-            case CALCULATION -> "规则计算";
-            case OPTIONS -> "规则选项清单";
-            case NONE, SOURCE, PERMISSION, VISUAL -> "回答附加结构";
-        };
-        return safe(documentVersionId, AnswerStatus.INVALID_MODEL_OUTPUT, label + "在一次修订后仍未通过结构或引用校验。");
+    private StructuredRuleAnswer invalidCalculation(UUID documentVersionId) {
+        return safe(documentVersionId, AnswerStatus.INVALID_MODEL_OUTPUT, "规则计算在一次修订后仍未通过输入或引用校验。");
     }
 
     private record StructuredDetails(
@@ -700,7 +679,14 @@ public class StructuredRuleAnswerService implements RuleAnswering {
             List<com.rulepilot.assistant.domain.RuleTieResolution> tieResolutions,
             List<com.rulepilot.assistant.domain.RuleScopeResolution> scopeResolutions,
             List<com.rulepilot.assistant.domain.RuleConceptComparison> conceptComparisons,
-            List<com.rulepilot.assistant.domain.RuleOption> ruleOptions) {}
+            List<com.rulepilot.assistant.domain.RuleOption> ruleOptions) {
+
+        private static StructuredDetails empty() {
+            return new StructuredDetails(
+                    List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), List.of(),
+                    List.of(), List.of(), List.of(), List.of(), List.of(), List.of());
+        }
+    }
 
     private QuestionInterpretationRequest interpretationRequest(
             UnderstoodQuestion deterministic, QuestionContext context) {
