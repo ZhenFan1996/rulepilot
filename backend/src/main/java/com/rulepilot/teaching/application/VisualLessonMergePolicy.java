@@ -2,7 +2,6 @@ package com.rulepilot.teaching.application;
 
 import com.rulepilot.teaching.VisualRegionLocator;
 import com.rulepilot.teaching.domain.IllustratedLesson;
-import com.rulepilot.teaching.domain.IllustratedLesson.EvidenceStatus;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonSection;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonStep;
 import com.rulepilot.teaching.domain.IllustratedLesson.TeachingMove;
@@ -36,7 +35,7 @@ final class VisualLessonMergePolicy {
                             step.position(),
                             step.heading(),
                             TeachingMove.DO,
-                            originalRuleText(step),
+                            step.text(),
                             step.sourcePages(),
                             step.sourceChunkIds()));
                     changed = true;
@@ -144,6 +143,12 @@ final class VisualLessonMergePolicy {
         int added = 0;
         int claimConflicts = 0;
         for (VisualRegionLocator.LocatedRegion region : regions) {
+            // A visual observation is optional enrichment. If it conflicts with the already validated cited prose,
+            // reject that observation locally instead of attaching it and downgrading the whole section.
+            if (region.claimContradicted()) {
+                claimConflicts++;
+                continue;
+            }
             if (availableIndexes.isEmpty()) break;
             Set<UUID> supportedEvidence = Set.copyOf(region.supportedEvidenceIds());
             java.util.Optional<Integer> supportedStepIndex = availableIndexes.stream()
@@ -154,19 +159,22 @@ final class VisualLessonMergePolicy {
                     .findFirst();
             if (supportedStepIndex.isEmpty()) continue;
             LessonStep supportedStep = steps.get(supportedStepIndex.get());
-            String observation = stripTrailingPunctuation(region.visibleDescription());
-            String label = containsHan(region.label()) ? region.label().strip() : supportedStep.heading();
+            if (!containsHan(region.label())
+                    || region.visibleDescription().isBlank()
+                    || !containsHan(region.visibleDescription())) {
+                continue;
+            }
             steps.set(supportedStepIndex.get(), new LessonStep(
                     supportedStep.position(),
                     supportedStep.heading(),
                     TeachingMove.VISUAL,
-                    originalRuleText(supportedStep),
+                    supportedStep.text(),
                     distinct(supportedStep.sourcePages(), region.pageNumber()),
                     distinct(supportedStep.sourceChunkIds(), region.supportedEvidenceIds()),
                     new VisualFocus(
                             region.pageNumber(),
-                            label,
-                            observation,
+                            region.label(),
+                            region.visibleDescription(),
                             region.x(),
                             region.y(),
                             region.width(),
@@ -175,7 +183,6 @@ final class VisualLessonMergePolicy {
             sourceChunkIds = distinct(sourceChunkIds, region.supportedEvidenceIds());
             availableIndexes.remove(supportedStepIndex.get());
             added++;
-            if (region.claimContradicted()) claimConflicts++;
         }
         LessonSection enriched = new LessonSection(
                 section.position(),
@@ -183,27 +190,13 @@ final class VisualLessonMergePolicy {
                 section.coverageTags(),
                 section.title(),
                 section.required(),
-                claimConflicts > 0 && section.evidenceStatus() == EvidenceStatus.SUPPORTED
-                        ? EvidenceStatus.CITED_DRAFT
-                        : section.evidenceStatus(),
+                section.evidenceStatus(),
                 section.visualKind(),
                 section.visualCaption(),
                 sourcePages,
                 sourceChunkIds,
                 steps);
         return new MergedVisualSection(enriched, added, claimConflicts);
-    }
-
-    private String originalRuleText(LessonStep step) {
-        if (step.kind() != TeachingMove.VISUAL) return step.text();
-        for (String connector : List.of("。结合图片完成这一步：", "。先认出这组图标，再按规则处理：")) {
-            int boundary = step.text().indexOf(connector);
-            if (boundary >= 0) {
-                String text = step.text().substring(boundary + connector.length()).strip();
-                if (!text.isBlank()) return text;
-            }
-        }
-        return step.text();
     }
 
     private boolean containsHan(String text) {
@@ -221,10 +214,6 @@ final class VisualLessonMergePolicy {
         LinkedHashSet<T> values = new LinkedHashSet<>(existing);
         values.addAll(additions);
         return List.copyOf(values);
-    }
-
-    private String stripTrailingPunctuation(String text) {
-        return text == null ? "" : text.strip().replaceFirst("[。.!！?？]+$", "");
     }
 
     record MergedVisualSection(LessonSection section, int addedCount, int claimConflictCount) {}

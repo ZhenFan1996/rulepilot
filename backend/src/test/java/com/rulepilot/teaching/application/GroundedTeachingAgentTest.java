@@ -49,7 +49,7 @@ import org.junit.jupiter.api.Test;
 class GroundedTeachingAgentTest {
 
     @Test
-    void publishesTextFirstBaseLessonBeforeRunningOneBoundedWholeLessonReview() {
+    void publishesDeterministicallyValidatedBaseWithoutCallingOptionalCritic() {
         UUID versionId = UUID.randomUUID();
         UUID chunkId = UUID.randomUUID();
         RuleEvidence visualEvidence = new RuleEvidence(
@@ -79,10 +79,7 @@ class GroundedTeachingAgentTest {
                 new PolicyEvidenceVerifier(),
                 (request, risk) -> {
                     criticCalls.incrementAndGet();
-                    assertThat(publications).isNotEmpty();
-                    assertThat(publications.getLast().status()).isEqualTo(LessonStatus.DRAFT_READY);
-                    assertThat(request.reviewMode()).isEqualTo(GeneratedContentCritic.ReviewMode.POST_PUBLICATION);
-                    return new GeneratedContentCritic.Review(true, List.of());
+                    throw new AssertionError("optional Critic must not run on the base-lesson critical path");
                 },
                 new ImmediateAuditedAgentInvocations(),
                 4);
@@ -91,7 +88,10 @@ class GroundedTeachingAgentTest {
 
         assertThat(lesson.status()).isEqualTo(LessonStatus.COMPLETE);
         assertThat(lesson.sections().getFirst().evidenceStatus()).isEqualTo(EvidenceStatus.SUPPORTED);
-        assertThat(criticCalls).hasValue(1);
+        assertThat(lesson.sections().getFirst().steps().getFirst().text())
+                .isEqualTo("把主棋盘放在桌面中央。");
+        assertThat(publications.getLast().status()).isEqualTo(LessonStatus.COMPLETE);
+        assertThat(criticCalls).hasValue(0);
     }
 
     @Test
@@ -254,7 +254,7 @@ class GroundedTeachingAgentTest {
     }
 
     @Test
-    void givesPlanRecommendedVisualEvidenceToTheProgressiveBaseLesson() {
+    void keepsOptionalPageImagesOutOfTheProgressiveBaseTextComposition() {
         UUID versionId = UUID.randomUUID();
         UUID chunkId = UUID.randomUUID();
         RuleEvidence evidence = new RuleEvidence(
@@ -274,25 +274,17 @@ class GroundedTeachingAgentTest {
 
             @Override
             public SectionDraft compose(SectionRequest request) {
-                assertThat(request.pageImages()).extracting(PageImageInput::pageNumber).containsExactly(5);
+                assertThat(request.pageImages()).isEmpty();
                 return new SectionDraft(
                         "看懂卡牌图标",
-                        VisualKind.TABLE_LAYOUT,
-                        "对照卡牌上的费用与效果。",
+                        VisualKind.REFERENCE_CARD,
+                        "先读费用，再读紧邻的效果。",
                         List.of(chunkId),
                         List.of(new StepDraft(
-                                "找到费用与效果",
-                                TeachingMove.VISUAL,
-                                "先找到费用图标，再阅读旁边的效果。",
-                                List.of(chunkId),
-                                new VisualFocusDraft(
-                                        5,
-                                        "费用与效果图标",
-                                        "费用图标位于效果文字左侧。",
-                                        120,
-                                        180,
-                                        520,
-                                        260))));
+                                "按顺序读卡牌",
+                                TeachingMove.DO,
+                                "先读费用，再读紧邻的效果；图片定位稍后单独补充。",
+                                List.of(chunkId))));
             }
         };
         TeachingPlan plan = new TeachingPlan(
@@ -323,8 +315,9 @@ class GroundedTeachingAgentTest {
         IllustratedLesson lesson = agent.createBase(plan, UUID.randomUUID(), null, ignored -> {});
 
         assertThat(lesson.status()).isEqualTo(LessonStatus.COMPLETE);
-        assertThat(lesson.sections().getFirst().steps().getFirst().visualFocus().visibleDescription())
-                .isEqualTo("费用图标位于效果文字左侧。");
+        assertThat(lesson.sections().getFirst().steps().getFirst().visualFocus()).isNull();
+        assertThat(lesson.sections().getFirst().steps().getFirst().text())
+                .isEqualTo("先读费用，再读紧邻的效果；图片定位稍后单独补充。");
     }
 
     @Test
@@ -706,7 +699,7 @@ class GroundedTeachingAgentTest {
     }
 
     @Test
-    void startBasePublishesExactlyOneCitedSectionBeforeContinuationWorkRuns() {
+    void startBasePublishesExactlyOneDeterministicallyValidatedSectionBeforeContinuationWorkRuns() {
         UUID versionId = UUID.randomUUID();
         UUID chunkId = UUID.randomUUID();
         AtomicInteger compositions = new AtomicInteger();
@@ -736,7 +729,7 @@ class GroundedTeachingAgentTest {
         assertThat(publications).singleElement().satisfies(first -> {
             assertThat(first.sections()).singleElement().satisfies(section -> {
                 assertThat(section.position()).isEqualTo(1);
-                assertThat(section.evidenceStatus()).isEqualTo(EvidenceStatus.CITED_DRAFT);
+                assertThat(section.evidenceStatus()).isEqualTo(EvidenceStatus.SUPPORTED);
                 assertThat(section.steps().getFirst().sourceChunkIds()).containsExactly(chunkId);
             });
         });
@@ -1003,7 +996,7 @@ class GroundedTeachingAgentTest {
         assertThat(publications.getFirst().sections()).singleElement().satisfies(section ->
                 assertThat(section.evidenceStatus()).isEqualTo(EvidenceStatus.INSUFFICIENT_EVIDENCE));
         assertThat(publications.getLast().sections().getLast().evidenceStatus())
-                .isEqualTo(EvidenceStatus.CITED_DRAFT);
+                .isEqualTo(EvidenceStatus.SUPPORTED);
         assertThat(continuation.hasRemainingWork()).isTrue();
 
         IllustratedLesson complete = agent.continueBase(continuation, publications::add);

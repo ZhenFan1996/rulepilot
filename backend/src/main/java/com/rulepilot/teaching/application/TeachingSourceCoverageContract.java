@@ -13,7 +13,6 @@ import com.rulepilot.teaching.domain.IllustratedLesson.LessonSection;
 import com.rulepilot.teaching.domain.TeachingPlan;
 import java.text.Normalizer;
 import java.util.ArrayList;
-import java.util.EnumSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -30,19 +29,36 @@ public final class TeachingSourceCoverageContract {
     static final String INCOMPLETE_INVENTORY_TAG = "source_contract_inventory_incomplete";
     static final String UNSOURCED_TAG = "source_contract_unsourced";
     private static final String ROLE_TAG_PREFIX = "source_contract_role_";
-    private static final Set<SourceCoverageRole> CORE_ROLES = EnumSet.of(
-            SourceCoverageRole.SETUP,
-            SourceCoverageRole.CORE_LOOP,
-            SourceCoverageRole.ENDING,
-            SourceCoverageRole.SCORING);
 
     private TeachingSourceCoverageContract() {}
 
     public static void requireCompleteModelContract(OutlineRequest request, OutlineDraft outline) {
+        requireCompleteSourceContract(request, outline);
+        requireCompleteWholeGameUnderstanding(outline);
+    }
+
+    public static void requireCompleteSourceContract(OutlineRequest request, OutlineDraft outline) {
         if (outline == null || !outline.sourceCoverageInventoryComplete()) {
             throw new IllegalArgumentException("teaching outline did not return a complete source coverage inventory");
         }
         validateAgainstSources(request, outline);
+    }
+
+    public static void requireCompleteWholeGameUnderstanding(OutlineDraft outline) {
+        TeachingWholeGameUnderstandingPolicy.validateComplete(outline);
+    }
+
+    public static List<String> unrelatedSourceOwnedTopicKeys(OutlineDraft outline) {
+        if (outline == null || outline.wholeGameUnderstanding() == null) return List.of();
+        Set<String> relatedTopics = outline.wholeGameUnderstanding().concepts().stream()
+                .flatMap(concept -> concept.relatedTopicKeys().stream())
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        return outline.sourceCoverageSlots().stream()
+                .filter(slot -> slot.availability() == SourceCoverageAvailability.SOURCED)
+                .map(SourceCoverageSlotDraft::ownerTopicKey)
+                .filter(owner -> !relatedTopics.contains(owner))
+                .distinct()
+                .toList();
     }
 
     public static void validateAgainstSources(OutlineRequest request, OutlineDraft outline) {
@@ -55,17 +71,14 @@ public final class TeachingSourceCoverageContract {
                 page -> page,
                 (first, ignored) -> first,
                 LinkedHashMap::new));
+        List<SourceCoverageSlotDraft> missingExactIdentifiers = missingExactSourceSlots(request, outline);
         for (SourceCoverageSlotDraft slot : outline.sourceCoverageSlots()) {
             if (slot.sourcePageNumbers().stream().anyMatch(page -> !pages.containsKey(page))) {
                 throw new IllegalArgumentException(
                         "teaching source coverage slot references an unknown source page: " + slot.slotId());
             }
-            if (slot.availability() == SourceCoverageAvailability.SOURCED
-                    && slot.sourcePageNumbers().stream()
-                            .map(pages::get)
-                            .noneMatch(page -> containsSourceIdentifier(page, slot.sourceIdentifier()))) {
-                throw new IllegalArgumentException(
-                        "teaching source coverage slot has no exact source identifier: " + slot.slotId());
+            if (missingExactIdentifiers.contains(slot)) {
+                throw new MissingExactSourceIdentifierException(slot.slotId(), slot.sourceIdentifier());
             }
             if (slot.availability() == SourceCoverageAvailability.MISSING_EXTERNAL_SOURCE
                     && !matchesMissingExternalSource(slot, pages)) {
@@ -95,6 +108,23 @@ public final class TeachingSourceCoverageContract {
         }
     }
 
+    public static List<SourceCoverageSlotDraft> missingExactSourceSlots(
+            OutlineRequest request, OutlineDraft outline) {
+        if (request == null || outline == null) return List.of();
+        Map<Integer, PageInput> pages = request.pages().stream().collect(Collectors.toMap(
+                PageInput::pageNumber,
+                page -> page,
+                (first, ignored) -> first,
+                LinkedHashMap::new));
+        return outline.sourceCoverageSlots().stream()
+                .filter(slot -> slot.availability() == SourceCoverageAvailability.SOURCED)
+                .filter(slot -> slot.sourcePageNumbers().stream()
+                        .map(pages::get)
+                        .filter(java.util.Objects::nonNull)
+                        .noneMatch(page -> containsSourceIdentifier(page, slot.sourceIdentifier())))
+                .toList();
+    }
+
     static void validateStructure(OutlineDraft outline) {
         if (outline == null) throw new IllegalArgumentException("teaching source coverage outline is required");
         if (!declaresContract(outline)) return;
@@ -111,6 +141,7 @@ public final class TeachingSourceCoverageContract {
         }
         Set<String> slotIds = new LinkedHashSet<>();
         Map<SourceAnchor, String> owners = new LinkedHashMap<>();
+        Map<String, String> teachingUnitOwners = new LinkedHashMap<>();
         for (SourceCoverageSlotDraft slot : outline.sourceCoverageSlots()) {
             if (!slotIds.add(identity(slot.slotId()))) {
                 throw new IllegalArgumentException("teaching source coverage slot IDs must be unique");
@@ -120,19 +151,17 @@ public final class TeachingSourceCoverageContract {
                 throw new IllegalArgumentException(
                         "teaching source coverage slot has no chapter owner: " + slot.slotId());
             }
-            Set<String> ownerTags = tags(owner);
-            if (owner.retrievalQueries().stream()
-                    .map(TeachingSourceCoverageContract::identity)
-                    .noneMatch(identity(slot.sourceIdentifier())::equals)) {
+            String previousUnitOwner = teachingUnitOwners.putIfAbsent(
+                    identity(slot.teachingUnitId()), slot.ownerTopicKey());
+            if (previousUnitOwner != null && !previousUnitOwner.equals(slot.ownerTopicKey())) {
                 throw new IllegalArgumentException(
-                        "teaching source coverage slot is absent from its owner's retrieval contract: "
-                                + slot.slotId());
+                        "one planned teaching unit cannot span multiple chapter owners: " + slot.teachingUnitId());
             }
             if (!owner.sourcePageNumbers().containsAll(slot.sourcePageNumbers())) {
                 throw new IllegalArgumentException(
                         "teaching source coverage slot exceeds its owner's source pages: " + slot.slotId());
             }
-            validateOwnerRole(slot, owner, ownerTags);
+            validateOwnerAvailability(slot, tags(owner));
             if (slot.availability() == SourceCoverageAvailability.SOURCED) {
                 for (Integer page : slot.sourcePageNumbers()) {
                     SourceAnchor anchor = new SourceAnchor(page, identity(slot.sourceIdentifier()));
@@ -143,29 +172,6 @@ public final class TeachingSourceCoverageContract {
                                         + slot.sourceIdentifier());
                     }
                 }
-            }
-        }
-        for (TopicDraft topic : outline.topics()) {
-            if (tags(topic).contains("source_dependency")) continue;
-            Set<String> ownedIdentifiers = outline.sourceCoverageSlots().stream()
-                    .filter(slot -> slot.ownerTopicKey().equals(topic.key()))
-                    .map(SourceCoverageSlotDraft::sourceIdentifier)
-                    .map(TeachingSourceCoverageContract::identity)
-                    .collect(Collectors.toCollection(LinkedHashSet::new));
-            if (ownedIdentifiers.isEmpty()) continue;
-            Set<String> retrievalIdentifiers = topic.retrievalQueries().stream()
-                    .map(TeachingSourceCoverageContract::identity)
-                    .collect(Collectors.toCollection(LinkedHashSet::new));
-            if (!retrievalIdentifiers.equals(ownedIdentifiers)) {
-                throw new IllegalArgumentException(
-                        "a source contract owner must retrieve exactly its owned source slots: " + topic.key());
-            }
-        }
-
-        for (SourceCoverageRole role : CORE_ROLES) {
-            if (outline.sourceCoverageSlots().stream().noneMatch(slot -> slot.role() == role)) {
-                throw new IllegalArgumentException(
-                        "teaching source coverage contract omitted required role " + role);
             }
         }
         if (outline.sourceCoverageInventoryComplete()
@@ -182,77 +188,7 @@ public final class TeachingSourceCoverageContract {
                 throw new IllegalArgumentException(
                         "teaching chapter claims source_coverage without a source coverage slot");
             }
-            for (SourceCoverageRole role : SourceCoverageRole.values()) {
-                if (role == SourceCoverageRole.SUPPORTING_RULE) continue;
-                String publicTag = publicCoverageTag(role);
-                if (publicTag == null || !topicTags.contains(publicTag)) continue;
-                boolean backed = outline.sourceCoverageSlots().stream()
-                        .anyMatch(slot -> slot.ownerTopicKey().equals(topic.key()) && slot.role() == role);
-                if (!backed) {
-                    throw new IllegalArgumentException(
-                            "teaching chapter claims " + publicTag + " without a source coverage slot");
-                }
-            }
         }
-        validatePlayableJourneyOrder(outline);
-    }
-
-    private static void validatePlayableJourneyOrder(OutlineDraft outline) {
-        Map<String, Integer> positions = new LinkedHashMap<>();
-        for (int index = 0; index < outline.topics().size(); index++) {
-            positions.put(outline.topics().get(index).key(), index);
-        }
-        List<SourceCoverageSlotDraft> sourced = outline.sourceCoverageSlots().stream()
-                .filter(slot -> slot.availability() == SourceCoverageAvailability.SOURCED)
-                .toList();
-        int latestSetup = latestPosition(sourced, positions, Set.of(SourceCoverageRole.SETUP));
-        int earliestPlayable = earliestPosition(
-                sourced,
-                positions,
-                Set.of(SourceCoverageRole.CORE_LOOP, SourceCoverageRole.LEGAL_ACTION));
-        int latestPlayable = latestPosition(
-                sourced,
-                positions,
-                Set.of(SourceCoverageRole.CORE_LOOP, SourceCoverageRole.LEGAL_ACTION));
-        int earliestEnding = earliestPosition(sourced, positions, Set.of(SourceCoverageRole.ENDING));
-        int latestEnding = latestPosition(sourced, positions, Set.of(SourceCoverageRole.ENDING));
-        int earliestScoring = earliestPosition(sourced, positions, Set.of(SourceCoverageRole.SCORING));
-        if (latestSetup > earliestPlayable) {
-            throw new IllegalArgumentException(
-                    "sourced setup obligation appears after the playable turn or action chapters");
-        }
-        if (latestPlayable > earliestEnding) {
-            throw new IllegalArgumentException(
-                    "sourced playable turn or action obligation appears after the ending chapter");
-        }
-        if (latestEnding > earliestScoring) {
-            throw new IllegalArgumentException(
-                    "sourced ending obligation appears after the scoring chapter");
-        }
-    }
-
-    private static int earliestPosition(
-            List<SourceCoverageSlotDraft> slots,
-            Map<String, Integer> positions,
-            Set<SourceCoverageRole> roles) {
-        return slots.stream()
-                .filter(slot -> roles.contains(slot.role()))
-                .map(SourceCoverageSlotDraft::ownerTopicKey)
-                .mapToInt(positions::get)
-                .min()
-                .orElse(Integer.MAX_VALUE);
-    }
-
-    private static int latestPosition(
-            List<SourceCoverageSlotDraft> slots,
-            Map<String, Integer> positions,
-            Set<SourceCoverageRole> roles) {
-        return slots.stream()
-                .filter(slot -> roles.contains(slot.role()))
-                .map(SourceCoverageSlotDraft::ownerTopicKey)
-                .mapToInt(positions::get)
-                .max()
-                .orElse(Integer.MIN_VALUE);
     }
 
     static List<String> metadataForTopic(OutlineDraft outline, TopicDraft topic) {
@@ -261,6 +197,7 @@ public final class TeachingSourceCoverageContract {
         metadata.add(CONTRACT_VERSION_TAG);
         metadata.add(outline.sourceCoverageInventoryComplete() ? COMPLETE_INVENTORY_TAG : INCOMPLETE_INVENTORY_TAG);
         if (outline.sourceCoverageSlots().stream()
+                .filter(slot -> slot.ownerTopicKey().equals(topic.key()))
                 .anyMatch(slot -> slot.availability() != SourceCoverageAvailability.SOURCED)) {
             metadata.add(UNSOURCED_TAG);
         }
@@ -298,12 +235,6 @@ public final class TeachingSourceCoverageContract {
                 || section.coverageTags().contains("source_dependency"))) {
             gaps.add("one or more source obligations are unavailable");
         }
-        for (SourceCoverageRole role : CORE_ROLES) {
-            if (plan.sections().stream().noneMatch(section -> section.coverageTags().contains(roleTag(role)))) {
-                gaps.add("required source role is absent: " + role);
-            }
-        }
-
         Map<String, List<LessonSection>> lessonByTopic = sections.stream()
                 .collect(Collectors.groupingBy(
                         LessonSection::topicKey,
@@ -340,13 +271,6 @@ public final class TeachingSourceCoverageContract {
                 gaps.add("source owner has no citation to its bound page: " + planned.topicKey());
                 continue;
             }
-            List<String> uncoveredIdentifiers = planned.retrievalQueries().stream()
-                    .filter(identifier -> actual.steps().stream().noneMatch(step ->
-                            citesOwnedIdentifier(step, planned.sourcePageNumbers(), identifier)))
-                    .toList();
-            if (!uncoveredIdentifiers.isEmpty()) {
-                gaps.add("source owner omitted one or more required source slots: " + planned.topicKey());
-            }
         }
         return new Assessment(true, gaps.isEmpty(), List.copyOf(gaps));
     }
@@ -354,16 +278,7 @@ public final class TeachingSourceCoverageContract {
     private static boolean ownsRequiredSlot(TeachingPlan.PlannedSection section) {
         if (!section.required()) return false;
         return section.coverageTags().stream()
-                .anyMatch(tag -> tag.startsWith(ROLE_TAG_PREFIX)
-                        && !tag.equals(roleTag(SourceCoverageRole.SUPPORTING_RULE)));
-    }
-
-    private static boolean citesOwnedIdentifier(
-            com.rulepilot.teaching.domain.IllustratedLesson.LessonStep step,
-            List<Integer> ownerPages,
-            String identifier) {
-        if (step.sourcePages().stream().noneMatch(ownerPages::contains)) return false;
-        return containsIdentifier(identity(step.heading() + " " + step.text()), identity(identifier));
+                .anyMatch(tag -> tag.startsWith(ROLE_TAG_PREFIX));
     }
 
     private static boolean containsIdentifier(String text, String identifier) {
@@ -394,17 +309,11 @@ public final class TeachingSourceCoverageContract {
         return false;
     }
 
-    private static void validateOwnerRole(
-            SourceCoverageSlotDraft slot, TopicDraft owner, Set<String> ownerTags) {
-        if (slot.role() != SourceCoverageRole.SUPPORTING_RULE && !owner.required()) {
-            throw new IllegalArgumentException(
-                    "required teaching source coverage slots need a required chapter owner: " + slot.slotId());
-        }
+    private static void validateOwnerAvailability(SourceCoverageSlotDraft slot, Set<String> ownerTags) {
         if (slot.availability() == SourceCoverageAvailability.MISSING_EXTERNAL_SOURCE) {
             String missingTag = missingSourceTag(slot.role());
             if (missingTag == null
-                    || !ownerTags.contains("source_dependency")
-                    || !ownerTags.contains(missingTag)) {
+                    || (ownerTags.contains("source_dependency") && !ownerTags.contains(missingTag))) {
                 throw new IllegalArgumentException(
                         "missing teaching source coverage slot is not backed by a source dependency: " + slot.slotId());
             }
@@ -412,11 +321,6 @@ public final class TeachingSourceCoverageContract {
         }
         if (ownerTags.contains("source_dependency")) {
             throw new IllegalArgumentException("a source dependency chapter cannot own a supplied rule slot");
-        }
-        String requiredTag = publicCoverageTag(slot.role());
-        if (requiredTag != null && !ownerTags.contains(requiredTag)) {
-            throw new IllegalArgumentException(
-                    "teaching source coverage slot role disagrees with its chapter: " + slot.slotId());
         }
     }
 
@@ -427,9 +331,10 @@ public final class TeachingSourceCoverageContract {
         return slot.sourcePageNumbers().stream()
                 .map(pages::get)
                 .filter(java.util.Objects::nonNull)
-                .flatMap(page -> page.sourceDependencies().stream())
-                .anyMatch(dependency -> identity(dependency.title()).equals(identity(slot.sourceIdentifier()))
-                        && dependency.missingCoverageTags().contains(requiredMissingTag));
+                .anyMatch(page -> page.sourceDependencies().stream().anyMatch(dependency ->
+                        dependency.missingCoverageTags().contains(requiredMissingTag)
+                                && containsIdentifier(slot.sourceIdentifier(), dependency.title())
+                                && containsIdentifier(page.text(), slot.sourceIdentifier())));
     }
 
     private static boolean containsSourceIdentifier(PageInput page, String identifier) {
@@ -446,18 +351,6 @@ public final class TeachingSourceCoverageContract {
                 .filter(java.util.Objects::nonNull)
                 .map(TeachingSourceCoverageContract::tagIdentity)
                 .collect(Collectors.toUnmodifiableSet());
-    }
-
-    private static String publicCoverageTag(SourceCoverageRole role) {
-        return switch (role) {
-            case SETUP -> "setup";
-            case CORE_LOOP -> "core_loop";
-            case LEGAL_ACTION -> "legal_action";
-            case ENDING -> "end";
-            case SCORING -> "scoring";
-            case NECESSARY_EXCEPTION -> "necessary_exception";
-            case SUPPORTING_RULE -> "source_coverage";
-        };
     }
 
     private static String missingSourceTag(SourceCoverageRole role) {
@@ -491,6 +384,25 @@ public final class TeachingSourceCoverageContract {
     }
 
     private record SourceAnchor(int pageNumber, String sourceIdentifier) {}
+
+    public static final class MissingExactSourceIdentifierException extends IllegalArgumentException {
+        private final String slotId;
+        private final String sourceIdentifier;
+
+        MissingExactSourceIdentifierException(String slotId, String sourceIdentifier) {
+            super("teaching source coverage slot has no exact source identifier: " + slotId);
+            this.slotId = slotId;
+            this.sourceIdentifier = sourceIdentifier;
+        }
+
+        public String slotId() {
+            return slotId;
+        }
+
+        public String sourceIdentifier() {
+            return sourceIdentifier;
+        }
+    }
 
     record Assessment(boolean applicable, boolean complete, List<String> gaps) {
         Assessment {

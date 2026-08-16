@@ -166,7 +166,7 @@ final class VisualLocatorResponsePolicy {
             int height,
             List<String> supportedClaimRefs) {
         ModelRegion {
-            visibleDescription = visibleDescription == null ? "" : visibleDescription.strip();
+            visibleDescription = visibleDescription == null ? "" : visibleDescription;
             supportedClaimRefs = supportedClaimRefs == null ? List.of() : List.copyOf(supportedClaimRefs);
         }
     }

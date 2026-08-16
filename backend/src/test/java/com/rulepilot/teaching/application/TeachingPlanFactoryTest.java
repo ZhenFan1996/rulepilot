@@ -156,7 +156,7 @@ class TeachingPlanFactoryTest {
 
         assertThatThrownBy(() -> new TeachingPlanFactory().create(UUID.randomUUID(), "player", outline))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("omitted setup");
+                .hasMessageContaining("requires a source dependency");
     }
 
     @Test
@@ -175,7 +175,7 @@ class TeachingPlanFactoryTest {
 
         assertThatThrownBy(() -> new TeachingPlanFactory().create(UUID.randomUUID(), "player", outline))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("source dependency cannot claim covered core rules");
+                .hasMessageContaining("cannot claim the unavailable procedure");
     }
 
     private TopicDraft topic(String key, String title, boolean visualEvidenceRecommended, List<String> tags) {

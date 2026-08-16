@@ -23,8 +23,13 @@ import com.rulepilot.teaching.TeachingOutlineModel.OutlineDraft;
 import com.rulepilot.teaching.TeachingOutlineModel.OutlineGenerationException;
 import com.rulepilot.teaching.TeachingOutlineModel.OutlineRequest;
 import com.rulepilot.teaching.TeachingOutlineModel.PageInput;
+import com.rulepilot.teaching.TeachingOutlineModel.GlobalConceptDraft;
+import com.rulepilot.teaching.TeachingOutlineModel.SourceCoverageAvailability;
 import com.rulepilot.teaching.TeachingOutlineModel.SourceCoverageRole;
+import com.rulepilot.teaching.TeachingOutlineModel.SourceCoverageSlotDraft;
 import com.rulepilot.teaching.TeachingOutlineModel.TopicDraft;
+import com.rulepilot.teaching.TeachingOutlineModel.TopicDependencyDraft;
+import com.rulepilot.teaching.TeachingOutlineModel.WholeGameUnderstandingDraft;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.SourceDependency;
@@ -48,7 +53,7 @@ import org.mockito.ArgumentCaptor;
 class TeachingPlanServiceTest {
 
     @Test
-    void publishesACompleteProgressiveVisualPlanWithoutWaitingForTheLegacyOutlineModel() {
+    void requiresAWholeGameSemanticOutlineBeforePublishingAVisualPlan() {
         UUID documentVersionId = UUID.randomUUID();
         UUID editionId = UUID.randomUUID();
         List<PageView> visualPages = IntStream.rangeClosed(1, 4)
@@ -68,9 +73,30 @@ class TeachingPlanServiceTest {
         when(catalog.findEdition(editionId)).thenReturn(Optional.of(new CatalogEditionLookup.EditionReference(
                 editionId, UUID.randomUUID(), "Example Game", "First edition", "en", Set.of())));
         when(documents.pages(documentVersionId)).thenReturn(visualPages);
-        when(visualCataloger.progressiveTeachingStart(
+        List<PageInput> catalogPages = IntStream.rangeClosed(1, 4)
+                .mapToObj(page -> completeVisualPage(
+                        page,
+                        "SOURCE GROUP " + page,
+                        "A page-owned relation is directly visible.",
+                        List.of()))
+                .toList();
+        when(visualCataloger.catalogVisualPages(
                         documentVersionId, visualPages, "example_rules_en.pdf", "alice", null))
-                .thenReturn(Optional.of(progressiveStart()));
+                .thenReturn(catalogPages);
+        when(outlines.organize(any())).thenReturn(sourceBoundOutline(
+                "Example Game",
+                "Understand the complete visible source before teaching its connected flow.",
+                List.of(new TopicDraft(
+                        "whole-flow",
+                        "完整流程",
+                        "根据整份可见证据组织一章相互关联的讲解。",
+                        true,
+                        true,
+                        catalogPages.stream()
+                                .flatMap(page -> page.sourceRuleGroupIdentifiers().stream())
+                                .toList(),
+                        List.of("setup", "core_loop", "end", "scoring", "source_coverage"),
+                        List.of(1, 2, 3, 4)))));
         when(publication.publish(any(TeachingPlan.class), eq("Example Game")))
                 .thenAnswer(invocation -> invocation.getArgument(0));
         TeachingPlanService service = new TeachingPlanService(
@@ -87,14 +113,16 @@ class TeachingPlanServiceTest {
         TeachingPlan plan = service.create(documentVersionId, null, "alice", null);
 
         assertThat(plan.gameTitle()).isEqualTo("Example Game");
-        assertThat(plan.sections()).extracting(section -> section.sourcePageNumbers().getFirst())
-                .containsExactly(2, 3, 4);
-        assertThat(plan.sections()).allMatch(section ->
-                section.topicKey().startsWith("progressive-visual-page-"));
+        assertThat(plan.wholeGameContext().evidenceBound()).isTrue();
+        assertThat(plan.sections()).singleElement().satisfies(section ->
+                assertThat(section.sourcePageNumbers()).containsExactly(1, 2, 3, 4));
         assertThat(plan.sections()).allSatisfy(section -> assertThat(section.coverageTags())
-                .contains(TeachingSourceCoverageContract.CONTRACT_VERSION_TAG));
+                .contains(
+                        TeachingSourceCoverageContract.CONTRACT_VERSION_TAG,
+                        TeachingWholeGameUnderstandingPolicy.CONTRACT_TAG));
         verify(publication).publish(any(TeachingPlan.class), eq("Example Game"));
-        verifyNoInteractions(outlines);
+        verify(outlines).organize(any());
+        verify(visualCataloger, never()).progressiveTeachingStart(any(), any(), any(), any(), any());
     }
 
     @Test
@@ -120,7 +148,7 @@ class TeachingPlanServiceTest {
                         1,
                         "VISIBLE TERM",
                         "A complete page-scoped factual observation supports the requested lesson.")));
-        when(outlines.organize(any())).thenReturn(new OutlineDraft(
+        when(outlines.organize(any())).thenReturn(sourceBoundOutline(
                 "Example Game",
                 "Follow the player's requested teaching emphasis.",
                 List.of(new TopicDraft(
@@ -157,7 +185,7 @@ class TeachingPlanServiceTest {
     }
 
     @Test
-    void modelOmissionFallsBackWithoutLosingAnExternalSetupDependency() {
+    void sourceLedgerFallbackCannotReplaceTheMissingWholeGameUnderstanding() {
         UUID documentVersionId = UUID.randomUUID();
         List<PageView> visualPages = List.of(new PageView(1, "", 0));
         DocumentProcessing documents = mock(DocumentProcessing.class);
@@ -206,22 +234,15 @@ class TeachingPlanServiceTest {
                 repository,
                 publication);
 
-        TeachingPlan plan = service.create(documentVersionId, "Teach this safely", "alice", null);
-
-        assertThat(plan.sections()).hasSize(2);
-        assertThat(plan.sections()).flatExtracting(TeachingPlan.PlannedSection::coverageTags)
-                .contains("source_dependency", "missing_setup_source")
-                .doesNotContain("setup");
-        assertThat(plan.sections().stream()
-                        .filter(section -> section.coverageTags().contains("source_dependency"))
-                        .findFirst()
-                        .orElseThrow()
-                        .retrievalQueries())
-                .containsExactly("First Session Booklet");
+        assertThatThrownBy(() -> service.create(documentVersionId, "Teach this safely", "alice", null))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("whole-game understanding")
+                .hasMessageContaining("retry preparation");
+        verifyNoInteractions(publication);
     }
 
     @Test
-    void modelThatOwnsAPageButDropsOneRuleGroupIsReplacedByTheCompleteSourceLedger() {
+    void completeSourceLedgerStillCannotPublishWithoutSemanticWholeGameUnderstanding() {
         UUID documentVersionId = UUID.randomUUID();
         List<PageView> visualPages = List.of(new PageView(1, "", 0));
         DocumentProcessing documents = mock(DocumentProcessing.class);
@@ -276,24 +297,15 @@ class TeachingPlanServiceTest {
                 repository,
                 publication);
 
-        TeachingPlan plan = service.create(documentVersionId, "Teach every visible group", "alice", null);
-
-        assertThat(plan.sections()).singleElement().satisfies(section -> {
-            assertThat(section.topicKey()).isEqualTo("source-page-1-group-1");
-            assertThat(section.retrievalQueries())
-                    .containsExactly(
-                            "GROUP A",
-                            "GROUP B",
-                            "GROUP C",
-                            "GROUP D",
-                            "GROUP E",
-                            "Five independent source relations are visible on this page.");
-            assertThat(section.sourcePageNumbers()).containsExactly(1);
-        });
+        assertThatThrownBy(() -> service.create(
+                        documentVersionId, "Teach every visible group", "alice", null))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("whole-game understanding");
+        verifyNoInteractions(publication);
     }
 
     @Test
-    void modelSchemaFailureFallsBackToTheCompleteVisualSourceLedger() {
+    void modelSchemaFailureCannotFanOutFromASourceLedgerWithoutWholeGameUnderstanding() {
         UUID documentVersionId = UUID.randomUUID();
         UUID assistantRunId = UUID.randomUUID();
         List<PageView> visualPages = IntStream.rangeClosed(1, 24)
@@ -314,9 +326,7 @@ class TeachingPlanServiceTest {
                         page,
                         "OPAQUE GROUP " + page,
                         "A page-owned rule relation numbered " + page + " is directly visible.",
-                        page == 1
-                                ? List.of(new SourceDependency("Separate Start Folio", List.of("setup")))
-                                : List.of()))
+                        List.of()))
                 .toList();
         when(visualCataloger.catalogVisualPages(
                         documentVersionId, visualPages, "Opaque Rulebook", "alice", assistantRunId))
@@ -348,22 +358,11 @@ class TeachingPlanServiceTest {
                 repository,
                 publication);
 
-        TeachingPlan plan = service.create(
-                documentVersionId, "Teach the complete source without guessing", "alice", assistantRunId);
-
-        assertThat(plan.sections().stream()
-                        .filter(section -> !section.coverageTags().contains("source_dependency"))
-                        .flatMap(section -> section.sourcePageNumbers().stream())
-                        .toList())
-                .containsExactlyInAnyOrderElementsOf(IntStream.rangeClosed(1, 24).boxed().toList());
-        assertThat(plan.sections()).flatExtracting(TeachingPlan.PlannedSection::retrievalQueries)
-                .containsAll(IntStream.rangeClosed(1, 24)
-                        .mapToObj(page -> "OPAQUE GROUP " + page)
-                        .toList());
-        assertThat(plan.sections()).flatExtracting(TeachingPlan.PlannedSection::coverageTags)
-                .contains("source_dependency", "missing_setup_source")
-                .doesNotContain("setup");
-        verify(publication).publish(any(TeachingPlan.class), eq("Opaque Rulebook"));
+        assertThatThrownBy(() -> service.create(
+                        documentVersionId, "Teach the complete source without guessing", "alice", assistantRunId))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("whole-game understanding");
+        verifyNoInteractions(publication);
     }
 
     @Test
@@ -559,7 +558,7 @@ class TeachingPlanServiceTest {
         AuditedAgentInvocations invocations = mock(AuditedAgentInvocations.class);
         TeachingPlanRepository repository = mock(TeachingPlanRepository.class);
         TeachingPlanPublication publication = mock(TeachingPlanPublication.class);
-        OutlineDraft complete = new OutlineDraft(
+        OutlineDraft complete = sourceBoundOutline(
                 "Example Game",
                 "Teach the complete game in dependency order.",
                 List.of(new TopicDraft(
@@ -578,7 +577,7 @@ class TeachingPlanServiceTest {
         when(scopes.findVersion(documentVersionId)).thenReturn(Optional.of(new VersionScope(
                 documentVersionId, null, "READY", "alice", "Example Game")));
         when(documents.pages(documentVersionId)).thenReturn(List.of(
-                page(1, "A complete first source page with enough opaque text for structural admission."),
+                page(1, "SOURCE TERM. A complete first source page with enough opaque text for structural admission."),
                 page(2, "A complete second source page with enough opaque text for structural admission.")));
         when(outlines.organize(any())).thenReturn(complete);
         when(outlines.refineChapterOwnership(any(), any(), any())).thenReturn(invalidRewrite);
@@ -636,7 +635,7 @@ class TeachingPlanServiceTest {
 
         assertThatThrownBy(() -> service.create(documentVersionId, null, "alice", null))
                 .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("semantic teaching outline")
+                .hasMessageContaining("whole-game understanding")
                 .hasMessageContaining("retry preparation");
         verify(outlines, never()).fallback(any());
         verifyNoInteractions(publication);
@@ -1031,6 +1030,51 @@ class TeachingPlanServiceTest {
 
     private OutlineDraft outline(List<TopicDraft> topics) {
         return new OutlineDraft("Game", "Premise", topics);
+    }
+
+    private OutlineDraft sourceBoundOutline(
+            String gameTitle,
+            String premise,
+            List<TopicDraft> topics) {
+        List<SourceCoverageSlotDraft> slots = new ArrayList<>();
+        List<GlobalConceptDraft> concepts = new ArrayList<>();
+        List<TopicDependencyDraft> dependencies = new ArrayList<>();
+        int slotNumber = 1;
+        for (int topicIndex = 0; topicIndex < topics.size(); topicIndex++) {
+            TopicDraft topic = topics.get(topicIndex);
+            String teachingUnitId = "test-unit-" + (topicIndex + 1);
+            for (String identifier : topic.retrievalQueries()) {
+                slots.add(new SourceCoverageSlotDraft(
+                        "test-slot-" + slotNumber++,
+                        SourceCoverageRole.SUPPORTING_RULE,
+                        identifier,
+                        topic.sourcePageNumbers(),
+                        topic.key(),
+                        teachingUnitId,
+                        SourceCoverageAvailability.SOURCED));
+            }
+            concepts.add(new GlobalConceptDraft(
+                    "test-concept-" + (topicIndex + 1),
+                    topic.title(),
+                    topic.objective(),
+                    topic.retrievalQueries(),
+                    topic.sourcePageNumbers(),
+                    List.of(topic.key()),
+                    topicIndex == 0 ? List.of() : List.of("test-concept-" + topicIndex)));
+            if (topicIndex > 0) {
+                dependencies.add(new TopicDependencyDraft(
+                        topics.get(topicIndex - 1).key(),
+                        topic.key(),
+                        "The Agent placed this chapter after its preceding concept."));
+            }
+        }
+        return new OutlineDraft(
+                gameTitle,
+                premise,
+                topics,
+                slots,
+                true,
+                new WholeGameUnderstandingDraft(premise, concepts, dependencies));
     }
 
     private ProgressiveTeachingStartDraft progressiveStart() {

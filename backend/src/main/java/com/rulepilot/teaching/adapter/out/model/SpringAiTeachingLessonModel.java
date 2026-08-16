@@ -241,7 +241,8 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
         int objectiveTokens = estimateTokens(request.objective());
         int requiredRuleTokens = request.requiredRuleIntents().isEmpty()
                 ? 0
-                : estimateTokens(request.requiredRuleIntents().toString());
+                : estimateTokens(request.requiredRuleIntents().toString())
+                        + estimateTokens(request.teachingUnits().toString());
         int evidenceTokens = estimateTokens(modelEvidence(request).toString());
         int chapterScopeTokens = estimateTokens(request.chapterScope());
         int continuityTokens = request.priorSections().isEmpty()
@@ -250,6 +251,7 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
         int revisionTokens = estimateTokens(revisionInstruction);
         int otherRequestTokens = estimateTokens(request.title())
                 + estimateTokens(request.coverageTags().toString())
+                + estimateTokens(request.wholeGameContext().toString())
                 + estimateTokens(Boolean.toString(!request.pageImages().isEmpty()))
                 + (request.pageImages().isEmpty()
                         ? 0
@@ -289,6 +291,8 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
                 "objective",
                 "coverage",
                 "requiredRules",
+                "teachingUnits",
+                "wholeGameContext",
                 "continuity",
                 "chapterScope",
                 "evidence",
@@ -347,6 +351,8 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
                                 .param("objective", request.objective())
                                 .param("coverage", request.coverageTags())
                                 .param("requiredRules", request.requiredRuleIntents())
+                                .param("teachingUnits", modelTeachingUnits(request))
+                                .param("wholeGameContext", request.wholeGameContext())
                                 .param("continuity", request.priorSections())
                                 .param("chapterScope", request.chapterScope())
                                 .param("evidence", modelEvidence(request))
@@ -518,6 +524,21 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
         return Map.copyOf(references);
     }
 
+    List<ModelTeachingUnit> modelTeachingUnits(SectionRequest request) {
+        Map<UUID, String> references = new LinkedHashMap<>();
+        evidenceIds(request).forEach((reference, id) -> references.put(id, reference));
+        return request.teachingUnits().stream()
+                .map(unit -> {
+                    List<String> directEvidenceReferences = unit.directEvidenceIds().stream()
+                            .map(references::get)
+                            .filter(java.util.Objects::nonNull)
+                            .toList();
+                    return new ModelTeachingUnit(
+                            unit.unitId(), unit.sourceIdentifiers(), directEvidenceReferences);
+                })
+                .toList();
+    }
+
     private ModelSectionDraft toModelDraft(SectionRequest request, SectionDraft draft) {
         Map<UUID, String> references = new LinkedHashMap<>();
         evidenceIds(request).forEach((reference, id) -> references.put(id, reference));
@@ -530,6 +551,7 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
                         .map(step -> new ModelStepDraft(
                                 step.heading(), step.kind(), step.text(),
                                 step.citationIds().stream().map(references::get).toList(),
+                                step.teachingUnitIds(),
                                 step.visualFocus()))
                         .toList());
     }
@@ -566,6 +588,7 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
                         .map(step -> new StepDraft(
                                 step.heading(), step.kind(), step.text(),
                                 resolveReferences(step.citationIds(), evidenceIds),
+                                step.teachingUnitIds(),
                                 step.kind() == TeachingMove.VISUAL ? step.visualFocus() : null))
                         .toList());
     }
@@ -593,6 +616,11 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
             int pageFrom,
             int pageTo) {}
 
+    record ModelTeachingUnit(
+            String unitId,
+            List<String> sourceIdentifiers,
+            List<String> directEvidenceIds) {}
+
     private record ModelSectionDraft(
             String title,
             VisualKind visualKind,
@@ -610,9 +638,11 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
             TeachingMove kind,
             String text,
             List<String> citationIds,
+            List<String> teachingUnitIds,
             VisualFocusDraft visualFocus) {
         private ModelStepDraft {
             citationIds = citationIds == null ? List.of() : List.copyOf(citationIds);
+            teachingUnitIds = teachingUnitIds == null ? List.of() : List.copyOf(teachingUnitIds);
         }
     }
 }

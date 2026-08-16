@@ -36,7 +36,9 @@ public record IllustratedLesson(
     }
 
     public enum EvidenceStatus {
+        /** Passed the deterministic publication boundary; this is not a human or second-model fact-check claim. */
         SUPPORTED,
+        /** Cited content retained for inspection after a local, optional enrichment or review concern. */
         CITED_DRAFT,
         INSUFFICIENT_EVIDENCE
     }
@@ -158,8 +160,6 @@ public record IllustratedLesson(
                     || height < 20 || height > 1_000 - y) {
                 throw new IllegalArgumentException("lesson visual focus is invalid");
             }
-            label = label.strip();
-            visibleDescription = visibleDescription.strip();
         }
     }
 }

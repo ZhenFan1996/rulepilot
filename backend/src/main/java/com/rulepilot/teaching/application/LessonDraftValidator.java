@@ -22,7 +22,8 @@ import java.util.stream.IntStream;
  * Validates the deterministic publication boundary for an untrusted lesson draft.
  *
  * <p>This class owns schema, citation scope, page membership, visual bounds, and internal-reference leakage. It does
- * not infer rule meaning from wording. Semantic fidelity and objective coverage belong to the evidence Critic.</p>
+ * not infer rule meaning from wording. Semantic fidelity and objective coverage remain explicit evaluation concerns;
+ * passing this boundary does not claim that an independent model proved entailment.</p>
  */
 final class LessonDraftValidator {
 
@@ -103,9 +104,9 @@ final class LessonDraftValidator {
                 .toList();
         return new LessonStep(
                 position,
-                draft.heading().strip(),
+                draft.heading(),
                 draft.kind(),
-                draft.text().strip(),
+                draft.text(),
                 pages,
                 List.copyOf(citationIds),
                 validatedVisualFocus(draft));
@@ -152,9 +153,6 @@ final class LessonDraftValidator {
         if (draft.visualKind() == null) throw new IllegalArgumentException("visualKind is missing.");
         if (draft.visualCaption() == null || draft.visualCaption().isBlank()) {
             throw new IllegalArgumentException("The visual caption is missing.");
-        }
-        if (draft.visualCaption().length() > 240) {
-            throw new IllegalArgumentException("The visual caption is longer than 240 characters.");
         }
         if (draft.visualCitationIds().isEmpty()) {
             throw new IllegalArgumentException("The visual caption has no evidence citation.");

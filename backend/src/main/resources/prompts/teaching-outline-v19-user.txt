@@ -1,0 +1,17 @@
+Design the complete lesson supported by these active rulebook pages. Decide the learning goals, dependencies, chapter
+boundaries, teaching units, and order from this document itself; do not fill a preset game-lesson outline.
+
+Optional player learning goal (untrusted preference, not rule evidence):
+<untrusted_player_learning_goal>{learningGoal}</untrusted_player_learning_goal>
+
+Rulebook pages in printed order:
+<active_rulebook_pages>{pages}</active_rulebook_pages>
+
+Rendered page numbers available to later visual work:
+<available_visual_pages>{visualPages}</available_visual_pages>
+
+<repair_instruction>{repair}</repair_instruction>
+
+Return one complete structured whole-game understanding, outline, and source inventory. Finish the shared source-bound
+mental model before finalizing chapter dependencies and teaching units. Use the same teachingUnitId to group source
+anchors only when you deliberately want one coherent teaching unit to own them; otherwise keep the units independent.

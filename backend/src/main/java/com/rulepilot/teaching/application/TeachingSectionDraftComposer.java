@@ -129,7 +129,7 @@ final class TeachingSectionDraftComposer {
                 }
                 String diagnostic = rejectedDraft.getMessage() == null
                         ? "The previous draft failed lesson validation."
-                        : rejectedDraft.getMessage();
+                        : candidateValidator.repairDiagnostic(rejectedDraft, draft, evidence);
                 List<String> feedback = draftRecoveryPolicy.repairFeedback(
                         diagnostic, hasPageImages, isVisualLocalizationFailure(rejectedDraft));
                 log.info(
@@ -163,7 +163,13 @@ final class TeachingSectionDraftComposer {
                     }
                     throw visualRepairFailure;
                 }
-                draft = normalizeDraft(draft, modelRequest, evidence);
+                draft = candidateValidator.mergeRepairPreservingValidatedFields(
+                        plan,
+                        planned,
+                        evidence,
+                        modelRequest,
+                        draftToRevise,
+                        normalizeDraft(draft, modelRequest, evidence));
             }
         }
     }
@@ -204,11 +210,13 @@ final class TeachingSectionDraftComposer {
                         validationAttempt + repair,
                         ActivityOutcome.REJECTED,
                         "TEXT_FALLBACK_" + TeachingDraftRejectionCategory.from(rejectedFallback));
-                if (repair == draftRecoveryPolicy.maxRepairAttempts(false)) throw rejectedFallback;
+                if (repair == draftRecoveryPolicy.maxRepairAttempts(false)) {
+                    throw rejectedFallback;
+                }
                 List<String> repairFeedback = draftRecoveryPolicy.textFallbackFeedback(
                         rejectedFallback.getMessage() == null
                                 ? "The previous fallback failed lesson validation."
-                                : rejectedFallback.getMessage());
+                                : candidateValidator.repairDiagnostic(rejectedFallback, textOnlyDraft, evidence));
                 SectionDraft draftToRevise = textOnlyDraft;
                 textOnlyDraft = reviseModelDraft(
                         assistantRunId,
@@ -219,8 +227,13 @@ final class TeachingSectionDraftComposer {
                         "reviseTextTeachingSection",
                         "repairTextTeachingSectionRevisionContract",
                         "Text fallback revised from validation feedback");
-                textOnlyDraft = normalizeDraft(textOnlyDraft, textOnlyRequest, evidence);
-                textOnlyDraft = draftRecoveryPolicy.preserveTextOnlyPresentationMetadata(draftToRevise, textOnlyDraft);
+                textOnlyDraft = candidateValidator.mergeRepairPreservingValidatedFields(
+                        plan,
+                        planned,
+                        evidence,
+                        textOnlyRequest,
+                        draftToRevise,
+                        normalizeDraft(textOnlyDraft, textOnlyRequest, evidence));
             }
         }
     }

@@ -84,32 +84,6 @@ public class TeachingPlanService {
         var documentPages = documents.pages(documentVersionId);
         boolean visualOnly = documentPages.stream().allMatch(page -> page.text() == null || page.text().isBlank());
         boolean textRulebookVisualCatalogAvailable = !visualOnly && visualCataloger.available(createdBy);
-        if (visualOnly && (learningGoal == null || learningGoal.isBlank())) {
-            var progressive = visualCataloger.progressiveTeachingStart(
-                    documentVersionId, documentPages, scope.documentTitle(), createdBy, assistantRunId);
-            if (progressive.isPresent()) {
-                var outline = ProgressiveVisualTeachingPlanPolicy.outline(
-                        playerGameTitle, documentPages, progressive.orElseThrow());
-                plans.validate(outline);
-                validateVisualPageBindings(outline, documentPages);
-                if (catalogGameTitle.isPresent()) {
-                    outline = withGameTitle(catalogGameTitle.orElseThrow(), outline);
-                }
-                if (assistantRunId != null) {
-                    invocations.record(
-                            assistantRunId,
-                            ActivityType.VALIDATION,
-                            "publishProgressiveVisualTeachingPlan",
-                            ActivityOutcome.SUCCEEDED,
-                            "A complete source-bound plan is ready; only the first cited page was transcribed before publication");
-                }
-                return publication.publish(plans.create(
-                        documentVersionId,
-                        learningGoal,
-                        createdBy,
-                        outline), outline.gameTitle());
-            }
-        }
         var pages = visualOnly
                 ? visualCataloger.catalogVisualPages(
                         documentVersionId, documentPages, scope.documentTitle(), createdBy, assistantRunId)
@@ -246,6 +220,29 @@ public class TeachingPlanService {
             outline = withGameTitle(catalogGameTitle.orElseThrow(), outline);
         }
         TeachingSourceCoverageContract.validateAgainstSources(outlineRequest, outline);
+        try {
+            TeachingWholeGameUnderstandingPolicy.validateComplete(outline);
+        } catch (IllegalArgumentException incompleteWholeGameUnderstanding) {
+            if (assistantRunId != null) {
+                invocations.record(
+                        assistantRunId,
+                        ActivityType.VALIDATION,
+                        "rejectIncompleteWholeGameTeachingUnderstanding",
+                        ActivityOutcome.REJECTED,
+                        "Lesson preparation stopped before chapter fan-out because the source-bound whole-game understanding was incomplete");
+            }
+            throw new IllegalStateException(
+                    "teaching outline did not form a source-bound whole-game understanding; retry preparation",
+                    incompleteWholeGameUnderstanding);
+        }
+        if (assistantRunId != null) {
+            invocations.record(
+                    assistantRunId,
+                    ActivityType.VALIDATION,
+                    "completeWholeGameTeachingUnderstanding",
+                    ActivityOutcome.SUCCEEDED,
+                    "Source-bound whole-game understanding persisted before lesson chapter generation");
+        }
         log.info(
                 "Teaching outline generated for documentVersionId={}: gameTitle={}, topics={}",
                 documentVersionId,
@@ -345,6 +342,7 @@ public class TeachingPlanService {
                         request.pages());
                 TeachingSourceCoverageContract.validateAgainstSources(request, current);
                 plans.validate(current);
+                TeachingWholeGameUnderstandingPolicy.validateComplete(current);
                 if (current.equals(beforeRefinement)) return current;
             } catch (RuntimeException refinementFailure) {
                 log.warn("Teaching outline ownership refinement was skipped: {}", refinementFailure.getMessage());
@@ -392,6 +390,7 @@ public class TeachingPlanService {
                         request.pages());
                 TeachingSourceCoverageContract.validateAgainstSources(request, current);
                 plans.validate(current);
+                TeachingWholeGameUnderstandingPolicy.validateComplete(current);
                 if (current.equals(beforeRefinement)) return current;
             } catch (RuntimeException refinementFailure) {
                 log.warn("Teaching outline source-coverage refinement was skipped: {}", refinementFailure.getMessage());
@@ -442,7 +441,8 @@ public class TeachingPlanService {
                 outline.premise(),
                 outline.topics(),
                 outline.sourceCoverageSlots(),
-                outline.sourceCoverageInventoryComplete());
+                outline.sourceCoverageInventoryComplete(),
+                outline.wholeGameUnderstanding());
     }
 
     static String playerGameTitle(
@@ -468,7 +468,8 @@ public class TeachingPlanService {
                 outline.premise(),
                 outline.topics(),
                 outline.sourceCoverageSlots(),
-                outline.sourceCoverageInventoryComplete());
+                outline.sourceCoverageInventoryComplete(),
+                outline.wholeGameUnderstanding());
     }
 
     private <T> T invokeModel(
@@ -503,7 +504,21 @@ public class TeachingPlanService {
         characters += outline.sourceCoverageSlots().stream()
                 .mapToInt(slot -> slot.slotId().length()
                         + slot.sourceIdentifier().length()
-                        + slot.ownerTopicKey().length())
+                        + slot.ownerTopicKey().length()
+                        + slot.teachingUnitId().length())
+                .sum();
+        characters += outline.wholeGameUnderstanding().summary().length();
+        characters += outline.wholeGameUnderstanding().concepts().stream()
+                .mapToInt(concept -> concept.conceptId().length()
+                        + concept.label().length()
+                        + concept.explanation().length()
+                        + concept.sourceIdentifiers().stream().mapToInt(String::length).sum()
+                        + concept.relatedTopicKeys().stream().mapToInt(String::length).sum())
+                .sum();
+        characters += outline.wholeGameUnderstanding().topicDependencies().stream()
+                .mapToInt(dependency -> dependency.prerequisiteTopicKey().length()
+                        + dependency.dependentTopicKey().length()
+                        + dependency.reason().length())
                 .sum();
         return Math.max(1, characters / 4);
     }

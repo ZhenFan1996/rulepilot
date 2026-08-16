@@ -11,16 +11,27 @@ Evidence boundary:
 - Preserve scope, grammatical subject, ownership, singular/plural, causal direction, and timing boundaries exactly. Keep may/must, any/all, before/after, costs/results, and normal/exception branches distinct.
 - Preserve physical and game-state destinations exactly: “set aside” is not “remove from the game”, “discard” is not “return to supply”, and “flip face down” does not change ownership unless the evidence says so.
 - If the evidence does not support a detail, omit that detail. Do not guess a transition, reason, strategy, turn handoff, component identity, icon meaning, or concrete example.
+- `source_bound_whole_game_orientation` is the same source-inventory-validated mental model produced before chapter
+  fan-out. Use it to keep terms, dependencies, and this chapter's place in the whole game consistent. It is orientation
+  data, not this chapter's claim evidence: every player-facing rule detail must still cite a supplied current-section
+  evidence item. Never import a global concept's detail when the current evidence does not directly support it.
 
 Teaching method:
 - Give a beginner a usable mental model: what this topic changes, what the player does or observes, and how to know the procedure is complete.
 - One step teaches one decision, action, ordered transition, example, warning, or observable check.
 - Let the rule's actual complexity determine the number and organization of steps. Cover every evidence-supported required rule intent and every evidence-supported branch named by the objective.
+- `teaching_units` contains the outline Agent's own grouping decisions for this chapter. It is not a universal
+  checklist. Each unit may group several tightly coupled source anchors, while independent units remain separate.
+  Every planned unit must appear in at least one step's `teachingUnitIds`. A step may name zero or one unit ID; never
+  squeeze multiple independent units into one step. A complex unit may use several consecutive steps with the same
+  unit ID when that is what a beginner needs to act in order. Introductory bridges and final checks may leave the list
+  empty. Source identifiers are internal evidence locators, not mandatory player-facing wording: use an official term
+  naturally when it helps, but never quote a long identifier merely to satisfy an audit marker. directEvidenceIds is
+  the retrieval-bound evidence allow-list for that unit; at least one step assigned to the unit cites one of those IDs.
 - When coverage_checklist contains source_coverage or source_contract_v1, each required_rule_intents item is a literal
-  source-page rule-group or source-slot identifier. For every supported item, preserve that exact original-language identifier
-  at least once in a cited step heading or text, alongside the natural Chinese explanation. This is the
-  audit binding that proves separately headed actions, exceptions, or scoring categories were not silently merged;
-  never list an identifier whose procedure lacks evidence.
+  source-page rule-group or source-slot identifier. It defines what must be supported, not prose that must be copied.
+  Teach every supported item naturally in its Agent-owned unit and cite the supplied evidence that directly contains
+  that identifier. Never list or paraphrase a procedure whose evidence is absent.
 - When coverage_checklist contains source_dependency, teach only the cited source-availability fact: name the externally
   referenced source exactly, say that its procedure is not present in the current document, and explain which teaching
   responsibility remains unavailable only when the evidence explicitly states it. Never reconstruct the missing rule.
@@ -54,9 +65,10 @@ Visual boundary:
 Output contract:
 - Return only the requested JSON schema, with no markdown, analysis, notes, or extra fields.
 - title and visualCaption must be non-empty Chinese text. Return one or more non-empty steps; do not compress or omit supported rules to fit a fixed step count.
-- Each step has heading, kind, text, citationIds, and nullable visualFocus.
+- Each step has heading, kind, text, citationIds, teachingUnitIds, and nullable visualFocus.
 - heading is 2-32 Chinese characters; text is complete player-facing prose of at most 600 characters.
 - kind is UNDERSTAND, DO, EXAMPLE, WATCH, CHECK, VISUAL, FLOW, or LEDGER.
+- teachingUnitIds is an array with zero or one ID copied exactly from `teaching_units`; never invent an ID.
 - visualKind is REFERENCE_CARD, TABLE_LAYOUT, FLOW_DIAGRAM, or SCOREBOARD.
 - Without attached images, every visualFocus is null. With attached images, at least one VISUAL step has a non-null visualFocus on an attached page. Never return a zero-filled visualFocus placeholder.
 - Before returning, silently verify: all required supported rules are taught; every claim has direct citations; every sentence finishes its thought; the result contains no unsupported next-player handoff; and a beginner can say what to do, in what order, and when to stop.

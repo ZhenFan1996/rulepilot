@@ -28,6 +28,32 @@ import org.junit.jupiter.api.Test;
 class TeachingSourceCoverageContractTest {
 
     @Test
+    void omittedAvailabilityDefaultsToSourcedButStillNeedsAnExactBoundPageIdentifier() {
+        SourceCoverageSlotDraft omittedStatus = new SourceCoverageSlotDraft(
+                "source-relation",
+                SourceCoverageRole.CORE_LOOP,
+                "R-kappa",
+                List.of(1),
+                "flow",
+                "source-relation",
+                null);
+        OutlineDraft outline = new OutlineDraft(
+                "Opaque game",
+                "Opaque premise",
+                List.of(topic("flow", List.of(), List.of("source_coverage", "core_loop"), List.of(1))),
+                List.of(omittedStatus),
+                true);
+
+        assertThat(omittedStatus.availability()).isEqualTo(SourceCoverageAvailability.SOURCED);
+        TeachingSourceCoverageContract.validateAgainstSources(
+                new OutlineRequest(List.of(new PageInput(1, "R-kappa advances play."))), outline);
+        assertThatThrownBy(() -> TeachingSourceCoverageContract.validateAgainstSources(
+                        new OutlineRequest(List.of(new PageInput(1, "A different relation advances play."))), outline))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("no exact source identifier");
+    }
+
+    @Test
     void completeOpaqueTextContractKeepsEveryActionAndNecessaryExceptionAsARequiredSourcedSlot() {
         List<PageInput> pages = List.of(
                 new PageInput(1, "Z-01 gives every participant the visible starting state."),
@@ -122,7 +148,7 @@ class TeachingSourceCoverageContractTest {
     }
 
     @Test
-    void aSourcedLegalActionCannotBeMovedBehindTheEndingChapter() {
+    void chapterOrderIsOwnedByThePlanningAgentInsteadOfAFixedLifecycleGate() {
         List<PageInput> pages = List.of(
                 new PageInput(1, "S-0 establishes the start."),
                 new PageInput(2, "T-0 advances play."),
@@ -146,10 +172,64 @@ class TeachingSourceCoverageContractTest {
                         slot("scoring", SourceCoverageRole.SCORING, "P-0", 3, "result")),
                 true);
 
-        assertThatThrownBy(() -> TeachingSourceCoverageContract.validateAgainstSources(
-                        new OutlineRequest(pages), reordered))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("action obligation appears after the ending");
+        TeachingSourceCoverageContract.validateAgainstSources(new OutlineRequest(pages), reordered);
+
+        assertThat(new TeachingPlanFactory().create(UUID.randomUUID(), "player", reordered).sections())
+                .extracting(TeachingPlan.PlannedSection::topicKey)
+                .containsExactly("start", "flow", "finish", "late-action", "result");
+    }
+
+    @Test
+    void descriptiveChapterTagsDoNotOverrideTheAgentsSourceUnitOwnership() {
+        PageInput page = new PageInput(1, "R-kappa explains the relation selected for this teaching unit.");
+        TopicDraft topic = topic("relation", List.of("R-kappa"), List.of("core_loop"), List.of(1));
+        OutlineDraft outline = new OutlineDraft(
+                "Opaque game",
+                "Opaque premise",
+                List.of(topic),
+                List.of(slot(
+                        "relation-source",
+                        SourceCoverageRole.SUPPORTING_RULE,
+                        "R-kappa",
+                        1,
+                        "relation")),
+                true);
+
+        TeachingSourceCoverageContract.validateAgainstSources(new OutlineRequest(List.of(page)), outline);
+
+        assertThat(new TeachingPlanFactory().create(UUID.randomUUID(), "player", outline).sections())
+                .singleElement()
+                .satisfies(section -> assertThat(TeachingUnitContract.decodeUnits(section.retrievalQueries()))
+                        .singleElement()
+                        .satisfies(unit -> assertThat(unit.sourceIdentifiers()).containsExactly("R-kappa")));
+    }
+
+    @Test
+    void derivesCanonicalRetrievalFromOwnedSlotsInsteadOfRejectingRedundantModelHints() {
+        PageInput page = new PageInput(1, "R-kappa explains the complete source-owned relation.");
+        TopicDraft topic = topic(
+                "relation",
+                List.of("broad model search hint", "duplicated presentation phrase"),
+                List.of("core_loop"),
+                List.of(1));
+        OutlineDraft outline = new OutlineDraft(
+                "Opaque game",
+                "Opaque premise",
+                List.of(topic),
+                List.of(slot(
+                        "relation-source",
+                        SourceCoverageRole.SUPPORTING_RULE,
+                        "R-kappa",
+                        1,
+                        "relation")),
+                true);
+
+        TeachingSourceCoverageContract.validateAgainstSources(new OutlineRequest(List.of(page)), outline);
+        TeachingPlan plan = new TeachingPlanFactory().create(UUID.randomUUID(), "player", outline);
+
+        assertThat(plan.sections()).singleElement().satisfies(section ->
+                assertThat(TeachingUnitContract.sourceIdentifiers(section.retrievalQueries()))
+                        .containsExactly("R-kappa"));
     }
 
     @Test
@@ -207,6 +287,48 @@ class TeachingSourceCoverageContractTest {
     }
 
     @Test
+    void aMixedOwnerKeepsItsSourcedProcedureWhileOnlyItsDelegatedVariantIsMarkedUnavailable() {
+        String delegation = "Variant tables require the separate Start Leaflet for their additional procedure.";
+        PageInput setupPage = new PageInput(
+                1,
+                "S-0 establishes the supplied start. " + delegation,
+                List.of(new com.rulepilot.teaching.VisualRulebookPageCatalogModel.SourceDependency(
+                        "Start Leaflet", List.of("setup"))));
+        TopicDraft setup = topic(
+                "start",
+                List.of("玩家准备"),
+                List.of("source_coverage", "setup"),
+                List.of(1));
+        TopicDraft flow = topic("flow", List.of("T-0"), List.of("source_coverage", "core_loop"), List.of(2));
+        OutlineDraft outline = new OutlineDraft(
+                "Opaque game",
+                "Opaque premise",
+                List.of(setup, flow),
+                List.of(
+                        slot("supplied-start", SourceCoverageRole.SETUP, "S-0", 1, "start"),
+                        new SourceCoverageSlotDraft(
+                                "delegated-variant",
+                                SourceCoverageRole.SETUP,
+                                delegation,
+                                List.of(1),
+                                "start",
+                                SourceCoverageAvailability.MISSING_EXTERNAL_SOURCE),
+                        slot("flow", SourceCoverageRole.CORE_LOOP, "T-0", 2, "flow")),
+                true);
+
+        TeachingSourceCoverageContract.validateAgainstSources(
+                new OutlineRequest(List.of(setupPage, new PageInput(2, "T-0 advances play."))), outline);
+        TeachingPlan plan = new TeachingPlanFactory().create(UUID.randomUUID(), "player", outline);
+
+        assertThat(TeachingUnitContract.sourceIdentifiers(plan.sections().getFirst().retrievalQueries()))
+                .containsExactly("S-0", delegation);
+        assertThat(plan.sections().getFirst().coverageTags())
+                .contains(TeachingSourceCoverageContract.UNSOURCED_TAG);
+        assertThat(plan.sections().get(1).coverageTags())
+                .doesNotContain(TeachingSourceCoverageContract.UNSOURCED_TAG);
+    }
+
+    @Test
     void anUnresolvedActionInventoryRemainsIncompleteEvenWhenEveryDraftChapterIsSupported() {
         OutlineDraft complete = completeOutline();
         List<SourceCoverageSlotDraft> unresolvedSlots = complete.sourceCoverageSlots().stream()
@@ -238,7 +360,7 @@ class TeachingSourceCoverageContractTest {
     }
 
     @Test
-    void aSupportedActionChapterStillCannotCompleteWhenOneRequiredActionIdentifierIsAbsent() {
+    void postPublicationAssemblyUsesTheSupportedReceiptInsteadOfMatchingSourceIdentifiersInTranslatedProse() {
         OutlineDraft outline = completeOutline();
         TeachingPlan plan = new TeachingPlanFactory().create(UUID.randomUUID(), "player", outline);
         List<LessonSection> sections = supportedSections(plan).stream()
@@ -252,20 +374,24 @@ class TeachingSourceCoverageContractTest {
                                 EvidenceStatus.SUPPORTED,
                                 section.visualKind(),
                                 section.visualCaption(),
-                                section.steps().stream()
-                                        .filter(step -> !step.heading().equals("A-mu"))
-                                        .toList())
+                                List.of(new LessonStep(
+                                        1,
+                                        "执行两个已规划选择",
+                                        TeachingMove.DO,
+                                        "按照本章前置验证通过的两个选择执行；发布层不再用英文锚点匹配中文正文。",
+                                        section.steps().getFirst().sourcePages(),
+                                        List.of(UUID.randomUUID()))))
                         : section)
                 .toList();
 
         assertThat(new TeachingLessonAssemblyPolicy().status(plan, sections))
-                .isEqualTo(LessonStatus.INCOMPLETE);
+                .isEqualTo(LessonStatus.COMPLETE);
         assertThat(new LessonQualityEvaluator().evaluate(plan, lesson(plan, sections)).checks())
                 .filteredOn(check -> check.type() == CheckType.SOURCE_RULE_GROUP_COVERAGE)
                 .singleElement()
                 .satisfies(check -> {
-                    assertThat(check.status()).isEqualTo(CheckStatus.FAIL);
-                    assertThat(check.summary()).contains("6 / 7");
+                    assertThat(check.status()).isEqualTo(CheckStatus.PASS);
+                    assertThat(check.summary()).contains("7 / 7");
                 });
     }
 
@@ -330,13 +456,15 @@ class TeachingSourceCoverageContractTest {
                         EvidenceStatus.SUPPORTED,
                         VisualKind.REFERENCE_CARD,
                         "Source-bound aid.",
-                        java.util.stream.IntStream.range(0, section.retrievalQueries().size())
+                        java.util.stream.IntStream.range(
+                                        0,
+                                        TeachingUnitContract.sourceIdentifiers(section.retrievalQueries()).size())
                                 .mapToObj(index -> new LessonStep(
                                         index + 1,
-                                        section.retrievalQueries().get(index),
+                                        TeachingUnitContract.sourceIdentifiers(section.retrievalQueries()).get(index),
                                         TeachingMove.DO,
                                         "Apply the cited source relation for "
-                                                + section.retrievalQueries().get(index) + ".",
+                                                + TeachingUnitContract.sourceIdentifiers(section.retrievalQueries()).get(index) + ".",
                                         section.sourcePageNumbers(),
                                         List.of(UUID.randomUUID())))
                                 .toList()))

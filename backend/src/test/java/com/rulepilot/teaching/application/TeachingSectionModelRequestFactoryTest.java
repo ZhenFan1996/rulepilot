@@ -15,6 +15,40 @@ import org.junit.jupiter.api.Test;
 class TeachingSectionModelRequestFactoryTest {
 
     @Test
+    void bindsAPlannedUnitToAllRetrievedChunksOnItsCanonicalAnchorPage() {
+        UUID versionId = UUID.randomUUID();
+        TeachingPlan.PlannedSection section = new TeachingPlan.PlannedSection(
+                1,
+                "flow",
+                "执行流程",
+                "按来源完成这一流程。",
+                true,
+                false,
+                List.of(TeachingUnitContract.encode(
+                        new TeachingUnitContract.Unit("flow-unit", List.of("R-anchor")))),
+                List.of("source_coverage"),
+                List.of(2));
+        TeachingPlan plan = new TeachingPlan(
+                UUID.randomUUID(), versionId, "Game", "Premise", List.of(section), "player", Instant.now());
+        RuleEvidence anchor = new RuleEvidence(
+                UUID.randomUUID(), versionId, "RULE", "R-anchor", "R-anchor begins here.", 2, 2);
+        RuleEvidence continuation = new RuleEvidence(
+                UUID.randomUUID(), versionId, "RULE", "Continuation", "The procedure continues here.", 2, 2);
+        RuleEvidence unrelatedPage = new RuleEvidence(
+                UUID.randomUUID(), versionId, "RULE", "Other", "Another page's procedure.", 3, 3);
+
+        var request = new TeachingSectionModelRequestFactory(VisualRulebookPageFacts.empty())
+                .create(plan, section, List.of(), List.of(anchor, continuation, unrelatedPage), false, false);
+
+        assertThat(request.teachingUnits()).singleElement().satisfies(unit -> {
+            assertThat(unit.sourceIdentifiers()).containsExactly("R-anchor");
+            assertThat(unit.directEvidenceIds())
+                    .containsExactly(anchor.chunkId(), continuation.chunkId())
+                    .doesNotContain(unrelatedPage.chunkId());
+        });
+    }
+
+    @Test
     void attachesStoredVisualFactsAndTheRelevantSourcePageToTheModelRequest() {
         UUID versionId = UUID.randomUUID();
         UUID chunkId = UUID.randomUUID();
@@ -84,6 +118,72 @@ class TeachingSectionModelRequestFactoryTest {
                 false);
 
         assertThat(request.requiredRuleIntents()).containsExactlyElementsOf(ruleGroups);
+    }
+
+    @Test
+    void everyChapterReceivesTheSameWholeGameModelButKeepsItsOwnUnitsAndEvidence() {
+        UUID versionId = UUID.randomUUID();
+        var alphaSlot = new com.rulepilot.teaching.TeachingOutlineModel.SourceCoverageSlotDraft(
+                "alpha-source",
+                com.rulepilot.teaching.TeachingOutlineModel.SourceCoverageRole.SUPPORTING_RULE,
+                "R-alpha",
+                List.of(2),
+                "observe-state",
+                "observe-state-unit",
+                com.rulepilot.teaching.TeachingOutlineModel.SourceCoverageAvailability.SOURCED);
+        var betaSlot = new com.rulepilot.teaching.TeachingOutlineModel.SourceCoverageSlotDraft(
+                "beta-source",
+                com.rulepilot.teaching.TeachingOutlineModel.SourceCoverageRole.SUPPORTING_RULE,
+                "R-beta",
+                List.of(3),
+                "apply-change",
+                "apply-change-unit",
+                com.rulepilot.teaching.TeachingOutlineModel.SourceCoverageAvailability.SOURCED);
+        var wholeGame = new TeachingPlan.WholeGameContext(
+                "先识别共享状态，再判断条件变化。",
+                List.of(
+                        new TeachingPlan.GlobalConcept(
+                                "shared-state", "共享状态", "识别共同观察的状态。",
+                                List.of("R-alpha"), List.of(2), List.of("observe-state"), List.of()),
+                        new TeachingPlan.GlobalConcept(
+                                "conditional-change", "条件变化", "判断状态何时改变。",
+                                List.of("R-beta"), List.of(3), List.of("apply-change"), List.of("shared-state"))),
+                List.of(new TeachingPlan.TopicDependency(
+                        "observe-state", "apply-change", "先观察，后改变。")),
+                true);
+        var sections = List.of(
+                new TeachingPlan.PlannedSection(
+                        1, "observe-state", "观察状态", "识别状态。", true, false,
+                        TeachingUnitContract.encodeUnits(List.of(alphaSlot)),
+                        List.of(TeachingWholeGameUnderstandingPolicy.CONTRACT_TAG), List.of(2)),
+                new TeachingPlan.PlannedSection(
+                        2, "apply-change", "应用变化", "应用条件。", true, false,
+                        TeachingUnitContract.encodeUnits(List.of(betaSlot)),
+                        List.of(TeachingWholeGameUnderstandingPolicy.CONTRACT_TAG), List.of(3)));
+        TeachingPlan plan = new TeachingPlan(
+                UUID.randomUUID(), versionId, null, "Opaque system", "两章相互依赖。", wholeGame,
+                sections, "player", Instant.now());
+        RuleEvidence alpha = new RuleEvidence(
+                UUID.randomUUID(), versionId, "RULE", "Alpha", "R-alpha establishes state.", 2, 2);
+        RuleEvidence beta = new RuleEvidence(
+                UUID.randomUUID(), versionId, "RULE", "Beta", "R-beta changes state.", 3, 3);
+        TeachingSectionModelRequestFactory factory =
+                new TeachingSectionModelRequestFactory(VisualRulebookPageFacts.empty());
+
+        var first = factory.create(plan, sections.getFirst(), List.of(), List.of(alpha), false, false);
+        var second = factory.create(plan, sections.getLast(), List.of(), List.of(beta), false, false);
+
+        assertThat(first.wholeGameContext()).isEqualTo(second.wholeGameContext());
+        assertThat(first.wholeGameContext().evidenceBound()).isTrue();
+        assertThat(first.wholeGameContext().concepts())
+                .extracting(com.rulepilot.teaching.TeachingLessonModel.GlobalConceptInput::conceptId)
+                .containsExactly("shared-state", "conditional-change");
+        assertThat(first.teachingUnits()).extracting(unit -> unit.unitId())
+                .containsExactly("observe-state-unit");
+        assertThat(second.teachingUnits()).extracting(unit -> unit.unitId())
+                .containsExactly("apply-change-unit");
+        assertThat(first.evidence()).extracting(source -> source.chunkId()).containsExactly(alpha.chunkId());
+        assertThat(second.evidence()).extracting(source -> source.chunkId()).containsExactly(beta.chunkId());
     }
 
     private TeachingPlan plan(UUID versionId) {
