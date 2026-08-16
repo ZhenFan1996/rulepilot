@@ -305,8 +305,10 @@ final class RecommendationActions {
                     .forEach(id -> state.assignNamedGameRole(id, purpose));
             Game resolved = result.games().getFirst();
             int resolvedId = resolved.ranking().bggId();
+            // An exact target is the player's choice, not a profile-ranked suggestion. A direct
+            // exclusion remains authoritative, while stale recommendation preferences do not.
             if (purpose == NamedGamePurpose.TARGET_GAME
-                    && runtime.recommendableIds(state).contains(resolvedId)) {
+                    && !state.excludedIds.contains(resolvedId)) {
                 String message = text(
                         arguments.path("message"), 1, MAX_RECOMMENDATION_MESSAGE_CHARACTERS);
                 progress.accept(ProgressStage.COMPOSING_RESPONSE);

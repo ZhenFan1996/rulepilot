@@ -95,7 +95,12 @@ class BoardGameRecommendationAgentPaidCanaryTest {
             long started = System.nanoTime();
             var response = agent.converse(
                     new ConversationRequest(
-                            RecommendationProfile.empty(),
+                            new RecommendationProfile(
+                                    5,
+                                    30,
+                                    new BigDecimal("1.5"),
+                                    BggGameType.PARTY,
+                                    BoardGameRecommendationAgent.InteractionPreference.COMPETITIVE),
                             requestText,
                             List.of(),
                             List.of(new DialogueMessage("user", requestText)),

@@ -76,7 +76,12 @@ class BoardGameRecommendationAgentTest {
 
         var response = agent(model, catalog, noResearch()).converse(
                 new ConversationRequest(
-                        RecommendationProfile.empty(),
+                        new RecommendationProfile(
+                                5,
+                                30,
+                                new BigDecimal("1.5"),
+                                BggGameType.PARTY,
+                                InteractionPreference.COMPETITIVE),
                         "我想玩蓝瓷花园（Mosaic Field）",
                         List.of(),
                         List.of(),
@@ -94,6 +99,51 @@ class BoardGameRecommendationAgentTest {
                 "RESOLVE_BGG_REFERENCE", "RECOMMEND_GAMES");
         assertThat(catalog.calls).isEqualTo(1);
         assertThat(catalog.lastResolvedTitle).isEqualTo("蓝瓷花园（Mosaic Field）");
+    }
+
+    @Test
+    void doesNotRepublishAnExplicitlyExcludedGameWhenTheModelMisclassifiesItAsATarget() {
+        Game target = game(
+                50,
+                "Mosaic Field",
+                45,
+                List.of("Abstract Strategy"),
+                List.of("Pattern Building", "Tile Placement"));
+        TrackingCatalog catalog = new TrackingCatalog(
+                Map.of(50, target),
+                Map.of("Mosaic Field", 50));
+        ScriptedModel model = new ScriptedModel(List.of(
+                ignored -> action(
+                        "resolve-excluded",
+                        BoardGameRecommendationAgent.RESOLVE_TOOL,
+                        "{\"title\":\"Mosaic Field\",\"purpose\":\"TARGET_GAME\","
+                                + "\"message\":\"I found the title.\"}"),
+                request -> {
+                    assertThat(request.tools()).extracting(ToolSpec::name)
+                            .contains(BoardGameRecommendationAgent.REPLY_TOOL)
+                            .doesNotContain(BoardGameRecommendationAgent.RECOMMEND_TOOL);
+                    return action(
+                            "respect-exclusion",
+                            BoardGameRecommendationAgent.REPLY_TOOL,
+                            "{\"message\":\"I will keep Mosaic Field excluded.\","
+                                    + "\"referencedBggIds\":[50]}");
+                }));
+
+        var response = agent(model, catalog, noResearch()).converse(
+                new ConversationRequest(
+                        RecommendationProfile.empty(),
+                        "Do not recommend Mosaic Field.",
+                        List.of(50),
+                        List.of(),
+                        null,
+                        List.of(),
+                        List.of()),
+                "en");
+
+        assertThat(response.outcome()).isEqualTo(Outcome.CONVERSATION);
+        assertThat(response.games()).isEmpty();
+        assertThat(response.harness().actions()).containsExactly(
+                "RESOLVE_BGG_REFERENCE", "REPLY_TO_USER");
     }
 
     @Test
