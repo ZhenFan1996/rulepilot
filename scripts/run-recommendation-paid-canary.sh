@@ -24,6 +24,8 @@ elif [ "${RULEPILOT_RECOMMENDATION_CANARY_SCENARIO:-}" = "imaginative" ]; then
 	./mvnw -q '-Dtest=BoardGameRecommendationAgentPaidCanaryTest#keepsImaginativePreferencesSoftAndAppliesOnlyExplicitMidConversationCorrections' test
 elif [ "${RULEPILOT_RECOMMENDATION_CANARY_SCENARIO:-}" = "production-two-turn" ]; then
 	./mvnw -q '-Dtest=BoardGameRecommendationAgentPaidCanaryTest#preservesDirectBoundsAcrossTheProductionTwoTurnJourney' test
+elif [ "${RULEPILOT_RECOMMENDATION_CANARY_SCENARIO:-}" = "availability-shortfall" ]; then
+	./mvnw -q '-Dtest=BoardGameRecommendationAgentPaidCanaryTest#publishesAvailableCardsOnceWhenTheHardEligiblePoolIsSmallerThanTheRequestedCount' test
 else
 	./mvnw -q -Dtest=BoardGameRecommendationAgentPaidCanaryTest test
 fi

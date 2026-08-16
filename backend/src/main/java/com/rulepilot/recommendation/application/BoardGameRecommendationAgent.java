@@ -224,7 +224,8 @@ public class BoardGameRecommendationAgent {
             List<ResearchSource> researchSources,
             HarnessTrace harness,
             List<RecommendedGame> games,
-            CandidateComparison comparison) {
+            CandidateComparison comparison,
+            RecommendationShortfall shortfall) {
         public ConversationResponse(
                 Outcome outcome,
                 DecisionMode mode,
@@ -246,6 +247,7 @@ public class BoardGameRecommendationAgent {
                     List.of(),
                     new HarnessTrace(0, 0, 0, false, List.of(), 0),
                     games,
+                    null,
                     null);
         }
 
@@ -273,6 +275,36 @@ public class BoardGameRecommendationAgent {
                     researchSources,
                     harness,
                     games,
+                    null,
+                    null);
+        }
+
+        public ConversationResponse(
+                Outcome outcome,
+                DecisionMode mode,
+                String assistantMessage,
+                RecommendationProfile profile,
+                Clarification clarification,
+                int sourceCount,
+                int candidatesEvaluated,
+                UserModelView userModel,
+                List<ResearchSource> researchSources,
+                HarnessTrace harness,
+                List<RecommendedGame> games,
+                CandidateComparison comparison) {
+            this(
+                    outcome,
+                    mode,
+                    assistantMessage,
+                    profile,
+                    clarification,
+                    sourceCount,
+                    candidatesEvaluated,
+                    userModel,
+                    researchSources,
+                    harness,
+                    games,
+                    comparison,
                     null);
         }
 
@@ -326,6 +358,14 @@ public class BoardGameRecommendationAgent {
     }
 
     public record ClarificationOption(String value, String label) {}
+
+    public record RecommendationShortfall(int requestedCount, int availableCount) {
+        public RecommendationShortfall {
+            if (requestedCount < 1 || availableCount < 1 || availableCount >= requestedCount) {
+                throw new IllegalArgumentException("recommendation shortfall counts are invalid");
+            }
+        }
+    }
 
     public record RecommendedGame(
             Game game,

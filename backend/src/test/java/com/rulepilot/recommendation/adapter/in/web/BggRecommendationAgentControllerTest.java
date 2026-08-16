@@ -31,6 +31,7 @@ import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.Out
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.PreferenceField;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendationProfile;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendationReason;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendationShortfall;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendedGame;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ReasonKind;
 import com.rulepilot.recommendation.application.RecommendationConversationCoordinator;
@@ -55,6 +56,41 @@ class BggRecommendationAgentControllerTest {
     private final BggRecommendationAgentController controller =
             new BggRecommendationAgentController(agent, presentation);
     private final Principal principal = () -> "player";
+
+    @Test
+    void exposesTypedAvailabilityShortfallAlongsideTheUnchangedAgentExplanation() {
+        String rawExplanation = "你要三款，但在五人和九十分钟这两个硬条件下，当前目录只有两款可核对的候选；我先把它们都给你。";
+        var shortfall = new RecommendationShortfall(3, 2);
+        var domain = new ConversationResponse(
+                Outcome.RECOMMENDATIONS,
+                DecisionMode.MODEL_ASSISTED,
+                rawExplanation,
+                RecommendationProfile.empty(),
+                null,
+                0,
+                2,
+                new BoardGameRecommendationAgent.UserModelView("", List.of()),
+                List.of(),
+                new BoardGameRecommendationAgent.HarnessTrace(2, 1, 0, false, List.of()),
+                List.of(),
+                null,
+                shortfall);
+
+        var response = BggRecommendationAgentController.RecommendationConversationResponse.from(
+                domain,
+                new LocalizedTaxonomy(Map.of(), Map.of()),
+                "zh-CN",
+                presentation,
+                null,
+                null,
+                null,
+                false);
+
+        assertThat(response.assistantMessage()).isEqualTo(rawExplanation);
+        assertThat(response.shortfall()).isNotNull();
+        assertThat(response.shortfall().requestedCount()).isEqualTo(3);
+        assertThat(response.shortfall().availableCount()).isEqualTo(2);
+    }
 
     @Test
     void preservesFiveHundredUnicodeCharactersAndRejectsTheNextCharacterWithoutTruncation() throws Exception {

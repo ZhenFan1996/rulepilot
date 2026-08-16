@@ -201,6 +201,76 @@ class BoardGameRecommendationAgentPaidCanaryTest {
     }
 
     @Test
+    void publishesAvailableCardsOnceWhenTheHardEligiblePoolIsSmallerThanTheRequestedCount() throws Exception {
+        assumeTrue("true".equalsIgnoreCase(System.getenv("RULEPILOT_RECOMMENDATION_PAID_CANARY")));
+        String provider = environment("RULEPILOT_RECOMMENDATION_CANARY_PROVIDER", "qwen")
+                .toLowerCase(Locale.ROOT);
+        String prefix = provider.toUpperCase(Locale.ROOT);
+        Capture capture = new Capture(provider, environment(prefix + "_MODEL", null));
+        BoardGameRecommendationModel model = model(
+                provider,
+                environment(prefix + "_API_KEY", null),
+                environment(prefix + "_BASE_URL", null),
+                environment(prefix + "_MODEL", null),
+                capture);
+        var properties = new BoardGameRecommendationProperties(
+                8, 3, new BigDecimal("0.66"), Duration.ofSeconds(30));
+        var agent = new BoardGameRecommendationAgent(
+                model,
+                new BoardGameRecommendationTools(new CanaryCatalog(List.of(102, 103)), noResearch()),
+                new BoardGameRecommendationSelector(properties),
+                properties,
+                json);
+
+        List<Map<String, Object>> visibleTurns = new ArrayList<>();
+        try {
+            String request = "今晚五个人，有两个第一次玩桌游，最多九十分钟。想换成能谈条件、彼此留一手的感觉，请直接挑三款。";
+            long started = System.nanoTime();
+            var response = agent.converse(
+                    new ConversationRequest(RecommendationProfile.empty(), request),
+                    "zh-CN");
+            visibleTurns.add(visible("explicit-three-with-two-hard-eligible", response, elapsed(started)));
+
+            assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
+            assertThat(response.games()).hasSize(2);
+            assertThat(response.shortfall()).isNotNull();
+            assertThat(response.shortfall().requestedCount()).isEqualTo(3);
+            assertThat(response.shortfall().availableCount()).isEqualTo(2);
+            assertThat(response.profile().players()).isEqualTo(5);
+            assertThat(response.profile().maxMinutes()).isEqualTo(90);
+            assertThat(response.clarification()).isNotNull();
+            assertThat(response.clarification().prompt()).isEqualTo(response.assistantMessage());
+            String rawRelaxation = json.readTree(capture.lastToolCall().argumentsJson())
+                    .path("shortfall")
+                    .path("relaxationOptions")
+                    .get(0)
+                    .path("reply")
+                    .asText();
+            assertThat(response.clarification().options())
+                    .extracting(BoardGameRecommendationAgent.ClarificationOption::value)
+                    .containsExactly(rawRelaxation);
+            assertThat(response.harness().fallbackUsed()).isFalse();
+            assertThat(response.harness().modelCalls())
+                    .as("an availability shortfall must not create an impossible retry loop")
+                    .isLessThanOrEqualTo(2);
+            assertThat(response.harness().actions())
+                    .contains("SEARCH_BGG_CATALOG", "RECOMMEND_GAMES")
+                    .noneMatch(action -> action.startsWith("REJECTED_ACTION")
+                            || action.startsWith("FALLBACK_")
+                            || action.equals("RUN_DEADLINE_EXCEEDED"));
+            assertTerminalProsePreserved(capture.lastToolCall(), response);
+            assertRecommendationNarrativesPreserved(capture.lastToolCall(), response);
+
+            writeArtifact(capture, visibleTurns, null);
+        } catch (Throwable failure) {
+            writeArtifact(capture, visibleTurns, failure.getClass().getSimpleName());
+            throw failure;
+        } finally {
+            agent.stopBoundedCalls();
+        }
+    }
+
+    @Test
     void keepsHardGatesAndNaturalTradeoffsAcrossOneCorrection() throws Exception {
         assumeTrue("true".equalsIgnoreCase(System.getenv("RULEPILOT_RECOMMENDATION_PAID_CANARY")));
         String provider = environment("RULEPILOT_RECOMMENDATION_CANARY_PROVIDER", "qwen")
@@ -771,6 +841,11 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                             .map(option -> Map.of("value", option.value(), "label", option.label()))
                             .toList()));
         }
+        if (response.shortfall() != null) {
+            value.put("shortfall", Map.of(
+                    "requestedCount", response.shortfall().requestedCount(),
+                    "availableCount", response.shortfall().availableCount()));
+        }
         value.put("games", response.games().stream()
                 .map(entry -> Map.of(
                         "bggId", entry.game().ranking().bggId(),
@@ -919,8 +994,13 @@ class BoardGameRecommendationAgentPaidCanaryTest {
     private static final class CanaryCatalog implements BoardGameRecommendationCatalog {
         private final Map<Integer, Game> games;
         private final Map<String, Integer> names;
+        private final List<Integer> candidateIds;
 
         private CanaryCatalog() {
+            this(List.of());
+        }
+
+        private CanaryCatalog(List<Integer> candidateIds) {
             List<Game> values = List.of(
                     game(101, "River Market", 2, 4, 30, 45, "2.2", List.of("Family"), List.of("Open Drafting", "Set Collection")),
                     game(102, "Signal Grove", 3, 5, 45, 60, "2.8", List.of("Strategy"), List.of("Cooperative Game", "Communication Limits")),
@@ -934,11 +1014,15 @@ class BoardGameRecommendationAgentPaidCanaryTest {
             names = values.stream().collect(java.util.stream.Collectors.toUnmodifiableMap(
                     value -> value.ranking().sourceName().toLowerCase(Locale.ROOT),
                     value -> value.ranking().bggId()));
+            this.candidateIds = List.copyOf(candidateIds);
         }
 
         @Override
         public CandidateSet findCandidates(BggGameType requiredType, List<BggGameType> suggestedTypes, int maximum) {
-            return new CandidateSet(games.size(), games.values().stream().limit(maximum).toList());
+            List<Game> candidates = candidateIds.isEmpty()
+                    ? games.values().stream().limit(maximum).toList()
+                    : candidateIds.stream().map(games::get).filter(java.util.Objects::nonNull).limit(maximum).toList();
+            return new CandidateSet(games.size(), candidates);
         }
 
         @Override

@@ -24,6 +24,11 @@ export type RecommendationClarification = {
   options: { value: string; label: string }[]
 }
 
+export type RecommendationShortfall = {
+  requestedCount: number
+  availableCount: number
+}
+
 export type RecommendationGame = {
   bggId: number
   name: string
@@ -107,6 +112,7 @@ export type RecommendationAgentResponse = {
   assistantMessage: string
   profile: RecommendationProfile
   clarification: RecommendationClarification | null
+  shortfall?: RecommendationShortfall | null
   sourceCount: number
   candidatesEvaluated: number
   userModel?: {

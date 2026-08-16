@@ -307,6 +307,7 @@ public class BggRecommendationAgentController {
             String assistantMessage,
             RecommendationProfileResponse profile,
             ClarificationResponse clarification,
+            RecommendationShortfallResponse shortfall,
             int sourceCount,
             int candidatesEvaluated,
             UserModelResponse userModel,
@@ -334,6 +335,7 @@ public class BggRecommendationAgentController {
                     response.assistantMessage(),
                     RecommendationProfileResponse.from(response.profile()),
                     response.clarification() == null ? null : ClarificationResponse.from(response.clarification()),
+                    response.shortfall() == null ? null : RecommendationShortfallResponse.from(response.shortfall()),
                     response.sourceCount(),
                     response.candidatesEvaluated(),
                     UserModelResponse.from(response.userModel()),
@@ -441,6 +443,15 @@ public class BggRecommendationAgentController {
     }
 
     record ClarificationOptionResponse(String value, String label) {}
+
+    record RecommendationShortfallResponse(int requestedCount, int availableCount) {
+        static RecommendationShortfallResponse from(
+                BoardGameRecommendationAgent.RecommendationShortfall shortfall) {
+            return new RecommendationShortfallResponse(
+                    shortfall.requestedCount(),
+                    shortfall.availableCount());
+        }
+    }
 
     record UserModelResponse(String summary, List<PreferenceHypothesisResponse> hypotheses) {
         static UserModelResponse from(BoardGameRecommendationAgent.UserModelView model) {
