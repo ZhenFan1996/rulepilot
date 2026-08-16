@@ -52,6 +52,7 @@ import com.rulepilot.recommendation.application.BoardGameRecommendationTools.Ref
 import com.rulepilot.recommendation.application.BoardGameRecommendationTools.ResearchObservation;
 import com.rulepilot.recommendation.application.BoardGameRecommendationTools.ToolStatus;
 import com.rulepilot.recommendation.application.RecommendationAgentState.NamedGamePurpose;
+import java.math.BigDecimal;
 import java.text.Normalizer;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -749,7 +750,7 @@ final class RecommendationActions {
                     citedEvidence);
         }
         List<CandidateObservation> visibleEvidence = citedEvidence.stream()
-                .filter(observation -> why.contains(observation.value()))
+                .filter(observation -> observationValueVisible(why, observation))
                 .toList();
         if (visibleEvidence.isEmpty()) {
             throw new InvalidAction("CANDIDATE_NARRATIVE_EVIDENCE_VALUE_NOT_VISIBLE");
@@ -758,6 +759,9 @@ final class RecommendationActions {
                         observation.attribute()))) {
             throw new InvalidAction("CANDIDATE_NARRATIVE_EVIDENCE_NOT_DIRECT_FIT");
         }
+        if (hasUngroundedNumericValue(why, game, visibleEvidence)) {
+            throw new InvalidAction("CANDIDATE_NARRATIVE_NUMERIC_VALUE_UNGROUNDED");
+        }
         if (visibleEvidence.size() < citedEvidence.size()) {
             state.actions.add("DROPPED_UNUSED_CANDIDATE_NARRATIVE_EVIDENCE");
         }
@@ -765,6 +769,83 @@ final class RecommendationActions {
                 why,
                 tradeoff,
                 visibleEvidence);
+    }
+
+    private boolean observationValueVisible(String narrative, CandidateObservation observation) {
+        if (narrative.contains(observation.value())) return true;
+        List<BigDecimal> expected = numericValues(observation.value());
+        return !expected.isEmpty() && containsNumericSequence(numericValues(narrative), expected);
+    }
+
+    private boolean containsNumericSequence(List<BigDecimal> actual, List<BigDecimal> expected) {
+        if (expected.size() > actual.size()) return false;
+        for (int start = 0; start <= actual.size() - expected.size(); start++) {
+            boolean matches = true;
+            for (int offset = 0; offset < expected.size(); offset++) {
+                if (actual.get(start + offset).compareTo(expected.get(offset)) != 0) {
+                    matches = false;
+                    break;
+                }
+            }
+            if (matches) return true;
+        }
+        return false;
+    }
+
+    private boolean hasUngroundedNumericValue(
+            String narrative,
+            Game game,
+            List<CandidateObservation> visibleEvidence) {
+        List<BigDecimal> grounded = new ArrayList<>();
+        visibleEvidence.stream()
+                .map(CandidateObservation::value)
+                .map(this::numericValues)
+                .forEach(grounded::addAll);
+        grounded.addAll(numericValues(game.details().name()));
+        grounded.addAll(numericValues(game.ranking().sourceName()));
+        if (visibleEvidence.stream().anyMatch(value -> "complexity".equals(value.attribute()))) {
+            grounded.add(new BigDecimal("5"));
+        }
+        return numericValues(narrative).stream()
+                .anyMatch(value -> grounded.stream().noneMatch(candidate -> candidate.compareTo(value) == 0));
+    }
+
+    private List<BigDecimal> numericValues(String text) {
+        String normalized = Normalizer.normalize(text == null ? "" : text, Normalizer.Form.NFKC);
+        List<BigDecimal> values = new ArrayList<>();
+        StringBuilder current = new StringBuilder();
+        boolean decimalPointSeen = false;
+        for (int index = 0; index < normalized.length(); index++) {
+            char character = normalized.charAt(index);
+            if (character >= '0' && character <= '9') {
+                current.append(character);
+                continue;
+            }
+            if (character == '.'
+                    && !decimalPointSeen
+                    && !current.isEmpty()
+                    && index + 1 < normalized.length()
+                    && normalized.charAt(index + 1) >= '0'
+                    && normalized.charAt(index + 1) <= '9') {
+                current.append(character);
+                decimalPointSeen = true;
+                continue;
+            }
+            addNumericValue(values, current);
+            decimalPointSeen = false;
+        }
+        addNumericValue(values, current);
+        return List.copyOf(values);
+    }
+
+    private void addNumericValue(List<BigDecimal> values, StringBuilder current) {
+        if (current.isEmpty()) return;
+        try {
+            values.add(new BigDecimal(current.toString()));
+        } catch (NumberFormatException ignored) {
+            // An incomplete numeric token is not evidence and remains unavailable to the narrative.
+        }
+        current.setLength(0);
     }
 
     private BoardGameRecommendationSelector.PreferenceLink validatedPreferenceLink(
@@ -831,7 +912,9 @@ final class RecommendationActions {
             case "CANDIDATE_NARRATIVE_MODE_INVALID" ->
                 "Recommendation cards use OBSERVED_ONLY literal facts. Ask a candidate-changing clarification or state the local evidence gap instead of predicting table feel.";
             case "CANDIDATE_NARRATIVE_EVIDENCE_VALUE_NOT_VISIBLE" ->
-                "Repeat every cited candidate observation value exactly in why. Do not translate or paraphrase taxonomy, and omit an unused evidenceId.";
+                "Show every cited candidate observation value in why. Natural range separators are allowed, but keep every number in the same order and omit an unused evidenceId.";
+            case "CANDIDATE_NARRATIVE_NUMERIC_VALUE_UNGROUNDED" ->
+                "A number in why is not present in the visible cited candidate observations. Remove or correct only that unsupported number; do not rewrite the grounded explanation.";
             case "CANDIDATE_NARRATIVE_EVIDENCE_NOT_DIRECT_FIT" ->
                 "Recommendation why may cite only this candidate's playerCount, durationMinutes, or complexity observations. Taxonomy is displayed separately and cannot justify a predicted experience.";
             case "PREFERENCE_EVIDENCE_NOT_GROUNDED" ->

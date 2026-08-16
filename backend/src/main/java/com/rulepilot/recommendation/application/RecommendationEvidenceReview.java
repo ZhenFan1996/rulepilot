@@ -223,8 +223,11 @@ final class RecommendationEvidenceReview {
         return switch (field) {
             case "players", "maxMinutes" -> value.canConvertToInt()
                     && containsInteger(numbers, value.intValue());
-            case "playerCount", "durationMinutes" -> value.isObject()
+            case "playerCount" -> value.isObject()
                     && containsIntegerBounds(numbers, value);
+            case "durationMinutes" -> value.isObject()
+                    && (containsIntegerBounds(numbers, value)
+                            || isOpenDurationLowerBoundSentinel(value, numbers));
             case "maxWeight" -> value.isNumber()
                     && containsDecimal(numbers, value.decimalValue());
             case "complexity" -> value.isObject()
@@ -360,8 +363,7 @@ final class RecommendationEvidenceReview {
             String evidence = text(update.path("evidence"), 1, 160);
             ConstraintRange<Integer> proposed = update.path("value").isNull()
                     ? null
-                    : integerConstraintRange(
-                            update.path("value"), 5, 1_440, evidence, request, "DURATION_OUT_OF_RANGE");
+                    : durationConstraintRange(update.path("value"), evidence, request);
             if (!sameRange(durationMinutes, proposed)) {
                 requirePreferenceEvidence(evidence, request);
                 durationMinutes = proposed;
@@ -475,8 +477,7 @@ final class RecommendationEvidenceReview {
                 case "durationMinutes" -> {
                     ConstraintRange<Integer> proposed = value.isNull()
                             ? null
-                            : integerConstraintRange(
-                                    value, 5, 1_440, evidence, request, "DURATION_OUT_OF_RANGE");
+                            : durationConstraintRange(value, evidence, request);
                     if (!sameRange(result.durationMinutes(), proposed)) {
                         requirePreferenceEvidence(evidence, request);
                     }
@@ -582,6 +583,37 @@ final class RecommendationEvidenceReview {
         }
         return ConstraintRange.hard(
                 minimum, maximum, preferenceEvidenceText(evidenceId, request), evidenceTurn(evidenceId));
+    }
+
+    private ConstraintRange<Integer> durationConstraintRange(
+            JsonNode value,
+            String evidenceId,
+            ConversationRequest request) {
+        requireObject(value, Set.of(), Set.of("minimum", "maximum"));
+        String sourceText = preferenceEvidence(request).get(evidenceId);
+        if (sourceText != null
+                && isOpenDurationLowerBoundSentinel(value, numericTokens(sourceText))) {
+            int maximum = integer(value.path("maximum"), 5, 1_440, "DURATION_OUT_OF_RANGE");
+            return ConstraintRange.hard(
+                    null, maximum, bounded(sourceText, 160), evidenceTurn(evidenceId));
+        }
+        return integerConstraintRange(
+                value, 5, 1_440, evidenceId, request, "DURATION_OUT_OF_RANGE");
+    }
+
+    private boolean isOpenDurationLowerBoundSentinel(JsonNode range, List<String> evidenceNumbers) {
+        JsonNode minimum = range.path("minimum");
+        JsonNode maximum = range.path("maximum");
+        if (!minimum.isNumber()
+                || minimum.decimalValue().compareTo(BigDecimal.ZERO) != 0
+                || !maximum.canConvertToInt()) {
+            return false;
+        }
+        int ceiling = maximum.intValue();
+        return ceiling >= 5
+                && ceiling <= 1_440
+                && containsInteger(evidenceNumbers, ceiling)
+                && !containsInteger(evidenceNumbers, 0);
     }
 
     private ConstraintRange<BigDecimal> decimalConstraintRange(
