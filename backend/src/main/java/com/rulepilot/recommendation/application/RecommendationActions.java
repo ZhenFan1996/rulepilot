@@ -45,6 +45,7 @@ import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.Har
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.Outcome;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.PreferenceField;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ProgressStage;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendationShortfall;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendedGame;
 import com.rulepilot.recommendation.application.BoardGameRecommendationTools.CatalogObservation;
 import com.rulepilot.recommendation.application.BoardGameRecommendationTools.DiscoveryObservation;
@@ -586,7 +587,7 @@ final class RecommendationActions {
         requireObject(
                 arguments,
                 Set.of("message", "selections"),
-                Set.of("referenceBggIds", "preferenceUpdates"));
+                Set.of("referenceBggIds", "preferenceUpdates", "shortfall"));
         evidenceReview.applyPreferenceUpdates(arguments, state, request);
         String proposedMessage = text(
                 arguments.path("message"), 1, MAX_RECOMMENDATION_MESSAGE_CHARACTERS);
@@ -600,10 +601,14 @@ final class RecommendationActions {
         if (!selections.isArray()) {
             throw new InvalidAction("SELECTIONS_ARRAY_REQUIRED");
         }
+        int availableCount = runtime.recommendableIds(state).size();
+        int expectedExplicitCount = state.explicitRecommendationCount == null
+                ? -1
+                : Math.min(state.explicitRecommendationCount, availableCount);
         if (selections.isEmpty()
                 || selections.size() > state.maximumRecommendationResults
                 || (state.explicitRecommendationCount != null
-                        && selections.size() != state.explicitRecommendationCount)) {
+                        && selections.size() != expectedExplicitCount)) {
             throw new InvalidAction("SELECTION_COUNT_INVALID");
         }
         List<Game> selected = new ArrayList<>();
@@ -615,7 +620,7 @@ final class RecommendationActions {
             requireObject(
                     selection,
                     Set.of("bggId"),
-                    Set.of("preferenceLink", "narrativeMode", "why", "tradeoff", "evidenceIds"));
+                    Set.of("preferenceLink", "narrativeMode", "why", "tradeoff", "internalEvidenceIds"));
             int id = integer(selection.path("bggId"), 1, Integer.MAX_VALUE, "BGG_ID_INVALID");
             if (!seen.add(id)) throw new InvalidAction("DUPLICATE_SELECTION");
             Game game = state.verified.get(id);
@@ -666,7 +671,23 @@ final class RecommendationActions {
                 proposedMessage,
                 selected.size() == narratives.size(),
                 state);
+        boolean hasShortfall = state.explicitRecommendationCount != null
+                && availableCount < state.explicitRecommendationCount;
+        List<ClarificationOption> shortfallOptions = validatedShortfallOptions(
+                arguments,
+                state,
+                availableCount);
+        RecommendationShortfall shortfall = hasShortfall
+                ? new RecommendationShortfall(state.explicitRecommendationCount, availableCount)
+                : null;
+        Clarification clarification = shortfall == null || shortfallOptions.isEmpty()
+                ? null
+                : new Clarification(
+                        PreferenceField.CONVERSATION,
+                        message,
+                        shortfallOptions);
         progress.accept(ProgressStage.COMPOSING_RESPONSE);
+        if (shortfall != null) state.actions.add("RECOMMENDATION_AVAILABILITY_SHORTFALL");
         state.actions.add("RECOMMEND_GAMES");
         List<Game> references = referenceIds.stream().map(state.verified::get).toList();
         List<RecommendedGame> games = selector.present(
@@ -682,8 +703,58 @@ final class RecommendationActions {
                 message,
                 state,
                 locale,
-                null,
-                games));
+                clarification,
+                games,
+                shortfall));
+    }
+
+    private List<ClarificationOption> validatedShortfallOptions(
+            JsonNode arguments,
+            RecommendationAgentState state,
+            int availableCount) {
+        Integer requestedCount = state.explicitRecommendationCount;
+        boolean expected = requestedCount != null && availableCount < requestedCount;
+        if (!expected) {
+            if (arguments.has("shortfall")) throw new InvalidAction("RECOMMENDATION_SHORTFALL_UNEXPECTED");
+            return List.of();
+        }
+        if (!arguments.has("shortfall")) {
+            throw new InvalidAction("RECOMMENDATION_SHORTFALL_REQUIRED");
+        }
+        JsonNode shortfall = arguments.path("shortfall");
+        requireObject(
+                shortfall,
+                Set.of("requestedCount", "availableCount", "relaxationOptions"),
+                Set.of());
+        int proposedRequested = integer(
+                shortfall.path("requestedCount"), 1, state.maximumRecommendationResults, "SHORTFALL_COUNT_INVALID");
+        int proposedAvailable = integer(
+                shortfall.path("availableCount"), 1, state.maximumRecommendationResults, "SHORTFALL_COUNT_INVALID");
+        if (proposedRequested != requestedCount || proposedAvailable != availableCount) {
+            throw new InvalidAction("SHORTFALL_COUNT_INVALID");
+        }
+
+        List<String> allowedSubjects = runtime.shortfallRelaxableSubjects(state.profile);
+        JsonNode options = shortfall.path("relaxationOptions");
+        int minimumOptions = allowedSubjects.isEmpty() ? 0 : 1;
+        int maximumOptions = Math.min(2, allowedSubjects.size());
+        if (!options.isArray() || options.size() < minimumOptions || options.size() > maximumOptions) {
+            throw new InvalidAction("SHORTFALL_RELAXATION_INVALID");
+        }
+        Set<String> subjects = new LinkedHashSet<>();
+        List<ClarificationOption> optionsForPlayer = new ArrayList<>();
+        for (JsonNode option : options) {
+            requireObject(option, Set.of("subject", "reply"), Set.of());
+            String subject = text(option.path("subject"), 1, 40);
+            if (!allowedSubjects.contains(subject) || !subjects.add(subject)) {
+                throw new InvalidAction("SHORTFALL_RELAXATION_INVALID");
+            }
+            String reply = publishableMessage(
+                    text(option.path("reply"), 4, 120),
+                    PlayerFacingMessagePolicy.Purpose.CONVERSATION);
+            optionsForPlayer.add(new ClarificationOption(reply, reply));
+        }
+        return List.copyOf(optionsForPlayer);
     }
 
     private String publishableGroundedRecommendationMessage(
@@ -719,10 +790,10 @@ final class RecommendationActions {
             RecommendationAgentState state) {
         boolean hasNarrative = selection.has("why")
                 || selection.has("tradeoff")
-                || selection.has("evidenceIds")
+                || selection.has("internalEvidenceIds")
                 || selection.has("narrativeMode");
         if (!hasNarrative) return null;
-        if (!selection.has("why") || !selection.has("evidenceIds")) {
+        if (!selection.has("why") || !selection.has("internalEvidenceIds")) {
             throw new InvalidAction("CANDIDATE_NARRATIVE_INCOMPLETE");
         }
         String why = publishableMessage(
@@ -739,12 +810,12 @@ final class RecommendationActions {
         if (!narrativeMode.isEmpty() && !"OBSERVED_ONLY".equals(narrativeMode)) {
             throw new InvalidAction("CANDIDATE_NARRATIVE_MODE_INVALID");
         }
-        List<String> evidenceIds = strings(selection.path("evidenceIds"), 1, 5, 3, 80);
+        List<String> internalEvidenceIds = strings(selection.path("internalEvidenceIds"), 1, 5, 3, 80);
         Map<String, CandidateObservation> observations = selector.observations(game).stream()
                 .collect(java.util.stream.Collectors.toUnmodifiableMap(
                         CandidateObservation::id,
                         observation -> observation));
-        if (evidenceIds.stream().anyMatch(id -> !observations.containsKey(id))) {
+        if (internalEvidenceIds.stream().anyMatch(id -> !observations.containsKey(id))) {
             throw new InvalidAction("CANDIDATE_NARRATIVE_EVIDENCE_WRONG_CANDIDATE");
         }
         List<String> visibleInternalIds = observations.keySet().stream()
@@ -757,9 +828,9 @@ final class RecommendationActions {
                     "CANDIDATE_NARRATIVE_INTERNAL_EVIDENCE_ID_VISIBLE",
                     "Remove internal evidence marker(s) from player-visible why/tradeoff: "
                             + String.join(", ", visibleInternalIds)
-                            + ". Keep the evidenceIds array unchanged and keep the cited numeric values as natural prose. Do not replace the removed marker with taxonomy, play-feel, or fit claims.");
+                            + ". Keep the internalEvidenceIds array unchanged and keep the cited numeric values as natural prose. Do not replace the removed marker with taxonomy, play-feel, or fit claims.");
         }
-        List<CandidateObservation> citedEvidence = evidenceIds.stream().map(observations::get).toList();
+        List<CandidateObservation> citedEvidence = internalEvidenceIds.stream().map(observations::get).toList();
         if (narrativeMode.isEmpty()) {
             return new BoardGameRecommendationSelector.CandidateNarrative(
                     why,
@@ -966,13 +1037,21 @@ final class RecommendationActions {
             case "MESSAGE_NAMES_UNSELECTED_GAME" ->
                 "The recommendation message may discuss selected cards and declared references, but not introduce an unselected game. Remove only that unsupported mention and keep the grounded explanation.";
             case "CANDIDATE_NARRATIVE_INCOMPLETE" ->
-                "Each candidate narrative needs why plus one or more candidate-scoped evidenceIds. tradeoff is optional.";
+                "Each candidate narrative needs why plus one or more candidate-scoped internalEvidenceIds. tradeoff is optional.";
             case "SELECTIONS_ARRAY_REQUIRED" ->
                 "selections must be a native JSON array of selection objects. Never quote or JSON-encode the array as a string.";
+            case "RECOMMENDATION_SHORTFALL_REQUIRED" ->
+                "Fewer hard-eligible candidates exist than the player requested. Return every available ID once and include the required shortfall object with the exact schema counts and one concrete allowed relaxation reply when offered.";
+            case "RECOMMENDATION_SHORTFALL_UNEXPECTED" ->
+                "Omit shortfall because the current hard-eligible pool can satisfy the requested count.";
+            case "SHORTFALL_COUNT_INVALID" ->
+                "Copy requestedCount and availableCount exactly from the current shortfall schema. Never pad or duplicate candidates.";
+            case "SHORTFALL_RELAXATION_INVALID" ->
+                "Use each allowed shortfall subject at most once and write one concrete direct player reply that relaxes only that bound.";
             case "CANDIDATE_NARRATIVE_EVIDENCE_WRONG_CANDIDATE" ->
                 "Every candidate narrative evidenceId must come from that same selected game's observation map. Do not move evidence across candidates.";
             case "CANDIDATE_NARRATIVE_INTERNAL_EVIDENCE_ID_VISIBLE" ->
-                "Evidence IDs belong only in evidenceIds. Remove them from player-visible why/tradeoff while preserving the natural cited values; do not add taxonomy or experience claims.";
+                "Evidence IDs belong only in internalEvidenceIds. Remove them from player-visible why/tradeoff while preserving the natural cited values; do not add taxonomy or experience claims.";
             case "CANDIDATE_NARRATIVE_MODE_INVALID" ->
                 "Recommendation cards use OBSERVED_ONLY literal facts. Ask a candidate-changing clarification or state the local evidence gap instead of predicting table feel.";
             case "CANDIDATE_NARRATIVE_EVIDENCE_VALUE_NOT_VISIBLE" ->
@@ -984,7 +1063,7 @@ final class RecommendationActions {
             case "PREFERENCE_EVIDENCE_NOT_GROUNDED" ->
                 "Use the exact evidenceId shown beside the user-authored message that states this hard constraint, or continue without changing the typed profile.";
             case "PREFERENCE_EVIDENCE_CLASSIFICATION_INVALID" ->
-                "Use DIRECT/DIRECT for an explicitly stated constraint. Only an exact player count strongly implied by a fully described group may use CONTEXTUAL/COMPLETE_GROUP_INFERENCE; otherwise omit the typed update.";
+                "Use evidenceClassification DIRECT for an explicitly stated constraint. Only an exact player count strongly implied by a fully described whole group may use CONTEXTUAL_COMPLETE_GROUP; otherwise omit the typed update.";
             case "PREFERENCE_LINK_EVIDENCE_NOT_GROUNDED" ->
                 "Use an exact user-authored evidenceId from recentConversation, or omit preferenceLink when no qualitative preference is grounded.";
             case "PREFERENCE_LINK_QUOTE_NOT_GROUNDED" ->
@@ -1035,6 +1114,17 @@ final class RecommendationActions {
             String locale,
             Clarification clarification,
             List<RecommendedGame> games) {
+        return response(outcome, message, state, locale, clarification, games, null);
+    }
+
+    private ConversationResponse response(
+            Outcome outcome,
+            String message,
+            RecommendationAgentState state,
+            String locale,
+            Clarification clarification,
+            List<RecommendedGame> games,
+            RecommendationShortfall shortfall) {
         ConversationResponse response = new ConversationResponse(
                 outcome,
                 DecisionMode.MODEL_ASSISTED,
@@ -1053,7 +1143,8 @@ final class RecommendationActions {
                         state.actions,
                         state.elapsedMs()),
                 games,
-                state.comparison);
+                state.comparison,
+                shortfall);
         runtime.logRun(response);
         return response;
     }

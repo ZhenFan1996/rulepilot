@@ -623,8 +623,26 @@ jobs:
                 && durationMinutes?.strength === 'hard'
               const allGamesHaveNaturalNarrative = Array.isArray(agentResult.games)
                 && agentResult.games.every(hasNaturalCandidateNarrative)
+              const requestedCount = 3
+              const shortfall = agentResult.shortfall
+              const fulfilledRequestedCount = agentResult.games?.length === requestedCount
+                && shortfall == null
+              const disclosedAvailabilityShortfall = Array.isArray(agentResult.games)
+                && agentResult.games.length > 0
+                && agentResult.games.length < requestedCount
+                && shortfall?.requestedCount === requestedCount
+                && shortfall?.availableCount === agentResult.games.length
+                && typeof agentResult.assistantMessage === 'string'
+                && agentResult.assistantMessage.length > 0
+                && agentResult.clarification?.prompt === agentResult.assistantMessage
+                && Array.isArray(agentResult.clarification?.options)
+                && agentResult.clarification.options.length > 0
+                && Array.isArray(agentActions)
+                && agentActions.includes('RECOMMENDATION_AVAILABILITY_SHORTFALL')
+              const deliveredRequestedOrExplainedShortfall = fulfilledRequestedCount
+                || disclosedAvailabilityShortfall
               if (agentResult.mode !== 'model_assisted'
-                  || !Array.isArray(agentResult.games) || agentResult.games.length !== 3
+                  || !deliveredRequestedOrExplainedShortfall
                   || !completedRecommendation || !usedGroundedCatalog
                   || !preservedHardPreferences || !allGamesHaveNaturalNarrative
                   || hasBudgetDegradation(agentResult)
@@ -636,6 +654,13 @@ jobs:
                   totalMillis: streamed.totalMillis,
                   actions: Array.isArray(agentActions) ? agentActions : [],
                   preservedHardPreferences,
+                  shortfall: shortfall == null ? null : {
+                    requestedCount: shortfall.requestedCount,
+                    availableCount: shortfall.availableCount,
+                    relaxationCount: Array.isArray(agentResult.clarification?.options)
+                      ? agentResult.clarification.options.length
+                      : -1,
+                  },
                   naturalNarrativeCount: Array.isArray(agentResult.games)
                     ? agentResult.games.filter(hasNaturalCandidateNarrative).length
                     : -1,

@@ -3,6 +3,7 @@ package com.rulepilot.recommendation.application;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rulepilot.catalog.BggGameType;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog;
@@ -116,12 +117,9 @@ class BoardGameRecommendationAgentTest {
                             .filter(tool -> BoardGameRecommendationAgent.RECOMMEND_TOOL.equals(tool.name()))
                             .findFirst()
                             .orElseThrow();
-                    assertThat(recommendation.description())
-                            .contains("Honor an explicit requested quantity");
-                    assertThat(recommendation.inputSchema())
-                            .contains("\"maxItems\":5")
-                            .doesNotContain("\"maxItems\":8")
-                            .doesNotContain("\"maxItems\":3");
+                    JsonNode selections = schema(recommendation).at("/properties/selections");
+                    assertThat(selections.path("minItems").intValue()).isEqualTo(5);
+                    assertThat(selections.path("maxItems").intValue()).isEqualTo(5);
                     assertThat(request.messages().get(1).content())
                             .contains("\"explicitRecommendationCount\":5");
                     assertThat(request.messages().getLast().content())
@@ -283,6 +281,76 @@ class BoardGameRecommendationAgentTest {
         assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
         assertThat(response.games()).extracting(game -> game.game().ranking().bggId())
                 .containsExactly(64, 65, 66);
+    }
+
+    @Test
+    void publishesATypedNaturalShortfallOnceWhenOnlyTwoHardEligibleCandidatesCanSatisfyARequestForThree() {
+        TrackingCatalog catalog = catalogWithTwoShortGames();
+        String rawMessage = "按当前九十分钟上限，目录里只有两款候选通过了硬条件，所以这次先把两款都给你，不拿重复游戏凑第三款。若想继续扩大范围，可以直接选择放宽时长。";
+        String rawRelaxation = "可以把时长上限放宽到 120 分钟";
+        ScriptedModel model = new ScriptedModel(List.of(
+                ignored -> action(
+                        "browse-two-hard-eligible",
+                        BoardGameRecommendationAgent.BROWSE_TOOL,
+                        "{\"limit\":3}"),
+                request -> {
+                    ToolSpec recommendation = request.tools().stream()
+                            .filter(tool -> BoardGameRecommendationAgent.RECOMMEND_TOOL.equals(tool.name()))
+                            .findFirst()
+                            .orElseThrow();
+                    assertThat(recommendation.inputSchema()).contains(
+                            "\"minItems\":2,\"maxItems\":2",
+                            "\"shortfall\"",
+                            "\"requestedCount\":{\"type\":\"integer\",\"enum\":[3]}",
+                            "\"availableCount\":{\"type\":\"integer\",\"enum\":[2]}",
+                            "\"subject\":{\"type\":\"string\",\"enum\":[\"durationMinutes\"]}",
+                            "\"required\":[\"message\",\"selections\",\"shortfall\"]");
+                    return action(
+                            "publish-two-with-typed-shortfall",
+                            BoardGameRecommendationAgent.RECOMMEND_TOOL,
+                            "{\"message\":\"" + rawMessage + "\",\"selections\":["
+                                    + "{\"bggId\":60,\"narrativeMode\":\"OBSERVED_ONLY\","
+                                    + "\"why\":\"Glass Orchard 标注 40..55 分钟，落在九十分钟上限内。\","
+                                    + "\"tradeoff\":\"当前资料不能证明新手是否容易上手。\","
+                                    + "\"internalEvidenceIds\":[\"B60:durationMinutes\"]},"
+                                    + "{\"bggId\":61,\"narrativeMode\":\"OBSERVED_ONLY\","
+                                    + "\"why\":\"Loom City 标注 45..60 分钟，也落在九十分钟上限内。\","
+                                    + "\"tradeoff\":\"当前资料不能证明谈条件时的实际桌感。\","
+                                    + "\"internalEvidenceIds\":[\"B61:durationMinutes\"]}],"
+                                    + "\"shortfall\":{\"requestedCount\":3,\"availableCount\":2,"
+                                    + "\"relaxationOptions\":[{\"subject\":\"durationMinutes\","
+                                    + "\"reply\":\"" + rawRelaxation + "\"}]}}" );
+                }));
+
+        var response = agent(model, catalog, noResearch()).converse(
+                new ConversationRequest(
+                        new RecommendationProfile(
+                                null,
+                                90,
+                                null,
+                                BggGameType.ALL,
+                                InteractionPreference.ANY),
+                        "最多九十分钟，请直接给我三款。"),
+                "zh-CN");
+
+        assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
+        assertThat(response.assistantMessage()).isEqualTo(rawMessage);
+        assertThat(response.games()).extracting(game -> game.game().ranking().bggId())
+                .containsExactly(60, 61);
+        assertThat(response.shortfall()).isNotNull();
+        assertThat(response.shortfall().requestedCount()).isEqualTo(3);
+        assertThat(response.shortfall().availableCount()).isEqualTo(2);
+        assertThat(response.clarification().prompt()).isEqualTo(rawMessage);
+        assertThat(response.clarification().options()).singleElement().satisfies(option -> {
+            assertThat(option.value()).isEqualTo(rawRelaxation);
+            assertThat(option.label()).isEqualTo(rawRelaxation);
+        });
+        assertThat(response.harness().modelCalls()).isEqualTo(2);
+        assertThat(response.harness().fallbackUsed()).isFalse();
+        assertThat(response.harness().actions()).containsExactly(
+                "SEARCH_BGG_CATALOG",
+                "RECOMMENDATION_AVAILABILITY_SHORTFALL",
+                "RECOMMEND_GAMES");
     }
 
     @Test
@@ -1350,7 +1418,7 @@ class BoardGameRecommendationAgentTest {
                         BoardGameRecommendationAgent.REPLY_TOOL,
                         "{\"message\":\"已记下 90 分钟上限。\",\"preferenceUpdates\":[{"
                                 + "\"field\":\"durationMinutes\",\"value\":{\"minimum\":0,\"maximum\":90},"
-                                + "\"evidence\":\"U1\",\"evidenceStatus\":\"DIRECT\",\"evidenceReason\":\"DIRECT\"}]}"),
+                                + "\"evidence\":\"U1\",\"evidenceClassification\":\"DIRECT\"}]}"),
                 ignored -> action(
                         "fallback-after-rejected-sentinel",
                         BoardGameRecommendationAgent.REPLY_TOOL,
@@ -1379,7 +1447,7 @@ class BoardGameRecommendationAgentTest {
                         BoardGameRecommendationAgent.REPLY_TOOL,
                         "{\"message\":\"已记录 0 到 90 分钟。\",\"preferenceUpdates\":[{"
                                 + "\"field\":\"durationMinutes\",\"value\":{\"minimum\":0,\"maximum\":90},"
-                                + "\"evidence\":\"U1\",\"evidenceStatus\":\"DIRECT\",\"evidenceReason\":\"DIRECT\"}]}"),
+                                + "\"evidence\":\"U1\",\"evidenceClassification\":\"DIRECT\"}]}"),
                 ignored -> action(
                         "reply-without-invalid-duration",
                         BoardGameRecommendationAgent.REPLY_TOOL,
@@ -1541,12 +1609,13 @@ class BoardGameRecommendationAgentTest {
         RecommendationProfile current = new RecommendationProfile(
                 4, 90, new BigDecimal("3.2"), BggGameType.STRATEGY, InteractionPreference.COMPETITIVE);
         ScriptedModel model = new ScriptedModel(List.of(request -> {
-            assertThat(request.tools().stream()
+            ToolSpec reply = request.tools().stream()
                             .filter(tool -> BoardGameRecommendationAgent.REPLY_TOOL.equals(tool.name()))
                             .findFirst()
-                            .orElseThrow()
-                            .inputSchema())
-                    .contains("null value clears an explicit limit", "{\"type\":\"null\"}");
+                            .orElseThrow();
+            JsonNode valueVariants = schema(reply)
+                    .at("/properties/preferenceUpdates/items/properties/value/anyOf");
+            assertThat(valueVariants.findValuesAsText("type")).contains("null");
             return action(
                     "clear-two-numeric-limits",
                     BoardGameRecommendationAgent.REPLY_TOOL,
@@ -1608,8 +1677,8 @@ class BoardGameRecommendationAgentTest {
                         + "\"options\":[\"偏短局\",\"偏长局\"],"
                         + "\"preferenceUpdates\":[{\"field\":\"players\",\"value\":5,\"evidence\":\"U1\"},{"
                         + "\"field\":\"interaction\",\"value\":\"COOPERATIVE\","
-                        + "\"evidence\":\"U1\",\"evidenceStatus\":\"CONTEXTUAL\","
-                        + "\"evidenceReason\":\"COMPLETE_GROUP_INFERENCE\"}]}")));
+                        + "\"evidence\":\"U1\","
+                        + "\"evidenceClassification\":\"CONTEXTUAL_COMPLETE_GROUP\"}]}")));
 
         var response = agent(model, new TrackingCatalog(), noResearch()).converse(
                 new ConversationRequest(RecommendationProfile.empty(), "我们有 5 个人，想找一种围着壁炉讲秘密的感觉"),
@@ -1673,12 +1742,15 @@ class BoardGameRecommendationAgentTest {
                             .filter(tool -> BoardGameRecommendationAgent.RECOMMEND_TOOL.equals(tool.name()))
                             .findFirst()
                             .orElseThrow();
-                    assertThat(finalAction.inputSchema()).contains(
-                            "preferenceUpdates",
-                            "evidence",
-                            "COMPETITIVE",
-                            "A negated mode proves no other enum",
-                            "Qualitative tastes");
+                    JsonNode preference = schema(finalAction).at("/properties/preferenceUpdates/items");
+                    assertThat(textValues(preference.path("required")))
+                            .containsExactly("field", "value", "evidence", "evidenceClassification");
+                    assertThat(textValues(preference.at("/properties/field/enum")))
+                            .contains("players", "interaction");
+                    assertThat(preference.at("/properties/value/anyOf").toString())
+                            .contains("COMPETITIVE");
+                    assertThat(textValues(preference.at("/properties/evidenceClassification/enum")))
+                            .containsExactly("DIRECT", "CONTEXTUAL_COMPLETE_GROUP");
                     return action(
                             "recommend",
                             BoardGameRecommendationAgent.RECOMMEND_TOOL,
@@ -1798,7 +1870,7 @@ class BoardGameRecommendationAgentTest {
                                 + "\"narrativeMode\":\"OBSERVED_ONLY\","
                                 + "\"why\":\"它标注 40..55 分钟、支持 2..4 人；\\n这些原值让本次试选的人数与时间边界清楚可核对。\","
                                 + "\"tradeoff\":\"资料只证明支持 2–4 人，不能据此断言所有人数下的互动强度一致。\","
-                                + "\"evidenceIds\":[\"B60:durationMinutes\",\"B60:playerCount\"]}]}")));
+                                + "\"internalEvidenceIds\":[\"B60:durationMinutes\",\"B60:playerCount\"]}]}")));
 
         var response = agent(model, catalog, noResearch()).converse(
                 new ConversationRequest(RecommendationProfile.empty(), "推荐一款图案构筑游戏"),
@@ -1842,7 +1914,7 @@ class BoardGameRecommendationAgentTest {
                             "{\"message\":\"先看 Glass Orchard。\",\"selections\":[{\"bggId\":60,"
                                     + "\"narrativeMode\":\"OBSERVED_ONLY\","
                                     + "\"why\":\"它标注四十到五十五分钟，时间边界适合先核对。\","
-                                    + "\"evidenceIds\":[\"B60:durationMinutes\"]}]}" );
+                                    + "\"internalEvidenceIds\":[\"B60:durationMinutes\"]}]}" );
                 },
                 request -> {
                     assertThat(request.messages().getLast().content())
@@ -1853,7 +1925,7 @@ class BoardGameRecommendationAgentTest {
                             "{\"message\":\"先看 Glass Orchard。\",\"selections\":[{\"bggId\":60,"
                                     + "\"narrativeMode\":\"OBSERVED_ONLY\","
                                     + "\"why\":\"它的机制标签原值是 Pattern Building；这个标签只提供待核对的方向。\","
-                                    + "\"evidenceIds\":[\"B60:mechanics\"]}]}" );
+                                    + "\"internalEvidenceIds\":[\"B60:mechanics\"]}]}" );
                 },
                 request -> {
                     assertThat(request.messages().getLast().content())
@@ -1865,7 +1937,7 @@ class BoardGameRecommendationAgentTest {
                                     + "\"narrativeMode\":\"OBSERVED_ONLY\","
                                     + "\"why\":\"它的标注时长原值是 40..55；这让时间边界可以直接核对。\","
                                     + "\"tradeoff\":\"当前资料没有实际游玩报告，不能判断你期待的桌感。\","
-                                    + "\"evidenceIds\":[\"B60:durationMinutes\"]}]}" );
+                                    + "\"internalEvidenceIds\":[\"B60:durationMinutes\"]}]}" );
                 }));
 
         var response = agent(model, catalog, noResearch()).converse(
@@ -1917,7 +1989,7 @@ class BoardGameRecommendationAgentTest {
                             "too-few-selections",
                             BoardGameRecommendationAgent.RECOMMEND_TOOL,
                             "{\"message\":\"先看 Glass Orchard。\",\"selections\":["
-                                    + "{\"bggId\":60,\"why\":\"标注时长为 40–55 分钟。\",\"evidenceIds\":[\"B60:durationMinutes\"]}]}");
+                                    + "{\"bggId\":60,\"why\":\"标注时长为 40–55 分钟。\",\"internalEvidenceIds\":[\"B60:durationMinutes\"]}]}");
                 },
                 request -> {
                     assertThat(request.messages().getLast().content()).contains("SELECTION_COUNT_INVALID");
@@ -1925,9 +1997,9 @@ class BoardGameRecommendationAgentTest {
                             "too-many-selections",
                             BoardGameRecommendationAgent.RECOMMEND_TOOL,
                             "{\"message\":\"先看 Glass Orchard、Loom City 和 Signal Bazaar。\",\"selections\":["
-                                    + "{\"bggId\":60,\"why\":\"标注时长为 40–55 分钟。\",\"evidenceIds\":[\"B60:durationMinutes\"]},"
-                                    + "{\"bggId\":61,\"why\":\"标注时长为 45–60 分钟。\",\"evidenceIds\":[\"B61:durationMinutes\"]},"
-                                    + "{\"bggId\":63,\"why\":\"标注时长为 60–75 分钟。\",\"evidenceIds\":[\"B63:durationMinutes\"]}]}" );
+                                    + "{\"bggId\":60,\"why\":\"标注时长为 40–55 分钟。\",\"internalEvidenceIds\":[\"B60:durationMinutes\"]},"
+                                    + "{\"bggId\":61,\"why\":\"标注时长为 45–60 分钟。\",\"internalEvidenceIds\":[\"B61:durationMinutes\"]},"
+                                    + "{\"bggId\":63,\"why\":\"标注时长为 60–75 分钟。\",\"internalEvidenceIds\":[\"B63:durationMinutes\"]}]}" );
                 },
                 request -> {
                     assertThat(request.messages().getLast().content()).contains("SELECTION_COUNT_INVALID");
@@ -1935,8 +2007,8 @@ class BoardGameRecommendationAgentTest {
                             "exactly-two-selections",
                             BoardGameRecommendationAgent.RECOMMEND_TOOL,
                             "{\"message\":\"先把 Glass Orchard 和 Loom City 放在一起看；两张卡都保留了可核对的时长边界。\",\"selections\":["
-                                    + "{\"bggId\":60,\"why\":\"标注时长为 40–55 分钟。\",\"tradeoff\":\"资料没有实际桌感报告。\",\"evidenceIds\":[\"B60:durationMinutes\"]},"
-                                    + "{\"bggId\":61,\"why\":\"标注时长为 45–60 分钟。\",\"tradeoff\":\"资料没有实际桌感报告。\",\"evidenceIds\":[\"B61:durationMinutes\"]}]}" );
+                                    + "{\"bggId\":60,\"why\":\"标注时长为 40–55 分钟。\",\"tradeoff\":\"资料没有实际桌感报告。\",\"internalEvidenceIds\":[\"B60:durationMinutes\"]},"
+                                    + "{\"bggId\":61,\"why\":\"标注时长为 45–60 分钟。\",\"tradeoff\":\"资料没有实际桌感报告。\",\"internalEvidenceIds\":[\"B61:durationMinutes\"]}]}" );
                 }));
 
         var response = agent(model, catalog, noResearch()).converse(
@@ -1968,7 +2040,7 @@ class BoardGameRecommendationAgentTest {
                                 + "\"bggId\":60,\"narrativeMode\":\"OBSERVED_ONLY\","
                                 + "\"why\":\"Glass Orchard 的标注时长原值是 40..55。\","
                                 + "\"tradeoff\":\"现有直接事实不能证明实际桌感。\","
-                                + "\"evidenceIds\":[\"B60:durationMinutes\",\"B60:complexity\"]}]}")));
+                                + "\"internalEvidenceIds\":[\"B60:durationMinutes\",\"B60:complexity\"]}]}")));
 
         var response = agent(model, catalog, noResearch()).converse(
                 new ConversationRequest(RecommendationProfile.empty(), "给我一个时长可直接核对的桌游。"),
@@ -2001,14 +2073,14 @@ class BoardGameRecommendationAgentTest {
                                 + "\"bggId\":60,\"narrativeMode\":\"OBSERVED_ONLY\","
                                 + "\"why\":\"" + rawWhy + "\","
                                 + "\"tradeoff\":\"这些目录数值不能证明实际桌感。\","
-                                + "\"evidenceIds\":[\"B60:playerCount\",\"B60:durationMinutes\"]}]}"),
+                                + "\"internalEvidenceIds\":[\"B60:playerCount\",\"B60:durationMinutes\"]}]}"),
                 ignored -> action(
                         "legacy-exact-separators",
                         BoardGameRecommendationAgent.RECOMMEND_TOOL,
                         "{\"message\":\"Glass Orchard 的人数与时长边界都能直接核对。\",\"selections\":[{"
                                 + "\"bggId\":60,\"narrativeMode\":\"OBSERVED_ONLY\","
                                 + "\"why\":\"它支持 2..4 人，标注 40..55 分钟。\","
-                                + "\"evidenceIds\":[\"B60:playerCount\",\"B60:durationMinutes\"]}]}")));
+                                + "\"internalEvidenceIds\":[\"B60:playerCount\",\"B60:durationMinutes\"]}]}")));
 
         var response = agent(model, catalog, noResearch()).converse(
                 new ConversationRequest(RecommendationProfile.empty(), "给我一款人数和时长都清楚的游戏。"),
@@ -2038,7 +2110,7 @@ class BoardGameRecommendationAgentTest {
                         "{\"message\":\"先看 Glass Orchard。\",\"selections\":[{"
                                 + "\"bggId\":60,\"narrativeMode\":\"OBSERVED_ONLY\","
                                 + "\"why\":\"它支持 2 到 5 人，标注时长原值是 40..55。\","
-                                + "\"evidenceIds\":[\"B60:playerCount\",\"B60:durationMinutes\"]}]}"),
+                                + "\"internalEvidenceIds\":[\"B60:playerCount\",\"B60:durationMinutes\"]}]}"),
                 request -> {
                     assertThat(request.messages().getLast().content())
                             .contains("CANDIDATE_NARRATIVE_NUMERIC_VALUE_UNGROUNDED");
@@ -2048,7 +2120,7 @@ class BoardGameRecommendationAgentTest {
                             "{\"message\":\"先看 Glass Orchard。\",\"selections\":[{"
                                     + "\"bggId\":60,\"narrativeMode\":\"OBSERVED_ONLY\","
                                     + "\"why\":\"它支持 2 到 4 人，标注时长原值是 40..55。\","
-                                    + "\"evidenceIds\":[\"B60:playerCount\",\"B60:durationMinutes\"]}]}" );
+                                    + "\"internalEvidenceIds\":[\"B60:playerCount\",\"B60:durationMinutes\"]}]}" );
                 }));
 
         var response = agent(model, catalog, noResearch()).converse(
@@ -2082,14 +2154,14 @@ class BoardGameRecommendationAgentTest {
                                 + "\"bggId\":60,\"narrativeMode\":\"OBSERVED_ONLY\","
                                 + "\"why\":\"" + rawWhy + "\","
                                 + "\"tradeoff\":\"目录时长不能保证每一桌都按时结束。\","
-                                + "\"evidenceIds\":[\"B60:durationMinutes\"]}]}"),
+                                + "\"internalEvidenceIds\":[\"B60:durationMinutes\"]}]}"),
                 ignored -> action(
                         "legacy-candidate-duration-only",
                         BoardGameRecommendationAgent.RECOMMEND_TOOL,
                         "{\"message\":\"Glass Orchard 的时长可以直接核对。\",\"selections\":[{"
                                 + "\"bggId\":60,\"narrativeMode\":\"OBSERVED_ONLY\","
                                 + "\"why\":\"它标注 40 到 55 分钟。\","
-                                + "\"evidenceIds\":[\"B60:durationMinutes\"]}]}")));
+                                + "\"internalEvidenceIds\":[\"B60:durationMinutes\"]}]}")));
 
         var response = agent(model, catalog, noResearch()).converse(
                 new ConversationRequest(
@@ -2128,12 +2200,12 @@ class BoardGameRecommendationAgentTest {
                                 + "\"bggId\":60,\"narrativeMode\":\"OBSERVED_ONLY\","
                                 + "\"why\":\"Glass Orchard 标注 40..55 分钟（B60:durationMinutes），时间边界可以直接核对。\","
                                 + "\"tradeoff\":\"目录时长不能证明实际桌感。\","
-                                + "\"evidenceIds\":[\"B60:durationMinutes\"]}]}"),
+                                + "\"internalEvidenceIds\":[\"B60:durationMinutes\"]}]}"),
                 request -> {
                     assertThat(request.messages().getLast().content())
                             .contains(
                                     "CANDIDATE_NARRATIVE_INTERNAL_EVIDENCE_ID_VISIBLE",
-                                    "Keep the evidenceIds array unchanged",
+                                    "Keep the internalEvidenceIds array unchanged",
                                     "B60:durationMinutes");
                     return action(
                             "hide-only-the-internal-id",
@@ -2142,7 +2214,7 @@ class BoardGameRecommendationAgentTest {
                                     + "\"bggId\":60,\"narrativeMode\":\"OBSERVED_ONLY\","
                                     + "\"why\":\"" + correctedWhy + "\","
                                     + "\"tradeoff\":\"目录时长不能证明实际桌感。\","
-                                    + "\"evidenceIds\":[\"B60:durationMinutes\"]}]}" );
+                                    + "\"internalEvidenceIds\":[\"B60:durationMinutes\"]}]}" );
                 }));
 
         var response = agent(model, catalog, noResearch()).converse(
@@ -2208,7 +2280,7 @@ class BoardGameRecommendationAgentTest {
                         "{\"message\":\"先看 Glass Orchard。\",\"selections\":[{"
                                 + "\"bggId\":60,\"narrativeMode\":\"OBSERVED_ONLY\","
                                 + "\"why\":\"它标注 40 到 55 分钟，低于你的 90 分钟上限，也低于 91 分钟。\","
-                                + "\"evidenceIds\":[\"B60:durationMinutes\"]}]}"),
+                                + "\"internalEvidenceIds\":[\"B60:durationMinutes\"]}]}"),
                 request -> {
                     assertThat(request.messages().getLast().content())
                             .contains("CANDIDATE_NARRATIVE_NUMERIC_VALUE_UNGROUNDED");
@@ -2218,7 +2290,7 @@ class BoardGameRecommendationAgentTest {
                             "{\"message\":\"先看 Glass Orchard。\",\"selections\":[{"
                                     + "\"bggId\":60,\"narrativeMode\":\"OBSERVED_ONLY\","
                                     + "\"why\":\"它标注 40 到 55 分钟，低于你的 90 分钟上限。\","
-                                    + "\"evidenceIds\":[\"B60:durationMinutes\"]}]}" );
+                                    + "\"internalEvidenceIds\":[\"B60:durationMinutes\"]}]}" );
                 }));
 
         var response = agent(model, catalog, noResearch()).converse(
@@ -2255,7 +2327,7 @@ class BoardGameRecommendationAgentTest {
                                 + "\"selections\":[{\"bggId\":61,"
                                 + "\"why\":\"它标注 45–60 分钟，边界可以直接与刚才那款对照。\","
                                 + "\"tradeoff\":\"60 分钟是目录上限，资料不能保证每桌一定提前结束。\","
-                                + "\"evidenceIds\":[\"B61:durationMinutes\"]}]}")));
+                                + "\"internalEvidenceIds\":[\"B61:durationMinutes\"]}]}")));
 
         var response = agent(model, catalog, noResearch()).converse(
                 new ConversationRequest(
@@ -2290,14 +2362,14 @@ class BoardGameRecommendationAgentTest {
                         "{\"message\":\"先选 Glass Orchard，Loom City 下次再说。\","
                                 + "\"selections\":[{\"bggId\":60,\"why\":\"它标注 40–55 分钟。\","
                                 + "\"tradeoff\":\"资料没有实际桌感报告。\","
-                                + "\"evidenceIds\":[\"B60:durationMinutes\"]}]}"),
+                                + "\"internalEvidenceIds\":[\"B60:durationMinutes\"]}]}"),
                 ignored -> action(
                         "remove-unselected-new-game",
                         BoardGameRecommendationAgent.RECOMMEND_TOOL,
                         "{\"message\":\"先选 Glass Orchard；卡片保留了可核对的时长边界。\","
                                 + "\"selections\":[{\"bggId\":60,\"why\":\"它标注 40–55 分钟。\","
                                 + "\"tradeoff\":\"资料没有实际桌感报告。\","
-                                + "\"evidenceIds\":[\"B60:durationMinutes\"]}]}")));
+                                + "\"internalEvidenceIds\":[\"B60:durationMinutes\"]}]}")));
 
         var response = agent(model, catalog, noResearch()).converse(
                 new ConversationRequest(RecommendationProfile.empty(), "推荐一款短局。"),
@@ -2324,7 +2396,7 @@ class BoardGameRecommendationAgentTest {
                         "cross-candidate-evidence",
                         BoardGameRecommendationAgent.RECOMMEND_TOOL,
                         "{\"message\":\"Glass Orchard 更短。\",\"selections\":[{\"bggId\":60,"
-                                + "\"why\":\"它适合先开一局。\",\"evidenceIds\":[\"B61:durationMinutes\"]}]}"),
+                                + "\"why\":\"它适合先开一局。\",\"internalEvidenceIds\":[\"B61:durationMinutes\"]}]}"),
                 request -> {
                     assertThat(request.messages().getLast().content())
                             .contains("CANDIDATE_NARRATIVE_EVIDENCE_WRONG_CANDIDATE");
@@ -2334,7 +2406,7 @@ class BoardGameRecommendationAgentTest {
                             "{\"message\":\"Glass Orchard 的标注时长更适合先开一局。\",\"selections\":[{\"bggId\":60,"
                                     + "\"why\":\"它标注 40–55 分钟，时间边界清楚。\","
                                     + "\"tradeoff\":\"这只能证明标注时长，不能保证每桌都在 55 分钟内结束。\","
-                                    + "\"evidenceIds\":[\"B60:durationMinutes\"]}]}" );
+                                    + "\"internalEvidenceIds\":[\"B60:durationMinutes\"]}]}" );
                 }));
 
         var response = agent(model, catalog, noResearch()).converse(
@@ -2366,7 +2438,7 @@ class BoardGameRecommendationAgentTest {
                         "{\"message\":\"" + rawMessage + "\",\"selections\":[{\"bggId\":60,"
                                 + "\"why\":\"它标注 40–55 分钟，时长边界明确。\","
                                 + "\"tradeoff\":\"目录资料不能证明实际桌感或等待时间。\","
-                                + "\"evidenceIds\":[\"B60:durationMinutes\",\"B60:mechanics\"]}]}")));
+                                + "\"internalEvidenceIds\":[\"B60:durationMinutes\",\"B60:mechanics\"]}]}")));
 
         var response = agent(model, catalog, noResearch()).converse(
                 new ConversationRequest(RecommendationProfile.empty(), "推荐一款短局并说清理由。"),
@@ -2401,7 +2473,7 @@ class BoardGameRecommendationAgentTest {
                                 + "\"narrativeMode\":\"OBSERVED_ONLY\","
                                 + "\"why\":\"Glass Orchard 的标注时长原值是 40..55。\","
                                 + "\"tradeoff\":\"这只能证明标注时长，不能保证每桌都在 55 分钟内结束。\","
-                                + "\"evidenceIds\":[\"B60:durationMinutes\"]}]}")));
+                                + "\"internalEvidenceIds\":[\"B60:durationMinutes\"]}]}")));
 
         var response = agent(model, catalog, noResearch()).converse(
                 new ConversationRequest(RecommendationProfile.empty(), "推荐一款短局并说清理由。"),
@@ -2502,11 +2574,17 @@ class BoardGameRecommendationAgentTest {
                             .filter(tool -> BoardGameRecommendationAgent.RECOMMEND_TOOL.equals(tool.name()))
                             .findFirst()
                             .orElseThrow();
-                    assertThat(recommendation.inputSchema())
-                            .contains(
-                                    "Candidate-scoped playerCount, durationMinutes, or complexity",
-                                    "Taxonomy is shown elsewhere")
-                            .doesNotContain("preferenceLink", "fitClaim");
+                    JsonNode selectionProperties = schema(recommendation)
+                            .at("/properties/selections/items/properties");
+                    assertThat(selectionProperties.has("why")).isTrue();
+                    assertThat(selectionProperties.has("internalEvidenceIds")).isTrue();
+                    assertThat(textValues(selectionProperties.at("/internalEvidenceIds/items/enum")))
+                            .containsExactly(
+                                    "B60:playerCount",
+                                    "B60:durationMinutes",
+                                    "B60:complexity");
+                    assertThat(selectionProperties.has("preferenceLink")).isFalse();
+                    assertThat(selectionProperties.has("fitClaim")).isFalse();
                     return action(
                             "recommend-with-grounded-link",
                             BoardGameRecommendationAgent.RECOMMEND_TOOL,
@@ -2700,6 +2778,70 @@ class BoardGameRecommendationAgentTest {
     }
 
     @Test
+    void recordsTheExplicitWholeGroupAndDurationWithOneAtomicDirectClassification() {
+        ScriptedModel model = new ScriptedModel(List.of(request -> {
+            ToolSpec reply = request.tools().stream()
+                    .filter(tool -> BoardGameRecommendationAgent.REPLY_TOOL.equals(tool.name()))
+                    .findFirst()
+                    .orElseThrow();
+            assertThat(reply.inputSchema())
+                    .contains(
+                            "evidenceClassification",
+                            "DIRECT",
+                            "CONTEXTUAL_COMPLETE_GROUP",
+                            "fully described whole group")
+                    .doesNotContain("evidenceStatus", "evidenceReason");
+            return action(
+                    "record-explicit-whole-group",
+                    BoardGameRecommendationAgent.REPLY_TOOL,
+                    "{\"message\":\"好的，我按五人、九十分钟内继续。\",\"preferenceUpdates\":["
+                            + "{\"field\":\"players\",\"value\":5,\"evidence\":\"U1\","
+                            + "\"evidenceClassification\":\"DIRECT\"},"
+                            + "{\"field\":\"durationMinutes\",\"value\":{\"minimum\":null,\"maximum\":90},"
+                            + "\"evidence\":\"U1\",\"evidenceClassification\":\"DIRECT\"}]}" );
+        }));
+
+        var response = agent(model, new TrackingCatalog(), noResearch()).converse(
+                new ConversationRequest(
+                        RecommendationProfile.empty(),
+                        "今晚五个人，有两个第一次玩桌游，最多九十分钟。"),
+                "zh-CN");
+
+        assertThat(response.profile().players()).isEqualTo(5);
+        assertThat(response.profile().players()).isNotEqualTo(2);
+        assertThat(response.profile().maxMinutes()).isEqualTo(90);
+        assertThat(response.userModel().hypotheses()).isEmpty();
+        assertThat(response.harness().actions()).containsExactly(
+                "UPDATE_PREFERENCES",
+                "REPLY_TO_USER");
+    }
+
+    @Test
+    void keepsASubgroupCountOutOfTheHardPlayerProfile() {
+        ScriptedModel model = new ScriptedModel(List.of(ignored -> action(
+                "keep-subgroup-contextual",
+                BoardGameRecommendationAgent.REPLY_TOOL,
+                "{\"message\":\"两位第一次玩的成员不等于整桌人数，我先不锁定硬人数。\","
+                        + "\"preferenceUpdates\":[{\"field\":\"players\",\"value\":2,\"evidence\":\"U1\","
+                        + "\"evidenceClassification\":\"CONTEXTUAL_COMPLETE_GROUP\"}]}")));
+
+        var response = agent(model, new TrackingCatalog(), noResearch()).converse(
+                new ConversationRequest(
+                        RecommendationProfile.empty(),
+                        "有两个第一次玩桌游的人，整桌人数还没定。"),
+                "zh-CN");
+
+        assertThat(response.profile().playerCount()).isNull();
+        assertThat(response.userModel().hypotheses()).singleElement().satisfies(hypothesis -> {
+            assertThat(hypothesis.field()).isEqualTo("players");
+            assertThat(hypothesis.value()).isEqualTo("2");
+        });
+        assertThat(response.harness().actions()).containsExactly(
+                "RECORD_CONTEXTUAL_PREFERENCE",
+                "REPLY_TO_USER");
+    }
+
+    @Test
     void inBandClassificationKeepsACompleteGroupCountAsAVisibleReversibleAssumption() {
         ScriptedModel model = new ScriptedModel(List.of(ignored -> action(
                 "reply-with-contextual-count",
@@ -2707,8 +2849,7 @@ class BoardGameRecommendationAgentTest {
                 "{\"message\":\"我先按你和爸妈三个人来理解，人数有变化随时改。\","
                         + "\"preferenceUpdates\":[{\"field\":\"playerCount\","
                         + "\"value\":{\"minimum\":3,\"maximum\":3},\"evidence\":\"U1\","
-                        + "\"evidenceStatus\":\"CONTEXTUAL\","
-                        + "\"evidenceReason\":\"COMPLETE_GROUP_INFERENCE\"}]}")));
+                        + "\"evidenceClassification\":\"CONTEXTUAL_COMPLETE_GROUP\"}]}")));
 
         var response = agent(model, new TrackingCatalog(), noResearch()).converse(
                 new ConversationRequest(RecommendationProfile.empty(), "周末想带爸妈玩一局，轻松一点就好。"),
@@ -2738,8 +2879,7 @@ class BoardGameRecommendationAgentTest {
                 "{\"message\":\"我已经按你明确说的 3 到 4 人记录，不把它降成语境猜测。\","
                         + "\"preferenceUpdates\":[{\"field\":\"playerCount\","
                         + "\"value\":{\"minimum\":3,\"maximum\":4},\"evidence\":\"U1\","
-                        + "\"evidenceStatus\":\"CONTEXTUAL\","
-                        + "\"evidenceReason\":\"COMPLETE_GROUP_INFERENCE\"}]}")));
+                        + "\"evidenceClassification\":\"CONTEXTUAL_COMPLETE_GROUP\"}]}")));
 
         var response = agent(model, new TrackingCatalog(), noResearch()).converse(
                 new ConversationRequest(RecommendationProfile.empty(), "我们明确是 3 到 4 个人。"),
@@ -2764,20 +2904,18 @@ class BoardGameRecommendationAgentTest {
                         if (BoardGameRecommendationAgent.ASK_TOOL.equals(tool.name())) {
                             assertThat(tool.inputSchema())
                                     .contains("Already-stated direct numeric constraints only")
-                                    .doesNotContain("CONTEXTUAL", "COMPLETE_GROUP_INFERENCE");
+                                    .doesNotContain("CONTEXTUAL_COMPLETE_GROUP");
                             return;
                         }
                         assertThat(tool.inputSchema())
                                 .contains(
-                                        "evidenceStatus",
-                                        "evidenceReason",
+                                        "evidenceClassification",
                                         "DIRECT",
-                                        "CONTEXTUAL",
-                                        "A stated current group count N",
-                                        "minimum:N,maximum:N",
+                                        "CONTEXTUAL_COMPLETE_GROUP",
+                                        "players=N is an exact current group",
+                                        "playerCount is only an explicit range or endpoint",
                                         "Duration ceiling N",
-                                        "minimum:null,maximum:N",
-                                        "never {minimum:0,maximum:N}");
+                                        "minimum:null,maximum:N");
                     });
             assertThat(request.messages().getFirst().content())
                     .contains(
@@ -2791,10 +2929,9 @@ class BoardGameRecommendationAgentTest {
                     "reply-from-context",
                     BoardGameRecommendationAgent.REPLY_TOOL,
                     "{\"message\":\"我先按三个人来理解，人数有变化随时告诉我。\","
-                            + "\"preferenceUpdates\":[{\"field\":\"playerCount\","
-                            + "\"value\":{\"minimum\":3,\"maximum\":3},\"evidence\":\"U1\","
-                            + "\"evidenceStatus\":\"CONTEXTUAL\","
-                            + "\"evidenceReason\":\"COMPLETE_GROUP_INFERENCE\"}]}" );
+                        + "\"preferenceUpdates\":[{\"field\":\"playerCount\","
+                        + "\"value\":{\"minimum\":3,\"maximum\":3},\"evidence\":\"U1\","
+                        + "\"evidenceClassification\":\"CONTEXTUAL_COMPLETE_GROUP\"}]}" );
         }));
 
         var response = agent(model, new TrackingCatalog(), noResearch()).converse(
@@ -2821,7 +2958,7 @@ class BoardGameRecommendationAgentTest {
                         BoardGameRecommendationAgent.REPLY_TOOL,
                         "{\"message\":\"明白，你想换掉合作这个方向；我不会擅自把它等同成某一种固定互动模式。\","
                                 + "\"preferenceUpdates\":[{\"field\":\"interaction\",\"value\":\"COMPETITIVE\",\"evidence\":\"U1\","
-                                + "\"evidenceStatus\":\"CONTEXTUAL\",\"evidenceReason\":\"COMPLETE_GROUP_INFERENCE\"}]}"),
+                                + "\"evidenceClassification\":\"CONTEXTUAL_COMPLETE_GROUP\"}]}"),
                 request -> {
                     assertThat(request.messages().getLast().content())
                             .contains("PREFERENCE_EVIDENCE_CLASSIFICATION_INVALID");
@@ -2852,9 +2989,9 @@ class BoardGameRecommendationAgentTest {
                         "{\"message\":\"我先按三人理解，并记下了明确的 60 分钟上限。\","
                                 + "\"preferenceUpdates\":["
                                 + "{\"field\":\"playerCount\",\"value\":{\"minimum\":3,\"maximum\":3},\"evidence\":\"U1\","
-                                + "\"evidenceStatus\":\"CONTEXTUAL\",\"evidenceReason\":\"COMPLETE_GROUP_INFERENCE\"},"
+                                + "\"evidenceClassification\":\"CONTEXTUAL_COMPLETE_GROUP\"},"
                                 + "{\"field\":\"durationMinutes\",\"value\":{\"minimum\":null,\"maximum\":60},\"evidence\":\"U1\","
-                                + "\"evidenceStatus\":\"DIRECT\",\"evidenceReason\":\"DIRECT\"}]}")));
+                                + "\"evidenceClassification\":\"DIRECT\"}]}")));
 
         var response = agent(model, new TrackingCatalog(), noResearch()).converse(
                 new ConversationRequest(
@@ -3855,15 +3992,15 @@ class BoardGameRecommendationAgentTest {
                 + "{\"bggId\":60,\"narrativeMode\":\"OBSERVED_ONLY\","
                 + "\"why\":\"" + firstWhy + "\","
                 + "\"tradeoff\":\"目录时长不能证明实际桌感。\","
-                + "\"evidenceIds\":[\"B60:durationMinutes\"]},"
+                + "\"internalEvidenceIds\":[\"B60:durationMinutes\"]},"
                 + "{\"bggId\":61,\"narrativeMode\":\"OBSERVED_ONLY\","
                 + "\"why\":\"Loom City 标注 45..60 分钟。\","
                 + "\"tradeoff\":\"目录时长不能证明实际桌感。\","
-                + "\"evidenceIds\":[\"B61:durationMinutes\"]},"
+                + "\"internalEvidenceIds\":[\"B61:durationMinutes\"]},"
                 + "{\"bggId\":63,\"narrativeMode\":\"OBSERVED_ONLY\","
                 + "\"why\":\"Signal Bazaar 标注 60..75 分钟。\","
                 + "\"tradeoff\":\"目录时长不能证明实际桌感。\","
-                + "\"evidenceIds\":[\"B63:durationMinutes\"]}]}";
+                + "\"internalEvidenceIds\":[\"B63:durationMinutes\"]}]}";
     }
 
     private static Turn action(String id, String name, String arguments) {
@@ -3939,6 +4076,15 @@ class BoardGameRecommendationAgentTest {
                 "Signal Bazaar", 63));
     }
 
+    private TrackingCatalog catalogWithTwoShortGames() {
+        Map<Integer, Game> games = new LinkedHashMap<>();
+        games.put(60, game(60, "Glass Orchard", 55, List.of("Abstract Strategy"), List.of("Pattern Building")));
+        games.put(61, game(61, "Loom City", 60, List.of("Abstract Strategy"), List.of("Tile Placement", "Open Drafting")));
+        return new TrackingCatalog(games, Map.of(
+                "Glass Orchard", 60,
+                "Loom City", 61));
+    }
+
     private TrackingCatalog catalogWithSixShortGames() {
         Map<Integer, Game> games = new LinkedHashMap<>();
         games.put(60, game(60, "Glass Orchard", 55, List.of("Abstract Strategy"), List.of("Pattern Building")));
@@ -4003,6 +4149,20 @@ class BoardGameRecommendationAgentTest {
                         List.of("Spatial Games"),
                         List.of("Designer A"),
                         List.of("Publisher A")));
+    }
+
+    private static JsonNode schema(ToolSpec tool) {
+        try {
+            return new ObjectMapper().readTree(tool.inputSchema());
+        } catch (Exception exception) {
+            throw new AssertionError("tool schema must be valid JSON", exception);
+        }
+    }
+
+    private static List<String> textValues(JsonNode array) {
+        List<String> values = new ArrayList<>();
+        array.forEach(value -> values.add(value.asText()));
+        return List.copyOf(values);
     }
 
     private static final class ScriptedModel implements BoardGameRecommendationModel {

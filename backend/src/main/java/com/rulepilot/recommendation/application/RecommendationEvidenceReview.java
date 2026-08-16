@@ -161,7 +161,7 @@ final class RecommendationEvidenceReview {
             requireObject(
                     update,
                     Set.of("field", "value", "evidence"),
-                    Set.of("evidenceStatus", "evidenceReason"));
+                    Set.of("evidenceClassification"));
             payloads.add(preferencePayload(update));
         }
         return payloads;
@@ -181,20 +181,17 @@ final class RecommendationEvidenceReview {
         requireObject(
                 update,
                 Set.of("field", "value", "evidence"),
-                Set.of("evidenceStatus", "evidenceReason"));
-        String status = update.has("evidenceStatus")
-                ? text(update.path("evidenceStatus"), 1, 20)
+                Set.of("evidenceClassification"));
+        String classification = update.has("evidenceClassification")
+                ? text(update.path("evidenceClassification"), 1, 40)
                 : "DIRECT";
-        String reason = update.has("evidenceReason")
-                ? text(update.path("evidenceReason"), 1, 40)
-                : "DIRECT";
-        if ("DIRECT".equals(status) && "DIRECT".equals(reason)) {
-            return new PreferenceEvidenceClassification(false, reason);
+        if ("DIRECT".equals(classification)) {
+            return new PreferenceEvidenceClassification(false, classification);
         }
         if (request != null && directlyStatesNumericPreference(update, request)) {
             return new PreferenceEvidenceClassification(false, "DIRECT");
         }
-        if (!"CONTEXTUAL".equals(status) || !"COMPLETE_GROUP_INFERENCE".equals(reason)) {
+        if (!"CONTEXTUAL_COMPLETE_GROUP".equals(classification)) {
             throw new InvalidAction("PREFERENCE_EVIDENCE_CLASSIFICATION_INVALID");
         }
         String field = text(update.path("field"), 1, 40);
@@ -211,7 +208,7 @@ final class RecommendationEvidenceReview {
         if (request != null && !preferenceEvidence(request).containsKey(update.path("evidence").asText())) {
             throw new InvalidAction("PREFERENCE_EVIDENCE_NOT_GROUNDED");
         }
-        return new PreferenceEvidenceClassification(true, reason);
+        return new PreferenceEvidenceClassification(true, classification);
     }
 
     private boolean directlyStatesNumericPreference(JsonNode update, ConversationRequest request) {

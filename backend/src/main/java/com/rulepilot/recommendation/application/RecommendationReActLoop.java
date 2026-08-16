@@ -418,11 +418,11 @@ final class RecommendationReActLoop {
 
                 Continue short corrections, pronouns, rejections, and preference fragments in context. Retrieval actions continue this run; replies, questions, comparisons, no-match reports, and recommendations finish it. Never promise work instead of doing it. A recommendation card is an application action: new candidates use recommend_games; ordinary chat and focused-game discussion use reply_to_user. If accidental retrieval began for chat, recover with reply_to_user; do not emit unwanted cards merely because a slate exists. Ask only for one missing player-owned preference, referent, or goal whose answer materially changes candidates. First explain that impact in one short sentence, then ask one easy question and offer 2–3 direct options when enumerable. Never turn schema, tool, provider, or empty-retrieval failure into clarification; self-repair locally or report the limit. Empty profile fields never block an actionable request.
 
-                The profile stores confirmed playerCount, durationMinutes, numeric complexity, BGG type, and interaction. Preserve range bounds, including when the next action is a clarification: store every already-stated hard numeric constraint in that ask action instead of making the player repeat it. A stated current group count of N players is exact: submit field players with scalar N; the stored range is {minimum:N,maximum:N}. Use field playerCount only for an explicit range or open endpoint; an open maximum is valid only when the player explicitly says at least N. For a duration ceiling such as "within 90 minutes", submit {minimum:null,maximum:90}; never use zero for an open endpoint. DIRECT/DIRECT must cite the exact latest U-id containing every value; CONTEXTUAL/COMPLETE_GROUP_INFERENCE is only for a fully described exact group and stays reversible. Ranges are DIRECT. Qualitative taste and table feel stay conversational. Result count is not players; negation proves no positive enum; complexity needs a number. Never resend unchanged values. "Games like X" is a per-turn comparison goal, not a stored preference. A late correction changes the profile and immediately recomputes recommendable IDs.
+                The profile stores confirmed playerCount, durationMinutes, numeric complexity, BGG type, and interaction. Preserve range bounds, including when the next action is a clarification: store every already-stated hard numeric constraint in that ask action instead of making the player repeat it. A stated current group count of N players is exact: submit field players with scalar N; the stored range is {minimum:N,maximum:N}. Use field playerCount only for an explicit range or open endpoint; an open maximum is valid only when the player explicitly says at least N. For a duration ceiling such as "within 90 minutes", submit {minimum:null,maximum:90}; never use zero for an open endpoint. evidenceClassification is one atomic choice: DIRECT for an explicitly stated constraint, or CONTEXTUAL_COMPLETE_GROUP only for a fully described exact group that stays reversible. A count describing only a subgroup is not the current player count. Ranges are DIRECT. Qualitative taste and table feel stay conversational. Result count is not players; negation proves no positive enum; complexity needs a number. Never resend unchanged values. "Games like X" is a per-turn comparison goal, not a stored preference. A late correction changes the profile and immediately recomputes recommendable IDs.
 
                 Identity and facts come only from observations. Resolve one intact player-authored title before using its facts; never resolve a title you guessed, translate/trim its span, or treat a person, award, publisher, list, or relationship as a title. Declare its purpose accurately. For qualitative or relational recommendations with an inspectable relationship, generate a diverse slate with inspect_candidate_titles; never include a player-named title. A pure metaphor/table-feel wish is not a filter: without an independent hard criterion, clarify before guessing titles; with hard constraints, retrieve on those and keep the wish unverified. For typed numeric/type constraints, browse the filtered catalog once instead of guessing famous titles. Do not browse or use public discovery merely because a request is semantic. Discovery is only for an external relationship or potentially changing fact, and its leads still require BGG resolution. Inspection/discovery already hydrate games; lookup reads only observed IDs without details.
 
-                Observations are id -> [kind,value]: M metadata, T taxonomy, A attributed report, R rulebook fact. Evidence is candidate-scoped. Evidence IDs stay only in JSON arrays, never visible prose. Taxonomy is a literal label, never proof of pace, interaction, load, mood, depth, fit, or enjoyment; numeric complexity is only its number. Use compare_candidates only when the current user explicitly asks to compare known candidates; a request to replace, refresh, or recommend N candidates still requires recommend_games. Exact numeric values and literal taxonomy may be stated. Without A/R evidence, any play-feel sentence must say it is only a possibility inferred from the label and needs actual-play reports to confirm, or omit it; an earlier disclaimer never qualifies a later choice claim. An unqualified decision uses observed values or taxonomy copied literally from the observation. If a decision keeps a hypothesis, that same sentence repeats both boundaries. Cite 1–4 observations that directly justify one decision rule; across message and decision, name every cited candidate and show every cited value exactly. OBSERVED_ONLY adds no uncited alternative rule. Never invent gameplay, rules, mechanisms, reception, or translations.
+                Observations are id -> [kind,value]: M metadata, T taxonomy, A attributed report, R rulebook fact. Evidence is candidate-scoped. In recommend_games, internalEvidenceIds is machine-only bookkeeping: copy IDs into that array and never into message, why, or tradeoff. Taxonomy is a literal label, never proof of pace, interaction, load, mood, depth, fit, or enjoyment; numeric complexity is only its number. Use compare_candidates only when the current user explicitly asks to compare known candidates; a request to replace, refresh, or recommend N candidates still requires recommend_games. Exact numeric values and literal taxonomy may be stated. Without A/R evidence, any play-feel sentence must say it is only a possibility inferred from the label and needs actual-play reports to confirm, or omit it; an earlier disclaimer never qualifies a later choice claim. An unqualified decision uses observed values or taxonomy copied literally from the observation. If a decision keeps a hypothesis, that same sentence repeats both boundaries. Cite 1–4 observations that directly justify one decision rule; across message and decision, name every cited candidate and show every cited value exactly. OBSERVED_ONLY adds no uncited alternative rule. Never invent gameplay, rules, mechanisms, reception, or translations.
 
                 Avoid repeated reads. Choose the result count from the conversation: honor an explicit count, otherwise use the smallest useful set, and never pad a unique relationship or thin evidence set. Recommend only verified eligible IDs. A clarification answer remains the player's unverified direction, not a candidate fact or taxonomy mapping. Each card gets a natural why plus a useful tradeoff/evidence gap. why may relate exact cited playerCount, durationMinutes, or complexity values to confirmed hard bounds; never add another number, taxonomy, soft wish, or experience prediction. Keep soft player context such as newcomers out of why; tradeoff may restate it only as an evidence gap, never as proven fit. The terminal message may synthesize hard bounds and the local unknown, but never claim that retrieval matched the soft wish. selections is a native JSON array. Revise only the rejected field; keep supported content and finish once evidence suffices.
                 """;
@@ -472,13 +472,12 @@ final class RecommendationReActLoop {
                                 && (BROWSE_TOOL.equals(action.name()) || DISCOVER_TOOL.equals(action.name())))
                 .map(action -> RECOMMEND_TOOL.equals(action.name())
                         ? recommendationAction(
-                                state.explicitRecommendationCount == null
-                                        ? 1
-                                        : state.explicitRecommendationCount,
-                                state.maximumRecommendationResults,
+                                recommendationMinimumCount(state, recommendableIds),
+                                recommendationMaximumCount(state, recommendableIds),
                                 recommendableIds,
                                 recommendableNarrativeEvidenceIds(state, recommendableIds),
-                                preferenceEvidenceIds)
+                                preferenceEvidenceIds,
+                                availabilityShortfall(state, recommendableIds))
                         : COMPARE_TOOL.equals(action.name())
                                 ? comparisonAction(comparableIds, comparableDecisionEvidenceIds(state, comparableIds))
                         : NO_MATCH_TOOL.equals(action.name())
@@ -550,6 +549,40 @@ final class RecommendationReActLoop {
                 .toList();
     }
 
+    private int recommendationMinimumCount(
+            RecommendationAgentState state,
+            List<Integer> recommendableIds) {
+        if (state.explicitRecommendationCount == null) return 1;
+        return Math.min(state.explicitRecommendationCount, recommendableIds.size());
+    }
+
+    private int recommendationMaximumCount(
+            RecommendationAgentState state,
+            List<Integer> recommendableIds) {
+        if (state.explicitRecommendationCount != null) {
+            return recommendationMinimumCount(state, recommendableIds);
+        }
+        return Math.min(state.maximumRecommendationResults, recommendableIds.size());
+    }
+
+    private AvailabilityShortfall availabilityShortfall(
+            RecommendationAgentState state,
+            List<Integer> recommendableIds) {
+        Integer requested = state.explicitRecommendationCount;
+        if (requested == null || recommendableIds.size() >= requested) return null;
+        return new AvailabilityShortfall(
+                requested,
+                recommendableIds.size(),
+                shortfallRelaxableSubjects(state.profile));
+    }
+
+    List<String> shortfallRelaxableSubjects(RecommendationProfile profile) {
+        List<String> subjects = new ArrayList<>();
+        if (profile.durationMinutes() != null) subjects.add("durationMinutes");
+        if (profile.complexity() != null) subjects.add("complexity");
+        return List.copyOf(subjects);
+    }
+
     List<String> relaxableSubjects(RecommendationAgentState state) {
         if (state.verified.isEmpty() || !recommendableIds(state).isEmpty()) return List.of();
         LinkedHashSet<String> actionable = new LinkedHashSet<>();
@@ -569,7 +602,7 @@ final class RecommendationReActLoop {
         return actionable.stream().limit(3).toList();
     }
 
-    private List<Integer> recommendableIds(RecommendationAgentState state) {
+    List<Integer> recommendableIds(RecommendationAgentState state) {
         return state.verified.values().stream()
                 .filter(game -> !state.excludedIds.contains(game.ranking().bggId()))
                 .filter(game -> !state.previouslyShownIds.contains(game.ranking().bggId())
@@ -629,7 +662,7 @@ final class RecommendationReActLoop {
                         "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"bggIds\":{\"type\":\"array\",\"minItems\":1,\"maxItems\":5,\"items\":{\"type\":\"integer\",\"minimum\":1}},\"question\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":300}},\"required\":[\"bggIds\",\"question\"]}"),
                 comparisonAction(List.of(), List.of()),
                 noMatchAction(List.of()),
-                recommendationAction(1, maximumResultCount, List.of(), List.of(), preferenceEvidenceIds));
+                recommendationAction(1, maximumResultCount, List.of(), List.of(), preferenceEvidenceIds, null));
     }
 
     private static ToolSpec comparisonAction(
@@ -673,7 +706,8 @@ final class RecommendationReActLoop {
             int maximumResultCount,
             List<Integer> recommendableIds,
             List<String> narrativeEvidenceIds,
-            List<String> preferenceEvidenceIds) {
+            List<String> preferenceEvidenceIds,
+            AvailabilityShortfall shortfall) {
         String idConstraint = recommendableIds.isEmpty()
                 ? "\"minimum\":1"
                 : "\"enum\":" + recommendableIds;
@@ -682,24 +716,61 @@ final class RecommendationReActLoop {
                 : "\"enum\":" + jsonArray(narrativeEvidenceIds);
         String selectionSchema = "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{"
                 + "\"bggId\":{\"type\":\"integer\"," + idConstraint + "},"
-                + "\"narrativeMode\":{\"type\":\"string\",\"description\":\"Recommendation cards use observed candidate facts only. Soft table-feel hypotheses remain an explicit evidence gap or require a clarification before retrieval.\",\"enum\":[\"OBSERVED_ONLY\"]},"
-                + "\"why\":{\"type\":\"string\",\"description\":\"Use the candidate name, exact numbers from observations named in evidenceIds, and confirmed hard bounds. Never show an evidence ID, taxonomy, soft player context, or experience prediction here.\",\"minLength\":8,\"maxLength\":280},"
-                + "\"tradeoff\":{\"type\":\"string\",\"description\":\"State hard-bound proximity or what direct facts cannot establish. Soft player context such as newcomers may appear only as an explicit evidence gap, never as proven fit.\",\"minLength\":4,\"maxLength\":240},"
-                + "\"evidenceIds\":{\"type\":\"array\",\"description\":\"Candidate-scoped playerCount, durationMinutes, or complexity observations. Their numeric values appear in why; IDs never do. Taxonomy is shown elsewhere.\",\"minItems\":1,\"maxItems\":5,\"uniqueItems\":true,\"items\":{\"type\":\"string\"," + narrativeEvidenceConstraint + "}}"
-                + "},\"required\":[\"bggId\",\"narrativeMode\",\"why\",\"tradeoff\",\"evidenceIds\"]}";
+                + "\"narrativeMode\":{\"type\":\"string\",\"description\":\"Use cited numeric observations only; leave soft fit unproven.\",\"enum\":[\"OBSERVED_ONLY\"]},"
+                + "\"why\":{\"type\":\"string\",\"description\":\"Player-visible candidate name, exact cited numbers, and hard bounds. No IDs, taxonomy, soft context, or predicted experience.\",\"minLength\":8,\"maxLength\":280},"
+                + "\"tradeoff\":{\"type\":\"string\",\"description\":\"State hard-bound proximity or an unproven soft-fit gap, never proven fit.\",\"minLength\":4,\"maxLength\":240},"
+                + "\"internalEvidenceIds\":{\"type\":\"array\",\"description\":\"Machine-only candidate numeric observation IDs. Copy them only here; put values, not IDs, in why.\",\"minItems\":1,\"maxItems\":5,\"uniqueItems\":true,\"items\":{\"type\":\"string\"," + narrativeEvidenceConstraint + "}}"
+                + "},\"required\":[\"bggId\",\"narrativeMode\",\"why\",\"tradeoff\",\"internalEvidenceIds\"]}";
+        String shortfallProperty = shortfall == null ? "" : ",\"shortfall\":" + shortfallSchema(shortfall);
+        String required = shortfall == null
+                ? "[\"message\",\"selections\"]"
+                : "[\"message\",\"selections\",\"shortfall\"]";
+        String availabilityGuidance = shortfall == null
+                ? ""
+                : " The player requested " + shortfall.requestedCount()
+                        + " cards, but exactly " + shortfall.availableCount()
+                        + " hard-eligible IDs are available. Return every available ID once, never duplicate or pad. The message must plainly explain this shortfall. Fill shortfall with the exact counts and concrete direct-reply relaxation options only for its allowed subjects; never promise that relaxing one guarantees another result.";
         return new ToolSpec(
                 RECOMMEND_TOOL,
-                "Select recommendable IDs. Honor an explicit requested quantity; otherwise use the smallest useful set. narrativeMode is OBSERVED_ONLY. why uses exact numbers from cited observations and hard bounds, never evidence IDs, taxonomy, or soft context. tradeoff may mention soft context only as an evidence gap, never proven fit. selections is a native JSON array.",
+                "Return verified IDs: the requested count when available, otherwise every available ID once plus shortfall. internalEvidenceIds is machine-only. why uses cited numeric values and hard bounds; tradeoff keeps soft fit unproven."
+                        + availabilityGuidance,
                 "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"message\":{\"type\":\"string\",\"description\":\"Natural plain text synthesizing selected names, exact hard bounds, and any local unknown. Do not claim that taxonomy proves or matches the player's soft wish; do not use Markdown/list syntax.\",\"minLength\":1,\"maxLength\":600},\"referenceBggIds\":{\"type\":\"array\",\"description\":\"Omit unless the player named a comparison game. Never put selected candidates here.\",\"maxItems\":2,\"items\":{\"type\":\"integer\",\"minimum\":1}},\"selections\":{\"type\":\"array\",\"description\":\"Native JSON array of selection objects. Never return a string containing JSON.\",\"minItems\":"
                         + minimumResultCount
                         + ",\"maxItems\":"
                         + maximumResultCount
                         + ",\"uniqueItems\":true,\"items\":"
                         + selectionSchema
-                        + "},\"preferenceUpdates\":"
+                        + "}"
+                        + shortfallProperty
+                        + ",\"preferenceUpdates\":"
                         + preferenceSchema(preferenceEvidenceIds)
-                        + "},\"required\":[\"message\",\"selections\"]}");
+                        + "},\"required\":"
+                        + required
+                        + "}");
     }
+
+    private static String shortfallSchema(AvailabilityShortfall shortfall) {
+        int minimumOptions = shortfall.relaxableSubjects().isEmpty() ? 0 : 1;
+        int maximumOptions = Math.min(2, shortfall.relaxableSubjects().size());
+        String subjectConstraint = shortfall.relaxableSubjects().isEmpty()
+                ? "[]"
+                : jsonArray(shortfall.relaxableSubjects());
+        return "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{"
+                + "\"requestedCount\":{\"type\":\"integer\",\"enum\":[" + shortfall.requestedCount() + "]},"
+                + "\"availableCount\":{\"type\":\"integer\",\"enum\":[" + shortfall.availableCount() + "]},"
+                + "\"relaxationOptions\":{\"type\":\"array\",\"minItems\":" + minimumOptions
+                + ",\"maxItems\":" + maximumOptions
+                + ",\"uniqueItems\":true,\"items\":{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{"
+                + "\"subject\":{\"type\":\"string\",\"enum\":" + subjectConstraint + "},"
+                + "\"reply\":{\"type\":\"string\",\"description\":\"One short, concrete first-person reply the player can select to relax only this bound. Do not claim it guarantees another match.\",\"minLength\":4,\"maxLength\":120}},"
+                + "\"required\":[\"subject\",\"reply\"]}}},"
+                + "\"required\":[\"requestedCount\",\"availableCount\",\"relaxationOptions\"]}";
+    }
+
+    private record AvailabilityShortfall(
+            int requestedCount,
+            int availableCount,
+            List<String> relaxableSubjects) {}
 
     private static ToolSpec slateReplyAction() {
         return new ToolSpec(
@@ -715,12 +786,11 @@ final class RecommendationReActLoop {
         String evidenceEnum = evidenceEnum(preferenceEvidenceIds);
         return "{\"type\":\"array\",\"minItems\":1,\"maxItems\":5,\"items\":{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{"
                 + "\"field\":{\"type\":\"string\",\"enum\":[\"players\",\"playerCount\",\"durationMinutes\",\"complexity\",\"type\",\"interaction\"]},"
-                + "\"value\":{\"description\":\"A stated current group count N is exact: use field players with scalar N; it is stored as {minimum:N,maximum:N}. Use playerCount {minimum,maximum} only for an explicit range or endpoint; minimum N with null maximum requires the player to explicitly say at least N. Duration ceiling N is {minimum:null,maximum:N}, never {minimum:0,maximum:N}. Other numeric fields use ranges; null value clears an explicit limit. Result count is not players. A negated mode proves no other enum. Qualitative tastes stay conversational.\",\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":20},{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"minimum\":{\"type\":[\"number\",\"null\"]},\"maximum\":{\"type\":[\"number\",\"null\"]}},\"required\":[\"minimum\",\"maximum\"]},{\"type\":\"null\"},{\"type\":\"string\",\"enum\":[\"ALL\",\"ABSTRACT\",\"CUSTOMIZABLE\",\"CHILDREN\",\"FAMILY\",\"PARTY\",\"STRATEGY\",\"THEMATIC\",\"WAR\",\"EXPANSION\",\"ANY\",\"COMPETITIVE\",\"COOPERATIVE\",\"TEAM\"]}]},"
+                + "\"value\":{\"description\":\"players=N is an exact current group; playerCount is only an explicit range or endpoint. Duration ceiling N is {minimum:null,maximum:N}. Other numeric fields use ranges; null clears a limit. Result count and qualitative taste are not profile values.\",\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":20},{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"minimum\":{\"type\":[\"number\",\"null\"]},\"maximum\":{\"type\":[\"number\",\"null\"]}},\"required\":[\"minimum\",\"maximum\"]},{\"type\":\"null\"},{\"type\":\"string\",\"enum\":[\"ALL\",\"ABSTRACT\",\"CUSTOMIZABLE\",\"CHILDREN\",\"FAMILY\",\"PARTY\",\"STRATEGY\",\"THEMATIC\",\"WAR\",\"EXPANSION\",\"ANY\",\"COMPETITIVE\",\"COOPERATIVE\",\"TEAM\"]}]},"
                 + "\"evidence\":{\"type\":\"string\",\"description\":\"Use the exact evidenceId from the latest user message. A later explicit correction replaces currentProfile; never cite superseded evidence.\",\"enum\":"
                 + evidenceEnum
-                + "},\"evidenceStatus\":{\"type\":\"string\",\"enum\":[\"DIRECT\",\"CONTEXTUAL\"]},"
-                + "\"evidenceReason\":{\"type\":\"string\",\"enum\":[\"DIRECT\",\"COMPLETE_GROUP_INFERENCE\"]}},"
-                + "\"required\":[\"field\",\"value\",\"evidence\",\"evidenceStatus\",\"evidenceReason\"]}}";
+                + "},\"evidenceClassification\":{\"type\":\"string\",\"description\":\"One atomic classification. DIRECT means the cited user turn explicitly states this exact constraint. CONTEXTUAL_COMPLETE_GROUP is only a reversible exact player count inferred from a fully described whole group; never use a count that describes only a subgroup.\",\"enum\":[\"DIRECT\",\"CONTEXTUAL_COMPLETE_GROUP\"]}},"
+                + "\"required\":[\"field\",\"value\",\"evidence\",\"evidenceClassification\"]}}";
     }
 
     private static String clarificationPreferenceSchema(List<String> preferenceEvidenceIds) {
@@ -733,10 +803,10 @@ final class RecommendationReActLoop {
     }
 
     private static String evidenceEnum(List<String> preferenceEvidenceIds) {
-        List<String> evidenceIds = preferenceEvidenceIds.isEmpty()
+        List<String> allowedEvidenceIds = preferenceEvidenceIds.isEmpty()
                 ? List.of("NO_USER_EVIDENCE")
                 : preferenceEvidenceIds;
-        return evidenceIds.stream()
+        return allowedEvidenceIds.stream()
                 .map(value -> "\"" + value + "\"")
                 .collect(java.util.stream.Collectors.joining(",", "[", "]"));
     }
