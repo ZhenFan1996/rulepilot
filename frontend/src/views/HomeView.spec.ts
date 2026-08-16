@@ -48,6 +48,30 @@ describe('HomeView', () => {
 
   beforeEach(() => setLocale('zh-CN'))
 
+  it('explains one complete player journey before optional discovery data resolves', async () => {
+    vi.stubGlobal('fetch', vi.fn((input: string | URL | Request) => {
+      const path = String(input)
+      if (path.includes('/api/auth/session')) return Promise.resolve(new Response(null, { status: 401 }))
+      if (path.includes('/api/v1/bgg/recommendations')) return new Promise<Response>(() => undefined)
+      return Promise.resolve(new Response(null, { status: 404 }))
+    }))
+
+    const wrapper = await mountHome()
+    const journey = wrapper.get('[data-testid="home-player-journey"]')
+
+    expect(wrapper.text()).toContain('还没选游戏，就先说人数、时长和想要的互动')
+    expect(journey.get('h2').text()).toBe('从一句局况，到能开桌')
+    expect(journey.findAll('li')).toHaveLength(3)
+    expect(journey.findAll('h3').map(heading => heading.text())).toEqual([
+      '推荐：说清人数、时长和取舍',
+      '规则书：找到来源或上传，并核对版本',
+      '讲解 / 答疑：按引用开桌，遇到局面继续问',
+    ])
+    expect(wrapper.get('a[href="/teach"].home-primary-action')).toBeTruthy()
+    expect(wrapper.get('a[href="/discover"]')).toBeTruthy()
+    expect(wrapper.text()).not.toContain('Agent')
+  })
+
   it('uses the shared illustrated-hero composition for the two concrete first actions', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
       if (String(input).includes('/api/v1/bgg/recommendations')) return Response.json(hotGames)
@@ -101,6 +125,12 @@ describe('HomeView', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('Hand me the rulebook. Let’s get this game to the table.')
+    expect(wrapper.text()).toContain('If you have not picked a game yet, start with your player count, time, and the kind of interaction you want.')
+    expect(wrapper.get('[data-testid="home-player-journey"]').findAll('h3').map(heading => heading.text())).toEqual([
+      'Recommendation: describe the players, time, and tradeoffs',
+      'Rulebook: find or add the right edition, then confirm it',
+      'Guide and Q&A: play from cited sources and ask about the table',
+    ])
     expect(wrapper.text()).toContain('Trending on BGG')
     expect(wrapper.text()).toContain('Three from the shelf')
     expect(wrapper.text()).not.toContain('规则书递过来')

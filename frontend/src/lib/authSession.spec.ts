@@ -1,10 +1,12 @@
 import { describe, expect, it, vi } from 'vitest'
+import { createMemoryHistory, createRouter } from 'vue-router'
 
 import {
   LOGIN_REQUIRED_EVENT,
   SESSION_CLEARED_EVENT,
   notifyLoginRequired,
   notifySessionCleared,
+  safeKnownAuthReturnPath,
   safeAuthReturnPath,
   safeLoginReturnPath,
 } from './authSession'
@@ -42,6 +44,24 @@ describe('auth session UI policy', () => {
     expect(safeAuthReturnPath('/LOGIN/?redirect=/catalog')).toBeNull()
     expect(safeAuthReturnPath('/register#form')).toBeNull()
     expect(safeAuthReturnPath(['/account'])).toBeNull()
+  })
+
+  it('keeps only local return paths that resolve to a current application route', () => {
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: '/', name: 'home', component: { template: '<div />' } },
+        { path: '/lessons', name: 'lessons', component: { template: '<div />' } },
+        { path: '/login', name: 'login', component: { template: '<div />' } },
+        { path: '/:pathMatch(.*)*', name: 'not-found', component: { template: '<div />' } },
+      ],
+    })
+
+    expect(safeKnownAuthReturnPath(router, '/lessons?filter=pending#ready'))
+      .toBe('/lessons?filter=pending#ready')
+    expect(safeKnownAuthReturnPath(router, '/retired-player-area')).toBeNull()
+    expect(safeKnownAuthReturnPath(router, 'https://example.com')).toBeNull()
+    expect(safeKnownAuthReturnPath(router, '/login?redirect=/lessons')).toBeNull()
   })
 
   it('announces a completed logout so mounted private views can discard owner data', () => {

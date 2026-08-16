@@ -18,6 +18,7 @@ interface HotGame {
 }
 
 const { locale, t } = useLocale()
+const journeyStepKeys = ['home.journey.step1', 'home.journey.step2', 'home.journey.step3'] as const
 const hotGames = ref<HotGame[]>([])
 const gameError = ref<boolean | null>(null)
 const randomOffset = ref(0)
@@ -104,11 +105,6 @@ onBeforeUnmount(() => {
               <TabletopGlyph name="arrow" :size="17" />
             </RouterLink>
           </div>
-
-          <p class="home-intro__aside">
-            <span aria-hidden="true">✦</span>
-            {{ t('home.noSetup') }}
-          </p>
         </div>
 
         <figure class="home-intro__art" aria-hidden="true">
@@ -120,6 +116,17 @@ onBeforeUnmount(() => {
             fetchpriority="high"
           >
         </figure>
+      </section>
+
+      <section
+        class="player-board p-5 sm:p-8"
+        aria-labelledby="home-journey-title"
+        data-testid="home-player-journey"
+      >
+        <h2 id="home-journey-title" class="home-section-title">{{ t('home.journey.title') }}</h2>
+        <ol class="mt-6 grid list-decimal gap-4 pl-5 sm:grid-cols-3">
+          <li v-for="key in journeyStepKeys" :key="key"><h3 class="font-semibold leading-6">{{ t(key) }}</h3></li>
+        </ol>
       </section>
 
       <section class="home-hot" aria-labelledby="hot-games-title">
@@ -194,11 +201,6 @@ onBeforeUnmount(() => {
           </li>
         </ul>
       </section>
-
-      <footer class="home-coda">
-        <span class="home-coda__ornament" aria-hidden="true">❦</span>
-        <p>{{ t('home.footer') }}</p>
-      </footer>
     </div>
   </AppShell>
 </template>
@@ -248,18 +250,6 @@ onBeforeUnmount(() => {
   gap: 0.75rem;
   margin-top: 1.5rem;
 }
-
-.home-intro__aside {
-  display: flex;
-  gap: 0.5rem;
-  align-items: center;
-  margin: 1.25rem 0 0;
-  color: color-mix(in srgb, var(--color-ink) 48%, transparent);
-  font-size: 0.76rem;
-  line-height: 1.5;
-}
-
-.home-intro__aside span { color: var(--color-gold); }
 
 .home-intro__art {
   position: relative;
@@ -552,22 +542,6 @@ onBeforeUnmount(() => {
   color: rgb(255 250 240 / 48%);
   font-size: 0.68rem;
 }
-
-.home-coda {
-  display: grid;
-  max-width: 48rem;
-  justify-self: center;
-  gap: 0.65rem;
-  padding-bottom: 1rem;
-  text-align: center;
-  color: color-mix(in srgb, var(--color-ink) 50%, transparent);
-  font-family: var(--font-display);
-  font-size: 1rem;
-  line-height: 1.7;
-}
-
-.home-coda__ornament { color: var(--color-gold); font-size: 1.4rem; }
-.home-coda p { margin: 0; }
 
 @media (min-width: 640px) {
   .home-game-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }

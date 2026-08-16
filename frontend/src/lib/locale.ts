@@ -1080,10 +1080,13 @@ const messages = {
     'home.greeting': '新游戏带来了吗？',
     'home.greetingNamed': '{username}，新游戏带来了吗？',
     'home.title': '规则书递过来，咱们开桌。',
-    'home.description': '有 PDF 就直接上传，只有照片或游戏名也没关系。先把摆桌和第一轮讲明白，结束、计分和容易忘的限制留在手边。',
+    'home.description': '还没选游戏，就先说人数、时长和想要的互动；已经选好，就找到或上传对应版本的规则书。RulePilot 只用核对过的原页整理开桌讲解和桌边答疑。',
     'home.rulebookAction': '我有规则书',
     'home.discoverAction': '先挑一盒',
-    'home.noSetup': '不用先建游戏，也不用一次填完资料。',
+    'home.journey.title': '从一句局况，到能开桌',
+    'home.journey.step1': '推荐：说清人数、时长和取舍',
+    'home.journey.step2': '规则书：找到来源或上传，并核对版本',
+    'home.journey.step3': '讲解 / 答疑：按引用开桌，遇到局面继续问',
     'home.hotEyebrow': '桌游圈正在关注',
     'home.hotTitle': 'BGG 热门桌游',
     'home.hotHint': '热度只代表近期关注，不是“最适合你”的排名。',
@@ -1098,7 +1101,6 @@ const messages = {
     'home.unknownYear': '年份未知',
     'home.browseCatalog': '慢慢逛完整目录',
     'home.source': '桌游资料来自 BGG',
-    'home.footer': '讲解里每条规则结论，都能点回你确认的规则书页。',
   },
 } as const
 

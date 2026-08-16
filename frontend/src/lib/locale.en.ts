@@ -1074,10 +1074,13 @@ const englishMessages = {
     'home.greeting': 'Brought a new game?',
     'home.greetingNamed': '{username}, brought a new game?',
     'home.title': 'Hand me the rulebook. Let’s get this game to the table.',
-    'home.description': 'Got a PDF? Upload it. Photos or just the game name work too. We’ll start with setup and the first round, then keep scoring, end conditions, and easy-to-miss limits close at hand.',
+    'home.description': 'If you have not picked a game yet, start with your player count, time, and the kind of interaction you want. Already chose one? Add its rulebook. RulePilot uses checked source pages for a table-ready guide and cited Q&A.',
     'home.rulebookAction': 'I’ve got the rulebook',
     'home.discoverAction': 'Help me pick a game',
-    'home.noSetup': 'No need to set up a game entry or fill in every detail first.',
+    'home.journey.title': 'From one table brief to ready to play',
+    'home.journey.step1': 'Recommendation: describe the players, time, and tradeoffs',
+    'home.journey.step2': 'Rulebook: find or add the right edition, then confirm it',
+    'home.journey.step3': 'Guide and Q&A: play from cited sources and ask about the table',
     'home.hotEyebrow': 'What players are watching',
     'home.hotTitle': 'Trending on BGG',
     'home.hotHint': 'Hotness shows recent attention, not a ranking of what will suit you best.',
@@ -1092,7 +1095,6 @@ const englishMessages = {
     'home.unknownYear': 'Year unknown',
     'home.browseCatalog': 'Browse the full catalog',
     'home.source': 'Game data from BGG',
-    'home.footer': 'Every rule conclusion in a guide opens the rulebook page you confirmed.',
 } as const satisfies TranslationCatalog
 
 export default englishMessages

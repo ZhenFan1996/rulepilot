@@ -62,6 +62,7 @@ const progress = ref<Record<string, PlanProgress>>({})
 const progressErrors = ref<Record<string, string>>({})
 const loading = ref(true)
 const errorMessage = ref('')
+const loginRequired = ref(false)
 const launchingPlanId = ref('')
 const deletingPlanId = ref('')
 const cleanupLoading = ref(false)
@@ -103,6 +104,20 @@ let shellUsername = ''
 
 const startedPlanId = computed(() => typeof route.query.started === 'string' ? route.query.started : '')
 const startedRunId = computed(() => typeof route.query.run === 'string' ? route.query.run : '')
+const loginTarget = computed(() => ({ name: 'login', query: { redirect: route.fullPath } }))
+const signedOutCopy = computed(() => locale.value === 'zh-CN' ? {
+  pageTitle: '回到你的规则讲解',
+  pageDescription: '这里保存正在准备、已经可读和需要处理的讲解。登录后会回到当前地址。',
+  title: '登录后查看你的讲解',
+  description: '你的讲解和后台进度属于账户。登录后回到这里继续，不需要重新上传规则书。',
+  action: '登录后继续',
+} : {
+  pageTitle: 'Return to your rule guides',
+  pageDescription: 'This is where guides that are being prepared, ready to read, or need attention stay together. Sign in and return to this address.',
+  title: 'Sign in to view your guides',
+  description: 'Your guides and background progress belong to your account. Sign in to return here without adding the rulebook again.',
+  action: 'Sign in and continue',
+})
 const pendingCopy = computed(() => locale.value === 'zh-CN' ? {
   eyebrow: '已进入我的讲解', title: '正在准备的讲解',
   detail: '这些条目来自持久化下载、规则书读取或讲解准备任务；刷新、离开页面或换入口都不会丢失。',
@@ -314,7 +329,10 @@ function pendingPhaseLabel(phase: (typeof pendingJourneys.value)[number]['phase'
 async function checkedFetch(path: string, options?: Parameters<typeof fetch>[1]) {
   const response = await fetch(path, { credentials: 'include', ...options })
   if (response.status === 401) {
-    notifyLoginRequired()
+    if (!loginRequired.value) {
+      loginRequired.value = true
+      notifyLoginRequired({ showReminder: false })
+    }
     throw new Error(t('lessons.error.login'))
   }
   return response
@@ -780,22 +798,22 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <AppShell @session-identity="updateSessionIdentity">
+  <AppShell :login-action-owned="loginRequired" @session-identity="updateSessionIdentity">
     <section class="tabletop-page max-w-6xl">
       <p class="tabletop-kicker">{{ t('lessons.eyebrow') }}</p>
       <div class="mt-4 flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
         <div>
-          <h1 ref="pageHeading" tabindex="-1" class="font-display text-4xl font-semibold tracking-tight outline-none">{{ t('lessons.title') }}</h1>
-          <p class="mt-4 max-w-2xl leading-7 text-ink/55">{{ t('lessons.description') }}</p>
+          <h1 ref="pageHeading" tabindex="-1" class="font-display text-4xl font-semibold tracking-tight outline-none">{{ loginRequired ? signedOutCopy.pageTitle : t('lessons.title') }}</h1>
+          <p class="mt-4 max-w-2xl leading-7 text-ink/55">{{ loginRequired ? signedOutCopy.pageDescription : t('lessons.description') }}</p>
         </div>
         <div class="flex flex-wrap gap-2">
-          <button v-if="visiblePlans.length > 1" type="button" :disabled="cleanupLoading || Boolean(deletingPlanId)" class="inline-flex min-h-11 items-center justify-center rounded-lg border border-ink/15 px-4 text-sm font-semibold hover:border-copper/50 disabled:opacity-40" @click="requestCleanDuplicates">{{ cleanupLoading && !destructiveAction ? t('lessons.cleanup.loading') : t('lessons.cleanup.action') }}</button>
-          <RouterLink :to="{ name: 'teach' }" class="inline-flex min-h-11 items-center justify-center rounded-lg bg-copper px-4 text-sm font-semibold text-white">{{ t('lessons.upload') }}</RouterLink>
+          <button v-if="!loginRequired && visiblePlans.length > 1" type="button" :disabled="cleanupLoading || Boolean(deletingPlanId)" class="inline-flex min-h-11 items-center justify-center rounded-lg border border-ink/15 px-4 text-sm font-semibold hover:border-copper/50 disabled:opacity-40" @click="requestCleanDuplicates">{{ cleanupLoading && !destructiveAction ? t('lessons.cleanup.loading') : t('lessons.cleanup.action') }}</button>
+          <RouterLink v-if="!loginRequired" :to="{ name: 'teach' }" class="inline-flex min-h-11 items-center justify-center rounded-lg bg-copper px-4 text-sm font-semibold text-white">{{ t('lessons.upload') }}</RouterLink>
         </div>
       </div>
 
-      <p v-if="startedPlanId" class="mt-6 rounded-lg bg-indigo/5 px-4 py-3 text-sm text-indigo" role="status">{{ t('lessons.started') }}</p>
-      <p v-if="cleanupMessage" class="mt-6 rounded-lg bg-emerald-50 px-4 py-3 text-sm text-emerald-800" role="status">{{ cleanupMessage }}</p>
+      <p v-if="!loginRequired && startedPlanId" class="mt-6 rounded-lg bg-indigo/5 px-4 py-3 text-sm text-indigo" role="status">{{ t('lessons.started') }}</p>
+      <p v-if="!loginRequired && cleanupMessage" class="mt-6 rounded-lg bg-emerald-50 px-4 py-3 text-sm text-emerald-800" role="status">{{ cleanupMessage }}</p>
       <div v-if="visiblePlans.length" class="mt-6 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-ink/45">
         <p>{{ t('lessons.summary', { versions: visiblePlans.length, rulebooks: planGroups.length, readable: readableGroupCount }) }}</p>
         <button v-if="visiblePlans.length > planGroups.length" type="button" class="font-semibold text-indigo underline decoration-indigo-soft underline-offset-4 " @click="showingAllVersions ? hideAllVersions() : showAllVersions()">{{ showingAllVersions ? t('lessons.history.hide') : t('lessons.history.show', { count: visiblePlans.length }) }}</button>
@@ -807,7 +825,7 @@ onBeforeUnmount(() => {
         <button type="button" class="min-h-10 rounded-full px-4 text-sm font-semibold transition" :class="selectedPlanFilter === 'ALL' ? 'bg-ink text-paper' : 'border border-ink/15 text-ink/65 hover:border-ink/35'" :aria-pressed="selectedPlanFilter === 'ALL'" @click="planFilter = 'ALL'">{{ t('lessons.filter.all', { count: planGroups.length }) }}</button>
       </div>
 
-      <section v-if="!loading && !errorMessage && pendingJourneys.length" class="mt-8 rounded-2xl border border-indigo/20 bg-indigo/[0.035] p-5 sm:p-6" aria-live="polite" data-testid="pending-guide-journeys">
+      <section v-if="!loginRequired && !loading && !errorMessage && pendingJourneys.length" class="mt-8 rounded-2xl border border-indigo/20 bg-indigo/[0.035] p-5 sm:p-6" aria-live="polite" data-testid="pending-guide-journeys">
         <p class="text-xs font-bold uppercase tracking-[0.12em] text-indigo">{{ pendingCopy.eyebrow }}</p>
         <h2 class="mt-1 font-display text-2xl font-semibold">{{ pendingCopy.title }}</h2>
         <p class="mt-2 max-w-3xl text-sm leading-6 text-ink/55">{{ pendingCopy.detail }}</p>
@@ -836,7 +854,13 @@ onBeforeUnmount(() => {
         </ol>
       </section>
 
-      <div v-if="loading" class="mt-8 rounded-xl border border-ink/10 bg-paper p-8 text-ink/50" role="status">{{ t('lessons.loading') }}</div>
+      <section v-if="loginRequired" class="mt-8 rounded-2xl border border-indigo/20 bg-paper p-6 sm:p-8" data-testid="signed-out-guides-gate" aria-labelledby="signed-out-guides-title">
+        <h2 id="signed-out-guides-title" class="font-display text-2xl font-semibold">{{ signedOutCopy.title }}</h2>
+        <p class="mt-3 max-w-2xl text-sm leading-6 text-ink/60">{{ signedOutCopy.description }}</p>
+        <RouterLink :to="loginTarget" class="mt-5 inline-flex min-h-11 items-center justify-center rounded-lg bg-indigo px-5 font-semibold text-white">{{ signedOutCopy.action }}</RouterLink>
+      </section>
+
+      <div v-else-if="loading" class="mt-8 rounded-xl border border-ink/10 bg-paper p-8 text-ink/50" role="status">{{ t('lessons.loading') }}</div>
 
       <div v-else-if="errorMessage" class="mt-10 rounded-3xl border border-red-200 bg-red-50 p-6 text-red-800" role="alert">
         <p>{{ errorMessage }}</p>

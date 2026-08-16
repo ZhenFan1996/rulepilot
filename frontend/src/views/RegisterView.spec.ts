@@ -31,7 +31,7 @@ describe('RegisterView', () => {
     wrapper.unmount()
   })
 
-  it('does not expose or follow an authentication or external return path', async () => {
+  it('falls back to the player entry for an authentication or external return path', async () => {
     vi.stubGlobal('fetch', successfulRegistrationFetch())
     const router = memoryRouter()
     await router.push('/register?redirect=/login?redirect=https://example.com')
@@ -46,7 +46,7 @@ describe('RegisterView', () => {
     await wrapper.get('form').trigger('submit')
     await flushPromises()
 
-    expect(router.currentRoute.value.fullPath).toBe('/account')
+    expect(router.currentRoute.value.fullPath).toBe('/')
     wrapper.unmount()
   })
 
@@ -204,6 +204,7 @@ function memoryRouter() {
       { path: '/register', name: 'register', component: RegisterView },
       { path: '/login', name: 'login', component: { template: '<p>login</p>' } },
       { path: '/lessons', name: 'lessons', component: { template: '<p>lessons</p>' } },
+      { path: '/catalog', name: 'catalog', component: { template: '<p>catalog</p>' } },
       { path: '/account', name: 'account', component: { template: '<p>account</p>' } },
       { path: '/', name: 'home', component: { template: '<p>home</p>' } },
     ],

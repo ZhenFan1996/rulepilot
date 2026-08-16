@@ -562,6 +562,29 @@ describe('AppShell', () => {
     wrapper.unmount()
   })
 
+  it('leaves authentication recovery to one page-owned region when requested', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 401 })))
+    const router = createAppShellRouter()
+    await router.push('/lessons?filter=pending')
+    await router.isReady()
+    const wrapper = mount(AppShell, {
+      props: { loginActionOwned: true },
+      slots: {
+        default: '<a data-testid="owned-login-action" href="/login?redirect=/lessons?filter=pending">登录后继续</a>',
+      },
+      global: { plugins: [router] },
+    })
+    await flushPromises()
+
+    notifyLoginRequired()
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.findAll('a[href^="/login"]')).toHaveLength(1)
+    expect(wrapper.get('[data-testid="owned-login-action"]').text()).toBe('登录后继续')
+    expect(wrapper.text()).not.toContain('当前页面已保留')
+    wrapper.unmount()
+  })
+
   it('clears account-owned notices and the active route state after logout succeeds', async () => {
     const sessionCleared = vi.fn()
     window.addEventListener(SESSION_CLEARED_EVENT, sessionCleared)
@@ -644,6 +667,7 @@ function createAppShellRouter() {
     history: createMemoryHistory(),
     routes: [
       { path: '/', name: 'home', component: { template: '<div />' } },
+      { path: '/discover', name: 'game-recommendations', component: { template: '<div />' } },
       { path: '/library', name: 'public-library', component: { template: '<div />' } },
       { path: '/catalog', name: 'catalog', component: { template: '<div />' } },
       { path: '/teach', name: 'teach', component: { template: '<div />' } },

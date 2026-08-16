@@ -12,6 +12,34 @@ describe('LessonsView', () => {
     vi.useRealTimers()
   })
 
+  it('shows one route-owned sign-in recovery instead of reload and upload noise', async () => {
+    const loginRequired = vi.fn()
+    window.addEventListener(LOGIN_REQUIRED_EVENT, loginRequired)
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 401 })))
+    const router = createMemoryRouter()
+    await router.push('/lessons?filter=pending')
+    await router.isReady()
+    const wrapper = mount(LessonsView, {
+      global: { plugins: [router], stubs: { BackgroundWorkCenter: true } },
+    })
+    await flushPromises()
+
+    const gate = wrapper.get('[data-testid="signed-out-guides-gate"]')
+    expect(router.currentRoute.value.fullPath).toBe('/lessons?filter=pending')
+    expect(gate.get('h2').text()).toBe('登录后查看你的讲解')
+    expect(gate.text()).toContain('登录后回到这里')
+    expect(wrapper.findAll('a[href="/login?redirect=/lessons?filter=pending"]')).toHaveLength(1)
+    expect(wrapper.find('main a[href="/teach"]').exists()).toBe(false)
+    expect(wrapper.findAll('button').some(button => button.text() === '重新加载')).toBe(false)
+    expect(wrapper.text()).not.toContain('当前页面已保留')
+    expect(loginRequired).toHaveBeenCalled()
+    expect(loginRequired.mock.calls.every(([event]) =>
+      (event as CustomEvent).detail?.showReminder === false)).toBe(true)
+
+    window.removeEventListener(LOGIN_REQUIRED_EVENT, loginRequired)
+    wrapper.unmount()
+  })
+
   it('shows a persisted selected game before plan creation and replaces it with the real guide', async () => {
     vi.useFakeTimers()
     let planReads = 0

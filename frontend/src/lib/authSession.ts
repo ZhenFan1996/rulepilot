@@ -1,3 +1,5 @@
+import type { Router } from 'vue-router'
+
 export const LOGIN_REQUIRED_EVENT = 'rulepilot:login-required'
 export const SESSION_CLEARED_EVENT = 'rulepilot:session-cleared'
 const AUTH_RETURN_ORIGIN = 'https://rulepilot.invalid'
@@ -32,3 +34,16 @@ export function safeAuthReturnPath(value: unknown) {
 }
 
 export const safeLoginReturnPath = safeAuthReturnPath
+
+export function safeKnownAuthReturnPath(router: Pick<Router, 'resolve'>, value: unknown) {
+  const path = safeAuthReturnPath(value)
+  if (!path) return null
+
+  try {
+    const resolved = router.resolve(path)
+    if (resolved.matched.length === 0 || resolved.name === 'not-found') return null
+    return resolved.fullPath
+  } catch {
+    return null
+  }
+}
