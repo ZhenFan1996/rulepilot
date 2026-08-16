@@ -124,9 +124,15 @@ final class RecommendationActions {
             state.actions.add("RUN_DEADLINE_EXCEEDED");
             return ActionOutcome.terminal(runtime.unavailable(state, locale, "RUN_DEADLINE_EXCEEDED"));
         } catch (JsonProcessingException | InvalidAction exception) {
-            String code = exception instanceof InvalidAction invalid ? invalid.code : "INVALID_JSON";
+            InvalidAction invalid = exception instanceof InvalidAction value ? value : null;
+            String code = invalid == null ? "INVALID_JSON" : invalid.code;
             if (!ASK_TOOL.equals(call.name())) state.clarificationBlockedByExecutionFailure = true;
-            return rejected(state, code, invalidActionGuidance(code));
+            return rejected(
+                    state,
+                    code,
+                    invalid != null && invalid.guidance != null
+                            ? invalid.guidance
+                            : invalidActionGuidance(code));
         } catch (RuntimeException exception) {
             LOGGER.warn("Recommendation action {} failed ({})", call.name(), exception.getClass().getSimpleName());
             if (!ASK_TOOL.equals(call.name())) state.clarificationBlockedByExecutionFailure = true;
@@ -741,6 +747,18 @@ final class RecommendationActions {
         if (evidenceIds.stream().anyMatch(id -> !observations.containsKey(id))) {
             throw new InvalidAction("CANDIDATE_NARRATIVE_EVIDENCE_WRONG_CANDIDATE");
         }
+        List<String> visibleInternalIds = observations.keySet().stream()
+                .filter(id -> why.contains(id) || tradeoff.contains(id))
+                .sorted()
+                .limit(5)
+                .toList();
+        if (!visibleInternalIds.isEmpty()) {
+            throw new InvalidAction(
+                    "CANDIDATE_NARRATIVE_INTERNAL_EVIDENCE_ID_VISIBLE",
+                    "Remove internal evidence marker(s) from player-visible why/tradeoff: "
+                            + String.join(", ", visibleInternalIds)
+                            + ". Keep the evidenceIds array unchanged and keep the cited numeric values as natural prose. Do not replace the removed marker with taxonomy, play-feel, or fit claims.");
+        }
         List<CandidateObservation> citedEvidence = evidenceIds.stream().map(observations::get).toList();
         if (narrativeMode.isEmpty()) {
             return new BoardGameRecommendationSelector.CandidateNarrative(
@@ -758,8 +776,20 @@ final class RecommendationActions {
                         observation.attribute()))) {
             throw new InvalidAction("CANDIDATE_NARRATIVE_EVIDENCE_NOT_DIRECT_FIT");
         }
-        if (hasUngroundedNumericValue(why, game, visibleEvidence, state.profile)) {
-            throw new InvalidAction("CANDIDATE_NARRATIVE_NUMERIC_VALUE_UNGROUNDED");
+        List<BigDecimal> ungrounded = ungroundedNumericValues(
+                why,
+                game,
+                visibleEvidence,
+                state.profile);
+        if (!ungrounded.isEmpty()) {
+            String unsupported = ungrounded.stream()
+                    .limit(5)
+                    .map(value -> value.stripTrailingZeros().toPlainString())
+                    .collect(java.util.stream.Collectors.joining(", "));
+            throw new InvalidAction(
+                    "CANDIDATE_NARRATIVE_NUMERIC_VALUE_UNGROUNDED",
+                    "Unsupported numeric value(s) in why: " + unsupported
+                            + ". Keep cited candidate values and confirmed hard profile bounds. Remove only the unsupported number; do not rewrite the grounded explanation.");
         }
         if (visibleEvidence.size() < citedEvidence.size()) {
             state.actions.add("DROPPED_UNUSED_CANDIDATE_NARRATIVE_EVIDENCE");
@@ -791,7 +821,7 @@ final class RecommendationActions {
         return false;
     }
 
-    private boolean hasUngroundedNumericValue(
+    private List<BigDecimal> ungroundedNumericValues(
             String narrative,
             Game game,
             List<CandidateObservation> visibleEvidence,
@@ -808,7 +838,9 @@ final class RecommendationActions {
             grounded.add(new BigDecimal("5"));
         }
         return numericValues(narrative).stream()
-                .anyMatch(value -> grounded.stream().noneMatch(candidate -> candidate.compareTo(value) == 0));
+                .filter(value -> grounded.stream().noneMatch(candidate -> candidate.compareTo(value) == 0))
+                .distinct()
+                .toList();
     }
 
     private void addConfirmedProfileValues(
@@ -939,12 +971,14 @@ final class RecommendationActions {
                 "selections must be a native JSON array of selection objects. Never quote or JSON-encode the array as a string.";
             case "CANDIDATE_NARRATIVE_EVIDENCE_WRONG_CANDIDATE" ->
                 "Every candidate narrative evidenceId must come from that same selected game's observation map. Do not move evidence across candidates.";
+            case "CANDIDATE_NARRATIVE_INTERNAL_EVIDENCE_ID_VISIBLE" ->
+                "Evidence IDs belong only in evidenceIds. Remove them from player-visible why/tradeoff while preserving the natural cited values; do not add taxonomy or experience claims.";
             case "CANDIDATE_NARRATIVE_MODE_INVALID" ->
                 "Recommendation cards use OBSERVED_ONLY literal facts. Ask a candidate-changing clarification or state the local evidence gap instead of predicting table feel.";
             case "CANDIDATE_NARRATIVE_EVIDENCE_VALUE_NOT_VISIBLE" ->
                 "Show every cited candidate observation value in why. Natural range separators are allowed, but keep every number in the same order and omit an unused evidenceId.";
             case "CANDIDATE_NARRATIVE_NUMERIC_VALUE_UNGROUNDED" ->
-                "A number in why is neither present in the visible cited candidate observations nor a confirmed hard profile bound. Remove or correct only that unsupported number; do not rewrite the grounded explanation.";
+                "A number in why is neither present in visible cited candidate observations nor a confirmed hard profile bound. Remove or correct only that unsupported number; do not rewrite the grounded explanation.";
             case "CANDIDATE_NARRATIVE_EVIDENCE_NOT_DIRECT_FIT" ->
                 "Recommendation why may cite only this candidate's playerCount, durationMinutes, or complexity observations. Taxonomy is displayed separately and cannot justify a predicted experience.";
             case "PREFERENCE_EVIDENCE_NOT_GROUNDED" ->
@@ -1286,10 +1320,16 @@ final class RecommendationActions {
 
     static final class InvalidAction extends RuntimeException {
         final String code;
+        final String guidance;
 
         InvalidAction(String code) {
+            this(code, null);
+        }
+
+        InvalidAction(String code, String guidance) {
             super(code);
             this.code = code;
+            this.guidance = guidance;
         }
     }
 }
