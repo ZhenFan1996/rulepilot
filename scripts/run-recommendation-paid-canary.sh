@@ -52,6 +52,8 @@ elif [ "${RULEPILOT_RECOMMENDATION_CANARY_SCENARIO:-}" = "production-two-turn" ]
 	./mvnw -q '-Dtest=BoardGameRecommendationAgentPaidCanaryTest#preservesDirectBoundsAcrossTheProductionTwoTurnJourney' test
 elif [ "${RULEPILOT_RECOMMENDATION_CANARY_SCENARIO:-}" = "availability-shortfall" ]; then
 	./mvnw -q '-Dtest=BoardGameRecommendationAgentPaidCanaryTest#publishesAvailableCardsOnceWhenTheHardEligiblePoolIsSmallerThanTheRequestedCount' test
+elif [ "${RULEPILOT_RECOMMENDATION_CANARY_SCENARIO:-}" = "direct-target" ]; then
+	./mvnw -q '-Dtest=BoardGameRecommendationAgentPaidCanaryTest#publishesAPlayerNamedBilingualTargetInTheResolvingTurn' test
 else
 	./mvnw -q -Dtest=BoardGameRecommendationAgentPaidCanaryTest test
 fi

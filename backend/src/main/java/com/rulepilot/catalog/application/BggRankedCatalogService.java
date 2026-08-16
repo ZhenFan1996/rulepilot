@@ -149,31 +149,73 @@ public class BggRankedCatalogService implements BggRankedCatalog, BoardGameRecom
     @Override
     public List<BoardGameRecommendationCatalog.Game> resolveReferenceTitle(String title) {
         String checked = checkedSearch(title);
-        String normalized = normalizedTitle(checked);
-        Optional<RankedGame> localExact = repository
-                .find(new Query(checked, BggGameType.ALL, Sort.RANK, 0, 5, List.of()))
-                .games()
-                .stream()
-                .filter(game -> normalizedTitle(game.sourceName()).equals(normalized))
-                .findFirst();
-        if (localExact.isPresent()) {
-            return findGameById(localExact.orElseThrow().bggId()).map(List::of).orElseGet(List::of);
+        List<String> aliases = explicitReferenceAliases(checked);
+        LinkedHashMap<Integer, RankedGame> localExact = new LinkedHashMap<>();
+        for (String alias : aliases) {
+            String normalizedAlias = normalizedTitle(alias);
+            repository.find(new Query(alias, BggGameType.ALL, Sort.RANK, 0, 5, List.of())).games().stream()
+                    .filter(game -> normalizedTitle(game.sourceName()).equals(normalizedAlias))
+                    .findFirst()
+                    .ifPresent(game -> localExact.putIfAbsent(game.bggId(), game));
+        }
+        if (localExact.size() > 1) return List.of();
+        if (localExact.size() == 1) {
+            int bggId = localExact.keySet().iterator().next();
+            return findGameById(bggId).map(List::of).orElseGet(List::of);
         }
         if (!bgg.configured()) return List.of();
 
-        List<Integer> exactIds = bgg.search(checked).stream()
-                .filter(result -> normalizedTitle(result.name()).equals(normalized))
-                .map(BoardGameGeekCatalog.SearchResult::bggId)
-                .distinct()
-                .limit(2)
-                .toList();
+        LinkedHashSet<Integer> exactIds = new LinkedHashSet<>();
+        for (String alias : aliases) {
+            String normalizedAlias = normalizedTitle(alias);
+            bgg.search(alias).stream()
+                    .filter(result -> normalizedTitle(result.name()).equals(normalizedAlias))
+                    .map(BoardGameGeekCatalog.SearchResult::bggId)
+                    .limit(2)
+                    .forEach(exactIds::add);
+            if (exactIds.size() > 1) return List.of();
+        }
         if (exactIds.size() != 1) return List.of();
-        int bggId = exactIds.getFirst();
+        int bggId = exactIds.iterator().next();
         Optional<RankedGame> ranked = repository.findByIds(List.of(bggId)).stream().findFirst();
         GameDetails details = bgg.game(bggId);
         return List.of(ranked
                 .map(value -> recommendationGame(value, details))
                 .orElseGet(() -> recommendationGame(details)));
+    }
+
+    /**
+     * A player may write one title as an explicit localized/canonical pair. Each locally exact
+     * alias must point to one BGG identity; a canonical local match avoids a redundant remote
+     * search for the localized spelling.
+     */
+    private List<String> explicitReferenceAliases(String title) {
+        LinkedHashSet<String> aliases = new LinkedHashSet<>();
+        StringBuilder outside = new StringBuilder();
+        for (int index = 0; index < title.length(); index++) {
+            char current = title.charAt(index);
+            char closing = current == '(' ? ')' : current == '（' ? '）' : 0;
+            if (closing == 0) {
+                outside.append(current);
+                continue;
+            }
+            int end = title.indexOf(closing, index + 1);
+            if (end < 0) {
+                outside.append(current);
+                continue;
+            }
+            addReferenceAlias(aliases, title.substring(index + 1, end));
+            outside.append(' ');
+            index = end;
+        }
+        addReferenceAlias(aliases, outside.toString());
+        addReferenceAlias(aliases, title);
+        return List.copyOf(aliases);
+    }
+
+    private void addReferenceAlias(LinkedHashSet<String> aliases, String value) {
+        String checked = value == null ? "" : value.strip().replaceAll("\\s+", " ");
+        if (checked.length() >= 2 && checked.length() <= 120) aliases.add(checked);
     }
 
     @Override
