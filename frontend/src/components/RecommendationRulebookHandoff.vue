@@ -162,7 +162,23 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   login: '登录后即可保留这次选择并继续找规则书。', loginAction: '打开桌游详情并继续',
   error: '这一步暂时没有完成；推荐对话和已选桌游不会受影响。', partialFailure: '已生成的章节仍可阅读，但后台生成或核对没有完整结束。可以安全重试，现有内容不会丢失。', retry: '重试当前步骤', close: '关闭小窗', change: '换一款',
   safe: '可以关闭这个小窗继续聊天；下载、规则书处理和讲解生成会继续。',
-  progress: '完整链路进度', current: '现在正在做', generationSteps: '讲解生成步骤', pollingWarning: '暂时没有拿到最新进度，正在自动重试；已确认的进度不会倒退。',
+  progress: '完整链路进度', current: '现在正在做', generationSteps: '讲解生成步骤', generationLatest: '最新实际进度', generationProcessHint: '后台会按下面的顺序推进；进入逐章生成后，这四步会对每一章重复。', planning: '规划中', pollingWarning: '暂时没有拿到最新进度，正在自动重试；已确认的进度不会倒退。',
+  generationProcess: [
+    '通读整本规则书，形成整局认识并规划章节',
+    '读取每一章需要引用的规则书页面',
+    '依据原文编写玩家可以直接照做的讲解',
+    '校验引用、章节结构与数量边界，通过后逐章发布',
+  ],
+  generationFallback: {
+    queued: '讲解准备任务已排队，等待后台开始通读规则书',
+    readiness: '正在确认规则书页面已经可以用于讲解',
+    planning: '正在通读整本规则书，形成整局认识并规划讲解章节',
+    outlineReady: '讲解章节已经规划完成，正在载入章节目录',
+    writingQueued: '章节目录已经完成，正文生成正在排队',
+    writing: '逐章生成已经启动，正在等待第一条读取或编写进度',
+    readable: '已有章节可以阅读，后台正在继续生成和校验其余章节',
+    complete: '所有讲解章节已经生成并发布',
+  },
   gameBound: '桌游已绑定', rulebook: '获取规则书', document: '读取规则书', lesson: '生成讲解', questions: '进入答疑',
   readLesson: '打开已生成的讲解', askQuestions: '切换为规则答疑', catalog: '我的桌游',
   readRulebook: '先阅读原规则书', rulebookReady: '规则书已经可以阅读；讲解会继续在后台生成。', rulebookAvailable: '原规则书已就绪，可随时与讲解对照阅读。',
@@ -211,7 +227,23 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   login: 'Sign in to keep this selection and continue to its rulebook.', loginAction: 'Open game details and continue',
   error: 'This step did not complete. The conversation and selected game are unaffected.', partialFailure: 'Published chapters remain readable, but background generation or review did not finish. You can retry safely without losing existing content.', retry: 'Retry this step', close: 'Close', change: 'Choose another game',
   safe: 'You may close this panel and keep chatting. Download, rulebook processing, and guide generation will continue.',
-  progress: 'End-to-end progress', current: 'Working on', generationSteps: 'Guide generation steps', pollingWarning: 'The latest update is temporarily unavailable. Retrying automatically without rolling back confirmed progress.',
+  progress: 'End-to-end progress', current: 'Working on', generationSteps: 'Guide generation steps', generationLatest: 'Latest actual progress', generationProcessHint: 'The background task follows this order. Once chapter writing starts, these four steps repeat for each chapter.', planning: 'Planning', pollingWarning: 'The latest update is temporarily unavailable. Retrying automatically without rolling back confirmed progress.',
+  generationProcess: [
+    'Read the whole rulebook, form a whole-game view, and plan the chapters',
+    'Read the rulebook pages needed by each chapter',
+    'Write player-actionable guidance directly from the source',
+    'Check citations, chapter structure, and quantities, then publish each chapter',
+  ],
+  generationFallback: {
+    queued: 'Guide preparation is queued and waiting to start reading the rulebook',
+    readiness: 'Confirming that the rulebook pages are ready for guide generation',
+    planning: 'Reading the whole rulebook to form a whole-game view and plan the chapters',
+    outlineReady: 'The chapter plan is ready and its directory is being loaded',
+    writingQueued: 'The chapter directory is ready and chapter writing is queued',
+    writing: 'Chapter generation has started; waiting for the first page-reading or writing update',
+    readable: 'Some chapters are readable while the remaining chapters continue through writing and checks',
+    complete: 'All guide chapters have been generated and published',
+  },
   gameBound: 'Game linked', rulebook: 'Get rulebook', document: 'Read rules', lesson: 'Generate guide', questions: 'Start Q&A',
   readLesson: 'Open the generated guide', askQuestions: 'Switch to rules Q&A', catalog: 'My Games',
   readRulebook: 'Read the original rulebook now', rulebookReady: 'The rulebook is readable now while the guide continues in the background.', rulebookAvailable: 'The original rulebook is ready to compare with the guide at any time.',
@@ -398,6 +430,50 @@ const journeyTeachingSteps = computed(() => {
     locale.value,
   ).map(step => ({ ...step, key: `chapter-${step.sequence}` }))
   return [...preparationSteps, ...chapterSteps].slice(-6)
+})
+const teachingJourneyPhases = new Set([
+  'TEACHING_PREPARATION_QUEUED', 'TEACHING_PREPARING', 'LESSON_GENERATION_QUEUED',
+  'LESSON_GENERATING', 'LESSON_READABLE', 'LESSON_COMPLETE',
+])
+const showTeachingGenerationSteps = computed(() => teachingJourneyPhases.has(projection.value.phase))
+const visibleJourneyTeachingSteps = computed(() => {
+  if (journeyTeachingSteps.value.length) return journeyTeachingSteps.value
+  const phase = projection.value.phase
+  const preparationState = preparationRun.value?.run.state
+  let text = copy.value.generationFallback.queued
+  let outcome: TeachingActivity['outcome'] = 'RUNNING'
+  if (phase === 'TEACHING_PREPARING') {
+    text = preparationState === 'DOCUMENT_READINESS'
+      ? copy.value.generationFallback.readiness
+      : copy.value.generationFallback.planning
+  } else if (phase === 'LESSON_GENERATION_QUEUED') {
+    text = plan.value ? copy.value.generationFallback.writingQueued : copy.value.generationFallback.outlineReady
+  } else if (phase === 'LESSON_GENERATING') {
+    text = copy.value.generationFallback.writing
+  } else if (phase === 'LESSON_READABLE') {
+    text = copy.value.generationFallback.readable
+  } else if (phase === 'LESSON_COMPLETE') {
+    text = copy.value.generationFallback.complete
+    outcome = 'SUCCEEDED'
+  }
+  return [{ key: `phase-${phase}`, sequence: 0, outcome, text }]
+})
+const teachingProgressIsIndeterminate = computed(() => [
+  'TEACHING_PREPARATION_QUEUED', 'TEACHING_PREPARING',
+].includes(projection.value.phase))
+const journeyProgressLabel = computed(() => {
+  if (teachingProgressIsIndeterminate.value) return copy.value.planning
+  if (projection.value.phase.startsWith('LESSON_') && projection.value.totalSections) {
+    return copy.value.chapters(projection.value.availableSections, projection.value.totalSections)
+  }
+  return `${projection.value.progress}%`
+})
+const journeyProgressValue = computed(() => {
+  if (teachingProgressIsIndeterminate.value) return null
+  if (projection.value.phase.startsWith('LESSON_') && projection.value.totalSections) {
+    return Math.round(projection.value.availableSections / projection.value.totalSections * 100)
+  }
+  return projection.value.progress
 })
 const journeyStatus = computed<RecommendationJourneyStatus>(() => ({
   projection: projection.value,
@@ -1258,10 +1334,10 @@ onBeforeUnmount(() => {
             <p class="mt-1 text-xs leading-5 text-ink/55">{{ currentPhaseDetail }}</p>
             <p v-if="journeyDetail" class="mt-1 text-xs leading-5 text-ink/50">{{ journeyDetail }}</p>
           </div>
-          <span class="font-mono text-sm font-semibold text-copper">{{ projection.progress }}%</span>
+          <span class="text-right text-sm font-semibold text-copper" :class="journeyProgressValue === null ? '' : 'font-mono'">{{ journeyProgressLabel }}</span>
         </div>
-        <div class="mt-3 h-2 overflow-hidden rounded-full bg-copper/10" role="progressbar" :aria-label="copy.progress" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="projection.progress">
-          <div class="h-full rounded-full bg-copper transition-[width] duration-500" :style="{ width: `${projection.progress}%` }" />
+        <div v-if="journeyProgressValue !== null" class="mt-3 h-2 overflow-hidden rounded-full bg-copper/10" role="progressbar" :aria-label="copy.progress" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="journeyProgressValue">
+          <div class="h-full rounded-full bg-copper transition-[width] duration-500" :style="{ width: `${journeyProgressValue}%` }" />
         </div>
         <ol class="mt-4 grid grid-cols-2 gap-2 text-xs sm:grid-cols-5" :aria-label="copy.progress">
           <li v-for="milestone in milestones" :key="milestone.label" :data-fact-confirmed="milestone.done ? 'true' : 'false'" class="rounded-lg border px-2.5 py-2" :class="milestone.done ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : milestone.active ? 'border-copper/30 bg-copper/5 font-semibold text-copper' : 'border-ink/8 bg-paper text-ink/40'">
@@ -1269,16 +1345,28 @@ onBeforeUnmount(() => {
           </li>
         </ol>
         <section
-          v-if="journeyTeachingSteps.length"
+          v-if="showTeachingGenerationSteps"
           data-testid="recommendation-teaching-generation-steps"
           class="mt-4 rounded-xl border border-copper/15 bg-copper/5 px-4 py-3"
           :aria-label="copy.generationSteps"
           aria-live="polite"
         >
           <p class="text-xs font-bold uppercase tracking-[0.1em] text-copper">{{ copy.generationSteps }}</p>
+          <p class="mt-1 text-xs leading-5 text-ink/50">{{ copy.generationProcessHint }}</p>
+          <ol class="mt-3 grid gap-2 sm:grid-cols-2">
+            <li
+              v-for="(step, index) in copy.generationProcess"
+              :key="step"
+              class="flex items-start gap-2 rounded-lg border border-copper/10 bg-paper/70 px-3 py-2 text-xs leading-5 text-ink/65"
+            >
+              <span class="grid size-5 shrink-0 place-items-center rounded-full bg-copper/10 font-mono text-[10px] font-bold text-copper" aria-hidden="true">{{ index + 1 }}</span>
+              <span>{{ step }}</span>
+            </li>
+          </ol>
+          <p class="mt-3 text-[11px] font-bold uppercase tracking-[0.08em] text-ink/45">{{ copy.generationLatest }}</p>
           <ol class="mt-2 grid gap-2 sm:grid-cols-2">
             <li
-              v-for="step in journeyTeachingSteps"
+              v-for="step in visibleJourneyTeachingSteps"
               :key="step.key"
               class="flex items-start gap-2 text-xs leading-5 text-ink/65"
             >
