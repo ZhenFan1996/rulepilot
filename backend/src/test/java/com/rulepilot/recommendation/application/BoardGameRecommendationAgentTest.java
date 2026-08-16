@@ -45,39 +45,26 @@ import org.junit.jupiter.api.Test;
 class BoardGameRecommendationAgentTest {
 
     @Test
-    void returnsAPlayerNamedTargetAsASelectableRecommendationCard() {
+    void returnsAPlayerNamedTargetAsASelectableRecommendationCardInTheResolvingTurn() {
         TrackingCatalog catalog = catalog();
-        ScriptedModel model = new ScriptedModel(List.of(
-                request -> {
-                    assertThat(request.tools().stream()
-                                    .filter(tool -> BoardGameRecommendationAgent.RESOLVE_TOOL.equals(tool.name()))
-                                    .findFirst()
-                                    .orElseThrow()
-                                    .inputSchema())
-                            .contains(
-                                    "TARGET_GAME",
-                                    "COMPARISON_REFERENCE",
-                                    "DISCUSSION_SUBJECT",
-                                    "IDENTITY_ONLY");
-                    return action(
-                            "resolve-target",
-                            BoardGameRecommendationAgent.RESOLVE_TOOL,
-                            "{\"title\":\"Mosaic Field\",\"purpose\":\"TARGET_GAME\"}");
-                },
-                request -> {
-                    assertThat(request.tools()).extracting(tool -> tool.name())
-                            .containsExactly(BoardGameRecommendationAgent.RECOMMEND_TOOL);
-                    assertThat(request.messages().getLast().content())
-                            .contains(
-                                    "\"targetGameBggIds\":[50]",
-                                    "\"recommendableBggIds\":[50]")
-                            .doesNotContain("\"comparisonReferenceBggIds\":[50]");
-                    return action(
-                            "recommend-target",
-                            BoardGameRecommendationAgent.RECOMMEND_TOOL,
-                            "{\"message\":\"就是你指定的这款；信息已经核对，可以继续为它找规则书。\","
-                                    + "\"selections\":[{\"bggId\":50}]}");
-                }));
+        ScriptedModel model = new ScriptedModel(List.of(request -> {
+            String resolutionSchema = request.tools().stream()
+                    .filter(tool -> BoardGameRecommendationAgent.RESOLVE_TOOL.equals(tool.name()))
+                    .findFirst()
+                    .orElseThrow()
+                    .inputSchema();
+            assertThat(resolutionSchema).contains(
+                    "TARGET_GAME",
+                    "COMPARISON_REFERENCE",
+                    "DISCUSSION_SUBJECT",
+                    "IDENTITY_ONLY",
+                    "message");
+            return action(
+                    "resolve-target",
+                    BoardGameRecommendationAgent.RESOLVE_TOOL,
+                    "{\"title\":\"Mosaic Field\",\"purpose\":\"TARGET_GAME\","
+                            + "\"message\":\"就是你指定的这款；核对成功后可以继续为它找规则书。\"}");
+        }));
 
         var response = agent(model, catalog, noResearch()).converse(
                 new ConversationRequest(
@@ -93,6 +80,8 @@ class BoardGameRecommendationAgentTest {
         assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
         assertThat(response.games()).extracting(game -> game.game().ranking().bggId())
                 .containsExactly(50);
+        assertThat(response.assistantMessage()).isEqualTo("就是你指定的这款；核对成功后可以继续为它找规则书。");
+        assertThat(response.harness().modelCalls()).isEqualTo(1);
         assertThat(response.harness().actions()).containsExactly(
                 "RESOLVE_BGG_REFERENCE", "RECOMMEND_GAMES");
         assertThat(catalog.calls).isEqualTo(1);
@@ -1467,7 +1456,7 @@ class BoardGameRecommendationAgentTest {
     @Test
     void preservesPlayerAndDurationRangesAsAtomicGroundedPreferenceUpdates() {
         assertThat(BoardGameRecommendationAgent.PROMPT_VERSION)
-                .isEqualTo("recommendation-agent-v3-natural-contract");
+                .isEqualTo("recommendation-agent-v4-direct-target");
         assertThat(BoardGameRecommendationAgent.class.getResource(
                         "/prompts/recommendation-agent-v1-system.txt"))
                 .as("the production-replayed v1 prompt remains reproducible after activating v2")

@@ -63,6 +63,80 @@ class BoardGameRecommendationAgentPaidCanaryTest {
     private final ObjectMapper json = JsonMapper.builder().findAndAddModules().build();
 
     @Test
+    void publishesAPlayerNamedBilingualTargetInTheResolvingTurn() throws Exception {
+        assumeTrue("true".equalsIgnoreCase(System.getenv("RULEPILOT_RECOMMENDATION_PAID_CANARY")));
+        String provider = environment("RULEPILOT_RECOMMENDATION_CANARY_PROVIDER", "qwen")
+                .toLowerCase(Locale.ROOT);
+        String prefix = provider.toUpperCase(Locale.ROOT);
+        Capture capture = new Capture(provider, environment(prefix + "_MODEL", null));
+        BoardGameRecommendationModel model = model(
+                provider,
+                environment(prefix + "_API_KEY", null),
+                environment(prefix + "_BASE_URL", null),
+                environment(prefix + "_MODEL", null),
+                capture);
+        var properties = new BoardGameRecommendationProperties(
+                8, 3, new BigDecimal("0.66"), Duration.ofSeconds(30));
+        var agent = new BoardGameRecommendationAgent(
+                model,
+                new BoardGameRecommendationTools(new CanaryCatalog(), noResearch()),
+                new BoardGameRecommendationSelector(properties),
+                properties,
+                json);
+
+        List<Map<String, Object>> visibleTurns = new ArrayList<>();
+        try {
+            String requestText = "我今晚已经决定玩河市集（River Market），第一次开桌。请直接帮我找到这款，不要换成相似游戏；找到后我想接着读规则书、听讲解，再问几个问题。";
+            List<KnownGame> knownGames = List.of(
+                    new KnownGame(102, "Signal Grove", "Signal Grove"),
+                    new KnownGame(103, "Clockwork Gallery", "Clockwork Gallery"),
+                    new KnownGame(104, "Lantern Route", "Lantern Route"),
+                    new KnownGame(105, "Harbor Chorus", "Harbor Chorus"));
+            long started = System.nanoTime();
+            var response = agent.converse(
+                    new ConversationRequest(
+                            RecommendationProfile.empty(),
+                            requestText,
+                            List.of(),
+                            List.of(new DialogueMessage("user", requestText)),
+                            null,
+                            knownGames,
+                            knownGames.stream().map(KnownGame::bggId).toList()),
+                    "zh-CN");
+            visibleTurns.add(visible("bilingual-direct-target", response, elapsed(started)));
+
+            assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
+            assertThat(response.games())
+                    .singleElement()
+                    .satisfies(entry -> assertThat(entry.game().ranking().bggId()).isEqualTo(101));
+            assertThat(response.harness().modelCalls())
+                    .as("verified target identity and its player-facing card belong to one Agent turn")
+                    .isEqualTo(1);
+            assertThat(response.harness().actions())
+                    .containsSubsequence("RESTORE_KNOWN_BGG_CANDIDATES", "RESOLVE_BGG_REFERENCE", "RECOMMEND_GAMES")
+                    .noneMatch(action -> action.equals("RUN_DEADLINE_EXCEEDED")
+                            || action.startsWith("FALLBACK_")
+                            || action.startsWith("REJECTED_"));
+            assertThat(response.harness().fallbackUsed()).isFalse();
+
+            ToolCall raw = capture.lastToolCall();
+            assertThat(raw.name()).isEqualTo(BoardGameRecommendationAgent.RESOLVE_TOOL);
+            JsonNode arguments = json.readTree(raw.argumentsJson());
+            assertThat(arguments.path("purpose").asText()).isEqualTo("TARGET_GAME");
+            assertThat(arguments.path("message").asText().strip())
+                    .isNotBlank()
+                    .isEqualTo(response.assistantMessage());
+
+            writeArtifact(capture, visibleTurns, null);
+        } catch (Throwable failure) {
+            writeArtifact(capture, visibleTurns, failure.getClass().getSimpleName());
+            throw failure;
+        } finally {
+            agent.stopBoundedCalls();
+        }
+    }
+
+    @Test
     void preservesDirectBoundsAcrossTheProductionTwoTurnJourney() throws Exception {
         assumeTrue("true".equalsIgnoreCase(System.getenv("RULEPILOT_RECOMMENDATION_PAID_CANARY")));
         String provider = environment("RULEPILOT_RECOMMENDATION_CANARY_PROVIDER", "qwen")
@@ -1137,9 +1211,13 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                     game(161533, "Lisboa", 1, 4, 60, 120, "4.6", List.of("Strategy"), List.of("Area Majority / Influence", "Hand Management"), List.of("Vital Lacerda")));
             games = values.stream().collect(java.util.stream.Collectors.toUnmodifiableMap(
                     value -> value.ranking().bggId(), value -> value));
-            names = values.stream().collect(java.util.stream.Collectors.toUnmodifiableMap(
-                    value -> value.ranking().sourceName().toLowerCase(Locale.ROOT),
-                    value -> value.ranking().bggId()));
+            Map<String, Integer> indexedNames = new LinkedHashMap<>();
+            values.forEach(value -> indexedNames.put(
+                    value.ranking().sourceName().toLowerCase(Locale.ROOT),
+                    value.ranking().bggId()));
+            indexedNames.put("河市集", 101);
+            indexedNames.put("河市集（river market）", 101);
+            names = Map.copyOf(indexedNames);
             this.candidateIds = List.copyOf(candidateIds);
         }
 

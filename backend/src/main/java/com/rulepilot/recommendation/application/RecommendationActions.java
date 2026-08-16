@@ -107,7 +107,7 @@ final class RecommendationActions {
             return switch (call.name()) {
                 case REPLY_TOOL -> reply(arguments, state, request, locale);
                 case ASK_TOOL -> ask(arguments, state, request, locale);
-                case RESOLVE_TOOL -> resolve(arguments, state, request, progress);
+                case RESOLVE_TOOL -> resolve(arguments, state, request, locale, progress);
                 case SEARCH_TOOL -> search(arguments, state, request, progress);
                 case BROWSE_TOOL -> browse(arguments, state, request, progress);
                 case DISCOVER_TOOL -> discover(arguments, state, request, locale, progress);
@@ -277,8 +277,9 @@ final class RecommendationActions {
             JsonNode arguments,
             RecommendationAgentState state,
             ConversationRequest request,
+            String locale,
             Consumer<ProgressStage> progress) {
-        requireObject(arguments, Set.of("title", "purpose"), Set.of("preferenceUpdates"));
+        requireObject(arguments, Set.of("title", "purpose"), Set.of("message", "preferenceUpdates"));
         String title = text(arguments.path("title"), 1, 160);
         if (!playerAuthoredTitle(request, title)) {
             throw new InvalidAction("REFERENCE_TITLE_NOT_GROUNDED");
@@ -300,6 +301,28 @@ final class RecommendationActions {
             result.games().stream()
                     .map(game -> game.ranking().bggId())
                     .forEach(id -> state.assignNamedGameRole(id, purpose));
+            Game resolved = result.games().getFirst();
+            int resolvedId = resolved.ranking().bggId();
+            if (purpose == NamedGamePurpose.TARGET_GAME
+                    && runtime.recommendableIds(state).contains(resolvedId)) {
+                String message = text(
+                        arguments.path("message"), 1, MAX_RECOMMENDATION_MESSAGE_CHARACTERS);
+                progress.accept(ProgressStage.COMPOSING_RESPONSE);
+                state.actions.add("RECOMMEND_GAMES");
+                List<RecommendedGame> games = selector.present(
+                        List.of(resolved),
+                        state.profile,
+                        List.of(),
+                        runtime.chinese(locale),
+                        state.research);
+                return ActionOutcome.terminal(response(
+                        Outcome.RECOMMENDATIONS,
+                        message,
+                        state,
+                        locale,
+                        null,
+                        games));
+            }
         }
         return ActionOutcome.observation(runtime.observation(Map.of(
                 "status", result.resolved() ? "SUCCESS" : result.status().name(),

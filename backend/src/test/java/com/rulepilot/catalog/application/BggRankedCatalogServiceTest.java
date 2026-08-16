@@ -95,6 +95,35 @@ class BggRankedCatalogServiceTest {
         assertThat(bgg.searchQueries).containsExactly("白塔庭院");
     }
 
+    @Test
+    void resolvesOneExplicitBilingualTitlePairThroughItsLocallyRankedCanonicalAlias() {
+        MemoryRepository repository = new MemoryRepository();
+        FakeBgg bgg = new FakeBgg();
+        BggRankedCatalogService service = new BggRankedCatalogService(repository, bgg);
+
+        var result = service.resolveReferenceTitle("白塔庭院（Game 20）");
+
+        assertThat(result).singleElement().satisfies(game -> {
+            assertThat(game.ranking().bggId()).isEqualTo(20);
+            assertThat(game.ranking().sourceName()).isEqualTo("Game 20");
+        });
+        assertThat(bgg.searchQueries)
+                .as("an explicit canonical alias already present in the ranked catalog needs no remote title search")
+                .isEmpty();
+    }
+
+    @Test
+    void rejectsAnExplicitTitlePairWhenItsAliasesResolveToDifferentGames() {
+        MemoryRepository repository = new MemoryRepository();
+        FakeBgg bgg = new FakeBgg();
+        BggRankedCatalogService service = new BggRankedCatalogService(repository, bgg);
+
+        var result = service.resolveReferenceTitle("Game 10（Game 20）");
+
+        assertThat(result).isEmpty();
+        assertThat(bgg.searchQueries).isEmpty();
+    }
+
     private static final class MemoryRepository implements BggRankedCatalogRepository {
         private Query query;
 
