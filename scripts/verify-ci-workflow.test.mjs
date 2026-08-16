@@ -7,6 +7,10 @@ const deploymentWorkflow = await readFile(
   new URL('../.github/workflows/deploy-production.yml', import.meta.url),
   'utf8',
 )
+const productionAvailabilityScript = await readFile(
+  new URL('./verify-production-availability.mjs', import.meta.url),
+  'utf8',
+)
 const productionCompose = await readFile(new URL('../infra/compose.production.yml', import.meta.url), 'utf8')
 const productionScript = await readFile(new URL('./run-production.sh', import.meta.url), 'utf8')
 const playwrightConfig = await readFile(new URL('../frontend/playwright.config.ts', import.meta.url), 'utf8')
@@ -87,94 +91,24 @@ test('production deployment synchronizes the protected BGG credential without pa
   assert.doesNotMatch(deploymentWorkflow, /'bash -s' -- "\$DEPLOY_PATH" "\$BGG_API_TOKEN"/)
 })
 
-test('production deployment verifies live BGG recommendations and detail enrichment', () => {
-  assert.match(deploymentWorkflow, /\/api\/v1\/bgg\/recommendations/)
-  assert.match(deploymentWorkflow, /\/api\/v1\/bgg\/games\/\$\{firstGame\.bggId\}\?locale=zh-CN/)
-  assert.match(deploymentWorkflow, /typeof game\.descriptionTranslated !== 'boolean'/)
-  assert.match(deploymentWorkflow, /Array\.isArray\(game\.categories\)/)
-  assert.match(deploymentWorkflow, /Array\.isArray\(game\.mechanics\)/)
+test('production deployment uses the standalone deterministic availability verification', () => {
+  assert.match(deploymentWorkflow, /name: Verify public release availability/)
+  assert.match(deploymentWorkflow, /node scripts\/verify-production-availability\.mjs/)
+  assert.match(productionAvailabilityScript, /\/api\/v1\/bgg\/recommendations/)
+  assert.match(productionAvailabilityScript, /\/api\/v1\/bgg\/games\/\$\{firstGame\.bggId\}\?locale=zh-CN/)
+  assert.match(productionAvailabilityScript, /typeof game\.descriptionTranslated !== 'boolean'/)
+  assert.match(productionAvailabilityScript, /Array\.isArray\(game\.categories\)/)
+  assert.match(productionAvailabilityScript, /Array\.isArray\(game\.mechanics\)/)
 })
 
-test('production deployment enables and exercises the bounded recommendation Agent', () => {
-  assert.match(deploymentWorkflow, /BGG_RECOMMENDATION_PROVIDER=spring-ai/)
-  assert.match(deploymentWorkflow, /BGG_RECOMMENDATION_WEB_RESEARCH_ENABLED=true/)
-  assert.match(deploymentWorkflow, /BGG_RECOMMENDATION_WEB_RESEARCH_TIMEOUT=PT25S/)
-  assert.match(deploymentWorkflow, /BGG_RECOMMENDATION_MODEL_CANDIDATE_LIMIT=8/)
-  assert.match(deploymentWorkflow, /\/api\/v1\/bgg\/recommendation-agent\/stream\?locale=zh-CN/)
-  assert.match(deploymentWorkflow, /accept: 'text\/event-stream'/)
-  assert.match(deploymentWorkflow, /name: Load protected production verification account/)
-  assert.match(deploymentWorkflow, /read_value RULEPILOT_USER_USERNAME/)
-  assert.match(deploymentWorkflow, /read_value RULEPILOT_USER_PASSWORD/)
-  assert.match(deploymentWorkflow, /RULEPILOT_VERIFY_USERNAME/)
-  assert.match(deploymentWorkflow, /RULEPILOT_VERIFY_PASSWORD/)
-  assert.match(deploymentWorkflow, /const authorization = 'Basic '/)
-  assert.equal(deploymentWorkflow.match(/^\s+authorization,$/gm)?.length, 2)
-  assert.match(deploymentWorkflow, /payload\.message \?\? payload\.code/)
-  assert.doesNotMatch(deploymentWorkflow, /echo "\$verify_password"/)
-  assert.match(deploymentWorkflow, /firstProgressMillis > 5_000/)
-  assert.match(deploymentWorkflow, /totalMillis > 35_000/)
-  assert.match(deploymentWorkflow, /openingStreamed\.totalMillis/)
-  assert.match(deploymentWorkflow, /streamed\.totalMillis/)
-  assert.match(deploymentWorkflow, /BGG_RECOMMENDATION_AGENT_TIMEOUT=PT30S/)
-  assert.match(deploymentWorkflow, /AbortSignal\.timeout\(45_000\)/)
-  assert.match(deploymentWorkflow, /RUN_DEADLINE_EXCEEDED/)
-  assert.match(deploymentWorkflow, /hasBudgetDegradation/)
-  assert.match(deploymentWorkflow, /outcome === 'unavailable'/)
-  assert.match(deploymentWorkflow, /action\.startsWith\('FALLBACK_VERIFIED_CARDS:'\)/)
-  assert.match(deploymentWorkflow, /attempt <= 1/)
-  assert.doesNotMatch(deploymentWorkflow, /attempt <= 3/)
-  assert.match(deploymentWorkflow, /QWEN_MODEL=qwen3\.7-plus/)
-  assert.match(deploymentWorkflow, /WEB_SEARCH_MODEL=qwen3\.7-plus/)
-  assert.match(deploymentWorkflow, /QWEN_VISION_CAPABLE=true/)
-  assert.match(deploymentWorkflow, /RULEBOOK_DISCOVERY_MODEL=qwen3\.7-max/)
-  assert.match(deploymentWorkflow, /RULEBOOK_DISCOVERY_HOURLY_LIMIT=30/)
-  assert.match(
-    deploymentWorkflow,
-    /const openingPrompt = '嗨，今晚五个人聚会，最近合作玩得有点腻，但我还没想清楚换什么方向。你会先怎么帮我挑？'/,
-  )
-  assert.match(deploymentWorkflow, /openingResult = openingStreamed\.result/)
-  assert.match(deploymentWorkflow, /\{ role: 'assistant', text: openingResult\.assistantMessage \}/)
-  assert.match(deploymentWorkflow, /knownGames: openingGames\.map/)
-  assert.match(deploymentWorkflow, /shownBggIds: openingGames\.map/)
-  assert.match(
-    deploymentWorkflow,
-    /const recommendationPrompt = '我想换成能谈判、互相骗一骗的；有两个新手，90 分钟内。你直接挑三款吧。'/,
-  )
-  assert.match(deploymentWorkflow, /message: recommendationPrompt/)
-  assert.match(deploymentWorkflow, /\{ role: 'user', text: recommendationPrompt \}/)
-  assert.doesNotMatch(deploymentWorkflow, /transcript: \[\{ role: 'user', text: recommendationPrompt \}\]/)
-  assert.doesNotMatch(deploymentWorkflow, /4 人，60 分钟，想玩合作游戏/)
-  assert.match(deploymentWorkflow, /RECOMMEND_GAMES/)
-  assert.match(deploymentWorkflow, /SEARCH_BGG_CATALOG/)
-  assert.match(deploymentWorkflow, /const hasNaturalCandidateNarrative/)
-  assert.match(deploymentWorkflow, /reason\?\.kind === 'preference_inference'/)
-  assert.match(deploymentWorkflow, /game\?\.tradeoffs/)
-  assert.match(deploymentWorkflow, /const requestedCount = 3/)
-  assert.match(deploymentWorkflow, /const fulfilledRequestedCount/)
-  assert.match(deploymentWorkflow, /shortfall == null/)
-  assert.match(deploymentWorkflow, /const disclosedAvailabilityShortfall/)
-  assert.match(deploymentWorkflow, /shortfall\?\.requestedCount === requestedCount/)
-  assert.match(deploymentWorkflow, /shortfall\?\.availableCount === agentResult\.games\.length/)
-  assert.match(deploymentWorkflow, /agentResult\.clarification\?\.prompt === agentResult\.assistantMessage/)
-  assert.match(deploymentWorkflow, /agentResult\.clarification\.options\.length > 0/)
-  assert.match(deploymentWorkflow, /agentActions\.includes\('RECOMMENDATION_AVAILABILITY_SHORTFALL'\)/)
-  assert.match(deploymentWorkflow, /const deliveredRequestedOrExplainedShortfall/)
-  assert.match(deploymentWorkflow, /!deliveredRequestedOrExplainedShortfall/)
-  assert.doesNotMatch(deploymentWorkflow, /agentResult\.games\.length !== 3/)
-  assert.match(deploymentWorkflow, /const preservedHardPreferences/)
-  assert.match(deploymentWorkflow, /playerCount\?\.minimum === 5/)
-  assert.match(deploymentWorkflow, /playerCount\?\.maximum === 5/)
-  assert.match(deploymentWorkflow, /durationMinutes\?\.maximum === 90/)
-  assert.match(deploymentWorkflow, /!preservedHardPreferences/)
-  assert.match(deploymentWorkflow, /outcome: agentResult\.outcome/)
-  assert.match(deploymentWorkflow, /actions: Array\.isArray\(agentActions\)/)
-  assert.doesNotMatch(deploymentWorkflow, /COMPOSE_RECOMMENDATIONS/)
-  assert.doesNotMatch(deploymentWorkflow, /RANK_STRUCTURED_CANDIDATES/)
-  assert.doesNotMatch(deploymentWorkflow, /MODEL_SELECT_TOOLS/)
-  assert.match(
-    deploymentWorkflow,
-    /const completedRecommendation = Array\.isArray\(agentActions\)\s*&& agentActions\.includes\('RECOMMEND_GAMES'\)/,
-  )
+test('production deployment does not couple release availability to a stochastic paid Agent review', () => {
+  assert.doesNotMatch(deploymentWorkflow, /recommendation-agent\/stream/)
+  assert.doesNotMatch(deploymentWorkflow, /Load protected production verification account/)
+  assert.doesNotMatch(deploymentWorkflow, /RULEPILOT_VERIFY_USERNAME|RULEPILOT_VERIFY_PASSWORD/)
+  assert.doesNotMatch(deploymentWorkflow, /hasNaturalCandidateNarrative/)
+  assert.doesNotMatch(deploymentWorkflow, /RECOMMENDATION_AVAILABILITY_SHORTFALL/)
+  assert.doesNotMatch(deploymentWorkflow, /我想换成能谈判|今晚五个人聚会/)
+  assert.doesNotMatch(productionAvailabilityScript, /recommendation-agent|authorization|paid model/i)
 })
 
 test('production deployment captures bounded API diagnostics without reading protected environment values', () => {
@@ -204,7 +138,7 @@ test('production deployment reclaims only inactive releases and restores current
 test('production deployment keeps long SSH activation sessions alive', () => {
   const activationStep = deploymentWorkflow.slice(
     deploymentWorkflow.indexOf('- name: Activate release and verify production health'),
-    deploymentWorkflow.indexOf('- name: Verify public browser and API path'),
+    deploymentWorkflow.indexOf('- name: Verify public release availability'),
   )
   assert.match(activationStep, /-o ConnectTimeout=20/)
   assert.match(activationStep, /-o ServerAliveInterval=30/)
