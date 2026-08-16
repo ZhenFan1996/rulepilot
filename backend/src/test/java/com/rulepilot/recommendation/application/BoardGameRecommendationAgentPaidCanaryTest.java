@@ -56,6 +56,63 @@ class BoardGameRecommendationAgentPaidCanaryTest {
     private final ObjectMapper json = JsonMapper.builder().findAndAddModules().build();
 
     @Test
+    void honorsAnExplicitResultCountWithGroundedNaturalCards() throws Exception {
+        assumeTrue("true".equalsIgnoreCase(System.getenv("RULEPILOT_RECOMMENDATION_PAID_CANARY")));
+        String provider = environment("RULEPILOT_RECOMMENDATION_CANARY_PROVIDER", "qwen")
+                .toLowerCase(Locale.ROOT);
+        String prefix = provider.toUpperCase(Locale.ROOT);
+        Capture capture = new Capture(provider, environment(prefix + "_MODEL", null));
+        BoardGameRecommendationModel model = model(
+                provider,
+                environment(prefix + "_API_KEY", null),
+                environment(prefix + "_BASE_URL", null),
+                environment(prefix + "_MODEL", null),
+                capture);
+        var properties = new BoardGameRecommendationProperties(
+                8, 3, new BigDecimal("0.66"), Duration.ofSeconds(30));
+        var agent = new BoardGameRecommendationAgent(
+                model,
+                new BoardGameRecommendationTools(new CanaryCatalog(), noResearch()),
+                new BoardGameRecommendationSelector(properties),
+                properties,
+                json);
+
+        List<Map<String, Object>> visibleTurns = new ArrayList<>();
+        try {
+            String request = "我们 3 到 4 个人，想找 30 到 60 分钟、复杂度不超过 3.0 的桌游。请给我三款，并具体说清适合点和代价。";
+            long started = System.nanoTime();
+            var response = agent.converse(
+                    new ConversationRequest(RecommendationProfile.empty(), request),
+                    "zh-CN");
+            visibleTurns.add(visible("explicit-count-opening", response, elapsed(started)));
+
+            assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
+            assertThat(response.games()).hasSize(3).allSatisfy(entry -> {
+                Details details = entry.game().details();
+                assertThat(details.minPlayers()).isLessThanOrEqualTo(3);
+                assertThat(details.maxPlayers()).isGreaterThanOrEqualTo(4);
+                assertThat(details.minimumPlayTimeMinutes()).isGreaterThanOrEqualTo(30);
+                assertThat(details.maximumPlayTimeMinutes()).isLessThanOrEqualTo(60);
+                assertThat(details.averageWeight()).isLessThanOrEqualTo(new BigDecimal("3.0"));
+                assertThat(entry.reasons().getFirst().kind())
+                        .isEqualTo(BoardGameRecommendationAgent.ReasonKind.PREFERENCE_INFERENCE);
+                assertThat(entry.reasons().getFirst().text()).hasSizeGreaterThanOrEqualTo(20);
+                assertThat(entry.tradeoffs()).isNotEmpty();
+            });
+            assertThat(response.harness().actions()).contains("SEARCH_BGG_CATALOG", "RECOMMEND_GAMES");
+            assertThat(response.harness().fallbackUsed()).isFalse();
+            assertThat(response.harness().modelCalls()).isLessThanOrEqualTo(3);
+
+            writeArtifact(capture, visibleTurns, null);
+        } catch (Throwable failure) {
+            writeArtifact(capture, visibleTurns, failure.getClass().getSimpleName());
+            throw failure;
+        } finally {
+            agent.stopBoundedCalls();
+        }
+    }
+
+    @Test
     void keepsHardGatesAndNaturalTradeoffsAcrossOneCorrection() throws Exception {
         assumeTrue("true".equalsIgnoreCase(System.getenv("RULEPILOT_RECOMMENDATION_PAID_CANARY")));
         String provider = environment("RULEPILOT_RECOMMENDATION_CANARY_PROVIDER", "qwen")

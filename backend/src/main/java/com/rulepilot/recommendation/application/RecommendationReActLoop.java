@@ -472,6 +472,9 @@ final class RecommendationReActLoop {
                                 && (BROWSE_TOOL.equals(action.name()) || DISCOVER_TOOL.equals(action.name())))
                 .map(action -> RECOMMEND_TOOL.equals(action.name())
                         ? recommendationAction(
+                                state.explicitRecommendationCount == null
+                                        ? 1
+                                        : state.explicitRecommendationCount,
                                 state.maximumRecommendationResults,
                                 recommendableIds,
                                 recommendableNarrativeEvidenceIds(state, recommendableIds),
@@ -624,7 +627,7 @@ final class RecommendationReActLoop {
                         "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"bggIds\":{\"type\":\"array\",\"minItems\":1,\"maxItems\":5,\"items\":{\"type\":\"integer\",\"minimum\":1}},\"question\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":300}},\"required\":[\"bggIds\",\"question\"]}"),
                 comparisonAction(List.of(), List.of()),
                 noMatchAction(List.of()),
-                recommendationAction(maximumResultCount, List.of(), List.of(), preferenceEvidenceIds));
+                recommendationAction(1, maximumResultCount, List.of(), List.of(), preferenceEvidenceIds));
     }
 
     private static ToolSpec comparisonAction(
@@ -664,6 +667,7 @@ final class RecommendationReActLoop {
     }
 
     private static ToolSpec recommendationAction(
+            int minimumResultCount,
             int maximumResultCount,
             List<Integer> recommendableIds,
             List<String> narrativeEvidenceIds,
@@ -683,8 +687,10 @@ final class RecommendationReActLoop {
                 + "},\"required\":[\"bggId\",\"narrativeMode\",\"why\",\"tradeoff\",\"evidenceIds\"]}";
         return new ToolSpec(
                 RECOMMEND_TOOL,
-                "Select from runMemory.recommendableBggIds. Honor an explicit requested quantity or use the smallest useful set. narrativeMode is OBSERVED_ONLY. In why, use only the candidate name plus exact candidate-scoped playerCount, durationMinutes, or complexity values; stop before taxonomy or the player's soft wish. In tradeoff, state the hard-bound proximity or the local evidence gap, never a hypothesis. selections must be a native JSON array.",
-                "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"message\":{\"type\":\"string\",\"description\":\"Natural plain text synthesizing selected names, exact hard bounds, and any local unknown. Do not claim that taxonomy proves or matches the player's soft wish; do not use Markdown/list syntax.\",\"minLength\":1,\"maxLength\":600},\"referenceBggIds\":{\"type\":\"array\",\"description\":\"Omit unless the player named a comparison game. Never put selected candidates here.\",\"maxItems\":2,\"items\":{\"type\":\"integer\",\"minimum\":1}},\"selections\":{\"type\":\"array\",\"description\":\"Native JSON array of selection objects. Never return a string containing JSON.\",\"minItems\":1,\"maxItems\":"
+                "Select from runMemory.recommendableBggIds. Honor an explicit requested quantity exactly as required by schema, or use the smallest useful set. narrativeMode is OBSERVED_ONLY. In why, use only the candidate name plus exact candidate-scoped playerCount, durationMinutes, or complexity values; stop before taxonomy or the player's soft wish. In tradeoff, state the hard-bound proximity or the local evidence gap, never a hypothesis. selections must be a native JSON array.",
+                "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"message\":{\"type\":\"string\",\"description\":\"Natural plain text synthesizing selected names, exact hard bounds, and any local unknown. Do not claim that taxonomy proves or matches the player's soft wish; do not use Markdown/list syntax.\",\"minLength\":1,\"maxLength\":600},\"referenceBggIds\":{\"type\":\"array\",\"description\":\"Omit unless the player named a comparison game. Never put selected candidates here.\",\"maxItems\":2,\"items\":{\"type\":\"integer\",\"minimum\":1}},\"selections\":{\"type\":\"array\",\"description\":\"Native JSON array of selection objects. Never return a string containing JSON.\",\"minItems\":"
+                        + minimumResultCount
+                        + ",\"maxItems\":"
                         + maximumResultCount
                         + ",\"uniqueItems\":true,\"items\":"
                         + selectionSchema

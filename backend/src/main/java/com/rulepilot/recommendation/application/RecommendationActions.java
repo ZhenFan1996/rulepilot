@@ -427,9 +427,12 @@ final class RecommendationActions {
         int limit = arguments.has("limit")
                 ? integer(arguments.path("limit"), 1, MAX_VERIFIED_GAMES, "LIMIT_OUT_OF_RANGE")
                 : Math.min(properties.modelCandidateLimit(), MAX_VERIFIED_GAMES);
+        int eligibilityLimit = state.explicitRecommendationCount == null
+                ? limit
+                : Math.max(limit, state.explicitRecommendationCount);
         Set<Integer> unavailableCandidateIds = new LinkedHashSet<>(state.excludedIds);
         unavailableCandidateIds.addAll(state.previouslyShownIds);
-        int requestedCandidateCount = Math.max(limit, properties.resultCount());
+        int requestedCandidateCount = Math.max(eligibilityLimit, properties.resultCount());
         int catalogLimit = Math.min(
                 runtime.maximumRecommendationResults(),
                 requestedCandidateCount
@@ -444,7 +447,7 @@ final class RecommendationActions {
         state.actions.add("SEARCH_BGG_CATALOG");
         state.sourceCount = Math.max(state.sourceCount, result.sourceCount());
         List<Game> eligible = result.succeeded()
-                ? selector.eligible(result.games(), state.profile, unavailableCandidateIds, limit)
+                ? selector.eligible(result.games(), state.profile, unavailableCandidateIds, eligibilityLimit)
                 : List.of();
         eligible.forEach(state::addVerified);
         return ActionOutcome.observation(runtime.observation(Map.of(
@@ -591,7 +594,10 @@ final class RecommendationActions {
         if (!selections.isArray()) {
             throw new InvalidAction("SELECTIONS_ARRAY_REQUIRED");
         }
-        if (selections.isEmpty() || selections.size() > state.maximumRecommendationResults) {
+        if (selections.isEmpty()
+                || selections.size() > state.maximumRecommendationResults
+                || (state.explicitRecommendationCount != null
+                        && selections.size() != state.explicitRecommendationCount)) {
             throw new InvalidAction("SELECTION_COUNT_INVALID");
         }
         List<Game> selected = new ArrayList<>();
@@ -619,7 +625,8 @@ final class RecommendationActions {
             selected.add(game);
             BoardGameRecommendationSelector.CandidateNarrative narrative = validatedCandidateNarrative(
                     selection,
-                    game);
+                    game,
+                    state);
             if (narrative != null) narratives.put(id, narrative);
             if (selection.has("preferenceLink")) {
                 try {
@@ -686,12 +693,24 @@ final class RecommendationActions {
             state.actions.add("PRESERVED_GROUNDED_RECOMMENDATION_WITH_MARKUP");
             return message;
         }
+        if (issue.get() == PlayerFacingMessagePolicy.Issue.INCOMPLETE
+                && everyCandidateHasGroundedNarrative
+                && endsWithCardConnector(message)) {
+            state.actions.add("PRESERVED_GROUNDED_RECOMMENDATION_CONNECTIVE");
+            return message;
+        }
         throw new InvalidAction("PLAYER_MESSAGE_" + issue.get().name());
+    }
+
+    private static boolean endsWithCardConnector(String message) {
+        String checked = message.strip();
+        return checked.endsWith(":") || checked.endsWith("：");
     }
 
     private BoardGameRecommendationSelector.CandidateNarrative validatedCandidateNarrative(
             JsonNode selection,
-            Game game) {
+            Game game,
+            RecommendationAgentState state) {
         boolean hasNarrative = selection.has("why")
                 || selection.has("tradeoff")
                 || selection.has("evidenceIds")
@@ -722,23 +741,30 @@ final class RecommendationActions {
         if (evidenceIds.stream().anyMatch(id -> !observations.containsKey(id))) {
             throw new InvalidAction("CANDIDATE_NARRATIVE_EVIDENCE_WRONG_CANDIDATE");
         }
-        if (!narrativeMode.isEmpty()
-                && evidenceIds.stream()
-                        .map(observations::get)
-                        .anyMatch(observation -> !RECOMMENDATION_NARRATIVE_SUBJECTS.contains(
-                                observation.attribute()))) {
+        List<CandidateObservation> citedEvidence = evidenceIds.stream().map(observations::get).toList();
+        if (narrativeMode.isEmpty()) {
+            return new BoardGameRecommendationSelector.CandidateNarrative(
+                    why,
+                    tradeoff,
+                    citedEvidence);
+        }
+        List<CandidateObservation> visibleEvidence = citedEvidence.stream()
+                .filter(observation -> why.contains(observation.value()))
+                .toList();
+        if (visibleEvidence.isEmpty()) {
+            throw new InvalidAction("CANDIDATE_NARRATIVE_EVIDENCE_VALUE_NOT_VISIBLE");
+        }
+        if (visibleEvidence.stream().anyMatch(observation -> !RECOMMENDATION_NARRATIVE_SUBJECTS.contains(
+                        observation.attribute()))) {
             throw new InvalidAction("CANDIDATE_NARRATIVE_EVIDENCE_NOT_DIRECT_FIT");
         }
-        if (!narrativeMode.isEmpty()
-                && evidenceIds.stream()
-                        .map(observations::get)
-                        .anyMatch(observation -> !why.contains(observation.value()))) {
-            throw new InvalidAction("CANDIDATE_NARRATIVE_EVIDENCE_VALUE_NOT_VISIBLE");
+        if (visibleEvidence.size() < citedEvidence.size()) {
+            state.actions.add("DROPPED_UNUSED_CANDIDATE_NARRATIVE_EVIDENCE");
         }
         return new BoardGameRecommendationSelector.CandidateNarrative(
                 why,
                 tradeoff,
-                evidenceIds.stream().map(observations::get).toList());
+                visibleEvidence);
     }
 
     private BoardGameRecommendationSelector.PreferenceLink validatedPreferenceLink(
