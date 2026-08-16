@@ -499,6 +499,56 @@ class SpringAiVisualRulebookPageCatalogModelTest {
     }
 
     @Test
+    void repairsAnInvalidTeachingLedgerOnceWithTheConfiguredQualityModel() throws IOException {
+        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        ChatModel chatModel = mock(ChatModel.class);
+        OpenAiChatOptions defaults = OpenAiChatOptions.builder().model("qwen3.7-plus").build();
+        when(configuration.usesFake(Role.VISUAL, "owner")).thenReturn(false);
+        when(configuration.supportsVision(Role.VISUAL, "owner")).thenReturn(true);
+        when(configuration.providerFor(Role.VISUAL, "owner")).thenReturn("qwen");
+        when(configuration.modelNameFor(Role.VISUAL, "owner")).thenReturn("qwen3.7-plus");
+        when(configuration.modelFor(Role.VISUAL, "owner")).thenReturn(chatModel);
+        when(chatModel.getDefaultOptions()).thenReturn(defaults);
+        when(chatModel.getOptions()).thenReturn(defaults);
+        when(chatModel.call(any(Prompt.class))).thenReturn(
+                response("""
+                        {"pages":[{"pageNumber":1,"printedTerms":["MOVE"],
+                         "factualSummary":["MOVEMENT: Move one pawn."],"keywords":["move"],
+                         "sourceDependencies":[],"ruleGroupIdentifiers":["MOVE"],
+                         "ruleGroupInventoryComplete":true,"quantityObservations":[]}]}
+                        """),
+                response("""
+                        {"pages":[{"pageNumber":1,"printedTerms":["MOVE"],
+                         "factualSummary":["MOVE: Move one pawn."],"keywords":["move"],
+                         "sourceDependencies":[],"ruleGroupIdentifiers":["MOVE"],
+                         "ruleGroupInventoryComplete":true,"quantityObservations":[]}]}
+                        """));
+        SpringAiVisualRulebookPageCatalogModel model = model(configuration);
+
+        CatalogDraft repaired = model.summarizeForTeaching(new CatalogRequest(
+                List.of(new PageImageInput(1, "image/png", png())), "owner", "Example Game"));
+
+        assertThat(repaired.pages()).singleElement().satisfies(page ->
+                assertThat(page.factualSummary()).isEqualTo("MOVE: Move one pawn."));
+        ArgumentCaptor<Prompt> prompts = ArgumentCaptor.forClass(Prompt.class);
+        verify(chatModel, times(2)).call(prompts.capture());
+        OpenAiChatOptions initialOptions = (OpenAiChatOptions) prompts.getAllValues().getFirst().getOptions();
+        OpenAiChatOptions repairOptions = (OpenAiChatOptions) prompts.getAllValues().getLast().getOptions();
+        assertThat(initialOptions.getModel()).isEqualTo("qwen3.6-flash");
+        assertThat(initialOptions.getMaxTokens()).isEqualTo(3_200);
+        assertThat(repairOptions.getModel()).isEqualTo("qwen3.7-plus");
+        assertThat(repairOptions.getMaxTokens()).isEqualTo(4_800);
+        assertThat(prompts.getAllValues().getLast().getInstructions().stream()
+                        .map(message -> message.getText().replaceAll("\\s+", " "))
+                        .toList())
+                .anySatisfy(text -> assertThat(text).contains(
+                        "previous ledger failed deterministic contract validation",
+                        "every literal ruleGroupIdentifiers value",
+                        "PER_VARIANT requires a visible non-empty variantAxis",
+                        "omit that optional observation while retaining its directly visible rule statement"));
+    }
+
+    @Test
     void preservesEveryExplicitNonTargetModelInsteadOfSilentlyReplacingIt() {
         assertThat(SpringAiVisualRulebookPageCatalogModel.teachingStartupModelName("qwen", "qwen3.6-plus"))
                 .isEqualTo("qwen3.6-plus");
@@ -1107,6 +1157,10 @@ class SpringAiVisualRulebookPageCatalogModelTest {
                 new ClassPathResource("prompts/visual-identifier-cell-v1-system.txt"),
                 new ClassPathResource("prompts/visual-identifier-reference-match-v1-system.txt"),
                 4_800);
+    }
+
+    private ChatResponse response(String content) {
+        return new ChatResponse(List.of(new Generation(new AssistantMessage(content))));
     }
 
     private static String teachingCatalogWithDependency(String dependency) {

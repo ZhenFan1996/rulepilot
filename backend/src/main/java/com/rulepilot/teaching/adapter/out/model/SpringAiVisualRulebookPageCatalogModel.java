@@ -70,6 +70,17 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
     private static final String QWEN_BALANCED_VISUAL_MODEL = "qwen3.7-plus";
     private static final String QWEN_FAST_VISUAL_MODEL = "qwen3.6-flash";
     private static final int MAX_FACTUAL_SUMMARY_CHARACTERS = 4_000;
+    private static final String TEACHING_CONTRACT_REPAIR = """
+            The previous ledger failed deterministic contract validation. Reinspect the attached pages and return one
+            complete replacement JSON object. Before returning it, verify both invariants: (1) every literal
+            ruleGroupIdentifiers value has a non-empty factualSummary line beginning with that exact value followed
+            by a colon; do not drop a visible rule group merely to make the arrays agree; (2) every
+            quantityObservations item is internally complete. PER_VARIANT requires a visible non-empty variantAxis
+            and perVariantQuantity; TOTAL requires only derivedTotal; REQUIRES_PAGE_INSPECTION requires UNRESOLVED
+            with all numeric fields null. If a quantitative relation cannot satisfy one of those shapes, omit that
+            optional observation while retaining its directly visible rule statement. Return every supplied page and
+            the exact original field set as JSON only.
+            """;
     private static final Set<String> QUANTITY_OBSERVATION_FIELDS = Set.of(
             "pageNumber",
             "ruleGroupIdentifier",
@@ -269,7 +280,19 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
         if (models.usesFake(Role.VISUAL, owner) || !models.supportsVision(Role.VISUAL, owner)) {
             return fake.summarizeForTeaching(request);
         }
-        return normalizeTeachingPageBindings(request, summarizeTeachingOnce(request, owner));
+        RuntimeException firstFailure;
+        try {
+            return normalizeTeachingPageBindings(request, summarizeTeachingOnce(request, owner, ""));
+        } catch (RuntimeException failure) {
+            firstFailure = failure;
+        }
+        try {
+            return normalizeTeachingPageBindings(
+                    request, summarizeTeachingOnce(request, owner, TEACHING_CONTRACT_REPAIR));
+        } catch (RuntimeException failure) {
+            failure.addSuppressed(firstFailure);
+            throw failure;
+        }
     }
 
     @Override
@@ -299,13 +322,15 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
                 provider, teachingStartupModelName(provider, configuredModel)));
     }
 
-    private CatalogDraft summarizeTeachingOnce(CatalogRequest request, String owner) {
+    private CatalogDraft summarizeTeachingOnce(CatalogRequest request, String owner, String contractRepair) {
         ChatClient.ChatClientRequestSpec prompt = ChatClient.create(models.modelFor(Role.VISUAL, owner)).prompt();
         String provider = models.providerFor(Role.VISUAL, owner);
         if ("qwen".equals(provider)) {
+            String configuredModel = models.modelNameFor(Role.VISUAL, owner);
+            boolean repairing = !contractRepair.isBlank();
             prompt = prompt.options(qwenJsonOptions(
-                    teachingStartupModelName(provider, models.modelNameFor(Role.VISUAL, owner)),
-                    Math.min(3_200, maxCompletionTokens)));
+                    repairing ? configuredModel : teachingStartupModelName(provider, configuredModel),
+                    Math.min(repairing ? 4_800 : 3_200, maxCompletionTokens)));
         }
         String content = prompt.system(teachingStartupPrompt)
                 .user(user -> {
@@ -318,11 +343,13 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
                                     ruleGroupIdentifiers, ruleGroupInventoryComplete, and quantityObservations. Keep every fact,
                                     rule-group identifier, and external-source dependency bound to the exact attached
                                     page on which it is visibly supported.
+                                    Additional contract-repair instructions: {contractRepair}
                                     """)
                             .param("pageNumbers", request.pages().stream().map(PageImageInput::pageNumber).toList())
                             .param("rulebookTitle", request.rulebookTitle() == null
                                     ? "not supplied; use only what is visible on each page"
                                     : request.rulebookTitle())
+                            .param("contractRepair", contractRepair)
                             .param("attachmentOrder", java.util.stream.IntStream.range(0, request.pages().size())
                                     .mapToObj(index -> "image " + (index + 1) + " = PDF page "
                                             + request.pages().get(index).pageNumber())
