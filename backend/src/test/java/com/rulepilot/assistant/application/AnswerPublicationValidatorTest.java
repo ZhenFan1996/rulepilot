@@ -10,6 +10,7 @@ import com.rulepilot.assistant.RuleAnswerModel.ModelDraft;
 import com.rulepilot.assistant.domain.AnswerBasis;
 import com.rulepilot.assistant.domain.AnswerConfidence;
 import com.rulepilot.assistant.domain.RuleWalkthroughStep;
+import com.rulepilot.assistant.domain.RuleExceptionClause;
 import com.rulepilot.assistant.domain.WalkthroughOrderBasis;
 import com.rulepilot.retrieval.VisualTranscribedRuleEvidence;
 import com.rulepilot.retrieval.evidence.HybridEvidenceHit;
@@ -128,6 +129,34 @@ class AnswerPublicationValidatorTest {
             assertThat(citation.excerpt()).isEqualTo("每张已完成的目标卡得 2 分。");
             assertThat(citation.excerpt()).doesNotContain("Visual-transcribed", "Do not derive", "Visible rule facts");
         });
+    }
+
+    @Test
+    void preservesLegacyAndStructuredExceptionDetailsInsteadOfForcingAWholeDraftRewrite() {
+        AnswerPublicationValidator validator = new AnswerPublicationValidator(verified());
+        ModelDraft draft = new ModelDraft(
+                "按规则执行。",
+                "满足列出的条件后执行该规则。",
+                List.of(chunkId),
+                List.of("扩展内容可能另有例外。"),
+                "HIGH");
+        RuleExceptionClause structured = new RuleExceptionClause(
+                "效果处于激活状态时",
+                "不能再创建同名效果。",
+                List.of(chunkId));
+
+        var answer = validator.publish(
+                versionId,
+                draft,
+                List.of(evidence(versionId)),
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(structured));
+
+        assertThat(answer.exceptions()).containsExactly("扩展内容可能另有例外。");
+        assertThat(answer.exceptionClauses()).containsExactly(structured);
     }
 
     @Test

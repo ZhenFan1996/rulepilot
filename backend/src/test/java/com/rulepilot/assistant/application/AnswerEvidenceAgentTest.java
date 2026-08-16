@@ -114,6 +114,36 @@ class AnswerEvidenceAgentTest {
     }
 
     @Test
+    void acceptsNaturalTerminalProseAfterAnExactPageRead() {
+        HybridEvidenceHit initial = hit(UUID.randomUUID(), "Movement", "Move one space.");
+        RuleEvidenceHit observed = source(UUID.randomUUID(), "Payment", "Pay after movement.");
+        RunResult naturalCompletion = new RunResult(
+                RunStatus.COMPLETED,
+                "The exact page now covers the remaining timing condition.",
+                "MODEL_COMPLETED",
+                2,
+                1,
+                List.of(observation(observed.chunkId())));
+        AnswerEvidenceAgent agent = new AnswerEvidenceAgent(
+                fixedAgent(naturalCompletion),
+                (documentVersionId, ids) -> List.of(observed),
+                scopes(),
+                limiter(mock(Permit.class)));
+
+        var result = agent.refine(
+                runId,
+                question("Can I move, and when do I pay?"),
+                new QuestionContext(versionId),
+                "player",
+                null,
+                multiObligationPlan(),
+                ready(initial));
+
+        assertThat(result.evidence()).extracting(hit -> hit.evidence().chunkId())
+                .contains(observed.chunkId(), initial.evidence().chunkId());
+    }
+
+    @Test
     void preservesExactPageEvidenceFromARecoverablePartialRun() {
         HybridEvidenceHit initial = hit(UUID.randomUUID(), "Movement", "Move one space.");
         RuleEvidenceHit observed = source(UUID.randomUUID(), "Payment", "Pay after movement.");
@@ -222,6 +252,7 @@ class AnswerEvidenceAgentTest {
                 "search_rule_relationships",
                 "read_visual_page_facts");
         assertThat(captured.get().requiredToolsBeforeCompletion()).isEmpty();
+        assertThat(captured.get().requiredTerminalText()).isEmpty();
         assertThat(captured.get().playerRequest())
                 .contains("evidence needs: ", "RELATIONSHIP", "VISUAL_REFERENCE");
         verify(permit).close();
@@ -257,6 +288,60 @@ class AnswerEvidenceAgentTest {
                 "multiplier",
                 "worked example",
                 "consistency check");
+        verify(permit).close();
+    }
+
+    @Test
+    void completesACompleteListRefinementAsSoonAsTheExactPageAuditSucceeds() {
+        AtomicReference<RunRequest> captured = new AtomicReference<>();
+        Permit permit = mock(Permit.class);
+        AnswerEvidenceAgent agent = new AnswerEvidenceAgent(
+                capturingFallbackAgent(captured), emptyLookup(), scopes(), limiter(permit));
+
+        agent.refine(
+                runId,
+                question("What are the two ways to win?"),
+                new QuestionContext(versionId),
+                "player",
+                null,
+                plan(Set.of(EvidenceNeed.DIRECT_RULE, EvidenceNeed.COMPLETE_LIST)),
+                ready(hit(UUID.randomUUID(), "Victory", "Win by reaching 30 points or completing a card.")));
+
+        assertThat(captured.get().requiredToolsBeforeCompletion()).containsExactly("read_rule_pages");
+        assertThat(captured.get().requiredTerminalText()).isEmpty();
+        verify(permit).close();
+    }
+
+    @Test
+    void doesNotTreatOneExactPageReadAsCoverageOfACompoundCompleteListPlan() {
+        AtomicReference<RunRequest> captured = new AtomicReference<>();
+        Permit permit = mock(Permit.class);
+        AnswerEvidenceAgent agent = new AnswerEvidenceAgent(
+                capturingFallbackAgent(captured), emptyLookup(), scopes(), limiter(permit));
+        AnswerQuestionPlan compound = new AnswerQuestionPlan(
+                List.of(
+                        new AnswerQuestionPlan.Subquestion(
+                                "Does this restriction apply to our player count?",
+                                Set.of(EvidenceNeed.DIRECT_RULE, EvidenceNeed.CONDITION)),
+                        new AnswerQuestionPlan.Subquestion(
+                                "What are all the ordinary outcomes?",
+                                Set.of(EvidenceNeed.DIRECT_RULE, EvidenceNeed.COMPLETE_LIST))),
+                true,
+                AnswerAid.SCOPE,
+                ReferenceBinding.CURRENT_QUESTION);
+
+        agent.refine(
+                runId,
+                question("Does this restriction apply, and what are all the ordinary outcomes?"),
+                new QuestionContext(versionId),
+                "player",
+                null,
+                compound,
+                ready(hit(UUID.randomUUID(), "Restriction", "This restriction applies in one mode.")));
+
+        assertThat(captured.get().requiredToolsBeforeCompletion()).isEmpty();
+        assertThat(captured.get().maxIterations()).isEqualTo(5);
+        assertThat(captured.get().maxToolCalls()).isEqualTo(5);
         verify(permit).close();
     }
 

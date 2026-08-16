@@ -5,11 +5,13 @@ import com.rulepilot.assistant.AuditedAgentInvocations;
 import com.rulepilot.assistant.RuleAnswerModel;
 import com.rulepilot.assistant.RuleAnswerModel.ModelDraft;
 import com.rulepilot.assistant.RuleAnswerModel.ModelRequest;
+import com.rulepilot.assistant.RuleAnswerModel.PlayerFacingField;
 import com.rulepilot.assistant.RuleAnswerModel.QuestionInterpretationDraft;
 import com.rulepilot.assistant.RuleAnswerModel.QuestionInterpretationRequest;
 import com.rulepilot.assistant.RuleAnswerModel.RetrievalQueryRequest;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 /** Bounded answer-model calls with one permit lifecycle and the player-visible audit activity. */
@@ -71,6 +73,34 @@ final class AnswerModelGateway {
                     successSummary,
                     () -> deadline.invoke(
                             runId, () -> model.revise(request, previousDraft, feedback, username)),
+                    result -> estimateTokens(result.toString()));
+        } finally {
+            permit.close();
+        }
+    }
+
+    ModelDraft revisePlayerFacing(
+            UUID runId,
+            String username,
+            UUID gameSessionId,
+            ModelRequest request,
+            ModelDraft previousDraft,
+            List<String> feedback,
+            Set<PlayerFacingField> editableFields,
+            String operation,
+            String successSummary) {
+        RuleAnswerRateLimiter.Permit permit = acquire(username, gameSessionId);
+        try {
+            return invocations.invoke(
+                    runId,
+                    ActivityType.MODEL,
+                    operation,
+                    estimateTokens(request.toString()) + estimateTokens(feedback.toString()),
+                    successSummary,
+                    () -> deadline.invoke(
+                            runId,
+                            () -> model.revisePlayerFacing(
+                                    request, previousDraft, feedback, editableFields, username)),
                     result -> estimateTokens(result.toString()));
         } finally {
             permit.close();

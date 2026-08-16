@@ -3,8 +3,12 @@ package com.rulepilot.assistant.application;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.rulepilot.assistant.RuleAnswerModel;
+import com.rulepilot.assistant.RuleAnswerModel.AnswerAid;
+import com.rulepilot.assistant.RuleAnswerModel.EvidenceNeed;
+import com.rulepilot.assistant.RuleAnswerModel.RuleScopeRequest;
 import com.rulepilot.assistant.domain.QuestionType;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
@@ -81,6 +85,50 @@ class AnswerBasisPolicyTest {
                         "The round has reached cleanup.", "SATISFIED", "Cleanup has started.", List.of(citationId))));
 
         assertThat(AnswerBasisPolicy.classify(request, draft).answerBasis()).isEqualTo("DIRECT_RULE");
+    }
+
+    @Test
+    void classifiesASelectedCitedScopeApplicationAsGroundedApplication() {
+        UUID citationId = UUID.randomUUID();
+        var request = new RuleAnswerModel.ModelRequest(
+                "两名玩家时这条规则适用吗？",
+                QuestionType.RULE_QUERY,
+                new RuleAnswerModel.AnswerContext(
+                        null, null, com.rulepilot.assistant.PlayerLocale.ZH_CN),
+                List.of(new RuleAnswerModel.EvidenceInput(
+                        citationId, "RULE", "人数限制", "两名玩家时不能使用这项规则。", 2, 2)),
+                Set.of(EvidenceNeed.CONDITION),
+                AnswerAid.SCOPE);
+        var draft = new RuleAnswerModel.ModelDraft(
+                true,
+                null,
+                "两名玩家时不适用。",
+                "当前局面符合引用中的人数限制。",
+                List.of(citationId),
+                List.of(),
+                "HIGH",
+                "DIRECT_RULE",
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(new RuleScopeRequest(
+                        "两人局",
+                        "玩家数为二",
+                        "当前问题明确是两名玩家",
+                        "MATCHES_SCOPE",
+                        "不能使用这项规则",
+                        "PLAYER_COUNT",
+                        List.of(citationId))));
+
+        assertThat(AnswerBasisPolicy.classify(request, draft).answerBasis())
+                .isEqualTo("GROUNDED_APPLICATION");
     }
 
     private RuleAnswerModel.ModelRequest request(String question) {

@@ -9,6 +9,8 @@ import com.rulepilot.assistant.GeneratedContentCritic.ReviewRisk;
 import com.rulepilot.assistant.GeneratedContentCritic.TaskContext;
 import com.rulepilot.assistant.QuestionUnderstanding.QuestionContext;
 import com.rulepilot.assistant.RuleAnswerModel.ModelRequest;
+import com.rulepilot.assistant.domain.AnswerBasis;
+import com.rulepilot.assistant.domain.AnswerConfidence;
 import com.rulepilot.assistant.domain.RuleCitation;
 import com.rulepilot.assistant.domain.StructuredRuleAnswer;
 import com.rulepilot.assistant.domain.UnderstoodQuestion;
@@ -17,7 +19,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
-/** Prepares one semantic, evidence-grounded review for every generated answer. */
+/** Prepares an optional semantic, evidence-grounded review for generated answers. */
 final class AnswerCritiquePolicy {
 
     private AnswerCritiquePolicy() {}
@@ -26,7 +28,45 @@ final class AnswerCritiquePolicy {
             UnderstoodQuestion question,
             QuestionContext context,
             StructuredRuleAnswer answer) {
-        return ReviewRisk.HIGH_IMPACT;
+        return reviewRisk(question, context, null, answer);
+    }
+
+    static ReviewRisk reviewRisk(
+            UnderstoodQuestion question,
+            QuestionContext context,
+            ModelRequest modelRequest,
+            StructuredRuleAnswer answer) {
+        if (answer.confidence() == AnswerConfidence.LOW) {
+            return ReviewRisk.LOW_CONFIDENCE;
+        }
+        if (answer.answerBasis() == AnswerBasis.GROUNDED_APPLICATION
+                || requiresCrossRuleSynthesis(answer)
+                || requiresPlannedEvidenceSynthesis(modelRequest, answer)) {
+            return ReviewRisk.HIGH_IMPACT;
+        }
+        // The candidate reached this policy only after schema, source/version ownership, citation-ID, and
+        // structured-aid publication gates. Those deterministic boundaries are the normal runtime protection;
+        // semantic Critic execution remains available in explicit evaluation mode instead of adding two paid model
+        // calls to every ordinary answer.
+        return ReviewRisk.STANDARD;
+    }
+
+    private static boolean requiresCrossRuleSynthesis(StructuredRuleAnswer answer) {
+        if (answer.citations().size() < 2) return false;
+        return !answer.priorityResolutions().isEmpty()
+                || !answer.timingResolutions().isEmpty()
+                || !answer.tieResolutions().isEmpty()
+                || !answer.scopeResolutions().isEmpty();
+    }
+
+    private static boolean requiresPlannedEvidenceSynthesis(
+            ModelRequest modelRequest, StructuredRuleAnswer answer) {
+        if (modelRequest == null || answer.citations().size() < 2) return false;
+        var needs = modelRequest.evidenceNeeds();
+        return needs.contains(com.rulepilot.assistant.RuleAnswerModel.EvidenceNeed.RELATIONSHIP)
+                || needs.contains(com.rulepilot.assistant.RuleAnswerModel.EvidenceNeed.EXCEPTION)
+                || needs.contains(com.rulepilot.assistant.RuleAnswerModel.EvidenceNeed.COMPLETE_LIST)
+                        && needs.contains(com.rulepilot.assistant.RuleAnswerModel.EvidenceNeed.CONDITION);
     }
 
     static boolean allowsBoundedCorrection(UnderstoodQuestion question, QuestionContext context) {

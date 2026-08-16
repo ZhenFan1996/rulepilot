@@ -107,6 +107,67 @@ class PlayerFacingAnswerPresenterTest {
     }
 
     @Test
+    void dropsOnlyAnUnsafeOptionalDetailInsteadOfReplacingTheValidatedCoreAnswer() {
+        UUID versionId = UUID.randomUUID();
+        UUID chunkId = UUID.randomUUID();
+        StructuredRuleAnswer answer = new StructuredRuleAnswer(
+                versionId,
+                AnswerStatus.ANSWERED,
+                "Move one space.",
+                "The cited rule directly allows one space of movement.",
+                List.of(new RuleCitation(chunkId, versionId, "MOVE", "Movement", "Move one space.", 4, 4)),
+                List.of(),
+                AnswerConfidence.HIGH,
+                AnswerBasis.DIRECT_RULE,
+                false,
+                null,
+                null,
+                null,
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(new RuleWalkthroughStep(
+                        "Call assistantRunId before moving.",
+                        "Internal protocol detail.",
+                        WalkthroughOrderBasis.EXPLANATION_ORDER,
+                        List.of(chunkId))));
+
+        var presented = PlayerFacingAnswerPresenter.present(answer, "How far may I move?", PlayerLocale.EN);
+
+        assertThat(presented.status()).isEqualTo(AnswerStatus.ANSWERED);
+        assertThat(presented.shortVerdict()).isEqualTo("Move one space.");
+        assertThat(presented.explanation()).isEqualTo("The cited rule directly allows one space of movement.");
+        assertThat(presented.walkthroughSteps()).isEmpty();
+        assertThat(presented.toString()).doesNotContain("assistantRunId", "Internal protocol");
+    }
+
+    @Test
+    void preservesValidatedModelProseByteForByteIncludingFormattingAndPunctuation() {
+        UUID versionId = UUID.randomUUID();
+        UUID chunkId = UUID.randomUUID();
+        String verdict = "【裁决】可以——但要先满足条件。";
+        String explanation = "【理由】**原规则**明确写出了条件。\n【边界】这里只裁决当前局面；不扩写别的情况。";
+        StructuredRuleAnswer answer = new StructuredRuleAnswer(
+                versionId,
+                AnswerStatus.ANSWERED,
+                verdict,
+                explanation,
+                List.of(new RuleCitation(chunkId, versionId, "RULE", "条件", "满足条件后可以执行。", 4, 4)),
+                List.of(),
+                AnswerConfidence.HIGH,
+                AnswerBasis.DIRECT_RULE,
+                false,
+                null,
+                null,
+                null);
+
+        var presented = PlayerFacingAnswerPresenter.present(answer, "这个局面可以吗？", PlayerLocale.ZH_CN);
+
+        assertThat(presented.shortVerdict()).isEqualTo(verdict);
+        assertThat(presented.explanation()).isEqualTo(explanation);
+    }
+
+    @Test
     void usesTheCurrentQuestionLanguageForSafeFailureAndRecoveryInsteadOfInternalDiagnostics() {
         UUID versionId = UUID.randomUUID();
         StructuredRuleAnswer failure = new StructuredRuleAnswer(
@@ -203,6 +264,28 @@ class PlayerFacingAnswerPresenterTest {
                 .doesNotContain("CLARIFICATION_REQUIRED", "repairRuleSituationCheck", "Schema output");
         assertThat(invalid.recovery().draft()).isEmpty();
         assertThat(invalid.toString()).doesNotContain(internalId.toString(), "assistantRunId");
+    }
+
+    @Test
+    void preservesAValidatedClarificationExactly() {
+        String clarification = "\n你说的“这个”具体是哪张卡、哪个行动或哪个效果？\n";
+        StructuredRuleAnswer answer = new StructuredRuleAnswer(
+                UUID.randomUUID(),
+                AnswerStatus.CLARIFICATION_REQUIRED,
+                "需要补充信息。",
+                "",
+                List.of(),
+                List.of(),
+                AnswerConfidence.LOW,
+                false,
+                null,
+                null,
+                clarification);
+
+        var presented = PlayerFacingAnswerPresenter.present(answer, "这个能用吗？", PlayerLocale.ZH_CN);
+
+        assertThat(presented.status()).isEqualTo(AnswerStatus.CLARIFICATION_REQUIRED);
+        assertThat(presented.clarification()).isEqualTo(clarification);
     }
 
     @Test

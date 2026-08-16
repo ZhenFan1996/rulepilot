@@ -37,6 +37,32 @@ public interface RuleAnswerModel {
     }
 
     /**
+     * Repairs only the player-facing core fields while preserving already validated structured details.
+     * Implementations may use a smaller structured response contract than a full answer regeneration.
+     */
+    default ModelDraft revisePlayerFacing(
+            ModelRequest request,
+            ModelDraft previousDraft,
+            List<String> feedback,
+            String ownerUsername) {
+        return revisePlayerFacing(
+                request,
+                previousDraft,
+                feedback,
+                Set.of(PlayerFacingField.SHORT_VERDICT, PlayerFacingField.EXPLANATION, PlayerFacingField.EXCEPTIONS),
+                ownerUsername);
+    }
+
+    default ModelDraft revisePlayerFacing(
+            ModelRequest request,
+            ModelDraft previousDraft,
+            List<String> feedback,
+            Set<PlayerFacingField> editableFields,
+            String ownerUsername) {
+        return revise(request, previousDraft, feedback, ownerUsername);
+    }
+
+    /**
      * Produces bounded search phrases only. The phrases are untrusted retrieval input, never rule evidence or an
      * answer, and may be ignored when the configured model cannot safely provide them.
      */
@@ -140,6 +166,13 @@ public interface RuleAnswerModel {
         COMPLETE_LIST,
         ADVICE,
         PRIOR_TURN
+    }
+
+    /** Player prose fields that one bounded repair call is explicitly allowed to replace. */
+    enum PlayerFacingField {
+        SHORT_VERDICT,
+        EXPLANATION,
+        EXCEPTIONS
     }
 
     /** One bounded player-facing shape selected by the semantic planning stage. */
@@ -298,14 +331,27 @@ public interface RuleAnswerModel {
             AnswerContext context,
             List<EvidenceInput> evidence,
             Set<EvidenceNeed> evidenceNeeds,
-            AnswerAid answerAid) {
+            AnswerAid answerAid,
+            List<PlannedSubquestion> subquestions) {
         public ModelRequest {
             if (question == null || question.isBlank() || questionType == null || context == null
-                    || evidence == null || evidence.isEmpty() || evidenceNeeds == null || answerAid == null) {
+                    || evidence == null || evidence.isEmpty() || evidenceNeeds == null || answerAid == null
+                    || subquestions == null || subquestions.size() > 4) {
                 throw new IllegalArgumentException("answer model request is invalid");
             }
             evidence = List.copyOf(evidence);
             evidenceNeeds = Set.copyOf(evidenceNeeds);
+            subquestions = List.copyOf(subquestions);
+        }
+
+        public ModelRequest(
+                String question,
+                QuestionType questionType,
+                AnswerContext context,
+                List<EvidenceInput> evidence,
+                Set<EvidenceNeed> evidenceNeeds,
+                AnswerAid answerAid) {
+            this(question, questionType, context, evidence, evidenceNeeds, answerAid, List.of());
         }
 
         public ModelRequest(
@@ -320,7 +366,8 @@ public interface RuleAnswerModel {
                     context,
                     evidence,
                     evidenceNeeds,
-                    AnswerAid.forLearningIntent(context.learningIntent()));
+                    AnswerAid.forLearningIntent(context.learningIntent()),
+                    List.of());
         }
 
         public ModelRequest(
@@ -334,7 +381,8 @@ public interface RuleAnswerModel {
                     context,
                     evidence,
                     Set.of(EvidenceNeed.DIRECT_RULE),
-                    AnswerAid.forLearningIntent(context.learningIntent()));
+                    AnswerAid.forLearningIntent(context.learningIntent()),
+                    List.of());
         }
     }
 

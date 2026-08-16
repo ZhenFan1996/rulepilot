@@ -248,9 +248,6 @@ final class AnswerPublicationValidator {
                         .anyMatch(exception -> exception == null || exception.isBlank() || exception.length() > 400)) {
             throw new IllegalArgumentException("model draft is incomplete");
         }
-        if (!exceptionClauses.isEmpty() && !draft.exceptions().isEmpty()) {
-            throw new IllegalArgumentException("structured exception clauses must not be duplicated as legacy exceptions");
-        }
         String completeAnswer = shortVerdict + "\n" + explanation + "\n"
                 + String.join("\n", draft.exceptions()) + "\n"
                 + calculations.stream()

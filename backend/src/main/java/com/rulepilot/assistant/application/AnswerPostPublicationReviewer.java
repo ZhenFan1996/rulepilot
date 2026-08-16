@@ -17,18 +17,17 @@ import com.rulepilot.assistant.domain.AnswerWarning.Type;
 import com.rulepilot.assistant.domain.StructuredRuleAnswer;
 import com.rulepilot.assistant.domain.UnderstoodQuestion;
 import com.rulepilot.retrieval.evidence.HybridEvidenceHit;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Applies the answer Critic after an evidence-validated candidate is already readable.
+ * Applies an optional answer Critic after an evidence-validated candidate is already readable.
  *
- * <p>The reviewer may request at most one context/table-mode correction. It cannot search, alter the evidence
- * selection, or turn an insufficient answer into a new answer path; failed review stays a typed player-safe result
- * for the caller to publish instead of caching the rejected candidate.</p>
+ * <p>Normal answers take the deterministic publication path without a paid semantic review. Evaluation mode may
+ * still surface one concrete defect and request one bounded correction. The reviewer cannot search or alter the
+ * evidence selection, and an unavailable optional Critic cannot erase the already validated candidate.</p>
  */
 final class AnswerPostPublicationReviewer {
 
@@ -107,14 +106,38 @@ final class AnswerPostPublicationReviewer {
             ModelDraft draft,
             StructuredRuleAnswer answer,
             List<HybridEvidenceHit> evidence) {
+        return review(
+                assistantRunId,
+                question,
+                context,
+                username,
+                gameSessionId,
+                modelRequest,
+                draft,
+                answer,
+                evidence,
+                true);
+    }
+
+    Result review(
+            UUID assistantRunId,
+            UnderstoodQuestion question,
+            QuestionContext context,
+            String username,
+            UUID gameSessionId,
+            ModelRequest modelRequest,
+            ModelDraft draft,
+            StructuredRuleAnswer answer,
+            List<HybridEvidenceHit> evidence,
+            boolean correctionAllowed) {
         try {
-            ReviewRisk risk = AnswerCritiquePolicy.reviewRisk(question, context, answer);
+            ReviewRisk risk = AnswerCritiquePolicy.reviewRisk(question, context, modelRequest, answer);
             Review review = critic.review(
                     AnswerCritiquePolicy.request(assistantRunId, question, context, modelRequest, answer, evidence),
                     risk,
                     username);
             if (review.accepted()) return Result.accepted(answer);
-            if (!AnswerCritiquePolicy.allowsBoundedCorrection(question, context)) {
+            if (!correctionAllowed || !AnswerCritiquePolicy.allowsBoundedCorrection(question, context)) {
                 return unresolvedReview(answer, review, context);
             }
             StructuredRuleAnswer revised;
@@ -135,20 +158,9 @@ final class AnswerPostPublicationReviewer {
                         ? unsupportedReview(context)
                         : Result.warned(answer, Type.REVIEW_UNRESOLVED);
             }
-            Review revisionReview;
-            try {
-                revisionReview = critic.review(
-                        AnswerCritiquePolicy.request(assistantRunId, question, context, modelRequest, revised, evidence),
-                        ReviewRisk.HIGH_IMPACT,
-                        username);
-            } catch (AgentExecutionStoppedException stopped) {
-                throw stopped;
-            } catch (RuntimeException reviewFailure) {
-                return unavailableReview();
-            }
-            if (!revisionReview.accepted()) {
-                return unresolvedReview(revised, revisionReview, context);
-            }
+            // The correction has already passed the same schema, citation ownership/version, and structured-aid
+            // gates as the original candidate. A second semantic review used to repeat the complete Critic flow
+            // (including atomic confirmation) without adding a new evidence boundary.
             return Result.accepted(revised);
         } catch (AgentExecutionStoppedException exception) {
             throw exception;
@@ -158,14 +170,8 @@ final class AnswerPostPublicationReviewer {
                     assistantRunId,
                     exception.getMessage(),
                     exception.getClass().getSimpleName());
-            return unavailableReview();
+            return Result.warned(answer, Type.REVIEW_UNRESOLVED);
         }
-    }
-
-    private Result unavailableReview() {
-        return Result.rejected(
-                AnswerStatus.INVALID_MODEL_OUTPUT,
-                "事实复核暂时不可用；为避免发布未经复核的规则结论，本次不作判定，请重试或直接查看规则页。");
     }
 
     private Result unresolvedReview(
@@ -212,18 +218,7 @@ final class AnswerPostPublicationReviewer {
                 feedback,
                 "reviseLearningResponse",
                 "Learning response revised from bounded critic feedback");
-        if (revised == null || !revised.answerable()) {
-            revised = modelGateway.revise(
-                    assistantRunId,
-                    username,
-                    gameSessionId,
-                    modelRequest,
-                    previousDraft,
-                    completionRetryFeedback(feedback),
-                    "retryEvidenceBackedAnswerRevision",
-                    "Evidence-backed answer revision retried after an empty correction");
-        }
-        if (revised == null || !revised.answerable()) {
+        if (revised == null || !revised.answerable() || revised.equals(previousDraft)) {
             throw new IllegalArgumentException("revised learning response is not answerable");
         }
         ModelDraft classified = AnswerBasisPolicy.classify(modelRequest, revised);
@@ -531,19 +526,6 @@ final class AnswerPostPublicationReviewer {
                 "Revised complete cited rule option list validated",
                 () -> ruleOptionResolver.resolve(modelRequest, draft),
                 results -> results.size() * 18);
-    }
-
-    /**
-     * A confirmed critic defect means the first draft cannot be published, but it does not mean the retrieved rule
-     * evidence disappeared. Give one high-risk correction a precise opportunity to narrow its claim instead of
-     * turning a usable cited ruling into a player-visible generic failure.
-     */
-    private List<String> completionRetryFeedback(List<String> feedback) {
-        List<String> retry = new ArrayList<>(feedback);
-        retry.add("The supplied rulebook evidence remains available and a complete answer is required. Return "
-                + "answerable=true with the narrowest cited ruling that resolves the player's condition. Preserve "
-                + "every evidenced branch; do not replace a correctable answer with generic insufficiency.");
-        return List.copyOf(retry);
     }
 
     record Result(StructuredRuleAnswer answer, AnswerStatus failureStatus, String failureMessage) {

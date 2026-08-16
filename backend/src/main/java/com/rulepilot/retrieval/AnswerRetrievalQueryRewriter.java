@@ -12,4 +12,12 @@ public interface AnswerRetrievalQueryRewriter {
     default boolean timedOut(RuntimeException failure) {
         return false;
     }
+
+    /**
+     * Multilingual vector search handles the normal first pass. A native evidence Agent may reformulate only after
+     * observing a real evidence gap, so the deterministic retrieval path must not pay for an unconditional rewrite.
+     */
+    static AnswerRetrievalQueryRewriter none() {
+        return (runId, username, question, previousQuestion) -> List.of();
+    }
 }

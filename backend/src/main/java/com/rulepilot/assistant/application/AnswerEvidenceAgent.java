@@ -74,8 +74,9 @@ public class AnswerEvidenceAgent implements AnswerEvidenceRefiner {
             operation, and total as a consistency check; never detach a local per-item sentence from its governing
             preamble or silently discard a multiplier. A result
             count does not prove coverage: if a broad search misses one obligation, search that obligation again with
-            the player's distinctive wording before reading the best candidate page. Only after every obligation has
-            a confirmed page observation may you return exactly EVIDENCE_READY. Do not invent identifiers or scope.
+            the player's distinctive wording before reading the best candidate page. Stop requesting tools after the
+            useful exact pages have been read. Any terminal prose is ignored by the application; only canonical page
+            observations can become answer evidence. Do not invent identifiers or scope.
             The current player question is authoritative. Selected reference context may resolve an omitted subject,
             but it may not replace an object explicitly named in the current question. A player-supplied page number
             is only a scoped locator to inspect, never evidence that the page entails the requested rule.
@@ -155,7 +156,7 @@ public class AnswerEvidenceAgent implements AnswerEvidenceRefiner {
                     toolPortfolio(question, context, questionPlan),
                     requiredEvidenceTools(questionPlan, context),
                     refinementToolBudget(questionPlan, context),
-                    "EVIDENCE_READY"));
+                    ""));
         } catch (RuntimeException failure) {
             LOGGER.warn(
                     "Answer evidence refinement failed for document version {}; preserving deterministic evidence",
@@ -173,14 +174,14 @@ public class AnswerEvidenceAgent implements AnswerEvidenceRefiner {
                 result.toolCalls(),
                 exactPageGroups.size(),
                 exactPageGroups.stream().mapToInt(Set::size).sum());
-        boolean declaredReady = result.status() == RunStatus.COMPLETED
-                && "EVIDENCE_READY".equals(result.text().strip())
-                && result.toolCalls() > 0;
+        boolean completedWithCanonicalPages = result.status() == RunStatus.COMPLETED
+                && result.toolCalls() > 0
+                && !exactPageGroups.isEmpty();
         boolean recoverablePartialRun = result.status() == RunStatus.FALLBACK
                 && RECOVERABLE_PARTIAL_RUN_REASONS.contains(result.reason())
                 && result.toolCalls() > 0
                 && !exactPageGroups.isEmpty();
-        if (!declaredReady && !recoverablePartialRun) return deterministic;
+        if (!completedWithCanonicalPages && !recoverablePartialRun) return deterministic;
         if (recoverablePartialRun) {
             // The model already chose and completed exact-page reads; a later empty turn or
             // budget edge must not erase canonical evidence. This does not accept model prose
@@ -217,7 +218,14 @@ public class AnswerEvidenceAgent implements AnswerEvidenceRefiner {
 
     private Set<String> requiredEvidenceTools(AnswerQuestionPlan questionPlan, QuestionContext context) {
         if (usesPriorPages(questionPlan, context)) return Set.of("read_rule_pages");
-        if (requiresSourceAuthoredAdvice(questionPlan) || requiresNumericalScopeAudit(questionPlan)) {
+        // One exact-page observation can close one bounded obligation. A compound plan must return to the native
+        // model after the first read so it can check the remaining independently planned obligations; otherwise a
+        // page that answers only the first subquestion would prematurely end the entire evidence run.
+        if (questionPlan.subquestions().size() == 1
+                && (requiresSourceAuthoredAdvice(questionPlan)
+                        || requiresNumericalScopeAudit(questionPlan)
+                        || questionPlan.evidenceNeeds().contains(
+                                com.rulepilot.assistant.RuleAnswerModel.EvidenceNeed.COMPLETE_LIST))) {
             return Set.of("read_rule_pages");
         }
         return Set.of();
@@ -404,7 +412,8 @@ public class AnswerEvidenceAgent implements AnswerEvidenceRefiner {
                 request.append("\n- ").append(cueQuery);
             }
         }
-        request.append("\nUse observations to cover every listed span. EVIDENCE_READY is accepted only when exact pages have been read.");
+        request.append("\nUse observations to cover every listed span. Stop after the useful exact pages have been read; "
+                + "the application ignores terminal prose and admits only canonical page observations.");
         return request.toString();
     }
 

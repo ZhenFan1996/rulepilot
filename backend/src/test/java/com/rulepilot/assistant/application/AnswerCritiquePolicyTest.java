@@ -7,6 +7,8 @@ import com.rulepilot.assistant.GeneratedContentCritic.Issue;
 import com.rulepilot.assistant.GeneratedContentCritic.IssueType;
 import com.rulepilot.assistant.GeneratedContentCritic.Review;
 import com.rulepilot.assistant.PlayerLocale;
+import com.rulepilot.assistant.RuleAnswerModel;
+import com.rulepilot.assistant.RuleAnswerModel.EvidenceNeed;
 import com.rulepilot.assistant.QuestionUnderstanding.QuestionContext;
 import com.rulepilot.assistant.domain.AnswerBasis;
 import com.rulepilot.assistant.domain.AnswerConfidence;
@@ -31,9 +33,54 @@ class AnswerCritiquePolicyTest {
     private final UUID chunkId = UUID.randomUUID();
 
     @Test
-    void treatsEveryPublishedAnswerAsHighImpactForSemanticReview() {
-        assertThat(AnswerCritiquePolicy.reviewRisk(question(), context(), answer()))
+    void letsDeterministicallyPublishedAnswersUseTheStandardRuntimePath() {
+        StructuredRuleAnswer direct = copyWithRisk(
+                answer(), AnswerConfidence.HIGH, AnswerBasis.DIRECT_RULE, List.of());
+
+        assertThat(AnswerCritiquePolicy.reviewRisk(question(), context(), direct))
+                .isEqualTo(GeneratedContentCritic.ReviewRisk.STANDARD);
+    }
+
+    @Test
+    void retainsSemanticReviewForLowConfidenceAndDerivedApplications() {
+        StructuredRuleAnswer direct = answer();
+        StructuredRuleAnswer lowConfidence = copyWithRisk(
+                direct, AnswerConfidence.LOW, AnswerBasis.DIRECT_RULE, List.of());
+        StructuredRuleAnswer calculated = copyWithRisk(
+                direct,
+                AnswerConfidence.HIGH,
+                AnswerBasis.GROUNDED_APPLICATION,
+                List.of(new RuleCalculation("8 / 2", "4")));
+
+        assertThat(AnswerCritiquePolicy.reviewRisk(question(), context(), lowConfidence))
+                .isEqualTo(GeneratedContentCritic.ReviewRisk.LOW_CONFIDENCE);
+        assertThat(AnswerCritiquePolicy.reviewRisk(question(), context(), calculated))
                 .isEqualTo(GeneratedContentCritic.ReviewRisk.HIGH_IMPACT);
+    }
+
+    @Test
+    void reviewsAMultiSourceConditionalCompleteListWithoutReviewingEveryMultiCitationAnswer() {
+        UUID secondId = UUID.randomUUID();
+        StructuredRuleAnswer multiSource = copyWithCitations(
+                copyWithRisk(answer(), AnswerConfidence.HIGH, AnswerBasis.DIRECT_RULE, List.of()),
+                List.of(
+                        answer().citations().getFirst(),
+                        new RuleCitation(
+                                secondId,
+                                versionId,
+                                "EXCEPTION",
+                                "Special case",
+                                "The special case changes one listed route.",
+                                4,
+                                4)));
+        RuleAnswerModel.ModelRequest conditionalList = modelRequest(Set.of(
+                EvidenceNeed.DIRECT_RULE, EvidenceNeed.CONDITION, EvidenceNeed.COMPLETE_LIST));
+        RuleAnswerModel.ModelRequest ordinary = modelRequest(Set.of(EvidenceNeed.DIRECT_RULE));
+
+        assertThat(AnswerCritiquePolicy.reviewRisk(question(), context(), conditionalList, multiSource))
+                .isEqualTo(GeneratedContentCritic.ReviewRisk.HIGH_IMPACT);
+        assertThat(AnswerCritiquePolicy.reviewRisk(question(), context(), ordinary, multiSource))
+                .isEqualTo(GeneratedContentCritic.ReviewRisk.STANDARD);
     }
 
     @Test
@@ -136,6 +183,81 @@ class AnswerCritiquePolicyTest {
                 List.of(),
                 List.of(new RuleWalkthroughStep(
                         "Pay first.", "Then resolve.", WalkthroughOrderBasis.RULE_ORDER, List.of(chunkId))));
+    }
+
+    private StructuredRuleAnswer copyWithRisk(
+            StructuredRuleAnswer source,
+            AnswerConfidence confidence,
+            AnswerBasis basis,
+            List<RuleCalculation> calculations) {
+        return new StructuredRuleAnswer(
+                source.documentVersionId(),
+                source.status(),
+                source.shortVerdict(),
+                source.explanation(),
+                source.citations(),
+                source.exceptions(),
+                confidence,
+                basis,
+                source.official(),
+                source.confirmedRulingId(),
+                source.confirmedRulingVersion(),
+                source.clarification(),
+                source.warnings(),
+                calculations,
+                source.situationChecks(),
+                source.walkthroughSteps(),
+                source.decisionBranches(),
+                source.exceptionClauses(),
+                source.termDefinitions(),
+                source.workedExamples(),
+                source.priorityResolutions(),
+                source.timingResolutions(),
+                source.tieResolutions(),
+                source.scopeResolutions(),
+                source.conceptComparisons(),
+                source.ruleOptions());
+    }
+
+    private StructuredRuleAnswer copyWithCitations(
+            StructuredRuleAnswer source, List<RuleCitation> citations) {
+        return new StructuredRuleAnswer(
+                source.documentVersionId(),
+                source.status(),
+                source.shortVerdict(),
+                source.explanation(),
+                citations,
+                source.exceptions(),
+                source.confidence(),
+                source.answerBasis(),
+                source.official(),
+                source.confirmedRulingId(),
+                source.confirmedRulingVersion(),
+                source.clarification(),
+                source.warnings(),
+                source.calculations(),
+                source.situationChecks(),
+                source.walkthroughSteps(),
+                source.decisionBranches(),
+                source.exceptionClauses(),
+                source.termDefinitions(),
+                source.workedExamples(),
+                source.priorityResolutions(),
+                source.timingResolutions(),
+                source.tieResolutions(),
+                source.scopeResolutions(),
+                source.conceptComparisons(),
+                source.ruleOptions());
+    }
+
+    private RuleAnswerModel.ModelRequest modelRequest(Set<EvidenceNeed> needs) {
+        return new RuleAnswerModel.ModelRequest(
+                question().originalQuestion(),
+                QuestionType.RULE_QUERY,
+                new RuleAnswerModel.AnswerContext(null, null, PlayerLocale.EN),
+                List.of(new RuleAnswerModel.EvidenceInput(
+                        chunkId, "RULE", "Procedure", "Direct evidence.", 3, 3)),
+                needs);
     }
 
     private HybridEvidenceHit evidence() {

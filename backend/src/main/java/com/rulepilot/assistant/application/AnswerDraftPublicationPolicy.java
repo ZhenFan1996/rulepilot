@@ -16,9 +16,13 @@ final class AnswerDraftPublicationPolicy {
     }
 
     static Preparation prepare(ModelRequest request, ModelDraft draft) {
-        ModelDraft prepared = AnswerBasisPolicy.classify(request, draft);
-        prepared = AnswerDraftSafetyPolicy.normalizeDanglingPunctuation(prepared);
-        prepared = AnswerDraftSafetyPolicy.normalizeInternalEvidenceReferences(prepared);
+        ModelDraft prepared = AnswerStructuredDraftPolicy.retainSelected(request, draft).draft();
+        var playerFacingFailure = AnswerRepairOutcomePolicy.publicationFailure(request, prepared);
+        if (playerFacingFailure.isPresent()) {
+            var failure = playerFacingFailure.orElseThrow();
+            return new Preparation(null, List.of(), failure.status(), failure.message());
+        }
+        prepared = AnswerBasisPolicy.classify(request, prepared);
         return Preparation.ready(prepared);
     }
 

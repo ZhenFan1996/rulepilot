@@ -15,7 +15,7 @@ import org.junit.jupiter.api.Test;
 class AnswerDraftSafetyPolicyTest {
 
     @Test
-    void removesOnlyInternalProtocolReferencesAndDanglingPunctuation() {
+    void detectsInternalProtocolReferencesWithoutSilentlyDeletingPlayerProse() {
         UUID chunkId = UUID.randomUUID();
         ModelDraft draft = new ModelDraft(
                 true,
@@ -27,14 +27,10 @@ class AnswerDraftSafetyPolicyTest {
                 "HIGH",
                 "DIRECT_RULE");
 
-        ModelDraft normalized = AnswerDraftSafetyPolicy.normalizeDanglingPunctuation(draft);
-        normalized = AnswerDraftSafetyPolicy.normalizeInternalEvidenceReferences(normalized);
-
-        assertThat(normalized.shortVerdict()).isEqualTo("支付 🟢");
-        assertThat(normalized.explanation()).doesNotContain("chunk", "48a31827", "（，）");
-        assertThat(normalized.exceptions()).containsExactly("例外见。 ".strip());
-        assertThat(normalized.shortVerdict()).contains("🟢");
-        assertThat(AnswerDraftSafetyPolicy.containsInternalEvidenceReference(normalized)).isFalse();
+        assertThat(draft.shortVerdict()).isEqualTo("支付 🟢 [E1]");
+        assertThat(draft.explanation()).contains("chunk", "48a31827", "（，）");
+        assertThat(draft.exceptions()).containsExactly("例外见 evidence E2。");
+        assertThat(AnswerDraftSafetyPolicy.containsInternalEvidenceReference(draft)).isTrue();
     }
 
     @Test

@@ -1,6 +1,7 @@
 <question_context>
   <question_type>{questionType}</question_type>
   <validated_evidence_needs>{evidenceNeeds}</validated_evidence_needs>
+  <validated_subquestions>{subquestions}</validated_subquestions>
   <validated_answer_aid>{answerAid}</validated_answer_aid>
   <reference_binding>{referenceBinding}</reference_binding>
   <validated_current_rule_objects>{currentRuleObjects}</validated_current_rule_objects>
@@ -32,3 +33,13 @@ boundary: do not offer possible meanings and do not tell the player to infer or 
 </grounding_boundary>
 
 {repair}
+
+<final_response_checks>
+- If any supported subquestion coexists with an unsupported subquestion, keep answerable=true, keep shortVerdict on the
+  supported ruling, and describe only what the current supplied excerpts cannot confirm. Never turn excerpt silence or
+  search results into a claim about what the whole rulebook lacks.
+- In particular, an ADVICE need is unsupported unless a supplied passage itself recommends, cautions, prioritizes, or
+  suggests a choice. When that advice branch is unsupported, preserve the supported rules and end explanation with one
+  useful question asking for a role, faction, phase, card, edition, page, or named section the player can identify.
+  Do not ask the player whether the rulebook contains the missing advice.
+</final_response_checks>
