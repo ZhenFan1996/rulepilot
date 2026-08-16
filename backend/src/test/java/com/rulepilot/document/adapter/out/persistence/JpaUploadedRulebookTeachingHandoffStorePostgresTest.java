@@ -216,6 +216,49 @@ class JpaUploadedRulebookTeachingHandoffStorePostgresTest {
         assertThat(unchanged.preparationRunId()).isEqualTo(newerRunId);
     }
 
+    @Test
+    void dismissesOnlyTheExactOwnedFailedPreparationAndKeepsTheUploadedRulebook() {
+        Instant now = Instant.parse("2026-08-10T11:30:00Z");
+        UUID versionId = insertDocument("READY");
+        UUID handoffId = UUID.randomUUID();
+        UUID failedRunId = UUID.randomUUID();
+        insertPreparationRun(failedRunId, versionId, "FAILED", now);
+        inTransactionReturning(store -> store.request(
+                handoffId, versionId, "upload-handoff-player", "先讲清准备流程。", now));
+        inTransaction(store -> store.claimReadyForDocument(versionId, 1, now.plusSeconds(1)));
+        inTransaction(store -> store.completeLaunch(handoffId, failedRunId, now.plusSeconds(2)));
+
+        boolean wrongOwner = inTransactionReturning(store -> store.dismissOwned(
+                handoffId,
+                "mallory",
+                UploadedRulebookTeachingHandoffStore.State.LAUNCHED,
+                failedRunId));
+        boolean staleRun = inTransactionReturning(store -> store.dismissOwned(
+                handoffId,
+                "upload-handoff-player",
+                UploadedRulebookTeachingHandoffStore.State.LAUNCHED,
+                UUID.randomUUID()));
+        boolean dismissed = inTransactionReturning(store -> store.dismissOwned(
+                handoffId,
+                "upload-handoff-player",
+                UploadedRulebookTeachingHandoffStore.State.LAUNCHED,
+                failedRunId));
+
+        assertThat(wrongOwner).isFalse();
+        assertThat(staleRun).isFalse();
+        assertThat(dismissed).isTrue();
+        assertThat(jdbc.queryForObject(
+                        "SELECT count(*) FROM uploaded_rulebook_teaching_handoff WHERE id = ?",
+                        Integer.class,
+                        handoffId))
+                .isZero();
+        assertThat(jdbc.queryForObject(
+                        "SELECT count(*) FROM document_version WHERE id = ?",
+                        Integer.class,
+                        versionId))
+                .isOne();
+    }
+
     private static UUID insertDocument(String status) {
         UUID documentId = UUID.randomUUID();
         UUID versionId = UUID.randomUUID();

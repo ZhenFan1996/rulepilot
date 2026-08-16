@@ -174,6 +174,38 @@ class JpaOfficialRulebookImportJobRepository implements OfficialRulebookImportJo
 
     @Override
     @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public boolean dismissTeaching(
+            UUID jobId,
+            String ownerUsername,
+            OfficialRulebookImportJob.TeachingHandoffState expectedState,
+            UUID expectedPreparationRunId,
+            Instant now) {
+        String runCondition = expectedPreparationRunId == null
+                ? "and job.teachingPreparationRunId is null"
+                : "and job.teachingPreparationRunId = :expectedRunId";
+        var update = entityManager.createQuery(
+                """
+                update OfficialRulebookImportJobEntity job
+                set job.teachingHandoffState = 'NOT_REQUESTED',
+                    job.teachingLearningGoal = null,
+                    job.teachingPreparationRunId = null,
+                    job.teachingErrorCode = null,
+                    job.teachingHandoffUpdatedAt = null,
+                    job.updatedAt = :now
+                where job.id = :jobId
+                  and job.ownerUsername = :owner
+                  and job.teachingHandoffState = :expectedState
+                """ + runCondition);
+        update.setParameter("jobId", jobId)
+                .setParameter("owner", ownerUsername)
+                .setParameter("expectedState", expectedState.name())
+                .setParameter("now", now);
+        if (expectedPreparationRunId != null) update.setParameter("expectedRunId", expectedPreparationRunId);
+        return update.executeUpdate() == 1;
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public List<OfficialRulebookImportJob> claimReadyTeaching(int limit, Instant now) {
         return claimReadyTeaching(null, limit, now);
     }

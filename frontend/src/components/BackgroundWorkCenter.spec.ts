@@ -114,6 +114,44 @@ describe('BackgroundWorkCenter request lifecycle', () => {
     wrapper.unmount()
   })
 
+  it('removes a dismissed failed preparation from background work while retaining its official import', async () => {
+    let dismissed = false
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const path = String(input)
+      if (path.includes('/api/v1/assistant-runs/active')) return response([])
+      if (path.endsWith('/api/v1/documents/official-imports')) return response([{
+        id: 'import-failed-preparation', title: '仍然保留的规则书', sourceDomain: 'publisher.example',
+        stage: 'COMPLETED', downloadedBytes: 4096, totalBytes: 4096, documentVersionId: 'version-kept',
+        errorCode: null, teachingHandoffState: dismissed ? 'NOT_REQUESTED' : 'FAILED',
+        teachingPreparationRunId: null, teachingErrorCode: dismissed ? null : 'TEACHING_PREPARATION_FAILED',
+        downloadCompletedAt: '2026-08-16T08:00:00Z', importCompletedAt: '2026-08-16T08:00:00Z',
+        teachingHandoffUpdatedAt: dismissed ? null : '2026-08-16T08:01:00Z',
+        updatedAt: new Date().toISOString(),
+      }])
+      if (path.endsWith('/api/v1/documents')) return response([{
+        document: { id: 'document-kept', title: 'rules.pdf', createdBy: 'player' },
+        latestVersion: { id: 'version-kept', status: 'READY' },
+      }])
+      if (path.endsWith('/api/v1/documents/upload-teaching-handoffs')) return response([])
+      return new Response(null, { status: 404 })
+    }))
+    const wrapper = await mountCenter('player')
+    await flushPromises()
+    await openCenter(wrapper)
+    expect(wrapper.text()).toContain('仍然保留的规则书')
+    expect(wrapper.text()).toContain('需要处理')
+
+    dismissed = true
+    notifyBackgroundWorkChanged({ dismissedImportIds: ['import-failed-preparation'] })
+    await flushPromises()
+
+    expect(wrapper.text()).not.toContain('仍然保留的规则书')
+    expect(wrapper.text()).toContain('当前没有后台任务')
+    expect(sessionStorage.getItem(backgroundWorkStorageKeys('player').dismissedImports))
+      .toContain('import-failed-preparation')
+    wrapper.unmount()
+  })
+
   it.each([
     ['RECEIVED', '讲解任务已接收'],
     ['DOCUMENT_READINESS', '正在确认规则书可以用于讲解'],

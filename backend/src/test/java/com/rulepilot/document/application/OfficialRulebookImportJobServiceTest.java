@@ -739,6 +739,16 @@ class OfficialRulebookImportJobServiceTest {
         }
 
         @Override
+        public boolean dismissTeaching(
+                UUID jobId,
+                String ownerUsername,
+                OfficialRulebookImportJob.TeachingHandoffState expectedState,
+                UUID expectedPreparationRunId,
+                Instant now) {
+            return false;
+        }
+
+        @Override
         public List<OfficialRulebookImportJob> claimReadyTeaching(int limit, Instant now) {
             return claimReadyTeaching(null, limit, now);
         }

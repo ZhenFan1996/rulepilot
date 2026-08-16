@@ -177,6 +177,12 @@ describe('PublicLessonView', () => {
             decisionBranches: [
               { condition: '玩家板尚未放置。', outcome: '把玩家板放到自己面前。', basis: 'EXPLICIT_RULE' },
             ],
+            conceptComparisons: [{
+              leftConcept: '玩家板', leftDefinition: '记录个人行动与资源。',
+              rightConcept: '公共板', rightDefinition: '记录所有玩家共享的状态。',
+              commonGround: '两者都会承载规则状态。', keyDifference: '玩家板只属于一名玩家。',
+              practicalBoundary: '个人资源放玩家板，共享信息放公共板。', basis: 'STORAGE_STATUS',
+            }],
           },
           visualAids: [{ visualFocus: lesson.lesson.sections[0]!.steps[0]!.visualFocus, relatedStep: '放置玩家板' }],
           examples: [{ heading: '开局示例', text: '每位玩家从自己的玩家板开始。', sourcePages: [2] }],
@@ -223,6 +229,8 @@ describe('PublicLessonView', () => {
     expect(wrapper.text()).toContain('讲解拆分')
     expect(wrapper.text()).toContain('不同条件会发生什么')
     expect(wrapper.text()).toContain('规则明示')
+    expect(wrapper.text()).toContain('两者都会承载规则状态。')
+    expect(wrapper.text()).toContain('玩家板只属于一名玩家。')
     expect(wrapper.text()).toContain('支持这段答案的规则图例')
     expect(wrapper.text()).toContain('蓝色玩家板旁放着三枚木制标记。')
     expect(wrapper.text()).toContain('照这个例子走：开局示例')

@@ -918,10 +918,32 @@ function handleTeachingLaunched(event: Event) {
   void refresh()
 }
 
-function handleBackgroundWorkChanged() {
+function handleBackgroundWorkChanged(event: Event) {
   if (!account) return
   invalidateRefresh()
+  if (event instanceof CustomEvent && event.detail && typeof event.detail === 'object') {
+    const detail = event.detail as Record<string, unknown>
+    dismissedImportIds.value = withDismissedIds(
+      dismissedImportIds.value,
+      detail.dismissedImportIds,
+    )
+    dismissedUploadedHandoffIds.value = withDismissedIds(
+      dismissedUploadedHandoffIds.value,
+      detail.dismissedUploadedHandoffIds,
+    )
+    const keys = backgroundWorkStorageKeys(account)
+    safelyStore(keys.dismissedImports, [...dismissedImportIds.value])
+    safelyStore(keys.dismissedUploadHandoffs, [...dismissedUploadedHandoffIds.value])
+  }
   void refresh()
+}
+
+function withDismissedIds(current: Set<string>, candidate: unknown) {
+  if (!Array.isArray(candidate)) return current
+  const accepted = candidate
+    .filter((value): value is string => typeof value === 'string' && value.trim().length > 0 && value.length <= 128)
+    .map(value => value.trim())
+  return new Set([...current, ...accepted].slice(-100))
 }
 
 function openCenter(trigger?: HTMLElement | null) {

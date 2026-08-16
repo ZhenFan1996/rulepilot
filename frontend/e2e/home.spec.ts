@@ -23,8 +23,8 @@ test('uses the full illustrated-hero rhythm while BGG hot and random games lead 
   await expect(page).toHaveURL('/')
   await expect(page).toHaveTitle(/RulePilot/)
   await expect(page.getByRole('heading', { level: 1 })).toContainText('规则书递过来')
-  await expect(page.getByTestId('home-player-journey')).toContainText('从一句局况，到能开桌')
-  await expect(page.getByTestId('home-player-journey').getByRole('listitem')).toHaveCount(3)
+  await expect(page.getByTestId('home-player-journey')).toHaveCount(0)
+  await expect(page.getByText('从一句局况，到能开桌')).toHaveCount(0)
   await expect(page.getByRole('link', { name: '登录', exact: true })).toHaveCount(1)
   await expect(page.locator('a[href="/teach"]:visible').first()).toBeVisible()
   await expect(page.locator('a[href="/discover"]:visible').first()).toBeVisible()
@@ -59,7 +59,8 @@ test('keeps hot games, random picks, and the primary journey usable on a mobile 
   await page.goto('/')
 
   await expect(page).toHaveURL('/')
-  await expect(page.getByTestId('home-player-journey')).toContainText('从一句局况，到能开桌')
+  await expect(page.getByTestId('home-player-journey')).toHaveCount(0)
+  await expect(page.getByText('从一句局况，到能开桌')).toHaveCount(0)
   await expect(page.getByRole('link', { name: '登录', exact: true })).toHaveCount(1)
   await expect(page.locator('a[href="/teach"]:visible').first()).toBeVisible()
   await expect(page.locator('img[src="/illustrations/home-screenprint-friends.webp"]')).toBeVisible()
@@ -157,7 +158,7 @@ test('keeps the signed-in root journey stable across a history round trip', asyn
 
   await expect(page).toHaveURL('/')
   await expect(page.getByText('player，新游戏带来了吗？')).toBeVisible()
-  await expect(page.getByTestId('home-player-journey').getByRole('listitem')).toHaveCount(3)
+  await expect(page.getByTestId('home-player-journey')).toHaveCount(0)
   await expect(page.getByRole('link', { name: '登录', exact: true })).toHaveCount(0)
 
   const discover = page.locator('a[href="/discover"]:visible').first()
@@ -167,6 +168,7 @@ test('keeps the signed-in root journey stable across a history round trip', asyn
   await page.goBack()
 
   await expect(page).toHaveURL('/')
-  await expect(page.getByTestId('home-player-journey')).toContainText('按引用开桌')
+  await expect(page.getByTestId('home-player-journey')).toHaveCount(0)
+  await expect(page.getByRole('heading', { name: 'BGG 热门桌游' })).toBeVisible()
   await expect(page.getByRole('heading', { level: 1 })).toContainText('规则书递过来')
 })

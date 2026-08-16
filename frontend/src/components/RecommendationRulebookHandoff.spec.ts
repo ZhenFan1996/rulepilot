@@ -713,13 +713,37 @@ describe('RecommendationRulebookHandoff', () => {
           return Response.json({ stage: 'READY', percentage: 100, processedPages: 12, totalPages: 12, complete: true })
         }
         if (path === '/api/v1/assistant-runs/preparation-run-1') {
-          return Response.json(runSnapshot('preparation-run-1', 'COMPLETED'))
+          return Response.json({
+            ...runSnapshot('preparation-run-1', 'COMPLETED'),
+            activities: [{
+              sequence: 1,
+              operation: 'organizeTeachingOutline',
+              summary: 'internal outline prompt',
+              outcome: 'SUCCEEDED',
+            }],
+          })
         }
         if (path === '/api/v1/document-versions/version-1/teaching-plans/latest') {
           return Response.json(planFixture('plan-1', 'version-1'))
         }
         if (path === '/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=plan-1') {
-          return Response.json(runSnapshot('teaching-run-1', 'LESSON_COMPOSITION'))
+          return Response.json({
+            ...runSnapshot('teaching-run-1', 'LESSON_COMPOSITION'),
+            activities: [
+              {
+                sequence: 1,
+                operation: 'readTeachingSourcePages|1',
+                summary: 'internal page read',
+                outcome: 'SUCCEEDED',
+              },
+              {
+                sequence: 2,
+                operation: 'composeTeachingSection|1',
+                summary: 'internal model operation',
+                outcome: 'RUNNING',
+              },
+            ],
+          })
         }
         if (path === '/api/v1/teaching-plans/plan-1/illustrated-lessons/latest') {
           lessonRequests += 1
@@ -736,6 +760,13 @@ describe('RecommendationRulebookHandoff', () => {
       await flushPromises()
       expect(lessonRequests).toBe(1)
       expect(wrapper.text()).not.toContain('讲解已有可读内容')
+      const generationSteps = wrapper.get('[data-testid="recommendation-teaching-generation-steps"]')
+      expect(generationSteps.text()).toContain('已形成整局认识，并把规则书整理成可讲解的章节')
+      expect(generationSteps.text()).toContain('正在读取第 1 章“Setup”引用的规则书页面')
+      expect(generationSteps.text()).toContain('正在依据规则书编写第 1 章“Setup”')
+      expect(generationSteps.text()).not.toContain('readTeachingSourcePages')
+      expect(generationSteps.text()).not.toContain('internal model operation')
+      expect(generationSteps.text()).not.toContain('internal outline prompt')
 
       await vi.advanceTimersByTimeAsync(499)
       await flushPromises()

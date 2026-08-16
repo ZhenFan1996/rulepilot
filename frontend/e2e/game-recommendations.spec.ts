@@ -88,6 +88,41 @@ const completeLesson = {
 function assistantRun(id: string, state: string, revision: number) {
   const updatedAt = `2026-08-10T08:00:0${revision}Z`
   const preparation = id.startsWith('preparation-run-')
+  const activities = preparation
+    ? [{
+        sequence: 1, type: 'MODEL', operation: 'organizeTeachingOutline', summary: 'internal outline telemetry',
+        outcome: state === 'COMPLETED' ? 'SUCCEEDED' : state === 'FAILED' ? 'FAILED' : 'RUNNING',
+        latencyMs: 12, occurredAt: updatedAt,
+      }]
+    : state === 'COMPLETED'
+      ? [
+          {
+            sequence: 1, type: 'TOOL', operation: 'readTeachingSourcePages|1', summary: 'internal page-read telemetry',
+            outcome: 'SUCCEEDED', latencyMs: 8, occurredAt: updatedAt,
+          },
+          {
+            sequence: 2, type: 'MODEL', operation: 'composeTeachingSection|1', summary: 'internal model telemetry',
+            outcome: 'SUCCEEDED', latencyMs: 12, occurredAt: updatedAt,
+          },
+          {
+            sequence: 3, type: 'VALIDATION', operation: 'validateTeachingSection|1|0', summary: 'internal validation telemetry',
+            outcome: 'SUCCEEDED', latencyMs: 1, occurredAt: updatedAt,
+          },
+          {
+            sequence: 4, type: 'VALIDATION', operation: 'publishTeachingSection|1', summary: 'CITED_BASE_SECTION_PUBLISHED',
+            outcome: 'SUCCEEDED', latencyMs: 1, occurredAt: updatedAt,
+          },
+        ]
+      : [
+          {
+            sequence: 1, type: 'TOOL', operation: 'readTeachingSourcePages|1', summary: 'internal page-read telemetry',
+            outcome: 'SUCCEEDED', latencyMs: 8, occurredAt: updatedAt,
+          },
+          {
+            sequence: 2, type: 'MODEL', operation: 'composeTeachingSection|1', summary: 'internal model telemetry',
+            outcome: 'RUNNING', latencyMs: 12, occurredAt: updatedAt,
+          },
+        ]
   return {
     run: {
       id, state, revision, mode: preparation ? 'TEACHING_PREPARATION' : 'TEACHING',
@@ -96,10 +131,7 @@ function assistantRun(id: string, state: string, revision: number) {
       completedAt: state === 'COMPLETED' ? updatedAt : null, lastErrorCode: null,
     },
     budget: { usedModelCalls: revision, maxModelCalls: 12 },
-    activities: state === 'COMPLETED' ? [{
-      sequence: 1, type: 'VALIDATION', operation: 'publishTeachingSection|1', summary: 'CITED_BASE_SECTION_PUBLISHED',
-      outcome: 'SUCCEEDED', latencyMs: 12, occurredAt: updatedAt,
-    }] : [],
+    activities,
   }
 }
 
@@ -989,6 +1021,11 @@ test('hands persisted recommendation work to global guides before the preparatio
   await journey.getByRole('checkbox', { name: /我已比较以上游戏、版本和语言/ }).check()
   await journey.getByRole('checkbox', { name: /确认该链接来自有权提供/ }).check()
   await journey.getByRole('button', { name: '下载规则书并生成讲解' }).click()
+
+  const generationSteps = journey.getByTestId('recommendation-teaching-generation-steps')
+  await expect(generationSteps).toContainText('正在通读规则书，先形成整局认识再规划讲解章节')
+  await expect(generationSteps).not.toContainText('organizeTeachingOutline')
+  await expect(generationSteps).not.toContainText('internal outline telemetry')
 
   const workTrigger = page.getByTestId('background-work-trigger-desktop')
   await expect(workTrigger.locator('span').filter({ hasText: '1' })).toBeVisible()

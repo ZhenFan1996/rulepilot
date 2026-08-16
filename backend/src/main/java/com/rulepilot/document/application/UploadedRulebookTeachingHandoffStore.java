@@ -13,6 +13,12 @@ public interface UploadedRulebookTeachingHandoffStore {
 
     Snapshot retry(UUID handoffId, UUID expectedPreparationRunId, String ownerUsername, Instant now);
 
+    boolean dismissOwned(
+            UUID handoffId,
+            String ownerUsername,
+            State expectedState,
+            UUID expectedPreparationRunId);
+
     List<Snapshot> findRecentOwned(String ownerUsername, int limit);
 
     List<Snapshot> claimReady(int limit, Instant now);

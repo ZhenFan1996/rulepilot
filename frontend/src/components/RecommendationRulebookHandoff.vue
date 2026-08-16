@@ -42,7 +42,12 @@ import {
   type PlayerJourneyProjection,
   type PlayerJourneyRun,
 } from '@/lib/playerJourney'
-import { teachingActivityText, type TeachingActivity } from '@/lib/teachingProgress'
+import {
+  recentTeachingActivitySteps,
+  recentTeachingPreparationActivitySteps,
+  teachingActivityText,
+  type TeachingActivity,
+} from '@/lib/teachingProgress'
 
 interface ImportedGame {
   game: { id: string; name: string }
@@ -157,7 +162,7 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   login: '登录后即可保留这次选择并继续找规则书。', loginAction: '打开桌游详情并继续',
   error: '这一步暂时没有完成；推荐对话和已选桌游不会受影响。', partialFailure: '已生成的章节仍可阅读，但后台生成或核对没有完整结束。可以安全重试，现有内容不会丢失。', retry: '重试当前步骤', close: '关闭小窗', change: '换一款',
   safe: '可以关闭这个小窗继续聊天；下载、规则书处理和讲解生成会继续。',
-  progress: '完整链路进度', current: '现在正在做', pollingWarning: '暂时没有拿到最新进度，正在自动重试；已确认的进度不会倒退。',
+  progress: '完整链路进度', current: '现在正在做', generationSteps: '讲解生成步骤', pollingWarning: '暂时没有拿到最新进度，正在自动重试；已确认的进度不会倒退。',
   gameBound: '桌游已绑定', rulebook: '获取规则书', document: '读取规则书', lesson: '生成讲解', questions: '进入答疑',
   readLesson: '打开已生成的讲解', askQuestions: '切换为规则答疑', catalog: '我的桌游',
   readRulebook: '先阅读原规则书', rulebookReady: '规则书已经可以阅读；讲解会继续在后台生成。', rulebookAvailable: '原规则书已就绪，可随时与讲解对照阅读。',
@@ -206,7 +211,7 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   login: 'Sign in to keep this selection and continue to its rulebook.', loginAction: 'Open game details and continue',
   error: 'This step did not complete. The conversation and selected game are unaffected.', partialFailure: 'Published chapters remain readable, but background generation or review did not finish. You can retry safely without losing existing content.', retry: 'Retry this step', close: 'Close', change: 'Choose another game',
   safe: 'You may close this panel and keep chatting. Download, rulebook processing, and guide generation will continue.',
-  progress: 'End-to-end progress', current: 'Working on', pollingWarning: 'The latest update is temporarily unavailable. Retrying automatically without rolling back confirmed progress.',
+  progress: 'End-to-end progress', current: 'Working on', generationSteps: 'Guide generation steps', pollingWarning: 'The latest update is temporarily unavailable. Retrying automatically without rolling back confirmed progress.',
   gameBound: 'Game linked', rulebook: 'Get rulebook', document: 'Read rules', lesson: 'Generate guide', questions: 'Start Q&A',
   readLesson: 'Open the generated guide', askQuestions: 'Switch to rules Q&A', catalog: 'My Games',
   readRulebook: 'Read the original rulebook now', rulebookReady: 'The rulebook is readable now while the guide continues in the background.', rulebookAvailable: 'The original rulebook is ready to compare with the guide at any time.',
@@ -374,6 +379,25 @@ const journeyDetail = computed(() => {
     )
   }
   return ''
+})
+const journeyTeachingSteps = computed(() => {
+  const preparationSteps = recentTeachingPreparationActivitySteps(
+    (preparationRun.value?.activities ?? []) as unknown as TeachingActivity[],
+    locale.value,
+  ).map(step => ({ ...step, key: `preparation-${step.sequence}` }))
+  if (!plan.value || !teachingRun.value?.activities?.length) return preparationSteps
+  const progressPlan = {
+    sections: plan.value.sections.map(section => ({
+      ...section,
+      visualEvidenceRecommended: false,
+    })),
+  }
+  const chapterSteps = recentTeachingActivitySteps(
+    progressPlan,
+    teachingRun.value.activities as unknown as TeachingActivity[],
+    locale.value,
+  ).map(step => ({ ...step, key: `chapter-${step.sequence}` }))
+  return [...preparationSteps, ...chapterSteps].slice(-6)
 })
 const journeyStatus = computed<RecommendationJourneyStatus>(() => ({
   projection: projection.value,
@@ -1244,6 +1268,29 @@ onBeforeUnmount(() => {
             <span class="mr-1" aria-hidden="true">{{ milestone.done ? '✓' : milestone.active ? '●' : '○' }}</span>{{ milestone.label }}
           </li>
         </ol>
+        <section
+          v-if="journeyTeachingSteps.length"
+          data-testid="recommendation-teaching-generation-steps"
+          class="mt-4 rounded-xl border border-copper/15 bg-copper/5 px-4 py-3"
+          :aria-label="copy.generationSteps"
+          aria-live="polite"
+        >
+          <p class="text-xs font-bold uppercase tracking-[0.1em] text-copper">{{ copy.generationSteps }}</p>
+          <ol class="mt-2 grid gap-2 sm:grid-cols-2">
+            <li
+              v-for="step in journeyTeachingSteps"
+              :key="step.key"
+              class="flex items-start gap-2 text-xs leading-5 text-ink/65"
+            >
+              <span
+                class="mt-0.5 grid size-4 shrink-0 place-items-center rounded-full text-[10px] font-bold text-white"
+                :class="step.outcome === 'RUNNING' ? 'animate-pulse bg-copper' : step.outcome === 'SUCCEEDED' ? 'bg-emerald-600' : 'bg-amber-600'"
+                aria-hidden="true"
+              >{{ step.outcome === 'SUCCEEDED' ? '✓' : step.outcome === 'RUNNING' ? '●' : '!' }}</span>
+              <span>{{ step.text }}</span>
+            </li>
+          </ol>
+        </section>
         <p class="mt-4 rounded-xl border border-indigo/10 bg-indigo/5 px-4 py-3 text-xs leading-5 text-ink/60">{{ copy.safe }}</p>
         <p v-if="pollingWarning" class="mt-3 rounded-lg bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-900" role="status">{{ copy.pollingWarning }}</p>
         <div v-if="projection.canReadRulebook" class="mt-4 rounded-xl border border-indigo/15 bg-indigo/5 p-4 text-sm leading-6 text-ink/65">

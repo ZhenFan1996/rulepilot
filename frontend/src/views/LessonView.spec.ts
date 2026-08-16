@@ -146,7 +146,7 @@ describe('LessonView progressive reading', () => {
     await flushPromises()
     expect(wrapper.text()).toContain('开始第一轮')
     expect(wrapper.text()).toContain('整本仍在后台生成')
-    expect(wrapper.text()).toContain('正在依据规则书编写“先摆主板”')
+    expect(wrapper.text()).toContain('正在依据规则书编写第 1 章“先摆主板”')
     expect(wrapper.text()).toContain('后台已处理 0/2 节')
     expect(wrapper.text()).not.toContain('模型调用')
     expect(wrapper.text()).toContain('第一节完成后')

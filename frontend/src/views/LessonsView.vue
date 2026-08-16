@@ -16,6 +16,7 @@ import {
   type PendingGuideCatalogGame,
   type PendingGuideDocument,
   type PendingGuideImport,
+  type PendingGuideJourney,
   type PendingGuidePreparationRun,
   type PendingGuideUploadHandoff,
 } from '@/lib/pendingGuideJourney'
@@ -50,6 +51,7 @@ interface CsrfResponse { headerName: string; token: string }
 type PlanFilter = 'READABLE' | 'PENDING' | 'ALL'
 type DestructiveAction =
   | { kind: 'delete-plan'; plan: TeachingPlan }
+  | { kind: 'delete-failed-preparation'; journey: PendingGuideJourney }
   | { kind: 'cleanup'; duplicateCount: number }
 
 const route = useRoute()
@@ -67,6 +69,7 @@ const errorMessage = ref('')
 const loginRequired = ref(false)
 const launchingPlanId = ref('')
 const deletingPlanId = ref('')
+const deletingJourneyId = ref('')
 const cleanupLoading = ref(false)
 const cleanupMessage = ref('')
 const destructiveAction = ref<DestructiveAction | null>(null)
@@ -76,13 +79,45 @@ const restoreAfterDestructiveSuccess = ref(false)
 const destructiveCopy = computed(() => locale.value === 'zh-CN' ? {
   deleteTitle: '删除这份讲解？', deleteDescription: (title: string) => `“${title}”的这份讲解和仍在进行的生成任务将被删除。规则书会保留，你之后可以重新生成。`,
   deleteCancel: '保留讲解', deleteConfirm: '删除讲解', deleteRetry: '重新尝试删除',
+  failedTitle: '删除这次失败的讲解准备？', failedDescription: (title: string) => `“${title}”的失败记录将从我的讲解和后台任务中移除。规则书会保留，之后仍可重新生成。`,
+  failedCancel: '保留记录', failedConfirm: '删除失败记录', failedRetry: '重新尝试删除',
   cleanupTitle: '清理重复讲解？', cleanupDescription: (count: number) => `发现 ${count} 份重复讲解。将保留内容最完整且最新的一份，删除其余重复项并停止它们仍在进行的任务。`,
   cleanupCancel: '保留全部', cleanupConfirm: '清理重复项', cleanupRetry: '重新尝试清理',
 } : {
   deleteTitle: 'Delete this guide?', deleteDescription: (title: string) => `The guide for “${title}” and any generation still running for it will be deleted. Its rulebook stays available, and you can generate another guide later.`,
   deleteCancel: 'Keep guide', deleteConfirm: 'Delete guide', deleteRetry: 'Try deletion again',
+  failedTitle: 'Delete this failed guide attempt?', failedDescription: (title: string) => `The failed attempt for “${title}” will be removed from My Guides and background work. Its rulebook stays available, so you can generate another guide later.`,
+  failedCancel: 'Keep attempt', failedConfirm: 'Delete failed attempt', failedRetry: 'Try deletion again',
   cleanupTitle: 'Clean up duplicate guides?', cleanupDescription: (count: number) => `${count} duplicate guides were found. The newest, most complete copy will remain; the other duplicates and any work still running for them will be removed.`,
   cleanupCancel: 'Keep all guides', cleanupConfirm: 'Clean up duplicates', cleanupRetry: 'Try cleanup again',
+})
+const destructivePending = computed(() => Boolean(deletingPlanId.value || deletingJourneyId.value) || cleanupLoading.value)
+const destructiveDialog = computed(() => {
+  const action = destructiveAction.value
+  if (action?.kind === 'cleanup') return {
+    title: destructiveCopy.value.cleanupTitle,
+    description: destructiveCopy.value.cleanupDescription(action.duplicateCount),
+    cancel: destructiveCopy.value.cleanupCancel,
+    confirm: destructiveCopy.value.cleanupConfirm,
+    pending: t('lessons.cleanup.loading'),
+    retry: destructiveCopy.value.cleanupRetry,
+  }
+  if (action?.kind === 'delete-failed-preparation') return {
+    title: destructiveCopy.value.failedTitle,
+    description: destructiveCopy.value.failedDescription(action.journey.title),
+    cancel: destructiveCopy.value.failedCancel,
+    confirm: destructiveCopy.value.failedConfirm,
+    pending: t('lessons.action.deleting'),
+    retry: destructiveCopy.value.failedRetry,
+  }
+  return {
+    title: destructiveCopy.value.deleteTitle,
+    description: destructiveCopy.value.deleteDescription(action?.kind === 'delete-plan' ? displayPlanTitle(action.plan) : ''),
+    cancel: destructiveCopy.value.deleteCancel,
+    confirm: destructiveCopy.value.deleteConfirm,
+    pending: t('lessons.action.deleting'),
+    retry: destructiveCopy.value.deleteRetry,
+  }
 })
 const retryingJourneyId = ref('')
 const journeyRetryErrors = ref<Record<string, string>>({})
@@ -713,14 +748,22 @@ async function retryPendingJourney(journey: (typeof pendingJourneys.value)[numbe
 }
 
 function requestDeletePlan(plan: TeachingPlan) {
-  if (deletingPlanId.value || cleanupLoading.value) return
+  if (destructivePending.value) return
   destructiveAction.value = { kind: 'delete-plan', plan }
   destructiveError.value = ''
   restoreAfterDestructiveSuccess.value = false
 }
 
+function requestDeleteFailedPreparation(journey: PendingGuideJourney) {
+  if (destructivePending.value || journey.state !== 'failed') return
+  if (!journey.importJobId && !journey.uploadHandoffId) return
+  destructiveAction.value = { kind: 'delete-failed-preparation', journey }
+  destructiveError.value = ''
+  restoreAfterDestructiveSuccess.value = false
+}
+
 function cancelDestructiveAction() {
-  if (deletingPlanId.value || cleanupLoading.value) return
+  if (destructivePending.value) return
   destructiveAction.value = null
   destructiveError.value = ''
   restoreAfterDestructiveSuccess.value = false
@@ -733,7 +776,7 @@ function destructiveRestoreTarget() {
 }
 
 async function confirmDeletePlan(plan: TeachingPlan) {
-  if (deletingPlanId.value || cleanupLoading.value) return
+  if (destructivePending.value) return
   deletingPlanId.value = plan.id
   destructiveError.value = ''
   try {
@@ -759,8 +802,63 @@ async function confirmDeletePlan(plan: TeachingPlan) {
   }
 }
 
+async function confirmDeleteFailedPreparation(journey: PendingGuideJourney) {
+  if (destructivePending.value) return
+  const sourcePath = journey.importJobId
+    ? `official-imports/${encodeURIComponent(journey.importJobId)}`
+    : journey.uploadHandoffId
+      ? `uploads/${encodeURIComponent(journey.uploadHandoffId)}`
+      : ''
+  if (!sourcePath) return
+  deletingJourneyId.value = journey.id
+  destructiveError.value = ''
+  try {
+    const csrfResponse = await checkedFetch('/api/auth/csrf')
+    if (!csrfResponse.ok) throw new Error(t('lessons.error.secureSession'))
+    const csrf = await csrfResponse.json() as CsrfResponse
+    const response = await checkedFetch(`/api/v1/teaching-preparation-failures/${sourcePath}`, {
+      method: 'DELETE', headers: { [csrf.headerName]: csrf.token },
+    })
+    if (!response.ok) throw new Error(locale.value === 'zh-CN' ? '没有成功删除这次失败记录。' : 'The failed attempt could not be deleted.')
+    if (journey.importJobId) {
+      guideImports.value = guideImports.value.map(job => job.id === journey.importJobId
+        ? {
+            ...job,
+            teachingHandoffState: 'NOT_REQUESTED',
+            teachingPreparationRunId: null,
+            teachingErrorCode: null,
+          }
+        : job)
+    }
+    if (journey.uploadHandoffId) {
+      guideUploadHandoffs.value = guideUploadHandoffs.value
+        .filter(handoff => handoff.id !== journey.uploadHandoffId)
+    }
+    if (journey.preparationRunId) {
+      preparationRuns.value = preparationRuns.value.filter(run => run.id !== journey.preparationRunId)
+    }
+    const nextErrors = { ...journeyRetryErrors.value }
+    delete nextErrors[journey.id]
+    journeyRetryErrors.value = nextErrors
+    restoreAfterDestructiveSuccess.value = true
+    destructiveAction.value = null
+    cleanupMessage.value = locale.value === 'zh-CN'
+      ? '失败的讲解准备记录已删除，规则书仍然保留。'
+      : 'The failed guide attempt was deleted and its rulebook was kept.'
+    notifyBackgroundWorkChanged(journey.importJobId
+      ? { dismissedImportIds: [journey.importJobId] }
+      : { dismissedUploadedHandoffIds: [journey.uploadHandoffId!] })
+  } catch (error) {
+    destructiveError.value = error instanceof Error
+      ? error.message
+      : locale.value === 'zh-CN' ? '没有成功删除这次失败记录。' : 'The failed attempt could not be deleted.'
+  } finally {
+    deletingJourneyId.value = ''
+  }
+}
+
 async function requestCleanDuplicates() {
-  if (cleanupLoading.value || deletingPlanId.value) return
+  if (destructivePending.value) return
   cleanupLoading.value = true
   cleanupMessage.value = ''
   errorMessage.value = ''
@@ -783,7 +881,7 @@ async function requestCleanDuplicates() {
 }
 
 async function confirmCleanDuplicates() {
-  if (cleanupLoading.value || deletingPlanId.value) return
+  if (destructivePending.value) return
   cleanupLoading.value = true
   destructiveError.value = ''
   try {
@@ -810,6 +908,7 @@ function confirmDestructiveAction() {
   const action = destructiveAction.value
   if (!action) return
   if (action.kind === 'delete-plan') void confirmDeletePlan(action.plan)
+  else if (action.kind === 'delete-failed-preparation') void confirmDeleteFailedPreparation(action.journey)
   else void confirmCleanDuplicates()
 }
 
@@ -909,6 +1008,7 @@ onBeforeUnmount(() => {
             </div>
             <div class="mt-4 flex flex-wrap gap-4 text-sm font-semibold text-indigo">
               <button v-if="journey.retryAction === 'PREPARE_TEACHING'" type="button" :disabled="Boolean(retryingJourneyId)" class="inline-flex min-h-10 items-center rounded-lg bg-indigo px-4 text-white disabled:opacity-40" @click="retryPendingJourney(journey)">{{ retryingJourneyId === journey.id ? pendingCopy.retryingPreparation : pendingCopy.retryPreparation }}</button>
+              <button v-if="journey.state === 'failed' && (journey.importJobId || journey.uploadHandoffId)" type="button" data-testid="delete-failed-guide-attempt" :disabled="destructivePending" class="inline-flex min-h-10 items-center rounded-lg px-2 text-ink/45 hover:bg-red-50 hover:text-red-700 disabled:opacity-40" @click="requestDeleteFailedPreparation(journey)">{{ deletingJourneyId === journey.id ? (locale === 'zh-CN' ? '正在删除…' : 'Deleting…') : (locale === 'zh-CN' ? '删除失败记录' : 'Delete failed attempt') }}</button>
               <RouterLink v-if="journey.documentVersionId && journey.canReadRulebook" :to="{ name: 'rulebook-reader', params: { versionId: journey.documentVersionId } }" class="inline-flex min-h-10 items-center underline">{{ pendingCopy.openRulebook }}</RouterLink>
               <RouterLink v-if="journey.importJobId" :to="{ name: 'teach', query: { importJob: journey.importJobId } }" class="inline-flex min-h-10 items-center underline">{{ pendingCopy.openSource }}</RouterLink>
               <RouterLink v-else-if="journey.state === 'failed'" :to="{ name: 'teach' }" class="inline-flex min-h-10 items-center underline">{{ pendingCopy.openSource }}</RouterLink>
@@ -1000,16 +1100,14 @@ onBeforeUnmount(() => {
 
       <DestructiveActionDialog
         :open="Boolean(destructiveAction)"
-        :pending="Boolean(deletingPlanId) || cleanupLoading"
+        :pending="destructivePending"
         :error="destructiveError"
-        :title="destructiveAction?.kind === 'cleanup' ? destructiveCopy.cleanupTitle : destructiveCopy.deleteTitle"
-        :description="destructiveAction?.kind === 'cleanup'
-          ? destructiveCopy.cleanupDescription(destructiveAction.duplicateCount)
-          : destructiveCopy.deleteDescription(destructiveAction?.kind === 'delete-plan' ? displayPlanTitle(destructiveAction.plan) : '')"
-        :cancel-label="destructiveAction?.kind === 'cleanup' ? destructiveCopy.cleanupCancel : destructiveCopy.deleteCancel"
-        :confirm-label="destructiveAction?.kind === 'cleanup' ? destructiveCopy.cleanupConfirm : destructiveCopy.deleteConfirm"
-        :pending-label="destructiveAction?.kind === 'cleanup' ? t('lessons.cleanup.loading') : t('lessons.action.deleting')"
-        :retry-label="destructiveAction?.kind === 'cleanup' ? destructiveCopy.cleanupRetry : destructiveCopy.deleteRetry"
+        :title="destructiveDialog.title"
+        :description="destructiveDialog.description"
+        :cancel-label="destructiveDialog.cancel"
+        :confirm-label="destructiveDialog.confirm"
+        :pending-label="destructiveDialog.pending"
+        :retry-label="destructiveDialog.retry"
         :restore-focus="destructiveRestoreTarget"
         @cancel="cancelDestructiveAction"
         @confirm="confirmDestructiveAction"

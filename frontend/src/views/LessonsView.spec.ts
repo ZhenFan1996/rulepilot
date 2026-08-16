@@ -409,7 +409,7 @@ describe('LessonsView', () => {
     const status = wrapper.get('[data-testid="player-work-status"]')
     expect(status.text()).toBe('正在补充图片或核对细节')
     expect(status.attributes('data-player-work-readiness')).toBe('usable')
-    expect(wrapper.text()).toContain('基础讲解已可用，正在核对“完成开局设置”的细节')
+    expect(wrapper.text()).toContain('基础讲解已可用，正在核对第 1 章“完成开局设置”的细节')
     expect(wrapper.text()).toContain('已处理 1/1 节')
     expect(wrapper.text()).not.toMatch(/模型调用|model calls|次内容处理/)
     expect(wrapper.text()).toContain('完整基础讲解已经可读')
@@ -912,6 +912,62 @@ describe('LessonsView', () => {
     expect(wrapper.text()).not.toContain('Root')
     expect(wrapper.text()).toContain('讲解已删除')
     expect(document.activeElement).toBe(wrapper.get('h1').element)
+    wrapper.unmount()
+  })
+
+  it('persistently deletes a failed preparation attempt while keeping its rulebook', async () => {
+    const deletePaths: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, options?: RequestInit) => {
+      const path = String(input)
+      if (path === '/api/v1/teaching-plans') return Response.json([])
+      if (path === '/api/v1/documents/official-imports') return Response.json([])
+      if (path === '/api/v1/documents/upload-teaching-handoffs') return Response.json([{
+        id: 'handoff-failed', documentVersionId: 'version-1', editionId: 'edition-1',
+        title: '星际探险', rulebookTitle: 'rules_v4_final.pdf', state: 'LAUNCHED',
+        preparationRunId: 'prep-failed', errorCode: null, updatedAt: '2026-08-16T00:00:00Z',
+      }])
+      if (path === '/api/v1/assistant-runs/active?mode=TEACHING_PREPARATION') return Response.json([])
+      if (path === '/api/v1/assistant-runs/prep-failed') return Response.json({ run: {
+        id: 'prep-failed', subjectId: 'version-1', state: 'FAILED',
+        lastErrorCode: 'TEACHING_PREPARATION_FAILED', updatedAt: '2026-08-16T00:01:00Z',
+      } })
+      if (path === '/api/v1/documents') return Response.json([{
+        document: { gameEditionId: 'edition-1', title: 'rules_v4_final.pdf' },
+        latestVersion: { id: 'version-1', status: 'READY' },
+      }])
+      if (path === '/api/v1/games') return Response.json([{
+        game: { name: '星际探险' }, editions: [{ id: 'edition-1' }],
+      }])
+      if (path === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      if (options?.method === 'DELETE') {
+        deletePaths.push(path)
+        return new Response(null, { status: 204 })
+      }
+      if (path.includes('/api/auth/session')) return Response.json({ username: 'alice', roles: ['USER'] })
+      return new Response(null, { status: 404 })
+    }))
+    const router = createMemoryRouter()
+    await router.push('/lessons')
+    await router.isReady()
+    const wrapper = mount(LessonsView, {
+      attachTo: document.body,
+      global: { plugins: [router], stubs: { BackgroundWorkCenter: true } },
+    })
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="pending-guide-journey"]').text()).toContain('rules_v4_final.pdf')
+    await wrapper.get('[data-testid="delete-failed-guide-attempt"]').trigger('click')
+    await flushPromises()
+    expect(deletePaths).toEqual([])
+    expect(document.body.querySelector('[role="alertdialog"]')?.textContent).toContain('规则书会保留')
+
+    ;[...document.body.querySelectorAll<HTMLButtonElement>('[role="alertdialog"] button')]
+      .find(button => button.textContent?.includes('删除失败记录'))!.click()
+    await flushPromises()
+
+    expect(deletePaths).toEqual(['/api/v1/teaching-preparation-failures/uploads/handoff-failed'])
+    expect(wrapper.find('[data-testid="pending-guide-journey"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('失败的讲解准备记录已删除，规则书仍然保留')
     wrapper.unmount()
   })
 })

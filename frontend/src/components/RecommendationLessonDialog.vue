@@ -91,13 +91,13 @@ useModalFocus({
 
 const copy = computed(() => locale.value === 'zh-CN' ? {
   dialog: '生成讲解阅读器', close: '关闭讲解', eyebrow: '规则书讲解', loading: '正在打开已生成的讲解…', error: '讲解暂时无法打开。', retry: '重试',
-  draft: '已有 {done} / {total} 章通过规则核对；其余基础内容仍可阅读，后台会继续核对。', complete: '完整讲解已经生成。', incomplete: '当前讲解只发布了有足够规则依据的内容。',
-  syncing: '已有 {done} / {total} 章通过规则核对；正在核对持久化后台任务状态。', settledDraft: '已有 {done} / {total} 章通过规则核对；未通过的章节仍需更强的规则依据。',
+  draft: '已有 {done} / {total} 章完成引用、结构与数量校验；其余章节仍在后台生成。', complete: '完整讲解已经生成。', incomplete: '当前讲解只发布了具备可用规则依据的章节。',
+  syncing: '已有 {done} / {total} 章完成引用、结构与数量校验；正在确认后台任务状态。', settledDraft: '已有 {done} / {total} 章完成引用、结构与数量校验；未发布章节仍缺少可用规则依据。',
   refresh: '暂时无法刷新最新章节，已显示的内容仍可继续阅读。', ask: '切换到规则答疑', source: '每个步骤都保留原规则书页码；答疑只使用同一份规则书。',
 } : {
   dialog: 'Generated guide reader', close: 'Close guide', eyebrow: 'Rulebook guide', loading: 'Opening generated guide content…', error: 'The guide cannot be opened right now.', retry: 'Retry',
-  draft: '{done} / {total} chapters passed rule review; the remaining starter content is readable while review continues.', complete: 'The complete guide is ready.', incomplete: 'This guide publishes only content with enough rulebook support.',
-  syncing: '{done} / {total} chapters passed rule review while the persisted background task is reconciled.', settledDraft: '{done} / {total} chapters passed rule review; the remaining chapters still need stronger rule evidence.',
+  draft: '{done} / {total} chapters passed citation, structure, and quantity checks; the remaining chapters are still being generated.', complete: 'The complete guide is ready.', incomplete: 'This guide publishes only chapters with usable rulebook support.',
+  syncing: '{done} / {total} chapters passed citation, structure, and quantity checks while the background task status is confirmed.', settledDraft: '{done} / {total} chapters passed citation, structure, and quantity checks; unpublished chapters still lack usable rulebook support.',
   refresh: 'The latest chapter update is unavailable. Confirmed content remains readable.', ask: 'Switch to rules Q&A', source: 'Every step retains original rulebook page references; Q&A uses the same rulebook.',
 })
 
