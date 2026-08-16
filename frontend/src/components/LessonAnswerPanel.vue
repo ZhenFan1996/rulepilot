@@ -2,10 +2,12 @@
 import { computed, nextTick, ref } from 'vue'
 
 import AgentWorkspaceHeader from '@/components/AgentWorkspaceHeader.vue'
+import PlayerWorkStatusText from '@/components/PlayerWorkStatusText.vue'
 import VoiceQuestionCapture from '@/components/VoiceQuestionCapture.vue'
 import { useLocale } from '@/lib/locale'
 import { playerFacingExplanation, playerFacingWalkthroughSteps } from '@/lib/playerFacingAnswer'
 import { playerFacingCitationExcerpt } from '@/lib/playerFacingCitation'
+import { playerWorkStatus } from '@/lib/playerWorkStatus'
 import type {
   AnswerTurn,
   ConfirmedRuling,
@@ -22,6 +24,7 @@ const props = withDefaults(defineProps<{
   activeLearningIntent: LearningIntent | null
   answerLoading: boolean
   answerError: string
+  answerOutcome: 'none' | 'failed' | 'cancelled'
   agentTrace?: AnswerAgentTraceItem[]
   online: boolean
   ruling: ConfirmedRuling | null
@@ -77,7 +80,23 @@ defineExpose({
 })
 const resolvedQuestion = ref('')
 const answerResolved = computed(() => resolvedQuestion.value === props.answeredQuestion && !!props.answeredQuestion)
-const { t } = useLocale()
+const { locale, t } = useLocale()
+const answerWorkStatus = computed(() => playerWorkStatus('CHECKING_ANSWER', {
+  capability: props.answerTurns.length > 0 ? 'answer' : 'rulebook',
+  readiness: props.answerTurns.length > 0 ? 'usable' : 'unavailable',
+  terminality: 'active',
+  outcome: 'none',
+}, locale.value))
+const answerErrorStatus = computed(() => playerWorkStatus(
+  props.answerOutcome === 'cancelled' ? 'CANCELLED' : 'NEEDS_ACTION',
+  {
+    capability: props.answerTurns.length > 0 ? 'answer' : 'rulebook',
+    readiness: props.answerTurns.length > 0 ? 'usable' : 'unavailable',
+    terminality: 'terminal',
+    outcome: props.answerOutcome === 'cancelled' ? 'cancelled' : 'failed',
+  },
+  locale.value,
+))
 
 async function focusQuestionForMoreDetail() {
   await nextTick()
@@ -477,11 +496,28 @@ function hasStructuredAnswerDetails(answer: StructuredRuleAnswer) {
             </div>
           </form>
 
-          <p v-if="answerError" class="mt-4 rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">{{ answerError }}</p>
+          <div
+            v-if="answerError"
+            class="mt-4 rounded-2xl px-4 py-3"
+            :class="answerOutcome === 'cancelled' ? 'bg-amber-50 text-amber-900' : 'bg-red-50 text-red-700'"
+            :role="answerOutcome === 'cancelled' ? 'status' : 'alert'"
+          >
+            <PlayerWorkStatusText
+              :status="answerErrorStatus"
+              class="text-sm font-semibold"
+            />
+            <p class="mt-1 text-xs leading-5">{{ answerError }}</p>
+          </div>
           <div v-else-if="answerLoading" class="mt-5 stack-y-md rounded-2xl border border-ink/8 p-5" aria-live="polite">
             <div class="flex items-center gap-3">
               <span class="size-3 animate-pulse rounded-full bg-indigo" aria-hidden="true" />
-              <p class="text-sm font-semibold">{{ activeLearningIntent ? t('lesson.answer.workingIntent', { intent: learningIntentLabel(activeLearningIntent) }) : t('lesson.answer.working') }}</p>
+              <div>
+                <PlayerWorkStatusText
+                  :status="answerWorkStatus"
+                  class="text-sm font-semibold"
+                />
+                <p class="mt-0.5 text-xs leading-5 text-ink/55">{{ activeLearningIntent ? t('lesson.answer.workingIntent', { intent: learningIntentLabel(activeLearningIntent) }) : t('lesson.answer.working') }}</p>
+              </div>
             </div>
             <ol v-if="agentTrace.length" class="stack-y-sm text-xs leading-5 text-ink/60" :aria-label="t('lesson.answer.agentTrace')">
               <li v-for="item in agentTrace" :key="item.sequence" class="flex items-start gap-2">

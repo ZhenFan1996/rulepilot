@@ -267,6 +267,9 @@ describe('RecommendationRulebookHandoff', () => {
     expect(wrapper.text()).toContain('Wingspan Rulebook')
     expect(wrapper.text()).toContain('英文（来源已明确标注）')
     expect(wrapper.text()).toContain('出版社 / 权利方来源')
+    const reviewStatus = wrapper.get('[data-testid="player-work-status"]')
+    expect(reviewStatus.text()).toBe('等待你继续')
+    expect(reviewStatus.attributes('data-player-work-terminality')).toBe('waiting')
     expect(requests.find(request => request.path === '/api/v1/bgg/games/266192/import')?.options).toMatchObject({
       method: 'POST',
       headers: { 'X-CSRF-TOKEN': 'csrf' },
@@ -607,7 +610,9 @@ describe('RecommendationRulebookHandoff', () => {
     await wrapper.get('button[aria-pressed="false"]').trigger('click')
     await confirmIdentityAndRights(wrapper)
     await wrapper.findAll('button').find(button => button.text() === '下载规则书并生成讲解')!.trigger('click')
-    await vi.waitFor(() => expect(wrapper.text()).toContain('TEACHING_PREPARATION_FAILED'))
+    await vi.waitFor(() => expect(wrapper.text()).toContain('需要处理'))
+    expect(wrapper.text()).not.toContain('TEACHING_PREPARATION_FAILED')
+    expect(wrapper.get('[data-testid="player-work-status"]').text()).toBe('需要处理')
 
     await wrapper.findAll('button').find(button => button.text() === '重试当前步骤')!.trigger('click')
     await vi.waitFor(
@@ -672,7 +677,11 @@ describe('RecommendationRulebookHandoff', () => {
     await wrapper.findAll('button').find(button => button.text() === '下载规则书并生成讲解')!.trigger('click')
 
     await vi.waitFor(() => expect(wrapper.text()).toContain('已生成的章节仍可阅读'))
-    expect(wrapper.text()).toContain('REVIEW_UNAVAILABLE')
+    const status = wrapper.get('[data-testid="player-work-status"]')
+    expect(status.text()).toBe('基础讲解可读')
+    expect(status.attributes('data-player-work-readiness')).toBe('usable')
+    expect(status.attributes('data-player-work-outcome')).toBe('needs-action')
+    expect(wrapper.text()).not.toContain('REVIEW_UNAVAILABLE')
     expect(wrapper.text()).toContain('打开已生成的讲解')
     await wrapper.findAll('button').find(button => button.text() === '重试当前步骤')!.trigger('click')
     await vi.waitFor(() => expect(wrapper.text()).toContain('完整讲解已经生成'))
@@ -815,6 +824,9 @@ describe('RecommendationRulebookHandoff', () => {
       await flushPromises()
       expect(importReads).toBe(2)
       expect(wrapper.text()).toContain('正在通读规则书并组织讲解章节')
+      const status = wrapper.get('[data-testid="player-work-status"]')
+      expect(status.text()).toBe('正在组织讲解')
+      expect(status.attributes('data-player-work-capability')).toBe('rulebook')
     } finally {
       wrapper?.unmount()
       vi.useRealTimers()

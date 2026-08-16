@@ -372,6 +372,11 @@ async function mockPublicDiscovery(
     { pageNumber: 2, text: 'Goal', characterCount: 960 },
     { pageNumber: 7, text: 'Gain food, then activate brown powers.', characterCount: 1100 },
   ] }))
+  await page.route('**/api/v1/document-versions/version-1/pages/*/image', route => route.fulfill({
+    status: 200,
+    contentType: 'image/svg+xml',
+    body: '<svg xmlns="http://www.w3.org/2000/svg" width="800" height="1100"/>',
+  }))
   await page.route('**/api/v1/assistant-runs/preparation-run-1', route => {
     const snapshot = assistantRun(
       'preparation-run-1',
@@ -472,7 +477,7 @@ test('keeps full-catalog browsing separate from the conversational recommendatio
 
   const firstAgentRequest = page.waitForRequest(request => request.url().includes('/api/v1/bgg/recommendation-agent')
     && request.headers()['x-csrf-token'] === 'csrf')
-  const composer = page.getByLabel('和推荐 Agent 聊聊')
+  const composer = page.getByLabel('聊聊你想玩的游戏')
   await composer.fill('4 个人，90 分钟内，想要中等策略；朋友聚会，希望热闹但不要尴尬')
   await page.getByRole('button', { name: '发送', exact: true }).click()
   await firstAgentRequest
@@ -502,7 +507,7 @@ test('keeps a pasted 501-character recommendation intact and sends exactly 500 c
   })
   await page.goto('/discover')
 
-  const composer = page.getByLabel('和推荐 Agent 聊聊')
+  const composer = page.getByLabel('聊聊你想玩的游戏')
   const send = page.getByRole('button', { name: '发送', exact: true })
   const overLimit = '界'.repeat(501)
   await composer.fill(overLimit)
@@ -583,7 +588,7 @@ test('restores the server conversation and unsent draft after sign-in and browse
   })
 
   await page.goto('/discover')
-  const composer = page.getByLabel('和推荐 Agent 聊聊')
+  const composer = page.getByLabel('聊聊你想玩的游戏')
   await composer.fill('登录前写好的 3–4 人条件')
   await page.getByRole('button', { name: '发送', exact: true }).click()
   await page.getByRole('link', { name: '登录并继续' }).click()
@@ -614,7 +619,7 @@ test('restores the server conversation and unsent draft after sign-in and browse
   await expect(page.getByText('支持 3–4 人')).toBeVisible()
   await expect(page.getByText('3–4 人', { exact: true })).toBeVisible()
   await expect(page.getByText('120–180 分钟', { exact: true })).toBeVisible()
-  await expect(page.getByLabel('和推荐 Agent 聊聊')).toHaveValue('这句草稿尚未发送')
+  await expect(page.getByLabel('聊聊你想玩的游戏')).toHaveValue('这句草稿尚未发送')
 })
 
 test('keeps full-catalog discovery usable without horizontal overflow at 390 px', async ({ page }) => {
@@ -635,7 +640,7 @@ test('shows streamed rulebook readiness without waiting for the next recommendat
   const progress = await mockPublicDiscovery(page, true, true, false, true)
   await page.goto('/discover')
 
-  await page.getByLabel('和推荐 Agent 聊聊').fill('4 个人，90 分钟内，想要中等策略')
+  await page.getByLabel('聊聊你想玩的游戏').fill('4 个人，90 分钟内，想要中等策略')
   await page.getByRole('button', { name: '发送', exact: true }).click()
   await page.getByRole('button', { name: '选这款，找规则书' }).click()
   const journey = page.getByTestId('player-journey-surface')
@@ -659,7 +664,7 @@ test('keeps a corrected reference title in conversational context on mobile', as
   await mockPublicDiscovery(page, true)
   await page.goto('/discover')
 
-  const composer = page.getByLabel('和推荐 Agent 聊聊')
+  const composer = page.getByLabel('聊聊你想玩的游戏')
   await composer.fill('我想玩和马赛克花园类似机制的游戏')
   await page.getByRole('button', { name: '发送', exact: true }).click()
   await expect(page.getByText(/你知道它的原文名吗/)).toBeVisible()
@@ -700,7 +705,7 @@ test('stops closed reader transport while the durable guide remains reopenable',
   await mockPublicDiscovery(page, true)
   await page.goto('/discover')
 
-  await page.getByLabel('和推荐 Agent 聊聊').fill('4 个人，90 分钟内，想要中等策略')
+  await page.getByLabel('聊聊你想玩的游戏').fill('4 个人，90 分钟内，想要中等策略')
   await page.getByRole('button', { name: '发送', exact: true }).click()
   await expect(page.getByText('支持 4 人游玩')).toBeVisible()
   await page.getByRole('button', { name: '选这款，找规则书' }).click()
@@ -846,7 +851,7 @@ test('keeps recommendation, rulebook reading, progressive teaching, and grounded
   await mockPublicDiscovery(page, true)
   await page.goto('/discover')
 
-  const recommendationComposer = page.getByLabel('和推荐 Agent 聊聊')
+  const recommendationComposer = page.getByLabel('聊聊你想玩的游戏')
   await recommendationComposer.fill('4 个人，90 分钟内，想要中等策略；朋友聚会，希望热闹但不要尴尬')
   await page.getByRole('button', { name: '发送', exact: true }).click()
   await expect(page.getByText('支持 4 人游玩')).toBeVisible()
@@ -902,7 +907,7 @@ test('keeps recommendation, rulebook reading, progressive teaching, and grounded
   await rulebook.getByRole('button', { name: '关闭规则书' }).click()
 
   const journeyDock = page.getByTestId('player-journey-dock')
-  await expect(journeyDock).toContainText('讲解已经可以阅读', { timeout: 8_000 })
+  await expect(journeyDock).toContainText('基础讲解可读', { timeout: 8_000 })
   await journeyDock.click()
   const lesson = page.getByRole('dialog', { name: '生成讲解阅读器' })
   await expectOpaqueSurface(page.getByTestId('recommendation-lesson-surface'))
@@ -955,7 +960,7 @@ test('hands persisted recommendation work to global guides before the preparatio
   await mockPublicDiscovery(page, true, true)
   await page.goto('/discover')
 
-  await page.getByLabel('和推荐 Agent 聊聊').fill('4 个人，90 分钟内，想要中等策略')
+  await page.getByLabel('聊聊你想玩的游戏').fill('4 个人，90 分钟内，想要中等策略')
   await page.getByRole('button', { name: '发送', exact: true }).click()
   await expect(page.getByText('支持 4 人游玩')).toBeVisible()
   await page.getByRole('button', { name: '选这款，找规则书' }).click()
@@ -971,13 +976,15 @@ test('hands persisted recommendation work to global guides before the preparatio
   await workTrigger.click()
   const workCenter = page.getByRole('dialog', { name: '后台任务' })
   await expect(workCenter.getByText('展翅翱翔')).toBeVisible()
-  await expect(workCenter.getByText('正在读取规则并建立讲解结构')).toBeVisible()
+  await expect(workCenter.getByText('正在组织讲解')).toBeVisible()
+  await expect(workCenter.getByText('建立讲解结构')).toHaveCount(0)
 
   await workCenter.getByRole('link', { name: /打开讲解中心/ }).click()
   await expect(page).toHaveURL(/\/lessons$/)
   const pending = page.getByTestId('pending-guide-journey')
   await expect(pending.getByRole('heading', { name: '展翅翱翔' })).toBeVisible()
-  await expect(pending.getByText('规则书已可用，正在建立讲解计划并启动逐章生成')).toBeVisible()
+  await expect(pending.getByText('正在组织讲解')).toBeVisible()
+  await expect(pending.getByText('规则书已可读，正在准备讲解')).toBeVisible()
   expect(lessonLaunchRequests).toBe(0)
 })
 
@@ -985,7 +992,7 @@ test('recovers persisted recommendation work after a full refresh without journe
   await mockPublicDiscovery(page, true, true)
   await page.goto('/discover')
 
-  await page.getByLabel('和推荐 Agent 聊聊').fill('4 个人，90 分钟内，想要中等策略')
+  await page.getByLabel('聊聊你想玩的游戏').fill('4 个人，90 分钟内，想要中等策略')
   await page.getByRole('button', { name: '发送', exact: true }).click()
   await expect(page.getByText('支持 4 人游玩')).toBeVisible()
   await page.getByRole('button', { name: '选这款，找规则书' }).click()
@@ -1004,20 +1011,22 @@ test('recovers persisted recommendation work after a full refresh without journe
   await workTrigger.click()
   const workCenter = page.getByRole('dialog', { name: '后台任务' })
   await expect(workCenter.getByText('展翅翱翔')).toBeVisible()
-  await expect(workCenter.getByText('正在读取规则并建立讲解结构')).toBeVisible()
+  await expect(workCenter.getByText('正在组织讲解')).toBeVisible()
+  await expect(workCenter.getByText('建立讲解结构')).toHaveCount(0)
   await workCenter.getByRole('link', { name: /打开讲解中心/ }).click()
 
   await expect(page).toHaveURL(/\/lessons$/)
   const pending = page.getByTestId('pending-guide-journey')
   await expect(pending.getByRole('heading', { name: '展翅翱翔' })).toBeVisible()
-  await expect(pending.getByText('规则书已可用，正在建立讲解计划并启动逐章生成')).toBeVisible()
+  await expect(pending.getByText('正在组织讲解')).toBeVisible()
+  await expect(pending.getByText('规则书已可读，正在准备讲解')).toBeVisible()
 })
 
 test('advances My Guides from plan startup to the first readable chapter without a manual refresh', async ({ page }) => {
   const preparation = await mockPublicDiscovery(page, true, true)
   await page.goto('/discover')
 
-  await page.getByLabel('和推荐 Agent 聊聊').fill('4 个人，90 分钟内，想要中等策略')
+  await page.getByLabel('聊聊你想玩的游戏').fill('4 个人，90 分钟内，想要中等策略')
   await page.getByRole('button', { name: '发送', exact: true }).click()
   await expect(page.getByText('支持 4 人游玩')).toBeVisible()
   await page.getByRole('button', { name: '选这款，找规则书' }).click()
@@ -1031,7 +1040,8 @@ test('advances My Guides from plan startup to the first readable chapter without
 
   const pending = page.getByTestId('pending-guide-journey')
   await expect(pending.getByRole('heading', { name: '展翅翱翔' })).toBeVisible()
-  await expect(pending.getByText('规则书已可用，正在建立讲解计划并启动逐章生成')).toBeVisible()
+  await expect(pending.getByText('正在组织讲解')).toBeVisible()
+  await expect(pending.getByText('规则书已可读，正在准备讲解')).toBeVisible()
 
   const previousPlanReads = preparation.planReads()
   preparation.publishPlan()
@@ -1039,11 +1049,11 @@ test('advances My Guides from plan startup to the first readable chapter without
   await expect(pending).toBeVisible()
   await expect(page.getByText('等待开始')).toHaveCount(0)
   await expect(page.getByText('还没有可读的讲解')).toHaveCount(0)
-  await expect(page.getByRole('link', { name: '立即阅读完整讲解' })).toHaveCount(0)
+  await expect(page.getByRole('link', { name: '阅读已完成章节' })).toHaveCount(0)
 
   preparation.publishFirstLesson()
-  await expect(page.getByText('可读，核对中')).toBeVisible({ timeout: 4_000 })
-  await expect(page.getByRole('link', { name: '立即阅读完整讲解' })).toBeVisible()
+  await expect(page.getByText('基础讲解可读')).toBeVisible({ timeout: 4_000 })
+  await expect(page.getByRole('link', { name: '阅读已完成章节' })).toBeVisible()
   await expect(pending).toHaveCount(0)
 })
 
@@ -1051,7 +1061,7 @@ test('keeps one global task while completed preparation hands off to a Teaching 
   const preparation = await mockPublicDiscovery(page, true, true)
   await page.goto('/discover')
 
-  await page.getByLabel('和推荐 Agent 聊聊').fill('4 个人，90 分钟内，想要中等策略')
+  await page.getByLabel('聊聊你想玩的游戏').fill('4 个人，90 分钟内，想要中等策略')
   await page.getByRole('button', { name: '发送', exact: true }).click()
   await expect(page.getByText('支持 4 人游玩')).toBeVisible()
   await page.getByRole('button', { name: '选这款，找规则书' }).click()
@@ -1066,7 +1076,7 @@ test('keeps one global task while completed preparation hands off to a Teaching 
   await expect(workTrigger.locator('span').filter({ hasText: '1' })).toBeVisible()
   await workTrigger.click()
   const workCenter = page.getByRole('dialog', { name: '后台任务' })
-  await expect(workCenter.getByText('正在读取规则并建立讲解结构')).toBeVisible()
+  await expect(workCenter.getByText('正在组织讲解')).toBeVisible()
 
   preparation.publishPlan()
   preparation.completePreparation()
@@ -1082,7 +1092,7 @@ test('recovers the preparation-to-Teaching bridge after a storage-free browser r
   const preparation = await mockPublicDiscovery(page, true, true)
   await page.goto('/discover')
 
-  await page.getByLabel('和推荐 Agent 聊聊').fill('4 个人，90 分钟内，想要中等策略')
+  await page.getByLabel('聊聊你想玩的游戏').fill('4 个人，90 分钟内，想要中等策略')
   await page.getByRole('button', { name: '发送', exact: true }).click()
   await expect(page.getByText('支持 4 人游玩')).toBeVisible()
   await page.getByRole('button', { name: '选这款，找规则书' }).click()
@@ -1102,7 +1112,7 @@ test('recovers the preparation-to-Teaching bridge after a storage-free browser r
   await expect(workTrigger.locator('span').filter({ hasText: '1' })).toBeVisible()
   await workTrigger.click()
   const workCenter = page.getByRole('dialog', { name: '后台任务' })
-  await expect(workCenter.getByText('规则书已就绪，正在启动讲解任务')).toBeVisible()
+  await expect(workCenter.getByText('正在组织讲解')).toBeVisible()
   await expect(workCenter.getByText('展翅翱翔')).toHaveCount(1)
   await expect(workCenter.getByText('当前没有后台任务')).toHaveCount(0)
 
@@ -1117,7 +1127,7 @@ test('retries failed preparation through the original import without downloading
   const recovery = await mockPublicDiscovery(page, true, true, true)
   await page.goto('/discover')
 
-  await page.getByLabel('和推荐 Agent 聊聊').fill('4 个人，90 分钟内，想要中等策略')
+  await page.getByLabel('聊聊你想玩的游戏').fill('4 个人，90 分钟内，想要中等策略')
   await page.getByRole('button', { name: '发送', exact: true }).click()
   await expect(page.getByText('支持 4 人游玩')).toBeVisible()
   await page.getByRole('button', { name: '选这款，找规则书' }).click()
@@ -1126,7 +1136,8 @@ test('retries failed preparation through the original import without downloading
   await journey.getByRole('checkbox', { name: /我已比较以上游戏、版本和语言/ }).check()
   await journey.getByRole('checkbox', { name: /确认该链接来自有权提供/ }).check()
   await journey.getByRole('button', { name: '下载规则书并生成讲解' }).click()
-  await expect(journey.getByText('TEACHING_PREPARATION_FAILED')).toBeVisible()
+  await expect(journey.getByTestId('player-work-status')).toHaveText('需要处理')
+  await expect(journey.getByText('TEACHING_PREPARATION_FAILED')).toHaveCount(0)
 
   recovery.publishPlan()
   recovery.publishFirstLesson()
@@ -1146,7 +1157,7 @@ test('keeps the readable-guide continuation legible and focus-safe at 320 and 39
   await mockPublicDiscovery(page, true)
   await page.goto('/discover')
 
-  await page.getByLabel('和推荐 Agent 聊聊').fill('4 个人，90 分钟内，想要中等策略')
+  await page.getByLabel('聊聊你想玩的游戏').fill('4 个人，90 分钟内，想要中等策略')
   await page.getByRole('button', { name: '发送', exact: true }).click()
   await expect(page.getByText('支持 4 人游玩')).toBeVisible()
   await page.getByRole('button', { name: '选这款，找规则书' }).click()
@@ -1160,7 +1171,7 @@ test('keeps the readable-guide continuation legible and focus-safe at 320 and 39
   const continuation = page.getByTestId('player-journey-continuation')
   const readGuide = page.getByTestId('player-journey-dock')
   const viewProgress = page.getByTestId('player-journey-progress-button')
-  await expect(readGuide).toContainText('讲解已经可以阅读', { timeout: 8_000 })
+  await expect(readGuide).toContainText('基础讲解可读', { timeout: 8_000 })
   await expect(readGuide).toContainText('打开讲解')
   await expect(viewProgress).toHaveText('查看进度')
 

@@ -52,6 +52,7 @@ describe('useLessonAnswers', () => {
     expect(answers.answerError.value).toBe(
       "I couldn't establish a secure session. Your question is still here; review it and try again.",
     )
+    expect(answers.answerOutcome.value).toBe('failed')
     expect(answers.question.value).toBe('When does this resolve?')
   })
 
@@ -136,6 +137,7 @@ describe('useLessonAnswers', () => {
     expect(answers.question.value).toBe('What if scoring is interrupted?')
     expect(answers.answerTurns.value).toHaveLength(1)
     expect(answers.answerError.value).toBe('Stopped waiting. This unfinished result will not replace the current page. You can edit the question and send it again.')
+    expect(answers.answerOutcome.value).toBe('cancelled')
     expect(answers.agentTrace.value).toEqual([])
   })
 

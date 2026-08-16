@@ -72,7 +72,7 @@ function answerThreadScope(): LessonAnswerThreadScope | null {
 }
 
 const {
-  question, answer, answeredQuestion, answerTurns, activeLearningIntent, answerLoading, answerError,
+  question, answer, answeredQuestion, answerTurns, activeLearningIntent, answerLoading, answerError, answerOutcome,
   agentTrace, answerRulingReference, cancelAnswer, clearAnswerFeedback, resetConversation, restoreConversation, submitQuestion,
 } = useLessonAnswers({
   currentContext: () => versionId.value && online.value
@@ -267,7 +267,7 @@ onUnmounted(() => {
           <LessonAnswerPanel
             ref="answerPanel"
             :question="question" :answer="answer" :answered-question="answeredQuestion" :answer-turns="answerTurns"
-            :active-learning-intent="activeLearningIntent" :answer-loading="answerLoading" :answer-error="answerError"
+            :active-learning-intent="activeLearningIntent" :answer-loading="answerLoading" :answer-error="answerError" :answer-outcome="answerOutcome"
             :agent-trace="agentTrace" :online="online" :ruling="ruling"
             :ruling-saving="rulingSaving" :clear-thread-disabled="rulingSaving || editingRuling" :ruling-error="rulingError" :ruling-conflict="rulingConflict"
             :editing-ruling="editingRuling" :edited-verdict="editedVerdict" :edited-explanation="editedExplanation"

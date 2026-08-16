@@ -413,7 +413,7 @@ test('recommendation becomes one readable, taught, and answerable production jou
     report.stage = 'recommendation'
     await page.goto('/discover')
     const recommendationStartedAt = performance.now()
-    const composer = page.getByLabel('和推荐 Agent 聊聊')
+    const composer = page.getByLabel('聊聊你想玩的游戏')
     await composer.fill(RECOMMENDATION_PROMPT)
     await page.getByRole('button', { name: '发送', exact: true }).click()
 
@@ -666,7 +666,7 @@ test('recommendation becomes one readable, taught, and answerable production jou
     const lessonStartedAt = performance.now()
     const journeyDock = page.getByTestId('player-journey-dock')
     await expect(journeyDock).toBeVisible()
-    await expect(journeyDock).toContainText('讲解已经可以阅读', { timeout: 20 * 60_000 })
+    await expect(journeyDock).toContainText('基础讲解可读', { timeout: 20 * 60_000 })
     report.lessonReadableMs = elapsed(lessonStartedAt)
     await journeyDock.click()
     const lesson = page.getByRole('dialog', { name: '生成讲解阅读器' })

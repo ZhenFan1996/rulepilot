@@ -2,13 +2,15 @@
 import { computed, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 
+import PlayerWorkStatusText from '@/components/PlayerWorkStatusText.vue'
 import TabletopGlyph from '@/components/TabletopGlyph.vue'
 import type { ShelfItem } from '@/lib/gameShelf'
 import { useLocale } from '@/lib/locale'
+import { playerWorkStatus } from '@/lib/playerWorkStatus'
 
 const props = defineProps<{ item: ShelfItem; index: number }>()
 const coverUnavailable = ref(false)
-const { t } = useLocale()
+const { locale, t } = useLocale()
 
 const tone = computed(() => [
   ['#3f5474', '#eff2f5'],
@@ -24,12 +26,32 @@ const playerCount = computed(() => {
     : `${props.item.players.min}–${props.item.players.max}`
   return t('shelf.card.playerCount', { count })
 })
-const status = computed(() => ({
-  IMPORTING: { label: t('shelf.card.status.importing'), className: 'bg-sky-50 text-sky-900' },
-  READY: { label: t('shelf.card.status.ready'), className: 'bg-emerald-50 text-emerald-800' },
-  READING: { label: t('shelf.card.status.reading'), className: 'bg-amber-50 text-amber-900' },
-  NEEDS_ATTENTION: { label: t('shelf.card.status.attention'), className: 'bg-red-50 text-red-800' },
-}[props.item.documentStatus]))
+const status = computed(() => {
+  const facts = {
+    IMPORTING: playerWorkStatus('ACQUIRING_RULEBOOK', {
+      capability: 'none', readiness: 'unavailable', terminality: 'active', outcome: 'none',
+    }, locale.value),
+    READY: playerWorkStatus('RULEBOOK_READY', {
+      capability: 'rulebook', readiness: 'usable', terminality: 'terminal', outcome: 'none',
+    }, locale.value),
+    READING: playerWorkStatus('READING_RULEBOOK', {
+      capability: 'none', readiness: 'unavailable', terminality: 'active', outcome: 'none',
+    }, locale.value),
+    NEEDS_ATTENTION: playerWorkStatus('NEEDS_ACTION', {
+      capability: 'none', readiness: 'unavailable', terminality: 'terminal', outcome: 'needs-action',
+    }, locale.value),
+  }[props.item.documentStatus]
+  return {
+    ...facts,
+    className: props.item.documentStatus === 'READY'
+      ? 'bg-emerald-50 text-emerald-800'
+      : props.item.documentStatus === 'NEEDS_ATTENTION'
+        ? 'bg-red-50 text-red-800'
+        : props.item.documentStatus === 'IMPORTING'
+          ? 'bg-sky-50 text-sky-900'
+          : 'bg-amber-50 text-amber-900',
+  }
+})
 const detailTarget = computed(() => props.item.gameId
   ? { name: 'game-workspace', params: { gameId: props.item.gameId } }
   : null)
@@ -41,10 +63,14 @@ const guideLabel = computed(() => {
   if (props.item.lessonCount) return t('shelf.card.guides', { count: props.item.lessonCount })
   return {
     LOADING: t('shelf.card.guideLoading'),
-    PREPARING: t('shelf.card.guidePreparing'),
+    PREPARING: playerWorkStatus('ORGANIZING_GUIDE', {
+      capability: 'rulebook', readiness: 'usable', terminality: 'active', outcome: 'none',
+    }, locale.value).label,
     READY: t('shelf.card.guides', { count: props.item.lessonCount }),
     NONE: t('shelf.card.noGuide'),
-    FAILED: t('shelf.card.guideFailed'),
+    FAILED: playerWorkStatus('NEEDS_ACTION', {
+      capability: 'rulebook', readiness: 'usable', terminality: 'terminal', outcome: 'needs-action',
+    }, locale.value).label,
     UNAVAILABLE: t('shelf.card.guideUnavailable'),
   }[props.item.guideStatus]
 })
@@ -60,7 +86,12 @@ const canManageRulebook = computed(() => props.item.documentCount > 0 || props.i
         <TabletopGlyph name="meeple" :size="64" class="absolute right-5 top-5 opacity-80" />
         <span class="absolute bottom-4 left-5 font-display text-4xl font-semibold tracking-tight">{{ initials }}</span>
       </div>
-      <span :class="status.className" class="absolute right-3 top-3 rounded-full px-3 py-1.5 text-xs font-bold elevation-sm">{{ status.label }}</span>
+      <PlayerWorkStatusText
+        :status="status"
+        as="span"
+        :class="status.className"
+        class="absolute right-3 top-3 rounded-full px-3 py-1.5 text-xs font-bold elevation-sm"
+      />
       <a v-if="item.coverAttributionUrl" :href="item.coverAttributionUrl" target="_blank" rel="noopener noreferrer" class="absolute bottom-2 right-3 rounded-md bg-ink/75 px-2 py-1 text-[0.65rem] font-semibold text-canvas opacity-0 transition group-hover:opacity-100 focus:opacity-100">{{ t('shelf.card.bggCover') }} ↗</a>
     </div>
 

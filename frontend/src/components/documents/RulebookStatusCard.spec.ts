@@ -1,6 +1,7 @@
 import { mount } from '@vue/test-utils'
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
+import { setLocale } from '@/lib/locale'
 import RulebookStatusCard from './RulebookStatusCard.vue'
 import type { OfficialImportCopy, OfficialRulebookImportJob } from './types'
 
@@ -41,6 +42,9 @@ function failedJob(retryable: boolean): OfficialRulebookImportJob {
 }
 
 describe('RulebookStatusCard import recovery', () => {
+  beforeEach(() => setLocale('en'))
+  afterEach(() => setLocale('zh-CN'))
+
   it('turns a terminal failure into explicit source and local-upload actions', async () => {
     const wrapper = mount(RulebookStatusCard, {
       props: {
@@ -49,6 +53,9 @@ describe('RulebookStatusCard import recovery', () => {
       },
     })
 
+    const status = wrapper.get('[data-testid="player-work-status"]')
+    expect(status.text()).toBe('Needs attention')
+    expect(status.attributes('data-player-work-outcome')).toBe('needs-action')
     expect(wrapper.text()).toContain('Import needs attention')
     expect(wrapper.text()).toContain('The source is temporarily unavailable.')
     const buttons = wrapper.findAll('button')
@@ -75,5 +82,22 @@ describe('RulebookStatusCard import recovery', () => {
     expect(wrapper.findAll('button').map(button => button.text())).toEqual([
       'Choose another source', 'Use local upload',
     ])
+  })
+
+  it('separates the acquisition status from its concrete download detail', () => {
+    const job = { ...failedJob(true), stage: 'DOWNLOADING', errorCode: null,
+      teachingHandoffState: 'WAITING_FOR_DOCUMENT', downloadedBytes: 1024, totalBytes: 4096,
+      recovery: undefined } as OfficialRulebookImportJob
+    const wrapper = mount(RulebookStatusCard, {
+      props: {
+        officialImportJob: job, officialImportCopy: copy, message: '', preparingVersionId: '',
+        preparationElapsedLabel: '', errorMessage: '', processingVersionId: '', processingPercentage: 0,
+      },
+    })
+
+    const status = wrapper.get('[data-testid="player-work-status"]')
+    expect(status.text()).toBe('Getting rulebook')
+    expect(status.attributes('data-player-work-terminality')).toBe('active')
+    expect(wrapper.text()).toContain('Downloading')
   })
 })

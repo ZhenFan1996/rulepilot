@@ -3,6 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 
 import ConversationResetDialog from '@/components/ConversationResetDialog.vue'
+import PlayerWorkStatusText from '@/components/PlayerWorkStatusText.vue'
 import RecommendationGameCard from '@/components/RecommendationGameCard.vue'
 import RecommendationComparisonTable from '@/components/RecommendationComparisonTable.vue'
 import RecommendationAnswerWorkspace from '@/components/RecommendationAnswerWorkspace.vue'
@@ -23,6 +24,7 @@ import { useModalFocus } from '@/composables/useModalFocus'
 import { notifyLoginRequired } from '@/lib/authSession'
 import { RecommendationRequestError, RecommendationStreamError, streamGameRecommendation } from '@/lib/gameRecommendationStream'
 import { useLocale, type AppLocale } from '@/lib/locale'
+import { playerWorkStatus } from '@/lib/playerWorkStatus'
 import { playerTurnLocale } from '@/lib/playerTurnLanguage'
 import { canonicalRecommendationProfile, emptyRecommendationProfile } from '@/lib/recommendationProfile'
 import {
@@ -40,20 +42,20 @@ const copy = {
     eyebrow: '一起挑一款', title: '今晚想玩什么？',
     description: '可以像和朋友一样聊：说一个游戏、一个感觉，或者上一批哪里不对。我会沿着上下文继续，不用按表格报条件。',
     initial: '晚上好。想一起挑一款，还是先聊聊最近喜欢的桌游？游戏名、气氛、人数，想到什么就说什么。',
-    inputLabel: '和推荐 Agent 聊聊', inputPlaceholder: '例如：想找和花砖物语机制接近、但互动再多一点的游戏', send: '发送', sending: '正在接着你的话想…',
+    inputLabel: '聊聊你想玩的游戏', inputPlaceholder: '例如：想找和花砖物语机制接近、但互动再多一点的游戏', send: '发送', sending: '正在接着你的话想…',
     reset: '清空这次对话', error: '刚才没有接上。你写下的条件还在，可以直接重试。', retry: '重试', profile: '这次想找',
     players: '{value} 人', duration: '{value} 分钟内', durationAny: '时长不限', weight: '复杂度 ≤ {value}', weightAny: '复杂度不限',
     inputCount: '{current} / {maximum}', inputTooLong: '请删减 {count} 个字后再发送；当前内容不会被裁掉。',
     source: '从完整 BGG 目录中核对了 {count} 款候选。', more: '换一批',
     understanding: '目前记下的偏好', basedOn: '你提到：“{value}”', low: '可能', medium: '大概', high: '明确',
-    toolTrail: '本轮 Agent 轨迹', toolUnderstand: '理解上下文并决定下一步', toolCatalog: '浏览 BGG 目录候选',
+    toolTrail: '本轮查找与核对', toolUnderstand: '理解你的条件', toolCatalog: '浏览 BGG 目录候选',
     toolReference: '在 BGG 核对参考游戏',
     toolNames: '完整目录按标题找候选', toolDetails: 'BGG 详情核对', toolDiscover: '公开资料发现候选', toolResearch: '体验资料查证', toolCompare: '按候选事实并排核对',
     starters: ['想找和我喜欢的一款机制相近的', '先聊聊最近流行什么', '朋友聚会，想热闹但不要尴尬', '我不确定，先问我一个问题吧'],
     type: '类型：{value}', interaction: '互动：{value}',
-    journeyWorking: '正在为《{game}》获取规则书并生成讲解 · {progress}%', journeyReady: '《{game}》的讲解已经可以阅读',
+    journeyWorking: '正在为《{game}》获取规则书并生成讲解 · {progress}%', journeyReady: '《{game}》的基础讲解可读',
     journeyFailed: '《{game}》的准备流程需要处理', journeyOpen: '打开进度', journeyRead: '打开讲解', journeyProgress: '查看进度', journeyDialog: '规则书与讲解进度',
-    recommendationRole: '继续推荐', answerRole: '规则答疑', roleLabel: '切换 Agent 任务',
+    recommendationRole: '继续推荐', answerRole: '规则答疑', roleLabel: '切换任务',
     loginRequired: '推荐需要登录；你写的条件已保留在这个浏览器会话中。登录后回来检查一下，再发送。',
     login: '登录并继续', register: '创建账号', checkingSession: '正在确认登录…',
     resetFailed: '服务器没有确认删除，当前对话仍然保留。请重试。',
@@ -63,20 +65,20 @@ const copy = {
     eyebrow: 'Choose together', title: 'What should we play tonight?',
     description: 'Talk as you would with a friend: name a game, describe a feeling, or say what missed the mark. I will continue from context; no form-filling required.',
     initial: 'Good evening. Want to choose a game together, or chat about what you have enjoyed lately? Start anywhere—a title, a mood, or the group.',
-    inputLabel: 'Chat with the recommendation Agent', inputPlaceholder: 'For example: something with similar mechanisms to a tile-drafting game, but more interaction', send: 'Send', sending: 'Thinking from where we left off…',
+    inputLabel: 'Tell us what you want to play', inputPlaceholder: 'For example: something with similar mechanisms to a tile-drafting game, but more interaction', send: 'Send', sending: 'Thinking from where we left off…',
     reset: 'Clear this conversation', error: 'That reply did not come through. Your preferences are still here.', retry: 'Retry', profile: 'Looking for',
     players: '{value} players', duration: 'Up to {value} min', durationAny: 'Any duration', weight: 'Complexity ≤ {value}', weightAny: 'Any complexity',
     inputCount: '{current} / {maximum}', inputTooLong: 'Remove {count} character(s) before sending. Your text has not been truncated.',
     source: 'Checked {count} candidates against the complete BGG catalog.', more: 'Try another batch',
     understanding: 'Preferences so far', basedOn: 'You said: “{value}”', low: 'Maybe', medium: 'Likely', high: 'Clear',
-    toolTrail: 'Agent trajectory this turn', toolUnderstand: 'Understand context and choose the next step', toolCatalog: 'Browse BGG catalog candidates',
+    toolTrail: 'Search and checks this turn', toolUnderstand: 'Understand your preferences', toolCatalog: 'Browse BGG catalog candidates',
     toolReference: 'Resolve the reference game in BGG',
     toolNames: 'Find titles in the full catalog', toolDetails: 'Verify BGG details', toolDiscover: 'Discover from public sources', toolResearch: 'Verify play experience', toolCompare: 'Compare candidate-scoped facts',
     starters: ['Find something mechanically similar to a game I like', 'Let’s chat about what is popular', 'Lively with friends, but not awkward', 'I am not sure—ask me one useful question'],
     type: 'Type: {value}', interaction: 'Interaction: {value}',
-    journeyWorking: 'Getting the rulebook and building a guide for {game} · {progress}%', journeyReady: 'The guide for {game} is ready to read',
+    journeyWorking: 'Getting the rulebook and building a guide for {game} · {progress}%', journeyReady: 'Base guide ready for {game}',
     journeyFailed: 'The preparation flow for {game} needs attention', journeyOpen: 'Open progress', journeyRead: 'Open guide', journeyProgress: 'View progress', journeyDialog: 'Rulebook and guide progress',
-    recommendationRole: 'Recommendations', answerRole: 'Rules Q&A', roleLabel: 'Switch Agent task',
+    recommendationRole: 'Recommendations', answerRole: 'Rules Q&A', roleLabel: 'Switch task',
     loginRequired: 'Sign in to use recommendations. Your draft is saved in this browser session; review it and send after you return.',
     login: 'Sign in and continue', register: 'Create account', checkingSession: 'Checking sign-in…',
     resetFailed: 'The server did not confirm deletion, so this conversation is still intact. Try again.',
@@ -87,14 +89,14 @@ const copy = {
 const loadingCopy = {
   'zh-CN': {
     requesting: '收到，接着聊下去…', understanding_request: '正在结合前文理解你这句话…',
-    selecting_tools: '推荐 Agent 正在决定下一步…',
+    selecting_tools: '正在确认下一步该核对什么…',
     searching_bgg_catalog: '正在桌游目录里查找…', reading_game_details: '正在翻看这款游戏的详细资料…',
     discovering_candidates: '正在补充更贴近这个感觉的候选…', verifying_bgg_candidates: '正在核对人数、时长和玩法…',
     researching_game_fit: '正在看看实际游玩感受…', composing_response: '已经找到几款，马上整理好…',
   },
   en: {
     requesting: 'Got it. Continuing from here…', understanding_request: 'Understanding this turn in the context of the conversation…',
-    selecting_tools: 'The recommendation Agent is choosing its next step…',
+    selecting_tools: 'Choosing what to check next…',
     searching_bgg_catalog: 'Searching the game catalog…', reading_game_details: 'Reading this game\'s details…',
     discovering_candidates: 'Looking for a closer fit…', verifying_bgg_candidates: 'Checking player count, time, and play style…',
     researching_game_fit: 'Checking how it feels to play…', composing_response: 'A few good options are ready…',
@@ -251,6 +253,9 @@ const loadingMessage = computed(() => {
   const message = loadingCopy[activeTurnLocale.value ?? locale.value][loadingStage.value]
   return loadingElapsedSeconds.value > 0 ? `${message} ${loadingElapsedSeconds.value}s` : message
 })
+const recommendationWorkStatus = computed(() => playerWorkStatus('FINDING_GAME', {
+  capability: 'none', readiness: 'unavailable', terminality: 'active', outcome: 'none',
+}, activeTurnLocale.value ?? locale.value))
 
 const failureMessage = computed(() => translated(failedTurnLocale.value ?? locale.value, 'error'))
 const retryLabel = computed(() => translated(failedTurnLocale.value ?? locale.value, 'retry'))
@@ -1085,7 +1090,17 @@ onBeforeUnmount(() => {
                   </div>
                 </article>
               </div>
-              <div v-if="loading" class="flex items-center gap-3 rounded-2xl rounded-bl-sm border border-ink/8 bg-canvas px-4 py-3 text-sm text-ink/55" role="status"><span class="flex gap-1" aria-hidden="true"><span class="size-1.5 animate-pulse rounded-full bg-copper" /><span class="size-1.5 animate-pulse rounded-full bg-copper [animation-delay:160ms]" /><span class="size-1.5 animate-pulse rounded-full bg-copper [animation-delay:320ms]" /></span><span>{{ loadingMessage }}</span></div>
+              <div v-if="loading" class="flex items-center gap-3 rounded-2xl rounded-bl-sm border border-ink/8 bg-canvas px-4 py-3 text-ink/55" role="status">
+                <span class="flex gap-1" aria-hidden="true"><span class="size-1.5 animate-pulse rounded-full bg-copper" /><span class="size-1.5 animate-pulse rounded-full bg-copper [animation-delay:160ms]" /><span class="size-1.5 animate-pulse rounded-full bg-copper [animation-delay:320ms]" /></span>
+                <span>
+                  <PlayerWorkStatusText
+                    :status="recommendationWorkStatus"
+                    as="strong"
+                    class="block text-sm font-semibold text-ink/70"
+                  />
+                  <span class="mt-0.5 block text-xs">{{ loadingMessage }}</span>
+                </span>
+              </div>
             </div>
             <div v-if="clarification?.options.length && !loading" class="border-t border-ink/8 px-4 py-4 sm:px-6"><div class="flex flex-wrap gap-2"><button v-for="option in clarification.options" :key="option.value" type="button" class="min-h-11 rounded-lg border border-ink/15 bg-ink/5 px-4 text-sm font-semibold text-ink/72 hover:border-copper/50" @click="choose(option)">{{ option.label }}</button></div></div>
             <div v-if="failed" class="mx-4 mb-3 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800 sm:mx-6" role="alert"><p>{{ failureMessage }}</p><button type="button" class="mt-2 min-h-11 font-semibold underline" @click="retry">{{ retryLabel }}</button></div>

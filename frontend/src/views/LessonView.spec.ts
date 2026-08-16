@@ -148,7 +148,7 @@ describe('LessonView progressive reading', () => {
     expect(wrapper.text()).toContain('整本仍在后台生成')
     expect(wrapper.text()).toContain('正在依据规则书编写“先摆主板”')
     expect(wrapper.text()).toContain('后台已处理 0/2 节')
-    expect(wrapper.text()).toContain('1 次模型调用')
+    expect(wrapper.text()).not.toContain('模型调用')
     expect(wrapper.text()).toContain('第一节完成后')
     expect(wrapper.text()).not.toContain('internal')
 
@@ -177,6 +177,45 @@ describe('LessonView progressive reading', () => {
     expect(supportingPaths.some((path) => path.includes('/narration'))).toBe(false)
     expect(supportingPaths.some((path) => path.endsWith('/video'))).toBe(false)
     expect(supportingPaths.some((path) => path.includes('media-consistency'))).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('never presents an empty terminal lesson as readable or complete', async () => {
+    let teachingReads = 0
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const path = String(input)
+      if (path === '/api/v1/teaching-plans/plan-1') {
+        return Response.json(planFixture('plan-1', 'Empty terminal guide'))
+      }
+      if (path.includes('mode=VISUAL_ENRICHMENT')) return new Response(null, { status: 404 })
+      if (path.includes('mode=TEACHING')) {
+        teachingReads += 1
+        return Response.json(runFixture('plan-1', teachingReads > 1 ? 'COMPLETED' : 'RETRIEVING'))
+      }
+      if (path.endsWith('/illustrated-lessons/latest')) {
+        return Response.json({
+          id: 'lesson-empty', teachingPlanId: 'plan-1',
+          status: teachingReads > 1 ? 'COMPLETE' : 'INCOMPLETE', sections: [],
+        })
+      }
+      if (path === '/api/auth/session') return Response.json({ username: 'player', roles: ['USER'] })
+      return new Response(null, { status: 404 })
+    }))
+    const router = createMemoryRouter()
+    await router.push('/lesson/plan-1')
+    await router.isReady()
+    const wrapper = mount(LessonView, {
+      global: { plugins: [router], stubs: { AppShell: { template: '<div><slot /></div>' } } },
+    })
+    await flushPromises()
+
+    await vi.advanceTimersByTimeAsync(1_500)
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="player-work-status"]').text()).toBe('需要处理')
+    expect(wrapper.text()).toContain('还没有可读章节')
+    expect(wrapper.text()).not.toContain('讲解完成')
+    expect(wrapper.get('[role="status"]').classes()).toContain('bg-amber-50')
     wrapper.unmount()
   })
 

@@ -79,6 +79,7 @@ const {
   activeLearningIntent,
   answerLoading,
   answerError,
+  answerOutcome,
   agentTrace,
   cancelAnswer,
   cancelReadTransport: cancelAnswerReads,
@@ -447,6 +448,7 @@ onUnmounted(() => {
             :active-learning-intent="activeLearningIntent"
             :answer-loading="answerLoading"
             :answer-error="answerError"
+            :answer-outcome="answerOutcome"
             :agent-trace="agentTrace"
             :online="online"
             :ruling="ruling"

@@ -100,7 +100,7 @@ describe('AppShell', () => {
     vi.advanceTimersByTime(4000)
     await flushPromises()
 
-    expect(wrapper.text()).toContain('已完成')
+    expect(wrapper.text()).toContain('讲解完成')
     expect(wrapper.text()).not.toContain('生成成功')
     expect(fetchMock.mock.calls.filter(([input]) => String(input).includes('/api/v1/teaching-plans'))).toHaveLength(1)
 
@@ -192,7 +192,7 @@ describe('AppShell', () => {
     await vi.advanceTimersByTimeAsync(4000)
     await flushPromises()
 
-    expect(wrapper.text()).toContain('已完成')
+    expect(wrapper.text()).toContain('讲解完成')
     wrapper.unmount()
   })
 
@@ -268,7 +268,9 @@ describe('AppShell', () => {
     await trigger.trigger('click')
 
     expect(wrapper.text()).toContain('规则书已保存，读取完成后会自动开始讲解')
-    expect(wrapper.text()).toContain('正在读取规则并建立讲解结构')
+    expect(wrapper.text()).toContain('读取规则书')
+    expect(wrapper.text()).toContain('正在组织讲解')
+    expect(wrapper.text()).not.toContain('建立讲解结构')
     expect(wrapper.text()).toContain('卡坦岛规则书')
     expect(wrapper.text()).toContain('展翅翱翔规则书')
     expect(wrapper.findAll('ol li')).toHaveLength(2)
@@ -347,7 +349,8 @@ describe('AppShell', () => {
 
     await wrapper.get('[data-testid="background-work-trigger-desktop"]').trigger('click')
     expect(wrapper.text()).toContain('失败的官方讲解')
-    expect(wrapper.text()).toContain('讲解准备失败')
+    expect(wrapper.text()).toContain('需要处理')
+    expect(wrapper.text()).toContain('讲解准备没有完成，可在讲解中心重试')
 
     await wrapper.findAll('button').find(button => button.text() === '清除已结束任务')!.trigger('click')
     expect(wrapper.text()).not.toContain('失败的官方讲解')
@@ -417,7 +420,8 @@ describe('AppShell', () => {
     await vi.advanceTimersByTimeAsync(4000)
     await flushPromises()
     expect(wrapper.text()).toContain('仍在准备的讲解')
-    expect(wrapper.text()).toContain('讲解准备失败')
+    expect(wrapper.text()).toContain('需要处理')
+    expect(wrapper.text()).toContain('讲解准备没有完成，可在讲解中心重试')
     wrapper.unmount()
   })
 

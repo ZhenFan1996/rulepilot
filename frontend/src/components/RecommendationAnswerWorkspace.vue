@@ -56,8 +56,8 @@ let workspaceRequest = 0
 let csrf: CsrfResponse | null = null
 
 const copy = computed(() => locale.value === 'zh-CN' ? {
-  eyebrow: '规则答疑 Agent',
-  title: `正在回答《${props.gameTitle}》`,
+  eyebrow: '规则答疑',
+  title: `《${props.gameTitle}》规则答疑`,
   description: '这里的问答绑定到已下载的同一版本规则书，并会保留本次追问上下文。推荐对话仍在，随时可以切回去。',
   loading: '正在恢复这款桌游的答疑会话…',
   error: '暂时无法建立绑定到这份规则书的答疑会话。',
@@ -67,8 +67,8 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   session: '无法创建或恢复规则答疑会话。',
   conversation: '无法恢复此前的规则问答。',
 } : {
-  eyebrow: 'Rules Q&A Agent',
-  title: `Answering from ${props.gameTitle}`,
+  eyebrow: 'Rules Q&A',
+  title: `Rules Q&A for ${props.gameTitle}`,
   description: 'Questions stay bound to the downloaded rulebook edition and preserve follow-up context. Your recommendation conversation remains available whenever you switch back.',
   loading: 'Restoring this game’s rules Q&A session…',
   error: 'A Q&A session bound to this rulebook cannot be established right now.',
@@ -233,7 +233,7 @@ function rulingFrom(answer: StructuredRuleAnswer, reference: AnswerRulingReferen
 }
 
 const {
-  question, answer, answeredQuestion, answerTurns, activeLearningIntent, answerLoading, answerError,
+  question, answer, answeredQuestion, answerTurns, activeLearningIntent, answerLoading, answerError, answerOutcome,
   agentTrace, answerRulingReference, cancelAnswer, clearAnswerFeedback, resetConversation, restoreConversation, submitQuestion,
 } = useLessonAnswers({
   currentContext: () => session.value && props.documentVersionId && online.value
@@ -427,7 +427,7 @@ onBeforeUnmount(() => {
       v-else
       ref="answerPanel"
       :question="question" :answer="answer" :answered-question="answeredQuestion" :answer-turns="answerTurns"
-      :active-learning-intent="activeLearningIntent" :answer-loading="answerLoading" :answer-error="answerError"
+      :active-learning-intent="activeLearningIntent" :answer-loading="answerLoading" :answer-error="answerError" :answer-outcome="answerOutcome"
       :agent-trace="agentTrace" :online="online" :ruling="ruling"
       :ruling-saving="rulingSaving" :clear-thread-disabled="rulingSaving || editingRuling || resettingSession" :ruling-error="rulingError" :ruling-conflict="rulingConflict"
       :editing-ruling="editingRuling" :edited-verdict="editedVerdict" :edited-explanation="editedExplanation"

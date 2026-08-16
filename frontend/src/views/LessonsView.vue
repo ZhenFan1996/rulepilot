@@ -4,11 +4,13 @@ import { RouterLink, useRoute } from 'vue-router'
 
 import AppShell from '@/components/AppShell.vue'
 import DestructiveActionDialog from '@/components/DestructiveActionDialog.vue'
+import PlayerWorkStatusText from '@/components/PlayerWorkStatusText.vue'
 import { notifyLoginRequired } from '@/lib/authSession'
 import { notifyBackgroundWorkChanged } from '@/lib/backgroundWorkRefresh'
 import { hasReadableLesson, mergeLessonProgress, type LessonProgressSummary } from '@/lib/lessonProgressState'
 import { groupPlansForReading, playerFacingTitle } from '@/lib/lessonPresentation'
 import { useLocale } from '@/lib/locale'
+import { guideWorkStatus, playerWorkStatus } from '@/lib/playerWorkStatus'
 import {
   buildPendingGuideJourneys,
   type PendingGuideCatalogGame,
@@ -121,16 +123,16 @@ const signedOutCopy = computed(() => locale.value === 'zh-CN' ? {
 const pendingCopy = computed(() => locale.value === 'zh-CN' ? {
   eyebrow: '已进入我的讲解', title: '正在准备的讲解',
   detail: '这些条目来自持久化下载、规则书读取或讲解准备任务；刷新、离开页面或换入口都不会丢失。',
-  rulebook: '规则书', downloading: '正在获取并核验规则书', reading: '规则书已保存，正在读取页面与建立检索',
-  preparing: '规则书已可用，正在建立讲解计划并启动逐章生成', failed: '任务需要处理',
+  rulebook: '规则书', downloading: '正在下载并核验来源文件', reading: '正在整理规则文字和原文页面',
+  preparing: '规则书已可读，正在准备讲解', failed: '任务没有完成，可以安全重试',
   progress: '已确认下载进度', openRulebook: '先读规则书', openSource: '查看任务入口',
   retryPreparation: '重新准备讲解', retryingPreparation: '正在重新启动…',
   retryFailed: '没有成功启动新的讲解准备任务，请稍后再试。',
 } : {
   eyebrow: 'In My Guides', title: 'Guides being prepared',
   detail: 'These entries come from persisted download, rulebook-reading, or guide-preparation work. Refreshing, leaving, or switching entry points will not lose them.',
-  rulebook: 'Rulebook', downloading: 'Acquiring and verifying the rulebook', reading: 'Rulebook saved; reading pages and building retrieval data',
-  preparing: 'Rulebook ready; building the guide plan and starting chapter generation', failed: 'This task needs attention',
+  rulebook: 'Rulebook', downloading: 'Downloading and verifying the source file', reading: 'Organizing rule text and original pages',
+  preparing: 'The rulebook is readable while the guide is prepared', failed: 'This task did not finish and can be retried safely',
   progress: 'Confirmed download progress', openRulebook: 'Read rulebook now', openSource: 'Open task entry',
   retryPreparation: 'Retry guide preparation', retryingPreparation: 'Restarting…',
   retryFailed: 'A new guide-preparation task could not be started. Please try again shortly.',
@@ -182,19 +184,49 @@ function stateOf(planId: string) {
   return 'PLANNED'
 }
 
-function stateLabel(planId: string) {
-  if (stateOf(planId) === 'GENERATING' && progress.value[planId]?.lesson?.status === 'DRAFT_READY') {
-    return t('lessons.state.readableReviewing')
+function planWorkStatus(planId: string) {
+  const state = stateOf(planId)
+  const lesson = progress.value[planId]?.lesson
+  if (state === 'GENERATING') {
+    const readable = hasReadableLesson(lesson)
+    return guideWorkStatus(
+      lesson?.status === 'DRAFT_READY' ? 'reviewing' : readable ? 'readable' : 'organizing',
+      readable ? 1 : 0,
+      locale.value,
+    )
   }
-  return ({
-    GENERATING: t('lessons.state.generating'),
-    COMPLETE: t('lessons.state.complete'),
-    DRAFT_READY: t('lessons.state.draftReady'),
-    INCOMPLETE: t('lessons.state.incomplete'),
-    FAILED: t('lessons.state.failed'),
-    NEEDS_ATTENTION: t('lessons.state.needsAttention'),
-    PLANNED: t('lessons.state.planned'),
-  } as const)[stateOf(planId)]
+  if (state === 'COMPLETE') {
+    if (!hasReadableLesson(lesson)) {
+      return playerWorkStatus('NEEDS_ACTION', {
+        capability: 'rulebook', readiness: 'usable', terminality: 'terminal', outcome: 'needs-action',
+      }, locale.value)
+    }
+    return playerWorkStatus('GUIDE_COMPLETE', {
+      capability: 'guide', readiness: 'complete', terminality: 'terminal', outcome: 'none',
+    }, locale.value)
+  }
+  if (state === 'DRAFT_READY') {
+    return playerWorkStatus('GUIDE_READABLE', {
+      capability: 'guide', readiness: 'usable', terminality: 'terminal', outcome: 'none',
+    }, locale.value)
+  }
+  if (state === 'INCOMPLETE') {
+    const readable = hasReadableLesson(lesson)
+    return playerWorkStatus('NEEDS_ACTION', {
+      capability: readable ? 'guide' : 'rulebook',
+      readiness: 'usable',
+      terminality: 'terminal',
+      outcome: 'needs-action',
+    }, locale.value)
+  }
+  if (state === 'FAILED' || state === 'NEEDS_ATTENTION') {
+    return playerWorkStatus('NEEDS_ACTION', {
+      capability: 'rulebook', readiness: 'usable', terminality: 'terminal', outcome: 'needs-action',
+    }, locale.value)
+  }
+  return playerWorkStatus('WAITING_FOR_PLAYER', {
+    capability: 'rulebook', readiness: 'usable', terminality: 'waiting', outcome: 'none',
+  }, locale.value)
 }
 
 function stateClass(planId: string) {
@@ -317,13 +349,40 @@ function createdLabel(value: string) {
   return new Intl.DateTimeFormat(locale.value, { dateStyle: 'medium', timeStyle: 'short' }).format(date)
 }
 
-function pendingPhaseLabel(phase: (typeof pendingJourneys.value)[number]['phase']) {
+function pendingPhaseDetail(phase: (typeof pendingJourneys.value)[number]['phase']) {
   return {
     DOWNLOADING: pendingCopy.value.downloading,
     READING_RULEBOOK: pendingCopy.value.reading,
     PREPARING_GUIDE: pendingCopy.value.preparing,
     FAILED: pendingCopy.value.failed,
   }[phase]
+}
+
+function pendingWorkStatus(journey: (typeof pendingJourneys.value)[number]) {
+  if (journey.phase === 'DOWNLOADING') {
+    return playerWorkStatus('ACQUIRING_RULEBOOK', {
+      capability: 'none', readiness: 'unavailable', terminality: 'active', outcome: 'none',
+    }, locale.value)
+  }
+  if (journey.phase === 'READING_RULEBOOK') {
+    return playerWorkStatus('READING_RULEBOOK', {
+      capability: 'none', readiness: 'unavailable', terminality: 'active', outcome: 'none',
+    }, locale.value)
+  }
+  if (journey.phase === 'PREPARING_GUIDE') {
+    return playerWorkStatus('ORGANIZING_GUIDE', {
+      capability: journey.canReadRulebook ? 'rulebook' : 'none',
+      readiness: journey.canReadRulebook ? 'usable' : 'unavailable',
+      terminality: 'active',
+      outcome: 'none',
+    }, locale.value)
+  }
+  return playerWorkStatus('NEEDS_ACTION', {
+    capability: journey.canReadRulebook ? 'rulebook' : 'none',
+    readiness: journey.canReadRulebook ? 'usable' : 'unavailable',
+    terminality: 'terminal',
+    outcome: 'needs-action',
+  }, locale.value)
 }
 
 async function checkedFetch(path: string, options?: Parameters<typeof fetch>[1]) {
@@ -835,7 +894,12 @@ onBeforeUnmount(() => {
               <div class="min-w-0">
                 <h3 class="truncate font-display text-xl font-semibold">{{ journey.title }}</h3>
                 <p v-if="journey.rulebookTitle" class="mt-1 truncate text-xs text-ink/45">{{ pendingCopy.rulebook }}：{{ journey.rulebookTitle }}</p>
-                <p class="mt-3 text-sm font-semibold" :class="journey.state === 'failed' ? 'text-red-700' : 'text-indigo'">{{ pendingPhaseLabel(journey.phase) }}</p>
+                <PlayerWorkStatusText
+                  :status="pendingWorkStatus(journey)"
+                  class="mt-3 text-sm font-semibold"
+                  :class="journey.state === 'failed' ? 'text-red-700' : 'text-indigo'"
+                />
+                <p class="mt-1 text-xs leading-5 text-ink/50">{{ pendingPhaseDetail(journey.phase) }}</p>
               </div>
               <span v-if="journey.state === 'active'" class="mt-1 size-3 shrink-0 animate-pulse rounded-full bg-indigo" aria-hidden="true" />
             </div>
@@ -889,7 +953,12 @@ onBeforeUnmount(() => {
                 <h2 class="mt-1 truncate font-display text-2xl font-semibold">{{ displayPlanTitle(plan) }}</h2>
               </div>
             </div>
-            <span :class="stateClass(plan.id)" class="rounded-full px-3 py-1.5 text-xs font-semibold">{{ stateLabel(plan.id) }}</span>
+            <PlayerWorkStatusText
+              :status="planWorkStatus(plan.id)"
+              as="span"
+              :class="stateClass(plan.id)"
+              class="rounded-full px-3 py-1.5 text-xs font-semibold"
+            />
           </div>
           <div v-if="stateOf(plan.id) === 'GENERATING'" class="mt-5 rounded-xl border border-indigo/15 bg-indigo/5 p-4" aria-live="polite" aria-atomic="true">
             <div class="flex items-start justify-between gap-4">
@@ -902,9 +971,8 @@ onBeforeUnmount(() => {
             <div class="mt-4 h-2 overflow-hidden rounded-full bg-indigo/10" role="progressbar" :aria-valuemin="0" :aria-valuemax="plan.sections.length" :aria-valuenow="processedChapterCount(plan)" :aria-label="t('lessons.live.progressAria', { processed: processedChapterCount(plan), total: plan.sections.length })">
               <div class="h-full rounded-full bg-indigo transition-[width] duration-500" :style="{ width: chapterProgressWidth(plan) }" />
             </div>
-            <div class="mt-2 flex flex-wrap justify-between gap-2 text-xs text-ink/55">
+            <div class="mt-2 text-xs text-ink/55">
               <span>{{ t('lessons.live.processed', { processed: processedChapterCount(plan), total: plan.sections.length, supported: supportedChapterCount(plan) }) }}</span>
-              <span>{{ t('lessons.live.modelCalls', { count: progress[plan.id]?.run?.budget.usedModelCalls ?? 0 }) }}</span>
             </div>
             <p class="mt-3 text-xs leading-5 text-ink/50">{{ remainingTimeText(plan) }} {{ progress[plan.id]?.lesson?.status === 'DRAFT_READY' ? t('lessons.live.readNow') : t('lessons.live.background') }}</p>
             <ol v-if="recentActivities(plan).length" class="mt-4 stack-y-sm border-t border-indigo/10 pt-3" :aria-label="t('lessons.live.recent')">

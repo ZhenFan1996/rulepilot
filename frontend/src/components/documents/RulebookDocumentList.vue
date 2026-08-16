@@ -2,7 +2,9 @@
 import { ref } from 'vue'
 import { RouterLink } from 'vue-router'
 
+import PlayerWorkStatusText from '@/components/PlayerWorkStatusText.vue'
 import { useLocale } from '@/lib/locale'
+import { playerWorkStatus } from '@/lib/playerWorkStatus'
 import type { BggSuggestion, BggSuggestionState, DocumentResponse } from './types'
 
 const props = defineProps<{
@@ -21,7 +23,7 @@ const emit = defineEmits<{
   'request-delete': [entry: DocumentResponse]
 }>()
 
-const { t } = useLocale()
+const { locale, t } = useLocale()
 const heading = ref<HTMLElement | null>(null)
 
 function documentStatusLabel(status: string) {
@@ -31,6 +33,22 @@ function documentStatusLabel(status: string) {
     READY: t('documents.status.ready'),
     FAILED: t('documents.status.failed'),
   }[status] ?? t('documents.status.processing')
+}
+
+function documentWorkStatus(status: string) {
+  if (status === 'READY') {
+    return playerWorkStatus('RULEBOOK_READY', {
+      capability: 'rulebook', readiness: 'usable', terminality: 'terminal', outcome: 'none',
+    }, locale.value)
+  }
+  if (status === 'FAILED') {
+    return playerWorkStatus('NEEDS_ACTION', {
+      capability: 'none', readiness: 'unavailable', terminality: 'terminal', outcome: 'needs-action',
+    }, locale.value)
+  }
+  return playerWorkStatus('READING_RULEBOOK', {
+    capability: 'none', readiness: 'unavailable', terminality: 'active', outcome: 'none',
+  }, locale.value)
 }
 
 function suggestionState(documentId: string) {
@@ -70,9 +88,11 @@ defineExpose({ focusTarget })
         <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div class="min-w-0">
             <p class="truncate font-semibold">{{ entry.document.title }}</p>
-            <p class="mt-1 text-sm text-ink/45">
-              {{ documentStatusLabel(entry.latestVersion.status) }} · {{ Math.ceil(entry.latestVersion.size / 1024) }} KiB
-            </p>
+            <PlayerWorkStatusText
+              :status="documentWorkStatus(entry.latestVersion.status)"
+              class="mt-1 text-sm font-semibold text-ink/65"
+            />
+            <p class="mt-1 text-xs text-ink/45">{{ documentStatusLabel(entry.latestVersion.status) }} · {{ Math.ceil(entry.latestVersion.size / 1024) }} KiB</p>
           </div>
           <div class="flex shrink-0 flex-wrap gap-2">
             <button v-if="entry.latestVersion.status === 'READY'" type="button" :disabled="suggestionState(entry.document.id)?.status === 'loading' || Boolean(deletingDocumentId)" class="min-h-11 rounded-lg border border-indigo/20 px-4 py-2.5 text-sm font-semibold text-indigo hover:border-indigo/50 disabled:opacity-40" @click="emit('load-suggestions', entry.document.id)">{{ suggestionState(entry.document.id)?.status === 'loading' ? t('documents.bgg.loading') : t('documents.bgg.open') }}</button>

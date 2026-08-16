@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 
 import type { RecommendationGame, RecommendationProfile } from '@/components/gameRecommendationTypes'
+import PlayerWorkStatusText from '@/components/PlayerWorkStatusText.vue'
 import RulebookIdentityConfirmation from '@/components/documents/RulebookIdentityConfirmation.vue'
 import type {
   RulebookCandidate,
@@ -21,6 +22,7 @@ import {
 import { acceptProgressiveLesson, teachingRunIsActive } from '@/lib/liveLesson'
 import { useLocale } from '@/lib/locale'
 import { playerFacingLanguageName } from '@/lib/playerFacingLanguage'
+import { playerWorkStatus, type PlayerWorkStage } from '@/lib/playerWorkStatus'
 import {
   monotonicElapsedSeconds,
   normalizeRulebookDiscoverySummary,
@@ -119,7 +121,7 @@ const { locale } = useLocale()
 
 const copy = computed(() => locale.value === 'zh-CN' ? {
   eyebrow: '从推荐到答疑', title: `已选《${props.game.name}》`, preparing: '正在加入“我的桌游”并寻找可审阅的规则书…',
-  finding: '桌游已保存，正在检索出版社、BGG、集石和可信规则库（已等待 {seconds} 秒，通常几秒，偶尔约 30 秒）…', found: '选择并核对来源', detail: '优先展示出版社来源，也会保留社区与可信规则库结果。请核对语言和版本；只有已核验的 PDF 或连续规则页可以导入。',
+  finding: '桌游已保存，正在查找出版社、BGG、集石和可信规则库（已等待 {seconds} 秒，通常几秒，偶尔约 30 秒）…', found: '选择并核对来源', detail: '优先展示出版社来源，也会保留社区与可信规则库结果。请核对语言和版本；只有已核验的 PDF 或连续规则页可以导入。',
   noImportableTitle: '暂未找到可直接导入的规则书', noImportableDetail: '当前结果只能继续查找文件或核对桌游信息；也可以改用公开链接或本地上传。',
   identityOnlyTitle: '仅用于核对桌游身份', identityOnlyDetail: '这些页面没有可导入的规则书文件，不属于规则书选择。',
   sources: { PUBLISHER: '出版社 / 权利方来源', TRUSTED_REPOSITORY: '可信规则库', COMMUNITY_PLATFORM: '社区规则书来源（如 BGG / 集石）', PUBLIC_WEB: '公开来源（请重点核对）' },
@@ -132,10 +134,10 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   retryDiscovery: '继续查找',
   discoveryTerminal: {
     PARTIAL: '部分来源未在本次预算内完成；下面只保留已经核验的结果。',
-    TIMED_OUT: '本次检索已到达时间预算，尚未找到可审阅结果。',
-    FAILED: '部分来源检索失败，尚未找到可审阅结果。',
+    TIMED_OUT: '本次查找已到达最长等待时间，尚未找到可审阅结果。',
+    FAILED: '部分来源没有完成查找，尚未找到可审阅结果。',
   },
-  discoveryTiming: (elapsed: number, budget: number) => `本次检索用时 ${elapsed} 秒，最长预算 ${budget} 秒。`,
+  discoveryTiming: (elapsed: number, budget: number) => `本次查找用时 ${elapsed} 秒，最长等待 ${budget} 秒。`,
   discoveryProviders: { CATALOG: '规则书目录', SOURCE_INSPECTION: '来源核验', WEB_SEARCH: '联网搜索' },
   discoveryProviderStates: { FINISHED: '已完成', TIMED_OUT: '已超时', FAILED: '失败', SKIPPED: '未使用', UNAVAILABLE: '未配置' },
   browserRequired: '已经找到这份文件，但来源网站要求在浏览器里完成隐私选择、刷新临时链接或登录。打开原始下载页取得 PDF 后，回到 RulePilot 上传即可继续；桌游、版本和讲解偏好都已保留。',
@@ -163,7 +165,7 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   phase: {
     GAME_BINDING: '正在把推荐结果加入“我的桌游”', RULEBOOK_DISCOVERY: '正在寻找可审阅的规则书来源', SOURCE_REVIEW: '等待你核对规则书语言和版本',
     IMPORT_QUEUED: '规则书下载已排队', IMPORT_CONNECTING: '正在连接规则书来源', IMPORT_DOWNLOADING: '正在下载规则书', IMPORT_COMPRESSING: '文件较大，正在压缩 PDF', IMPORT_VERIFYING: '正在核验文件确实是可读取的 PDF', IMPORT_SAVING: '正在保存规则书并绑定到这款桌游',
-    DOCUMENT_PROCESSING: '正在提取规则、生成页面并建立检索结构', TEACHING_PREPARATION_QUEUED: '规则书已就绪，讲解准备任务正在排队', TEACHING_PREPARING: '正在通读规则书并组织讲解章节', LESSON_GENERATION_QUEUED: '讲解大纲已完成，正文生成正在排队', LESSON_GENERATING: '正在逐章生成、引用并核对讲解', LESSON_READABLE: '第一批讲解内容已经可以阅读', LESSON_COMPLETE: '完整讲解已经生成', FAILED: '当前步骤需要处理',
+    DOCUMENT_PROCESSING: '正在读取规则文字并准备原文页面', TEACHING_PREPARATION_QUEUED: '规则书已就绪，讲解准备任务正在排队', TEACHING_PREPARING: '正在通读规则书并组织讲解章节', LESSON_GENERATION_QUEUED: '讲解大纲已完成，正文生成正在排队', LESSON_GENERATING: '正在逐章生成、引用并核对讲解', LESSON_READABLE: '第一批讲解内容已经可以阅读', LESSON_COMPLETE: '完整讲解已经生成', FAILED: '当前步骤需要处理',
   },
   bytes: (done: string, total: string) => `${done} / ${total}`, pages: (done: number, total: number) => `第 ${done} / ${total} 页`, chapters: (done: number, total: number | null) => total ? `已有 ${done} / ${total} 章可读` : `已有 ${done} 章可读`,
 } : {
@@ -212,7 +214,7 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   phase: {
     GAME_BINDING: 'Adding the recommendation to My Games', RULEBOOK_DISCOVERY: 'Finding reviewable rulebook sources', SOURCE_REVIEW: 'Waiting for your language and edition review',
     IMPORT_QUEUED: 'Rulebook download is queued', IMPORT_CONNECTING: 'Connecting to the rulebook source', IMPORT_DOWNLOADING: 'Downloading the rulebook', IMPORT_COMPRESSING: 'Compressing the oversized PDF', IMPORT_VERIFYING: 'Verifying that the file is a readable PDF', IMPORT_SAVING: 'Saving and linking the rulebook to this game',
-    DOCUMENT_PROCESSING: 'Extracting rules, rendering pages, and building retrieval data', TEACHING_PREPARATION_QUEUED: 'The rulebook is ready and guide preparation is queued', TEACHING_PREPARING: 'Reading the rules and organizing guide chapters', LESSON_GENERATION_QUEUED: 'The outline is ready and chapter generation is queued', LESSON_GENERATING: 'Generating, citing, and reviewing the guide chapter by chapter', LESSON_READABLE: 'The first guide content is ready to read', LESSON_COMPLETE: 'The complete guide is ready', FAILED: 'This step needs attention',
+    DOCUMENT_PROCESSING: 'Reading the rules and preparing the original pages', TEACHING_PREPARATION_QUEUED: 'The rulebook is ready and guide preparation is queued', TEACHING_PREPARING: 'Reading the rules and organizing guide chapters', LESSON_GENERATION_QUEUED: 'The outline is ready and chapter generation is queued', LESSON_GENERATING: 'Generating, citing, and reviewing the guide chapter by chapter', LESSON_READABLE: 'The first guide content is ready to read', LESSON_COMPLETE: 'The complete guide is ready', FAILED: 'This step needs attention',
   },
   bytes: (done: string, total: string) => `${done} / ${total}`, pages: (done: number, total: number) => `Page ${done} / ${total}`, chapters: (done: number, total: number | null) => total ? `${done} / ${total} chapters readable` : `${done} chapters readable`,
 })
@@ -299,7 +301,46 @@ const projection = computed(() => derivePlayerJourney({
   teachingRun: teachingRun.value,
   lesson: lesson.value,
 }))
-const currentPhaseText = computed(() => copy.value.phase[projection.value.phase])
+const currentPhaseDetail = computed(() => copy.value.phase[projection.value.phase])
+const currentWorkStatus = computed(() => {
+  const current = projection.value
+  let stage: PlayerWorkStage
+  if (current.phase === 'GAME_BINDING' || current.phase === 'RULEBOOK_DISCOVERY') stage = 'FINDING_RULEBOOK'
+  else if (current.phase === 'SOURCE_REVIEW') stage = 'WAITING_FOR_PLAYER'
+  else if (current.phase.startsWith('IMPORT_')) stage = 'ACQUIRING_RULEBOOK'
+  else if (current.phase === 'DOCUMENT_PROCESSING') stage = 'READING_RULEBOOK'
+  else if (current.phase === 'LESSON_READABLE') stage = 'GUIDE_READABLE'
+  else if (current.phase === 'LESSON_COMPLETE') stage = 'GUIDE_COMPLETE'
+  else if (current.phase === 'FAILED') stage = current.retryAction ? 'NEEDS_ACTION' : 'FAILED'
+  else stage = 'ORGANIZING_GUIDE'
+
+  const capability = current.canReadLesson ? 'guide' : current.canReadRulebook ? 'rulebook' : 'none'
+  const readiness = current.phase === 'LESSON_COMPLETE'
+    ? 'complete'
+    : current.canReadLesson || current.canReadRulebook ? 'usable' : 'unavailable'
+  const terminality = current.state === 'waiting'
+    ? 'waiting'
+    : current.state === 'active' || current.state === 'ready' && !current.retryAction ? 'active' : 'terminal'
+  const outcome = current.retryAction
+    ? 'needs-action'
+    : current.state === 'failed' ? 'failed' : 'none'
+  return playerWorkStatus(stage, { capability, readiness, terminality, outcome }, locale.value)
+})
+const sourceWorkStatus = computed(() => {
+  if (state.value === 'error') {
+    return playerWorkStatus('NEEDS_ACTION', {
+      capability: 'none', readiness: 'unavailable', terminality: 'terminal', outcome: 'needs-action',
+    }, locale.value)
+  }
+  if (state.value === 'review' || state.value === 'unavailable' || state.value === 'browser-required') {
+    return playerWorkStatus('WAITING_FOR_PLAYER', {
+      capability: 'none', readiness: 'unavailable', terminality: 'waiting', outcome: 'none',
+    }, locale.value)
+  }
+  return playerWorkStatus('FINDING_RULEBOOK', {
+    capability: 'none', readiness: 'unavailable', terminality: 'active', outcome: 'none',
+  }, locale.value)
+})
 const importFailureDetail = computed(() => {
   if (importJob.value?.stage !== 'FAILED') return ''
   return copy.value.importFailureDetail[importJob.value.recovery?.failureKind ?? 'OTHER']
@@ -1091,7 +1132,14 @@ onBeforeUnmount(() => {
     </div>
 
     <div class="p-4 sm:p-5">
-      <p v-if="state === 'preparing' || state === 'finding'" class="flex items-center gap-3 text-sm text-ink/65" role="status">
+      <PlayerWorkStatusText
+        v-if="state !== 'journey' && state !== 'login'"
+        :status="sourceWorkStatus"
+        class="mb-2 text-sm font-semibold text-copper"
+        role="status"
+      />
+
+      <p v-if="state === 'preparing' || state === 'finding'" class="flex items-center gap-3 text-sm text-ink/65">
         <span class="size-2 animate-pulse rounded-full bg-copper" aria-hidden="true" />
         {{ state === 'preparing' ? copy.preparing : findingText }}
       </p>
@@ -1178,7 +1226,12 @@ onBeforeUnmount(() => {
         <div class="flex items-start justify-between gap-4">
           <div>
             <p class="text-xs font-bold uppercase tracking-[0.12em] text-copper">{{ copy.current }}</p>
-            <p class="mt-1 text-sm font-semibold text-ink" role="status">{{ currentPhaseText }}</p>
+            <PlayerWorkStatusText
+              :status="currentWorkStatus"
+              class="mt-1 text-sm font-semibold text-ink"
+              role="status"
+            />
+            <p class="mt-1 text-xs leading-5 text-ink/55">{{ currentPhaseDetail }}</p>
             <p v-if="journeyDetail" class="mt-1 text-xs leading-5 text-ink/50">{{ journeyDetail }}</p>
           </div>
           <span class="font-mono text-sm font-semibold text-copper">{{ projection.progress }}%</span>
@@ -1208,7 +1261,7 @@ onBeforeUnmount(() => {
             </div>
           </template>
           <template v-else>
-            <p>{{ projection.canReadLesson ? copy.partialFailure : copy.error }}<span v-if="projection.errorCode" class="mt-1 block font-mono text-xs">{{ projection.errorCode }}</span></p>
+            <p>{{ projection.canReadLesson ? copy.partialFailure : copy.error }}</p>
             <button v-if="projection.retryAction" type="button" :disabled="retrying" class="mt-2 min-h-11 font-semibold underline disabled:opacity-40" @click="retryJourney">{{ copy.retry }}</button>
           </template>
         </div>

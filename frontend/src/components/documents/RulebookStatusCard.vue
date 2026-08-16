@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 
+import PlayerWorkStatusText from '@/components/PlayerWorkStatusText.vue'
 import { useLocale } from '@/lib/locale'
+import { playerWorkStatus } from '@/lib/playerWorkStatus'
 import type { OfficialImportCopy, OfficialRulebookImportJob } from './types'
 
 const props = defineProps<{
@@ -22,7 +24,7 @@ const emit = defineEmits<{
   'retry-original': []
 }>()
 
-const { t } = useLocale()
+const { locale, t } = useLocale()
 
 const officialImportProgress = computed(() => {
   const job = props.officialImportJob
@@ -53,6 +55,43 @@ const officialImportStage = computed(() => {
   return props.officialImportCopy[job.stage]
 })
 
+const officialPlayerStatus = computed(() => {
+  const job = props.officialImportJob
+  if (!job) return null
+  const rulebookUsable = Boolean(job.documentVersionId && job.stage === 'COMPLETED')
+  const facts = {
+    capability: rulebookUsable ? 'rulebook' as const : 'none' as const,
+    readiness: rulebookUsable ? 'usable' as const : 'unavailable' as const,
+  }
+  if (job.stage === 'FAILED' || job.teachingHandoffState === 'FAILED') {
+    return playerWorkStatus('NEEDS_ACTION', {
+      ...facts, terminality: 'terminal', outcome: 'needs-action',
+    }, locale.value)
+  }
+  if (job.stage !== 'COMPLETED') {
+    return playerWorkStatus('ACQUIRING_RULEBOOK', {
+      ...facts, terminality: 'active', outcome: 'none',
+    }, locale.value)
+  }
+  if (job.teachingHandoffState === 'WAITING_FOR_DOCUMENT') {
+    return playerWorkStatus('READING_RULEBOOK', {
+      ...facts, terminality: 'active', outcome: 'none',
+    }, locale.value)
+  }
+  if (job.teachingHandoffState === 'LAUNCHING' || job.teachingHandoffState === 'LAUNCHED') {
+    return playerWorkStatus('ORGANIZING_GUIDE', {
+      ...facts, terminality: 'active', outcome: 'none',
+    }, locale.value)
+  }
+  return playerWorkStatus('RULEBOOK_READY', {
+    ...facts, terminality: 'terminal', outcome: 'none',
+  }, locale.value)
+})
+
+const preparationPlayerStatus = computed(() => playerWorkStatus('ORGANIZING_GUIDE', {
+  capability: 'rulebook', readiness: 'usable', terminality: 'active', outcome: 'none',
+}, locale.value))
+
 const failedRecovery = computed(() => {
   const job = props.officialImportJob
   return job?.stage === 'FAILED' ? job.recovery ?? null : null
@@ -67,7 +106,12 @@ const failureKind = computed(() => failedRecovery.value?.failureKind ?? 'OTHER')
       <div class="min-w-0">
         <p class="tabletop-kicker">{{ officialImportJob.stage === 'FAILED' ? officialImportCopy.failureTitle : officialImportCopy.title }}</p>
         <h2 class="mt-1 truncate font-display text-xl font-semibold">{{ officialImportJob.title }}</h2>
-        <p class="mt-2 text-sm font-semibold text-copper">{{ officialImportStage }}</p>
+        <PlayerWorkStatusText
+          v-if="officialPlayerStatus"
+          :status="officialPlayerStatus"
+          class="mt-2 text-sm font-semibold text-copper"
+        />
+        <p class="mt-1 text-xs leading-5 text-ink/60">{{ officialImportStage }}</p>
         <p v-if="officialImportJob.stage !== 'FAILED'" class="mt-1 text-xs leading-5 text-ink/50">{{ officialImportCopy.safe }}</p>
       </div>
       <span v-if="officialImportBytes" class="shrink-0 text-xs font-semibold text-indigo">{{ officialImportBytes }}</span>
@@ -95,7 +139,10 @@ const failureKind = computed(() => failedRecovery.value?.failureKind ?? 'OTHER')
   <div v-if="preparingVersionId" class="mt-5 rounded-xl border border-indigo/15 bg-indigo/5 p-4 text-left" role="status" aria-live="polite">
     <div class="flex items-start justify-between gap-4">
       <div>
-        <p class="font-semibold text-ink">{{ t('documents.organizing') }}</p>
+        <PlayerWorkStatusText
+          :status="preparationPlayerStatus"
+          class="font-semibold text-ink"
+        />
         <p class="mt-1 text-sm leading-6 text-ink/60">{{ message }}</p>
       </div>
       <span class="shrink-0 text-xs font-medium text-indigo">{{ preparationElapsedLabel }}</span>

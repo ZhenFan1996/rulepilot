@@ -90,6 +90,10 @@ describe('RecommendationAnswerWorkspace', () => {
     const wrapper = mountWorkspace()
     await flushPromises()
 
+    expect(wrapper.text()).toContain('Rules Q&A for Wingspan')
+    expect(wrapper.text()).not.toContain('Rules Q&A Agent')
+    expect(wrapper.text()).not.toContain('Answering from Wingspan')
+
     const create = requests.find(request => request.path === '/api/v1/game-sessions' && request.init?.method === 'POST')
     expect(JSON.parse(String(create?.init?.body))).toMatchObject({
       editionId: 'edition-1',

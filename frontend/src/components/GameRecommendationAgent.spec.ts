@@ -628,9 +628,10 @@ describe('GameRecommendationAgent', () => {
     expect(wrapper.text()).toContain('不能证明实际互动感或节奏')
     expect(wrapper.get('a[href="https://publisher.example/wingspan"]').attributes('rel')).toContain('noopener')
     expect(wrapper.text()).toContain('目前记下的偏好')
-    expect(wrapper.text()).toContain('本轮 Agent 轨迹')
-    expect(wrapper.text()).toContain('理解上下文并决定下一步')
+    expect(wrapper.text()).toContain('本轮查找与核对')
+    expect(wrapper.text()).toContain('理解你的条件')
     expect(wrapper.text()).toContain('体验资料查证')
+    expect(wrapper.text()).not.toContain('本轮 Agent 轨迹')
     expect(wrapper.findAll('[data-testid="assistant-recommendation-turn"]')).toHaveLength(2)
     await wrapper.findAll('button').find(button => button.text() === '换一批')!.trigger('click')
     await flushPromises()
@@ -717,7 +718,7 @@ describe('GameRecommendationAgent', () => {
     expect(wrapper.text()).toContain('我先核对参考游戏')
   })
 
-  it('leaves natural references to the Agent and supplies verified conversation games as context', async () => {
+  it('keeps natural user language and supplies verified conversation games as context', async () => {
     const requests: Array<Record<string, unknown>> = []
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       if (String(input) === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
@@ -769,7 +770,7 @@ describe('GameRecommendationAgent', () => {
     expect(wrapper.text()).toContain('这是刚才那款游戏的详细介绍')
   })
 
-  it('keeps cards and Agent trajectory attached to the assistant turn that produced them', async () => {
+  it('keeps cards and player-facing verification progress attached to the assistant turn that produced them', async () => {
     let turn = 0
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
       if (String(input) === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
@@ -910,7 +911,7 @@ describe('GameRecommendationAgent', () => {
     expect(requestedUrls).toContain('/api/v1/bgg/recommendation-agent/stream?locale=zh-CN')
     const currentTurn = wrapper.get('[data-testid="assistant-recommendation-turn"]')
     expect(currentTurn.text()).toContain('这轮按你当前的中文问题回答。')
-    expect(currentTurn.text()).toContain('本轮 Agent 轨迹')
+    expect(currentTurn.text()).toContain('本轮查找与核对')
     expect(currentTurn.text()).toContain('完整目录按标题找候选')
     expect(currentTurn.text()).toContain('从完整 BGG 目录中核对了 1 款候选。')
     expect(currentTurn.text()).toContain('换一批')
@@ -1308,7 +1309,7 @@ describe('GameRecommendationAgent', () => {
     document.body.querySelector<HTMLButtonElement>('[data-testid="close-journey"]')!.click()
     await flushPromises()
     const dock = wrapper.get('[data-testid="player-journey-dock"]')
-    expect(dock.text()).toContain('讲解已经可以阅读')
+    expect(dock.text()).toContain('基础讲解可读')
     expect(dock.text()).toContain('打开讲解')
     expect(wrapper.get('[data-testid="player-journey-progress-button"]').text()).toBe('查看进度')
 
@@ -1334,6 +1335,7 @@ describe('GameRecommendationAgent', () => {
     await wrapper.get('textarea').setValue('想找有探索感的桌游')
     await wrapper.get('form').trigger('submit')
     await flushPromises()
+    expect(wrapper.get('[data-testid="player-work-status"]').text()).toBe('正在查找桌游')
     expect(wrapper.get('[role="status"]').text()).toContain('收到，接着聊下去')
 
     streamController?.enqueue(encoder.encode('event: progress\ndata: {"stage":"searching_bgg_catalog","elapsedMs":120}\n\n'))

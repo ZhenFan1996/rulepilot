@@ -146,7 +146,7 @@ describe('GameShelfView', () => {
 
     expect(wrapper.text()).toContain('Catalog Game')
     expect(wrapper.text()).toContain('1 本规则书')
-    expect(wrapper.text()).toContain('讲解正在准备')
+    expect(wrapper.text()).toContain('正在组织讲解')
     expect(wrapper.text()).not.toContain('还没生成讲解')
 
     delayedPlans.resolve(response([{
@@ -180,8 +180,8 @@ describe('GameShelfView', () => {
     const wrapper = mount(GameShelfView, { global: { plugins: [router] } })
     await flushPromises()
 
-    expect(wrapper.text()).toContain('讲解需要处理')
-    expect(wrapper.text()).not.toContain('讲解正在准备')
+    expect(wrapper.text()).toContain('需要处理')
+    expect(wrapper.text()).not.toContain('正在组织讲解')
     expect(wrapper.findAll('a[href="/lessons"]').some(link => link.text().includes('去我的讲解重试'))).toBe(true)
   })
 
@@ -205,7 +205,9 @@ describe('GameShelfView', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('Catalog Game')
-    expect(wrapper.text()).toContain('正在下载规则书')
+    const status = wrapper.get('[data-testid="player-work-status"]')
+    expect(status.text()).toBe('正在获取规则书')
+    expect(status.attributes('data-player-work-readiness')).toBe('unavailable')
     expect(wrapper.text()).toContain('规则书正在加入')
     expect(wrapper.findAll('a[href="/games/game-1"]').some(link => link.text().includes('查看准备进度'))).toBe(true)
   })

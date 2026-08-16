@@ -27,6 +27,7 @@ const baseProps = {
   activeLearningIntent: null,
   answerLoading: false,
   answerError: '',
+  answerOutcome: 'none' as const,
   online: true,
   ruling: null,
   rulingSaving: false,
@@ -233,7 +234,7 @@ describe('LessonAnswerPanel', () => {
 
     expect(wrapper.text()).toContain('规则计算')
     expect(wrapper.text()).toContain('floor(8 / 3) * 5 = 10')
-    expect(wrapper.text()).toContain('确定性计算器复核')
+    expect(wrapper.text()).toContain('下方计算过程便于直接复核结果')
   })
 
   it('shows cited term meanings and their confusion boundaries', () => {
@@ -525,12 +526,15 @@ describe('LessonAnswerPanel', () => {
     expect(wrapper.findAll('button').some(button => button.text() === '解决了')).toBe(false)
   })
 
-  it('does not present placeholder stages as live Agent progress', () => {
+  it('shows one honest answer status without presenting placeholder implementation progress', () => {
     const waiting = mount(LessonAnswerPanel, {
       props: { ...baseProps, answerLoading: true },
       global: { stubs: { VoiceQuestionCapture: true } },
     })
 
+    const waitingStatus = waiting.get('[data-testid="player-work-status"]')
+    expect(waitingStatus.text()).toBe('正在核对回答')
+    expect(waitingStatus.attributes('data-player-work-terminality')).toBe('active')
     expect(waiting.text()).toContain('问题已收到，正在等待这次答疑的最新进度')
     expect(waiting.text()).not.toContain('对齐问题与规则书术语')
     expect(waiting.text()).not.toContain('查找规则书原文')
@@ -554,6 +558,7 @@ describe('LessonAnswerPanel', () => {
       props: { ...baseProps, answerLoading: true },
       global: { stubs: { VoiceQuestionCapture: true } },
     })
+    expect(english.get('[data-testid="player-work-status"]').text()).toBe('Checking answer')
     expect(english.text()).toContain('Question received. Waiting for the latest verified progress')
   })
 
@@ -573,6 +578,16 @@ describe('LessonAnswerPanel', () => {
     await wrapper.findAll('button').find(button => button.text() === '停止等待')!.trigger('click')
 
     expect(wrapper.emitted('cancelAnswer')).toHaveLength(1)
+
+    await wrapper.setProps({
+      answerLoading: false,
+      answerError: '已停止等待；未完成结果不会替换当前页面。',
+      answerOutcome: 'cancelled',
+    })
+    const stopped = wrapper.get('[data-testid="player-work-status"]')
+    expect(stopped.text()).toBe('已取消')
+    expect(stopped.attributes('data-player-work-outcome')).toBe('cancelled')
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false)
   })
 
   it('localizes the personal answer thread when the player selects English', () => {
@@ -658,7 +673,8 @@ describe('LessonAnswerPanel', () => {
     })
 
     expect(wrapper.text()).toContain('先完成结算')
-    expect(wrapper.text()).toContain('模型对这条结论的把握较低')
+    expect(wrapper.text()).toContain('这条结论的依据还不够稳妥')
+    expect(wrapper.text()).not.toContain('模型')
     expect(wrapper.text()).toContain('回合结束')
   })
 

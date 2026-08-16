@@ -236,7 +236,7 @@ describe('DocumentsView recoverable lesson handoff', () => {
       await flushPromises()
 
       expect(wrapper.get('[data-testid="rulebook-discovery-summary"]').text()).toContain('联网搜索: 已超时')
-      expect(wrapper.text()).toContain('本次检索已到达时间预算')
+      expect(wrapper.text()).toContain('本次查找已到达最长等待时间')
       expect(wrapper.findAll('button').some(button => button.text() === '继续查找')).toBe(true)
       expect(wrapper.get('a[href="#rulebook-file"]').text()).toBe('上传本地规则书')
     } finally {

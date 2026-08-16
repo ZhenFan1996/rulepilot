@@ -88,6 +88,7 @@ export function useLessonAnswers(options: UseLessonAnswersOptions) {
   const activeLearningIntent = ref<LearningIntent | null>(null)
   const answerLoading = ref(false)
   const answerError = ref('')
+  const answerOutcome = ref<'none' | 'failed' | 'cancelled'>('none')
   const agentTrace = ref<AnswerAgentTraceItem[]>([])
   let latestAnswerRequest = 0
   let traceTimer: ReturnType<typeof setTimeout> | null = null
@@ -115,6 +116,7 @@ export function useLessonAnswers(options: UseLessonAnswersOptions) {
     activeLearningIntent.value = null
     answerLoading.value = false
     answerError.value = ''
+    answerOutcome.value = 'none'
     agentTrace.value = []
   }
 
@@ -132,6 +134,7 @@ export function useLessonAnswers(options: UseLessonAnswersOptions) {
     cancelReadTransport()
     answer.value = null
     answerError.value = ''
+    answerOutcome.value = 'none'
     answerRulingReference.value = null
   }
 
@@ -148,6 +151,7 @@ export function useLessonAnswers(options: UseLessonAnswersOptions) {
     answerLoading.value = true
     activeLearningIntent.value = learningIntent
     answerError.value = ''
+    answerOutcome.value = 'none'
     answer.value = null
     agentTrace.value = []
     answerRulingReference.value = null
@@ -213,6 +217,7 @@ export function useLessonAnswers(options: UseLessonAnswersOptions) {
     } catch {
       if (!isCurrentAnswerRequest(answerRequest, lessonRequest, context.planId)) return
       answerError.value = answerRequestFailureCopy(failureKind, responseLocale)
+      answerOutcome.value = 'failed'
     } finally {
       if (activeAnswerController === controller) activeAnswerController = null
       if (isCurrentAnswerRequest(answerRequest, lessonRequest, context.planId)) {
@@ -237,6 +242,7 @@ export function useLessonAnswers(options: UseLessonAnswersOptions) {
     agentTrace.value = []
     const fallback = options.currentContext()?.locale ?? 'zh-CN'
     answerError.value = answerRequestFailureCopy('cancelled', playerTurnLocale(question.value, fallback))
+    answerOutcome.value = 'cancelled'
   }
 
   function startTracePolling(
@@ -322,6 +328,7 @@ export function useLessonAnswers(options: UseLessonAnswersOptions) {
     activeLearningIntent,
     answerLoading,
     answerError,
+    answerOutcome,
     agentTrace,
     cancelReadTransport,
     clearAnswerFeedback,

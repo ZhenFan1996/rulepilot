@@ -215,7 +215,7 @@ describe('PublicLessonView', () => {
     expect(wrapper.text()).toContain('按规则回答当前问题')
     expect(wrapper.text()).toContain('这条答案如何得出')
     expect(wrapper.text()).toContain('floor(8 / 3) * 5 = 10')
-    expect(wrapper.text()).toContain('确定性计算器复核')
+    expect(wrapper.text()).toContain('下方计算过程便于直接复核结果')
     expect(wrapper.text()).toContain('当前局面条件')
     expect(wrapper.text()).toContain('尚未提供')
     expect(wrapper.text()).toContain('照这个顺序做')

@@ -36,79 +36,79 @@ function traceItem(activity: AnswerAgentActivity, locale: 'zh-CN' | 'en'): Answe
       : 'stopped'
   const operation = activity.operation
   if (operation.startsWith('nativeTool|search_rule_evidence') || operation === 'hybridRuleSearch') {
-    return item(activity.sequence, 'tool', text(locale, '选择“检索规则依据”', 'Selected “Search rule evidence”'), status)
+    return item(activity.sequence, 'tool', text(locale, '查找规则依据', 'Searching rule evidence'), status)
   }
   if (operation.startsWith('nativeTool|search_rule_relationships')) {
-    return item(activity.sequence, 'tool', text(locale, '选择“查找例外与覆盖条款”', 'Selected “Find exceptions and overrides”'), status)
+    return item(activity.sequence, 'tool', text(locale, '查找例外与覆盖条款', 'Finding exceptions and overrides'), status)
   }
   if (operation.startsWith('nativeTool|expand_rule_evidence_context')) {
-    return item(activity.sequence, 'tool', text(locale, '选择“展开引用前后文”', 'Selected “Expand citation context”'), status)
+    return item(activity.sequence, 'tool', text(locale, '展开引用前后文', 'Expanding citation context'), status)
   }
   if (operation.startsWith('nativeTool|read_rule_pages')) {
-    return item(activity.sequence, 'tool', text(locale, '选择“读取原文页”', 'Selected “Read exact rulebook pages”'), status)
+    return item(activity.sequence, 'tool', text(locale, '读取原文页', 'Reading exact rulebook pages'), status)
   }
   if (operation.startsWith('nativeTool|read_visual_page_facts')) {
-    return item(activity.sequence, 'tool', text(locale, '选择“查看页面图示信息”', 'Selected “Inspect page visuals”'), status)
+    return item(activity.sequence, 'tool', text(locale, '查看页面图示信息', 'Checking page visuals'), status)
   }
   if (operation === 'calculateRuleMath') {
-    return item(activity.sequence, 'tool', text(locale, '选择“核算规则结果”', 'Selected “Calculate rule result”'), status)
+    return item(activity.sequence, 'tool', text(locale, '核算规则结果', 'Calculating the rule result'), status)
   }
   if (operation === 'checkRuleSituation') {
-    return item(activity.sequence, 'tool', text(locale, '选择“核对当前局面条件”', 'Selected “Check current situation conditions”'), status)
+    return item(activity.sequence, 'tool', text(locale, '核对当前局面条件', 'Checking current situation conditions'), status)
   }
   if (operation === 'buildRuleWalkthrough') {
-    return item(activity.sequence, 'tool', text(locale, '选择“整理引用分步讲解”', 'Selected “Build cited walkthrough”'), status)
+    return item(activity.sequence, 'tool', text(locale, '整理引用分步讲解', 'Building a cited walkthrough'), status)
   }
   if (operation === 'traceRuleDependencies') {
-    return item(activity.sequence, 'tool', text(locale, '选择“梳理规则前后关系”', 'Selected “Trace rule dependencies”'), status)
+    return item(activity.sequence, 'tool', text(locale, '梳理规则前后关系', 'Tracing rule dependencies'), status)
   }
   if (operation === 'buildRuleDecisionTable') {
-    return item(activity.sequence, 'tool', text(locale, '选择“整理条件分支”', 'Selected “Build rule decision table”'), status)
+    return item(activity.sequence, 'tool', text(locale, '整理条件分支', 'Organizing rule branches'), status)
   }
   if (operation === 'buildRuleExceptionList') {
-    return item(activity.sequence, 'tool', text(locale, '选择“逐条核对例外和限制”', 'Selected “Validate exceptions and restrictions”'), status)
+    return item(activity.sequence, 'tool', text(locale, '逐条核对例外和限制', 'Checking exceptions and restrictions'), status)
   }
   if (operation === 'defineRuleTerms') {
-    return item(activity.sequence, 'tool', text(locale, '选择“核对规则书术语定义”', 'Selected “Validate rulebook term definitions”'), status)
+    return item(activity.sequence, 'tool', text(locale, '核对规则书术语定义', 'Checking rulebook term definitions'), status)
   }
   if (operation === 'illustrateRule') {
-    return item(activity.sequence, 'tool', text(locale, '选择“整理带出处的规则示例”', 'Selected “Build a cited rule example”'), status)
+    return item(activity.sequence, 'tool', text(locale, '整理带出处的规则示例', 'Building a cited rule example'), status)
   }
   if (operation === 'resolveRulePriority') {
-    return item(activity.sequence, 'tool', text(locale, '选择“核对规则优先关系”', 'Selected “Resolve rule priority”'), status)
+    return item(activity.sequence, 'tool', text(locale, '核对规则优先关系', 'Checking rule priority'), status)
   }
   if (operation === 'checkRuleConflicts') {
-    return item(activity.sequence, 'tool', text(locale, '选择“检查两条规则是否真冲突”', 'Selected “Check whether rules truly conflict”'), status)
+    return item(activity.sequence, 'tool', text(locale, '检查两条规则是否真冲突', 'Checking whether the rules conflict'), status)
   }
   if (operation === 'showRuleEvidence') {
-    return item(activity.sequence, 'tool', text(locale, '选择“展示最直接的原文依据”', 'Selected “Show the most direct source rule”'), status)
+    return item(activity.sequence, 'tool', text(locale, '展示最直接的原文依据', 'Showing the most direct source rule'), status)
   }
   if (operation === 'checkRulePermission') {
-    return item(activity.sequence, 'tool', text(locale, '选择“核对规则是否允许”', 'Selected “Check whether the rule permits this”'), status)
+    return item(activity.sequence, 'tool', text(locale, '核对规则是否允许', 'Checking whether the rule permits this'), status)
   }
   if (operation === 'resolveRuleTiming') {
-    return item(activity.sequence, 'tool', text(locale, '选择“核对同时触发顺序”', 'Selected “Resolve simultaneous-effect order”'), status)
+    return item(activity.sequence, 'tool', text(locale, '核对同时触发顺序', 'Checking simultaneous-effect order'), status)
   }
   if (operation === 'resolveRuleTie') {
-    return item(activity.sequence, 'tool', text(locale, '选择“逐级核对平局判定”', 'Selected “Resolve the tie-break ladder”'), status)
+    return item(activity.sequence, 'tool', text(locale, '逐级核对平局判定', 'Checking the tie-break ladder'), status)
   }
   if (operation === 'resolveRuleScope') {
-    return item(activity.sequence, 'tool', text(locale, '选择“核对规则适用范围”', 'Selected “Check rule applicability”'), status)
+    return item(activity.sequence, 'tool', text(locale, '核对规则适用范围', 'Checking rule applicability'), status)
   }
   if (operation === 'compareRuleConcepts') {
-    return item(activity.sequence, 'tool', text(locale, '选择“对比两个规则概念”', 'Selected “Compare rule concepts”'), status)
+    return item(activity.sequence, 'tool', text(locale, '对比两个规则概念', 'Comparing rule concepts'), status)
   }
   if (operation === 'listRuleOptions') {
-    return item(activity.sequence, 'tool', text(locale, '选择“列出完整规则选项”', 'Selected “List complete rule options”'), status)
+    return item(activity.sequence, 'tool', text(locale, '列出完整规则选项', 'Listing complete rule options'), status)
   }
   if (operation.startsWith('nativeModelTurn')) {
     return item(activity.sequence, 'decision', text(locale, '根据当前证据判断下一步', 'Decided the next step from current evidence'), status)
   }
   if (operation === 'nativeToolFallback') {
-    return item(activity.sequence, 'verification', text(locale, '工具检索未补到新证据，保留已验证结果', 'Tool search added no evidence; kept the verified result'), status)
+    return item(activity.sequence, 'verification', text(locale, '没有找到新的规则依据，保留已核对结果', 'No new rule evidence found; keeping the checked result'), status)
   }
   if (operation === 'nativeCompletionRequirement') {
-    return item(activity.sequence, 'verification', text(locale, '证据工具尚未调用，继续查找依据', 'Evidence tool had not run; continued searching'), status)
+    return item(activity.sequence, 'verification', text(locale, '还需要规则依据，继续查找', 'More rule evidence is needed; continuing the search'), status)
   }
   if (operation === 'repairPublicationValidation') {
     return item(activity.sequence, 'verification', text(locale, '修正引用后重新核对回答', 'Corrected citations and checked the answer again'), status)
@@ -156,7 +156,7 @@ function traceItem(activity: AnswerAgentActivity, locale: 'zh-CN' | 'en'): Answe
     return item(activity.sequence, 'verification', text(locale, '复核回答是否被引用支持', 'Reviewed whether citations support the answer'), status)
   }
   if (activity.type === 'VALIDATION') {
-    return item(activity.sequence, 'verification', text(locale, '核对工具结果与引用边界', 'Validated tool results and citation boundaries'), status)
+    return item(activity.sequence, 'verification', text(locale, '核对查找结果与引用边界', 'Checked lookup results and citation boundaries'), status)
   }
   if (activity.type === 'MODEL') {
     return item(activity.sequence, 'decision', text(locale, '根据已验证证据组织回答', 'Composed from validated evidence'), status)
