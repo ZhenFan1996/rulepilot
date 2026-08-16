@@ -2113,6 +2113,88 @@ class BoardGameRecommendationAgentTest {
     }
 
     @Test
+    void repairsAnInternalEvidenceIdWithoutReplacingTheGroundedNarrative() {
+        TrackingCatalog catalog = catalogWithThreeShortGames();
+        String correctedWhy = "Glass Orchard 标注 40..55 分钟，时间边界可以直接核对。";
+        ScriptedModel model = new ScriptedModel(List.of(
+                ignored -> action(
+                        "inspect-one",
+                        BoardGameRecommendationAgent.SEARCH_TOOL,
+                        "{\"titles\":[\"Glass Orchard\"]}"),
+                ignored -> action(
+                        "show-internal-evidence-id",
+                        BoardGameRecommendationAgent.RECOMMEND_TOOL,
+                        "{\"message\":\"先看 Glass Orchard。\",\"selections\":[{"
+                                + "\"bggId\":60,\"narrativeMode\":\"OBSERVED_ONLY\","
+                                + "\"why\":\"Glass Orchard 标注 40..55 分钟（B60:durationMinutes），时间边界可以直接核对。\","
+                                + "\"tradeoff\":\"目录时长不能证明实际桌感。\","
+                                + "\"evidenceIds\":[\"B60:durationMinutes\"]}]}"),
+                request -> {
+                    assertThat(request.messages().getLast().content())
+                            .contains(
+                                    "CANDIDATE_NARRATIVE_INTERNAL_EVIDENCE_ID_VISIBLE",
+                                    "Keep the evidenceIds array unchanged",
+                                    "B60:durationMinutes");
+                    return action(
+                            "hide-only-the-internal-id",
+                            BoardGameRecommendationAgent.RECOMMEND_TOOL,
+                            "{\"message\":\"先看 Glass Orchard。\",\"selections\":[{"
+                                    + "\"bggId\":60,\"narrativeMode\":\"OBSERVED_ONLY\","
+                                    + "\"why\":\"" + correctedWhy + "\","
+                                    + "\"tradeoff\":\"目录时长不能证明实际桌感。\","
+                                    + "\"evidenceIds\":[\"B60:durationMinutes\"]}]}" );
+                }));
+
+        var response = agent(model, catalog, noResearch()).converse(
+                new ConversationRequest(RecommendationProfile.empty(), "给我一款时长明确的游戏。"),
+                "zh-CN");
+
+        assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
+        assertThat(response.games()).singleElement().satisfies(game ->
+                assertThat(game.reasons().getFirst().text()).isEqualTo(correctedWhy));
+        assertThat(response.harness().actions()).containsExactly(
+                "SEARCH_BGG_BY_NAME",
+                "LOOKUP_BGG_CANDIDATES",
+                "REJECTED_ACTION:CANDIDATE_NARRATIVE_INTERNAL_EVIDENCE_ID_VISIBLE",
+                "RECOMMEND_GAMES");
+    }
+
+    @Test
+    void doesNotTreatTheRequestedResultCountAsCandidateNarrativeEvidence() {
+        TrackingCatalog catalog = catalogWithThreeShortGames();
+        ScriptedModel model = new ScriptedModel(List.of(
+                ignored -> action(
+                        "inspect-three",
+                        BoardGameRecommendationAgent.SEARCH_TOOL,
+                        "{\"titles\":[\"Glass Orchard\",\"Loom City\",\"Signal Bazaar\"]}"),
+                ignored -> action(
+                        "misuse-result-count",
+                        BoardGameRecommendationAgent.RECOMMEND_TOOL,
+                        threeSelectionRecommendation(
+                                "Glass Orchard 标注 40..55 分钟，是这 3 款里的第一张卡。")),
+                request -> {
+                    assertThat(request.messages().getLast().content())
+                            .contains("CANDIDATE_NARRATIVE_NUMERIC_VALUE_UNGROUNDED", "3");
+                    return action(
+                            "remove-result-count-from-card-claim",
+                            BoardGameRecommendationAgent.RECOMMEND_TOOL,
+                            threeSelectionRecommendation("Glass Orchard 标注 40..55 分钟。"));
+                }));
+
+        var response = agent(model, catalog, noResearch()).converse(
+                new ConversationRequest(RecommendationProfile.empty(), "请直接给我 3 款。"),
+                "zh-CN");
+
+        assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
+        assertThat(response.games()).hasSize(3);
+        assertThat(response.harness().actions()).containsExactly(
+                "SEARCH_BGG_BY_NAME",
+                "LOOKUP_BGG_CANDIDATES",
+                "REJECTED_ACTION:CANDIDATE_NARRATIVE_NUMERIC_VALUE_UNGROUNDED",
+                "RECOMMEND_GAMES");
+    }
+
+    @Test
     void rejectsANumericValueOutsideBothCandidateEvidenceAndConfirmedUserBounds() {
         TrackingCatalog catalog = catalogWithThreeShortGames();
         ScriptedModel model = new ScriptedModel(List.of(
@@ -3766,6 +3848,22 @@ class BoardGameRecommendationAgentTest {
                 new BoardGameRecommendationSelector(properties),
                 properties,
                 new ObjectMapper());
+    }
+
+    private static String threeSelectionRecommendation(String firstWhy) {
+        return "{\"message\":\"这三张卡都保留了可核对的时长。\",\"selections\":["
+                + "{\"bggId\":60,\"narrativeMode\":\"OBSERVED_ONLY\","
+                + "\"why\":\"" + firstWhy + "\","
+                + "\"tradeoff\":\"目录时长不能证明实际桌感。\","
+                + "\"evidenceIds\":[\"B60:durationMinutes\"]},"
+                + "{\"bggId\":61,\"narrativeMode\":\"OBSERVED_ONLY\","
+                + "\"why\":\"Loom City 标注 45..60 分钟。\","
+                + "\"tradeoff\":\"目录时长不能证明实际桌感。\","
+                + "\"evidenceIds\":[\"B61:durationMinutes\"]},"
+                + "{\"bggId\":63,\"narrativeMode\":\"OBSERVED_ONLY\","
+                + "\"why\":\"Signal Bazaar 标注 60..75 分钟。\","
+                + "\"tradeoff\":\"目录时长不能证明实际桌感。\","
+                + "\"evidenceIds\":[\"B63:durationMinutes\"]}]}";
     }
 
     private static Turn action(String id, String name, String arguments) {
