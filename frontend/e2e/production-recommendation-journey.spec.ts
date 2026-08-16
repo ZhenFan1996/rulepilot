@@ -350,13 +350,15 @@ async function opaqueSurface(locator: Locator) {
     && appearance.height > 0
 }
 
-function requiresPersistedPublicationActivity(importReused: boolean) {
-  return !importReused
+function requiresPersistedPublicationActivity(
+  report: Pick<ProductionJourneyReport, 'importReused'>,
+) {
+  return !report.importReused
 }
 
 test('requires new publication activity telemetry only for a fresh production import', () => {
-  expect(requiresPersistedPublicationActivity(false)).toBe(true)
-  expect(requiresPersistedPublicationActivity(true)).toBe(false)
+  expect(requiresPersistedPublicationActivity({ importReused: false })).toBe(true)
+  expect(requiresPersistedPublicationActivity({ importReused: true })).toBe(false)
 })
 
 test('recommendation becomes one readable, taught, and answerable production journey', async ({ page }) => {
@@ -626,7 +628,7 @@ test('recommendation becomes one readable, taught, and answerable production jou
     }
     expect(report.preparationRunCreatedAt, 'The production probe did not observe the real preparation Run')
       .not.toBeNull()
-    if (requiresPersistedPublicationActivity(completedJob.reused)) {
+    if (requiresPersistedPublicationActivity(report)) {
       expect(report.firstCitedPublicationActivityAt,
         'A fresh production import did not persist a source-cited publication activity').not.toBeNull()
       expect(report.persistedPreparationToFirstCitedActivityMs,
