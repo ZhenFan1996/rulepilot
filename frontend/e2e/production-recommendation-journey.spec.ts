@@ -199,10 +199,11 @@ function persistedDuration(from: string | null, to: string | null) {
 async function login(page: Page, username: string, password: string) {
   await page.addInitScript(() => localStorage.setItem('rulepilot:locale', 'zh-CN'))
   await page.goto('/login')
+  const homeUrl = new URL('/', page.url()).toString()
   await page.locator('input[name="username"]').fill(username)
   await page.locator('input[name="password"]').fill(password)
   await page.locator('form button[type="submit"]').click()
-  await expect(page).toHaveURL(/\/account$/)
+  await expect(page).toHaveURL(homeUrl)
 }
 
 function observedDownloadComplete(job: ImportJob) {
