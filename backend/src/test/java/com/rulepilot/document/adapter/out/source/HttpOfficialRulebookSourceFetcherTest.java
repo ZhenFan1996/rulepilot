@@ -258,6 +258,88 @@ class HttpOfficialRulebookSourceFetcherTest {
     }
 
     @Test
+    void downloadsIndependentGalleryPagesWithBoundedConcurrencyAndKeepsTheirSourceOrder() {
+        int pageCount = 8;
+        AtomicInteger activeDownloads = new AtomicInteger();
+        AtomicInteger maximumConcurrentDownloads = new AtomicInteger();
+        OkHttpClient http = new OkHttpClient.Builder()
+                .addInterceptor(chain -> {
+                    if (chain.request().url().encodedPath().equals("/game/doc-1234.html")) {
+                        StringBuilder html = new StringBuilder("<div id=\"preview_imgs\">");
+                        for (int page = 1; page <= pageCount; page++) {
+                            html.append("<img src=\"https://oss.gstonegames.com/static/image/document/page-%02d.jpg\">"
+                                    .formatted(page));
+                        }
+                        return response(chain.request(), "text/html; charset=utf-8",
+                                html.append("</div>").toString().getBytes(StandardCharsets.UTF_8));
+                    }
+                    int active = activeDownloads.incrementAndGet();
+                    maximumConcurrentDownloads.accumulateAndGet(active, Math::max);
+                    try {
+                        Thread.sleep(75);
+                        return response(chain.request(), "image/jpeg",
+                                new byte[] {(byte) 0xff, (byte) 0xd8, (byte) 0xff});
+                    } catch (InterruptedException interrupted) {
+                        Thread.currentThread().interrupt();
+                        throw new IOException("fixture download interrupted", interrupted);
+                    } finally {
+                        activeDownloads.decrementAndGet();
+                    }
+                })
+                .build();
+        List<String> assembledPageNames = new ArrayList<>();
+        var fetcher = new HttpOfficialRulebookSourceFetcher(
+                http,
+                5 * 1024 * 1024,
+                64 * 1024,
+                pages -> {
+                    pages.forEach(page -> assembledPageNames.add(page.originalFilename()));
+                    return new com.rulepilot.document.application.PhotographedRulebookAssembler.AssembledRulebook(
+                            "rulebook.pdf", "%PDF-gallery".getBytes(StandardCharsets.US_ASCII));
+                });
+
+        var fetched = fetcher.fetch(URI.create("https://www.gstonegames.com/game/doc-1234.html"));
+
+        assertThat(maximumConcurrentDownloads).hasValueBetween(2, 4);
+        assertThat(assembledPageNames).containsExactly(
+                "page-01.jpg", "page-02.jpg", "page-03.jpg", "page-04.jpg",
+                "page-05.jpg", "page-06.jpg", "page-07.jpg", "page-08.jpg");
+        assertThat(new String(fetched.content(), StandardCharsets.US_ASCII)).isEqualTo("%PDF-gallery");
+    }
+
+    @Test
+    void keepsTheAggregateGalleryDownloadBoundUnderParallelPageReads() {
+        byte[] page = new byte[24];
+        page[0] = (byte) 0xff;
+        page[1] = (byte) 0xd8;
+        page[2] = (byte) 0xff;
+        OkHttpClient http = new OkHttpClient.Builder()
+                .addInterceptor(chain -> {
+                    if (chain.request().url().encodedPath().equals("/game/doc-1234.html")) {
+                        String html = """
+                                <div id="preview_imgs">
+                                  <img src="https://oss.gstonegames.com/static/image/document/page-01.jpg">
+                                  <img src="https://oss.gstonegames.com/static/image/document/page-02.jpg">
+                                </div>
+                                """;
+                        return response(chain.request(), "text/html; charset=utf-8",
+                                html.getBytes(StandardCharsets.UTF_8));
+                    }
+                    return response(chain.request(), "image/jpeg", page);
+                })
+                .build();
+        var fetcher = new HttpOfficialRulebookSourceFetcher(
+                http,
+                32,
+                8 * 1024,
+                pages -> { throw new AssertionError("oversized gallery must not be assembled"); });
+
+        assertThatThrownBy(() -> fetcher.fetch(URI.create("https://www.gstonegames.com/game/doc-1234.html")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("page images exceed");
+    }
+
+    @Test
     void rejectsAGalleryWhenTheAssembledPdfExceedsTheConfiguredLimit() {
         byte[] jpegMagic = {(byte) 0xff, (byte) 0xd8, (byte) 0xff};
         AtomicInteger calls = new AtomicInteger();

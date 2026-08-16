@@ -15,9 +15,17 @@ import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorCompletionService;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
 import okhttp3.Call;
@@ -37,6 +45,8 @@ public class HttpOfficialRulebookSourceFetcher implements OfficialRulebookSource
 
     private static final int MAX_REDIRECTS = 3;
     private static final int MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+    private static final int MAX_GALLERY_DOWNLOAD_CONCURRENCY = 4;
+    private static final long DOWNLOAD_PROGRESS_INTERVAL_BYTES = 256L * 1024;
     private static final long ABSOLUTE_MAX_COMPRESSIBLE_PDF_BYTES = 256L * 1024 * 1024;
     private static final long DEFAULT_MAX_COMPRESSIBLE_PDF_BYTES = 100L * 1024 * 1024;
     private static final String GSTONE_READABLE_IMAGE_TRANSFORM =
@@ -262,18 +272,9 @@ public class HttpOfficialRulebookSourceFetcher implements OfficialRulebookSource
         var gallery = galleryParser.parse(source, document).orElseThrow(this::interactiveBrowserRequired);
 
         progress.downloadStarted(null);
-        long downloaded = 0;
-        var pages = new ArrayList<PhotoPage>(gallery.pages().size());
-        for (int index = 0; index < gallery.pages().size(); index++) {
-            FetchedImage page = fetchImage(source, gallery.pages().get(index), downloaded, progress);
-            downloaded += page.content().length;
-            if (downloaded > maxPdfBytes) {
-                throw new IllegalArgumentException("rulebook page images exceed the configured size limit");
-            }
-            pages.add(new PhotoPage(
-                    "page-%02d.%s".formatted(index + 1, page.extension()), page.contentType(), page.content()));
-            progress.downloaded(downloaded, null);
-        }
+        var download = new GalleryDownload(progress, maxPdfBytes);
+        List<PhotoPage> pages = fetchGalleryPages(source, gallery.pages(), download);
+        download.finish();
         progress.downloadCompleted();
         byte[] pdf = galleryAssembler.assemble(pages).pdf();
         if (pdf.length > maxPdfBytes) {
@@ -284,12 +285,56 @@ public class HttpOfficialRulebookSourceFetcher implements OfficialRulebookSource
         return new FetchedRulebook(source, pdf);
     }
 
-    private FetchedImage fetchImage(
-            URI gallerySource, URI imageSource, long previouslyDownloaded, ProgressListener progress)
-            throws IOException {
+    private List<PhotoPage> fetchGalleryPages(
+            URI gallerySource, List<URI> imageSources, GalleryDownload download) throws IOException {
+        int concurrency = Math.min(MAX_GALLERY_DOWNLOAD_CONCURRENCY, imageSources.size());
+        ExecutorService executor = Executors.newFixedThreadPool(
+                concurrency,
+                Thread.ofPlatform().daemon().name("rulebook-gallery-download-", 0).factory());
+        var completed = new ExecutorCompletionService<IndexedImage>(executor);
+        var futures = new ArrayList<Future<IndexedImage>>(imageSources.size());
+        List<PhotoPage> pages = new ArrayList<>(Collections.nCopies(imageSources.size(), null));
+        try {
+            for (int index = 0; index < imageSources.size(); index++) {
+                int pageIndex = index;
+                URI imageSource = imageSources.get(index);
+                Callable<IndexedImage> fetch = () ->
+                        new IndexedImage(pageIndex, fetchImage(gallerySource, imageSource, download));
+                futures.add(completed.submit(fetch));
+            }
+            for (int received = 0; received < imageSources.size(); received++) {
+                IndexedImage result = completed.take().get();
+                FetchedImage page = result.image();
+                pages.set(result.index(), new PhotoPage(
+                        "page-%02d.%s".formatted(result.index() + 1, page.extension()),
+                        page.contentType(),
+                        page.content()));
+            }
+            return List.copyOf(pages);
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("rulebook page-image download was interrupted", interrupted);
+        } catch (ExecutionException failed) {
+            Throwable cause = failed.getCause();
+            if (cause instanceof IOException unavailable) throw unavailable;
+            if (cause instanceof RuntimeException rejected) throw rejected;
+            throw new IllegalStateException("rulebook page-image download failed", cause);
+        } finally {
+            futures.forEach(future -> future.cancel(true));
+            download.cancelActiveCalls();
+            executor.shutdownNow();
+        }
+    }
+
+    private FetchedImage fetchImage(URI gallerySource, URI imageSource, GalleryDownload download) throws IOException {
         URI current = readableGalleryImage(trustedGalleryImage(gallerySource, imageSource));
         for (int redirects = 0; redirects <= MAX_REDIRECTS; redirects++) {
-            try (Response response = calls.newCall(imageRequest(current, gallerySource)).execute()) {
+            if (Thread.currentThread().isInterrupted()) {
+                throw new IOException("rulebook page-image download was cancelled");
+            }
+            Call call = calls.newCall(imageRequest(current, gallerySource));
+            download.started(call);
+            try (Response response = call.execute()) {
                 if (response.isRedirect()) {
                     if (redirects == MAX_REDIRECTS) {
                         throw new IllegalArgumentException("rulebook page image redirected too many times");
@@ -307,14 +352,15 @@ public class HttpOfficialRulebookSourceFetcher implements OfficialRulebookSource
                 }
                 String contentType = normalizedImageType(response.header("Content-Type", ""));
                 long declaredSize = response.body().contentLength();
-                long remaining = maxPdfBytes - previouslyDownloaded;
-                if (declaredSize > MAX_IMAGE_BYTES || declaredSize > remaining) {
+                if (declaredSize > MAX_IMAGE_BYTES || declaredSize > maxPdfBytes) {
                     throw new IllegalArgumentException("rulebook page image exceeds the configured size limit");
                 }
-                byte[] content = readImageBounded(response, remaining, previouslyDownloaded, progress);
+                byte[] content = readImageBounded(response, download);
                 validateImage(content, contentType);
                 String extension = "image/png".equals(contentType) ? "png" : "jpg";
                 return new FetchedImage(contentType, extension, content);
+            } finally {
+                download.finished(call);
             }
         }
         throw new IllegalArgumentException("rulebook page image redirected too many times");
@@ -331,25 +377,19 @@ public class HttpOfficialRulebookSourceFetcher implements OfficialRulebookSource
         return URI.create(source.toASCIIString() + "?" + GSTONE_READABLE_IMAGE_TRANSFORM);
     }
 
-    private byte[] readImageBounded(
-            Response response, long remaining, long previouslyDownloaded, ProgressListener progress)
-            throws IOException {
+    private byte[] readImageBounded(Response response, GalleryDownload download) throws IOException {
         var content = new ByteArrayOutputStream();
         byte[] buffer = new byte[16 * 1024];
         long downloaded = 0;
-        long lastReported = 0;
         try (var input = response.body().byteStream()) {
             int read;
             while ((read = input.read(buffer)) != -1) {
                 downloaded += read;
-                if (downloaded > MAX_IMAGE_BYTES || downloaded > remaining) {
+                if (downloaded > MAX_IMAGE_BYTES) {
                     throw new IllegalArgumentException("rulebook page image exceeds the configured size limit");
                 }
+                download.received(read);
                 content.write(buffer, 0, read);
-                if (downloaded - lastReported >= 256 * 1024) {
-                    progress.downloaded(previouslyDownloaded + downloaded, null);
-                    lastReported = downloaded;
-                }
             }
         }
         return content.toByteArray();
@@ -417,7 +457,7 @@ public class HttpOfficialRulebookSourceFetcher implements OfficialRulebookSource
                     throw new IllegalArgumentException("official rulebook PDF exceeds the safe compression input limit");
                 }
                 content.write(buffer, 0, read);
-                if (downloaded - lastReported >= 256 * 1024) {
+                if (downloaded - lastReported >= DOWNLOAD_PROGRESS_INTERVAL_BYTES) {
                     progress.downloaded(downloaded, totalBytes);
                     lastReported = downloaded;
                 }
@@ -496,6 +536,52 @@ public class HttpOfficialRulebookSourceFetcher implements OfficialRulebookSource
                 .header("User-Agent", "RulePilot/0.1 user-confirmed-rulebook-import")
                 .build();
     }
+
+    private static final class GalleryDownload {
+
+        private final ProgressListener progress;
+        private final long maximumBytes;
+        private final Set<Call> activeCalls = ConcurrentHashMap.newKeySet();
+        private long downloadedBytes;
+        private long reportedBytes;
+
+        private GalleryDownload(ProgressListener progress, long maximumBytes) {
+            this.progress = progress;
+            this.maximumBytes = maximumBytes;
+        }
+
+        private void started(Call call) {
+            activeCalls.add(call);
+        }
+
+        private void finished(Call call) {
+            activeCalls.remove(call);
+        }
+
+        private synchronized void received(int bytes) {
+            if (downloadedBytes > maximumBytes - bytes) {
+                throw new IllegalArgumentException("rulebook page images exceed the configured size limit");
+            }
+            downloadedBytes += bytes;
+            if (downloadedBytes - reportedBytes >= DOWNLOAD_PROGRESS_INTERVAL_BYTES) {
+                progress.downloaded(downloadedBytes, null);
+                reportedBytes = downloadedBytes;
+            }
+        }
+
+        private synchronized void finish() {
+            if (reportedBytes != downloadedBytes) {
+                progress.downloaded(downloadedBytes, null);
+                reportedBytes = downloadedBytes;
+            }
+        }
+
+        private void cancelActiveCalls() {
+            activeCalls.forEach(Call::cancel);
+        }
+    }
+
+    private record IndexedImage(int index, FetchedImage image) {}
 
     private record FetchedImage(String contentType, String extension, byte[] content) {}
 }

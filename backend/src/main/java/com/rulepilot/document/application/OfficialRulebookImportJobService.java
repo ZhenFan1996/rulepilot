@@ -10,6 +10,7 @@ import com.rulepilot.document.domain.OfficialRulebookImportJob.TeachingHandoffSt
 import com.rulepilot.document.domain.RuleDocument;
 import java.net.URI;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -26,6 +27,9 @@ import org.springframework.stereotype.Service;
 @Service
 @Profile("!test")
 public class OfficialRulebookImportJobService implements RulebookTeachingHandoffs {
+
+    private static final long DOWNLOAD_PROGRESS_WRITE_INTERVAL_BYTES = 4L * 1024 * 1024;
+    private static final Duration DOWNLOAD_PROGRESS_WRITE_INTERVAL = Duration.ofSeconds(1);
 
     private final OfficialRulebookImportJobRepository jobs;
     private final RuleDocumentRepository documents;
@@ -301,52 +305,76 @@ public class OfficialRulebookImportJobService implements RulebookTeachingHandoff
                     job.sourceUrl(),
                     true,
                     job.ownerUsername(),
-                    new OfficialRulebookSourceFetcher.ProgressListener() {
-                        @Override
-                        public void downloadStarted(Long totalBytes) {
-                            jobs.updateProgress(
-                                    job.id(), OfficialRulebookImportJob.Stage.DOWNLOADING, 0, totalBytes, Instant.now(clock));
-                        }
-
-                        @Override
-                        public void downloaded(long downloadedBytes, Long totalBytes) {
-                            jobs.updateProgress(
-                                    job.id(), OfficialRulebookImportJob.Stage.DOWNLOADING,
-                                    downloadedBytes, totalBytes, Instant.now(clock));
-                        }
-
-                        @Override
-                        public void downloadCompleted() {
-                            jobs.markDownloadCompleted(job.id(), Instant.now(clock));
-                        }
-
-                        @Override
-                        public void compressing() {
-                            var current = requireOwned(job.id(), job.ownerUsername());
-                            jobs.updateProgress(
-                                    job.id(), OfficialRulebookImportJob.Stage.COMPRESSING,
-                                    current.downloadedBytes(), current.totalBytes(), Instant.now(clock));
-                        }
-
-                        @Override
-                        public void verifying() {
-                            var current = requireOwned(job.id(), job.ownerUsername());
-                            jobs.updateProgress(
-                                    job.id(), OfficialRulebookImportJob.Stage.VERIFYING_FILE,
-                                    current.downloadedBytes(), current.totalBytes(), Instant.now(clock));
-                        }
-
-                        @Override
-                        public void saving() {
-                            var current = requireOwned(job.id(), job.ownerUsername());
-                            jobs.updateProgress(
-                                    job.id(), OfficialRulebookImportJob.Stage.SAVING,
-                                    current.downloadedBytes(), current.totalBytes(), Instant.now(clock));
-                        }
-                    });
+                    new PersistedImportProgress(job.id()));
             jobs.complete(job.id(), result.version().id(), result.duplicate(), Instant.now(clock));
         } catch (RuntimeException exception) {
             jobs.fail(job.id(), failureCode(exception), Instant.now(clock));
+        }
+    }
+
+    /** Keeps UI progress fresh without putting one database transaction in every network read loop. */
+    private final class PersistedImportProgress implements OfficialRulebookSourceFetcher.ProgressListener {
+
+        private final UUID jobId;
+        private long downloadedBytes;
+        private long persistedDownloadedBytes = -1;
+        private Long totalBytes;
+        private Long persistedTotalBytes;
+        private Instant lastPersistedAt;
+
+        private PersistedImportProgress(UUID jobId) {
+            this.jobId = jobId;
+        }
+
+        @Override
+        public synchronized void downloadStarted(Long totalBytes) {
+            downloadedBytes = 0;
+            this.totalBytes = totalBytes;
+            persist(OfficialRulebookImportJob.Stage.DOWNLOADING, Instant.now(clock));
+        }
+
+        @Override
+        public synchronized void downloaded(long downloadedBytes, Long totalBytes) {
+            this.downloadedBytes = downloadedBytes;
+            this.totalBytes = totalBytes;
+            Instant now = Instant.now(clock);
+            boolean enoughBytes = downloadedBytes - persistedDownloadedBytes >= DOWNLOAD_PROGRESS_WRITE_INTERVAL_BYTES;
+            boolean enoughTime = lastPersistedAt == null
+                    || !now.isBefore(lastPersistedAt.plus(DOWNLOAD_PROGRESS_WRITE_INTERVAL));
+            if (enoughBytes || enoughTime || !Objects.equals(totalBytes, persistedTotalBytes)) {
+                persist(OfficialRulebookImportJob.Stage.DOWNLOADING, now);
+            }
+        }
+
+        @Override
+        public synchronized void downloadCompleted() {
+            Instant now = Instant.now(clock);
+            if (downloadedBytes != persistedDownloadedBytes || !Objects.equals(totalBytes, persistedTotalBytes)) {
+                persist(OfficialRulebookImportJob.Stage.DOWNLOADING, now);
+            }
+            jobs.markDownloadCompleted(jobId, now);
+        }
+
+        @Override
+        public synchronized void compressing() {
+            persist(OfficialRulebookImportJob.Stage.COMPRESSING, Instant.now(clock));
+        }
+
+        @Override
+        public synchronized void verifying() {
+            persist(OfficialRulebookImportJob.Stage.VERIFYING_FILE, Instant.now(clock));
+        }
+
+        @Override
+        public synchronized void saving() {
+            persist(OfficialRulebookImportJob.Stage.SAVING, Instant.now(clock));
+        }
+
+        private void persist(OfficialRulebookImportJob.Stage stage, Instant now) {
+            jobs.updateProgress(jobId, stage, downloadedBytes, totalBytes, now);
+            persistedDownloadedBytes = downloadedBytes;
+            persistedTotalBytes = totalBytes;
+            lastPersistedAt = now;
         }
     }
 
