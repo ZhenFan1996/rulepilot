@@ -549,6 +549,48 @@ class SpringAiVisualRulebookPageCatalogModelTest {
     }
 
     @Test
+    void leavesAnInvalidMultiPageLedgerForTheCallerToSplitWithoutAQualityRetry() throws IOException {
+        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        ChatModel chatModel = mock(ChatModel.class);
+        OpenAiChatOptions defaults = OpenAiChatOptions.builder().model("qwen3.7-plus").build();
+        when(configuration.usesFake(Role.VISUAL, "owner")).thenReturn(false);
+        when(configuration.supportsVision(Role.VISUAL, "owner")).thenReturn(true);
+        when(configuration.providerFor(Role.VISUAL, "owner")).thenReturn("qwen");
+        when(configuration.modelNameFor(Role.VISUAL, "owner")).thenReturn("qwen3.7-plus");
+        when(configuration.modelFor(Role.VISUAL, "owner")).thenReturn(chatModel);
+        when(chatModel.getDefaultOptions()).thenReturn(defaults);
+        when(chatModel.getOptions()).thenReturn(defaults);
+        when(chatModel.call(any(Prompt.class))).thenReturn(response("""
+                {"pages":[
+                 {"pageNumber":1,"printedTerms":["MOVE"],
+                  "factualSummary":["MOVEMENT: Move one pawn."],"keywords":["move"],
+                  "sourceDependencies":[],"ruleGroupIdentifiers":["MOVE"],
+                  "ruleGroupInventoryComplete":true,"quantityObservations":[]},
+                 {"pageNumber":2,"printedTerms":["DRAW"],
+                  "factualSummary":["DRAW: Draw one card."],"keywords":["draw"],
+                  "sourceDependencies":[],"ruleGroupIdentifiers":["DRAW"],
+                  "ruleGroupInventoryComplete":true,"quantityObservations":[]}]}
+                """));
+        SpringAiVisualRulebookPageCatalogModel model = model(configuration);
+        CatalogRequest request = new CatalogRequest(
+                List.of(
+                        new PageImageInput(1, "image/png", png()),
+                        new PageImageInput(2, "image/png", png())),
+                "owner",
+                "Example Game");
+
+        assertThatThrownBy(() -> model.summarizeForTeaching(request))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("no same-page fact");
+
+        ArgumentCaptor<Prompt> prompt = ArgumentCaptor.forClass(Prompt.class);
+        verify(chatModel).call(prompt.capture());
+        OpenAiChatOptions options = (OpenAiChatOptions) prompt.getValue().getOptions();
+        assertThat(options.getModel()).isEqualTo("qwen3.6-flash");
+        assertThat(options.getMaxTokens()).isEqualTo(3_200);
+    }
+
+    @Test
     void preservesEveryExplicitNonTargetModelInsteadOfSilentlyReplacingIt() {
         assertThat(SpringAiVisualRulebookPageCatalogModel.teachingStartupModelName("qwen", "qwen3.6-plus"))
                 .isEqualTo("qwen3.6-plus");
