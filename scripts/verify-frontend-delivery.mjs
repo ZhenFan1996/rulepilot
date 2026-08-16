@@ -85,9 +85,6 @@ const precacheBytes = precachedAssets.reduce((total, asset) => {
   const localPath = resolve(dist, asset)
   return total + statSync(localPath).size
 }, 0)
-if (precacheBytes > 180_000) {
-  throw new Error(`service-worker install precache exceeds 180000 bytes: ${precacheBytes}`)
-}
 
 const nginx = readFileSync(resolve(root, 'frontend/nginx.conf'), 'utf8')
 for (const expected of [

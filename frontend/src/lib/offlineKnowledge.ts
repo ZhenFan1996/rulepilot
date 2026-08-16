@@ -40,6 +40,7 @@ export interface OfflineKnowledgeEntry {
   ruling: OfflineRuling | null
 }
 
+const LEGACY_VERSION = 1
 const VERSION = 2
 const MAX_ENTRIES = 12
 
@@ -119,6 +120,67 @@ function isEntry(value: unknown): value is OfflineKnowledgeEntry {
     && (entry.ruling === null || isRuling(entry.ruling))
 }
 
+function normalizeCitation(citation: OfflineCitation): OfflineCitation {
+  return {
+    heading: citation.heading,
+    excerpt: citation.excerpt,
+    pageFrom: citation.pageFrom,
+    pageTo: citation.pageTo,
+  }
+}
+
+function normalizeRuling(ruling: OfflineRuling | null): OfflineRuling | null {
+  if (!ruling) return null
+  return {
+    id: ruling.id,
+    shortVerdict: ruling.shortVerdict,
+    explanation: ruling.explanation,
+    citations: ruling.citations.map(citation => ({
+      ...normalizeCitation(citation),
+      chunkId: citation.chunkId,
+      sectionType: citation.sectionType,
+    })),
+    exceptions: [...ruling.exceptions],
+    confidence: ruling.confidence,
+    status: 'CONFIRMED',
+    version: ruling.version,
+  }
+}
+
+function legacyAnswerSource(answer: OfflineAnswer, ruling: OfflineRuling | null): OfflineAnswer['source'] {
+  const legacy = answer as OfflineAnswer & {
+    confirmedRulingId?: unknown
+    official?: unknown
+  }
+  if (ruling || isString(legacy.confirmedRulingId, 80)) return 'CONFIRMED'
+  return legacy.official === true ? 'OFFICIAL' : 'UPLOADED'
+}
+
+function normalizeEntry(
+  entry: OfflineKnowledgeEntry,
+  storedVersion: typeof LEGACY_VERSION | typeof VERSION,
+): OfflineKnowledgeEntry {
+  const ruling = normalizeRuling(entry.ruling)
+  const source = entry.answer.source
+    ?? (storedVersion === LEGACY_VERSION ? legacyAnswerSource(entry.answer, ruling) : undefined)
+  return {
+    question: entry.question,
+    cachedAt: entry.cachedAt,
+    answer: {
+      status: 'ANSWERED',
+      shortVerdict: entry.answer.shortVerdict,
+      explanation: entry.answer.explanation,
+      citations: entry.answer.citations.map(normalizeCitation),
+      exceptions: [...entry.answer.exceptions],
+      confidence: entry.answer.confidence,
+      ...(entry.answer.language ? { language: entry.answer.language } : {}),
+      ...(source ? { source } : {}),
+      clarification: null,
+    },
+    ruling,
+  }
+}
+
 export function loadOfflineKnowledge(planId: string): OfflineKnowledgeEntry[] {
   const key = storageKey(planId)
   if (!key) return []
@@ -126,11 +188,15 @@ export function loadOfflineKnowledge(planId: string): OfflineKnowledgeEntry[] {
     const parsed = JSON.parse(localStorage.getItem(key) ?? 'null') as unknown
     if (!parsed || typeof parsed !== 'object') return []
     const record = parsed as { version?: unknown; entries?: unknown }
-    if (record.version !== VERSION || !Array.isArray(record.entries)) return []
-    return record.entries
+    const storedVersion = record.version
+    if ((storedVersion !== LEGACY_VERSION && storedVersion !== VERSION)
+      || !Array.isArray(record.entries)) return []
+    const entries = record.entries
       .filter(isEntry)
       .slice(0, MAX_ENTRIES)
-      .map(({ question, cachedAt, answer, ruling }) => ({ question, cachedAt, answer, ruling }))
+      .map(entry => normalizeEntry(entry, storedVersion))
+    if (storedVersion === LEGACY_VERSION) save(planId, entries)
+    return entries
   } catch {
     return []
   }

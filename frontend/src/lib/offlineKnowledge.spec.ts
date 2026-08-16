@@ -39,6 +39,57 @@ describe('offline knowledge cache', () => {
     expect(entries[0]?.ruling?.id).toBe('ruling-1')
   })
 
+  it('migrates validated version 1 knowledge without losing a confirmed ruling', () => {
+    const key = 'rulepilot:offline-knowledge:plan-legacy'
+    localStorage.setItem(key, JSON.stringify({
+      version: 1,
+      entries: [{
+        question: '硬币如何计分？',
+        cachedAt: '2026-07-18T10:00:00.000Z',
+        answer: {
+          status: 'ANSWERED',
+          shortVerdict: answer.shortVerdict,
+          explanation: answer.explanation,
+          citations: [{
+            ...answer.citations[0],
+            chunkId: 'chunk-1',
+            sectionType: 'SCORING',
+          }],
+          exceptions: [],
+          confidence: 'HIGH',
+          official: false,
+          confirmedRulingId: 'ruling-1',
+          confirmedRulingVersion: 1,
+          clarification: null,
+        },
+        ruling: {
+          id: 'ruling-1',
+          shortVerdict: answer.shortVerdict,
+          explanation: answer.explanation,
+          citations: [{
+            ...answer.citations[0],
+            chunkId: 'chunk-1',
+            sectionType: 'SCORING',
+          }],
+          exceptions: [],
+          confidence: 'HIGH',
+          status: 'CONFIRMED',
+          version: 1,
+        },
+      }],
+    }))
+
+    const entries = loadOfflineKnowledge('plan-legacy')
+
+    expect(entries).toHaveLength(1)
+    expect(entries[0]?.answer.source).toBe('CONFIRMED')
+    expect(entries[0]?.answer.citations[0]).toEqual(answer.citations[0])
+    expect(entries[0]?.answer).not.toHaveProperty('official')
+    expect(entries[0]?.ruling?.id).toBe('ruling-1')
+    const migrated = JSON.parse(localStorage.getItem(key) ?? 'null') as { version?: number }
+    expect(migrated.version).toBe(2)
+  })
+
   it('rejects malformed browser storage instead of trusting it', () => {
     localStorage.setItem('rulepilot:offline-knowledge:plan-1', JSON.stringify({ version: 2, entries: [{ question: '<script>' }] }))
 
