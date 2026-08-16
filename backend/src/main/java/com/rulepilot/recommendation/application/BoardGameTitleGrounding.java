@@ -2,6 +2,9 @@ package com.rulepilot.recommendation.application;
 
 import java.text.Normalizer;
 import java.util.Locale;
+import java.util.Optional;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /** Validates that an Agent-returned title is an intact span from player-authored text. */
 public final class BoardGameTitleGrounding {
@@ -25,6 +28,36 @@ public final class BoardGameTitleGrounding {
             fromIndex = index + 1;
         }
         return false;
+    }
+
+    /**
+     * Restores an explicit localized/canonical pair when the Agent returns only the leading title.
+     * The returned value is always an exact player-authored span; this method never translates or
+     * guesses an alias.
+     */
+    public static Optional<String> withImmediateParenthesizedAlias(String text, String title) {
+        if (!occursInPlayerText(text, title) || text == null || title == null || title.isBlank()) {
+            return Optional.empty();
+        }
+        Matcher matcher = Pattern.compile(Pattern.quote(title), Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE)
+                .matcher(text);
+        while (matcher.find()) {
+            if (!hasValidLeadingBoundary(text, title, matcher.start())
+                    || !hasValidTrailingBoundary(text, title, matcher.end())) {
+                continue;
+            }
+            int opening = matcher.end();
+            while (opening < text.length() && Character.isWhitespace(text.charAt(opening))) opening++;
+            if (opening >= text.length()) continue;
+            char openingCharacter = text.charAt(opening);
+            char closingCharacter = openingCharacter == '(' ? ')' : openingCharacter == '（' ? '）' : 0;
+            if (closingCharacter == 0) continue;
+            int closing = text.indexOf(closingCharacter, opening + 1);
+            if (closing < 0 || text.substring(opening + 1, closing).isBlank()) continue;
+            String expanded = text.substring(matcher.start(), closing + 1).strip();
+            if (expanded.length() <= 120) return Optional.of(expanded);
+        }
+        return Optional.empty();
     }
 
     private static boolean hasValidLeadingBoundary(String text, String title, int index) {

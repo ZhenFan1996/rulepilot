@@ -46,7 +46,15 @@ class BoardGameRecommendationAgentTest {
 
     @Test
     void returnsAPlayerNamedTargetAsASelectableRecommendationCardInTheResolvingTurn() {
-        TrackingCatalog catalog = catalog();
+        Game target = game(
+                50,
+                "Mosaic Field",
+                45,
+                List.of("Abstract Strategy"),
+                List.of("Pattern Building", "Tile Placement"));
+        TrackingCatalog catalog = new TrackingCatalog(
+                Map.of(50, target),
+                Map.of("蓝瓷花园（Mosaic Field）", 50));
         ScriptedModel model = new ScriptedModel(List.of(request -> {
             String resolutionSchema = request.tools().stream()
                     .filter(tool -> BoardGameRecommendationAgent.RESOLVE_TOOL.equals(tool.name()))
@@ -62,14 +70,14 @@ class BoardGameRecommendationAgentTest {
             return action(
                     "resolve-target",
                     BoardGameRecommendationAgent.RESOLVE_TOOL,
-                    "{\"title\":\"Mosaic Field\",\"purpose\":\"TARGET_GAME\","
+                    "{\"title\":\"蓝瓷花园\",\"purpose\":\"TARGET_GAME\","
                             + "\"message\":\"就是你指定的这款；核对成功后可以继续为它找规则书。\"}");
         }));
 
         var response = agent(model, catalog, noResearch()).converse(
                 new ConversationRequest(
                         RecommendationProfile.empty(),
-                        "我想玩 Mosaic Field",
+                        "我想玩蓝瓷花园（Mosaic Field）",
                         List.of(),
                         List.of(),
                         null,
@@ -85,6 +93,7 @@ class BoardGameRecommendationAgentTest {
         assertThat(response.harness().actions()).containsExactly(
                 "RESOLVE_BGG_REFERENCE", "RECOMMEND_GAMES");
         assertThat(catalog.calls).isEqualTo(1);
+        assertThat(catalog.lastResolvedTitle).isEqualTo("蓝瓷花园（Mosaic Field）");
     }
 
     @Test
@@ -3714,6 +3723,7 @@ class BoardGameRecommendationAgentTest {
         private final Map<String, Integer> names;
         private int calls;
         private int maximumRequested;
+        private String lastResolvedTitle;
 
         private TrackingCatalog() {
             this(Map.of(), Map.of());
@@ -3748,6 +3758,7 @@ class BoardGameRecommendationAgentTest {
         @Override
         public List<Game> resolveReferenceTitle(String title) {
             calls++;
+            lastResolvedTitle = title;
             Integer id = names.get(title);
             return id == null ? List.of() : List.of(games.get(id));
         }

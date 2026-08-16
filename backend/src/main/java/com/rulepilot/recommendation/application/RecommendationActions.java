@@ -59,6 +59,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.function.Consumer;
 import org.slf4j.Logger;
@@ -286,11 +287,12 @@ final class RecommendationActions {
         }
         NamedGamePurpose purpose = enumValue(
                 NamedGamePurpose.class, arguments.path("purpose"), "NAMED_GAME_PURPOSE_INVALID");
+        String groundedTitle = playerAuthoredReferenceTitle(request, title);
         String preferenceWarning = evidenceReview.applyPreferenceUpdatesForRead(arguments, state, request);
         state.referenceResolutionAttempts++;
         progress.accept(ProgressStage.READING_GAME_DETAILS);
         state.catalogCalls++;
-        ReferenceObservation result = runtime.withinDeadline(state, () -> tools.resolveReferenceTitle(title));
+        ReferenceObservation result = runtime.withinDeadline(state, () -> tools.resolveReferenceTitle(groundedTitle));
         state.actions.add("RESOLVE_BGG_REFERENCE");
         result.games().forEach(game -> {
             state.observeCandidate(game.ranking().bggId(), game.ranking().sourceName());
@@ -1119,6 +1121,20 @@ final class RecommendationActions {
                 .filter(message -> "user".equals(message.role()))
                 .map(DialogueMessage::text)
                 .anyMatch(text -> BoardGameTitleGrounding.occursInPlayerText(text, title));
+    }
+
+    private String playerAuthoredReferenceTitle(ConversationRequest request, String title) {
+        Optional<String> current = BoardGameTitleGrounding.withImmediateParenthesizedAlias(
+                request.message(), title);
+        if (current.isPresent()) return current.orElseThrow();
+        for (int index = request.transcript().size() - 1; index >= 0; index--) {
+            DialogueMessage message = request.transcript().get(index);
+            if (!"user".equals(message.role())) continue;
+            Optional<String> expanded = BoardGameTitleGrounding.withImmediateParenthesizedAlias(
+                    message.text(), title);
+            if (expanded.isPresent()) return expanded.orElseThrow();
+        }
+        return title;
     }
 
     record ActionOutcome(ConversationResponse response, String observation) {
