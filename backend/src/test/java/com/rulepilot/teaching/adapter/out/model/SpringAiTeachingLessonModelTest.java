@@ -217,6 +217,43 @@ class SpringAiTeachingLessonModelTest {
     }
 
     @Test
+    void keepsDeepSeekJsonModeWhenTeachingUsesThinkingGeneration() {
+        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        VersionedAgentPrompts prompts = mock(VersionedAgentPrompts.class);
+        ChatModel chatModel = mock(ChatModel.class);
+        when(configuration.usesFake(Role.TEACHING)).thenReturn(false);
+        when(configuration.providerFor(Role.TEACHING)).thenReturn("deepseek");
+        when(configuration.usesDeepSeekNonThinkingGeneration(Role.TEACHING, null)).thenReturn(false);
+        when(configuration.modelNameFor(Role.TEACHING, null)).thenReturn("deepseek-v4-pro");
+        when(configuration.modelFor(Role.TEACHING, null)).thenReturn(chatModel);
+        OpenAiChatOptions defaults = OpenAiChatOptions.builder()
+                .apiKey("test-key")
+                .baseUrl("https://provider.example/v1")
+                .model("deepseek-v4-pro")
+                .build();
+        when(chatModel.getDefaultOptions()).thenReturn(defaults);
+        when(chatModel.getOptions()).thenReturn(defaults);
+        when(prompts.teachingRuntimeSystem()).thenReturn("Teach only from evidence.");
+        when(prompts.teachingUser()).thenReturn("{section}\n{objective}\n{evidence}\n{repair}");
+        when(chatModel.call(any(Prompt.class))).thenReturn(response("""
+                {"title":"Setup","visualKind":"REFERENCE_CARD","visualCaption":"Source",
+                 "visualCitationIds":["E1"],"steps":[{"heading":"Do this","kind":"DO",
+                 "text":"Place the board.","citationIds":["E1"]}]}
+                """));
+        SpringAiTeachingLessonModel model = new SpringAiTeachingLessonModel(
+                configuration, new FakeTeachingLessonModel(), prompts);
+
+        assertThat(model.compose(request(List.of())).steps()).hasSize(1);
+
+        ArgumentCaptor<Prompt> sent = ArgumentCaptor.forClass(Prompt.class);
+        verify(chatModel).call(sent.capture());
+        OpenAiChatOptions options = (OpenAiChatOptions) sent.getValue().getOptions();
+        assertThat(options.getModel()).isEqualTo("deepseek-v4-pro");
+        assertThat(options.getResponseFormat().getType()).isEqualTo(Type.JSON_OBJECT);
+        assertThat(options.getExtraBody()).isNull();
+    }
+
+    @Test
     void exposesProviderUsageFromTheSameCompositionResponse() {
         RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
         VersionedAgentPrompts prompts = mock(VersionedAgentPrompts.class);
@@ -451,6 +488,18 @@ class SpringAiTeachingLessonModelTest {
         assertThat(modelUnits.toString())
                 .doesNotContain(anchor.toString())
                 .doesNotContain(continuation.toString());
+    }
+
+    @Test
+    void separatesEvidenceSentencesForCompositionWithoutChangingTheirTextOrOrder() {
+        String source = "Use side A once. Then flip the card. Use side B once and remove it.";
+
+        String readable = SpringAiTeachingLessonModel.readableEvidence(source);
+
+        assertThat(readable)
+                .contains("Use side A once.", "Then flip the card.", "Use side B once and remove it.")
+                .contains("\n");
+        assertThat(readable.replace("\n", "")).isEqualTo(source);
     }
 
     @Test

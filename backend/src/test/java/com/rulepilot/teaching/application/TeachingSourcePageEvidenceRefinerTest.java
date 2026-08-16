@@ -218,7 +218,7 @@ class TeachingSourcePageEvidenceRefinerTest {
     }
 
     @Test
-    void keepsSearchRelevantEvidenceFirstWhileRoundRobiningCanonicalChunksAcrossPages() {
+    void selectsPageDiverseEvidenceThenPresentsItInCanonicalPageOrder() {
         RuleEvidence pageTwoSearchHit = evidence(UUID.randomUUID(), 2, "Relevant hit on the first planned page.");
         RuleEvidence pageFiveSearchHit = evidence(UUID.randomUUID(), 5, "Relevant hit on the second planned page.");
         List<RuleEvidence> canonical = new java.util.ArrayList<>();
@@ -236,7 +236,10 @@ class TeachingSourcePageEvidenceRefinerTest {
                 .refine(plan, plan.sections().getFirst(), runId, verified(2, pageTwoSearchHit, pageFiveSearchHit));
 
         assertThat(result.evidence()).hasSize(8);
-        assertThat(result.evidence().subList(0, 2)).containsExactly(pageTwoSearchHit, pageFiveSearchHit);
+        assertThat(result.evidence()).extracting(RuleEvidence::pageFrom)
+                .containsExactly(2, 2, 2, 2, 5, 5, 5, 5);
+        assertThat(result.evidence().getFirst()).isEqualTo(pageTwoSearchHit);
+        assertThat(result.evidence().get(4)).isEqualTo(pageFiveSearchHit);
         assertThat(result.evidence().stream().filter(source -> source.pageFrom() == 2)).hasSize(4);
         assertThat(result.evidence().stream().filter(source -> source.pageFrom() == 5)).hasSize(4);
     }
@@ -262,8 +265,32 @@ class TeachingSourcePageEvidenceRefinerTest {
     }
 
     @Test
-    void marksTheChapterInvalidBeforeCompositionWhenItsPlannedAnchorIsAbsent() {
-        RuleEvidence unrelated = evidence(UUID.randomUUID(), 2, "A different relation is present.");
+    void presentsTheAgentOwnedSourcePageBeforeEarlierIncidentalContextWithoutDroppingEither() {
+        RuleEvidence earlierContext = evidence(
+                UUID.randomUUID(), 2, "A cross-reference points forward to the independently planned relation.");
+        RuleEvidence plannedAnchor = evidence(
+                UUID.randomUUID(), 5, "R-omega is the independently planned relation.");
+        RuleEvidence samePageContinuation = evidence(
+                UUID.randomUUID(), 5, "The ordered relation ends with this terminal state.");
+        TeachingPlan plan = planWithUnit("R-omega", List.of(2, 5));
+
+        var result = refiner(
+                        scopes(),
+                        tools(List.of(earlierContext, plannedAnchor, samePageContinuation)),
+                        new RecordingInvocations())
+                .refine(
+                        plan,
+                        plan.sections().getFirst(),
+                        runId,
+                        verified(2, plannedAnchor, earlierContext));
+
+        assertThat(result.evidence())
+                .containsExactly(plannedAnchor, samePageContinuation, earlierContext);
+    }
+
+    @Test
+    void marksTheChapterInvalidBeforeCompositionWhenItsCanonicalSourcePageIsAbsent() {
+        RuleEvidence unrelated = evidence(UUID.randomUUID(), 3, "A different relation is present.");
         TeachingPlan plan = planWithUnit("R-missing", List.of(2));
 
         var result = refiner(scopes(), tools(List.of(unrelated)), new RecordingInvocations())

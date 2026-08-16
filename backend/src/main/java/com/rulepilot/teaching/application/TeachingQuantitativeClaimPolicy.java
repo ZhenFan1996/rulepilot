@@ -68,7 +68,7 @@ final class TeachingQuantitativeClaimPolicy {
     private static final Pattern ENGLISH_ORDINAL = Pattern.compile(
             "(?iu)\\b(" + String.join("|", ENGLISH_ORDINAL_VALUES.keySet()) + ")\\b");
     private static final Pattern CHINESE_AMOUNT = Pattern.compile(
-            "([零〇一二两三四五六七八九十]{1,3})(?=\\s*(?:个|张|枚|块|种|位|名|局|轮|回合|次|倍|格|分|点|份|组|类|项|条))");
+            "(?<!另)([零〇一二两三四五六七八九十]{1,3})(?=\\s*(?:个|张|枚|块|种|位|名|局|轮|回合|次|倍|格|分|点|份|组|类|项|条))");
     private static final Pattern TEACHING_ENUMERATION_COUNT = Pattern.compile(
             "(?iu)([零〇一二两三四五六七八九十]{1,3}|\\d{1,2}|"
                     + String.join("|", ENGLISH_NUMBER_VALUES.keySet())
@@ -77,7 +77,7 @@ final class TeachingQuantitativeClaimPolicy {
     private static final Pattern IF_WORD = Pattern.compile("(?iu)\\bif\\b");
     private static final Pattern COLON_LIST = Pattern.compile("(?iu)[:：]\\s*([^.。;；\\n]{1,500})");
     private static final Pattern PRODUCT = Pattern.compile(
-            "(?iu)(?:\\b(?:multiply|multiplied|multiplier|product|times)\\b|[×*]|(?<=\\d)\\s*[xX]\\s*(?=\\d)|乘以|相乘|倍)");
+            "(?iu)(?:\\b(?:multiply|multiplied|multiplier|product)\\b|[×*]|(?<=\\d)\\s*[xX]\\s*(?=\\d)|乘以|相乘|倍)");
     private static final Pattern ENGLISH_REPETITION = Pattern.compile(
             "(?iu)\\b(?:each|every|per|again|once)\\b");
     private static final Pattern CHINESE_REPETITION = Pattern.compile("每|各|逐|一次|再算|重复");

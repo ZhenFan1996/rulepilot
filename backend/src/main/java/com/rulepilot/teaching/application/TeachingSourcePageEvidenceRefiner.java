@@ -11,6 +11,7 @@ import com.rulepilot.assistant.EvidenceVerifier.VerificationRequest;
 import com.rulepilot.assistant.NativeToolScopes;
 import com.rulepilot.teaching.domain.TeachingPlan;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -121,12 +122,16 @@ public class TeachingSourcePageEvidenceRefiner implements TeachingEvidenceRefine
         }
         List<RuleEvidence> prioritized = new ArrayList<>(deterministic.evidence());
         prioritized.addAll(canonicalExtras);
-        List<String> plannedSourceIdentifiers = TeachingUnitContract.decodeUnits(planned.retrievalQueries()).stream()
-                .flatMap(unit -> unit.sourceIdentifiers().stream())
+        List<TeachingUnitContract.Unit> plannedUnits = TeachingUnitContract.decodeUnits(planned.retrievalQueries());
+        List<RuleEvidence> selected = selectSourceCompleteEvidence(prioritized, plannedUnits);
+        List<UUID> plannedAnchorIds = plannedUnits.stream()
+                .flatMap(unit -> unit.sourceIdentifiers().stream()
+                        .flatMap(identifier -> plannedAnchor(prioritized, unit, identifier).stream())
+                        .map(RuleEvidence::chunkId))
                 .distinct()
                 .toList();
-        List<RuleEvidence> selected = selectSourceCompleteEvidence(prioritized, plannedSourceIdentifiers);
-        if (!coversEverySourceIdentifier(selected, plannedSourceIdentifiers)) {
+        selected = orderForComposition(selected, observed, plannedAnchorIds);
+        if (!coversEverySourceIdentifier(selected, plannedUnits)) {
             return invalid(totalToolCalls);
         }
         boolean verified = evidenceVerifier.verify(new VerificationRequest(
@@ -146,18 +151,17 @@ public class TeachingSourcePageEvidenceRefiner implements TeachingEvidenceRefine
     }
 
     private List<RuleEvidence> selectSourceCompleteEvidence(
-            List<RuleEvidence> prioritized, List<String> sourceIdentifiers) {
+            List<RuleEvidence> prioritized, List<TeachingUnitContract.Unit> plannedUnits) {
         LinkedHashMap<UUID, RuleEvidence> selected = new LinkedHashMap<>();
-        for (String identifier : sourceIdentifiers) {
-            prioritized.stream()
-                    .filter(source -> TeachingPlannedUnitCoveragePolicy.containsIdentifier(
-                            source.heading() + " " + source.excerpt(), identifier))
-                    .findFirst()
-                    .ifPresent(source -> {
-                        if (selected.size() < MAX_EVIDENCE_PER_SECTION) {
-                            selected.putIfAbsent(source.chunkId(), source);
-                        }
-                    });
+        for (TeachingUnitContract.Unit unit : plannedUnits) {
+            for (String identifier : unit.sourceIdentifiers()) {
+                plannedAnchor(prioritized, unit, identifier)
+                        .ifPresent(source -> {
+                            if (selected.size() < MAX_EVIDENCE_PER_SECTION) {
+                                selected.putIfAbsent(source.chunkId(), source);
+                            }
+                        });
+            }
         }
 
         Map<String, List<RuleEvidence>> evidenceByPage = new LinkedHashMap<>();
@@ -179,10 +183,63 @@ public class TeachingSourcePageEvidenceRefiner implements TeachingEvidenceRefine
         return List.copyOf(selected.values());
     }
 
-    private boolean coversEverySourceIdentifier(List<RuleEvidence> evidence, List<String> sourceIdentifiers) {
-        return sourceIdentifiers.stream().allMatch(identifier -> evidence.stream().anyMatch(source ->
-                TeachingPlannedUnitCoveragePolicy.containsIdentifier(
-                        source.heading() + " " + source.excerpt(), identifier)));
+    private boolean coversEverySourceIdentifier(
+            List<RuleEvidence> evidence, List<TeachingUnitContract.Unit> plannedUnits) {
+        return plannedUnits.stream().allMatch(unit -> unit.sourceIdentifiers().stream().allMatch(identifier ->
+                evidence.stream().anyMatch(source -> ownsSource(unit, identifier, source))));
+    }
+
+    private java.util.Optional<RuleEvidence> plannedAnchor(
+            List<RuleEvidence> evidence, TeachingUnitContract.Unit unit, String identifier) {
+        List<RuleEvidence> owned = evidence.stream()
+                .filter(source -> ownsSource(unit, identifier, source))
+                .toList();
+        return owned.stream()
+                .filter(source -> TeachingPlannedUnitCoveragePolicy.containsIdentifier(
+                        source.heading() + " " + source.excerpt(), identifier))
+                .findFirst()
+                .or(() -> owned.stream().findFirst());
+    }
+
+    private boolean ownsSource(TeachingUnitContract.Unit unit, String identifier, RuleEvidence source) {
+        List<Integer> pages = unit.sourcePages(identifier);
+        if (!pages.isEmpty()) {
+            return java.util.stream.IntStream.rangeClosed(source.pageFrom(), source.pageTo())
+                    .anyMatch(pages::contains);
+        }
+        return TeachingPlannedUnitCoveragePolicy.containsIdentifier(
+                source.heading() + " " + source.excerpt(), identifier);
+    }
+
+    /** Keeps selection unchanged while presenting each Agent-owned source block before incidental context. */
+    private List<RuleEvidence> orderForComposition(
+            List<RuleEvidence> selected,
+            List<RuleEvidence> canonicalPageRead,
+            List<UUID> plannedAnchorIds) {
+        Map<UUID, Integer> canonicalPosition = new LinkedHashMap<>();
+        for (int index = 0; index < canonicalPageRead.size(); index++) {
+            canonicalPosition.putIfAbsent(canonicalPageRead.get(index).chunkId(), index);
+        }
+        Map<UUID, Integer> selectedPosition = new LinkedHashMap<>();
+        for (int index = 0; index < selected.size(); index++) {
+            selectedPosition.putIfAbsent(selected.get(index).chunkId(), index);
+        }
+        List<RuleEvidence> canonical = selected.stream()
+                .sorted(Comparator.comparingInt(RuleEvidence::pageFrom)
+                        .thenComparingInt(RuleEvidence::pageTo)
+                        .thenComparingInt(source -> canonicalPosition.getOrDefault(source.chunkId(), Integer.MAX_VALUE))
+                        .thenComparingInt(source -> selectedPosition.get(source.chunkId())))
+                .toList();
+        LinkedHashMap<UUID, RuleEvidence> composed = new LinkedHashMap<>();
+        for (UUID anchorId : plannedAnchorIds) {
+            canonical.stream().filter(source -> source.chunkId().equals(anchorId)).findFirst().ifPresent(anchor ->
+                    canonical.stream()
+                            .filter(source -> source.pageFrom() == anchor.pageFrom()
+                                    && source.pageTo() == anchor.pageTo())
+                            .forEach(source -> composed.putIfAbsent(source.chunkId(), source)));
+        }
+        canonical.forEach(source -> composed.putIfAbsent(source.chunkId(), source));
+        return List.copyOf(composed.values());
     }
 
     private List<Integer> plannedSourcePages(TeachingPlan.PlannedSection planned) {

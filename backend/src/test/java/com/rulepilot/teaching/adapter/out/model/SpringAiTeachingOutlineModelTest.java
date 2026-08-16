@@ -289,6 +289,82 @@ class SpringAiTeachingOutlineModelTest {
     }
 
     @Test
+    void letsTheOutlineAgentOwnAnExactConceptSourceThatWasMissingFromItsTeachingUnits() {
+        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        VersionedAgentPrompts prompts = mock(VersionedAgentPrompts.class);
+        ChatModel chatModel = mock(ChatModel.class);
+        when(configuration.usesFake(Role.TEACHING, "player")).thenReturn(false);
+        when(configuration.modelFor(Role.TEACHING, "player")).thenReturn(chatModel);
+        when(chatModel.getDefaultOptions()).thenReturn(ToolCallingChatOptions.builder().build());
+        when(chatModel.getOptions()).thenReturn(ToolCallingChatOptions.builder().build());
+        ChatResponse incompleteOwnership = new ChatResponse(List.of(new Generation(new AssistantMessage("""
+                {"gameTitle":"Game","premise":"Two source relations form one lesson.","topics":[{
+                  "key":"flow","title":"关系流程","objective":"理解两项来源关系。","required":true,
+                  "visualEvidenceRecommended":false,"retrievalQueries":["R-one"],
+                  "coverageTags":["source_coverage"],"sourcePageNumbers":[1]
+                }],"sourceCoverageSlots":[{
+                  "slotId":"first-slot","role":"SUPPORTING_RULE","sourceIdentifier":"R-one",
+                  "sourcePageNumbers":[1],"ownerTopicKey":"flow","teachingUnitId":"first-unit",
+                  "availability":"SOURCED"
+                }],"sourceCoverageInventoryComplete":true,"wholeGameUnderstanding":{
+                  "summary":"先理解第一关系，再将第二关系接入流程。","concepts":[{
+                    "conceptId":"shared-relation","label":"共享关系","explanation":"两项来源共同形成流程。",
+                    "sourceIdentifiers":["R-one","R-two"],"sourcePageNumbers":[1],
+                    "relatedTopicKeys":["flow"],"prerequisiteConceptIds":[]
+                  }],"topicDependencies":[]}}
+                """))));
+        ChatResponse repairedOwnership = new ChatResponse(List.of(new Generation(new AssistantMessage("""
+                {"gameTitle":"Game","premise":"Two source relations form one lesson.","topics":[{
+                  "key":"flow","title":"关系流程","objective":"理解两项来源关系。","required":true,
+                  "visualEvidenceRecommended":false,"retrievalQueries":["R-one"],
+                  "coverageTags":["source_coverage"],"sourcePageNumbers":[1]
+                }],"sourceCoverageSlots":[
+                  {"slotId":"first-slot","role":"SUPPORTING_RULE","sourceIdentifier":"R-one",
+                   "sourcePageNumbers":[1],"ownerTopicKey":"flow","teachingUnitId":"shared-unit",
+                   "availability":"SOURCED"},
+                  {"slotId":"second-slot","role":"SUPPORTING_RULE","sourceIdentifier":"R-two",
+                   "sourcePageNumbers":[1],"ownerTopicKey":"flow","teachingUnitId":"shared-unit",
+                   "availability":"SOURCED"}
+                ],"sourceCoverageInventoryComplete":true,"wholeGameUnderstanding":{
+                  "summary":"先理解第一关系，再将第二关系接入流程。","concepts":[{
+                    "conceptId":"shared-relation","label":"共享关系","explanation":"两项来源共同形成流程。",
+                    "sourceIdentifiers":["R-one","R-two"],"sourcePageNumbers":[1],
+                    "relatedTopicKeys":["flow"],"prerequisiteConceptIds":[]
+                  }],"topicDependencies":[]}}
+                """))));
+        when(chatModel.call(any(Prompt.class))).thenReturn(incompleteOwnership, repairedOwnership);
+        SpringAiTeachingOutlineModel model = new SpringAiTeachingOutlineModel(
+                configuration, prompts, new FakeTeachingOutlineModel());
+
+        OutlineDraft outline;
+        try {
+            outline = model.organize(new OutlineRequest(
+                    List.of(new PageInput(1, "R-one is established first. R-two completes the relation.")),
+                    List.of(),
+                    "player"));
+        } finally {
+            model.close();
+        }
+
+        assertThat(outline.sourceCoverageSlots())
+                .extracting(slot -> slot.sourceIdentifier())
+                .containsExactly("R-one", "R-two");
+        assertThat(outline.sourceCoverageSlots())
+                .extracting(slot -> slot.teachingUnitId())
+                .containsOnly("shared-unit");
+        ArgumentCaptor<Prompt> promptsSent = ArgumentCaptor.forClass(Prompt.class);
+        verify(chatModel, times(2)).call(promptsSent.capture());
+        assertThat(promptsSent.getAllValues().get(1).getInstructions())
+                .extracting(message -> message.getText())
+                .anySatisfy(text -> assertThat(text)
+                        .contains(
+                                "source-ownership gap",
+                                "sourceIdentifier=R-two",
+                                "Agent-chosen teaching unit",
+                                "Current complete outline"));
+    }
+
+    @Test
     void repairsOnlyInvalidSourceIdentifiersAndPreservesTheAgentOwnedOutline() {
         RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
         VersionedAgentPrompts prompts = mock(VersionedAgentPrompts.class);

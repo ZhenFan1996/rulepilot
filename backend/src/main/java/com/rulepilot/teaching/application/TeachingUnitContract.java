@@ -17,7 +17,8 @@ import java.util.Map;
  */
 final class TeachingUnitContract {
 
-    private static final String PREFIX = "teaching-unit-v1.";
+    private static final String V1_PREFIX = "teaching-unit-v1.";
+    private static final String V2_PREFIX = "teaching-unit-v2.";
     private static final Base64.Encoder ENCODER = Base64.getUrlEncoder().withoutPadding();
     private static final Base64.Decoder DECODER = Base64.getUrlDecoder();
 
@@ -25,13 +26,16 @@ final class TeachingUnitContract {
 
     static List<String> encodeUnits(
             List<com.rulepilot.teaching.TeachingOutlineModel.SourceCoverageSlotDraft> slots) {
-        Map<String, List<String>> identifiersByUnit = new LinkedHashMap<>();
+        Map<String, Map<String, List<Integer>>> sourcesByUnit = new LinkedHashMap<>();
         for (var slot : slots) {
-            identifiersByUnit
-                    .computeIfAbsent(slot.teachingUnitId(), ignored -> new ArrayList<>())
-                    .add(slot.sourceIdentifier());
+            Map<String, List<Integer>> unitSources = sourcesByUnit.computeIfAbsent(
+                    slot.teachingUnitId(), ignored -> new LinkedHashMap<>());
+            List<Integer> pages = new ArrayList<>(
+                    unitSources.getOrDefault(slot.sourceIdentifier(), List.of()));
+            slot.sourcePageNumbers().stream().filter(page -> !pages.contains(page)).forEach(pages::add);
+            unitSources.put(slot.sourceIdentifier(), List.copyOf(pages));
         }
-        return identifiersByUnit.entrySet().stream()
+        return sourcesByUnit.entrySet().stream()
                 .map(entry -> encode(new Unit(entry.getKey(), entry.getValue())))
                 .toList();
     }
@@ -60,23 +64,43 @@ final class TeachingUnitContract {
 
     static String encode(Unit unit) {
         String sources = unit.sourceIdentifiers().stream()
-                .map(TeachingUnitContract::base64)
-                .reduce((left, right) -> left + "." + right)
-                .orElseThrow();
-        return PREFIX + base64(unit.unitId()) + "." + sources;
+                .map(identifier -> base64(identifier) + "@" + unit.sourcePages(identifier).stream()
+                        .map(String::valueOf)
+                        .collect(java.util.stream.Collectors.joining(",")))
+                .collect(java.util.stream.Collectors.joining("."));
+        return V2_PREFIX + base64(unit.unitId()) + "." + sources;
     }
 
     private static Unit decode(String contract) {
-        String[] parts = contract.substring(PREFIX.length()).split("\\.");
+        if (contract.startsWith(V2_PREFIX)) return decodeV2(contract);
+        String[] parts = contract.substring(V1_PREFIX.length()).split("\\.");
         if (parts.length < 2) throw new IllegalArgumentException("teaching unit contract is invalid");
-        List<String> identifiers = java.util.stream.IntStream.range(1, parts.length)
+        Map<String, List<Integer>> sources = new LinkedHashMap<>();
+        java.util.stream.IntStream.range(1, parts.length)
                 .mapToObj(index -> text(parts[index]))
-                .toList();
-        return new Unit(text(parts[0]), identifiers);
+                .forEach(identifier -> sources.put(identifier, List.of()));
+        return new Unit(text(parts[0]), sources);
+    }
+
+    private static Unit decodeV2(String contract) {
+        String[] parts = contract.substring(V2_PREFIX.length()).split("\\.");
+        if (parts.length < 2) throw new IllegalArgumentException("teaching unit contract is invalid");
+        Map<String, List<Integer>> sources = new LinkedHashMap<>();
+        for (int index = 1; index < parts.length; index++) {
+            String[] source = parts[index].split("@", -1);
+            if (source.length != 2) throw new IllegalArgumentException("teaching unit contract is invalid");
+            List<Integer> pages = source[1].isBlank()
+                    ? List.of()
+                    : java.util.Arrays.stream(source[1].split(","))
+                            .map(Integer::parseInt)
+                            .toList();
+            sources.put(text(source[0]), pages);
+        }
+        return new Unit(text(parts[0]), sources);
     }
 
     private static boolean encoded(String value) {
-        return value != null && value.startsWith(PREFIX);
+        return value != null && (value.startsWith(V1_PREFIX) || value.startsWith(V2_PREFIX));
     }
 
     private static String base64(String value) {
@@ -91,16 +115,46 @@ final class TeachingUnitContract {
         }
     }
 
-    record Unit(String unitId, List<String> sourceIdentifiers) {
+    record Unit(String unitId, Map<String, List<Integer>> sourcePagesByIdentifier) {
+        Unit(String unitId, List<String> sourceIdentifiers) {
+            this(
+                    unitId,
+                    sourceIdentifiers == null
+                            ? (Map<String, List<Integer>>) null
+                            : sourceIdentifiers.stream().collect(java.util.stream.Collectors.toMap(
+                                    identifier -> identifier,
+                                    ignored -> List.<Integer>of(),
+                                    (first, duplicate) -> first,
+                                    LinkedHashMap::new)));
+        }
+
         Unit {
             if (unitId == null || unitId.isBlank() || unitId.length() > 80
-                    || sourceIdentifiers == null || sourceIdentifiers.isEmpty() || sourceIdentifiers.size() > 16
-                    || sourceIdentifiers.stream().anyMatch(identifier -> identifier == null
-                            || identifier.isBlank() || identifier.length() > 160)) {
+                    || sourcePagesByIdentifier == null || sourcePagesByIdentifier.isEmpty()
+                    || sourcePagesByIdentifier.size() > 16
+                    || sourcePagesByIdentifier.entrySet().stream().anyMatch(entry -> entry.getKey() == null
+                            || entry.getKey().isBlank() || entry.getKey().length() > 160
+                            || entry.getValue() == null || entry.getValue().size() > 10
+                            || entry.getValue().stream().anyMatch(page -> page == null || page < 1))) {
                 throw new IllegalArgumentException("planned teaching unit is invalid");
             }
             unitId = unitId.strip();
-            sourceIdentifiers = sourceIdentifiers.stream().map(String::strip).distinct().toList();
+            Map<String, List<Integer>> normalized = new LinkedHashMap<>();
+            sourcePagesByIdentifier.forEach((identifier, pages) -> normalized.put(
+                    identifier.strip(), pages.stream().distinct().toList()));
+            sourcePagesByIdentifier = java.util.Collections.unmodifiableMap(normalized);
+        }
+
+        List<String> sourceIdentifiers() {
+            return List.copyOf(sourcePagesByIdentifier.keySet());
+        }
+
+        List<Integer> sourcePages(String identifier) {
+            return sourcePagesByIdentifier.getOrDefault(identifier, List.of());
+        }
+
+        List<Integer> sourcePages() {
+            return sourcePagesByIdentifier.values().stream().flatMap(List::stream).distinct().toList();
         }
     }
 }

@@ -42,6 +42,21 @@ class TeachingUnitContractTest {
                 .containsExactly("combined-choice", "separate-condition");
         assertThat(TeachingUnitContract.decodeUnits(planned.retrievalQueries()).getFirst().sourceIdentifiers())
                 .containsExactly("K-one", "K-two");
+        assertThat(TeachingUnitContract.decodeUnits(planned.retrievalQueries()).getFirst().sourcePages("K-one"))
+                .containsExactly(4);
+        assertThat(TeachingUnitContract.decodeUnits(planned.retrievalQueries()).getFirst().sourcePages("K-two"))
+                .containsExactly(4);
+    }
+
+    @Test
+    void stillReadsPersistedVersionOneUnitContractsWithoutInventingPageOwnership() {
+        String legacy = "teaching-unit-v1.dW5pdA.Ul9vbGQ";
+
+        var unit = TeachingUnitContract.decodeUnits(List.of(legacy)).getFirst();
+
+        assertThat(unit.unitId()).isEqualTo("unit");
+        assertThat(unit.sourceIdentifiers()).containsExactly("R_old");
+        assertThat(unit.sourcePages()).isEmpty();
     }
 
     @Test

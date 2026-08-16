@@ -15,8 +15,13 @@ import com.rulepilot.assistant.AssistantReadTools;
 import com.rulepilot.assistant.AssistantReadTools.RuleEvidence;
 import com.rulepilot.assistant.AuditedAgentInvocations;
 import com.rulepilot.assistant.GeneratedContentCritic;
+import com.rulepilot.assistant.GeneratedContentCritic.ReviewRisk;
 import com.rulepilot.assistant.NativeAgentTool.ToolScope;
 import com.rulepilot.assistant.NativeToolScopes;
+import com.rulepilot.assistant.PlayerLocale;
+import com.rulepilot.assistant.adapter.out.model.FakeContentCriticModel;
+import com.rulepilot.assistant.adapter.out.model.SpringAiContentCriticModel;
+import com.rulepilot.assistant.application.ConditionalGeneratedContentCritic;
 import com.rulepilot.assistant.application.PolicyEvidenceVerifier;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration;
 import com.rulepilot.modelconfig.VersionedAgentPrompts;
@@ -76,8 +81,17 @@ import org.springframework.context.annotation.AnnotationConfigApplicationContext
 @Tag("paid-teaching-richness-canary")
 class TeachingRichLessonPaidCanaryTest {
 
-    private static final int FIRST_ACTIVE_PAGE = 4;
-    private static final int LAST_ACTIVE_PAGE = 13;
+    private static final String CANARY_CASE_ID = "captain-is-dead-base-rules-iteration-2";
+    private static final String CANARY_PDF = ".local/public-corpus/pdfs/the-captain-is-dead.pdf";
+    private static final List<Integer> CANARY_PAGES = List.of(
+            2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 16);
+    private static final String CANARY_SCOPE =
+            "Base-game rulebook pages 2-13 plus system-action quick reference page 16; "
+                    + "variants and credits on pages 14-15 are intentionally outside this lesson.";
+    private static final String CANARY_OUTPUT =
+            ".local/agent-evaluation/teaching-iteration-2-captain-is-dead-canary.json";
+    private static final String CANARY_FAILURE_OUTPUT =
+            ".local/agent-evaluation/teaching-iteration-2-captain-is-dead-outline-failure.json";
     private static final String OWNER = "teaching-richness-canary";
 
     private final ObjectMapper mapper = JsonMapper.builder().findAndAddModules().build();
@@ -86,17 +100,23 @@ class TeachingRichLessonPaidCanaryTest {
     void plansAndPublishesACompleteMultiChapterLessonFromOneRealRulebookSlice() throws Exception {
         assumeTrue("true".equalsIgnoreCase(System.getenv("RULEPILOT_ALLOW_PAID_CANARY")));
         Path root = Path.of(System.getProperty("user.dir")).getParent();
-        Path pdf = root.resolve(".local/public-corpus/pdfs/dune-imperium-english.pdf");
+        Path pdf = root.resolve(CANARY_PDF);
         assumeTrue(Files.isRegularFile(pdf), "ignored representative rulebook is required");
 
-        Provider provider = provider("deepseek");
+        String providerName = java.util.Optional.ofNullable(System.getenv("RULEPILOT_TEACHING_CANARY_PROVIDER"))
+                .filter(value -> !value.isBlank())
+                .orElse("deepseek")
+                .toLowerCase(Locale.ROOT);
+        assumeTrue(Set.of("deepseek", "qwen", "openai").contains(providerName),
+                "paid teaching canary provider must be deepseek, qwen, or openai");
+        Provider provider = provider(providerName);
         VersionedAgentPrompts prompts = prompts();
         UUID versionId = UUID.nameUUIDFromBytes(
-                "teaching-richness:dune-pages-4-13".getBytes(StandardCharsets.UTF_8));
+                ("teaching-richness:" + CANARY_CASE_ID).getBytes(StandardCharsets.UTF_8));
         UUID runId = UUID.randomUUID();
         PdfEvidence corpus = new PdfEvidence(pdf, versionId);
-        List<PageInput> activePages = java.util.stream.IntStream.rangeClosed(FIRST_ACTIVE_PAGE, LAST_ACTIVE_PAGE)
-                .mapToObj(page -> new PageInput(page, TeachingPageCatalogText.bounded(corpus.page(page))))
+        List<PageInput> activePages = CANARY_PAGES.stream()
+                .map(page -> new PageInput(page, TeachingPageCatalogText.bounded(corpus.page(page))))
                 .toList();
 
         List<String> rawOutlineResponses = Collections.synchronizedList(new ArrayList<>());
@@ -107,10 +127,10 @@ class TeachingRichLessonPaidCanaryTest {
                 OWNER);
         OutlineDraft outline;
         boolean outlineReplayed =
-                "true".equalsIgnoreCase(System.getenv("RULEPILOT_REUSE_CAPTURED_TEACHING_OUTLINE"));
+                "true".equalsIgnoreCase(System.getenv("RULEPILOT_REUSE_ITERATION_2_TEACHING_OUTLINE"));
         long outlineStarted = System.nanoTime();
         if (outlineReplayed) {
-            Path captured = root.resolve(".local/agent-evaluation/teaching-rich-lesson-canary.json");
+            Path captured = root.resolve(CANARY_OUTPUT);
             var capturedNode = mapper.readTree(captured.toFile());
             String raw = capturedNode.path("result").path("rawOutlineProviderResponses").get(0).asText();
             rawOutlineResponses.add(raw);
@@ -124,7 +144,7 @@ class TeachingRichLessonPaidCanaryTest {
             try {
                 outline = outlineModel.organize(outlineRequest);
             } catch (RuntimeException failure) {
-                Path failureOutput = root.resolve(".local/agent-evaluation/teaching-rich-outline-failure.json");
+                Path failureOutput = root.resolve(CANARY_FAILURE_OUTPUT);
                 Files.createDirectories(failureOutput.getParent());
                 Files.writeString(
                         failureOutput,
@@ -155,8 +175,13 @@ class TeachingRichLessonPaidCanaryTest {
         List<String> rawSectionResponses = Collections.synchronizedList(new ArrayList<>());
         RuntimeModelConfiguration sectionConfiguration = configuration(
                 provider, recordingChatModel(provider, rawSectionResponses));
+        double teachingTemperature = java.util.Optional.ofNullable(
+                        System.getenv("RULEPILOT_TEACHING_CANARY_TEMPERATURE"))
+                .filter(value -> !value.isBlank())
+                .map(Double::parseDouble)
+                .orElse(0.2d);
         RecordingTeachingModel sections = new RecordingTeachingModel(new SpringAiTeachingLessonModel(
-                sectionConfiguration, new FakeTeachingLessonModel(), prompts));
+                sectionConfiguration, new FakeTeachingLessonModel(), prompts, teachingTemperature));
         CanaryInvocations audit = new CanaryInvocations();
         NativeToolScopes scopes = mock(NativeToolScopes.class);
         when(scopes.create(eq(OWNER), eq(versionId), eq(runId))).thenReturn(java.util.Optional.of(
@@ -179,6 +204,7 @@ class TeachingRichLessonPaidCanaryTest {
         long lessonStarted = System.nanoTime();
         IllustratedLesson lesson = agent.createBase(plan, runId, null, progressSnapshots::add);
         long lessonLatencyMs = elapsedMillis(lessonStarted);
+        Map<String, Object> criticProbe = criticProbe(plan, lesson, sections, provider, prompts, audit, runId);
 
         Map<String, Object> result = result(
                 root,
@@ -191,12 +217,14 @@ class TeachingRichLessonPaidCanaryTest {
                 rawSectionResponses,
                 audit,
                 outlineReplayed,
+                teachingTemperature,
                 outlineLatencyMs,
                 lessonLatencyMs,
                 progressSnapshots,
                 outlineCompletedAt,
-                planReloadedAt);
-        Path output = root.resolve(".local/agent-evaluation/teaching-rich-lesson-canary.json");
+                planReloadedAt,
+                criticProbe);
+        Path output = root.resolve(canaryOutput(provider.provider()));
         Files.createDirectories(output.getParent());
         Files.writeString(
                 output,
@@ -220,12 +248,18 @@ class TeachingRichLessonPaidCanaryTest {
                 .containsEntry("allPlayerFacingFieldsPreserved", true)
                 .containsEntry("allPlannedUnitsCovered", true)
                 .containsEntry("localProseDeletionCount", 0)
+                .containsEntry("ownerApiJsonProjectionPreservesAllFields", true)
+                .containsEntry("defaultPlayerProjectionPreservesAllFields", true)
                 .containsEntry("planContextSurvivedPersistenceRoundTrip", true)
                 .containsEntry("allSectionRequestsShareWholeGameContext", true)
                 .containsEntry("sectionRequestsRetainOwnUnitsAndEvidence", true)
                 .containsEntry("wholeGameCompletedBeforeSectionFanOut", true)
-                .containsEntry("criticCalls", 0)
                 .containsEntry("withinLatencyBudget", true);
+        if (criticProbeEnabled()) {
+            assertThat(audit.criticCalls.get()).isPositive();
+        } else {
+            assertThat(audit.criticCalls.get()).isZero();
+        }
         assertThat(audit.modelCalls.get()).isBetween(plan.sections().size(), plan.sections().size() * 2);
         assertThat(rawOutlineResponses).isNotEmpty().hasSizeLessThanOrEqualTo(2);
         assertThat(rawSectionResponses).isNotEmpty();
@@ -242,18 +276,24 @@ class TeachingRichLessonPaidCanaryTest {
             List<String> rawSectionResponses,
             CanaryInvocations audit,
             boolean outlineReplayed,
+            double teachingTemperature,
             long outlineLatencyMs,
             long lessonLatencyMs,
             List<IllustratedLesson> progressSnapshots,
             Instant outlineCompletedAt,
-            Instant planReloadedAt) throws IOException {
+            Instant planReloadedAt,
+            Map<String, Object> criticProbe) throws IOException {
         List<Map<String, Object>> fieldDiffs = lesson.sections().stream()
                 .map(section -> fieldDiff(section, model.draftAttempts(section.topicKey())))
                 .toList();
         Map<String, Object> result = new LinkedHashMap<>();
-        result.put("caseId", "dune-imperium-pages-4-13-autonomous-plan");
-        result.put("corpusScope", "PDF pages 4-13 only; complete lesson for this bounded rules slice, not all 20 pages");
+        result.put("caseId", CANARY_CASE_ID);
+        result.put("corpusScope", CANARY_SCOPE);
+        result.put("sourcePages", CANARY_PAGES);
         result.put("provider", provider.provider());
+        result.put("model", provider.model());
+        result.put("deepSeekThinking", deepSeekThinking());
+        result.put("teachingTemperature", teachingTemperature);
         result.put("outlineRuntime", "whole-game-first autonomous v19 prompt; no historical outline prompt concatenation");
         result.put("outlineLatencyMs", outlineLatencyMs);
         result.put("lessonLatencyMs", lessonLatencyMs);
@@ -268,6 +308,7 @@ class TeachingRichLessonPaidCanaryTest {
         result.put("toolCalls", audit.toolCalls.get());
         result.put("toolOperations", List.copyOf(audit.toolOperations));
         result.put("criticCalls", audit.criticCalls.get());
+        result.put("criticProbe", criticProbe);
         result.put("modelOperations", List.copyOf(audit.modelOperations));
         result.put("activityTimeline", List.copyOf(audit.events));
         result.put("progressSnapshotCount", progressSnapshots.size());
@@ -280,6 +321,14 @@ class TeachingRichLessonPaidCanaryTest {
         result.put("wholeGameUnderstanding", plan.wholeGameContext());
         result.put("planTeachingUnits", visiblePlanUnits(plan));
         result.put("publishedLesson", visibleLesson(lesson));
+        IllustratedLesson apiRoundTrip = mapper.readValue(mapper.writeValueAsBytes(lesson), IllustratedLesson.class);
+        result.put("ownerApiJsonProjectionPreservesAllFields", visibleLesson(apiRoundTrip).equals(visibleLesson(lesson)));
+        var localizations = new LessonLocalizationService(
+                mock(LessonLocalizationPersistence.class),
+                mock(LessonLocalizationWorker.class),
+                mock(org.springframework.core.task.TaskExecutor.class));
+        result.put("defaultPlayerProjectionPreservesAllFields",
+                localizations.view(lesson, PlayerLocale.ZH_CN).lesson().equals(lesson));
         result.put("rawStructuredDrafts", model.visibleDrafts());
         result.put("modelRequests", model.visibleRequests());
         result.put("rawOutlineProviderResponses", List.copyOf(rawOutlineResponses));
@@ -318,6 +367,47 @@ class TeachingRichLessonPaidCanaryTest {
         return Map.copyOf(result);
     }
 
+    private Map<String, Object> criticProbe(
+            TeachingPlan plan,
+            IllustratedLesson lesson,
+            RecordingTeachingModel sections,
+            Provider provider,
+            VersionedAgentPrompts prompts,
+            CanaryInvocations audit,
+            UUID runId) {
+        if (!criticProbeEnabled()) return Map.of("performed", false);
+        List<String> rawResponses = Collections.synchronizedList(new ArrayList<>());
+        ChatModel chatModel = recordingChatModel(provider, rawResponses);
+        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        when(configuration.modelFor(RuntimeModelConfiguration.Role.CRITIC)).thenReturn(chatModel);
+        when(configuration.modelFor(RuntimeModelConfiguration.Role.CRITIC, OWNER)).thenReturn(chatModel);
+        when(configuration.providerFor(RuntimeModelConfiguration.Role.CRITIC)).thenReturn(provider.provider());
+        when(configuration.providerFor(RuntimeModelConfiguration.Role.CRITIC, OWNER)).thenReturn(provider.provider());
+        when(configuration.modelNameFor(RuntimeModelConfiguration.Role.CRITIC)).thenReturn(provider.model());
+        when(configuration.modelNameFor(RuntimeModelConfiguration.Role.CRITIC, OWNER)).thenReturn(provider.model());
+        when(configuration.usesFake(RuntimeModelConfiguration.Role.CRITIC)).thenReturn(false);
+        when(configuration.usesFake(RuntimeModelConfiguration.Role.CRITIC, OWNER)).thenReturn(false);
+        when(configuration.usesDeepSeekNonThinkingGeneration(RuntimeModelConfiguration.Role.CRITIC))
+                .thenReturn("deepseek".equals(provider.provider()));
+        when(configuration.usesDeepSeekNonThinkingGeneration(RuntimeModelConfiguration.Role.CRITIC, OWNER))
+                .thenReturn("deepseek".equals(provider.provider()));
+        var critic = new ConditionalGeneratedContentCritic(
+                new SpringAiContentCriticModel(configuration, new FakeContentCriticModel(), prompts), audit, true);
+        var batch = LessonReviewPlanner.plan(plan, sections.reviewCandidates(plan, lesson), runId);
+        long started = System.nanoTime();
+        var review = critic.review(batch.request(), ReviewRisk.HIGH_IMPACT, OWNER);
+        return Map.of(
+                "performed", true,
+                "latencyMs", elapsedMillis(started),
+                "issueCount", review.issues().size(),
+                "issues", review.issues(),
+                "rawProviderResponses", List.copyOf(rawResponses));
+    }
+
+    private boolean criticProbeEnabled() {
+        return "true".equalsIgnoreCase(System.getenv("RULEPILOT_TEACHING_CANARY_CRITIC_PROBE"));
+    }
+
     private Map<String, Object> historicalBaseline(Path root) throws IOException {
         Path input = root.resolve(".local/public-corpus/runs/dune-imperium.json");
         if (!Files.isRegularFile(input)) return Map.of("available", false);
@@ -346,11 +436,8 @@ class TeachingRichLessonPaidCanaryTest {
                 .orElse(-1);
         List<List<Integer>> stepSourceAttempts = published.steps().stream()
                 .map(step -> java.util.stream.IntStream.range(0, rawAttempts.size())
-                        .filter(attempt -> rawAttempts.get(attempt).steps().stream().anyMatch(candidate ->
-                                candidate.heading().equals(step.heading())
-                                        && candidate.kind() == step.kind()
-                                        && candidate.text().equals(step.text())
-                                        && candidate.citationIds().equals(step.sourceChunkIds())))
+                        .filter(attempt -> rawAttempts.get(attempt).steps().stream()
+                                .anyMatch(candidate -> exactPlayerFacingStep(candidate, step)))
                         .boxed()
                         .toList())
                 .toList();
@@ -358,11 +445,8 @@ class TeachingRichLessonPaidCanaryTest {
                 && stepSourceAttempts.stream().noneMatch(List::isEmpty);
         Set<String> coveredUnits = rawAttempts.stream()
                 .flatMap(raw -> raw.steps().stream())
-                .filter(candidate -> published.steps().stream().anyMatch(step ->
-                        candidate.heading().equals(step.heading())
-                                && candidate.kind() == step.kind()
-                                && candidate.text().equals(step.text())
-                                && candidate.citationIds().equals(step.sourceChunkIds())))
+                .filter(candidate -> published.steps().stream()
+                        .anyMatch(step -> exactPlayerFacingStep(candidate, step)))
                 .flatMap(step -> step.teachingUnitIds().stream())
                 .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
         SectionRequest request = modelRequest(published.topicKey());
@@ -383,15 +467,22 @@ class TeachingRichLessonPaidCanaryTest {
         diff.put("rawStepCounts", rawAttempts.stream().map(draft -> draft.steps().size()).toList());
         diff.put("publishedStepCount", published.steps().size());
         int superseded = rawAttempts.stream().mapToInt(raw -> (int) raw.steps().stream()
-                        .filter(candidate -> published.steps().stream().noneMatch(step ->
-                                candidate.heading().equals(step.heading())
-                                        && candidate.kind() == step.kind()
-                                        && candidate.text().equals(step.text())
-                                        && candidate.citationIds().equals(step.sourceChunkIds())))
+                        .filter(candidate -> published.steps().stream()
+                                .noneMatch(step -> exactPlayerFacingStep(candidate, step)))
                         .count())
                 .sum();
         diff.put("supersededRawStepCount", superseded);
         return Map.copyOf(diff);
+    }
+
+    private boolean exactPlayerFacingStep(
+            TeachingLessonModel.StepDraft raw,
+            IllustratedLesson.LessonStep published) {
+        return raw.heading().equals(published.heading())
+                && raw.kind() == published.kind()
+                && raw.text().equals(published.text())
+                && raw.citationIds().equals(published.sourceChunkIds())
+                && visibleFocus(raw.visualFocus()).equals(visibleFocus(published.visualFocus()));
     }
 
     private final Map<String, SectionRequest> requestIndex = new ConcurrentHashMap<>();
@@ -449,21 +540,74 @@ class TeachingRichLessonPaidCanaryTest {
     private Map<String, Object> visibleLesson(IllustratedLesson lesson) {
         return Map.of(
                 "status", lesson.status().name(),
-                "sections", lesson.sections().stream().map(section -> Map.<String, Object>of(
-                        "position", section.position(),
-                        "topicKey", section.topicKey(),
-                        "title", section.title(),
-                        "visualCaption", section.visualCaption(),
-                        "evidenceStatus", section.evidenceStatus().name(),
-                        "steps", section.steps().stream().map(step -> Map.<String, Object>of(
-                                "position", step.position(),
-                                "heading", step.heading(),
-                                "kind", step.kind().name(),
-                                "text", step.text(),
-                                "sourcePages", step.sourcePages(),
-                                "sourceChunkIds", step.sourceChunkIds()))
-                                .toList()))
+                "sections", lesson.sections().stream().map(section -> {
+                    Map<String, Object> visible = new LinkedHashMap<>();
+                    visible.put("position", section.position());
+                    visible.put("topicKey", section.topicKey());
+                    visible.put("coverageTags", section.coverageTags());
+                    visible.put("title", section.title());
+                    visible.put("required", section.required());
+                    visible.put("visualKind", section.visualKind().name());
+                    visible.put("visualCaption", section.visualCaption());
+                    visible.put("visualSourcePages", section.visualSourcePages());
+                    visible.put("visualSourceChunkIds", section.visualSourceChunkIds());
+                    visible.put("evidenceStatus", section.evidenceStatus().name());
+                    visible.put("steps", section.steps().stream().map(step -> {
+                        Map<String, Object> item = new LinkedHashMap<>();
+                        item.put("position", step.position());
+                        item.put("heading", step.heading());
+                        item.put("kind", step.kind().name());
+                        item.put("text", step.text());
+                        item.put("sourcePages", step.sourcePages());
+                        item.put("sourceChunkIds", step.sourceChunkIds());
+                        item.put("visualFocus", visibleFocus(step.visualFocus()));
+                        return Map.copyOf(item);
+                    }).toList());
+                    return Map.copyOf(visible);
+                })
                         .toList());
+    }
+
+    private Map<String, Object> visibleFocus(TeachingLessonModel.VisualFocusDraft focus) {
+        if (focus == null) return Map.of();
+        return visibleFocus(
+                focus.pageNumber(),
+                focus.label(),
+                focus.visibleDescription(),
+                focus.x(),
+                focus.y(),
+                focus.width(),
+                focus.height());
+    }
+
+    private Map<String, Object> visibleFocus(IllustratedLesson.VisualFocus focus) {
+        if (focus == null) return Map.of();
+        return visibleFocus(
+                focus.pageNumber(),
+                focus.label(),
+                focus.visibleDescription(),
+                focus.x(),
+                focus.y(),
+                focus.width(),
+                focus.height());
+    }
+
+    private Map<String, Object> visibleFocus(
+            int pageNumber,
+            String label,
+            String visibleDescription,
+            int x,
+            int y,
+            int width,
+            int height) {
+        return Map.of(
+                "pageNumber", pageNumber,
+                "label", label,
+                "visibleDescription", visibleDescription,
+                "x", x,
+                "y", y,
+                "width", width,
+                "height", height);
     }
 
     private int visibleCharacters(IllustratedLesson lesson) {
@@ -484,8 +628,12 @@ class TeachingRichLessonPaidCanaryTest {
         when(configuration.usesFake(RuntimeModelConfiguration.Role.TEACHING, OWNER)).thenReturn(false);
         when(configuration.usesDeepSeekNonThinkingGeneration(
                         RuntimeModelConfiguration.Role.TEACHING, OWNER))
-                .thenReturn(true);
+                .thenReturn("deepseek".equals(provider.provider()) && !deepSeekThinking());
         return configuration;
+    }
+
+    private boolean deepSeekThinking() {
+        return "true".equalsIgnoreCase(System.getenv("RULEPILOT_TEACHING_CANARY_DEEPSEEK_THINKING"));
     }
 
     private ChatModel recordingChatModel(Provider provider, List<String> rawResponses) {
@@ -531,6 +679,17 @@ class TeachingRichLessonPaidCanaryTest {
                 requiredEnvironment(prefix + "_API_KEY"),
                 requiredEnvironment(prefix + "_BASE_URL"),
                 requiredEnvironment(prefix + "_MODEL"));
+    }
+
+    private String canaryOutput(String provider) {
+        String providerSuffix = "deepseek".equals(provider) ? "" : "-" + provider;
+        String runLabel = java.util.Optional.ofNullable(System.getenv("RULEPILOT_TEACHING_CANARY_RUN_LABEL"))
+                .filter(value -> !value.isBlank())
+                .orElse("");
+        if (!runLabel.matches("[A-Za-z0-9-]{0,40}")) {
+            throw new IllegalArgumentException("paid teaching canary run label is invalid");
+        }
+        return CANARY_OUTPUT.replace(".json", providerSuffix + (runLabel.isEmpty() ? "" : "-" + runLabel) + ".json");
     }
 
     private String requiredEnvironment(String name) {
@@ -610,16 +769,24 @@ class TeachingRichLessonPaidCanaryTest {
 
         private Map<String, Object> visibleDrafts() {
             Map<String, Object> visible = new LinkedHashMap<>();
-            drafts.forEach((topic, attempts) -> visible.put(topic, attempts.stream().map(draft -> Map.of(
-                    "title", draft.title(),
-                    "visualCaption", draft.visualCaption(),
-                    "steps", draft.steps().stream().map(step -> Map.of(
-                            "heading", step.heading(),
-                            "kind", step.kind().name(),
-                            "text", step.text(),
-                            "citationIds", step.citationIds(),
-                            "teachingUnitIds", step.teachingUnitIds()))
-                            .toList())).toList()));
+            drafts.forEach((topic, attempts) -> visible.put(topic, attempts.stream().map(draft -> {
+                Map<String, Object> item = new LinkedHashMap<>();
+                item.put("title", draft.title());
+                item.put("visualKind", draft.visualKind().name());
+                item.put("visualCaption", draft.visualCaption());
+                item.put("visualCitationIds", draft.visualCitationIds());
+                item.put("steps", draft.steps().stream().map(step -> {
+                    Map<String, Object> visibleStep = new LinkedHashMap<>();
+                    visibleStep.put("heading", step.heading());
+                    visibleStep.put("kind", step.kind().name());
+                    visibleStep.put("text", step.text());
+                    visibleStep.put("citationIds", step.citationIds());
+                    visibleStep.put("teachingUnitIds", step.teachingUnitIds());
+                    visibleStep.put("visualFocus", visibleFocus(step.visualFocus()));
+                    return Map.copyOf(visibleStep);
+                }).toList());
+                return Map.copyOf(item);
+            }).toList()));
             return Map.copyOf(visible);
         }
 
@@ -642,6 +809,36 @@ class TeachingRichLessonPaidCanaryTest {
                             })
                             .toList())));
             return Map.copyOf(visible);
+        }
+
+        private List<TeachingSectionDraftCandidate> reviewCandidates(
+                TeachingPlan plan, IllustratedLesson lesson) {
+            Map<String, LessonSection> published = lesson.sections().stream()
+                    .collect(java.util.stream.Collectors.toMap(LessonSection::topicKey, section -> section));
+            return java.util.stream.IntStream.range(0, plan.sections().size())
+                    .mapToObj(index -> {
+                        TeachingPlan.PlannedSection planned = plan.sections().get(index);
+                        SectionRequest request = requestIndex.get(planned.topicKey());
+                        List<SectionDraft> attempts = draftAttempts(planned.topicKey());
+                        List<RuleEvidence> evidence = request.evidence().stream()
+                                .map(source -> new RuleEvidence(
+                                        source.chunkId(),
+                                        plan.documentVersionId(),
+                                        source.sectionType(),
+                                        source.heading(),
+                                        source.excerpt(),
+                                        source.pageFrom(),
+                                        source.pageTo()))
+                                .toList();
+                        return new TeachingSectionDraftCandidate(
+                                index,
+                                planned,
+                                evidence,
+                                request,
+                                attempts.getLast(),
+                                published.get(planned.topicKey()));
+                    })
+                    .toList();
         }
 
         private Instant firstRequestAt() {

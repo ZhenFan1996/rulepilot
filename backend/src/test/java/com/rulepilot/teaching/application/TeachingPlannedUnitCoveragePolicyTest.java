@@ -53,6 +53,58 @@ class TeachingPlannedUnitCoveragePolicyTest {
     }
 
     @Test
+    void acceptsARedundantCrossUnitCheckWhenEachUnitAlreadyHasItsOwnInstruction() {
+        List<TeachingUnitInput> units = List.of(
+                new TeachingUnitInput("first-decision", List.of("R-alpha"), List.of(alpha.chunkId())),
+                new TeachingUnitInput("conditional-procedure", List.of("R-gamma"), List.of(gamma.chunkId())));
+        SectionDraft draft = draft(List.of(
+                step(
+                        "先做决定",
+                        "按 R-alpha 作出选择并完成结算。",
+                        List.of(alpha.chunkId()),
+                        List.of("first-decision")),
+                step(
+                        "再处理条件",
+                        "条件成立时执行 R-gamma。",
+                        List.of(gamma.chunkId()),
+                        List.of("conditional-procedure")),
+                step(
+                        "检查整个流程",
+                        TeachingMove.CHECK,
+                        "确认两个已讲清的单元都已完成。",
+                        List.of(alpha.chunkId(), gamma.chunkId()),
+                        List.of("first-decision", "conditional-procedure"))));
+
+        assertThatCode(() -> TeachingPlannedUnitCoveragePolicy.validate(
+                        units, List.of(alpha, gamma), draft))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
+    void rejectsACrossUnitCheckWhenItIsTheOnlyStepClaimingOneUnit() {
+        List<TeachingUnitInput> units = List.of(
+                new TeachingUnitInput("first-decision", List.of("R-alpha"), List.of(alpha.chunkId())),
+                new TeachingUnitInput("conditional-procedure", List.of("R-gamma"), List.of(gamma.chunkId())));
+        SectionDraft compressed = draft(List.of(
+                step(
+                        "先做决定",
+                        "按 R-alpha 作出选择并完成结算。",
+                        List.of(alpha.chunkId()),
+                        List.of("first-decision")),
+                step(
+                        "一起检查",
+                        TeachingMove.CHECK,
+                        "检查 R-alpha 和 R-gamma。",
+                        List.of(alpha.chunkId(), gamma.chunkId()),
+                        List.of("first-decision", "conditional-procedure"))));
+
+        assertThatThrownBy(() -> TeachingPlannedUnitCoveragePolicy.validate(
+                        units, List.of(alpha, gamma), compressed))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("cannot absorb multiple");
+    }
+
+    @Test
     void rejectsAnOtherwiseReadableDraftThatOmitsOnePlanOwnedUnit() {
         List<TeachingUnitInput> units = List.of(
                 new TeachingUnitInput("first-decision", List.of("R-alpha"), List.of(alpha.chunkId())),
@@ -115,9 +167,18 @@ class TeachingPlannedUnitCoveragePolicyTest {
             String text,
             List<UUID> citations,
             List<String> teachingUnitIds) {
+        return step(heading, TeachingMove.DO, text, citations, teachingUnitIds);
+    }
+
+    private StepDraft step(
+            String heading,
+            TeachingMove move,
+            String text,
+            List<UUID> citations,
+            List<String> teachingUnitIds) {
         return new StepDraft(
                 heading,
-                TeachingMove.DO,
+                move,
                 text,
                 citations,
                 teachingUnitIds,

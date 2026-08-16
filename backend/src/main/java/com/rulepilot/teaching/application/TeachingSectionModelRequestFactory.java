@@ -58,6 +58,21 @@ final class TeachingSectionModelRequestFactory {
 
     private TeachingLessonModel.TeachingUnitInput boundTeachingUnit(
             TeachingUnitContract.Unit unit, List<RuleEvidence> evidence) {
+        if (!unit.sourcePages().isEmpty()) {
+            List<java.util.UUID> ownedEvidenceIds = evidence.stream()
+                    .filter(candidate -> java.util.stream.IntStream
+                            .rangeClosed(candidate.pageFrom(), candidate.pageTo())
+                            .anyMatch(unit.sourcePages()::contains))
+                    .map(RuleEvidence::chunkId)
+                    .distinct()
+                    .toList();
+            if (ownedEvidenceIds.isEmpty()) {
+                throw new IllegalArgumentException(
+                        "retrieval did not bind planned teaching source pages " + unit.sourcePages());
+            }
+            return new TeachingLessonModel.TeachingUnitInput(
+                    unit.unitId(), unit.sourceIdentifiers(), ownedEvidenceIds);
+        }
         LinkedHashSet<RuleEvidence> anchorEvidence = new LinkedHashSet<>();
         for (String sourceIdentifier : unit.sourceIdentifiers()) {
             List<RuleEvidence> matches = evidence.stream()
