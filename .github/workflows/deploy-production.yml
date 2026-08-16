@@ -488,8 +488,18 @@ jobs:
           const hasBudgetDegradation = (result) => {
             const actions = Array.isArray(result?.harness?.actions) ? result.harness.actions : []
             return result?.outcome === 'unavailable'
-              || actions.some((action) => action.includes('PREFERENCE_REVIEW_UNAVAILABLE')
-                || action.includes('RUN_DEADLINE_EXCEEDED'))
+              || actions.some((action) => action.includes('RUN_DEADLINE_EXCEEDED')
+                || action.startsWith('FALLBACK_VERIFIED_CARDS:'))
+          }
+          const hasNaturalCandidateNarrative = (game) => {
+            const hasPreferenceReason = Array.isArray(game?.reasons)
+              && game.reasons.some((reason) => reason?.kind === 'preference_inference'
+                && typeof reason.text === 'string'
+                && reason.text.trim().length >= 20)
+            const hasConcreteTradeoff = Array.isArray(game?.tradeoffs)
+              && game.tradeoffs.some((tradeoff) => typeof tradeoff === 'string'
+                && tradeoff.trim().length >= 12)
+            return hasPreferenceReason && hasConcreteTradeoff
           }
           // This path invokes paid models. Run it once; application budgets and diagnostics make failure actionable.
           for (let attempt = 1; attempt <= 1; attempt += 1) {
@@ -598,15 +608,25 @@ jobs:
               const agentResult = streamed.result
               const agentActions = agentResult.harness?.actions
               const completedRecommendation = Array.isArray(agentActions)
-                && (agentActions.includes('RECOMMEND_GAMES')
-                  || agentActions.some((action) => action.startsWith('FALLBACK_VERIFIED_CARDS:')))
-              const usedSemanticReActTools = Array.isArray(agentActions)
-                && (agentActions.includes('SEARCH_BGG_BY_NAME')
-                  || agentActions.includes('DISCOVER_CANDIDATES'))
-                && agentActions.includes('LOOKUP_BGG_CANDIDATES')
+                && agentActions.includes('RECOMMEND_GAMES')
+              const usedGroundedCatalog = Array.isArray(agentActions)
+                && (agentActions.includes('SEARCH_BGG_CATALOG')
+                  || ((agentActions.includes('SEARCH_BGG_BY_NAME')
+                    || agentActions.includes('DISCOVER_CANDIDATES'))
+                    && agentActions.includes('LOOKUP_BGG_CANDIDATES')))
+              const playerCount = agentResult.profile?.playerCount
+              const durationMinutes = agentResult.profile?.durationMinutes
+              const preservedHardPreferences = playerCount?.minimum === 5
+                && playerCount?.maximum === 5
+                && playerCount?.strength === 'hard'
+                && durationMinutes?.maximum === 90
+                && durationMinutes?.strength === 'hard'
+              const allGamesHaveNaturalNarrative = Array.isArray(agentResult.games)
+                && agentResult.games.every(hasNaturalCandidateNarrative)
               if (agentResult.mode !== 'model_assisted'
-                  || !Array.isArray(agentResult.games) || agentResult.games.length === 0
-                  || !completedRecommendation || !usedSemanticReActTools
+                  || !Array.isArray(agentResult.games) || agentResult.games.length !== 3
+                  || !completedRecommendation || !usedGroundedCatalog
+                  || !preservedHardPreferences || !allGamesHaveNaturalNarrative
                   || hasBudgetDegradation(agentResult)
                   || streamed.totalMillis > 35_000) {
                 const diagnostic = JSON.stringify({
@@ -615,6 +635,10 @@ jobs:
                   gameCount: Array.isArray(agentResult.games) ? agentResult.games.length : -1,
                   totalMillis: streamed.totalMillis,
                   actions: Array.isArray(agentActions) ? agentActions : [],
+                  preservedHardPreferences,
+                  naturalNarrativeCount: Array.isArray(agentResult.games)
+                    ? agentResult.games.filter(hasNaturalCandidateNarrative).length
+                    : -1,
                 })
                 throw new Error(`recommendation Agent returned an invalid response: ${diagnostic}`)
               }
