@@ -253,6 +253,20 @@ const loadingMessage = computed(() => {
   const message = loadingCopy[activeTurnLocale.value ?? locale.value][loadingStage.value]
   return loadingElapsedSeconds.value > 0 ? `${message} ${loadingElapsedSeconds.value}s` : message
 })
+const recommendationSoftBudgetReached = computed(() => loading.value && loadingElapsedSeconds.value >= 8)
+const hasVerifiedCandidates = computed(() => messages.value.some(message =>
+  Boolean(message.response?.games.length || message.response?.comparison?.candidates.length)))
+const recommendationSoftBudgetCopy = computed(() => {
+  const english = (activeTurnLocale.value ?? locale.value) === 'en'
+  if (hasVerifiedCandidates.value) {
+    return english
+      ? 'Previously verified candidates remain above. This turn still needs catalog facts and fit tradeoffs checked; no new candidate appears before validation.'
+      : '上一轮已核对候选仍保留在上方；当前轮还需核对目录事实与匹配取舍，通过校验前不会显示新候选。'
+  }
+  return english
+    ? 'There is not yet a new candidate safe to show. Catalog facts and fit tradeoffs still need checking; unfinished candidates stay hidden.'
+    : '目前还没有足以展示的新候选；还需核对目录事实与匹配取舍，未完成候选不会提前显示。'
+})
 const recommendationWorkStatus = computed(() => playerWorkStatus('FINDING_GAME', {
   capability: 'none', readiness: 'unavailable', terminality: 'active', outcome: 'none',
 }, activeTurnLocale.value ?? locale.value))
@@ -1090,16 +1104,17 @@ onBeforeUnmount(() => {
                   </div>
                 </article>
               </div>
-              <div v-if="loading" class="flex items-center gap-3 rounded-2xl rounded-bl-sm border border-ink/8 bg-canvas px-4 py-3 text-ink/55" role="status">
+              <div v-if="loading" class="flex items-start gap-3 rounded-2xl rounded-bl-sm border border-ink/8 bg-canvas px-4 py-3 text-ink/55" role="status">
                 <span class="flex gap-1" aria-hidden="true"><span class="size-1.5 animate-pulse rounded-full bg-copper" /><span class="size-1.5 animate-pulse rounded-full bg-copper [animation-delay:160ms]" /><span class="size-1.5 animate-pulse rounded-full bg-copper [animation-delay:320ms]" /></span>
-                <span>
+                <div class="min-w-0 flex-1">
                   <PlayerWorkStatusText
                     :status="recommendationWorkStatus"
                     as="strong"
                     class="block text-sm font-semibold text-ink/70"
                   />
                   <span class="mt-0.5 block text-xs">{{ loadingMessage }}</span>
-                </span>
+                  <p v-if="recommendationSoftBudgetReached" data-testid="recommendation-soft-budget" class="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-950">{{ recommendationSoftBudgetCopy }}</p>
+                </div>
               </div>
             </div>
             <div v-if="clarification?.options.length && !loading" class="border-t border-ink/8 px-4 py-4 sm:px-6"><div class="flex flex-wrap gap-2"><button v-for="option in clarification.options" :key="option.value" type="button" class="min-h-11 rounded-lg border border-ink/15 bg-ink/5 px-4 text-sm font-semibold text-ink/72 hover:border-copper/50" @click="choose(option)">{{ option.label }}</button></div></div>

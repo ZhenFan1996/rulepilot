@@ -203,8 +203,8 @@ final class RecommendationReActLoop {
                 Outcome.UNAVAILABLE,
                 DecisionMode.MODEL_ASSISTED,
                 chinese(locale)
-                        ? "推荐 Agent 暂时没能完成这轮对话。你刚才的内容和已记录条件都还在，稍后可以直接重试。"
-                        : "The recommendation Agent could not complete this turn. Your message and saved constraints are still here, so you can retry shortly.",
+                        ? "这轮推荐没有完成；继续查找已经停止。你刚才的内容和已记录条件都还在，可以直接重试。"
+                        : "This recommendation turn did not finish, and further searching has stopped. Your message and saved constraints are still here, so you can retry.",
                 state.profile,
                 null,
                 state.sourceCount,

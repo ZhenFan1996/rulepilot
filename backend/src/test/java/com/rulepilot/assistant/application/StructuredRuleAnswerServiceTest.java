@@ -2,7 +2,20 @@ package com.rulepilot.assistant.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
+import com.rulepilot.assistant.AgentExecutionControl.ActivityType;
+import com.rulepilot.assistant.AgentExecutionStoppedException;
+import com.rulepilot.assistant.AgentExecutionStoppedException.StopReason;
+import com.rulepilot.assistant.AssistantRunMode;
+import com.rulepilot.assistant.AssistantRunState;
+import com.rulepilot.assistant.AssistantRuns;
+import com.rulepilot.assistant.AssistantRuns.RunSnapshot;
+import com.rulepilot.assistant.AuditedAgentInvocations;
 import com.rulepilot.assistant.GeneratedContentCritic;
 import com.rulepilot.assistant.GeneratedContentCritic.Issue;
 import com.rulepilot.assistant.GeneratedContentCritic.IssueType;
@@ -45,16 +58,74 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.time.Instant;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
+import java.util.function.Supplier;
+import java.util.function.ToIntFunction;
 import org.junit.jupiter.api.Test;
 
 class StructuredRuleAnswerServiceTest {
 
     private final UUID versionId = UUID.randomUUID();
     private final DeterministicQuestionUnderstanding understanding = new DeterministicQuestionUnderstanding();
+
+    @Test
+    void returnsAnHonestTimeoutOutcomeWhenTheApplicationBudgetStopsTheWorkflow() {
+        AssistantRuns runs = mock(AssistantRuns.class);
+        UUID runId = UUID.randomUUID();
+        Instant now = Instant.now();
+        RunSnapshot run = new RunSnapshot(
+                runId,
+                AssistantRunMode.QUESTION_ANSWER,
+                versionId,
+                "player",
+                AssistantRunState.RECEIVED,
+                1,
+                now,
+                now,
+                null,
+                null);
+        when(runs.start(AssistantRunMode.QUESTION_ANSWER, versionId, "player")).thenReturn(run);
+        AuditedAgentInvocations stopped = new AuditedAgentInvocations() {
+            @Override
+            public <T> T invoke(
+                    UUID ignoredRunId,
+                    ActivityType type,
+                    String operation,
+                    int estimatedInputTokens,
+                    String successSummary,
+                    Supplier<T> invocation,
+                    ToIntFunction<T> outputTokenEstimator) {
+                throw new AgentExecutionStoppedException(StopReason.TIMEOUT);
+            }
+        };
+        StructuredRuleAnswerService service = new StructuredRuleAnswerService(
+                understanding,
+                (documentVersionId, query, options) -> List.of(),
+                VisualRulebookPageFactSearch.empty(),
+                (documentVersionId, chunkIds) -> List.of(),
+                request -> { throw new AssertionError("model must not run after timeout"); },
+                new InMemoryAnswerCache(),
+                new RecordingRateLimiter(),
+                new MutableRuleDataVersion(),
+                noConfirmedRulings(),
+                new PolicyEvidenceVerifier(),
+                acceptedCritic(),
+                runs,
+                stopped,
+                ObservationRegistry.NOOP,
+                new SimpleMeterRegistry(),
+                null);
+
+        var creation = service.answerWithRun(
+                "When does this resolve?", new QuestionContext(versionId), "player", null);
+
+        assertThat(creation.answer().status()).isEqualTo(AnswerStatus.MODEL_TIMEOUT);
+        verify(runs).fail(eq(runId), eq(1L), eq("AGENT_TIMEOUT"), any());
+    }
 
     @Test
     void publishesOneDirectAnswerWithOnlyCurrentVersionCitationsAndSemanticReview() {

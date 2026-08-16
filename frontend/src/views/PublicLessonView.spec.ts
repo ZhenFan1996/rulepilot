@@ -62,6 +62,7 @@ describe('PublicLessonView', () => {
     setLocale('zh-CN')
     localStorage.clear()
     sessionStorage.clear()
+    vi.useRealTimers()
     vi.unstubAllGlobals()
   })
 
@@ -302,6 +303,44 @@ describe('PublicLessonView', () => {
     expect(wrapper.text()).toContain('这次未完成的结果不会替换当前页面')
     expect((wrapper.get('#public-question').element as HTMLTextAreaElement).value).toBe('这个效果何时结算？')
     expect(wrapper.findAll('button').some(button => button.text() === '停止等待')).toBe(false)
+  })
+
+  it('keeps a verified public answer visible at the eight-second soft boundary without publishing unfinished text', async () => {
+    vi.useFakeTimers()
+    const lesson = publicLessonPayload('plan-1', 'Wingspan Rules')
+    let answerRequests = 0
+    vi.stubGlobal('fetch', vi.fn((input: string | URL | Request, init?: RequestInit) => {
+      const path = String(input)
+      if (path.includes('/api/auth/session')) return Promise.resolve(new Response(null, { status: 401 }))
+      if (path.endsWith('/icon-glossary')) return Promise.resolve(new Response(null, { status: 404 }))
+      if (path.endsWith('/answers') && init?.method === 'POST') {
+        answerRequests += 1
+        if (answerRequests === 1) return Promise.resolve(Response.json(publicAnswerPayload('上一条已核对结论')))
+        return new Promise<Response>(() => undefined)
+      }
+      return Promise.resolve(Response.json(lesson))
+    }))
+    const router = createPublicLessonRouter()
+    await router.push('/read/plan-1/questions')
+    await router.isReady()
+    const wrapper = mount(PublicLessonView, { global: { plugins: [router] } })
+    await flushPromises()
+
+    await wrapper.get('#public-question').setValue('第一条问题')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    await wrapper.get('#public-question').setValue('第二条还在核对的问题')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(8_000)
+
+    expect(wrapper.text()).toContain('上一条已核对结论')
+    expect(wrapper.get('[data-testid="public-answer-soft-budget"]').text())
+      .toContain('上一条已核对答案和引用仍保留在下方')
+    expect(wrapper.get('[data-testid="public-answer-soft-budget"]').text())
+      .toContain('当前问题还需核对原文与结论')
+    expect(wrapper.text()).not.toContain('第二条未完成答复')
+    wrapper.unmount()
   })
 
   it('turns clarification and insufficient evidence into focused, editable next steps', async () => {

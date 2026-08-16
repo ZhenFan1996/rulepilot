@@ -7,6 +7,7 @@ import VoiceQuestionCapture from '@/components/VoiceQuestionCapture.vue'
 import { useLocale } from '@/lib/locale'
 import { playerFacingExplanation, playerFacingWalkthroughSteps } from '@/lib/playerFacingAnswer'
 import { playerFacingCitationExcerpt } from '@/lib/playerFacingCitation'
+import { playerTurnLocale } from '@/lib/playerTurnLanguage'
 import { playerWorkStatus } from '@/lib/playerWorkStatus'
 import type {
   AnswerTurn,
@@ -25,6 +26,8 @@ const props = withDefaults(defineProps<{
   answerLoading: boolean
   answerError: string
   answerOutcome: 'none' | 'failed' | 'cancelled'
+  answerElapsedSeconds?: number
+  answerSoftBudgetReached?: boolean
   agentTrace?: AnswerAgentTraceItem[]
   online: boolean
   ruling: ConfirmedRuling | null
@@ -38,6 +41,8 @@ const props = withDefaults(defineProps<{
   showHeader?: boolean
 }>(), {
   agentTrace: () => [],
+  answerElapsedSeconds: 0,
+  answerSoftBudgetReached: false,
   clearThreadDisabled: false,
   showHeader: true,
 })
@@ -97,6 +102,21 @@ const answerErrorStatus = computed(() => playerWorkStatus(
   },
   locale.value,
 ))
+const latestPriorAnswer = computed(() => props.answerTurns.at(-1) ?? null)
+const softBudgetCopy = computed(() => {
+  const responseLocale = playerTurnLocale(props.question, locale.value)
+  const elapsed = responseLocale === 'en'
+    ? `${props.answerElapsedSeconds} seconds`
+    : `${props.answerElapsedSeconds} 秒`
+  if (latestPriorAnswer.value) {
+    return responseLocale === 'en'
+      ? `The previous verified answer and citations remain above. This question is still checking the rule text and conclusion (${elapsed}); it will not replace them before the full check passes.`
+      : `上一条已核对答案和引用仍保留在上方；当前问题还在核对原文与结论（${elapsed}）。通过完整性检查前不会替换它。`
+  }
+  return responseLocale === 'en'
+    ? `${elapsed}: there is not yet enough verified evidence to show. The rule text and conclusion are still being checked; unfinished text will not appear as an answer.`
+    : `${elapsed}：目前还没有足以显示的已核对引用；仍在核对原文与结论，未完成文字不会显示成答案。`
+})
 
 async function focusQuestionForMoreDetail() {
   await nextTick()
@@ -519,6 +539,7 @@ function hasStructuredAnswerDetails(answer: StructuredRuleAnswer) {
                 <p class="mt-0.5 text-xs leading-5 text-ink/55">{{ activeLearningIntent ? t('lesson.answer.workingIntent', { intent: learningIntentLabel(activeLearningIntent) }) : t('lesson.answer.working') }}</p>
               </div>
             </div>
+            <p v-if="answerSoftBudgetReached" data-testid="answer-soft-budget" class="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-950">{{ softBudgetCopy }}</p>
             <ol v-if="agentTrace.length" class="stack-y-sm text-xs leading-5 text-ink/60" :aria-label="t('lesson.answer.agentTrace')">
               <li v-for="item in agentTrace" :key="item.sequence" class="flex items-start gap-2">
                 <span :class="item.status === 'running' ? 'animate-pulse bg-copper' : item.status === 'done' ? 'bg-emerald-500' : 'bg-amber-500'" class="mt-1.5 size-2 shrink-0 rounded-full" aria-hidden="true" />

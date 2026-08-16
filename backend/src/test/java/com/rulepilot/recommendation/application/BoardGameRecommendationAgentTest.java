@@ -2305,7 +2305,7 @@ class BoardGameRecommendationAgentTest {
                 "zh-CN");
 
         assertThat(response.outcome()).isEqualTo(Outcome.UNAVAILABLE);
-        assertThat(response.assistantMessage()).contains("暂时没能完成");
+        assertThat(response.assistantMessage()).contains("这轮推荐没有完成", "继续查找已经停止");
         assertThat(response.harness().fallbackUsed()).isFalse();
         assertThat(response.harness().actions()).contains("UNAVAILABLE:MODEL_NOT_CONFIGURED");
         assertThat(catalog.calls).isZero();
@@ -2708,7 +2708,7 @@ class BoardGameRecommendationAgentTest {
 
         assertThat(response.outcome()).isEqualTo(Outcome.UNAVAILABLE);
         assertThat(response.assistantMessage())
-                .contains("暂时没能完成", "可以直接重试")
+                .contains("这轮推荐没有完成", "继续查找已经停止", "可以直接重试")
                 .doesNotContain("stale English payload");
         assertThat(response.harness().actions()).containsExactly(
                 "MODEL_OUTPUT_TRUNCATED", "UNAVAILABLE:MODEL_OUTPUT_TRUNCATED");

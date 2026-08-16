@@ -89,6 +89,7 @@ interface PublicAnswerTurn {
 }
 
 const PUBLIC_ANSWER_HISTORY_LIMIT = 6
+const PUBLIC_ANSWER_SOFT_BUDGET_SECONDS = 8
 const PUBLIC_ANSWER_STORAGE_PREFIX = 'rulepilot:public-answer-thread:v2:'
 const PUBLIC_ANSWER_READER_KEY = 'rulepilot:public-answer-reader'
 const PUBLIC_ANSWER_FIELDS = new Set([
@@ -116,6 +117,9 @@ const publicLesson = ref<PublicLessonResponse | null>(null)
 const publicQuestion = ref('')
 const publicAnswerTurns = ref<PublicAnswerTurn[]>([])
 const publicAnswerLoading = ref(false)
+const publicAnswerElapsedSeconds = ref(0)
+const publicAnswerSoftBudgetReached = computed(() =>
+  publicAnswerLoading.value && publicAnswerElapsedSeconds.value >= PUBLIC_ANSWER_SOFT_BUDGET_SECONDS)
 const publicAnswerError = ref('')
 const publicAnswerNotice = ref('')
 const publicResetDialogOpen = ref(false)
@@ -129,6 +133,7 @@ let loadedLessonPlanId = ''
 let loadedLessonLocale = ''
 let latestPublicAnswerRequest = 0
 let activePublicAnswerController: AbortController | null = null
+let publicAnswerClock: ReturnType<typeof setInterval> | null = null
 let readerScopeGeneration = 0
 let disposed = false
 const planId = computed(() => typeof route.params.planId === 'string' ? route.params.planId : '')
@@ -141,6 +146,18 @@ const heroEyebrow = computed(() => questionMode.value ? t('questions.eyebrow') :
 const heroDescription = computed(() => questionMode.value ? t('public.question.description') : t('public.hero.description'))
 const englishGuidePending = computed(() => locale.value === 'en' && publicLesson.value?.contentLanguage !== 'en')
 const englishGuideFailed = computed(() => englishGuidePending.value && publicLesson.value?.localizationStatus === 'FAILED')
+const publicAnswerSoftBudgetCopy = computed(() => {
+  const english = playerTurnLocale(publicQuestion.value, locale.value) === 'en'
+  const elapsed = english ? `${publicAnswerElapsedSeconds.value} seconds` : `${publicAnswerElapsedSeconds.value} 秒`
+  if (publicAnswerTurns.value.length) {
+    return english
+      ? `The previous verified answer and citations remain below. The current question still needs its rule text and conclusion checked (${elapsed}); unfinished text stays hidden.`
+      : `上一条已核对答案和引用仍保留在下方；当前问题还需核对原文与结论（${elapsed}），未完成文字不会显示成答案。`
+  }
+  return english
+    ? `${elapsed}: there is not yet enough verified evidence to show. The rule text and conclusion still need checking; unfinished text stays hidden.`
+    : `${elapsed}：目前还没有足以展示的已核对引用；还需核对原文与结论，未完成文字不会显示成答案。`
+})
 
 function answerThreadStorageKey(
   scope: string | null = readerScope.value,
@@ -653,6 +670,7 @@ async function sendPublicQuestion(question: string, learningIntent: LearningInte
   let failureKind: PublicAnswerRequestFailure = 'unavailable'
   activePublicAnswerController = controller
   publicAnswerLoading.value = true
+  startPublicAnswerClock()
   publicAnswerError.value = ''
   publicAnswerNotice.value = ''
   try {
@@ -709,9 +727,24 @@ async function sendPublicQuestion(question: string, learningIntent: LearningInte
     )
     if (activePublicAnswerController === controller) activePublicAnswerController = null
     if (requestStillCurrent) {
+      stopPublicAnswerClock()
       publicAnswerLoading.value = false
     }
   }
+}
+
+function startPublicAnswerClock() {
+  stopPublicAnswerClock()
+  publicAnswerElapsedSeconds.value = 0
+  const startedAt = Date.now()
+  publicAnswerClock = setInterval(() => {
+    publicAnswerElapsedSeconds.value = Math.max(0, Math.floor((Date.now() - startedAt) / 1_000))
+  }, 1_000)
+}
+
+function stopPublicAnswerClock() {
+  if (publicAnswerClock !== null) clearInterval(publicAnswerClock)
+  publicAnswerClock = null
 }
 
 type PublicAnswerRequestFailure = 'missing' | 'unavailable' | 'invalid'
@@ -766,6 +799,7 @@ function isCurrentPublicAnswerRequest(
 }
 
 function abandonPublicAnswer(showNotice = false) {
+  stopPublicAnswerClock()
   if (!publicAnswerLoading.value && !activePublicAnswerController) return
   latestPublicAnswerRequest++
   activePublicAnswerController?.abort()
@@ -881,6 +915,7 @@ onUnmounted(() => {
           <div v-else-if="publicAnswerLoading" class="mt-5 rounded-2xl border border-indigo/12 bg-paper p-5" role="status" aria-live="polite">
             <div class="flex items-center gap-3"><span class="size-3 animate-pulse rounded-full bg-copper" /><p class="text-sm font-semibold">{{ t('public.question.waiting') }}</p></div>
             <p class="mt-2 text-xs leading-5 text-ink/50">{{ t('public.question.waitingDetail') }}</p>
+            <p v-if="publicAnswerSoftBudgetReached" data-testid="public-answer-soft-budget" class="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-950">{{ publicAnswerSoftBudgetCopy }}</p>
             <button type="button" class="mt-4 min-h-11 rounded-xl border border-ink/15 px-4 text-sm font-semibold text-ink/65" @click="abandonPublicAnswer(true)">{{ t('public.question.stop') }}</button>
           </div>
 

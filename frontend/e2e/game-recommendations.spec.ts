@@ -495,6 +495,26 @@ test('keeps full-catalog browsing separate from the conversational recommendatio
   await expect(page.getByText('目前记下的偏好')).toBeVisible()
 })
 
+test('acknowledges a recommendation turn immediately and exposes honest remaining work at eight seconds', async ({ page }) => {
+  await page.clock.install()
+  await mockPublicDiscovery(page, true)
+  await page.unroute('**/api/v1/bgg/recommendation-agent**')
+  await page.route('**/api/v1/bgg/recommendation-agent/session', route => route.fulfill({ status: 204 }))
+  let recommendationRequests = 0
+  await page.route('**/api/v1/bgg/recommendation-agent/stream?*', () => { recommendationRequests += 1 })
+  await page.goto('/discover')
+
+  await page.getByLabel('聊聊你想玩的游戏').fill('想找一款有探索感、但规则不太重的游戏')
+  await page.getByRole('button', { name: '发送' }).click()
+
+  await expect(page.getByTestId('player-work-status')).toHaveText('正在查找桌游', { timeout: 1_000 })
+  await expect.poll(() => recommendationRequests, { timeout: 1_000 }).toBe(1)
+  await page.clock.fastForward(8_000)
+  await expect(page.getByTestId('recommendation-soft-budget')).toContainText('目前还没有足以展示的新候选')
+  await expect(page.getByTestId('recommendation-soft-budget')).toContainText('还需核对目录事实与匹配取舍')
+  await expect(page.getByText('想找一款有探索感、但规则不太重的游戏')).toBeVisible()
+})
+
 test('keeps a pasted 501-character recommendation intact and sends exactly 500 characters', async ({ page }) => {
   await mockPublicDiscovery(page, true)
   await page.route('**/api/v1/bgg/recommendation-agent/session', route => route.fulfill({ status: 204 }))

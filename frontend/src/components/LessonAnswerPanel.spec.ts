@@ -590,6 +590,36 @@ describe('LessonAnswerPanel', () => {
     expect(wrapper.find('[role="alert"]').exists()).toBe(false)
   })
 
+  it('marks the soft budget without presenting the unfinished answer as a result', async () => {
+    const prior = {
+      ...answered,
+      citations: [{
+        heading: '结算时机', excerpt: '先完成本次结算。', pageFrom: 4, pageTo: 4,
+      }],
+    }
+    const wrapper = mount(LessonAnswerPanel, {
+      props: {
+        ...baseProps,
+        question: '如果结算被打断呢？',
+        answerLoading: true,
+        answerElapsedSeconds: 8,
+        answerSoftBudgetReached: true,
+        answerTurns: [{ question: '什么时候结算？', answer: prior, learningIntent: null }],
+      },
+      global: { stubs: { VoiceQuestionCapture: true } },
+    })
+
+    expect(wrapper.text()).toContain('上一条已核对答案和引用仍保留在上方')
+    expect(wrapper.text()).toContain('当前问题还在核对原文与结论')
+    expect(wrapper.text()).toContain('8 秒')
+    expect(wrapper.text()).not.toContain('如果结算被打断呢？：先完成结算')
+
+    await wrapper.setProps({ question: 'What if scoring is interrupted?' })
+    expect(wrapper.get('[data-testid="answer-soft-budget"]').text())
+      .toContain('The previous verified answer and citations remain above')
+    expect(wrapper.get('[data-testid="answer-soft-budget"]').text()).toContain('8 seconds')
+  })
+
   it('localizes the personal answer thread when the player selects English', () => {
     setLocale('en')
     const wrapper = mount(LessonAnswerPanel, {

@@ -17,6 +17,7 @@ import java.time.Instant;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 
@@ -31,6 +32,23 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
     private final AgentExecutionControl execution;
     private final AuditedAgentInvocations audited;
     private final ObjectMapper objectMapper;
+    private final AgentInvocationDeadline deadline;
+
+    @Autowired
+    public BoundedNativeToolAgent(
+            NativeToolModel model,
+            NativeAgentToolRegistry tools,
+            AgentExecutionControl execution,
+            AuditedAgentInvocations audited,
+            ObjectMapper objectMapper,
+            AgentInvocationDeadline deadline) {
+        this.model = model;
+        this.tools = tools;
+        this.execution = execution;
+        this.audited = audited;
+        this.objectMapper = objectMapper;
+        this.deadline = deadline;
+    }
 
     public BoundedNativeToolAgent(
             NativeToolModel model,
@@ -38,11 +56,7 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
             AgentExecutionControl execution,
             AuditedAgentInvocations audited,
             ObjectMapper objectMapper) {
-        this.model = model;
-        this.tools = tools;
-        this.execution = execution;
-        this.audited = audited;
-        this.objectMapper = objectMapper;
+        this(model, tools, execution, audited, objectMapper, AgentInvocationDeadline.unbounded());
     }
 
     @Override
@@ -87,12 +101,15 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
                         "nativeModelTurn|" + currentIteration,
                         estimatedInputTokens,
                         "native model turn completed",
-                        () -> model.next(new ModelRequest(
-                                request.role(),
-                                request.scope(),
-                                messages,
-                                advertisedTools,
-                                request.maxOutputTokens())),
+                        () -> deadline.invoke(
+                                request.scope().runId(),
+                                request.scope().deadlineAt(),
+                                () -> model.next(new ModelRequest(
+                                        request.role(),
+                                        request.scope(),
+                                        messages,
+                                        advertisedTools,
+                                        request.maxOutputTokens()))),
                         ModelTurn::completionTokens);
             } catch (NativeAgentConversation.ContextLimitException exception) {
                 return fallback(request, "CONTEXT_LIMIT", iteration - 1, toolCalls, observations);
@@ -212,7 +229,11 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
                             "nativeTool|" + boundedOperationName(call.name()) + "|" + shortHash(toolSpec.schemaHash()),
                             estimateTokens(call.argumentsJson()),
                             "native read tool observation recorded",
-                            () -> tools.execute(request.role(), call.name(), call.argumentsJson(), request.scope()),
+                            () -> deadline.invoke(
+                                    request.scope().runId(),
+                                    request.scope().deadlineAt(),
+                                    () -> tools.execute(
+                                            request.role(), call.name(), call.argumentsJson(), request.scope())),
                             result -> estimateTokens(observationJson(result)));
                 } catch (NativeAgentConversation.StaleSchemaException exception) {
                     return fallback(request, "TOOL_SCHEMA_STALE", iteration, toolCalls, observations);

@@ -18,12 +18,22 @@ final class AnswerModelGateway {
     private final RuleAnswerModel model;
     private final RuleAnswerRateLimiter rateLimiter;
     private final AuditedAgentInvocations invocations;
+    private final AgentInvocationDeadline deadline;
 
     AnswerModelGateway(
             RuleAnswerModel model, RuleAnswerRateLimiter rateLimiter, AuditedAgentInvocations invocations) {
+        this(model, rateLimiter, invocations, AgentInvocationDeadline.unbounded());
+    }
+
+    AnswerModelGateway(
+            RuleAnswerModel model,
+            RuleAnswerRateLimiter rateLimiter,
+            AuditedAgentInvocations invocations,
+            AgentInvocationDeadline deadline) {
         this.model = model;
         this.rateLimiter = rateLimiter;
         this.invocations = invocations;
+        this.deadline = deadline;
     }
 
     ModelDraft compose(UUID runId, String username, UUID gameSessionId, ModelRequest request) {
@@ -35,7 +45,7 @@ final class AnswerModelGateway {
                     "composeRuleAnswer",
                     estimateTokens(request.toString()),
                     "Rule answer model output received",
-                    () -> model.compose(request, username),
+                    () -> deadline.invoke(runId, () -> model.compose(request, username)),
                     result -> estimateTokens(result.toString()));
         } finally {
             permit.close();
@@ -59,7 +69,8 @@ final class AnswerModelGateway {
                     operation,
                     estimateTokens(request.toString()) + estimateTokens(feedback.toString()),
                     successSummary,
-                    () -> model.revise(request, previousDraft, feedback, username),
+                    () -> deadline.invoke(
+                            runId, () -> model.revise(request, previousDraft, feedback, username)),
                     result -> estimateTokens(result.toString()));
         } finally {
             permit.close();
@@ -76,7 +87,7 @@ final class AnswerModelGateway {
                     "rewriteAnswerRetrievalQueries",
                     estimateTokens(request.question()),
                     "Cross-language retrieval phrases prepared",
-                    () -> model.rewriteRetrievalQueries(request, username),
+                    () -> deadline.invoke(runId, () -> model.rewriteRetrievalQueries(request, username)),
                     result -> estimateTokens(result.toString()));
         } finally {
             permit.close();
@@ -100,7 +111,7 @@ final class AnswerModelGateway {
                     "interpretAnswerQuestion",
                     estimateTokens(request.toString()),
                     "Player question intent interpreted",
-                    () -> model.interpretQuestion(request, username),
+                    () -> deadline.invoke(runId, () -> model.interpretQuestion(request, username)),
                     result -> estimateTokens(result.toString()));
         } finally {
             permit.close();

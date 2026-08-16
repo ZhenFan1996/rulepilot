@@ -12,8 +12,9 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
-import org.springframework.context.annotation.Profile;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -24,11 +25,12 @@ public class AssistantRunService implements AssistantRuns {
 
     private final AssistantRunRepository repository;
     private final AgentExecutionControl execution;
-    private final BudgetLimits defaultLimits;
+    private final BudgetLimits answerLimits;
     private final BudgetLimits teachingLimits;
     private final BudgetLimits visualEnrichmentLimits;
     private final Clock clock = Clock.systemUTC();
 
+    @Autowired
     public AssistantRunService(
             AssistantRunRepository repository,
             AgentExecutionControl execution,
@@ -37,6 +39,7 @@ public class AssistantRunService implements AssistantRuns {
             @Value("${rulepilot.agent.max-model-calls:16}") int maxModelCalls,
             @Value("${rulepilot.agent.max-tokens:24000}") int maxTokens,
             @Value("${rulepilot.agent.timeout:PT2M}") Duration timeout,
+            @Value("${rulepilot.answer.agent.timeout:PT30S}") Duration answerTimeout,
             @Value("${rulepilot.teaching.agent.max-tool-calls:72}") int teachingMaxToolCalls,
             @Value("${rulepilot.teaching.agent.max-model-calls:72}") int teachingMaxModelCalls,
             @Value("${rulepilot.teaching.agent.max-tokens:300000}") int teachingMaxTokens,
@@ -49,7 +52,9 @@ public class AssistantRunService implements AssistantRuns {
                     Duration visualEnrichmentTimeout) {
         this.repository = repository;
         this.execution = execution;
-        this.defaultLimits = new BudgetLimits(maxSteps, maxToolCalls, maxModelCalls, maxTokens, timeout);
+        Duration boundedAnswerTimeout = answerTimeout.compareTo(timeout) < 0 ? answerTimeout : timeout;
+        this.answerLimits = new BudgetLimits(
+                maxSteps, maxToolCalls, maxModelCalls, maxTokens, boundedAnswerTimeout);
         this.teachingLimits = new BudgetLimits(
                 maxSteps, teachingMaxToolCalls, teachingMaxModelCalls, teachingMaxTokens, teachingTimeout);
         this.visualEnrichmentLimits = new BudgetLimits(
@@ -227,7 +232,7 @@ public class AssistantRunService implements AssistantRuns {
         return switch (mode) {
             case TEACHING, TEACHING_PREPARATION -> teachingLimits;
             case VISUAL_ENRICHMENT -> visualEnrichmentLimits;
-            case QUESTION_ANSWER -> defaultLimits;
+            case QUESTION_ANSWER -> answerLimits;
         };
     }
 

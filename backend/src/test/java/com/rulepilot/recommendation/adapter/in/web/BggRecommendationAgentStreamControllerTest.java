@@ -24,6 +24,7 @@ import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.Pro
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendationProfile;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.nio.charset.StandardCharsets;
 import org.junit.jupiter.api.Test;
@@ -32,6 +33,32 @@ import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 class BggRecommendationAgentStreamControllerTest {
+
+    @Test
+    void acknowledgesTheTurnBeforeQueuedRecommendationWorkCanStart() throws Exception {
+        BoardGameRecommendationAgent agent = mock(BoardGameRecommendationAgent.class);
+        BggRecommendationPresentation presentation = mock(BggRecommendationPresentation.class);
+        AtomicReference<Runnable> queued = new AtomicReference<>();
+        var controller = new BggRecommendationAgentStreamController(
+                agent, presentation, queued::set);
+        var mockMvc = MockMvcBuilders.standaloneSetup(controller).build();
+
+        var pending = mockMvc.perform(post("/api/v1/bgg/recommendation-agent/stream")
+                        .principal(() -> "player")
+                        .queryParam("locale", "zh-CN")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .accept(MediaType.TEXT_EVENT_STREAM)
+                        .content("{\"profile\":null,\"message\":\"四人区控\"}"))
+                .andExpect(request().asyncStarted())
+                .andReturn();
+
+        assertThat(queued).hasValueSatisfying(task -> assertThat(task).isNotNull());
+        assertThat(pending.getResponse().getContentAsString(StandardCharsets.UTF_8))
+                .contains("event:progress")
+                .contains("understanding_request")
+                .contains("\"elapsedMs\":0");
+        verify(agent, never()).converse(any(), any(), any(), any());
+    }
 
     @Test
     void rejectsAnOversizedTurnBeforeStartingTheStreamOrCallingTheAgent() throws Exception {

@@ -117,9 +117,10 @@ public class StructuredRuleAnswerService implements RuleAnswering {
             AuditedAgentInvocations invocations,
             ObservationRegistry observations,
             MeterRegistry metrics,
-            AnswerEvidenceRefiner evidenceRefiner) {
+            AnswerEvidenceRefiner evidenceRefiner,
+            AgentInvocationDeadline deadline) {
         this.understanding = understanding;
-        this.modelGateway = new AnswerModelGateway(model, rateLimiter, invocations);
+        this.modelGateway = new AnswerModelGateway(model, rateLimiter, invocations, deadline);
         this.questionInterpretation = new AnswerQuestionInterpretationPolicy();
         this.evidenceRetriever = new AnswerEvidenceRetriever(
                 retrieval,
@@ -165,6 +166,43 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                 "rulepilot.answer.question.interpretations", "result", "accepted");
         this.fallbackQuestionInterpretations = metrics.counter(
                 "rulepilot.answer.question.interpretations", "result", "fallback");
+    }
+
+    public StructuredRuleAnswerService(
+            QuestionUnderstanding understanding,
+            HybridRuleSearch retrieval,
+            VisualRulebookPageFactSearch visualFacts,
+            RuleEvidenceLookup evidenceLookup,
+            RuleAnswerModel model,
+            RuleAnswerCache cache,
+            RuleAnswerRateLimiter rateLimiter,
+            RuleDataVersion ruleDataVersion,
+            ConfirmedRulingLookup confirmedRulings,
+            EvidenceVerifier evidenceVerifier,
+            GeneratedContentCritic critic,
+            AssistantRuns runs,
+            AuditedAgentInvocations invocations,
+            ObservationRegistry observations,
+            MeterRegistry metrics,
+            AnswerEvidenceRefiner evidenceRefiner) {
+        this(
+                understanding,
+                retrieval,
+                visualFacts,
+                evidenceLookup,
+                model,
+                cache,
+                rateLimiter,
+                ruleDataVersion,
+                confirmedRulings,
+                evidenceVerifier,
+                critic,
+                runs,
+                invocations,
+                observations,
+                metrics,
+                evidenceRefiner,
+                AgentInvocationDeadline.unbounded());
     }
 
     public StructuredRuleAnswerService(
@@ -325,7 +363,11 @@ public class StructuredRuleAnswerService implements RuleAnswering {
             return new AnswerCreation(run.id(), answer);
         } catch (AgentExecutionStoppedException stopped) {
             runLifecycle.fail(run, "AGENT_" + stopped.reason().name(), "Question workflow stopped by execution budget", stopped);
-            throw stopped;
+            AnswerStatus status = stopped.reason() == AgentExecutionStoppedException.StopReason.TIMEOUT
+                    ? AnswerStatus.MODEL_TIMEOUT
+                    : AnswerStatus.INVALID_MODEL_OUTPUT;
+            return new AnswerCreation(
+                    run.id(), safe(context.documentVersionId(), status, "答疑执行已在应用预算边界安全停止。"));
         } catch (RuntimeException exception) {
             runLifecycle.fail(run, "QUESTION_WORKFLOW_FAILED", "Question workflow failed safely", exception);
             throw exception;

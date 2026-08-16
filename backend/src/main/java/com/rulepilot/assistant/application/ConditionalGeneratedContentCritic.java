@@ -33,15 +33,25 @@ public class ConditionalGeneratedContentCritic implements GeneratedContentCritic
     private final ContentCriticModel model;
     private final AuditedAgentInvocations invocations;
     private final boolean evaluationMode;
+    private final AgentInvocationDeadline deadline;
 
     @Autowired
     public ConditionalGeneratedContentCritic(
             ContentCriticModel model,
             AuditedAgentInvocations invocations,
-            @Value("${rulepilot.critic.evaluation-mode:false}") boolean evaluationMode) {
+            @Value("${rulepilot.critic.evaluation-mode:false}") boolean evaluationMode,
+            AgentInvocationDeadline deadline) {
         this.model = model;
         this.invocations = invocations;
         this.evaluationMode = evaluationMode;
+        this.deadline = deadline;
+    }
+
+    public ConditionalGeneratedContentCritic(
+            ContentCriticModel model,
+            AuditedAgentInvocations invocations,
+            boolean evaluationMode) {
+        this(model, invocations, evaluationMode, AgentInvocationDeadline.unbounded());
     }
 
     /** Compatibility constructor for historical evaluation fixtures; confirmation concurrency is no longer used. */
@@ -98,7 +108,8 @@ public class ConditionalGeneratedContentCritic implements GeneratedContentCritic
                 operation,
                 estimateTokens(request.toString()),
                 successSummary,
-                () -> model.critique(request, ownerUsername),
+                () -> deadline.invoke(
+                        request.assistantRunId(), () -> model.critique(request, ownerUsername)),
                 result -> estimateTokens(result.toString()));
         if (draft == null) {
             throw new IllegalArgumentException("critic output is invalid");

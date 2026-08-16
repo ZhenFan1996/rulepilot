@@ -81,6 +81,8 @@ const {
   answerError,
   answerOutcome,
   agentTrace,
+  answerElapsedSeconds,
+  answerSoftBudgetReached,
   cancelAnswer,
   cancelReadTransport: cancelAnswerReads,
   clearAnswerFeedback,
@@ -449,6 +451,8 @@ onUnmounted(() => {
             :answer-loading="answerLoading"
             :answer-error="answerError"
             :answer-outcome="answerOutcome"
+            :answer-elapsed-seconds="answerElapsedSeconds"
+            :answer-soft-budget-reached="answerSoftBudgetReached"
             :agent-trace="agentTrace"
             :online="online"
             :ruling="ruling"

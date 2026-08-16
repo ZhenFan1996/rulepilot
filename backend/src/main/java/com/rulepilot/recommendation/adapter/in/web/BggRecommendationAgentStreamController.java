@@ -12,8 +12,8 @@ import java.util.Locale;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Profile;
 import org.springframework.core.task.TaskExecutor;
 import org.springframework.http.MediaType;
@@ -28,7 +28,7 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 public class BggRecommendationAgentStreamController {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(BggRecommendationAgentStreamController.class);
-    private static final long STREAM_TIMEOUT_MILLIS = 120_000;
+    private static final long STREAM_TIMEOUT_MILLIS = 25_000;
 
     private final BoardGameRecommendationAgent agent;
     private final BggRecommendationPresentation presentation;
@@ -67,6 +67,9 @@ public class BggRecommendationAgentStreamController {
         emitter.onCompletion(() -> open.set(false));
         emitter.onTimeout(() -> open.set(false));
         emitter.onError(ignored -> open.set(false));
+        sendProgress(emitter, open, new ProgressUpdate(
+                BoardGameRecommendationAgent.ProgressStage.UNDERSTANDING_REQUEST, 0));
+        if (!open.get()) return emitter;
         try {
             String modelConfigurationOwner = principal.getName();
             executor.execute(() -> runConversation(
@@ -91,14 +94,14 @@ public class BggRecommendationAgentStreamController {
                                     request.toSessionTurn(command),
                                     locale,
                                     modelConfigurationOwner,
-                                    update -> sendProgress(emitter, open, update)),
+                                    update -> sendAgentProgress(emitter, open, update)),
                             presentation)
                     : BggRecommendationAgentController.present(
                             agent.converse(
                                     command,
                                     locale,
                                     modelConfigurationOwner,
-                                    update -> sendProgress(emitter, open, update)),
+                                    update -> sendAgentProgress(emitter, open, update)),
                             locale,
                             presentation);
             if (!open.get()) return;
@@ -113,6 +116,11 @@ public class BggRecommendationAgentStreamController {
                     : "recommendation_unavailable";
             sendError(emitter, open, code);
         }
+    }
+
+    private void sendAgentProgress(SseEmitter emitter, AtomicBoolean open, ProgressUpdate update) {
+        if (update.stage() == BoardGameRecommendationAgent.ProgressStage.UNDERSTANDING_REQUEST) return;
+        sendProgress(emitter, open, update);
     }
 
     private void sendProgress(SseEmitter emitter, AtomicBoolean open, ProgressUpdate update) {

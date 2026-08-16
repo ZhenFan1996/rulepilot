@@ -1342,8 +1342,12 @@ describe('GameRecommendationAgent', () => {
     await flushPromises()
     expect(wrapper.get('[role="status"]').text()).toContain('正在桌游目录里查找')
 
-    await vi.advanceTimersByTimeAsync(1300)
+    await vi.advanceTimersByTimeAsync(8_000)
     expect(wrapper.get('[role="status"]').text()).toContain('正在桌游目录里查找')
+    expect(wrapper.get('[data-testid="recommendation-soft-budget"]').text())
+      .toContain('目前还没有足以展示的新候选')
+    expect(wrapper.get('[data-testid="recommendation-soft-budget"]').text())
+      .toContain('还需核对目录事实与匹配取舍')
 
     streamController?.enqueue(encoder.encode(`event: result\ndata: ${JSON.stringify({
       outcome: 'no_match', mode: 'model_assisted', assistantMessage: '还需要再确认一个偏好。',
@@ -1352,5 +1356,6 @@ describe('GameRecommendationAgent', () => {
     streamController?.close()
     await flushPromises()
     expect(wrapper.find('[role="status"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="recommendation-soft-budget"]').exists()).toBe(false)
   })
 })

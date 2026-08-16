@@ -200,6 +200,8 @@ rulepilot:
   answer:
     provider: ${ANSWER_PROVIDER:fake}
     model-provider: ${ANSWER_MODEL_PROVIDER:gemini}
+    agent:
+      timeout: ${ANSWER_AGENT_TIMEOUT:PT30S}
     temperature: ${ANSWER_TEMPERATURE:0.15}
     interpretation-temperature: ${ANSWER_INTERPRETATION_TEMPERATURE:0.0}
     cache-retention: ${ANSWER_CACHE_RETENTION:PT6H}

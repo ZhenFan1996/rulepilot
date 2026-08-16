@@ -141,6 +141,62 @@ describe('useLessonAnswers', () => {
     expect(answers.agentTrace.value).toEqual([])
   })
 
+  it('exposes the eight-second soft boundary and cancels a known server run with the same secure session', async () => {
+    vi.useFakeTimers()
+    const runId = '11111111-1111-4111-8111-111111111111'
+    let answerSignal: AbortSignal | undefined
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input)
+      if (path === '/api/auth/csrf') {
+        return Promise.resolve(Response.json({ headerName: 'X-CSRF-TOKEN', token: 'token' }))
+      }
+      if (path.includes('/answers') && init?.method === 'POST') {
+        answerSignal = init.signal ?? undefined
+        return new Promise<Response>((_resolve, reject) => {
+          answerSignal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')))
+        })
+      }
+      if (path.includes('/assistant-runs/latest')) {
+        return Promise.resolve(Response.json({
+          ...answerRunDetails('document-1', 'readRulePages'),
+          run: {
+            ...answerRunDetails('document-1', 'readRulePages').run,
+            id: runId,
+            createdAt: new Date().toISOString(),
+          },
+        }))
+      }
+      if (path === `/api/v1/assistant-runs/${runId}/cancellation`) {
+        return Promise.resolve(new Response(null, { status: 202 }))
+      }
+      return Promise.resolve(new Response(null, { status: 404 }))
+    }))
+    const answers = createAnswers()
+    answers.question.value = 'What if the prior timing clause applies?'
+
+    const pending = answers.submitQuestion(answers.question.value, null)
+    expect(answers.answerLoading.value).toBe(true)
+    expect(answers.answerElapsedSeconds.value).toBe(0)
+    expect(answers.answerSoftBudgetReached.value).toBe(false)
+    await vi.advanceTimersByTimeAsync(8_000)
+
+    expect(answers.answerElapsedSeconds.value).toBe(8)
+    expect(answers.answerSoftBudgetReached.value).toBe(true)
+    answers.cancelAnswer()
+    await vi.advanceTimersByTimeAsync(0)
+    await pending
+
+    expect(answerSignal?.aborted).toBe(true)
+    expect(vi.mocked(fetch).mock.calls).toContainEqual([
+      `/api/v1/assistant-runs/${runId}/cancellation`,
+      expect.objectContaining({
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'X-CSRF-TOKEN': 'token' },
+      }),
+    ])
+  })
+
   it('keeps completed audit identities outside the player answer state', async () => {
     const internalId = '11111111-1111-4111-8111-111111111111'
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
