@@ -1215,7 +1215,6 @@ class BoardGameRecommendationAgentPaidCanaryTest {
             values.forEach(value -> indexedNames.put(
                     value.ranking().sourceName().toLowerCase(Locale.ROOT),
                     value.ranking().bggId()));
-            indexedNames.put("河市集", 101);
             indexedNames.put("河市集（river market）", 101);
             names = Map.copyOf(indexedNames);
             this.candidateIds = List.copyOf(candidateIds);
