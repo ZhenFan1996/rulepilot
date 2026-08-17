@@ -47,7 +47,7 @@ class VisualTeachingCatalogPaidCanaryTest {
     private final ObjectMapper json = JsonMapper.builder().findAndAddModules().build();
 
     @Test
-    void recordsARealDensePageWithBoundRuleGroupsAndUnambiguousQuantityEnums() throws Exception {
+    void recordsARealDensePageWithBoundRuleGroupsAndDiscriminatedQuantities() throws Exception {
         assumeTrue("true".equalsIgnoreCase(System.getenv("RULEPILOT_VISUAL_TEACHING_CATALOG_CANARY")));
         Path root = Path.of(System.getProperty("user.dir")).getParent();
         Path pdf = root.resolve(environmentOrDefault(
@@ -93,6 +93,10 @@ class VisualTeachingCatalogPaidCanaryTest {
         rawPage.path("quantityObservations").forEach(observation -> {
             assertThat(observation.has("ruleGroupIndex")).isTrue();
             assertThat(observation.has("ruleGroupIdentifier")).isFalse();
+            assertThat(observation.path("kind").asText()).isIn(
+                    "PER_VARIANT_EXACT", "TOTAL_EXACT", "REQUIRES_PAGE_INSPECTION");
+            assertThat(observation.has("quantifierScope")).isFalse();
+            assertThat(observation.has("resolution")).isFalse();
         });
         assertThat(rawPage.path("ruleGroupInventoryComplete").asBoolean()).isTrue();
 
@@ -133,7 +137,7 @@ class VisualTeachingCatalogPaidCanaryTest {
         artifact.put("rawPairsProjectedExactly", true);
         Files.createDirectories(root.resolve(".local/agent-evaluation"));
         Files.writeString(
-                root.resolve(".local/agent-evaluation/visual-teaching-catalog-v4-paid-canary.json"),
+                root.resolve(".local/agent-evaluation/visual-teaching-catalog-v5-paid-canary.json"),
                 json.writerWithDefaultPrettyPrinter().writeValueAsString(artifact) + "\n",
                 StandardCharsets.UTF_8);
     }
@@ -143,7 +147,7 @@ class VisualTeachingCatalogPaidCanaryTest {
                 configuration,
                 new FakeVisualRulebookPageCatalogModel(),
                 new ClassPathResource("prompts/visual-page-catalog-v2-icon-inventory-system.txt"),
-                new ClassPathResource("prompts/visual-page-teaching-catalog-v4-bound-rule-groups-system.txt"),
+                new ClassPathResource("prompts/visual-page-teaching-catalog-v5-discriminated-quantities-system.txt"),
                 new ClassPathResource("prompts/visual-page-progressive-teaching-start-v4-source-contract-system.txt"),
                 new ClassPathResource("prompts/visual-icon-localization-v2-system.txt"),
                 new ClassPathResource("prompts/visual-icon-crop-review-v4-system.txt"),

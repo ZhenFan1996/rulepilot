@@ -2,6 +2,32 @@ name: Production recommendation journey
 
 on:
   workflow_dispatch:
+    inputs:
+      target_bgg_id:
+        description: Exact BGG base-game id
+        required: true
+        type: string
+        default: '230802'
+      target_names:
+        description: Literal game-name aliases separated by |
+        required: true
+        type: string
+        default: '花砖物语|Azul'
+      recommendation_prompt:
+        description: Natural-language request that must produce the selected game
+        required: true
+        type: string
+        default: '我今晚已经决定玩花砖物语（Azul），第一次开桌。请直接帮我找到这款，不要换成相似游戏；找到后我想接着读规则书、听讲解，再问几个问题。'
+      rule_question:
+        description: Question asked after the cited lesson becomes readable
+        required: true
+        type: string
+        default: '我从一个工厂展示板拿走同色砖以后，剩下的砖要放到哪里？请用日常的话简短回答，并引用规则书页码。'
+      require_fresh_import:
+        description: Fail if production reuses an existing imported rulebook
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -25,6 +51,11 @@ jobs:
       DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
       DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
       RULEPILOT_PUBLIC_URL: https://rulepilot.cn
+      RULEPILOT_RECOMMENDATION_TARGET_BGG_ID: ${{ inputs.target_bgg_id }}
+      RULEPILOT_RECOMMENDATION_TARGET_NAMES: ${{ inputs.target_names }}
+      RULEPILOT_RECOMMENDATION_PROMPT: ${{ inputs.recommendation_prompt }}
+      RULEPILOT_RECOMMENDATION_RULE_QUESTION: ${{ inputs.rule_question }}
+      RULEPILOT_RECOMMENDATION_REQUIRE_FRESH_IMPORT: ${{ inputs.require_fresh_import }}
     steps:
       - uses: actions/checkout@v6
         with:

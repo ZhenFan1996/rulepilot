@@ -3,11 +3,29 @@ import { writeFile } from 'node:fs/promises'
 import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test'
 
 const enabled = process.env.RULEPILOT_PRODUCTION_RECOMMENDATION_JOURNEY === 'true'
-const TARGET_BGG_ID = 230802
-const TARGET_NAME = /花砖物语|Azul/i
-const RECOMMENDATION_PROMPT = '我今晚已经决定玩花砖物语（Azul），第一次开桌。请直接帮我找到这款，不要换成相似游戏；找到后我想接着读规则书、听讲解，再问几个问题。'
+const TARGET_BGG_ID = positiveIntegerEnvironment('RULEPILOT_RECOMMENDATION_TARGET_BGG_ID', 230802)
+const TARGET_NAME = aliasPattern(process.env.RULEPILOT_RECOMMENDATION_TARGET_NAMES ?? '花砖物语|Azul')
+const RECOMMENDATION_PROMPT = process.env.RULEPILOT_RECOMMENDATION_PROMPT
+  ?? '我今晚已经决定玩花砖物语（Azul），第一次开桌。请直接帮我找到这款，不要换成相似游戏；找到后我想接着读规则书、听讲解，再问几个问题。'
 const PRESERVED_DRAFT = '下次我还想给完全没玩过桌游的家人找一款更轻松的。'
-const RULE_QUESTION = '我从一个工厂展示板拿走同色砖以后，剩下的砖要放到哪里？请用日常的话简短回答，并引用规则书页码。'
+const RULE_QUESTION = process.env.RULEPILOT_RECOMMENDATION_RULE_QUESTION
+  ?? '我从一个工厂展示板拿走同色砖以后，剩下的砖要放到哪里？请用日常的话简短回答，并引用规则书页码。'
+const REQUIRE_FRESH_IMPORT = process.env.RULEPILOT_RECOMMENDATION_REQUIRE_FRESH_IMPORT === 'true'
+
+function positiveIntegerEnvironment(name: string, fallback: number) {
+  const raw = process.env[name]
+  if (raw === undefined || raw.trim() === '') return fallback
+  if (!/^[1-9]\d*$/.test(raw)) throw new Error(`${name} must be a positive integer`)
+  const value = Number(raw)
+  if (!Number.isSafeInteger(value)) throw new Error(`${name} must be a safe positive integer`)
+  return value
+}
+
+function aliasPattern(raw: string) {
+  const aliases = raw.split('|').map(alias => alias.trim()).filter(Boolean)
+  if (aliases.length === 0) throw new Error('At least one target game name is required')
+  return new RegExp(aliases.map(alias => alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'), 'i')
+}
 
 interface RulebookCandidate {
   title: string
@@ -389,6 +407,14 @@ test('requires current publication telemetry for fresh imports and stale-evidenc
   })).toBe(false)
 })
 
+test('production target aliases are literal and cannot widen the title match', () => {
+  const pattern = aliasPattern('奋进号：深海|Endeavor: Deep Sea (2024)')
+
+  expect('奋进号：深海').toMatch(pattern)
+  expect('Endeavor: Deep Sea (2024)').toMatch(pattern)
+  expect('Endeavor: Deep Sea 2024').not.toMatch(pattern)
+})
+
 test('recommendation becomes one readable, taught, and answerable production journey', async ({ page }) => {
   test.skip(!enabled, 'Runs only through the credentialed production recommendation workflow')
   test.setTimeout(40 * 60_000)
@@ -556,6 +582,9 @@ test('recommendation becomes one readable, taught, and answerable production jou
     expect(importResponse.status()).toBe(202)
     const launchedJob = await importResponse.json() as ImportJob
     report.importReused = launchedJob.reused
+    if (REQUIRE_FRESH_IMPORT) {
+      expect(launchedJob.reused, 'The requested fresh-import journey reused an existing rulebook').toBe(false)
+    }
     report.teachingEvidenceRefreshRequested = launchedJob.reused
       && launchedJob.teachingPreparationRunId === null
       && (launchedJob.teachingHandoffState === 'WAITING_FOR_DOCUMENT'
