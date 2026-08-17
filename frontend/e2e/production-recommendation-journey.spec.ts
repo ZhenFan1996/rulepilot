@@ -845,7 +845,10 @@ test('recommendation becomes one readable, taught, and answerable production jou
     await roleSwitcher.getByRole('button', { name: '继续推荐' }).click()
     await expect(composer).toBeVisible()
     await expect(composer).toHaveValue(PRESERVED_DRAFT)
-    await expect(targetDetailsButton).toBeVisible()
+    await expect.poll(() => targetDetailsButton.count(), {
+      message: 'The recommendation workspace did not restore a matching verified game card',
+    }).toBeGreaterThan(0)
+    await expect(targetDetailsButton.first()).toBeVisible()
     report.recommendationRestored = true
     await roleSwitcher.getByRole('button', { name: '规则答疑' }).click()
     await expect(answerWorkspace.locator('#lesson-answer-evidence-title')).toBeVisible()
