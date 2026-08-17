@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 
 import type { CandidateComparison } from '@/components/gameRecommendationTypes'
+import SafeMarkdown from '@/components/SafeMarkdown.vue'
 import { useLocale } from '@/lib/locale'
 
 const props = defineProps<{
@@ -53,11 +54,11 @@ function candidateName(bggId: number) {
         <tbody>
           <tr v-for="axis in comparison.axes" :key="axis.subject" class="comparison-axis-row">
             <th scope="row" class="comparison-axis-name">
-              <span class="comparison-axis-label">{{ axis.label }}</span>
+              <SafeMarkdown :source="axis.label" class="comparison-axis-label" />
               <span class="comparison-capability">{{ labels[axis.capability] }}</span>
             </th>
             <td v-for="cell in axis.cells" :key="`${axis.subject}-${cell.bggId}`" class="comparison-cell" :aria-label="`${candidateName(cell.bggId)} · ${axis.label}`">
-              <span v-if="cell.status === 'observed'" class="comparison-observation">{{ cell.value }}</span>
+              <SafeMarkdown v-if="cell.status === 'observed'" :source="cell.value" class="comparison-observation" />
               <span v-else class="comparison-unknown"><span aria-hidden="true" class="comparison-unknown-mark">?</span>{{ labels.unknown }}</span>
             </td>
           </tr>

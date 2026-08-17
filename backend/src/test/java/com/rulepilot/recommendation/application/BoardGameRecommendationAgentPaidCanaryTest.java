@@ -140,6 +140,164 @@ class BoardGameRecommendationAgentPaidCanaryTest {
     }
 
     @Test
+    void carriesAwardWinningClassicsThroughCorrectionAndComparisonWithoutRediscovery() throws Exception {
+        assumeTrue("true".equalsIgnoreCase(System.getenv("RULEPILOT_RECOMMENDATION_PAID_CANARY")));
+        String provider = environment("RULEPILOT_RECOMMENDATION_CANARY_PROVIDER", "qwen")
+                .toLowerCase(Locale.ROOT);
+        String prefix = provider.toUpperCase(Locale.ROOT);
+        Capture capture = new Capture(provider, environment(prefix + "_MODEL", null));
+        BoardGameRecommendationModel model = model(
+                provider,
+                environment(prefix + "_API_KEY", null),
+                environment(prefix + "_BASE_URL", null),
+                environment(prefix + "_MODEL", null),
+                capture);
+        AtomicInteger discoveryCalls = new AtomicInteger();
+        List<DiscoveryRequest> discoveryRequests = new ArrayList<>();
+        var properties = new BoardGameRecommendationProperties(
+                8, 3, new BigDecimal("0.66"), Duration.ofSeconds(30));
+        var agent = new BoardGameRecommendationAgent(
+                model,
+                new BoardGameRecommendationTools(
+                        new CanaryCatalog(), classicAwardDiscovery(discoveryCalls, discoveryRequests)),
+                new BoardGameRecommendationSelector(properties),
+                properties,
+                json);
+
+        List<Map<String, Object>> visibleTurns = new ArrayList<>();
+        try {
+            String openingText = "你好，我想玩获过奖的经典老游戏";
+            List<DialogueMessage> transcript = new ArrayList<>();
+            transcript.add(new DialogueMessage("user", openingText));
+            List<Map<String, Object>> openingProgress = new ArrayList<>();
+            int openingRawStart = capture.callCount();
+            long openingStarted = System.nanoTime();
+            var opening = agent.converse(
+                    new ConversationRequest(
+                            RecommendationProfile.empty(),
+                            openingText,
+                            List.of(),
+                            List.copyOf(transcript),
+                            null,
+                            List.of(),
+                            List.of()),
+                    "zh-CN",
+                    update -> openingProgress.add(progress(update, openingStarted)));
+            visibleTurns.add(visible(
+                    "award-winning-classics-opening",
+                    opening,
+                    elapsed(openingStarted),
+                    openingProgress,
+                    openingRawStart,
+                    capture.callCount()));
+
+            assertUsefulClassicRecommendation(opening);
+            assertThat(opening.harness().modelCalls()).isEqualTo(2);
+            assertThat(opening.harness().catalogCalls()).isEqualTo(2);
+            assertThat(opening.harness().webResearchCalls()).isEqualTo(1);
+            assertTerminalProsePreserved(capture.lastToolCall(), opening);
+            assertRecommendationNarrativesPreserved(capture.lastToolCall(), opening);
+
+            List<KnownGame> rememberedGames = knownGames(opening);
+            List<Integer> shownIds = shownIds(opening);
+            transcript.add(new DialogueMessage("assistant", opening.assistantMessage()));
+
+            String correctionText = "那更适合三个人呢？";
+            transcript.add(new DialogueMessage("user", correctionText));
+            List<Map<String, Object>> correctionProgress = new ArrayList<>();
+            int correctionRawStart = capture.callCount();
+            long correctionStarted = System.nanoTime();
+            var correction = agent.converse(
+                    new ConversationRequest(
+                            opening.profile(),
+                            correctionText,
+                            List.of(),
+                            List.copyOf(transcript),
+                            null,
+                            rememberedGames,
+                            shownIds),
+                    "zh-CN",
+                    update -> correctionProgress.add(progress(update, correctionStarted)));
+            visibleTurns.add(visible(
+                    "three-player-correction",
+                    correction,
+                    elapsed(correctionStarted),
+                    correctionProgress,
+                    correctionRawStart,
+                    capture.callCount()));
+
+            assertThat(correction.harness().catalogCalls())
+                    .as("the follow-up should restore the known cards once, not discover them again")
+                    .isEqualTo(1);
+            assertThat(correction.harness().webResearchCalls()).isZero();
+            assertThat(correction.harness().modelCalls()).isLessThanOrEqualTo(2);
+            assertThat(correction.harness().actions())
+                    .containsOnlyOnce("RESTORE_KNOWN_BGG_CANDIDATES")
+                    .noneMatch(action -> action.equals("DISCOVER_CANDIDATES")
+                            || action.equals("SEARCH_BGG_BY_NAME")
+                            || action.startsWith("FALLBACK_")
+                            || action.startsWith("REJECTED_"));
+            assertTerminalProsePreserved(capture.lastToolCall(), correction);
+
+            rememberedGames = mergeKnownGames(rememberedGames, correction);
+            shownIds = mergeShownIds(shownIds, correction);
+            transcript.add(new DialogueMessage("assistant", correction.assistantMessage()));
+
+            String comparisonText = "把你刚才最推荐的两款放在一起比较：三个人玩时的时长、复杂度和机制差别是什么？直接告诉我怎么选。";
+            transcript.add(new DialogueMessage("user", comparisonText));
+            List<Map<String, Object>> comparisonProgress = new ArrayList<>();
+            int comparisonRawStart = capture.callCount();
+            long comparisonStarted = System.nanoTime();
+            var comparison = agent.converse(
+                    new ConversationRequest(
+                            correction.profile(),
+                            comparisonText,
+                            List.of(),
+                            List.copyOf(transcript),
+                            null,
+                            rememberedGames,
+                            shownIds),
+                    "zh-CN",
+                    update -> comparisonProgress.add(progress(update, comparisonStarted)));
+            visibleTurns.add(visible(
+                    "comparison-followup",
+                    comparison,
+                    elapsed(comparisonStarted),
+                    comparisonProgress,
+                    comparisonRawStart,
+                    capture.callCount()));
+
+            assertThat(comparison.outcome()).isEqualTo(Outcome.CONVERSATION);
+            assertThat(comparison.comparison()).isNotNull();
+            assertThat(comparison.comparison().candidates()).hasSize(2);
+            assertThat(comparison.harness().modelCalls()).isEqualTo(1);
+            assertThat(comparison.harness().catalogCalls()).isEqualTo(1);
+            assertThat(comparison.harness().webResearchCalls()).isZero();
+            assertThat(comparison.harness().actions())
+                    .containsOnlyOnce("RESTORE_KNOWN_BGG_CANDIDATES")
+                    .contains("COMPARE_CANDIDATES")
+                    .noneMatch(action -> action.equals("DISCOVER_CANDIDATES")
+                            || action.equals("SEARCH_BGG_BY_NAME")
+                            || action.startsWith("FALLBACK_")
+                            || action.startsWith("REJECTED_"));
+            assertTerminalProsePreserved(capture.lastToolCall(), comparison);
+            assertThat(discoveryCalls).hasValue(1);
+            assertThat(discoveryRequests).hasSize(1);
+            assertThat(visibleTurns)
+                    .allSatisfy(turn -> assertThat((long) turn.get("progressTtfbMs"))
+                            .as("the existing progress stream must yield before the final assistant result")
+                            .isLessThanOrEqualTo(100));
+
+            writeArtifact(capture, visibleTurns, null);
+        } catch (Throwable failure) {
+            writeArtifact(capture, visibleTurns, failure.getClass().getSimpleName());
+            throw failure;
+        } finally {
+            agent.stopBoundedCalls();
+        }
+    }
+
+    @Test
     void publishesAPlayerNamedBilingualTargetInTheResolvingTurn() throws Exception {
         assumeTrue("true".equalsIgnoreCase(System.getenv("RULEPILOT_RECOMMENDATION_PAID_CANARY")));
         String provider = environment("RULEPILOT_RECOMMENDATION_CANARY_PROVIDER", "qwen")
@@ -1172,10 +1330,27 @@ class BoardGameRecommendationAgentPaidCanaryTest {
             String turn,
             BoardGameRecommendationAgent.ConversationResponse response,
             long latencyMs) {
+        return visible(turn, response, latencyMs, List.of(), 0, 0);
+    }
+
+    private Map<String, Object> visible(
+            String turn,
+            BoardGameRecommendationAgent.ConversationResponse response,
+            long latencyMs,
+            List<Map<String, Object>> progress,
+            int rawModelCallStart,
+            int rawModelCallEnd) {
         Map<String, Object> value = new LinkedHashMap<>();
         value.put("turn", turn);
         value.put("outcome", response.outcome().name());
         value.put("latencyMs", latencyMs);
+        value.put("assistantResultTtfbMs", latencyMs);
+        value.put("progressTtfbMs", progress.isEmpty() ? latencyMs : progress.getFirst().get("observedAtMs"));
+        value.put("progress", List.copyOf(progress));
+        value.put("rawModelCallOrdinals", java.util.stream.IntStream
+                .range(rawModelCallStart + 1, rawModelCallEnd + 1)
+                .boxed()
+                .toList());
         value.put("assistantMessage", response.assistantMessage());
         value.put("assistantMessageCharacters", response.assistantMessage().codePointCount(0, response.assistantMessage().length()));
         value.put("profile", response.profile());
@@ -1227,6 +1402,47 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                             .toList()));
         }
         return Map.copyOf(value);
+    }
+
+    private Map<String, Object> progress(
+            BoardGameRecommendationAgent.ProgressUpdate update,
+            long turnStartedAt) {
+        return Map.of(
+                "stage", update.stage().name(),
+                "agentElapsedMs", update.elapsedMs(),
+                "observedAtMs", elapsed(turnStartedAt));
+    }
+
+    private List<KnownGame> knownGames(BoardGameRecommendationAgent.ConversationResponse response) {
+        return response.games().stream()
+                .map(entry -> new KnownGame(
+                        entry.game().ranking().bggId(),
+                        entry.game().details().name(),
+                        entry.game().ranking().sourceName()))
+                .toList();
+    }
+
+    private List<KnownGame> mergeKnownGames(
+            List<KnownGame> remembered,
+            BoardGameRecommendationAgent.ConversationResponse response) {
+        Map<Integer, KnownGame> merged = new LinkedHashMap<>();
+        remembered.forEach(game -> merged.put(game.bggId(), game));
+        knownGames(response).forEach(game -> merged.put(game.bggId(), game));
+        return List.copyOf(merged.values());
+    }
+
+    private List<Integer> shownIds(BoardGameRecommendationAgent.ConversationResponse response) {
+        return response.games().stream()
+                .map(entry -> entry.game().ranking().bggId())
+                .toList();
+    }
+
+    private List<Integer> mergeShownIds(
+            List<Integer> remembered,
+            BoardGameRecommendationAgent.ConversationResponse response) {
+        Set<Integer> merged = new LinkedHashSet<>(remembered);
+        merged.addAll(shownIds(response));
+        return List.copyOf(merged);
     }
 
     private List<String> textValues(JsonNode values) {
@@ -1391,6 +1607,10 @@ class BoardGameRecommendationAgentPaidCanaryTest {
         private synchronized ToolCall lastToolCall() {
             if (toolCalls.isEmpty()) throw new AssertionError("missing captured tool call");
             return toolCalls.getLast();
+        }
+
+        private synchronized int callCount() {
+            return calls.size();
         }
     }
 

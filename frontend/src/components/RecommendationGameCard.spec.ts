@@ -58,4 +58,29 @@ describe('RecommendationGameCard', () => {
     await wrapper.get('button:nth-of-type(2)').trigger('click')
     expect(wrapper.emitted('introduce')).toEqual([[game.bggId, game.name, 'en']])
   })
+
+  it('renders grounded reasons and tradeoffs as safe readable markdown', () => {
+    const wrapper = mount(RecommendationGameCard, {
+      props: {
+        entry: {
+          game,
+          matches: [],
+          reasons: [
+            { kind: 'bgg_fact', text: '**2–5 players** are listed.', sourceIndexes: [] },
+            { kind: 'preference_inference', text: 'Fits your *short setup* preference.', sourceIndexes: [] },
+          ],
+          tradeoffs: ['Read the [language note](https://example.test/language).', '[unsafe](javascript:alert(1))'],
+        },
+        sources: [],
+        loading: false,
+        responseLocale: 'en',
+      },
+    })
+
+    expect(wrapper.get('strong').text()).toBe('2–5 players')
+    expect(wrapper.get('em').text()).toBe('short setup')
+    expect(wrapper.get('a').attributes('href')).toBe('https://example.test/language')
+    expect(wrapper.find('a[href^="javascript:"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('**2–5 players**')
+  })
 })

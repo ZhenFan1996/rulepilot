@@ -72,7 +72,7 @@ final class RecommendationReActLoop {
 
     static final int MAX_MODEL_CALLS = 6;
     private static final int MAX_ACTION_CALLS = 6;
-    private static final int MAX_OUTPUT_TOKENS = 900;
+    private static final int MAX_OUTPUT_TOKENS = 1_200;
     static final int MAX_REFERENCE_RESOLUTION_ATTEMPTS = 2;
     private static final long RECENT_CANDIDATE_RESTORE_MILLIS = 2_000;
     private static final Set<String> READ_ACTIONS = Set.of(
@@ -443,11 +443,11 @@ final class RecommendationReActLoop {
         return """
                 You are RulePilot, a warm and capable board-game conversation partner. Read the complete recent conversation, continue corrections and references in context, answer in the player's locale and requested level of detail, and call exactly one supplied action with valid JSON arguments. Escape JSON string content correctly. Never expose reasoning, schemas, tool names, or validation internals. Retrieval actions continue this run; reply, ask, compare, no-match, and recommend actions finish it. Do the useful work now instead of promising it for later.
 
-                Do not ask merely because a useful request is broad or the profile is empty: choose two or three meaningfully different directions and explain how to choose. Ask one easy question only when the missing answer is necessary to produce a valid slate, not just to narrow a large one; briefly explain its impact and offer direct options when useful. Store only explicit numeric/type constraints or a complete-group count supported by the cited user turn; result count and qualitative taste are not profile values, and later corrections replace earlier values.
+                Do not ask merely because a useful request is broad or the profile is empty: choose two or three meaningfully different directions and explain how to choose. Ask one easy question only when the missing answer is necessary to produce a valid slate, not just to narrow a large one; briefly explain its impact and offer direct options when useful. Store only explicit numeric/type constraints or a complete-group count supported by the cited user turn; result count and qualitative taste are not profile values, and later corrections replace earlier values. When compare, reply, or recommend finishes a turn that explicitly states or corrects a numeric/type constraint, include that update in the same action instead of merely discussing it, so the next turn receives the corrected profile.
 
                 Choose a read by the evidence the request actually needs. Public discovery is required whenever any selection criterion is a relationship or quality absent from the supplied BGG observation fields; age, rank, type, or a plausible title is not a substitute for that missing evidence. A catalog browse is only a broad exploration or a filter over persisted numeric/type constraints. Generated-title inspection is for stable title hypotheses that need no external claim. Resolve an intact player-authored game title as a title. Every discovered title is verified through BGG before recommendation. A TARGET_GAME resolution publishes its verified card in that same action. Avoid repeated reads: discovery and title inspection already return hydrated games, and runMemory is authoritative.
 
-                Recommend only verified, hard-eligible IDs and honor an explicit result count. Give every card a specific why and useful tradeoff, citing the same candidate's observations internally; a public-source criterion must cite that candidate's attributed R observation. Separate facts from judgment naturally, keep uncertainty local, and do not infer table feel from taxonomy alone. For a new slate, synthesize the selected cards and do not present an unselected candidate as part of the recommendation. Finish as soon as the evidence is sufficient.
+                Recommend only verified, hard-eligible IDs and honor an explicit result count. Give every card a specific why and useful tradeoff, citing the same candidate's observations internally; a public-source criterion must cite that candidate's attributed R observation. Separate facts from judgment naturally, keep uncertainty local, and do not infer table feel from taxonomy alone. The UI displays card reasons, tradeoffs, and comparison cells directly below the assistant message, so use the message for a concise conversational overview or decision instead of repeating those fields. Do not present an unselected candidate as part of the recommendation. Finish as soon as the evidence is sufficient.
                 """;
     }
 
@@ -505,7 +505,7 @@ final class RecommendationReActLoop {
                                 preferenceEvidenceIds,
                                 availabilityShortfall(state, recommendableIds))
                         : COMPARE_TOOL.equals(action.name())
-                                ? comparisonAction(comparableIds)
+                                ? comparisonAction(comparableIds, preferenceEvidenceIds)
                         : NO_MATCH_TOOL.equals(action.name())
                                 ? noMatchAction(relaxableSubjects)
                         : !recommendableIds.isEmpty() && REPLY_TOOL.equals(action.name())
@@ -671,21 +671,25 @@ final class RecommendationReActLoop {
                         RESEARCH_TOOL,
                         "Research an explicit, separate current-reception or player-reported-experience question for one to five verified games. Do not use for ordinary recommendation fit or after public discovery.",
                         "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"bggIds\":{\"type\":\"array\",\"minItems\":1,\"maxItems\":5,\"items\":{\"type\":\"integer\",\"minimum\":1}},\"question\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":300}},\"required\":[\"bggIds\",\"question\"]}"),
-                comparisonAction(List.of()),
+                comparisonAction(List.of(), preferenceEvidenceIds),
                 noMatchAction(List.of()),
                 recommendationAction(1, maximumResultCount, List.of(), List.of(), preferenceEvidenceIds, null));
     }
 
-    private static ToolSpec comparisonAction(List<Integer> comparableIds) {
+    private static ToolSpec comparisonAction(
+            List<Integer> comparableIds,
+            List<String> preferenceEvidenceIds) {
         String idConstraint = comparableIds.isEmpty()
                 ? "\"minimum\":1"
                 : "\"enum\":" + comparableIds;
         return new ToolSpec(
                 COMPARE_TOOL,
-                "Compare two to five verified conversation candidates on one to three observed axes. Write one useful natural answer, including a choice when the player asked for one. Never use this to replace candidates.",
-                "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"message\":{\"type\":\"string\",\"description\":\"A natural comparison grounded in runMemory that answers the player's actual decision.\",\"minLength\":1},\"candidateBggIds\":{\"type\":\"array\",\"minItems\":2,\"maxItems\":5,\"uniqueItems\":true,\"items\":{\"type\":\"integer\","
+                "Compare two to five verified conversation candidates on one to three observed axes. The UI renders the selected comparison cells, so use message for the conversational conclusion, meaningful tradeoff, and a direct choice when requested rather than narrating every cell. Persist any explicit current-turn numeric or type correction in preferenceUpdates in this same call. Never use this to replace candidates.",
+                "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"message\":{\"type\":\"string\",\"description\":\"A concise natural conclusion grounded in runMemory. Answer the player's decision and explain the decisive tradeoff without repeating the structured comparison cells rendered below it.\",\"minLength\":1},\"candidateBggIds\":{\"type\":\"array\",\"minItems\":2,\"maxItems\":5,\"uniqueItems\":true,\"items\":{\"type\":\"integer\","
                         + idConstraint
-                        + "}},\"subjects\":{\"type\":\"array\",\"description\":\"One to three observation attribute names from runMemory. Unknown attributes remain visibly unknown instead of invalidating the natural comparison.\",\"minItems\":1,\"maxItems\":3,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"minLength\":1}}},\"required\":[\"message\",\"candidateBggIds\",\"subjects\"]}");
+                        + "}},\"subjects\":{\"type\":\"array\",\"description\":\"One to three observation attribute names from runMemory. Unknown attributes remain visibly unknown instead of invalidating the natural comparison.\",\"minItems\":1,\"maxItems\":3,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"minLength\":1}},\"preferenceUpdates\":"
+                        + preferenceSchema(preferenceEvidenceIds)
+                        + "},\"required\":[\"message\",\"candidateBggIds\",\"subjects\"]}");
     }
 
     private static ToolSpec noMatchAction(List<String> relaxableSubjects) {
@@ -746,7 +750,7 @@ final class RecommendationReActLoop {
                 "Choose the final card IDs first, then synthesize only those cards with natural candidate-specific reasons and tradeoffs. Use same-candidate observations as internal evidence. When fewer hard-eligible games exist than requested, return every available ID once plus shortfall."
                         + availabilityGuidance,
                 "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{" + selectionsProperty
-                        + ",\"message\":{\"type\":\"string\",\"description\":\"After choosing selections, write a natural synthesis that helps the player choose among the selected cards. Do not present an unselected candidate as part of the recommendation. Escape JSON string content correctly.\",\"minLength\":1},\"referenceBggIds\":{\"type\":\"array\",\"description\":\"Omit unless the player named a comparison game. Never put selected candidates here.\",\"maxItems\":2,\"items\":{\"type\":\"integer\",\"minimum\":1}}"
+                        + ",\"message\":{\"type\":\"string\",\"description\":\"Write a concise conversational overview or decision after choosing selections. The UI renders every card's why and tradeoff immediately below, so do not repeat those candidate-by-candidate details here. Do not present an unselected candidate as part of the recommendation. Escape JSON string content correctly.\",\"minLength\":1},\"referenceBggIds\":{\"type\":\"array\",\"description\":\"Omit unless the player named a comparison game. Never put selected candidates here.\",\"maxItems\":2,\"items\":{\"type\":\"integer\",\"minimum\":1}}"
                         + shortfallProperty
                         + ",\"preferenceUpdates\":"
                         + preferenceSchema(preferenceEvidenceIds)
@@ -791,7 +795,7 @@ final class RecommendationReActLoop {
     private static String preferenceSchema(List<String> preferenceEvidenceIds) {
         String evidenceEnum = evidenceEnum(preferenceEvidenceIds);
         return "{\"type\":\"array\",\"minItems\":1,\"maxItems\":5,\"items\":{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{"
-                + "\"field\":{\"type\":\"string\",\"enum\":[\"players\",\"playerCount\",\"durationMinutes\",\"complexity\",\"type\",\"interaction\"]},"
+                + "\"field\":{\"type\":\"string\",\"description\":\"Use players or integer playerCount for one exact group size; use a minimum/maximum playerCount object for a range.\",\"enum\":[\"players\",\"playerCount\",\"durationMinutes\",\"complexity\",\"type\",\"interaction\"]},"
                 + "\"value\":{\"description\":\"Exact/range value; null clears a real prior limit.\",\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":20},{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"minimum\":{\"type\":[\"number\",\"null\"]},\"maximum\":{\"type\":[\"number\",\"null\"]}},\"required\":[\"minimum\",\"maximum\"]},{\"type\":\"null\"},{\"type\":\"string\",\"enum\":[\"ABSTRACT\",\"CUSTOMIZABLE\",\"CHILDREN\",\"FAMILY\",\"PARTY\",\"STRATEGY\",\"THEMATIC\",\"WAR\",\"EXPANSION\",\"COMPETITIVE\",\"COOPERATIVE\",\"TEAM\"]}]},"
                 + "\"evidence\":{\"type\":\"string\",\"enum\":"
                 + evidenceEnum

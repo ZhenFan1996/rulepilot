@@ -125,6 +125,11 @@ interface ImportMilestoneObservation {
   teachingHandoffLaunchedMs: number | null
 }
 
+interface CsrfToken {
+  headerName: string
+  token: string
+}
+
 interface FirstCitedLessonObservation {
   teachingPreparationStartedMs: number
   firstCitedLessonMs: number
@@ -274,6 +279,39 @@ async function waitForCompletedImport(
     await new Promise(resolve => setTimeout(resolve, 500))
   }
   throw new Error(`Official import did not complete; latest stage was ${latest?.stage ?? 'UNKNOWN'}`)
+}
+
+async function retryFailedReusedTeaching(
+  request: APIRequestContext,
+  job: ImportJob,
+): Promise<ImportJob> {
+  if (!job.reused || !job.teachingPreparationRunId) return job
+
+  const runResponse = await request.get(
+    `/api/v1/assistant-runs/${encodeURIComponent(job.teachingPreparationRunId)}`,
+  )
+  expect([200, 404], `Existing teaching preparation returned HTTP ${runResponse.status()}`)
+    .toContain(runResponse.status())
+  if (!runResponse.ok()) return job
+
+  const existing = await runResponse.json() as RunDetailsResponse
+  if (existing.run.state !== 'FAILED') return job
+
+  const csrfResponse = await request.get('/api/auth/csrf')
+  expect(csrfResponse.ok(), `CSRF token returned HTTP ${csrfResponse.status()}`).toBe(true)
+  const csrf = await csrfResponse.json() as CsrfToken
+  const retryResponse = await request.post(
+    `/api/v1/documents/official-imports/${encodeURIComponent(job.id)}/teaching-retry`,
+    {
+      headers: { [csrf.headerName]: csrf.token },
+      data: { expectedPreparationRunId: job.teachingPreparationRunId },
+    },
+  )
+  expect(retryResponse.status(), 'The failed reused teaching preparation was not accepted for retry')
+    .toBe(202)
+  const retried = await retryResponse.json() as ImportJob
+  expect(retried.id, 'Teaching retry changed the persisted import identity').toBe(job.id)
+  return retried
 }
 
 async function waitForFirstCitedLesson(
@@ -580,7 +618,8 @@ test('recommendation becomes one readable, taught, and answerable production jou
     await importButton.click()
     const importResponse = await importResponsePromise
     expect(importResponse.status()).toBe(202)
-    const launchedJob = await importResponse.json() as ImportJob
+    let launchedJob = await importResponse.json() as ImportJob
+    launchedJob = await retryFailedReusedTeaching(page.request, launchedJob)
     report.importReused = launchedJob.reused
     if (REQUIRE_FRESH_IMPORT) {
       expect(launchedJob.reused, 'The requested fresh-import journey reused an existing rulebook').toBe(false)
