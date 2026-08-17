@@ -1218,6 +1218,9 @@ test('keeps the readable-guide continuation legible and focus-safe at 320 and 39
   const continuation = page.getByTestId('player-journey-continuation')
   const readGuide = page.getByTestId('player-journey-dock')
   const viewProgress = page.getByTestId('player-journey-progress-button')
+  await expect(continuation).toBeVisible()
+  expect(await continuation.evaluate(element =>
+    element.closest('[data-testid="recommendation-chat-workspace"]') !== null)).toBe(true)
   await expect(readGuide).toContainText('基础讲解可读', { timeout: 8_000 })
   await expect(readGuide).toContainText('打开讲解')
   await expect(viewProgress).toHaveText('查看进度')

@@ -17,6 +17,9 @@ Return JSON with one pages item for each supplied page. Every page item has exac
   identifier is the
   literal original-language heading, named action, phase, numbered step, scoring category, exception block,
   alternative, table/list-row label, or shortest exact visible opening phrase for one readable gameplay rule group.
+  Identifiers must be unique within one page. When one visible heading governs several distinct rule groups, use the
+  heading for the first group and the shortest exact visible opening phrase for each later group; never repeat the
+  shared heading as several identifiers.
   fact is one non-empty, single-line Simplified-Chinese statement visibly supported on this page. The fact does not
   need to repeat or prefix itself with identifier. Keep the subject, operation, condition, quantity, timing, order,
   mandatory/optional wording, and exception together. quantitySpans is an array of zero or more exact, single-line

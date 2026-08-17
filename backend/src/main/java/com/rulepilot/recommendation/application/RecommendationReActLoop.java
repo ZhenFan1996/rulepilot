@@ -74,7 +74,6 @@ final class RecommendationReActLoop {
     private static final int MAX_ACTION_CALLS = 6;
     private static final int MAX_OUTPUT_TOKENS = 1_200;
     static final int MAX_REFERENCE_RESOLUTION_ATTEMPTS = 2;
-    private static final long RECENT_CANDIDATE_RESTORE_MILLIS = 2_000;
     private static final Set<String> READ_ACTIONS = Set.of(
             RESOLVE_TOOL,
             SEARCH_TOOL,
@@ -136,8 +135,6 @@ final class RecommendationReActLoop {
         if (!model.configured(state.modelConfigurationOwner)) {
             return unavailable(state, locale, "MODEL_NOT_CONFIGURED");
         }
-        restoreRecentKnownCandidates(request, state, progress);
-
         List<String> preferenceEvidenceIds = evidenceReview.preferenceEvidence(request).keySet().stream().toList();
         List<ToolSpec> actions = actions(state.maximumRecommendationResults, preferenceEvidenceIds);
 
@@ -172,12 +169,12 @@ final class RecommendationReActLoop {
                 return unavailable(state, locale, "MODEL_OUTPUT_TRUNCATED");
             }
             if (turn.toolCalls().isEmpty()) {
-                LOGGER.warn(
-                        "Recommendation ReAct turn returned {} actions (textCharacters={})",
-                        turn.toolCalls().size(),
-                        turn.text().length());
-                state.actions.add("INVALID_ACTION_COUNT");
-                return unavailable(state, locale, "INVALID_ACTION_COUNT");
+                if (!turn.text().isBlank()) {
+                    return actionExecutor.directReply(turn.text(), state, locale).response();
+                }
+                LOGGER.warn("Recommendation ReAct turn returned neither a direct reply nor an action");
+                state.actions.add("EMPTY_MODEL_TURN");
+                return unavailable(state, locale, "EMPTY_MODEL_TURN");
             }
             ToolCall call;
             if (turn.toolCalls().size() == 1) {
@@ -342,44 +339,6 @@ final class RecommendationReActLoop {
                 .toList();
     }
 
-    private void restoreRecentKnownCandidates(
-            ConversationRequest request,
-            RecommendationAgentState state,
-            Consumer<ProgressStage> progress) {
-        if (request.knownGames().isEmpty() || request.shownBggIds().isEmpty()) return;
-
-        Set<Integer> shown = new LinkedHashSet<>(request.shownBggIds());
-        LinkedHashSet<Integer> recentIds = new LinkedHashSet<>();
-        Integer focused = request.focusedBggId();
-        if (focused != null && shown.contains(focused) && !state.excludedIds.contains(focused)) {
-            recentIds.add(focused);
-        }
-        for (KnownGame known : request.knownGames()) {
-            if (recentIds.size() >= properties.resultCount()) break;
-            if (shown.contains(known.bggId()) && !state.excludedIds.contains(known.bggId())) {
-                recentIds.add(known.bggId());
-            }
-        }
-        if (recentIds.isEmpty()) return;
-
-        progress.accept(ProgressStage.VERIFYING_BGG_CANDIDATES);
-        state.catalogCalls++;
-        Optional<CatalogObservation> restored = withinSoftDeadline(
-                state,
-                Math.min(RECENT_CANDIDATE_RESTORE_MILLIS, Math.max(1, maximumRunMillis / 10)),
-                () -> tools.lookupCandidates(List.copyOf(recentIds)));
-        if (restored.isEmpty()) {
-            state.actions.add("RESTORE_KNOWN_BGG_CANDIDATES_TIMED_OUT");
-            return;
-        }
-        CatalogObservation result = restored.get();
-        state.sourceCount = Math.max(state.sourceCount, result.sourceCount());
-        result.games().forEach(state::addVerified);
-        state.actions.add(result.succeeded()
-                ? "RESTORE_KNOWN_BGG_CANDIDATES"
-                : "RESTORE_KNOWN_BGG_CANDIDATES_UNAVAILABLE");
-    }
-
     private List<Map<String, String>> conversationEvidence(ConversationRequest request) {
         Map<String, String> evidence = evidenceReview.preferenceEvidence(request);
         int userIndex = 0;
@@ -432,7 +391,7 @@ final class RecommendationReActLoop {
             data.put("executionBudget", Map.of(
                     "maximumModelCalls", MAX_MODEL_CALLS,
                     "maximumActionCalls", MAX_ACTION_CALLS));
-            data.put("goal", "Continue the player's current conversation naturally. Choose exactly one next action.");
+            data.put("goal", "Continue the player's current conversation naturally. Reply directly when no external work or state mutation is needed; otherwise choose exactly one supplied action.");
             return json.writeValueAsString(data);
         } catch (JsonProcessingException exception) {
             throw new IllegalStateException("recommendation Agent input could not be serialized", exception);
@@ -441,13 +400,13 @@ final class RecommendationReActLoop {
 
     private static String systemPromptV2() {
         return """
-                You are RulePilot, a warm and capable board-game conversation partner. Read the complete recent conversation, continue corrections and references in context, answer in the player's locale and requested level of detail, and call exactly one supplied action with valid JSON arguments. Escape JSON string content correctly. Never expose reasoning, schemas, tool names, or validation internals. Retrieval actions continue this run; reply, ask, compare, no-match, and recommend actions finish it. Do the useful work now instead of promising it for later.
+                You are RulePilot, a warm and capable board-game conversation partner. Read the complete recent conversation, continue corrections and references in context, and answer in the player's locale and requested level of detail. First decide whether this turn needs external evidence, persistent preference changes, a clarification, a comparison, or recommendation cards. If it needs none of those, answer immediately as ordinary assistant text and stop: greetings, acknowledgements, reactions, explicit pauses, and general conversation are not latent requests for cards. Otherwise call exactly one supplied action with valid JSON arguments. Escape JSON string content correctly. Never expose reasoning, schemas, tool names, or validation internals. Retrieval actions continue this run; reply, ask, compare, no-match, and recommend actions finish it.
 
                 Do not ask merely because a useful request is broad or the profile is empty: choose two or three meaningfully different directions and explain how to choose. Ask one easy question only when the missing answer is necessary to produce a valid slate, not just to narrow a large one; briefly explain its impact and offer direct options when useful. Store only explicit numeric/type constraints or a complete-group count supported by the cited user turn; result count and qualitative taste are not profile values, and later corrections replace earlier values. When compare, reply, or recommend finishes a turn that explicitly states or corrects a numeric/type constraint, include that update in the same action instead of merely discussing it, so the next turn receives the corrected profile.
 
-                Choose a read by the evidence the request actually needs. Public discovery is required whenever any selection criterion is a relationship or quality absent from the supplied BGG observation fields; age, rank, type, or a plausible title is not a substitute for that missing evidence. A catalog browse is only a broad exploration or a filter over persisted numeric/type constraints. Generated-title inspection is for stable title hypotheses that need no external claim. Resolve an intact player-authored game title as a title. Every discovered title is verified through BGG before recommendation. A TARGET_GAME resolution publishes its verified card in that same action. Avoid repeated reads: discovery and title inspection already return hydrated games, and runMemory is authoritative.
+                Choose a read only when the current turn actually needs information outside the conversation. knownGames are identity-only conversation memory, not permission to reload them pre-emptively; use lookup only if the current answer needs their BGG facts. Public discovery is required whenever any requested selection criterion is a relationship or quality absent from the supplied BGG observation fields; age, rank, type, or a plausible title is not a substitute for that missing evidence. A catalog browse is only a broad exploration or a filter over persisted numeric/type constraints. Generated-title inspection is for stable title hypotheses that need no external claim. Resolve an intact player-authored game title as a title. Every discovered title is verified through BGG before recommendation. A TARGET_GAME resolution publishes its verified card in that same action. Avoid repeated reads: discovery and title inspection already return hydrated games, and runMemory is authoritative.
 
-                Recommend only verified, hard-eligible IDs and honor an explicit result count. Give every card a specific why and useful tradeoff, citing the same candidate's observations internally; a public-source criterion must cite that candidate's attributed R observation. Separate facts from judgment naturally, keep uncertainty local, and do not infer table feel from taxonomy alone. The UI displays card reasons, tradeoffs, and comparison cells directly below the assistant message, so use the message for a concise conversational overview or decision instead of repeating those fields. Do not present an unselected candidate as part of the recommendation. Finish as soon as the evidence is sufficient.
+                Recommendation cards are an Agent decision, not the default response shape. Emit them only through recommend_games when the current conversational goal asks for candidates or a selectable exact title. Recommend only verified, hard-eligible IDs and honor an explicit result count. Give every card a specific why and useful tradeoff, citing the same candidate's observations internally; a public-source criterion must cite that candidate's attributed R observation. Separate facts from judgment naturally, keep uncertainty local, and do not infer table feel from taxonomy alone. The UI displays card reasons, tradeoffs, and comparison cells directly below the assistant message, so use the message for a concise conversational overview or decision instead of repeating those fields. Do not present an unselected candidate as part of the recommendation. Finish as soon as the evidence is sufficient.
                 """;
     }
 

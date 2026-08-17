@@ -20,9 +20,11 @@ set +a
 
 cd "$ROOT_DIR/backend"
 RULEPILOT_GSTONE_VISUAL_TEACHING_CANARY=true \
+	RULEPILOT_GSTONE_REUSE_VISUAL_CATALOG=false \
+	RULEPILOT_GSTONE_VISUAL_PARALLELISM=10 \
 	./mvnw -q \
 	-Dtest='VisualTeachingCatalogPaidCanaryTest#preparesACompleteRealGstoneVisualRulebookWithCompactWholeGamePlanning' \
 	test
 
 echo "Gstone visual Teaching preparation canary passed."
-echo "Artifact: $ROOT_DIR/.local/agent-evaluation/gstone-endeavor-visual-teaching-preparation-v1.json"
+echo "Artifact: $ROOT_DIR/.local/agent-evaluation/gstone-endeavor-visual-teaching-ten-way-v1.json"

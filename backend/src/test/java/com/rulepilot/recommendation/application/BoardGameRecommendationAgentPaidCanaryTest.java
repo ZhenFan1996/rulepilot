@@ -64,6 +64,94 @@ class BoardGameRecommendationAgentPaidCanaryTest {
     private final ObjectMapper json = JsonMapper.builder().findAndAddModules().build();
 
     @Test
+    void routesAnObviousConversationTurnWithoutRecommendationWork() throws Exception {
+        assumeTrue("true".equalsIgnoreCase(System.getenv("RULEPILOT_RECOMMENDATION_PAID_CANARY")));
+        String provider = environment("RULEPILOT_RECOMMENDATION_CANARY_PROVIDER", "qwen")
+                .toLowerCase(Locale.ROOT);
+        String prefix = provider.toUpperCase(Locale.ROOT);
+        Capture capture = new Capture(provider, environment(prefix + "_MODEL", null));
+        BoardGameRecommendationModel model = model(
+                provider,
+                environment(prefix + "_API_KEY", null),
+                environment(prefix + "_BASE_URL", null),
+                environment(prefix + "_MODEL", null),
+                capture);
+        var properties = new BoardGameRecommendationProperties(
+                8, 3, new BigDecimal("0.66"), Duration.ofSeconds(30));
+        var agent = new BoardGameRecommendationAgent(
+                model,
+                new BoardGameRecommendationTools(new CanaryCatalog(), noResearch()),
+                new BoardGameRecommendationSelector(properties),
+                properties,
+                json);
+        List<Map<String, Object>> visibleTurns = new ArrayList<>();
+        String message = "谢谢，先不用再推荐了。我们随便聊聊：你觉得大家为什么会喜欢桌游？";
+
+        try {
+            int conversationRawStart = capture.callCount();
+            long started = System.nanoTime();
+            var response = agent.converse(
+                    new ConversationRequest(
+                            RecommendationProfile.empty(),
+                            message,
+                            List.of(),
+                            List.of(
+                                    new DialogueMessage("assistant", "这两款方向不同，可以继续比较。"),
+                                    new DialogueMessage("user", message)),
+                            null,
+                            List.of(
+                                    new KnownGame(101, "River Market", "River Market"),
+                                    new KnownGame(102, "Signal Grove", "Signal Grove")),
+                            List.of(101, 102)),
+                    "zh-CN");
+            visibleTurns.add(visible(
+                    "obvious-conversation",
+                    response,
+                    elapsed(started),
+                    List.of(),
+                    conversationRawStart,
+                    capture.callCount()));
+
+            assertThat(response.outcome()).isEqualTo(Outcome.CONVERSATION);
+            assertThat(response.games()).isEmpty();
+            assertThat(response.harness().modelCalls()).isEqualTo(1);
+            assertThat(response.harness().catalogCalls()).isZero();
+            assertThat(response.harness().webResearchCalls()).isZero();
+            assertThat(response.harness().fallbackUsed()).isFalse();
+            assertThat(response.harness().actions()).containsExactly("DIRECT_REPLY_TO_USER");
+            assertThat(response.assistantMessage()).isEqualTo(capture.lastAssistantText());
+
+            String recommendationRequest = "现在请按 3 人、60 分钟内，明确推荐两款并说明各自取舍。";
+            int recommendationRawStart = capture.callCount();
+            long recommendationStarted = System.nanoTime();
+            var recommendation = agent.converse(
+                    new ConversationRequest(RecommendationProfile.empty(), recommendationRequest),
+                    "zh-CN");
+            visibleTurns.add(visible(
+                    "explicit-recommendation",
+                    recommendation,
+                    elapsed(recommendationStarted),
+                    List.of(),
+                    recommendationRawStart,
+                    capture.callCount()));
+
+            assertThat(recommendation.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
+            assertThat(recommendation.games()).hasSize(2);
+            assertThat(recommendation.harness().catalogCalls()).isPositive();
+            assertThat(recommendation.harness().fallbackUsed()).isFalse();
+            assertThat(recommendation.harness().actions()).contains("RECOMMEND_GAMES");
+            assertTerminalProsePreserved(capture.lastToolCall(), recommendation);
+            assertRecommendationNarrativesPreserved(capture.lastToolCall(), recommendation);
+            writeArtifact(capture, visibleTurns, null);
+        } catch (Throwable failure) {
+            writeArtifact(capture, visibleTurns, failure.getClass().getSimpleName());
+            throw failure;
+        } finally {
+            agent.stopBoundedCalls();
+        }
+    }
+
+    @Test
     void understandsAwardWinningClassicsAndAnImaginativeEquivalentWithoutFallback() throws Exception {
         assumeTrue("true".equalsIgnoreCase(System.getenv("RULEPILOT_RECOMMENDATION_PAID_CANARY")));
         String provider = environment("RULEPILOT_RECOMMENDATION_CANARY_PROVIDER", "qwen")
@@ -1607,6 +1695,11 @@ class BoardGameRecommendationAgentPaidCanaryTest {
         private synchronized ToolCall lastToolCall() {
             if (toolCalls.isEmpty()) throw new AssertionError("missing captured tool call");
             return toolCalls.getLast();
+        }
+
+        private synchronized String lastAssistantText() {
+            if (calls.isEmpty()) throw new AssertionError("missing captured model call");
+            return String.valueOf(calls.getLast().get("assistantText"));
         }
 
         private synchronized int callCount() {

@@ -618,7 +618,7 @@ class VisualRulebookCatalogerTest {
         UUID documentVersionId = UUID.randomUUID();
         AtomicInteger activeRequests = new AtomicInteger();
         AtomicInteger peakRequests = new AtomicInteger();
-        CountDownLatch firstWindowReady = new CountDownLatch(3);
+        CountDownLatch firstWindowReady = new CountDownLatch(10);
         VisualRulebookCataloger cataloger = cataloger(
                 (id, pages) -> pages.stream()
                         .map(page -> new DocumentPageImages.PageImage(page, "image/png", new byte[] {1}, 100, 120))
@@ -627,7 +627,7 @@ class VisualRulebookCatalogerTest {
                     int active = activeRequests.incrementAndGet();
                     peakRequests.accumulateAndGet(active, Math::max);
                     try {
-                        if (request.pages().getFirst().pageNumber() <= 3) {
+                        if (request.pages().getFirst().pageNumber() <= 10) {
                             firstWindowReady.countDown();
                             assertThat(firstWindowReady.await(1, TimeUnit.SECONDS)).isTrue();
                         }
@@ -647,17 +647,70 @@ class VisualRulebookCatalogerTest {
                             .toList());
                 },
                 new InMemoryFacts(),
-                3);
+                10);
 
         List<PageInput> result = cataloger.catalogVisualPages(
                 documentVersionId,
-                List.of(page(1), page(2), page(3), page(4)),
+                java.util.stream.IntStream.rangeClosed(1, 12)
+                        .mapToObj(VisualRulebookCatalogerTest::page)
+                        .toList(),
                 "Example game",
                 "owner",
                 null);
 
-        assertThat(peakRequests).hasValue(3);
-        assertThat(result).extracting(PageInput::pageNumber).containsExactly(1, 2, 3, 4);
+        assertThat(peakRequests).hasValue(10);
+        assertThat(result).extracting(PageInput::pageNumber)
+                .containsExactlyElementsOf(java.util.stream.IntStream.rangeClosed(1, 12).boxed().toList());
+    }
+
+    @Test
+    void tenWayWindowSharesOneProviderDeadlineAndKeepsEveryCompletedPage() {
+        UUID documentVersionId = UUID.randomUUID();
+        InMemoryFacts facts = new InMemoryFacts();
+        VisualRulebookCataloger cataloger = cataloger(
+                (id, pages) -> pages.stream()
+                        .map(page -> new DocumentPageImages.PageImage(page, "image/png", new byte[] {1}, 100, 120))
+                        .toList(),
+                request -> {
+                    int pageNumber = request.pages().getFirst().pageNumber();
+                    if (pageNumber <= 2) {
+                        long providerDeadline = System.nanoTime() + Duration.ofMillis(350).toNanos();
+                        while (System.nanoTime() < providerDeadline) {
+                            try {
+                                Thread.sleep(5);
+                            } catch (InterruptedException ignored) {
+                                // A real HTTP client may not stop until its own socket timeout after cancellation.
+                            }
+                        }
+                    }
+                    return new CatalogDraft(request.pages().stream()
+                            .map(image -> teachingSummary(
+                                    image.pageNumber(),
+                                    "PAGE " + image.pageNumber(),
+                                    "Visible rule " + image.pageNumber(),
+                                    List.of("page " + image.pageNumber())))
+                            .toList());
+                },
+                facts,
+                10,
+                Duration.ofMillis(100));
+
+        long started = System.nanoTime();
+        List<PageInput> inputs = cataloger.catalogVisualPages(
+                documentVersionId,
+                IntStream.rangeClosed(1, 10).mapToObj(VisualRulebookCatalogerTest::page).toList(),
+                "Example game",
+                "owner",
+                null);
+        long elapsedMillis = Duration.ofNanos(System.nanoTime() - started).toMillis();
+
+        assertThat(elapsedMillis).isLessThan(175);
+        assertThat(facts.find(documentVersionId, Set.of(1, 2, 3, 4, 5, 6, 7, 8, 9, 10)))
+                .extracting(PageFact::pageNumber)
+                .containsExactly(3, 4, 5, 6, 7, 8, 9, 10);
+        assertThat(inputs).hasSize(10);
+        assertThat(inputs.subList(0, 2))
+                .allSatisfy(input -> assertThat(input.text()).contains("visual interpretation did not finish"));
     }
 
     @Test
@@ -1280,7 +1333,7 @@ class VisualRulebookCatalogerTest {
     }
 
     @Test
-    void auditsPageTranscriptionSeparatelyBeforePassingItToSemanticRuleGrouping() {
+    void sendsEachTeachingPageStraightToTheCapableVisionModelWithoutMandatoryOcr() {
         UUID documentVersionId = UUID.randomUUID();
         List<String> operations = new java.util.ArrayList<>();
         List<String> summaries = new java.util.ArrayList<>();
@@ -1299,15 +1352,12 @@ class VisualRulebookCatalogerTest {
             public PageTranscript transcribeTeachingPage(
                     com.rulepilot.teaching.TeachingOutlineModel.PageImageInput page,
                     String owner) {
-                return new PageTranscript(page.pageNumber(), "玩家分数：9、13、16；门槛：33");
+                throw new AssertionError("independent OCR is not a mandatory critical-path model call");
             }
 
             @Override
             public CatalogDraft summarizeForTeaching(CatalogRequest request) {
-                assertThat(request.transcripts()).singleElement().satisfies(transcript -> {
-                    assertThat(transcript.pageNumber()).isEqualTo(1);
-                    assertThat(transcript.text()).contains("9、13、16", "33");
-                });
+                assertThat(request.transcripts()).isEmpty();
                 return new CatalogDraft(List.of(teachingSummary(
                         1, "COOPERATIVE SCORE", "Players compare their scores with the threshold.", List.of("score"))));
             }
@@ -1346,12 +1396,8 @@ class VisualRulebookCatalogerTest {
         cataloger.catalogVisualPages(
                 documentVersionId, List.of(page(1)), "Example game", "owner", UUID.randomUUID());
 
-        assertThat(operations).containsExactly(
-                "transcribeTeachingVisualPage|1|1",
-                "inspectTeachingVisualPage|1|1");
-        assertThat(summaries).containsExactly(
-                "PDF page 1 transcribed via qwen/qwen3.5-ocr",
-                "Teaching-start page facts interpreted");
+        assertThat(operations).containsExactly("inspectTeachingVisualPage|1|1");
+        assertThat(summaries).containsExactly("Teaching-start page facts interpreted");
     }
 
     @Test
