@@ -126,7 +126,6 @@ public class TeachingPlanService {
         outline = refineChapterOwnership(
                 outlineRequest, outline, assistantRunId, documentPages, playerGameTitle);
         try {
-            if (visualOnly) VisualOutlineEvidencePolicy.validateVisualFastBaseline(outline);
             if (visualOnly || hasStructuredSourceDependencies(pages)) {
                 VisualOutlineEvidencePolicy.validateVisualSourceDependencies(outline, pages);
             }

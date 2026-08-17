@@ -242,7 +242,8 @@ public class FakeTeachingOutlineModel implements TeachingOutlineModel {
         LinkedHashSet<Integer> currentPages = new LinkedHashSet<>();
         List<String> currentQueries = new ArrayList<>();
         for (PageInput page : sourcePages) {
-            List<String> identifiers = VisualSourceRuleGroupLedger.identifiers(page);
+            List<String> identifiers = List.copyOf(
+                    new LinkedHashSet<>(VisualSourceRuleGroupLedger.identifiers(page)));
             if (identifiers.isEmpty()) {
                 identifiers = List.of("Inspect the cited rulebook page and report only directly visible rules.");
             }

@@ -1067,21 +1067,19 @@ class TeachingPlanServiceTest {
     }
 
     @Test
-    void visualFastBaselineRejectsElevenRuleTopicsButDoesNotCountASourceDependency() {
+    void visualPlanningUsesTheActualSixteenChapterResourceBudgetInsteadOfATenChapterFastPath() {
         List<TopicDraft> eleven = new ArrayList<>();
         IntStream.rangeClosed(1, 11)
                 .forEach(index -> eleven.add(topic("topic-" + index, List.of("source_coverage"), List.of(index))));
         OutlineDraft expanded = outline(eleven);
 
-        assertThatThrownBy(() -> VisualOutlineEvidencePolicy.validateVisualFastBaseline(expanded))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("ten-section");
+        new TeachingPlanFactory().validate(expanded);
 
         List<TopicDraft> tenRulesAndOneDependency = new ArrayList<>(eleven.subList(0, 10));
         tenRulesAndOneDependency.add(topic(
                 "missing-source", List.of("source_dependency", "missing_setup_source"), List.of(1)));
         OutlineDraft boundedWithDependency = outline(tenRulesAndOneDependency);
-        VisualOutlineEvidencePolicy.validateVisualFastBaseline(boundedWithDependency);
+        new TeachingPlanFactory().validate(boundedWithDependency);
     }
 
     private OutlineDraft outline(List<TopicDraft> topics) {

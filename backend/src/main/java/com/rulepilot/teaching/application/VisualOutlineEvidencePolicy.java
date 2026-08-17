@@ -167,22 +167,6 @@ final class VisualOutlineEvidencePolicy {
         return outline;
     }
 
-    static void validateVisualFastBaseline(TeachingOutlineModel.OutlineDraft outline) {
-        if (exceedsFastBaseline(outline)) {
-            throw new IllegalArgumentException(
-                    "visual rulebook outline exceeds the ten-section fast baseline and must be compacted");
-        }
-    }
-
-    static boolean exceedsFastBaseline(TeachingOutlineModel.OutlineDraft outline) {
-        long teachingTopics = outline.topics().stream()
-                .filter(topic -> topic.coverageTags().stream()
-                        .map(VisualOutlineEvidencePolicy::identityKey)
-                        .noneMatch("source_dependency"::equals))
-                .count();
-        return teachingTopics > 10 || outline.topics().size() > 16;
-    }
-
     static Set<Integer> selectedVisualPageNumbers(
             TeachingOutlineModel.OutlineDraft outline, List<DocumentProcessing.PageView> pages) {
         Set<Integer> available = pages.stream()

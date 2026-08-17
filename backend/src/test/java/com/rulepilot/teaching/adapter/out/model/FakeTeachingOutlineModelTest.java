@@ -8,6 +8,7 @@ import com.rulepilot.teaching.TeachingOutlineModel.PageInput;
 import com.rulepilot.teaching.TeachingOutlineModel.SourceCoverageAvailability;
 import com.rulepilot.teaching.TeachingOutlineModel.SourceCoverageRole;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.SourceDependency;
+import com.rulepilot.teaching.application.TeachingSourceCoverageContract;
 import java.util.List;
 import java.util.stream.IntStream;
 import org.junit.jupiter.api.Test;
@@ -221,6 +222,27 @@ class FakeTeachingOutlineModelTest {
         assertThat(outline.sourceCoverageSlots())
                 .filteredOn(slot -> slot.availability() == SourceCoverageAvailability.SOURCED)
                 .hasSize(13 * 9);
+    }
+
+    @Test
+    void repeatedPageIdentifierHasExactlyOneChapterOwnerAcrossAChapterBoundary() {
+        String[] identifiers = java.util.stream.Stream.concat(
+                        java.util.stream.Stream.of("晋升"),
+                        java.util.stream.Stream.concat(
+                                IntStream.rangeClosed(1, 16).mapToObj(index -> "R" + index),
+                                java.util.stream.Stream.of("晋升")))
+                .toArray(String[]::new);
+        PageInput page = completeVisualPage(4, identifiers);
+        OutlineRequest request = new OutlineRequest(List.of(page));
+
+        var outline = model.organize(request);
+
+        assertThat(outline.topics()).hasSize(2);
+        assertThat(outline.sourceCoverageSlots())
+                .filteredOn(slot -> slot.availability() == SourceCoverageAvailability.SOURCED
+                        && slot.sourceIdentifier().equals("晋升"))
+                .singleElement();
+        TeachingSourceCoverageContract.validateAgainstSources(request, outline);
     }
 
     @Test
