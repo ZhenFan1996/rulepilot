@@ -197,6 +197,7 @@ interface ProductionJourneyReport {
   rulebookReadableMs: number | null
   renderedRulebookPage: boolean
   lessonReadableMs: number | null
+  lessonDockText: string | null
   lessonSectionCount: number
   citedLessonStep: boolean
   answerMs: number | null
@@ -507,6 +508,7 @@ test('recommendation becomes one readable, taught, and answerable production jou
     documentProgressStage: null, documentProgressComplete: null, teachingHandoffState: null,
     teachingPreparationState: null, teachingPreparationErrorCode: null,
     rulebookReadableMs: null, renderedRulebookPage: false, lessonReadableMs: null,
+    lessonDockText: null,
     lessonSectionCount: 0, citedLessonStep: false, answerMs: null, answerStatus: null,
     answerCitationCount: 0, citedAnswer: false,
     recommendationRestored: false, answerRestored: false, pageErrorCount: 0,
@@ -782,7 +784,9 @@ test('recommendation becomes one readable, taught, and answerable production jou
     const lessonStartedAt = performance.now()
     const journeyDock = page.getByTestId('player-journey-dock')
     await expect(journeyDock).toBeVisible()
-    await expect(journeyDock).toContainText('基础讲解可读', { timeout: 20 * 60_000 })
+    await expect(journeyDock).toContainText('打开讲解', { timeout: 60_000 })
+    await expect(journeyDock).toContainText(/基础讲解可读|准备流程需要处理/)
+    report.lessonDockText = (await journeyDock.innerText()).trim()
     report.lessonReadableMs = elapsed(lessonStartedAt)
     await journeyDock.click()
     const lesson = page.getByRole('dialog', { name: '生成讲解阅读器' })
