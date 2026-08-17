@@ -215,7 +215,7 @@ public class BggRankedCatalogService implements BggRankedCatalog, BoardGameRecom
 
     private void addReferenceAlias(LinkedHashSet<String> aliases, String value) {
         String checked = value == null ? "" : value.strip().replaceAll("\\s+", " ");
-        if (checked.length() >= 2 && checked.length() <= 120) aliases.add(checked);
+        if (!checked.isBlank() && checked.length() <= 120) aliases.add(checked);
     }
 
     @Override
@@ -393,8 +393,8 @@ public class BggRankedCatalogService implements BggRankedCatalog, BoardGameRecom
     private String checkedSearch(String search) {
         if (search == null || search.isBlank()) return "";
         String checked = search.strip().replaceAll("\\s+", " ");
-        if (checked.length() < 2 || checked.length() > 120) {
-            throw new IllegalArgumentException("search must contain 2 to 120 characters");
+        if (checked.length() > 120) {
+            throw new IllegalArgumentException("search must contain at most 120 characters");
         }
         return checked;
     }

@@ -12,7 +12,8 @@ import org.springframework.stereotype.Service;
 @Profile("!test")
 public class PhotographedRulebookUploadService {
 
-    static final int MAX_PAGE_COUNT = 40;
+    /** Matches the PDF processor's page boundary; the multipart request separately bounds aggregate bytes. */
+    static final int MAX_PAGE_COUNT = 500;
     static final long MAX_PHOTO_BYTES = 8L * 1024 * 1024;
     private static final Set<String> ACCEPTED_IMAGE_TYPES = Set.of("image/jpeg", "image/png");
     private static final String DEFAULT_TITLE = "Photographed rulebook";

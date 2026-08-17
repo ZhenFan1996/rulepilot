@@ -175,13 +175,13 @@ public class UploadedDocumentIngestion {
 
     private void chunk(UUID documentVersionId) {
         // Compatibility bridge for CHUNK messages published by a pre-P27-23 Worker during a rolling deployment.
-        int storedPageCount = documents.pages(documentVersionId).size();
+        int storedPageCount = documents.pageCount(documentVersionId);
         documents.markChunking(documentVersionId);
         progress.update(documentVersionId, "CHUNKING", 85, storedPageCount, false);
     }
 
     private void embed(UUID documentVersionId) {
-        int pageCount = documents.pages(documentVersionId).size();
+        int pageCount = documents.pageCount(documentVersionId);
         documents.markEmbedding(documentVersionId);
         progress.update(documentVersionId, "EMBEDDING", 90, pageCount, false);
         embeddings.index(documentVersionId);

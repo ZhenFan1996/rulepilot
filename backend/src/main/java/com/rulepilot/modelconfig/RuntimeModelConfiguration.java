@@ -164,7 +164,7 @@ public class RuntimeModelConfiguration {
             String model,
             boolean visionCapable) {
         String id = providerId(provider);
-        String checkedModel = permittedModel(required(model, "model name", 200));
+        String checkedModel = required(model, "model name", 200);
         String checkedBaseUrl = "gemini".equals(id) ? "" : validBaseUrl(baseUrl);
         String checkedApiKey = required(apiKey, "API key", 4096);
         ChatModel client = factory.create(id, checkedApiKey, checkedBaseUrl, checkedModel);
@@ -274,7 +274,7 @@ public class RuntimeModelConfiguration {
             return;
         }
         String baseUrl = "gemini".equals(id) ? "" : validBaseUrl(properties.baseUrl());
-        String model = permittedModel(required(properties.model(), "model name", 200));
+        String model = required(properties.model(), "model name", 200);
         ChatModel client = factory.create(id, properties.apiKey(), baseUrl, model);
         providers.put(id, new ConfiguredProvider(id, baseUrl, model, client, properties.visionCapable()));
     }
@@ -319,17 +319,6 @@ public class RuntimeModelConfiguration {
             throw new IllegalArgumentException("unsupported model provider: " + id);
         }
         return id;
-    }
-
-    private String permittedModel(String model) {
-        String normalized = model.toLowerCase(Locale.ROOT);
-        if (normalized.equals("qwen-plus")
-                || normalized.startsWith("qwen-plus-")
-                || normalized.startsWith("qwen-plus_")) {
-            throw new IllegalArgumentException(
-                    "qwen-plus and its legacy aliases are prohibited; select an explicitly approved Qwen model");
-        }
-        return model;
     }
 
     private String validBaseUrl(String value) {

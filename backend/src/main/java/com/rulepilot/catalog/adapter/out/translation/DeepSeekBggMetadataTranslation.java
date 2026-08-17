@@ -233,44 +233,34 @@ public class DeepSeekBggMetadataTranslation implements BggMetadataTranslation {
     }
 
     private Optional<Translation> parseTranslation(JsonNode translated, Request request) {
-        if (!translated.isObject()
-                || translated.size() != 3
-                || !translated.has("description")
-                || !translated.has("categories")
-                || !translated.has("mechanics")) return Optional.empty();
-        String description = SimplifiedChineseText.normalize(translated.path("description").asText("").strip());
-        Optional<List<String>> parsedCategories = strings(translated.path("categories"));
-        Optional<List<String>> parsedMechanics = strings(translated.path("mechanics"));
-        if (parsedCategories.isEmpty() || parsedMechanics.isEmpty()) return Optional.empty();
-        List<String> categories = SimplifiedChineseText.normalize(parsedCategories.get());
-        List<String> mechanics = SimplifiedChineseText.normalize(parsedMechanics.get());
-        if (!validDescription(description, request.description())
-                || !validTerms(categories, request.categories())
-                || !validTerms(mechanics, request.mechanics())) return Optional.empty();
+        if (!translated.isObject()) return Optional.empty();
+        String description = translatedDescription(translated.get("description"), request.description());
+        List<String> categories = translatedTerms(translated.get("categories"), request.categories());
+        List<String> mechanics = translatedTerms(translated.get("mechanics"), request.mechanics());
         return Optional.of(new Translation(description, categories, mechanics));
     }
 
-    private Optional<List<String>> strings(JsonNode node) {
-        if (!node.isArray() || node.size() > MAX_TERMS_PER_GROUP) return Optional.empty();
-        List<String> values = new ArrayList<>();
-        for (JsonNode item : node) {
-            if (!item.isTextual()) return Optional.empty();
-            values.add(item.asText().strip());
-        }
-        return Optional.of(List.copyOf(values));
+    private String translatedDescription(JsonNode node, String source) {
+        String fallback = source == null ? "" : source.strip();
+        if (node == null || !node.isTextual()) return fallback;
+        String translated = SimplifiedChineseText.normalize(node.asText().strip());
+        if (fallback.isBlank()) return "";
+        return translated.isBlank() ? fallback : translated;
     }
 
-    private boolean validDescription(String translated, String source) {
-        if (source == null || source.isBlank()) return translated.isBlank();
-        return !translated.isBlank() && containsHan(translated);
-    }
-
-    private boolean validTerms(List<String> translated, List<String> source) {
-        if (translated.size() != source.size()) return false;
-        for (String value : translated) {
-            if (value.isBlank() || value.length() > 200 || !containsHan(value)) return false;
+    private List<String> translatedTerms(JsonNode node, List<String> source) {
+        if (node == null || !node.isArray() || node.size() != source.size()) return source;
+        List<String> values = new ArrayList<>(source.size());
+        for (int index = 0; index < source.size(); index++) {
+            JsonNode item = node.get(index);
+            String fallback = source.get(index);
+            if (item == null || !item.isTextual() || item.asText().isBlank()) {
+                values.add(fallback);
+            } else {
+                values.add(SimplifiedChineseText.normalize(item.asText().strip()));
+            }
         }
-        return true;
+        return List.copyOf(values);
     }
 
     private String systemPrompt() {
@@ -284,10 +274,16 @@ public class DeepSeekBggMetadataTranslation implements BggMetadataTranslation {
     }
 
     private String sourceText(Request request) {
+        String full = requestPayload(request, request.description());
+        if (full.length() <= MAX_SOURCE_CHARACTERS) return full;
+        return requestPayload(request, "");
+    }
+
+    private String requestPayload(Request request, String description) {
         try {
             return json.writeValueAsString(Map.of(
                     "gameName", bounded(request.gameName(), 500),
-                    "description", request.description() == null ? "" : request.description().strip(),
+                    "description", description == null ? "" : description.strip(),
                     "categories", request.categories(),
                     "mechanics", request.mechanics()));
         } catch (IOException exception) {
@@ -301,7 +297,8 @@ public class DeepSeekBggMetadataTranslation implements BggMetadataTranslation {
     }
 
     private String cacheKey(Request request) {
-        return "rulepilot:bgg:metadata-translation:zh-CN:v3:" + request.bggId() + ":" + digest(sourceText(request));
+        return "rulepilot:bgg:metadata-translation:zh-CN:v4:" + request.bggId() + ":"
+                + digest(requestPayload(request, request.description()));
     }
 
     private String digest(String value) {
@@ -311,11 +308,6 @@ public class DeepSeekBggMetadataTranslation implements BggMetadataTranslation {
         } catch (NoSuchAlgorithmException exception) {
             throw new IllegalStateException("SHA-256 is unavailable", exception);
         }
-    }
-
-    private boolean containsHan(String value) {
-        return value.codePoints()
-                .anyMatch(codePoint -> Character.UnicodeScript.of(codePoint) == Character.UnicodeScript.HAN);
     }
 
     private static Duration positive(Duration value, String label) {

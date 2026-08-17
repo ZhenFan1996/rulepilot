@@ -220,6 +220,17 @@ public class JpaRuleDocumentRepository implements RuleDocumentRepository {
     }
 
     @Override
+    public int countPages(UUID versionId) {
+        long count = entityManager
+                .createQuery(
+                        "select count(p) from DocumentPageEntity p where p.documentVersionId = :versionId",
+                        Long.class)
+                .setParameter("versionId", versionId)
+                .getSingleResult();
+        return Math.toIntExact(count);
+    }
+
+    @Override
     public List<DocumentProcessing.PageView> findPages(UUID versionId) {
         return entityManager
                 .createQuery(

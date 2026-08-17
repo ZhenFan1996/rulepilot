@@ -469,7 +469,7 @@ class OfficialRulebookImportJobEntity {
     @Column(name = "error_code") String errorCode;
     @Column(name = "download_completed_at") Instant downloadCompletedAt;
     @Column(name = "teaching_handoff_state", nullable = false) String teachingHandoffState;
-    @Column(name = "teaching_learning_goal", length = 500) String teachingLearningGoal;
+    @Column(name = "teaching_learning_goal", columnDefinition = "text") String teachingLearningGoal;
     @Column(name = "teaching_preparation_run_id") UUID teachingPreparationRunId;
     @Column(name = "teaching_error_code") String teachingErrorCode;
     @Column(name = "teaching_handoff_updated_at") Instant teachingHandoffUpdatedAt;

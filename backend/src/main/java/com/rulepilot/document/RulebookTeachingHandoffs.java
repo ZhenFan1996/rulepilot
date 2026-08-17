@@ -36,7 +36,7 @@ public interface RulebookTeachingHandoffs {
             ownerUsername = ownerUsername.strip();
             if (learningGoal != null) {
                 learningGoal = learningGoal.strip();
-                if (learningGoal.isBlank() || learningGoal.length() > 500) {
+                if (learningGoal.isBlank()) {
                     throw new IllegalArgumentException("ready rulebook teaching goal is invalid");
                 }
             }

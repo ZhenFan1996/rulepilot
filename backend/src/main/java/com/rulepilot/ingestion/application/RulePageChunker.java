@@ -101,7 +101,6 @@ public class RulePageChunker {
         String currentHeading = heading(text, pageNumber);
         StringBuilder current = new StringBuilder();
         for (PageBlock block : pageBlocks) {
-            if (block.role() == BlockRole.FOOTER) continue;
             if (block.role() == BlockRole.HEADING) {
                 if (!current.isEmpty()) {
                     sections.add(new LocalSection(currentHeading, current.toString()));

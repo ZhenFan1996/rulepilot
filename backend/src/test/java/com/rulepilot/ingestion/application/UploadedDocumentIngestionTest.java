@@ -371,12 +371,50 @@ class UploadedDocumentIngestionTest {
                 embeddings,
                 metrics);
         UUID versionId = UUID.randomUUID();
-        when(documents.pages(versionId)).thenReturn(List.of(new DocumentProcessing.PageView(1, "Setup", 5)));
+        when(documents.pageCount(versionId)).thenReturn(1);
 
         ingestion.process(versionId, DocumentProcessingStage.CHUNK);
 
+        verify(documents).pageCount(versionId);
+        verify(documents, never()).pages(versionId);
         verify(documents).markChunking(versionId);
         verifyNoInteractions(pdfPreparation, pageImages, structures, embeddings);
+    }
+
+    @Test
+    void embeddingReadsOnlyThePageCountInsteadOfEveryPageBody() {
+        DocumentProcessing documents = Mockito.mock(DocumentProcessing.class);
+        PdfRulebookPreparation pdfPreparation = Mockito.mock(PdfRulebookPreparation.class);
+        DocumentPageImageStore pageImages = Mockito.mock(DocumentPageImageStore.class);
+        ProcessingProgressTracker progress = Mockito.mock(ProcessingProgressTracker.class);
+        RuleStructureService structures = Mockito.mock(RuleStructureService.class);
+        RuleChunkEmbeddingService embeddings = Mockito.mock(RuleChunkEmbeddingService.class);
+        UUID versionId = UUID.randomUUID();
+        when(documents.pageCount(versionId)).thenReturn(500);
+        when(documents.pages(versionId)).thenAnswer(ignored -> {
+            Thread.sleep(200);
+            return List.of(new DocumentProcessing.PageView(1, "Setup", 5));
+        });
+        var ingestion = new UploadedDocumentIngestion(
+                documents,
+                pdfPreparation,
+                pageImages,
+                new BoundedPageImageStoragePipeline(Runnable::run, 1),
+                progress,
+                structures,
+                embeddings,
+                new SimpleMeterRegistry());
+
+        long startedAt = System.nanoTime();
+        ingestion.process(versionId, DocumentProcessingStage.EMBED);
+        long elapsedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt);
+
+        assertThat(elapsedMillis).isLessThan(100);
+        verify(documents).pageCount(versionId);
+        verify(documents, never()).pages(versionId);
+        verify(progress).update(versionId, "EMBEDDING", 90, 500, false);
+        verify(progress).update(versionId, "INDEXING", 95, 500, false);
+        verify(progress).update(versionId, "READY", 100, 500, true);
     }
 
     private ExtractedPage page(int pageNumber, String text) {

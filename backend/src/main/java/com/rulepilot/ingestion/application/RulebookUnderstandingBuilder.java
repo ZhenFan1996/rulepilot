@@ -16,8 +16,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 import org.springframework.stereotype.Component;
 
 /**
@@ -27,13 +25,9 @@ import org.springframework.stereotype.Component;
 @Component
 public class RulebookUnderstandingBuilder {
 
-    private static final int MAX_TERM_LENGTH = 100;
+    private static final int MAX_TERM_LENGTH = 120;
     static final String VISUAL_PAGE_PLACEHOLDER =
             "This rulebook page is visual evidence. Text extraction was unavailable; inspect the rendered page image.";
-    private static final Pattern CAPITALIZED_PHRASE = Pattern.compile(
-            "\\b(?:[A-Z][\\p{L}\\p{N}'-]*)(?:\\s+[A-Z][\\p{L}\\p{N}'-]*){0,3}\\b");
-    private static final Pattern ACRONYM = Pattern.compile("\\b[A-Z][A-Z0-9]{1,11}\\b");
-
     public RulebookUnderstanding build(List<ExtractedPage> pages) {
         if (pages == null || pages.isEmpty()) {
             throw new IllegalArgumentException("extracted pages are required");
@@ -111,21 +105,11 @@ public class RulebookUnderstandingBuilder {
     private List<TerminologyCandidate> terminology(List<PageBlock> blocks) {
         Map<String, TerminologyCandidate> candidates = new LinkedHashMap<>();
         for (PageBlock block : blocks) {
-            if (block.role() == BlockRole.FOOTER) continue;
             if (block.role() == BlockRole.HEADING) {
                 addTerm(candidates, block.text(), block);
             }
-            extractTerms(CAPITALIZED_PHRASE, block, candidates);
-            extractTerms(ACRONYM, block, candidates);
         }
         return List.copyOf(candidates.values());
-    }
-
-    private void extractTerms(Pattern pattern, PageBlock block, Map<String, TerminologyCandidate> candidates) {
-        Matcher matcher = pattern.matcher(block.text());
-        while (matcher.find()) {
-            addTerm(candidates, matcher.group(), block);
-        }
     }
 
     private void addTerm(Map<String, TerminologyCandidate> candidates, String rawTerm, PageBlock block) {

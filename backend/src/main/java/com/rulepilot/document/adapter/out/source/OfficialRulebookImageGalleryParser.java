@@ -15,8 +15,8 @@ import org.jsoup.nodes.Element;
 /** Identifies ordered rulebook-page images inside an explicitly marked document viewer. */
 final class OfficialRulebookImageGalleryParser {
 
-    static final int MAX_PAGE_COUNT = 40;
-    private static final int MIN_PAGE_COUNT = 2;
+    /** Mirrors the PDF ingestion boundary; aggregate bytes and decoded pixels are bounded downstream. */
+    static final int MAX_PAGE_COUNT = 500;
     private static final Pattern GSTONE_DOCUMENT_PATH = Pattern.compile("^/game/doc-[0-9]+\\.html$");
     private static final Set<String> RULEBOOK_TERMS = Set.of(
             "rulebook", "rules", "manual", "instructions", "regles", "regeln", "regolamento", "reglas",
@@ -42,7 +42,7 @@ final class OfficialRulebookImageGalleryParser {
             URI page = pageImage(source, image);
             if (page != null) orderedPages.putIfAbsent(page.toASCIIString(), page);
         }
-        if (orderedPages.size() < MIN_PAGE_COUNT || orderedPages.size() > MAX_PAGE_COUNT) {
+        if (orderedPages.isEmpty() || orderedPages.size() > MAX_PAGE_COUNT) {
             return Optional.empty();
         }
         return Optional.of(new Gallery(List.copyOf(orderedPages.values())));

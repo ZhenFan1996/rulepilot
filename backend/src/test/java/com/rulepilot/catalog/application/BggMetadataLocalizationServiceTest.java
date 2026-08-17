@@ -77,7 +77,7 @@ class BggMetadataLocalizationServiceTest {
     }
 
     @Test
-    void retainsTheOfficialNameButFallsBackOnInvalidModelMetadata() {
+    void keepsValidTranslatedFieldsWhenOneOptionalListHasTheWrongShape() {
         var game = game(List.of("展翅翱翔"));
         when(translations.translate(any())).thenReturn(Optional.of(new Translation(
                 "建造一座鸟类保护区。", List.of(), List.of("卡牌轮抽"))));
@@ -86,9 +86,12 @@ class BggMetadataLocalizationServiceTest {
 
         assertThat(localized.name()).isEqualTo("展翅翱翔");
         assertThat(localized.officialNameLocalized()).isTrue();
-        assertThat(localized.description()).isEqualTo(game.description());
+        assertThat(localized.description()).isEqualTo("建造一座鸟类保护区。");
         assertThat(localized.categories()).isEqualTo(game.categories());
-        assertThat(localized.mechanics()).isEqualTo(game.mechanics());
+        assertThat(localized.mechanics()).containsExactly("卡牌轮抽");
+        assertThat(localized.descriptionTranslated()).isTrue();
+        assertThat(localized.categoriesTranslated()).isFalse();
+        assertThat(localized.mechanicsTranslated()).isTrue();
     }
 
     @Test
@@ -191,6 +194,42 @@ class BggMetadataLocalizationServiceTest {
         assertThat(localized.categories()).containsEntry("Strategy", "译:Strategy");
         assertThat(localized.mechanics()).containsEntry("Mechanic 51", "译:Mechanic 51");
         verify(translations, times(2)).translate(any());
+    }
+
+    @Test
+    void keepsTranslatedTaxonomyChunksWhenALaterOptionalChunkIsUnavailable() {
+        List<String> mechanics = java.util.stream.IntStream.rangeClosed(1, 51)
+                .mapToObj(index -> "Mechanic " + index)
+                .toList();
+        when(translations.translate(any())).thenAnswer(invocation -> {
+            BggMetadataTranslation.Request request = invocation.getArgument(0);
+            if (request.mechanics().contains("Mechanic 50")) return Optional.empty();
+            return Optional.of(new Translation(
+                    "",
+                    request.categories().stream().map(value -> "译:" + value).toList(),
+                    request.mechanics().stream().map(value -> "译:" + value).toList()));
+        });
+
+        var localized = service.localizeDiscoveryTaxonomy(List.of("Strategy"), mechanics, "zh-CN");
+
+        assertThat(localized.translated()).isTrue();
+        assertThat(localized.categories()).containsEntry("Strategy", "译:Strategy");
+        assertThat(localized.mechanics())
+                .containsEntry("Mechanic 1", "译:Mechanic 1")
+                .containsEntry("Mechanic 51", "Mechanic 51");
+        verify(translations, times(2)).translate(any());
+    }
+
+    @Test
+    void doesNotRejectAnOtherwiseValidTaxonomyTermAtAnArbitraryCharacterCount() {
+        String longTranslation = "策略".repeat(120);
+        when(translations.translate(any())).thenReturn(Optional.of(new Translation(
+                "", List.of(longTranslation), List.of())));
+
+        var localized = service.localizeDiscoveryCategories(List.of("Strategy"), "zh-CN");
+
+        assertThat(localized.translated()).isTrue();
+        assertThat(localized.categories()).containsEntry("Strategy", longTranslation);
     }
 
     private BoardGameGeekCatalog.GameDetails game(List<String> officialChineseNames) {

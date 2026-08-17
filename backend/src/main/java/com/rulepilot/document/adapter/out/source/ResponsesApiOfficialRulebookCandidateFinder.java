@@ -414,10 +414,7 @@ public class ResponsesApiOfficialRulebookCandidateFinder implements OfficialRule
         List<Candidate> result = new ArrayList<>();
         try {
             JsonNode payload = json.readTree(jsonPayload(outputText(output)));
-            if (payload != null
-                    && payload.isObject()
-                    && payload.size() == 1
-                    && payload.path("candidates").isArray()) {
+            if (payload != null && payload.isObject() && payload.path("candidates").isArray()) {
                 for (JsonNode candidate : payload.path("candidates")) {
                     if (result.size() == 8) break;
                     Candidate checked = candidate(candidate, sourceUrls);
@@ -552,11 +549,10 @@ public class ResponsesApiOfficialRulebookCandidateFinder implements OfficialRule
     }
 
     private Candidate candidate(JsonNode value, Map<Integer, String> sourceUrls) {
-        if (!exactFields(value, "title", "url", "publisher", "language", "edition", "sourceIndexes")
+        if (!value.isObject()
                 || !value.path("sourceIndexes").isArray()
-                || value.path("sourceIndexes").isEmpty()
-                || value.path("sourceIndexes").size() > 5) return null;
-        String title = text(value.path("title"), 180);
+                || value.path("sourceIndexes").isEmpty()) return null;
+        String title = requiredText(value.path("title"));
         String url = publicHttps(value.path("url").asText(""));
         if (title == null || url == null) return null;
         boolean observed = false;
@@ -569,9 +565,9 @@ public class ResponsesApiOfficialRulebookCandidateFinder implements OfficialRule
         return new Candidate(
                 title,
                 url,
-                optionalText(value.path("publisher"), 120),
-                optionalText(value.path("language"), 40),
-                optionalText(value.path("edition"), 120));
+                optionalText(value.path("publisher")),
+                optionalText(value.path("language")),
+                optionalText(value.path("edition")));
     }
 
     private Map<Integer, String> sources(JsonNode output) {
@@ -705,22 +701,15 @@ public class ResponsesApiOfficialRulebookCandidateFinder implements OfficialRule
         return value.substring(newline + 1, value.length() - 3).strip();
     }
 
-    private boolean exactFields(JsonNode node, String... names) {
-        if (!node.isObject() || node.size() != names.length) return false;
-        for (String name : names) if (!node.has(name)) return false;
-        return true;
-    }
-
-    private String text(JsonNode node, int maximum) {
+    private String requiredText(JsonNode node) {
         if (!node.isTextual()) return null;
         String value = node.asText().strip().replaceAll("\\s+", " ");
-        return value.isBlank() || value.length() > maximum ? null : value;
+        return value.isBlank() ? null : value;
     }
 
-    private String optionalText(JsonNode node, int maximum) {
+    private String optionalText(JsonNode node) {
         if (!node.isTextual()) return "";
-        String value = node.asText().strip().replaceAll("\\s+", " ");
-        return value.length() <= maximum ? value : value.substring(0, maximum);
+        return node.asText().strip();
     }
 
     private String publicHttps(String value) {

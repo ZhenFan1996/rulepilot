@@ -155,9 +155,7 @@ public class UploadedRulebookTeachingHandoffService implements UploadedRulebookT
 
     private String normalizedGoal(String learningGoal) {
         if (learningGoal == null || learningGoal.isBlank()) return null;
-        String normalized = learningGoal.strip();
-        if (normalized.length() > 500) throw new IllegalArgumentException("teaching learning goal is too long");
-        return normalized;
+        return learningGoal.strip();
     }
 
     public record HandoffView(

@@ -40,7 +40,6 @@ public class BggMetadataLocalizationService {
                 game.bggId(), fallback.name(), description, game.categories(), game.mechanics());
         try {
             return translations.translate(request)
-                    .filter(translation -> validFor(request, translation))
                     .map(translation -> localized(fallback, request, translation))
                     .orElse(fallback);
         } catch (RuntimeException exception) {
@@ -88,8 +87,10 @@ public class BggMetadataLocalizationService {
         Request request = new Request(DISCOVERY_TAXONOMY_ID, "BGG discovery categories", "", source, List.of());
         try {
             return translations.translate(request)
-                    .filter(translation -> validFor(request, translation))
-                    .map(translation -> new LocalizedTaxonomy(indexed(source, translation.categories()), true))
+                    .map(translation -> {
+                        List<String> localized = translatedTerms(source, translation.categories());
+                        return new LocalizedTaxonomy(indexed(source, localized), !localized.equals(source));
+                    })
                     .orElseGet(() -> new LocalizedTaxonomy(identity(source), false));
         } catch (RuntimeException exception) {
             LOGGER.warn("BGG discovery category translation fell back to source values");
@@ -108,35 +109,38 @@ public class BggMetadataLocalizationService {
                 || (sourceCategories.isEmpty() && sourceMechanics.isEmpty())) {
             return fallback;
         }
-        try {
-            Map<String, String> localizedCategories = new java.util.LinkedHashMap<>();
-            Map<String, String> localizedMechanics = new java.util.LinkedHashMap<>();
-            List<TaxonomyTerm> terms = java.util.stream.Stream.concat(
-                            sourceCategories.stream().map(value -> new TaxonomyTerm(value, true)),
-                            sourceMechanics.stream().map(value -> new TaxonomyTerm(value, false)))
-                    .toList();
-            for (int start = 0; start < terms.size(); start += TRANSLATION_CHUNK_SIZE) {
-                List<TaxonomyTerm> chunk = terms.subList(start, Math.min(start + TRANSLATION_CHUNK_SIZE, terms.size()));
-                List<String> categoryChunk = chunk.stream().filter(TaxonomyTerm::category).map(TaxonomyTerm::value).toList();
-                List<String> mechanicChunk = chunk.stream().filter(term -> !term.category()).map(TaxonomyTerm::value).toList();
-                Request request = new Request(
-                        RANKED_CATALOG_TAXONOMY_ID,
-                        "BGG ranked catalog taxonomy",
-                        "",
-                        categoryChunk,
-                        mechanicChunk);
-                Translation translation = translations.translate(request)
-                        .filter(candidate -> validFor(request, candidate))
-                        .orElse(null);
-                if (translation == null) return fallback;
-                localizedCategories.putAll(indexed(categoryChunk, translation.categories()));
-                localizedMechanics.putAll(indexed(mechanicChunk, translation.mechanics()));
+        Map<String, String> localizedCategories = new java.util.LinkedHashMap<>(identity(sourceCategories));
+        Map<String, String> localizedMechanics = new java.util.LinkedHashMap<>(identity(sourceMechanics));
+        boolean anyTranslated = false;
+        List<TaxonomyTerm> terms = java.util.stream.Stream.concat(
+                        sourceCategories.stream().map(value -> new TaxonomyTerm(value, true)),
+                        sourceMechanics.stream().map(value -> new TaxonomyTerm(value, false)))
+                .toList();
+        for (int start = 0; start < terms.size(); start += TRANSLATION_CHUNK_SIZE) {
+            List<TaxonomyTerm> chunk = terms.subList(start, Math.min(start + TRANSLATION_CHUNK_SIZE, terms.size()));
+            List<String> categoryChunk = chunk.stream().filter(TaxonomyTerm::category).map(TaxonomyTerm::value).toList();
+            List<String> mechanicChunk = chunk.stream().filter(term -> !term.category()).map(TaxonomyTerm::value).toList();
+            Request request = new Request(
+                    RANKED_CATALOG_TAXONOMY_ID,
+                    "BGG ranked catalog taxonomy",
+                    "",
+                    categoryChunk,
+                    mechanicChunk);
+            Translation translation;
+            try {
+                translation = translations.translate(request).orElse(null);
+            } catch (RuntimeException exception) {
+                LOGGER.warn("One BGG ranked catalog taxonomy translation chunk fell back to source values");
+                continue;
             }
-            return new LocalizedDiscoveryTaxonomy(localizedCategories, localizedMechanics, true);
-        } catch (RuntimeException exception) {
-            LOGGER.warn("BGG ranked catalog taxonomy translation fell back to source values");
-            return fallback;
+            if (translation == null) continue;
+            List<String> translatedCategories = translatedTerms(categoryChunk, translation.categories());
+            List<String> translatedMechanics = translatedTerms(mechanicChunk, translation.mechanics());
+            localizedCategories.putAll(indexed(categoryChunk, translatedCategories));
+            localizedMechanics.putAll(indexed(mechanicChunk, translatedMechanics));
+            anyTranslated |= !translatedCategories.equals(categoryChunk) || !translatedMechanics.equals(mechanicChunk);
         }
+        return new LocalizedDiscoveryTaxonomy(localizedCategories, localizedMechanics, anyTranslated);
     }
 
     private List<String> normalizedTaxonomy(List<String> values) {
@@ -173,32 +177,13 @@ public class BggMetadataLocalizationService {
                 false);
     }
 
-    private boolean validFor(Request request, Translation translation) {
-        return translation.description() != null
-                && (request.description().isBlank() == translation.description().isBlank())
-                && sameShape(request.categories(), translation.categories())
-                && sameShape(request.mechanics(), translation.mechanics());
-    }
-
-    private boolean sameShape(List<String> source, List<String> translated) {
-        return translated != null
-                && translated.size() == source.size()
-                && translated.stream().allMatch(value -> value != null && !value.isBlank() && value.length() <= 200);
-    }
-
     private LocalizedMetadata localized(
             LocalizedMetadata fallback,
             Request request,
             Translation translation) {
-        String description = SimplifiedChineseText.normalize(translation.description().strip());
-        List<String> categories = translation.categories().stream()
-                .map(String::strip)
-                .map(SimplifiedChineseText::normalize)
-                .toList();
-        List<String> mechanics = translation.mechanics().stream()
-                .map(String::strip)
-                .map(SimplifiedChineseText::normalize)
-                .toList();
+        String description = translatedDescription(request.description(), translation.description());
+        List<String> categories = translatedTerms(request.categories(), translation.categories());
+        List<String> mechanics = translatedTerms(request.mechanics(), translation.mechanics());
         return new LocalizedMetadata(
                 fallback.name(),
                 fallback.officialNameLocalized(),
@@ -208,6 +193,24 @@ public class BggMetadataLocalizationService {
                 !categories.equals(request.categories()),
                 mechanics,
                 !mechanics.equals(request.mechanics()));
+    }
+
+    private String translatedDescription(String source, String candidate) {
+        if (source == null || source.isBlank()) return "";
+        if (candidate == null || candidate.isBlank()) return source;
+        return SimplifiedChineseText.normalize(candidate.strip());
+    }
+
+    private List<String> translatedTerms(List<String> source, List<String> candidates) {
+        if (candidates == null || candidates.size() != source.size()) return source;
+        return IntStream.range(0, source.size())
+                .mapToObj(index -> {
+                    String candidate = candidates.get(index);
+                    return candidate == null || candidate.isBlank()
+                            ? source.get(index)
+                            : SimplifiedChineseText.normalize(candidate.strip());
+                })
+                .toList();
     }
 
     public record LocalizedMetadata(

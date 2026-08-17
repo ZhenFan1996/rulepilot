@@ -58,8 +58,8 @@ class PublicGameIdentityLookupService implements PublicGameIdentityLookup {
 
     private String checkedTitle(String title) {
         String checked = title == null ? "" : title.strip().replaceAll("\\s+", " ");
-        if (checked.length() < 2 || checked.length() > 120) {
-            throw new IllegalArgumentException("public game title must contain 2 to 120 characters");
+        if (checked.isBlank() || checked.length() > 120) {
+            throw new IllegalArgumentException("public game title is required and must contain at most 120 characters");
         }
         return checked;
     }

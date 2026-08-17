@@ -33,7 +33,7 @@ public record ConfirmedRuling(
                 || version < 0 || createdAt == null || updatedAt == null) {
             throw new IllegalArgumentException("confirmed ruling is invalid");
         }
-        originalQuestion = normalized(originalQuestion, "question", 2000);
+        originalQuestion = requiredText(originalQuestion, "question");
         normalizedQuestion = normalizeQuestion(normalizedQuestion);
         if (!normalizeQuestion(originalQuestion).equals(normalizedQuestion)) {
             throw new IllegalArgumentException("normalized ruling question does not match the original question");
@@ -44,12 +44,12 @@ public record ConfirmedRuling(
         } else if (!normalizedQuestionHash.equals(expectedHash)) {
             throw new IllegalArgumentException("ruling question hash is invalid");
         }
-        shortVerdict = normalized(shortVerdict, "short verdict", 2000);
-        explanation = normalized(explanation, "explanation", 20000);
-        createdBy = normalized(createdBy, "creator", 120);
+        shortVerdict = requiredText(shortVerdict, "short verdict");
+        explanation = requiredText(explanation, "explanation");
+        createdBy = schemaBounded(createdBy, "creator", 120);
         citations = List.copyOf(citations);
         exceptions = exceptions.stream()
-                .map(value -> normalized(value, "exception", 2000))
+                .map(value -> requiredText(value, "exception"))
                 .toList();
         if (citations.stream().anyMatch(citation ->
                 !applicability.documentVersionId().equals(citation.documentVersionId()))) {
@@ -96,14 +96,20 @@ public record ConfirmedRuling(
     }
 
     private static String normalizeQuestion(String value) {
-        return normalized(value, "normalized question", 2000).toLowerCase(Locale.ROOT);
+        return requiredText(value, "normalized question")
+                .replaceAll("\\s+", " ")
+                .toLowerCase(Locale.ROOT);
     }
 
-    private static String normalized(String value, String field, int maxLength) {
+    private static String requiredText(String value, String field) {
         if (value == null || value.isBlank()) {
             throw new IllegalArgumentException(field + " is required");
         }
-        String normalized = value.strip().replaceAll("\\s+", " ");
+        return value.strip();
+    }
+
+    private static String schemaBounded(String value, String field, int maxLength) {
+        String normalized = requiredText(value, field);
         if (normalized.length() > maxLength) {
             throw new IllegalArgumentException(field + " is too long");
         }

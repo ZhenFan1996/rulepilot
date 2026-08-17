@@ -113,6 +113,21 @@ class BggRankedCatalogServiceTest {
     }
 
     @Test
+    void resolvesAnExactSingleCharacterReferenceAlias() {
+        MemoryRepository repository = new MemoryRepository();
+        FakeBgg bgg = new FakeBgg();
+        BggRankedCatalogService service = new BggRankedCatalogService(repository, bgg);
+
+        var result = service.resolveReferenceTitle("碁");
+
+        assertThat(result).singleElement().satisfies(game -> {
+            assertThat(game.ranking().bggId()).isEqualTo(30);
+            assertThat(game.ranking().sourceName()).isEqualTo("碁");
+        });
+        assertThat(bgg.searchQueries).isEmpty();
+    }
+
+    @Test
     void rejectsAnExplicitTitlePairWhenItsAliasesResolveToDifferentGames() {
         MemoryRepository repository = new MemoryRepository();
         FakeBgg bgg = new FakeBgg();
@@ -136,6 +151,9 @@ class BggRankedCatalogServiceTest {
         @Override
         public Page find(Query query) {
             this.query = query;
+            if (query.search().equals("碁")) {
+                return new Page(1, query.page(), query.size(), List.of(game(30, 30, "碁")));
+            }
             return new Page(
                     162_686,
                     query.page(),
@@ -146,15 +164,19 @@ class BggRankedCatalogServiceTest {
         @Override
         public List<RankedGame> findByIds(List<Integer> bggIds) {
             return bggIds.stream()
-                    .filter(id -> id == 10 || id == 20)
-                    .map(id -> game(id, id))
+                    .filter(id -> id == 10 || id == 20 || id == 30)
+                    .map(id -> id == 30 ? game(30, 30, "碁") : game(id, id))
                     .toList();
         }
 
         private RankedGame game(int id, int rank) {
+            return game(id, rank, "Game " + id);
+        }
+
+        private RankedGame game(int id, int rank, String name) {
             return new RankedGame(
                     id,
-                    "Game " + id,
+                    name,
                     2026,
                     rank,
                     new BigDecimal("7.1"),

@@ -44,6 +44,8 @@ public interface RuleDocumentRepository {
 
     void replacePages(UUID versionId, List<DocumentProcessing.ExtractedPage> pages);
 
+    int countPages(UUID versionId);
+
     List<DocumentProcessing.PageView> findPages(UUID versionId);
 
     void updatePageImage(UUID versionId, int pageNumber, String objectKey, int width, int height);

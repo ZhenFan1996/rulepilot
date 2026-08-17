@@ -303,7 +303,7 @@ class UploadedRulebookTeachingHandoffEntity {
     @Id UUID id;
     @Column(name = "document_version_id", nullable = false) UUID documentVersionId;
     @Column(name = "owner_username", nullable = false) String ownerUsername;
-    @Column(name = "learning_goal", length = 500) String learningGoal;
+    @Column(name = "learning_goal", columnDefinition = "text") String learningGoal;
     @Column(nullable = false) String state;
     @Column(name = "preparation_run_id") UUID preparationRunId;
     @Column(name = "error_code") String errorCode;

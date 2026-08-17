@@ -64,7 +64,7 @@ class DeepSeekBggMetadataTranslationTest {
             verify(redis.values()).set(
                     key.capture(), value.capture(), org.mockito.ArgumentMatchers.eq(Duration.ofDays(30)));
             assertThat(key.getValue())
-                    .startsWith("rulepilot:bgg:metadata-translation:zh-CN:v3:266192:")
+                    .startsWith("rulepilot:bgg:metadata-translation:zh-CN:v4:266192:")
                     .doesNotContain("Build a bird reserve", "Animals", "Card Drafting");
             assertThat(value.getValue()).contains("建造一座鸟类保护区。", "动物", "卡牌轮抽");
         } finally {
@@ -94,20 +94,53 @@ class DeepSeekBggMetadataTranslationTest {
     }
 
     @Test
-    void rejectsAResponseThatDropsOrLeavesStructuredTermsUntranslated() throws Exception {
+    void keepsUsableFieldsWhenAnotherOptionalTranslationFieldIsInvalid() throws Exception {
         HttpServer server = responseServer(Map.of(
                 "description", "建造一座鸟类保护区。",
                 "categories", List.of(),
-                "mechanics", List.of("Card Drafting")));
+                "mechanics", List.of("Card Drafting"),
+                "providerNote", "ignored"));
         server.start();
         try {
             RedisMocks redis = redisWithMissAndBudget(1L);
             var adapter = adapter(redis.template(), "http://127.0.0.1:" + server.getAddress().getPort());
 
-            assertThat(adapter.translate(REQUEST)).isEmpty();
+            assertThat(adapter.translate(REQUEST)).hasValueSatisfying(value -> {
+                assertThat(value.description()).isEqualTo("建造一座鸟类保护区。");
+                assertThat(value.categories()).containsExactly("Animals");
+                assertThat(value.mechanics()).containsExactly("Card Drafting");
+            });
 
-            verify(redis.values(), never()).set(
+            verify(redis.values()).set(
                     anyString(), anyString(), org.mockito.ArgumentMatchers.any(Duration.class));
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void omitsAnOversizedOptionalDescriptionButStillTranslatesStructuredTerms() throws Exception {
+        String sourceDescription = "Long publisher description. ".repeat(700);
+        Request request = new Request(
+                266192,
+                "Wingspan",
+                sourceDescription,
+                List.of("Animals"),
+                List.of("Card Drafting"));
+        HttpServer server = responseServer(Map.of(
+                "description", "",
+                "categories", List.of("动物"),
+                "mechanics", List.of("卡牌轮抽")));
+        server.start();
+        try {
+            RedisMocks redis = redisWithMissAndBudget(1L);
+            var adapter = adapter(redis.template(), "http://127.0.0.1:" + server.getAddress().getPort());
+
+            assertThat(adapter.translate(request)).hasValueSatisfying(value -> {
+                assertThat(value.description()).isEqualTo(sourceDescription.strip());
+                assertThat(value.categories()).containsExactly("动物");
+                assertThat(value.mechanics()).containsExactly("卡牌轮抽");
+            });
         } finally {
             server.stop(0);
         }

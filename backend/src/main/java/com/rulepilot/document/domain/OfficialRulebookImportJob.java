@@ -149,7 +149,7 @@ public record OfficialRulebookImportJob(
             if (state == null) throw new IllegalArgumentException("teaching handoff state is required");
             if (learningGoal != null) {
                 learningGoal = learningGoal.strip();
-                if (learningGoal.isBlank() || learningGoal.length() > 500) {
+                if (learningGoal.isBlank()) {
                     throw new IllegalArgumentException("teaching learning goal is invalid");
                 }
             }
