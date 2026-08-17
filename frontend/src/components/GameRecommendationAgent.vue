@@ -54,7 +54,7 @@ const copy = {
     starters: ['想找和我喜欢的一款机制相近的', '先聊聊最近流行什么', '朋友聚会，想热闹但不要尴尬', '我不确定，先问我一个问题吧'],
     type: '类型：{value}', interaction: '互动：{value}',
     journeyWorking: '正在为《{game}》获取规则书并生成讲解 · {progress}%', journeyReady: '《{game}》的基础讲解可读',
-    journeyFailed: '《{game}》的准备流程需要处理', journeyOpen: '打开进度', journeyRead: '打开讲解', journeyProgress: '查看进度', journeyDialog: '规则书与讲解进度',
+    journeyFailed: '《{game}》的准备流程需要处理', journeyStatusLabel: '讲解状态', journeyOpen: '打开进度', journeyRead: '打开讲解', journeyProgress: '查看进度', journeyDialog: '规则书与讲解进度',
     recommendationRole: '继续推荐', answerRole: '规则答疑', roleLabel: '切换任务',
     loginRequired: '推荐需要登录；你写的条件已保留在这个浏览器会话中。登录后回来检查一下，再发送。',
     login: '登录并继续', register: '创建账号', checkingSession: '正在确认登录…',
@@ -76,7 +76,7 @@ const copy = {
     starters: ['Find something mechanically similar to a game I like', 'Let’s chat about what is popular', 'Lively with friends, but not awkward', 'I am not sure—ask me one useful question'],
     type: 'Type: {value}', interaction: 'Interaction: {value}',
     journeyWorking: 'Getting the rulebook and building a guide for {game} · {progress}%', journeyReady: 'Base guide ready for {game}',
-    journeyFailed: 'The preparation flow for {game} needs attention', journeyOpen: 'Open progress', journeyRead: 'Open guide', journeyProgress: 'View progress', journeyDialog: 'Rulebook and guide progress',
+    journeyFailed: 'The preparation flow for {game} needs attention', journeyStatusLabel: 'Guide status', journeyOpen: 'Open progress', journeyRead: 'Open guide', journeyProgress: 'View progress', journeyDialog: 'Rulebook and guide progress',
     recommendationRole: 'Recommendations', answerRole: 'Rules Q&A', roleLabel: 'Switch task',
     loginRequired: 'Sign in to use recommendations. Your draft is saved in this browser session; review it and send after you return.',
     login: 'Sign in and continue', register: 'Create account', checkingSession: 'Checking sign-in…',
@@ -1071,11 +1071,23 @@ onBeforeUnmount(() => {
           <button v-if="canResetRecommendation" type="button" :disabled="loading" class="recommendation-reset mt-5 min-h-11 text-sm font-semibold underline decoration-light-soft underline-offset-4 disabled:cursor-not-allowed disabled:opacity-40" @click="requestReset">{{ t('reset') }}</button>
         </div>
 
-        <div class="min-w-0 bg-paper text-ink">
+        <div data-testid="recommendation-chat-workspace" class="min-w-0 bg-paper text-ink">
           <nav v-if="answerWorkspaceReady" data-testid="agent-role-switcher" class="flex gap-2 border-b border-ink/8 px-4 py-3 sm:px-6" :aria-label="t('roleLabel')">
             <button type="button" class="min-h-11 rounded-xl px-4 text-sm font-semibold" :class="conversationRole === 'recommendation' ? 'bg-felt text-white' : 'border border-ink/12 text-ink/60'" :aria-pressed="conversationRole === 'recommendation'" @click="switchToRecommendations">{{ t('recommendationRole') }}</button>
             <button type="button" class="min-h-11 rounded-xl px-4 text-sm font-semibold" :class="conversationRole === 'rule-qa' ? 'bg-indigo text-white' : 'border border-ink/12 text-ink/60'" :aria-pressed="conversationRole === 'rule-qa'" @click="switchToQuestions()">{{ t('answerRole') }}</button>
           </nav>
+
+          <div v-if="selectedGame && openSurface !== 'journey'" data-testid="player-journey-continuation" class="mx-4 my-3 flex flex-col overflow-hidden rounded-2xl border border-copper/25 bg-canvas elevation-sm hover:border-copper/45 sm:mx-6 sm:flex-row">
+            <button ref="journeyDock" data-testid="player-journey-dock" type="button" class="flex min-h-16 min-w-0 flex-1 items-center gap-3 px-4 py-3 text-left" @click="openJourneyDock">
+              <span class="grid size-9 shrink-0 place-items-center rounded-full bg-copper/10 font-mono text-xs font-bold text-copper">{{ journeyStatus ? `${journeyStatus.projection.progress}%` : '…' }}</span>
+              <span class="min-w-0 flex-1">
+                <span class="block text-[0.6875rem] font-bold uppercase tracking-[0.12em] text-copper">{{ t('journeyStatusLabel') }}</span>
+                <span class="mt-0.5 block text-sm font-semibold text-ink">{{ compactJourneyText }}</span>
+              </span>
+              <span class="shrink-0 text-sm font-semibold text-indigo underline">{{ t(journeyStatus?.projection.canReadLesson && journeyStatus.plan?.id ? 'journeyRead' : 'journeyOpen') }}</span>
+            </button>
+            <button v-if="journeyStatus?.projection.canReadLesson && journeyStatus.plan?.id" data-testid="player-journey-progress-button" type="button" class="min-h-11 w-full shrink-0 border-t border-copper/20 px-4 text-sm font-semibold text-ink/55 underline sm:w-auto sm:border-l sm:border-t-0" @click="openSurface = 'journey'">{{ t('journeyProgress') }}</button>
+          </div>
 
           <div v-show="conversationRole === 'recommendation'">
             <div ref="conversationScroller" data-testid="recommendation-conversation" class="max-h-[70vh] min-h-72 scroll-pb-8 stack-y-md overflow-y-auto px-4 py-5 pb-8 sm:min-h-[31rem] sm:px-6 sm:py-7 sm:pb-9 lg:max-h-[46rem]" aria-live="polite">
@@ -1150,15 +1162,6 @@ onBeforeUnmount(() => {
           />
         </div>
       </div>
-    </div>
-
-    <div v-if="selectedGame && openSurface !== 'journey'" data-testid="player-journey-continuation" class="mt-4 flex flex-col overflow-hidden rounded-2xl border border-copper/25 bg-paper elevation-sm hover:border-copper/45 sm:flex-row">
-      <button ref="journeyDock" data-testid="player-journey-dock" type="button" class="flex min-h-16 min-w-0 flex-1 items-center gap-3 px-4 py-3 text-left" @click="openJourneyDock">
-        <span class="grid size-9 shrink-0 place-items-center rounded-full bg-copper/10 font-mono text-xs font-bold text-copper">{{ journeyStatus?.projection.progress ?? 5 }}%</span>
-        <span class="min-w-0 flex-1 text-sm font-semibold text-ink">{{ compactJourneyText }}</span>
-        <span class="shrink-0 text-sm font-semibold text-indigo underline">{{ t(journeyStatus?.projection.canReadLesson && journeyStatus.plan?.id ? 'journeyRead' : 'journeyOpen') }}</span>
-      </button>
-      <button v-if="journeyStatus?.projection.canReadLesson && journeyStatus.plan?.id" data-testid="player-journey-progress-button" type="button" class="min-h-11 w-full shrink-0 border-t border-copper/20 px-4 text-sm font-semibold text-ink/55 underline sm:w-auto sm:border-l sm:border-t-0" @click="openSurface = 'journey'">{{ t('journeyProgress') }}</button>
     </div>
 
     <Teleport to="body">

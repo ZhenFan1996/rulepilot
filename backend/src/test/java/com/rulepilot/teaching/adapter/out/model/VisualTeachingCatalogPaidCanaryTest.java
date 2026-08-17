@@ -47,6 +47,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -169,7 +170,7 @@ class VisualTeachingCatalogPaidCanaryTest {
         assumeTrue("true".equalsIgnoreCase(System.getenv("RULEPILOT_GSTONE_VISUAL_TEACHING_CANARY")));
         Path root = Path.of(System.getProperty("user.dir")).getParent();
         Path artifactPath = root.resolve(
-                ".local/agent-evaluation/gstone-endeavor-visual-teaching-preparation-v1.json");
+                ".local/agent-evaluation/gstone-endeavor-visual-teaching-ten-way-v1.json");
         boolean reuseVisualCatalog = "true".equalsIgnoreCase(
                 System.getenv("RULEPILOT_GSTONE_REUSE_VISUAL_CATALOG"));
         JsonNode priorArtifact = reuseVisualCatalog && Files.isRegularFile(artifactPath)
@@ -184,8 +185,8 @@ class VisualTeachingCatalogPaidCanaryTest {
         int expectedPages = Integer.parseInt(environmentOrDefault(
                 "RULEPILOT_GSTONE_VISUAL_TEACHING_PAGES", "16"));
         int visualParallelism = Integer.parseInt(environmentOrDefault(
-                "RULEPILOT_GSTONE_VISUAL_PARALLELISM", "3"));
-        assertThat(visualParallelism).isBetween(1, 4);
+                "RULEPILOT_GSTONE_VISUAL_PARALLELISM", "10"));
+        assertThat(visualParallelism).isBetween(1, 10);
         HttpClient http = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(20))
                 .followRedirects(HttpClient.Redirect.NORMAL)
@@ -221,34 +222,53 @@ class VisualTeachingCatalogPaidCanaryTest {
 
         List<GstonePageCatalogResult> pageResults = new ArrayList<>();
         Throwable catalogFailure = null;
+        List<String> catalogFailures = new ArrayList<>();
         long catalogStarted = System.nanoTime();
         if (priorArtifact != null) {
             pageResults.addAll(reusablePageResults(priorArtifact, expectedPages));
         } else {
-            ExecutorService visualExecutor = Executors.newFixedThreadPool(visualParallelism);
-            try {
-                List<Future<GstonePageCatalogResult>> futures = new ArrayList<>();
-                for (int index = 0; index < pageImages.size(); index++) {
-                    int pageNumber = index + 1;
-                    URI pageImage = pageImages.get(index);
-                    futures.add(visualExecutor.submit(() -> catalogGstonePage(
-                            http,
-                            pageImage,
-                            pageNumber,
-                            rulebookTitle,
-                            catalog,
-                            visualCallContext,
-                            activeVisualRequests,
-                            peakVisualRequests,
-                            pageAttempts)));
+            Duration visualWindowTimeout = Duration.parse(
+                    environmentOrDefault("VISUAL_CATALOG_TIMEOUT", "PT120S"));
+            for (int windowStart = 0; windowStart < pageImages.size(); windowStart += visualParallelism) {
+                int windowEnd = Math.min(windowStart + visualParallelism, pageImages.size());
+                ExecutorService visualExecutor = Executors.newFixedThreadPool(windowEnd - windowStart);
+                try {
+                    List<Future<GstonePageCatalogResult>> futures = new ArrayList<>();
+                    for (int index = windowStart; index < windowEnd; index++) {
+                        int pageNumber = index + 1;
+                        URI pageImage = pageImages.get(index);
+                        futures.add(visualExecutor.submit(() -> catalogGstonePage(
+                                http,
+                                pageImage,
+                                pageNumber,
+                                rulebookTitle,
+                                catalog,
+                                visualCallContext,
+                                activeVisualRequests,
+                                peakVisualRequests,
+                                pageAttempts)));
+                    }
+                    long visualWindowDeadline = System.nanoTime() + visualWindowTimeout.toNanos();
+                    for (Future<GstonePageCatalogResult> future : futures) {
+                        try {
+                            long remainingNanos = Math.max(0L, visualWindowDeadline - System.nanoTime());
+                            pageResults.add(future.get(remainingNanos, TimeUnit.NANOSECONDS));
+                        } catch (Throwable failure) {
+                            future.cancel(true);
+                            Throwable pageFailure = failure instanceof TimeoutException
+                                    ? new IllegalStateException(
+                                            "visual catalog window exceeded " + visualWindowTimeout, failure)
+                                    : failure;
+                            if (catalogFailure == null) catalogFailure = pageFailure;
+                            catalogFailures.add(pageFailure.toString());
+                        }
+                    }
+                } catch (Throwable failure) {
+                    if (catalogFailure == null) catalogFailure = failure;
+                    catalogFailures.add(failure.toString());
+                } finally {
+                    visualExecutor.shutdownNow();
                 }
-                for (Future<GstonePageCatalogResult> future : futures) {
-                    pageResults.add(future.get(180, TimeUnit.SECONDS));
-                }
-            } catch (Throwable failure) {
-                catalogFailure = failure;
-            } finally {
-                visualExecutor.shutdownNow();
             }
         }
         long catalogLatencyMs = Duration.ofNanos(System.nanoTime() - catalogStarted).toMillis();
@@ -270,6 +290,7 @@ class VisualTeachingCatalogPaidCanaryTest {
         artifact.put("visualProvider", "qwen");
         artifact.put("visualModel", visualModelName);
         artifact.put("visualOcrModel", "qwen3.5-ocr");
+        artifact.put("visualOcrUsedOnCriticalPath", false);
         artifact.put("visualCatalogReusedFromArtifact", priorArtifact != null);
         artifact.put("visualModelCallsThisRun", rawCatalogResponses.size());
         artifact.put("visualModelCalls", priorArtifact == null
@@ -305,6 +326,7 @@ class VisualTeachingCatalogPaidCanaryTest {
                 && pageInputs.stream().allMatch(PageInput::sourceRuleGroupInventoryComplete));
         if (catalogFailure != null) {
             artifact.put("catalogFailure", catalogFailure.toString());
+            artifact.put("catalogFailures", catalogFailures);
         }
         writeArtifact(artifactPath, artifact);
 
@@ -530,7 +552,6 @@ class VisualTeachingCatalogPaidCanaryTest {
             throws Exception {
         byte[] image = rgbJpeg(fetchBytes(http, imageUri));
         PageSummary lastSummary = null;
-        PageTranscript transcript = null;
         Throwable lastFailure = null;
         for (int attempt = 1; attempt <= 2; attempt++) {
             long started = System.nanoTime();
@@ -539,12 +560,8 @@ class VisualTeachingCatalogPaidCanaryTest {
             callContext.set(new VisualCallContext(pageNumber, attempt));
             try {
                 PageImageInput pageImage = new PageImageInput(pageNumber, "image/jpeg", image);
-                if (transcript == null) transcript = catalog.transcribeTeachingPage(pageImage, OWNER);
                 lastSummary = catalog.summarizeForTeaching(new CatalogRequest(
-                                List.of(pageImage),
-                                OWNER,
-                                rulebookTitle,
-                                List.of(transcript)))
+                                List.of(pageImage), OWNER, rulebookTitle))
                         .pages()
                         .getFirst();
                 pageAttempts.add(new VisualCatalogAttempt(

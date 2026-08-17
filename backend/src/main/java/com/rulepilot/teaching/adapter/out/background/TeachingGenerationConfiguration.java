@@ -84,15 +84,15 @@ class TeachingGenerationConfiguration {
     }
 
     /**
-     * Vision calls are deliberately isolated from base lesson generation. A tiny configurable concurrency lets a
-     * player receive independent icon/component crops sooner, while the zero-capacity queue still rejects excess work
-     * instead of accumulating costly provider calls.
+     * Vision calls are deliberately isolated from base lesson generation. Each page request owns its source image,
+     * provider response, validation, and persistence boundary, so up to ten pages can make progress without a shared
+     * response queue. The zero-capacity queue still rejects work above the configured per-lesson bound.
      */
     @Bean(name = "visualLocationExecutor")
     ThreadPoolTaskExecutor visualLocationExecutor(
-            @Value("${rulepilot.visual.request-parallelism:1}") int requestParallelism) {
-        if (requestParallelism < 1 || requestParallelism > 3) {
-            throw new IllegalArgumentException("visual request parallelism must be between one and three");
+            @Value("${rulepilot.visual.request-parallelism:10}") int requestParallelism) {
+        if (requestParallelism < 1 || requestParallelism > 10) {
+            throw new IllegalArgumentException("visual request parallelism must be between one and ten");
         }
         var executor = new ThreadPoolTaskExecutor();
         executor.setCorePoolSize(requestParallelism);

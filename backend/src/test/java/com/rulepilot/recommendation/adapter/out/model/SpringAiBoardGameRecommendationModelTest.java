@@ -25,7 +25,7 @@ import org.springframework.ai.openai.OpenAiChatOptions;
 class SpringAiBoardGameRecommendationModelTest {
 
     @Test
-    void disablesDeepSeekThinkingWhenTheActionProtocolIsRequired() {
+    void letsDeepSeekChooseDirectTextOrAnActionWithoutEnablingThinking() {
         RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
         ChatModel chatModel = mock(ChatModel.class);
         when(configuration.modelFor(RuntimeModelConfiguration.Role.RECOMMENDATION)).thenReturn(chatModel);
@@ -58,7 +58,7 @@ class SpringAiBoardGameRecommendationModelTest {
         ArgumentCaptor<Prompt> prompt = ArgumentCaptor.forClass(Prompt.class);
         verify(chatModel).call(prompt.capture());
         OpenAiChatOptions options = (OpenAiChatOptions) prompt.getValue().getOptions();
-        assertThat(options.getToolChoice()).isEqualTo("required");
+        assertThat(options.getToolChoice()).isEqualTo("auto");
         assertThat(options.getParallelToolCalls()).isFalse();
         assertThat(options.getExtraBody())
                 .containsExactlyInAnyOrderEntriesOf(
@@ -66,7 +66,7 @@ class SpringAiBoardGameRecommendationModelTest {
     }
 
     @Test
-    void preservesNativeActionCallsAndRequiresTheQwenActionProtocol() {
+    void preservesNativeActionCallsWhileQwenMayAlsoAnswerDirectly() {
         RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
         ChatModel chatModel = mock(ChatModel.class);
         when(configuration.usesFake(RuntimeModelConfiguration.Role.RECOMMENDATION)).thenReturn(false);
@@ -105,7 +105,7 @@ class SpringAiBoardGameRecommendationModelTest {
         ArgumentCaptor<Prompt> prompt = ArgumentCaptor.forClass(Prompt.class);
         verify(chatModel).call(prompt.capture());
         OpenAiChatOptions options = (OpenAiChatOptions) prompt.getValue().getOptions();
-        assertThat(options.getToolChoice()).isEqualTo("required");
+        assertThat(options.getToolChoice()).isEqualTo("auto");
         assertThat(options.getParallelToolCalls()).isFalse();
         assertThat(options.getTemperature()).isEqualTo(0.45);
         assertThat(options.getMaxTokens()).isEqualTo(1_200);

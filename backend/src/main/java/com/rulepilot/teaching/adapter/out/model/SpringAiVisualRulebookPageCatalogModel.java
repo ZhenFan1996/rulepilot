@@ -78,6 +78,8 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
             identifier, its same-page fact, and quantitySpans; never return a separate ruleGroupIdentifiers or
             quantityObservations array. quantitySpans contains only exact strings copied from the page and belongs to
             that same ruleGroups item. Do not return kind, indexes, numeric fields, interpreted scope, or calculated total.
+            Every identifier must be unique within its page. If one heading governs several distinct groups, use the
+            heading once and the shortest exact visible opening phrase for each later group; do not repeat the heading.
             Return externalDocumentDependencies only for a separately named document whose required rules are absent
             from this rulebook; a reference to another page in this same rulebook belongs in ruleGroups instead.
             Every ruleGroups fact containing a rule-significant number, written number, ordinal, threshold, range, or
