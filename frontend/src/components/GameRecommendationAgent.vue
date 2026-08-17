@@ -11,6 +11,7 @@ import RecommendationGameDetailsDialog from '@/components/RecommendationGameDeta
 import RecommendationLessonDialog from '@/components/RecommendationLessonDialog.vue'
 import RecommendationRulebookDialog from '@/components/RecommendationRulebookDialog.vue'
 import RecommendationRulebookHandoff, { type RecommendationJourneyStatus } from '@/components/RecommendationRulebookHandoff.vue'
+import SafeMarkdown from '@/components/SafeMarkdown.vue'
 import type {
   RecommendationAgentResponse,
   RecommendationClarification,
@@ -190,6 +191,7 @@ const messages = ref<RecommendationMessage[]>([{ id: 1, role: 'assistant', text:
 const draft = ref(restoredDraft())
 const loading = ref(false)
 const loadingStage = ref<LoadingStage>('requesting')
+const reportedLoadingStages = ref<RecommendationProgressStage[]>([])
 const loadingElapsedSeconds = ref(0)
 const failed = ref(false)
 const activeTurnLocale = ref<AppLocale | null>(null)
@@ -243,6 +245,11 @@ const loadingMessage = computed(() => {
   const message = loadingCopy[activeTurnLocale.value ?? locale.value][loadingStage.value]
   return loadingElapsedSeconds.value > 0 ? `${message} ${loadingElapsedSeconds.value}s` : message
 })
+const reportedLoadingSteps = computed(() => reportedLoadingStages.value.map((stage, index, stages) => ({
+  stage,
+  label: loadingCopy[activeTurnLocale.value ?? locale.value][stage],
+  current: index === stages.length - 1,
+})))
 const recommendationSoftBudgetReached = computed(() => loading.value && loadingElapsedSeconds.value >= 8)
 const hasVerifiedCandidates = computed(() => messages.value.some(message =>
   Boolean(message.response?.games.length || message.response?.comparison?.candidates.length)))
@@ -356,6 +363,7 @@ async function csrfToken() {
 function beginLoading() {
   if (loadingClock) clearInterval(loadingClock)
   loadingStage.value = 'requesting'
+  reportedLoadingStages.value = []
   loadingElapsedSeconds.value = 0
   const startedAt = Date.now()
   loadingClock = setInterval(() => { loadingElapsedSeconds.value = Math.floor((Date.now() - startedAt) / 1000) }, 1000)
@@ -463,6 +471,9 @@ async function submitPendingTurn(
       signal: activeRequest.signal,
     }, update => {
       loadingStage.value = update.stage
+      if (reportedLoadingStages.value.at(-1) !== update.stage) {
+        reportedLoadingStages.value = [...reportedLoadingStages.value, update.stage]
+      }
       loadingElapsedSeconds.value = Math.max(loadingElapsedSeconds.value, Math.floor(update.elapsedMs / 1000))
     })
     if (serverResponse.clientTurnId && serverResponse.clientTurnId !== pending.clientTurnId) {
@@ -1071,7 +1082,7 @@ onBeforeUnmount(() => {
               <div v-for="message in messages" :key="message.id" data-conversation-message :data-has-recommendations="message.response?.games.length ? 'true' : 'false'" class="flex min-w-0" :class="message.role === 'user' ? 'justify-end' : 'justify-start'">
                 <p v-if="message.role === 'user'" class="max-w-[88%] rounded-2xl rounded-br-sm bg-felt px-4 py-3 text-sm leading-6 text-white">{{ message.text }}</p>
                 <article v-else class="min-w-0 w-full" :data-testid="message.response?.games.length ? 'assistant-recommendation-turn' : 'assistant-conversation-turn'">
-                  <p class="max-w-[88%] rounded-2xl rounded-bl-sm border border-ink/8 bg-canvas px-4 py-3 text-sm leading-6 text-ink/72">{{ message.text }}</p>
+                  <SafeMarkdown :source="message.text" class="max-w-[88%] rounded-2xl rounded-bl-sm border border-ink/8 bg-canvas px-4 py-3 text-sm leading-6 text-ink/72" />
 
                   <div v-if="toolLabelsFor(message.response).length" class="mt-2 flex flex-wrap items-center gap-2 pl-1 text-[0.6875rem] text-ink/45" :aria-label="responseT(message.response, 'toolTrail')">
                     <span class="recommendation-tool-label font-semibold">{{ responseT(message.response, 'toolTrail') }}</span>
@@ -1100,6 +1111,12 @@ onBeforeUnmount(() => {
                     class="block text-sm font-semibold text-ink/70"
                   />
                   <span class="mt-0.5 block text-xs">{{ loadingMessage }}</span>
+                  <ol v-if="reportedLoadingSteps.length" data-testid="recommendation-progress-steps" class="mt-3 grid gap-1.5 text-xs leading-5">
+                    <li v-for="(step, index) in reportedLoadingSteps" :key="`${step.stage}-${index}`" class="flex items-start gap-2" :class="step.current ? 'font-semibold text-ink/70' : 'text-ink/50'">
+                      <span aria-hidden="true" class="mt-px w-3 shrink-0 text-center">{{ step.current ? '●' : '✓' }}</span>
+                      <span>{{ step.label }}</span>
+                    </li>
+                  </ol>
                   <p v-if="recommendationSoftBudgetReached" data-testid="recommendation-soft-budget" class="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-950">{{ recommendationSoftBudgetCopy }}</p>
                 </div>
               </div>

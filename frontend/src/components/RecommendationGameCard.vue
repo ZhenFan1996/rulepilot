@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 
 import TabletopGlyph from '@/components/TabletopGlyph.vue'
+import SafeMarkdown from '@/components/SafeMarkdown.vue'
 import type { RecommendedGame, ResearchSource } from '@/components/gameRecommendationTypes'
 import { useLocale, type AppLocale } from '@/lib/locale'
 
@@ -69,7 +70,14 @@ function fitIcon(relation: 'satisfied' | 'conflict' | 'unknown') {
 }
 
 function source(index: number) {
-  return props.sources.find(item => item.index === index)
+  const candidate = props.sources.find(item => item.index === index)
+  if (!candidate) return undefined
+  try {
+    const url = new URL(candidate.url)
+    return url.protocol === 'http:' || url.protocol === 'https:' ? candidate : undefined
+  } catch {
+    return undefined
+  }
 }
 
 function hideBrokenImage(event: Event) {
@@ -94,7 +102,7 @@ function hideBrokenImage(event: Event) {
       <ul class="mt-2 stack-y-s text-sm leading-5">
         <li v-for="claim in fitClaims" :key="`${claim.subject}-${claim.relation}`" class="flex gap-2" :class="claim.relation === 'conflict' ? 'text-red-700' : claim.relation === 'unknown' ? 'text-ink/55' : 'text-ink/68'">
           <span aria-hidden="true" class="font-bold">{{ fitIcon(claim.relation) }}</span>
-          <span><span class="mr-1.5 text-[0.6875rem] font-bold uppercase tracking-wide">{{ claim.strength === 'hard' ? labels.hard : labels.soft }} · {{ fitLabel(claim.relation) }}</span>{{ claim.text }}</span>
+          <span class="min-w-0"><span class="mr-1.5 text-[0.6875rem] font-bold uppercase tracking-wide">{{ claim.strength === 'hard' ? labels.hard : labels.soft }} · {{ fitLabel(claim.relation) }}</span><SafeMarkdown :source="claim.text" class="inline" /></span>
         </li>
       </ul>
     </section>
@@ -102,17 +110,17 @@ function hideBrokenImage(event: Event) {
     <section v-if="groupedReasons.bgg_fact.length" class="mt-4">
       <p class="tabletop-rule text-copper">{{ labels.bgg }}</p>
       <ul class="mt-2 stack-y-s text-sm leading-5 text-ink/65">
-        <li v-for="reason in groupedReasons.bgg_fact" :key="reason.text" class="flex gap-2"><span aria-hidden="true" class="text-copper">✓</span><span>{{ reason.text }}</span></li>
+        <li v-for="reason in groupedReasons.bgg_fact" :key="reason.text" class="flex gap-2"><span aria-hidden="true" class="text-copper">✓</span><SafeMarkdown :source="reason.text" class="min-w-0 flex-1" /></li>
       </ul>
     </section>
     <section v-if="groupedReasons.preference_inference.length" class="mt-4 border-l-2 border-indigo/35 pl-3">
       <p class="text-xs font-bold text-indigo">{{ labels.inferred }}</p>
-      <ul class="mt-2 stack-y-s text-sm leading-5 text-ink/65"><li v-for="reason in groupedReasons.preference_inference" :key="reason.text">{{ reason.text }}</li></ul>
+      <ul class="mt-2 stack-y-s text-sm leading-5 text-ink/65"><li v-for="reason in groupedReasons.preference_inference" :key="reason.text"><SafeMarkdown :source="reason.text" /></li></ul>
     </section>
     <section v-if="groupedReasons.web_research.length" class="mt-4 rounded-lg border border-copper/15 bg-copper/5 p-3">
       <p class="text-xs font-bold text-copper">{{ labels.researched }}</p>
       <div v-for="reason in groupedReasons.web_research" :key="reason.text" class="mt-2 text-sm leading-5 text-ink/65">
-        <p>{{ reason.text }}</p>
+        <SafeMarkdown :source="reason.text" />
         <p class="mt-1 flex flex-wrap gap-2 text-xs">
           <template v-for="index in reason.sourceIndexes" :key="index">
             <a v-if="source(index)" :href="source(index)!.url" target="_blank" rel="noopener noreferrer" class="font-semibold text-indigo underline decoration-indigo-soft underline-offset-2">[{{ index }}] {{ source(index)!.domain }}</a>
@@ -120,7 +128,7 @@ function hideBrokenImage(event: Event) {
         </p>
       </div>
     </section>
-    <div v-if="entry.tradeoffs.length" class="mt-3 border-t border-ink/8 pt-3"><p class="text-xs font-bold text-copper">{{ labels.tradeoff }}</p><p class="mt-1 text-xs leading-5 text-ink/60">{{ entry.tradeoffs.join(cardLocale === 'zh-CN' ? '；' : '; ') }}</p></div>
+    <div v-if="entry.tradeoffs.length" class="mt-3 border-t border-ink/8 pt-3"><p class="text-xs font-bold text-copper">{{ labels.tradeoff }}</p><ul class="mt-1 stack-y-s text-xs leading-5 text-ink/60"><li v-for="tradeoff in entry.tradeoffs" :key="tradeoff"><SafeMarkdown :source="tradeoff" /></li></ul></div>
 
     <div class="mt-3 flex flex-wrap gap-3">
       <button type="button" :disabled="loading" class="min-h-11 rounded-lg bg-felt px-4 text-sm font-semibold text-white disabled:opacity-40" @click="$emit('select', entry.game)">{{ labels.select }}</button>

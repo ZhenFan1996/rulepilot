@@ -39,9 +39,9 @@ describe('RecommendationComparisonTable', () => {
           ],
           axes: [
             {
-              subject: 'durationMinutes', label: 'Listed duration', capability: 'structured_metadata',
+              subject: 'durationMinutes', label: '**Listed duration**', capability: 'structured_metadata',
               cells: [
-                { bggId: 11, status: 'observed', observationKind: 'structured_metadata', value: '45–60 min' },
+                { bggId: 11, status: 'observed', observationKind: 'structured_metadata', value: '[45–60 min](https://example.test/duration)' },
                 { bggId: 22, status: 'observed', observationKind: 'structured_metadata', value: '60–75 min' },
               ],
             },
@@ -65,5 +65,8 @@ describe('RecommendationComparisonTable', () => {
     expect(table.text()).toContain('60–75 min')
     expect(table.text().match(/Unknown from the available evidence/g)).toHaveLength(2)
     expect(table.text()).not.toContain('并排核对')
+    expect(table.text()).not.toContain('**Listed duration**')
+    expect(table.get('strong').text()).toBe('Listed duration')
+    expect(table.get('a').attributes('href')).toBe('https://example.test/duration')
   })
 })

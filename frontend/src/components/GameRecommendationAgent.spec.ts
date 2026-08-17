@@ -109,6 +109,36 @@ describe('GameRecommendationAgent', () => {
       .toBe('两个人，想玩半小时的对抗游戏')
   })
 
+  it('renders the assistant narrative as safe markdown without activating model supplied HTML', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      if (String(input) === '/api/auth/csrf') {
+        return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      }
+      return Response.json({
+        outcome: 'conversation',
+        mode: 'model_assisted',
+        assistantMessage: '**Short answer**\n\n- [Useful source](https://example.test/source)\n- [unsafe](javascript:alert(1))\n\n<script>alert(1)</script>',
+        profile: baseProfile,
+        clarification: null,
+        sourceCount: 0,
+        candidatesEvaluated: 0,
+        games: [],
+      })
+    }))
+    const wrapper = await mountAgent()
+
+    await wrapper.get('textarea').setValue('Give me the short answer')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    const turn = wrapper.findAll('[data-testid="assistant-conversation-turn"]').at(-1)!
+    expect(turn.get('strong').text()).toBe('Short answer')
+    expect(turn.get('a').attributes('href')).toBe('https://example.test/source')
+    expect(turn.find('script').exists()).toBe(false)
+    expect(turn.find('a[href^="javascript:"]').exists()).toBe(false)
+    expect(turn.text()).toContain('<script>alert(1)</script>')
+  })
+
   it('restores an account-scoped transcript, preferences, and verified candidate names after route remount', async () => {
     const fetchMock = vi.fn(async (input: string | URL | Request, _init?: RequestInit) => {
       if (String(input) === '/api/auth/csrf') {
@@ -1347,9 +1377,23 @@ describe('GameRecommendationAgent', () => {
     streamController?.enqueue(encoder.encode('event: progress\ndata: {"stage":"searching_bgg_catalog","elapsedMs":120}\n\n'))
     await flushPromises()
     expect(wrapper.get('[role="status"]').text()).toContain('正在桌游目录里查找')
+    expect(wrapper.get('[data-testid="recommendation-progress-steps"]').text()).toContain('正在桌游目录里查找')
+
+    streamController?.enqueue(encoder.encode('event: progress\ndata: {"stage":"verifying_bgg_candidates","elapsedMs":180}\n\n'))
+    await flushPromises()
+    const reportedSteps = wrapper.get('[data-testid="recommendation-progress-steps"]')
+    expect(reportedSteps.text()).toContain('正在桌游目录里查找')
+    expect(reportedSteps.text()).toContain('正在核对人数、时长和玩法')
+    expect(reportedSteps.findAll('li')).toHaveLength(2)
+
+    streamController?.enqueue(encoder.encode('event: progress\ndata: {"stage":"selecting_tools","elapsedMs":220}\n\n'))
+    streamController?.enqueue(encoder.encode('event: progress\ndata: {"stage":"selecting_tools","elapsedMs":230}\n\n'))
+    await flushPromises()
+    expect(reportedSteps.findAll('li')).toHaveLength(3)
+    expect(reportedSteps.findAll('li').at(-1)?.text()).toContain('正在确认下一步该核对什么')
 
     await vi.advanceTimersByTimeAsync(8_000)
-    expect(wrapper.get('[role="status"]').text()).toContain('正在桌游目录里查找')
+    expect(wrapper.get('[role="status"]').text()).toContain('正在确认下一步该核对什么')
     expect(wrapper.get('[data-testid="recommendation-soft-budget"]').text())
       .toContain('目前还没有足以展示的新候选')
     expect(wrapper.get('[data-testid="recommendation-soft-budget"]').text())
