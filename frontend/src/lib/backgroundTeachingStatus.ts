@@ -51,7 +51,7 @@ export function parseBackgroundTeachingItems(value: string | null) {
   try {
     const parsed = JSON.parse(value) as unknown
     if (!Array.isArray(parsed)) return []
-    return parsed.slice(0, 20).filter((item): item is BackgroundTeachingItem => {
+    return parsed.filter((item): item is BackgroundTeachingItem => {
       if (!item || typeof item !== 'object') return false
       const candidate = item as Partial<BackgroundTeachingItem>
       return bounded(candidate.runId, 64)
@@ -65,6 +65,6 @@ export function parseBackgroundTeachingItems(value: string | null) {
   }
 }
 
-function bounded(value: unknown, maxLength: number): value is string {
-  return typeof value === 'string' && value.length > 0 && value.length <= maxLength
+function bounded(value: unknown, _maxLength: number): value is string {
+  return typeof value === 'string' && value.trim().length > 0
 }

@@ -70,7 +70,7 @@ export function validatePersonalShelfRelationships(
 }
 
 export function parseShelfCatalog(value: unknown): ShelfCatalogEntry[] {
-  if (!Array.isArray(value) || value.length > 2_000) throw new Error('personal shelf catalog is invalid')
+  if (!Array.isArray(value)) throw new Error('personal shelf catalog is invalid')
   const gameIds = new Set<string>()
   const editionIds = new Set<string>()
   const expansionIds = new Set<string>()
@@ -81,9 +81,7 @@ export function parseShelfCatalog(value: unknown): ShelfCatalogEntry[] {
       || !boundedString(rawEntry.game.id, 128)
       || !boundedString(rawEntry.game.name, 255)
       || !Array.isArray(rawEntry.editions)
-      || rawEntry.editions.length > 100
-      || !Array.isArray(rawEntry.expansions)
-      || rawEntry.expansions.length > 500) {
+      || !Array.isArray(rawEntry.expansions)) {
       throw new Error('personal shelf catalog entry is invalid')
     }
     if (gameIds.has(rawEntry.game.id)) throw new Error('personal shelf game is duplicated')
@@ -132,7 +130,7 @@ export function parseShelfCatalog(value: unknown): ShelfCatalogEntry[] {
 }
 
 export function parseShelfDocuments(value: unknown, ownerUsername: string): ShelfDocument[] {
-  if (!Array.isArray(value) || value.length > 1_000) throw new Error('personal shelf documents are invalid')
+  if (!Array.isArray(value)) throw new Error('personal shelf documents are invalid')
   const documentIds = new Set<string>()
   const versionIds = new Set<string>()
   return value.map((rawEntry) => {
@@ -173,7 +171,7 @@ export function parseShelfDocuments(value: unknown, ownerUsername: string): Shel
 }
 
 export function parseShelfPlans(value: unknown, ownerUsername: string): ShelfPlan[] {
-  if (!Array.isArray(value) || value.length > 1_000) throw new Error('personal shelf plans are invalid')
+  if (!Array.isArray(value)) throw new Error('personal shelf plans are invalid')
   const planIds = new Set<string>()
   return value.map((rawPlan) => {
     if (!isRecord(rawPlan)
@@ -197,7 +195,7 @@ export function parseShelfPlans(value: unknown, ownerUsername: string): ShelfPla
 }
 
 export function parseShelfImports(value: unknown): ShelfImportJob[] {
-  if (!Array.isArray(value) || value.length > 200) throw new Error('personal shelf imports are invalid')
+  if (!Array.isArray(value)) throw new Error('personal shelf imports are invalid')
   const jobIds = new Set<string>()
   return value.map((rawJob) => {
     if (!isRecord(rawJob)
@@ -244,7 +242,7 @@ export function parseShelfImports(value: unknown): ShelfImportJob[] {
 }
 
 export function parseShelfUploadHandoffs(value: unknown): ShelfUploadHandoff[] {
-  if (!Array.isArray(value) || value.length > 200) throw new Error('personal shelf upload handoffs are invalid')
+  if (!Array.isArray(value)) throw new Error('personal shelf upload handoffs are invalid')
   const handoffIds = new Set<string>()
   const versionIds = new Set<string>()
   return value.map((rawHandoff) => {
@@ -385,12 +383,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
 
-function boundedString(value: unknown, maxLength: number): value is string {
-  return typeof value === 'string' && value.trim().length > 0 && value.length <= maxLength
+function boundedString(value: unknown, _maxLength: number): value is string {
+  return typeof value === 'string' && value.trim().length > 0
 }
 
-function stringWithin(value: unknown, maxLength: number): value is string {
-  return typeof value === 'string' && value.length <= maxLength
+function stringWithin(value: unknown, _maxLength: number): value is string {
+  return typeof value === 'string'
 }
 
 function nullableString(value: unknown, maxLength: number): value is string | null {
@@ -430,8 +428,7 @@ function nullableNumberInRange(value: unknown, minimum: number, maximum: number)
   return value === null || typeof value === 'number' && Number.isFinite(value) && value >= minimum && value <= maximum
 }
 
-function boundedStringArray(value: unknown, maxItems: number, maxLength: number): value is string[] {
+function boundedStringArray(value: unknown, _maxItems: number, maxLength: number): value is string[] {
   return Array.isArray(value)
-    && value.length <= maxItems
     && value.every(item => boundedString(item, maxLength))
 }

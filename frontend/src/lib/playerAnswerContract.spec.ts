@@ -41,21 +41,21 @@ describe('playerAnswerContract', () => {
     expect(JSON.stringify(parsed)).not.toMatch(/assistantRunId|chunkId|sectionType|schemaDiagnostic|11111111/)
   })
 
-  it('requires cited conclusions and a matching warning status', () => {
+  it('requires cited conclusions without rejecting useful prose for warning bookkeeping', () => {
     expect(isPlayerFacingRuleAnswer({ ...answered, citations: [] })).toBe(false)
     expect(isPlayerFacingRuleAnswer({ ...answered, answerBasis: null })).toBe(false)
     expect(isPlayerFacingRuleAnswer({
       ...answered,
       status: 'ANSWERED_WITH_WARNING',
       warnings: [],
-    })).toBe(false)
+    })).toBe(true)
     expect(isPlayerFacingRuleAnswer({
       ...answered,
       warnings: [{ type: 'LOW_CONFIDENCE' }],
-    })).toBe(false)
+    })).toBe(true)
   })
 
-  it('requires one natural recovery action for every non-conclusion', () => {
+  it('preserves evidence-backed partial answers instead of requiring an empty fallback shape', () => {
     const insufficient: PlayerFacingRuleAnswer = {
       language: 'zh-CN',
       status: 'INSUFFICIENT_EVIDENCE',
@@ -72,12 +72,20 @@ describe('playerAnswerContract', () => {
     }
 
     expect(isPlayerFacingRuleAnswer(insufficient)).toBe(true)
-    expect(isPlayerFacingRuleAnswer({ ...insufficient, recovery: null })).toBe(false)
-    expect(isPlayerFacingRuleAnswer({ ...insufficient, confidence: 'HIGH' })).toBe(false)
+    expect(isPlayerFacingRuleAnswer({
+      ...insufficient,
+      explanation: '这页能确认行动发生在移动之后，但没有说明并列目标如何选择。',
+      recovery: null,
+      walkthroughSteps: Array.from({ length: 9 }, (_, index) => ({
+        instruction: `已确认步骤 ${index + 1}`,
+        explanation: '保留模型基于引用给出的逐步说明。'.repeat(30),
+        orderBasis: 'RULE_ORDER' as const,
+      })),
+    })).toBe(true)
     expect(isPlayerFacingRuleAnswer({
       ...insufficient,
       status: 'MODEL_TIMEOUT',
-    })).toBe(false)
+    })).toBe(true)
   })
 
   it('does not reinterpret valid published prose with a browser-side keyword blacklist', () => {
@@ -91,5 +99,33 @@ describe('playerAnswerContract', () => {
     }
 
     expect(parsePlayerFacingRuleAnswer(naturalPublishedAnswer)).toEqual(naturalPublishedAnswer)
+  })
+
+  it('drops only malformed optional enrichment while preserving the cited answer core', () => {
+    const parsed = parsePlayerFacingRuleAnswer({
+      ...answered,
+      citations: [
+        ...answered.citations,
+        { heading: 'Broken citation', excerpt: 'No usable page identity.', pageFrom: 'seven', pageTo: 7 },
+      ],
+      calculations: [
+        { expression: '3 × 4', result: '12' },
+        { expression: 'missing result' },
+      ],
+      walkthroughSteps: { unexpected: 'object instead of a list' },
+      warnings: [{ type: 'LOW_CONFIDENCE' }, { type: 'OLD_BROWSER_ONLY_WARNING' }],
+    })
+
+    expect(parsed).toMatchObject({
+      shortVerdict: answered.shortVerdict,
+      citations: answered.citations,
+      calculations: [{ expression: '3 × 4', result: '12' }],
+      warnings: [{ type: 'LOW_CONFIDENCE' }],
+    })
+    expect(parsed?.walkthroughSteps).toBeUndefined()
+    expect(parsePlayerFacingRuleAnswer({
+      ...answered,
+      citations: [{ heading: 'Broken', excerpt: '', pageFrom: 0, pageTo: 0 }],
+    })).toBeNull()
   })
 })

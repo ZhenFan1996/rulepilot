@@ -62,26 +62,27 @@ describe('GameRecommendationAgent', () => {
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)
     const wrapper = await mountAgent({}, { sessionIdentity: '' })
+    const detailedDraft = '4 个人，想玩 60 分钟内、全程都有参与感的游戏；还要保留这一条完整偏好。'.repeat(700)
 
-    await wrapper.get('textarea').setValue('4 个人，想玩 60 分钟内、全程都有参与感的游戏')
+    await wrapper.get('textarea').setValue(detailedDraft)
     await wrapper.get('form').trigger('submit')
     await flushPromises()
 
     expect(fetchMock).not.toHaveBeenCalled()
     expect((wrapper.get('textarea').element as HTMLTextAreaElement).value)
-      .toBe('4 个人，想玩 60 分钟内、全程都有参与感的游戏')
+      .toBe(detailedDraft)
     expect(wrapper.text()).toContain('推荐需要登录')
     expect(wrapper.text()).toContain('条件已保留在这个浏览器会话中')
     expect(wrapper.get('a[href^="/login"]').attributes('href')).toContain('redirect=/discover')
     expect(wrapper.get('a[href^="/register"]').attributes('href')).toContain('redirect=/discover')
     expect(sessionStorage.getItem('rulepilot:recommendation-draft:v1'))
-      .toContain('全程都有参与感')
+      .toContain(detailedDraft)
 
     wrapper.unmount()
     fetchMock.mockClear()
     const returned = await mountAgent({}, { sessionIdentity: 'player' })
     expect((returned.get('textarea').element as HTMLTextAreaElement).value)
-      .toBe('4 个人，想玩 60 分钟内、全程都有参与感的游戏')
+      .toBe(detailedDraft)
     expect(fetchMock).toHaveBeenCalledOnce()
     expect(String(fetchMock.mock.calls[0]?.[0])).toBe('/api/v1/bgg/recommendation-agent/session')
   })
@@ -821,25 +822,30 @@ describe('GameRecommendationAgent', () => {
     expect(wrapper.get('[role="alert"] button').text()).toBe('重试')
   })
 
-  it('keeps an over-limit turn intact, explains the 500-character boundary, and never sends it', async () => {
-    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+  it('sends a detailed natural-language turn without an arbitrary browser-side character gate', async () => {
+    const sentBodies: string[] = []
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       if (String(input) === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
-      throw new Error('an over-limit turn must not reach the recommendation endpoint')
+      sentBodies.push(String(init?.body))
+      return Response.json({
+        outcome: 'conversation', mode: 'model_assisted', assistantMessage: '我会结合这些细节一起判断。',
+        profile: baseProfile, clarification: null, sourceCount: 0, candidatesEvaluated: 0, games: [],
+      })
     })
     vi.stubGlobal('fetch', fetchMock)
     const wrapper = await mountAgent()
-    const overLimit = '我'.repeat(501)
+    const detailedTurn = '我们这次想把过往喜欢和不喜欢的体验都说清楚：'.repeat(20)
 
-    await wrapper.get('textarea').setValue(overLimit)
+    await wrapper.get('textarea').setValue(detailedTurn)
     await flushPromises()
 
-    expect((wrapper.get('textarea').element as HTMLTextAreaElement).value).toBe(overLimit)
-    expect(wrapper.text()).toContain('501 / 500')
-    expect(wrapper.text()).toContain('请删减 1 个字后再发送')
-    expect(wrapper.get('button[type="submit"]').attributes('disabled')).toBeDefined()
+    expect((wrapper.get('textarea').element as HTMLTextAreaElement).value).toBe(detailedTurn)
+    expect(wrapper.get('button[type="submit"]').attributes('disabled')).toBeUndefined()
     await wrapper.get('form').trigger('submit')
     await flushPromises()
-    expect(fetchMock).not.toHaveBeenCalled()
+    expect(sentBodies).toHaveLength(1)
+    expect(JSON.parse(sentBodies[0]!)).toMatchObject({ message: detailedTurn })
+    expect(wrapper.text()).toContain('我会结合这些细节一起判断')
   })
 
   it('requests the response language from the current turn while leaving the UI locale unchanged', async () => {

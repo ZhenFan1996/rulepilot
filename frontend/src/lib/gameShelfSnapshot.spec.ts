@@ -44,6 +44,20 @@ describe('personal shelf response boundaries', () => {
     }], 'player')).toHaveLength(1)
   })
 
+  it('keeps a large valid shelf and long player-visible titles instead of rejecting the whole view', () => {
+    const longTitle = '一份很长但仍然有效的桌游规则书标题'.repeat(30)
+    const plans = parseShelfPlans(Array.from({ length: 1_001 }, (_, index) => ({
+      id: `plan-${index}`,
+      documentVersionId: `version-${index}`,
+      gameTitle: index === 1_000 ? longTitle : `游戏 ${index}`,
+      createdBy: 'player',
+      createdAt: '2026-08-13T08:01:00Z',
+    })), 'player')
+
+    expect(plans).toHaveLength(1_001)
+    expect(plans.at(-1)?.gameTitle).toBe(longTitle)
+  })
+
   it('rejects cross-account documents and plans', () => {
     expect(() => parsePersonalShelfBase(catalog, [{
       ...documents[0], document: { ...documents[0]!.document, createdBy: 'other' },

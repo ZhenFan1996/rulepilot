@@ -100,7 +100,7 @@ describe('teaching progress', () => {
     expect(steps.map(step => step.text)).toEqual([
       '正在读取第 1 章“完成开局设置”引用的规则书页面',
       '正在依据规则书编写第 1 章“完成开局设置”',
-      '第 1 章“完成开局设置”已完成引用、结构与数量校验',
+      '第 1 章“完成开局设置”已完成引用归属、规则书版本与结构校验',
       '第 1 章“完成开局设置”已经可以阅读',
     ])
     expect(steps.map(step => step.outcome)).toEqual([
@@ -111,18 +111,59 @@ describe('teaching progress', () => {
 
   it('shows real chapter-planning work before the first teaching run exists', () => {
     const activities = [
-      activity(1, 'organizeTeachingOutline', 'RUNNING'),
-      activity(2, 'refineTeachingOutlineCoverage', 'SUCCEEDED'),
-      activity(3, 'internalOutlineTelemetry', 'SUCCEEDED'),
+      activity(1, 'transcribeTeachingVisualPage|3|16', 'SUCCEEDED'),
+      activity(2, 'inspectTeachingVisualPage|3|16', 'SUCCEEDED'),
+      activity(3, 'organizeTeachingOutline', 'RUNNING'),
+      activity(4, 'refineTeachingOutlineCoverage', 'SUCCEEDED'),
+      activity(5, 'internalOutlineTelemetry', 'SUCCEEDED'),
     ]
 
     const steps = recentTeachingPreparationActivitySteps(activities)
 
     expect(steps.map(step => step.text)).toEqual([
+      '正在逐字识别图像规则页第 3 / 16 页',
+      '正在整理图像规则页第 3 / 16 页的规则组',
       '正在通读规则书，先形成整局认识再规划讲解章节',
       '正在检查章节规划有没有漏掉规则内容',
     ])
     expect(JSON.stringify(steps)).not.toMatch(/organizeTeachingOutline|refineTeachingOutlineCoverage|internalOutlineTelemetry/)
+  })
+
+  it('shows the exact visual page that needs another pass without exposing operation names', () => {
+    const activities = [activity(1, 'inspectTeachingVisualPage|7|16', 'FAILED')]
+
+    expect(recentTeachingPreparationActivitySteps(activities).map(step => step.text)).toEqual([
+      '图像规则页第 7 / 16 页的规则整理需要重试',
+    ])
+    expect(recentTeachingPreparationActivitySteps(activities, 'en').map(step => step.text)).toEqual([
+      'Rule grouping for visual rulebook page 7 of 16 needs another pass',
+    ])
+  })
+
+  it('shows OCR and semantic grouping as two real visual-page steps', () => {
+    const activities = [
+      activity(1, 'transcribeTeachingVisualPage|7|16', 'RUNNING'),
+      activity(2, 'inspectTeachingVisualPage|7|16', 'RUNNING'),
+    ]
+
+    expect(recentTeachingPreparationActivitySteps(activities).map(step => step.text)).toEqual([
+      '正在逐字识别图像规则页第 7 / 16 页',
+      '正在整理图像规则页第 7 / 16 页的规则组',
+    ])
+  })
+
+  it('keeps the complete real preparation history instead of hiding early pages behind a display cap', () => {
+    const activities = Array.from({ length: 16 }, (_, index) => index + 1)
+      .flatMap(page => [
+        activity(page * 2 - 1, `transcribeTeachingVisualPage|${page}|16`, 'SUCCEEDED'),
+        activity(page * 2, `inspectTeachingVisualPage|${page}|16`, 'SUCCEEDED'),
+      ])
+
+    const steps = recentTeachingPreparationActivitySteps(activities)
+
+    expect(steps).toHaveLength(32)
+    expect(steps[0]?.text).toBe('正在逐字识别图像规则页第 1 / 16 页')
+    expect(steps.at(-1)?.text).toBe('正在整理图像规则页第 16 / 16 页的规则组')
   })
 
   it('shows a repair only when the backend actually emitted one', () => {

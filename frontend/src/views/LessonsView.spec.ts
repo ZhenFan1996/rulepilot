@@ -578,8 +578,8 @@ describe('LessonsView', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('共 3 个版本，按 2 本规则书整理；1 本可以继续阅读。')
-    expect(wrapper.findAll('h2').filter((heading) => heading.text() === 'Ahoy').length).toBe(1)
-    expect(wrapper.findAll('h2').filter((heading) => heading.text() === 'Root').length).toBe(0)
+    expect(wrapper.findAll('h2').filter((heading) => heading.text() === 'Ahoy Rules').length).toBe(1)
+    expect(wrapper.findAll('h2').filter((heading) => heading.text() === 'Root Rules').length).toBe(0)
     expect(wrapper.text()).toContain('同一本规则书的 1 个历史版本已收起。')
     expect(wrapper.text()).toContain('讲解已生成')
     expect(wrapper.text()).not.toContain('讲解已经通过规则依据核对')
@@ -587,14 +587,14 @@ describe('LessonsView', () => {
     const pending = wrapper.findAll('button').find((button) => button.text().includes('待处理 1'))
     expect(pending).toBeDefined()
     await pending!.trigger('click')
-    expect(wrapper.findAll('h2').filter((heading) => heading.text() === 'Root').length).toBe(1)
+    expect(wrapper.findAll('h2').filter((heading) => heading.text() === 'Root Rules').length).toBe(1)
 
     const showAll = wrapper.findAll('button').find((button) => button.text().includes('查看全部 3 个版本'))
     expect(showAll).toBeDefined()
     await showAll!.trigger('click')
 
-    expect(wrapper.findAll('h2').filter((heading) => heading.text() === 'Ahoy').length).toBe(2)
-    expect(wrapper.findAll('h2').filter((heading) => heading.text() === 'Root').length).toBe(1)
+    expect(wrapper.findAll('h2').filter((heading) => heading.text() === 'Ahoy Rules').length).toBe(2)
+    expect(wrapper.findAll('h2').filter((heading) => heading.text() === 'Root Rules').length).toBe(1)
     expect(wrapper.text()).toContain('收起历史版本')
     wrapper.unmount()
   })

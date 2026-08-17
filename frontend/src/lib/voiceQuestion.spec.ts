@@ -13,10 +13,9 @@ describe('voice question transcript', () => {
     )
   })
 
-  it('enforces the question boundary after merging', () => {
+  it('does not silently truncate a detailed spoken question', () => {
     const merged = mergeVoiceQuestion('a'.repeat(799), 'voice')
 
-    expect(merged.length).toBeLessThanOrEqual(800)
-    expect(merged).toBe('a'.repeat(799))
+    expect(merged).toBe(`${'a'.repeat(799)}\nvoice`)
   })
 })

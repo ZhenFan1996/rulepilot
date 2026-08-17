@@ -15,7 +15,6 @@ import {
 } from '@/lib/playerAnswerContract'
 import { playerTurnLocale } from '@/lib/playerTurnLanguage'
 
-const ANSWER_HISTORY_LIMIT = 12
 const ANSWER_SOFT_BUDGET_SECONDS = 8
 
 export type RuleCitation = PlayerRuleCitation
@@ -132,7 +131,7 @@ export function useLessonAnswers(options: UseLessonAnswersOptions) {
 
   function restoreConversation(turns: AnswerTurn[], clearQuestion = true) {
     resetConversation(clearQuestion)
-    answerTurns.value = turns.slice(-ANSWER_HISTORY_LIMIT)
+    answerTurns.value = [...turns]
     const latest = answerTurns.value.at(-1)
     if (!latest) return
     answer.value = latest.answer
@@ -221,7 +220,7 @@ export function useLessonAnswers(options: UseLessonAnswersOptions) {
       answerTurns.value = [
         ...answerTurns.value,
         { question: text, answer: received, learningIntent, rulingReference },
-      ].slice(-ANSWER_HISTORY_LIMIT)
+      ]
       question.value = ''
       options.onReceived(context, text, received, rulingReference)
       stopTracePolling()

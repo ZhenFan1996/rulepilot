@@ -45,7 +45,6 @@ const copy = {
     inputLabel: '聊聊你想玩的游戏', inputPlaceholder: '例如：想找和花砖物语机制接近、但互动再多一点的游戏', send: '发送', sending: '正在接着你的话想…',
     reset: '清空这次对话', error: '刚才没有接上。你写下的条件还在，可以直接重试。', retry: '重试', profile: '这次想找',
     players: '{value} 人', duration: '{value} 分钟内', durationAny: '时长不限', weight: '复杂度 ≤ {value}', weightAny: '复杂度不限',
-    inputCount: '{current} / {maximum}', inputTooLong: '请删减 {count} 个字后再发送；当前内容不会被裁掉。',
     source: '从完整 BGG 目录中核对了 {count} 款候选。', more: '换一批',
     understanding: '目前记下的偏好', basedOn: '你提到：“{value}”', low: '可能', medium: '大概', high: '明确',
     toolTrail: '本轮查找与核对', toolUnderstand: '理解你的条件', toolCatalog: '浏览 BGG 目录候选',
@@ -68,7 +67,6 @@ const copy = {
     inputLabel: 'Tell us what you want to play', inputPlaceholder: 'For example: something with similar mechanisms to a tile-drafting game, but more interaction', send: 'Send', sending: 'Thinking from where we left off…',
     reset: 'Clear this conversation', error: 'That reply did not come through. Your preferences are still here.', retry: 'Retry', profile: 'Looking for',
     players: '{value} players', duration: 'Up to {value} min', durationAny: 'Any duration', weight: 'Complexity ≤ {value}', weightAny: 'Any complexity',
-    inputCount: '{current} / {maximum}', inputTooLong: 'Remove {count} character(s) before sending. Your text has not been truncated.',
     source: 'Checked {count} candidates against the complete BGG catalog.', more: 'Try another batch',
     understanding: 'Preferences so far', basedOn: 'You said: “{value}”', low: 'Maybe', medium: 'Likely', high: 'Clear',
     toolTrail: 'Search and checks this turn', toolUnderstand: 'Understand your preferences', toolCatalog: 'Browse BGG catalog candidates',
@@ -144,12 +142,6 @@ function initialClarification(): RecommendationClarification {
 
 const DRAFT_STORAGE_KEY = 'rulepilot:recommendation-draft:v1'
 const DRAFT_STORAGE_VERSION = 2
-const MAX_RECOMMENDATION_CHARACTERS = 500
-const MAX_STORED_DRAFT_CHARACTERS = 20_000
-
-function characterCount(value: string) {
-  return Array.from(value).length
-}
 
 function protocolUuid(value: unknown): value is string {
   if (typeof value !== 'string' || value.length !== 36) return false
@@ -172,7 +164,6 @@ function restoredDraft() {
     const saved = parsed as { version?: unknown; draft?: unknown }
     return (saved.version === 1 || saved.version === DRAFT_STORAGE_VERSION)
       && typeof saved.draft === 'string'
-      && characterCount(saved.draft) <= MAX_STORED_DRAFT_CHARACTERS
       ? saved.draft
       : ''
   } catch {
@@ -183,7 +174,6 @@ function restoredDraft() {
 function rememberDraft(value: string) {
   try {
     if (value) {
-      if (characterCount(value) > MAX_STORED_DRAFT_CHARACTERS) return
       sessionStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify({ version: DRAFT_STORAGE_VERSION, draft: value }))
     } else {
       sessionStorage.removeItem(DRAFT_STORAGE_KEY)
@@ -287,9 +277,6 @@ const profileLabels = computed(() => {
   if (profile.value.interaction !== 'any') labels.push(t('interaction', { value: profile.value.interaction }))
   return labels
 })
-
-const draftCharacterCount = computed(() => characterCount(draft.value))
-const draftOverLimit = computed(() => Math.max(0, draftCharacterCount.value - MAX_RECOMMENDATION_CHARACTERS))
 
 function integerRangeLabel(minimum: number | null, maximum: number | null, kind: 'players' | 'duration') {
   if (minimum !== null && maximum !== null && minimum === maximum) {
@@ -559,7 +546,7 @@ function choose(option: { value: string; label: string }) {
 
 function submitMessage() {
   const message = draft.value.trim()
-  if (!message || draftOverLimit.value > 0 || loading.value || !sessionKnown.value || !serverSessionReady.value) return
+  if (!message || loading.value || !sessionKnown.value || !serverSessionReady.value) return
   if (!signedIn.value) {
     loginGateVisible.value = true
     notifyLoginRequired({ showReminder: false })
@@ -1129,13 +1116,9 @@ onBeforeUnmount(() => {
             <form class="flex items-end gap-2 border-t border-ink/8 p-4 sm:p-5" @submit.prevent="submitMessage">
               <div class="min-w-0 flex-1">
                 <label for="recommendation-agent-message" class="sr-only">{{ t('inputLabel') }}</label>
-                <textarea id="recommendation-agent-message" ref="recommendationInput" v-model="draft" rows="2" :placeholder="t('inputPlaceholder')" :aria-invalid="draftOverLimit > 0" aria-describedby="recommendation-agent-input-status" class="min-h-14 w-full resize-none rounded-xl border bg-canvas px-4 py-3 text-sm leading-6 outline-none" :class="draftOverLimit > 0 ? 'border-red-400 focus:border-red-500' : 'border-ink/15 focus:border-felt'" />
-                <div id="recommendation-agent-input-status" class="mt-1 flex items-start justify-between gap-3 text-xs" :class="draftOverLimit > 0 ? 'text-red-700' : 'text-ink/45'">
-                  <span>{{ draftOverLimit > 0 ? t('inputTooLong', { count: draftOverLimit }) : '' }}</span>
-                  <span class="shrink-0 tabular-nums">{{ t('inputCount', { current: draftCharacterCount, maximum: MAX_RECOMMENDATION_CHARACTERS }) }}</span>
-                </div>
+                <textarea id="recommendation-agent-message" ref="recommendationInput" v-model="draft" rows="2" :placeholder="t('inputPlaceholder')" class="min-h-14 w-full resize-none rounded-xl border border-ink/15 bg-canvas px-4 py-3 text-sm leading-6 outline-none focus:border-felt" />
               </div>
-              <button type="submit" :disabled="loading || !draft.trim() || draftOverLimit > 0 || !sessionKnown || !serverSessionReady" class="min-h-12 rounded-xl bg-felt px-5 text-sm font-semibold text-white disabled:opacity-40">{{ sessionKnown && serverSessionReady ? t('send') : t('checkingSession') }}</button>
+              <button type="submit" :disabled="loading || !draft.trim() || !sessionKnown || !serverSessionReady" class="min-h-12 rounded-xl bg-felt px-5 text-sm font-semibold text-white disabled:opacity-40">{{ sessionKnown && serverSessionReady ? t('send') : t('checkingSession') }}</button>
             </form>
           </div>
 

@@ -6,7 +6,6 @@ import {
 } from '@/lib/playerAnswerContract'
 
 const STORAGE_PREFIX = 'rulepilot:lesson-answer-thread:v2:'
-const HISTORY_LIMIT = 12
 
 export interface LessonAnswerThreadScope {
   username: string
@@ -24,7 +23,6 @@ export function readLessonAnswerThread(storage: Storage, scope: LessonAnswerThre
     return parsed
       .map(parseAnswerTurn)
       .filter((turn): turn is AnswerTurn => turn !== null)
-      .slice(-HISTORY_LIMIT)
   } catch {
     return []
   }
@@ -41,7 +39,6 @@ export function rememberLessonAnswerThread(
     const safeTurns = turns
       .map(parseAnswerTurn)
       .filter((turn): turn is AnswerTurn => turn !== null)
-      .slice(-HISTORY_LIMIT)
     storage.setItem(key, JSON.stringify(safeTurns))
   } catch {
     // The visible thread remains usable when browser-session storage is unavailable.
@@ -68,7 +65,7 @@ function storageKey(scope: LessonAnswerThreadScope) {
 
 function parseAnswerTurn(value: unknown): AnswerTurn | null {
   if (!isRecord(value)
-    || !boundedString(value.question, 1, 800)
+    || !hasText(value.question)
     || !isLearningIntent(value.learningIntent)
     || !(value.rulingReference === undefined || value.rulingReference === null
       || isAnswerRulingReference(value.rulingReference))) return null
@@ -93,8 +90,8 @@ function isLearningIntent(value: unknown) {
     || value === 'DEFINE' || value === 'WHY' || value === 'EXCEPTIONS' || value === 'SOURCE' || value === 'VERIFY'
 }
 
-function boundedString(value: unknown, min: number, max: number): value is string {
-  return typeof value === 'string' && value.trim().length >= min && value.length <= max
+function hasText(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

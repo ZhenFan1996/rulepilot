@@ -88,7 +88,6 @@ interface PublicAnswerTurn {
   learningIntent?: LearningIntent | null
 }
 
-const PUBLIC_ANSWER_HISTORY_LIMIT = 6
 const PUBLIC_ANSWER_SOFT_BUDGET_SECONDS = 8
 const PUBLIC_ANSWER_STORAGE_PREFIX = 'rulepilot:public-answer-thread:v2:'
 const PUBLIC_ANSWER_READER_KEY = 'rulepilot:public-answer-reader'
@@ -241,7 +240,6 @@ function restorePublicAnswerTurns(
       ? parsed
           .map(parsePublicAnswerTurn)
           .filter((turn): turn is PublicAnswerTurn => turn !== null)
-          .slice(-PUBLIC_ANSWER_HISTORY_LIMIT)
       : []
   } catch {
     publicAnswerTurns.value = []
@@ -260,7 +258,6 @@ function rememberPublicAnswerTurns(
     const safeTurns = turns
       .map(parsePublicAnswerTurn)
       .filter((turn): turn is PublicAnswerTurn => turn !== null)
-      .slice(-PUBLIC_ANSWER_HISTORY_LIMIT)
     sessionStorage.setItem(storageKey, JSON.stringify(safeTurns))
   } catch {
     // A private browser mode may not expose storage; the current on-page thread remains usable.
@@ -306,7 +303,6 @@ function parsePublicAnswerTurn(value: unknown): PublicAnswerTurn | null {
   if (!isRecord(value)
     || typeof value.question !== 'string'
     || value.question.trim().length === 0
-    || value.question.length > 800
     || !isPublicLearningIntent(value.learningIntent)) return null
   const answer = parsePublicAnswer(value.answer)
   if (!answer) return null
@@ -319,13 +315,34 @@ function isPublicLearningIntent(value: unknown) {
 }
 
 function parsePublicAnswer(value: unknown): PublicAnswer | null {
-  if (!isPublicAnswer(value)) return null
   try {
     const projected = JSON.parse(JSON.stringify(value, function(this: unknown, key, nestedValue) {
       if (key === '' || Array.isArray(this) || PUBLIC_ANSWER_FIELDS.has(key)) return nestedValue
       return undefined
     })) as unknown
-    return isPublicAnswer(projected) ? projected : null
+    if (!isRecord(projected) || !isRecord(projected.answer)) return null
+    const answer = projected.answer
+    const answerBasis = answer.answerBasis === 'DIRECT_RULE' || answer.answerBasis === 'GROUNDED_APPLICATION'
+      || answer.answerBasis === null
+      ? answer.answerBasis
+      : undefined
+    const candidate = {
+      answer: {
+        status: answer.status,
+        shortVerdict: answer.shortVerdict,
+        explanation: answer.explanation,
+        citations: validItems(answer.citations, isCitation),
+        exceptions: validItems(answer.exceptions, item => typeof item === 'string'),
+        confidence: answer.confidence,
+        answerBasis,
+        ...projectOptionalPublicEnrichment(answer),
+        clarification: typeof answer.clarification === 'string' || answer.clarification === null ? answer.clarification : null,
+        warnings: validItems(answer.warnings, isAnswerWarning),
+      },
+      visualAids: validItems(projected.visualAids, isVisualAid),
+      examples: validItems(projected.examples, isExample),
+    }
+    return isPublicAnswer(candidate) ? candidate : null
   } catch {
     return null
   }
@@ -342,86 +359,7 @@ function isPublicAnswer(value: unknown): value is PublicAnswer {
     && isConfidence(answer.confidence)
     && (answer.answerBasis === undefined || answer.answerBasis === null
       || answer.answerBasis === 'DIRECT_RULE' || answer.answerBasis === 'GROUNDED_APPLICATION')
-    && (answer.calculations === undefined || Array.isArray(answer.calculations)
-      && answer.calculations.every(calculation => typeof calculation?.expression === 'string'
-        && calculation.expression.length > 0 && calculation.expression.length <= 160
-        && typeof calculation?.result === 'string' && calculation.result.length > 0 && calculation.result.length <= 80))
-    && (answer.situationChecks === undefined || Array.isArray(answer.situationChecks)
-      && answer.situationChecks.length <= 6 && answer.situationChecks.every(check => typeof check?.requirement === 'string'
-        && check.requirement.length > 0 && check.requirement.length <= 500
-        && (check.status === 'CONFIRMED' || check.status === 'CONTRADICTED' || check.status === 'NOT_PROVIDED')
-        && typeof check.playerFact === 'string' && check.playerFact.length <= 800
-        && (check.status === 'NOT_PROVIDED' ? check.playerFact.length === 0 : check.playerFact.trim().length > 0)))
-    && (answer.walkthroughSteps === undefined || Array.isArray(answer.walkthroughSteps)
-      && answer.walkthroughSteps.length <= 6 && answer.walkthroughSteps.every(step => typeof step?.instruction === 'string'
-        && step.instruction.length > 0 && step.instruction.length <= 240
-        && typeof step?.explanation === 'string' && step.explanation.length > 0 && step.explanation.length <= 500
-        && (step.orderBasis === 'RULE_ORDER' || step.orderBasis === 'EXPLANATION_ORDER')))
-    && (answer.decisionBranches === undefined || Array.isArray(answer.decisionBranches)
-      && answer.decisionBranches.length <= 6 && answer.decisionBranches.every(branch => typeof branch?.condition === 'string'
-        && branch.condition.length > 0 && branch.condition.length <= 300
-        && typeof branch?.outcome === 'string' && branch.outcome.length > 0 && branch.outcome.length <= 500
-        && (branch.basis === 'EXPLICIT_RULE' || branch.basis === 'RULEBOOK_EXAMPLE')))
-    && (answer.exceptionClauses === undefined || Array.isArray(answer.exceptionClauses)
-      && answer.exceptionClauses.length <= 6 && answer.exceptionClauses.every(clause => typeof clause?.condition === 'string'
-        && clause.condition.length > 0 && clause.condition.length <= 300
-        && typeof clause?.effect === 'string' && clause.effect.length > 0 && clause.effect.length <= 500))
-    && (answer.termDefinitions === undefined || Array.isArray(answer.termDefinitions)
-      && answer.termDefinitions.length <= 4 && answer.termDefinitions.every(definition => typeof definition?.term === 'string'
-        && definition.term.length > 0 && definition.term.length <= 120
-        && typeof definition?.definition === 'string' && definition.definition.length > 0 && definition.definition.length <= 600
-        && typeof definition?.boundary === 'string' && definition.boundary.length <= 400))
-    && (answer.workedExamples === undefined || Array.isArray(answer.workedExamples)
-      && answer.workedExamples.length <= 3 && answer.workedExamples.every(example => typeof example?.setup === 'string'
-        && example.setup.length > 0 && example.setup.length <= 500
-        && typeof example?.action === 'string' && example.action.length > 0 && example.action.length <= 700
-        && typeof example?.outcome === 'string' && example.outcome.length > 0 && example.outcome.length <= 500
-        && (example.basis === 'RULEBOOK_EXAMPLE' || example.basis === 'EVIDENCE_BOUND_ILLUSTRATION')))
-    && (answer.priorityResolutions === undefined || Array.isArray(answer.priorityResolutions)
-      && answer.priorityResolutions.length <= 3 && answer.priorityResolutions.every(resolution => typeof resolution?.baseRule === 'string'
-        && resolution.baseRule.length > 0 && resolution.baseRule.length <= 500
-        && typeof resolution?.competingRule === 'string' && resolution.competingRule.length > 0 && resolution.competingRule.length <= 500
-        && typeof resolution?.resolution === 'string' && resolution.resolution.length > 0 && resolution.resolution.length <= 600
-        && (resolution.basis === 'EXPLICIT_OVERRIDE' || resolution.basis === 'IMPOSSIBILITY_PRIORITY' || resolution.basis === 'CONFLICT_ONLY_OVERRIDE')))
-    && (answer.timingResolutions === undefined || Array.isArray(answer.timingResolutions)
-      && answer.timingResolutions.length <= 3 && answer.timingResolutions.every(resolution => typeof resolution?.timingContext === 'string'
-        && resolution.timingContext.length > 0 && resolution.timingContext.length <= 500
-        && typeof resolution?.resolutionOrder === 'string' && resolution.resolutionOrder.length > 0 && resolution.resolutionOrder.length <= 700
-        && typeof resolution?.orderSource === 'string' && resolution.orderSource.length > 0 && resolution.orderSource.length <= 400
-        && (resolution.basis === 'CURRENT_PLAYER_CHOOSES' || resolution.basis === 'PRINTED_TOP_TO_BOTTOM' || resolution.basis === 'NORMAL_TURN_ORDER')))
-    && (answer.tieResolutions === undefined || Array.isArray(answer.tieResolutions)
-      && answer.tieResolutions.length <= 3 && answer.tieResolutions.every(resolution => typeof resolution?.tieContext === 'string'
-        && resolution.tieContext.length > 0 && resolution.tieContext.length <= 500
-        && Array.isArray(resolution.resolutionSteps) && resolution.resolutionSteps.length >= 1 && resolution.resolutionSteps.length <= 6
-        && resolution.resolutionSteps.every((step: unknown) => typeof step === 'string' && step.length > 0 && step.length <= 500 && !step.includes('\n') && !step.includes('\r'))
-        && typeof resolution?.finalOutcome === 'string' && resolution.finalOutcome.length > 0 && resolution.finalOutcome.length <= 500
-        && (resolution.basis === 'SINGLE_TIEBREAKER' || resolution.basis === 'ORDERED_TIEBREAKERS' || resolution.basis === 'RANK_REWARD_SHIFT' || resolution.basis === 'POSITIONAL_PRIORITY')))
-    && (answer.scopeResolutions === undefined || Array.isArray(answer.scopeResolutions)
-      && answer.scopeResolutions.length <= 3 && answer.scopeResolutions.every(resolution => typeof resolution?.ruleContext === 'string'
-        && resolution.ruleContext.length > 0 && resolution.ruleContext.length <= 500
-        && typeof resolution?.governingCondition === 'string' && resolution.governingCondition.length > 0 && resolution.governingCondition.length <= 500
-        && typeof resolution?.currentSituation === 'string' && resolution.currentSituation.length > 0 && resolution.currentSituation.length <= 300
-        && (resolution.matchStatus === 'MATCHES_SCOPE' || resolution.matchStatus === 'OUTSIDE_SCOPE' || resolution.matchStatus === 'NEEDS_CONTEXT')
-        && typeof resolution?.effect === 'string' && resolution.effect.length > 0 && resolution.effect.length <= 600
-        && (resolution.basis === 'PLAYER_COUNT' || resolution.basis === 'ROLE_PRESENCE' || resolution.basis === 'GAME_MODE'
-          || resolution.basis === 'VARIANT_SELECTION' || resolution.basis === 'PLAYER_COUNT_EXCEPTION')))
-    && (answer.conceptComparisons === undefined || Array.isArray(answer.conceptComparisons)
-      && answer.conceptComparisons.length <= 3 && answer.conceptComparisons.every(item => typeof item?.leftConcept === 'string'
-        && typeof item.leftDefinition === 'string' && typeof item.rightConcept === 'string'
-        && typeof item.rightDefinition === 'string' && typeof item.commonGround === 'string'
-        && typeof item.keyDifference === 'string' && typeof item.practicalBoundary === 'string'
-        && (item.basis === 'ACTION_WINDOW' || item.basis === 'RESOURCE_FUNCTION'
-          || item.basis === 'STORAGE_STATUS' || item.basis === 'RULE_SCOPE'
-          || item.basis === 'DEFINITION_BOUNDARY')))
-    && (answer.ruleOptions === undefined || Array.isArray(answer.ruleOptions)
-      && answer.ruleOptions.length >= 2 && answer.ruleOptions.length <= 8
-      && answer.ruleOptions.every(item => typeof item?.decisionContext === 'string' && item.decisionContext.length > 0 && item.decisionContext.length <= 240
-        && typeof item.selectionRule === 'string' && item.selectionRule.length > 0 && item.selectionRule.length <= 400
-        && typeof item.optionName === 'string' && item.optionName.length > 0 && item.optionName.length <= 160
-        && typeof item.availabilityCondition === 'string' && item.availabilityCondition.length > 0 && item.availabilityCondition.length <= 500
-        && typeof item.result === 'string' && item.result.length > 0 && item.result.length <= 700
-        && (item.basis === 'SOURCE_SELECTION' || item.basis === 'TIMING_CATALOG'
-          || item.basis === 'ALTERNATIVE_ACTION' || item.basis === 'EXCLUSIVE_CHOICE')))
+    && hasValidOptionalPublicEnrichment(answer)
     && (typeof answer.clarification === 'string' || answer.clarification === null)
     && Array.isArray(answer.warnings) && answer.warnings.every(isAnswerWarning)
     && Array.isArray(value.visualAids) && value.visualAids.every(isVisualAid)
@@ -431,35 +369,78 @@ function isPublicAnswer(value: unknown): value is PublicAnswer {
 
 function hasValidPublicOutcomeShape(answer: PublicAnswer['answer']) {
   const publishes = answer.status === 'ANSWERED' || answer.status === 'ANSWERED_WITH_WARNING'
-  const structured = [
-    answer.calculations,
-    answer.situationChecks,
-    answer.walkthroughSteps,
-    answer.decisionBranches,
-    answer.exceptionClauses,
-    answer.termDefinitions,
-    answer.workedExamples,
-    answer.priorityResolutions,
-    answer.timingResolutions,
-    answer.tieResolutions,
-    answer.scopeResolutions,
-    answer.conceptComparisons,
-    answer.ruleOptions,
-  ].some(items => items !== undefined && items.length > 0)
   if (publishes) {
     return answer.citations.length > 0
       && (answer.answerBasis === 'DIRECT_RULE' || answer.answerBasis === 'GROUNDED_APPLICATION')
       && answer.clarification === null
-      && (answer.status === 'ANSWERED_WITH_WARNING') === (answer.warnings.length > 0)
   }
-  return answer.confidence === 'LOW'
-    && (answer.answerBasis === undefined || answer.answerBasis === null)
-    && (answer.explanation === null || answer.explanation === '')
-    && answer.exceptions.length === 0
-    && answer.warnings.length === 0
-    && !structured
-    && (answer.status === 'INSUFFICIENT_EVIDENCE' || answer.citations.length === 0)
-    && (answer.status === 'CLARIFICATION_REQUIRED') === Boolean(answer.clarification?.trim())
+  if (answer.status === 'CLARIFICATION_REQUIRED') return Boolean(answer.clarification?.trim())
+  return true
+}
+
+const PUBLIC_OPTIONAL_ENRICHMENT_VALIDATORS: Record<string, (item: unknown) => boolean> = {
+  calculations: item => hasTextFields(item, ['expression', 'result']),
+  situationChecks: item => hasTextFields(item, ['requirement'])
+    && hasStringFields(item, ['playerFact'])
+    && isRecord(item) && ['CONFIRMED', 'CONTRADICTED', 'NOT_PROVIDED'].includes(String(item.status)),
+  walkthroughSteps: item => hasTextFields(item, ['instruction', 'explanation'])
+    && isRecord(item) && ['RULE_ORDER', 'EXPLANATION_ORDER'].includes(String(item.orderBasis)),
+  decisionBranches: item => hasTextFields(item, ['condition', 'outcome'])
+    && isRecord(item) && ['EXPLICIT_RULE', 'RULEBOOK_EXAMPLE'].includes(String(item.basis)),
+  exceptionClauses: item => hasTextFields(item, ['condition', 'effect']),
+  termDefinitions: item => hasTextFields(item, ['term', 'definition']) && hasStringFields(item, ['boundary']),
+  workedExamples: item => hasTextFields(item, ['setup', 'action', 'outcome'])
+    && isRecord(item) && ['RULEBOOK_EXAMPLE', 'EVIDENCE_BOUND_ILLUSTRATION'].includes(String(item.basis)),
+  priorityResolutions: item => hasTextFields(item, ['baseRule', 'competingRule', 'resolution'])
+    && isRecord(item) && ['EXPLICIT_OVERRIDE', 'IMPOSSIBILITY_PRIORITY', 'CONFLICT_ONLY_OVERRIDE'].includes(String(item.basis)),
+  timingResolutions: item => hasTextFields(item, ['timingContext', 'resolutionOrder', 'orderSource'])
+    && isRecord(item) && ['CURRENT_PLAYER_CHOOSES', 'PRINTED_TOP_TO_BOTTOM', 'NORMAL_TURN_ORDER'].includes(String(item.basis)),
+  tieResolutions: item => hasTextFields(item, ['tieContext', 'finalOutcome'])
+    && isRecord(item) && Array.isArray(item.resolutionSteps) && item.resolutionSteps.every(hasText)
+    && ['SINGLE_TIEBREAKER', 'ORDERED_TIEBREAKERS', 'RANK_REWARD_SHIFT', 'POSITIONAL_PRIORITY'].includes(String(item.basis)),
+  scopeResolutions: item => hasTextFields(item, ['ruleContext', 'governingCondition', 'currentSituation', 'effect'])
+    && isRecord(item) && ['MATCHES_SCOPE', 'OUTSIDE_SCOPE', 'NEEDS_CONTEXT'].includes(String(item.matchStatus))
+    && ['PLAYER_COUNT', 'ROLE_PRESENCE', 'GAME_MODE', 'VARIANT_SELECTION', 'PLAYER_COUNT_EXCEPTION'].includes(String(item.basis)),
+  conceptComparisons: item => hasTextFields(item, [
+    'leftConcept', 'leftDefinition', 'rightConcept', 'rightDefinition', 'commonGround', 'keyDifference', 'practicalBoundary',
+  ]) && isRecord(item) && ['ACTION_WINDOW', 'RESOURCE_FUNCTION', 'STORAGE_STATUS', 'RULE_SCOPE', 'DEFINITION_BOUNDARY'].includes(String(item.basis)),
+  ruleOptions: item => hasTextFields(item, [
+    'decisionContext', 'selectionRule', 'optionName', 'availabilityCondition', 'result',
+  ]) && isRecord(item) && ['SOURCE_SELECTION', 'TIMING_CATALOG', 'ALTERNATIVE_ACTION', 'EXCLUSIVE_CHOICE'].includes(String(item.basis)),
+}
+
+function hasValidOptionalPublicEnrichment(answer: Record<string, unknown>) {
+  return Object.entries(PUBLIC_OPTIONAL_ENRICHMENT_VALIDATORS)
+    .every(([field, validator]) => optionalArrayOf(answer[field], validator))
+}
+
+function projectOptionalPublicEnrichment(answer: Record<string, unknown>) {
+  return Object.fromEntries(Object.entries(PUBLIC_OPTIONAL_ENRICHMENT_VALIDATORS)
+    .map(([field, validator]) => [field, optionalValidItems(answer[field], validator)]))
+}
+
+function optionalArrayOf(value: unknown, validator: (item: unknown) => boolean) {
+  return value === undefined || Array.isArray(value) && value.every(validator)
+}
+
+function validItems<T>(value: unknown, validator: (item: unknown) => boolean): T[] {
+  return Array.isArray(value) ? value.filter(validator) as T[] : []
+}
+
+function optionalValidItems<T>(value: unknown, validator: (item: unknown) => boolean): T[] | undefined {
+  return Array.isArray(value) ? value.filter(validator) as T[] : undefined
+}
+
+function hasText(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0
+}
+
+function hasTextFields(value: unknown, fields: string[]) {
+  return isRecord(value) && fields.every(field => hasText(value[field]))
+}
+
+function hasStringFields(value: unknown, fields: string[]) {
+  return isRecord(value) && fields.every(field => typeof value[field] === 'string')
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -619,7 +600,7 @@ async function preparePublicAnswerReply(turn: PublicAnswerTurn) {
       publicQuestion.value = replyLanguage === 'en' ? 'I mean: ' : '我指的是：'
     } else if (turn.answer.answer.status === 'INSUFFICIENT_EVIDENCE') {
       const suffix = replyLanguage === 'en' ? '\nAdditional condition: ' : '\n补充条件：'
-      publicQuestion.value = `${turn.question.slice(0, Math.max(0, 800 - suffix.length))}${suffix}`
+      publicQuestion.value = `${turn.question}${suffix}`
     } else {
       publicQuestion.value = turn.question
     }
@@ -702,7 +683,7 @@ async function sendPublicQuestion(question: string, learningIntent: LearningInte
     if (!isCurrentPublicAnswerRequest(
       answerRequest, requestedPlanId, requestedLocale, requestedReaderScopeGeneration, requestedReaderScope, controller,
     )) return
-    const nextTurns = [...publicAnswerTurns.value, { question, answer: received, learningIntent }].slice(-PUBLIC_ANSWER_HISTORY_LIMIT)
+    const nextTurns = [...publicAnswerTurns.value, { question, answer: received, learningIntent }]
     publicAnswerTurns.value = nextTurns
     rememberPublicAnswerTurns(nextTurns, requestedReaderScope, requestedPlanId, requestedLocale)
     publicQuestion.value = ''
@@ -989,7 +970,7 @@ onUnmounted(() => {
 
           <form class="mt-5" @submit.prevent="submitPublicQuestion">
             <label for="public-question" class="sr-only">{{ t('public.question.submit') }}</label>
-            <textarea id="public-question" v-model="publicQuestion" rows="3" maxlength="800" :disabled="publicAnswerLoading || !readerScopeReady" :placeholder="t('public.question.placeholder')" class="w-full resize-y rounded-2xl border border-ink/15 bg-paper px-4 py-3 leading-7 outline-none transition placeholder:text-ink/35 focus:border-indigo focus:ring-4 focus:ring-indigo/10 disabled:opacity-55" />
+            <textarea id="public-question" v-model="publicQuestion" rows="3" :disabled="publicAnswerLoading || !readerScopeReady" :placeholder="t('public.question.placeholder')" class="w-full resize-y rounded-2xl border border-ink/15 bg-paper px-4 py-3 leading-7 outline-none transition placeholder:text-ink/35 focus:border-indigo focus:ring-4 focus:ring-indigo/10 disabled:opacity-55" />
             <div class="mt-3 flex flex-wrap items-center justify-between gap-3">
               <p class="text-xs text-ink/45">{{ t('public.question.counter', { count: publicQuestion.length }) }}</p>
               <button type="submit" :disabled="publicAnswerLoading || !readerScopeReady || !publicQuestion.trim()" class="min-h-11 rounded-xl bg-indigo px-5 text-sm font-semibold text-white transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-40">{{ publicAnswerLoading ? t('public.question.loading') : t('public.question.submit') }}</button>

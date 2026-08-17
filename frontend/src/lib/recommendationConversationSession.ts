@@ -6,12 +6,8 @@ const STORAGE_PREFIX = 'rulepilot:recommendation-conversation:v1:'
 const STORAGE_VERSION = 3
 const MAX_RAW_LENGTH = 200_000
 const MAX_TRANSCRIPT = 24
-const MAX_TRANSCRIPT_TEXT = 4_000
 const MAX_KNOWN_GAMES = 60
 const MAX_SHOWN_GAMES = 60
-const MAX_GAME_NAME = 160
-const MAX_PENDING_MESSAGE = 20_000
-const MAX_PROFILE_TERM = 80
 
 export type RecommendationConversationTurn = {
   role: 'assistant' | 'user'
@@ -282,8 +278,8 @@ function isProfile(value: unknown): value is RecommendationProfile {
       || value.maxMinutes === 0
       || Number(value.maxMinutes) >= 5)
     && (value.maxWeight === undefined || nullableNumberInRange(value.maxWeight, 0, 5))
-    && boundedString(value.type, 1, MAX_PROFILE_TERM)
-    && boundedString(value.interaction, 1, MAX_PROFILE_TERM)
+    && hasText(value.type)
+    && hasText(value.interaction)
     && optionalConstraintRange(value.playerCount, 1, 20, true)
     && optionalConstraintRange(value.durationMinutes, 5, 1_440, true)
     && optionalConstraintRange(value.complexity, 0, 5, false)
@@ -310,28 +306,27 @@ function optionalConstraintRange(
     && (minimum !== null || maximum !== null)
     && (minimum === null || maximum === null || Number(minimum) <= Number(maximum))
     && (value.strength === 'hard' || value.strength === 'soft')
-    && boundedString(value.sourceText, 0, 160)
+    && typeof value.sourceText === 'string'
     && Number.isSafeInteger(value.confirmedTurn)
     && Number(value.confirmedTurn) >= 0
-    && Number(value.confirmedTurn) <= 10_000
 }
 
 function isConversationTurn(value: unknown): value is RecommendationConversationTurn {
   return isRecord(value)
     && (value.role === 'assistant' || value.role === 'user')
-    && boundedString(value.text, 1, MAX_TRANSCRIPT_TEXT)
+    && hasText(value.text)
 }
 
 function isConversationGame(value: unknown): value is RecommendationConversationGame {
   return isRecord(value)
     && isPositiveInteger(value.bggId)
-    && boundedString(value.name, 1, MAX_GAME_NAME)
-    && boundedString(value.originalName, 1, MAX_GAME_NAME)
+    && hasText(value.name)
+    && hasText(value.originalName)
 }
 
 function isConversationPending(value: unknown): value is RecommendationConversationPending {
   return isRecord(value)
-    && boundedString(value.message, 1, MAX_PENDING_MESSAGE)
+    && hasText(value.message)
     && Array.isArray(value.excludedBggIds)
     && value.excludedBggIds.length <= MAX_SHOWN_GAMES
     && value.excludedBggIds.every(isPositiveInteger)
@@ -343,7 +338,7 @@ function isConversationPending(value: unknown): value is RecommendationConversat
 
 function isPreviousPending(value: unknown): value is PreviousRecommendationPending {
   return isRecord(value)
-    && boundedString(value.message, 1, MAX_PENDING_MESSAGE)
+    && hasText(value.message)
     && Array.isArray(value.excludedBggIds)
     && value.excludedBggIds.length <= MAX_SHOWN_GAMES
     && value.excludedBggIds.every(isPositiveInteger)
@@ -355,7 +350,7 @@ function isPreviousPending(value: unknown): value is PreviousRecommendationPendi
 function isLegacyPending(value: unknown): value is Omit<PreviousRecommendationPending, 'clientTurnId'> {
   return isRecord(value)
     && !('clientTurnId' in value)
-    && boundedString(value.message, 1, MAX_PENDING_MESSAGE)
+    && hasText(value.message)
     && Array.isArray(value.excludedBggIds)
     && value.excludedBggIds.length <= MAX_SHOWN_GAMES
     && value.excludedBggIds.every(isPositiveInteger)
@@ -387,8 +382,8 @@ function nullableNumberInRange(value: unknown, minimum: number, maximum: number)
   return value === null || typeof value === 'number' && Number.isFinite(value) && value >= minimum && value <= maximum
 }
 
-function boundedString(value: unknown, minimum: number, maximum: number): value is string {
-  return typeof value === 'string' && value.length >= minimum && value.length <= maximum
+function hasText(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

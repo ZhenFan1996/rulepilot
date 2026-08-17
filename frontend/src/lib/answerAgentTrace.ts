@@ -25,7 +25,6 @@ export function answerAgentTrace(
     .filter((item, index, values) => index === 0
       || item.label !== values[index - 1]?.label
       || item.status !== values[index - 1]?.status)
-    .slice(-8)
 }
 
 function traceItem(activity: AnswerAgentActivity, locale: 'zh-CN' | 'en'): AnswerAgentTraceItem | null {

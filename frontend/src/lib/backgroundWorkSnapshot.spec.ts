@@ -32,7 +32,7 @@ describe('background work snapshot boundary', () => {
     })).toThrow()
   })
 
-  it('bounds teaching plans and owner-scoped documents', () => {
+  it('validates teaching plan structure and owner scope without arbitrary display caps', () => {
     expect(parseTeachingPlans([{ id: 'plan-1', gameTitle: '可信标题' }])).toEqual([
       { id: 'plan-1', gameTitle: '可信标题' },
     ])
@@ -53,6 +53,12 @@ describe('background work snapshot boundary', () => {
     }])).toThrow()
     expect(parseLatestTeachingRun({ run }, 'plan-1', 'player')).toEqual(run)
     expect(() => parseLatestTeachingRun({ run: { ...run, ownerUsername: 'other' } }, 'plan-1', 'player')).toThrow()
+
+    const longNaturalTitle = '一份确实很长但仍然可显示的规则书标题'.repeat(30)
+    expect(parseTeachingPlans(Array.from({ length: 501 }, (_, index) => ({
+      id: `plan-${index}`,
+      gameTitle: index === 500 ? longNaturalTitle : `游戏 ${index}`,
+    })))[500]?.gameTitle).toBe(longNaturalTitle)
   })
 
   it('requires imports and upload handoffs to bind to coherent document versions', () => {

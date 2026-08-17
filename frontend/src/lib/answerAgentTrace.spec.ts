@@ -20,6 +20,8 @@ describe('player-facing answer progress', () => {
     const trace = answerAgentTrace(activities)
 
     expect(trace.map(item => item.label)).toEqual([
+      '根据当前证据判断下一步',
+      '查找规则依据',
       '查找例外与覆盖条款',
       '读取原文页',
       '查看页面图示信息',
