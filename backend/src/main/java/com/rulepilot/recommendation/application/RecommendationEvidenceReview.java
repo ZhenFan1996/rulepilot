@@ -233,8 +233,9 @@ final class RecommendationEvidenceReview {
         return switch (field) {
             case "players", "maxMinutes" -> value.canConvertToInt()
                     && containsInteger(numbers, value.intValue());
-            case "playerCount" -> value.isObject()
-                    && containsIntegerBounds(numbers, value);
+            case "playerCount" -> value.isIntegralNumber()
+                    ? containsInteger(numbers, value.intValue())
+                    : value.isObject() && containsIntegerBounds(numbers, value);
             case "durationMinutes" -> value.isObject()
                     && (containsIntegerBounds(numbers, value)
                             || isOpenDurationLowerBoundSentinel(value, numbers));
@@ -351,10 +352,8 @@ final class RecommendationEvidenceReview {
         if (arguments.has("playerCount")) {
             JsonNode update = preference(arguments.path("playerCount"));
             String evidence = text(update.path("evidence"), 1, 160);
-            ConstraintRange<Integer> proposed = update.path("value").isNull()
-                    ? null
-                    : integerConstraintRange(
-                            update.path("value"), 1, 20, evidence, request, "PLAYERS_OUT_OF_RANGE");
+            ConstraintRange<Integer> proposed = playerCountConstraint(
+                    update.path("value"), evidence, request);
             if (!sameRange(playerCount, proposed)) {
                 requirePreferenceEvidence(evidence, request);
                 playerCount = proposed;
@@ -458,10 +457,7 @@ final class RecommendationEvidenceReview {
             JsonNode value = update.path("value");
             result = switch (field) {
                 case "playerCount" -> {
-                    ConstraintRange<Integer> proposed = value.isNull()
-                            ? null
-                            : integerConstraintRange(
-                                    value, 1, 20, evidence, request, "PLAYERS_OUT_OF_RANGE");
+                    ConstraintRange<Integer> proposed = playerCountConstraint(value, evidence, request);
                     if (!sameRange(result.playerCount(), proposed)) {
                         requirePreferenceEvidence(evidence, request);
                     }
@@ -593,6 +589,19 @@ final class RecommendationEvidenceReview {
         }
         return ConstraintRange.hard(
                 minimum, maximum, preferenceEvidenceText(evidenceId, request), evidenceTurn(evidenceId));
+    }
+
+    private ConstraintRange<Integer> playerCountConstraint(
+            JsonNode value,
+            String evidenceId,
+            ConversationRequest request) {
+        if (value.isNull()) return null;
+        if (value.isIntegralNumber()) {
+            return exactIntegerConstraint(
+                    integer(value, 1, 20, "PLAYERS_OUT_OF_RANGE"), evidenceId, request);
+        }
+        return integerConstraintRange(
+                value, 1, 20, evidenceId, request, "PLAYERS_OUT_OF_RANGE");
     }
 
     private ConstraintRange<Integer> durationConstraintRange(

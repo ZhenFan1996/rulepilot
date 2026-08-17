@@ -1728,7 +1728,7 @@ class BoardGameRecommendationAgentTest {
     @Test
     void preservesPlayerAndDurationRangesAsAtomicGroundedPreferenceUpdates() {
         assertThat(BoardGameRecommendationAgent.PROMPT_VERSION)
-                .isEqualTo("recommendation-agent-v6-lossless-prose");
+                .isEqualTo("recommendation-agent-v8-nonduplicative-synthesis");
         assertThat(BoardGameRecommendationAgent.class.getResource(
                         "/prompts/recommendation-agent-v1-system.txt"))
                 .as("the production-replayed v1 prompt remains reproducible after activating v2")
@@ -1747,7 +1747,7 @@ class BoardGameRecommendationAgentTest {
                                     "durationMinutes",
                                     "minimum",
                                     "maximum",
-                                    "\"field\":{\"type\":\"string\",\"enum\":[\"players\"");
+                                    "\"enum\":[\"players\",\"playerCount\"");
                     return action(
                             "keep-both-range-bounds",
                             BoardGameRecommendationAgent.SEARCH_TOOL,
@@ -2043,6 +2043,10 @@ class BoardGameRecommendationAgentTest {
                             .findFirst()
                             .orElseThrow();
                     JsonNode preference = schema(finalAction).at("/properties/preferenceUpdates/items");
+                    assertThat(schema(finalAction).at("/properties/message/description").asText())
+                            .contains(
+                                    "concise conversational overview or decision",
+                                    "do not repeat those candidate-by-candidate details");
                     assertThat(textValues(preference.path("required")))
                             .containsExactly("field", "value", "evidence", "evidenceClassification");
                     assertThat(textValues(preference.at("/properties/field/enum")))
@@ -3241,7 +3245,12 @@ class BoardGameRecommendationAgentTest {
             assertThat(comparisonTool.description())
                     .contains(
                             "verified conversation candidates",
-                            "one useful natural answer");
+                            "rather than narrating every cell",
+                            "Persist any explicit current-turn numeric or type correction");
+            assertThat(schema(comparisonTool).at("/properties/message/description").asText())
+                    .contains("without repeating the structured comparison cells");
+            assertThat(schema(comparisonTool).at("/properties/preferenceUpdates/type").asText())
+                    .isEqualTo("array");
             assertThat(comparisonTool.inputSchema())
                     .contains("\"required\":[\"message\",\"candidateBggIds\",\"subjects\"]")
                     .doesNotContain("decisionMode", "decisionEvidenceIds");
@@ -3287,6 +3296,58 @@ class BoardGameRecommendationAgentTest {
         });
         assertThat(response.harness().actions()).containsExactly(
                 "RESTORE_KNOWN_BGG_CANDIDATES", "COMPARE_CANDIDATES");
+    }
+
+    @Test
+    void persistsAnExplicitFollowUpCorrectionInTheSameComparisonAction() {
+        TrackingCatalog catalog = catalogWithThreeShortGames();
+        String rawMessage = "三个人玩时，两款都符合人数；Glass Orchard 更短，Loom City 的机制组合更多，按今晚想快开局就选前者。";
+        ScriptedModel model = new ScriptedModel(List.of(request -> {
+            var comparison = request.tools().stream()
+                    .filter(tool -> BoardGameRecommendationAgent.COMPARE_TOOL.equals(tool.name()))
+                    .findFirst()
+                    .orElseThrow();
+            String evidenceEnum = schema(comparison)
+                    .at("/properties/preferenceUpdates/items/properties/evidence/enum")
+                    .toString();
+            assertThat(evidenceEnum).contains("U1", "U2");
+            return action(
+                    "three-player-comparison",
+                    BoardGameRecommendationAgent.COMPARE_TOOL,
+                    "{\"message\":\"" + rawMessage + "\","
+                            + "\"candidateBggIds\":[60,61],\"subjects\":[\"playerCount\",\"durationMinutes\"],"
+                            + "\"preferenceUpdates\":[{\"field\":\"playerCount\",\"value\":3,\"evidence\":\"U2\",\"evidenceClassification\":\"DIRECT\"}]}");
+        }));
+
+        String opening = "先给我看看这两款。";
+        String correction = "那更适合三个人呢？";
+        var response = agent(model, catalog, noResearch()).converse(
+                new ConversationRequest(
+                        RecommendationProfile.empty(),
+                        correction,
+                        List.of(),
+                        List.of(
+                                new DialogueMessage("user", opening),
+                                new DialogueMessage("assistant", "可以，我们接着比较。"),
+                                new DialogueMessage("user", correction)),
+                        null,
+                        List.of(
+                                new BoardGameRecommendationAgent.KnownGame(60, "Glass Orchard", "Glass Orchard"),
+                                new BoardGameRecommendationAgent.KnownGame(61, "Loom City", "Loom City")),
+                        List.of(60, 61)),
+                "zh-CN");
+
+        assertThat(response.outcome()).isEqualTo(Outcome.CONVERSATION);
+        assertThat(response.assistantMessage()).isEqualTo(rawMessage);
+        assertThat(response.profile().playerCount().minimum()).isEqualTo(3);
+        assertThat(response.profile().playerCount().maximum()).isEqualTo(3);
+        assertThat(response.harness().modelCalls()).isEqualTo(1);
+        assertThat(response.harness().catalogCalls()).isEqualTo(1);
+        assertThat(response.harness().actions()).containsExactly(
+                "RESTORE_KNOWN_BGG_CANDIDATES",
+                "UPDATE_PREFERENCES",
+                "RECONSIDER_SELECTION_AFTER_PREFERENCE_UPDATE",
+                "COMPARE_CANDIDATES");
     }
 
     @Test
@@ -3547,7 +3608,7 @@ class BoardGameRecommendationAgentTest {
             String input = request.messages().get(1).content();
             assertThat(input).doesNotContain("turn-0-").contains("turn-8-", "turn-19-");
             assertThat(input.length()).isLessThan(5_000);
-            assertThat(request.maxOutputTokens()).isEqualTo(900);
+            assertThat(request.maxOutputTokens()).isEqualTo(1_200);
             return action(
                     "reply",
                     BoardGameRecommendationAgent.REPLY_TOOL,

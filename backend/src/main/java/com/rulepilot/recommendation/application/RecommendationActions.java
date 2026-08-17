@@ -108,7 +108,7 @@ final class RecommendationActions {
                 case DISCOVER_TOOL -> discover(arguments, state, request, locale, progress);
                 case LOOKUP_TOOL -> lookup(arguments, state, progress);
                 case RESEARCH_TOOL -> research(arguments, state, locale, progress);
-                case COMPARE_TOOL -> compare(arguments, state, locale);
+                case COMPARE_TOOL -> compare(arguments, state, request, locale);
                 case NO_MATCH_TOOL -> noMatch(arguments, state, locale);
                 case RECOMMEND_TOOL -> recommend(arguments, state, request, locale, progress);
                 default -> rejected(state, "TOOL_NOT_ALLOWED", "Choose one action from the supplied action list.");
@@ -192,8 +192,13 @@ final class RecommendationActions {
     private ActionOutcome compare(
             JsonNode arguments,
             RecommendationAgentState state,
+            ConversationRequest request,
             String locale) {
-        requireObject(arguments, Set.of("message", "candidateBggIds", "subjects"), Set.of());
+        requireObject(
+                arguments,
+                Set.of("message", "candidateBggIds", "subjects"),
+                Set.of("preferenceUpdates"));
+        evidenceReview.applyPreferenceUpdatesForRead(arguments, state, request);
         List<Integer> candidateIds = ids(arguments.path("candidateBggIds"), 2, 5);
         List<Game> games = candidateIds.stream().map(state.verified::get).toList();
         if (games.stream().anyMatch(Objects::isNull)) {
