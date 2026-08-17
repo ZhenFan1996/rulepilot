@@ -226,43 +226,43 @@ class RuntimeModelConfigurationTest {
     }
 
     @Test
-    void rejectsTheLegacyQwenPlusFamilyBeforeCreatingAStartupClient() {
-        ChatModelFactory factory = mock(ChatModelFactory.class);
-        Provider disabled = new Provider(false, "", "", "", false);
-        Provider prohibited = new Provider(
-                true,
-                "qwen-secret",
-                "https://dashscope.aliyuncs.com/compatible-mode/v1",
-                "qwen-plus",
-                false);
-
-        assertThatThrownBy(() -> new RuntimeModelConfiguration(
-                        factory,
-                        new ModelProviderProperties(disabled, disabled, disabled, prohibited, disabled),
-                        "fake", "gemini", "fake", "gemini", "fake", "gemini", "fake", "gemini",
-                        "spring-ai", "qwen", false, ""))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("qwen-plus")
-                .hasMessageContaining("prohibited");
-
-        verify(factory, org.mockito.Mockito.never())
-                .create(
-                        "qwen",
-                        "qwen-secret",
-                        "https://dashscope.aliyuncs.com/compatible-mode/v1",
-                        "qwen-plus");
-    }
-
-    @Test
-    void rejectsLegacyQwenPlusAliasesButAllowsQwen37PlusForPersonalConfiguration() {
+    void letsTheConfiguredProviderDecideWhetherAStartupModelNameIsSupported() {
         ChatModelFactory factory = mock(ChatModelFactory.class);
         ChatModel qwenModel = mock(ChatModel.class);
         when(factory.create(
                         "qwen",
                         "qwen-secret",
                         "https://dashscope.aliyuncs.com/compatible-mode/v1",
-                        "qwen3.7-plus"))
+                        "qwen-plus"))
                 .thenReturn(qwenModel);
+        Provider disabled = new Provider(false, "", "", "", false);
+        Provider configured = new Provider(
+                true,
+                "qwen-secret",
+                "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                "qwen-plus",
+                false);
+
+        RuntimeModelConfiguration configuration = new RuntimeModelConfiguration(
+                factory,
+                new ModelProviderProperties(disabled, disabled, disabled, configured, disabled),
+                "fake", "gemini", "fake", "gemini", "fake", "gemini", "fake", "gemini",
+                "spring-ai", "qwen", false, "");
+
+        assertThat(configuration.modelNameFor(RuntimeModelConfiguration.Role.RECOMMENDATION))
+                .isEqualTo("qwen-plus");
+        assertThat(configuration.modelFor(RuntimeModelConfiguration.Role.RECOMMENDATION)).isSameAs(qwenModel);
+    }
+
+    @Test
+    void preservesPersonalModelNamesWithoutMaintainingAStaticModelDenylist() {
+        ChatModelFactory factory = mock(ChatModelFactory.class);
+        when(factory.create(
+                        org.mockito.ArgumentMatchers.eq("qwen"),
+                        org.mockito.ArgumentMatchers.eq("qwen-secret"),
+                        org.mockito.ArgumentMatchers.eq("https://dashscope.aliyuncs.com/compatible-mode/v1"),
+                        org.mockito.ArgumentMatchers.anyString()))
+                .thenReturn(mock(ChatModel.class));
         Provider disabled = new Provider(false, "", "", "", false);
         RuntimeModelConfiguration configuration = new RuntimeModelConfiguration(
                 factory,
@@ -270,29 +270,17 @@ class RuntimeModelConfigurationTest {
                 "fake", "gemini", "fake", "gemini", "fake", "gemini", "fake", "gemini",
                 "fake", "qwen", false, "");
 
-        for (String prohibited : java.util.List.of("qwen-plus", "QWEN-PLUS-US", "qwen-plus-2025-01-25")) {
-            assertThatThrownBy(() -> configuration.configure(
-                            "player",
-                            "qwen",
-                            "qwen-secret",
-                            "https://dashscope.aliyuncs.com/compatible-mode/v1",
-                            prohibited,
-                            false))
-                    .isInstanceOf(IllegalArgumentException.class)
-                    .hasMessageContaining("prohibited");
-        }
-
         assertThat(configuration.configure(
                                 "player",
                                 "qwen",
                                 "qwen-secret",
                                 "https://dashscope.aliyuncs.com/compatible-mode/v1",
-                                "qwen3.7-plus",
+                                "QWEN-PLUS-US",
                                 true)
                         .providers())
                 .anySatisfy(provider -> {
                     assertThat(provider.id()).isEqualTo("qwen");
-                    assertThat(provider.model()).isEqualTo("qwen3.7-plus");
+                    assertThat(provider.model()).isEqualTo("QWEN-PLUS-US");
                 });
     }
 

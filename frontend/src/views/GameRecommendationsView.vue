@@ -54,7 +54,7 @@ const copy = {
     title: '按自己的节奏慢慢挑',
     description: '搜索 BGG 收录的桌游，按热度、玩家评分和细分类型浏览。只有 BGG 版本资料明确收录的官方中文名才会显示为中文。',
     assistant: '让推荐助手帮我挑', assistantDescription: '如果还没有明确目标，可以回到对话里说人数、时间和想要的感觉。',
-    searchLabel: '搜索桌游', searchPlaceholder: '输入桌游名或原版名', search: '搜索', searching: '搜索中…', searchValidation: '请至少输入 2 个字符。',
+    searchLabel: '搜索桌游', searchPlaceholder: '输入桌游名或原版名', search: '搜索', searching: '搜索中…',
     browseEyebrow: '游戏目录', browseTitle: '浏览全部桌游',
     sortLabel: '排序', sortHot: '当前热榜优先', sortRating: '玩家评分优先', sortRank: 'BGG 总榜优先',
     typeLabel: 'BGG 类型榜', apply: '应用', clear: '重置',
@@ -71,7 +71,7 @@ const copy = {
     eyebrow: 'Game catalog', title: 'Browse at your own pace',
     description: 'Search BGG games and browse by heat, player rating, and detailed type. Localized titles appear only when an official BGG edition records them.',
     assistant: 'Ask the recommendation assistant', assistantDescription: 'If you do not have a precise target yet, return to the conversation and share the group, time, and mood.',
-    searchLabel: 'Search the full catalog', searchPlaceholder: 'Enter a title or original name', search: 'Search', searching: 'Searching…', searchValidation: 'Enter at least 2 characters.',
+    searchLabel: 'Search the full catalog', searchPlaceholder: 'Enter a title or original name', search: 'Search', searching: 'Searching…',
     browseEyebrow: 'Game catalog', browseTitle: 'Browse every game',
     sortLabel: 'Sort', sortHot: 'Current heat first', sortRating: 'Player rating first', sortRank: 'BGG rank first', typeLabel: 'BGG ranking family', apply: 'Apply', clear: 'Reset',
     all: 'All base games', abstract: 'Abstract', customizable: 'Customizable', children: "Children's", family: 'Family', party: 'Party', strategy: 'Strategy', thematic: 'Thematic', war: 'War', expansion: 'Expansions',
@@ -106,7 +106,6 @@ const type = ref<CatalogType>('all')
 const page = ref(0)
 const searchQuery = ref('')
 const submittedQuery = ref('')
-const searchValidation = ref(false)
 let queryGeneration = 0
 let disposed = false
 let activeQuery: CatalogQuery | null = null
@@ -294,8 +293,6 @@ function applyFilters() {
 
 function searchGames() {
   const checked = searchQuery.value.trim().replace(/\s+/g, ' ')
-  searchValidation.value = checked.length > 0 && checked.length < 2
-  if (searchValidation.value) return
   submittedQuery.value = checked
   void loadCatalog(false)
 }
@@ -305,7 +302,6 @@ function clearFilters() {
   type.value = 'all'
   searchQuery.value = ''
   submittedQuery.value = ''
-  searchValidation.value = false
   void loadCatalog(false)
 }
 
@@ -359,7 +355,7 @@ onBeforeUnmount(() => {
         <div class="tabletop-panel player-board mt-6 grid gap-4 p-5 lg:grid-cols-[minmax(18rem,1.4fr)_minmax(11rem,0.7fr)_minmax(11rem,0.7fr)_auto] lg:items-end">
           <form class="lg:contents" role="search" @submit.prevent="searchGames">
             <label class="grid gap-2 text-xs font-semibold text-ink/55" for="bgg-catalog-search">{{ t('searchLabel') }}
-              <input id="bgg-catalog-search" v-model="searchQuery" type="search" maxlength="120" :placeholder="t('searchPlaceholder')" class="min-h-12 min-w-0 rounded-xl border border-ink/15 bg-canvas px-4 text-sm font-normal outline-none focus:border-copper">
+              <input id="bgg-catalog-search" v-model="searchQuery" type="search" :placeholder="t('searchPlaceholder')" class="min-h-12 min-w-0 rounded-xl border border-ink/15 bg-canvas px-4 text-sm font-normal outline-none focus:border-copper">
             </label>
             <button type="submit" :disabled="loading" class="min-h-12 rounded-xl bg-felt px-5 text-sm font-semibold text-white disabled:opacity-50 lg:order-last">{{ t('search') }}</button>
           </form>
@@ -373,7 +369,6 @@ onBeforeUnmount(() => {
             <button type="submit" :disabled="loading" class="sr-only">{{ t('apply') }}</button>
           </form>
         </div>
-        <p v-if="searchValidation" class="mt-2 text-xs text-red-700" role="alert">{{ t('searchValidation') }}</p>
         <button v-if="filterActive" type="button" class="mt-4 min-h-11 rounded-lg border border-ink/15 px-4 text-sm font-semibold text-ink/60" @click="clearFilters">{{ t('clear') }}</button>
 
         <p v-if="ready" class="mt-4 text-sm text-ink/50">
@@ -408,7 +403,7 @@ onBeforeUnmount(() => {
             <p v-if="playerTime(game)" class="mt-1 text-xs leading-5 text-ink/55">{{ playerTime(game) }}<span v-if="game.averageWeight !== null"> · {{ t('weight', { weight: game.averageWeight.toFixed(1) }) }}</span></p>
             <p v-else class="mt-1 text-xs leading-5 text-ink/40">{{ t('detailPending') }}</p>
             <ul v-if="game.categories.length || game.mechanics.length" class="mt-3 flex flex-wrap gap-1.5" :aria-label="t('categoriesAria')">
-              <li v-for="item in [...game.categories, ...game.mechanics].slice(0, 3)" :key="item" class="tabletop-chip">{{ item }}</li>
+              <li v-for="item in [...game.categories, ...game.mechanics]" :key="item" class="tabletop-chip">{{ item }}</li>
             </ul>
           </article>
         </TransitionGroup>

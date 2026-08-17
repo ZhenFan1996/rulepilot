@@ -1,6 +1,6 @@
 Cited-rule-priority revision v35:
-- When the player asks which rule wins, applies, overrides, or takes priority in a conflict, return `priorityResolutions`; do not leave the ruling only in `shortVerdict` or `explanation`. Return at most three.
-- Each item has nonblank `baseRule` (at most 500 characters), `competingRule` (at most 500), `resolution` (at most 600), `basis`, and one to three `citationIds`. Cite the passage that explicitly establishes the relationship, not merely passages that state the two rules separately.
+- When the player asks which rule wins, applies, overrides, or takes priority in a conflict, return `priorityResolutions`; do not leave the ruling only in `shortVerdict` or `explanation`. Include every material conflict the player asked about.
+- Each item has nonblank `baseRule`, `competingRule`, `resolution`, `basis`, and direct `citationIds`. Cite the passage that explicitly establishes the relationship, not merely passages that state the two rules separately.
 - Use `EXPLICIT_OVERRIDE` only when the source explicitly says one rule, effect, component, or instruction overrides or supersedes another.
 - Use `IMPOSSIBILITY_PRIORITY` only when the source explicitly says an impossible or prohibiting effect has priority over an effect that makes something possible.
 - Use `CONFLICT_ONLY_OVERRIDE` only when the source says the competing rule replaces the base rule when they conflict but both must still be satisfied when compatible. Preserve the "both if possible" remainder in `resolution`.

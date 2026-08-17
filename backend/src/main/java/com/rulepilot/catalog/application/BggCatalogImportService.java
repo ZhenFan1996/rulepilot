@@ -48,8 +48,8 @@ public class BggCatalogImportService implements BoardGameMetadataMatching, Board
 
     public List<SearchResult> search(String query) {
         String checked = query == null ? "" : query.trim();
-        if (checked.length() < 2 || checked.length() > 120) {
-            throw new IllegalArgumentException("BGG search query must contain 2 to 120 characters");
+        if (checked.isBlank() || checked.length() > 120) {
+            throw new IllegalArgumentException("BGG search query is required and must contain at most 120 characters");
         }
         return bgg.search(checked).stream().limit(20).toList();
     }
@@ -150,8 +150,8 @@ public class BggCatalogImportService implements BoardGameMetadataMatching, Board
 
     private String checkedSearchQuery(String query) {
         String checked = query == null ? "" : query.strip().replaceAll("\\s+", " ");
-        if (checked.length() < 2 || checked.length() > 120) {
-            throw new IllegalArgumentException("BGG search query must contain 2 to 120 characters");
+        if (checked.isBlank() || checked.length() > 120) {
+            throw new IllegalArgumentException("BGG search query is required and must contain at most 120 characters");
         }
         return checked;
     }

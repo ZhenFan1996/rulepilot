@@ -104,7 +104,7 @@ describe('LoginView', () => {
     wrapper.unmount()
   })
 
-  it('localizes a network exception, focuses its summary, and locks duplicate submission', async () => {
+  it('localizes a network exception and focuses its summary', async () => {
     let rejectCsrf!: (reason: unknown) => void
     const csrfRequest = new Promise<Response>((_, reject) => { rejectCsrf = reject })
     const fetchMock = vi.fn(async () => csrfRequest)
@@ -119,9 +119,6 @@ describe('LoginView', () => {
     await wrapper.get('form').trigger('submit')
 
     expect(wrapper.get('form').attributes('aria-busy')).toBe('true')
-    expect(wrapper.get('input[name="username"]').attributes('disabled')).toBeDefined()
-    expect(wrapper.get('input[name="password"]').attributes('disabled')).toBeDefined()
-    await wrapper.get('form').trigger('submit')
     expect(fetchMock).toHaveBeenCalledOnce()
 
     rejectCsrf(new TypeError('Failed to fetch'))
@@ -132,6 +129,38 @@ describe('LoginView', () => {
     expect(alert.text()).not.toContain('Failed to fetch')
     expect(document.activeElement).toBe(alert.element)
     expect(wrapper.get('form').attributes('aria-busy')).toBe('false')
+    wrapper.unmount()
+  })
+
+  it('lets a new login attempt replace a request that never returns', async () => {
+    const hangingRequest = new Promise<Response>(() => {})
+    let csrfAttempts = 0
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      if (String(input).includes('/api/auth/csrf')) {
+        csrfAttempts += 1
+        return csrfAttempts === 1
+          ? hangingRequest
+          : response({ headerName: 'X-CSRF-TOKEN', token: 'replacement-token' })
+      }
+      return new Response(null, { status: 204 })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const router = memoryRouter()
+    await router.push('/login')
+    await router.isReady()
+    const wrapper = mount(LoginView, { attachTo: document.body, global: { plugins: [router] } })
+
+    await wrapper.get('input[name="username"]').setValue('alice')
+    await wrapper.get('input[name="password"]').setValue('test-password')
+    await wrapper.get('form').trigger('submit')
+
+    expect(wrapper.get('button[type="submit"]').text()).toContain('重新登录')
+    expect(wrapper.get('button[type="submit"]').attributes('disabled')).toBeUndefined()
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    expect(csrfAttempts).toBe(2)
+    expect(router.currentRoute.value.fullPath).toBe('/')
     wrapper.unmount()
   })
 })

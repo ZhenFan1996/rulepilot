@@ -167,13 +167,20 @@ describe('PublicLessonView', () => {
           answer: {
             status: 'ANSWERED', shortVerdict: '先把玩家板放到自己面前。', explanation: '这是开局的第一步.', warnings: [],
             citations: [{ heading: '设置', pageFrom: 2, pageTo: 2 }], exceptions: [], confidence: 'HIGH', answerBasis: 'GROUNDED_APPLICATION', clarification: null,
-            calculations: [{ expression: 'floor(8 / 3) * 5', result: '10' }],
+            calculations: [
+              { expression: 'floor(8 / 3) * 5', result: '10' },
+              { expression: '这条可选计算缺少结果，不应抹掉整份答案。' },
+            ],
             situationChecks: [
               { requirement: '玩家板必须尚未放置', status: 'NOT_PROVIDED', playerFact: '' },
             ],
-            walkthroughSteps: [
-              { instruction: '取出玩家板。', explanation: '先找到自己的玩家板。', orderBasis: 'EXPLANATION_ORDER' },
-            ],
+            walkthroughSteps: Array.from({ length: 9 }, (_, index) => ({
+              instruction: index === 0 ? '取出玩家板。' : `继续核对设置步骤 ${index + 1}。`,
+              explanation: index === 8
+                ? '这一段完整说明超过旧的展示数量限制，仍然应当原样保留。'.repeat(30)
+                : '先找到自己的玩家板。',
+              orderBasis: 'EXPLANATION_ORDER',
+            })),
             decisionBranches: [
               { condition: '玩家板尚未放置。', outcome: '把玩家板放到自己面前。', basis: 'EXPLICIT_RULE' },
             ],
@@ -184,7 +191,10 @@ describe('PublicLessonView', () => {
               practicalBoundary: '个人资源放玩家板，共享信息放公共板。', basis: 'STORAGE_STATUS',
             }],
           },
-          visualAids: [{ visualFocus: lesson.lesson.sections[0]!.steps[0]!.visualFocus, relatedStep: '放置玩家板' }],
+          visualAids: [
+            { visualFocus: lesson.lesson.sections[0]!.steps[0]!.visualFocus, relatedStep: '放置玩家板' },
+            { relatedStep: '这条可选图例缺少坐标，不应抹掉整份答案。' },
+          ],
           examples: [{ heading: '开局示例', text: '每位玩家从自己的玩家板开始。', sourcePages: [2] }],
         })
       }
@@ -222,11 +232,15 @@ describe('PublicLessonView', () => {
     expect(wrapper.text()).toContain('按规则回答当前问题')
     expect(wrapper.text()).toContain('这条答案如何得出')
     expect(wrapper.text()).toContain('floor(8 / 3) * 5 = 10')
+    expect(wrapper.text()).not.toContain('这条可选计算缺少结果')
+    expect(wrapper.text()).not.toContain('这条可选图例缺少坐标')
     expect(wrapper.text()).toContain('下方计算过程便于直接复核结果')
     expect(wrapper.text()).toContain('当前局面条件')
     expect(wrapper.text()).toContain('尚未提供')
     expect(wrapper.text()).toContain('照这个顺序做')
     expect(wrapper.text()).toContain('讲解拆分')
+    expect(wrapper.text()).toContain('继续核对设置步骤 9')
+    expect(wrapper.text()).toContain('这一段完整说明超过旧的展示数量限制')
     expect(wrapper.text()).toContain('不同条件会发生什么')
     expect(wrapper.text()).toContain('规则明示')
     expect(wrapper.text()).toContain('两者都会承载规则状态。')
@@ -401,14 +415,15 @@ describe('PublicLessonView', () => {
     expect((wrapper.get('#public-question').element as HTMLTextAreaElement).value).toBe('我指的是：')
     expect(document.activeElement).toBe(wrapper.get('#public-question').element)
 
-    await wrapper.get('#public-question').setValue('我指的是：红色行动牌')
+    const detailedContext = `我指的是：红色行动牌；${'并补充完整局面。'.repeat(120)}`
+    await wrapper.get('#public-question').setValue(detailedContext)
     await wrapper.get('form').trigger('submit')
     await flushPromises()
     expect(wrapper.text()).toContain('具体对象、触发时机或前一步')
     await wrapper.findAll('button').find(button => button.text() === '补充条件后重试')!.trigger('click')
 
     expect((wrapper.get('#public-question').element as HTMLTextAreaElement).value)
-      .toBe('我指的是：红色行动牌\n补充条件：')
+      .toBe(`${detailedContext}\n补充条件：`)
     expect(document.activeElement).toBe(wrapper.get('#public-question').element)
     wrapper.unmount()
   })
@@ -605,7 +620,7 @@ describe('PublicLessonView', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('Rule Q&A')
-    expect(wrapper.text()).toContain('Ask the Wingspan rulebook')
+    expect(wrapper.text()).toContain('Ask the Wingspan Rules rulebook')
     await wrapper.get('#public-question').setValue('Where does my mat go?')
     await wrapper.get('form').trigger('submit')
     await flushPromises()

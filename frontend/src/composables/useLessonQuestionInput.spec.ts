@@ -81,13 +81,13 @@ describe('useLessonQuestionInput', () => {
     expect(fixture.submitQuestion).toHaveBeenCalledWith(fixture.question.value, 'SOURCE')
   })
 
-  it('keeps a self-contained learning follow-up inside the question budget', async () => {
+  it('keeps a self-contained learning follow-up without truncating the player context', async () => {
     setLocale('en')
     const fixture = createInput(`Which milestone applies after scoring? ${'x'.repeat(1_000)}`)
 
     await fixture.input.requestLearningHelp('VERIFY')
 
-    expect(fixture.question.value.length).toBeLessThanOrEqual(800)
+    expect(fixture.question.value).toContain('x'.repeat(1_000))
     expect(fixture.question.value).toContain('Which milestone applies after scoring?')
     expect(fixture.question.value).toContain('Could you check it once more')
     expect(fixture.submitQuestion).not.toHaveBeenCalled()

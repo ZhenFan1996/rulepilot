@@ -39,6 +39,28 @@ describe('offline knowledge cache', () => {
     expect(entries[0]?.ruling?.id).toBe('ruling-1')
   })
 
+  it('keeps a detailed cited answer offline without prose or citation-count rejection', () => {
+    const detailedQuestion = '请结合当前完整局面逐步解释：'.repeat(80)
+    const detailedAnswer: OfflineAnswer = {
+      ...answer,
+      explanation: '这是一段需要完整保留的规则解释。'.repeat(1_000),
+      citations: Array.from({ length: 21 }, (_, index) => ({
+        heading: `规则依据 ${index + 1}`,
+        excerpt: '对应原文。'.repeat(1_000),
+        pageFrom: index + 1,
+        pageTo: index + 1,
+      })),
+    }
+
+    cacheOfflineAnswer('plan-detailed', detailedQuestion, detailedAnswer)
+
+    expect(loadOfflineKnowledge('plan-detailed')[0]).toMatchObject({
+      question: detailedQuestion,
+      answer: { explanation: detailedAnswer.explanation, citations: expect.any(Array) },
+    })
+    expect(loadOfflineKnowledge('plan-detailed')[0]?.answer.citations).toHaveLength(21)
+  })
+
   it('migrates validated version 1 knowledge without losing a confirmed ruling', () => {
     const key = 'rulepilot:offline-knowledge:plan-legacy'
     localStorage.setItem(key, JSON.stringify({

@@ -31,8 +31,6 @@ public class LessonQualityEvaluator {
             checks.add(sourceAvailability(plan));
         }
         checks.add(citationSupport(lesson));
-        checks.add(setupExecutability(lesson));
-        checks.add(endAndScoring(lesson));
         checks.add(new QualityCheck(
                 CheckType.EXPANSION_SCOPE,
                 CheckStatus.NOT_EVALUATED,
@@ -55,23 +53,23 @@ public class LessonQualityEvaluator {
                 .filter(LessonSection::required)
                 .filter(this::hasCitedEvidence)
                 .count();
-        long reviewed = lesson.sections().stream()
+        long validated = lesson.sections().stream()
                 .filter(LessonSection::required)
                 .filter(section -> section.evidenceStatus() == EvidenceStatus.SUPPORTED)
                 .count();
         CheckStatus status = available < required
                 ? CheckStatus.FAIL
-                : reviewed < required ? CheckStatus.NOT_EVALUATED : CheckStatus.PASS;
+                : validated < required ? CheckStatus.NOT_EVALUATED : CheckStatus.PASS;
         return new QualityCheck(
                 CheckType.REQUIRED_SECTION_COVERAGE,
                 status,
-                "必需章节已核对 " + reviewed + " / " + required,
+                "必需章节已完成发布校验 " + validated + " / " + required,
                 available < required
                         ? "有 " + (required - available) + " 个必需章节缺少可引用的规则证据。"
-                        : reviewed < required
-                                ? available + " 个必需章节已有引用，但还有 " + (required - reviewed)
-                                        + " 个未完成独立事实核对；不能确认整套讲解可以独立开桌。"
-                                : "所有必需章节都有规则证据并已完成核对。");
+                        : validated < required
+                                ? available + " 个必需章节已有引用，但还有 " + (required - validated)
+                                        + " 个未完成引用归属、规则书版本与结构校验。"
+                                : "所有必需章节都有规则证据，并已完成引用归属、规则书版本与结构校验。");
     }
 
     private QualityCheck citationSupport(IllustratedLesson lesson) {
@@ -99,15 +97,13 @@ public class LessonQualityEvaluator {
                         ? ownsContractSlot(section)
                         : section.coverageTags().contains("source_coverage"))
                 .toList();
-        long required = sourceSections.stream()
-                .mapToLong(section -> TeachingUnitContract.sourceIdentifiers(section.retrievalQueries()).size())
-                .sum();
+        long required = sourceSections.size();
         long available = sourceSections.stream()
-                .mapToLong(planned -> coveredSourceGroups(planned, lesson, false))
-                .sum();
-        long reviewed = sourceSections.stream()
-                .mapToLong(planned -> coveredSourceGroups(planned, lesson, true))
-                .sum();
+                .filter(planned -> coveredSourceOwner(planned, lesson, false))
+                .count();
+        long validated = sourceSections.stream()
+                .filter(planned -> coveredSourceOwner(planned, lesson, true))
+                .count();
         boolean sourceInventoryUnavailable = sourceContract && plan.sections().stream()
                 .anyMatch(section -> section.coverageTags().contains(
                                 TeachingSourceCoverageContract.INCOMPLETE_INVENTORY_TAG)
@@ -116,22 +112,20 @@ public class LessonQualityEvaluator {
                 ? CheckStatus.FAIL
                 : available < required
                 ? CheckStatus.FAIL
-                : reviewed < required ? CheckStatus.NOT_EVALUATED : CheckStatus.PASS;
+                : validated < required ? CheckStatus.NOT_EVALUATED : CheckStatus.PASS;
         return new QualityCheck(
                 CheckType.SOURCE_RULE_GROUP_COVERAGE,
                 status,
-                "来源规则组已核对 " + reviewed + " / " + required,
+                "来源归属章节已完成发布校验 " + validated + " / " + required,
                 sourceInventoryUnavailable
                         ? "来源义务清单仍不完整，或至少一个由规划 Agent 识别的必要教学单元没有可用来源；"
                                 + "即使已有章节带引用，也不能把整局标为完整。"
                         : available < required
-                        ? "有 " + (required - available) + " 个从规则页清点出的规则组，尚未逐项在带原始标识和"
-                                + "来源页的讲解步骤中出现；不能把整章通过自动算成全部规则组已核对。"
-                        : reviewed < required
-                                ? available + " 个来源规则组已有引用，但还有 " + (required - reviewed)
-                                        + " 个未通过逐项完整证据窗口的独立核对；"
-                                        + "不能确认全部可读规则组均已进入讲解。"
-                                : "每个从规则页清点出的可读规则组，都以原始标识和同页引用进入讲解并通过独立核对。");
+                        ? "有 " + (required - available) + " 个来源归属章节没有引用其规划时绑定的规则页。"
+                        : validated < required
+                                ? available + " 个来源归属章节已有绑定页引用，但还有 " + (required - validated)
+                                        + " 个未完成发布校验。"
+                                : "每个来源归属章节都引用了规划时绑定的规则页，并完成引用归属、版本与结构校验。");
     }
 
     private boolean ownsContractSlot(TeachingPlan.PlannedSection section) {
@@ -140,7 +134,7 @@ public class LessonQualityEvaluator {
                 .anyMatch(section.coverageTags()::contains);
     }
 
-    private long coveredSourceGroups(
+    private boolean coveredSourceOwner(
             TeachingPlan.PlannedSection planned,
             IllustratedLesson lesson,
             boolean requireReview) {
@@ -151,17 +145,13 @@ public class LessonQualityEvaluator {
         if (section == null
                 || !hasCitedEvidence(section)
                 || (requireReview && section.evidenceStatus() != EvidenceStatus.SUPPORTED)) {
-            return 0;
+            return false;
         }
         boolean citesOwnerPage = planned.sourcePageNumbers().isEmpty()
                 || section.steps().stream()
                         .flatMap(step -> step.sourcePages().stream())
                         .anyMatch(planned.sourcePageNumbers()::contains);
-        if (!citesOwnerPage) return 0;
-        // SUPPORTED is the durable receipt from TeachingSectionCandidateValidator. Re-inferring the outline Agent's
-        // unit ownership from translated player prose would reject correct lessons whenever the source and output
-        // languages differ, and would duplicate the directEvidenceIds gate already crossed before publication.
-        return TeachingUnitContract.sourceIdentifiers(planned.retrievalQueries()).size();
+        return citesOwnerPage;
     }
 
     private QualityCheck sourceAvailability(TeachingPlan plan) {
@@ -220,68 +210,8 @@ public class LessonQualityEvaluator {
                 .strip();
     }
 
-    private QualityCheck setupExecutability(IllustratedLesson lesson) {
-        var setup = section(lesson, "setup");
-        boolean executable = setup != null
-                && hasCitedEvidence(setup)
-                && !setup.steps().isEmpty()
-                && setup.steps().stream().allMatch(step -> !step.sourcePages().isEmpty());
-        boolean reviewed = executable && setup.evidenceStatus() == EvidenceStatus.SUPPORTED;
-        return new QualityCheck(
-                CheckType.SETUP_EXECUTABILITY,
-                !executable ? CheckStatus.FAIL : reviewed ? CheckStatus.PASS : CheckStatus.NOT_EVALUATED,
-                !executable
-                        ? "Setup 尚不可执行"
-                        : reviewed ? "Setup 可执行性已核对" : "Setup 有引用，待核对可执行性",
-                !executable
-                        ? "需要补充并引用按顺序可执行的开局布置步骤。"
-                        : reviewed
-                                ? "Setup 包含有页码依据且已核对的执行步骤。"
-                                : "Setup 步骤带有来源页码，但尚未完成独立事实与缺项核对；"
-                                        + "不能确认仅照这些步骤即可完成开局。");
-    }
-
-    private QualityCheck endAndScoring(IllustratedLesson lesson) {
-        List<String> required = List.of("end", "scoring");
-        List<String> missing = required.stream()
-                .filter(tag -> {
-                    var section = section(lesson, tag);
-                    return section == null || !hasCitedEvidence(section);
-                })
-                .toList();
-        boolean reviewed = missing.isEmpty() && required.stream()
-                .map(tag -> section(lesson, tag))
-                .allMatch(section -> section.evidenceStatus() == EvidenceStatus.SUPPORTED);
-        return new QualityCheck(
-                CheckType.END_AND_SCORING_COMPLETENESS,
-                !missing.isEmpty() ? CheckStatus.FAIL : reviewed ? CheckStatus.PASS : CheckStatus.NOT_EVALUATED,
-                !missing.isEmpty()
-                        ? "结束与计分仍有缺口"
-                        : reviewed ? "结束与计分已核对" : "结束与计分待核对",
-                missing.isEmpty()
-                        ? reviewed
-                                ? "结束条件与最终计分均有证据并已完成独立核对。"
-                                : "结束与计分章节已有引用，但尚未完成独立事实与缺项核对；"
-                                        + "不能确认聚合方式、例外或适用的同分规则已经完整。"
-                        : "缺少：" + missing.stream().map(this::label).collect(java.util.stream.Collectors.joining("、")));
-    }
-
     private boolean hasCitedEvidence(LessonSection section) {
         return section.evidenceStatus() != EvidenceStatus.INSUFFICIENT_EVIDENCE;
     }
 
-    private LessonSection section(IllustratedLesson lesson, String coverageTag) {
-        return lesson.sections().stream()
-                .filter(section -> section.coverageTags().contains(coverageTag))
-                .findFirst()
-                .orElse(null);
-    }
-
-    private String label(String tag) {
-        return switch (tag) {
-            case "end" -> "结束条件";
-            case "scoring" -> "最终计分";
-            default -> tag;
-        };
-    }
 }

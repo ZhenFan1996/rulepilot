@@ -39,6 +39,16 @@ class PublicGameIdentityLookupServiceTest {
     }
 
     @Test
+    void linksAnExactSingleCharacterTitle() {
+        when(rankedGames.find(any())).thenReturn(new Page(1, 0, 5, List.of(game(7, "碁"))));
+
+        assertThat(lookup.findByTitle("碁")).hasValueSatisfying(identity -> {
+            assertThat(identity.bggId()).isEqualTo(7);
+            assertThat(identity.name()).isEqualTo("碁");
+        });
+    }
+
+    @Test
     void batchLookupSkipsInvalidOrUnavailableOptionalMetadata() {
         when(rankedGames.find(any())).thenThrow(new IllegalStateException("snapshot unavailable"));
 

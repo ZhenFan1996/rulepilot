@@ -53,9 +53,6 @@ public interface QuestionUnderstanding {
                 throw new IllegalArgumentException("question context is invalid");
             }
             previousQuestion = normalize(previousQuestion);
-            if (previousQuestion != null && previousQuestion.length() > 800) {
-                throw new IllegalArgumentException("previous question is too long");
-            }
             outputLanguage = outputLanguage == null ? PlayerLocale.ZH_CN : outputLanguage;
             if (priorTurnReference != null
                     && !documentVersionId.equals(priorTurnReference.documentVersionId())) {
@@ -64,7 +61,7 @@ public interface QuestionUnderstanding {
         }
 
         private static String normalize(String value) {
-            return value == null || value.isBlank() ? null : value.strip();
+            return value == null || value.isBlank() ? null : value;
         }
     }
 
@@ -75,13 +72,10 @@ public interface QuestionUnderstanding {
             String groundedVerdict,
             List<PriorCitationReference> citations) {
         public PriorTurnReference {
-            if (documentVersionId == null || blank(question) || question.length() > 800
-                    || blank(groundedVerdict) || groundedVerdict.length() > 800
-                    || citations == null || citations.size() > 8) {
+            if (documentVersionId == null || blank(question)
+                    || blank(groundedVerdict) || citations == null) {
                 throw new IllegalArgumentException("prior turn reference is invalid");
             }
-            question = question.strip();
-            groundedVerdict = groundedVerdict.strip();
             citations = List.copyOf(citations);
             if (citations.stream().anyMatch(citation -> !documentVersionId.equals(citation.documentVersionId()))) {
                 throw new IllegalArgumentException("prior citation uses a different document version");

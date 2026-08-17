@@ -6,11 +6,11 @@ import {
 } from './playerFacingAnswer'
 
 describe('player-facing answer presentation', () => {
-  it('omits a Chinese explanation that only repeats the verdict in audit-style prose', () => {
+  it('preserves the model explanation instead of using browser-side lexical heuristics to hide it', () => {
     expect(playerFacingExplanation({
       shortVerdict: '顺时针进行；每回合打出一张人格牌并执行，打出 Tribune 时收回已打出的人格牌。',
       explanation: '游戏按顺时针进行。轮到你时打出一张人格牌并执行；如果打出 Tribune，就把已打出的人格牌收回。',
-    })).toBe('')
+    })).toBe('游戏按顺时针进行。轮到你时打出一张人格牌并执行；如果打出 Tribune，就把已打出的人格牌收回。')
   })
 
   it('keeps a qualification, exception, quantity, or timing boundary that the verdict does not contain', () => {
@@ -25,11 +25,11 @@ describe('player-facing answer presentation', () => {
     })).toContain('18 分')
   })
 
-  it('applies the same progressive disclosure to English without dropping a new condition', () => {
+  it('preserves English prose without language-specific stop-word filtering', () => {
     expect(playerFacingExplanation({
       shortVerdict: 'Play one personality card, then carry out its action.',
       explanation: 'On your turn, play one personality card, then carry out that card\'s action.',
-    })).toBe('')
+    })).toBe("On your turn, play one personality card, then carry out that card's action.")
 
     expect(playerFacingExplanation({
       shortVerdict: 'Play one personality card and carry out its action.',
@@ -37,7 +37,7 @@ describe('player-facing answer presentation', () => {
     })).toContain('If you play Tribune')
   })
 
-  it('suppresses a walkthrough only when the whole sequence adds no usable information', () => {
+  it('preserves complete model-authored walkthroughs without trying to judge their value in the browser', () => {
     const duplicateSteps = [
       { instruction: '打出一张人格牌。', explanation: '轮到你时选择并打出一张人格牌。', orderBasis: 'RULE_ORDER' as const },
       { instruction: '执行该牌行动。', explanation: '打出后执行这张牌的行动。', orderBasis: 'RULE_ORDER' as const },
@@ -47,7 +47,7 @@ describe('player-facing answer presentation', () => {
       shortVerdict: '轮到你时，打出一张人格牌，然后执行该牌行动。',
       explanation: '先选择并打出人格牌，再执行这张牌的行动。',
       walkthroughSteps: duplicateSteps,
-    })).toEqual([])
+    })).toEqual(duplicateSteps)
 
     expect(playerFacingWalkthroughSteps({
       shortVerdict: '执行 Architect 行动。',

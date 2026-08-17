@@ -13,11 +13,10 @@ public record GameSessionConversationTurn(
 
     public GameSessionConversationTurn {
         if (id == null || sessionId == null || answer == null || createdAt == null
-                || question == null || question.isBlank() || question.length() > 800
+                || question == null || question.isBlank()
                 || createdBy == null || createdBy.isBlank() || createdBy.length() > 120) {
             throw new IllegalArgumentException("game session conversation turn is invalid");
         }
-        question = question.strip();
         createdBy = createdBy.strip();
     }
 

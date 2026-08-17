@@ -289,12 +289,12 @@ public interface TeachingLessonModel {
                     || priorSections == null || priorSections.size() > 2
                     || evidence == null || evidence.isEmpty()
                     || pageImages == null || pageImages.size() > 2
-                    || requiredRuleIntents == null || requiredRuleIntents.size() > 32
+                    || requiredRuleIntents == null
                     || requiredRuleIntents.stream()
                             .anyMatch(intent -> intent == null || intent.isBlank() || intent.length() > 300)
-                    || teachingUnits == null || teachingUnits.size() > 16
+                    || teachingUnits == null
                     || teachingUnits.stream().anyMatch(java.util.Objects::isNull)
-                    || chapterScope == null || chapterScope.length() > 4_000
+                    || chapterScope == null
                     || wholeGameContext == null) {
                 throw new IllegalArgumentException("teaching model request is invalid");
             }
@@ -315,11 +315,11 @@ public interface TeachingLessonModel {
         }
 
         public TeachingUnitInput {
-            if (unitId == null || unitId.isBlank() || unitId.length() > 80
-                    || sourceIdentifiers == null || sourceIdentifiers.isEmpty() || sourceIdentifiers.size() > 16
+            if (unitId == null || unitId.isBlank()
+                    || sourceIdentifiers == null || sourceIdentifiers.isEmpty()
                     || sourceIdentifiers.stream().anyMatch(identifier -> identifier == null
-                            || identifier.isBlank() || identifier.length() > 160)
-                    || directEvidenceIds == null || directEvidenceIds.size() > 72
+                            || identifier.isBlank())
+                    || directEvidenceIds == null
                     || directEvidenceIds.stream().anyMatch(java.util.Objects::isNull)) {
                 throw new IllegalArgumentException("teaching unit input is invalid");
             }
@@ -336,9 +336,9 @@ public interface TeachingLessonModel {
             List<TopicDependencyInput> topicDependencies,
             boolean evidenceBound) {
         public WholeGameContextInput {
-            if (summary == null || summary.isBlank() || summary.length() > 2_400
-                    || concepts == null || concepts.size() > 32 || concepts.stream().anyMatch(java.util.Objects::isNull)
-                    || topicDependencies == null || topicDependencies.size() > 32
+            if (summary == null || summary.isBlank()
+                    || concepts == null || concepts.stream().anyMatch(java.util.Objects::isNull)
+                    || topicDependencies == null
                     || topicDependencies.stream().anyMatch(java.util.Objects::isNull)
                     || (evidenceBound && concepts.isEmpty())) {
                 throw new IllegalArgumentException("whole-game model input is invalid");
@@ -393,12 +393,10 @@ public interface TeachingLessonModel {
 
     record PriorSectionContext(String topicKey, String title, String closingStep) {
         public PriorSectionContext {
-            if (topicKey == null || topicKey.isBlank() || title == null || title.isBlank() || title.length() > 160
-                    || closingStep == null || closingStep.isBlank() || closingStep.length() > 600) {
+            if (topicKey == null || topicKey.isBlank() || title == null || title.isBlank()
+                    || closingStep == null || closingStep.isBlank()) {
                 throw new IllegalArgumentException("prior teaching section context is invalid");
             }
-            title = title.strip();
-            closingStep = closingStep.strip();
         }
     }
 
@@ -446,15 +444,11 @@ public interface TeachingLessonModel {
             VisualFocusDraft visualFocus) {
         public StepDraft {
             citationIds = citationIds == null ? List.of() : List.copyOf(citationIds);
-            if (teachingUnitIds != null && (teachingUnitIds.size() > 8 || teachingUnitIds.stream()
-                    .anyMatch(unitId -> unitId == null || unitId.isBlank() || unitId.length() > 80))) {
+            if (teachingUnitIds != null && teachingUnitIds.stream()
+                    .anyMatch(unitId -> unitId == null || unitId.isBlank())) {
                 throw new IllegalArgumentException("teaching step unit references are invalid");
             }
-            teachingUnitIds = teachingUnitIds == null ? List.of() : teachingUnitIds.stream()
-                    .filter(unitId -> unitId != null && !unitId.isBlank())
-                    .map(String::strip)
-                    .distinct()
-                    .toList();
+            teachingUnitIds = teachingUnitIds == null ? List.of() : List.copyOf(teachingUnitIds);
         }
 
         public StepDraft(
@@ -486,9 +480,6 @@ public interface TeachingLessonModel {
         public VisualFocusDraft {
             label = label == null ? "" : label;
             visibleDescription = visibleDescription == null ? "" : visibleDescription;
-            if (visibleDescription.length() > 240) {
-                throw new IllegalArgumentException("visual focus description is too long");
-            }
         }
 
         public VisualFocusDraft(

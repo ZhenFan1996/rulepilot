@@ -19,7 +19,7 @@ describe('pending rulebook lesson handoff', () => {
     expect(readPendingRulebookLessons(localStorage, 'other-player')).toEqual([])
   })
 
-  it('rejects invalid handoffs and bounds retained work', () => {
+  it('rejects invalid handoffs without silently dropping older retained work', () => {
     for (let index = 0; index < 7; index += 1) {
       rememberPendingRulebookLesson(localStorage, 'player', pending(`version-${index}`))
     }
@@ -27,7 +27,7 @@ describe('pending rulebook lesson handoff', () => {
       { ...pending('version-bad'), editionId: '' },
     ]))
 
-    expect(readPendingRulebookLessons(localStorage, 'player')).toHaveLength(5)
+    expect(readPendingRulebookLessons(localStorage, 'player')).toHaveLength(7)
     expect(readPendingRulebookLessons(localStorage, 'invalid')).toEqual([])
   })
 
@@ -39,7 +39,7 @@ describe('pending rulebook lesson handoff', () => {
     expect(readPendingRulebookLessons(localStorage, 'player')).toEqual([])
   })
 
-  it('normalizes a bounded natural learning goal and rejects oversized stored input', () => {
+  it('normalizes a natural learning goal without an arbitrary content cap', () => {
     rememberPendingRulebookLesson(localStorage, 'player', {
       ...pending('version-1'),
       learningGoal: '  先让我能带大家开局，再重点讲行动衔接。  ',
@@ -50,10 +50,11 @@ describe('pending rulebook lesson handoff', () => {
       learningGoal: '先让我能带大家开局，再重点讲行动衔接。',
     }])
 
-    localStorage.setItem('rulepilot:pending-rulebook-lessons:oversized', JSON.stringify([{
-      ...pending('version-2'), learningGoal: 'x'.repeat(501),
+    const detailedGoal = '我希望按实际带玩顺序讲清楚每一个分支和例外。'.repeat(30)
+    localStorage.setItem('rulepilot:pending-rulebook-lessons:detailed', JSON.stringify([{
+      ...pending('version-2'), learningGoal: detailedGoal,
     }]))
-    expect(readPendingRulebookLessons(localStorage, 'oversized')).toEqual([])
+    expect(readPendingRulebookLessons(localStorage, 'detailed')[0]?.learningGoal).toBe(detailedGoal)
   })
 
   it('sanitizes retired audience fields from an older stored handoff', () => {

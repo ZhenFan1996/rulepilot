@@ -12,18 +12,18 @@ public record RuleTimingResolution(
         List<UUID> citationIds) {
 
     public RuleTimingResolution {
-        bounded(timingContext, 500, "timing context");
-        bounded(resolutionOrder, 700, "resolution order");
-        bounded(orderSource, 400, "order source");
-        if (basis == null || citationIds == null || citationIds.isEmpty() || citationIds.size() > 3
+        required(timingContext, "timing context");
+        required(resolutionOrder, "resolution order");
+        required(orderSource, "order source");
+        if (basis == null || citationIds == null || citationIds.isEmpty()
                 || citationIds.stream().distinct().count() != citationIds.size()) {
             throw new IllegalArgumentException("rule timing resolution is invalid");
         }
         citationIds = List.copyOf(citationIds);
     }
 
-    private static void bounded(String value, int maximum, String field) {
-        if (value == null || value.isBlank() || value.length() > maximum) {
+    private static void required(String value, String field) {
+        if (value == null || value.isBlank()) {
             throw new IllegalArgumentException("rule timing " + field + " is invalid");
         }
     }

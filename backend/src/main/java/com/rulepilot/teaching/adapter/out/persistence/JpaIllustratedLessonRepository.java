@@ -294,15 +294,15 @@ class IllustratedLessonSectionEntity {
     @Id UUID id;
     @Column(name = "lesson_id", nullable = false) UUID lessonId;
     @Column(nullable = false) int position;
-    @Column(name = "topic_key", nullable = false) String topicKey;
-    @Column(name = "coverage_tags", nullable = false) String coverageTags;
-    @Column(nullable = false) String title;
+    @Column(name = "topic_key", nullable = false, columnDefinition = "text") String topicKey;
+    @Column(name = "coverage_tags", nullable = false, columnDefinition = "text") String coverageTags;
+    @Column(nullable = false, columnDefinition = "text") String title;
     @Column(nullable = false) boolean required;
     @Column(name = "evidence_status", nullable = false) String evidenceStatus;
     @Column(name = "visual_kind", nullable = false) String visualKind;
-    @Column(name = "visual_caption", nullable = false) String visualCaption;
-    @Column(name = "visual_source_pages", nullable = false) String visualSourcePages;
-    @Column(name = "visual_source_chunk_ids", nullable = false) String visualSourceChunkIds;
+    @Column(name = "visual_caption", nullable = false, columnDefinition = "text") String visualCaption;
+    @Column(name = "visual_source_pages", nullable = false, columnDefinition = "text") String visualSourcePages;
+    @Column(name = "visual_source_chunk_ids", nullable = false, columnDefinition = "text") String visualSourceChunkIds;
 
     protected IllustratedLessonSectionEntity() {}
 
@@ -351,14 +351,14 @@ class IllustratedLessonStepEntity {
     @Id UUID id;
     @Column(name = "lesson_section_id", nullable = false) UUID lessonSectionId;
     @Column(nullable = false) int position;
-    @Column(name = "step_heading", nullable = false) String stepHeading;
+    @Column(name = "step_heading", nullable = false, columnDefinition = "text") String stepHeading;
     @Column(name = "teaching_move", nullable = false) String teachingMove;
     @Column(name = "step_text", nullable = false, columnDefinition = "text") String stepText;
-    @Column(name = "source_pages", nullable = false) String sourcePages;
-    @Column(name = "source_chunk_ids", nullable = false) String sourceChunkIds;
+    @Column(name = "source_pages", nullable = false, columnDefinition = "text") String sourcePages;
+    @Column(name = "source_chunk_ids", nullable = false, columnDefinition = "text") String sourceChunkIds;
     @Column(name = "visual_page") Integer visualPage;
-    @Column(name = "visual_label") String visualLabel;
-    @Column(name = "visual_description", nullable = false) String visualDescription = "";
+    @Column(name = "visual_label", columnDefinition = "text") String visualLabel;
+    @Column(name = "visual_description", nullable = false, columnDefinition = "text") String visualDescription = "";
     @Column(name = "visual_x") Integer visualX;
     @Column(name = "visual_y") Integer visualY;
     @Column(name = "visual_width") Integer visualWidth;

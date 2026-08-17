@@ -182,7 +182,6 @@ function parseConversationTurnResponse(value: unknown): ConversationTurnResponse
     || value.id.length === 0
     || typeof value.question !== 'string'
     || value.question.trim().length === 0
-    || value.question.length > 800
     || typeof value.createdAt !== 'string'
     || !isAnswerRulingReference(value.rulingReference)) return null
   const answer = parsePlayerFacingRuleAnswer(value.answer)

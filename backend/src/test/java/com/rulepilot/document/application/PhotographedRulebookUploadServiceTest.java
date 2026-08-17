@@ -11,6 +11,7 @@ import static org.mockito.Mockito.when;
 import com.rulepilot.document.application.PhotographedRulebookUploadService.PhotoPage;
 import com.rulepilot.document.domain.DocumentSourceType;
 import java.io.InputStream;
+import java.util.ArrayList;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 
@@ -73,6 +74,33 @@ class PhotographedRulebookUploadServiceTest {
                 eq("alice"),
                 eq(true),
                 eq("重点讲组件摆放。"));
+    }
+
+    @Test
+    void acceptsARealisticallyLongPhotographedRulebookWithinThePdfBoundary() {
+        List<PhotoPage> pages = new ArrayList<>();
+        for (int page = 1; page <= 60; page++) {
+            pages.add(new PhotoPage("page-" + page + ".jpg", "image/jpeg", new byte[] {(byte) page}));
+        }
+        when(assembler.assemble(pages)).thenReturn(new PhotographedRulebookAssembler.AssembledRulebook(
+                "photographed-rulebook.pdf", new byte[] {4, 5, 6}));
+
+        service.upload(null, "Long rulebook", DocumentSourceType.BASE_RULEBOOK, null, null, pages, "alice");
+
+        verify(assembler).assemble(pages);
+        verify(documents).upload(
+                eq(null),
+                eq("Long rulebook"),
+                eq(DocumentSourceType.BASE_RULEBOOK),
+                eq(null),
+                eq(null),
+                eq("photographed-rulebook.pdf"),
+                eq(RuleDocumentStorageService.PDF_CONTENT_TYPE),
+                eq(3L),
+                any(InputStream.class),
+                eq("alice"),
+                eq(false),
+                isNull());
     }
 
     @Test

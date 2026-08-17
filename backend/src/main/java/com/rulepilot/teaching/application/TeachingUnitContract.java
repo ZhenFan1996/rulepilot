@@ -129,12 +129,11 @@ final class TeachingUnitContract {
         }
 
         Unit {
-            if (unitId == null || unitId.isBlank() || unitId.length() > 80
+            if (unitId == null || unitId.isBlank()
                     || sourcePagesByIdentifier == null || sourcePagesByIdentifier.isEmpty()
-                    || sourcePagesByIdentifier.size() > 16
                     || sourcePagesByIdentifier.entrySet().stream().anyMatch(entry -> entry.getKey() == null
-                            || entry.getKey().isBlank() || entry.getKey().length() > 160
-                            || entry.getValue() == null || entry.getValue().size() > 10
+                            || entry.getKey().isBlank()
+                            || entry.getValue() == null
                             || entry.getValue().stream().anyMatch(page -> page == null || page < 1))) {
                 throw new IllegalArgumentException("planned teaching unit is invalid");
             }

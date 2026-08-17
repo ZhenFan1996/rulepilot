@@ -68,7 +68,7 @@ class VisualRulebookCataloger {
             @Value("${rulepilot.visual.catalog-timeout:PT45S}") Duration visualCatalogTimeout,
             @Value("${rulepilot.visual.progressive-start-timeout:PT35S}") Duration progressiveStartTimeout,
             @Value("${rulepilot.visual.coverage-probe-pages:4}") int visualCoverageProbePages,
-            @Value("${rulepilot.visual.request-parallelism:1}") int visualRequestParallelism) {
+            @Value("${rulepilot.visual.request-parallelism:3}") int visualRequestParallelism) {
         this.pageImages = pageImages;
         this.visualCatalog = visualCatalog;
         this.visualFacts = visualFacts;
@@ -218,10 +218,10 @@ class VisualRulebookCataloger {
                     ActivityOutcome.SUCCEEDED,
                     "Reused " + cached.size() + " page-scoped visual facts from this immutable rulebook version");
         }
-        // A visual-only rulebook cannot form an evidence-bound outline from a partial ledger. Preserve every
-        // successfully cataloged page and only request missing pages. Visual anchors are optional crop-discovery
-        // hints, not a condition for trusting the page's factual ledger; retrying an anchorless page made every
-        // subsequent plan pay again for otherwise usable visual evidence.
+        // Preserve every page observation, including an explicitly partial one. Completeness is source metadata for
+        // the outline Agent, not permission for this adapter to discard visible rules or block the whole lesson.
+        // A page that could not be read at all is represented by pageInputs(...) as unavailable, so the outline can
+        // keep the page binding without inventing facts from it.
         Set<Integer> requiredFacts = new LinkedHashSet<>(missingPages);
         List<PageFact> fresh = requiredFacts.isEmpty()
                 ? List.of()
@@ -239,32 +239,10 @@ class VisualRulebookCataloger {
                 ? VisualRulebookCatalogPolicy.mergeFreshFacts(cached, fresh)
                 : VisualRulebookCatalogPolicy.backfillAnchors(cached, fresh);
         if (!fresh.isEmpty()) visualFacts.merge(documentVersionId, facts);
-        List<PageFact> completeTeachingFacts = facts.stream()
-                .filter(VisualRulebookCatalogPolicy::hasReusableCompleteRuleLedger)
+        List<PageFact> teachingFacts = facts.stream()
+                .filter(fact -> fact.schemaVersion() == PageFact.CURRENT_SCHEMA_VERSION)
                 .toList();
-        Set<Integer> completedPages = completeTeachingFacts.stream()
-                .map(PageFact::pageNumber)
-                .collect(Collectors.toSet());
-        List<Integer> unavailablePages = requestedPages.stream()
-                .filter(page -> !completedPages.contains(page))
-                .toList();
-        if (!unavailablePages.isEmpty()) {
-            log.warn(
-                    "Visual teaching inventory remained incomplete for document {} pages {}; rejecting preparation",
-                    documentVersionId,
-                    unavailablePages);
-            if (assistantRunId != null) {
-                invocations.record(
-                        assistantRunId,
-                        ActivityType.VALIDATION,
-                        "rejectIncompleteVisualRuleGroupInventory",
-                        ActivityOutcome.REJECTED,
-                        "Teaching preparation stopped because one or more source pages lacked a complete rule-group inventory");
-            }
-            throw new IllegalStateException(
-                    "visual rulebook rule-group inventory is incomplete; retry preparation");
-        }
-        return VisualRulebookCatalogPolicy.pageInputs(documentPages, completeTeachingFacts);
+        return VisualRulebookCatalogPolicy.pageInputs(documentPages, teachingFacts);
     }
 
     List<PageFact> inspectUnownedSparseVisualPages(
@@ -329,7 +307,7 @@ class VisualRulebookCataloger {
                 owner,
                 rulebookTitle,
                 assistantRunId,
-                index -> "inspectTeachingVisualBatch|" + (index + 1),
+                index -> "inspectTeachingVisualPage|" + orderedPages.get(index) + "|" + orderedPages.size(),
                 timedOutPages);
         List<Integer> retryPages = missingPages.stream()
                 .filter(page -> !timedOutPages.contains(page))
@@ -430,7 +408,20 @@ class VisualRulebookCataloger {
             UUID assistantRunId,
             String operation) {
         List<PageImageInput> images = readTeachingPageImages(documentVersionId, batch);
-        var request = new VisualRulebookPageCatalogModel.CatalogRequest(images, owner, rulebookTitle);
+        List<VisualRulebookPageCatalogModel.PageTranscript> transcripts = visualCatalog
+                        .supportsTeachingPageTranscription(owner)
+                ? images.stream()
+                        .map(image -> invokeModel(
+                                assistantRunId,
+                                teachingTranscriptionOperation(operation, image.pageNumber()),
+                                600,
+                                teachingTranscriptionSuccessSummary(owner, image.pageNumber()),
+                                () -> visualCatalog.transcribeTeachingPage(image, owner),
+                                transcript -> Math.max(1, transcript.text().length() / 4)))
+                        .toList()
+                : List.of();
+        var request = new VisualRulebookPageCatalogModel.CatalogRequest(
+                images, owner, rulebookTitle, transcripts);
         return invokeModel(
                 assistantRunId,
                 operation,
@@ -438,6 +429,22 @@ class VisualRulebookCataloger {
                 teachingStartupSuccessSummary(owner),
                 () -> visualCatalog.summarizeForTeaching(request),
                 this::catalogOutputTokens);
+    }
+
+    private static String teachingTranscriptionOperation(String catalogOperation, int pageNumber) {
+        if (catalogOperation.startsWith("inspectTeachingVisualPage|")) {
+            return "transcribeTeachingVisualPage|" + catalogOperation.substring("inspectTeachingVisualPage|".length());
+        }
+        if (catalogOperation.startsWith("inspectTeachingVisualRetry|")) {
+            return "transcribeTeachingVisualRetry|" + pageNumber;
+        }
+        return "transcribeTeachingVisualPage|" + pageNumber;
+    }
+
+    private String teachingTranscriptionSuccessSummary(String owner, int pageNumber) {
+        return visualCatalog.teachingPageTranscriptionExecutionIdentity(owner)
+                .map(identity -> "PDF page " + pageNumber + " transcribed via " + identity.auditLabel())
+                .orElse("PDF page " + pageNumber + " transcribed");
     }
 
     private String teachingStartupSuccessSummary(String owner) {
@@ -608,7 +615,6 @@ class VisualRulebookCataloger {
                                         : icon.verifiedVisualLabel())
                                 .filter(label -> label != null && !label.isBlank())
                                 .distinct()
-                                .limit(12)
                                 .toList();
                 int cellBatchSize = referencePages.isEmpty() ? 4 : 1;
                 for (int start = 0; start < cells.size(); start += cellBatchSize) {
@@ -735,7 +741,6 @@ class VisualRulebookCataloger {
                     String evidence = fact == null
                             ? "The complete rendered page is the only reference evidence."
                             : fact.printedTerms() + "\n" + fact.factualSummary();
-                    if (evidence.length() > 1_600) evidence = evidence.substring(0, 1_600).stripTrailing();
                     return new VisualRulebookPageCatalogModel.IdentifierReferencePage(
                             new PageImageInput(page.pageNumber(), page.mediaType(), page.content()), evidence);
                 })
@@ -752,15 +757,7 @@ class VisualRulebookCataloger {
         if (!preserveCompletePageFacts && pageSummary != null && !pageSummary.isBlank()) {
             blocks.add(pageSummary.strip());
         }
-        StringBuilder merged = new StringBuilder();
-        for (String block : blocks) {
-            int separator = merged.isEmpty() ? 0 : 1;
-            int remaining = 4_000 - merged.length() - separator;
-            if (remaining <= 0) break;
-            if (!merged.isEmpty()) merged.append('\n');
-            merged.append(block, 0, Math.min(block.length(), remaining));
-        }
-        return merged.toString();
+        return String.join("\n", blocks);
     }
 
     /**

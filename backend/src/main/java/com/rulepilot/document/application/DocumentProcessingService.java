@@ -112,6 +112,13 @@ class DocumentProcessingService implements DocumentProcessing, DocumentPageImage
 
     @Override
     @Transactional(readOnly = true)
+    public int pageCount(UUID documentVersionId) {
+        requireVersion(documentVersionId);
+        return repository.countPages(documentVersionId);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
     public List<PageView> pages(UUID documentVersionId) {
         requireVersion(documentVersionId);
         return repository.findPages(documentVersionId);

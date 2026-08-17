@@ -12,8 +12,6 @@ import java.util.List;
 /** Validates the schema and evidence scope of the walkthrough selected by the answer plan. */
 final class AnswerWalkthroughResolver {
 
-    private static final int MAX_STEPS = 6;
-
     List<RuleWalkthroughStep> resolve(ModelRequest request, ModelDraft draft) {
         if (request == null || draft == null) {
             throw new IllegalArgumentException("walkthrough input is invalid");
@@ -22,8 +20,6 @@ final class AnswerWalkthroughResolver {
         AnswerStructuredAidPolicy.validateSelection(
                 request, AnswerAid.WALKTHROUGH, proposed.isEmpty(), "walkthrough");
         if (proposed.isEmpty()) return List.of();
-        if (proposed.size() > MAX_STEPS) throw new IllegalArgumentException("too many walkthrough steps");
-
         LinkedHashSet<String> instructions = new LinkedHashSet<>();
         return proposed.stream()
                 .map(step -> resolveOne(request, draft, step))
@@ -42,8 +38,8 @@ final class AnswerWalkthroughResolver {
     private RuleWalkthroughStep resolveOne(ModelRequest modelRequest, ModelDraft draft, WalkthroughStepRequest item) {
         if (item == null) throw new IllegalArgumentException("walkthrough step is null");
         return new RuleWalkthroughStep(
-                AnswerStructuredAidPolicy.requiredText(item.instruction(), 240, "walkthrough instruction"),
-                AnswerStructuredAidPolicy.requiredText(item.explanation(), 500, "walkthrough explanation"),
+                AnswerStructuredAidPolicy.requiredText(item.instruction(), "walkthrough instruction"),
+                AnswerStructuredAidPolicy.requiredText(item.explanation(), "walkthrough explanation"),
                 AnswerStructuredAidPolicy.enumValue(
                         item.orderBasis(), WalkthroughOrderBasis.class, "walkthrough order basis"),
                 AnswerStructuredAidPolicy.citations(

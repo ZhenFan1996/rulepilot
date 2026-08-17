@@ -49,35 +49,40 @@ class ResponsesApiOfficialRulebookCandidateFinderTest {
             authorization.set(exchange.getRequestHeaders().getFirst("Authorization"));
             requestBody.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
             ObjectMapper json = new ObjectMapper();
-            String content = json.writeValueAsString(Map.of("candidates", List.of(
-                    Map.of(
-                            "title", "Official rules",
-                            "url", "https://publisher.example/support/rules.pdf",
-                            "publisher", "Publisher",
-                            "language", "en",
-                            "edition", "First",
-                            "sourceIndexes", List.of(1, 2, 3)),
-                    Map.of(
-                            "title", "BGG file page",
-                            "url", "https://boardgamegeek.com/filepage/123/rulebook",
-                            "publisher", "",
-                            "language", "en",
-                            "edition", "First",
-                            "sourceIndexes", List.of(2)),
-                    Map.of(
-                            "title", "Observed BGG download",
-                            "url", "https://boardgamegeek.com/file/download_redirect/c66d839e5ef882cf86295abc25caef76456ef0ed43746421/catalog-game-rules.pdf",
-                            "publisher", "Community uploader",
-                            "language", "en",
-                            "edition", "First",
-                            "sourceIndexes", List.of(3)),
-                    Map.of(
-                            "title", "Invented rules",
-                            "url", "https://publisher.example/invented.pdf",
-                            "publisher", "Publisher",
-                            "language", "en",
-                            "edition", "First",
-                            "sourceIndexes", List.of(1)))));
+            String descriptiveTitle = "Official rules " + "complete edition details ".repeat(10);
+            String content = json.writeValueAsString(Map.of(
+                    "providerNote", "Search completed with independently observed sources.",
+                    "candidates",
+                    List.of(
+                            Map.of(
+                                    "title", descriptiveTitle,
+                                    "url", "https://publisher.example/support/rules.pdf",
+                                    "publisher", "Publisher",
+                                    "language", "en",
+                                    "edition", "First",
+                                    "sourceIndexes", List.of(1, 2, 3, 1, 2, 3),
+                                    "confidence", "high"),
+                            Map.of(
+                                    "title", "BGG file page",
+                                    "url", "https://boardgamegeek.com/filepage/123/rulebook",
+                                    "publisher", "",
+                                    "language", "en",
+                                    "edition", "First",
+                                    "sourceIndexes", List.of(2)),
+                            Map.of(
+                                    "title", "Observed BGG download",
+                                    "url", "https://boardgamegeek.com/file/download_redirect/c66d839e5ef882cf86295abc25caef76456ef0ed43746421/catalog-game-rules.pdf",
+                                    "publisher", "Community uploader",
+                                    "language", "en",
+                                    "edition", "First",
+                                    "sourceIndexes", List.of(3)),
+                            Map.of(
+                                    "title", "Invented rules",
+                                    "url", "https://publisher.example/invented.pdf",
+                                    "publisher", "Publisher",
+                                    "language", "en",
+                                    "edition", "First",
+                                    "sourceIndexes", List.of(1)))));
             byte[] response = json.writeValueAsBytes(Map.of("output", List.of(
                     Map.of(
                             "type", "web_search_call",
@@ -115,6 +120,7 @@ class ResponsesApiOfficialRulebookCandidateFinderTest {
                     "https://publisher.example/support/rules.pdf",
                     "https://boardgamegeek.com/file/download_redirect/c66d839e5ef882cf86295abc25caef76456ef0ed43746421/catalog-game-rules.pdf",
                     "https://boardgamegeek.com/filepage/123/rulebook");
+            assertThat(candidates.getFirst().title()).startsWith("Official rules").hasSizeGreaterThan(180);
             assertThat(candidates).allSatisfy(candidate -> assertThat(candidate.toString()).doesNotContain("secret-key"));
             assertThat(authorization.get()).isEqualTo("Bearer secret-key");
             assertThat(requestBody.get()).contains(

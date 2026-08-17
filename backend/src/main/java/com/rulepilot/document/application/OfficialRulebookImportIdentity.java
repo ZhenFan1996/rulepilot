@@ -4,8 +4,10 @@ import com.rulepilot.catalog.CatalogEditionLookup.EditionReference;
 import java.text.Normalizer;
 import java.util.ArrayList;
 import java.util.EnumSet;
+import java.util.IllformedLocaleException;
 import java.util.List;
 import java.util.Locale;
+import java.util.MissingResourceException;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -126,15 +128,17 @@ public final class OfficialRulebookImportIdentity {
         private static String checkedLanguage(String language) {
             if (language == null || language.isBlank()) return null;
             String normalized = language.strip().replace('_', '-');
-            if (normalized.length() > 20
-                    || !normalized.matches("(?i)[a-z]{2,3}(?:-[a-z]{4})?(?:-(?:[a-z]{2}|[0-9]{3}))?")) {
+            try {
+                Locale parsed = new Locale.Builder().setLanguageTag(normalized).build();
+                String canonical = parsed.toLanguageTag();
+                if (canonical.equalsIgnoreCase("und")) {
+                    throw new IllegalArgumentException("source language must be a known language tag");
+                }
+                parsed.getISO3Language();
+                return canonical;
+            } catch (IllformedLocaleException | MissingResourceException invalid) {
                 throw new IllegalArgumentException("source language must be a valid language tag");
             }
-            String canonical = Locale.forLanguageTag(normalized).toLanguageTag();
-            if (canonical.equalsIgnoreCase("und")) {
-                throw new IllegalArgumentException("source language must be a known language tag");
-            }
-            return canonical;
         }
     }
 

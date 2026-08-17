@@ -6,9 +6,9 @@ import com.rulepilot.teaching.domain.IllustratedLesson.LessonSection;
 /**
  * Publishes the exact section that already crossed the deterministic Teaching boundary.
  *
- * <p>The candidate can only be produced after schema, citation scope, document version, visual geometry, and
- * quantitative checks pass. Publication changes only its lifecycle status; it never rewrites model prose, citations,
- * or teaching structure. Optional semantic review and visual enrichment are separate, best-effort work.</p>
+ * <p>The candidate can only be produced after schema, citation scope, document version, and optional visual geometry
+ * checks pass. Publication changes only its lifecycle status; it never rewrites model prose, citations, or teaching
+ * structure. Optional semantic review and visual enrichment are separate, best-effort work.</p>
  */
 final class TeachingBaseSectionPublicationPolicy {
 

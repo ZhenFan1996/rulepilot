@@ -112,9 +112,6 @@ public record PlayerFacingRuleAnswer(
             if (message == null || message.isBlank() || actionLabel == null || actionLabel.isBlank() || draft == null) {
                 throw new IllegalArgumentException("player-facing recovery is invalid");
             }
-            message = message.strip();
-            actionLabel = actionLabel.strip();
-            draft = draft.strip();
         }
     }
 }

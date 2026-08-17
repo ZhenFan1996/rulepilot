@@ -7,6 +7,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.json.JsonMapper;
 import com.rulepilot.assistant.AgentExecutionControl.ActivityOutcome;
@@ -69,6 +70,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 import java.util.function.ToIntFunction;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
@@ -92,6 +94,10 @@ class TeachingRichLessonPaidCanaryTest {
             ".local/agent-evaluation/teaching-iteration-2-captain-is-dead-canary.json";
     private static final String CANARY_FAILURE_OUTPUT =
             ".local/agent-evaluation/teaching-iteration-2-captain-is-dead-outline-failure.json";
+    private static final String GSTONE_VISUAL_CANARY_INPUT =
+            ".local/agent-evaluation/gstone-endeavor-visual-teaching-preparation-v1.json";
+    private static final String GSTONE_VISUAL_LESSON_OUTPUT =
+            ".local/agent-evaluation/gstone-endeavor-visual-teaching-lesson-v1.json";
     private static final String OWNER = "teaching-richness-canary";
 
     private final ObjectMapper mapper = JsonMapper.builder().findAndAddModules().build();
@@ -263,6 +269,157 @@ class TeachingRichLessonPaidCanaryTest {
         assertThat(audit.modelCalls.get()).isBetween(plan.sections().size(), plan.sections().size() * 2);
         assertThat(rawOutlineResponses).isNotEmpty().hasSizeLessThanOrEqualTo(2);
         assertThat(rawSectionResponses).isNotEmpty();
+    }
+
+    @Test
+    void publishesTheCapturedCompleteGstoneVisualLedgerAsARichLesson() throws Exception {
+        assumeTrue("true".equalsIgnoreCase(System.getenv("RULEPILOT_GSTONE_VISUAL_LESSON_CANARY")));
+        Path root = Path.of(System.getProperty("user.dir")).getParent();
+        Path input = root.resolve(GSTONE_VISUAL_CANARY_INPUT);
+        assumeTrue(Files.isRegularFile(input), "complete ignored Gstone visual preparation artifact is required");
+        JsonNode preparation = mapper.readTree(input.toFile());
+        assertThat(preparation.path("catalogStageComplete").asBoolean()).isTrue();
+        assertThat(preparation.path("outlineStageComplete").asBoolean()).isTrue();
+        assertThat(preparation.path("canonicalSlotCount").asInt()).isGreaterThan(128);
+
+        String providerName = java.util.Optional.ofNullable(System.getenv("RULEPILOT_TEACHING_CANARY_PROVIDER"))
+                .filter(value -> !value.isBlank())
+                .orElse("deepseek")
+                .toLowerCase(Locale.ROOT);
+        Provider provider = provider(providerName);
+        OutlineDraft outline = mapper.treeToValue(preparation.path("outline"), OutlineDraft.class);
+        UUID versionId = UUID.nameUUIDFromBytes(
+                "gstone-endeavor-deep-sea-visual-v1".getBytes(StandardCharsets.UTF_8));
+        String learningGoal = "先理解整局，再把复杂规则拆成第一次开桌能照做的清晰教学单元。";
+        TeachingPlan generatedPlan = new TeachingPlanFactory().create(versionId, learningGoal, OWNER, outline);
+        TeachingPlan plan = TeachingPlanPersistenceRoundTrip.serializeAndReload(generatedPlan);
+        CatalogEvidence corpus = new CatalogEvidence(versionId, visualPageEvidence(preparation));
+
+        List<String> rawSectionResponses = Collections.synchronizedList(new ArrayList<>());
+        VersionedAgentPrompts prompts = prompts();
+        RuntimeModelConfiguration configuration = configuration(
+                provider, recordingChatModel(provider, rawSectionResponses));
+        RecordingTeachingModel sections = new RecordingTeachingModel(new SpringAiTeachingLessonModel(
+                configuration, new FakeTeachingLessonModel(), prompts, 0.2d));
+        CanaryInvocations audit = new CanaryInvocations();
+        UUID runId = UUID.randomUUID();
+        NativeToolScopes scopes = mock(NativeToolScopes.class);
+        when(scopes.create(eq(OWNER), eq(versionId), eq(runId))).thenReturn(java.util.Optional.of(
+                new ToolScope(OWNER, versionId, runId, Instant.now().plusSeconds(300))));
+        var refiner = new TeachingSourcePageEvidenceRefiner(
+                scopes, corpus, new PolicyEvidenceVerifier(), audit);
+        GroundedTeachingAgent agent = new GroundedTeachingAgent(
+                corpus,
+                sections,
+                new PolicyEvidenceVerifier(),
+                mock(GeneratedContentCritic.class),
+                audit,
+                VisualRulebookPageFacts.empty(),
+                VisualRulebookPageCatalogModel.unavailable(),
+                72,
+                3,
+                3,
+                refiner);
+        List<IllustratedLesson> progressSnapshots = new CopyOnWriteArrayList<>();
+        long lessonStarted = System.nanoTime();
+        IllustratedLesson lesson = agent.createBase(plan, runId, null, progressSnapshots::add);
+        long lessonLatencyMs = elapsedMillis(lessonStarted);
+        List<Map<String, Object>> fieldDiffs = lesson.sections().stream()
+                .map(section -> fieldDiff(section, sections.draftAttempts(section.topicKey())))
+                .toList();
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("schemaVersion", 1);
+        result.put("generatedAt", Instant.now().toString());
+        result.put("caseId", "gstone-endeavor-deep-sea-visual-v1");
+        result.put("sourceUrl", preparation.path("sourceUrl").asText());
+        result.put("provider", provider.provider());
+        result.put("model", provider.model());
+        result.put("visualCatalogModelCalls", preparation.path("visualModelCalls").asInt());
+        result.put("visualCatalogLatencyMs", preparation.path("visualCatalogLatencyMs").asLong());
+        result.put("visualCatalogParallelism", preparation.path("peakVisualParallelism").asInt());
+        result.put("outlineModelCalls", preparation.path("outlineModelCalls").asInt());
+        result.put("outlineLatencyMs", preparation.path("outlineLatencyMs").asLong());
+        result.put("sectionModelCalls", audit.modelCalls.get());
+        result.put("toolCalls", audit.toolCalls.get());
+        result.put("criticCalls", audit.criticCalls.get());
+        result.put("lessonLatencyMs", lessonLatencyMs);
+        result.put("lessonStatus", lesson.status().name());
+        result.put("sectionCount", lesson.sections().size());
+        result.put("stepCount", lesson.sections().stream().mapToInt(section -> section.steps().size()).sum());
+        result.put("visibleCharacterCount", visibleCharacters(lesson));
+        result.put("progressSnapshotCount", progressSnapshots.size());
+        result.put("activityTimeline", List.copyOf(audit.events));
+        result.put("modelOperations", List.copyOf(audit.modelOperations));
+        result.put("toolOperations", List.copyOf(audit.toolOperations));
+        result.put("wholeGameUnderstanding", plan.wholeGameContext());
+        result.put("planTeachingUnits", visiblePlanUnits(plan));
+        result.put("publishedLesson", visibleLesson(lesson));
+        result.put("rawStructuredDrafts", sections.visibleDrafts());
+        result.put("rawSectionProviderResponses", List.copyOf(rawSectionResponses));
+        result.put("fieldPreservation", fieldDiffs);
+        result.put("allPlayerFacingFieldsPreserved", fieldDiffs.stream()
+                .allMatch(diff -> Boolean.TRUE.equals(diff.get("playerFacingFieldsExact"))));
+        result.put("allPublishedFieldsComeFromRaw", fieldDiffs.stream()
+                .allMatch(diff -> Boolean.TRUE.equals(diff.get("publishedFieldsAreExactRawSubset"))));
+        result.put("allPlannedUnitsCovered", fieldDiffs.stream()
+                .allMatch(diff -> Boolean.TRUE.equals(diff.get("plannedUnitsCovered"))));
+        result.put("localProseDeletionCount", 0);
+        result.put("planContextSurvivedPersistenceRoundTrip", plan.wholeGameContext().equals(generatedPlan.wholeGameContext()));
+        Path output = root.resolve(GSTONE_VISUAL_LESSON_OUTPUT);
+        Files.createDirectories(output.getParent());
+        Files.writeString(
+                output,
+                mapper.writerWithDefaultPrettyPrinter().writeValueAsString(result) + "\n",
+                StandardCharsets.UTF_8);
+
+        assertThat(lesson.status()).isEqualTo(LessonStatus.COMPLETE);
+        assertThat(lesson.sections()).hasSize(plan.sections().size()).hasSizeGreaterThanOrEqualTo(10);
+        assertThat(lesson.sections()).allSatisfy(section -> {
+            assertThat(section.evidenceStatus()).isEqualTo(EvidenceStatus.SUPPORTED);
+            assertThat(section.steps()).isNotEmpty();
+        });
+        assertThat(fieldDiffs).allSatisfy(diff -> assertThat(diff)
+                .containsEntry("playerFacingFieldsExact", true)
+                .containsEntry("publishedFieldsAreExactRawSubset", true)
+                .containsEntry("plannedUnitsCovered", true));
+        assertThat(audit.criticCalls).hasValue(0);
+        assertThat(audit.modelCalls.get()).isBetween(plan.sections().size(), plan.sections().size() * 2);
+        assertThat(rawSectionResponses).isNotEmpty();
+        assertThat(lessonLatencyMs).isLessThan(180_000L);
+    }
+
+    private Map<Integer, String> visualPageEvidence(JsonNode preparation) {
+        Map<Integer, String> pages = new java.util.TreeMap<>();
+        for (JsonNode response : preparation.path("rawCatalogResponses")) {
+            for (JsonNode page : response.path("body").path("pages")) {
+                if (!page.path("ruleGroupInventoryComplete").asBoolean()) continue;
+                StringBuilder evidence = new StringBuilder();
+                JsonNode pageSummary = page.path("factualSummary");
+                if (pageSummary.isArray()) {
+                    pageSummary.forEach(item -> evidence.append(item.asText()).append('\n'));
+                } else if (pageSummary.isTextual()) {
+                    evidence.append(pageSummary.asText()).append('\n');
+                }
+                for (JsonNode group : page.path("ruleGroups")) {
+                    evidence.append(group.path("identifier").asText())
+                            .append(": ")
+                            .append(group.path("fact").asText())
+                            .append('\n');
+                }
+                for (JsonNode quantity : page.path("quantityObservations")) {
+                    evidence.append("Visible quantity: ")
+                            .append(quantity.path("originalSpan").asText())
+                            .append('\n');
+                }
+                String text = evidence.toString().strip();
+                if (!text.isBlank()) pages.put(page.path("pageNumber").asInt(), text);
+            }
+        }
+        if (pages.size() != preparation.path("pageCount").asInt()) {
+            throw new IllegalArgumentException("captured visual ledger omitted a complete page");
+        }
+        return Map.copyOf(pages);
     }
 
     private Map<String, Object> result(
@@ -950,6 +1107,68 @@ class TeachingRichLessonPaidCanaryTest {
             }
             return -1;
         }
+    }
+
+    private static final class CatalogEvidence implements AssistantReadTools {
+        private static final Pattern TERMS = Pattern.compile("[\\p{L}\\p{N}]{2,}");
+        private final UUID versionId;
+        private final List<RuleEvidence> chunks;
+
+        private CatalogEvidence(UUID versionId, Map<Integer, String> pages) {
+            this.versionId = versionId;
+            this.chunks = pages.entrySet().stream()
+                    .sorted(Map.Entry.comparingByKey())
+                    .map(entry -> new RuleEvidence(
+                            UUID.nameUUIDFromBytes((versionId + ":visual-page:" + entry.getKey())
+                                    .getBytes(StandardCharsets.UTF_8)),
+                            versionId,
+                            "VISUAL_PAGE_LEDGER",
+                            "Visual rulebook page " + entry.getKey(),
+                            entry.getValue(),
+                            entry.getKey(),
+                            entry.getKey()))
+                    .toList();
+        }
+
+        @Override
+        public List<RuleEvidence> searchRuleEvidence(SearchRuleEvidence request) {
+            if (!versionId.equals(request.documentVersionId())) return List.of();
+            Set<String> terms = terms(request.query());
+            return chunks.stream()
+                    .map(source -> new Scored(source, score(source.excerpt(), terms)))
+                    .filter(candidate -> candidate.score() > 0)
+                    .sorted(Comparator.comparingInt(Scored::score).reversed())
+                    .limit(request.limit())
+                    .map(Scored::source)
+                    .toList();
+        }
+
+        @Override
+        public List<RuleEvidence> readRuleEvidencePages(
+                UUID documentVersionId, Set<Integer> pageNumbers, boolean includePageImages) {
+            if (!versionId.equals(documentVersionId) || includePageImages) return List.of();
+            return chunks.stream().filter(source -> pageNumbers.contains(source.pageFrom())).toList();
+        }
+
+        @Override
+        public List<RuleEvidence> readRuleEvidenceIds(UUID documentVersionId, Set<UUID> evidenceIds) {
+            if (!versionId.equals(documentVersionId)) return List.of();
+            return chunks.stream().filter(source -> evidenceIds.contains(source.chunkId())).toList();
+        }
+
+        private Set<String> terms(String query) {
+            Matcher matcher = TERMS.matcher(query == null ? "" : query.toLowerCase(Locale.ROOT));
+            LinkedHashSet<String> terms = new LinkedHashSet<>();
+            while (matcher.find()) terms.add(matcher.group());
+            return Set.copyOf(terms);
+        }
+
+        private int score(String excerpt, Set<String> terms) {
+            String lower = excerpt.toLowerCase(Locale.ROOT);
+            return (int) terms.stream().filter(lower::contains).count();
+        }
+
+        private record Scored(RuleEvidence source, int score) {}
     }
 
     private static final class PdfEvidence implements AssistantReadTools {

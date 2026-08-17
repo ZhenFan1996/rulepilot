@@ -69,14 +69,13 @@ class AnswerDecisionTableResolverTest {
     }
 
     @Test
-    void boundsBranchCountWithoutDependingOnRulebookVocabulary() {
-        List<DecisionBranchRequest> tooMany = java.util.stream.IntStream.rangeClosed(1, 7)
+    void preservesEverySupportedBranchBeyondTheOldPresentationCap() {
+        List<DecisionBranchRequest> branches = java.util.stream.IntStream.rangeClosed(1, 7)
                 .mapToObj(index -> branch(
                         "Condition " + index, "Outcome " + index, "EXPLICIT_RULE", first))
                 .toList();
 
-        assertThatThrownBy(() -> resolver.resolve(request("What happens in each case?", first), draft(tooMany)))
-                .hasMessageContaining("too many decision branches");
+        assertThat(resolver.resolve(request("What happens in each case?", first), draft(branches))).hasSize(7);
     }
 
     private ModelRequest request(String question, UUID... evidenceIds) {

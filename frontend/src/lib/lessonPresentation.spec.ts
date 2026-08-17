@@ -3,10 +3,11 @@ import { describe, expect, it } from 'vitest'
 import { deduplicatePublicLessons, groupPlansForReading, playerFacingTitle, publicLessonTitle } from './lessonPresentation'
 
 describe('playerFacingTitle', () => {
-  it('removes rulebook and internal replay suffixes without rewriting stored data', () => {
-    expect(playerFacingTitle('CATAN Base Game Rules Corpus Replay')).toBe('CATAN')
-    expect(playerFacingTitle('Root: Learning to Play Rules')).toBe('Root')
-    expect(playerFacingTitle('Atelier: The Painter\'s Studio Rules')).toBe("Atelier: The Painter's Studio")
+  it('normalizes uploaded filenames without guessing which title words should be deleted', () => {
+    expect(playerFacingTitle('CATAN Base Game Rules Corpus Replay')).toBe('CATAN Base Game Rules Corpus Replay')
+    expect(playerFacingTitle('Root: Learning to Play Rules')).toBe('Root: Learning to Play Rules')
+    expect(playerFacingTitle('Atelier: The Painter\'s Studio Rules')).toBe("Atelier: The Painter's Studio Rules")
+    expect(playerFacingTitle('wingspan_quick_start.pdf')).toBe('wingspan quick start')
     expect(playerFacingTitle('Rules')).toBe('Rules')
   })
 })
@@ -22,29 +23,31 @@ describe('publicLessonTitle', () => {
 })
 
 describe('player-facing lesson groups', () => {
-  it('keeps one stronger public lesson per visible game without deleting any source record', () => {
+  it('deduplicates exact normalized identities without collapsing titles by keyword or punctuation', () => {
     const results = deduplicatePublicLessons([
-      { id: 'older', rulebookTitle: 'Root Learning to Play Corpus Replay', gameCover: null, sectionCount: 10, stepCount: 55 },
-      { id: 'stronger', rulebookTitle: 'Root: Learning to Play Rules', gameCover: { gameName: 'Root: Learning to Play Rules' }, sectionCount: 14, stepCount: 63 },
+      { id: 'older', rulebookTitle: 'Root', gameCover: null, sectionCount: 10, stepCount: 55 },
+      { id: 'stronger', rulebookTitle: 'root', gameCover: { gameName: 'root' }, sectionCount: 14, stepCount: 63 },
+      { id: 'learning-guide', rulebookTitle: 'Root: Learning to Play Rules', gameCover: null, sectionCount: 9, stepCount: 30 },
       { id: 'fort', rulebookTitle: 'Fort Rules', gameCover: null, sectionCount: 12, stepCount: 60 },
     ])
 
     expect(results).toEqual([
-      expect.objectContaining({ title: 'Root', lesson: expect.objectContaining({ id: 'stronger' }) }),
-      expect.objectContaining({ title: 'Fort', lesson: expect.objectContaining({ id: 'fort' }) }),
+      expect.objectContaining({ title: 'root', lesson: expect.objectContaining({ id: 'stronger' }) }),
+      expect.objectContaining({ title: 'Root: Learning to Play Rules', lesson: expect.objectContaining({ id: 'learning-guide' }) }),
+      expect.objectContaining({ title: 'Fort Rules', lesson: expect.objectContaining({ id: 'fort' }) }),
     ])
   })
 
   it('groups repeated titles in a short continuation list but leaves each plan intact', () => {
     const plans = groupPlansForReading([
-      { id: 'one', gameTitle: 'CATAN Base Game Rules Corpus Replay' },
+      { id: 'one', gameTitle: 'CATAN' },
       { id: 'two', gameTitle: 'Catan' },
       { id: 'three', gameTitle: 'Root Rules' },
     ])
 
     expect(plans).toEqual([
       expect.objectContaining({ title: 'CATAN', count: 2, plan: expect.objectContaining({ id: 'one' }) }),
-      expect.objectContaining({ title: 'Root', count: 1, plan: expect.objectContaining({ id: 'three' }) }),
+      expect.objectContaining({ title: 'Root Rules', count: 1, plan: expect.objectContaining({ id: 'three' }) }),
     ])
   })
 
@@ -56,8 +59,8 @@ describe('player-facing lesson groups', () => {
     ], (plan) => plan.id === 'older-readable' ? 10 : 0)
 
     expect(plans).toEqual([
-      expect.objectContaining({ title: 'Ahoy', count: 2, plan: expect.objectContaining({ id: 'older-readable' }) }),
-      expect.objectContaining({ title: 'Ahoy', count: 1, plan: expect.objectContaining({ id: 'separate-upload' }) }),
+      expect.objectContaining({ title: 'Ahoy Rules', count: 2, plan: expect.objectContaining({ id: 'older-readable' }) }),
+      expect.objectContaining({ title: 'Ahoy Rules', count: 1, plan: expect.objectContaining({ id: 'separate-upload' }) }),
     ])
     expect(plans[0]?.plans).toHaveLength(2)
   })

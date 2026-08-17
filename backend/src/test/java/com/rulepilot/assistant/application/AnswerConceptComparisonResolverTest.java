@@ -66,7 +66,7 @@ class AnswerConceptComparisonResolverTest {
     }
 
     @Test
-    void rejectsDuplicatePairsAndBoundsTheComparisonCount() {
+    void rejectsDuplicatePairsAndPreservesEveryDistinctComparison() {
         RuleConceptComparisonRequest one = comparison(
                 "Left", "Definition A", "Right", "Definition B",
                 "Common", "Different", "Boundary", "RULE_SCOPE", citationId);
@@ -77,15 +77,14 @@ class AnswerConceptComparisonResolverTest {
                         request(AnswerAid.CONCEPT_COMPARISON), draft(List.of(one, duplicate))))
                 .hasMessageContaining("duplicate");
 
-        List<RuleConceptComparisonRequest> tooMany = IntStream.rangeClosed(1, 4)
+        List<RuleConceptComparisonRequest> comparisons = IntStream.rangeClosed(1, 4)
                 .mapToObj(index -> comparison(
                         "Left " + index, "Definition A " + index,
                         "Right " + index, "Definition B " + index,
                         "Common", "Different", "Boundary", "RULE_SCOPE", citationId))
                 .toList();
-        assertThatThrownBy(() -> resolver.resolve(
-                        request(AnswerAid.CONCEPT_COMPARISON), draft(tooMany)))
-                .hasMessageContaining("too many concept comparisons");
+        assertThat(resolver.resolve(
+                        request(AnswerAid.CONCEPT_COMPARISON), draft(comparisons))).hasSize(4);
     }
 
     private ModelRequest request(AnswerAid aid) {

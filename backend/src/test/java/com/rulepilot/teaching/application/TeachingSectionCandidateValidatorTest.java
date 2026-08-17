@@ -18,7 +18,6 @@ import com.rulepilot.teaching.domain.IllustratedLesson.VisualKind;
 import com.rulepilot.teaching.domain.TeachingPlan;
 import java.time.Instant;
 import java.util.List;
-import java.util.Set;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
@@ -123,6 +122,35 @@ class TeachingSectionCandidateValidatorTest {
     }
 
     @Test
+    void rejectsEvidenceFromAnotherDocumentVersionEvenWhenTheCitationIdIsAllowed() {
+        UUID planVersionId = UUID.randomUUID();
+        UUID otherVersionId = UUID.randomUUID();
+        UUID chunkId = UUID.randomUUID();
+        RuleEvidence evidence = textEvidence(chunkId, otherVersionId);
+        SectionDraft draft = new SectionDraft(
+                "从公共区域开始",
+                VisualKind.FLOW_DIAGRAM,
+                "先准备公共区域，再开始行动。",
+                List.of(chunkId),
+                List.of(new StepDraft(
+                        "执行行动",
+                        TeachingMove.DO,
+                        "选择一项可用行动，结算完成后把回合交给下一位玩家。",
+                        List.of(chunkId))));
+        TeachingPlan plan = plan(planVersionId);
+
+        assertThatThrownBy(() -> validator.validate(
+                        plan,
+                        plan.sections().getFirst(),
+                        List.of(evidence),
+                        textRequest(chunkId),
+                        draft,
+                        EvidenceStatus.CITED_DRAFT))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("VERSION_MISMATCH");
+    }
+
+    @Test
     void preservesACompleteNaturalSectionExactlyAfterDeterministicValidation() {
         UUID versionId = UUID.randomUUID();
         UUID chunkId = UUID.randomUUID();
@@ -203,7 +231,7 @@ class TeachingSectionCandidateValidatorTest {
     }
 
     @Test
-    void rejectsAnUnsupportedOptionalExampleInsteadOfDeletingModelProse() {
+    void doesNotPretendThatNumberMatchingProvesOrDisprovesRuleMeaning() {
         UUID versionId = UUID.randomUUID();
         UUID chunkId = UUID.randomUUID();
         RuleEvidence evidence = new RuleEvidence(
@@ -215,89 +243,14 @@ class TeachingSectionCandidateValidatorTest {
                 8,
                 8);
         TeachingPlan plan = scoringPlan(versionId);
-        String groundedText = "满足条件时获得1个资源。";
+        String caption = "按证据结算；原文中的 [bonus]、🎯 与 E1 都可能是合法规则标记。";
+        String text = "满足条件时获得2个资源；这里的数量语义留给生成 Agent 与真实评测，不由字符串比对裁决。";
         SectionDraft draft = new SectionDraft(
                 "结算资源",
                 VisualKind.REFERENCE_CARD,
-                "按满足的条件结算资源。",
+                caption,
                 List.of(chunkId),
-                List.of(
-                        new StepDraft("执行结算", TeachingMove.DO, groundedText, List.of(chunkId)),
-                        new StepDraft(
-                                "可选示例",
-                                TeachingMove.EXAMPLE,
-                                "例如，结算后总共有2个资源。",
-                                List.of(chunkId))));
-
-        assertThatThrownBy(() -> validator.validate(
-                        plan,
-                        plan.sections().getFirst(),
-                        List.of(evidence),
-                        scoringRequest(chunkId),
-                        draft,
-                        EvidenceStatus.CITED_DRAFT))
-                .isInstanceOf(TeachingQuantitativeClaimPolicy.UnsupportedQuantitativeClaimException.class)
-                .hasMessageContaining("unsupported value", "2");
-    }
-
-    @Test
-    void stillRejectsAnUnsupportedQuantityInTheOnlyRequiredInstruction() {
-        UUID versionId = UUID.randomUUID();
-        UUID chunkId = UUID.randomUUID();
-        RuleEvidence evidence = new RuleEvidence(
-                chunkId,
-                versionId,
-                "SCORING",
-                "Resource award",
-                "Gain 1 resource when the condition is met.",
-                8,
-                8);
-        TeachingPlan plan = scoringPlan(versionId);
-        SectionDraft unsupported = new SectionDraft(
-                "结算资源",
-                VisualKind.REFERENCE_CARD,
-                "按满足的条件结算资源。",
-                List.of(chunkId),
-                List.of(new StepDraft(
-                        "执行结算",
-                        TeachingMove.DO,
-                        "满足条件时获得2个资源。",
-                        List.of(chunkId))));
-
-        assertThatThrownBy(() -> validator.validate(
-                        plan,
-                        plan.sections().getFirst(),
-                        List.of(evidence),
-                        scoringRequest(chunkId),
-                        unsupported,
-                        EvidenceStatus.CITED_DRAFT))
-                .isInstanceOf(TeachingQuantitativeClaimPolicy.UnsupportedQuantitativeClaimException.class)
-                .hasMessageContaining("unsupported value", "2");
-    }
-
-    @Test
-    void acceptsAnAgentEnumerationCountOnlyWhenCitedEvidenceListsThatManyItems() {
-        UUID versionId = UUID.randomUUID();
-        UUID chunkId = UUID.randomUUID();
-        RuleEvidence evidence = new RuleEvidence(
-                chunkId,
-                versionId,
-                "SCORING",
-                "Ordered procedure",
-                "This consists of the following steps in order: Reveal, Resolve, Set Strength, and Clean Up.",
-                8,
-                8);
-        TeachingPlan plan = scoringPlan(versionId);
-        SectionDraft draft = new SectionDraft(
-                "按顺序完成结算",
-                VisualKind.REFERENCE_CARD,
-                "按证据列出的顺序完成结算。",
-                List.of(chunkId),
-                List.of(new StepDraft(
-                        "先看完整流程",
-                        TeachingMove.FLOW,
-                        "这个流程包含四个步骤：揭示、结算、设定强度、清理。",
-                        List.of(chunkId))));
+                List.of(new StepDraft("执行结算", TeachingMove.DO, text, List.of(chunkId))));
 
         var section = validator.validate(
                 plan,
@@ -307,42 +260,8 @@ class TeachingSectionCandidateValidatorTest {
                 draft,
                 EvidenceStatus.CITED_DRAFT);
 
-        assertThat(section.steps().getFirst().text()).isEqualTo(draft.steps().getFirst().text());
-    }
-
-    @Test
-    void stillRejectsAnEnumerationCountWhenTheCitedEvidenceDoesNotContainThatManyAlternatives() {
-        UUID versionId = UUID.randomUUID();
-        UUID chunkId = UUID.randomUUID();
-        RuleEvidence evidence = new RuleEvidence(
-                chunkId,
-                versionId,
-                "SCORING",
-                "Stopping condition",
-                "If the signal appears, stop the procedure.",
-                8,
-                8);
-        TeachingPlan plan = scoringPlan(versionId);
-        SectionDraft draft = new SectionDraft(
-                "检查停止条件",
-                VisualKind.REFERENCE_CARD,
-                "检查停止条件。",
-                List.of(chunkId),
-                List.of(new StepDraft(
-                        "检查两个条件",
-                        TeachingMove.CHECK,
-                        "这个流程有两个触发条件，满足一个就停止。",
-                        List.of(chunkId))));
-
-        assertThatThrownBy(() -> validator.validate(
-                        plan,
-                        plan.sections().getFirst(),
-                        List.of(evidence),
-                        scoringRequest(chunkId),
-                        draft,
-                        EvidenceStatus.CITED_DRAFT))
-                .isInstanceOf(TeachingQuantitativeClaimPolicy.UnsupportedQuantitativeClaimException.class)
-                .hasMessageContaining("unsupported value", "2");
+        assertThat(section.visualCaption()).isEqualTo(caption);
+        assertThat(section.steps().getFirst().text()).isEqualTo(text);
     }
 
     @Test
@@ -374,104 +293,6 @@ class TeachingSectionCandidateValidatorTest {
 
         assertThat(caption.length()).isGreaterThan(240);
         assertThat(section.visualCaption()).isEqualTo(caption);
-    }
-
-    @Test
-    void quantityRepairDiagnosticIdentifiesTheExactPlayerFacingStepWithoutRewritingIt() {
-        UUID chunkId = UUID.randomUUID();
-        SectionDraft draft = new SectionDraft(
-                "结算资源",
-                VisualKind.REFERENCE_CARD,
-                "按条件结算资源。",
-                List.of(chunkId),
-                List.of(new StepDraft(
-                        "检查本轮总数",
-                        TeachingMove.CHECK,
-                        "确认本轮是否已经获得2个资源。",
-                        List.of(chunkId))));
-        var failure = new TeachingQuantitativeClaimPolicy.UnsupportedQuantitativeClaimException(
-                2, "Quantitative teaching claim at claim position 2 introduces unsupported value(s): [2]");
-
-        String diagnostic = validator.repairDiagnostic(failure, draft);
-
-        assertThat(diagnostic)
-                .contains("step heading '检查本轮总数'", chunkId.toString(), "Repair only that field");
-        assertThat(draft.steps().getFirst().text()).isEqualTo("确认本轮是否已经获得2个资源。");
-    }
-
-    @Test
-    void quantityRepairDiagnosticPointsTheAgentToEvidenceContainingEveryClaimQuantity() {
-        UUID versionId = UUID.randomUUID();
-        UUID currentCitation = UUID.randomUUID();
-        UUID partialCandidate = UUID.randomUUID();
-        UUID completeCandidate = UUID.randomUUID();
-        SectionDraft draft = new SectionDraft(
-                "放置奖励",
-                VisualKind.REFERENCE_CARD,
-                "按当前状态放置奖励。",
-                List.of(currentCitation),
-                List.of(new StepDraft(
-                        "奖励示例",
-                        TeachingMove.EXAMPLE,
-                        "原有1个奖励，再加入1个后共有2个奖励。",
-                        List.of(currentCitation))));
-        var failure = new TeachingQuantitativeClaimPolicy.UnsupportedQuantitativeClaimException(
-                2,
-                Set.of("1", "2"),
-                Set.of("2"),
-                "Quantitative teaching claim at claim position 2 introduces unsupported value(s): [2]");
-        RuleEvidence current = new RuleEvidence(
-                currentCitation, versionId, "TURN", "Add a reward", "Add 1 reward.", 4, 4);
-        RuleEvidence partial = new RuleEvidence(
-                partialCandidate, versionId, "TURN", "Two rounds", "After 2 rounds, stop.", 5, 5);
-        RuleEvidence complete = new RuleEvidence(
-                completeCandidate,
-                versionId,
-                "TURN",
-                "Worked example",
-                "There is already 1 reward; after adding another, there are 2 rewards.",
-                6,
-                6);
-
-        String diagnostic = validator.repairDiagnostic(failure, draft, List.of(current, partial, complete));
-
-        assertThat(diagnostic)
-                .contains("Quantity-only candidate citation IDs", completeCandidate.toString())
-                .doesNotContain(partialCandidate.toString());
-        assertThat(draft.steps().getFirst().text()).isEqualTo("原有1个奖励，再加入1个后共有2个奖励。");
-    }
-
-    @Test
-    void unitRepairDiagnosticNamesOnlyTheAffectedAgentOwnedUnitAndItsDirectEvidence() {
-        UUID directEvidence = UUID.randomUUID();
-        SectionDraft draft = new SectionDraft(
-                "部署与结算",
-                VisualKind.REFERENCE_CARD,
-                "先部署，再结算。",
-                List.of(directEvidence),
-                List.of(
-                        new StepDraft(
-                                "部署部队",
-                                TeachingMove.DO,
-                                "把允许的部队部署到冲突区。",
-                                List.of(directEvidence),
-                                List.of("deployment"),
-                                null),
-                        new StepDraft(
-                                "结算奖励",
-                                TeachingMove.DO,
-                                "按当前顺序结算奖励。",
-                                List.of(directEvidence),
-                                List.of("resolution"),
-                                null)));
-        var failure = new TeachingPlannedUnitCoveragePolicy.MissingDirectUnitEvidenceException(
-                "deployment", "Deploying Troops", Set.of(directEvidence));
-
-        String diagnostic = validator.repairDiagnostic(failure, draft);
-
-        assertThat(diagnostic)
-                .contains("affected planned unit is 'deployment'", "部署部队", "Deploying Troops")
-                .doesNotContain("结算奖励");
     }
 
     @Test
@@ -622,6 +443,88 @@ class TeachingSectionCandidateValidatorTest {
         assertThat(section.steps().getFirst().heading()).isEqualTo("摆好公共区域");
         assertThat(section.steps().getFirst().text()).isEqualTo(groundedText);
         assertThat(section.steps().get(1).heading()).isEqualTo("检查后续条件");
+    }
+
+    @Test
+    void agentCanOmitOneInvalidOptionalStepWhenSeveralStepsShareTheSameUnit() {
+        UUID versionId = UUID.randomUUID();
+        UUID chunkId = UUID.randomUUID();
+        UUID unknownChunkId = UUID.randomUUID();
+        RuleEvidence evidence = textEvidence(chunkId, versionId);
+        TeachingPlan plan = plan(versionId);
+        SectionDraft original = new SectionDraft(
+                "执行完整回合",
+                VisualKind.FLOW_DIAGRAM,
+                "按顺序完成有依据的回合步骤。",
+                List.of(chunkId),
+                List.of(
+                        new StepDraft(
+                                "选择行动",
+                                TeachingMove.DO,
+                                "轮到你时选择一项可用行动。",
+                                List.of(chunkId),
+                                List.of("turn-flow"),
+                                null),
+                        new StepDraft(
+                                "可选算例",
+                                TeachingMove.EXAMPLE,
+                                "这个算例来自未检索到的材料。",
+                                List.of(unknownChunkId),
+                                List.of("turn-flow"),
+                                null),
+                        new StepDraft(
+                                "交给下一位",
+                                TeachingMove.FLOW,
+                                "完整结算后把回合交给下一位玩家。",
+                                List.of(chunkId),
+                                List.of("turn-flow"),
+                                null)));
+        SectionRequest request = unitRequest(
+                chunkId,
+                List.of(new TeachingUnitInput(
+                        "turn-flow", List.of("Setup and turns"), List.of(chunkId))));
+        SectionDraft repaired = new SectionDraft(
+                original.title(),
+                original.visualKind(),
+                original.visualCaption(),
+                original.visualCitationIds(),
+                List.of(
+                        new StepDraft(
+                                "选择行动",
+                                TeachingMove.DO,
+                                "模型不应覆盖已经验证的第一步。",
+                                List.of(chunkId),
+                                List.of("turn-flow"),
+                                null),
+                        new StepDraft(
+                                "交给下一位",
+                                TeachingMove.FLOW,
+                                "模型不应覆盖已经验证的最后一步。",
+                                List.of(chunkId),
+                                List.of("turn-flow"),
+                                null)));
+
+        SectionDraft merged = validator.mergeRepairPreservingValidatedFields(
+                plan,
+                plan.sections().getFirst(),
+                List.of(evidence),
+                request,
+                original,
+                repaired);
+        var section = validator.validate(
+                plan,
+                plan.sections().getFirst(),
+                List.of(evidence),
+                request,
+                merged,
+                EvidenceStatus.CITED_DRAFT);
+
+        assertThat(section.steps()).extracting(step -> step.heading())
+                .containsExactly("选择行动", "交给下一位");
+        assertThat(section.steps()).extracting(step -> step.text())
+                .containsExactly(
+                        "轮到你时选择一项可用行动。",
+                        "完整结算后把回合交给下一位玩家。");
     }
 
     private TeachingPlan plan(UUID versionId) {

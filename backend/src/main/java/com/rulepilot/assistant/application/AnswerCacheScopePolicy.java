@@ -30,7 +30,9 @@ final class AnswerCacheScopePolicy {
             String policyVersion, UnderstoodQuestion question, QuestionContext context) {
         String conversation = context.previousQuestion() == null
                 ? question.normalizedQuestion()
-                : context.previousQuestion().toLowerCase(Locale.ROOT) + " -> " + question.normalizedQuestion();
+                : context.previousQuestion().strip().toLowerCase(Locale.ROOT)
+                        + " -> "
+                        + question.normalizedQuestion();
         String scoped = policyVersion + ":" + context.outputLanguage().name() + ":" + conversation;
         return context.learningIntent() == null ? scoped : context.learningIntent().name() + ":" + scoped;
     }

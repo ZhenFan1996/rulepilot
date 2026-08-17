@@ -43,7 +43,7 @@ class DocumentTeachingPreparationServiceTest {
     }
 
     @Test
-    void replacesAFilenameArtifactWithTheTitleInferredFromTheActiveRulebook() {
+    void preservesTheUploadedTitleInsteadOfReclassifyingItWithFilenameWords() {
         RuleDocument document = new RuleDocument(
                 UUID.randomUUID(), null, "aurora_rulebook_EN_36_web", DocumentSourceType.BASE_RULEBOOK, "alice", NOW);
         DocumentVersion version = version(document.id(), ProcessingStatus.READY);
@@ -51,14 +51,14 @@ class DocumentTeachingPreparationServiceTest {
         when(documents.findVersion(version.id())).thenReturn(Optional.of(version));
         when(documents.findDocument(document.id())).thenReturn(Optional.of(document));
         when(catalog.provisionDefaultEdition("Aurora")).thenReturn(editionId);
-        when(documents.findDocument(editionId, "alice", "Aurora", document.sourceType()))
+        when(documents.findDocument(editionId, "alice", document.title(), document.sourceType()))
                 .thenReturn(Optional.empty());
 
         var scope = preparation.prepare(version.id(), "alice", "Aurora");
 
-        assertThat(scope.documentTitle()).isEqualTo("Aurora");
-        verify(documents).update(document.withTitle("Aurora"));
-        verify(documents).update(document.withTitle("Aurora").assignTo(editionId));
+        assertThat(scope.documentTitle()).isEqualTo("aurora_rulebook_EN_36_web");
+        verify(documents, never()).update(document.withTitle("Aurora"));
+        verify(documents).update(document.assignTo(editionId));
     }
 
     @Test

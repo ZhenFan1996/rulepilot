@@ -15,14 +15,14 @@ numbers explicitly mapped to the attached images. Each item has exactly these fi
   missingCoverageTags must always be an explicit array with no duplicates and at most four items. It may contain only
   setup, core_loop, end, or scoring, and only when the current page explicitly says that source owns that procedure.
   Use an empty array when the procedure is not stated.
-- ruleGroupIdentifiers: up to sixteen literal, original-language identifiers in page order, with one identifier for
+- ruleGroupIdentifiers: up to thirty-two literal, original-language identifiers in page order, with one identifier for
   every distinct readable gameplay rule group on this page. A group can be a subheading, named action, phase,
   numbered step, scoring category, exception block, alternative, or table/list row with its own effect. When a group
   has no heading, use its shortest exact visible opening phrase; do not invent a label. External source titles belong
   only in sourceDependencies and are not gameplay rule groups;
 - ruleGroupInventoryComplete: true only after checking the complete page at readable scale and recording every
   distinct readable gameplay rule group. Set false when a readable group lacks an identifier, any group or its
-  governing relation is unreadable, the page has more than sixteen groups, or the response budget prevents a full
+  governing relation is unreadable, the page has more than thirty-two groups, or the response budget prevents a full
   inventory. A fully checked non-gameplay page has an empty ruleGroupIdentifiers array and true.
 
 For every ruleGroupIdentifiers item, factualSummary must include at least one complete same-page statement that begins

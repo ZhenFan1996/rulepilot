@@ -60,6 +60,33 @@ class ConfirmedRulingServiceTest {
     }
 
     @Test
+    void preservesLongFormConfirmedContentBecauseThePersistenceColumnsAreText() {
+        InMemoryRulings repository = new InMemoryRulings();
+        ConfirmedRulingService service = service(repository, Set.of(), List.of(evidence(chunkId)));
+        String question = "How does this detailed situation resolve? " + "context ".repeat(350);
+        String verdict = "Resolve the complete situation as follows. " + "verdict detail ".repeat(180);
+        String explanation = "First paragraph.\n\n" + "Evidence-backed explanation. ".repeat(900);
+        String exception = "This exception remains relevant when the alternate condition applies. "
+                + "exception detail ".repeat(140);
+
+        ConfirmedRuling ruling = service.confirm(
+                versionId,
+                Set.of(),
+                question,
+                verdict,
+                explanation,
+                List.of(chunkId),
+                List.of(exception),
+                RulingConfidence.HIGH,
+                "alice");
+
+        assertThat(ruling.originalQuestion()).isEqualTo(question.strip()).hasSizeGreaterThan(2_000);
+        assertThat(ruling.shortVerdict()).isEqualTo(verdict.strip()).hasSizeGreaterThan(2_000);
+        assertThat(ruling.explanation()).isEqualTo(explanation.strip()).contains("\n\n").hasSizeGreaterThan(20_000);
+        assertThat(ruling.exceptions().getFirst()).isEqualTo(exception.strip()).hasSizeGreaterThan(2_000);
+    }
+
+    @Test
     void rejectsMissingEvidenceAndDuplicateActiveScope() {
         InMemoryRulings repository = new InMemoryRulings();
         ConfirmedRulingService missingEvidence = service(repository, Set.of(), List.of());

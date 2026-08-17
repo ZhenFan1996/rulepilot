@@ -11,6 +11,7 @@ import com.rulepilot.teaching.TeachingOutlineModel.SourceCoverageRole;
 import com.rulepilot.teaching.TeachingOutlineModel.SourceCoverageSlotDraft;
 import com.rulepilot.teaching.TeachingOutlineModel.TopicDraft;
 import java.util.List;
+import java.util.stream.IntStream;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
@@ -57,6 +58,26 @@ class TeachingUnitContractTest {
         assertThat(unit.unitId()).isEqualTo("unit");
         assertThat(unit.sourceIdentifiers()).containsExactly("R_old");
         assertThat(unit.sourcePages()).isEmpty();
+    }
+
+    @Test
+    void preservesEverySourceWhenTheOutlineAgentGroupsALargeCoherentUnit() {
+        List<SourceCoverageSlotDraft> slots = IntStream.rangeClosed(1, 19)
+                .mapToObj(index -> slot(
+                        "slot-" + index,
+                        "Source relation " + index,
+                        "complete-reward-table",
+                        "reward-resolution",
+                        8))
+                .toList();
+
+        List<String> encoded = TeachingUnitContract.encodeUnits(slots);
+
+        assertThat(encoded).hasSize(1);
+        assertThat(TeachingUnitContract.decodeUnits(encoded).getFirst().sourceIdentifiers())
+                .containsExactlyElementsOf(slots.stream()
+                        .map(SourceCoverageSlotDraft::sourceIdentifier)
+                        .toList());
     }
 
     @Test

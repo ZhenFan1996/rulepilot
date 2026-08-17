@@ -941,9 +941,9 @@ function handleBackgroundWorkChanged(event: Event) {
 function withDismissedIds(current: Set<string>, candidate: unknown) {
   if (!Array.isArray(candidate)) return current
   const accepted = candidate
-    .filter((value): value is string => typeof value === 'string' && value.trim().length > 0 && value.length <= 128)
+    .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
     .map(value => value.trim())
-  return new Set([...current, ...accepted].slice(-100))
+  return new Set([...current, ...accepted])
 }
 
 function openCenter(trigger?: HTMLElement | null) {
@@ -1012,8 +1012,8 @@ function readStoredIds(key: string) {
   try {
     const stored = JSON.parse(sessionStorage.getItem(key) ?? '[]') as unknown
     if (!Array.isArray(stored)) return new Set<string>()
-    return new Set(stored.slice(0, 100)
-      .filter((value): value is string => typeof value === 'string' && value.trim().length > 0 && value.length <= 128))
+    return new Set(stored
+      .filter((value): value is string => typeof value === 'string' && value.trim().length > 0))
   } catch {
     return new Set<string>()
   }

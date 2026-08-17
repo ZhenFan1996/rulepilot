@@ -508,9 +508,6 @@ public class OfficialRulebookImportJobService implements RulebookTeachingHandoff
                 throw new IllegalArgumentException("official rulebook source must use standard public HTTPS");
             }
             String normalizedGoal = learningGoal == null || learningGoal.isBlank() ? null : learningGoal.strip();
-            if (normalizedGoal != null && normalizedGoal.length() > 500) {
-                throw new IllegalArgumentException("teaching learning goal is too long");
-            }
             if (!startTeaching && normalizedGoal != null) {
                 throw new IllegalArgumentException("teaching goal requires an automatic teaching handoff");
             }

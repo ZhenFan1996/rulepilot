@@ -213,9 +213,14 @@ final class TeachingVisualEvidenceResolver {
                                 : visualCatalog.summarize(request),
                         result -> estimateTokens(result.toString()));
                 interpreted.addAll(catalog.pages().stream()
-                        .map(summary -> progressive
-                                ? VisualRulebookCatalogPolicy.teachingStartupFact(summary)
-                                : VisualRulebookCatalogPolicy.requireCompleteRuleLedger(summary))
+                        .map(summary -> {
+                            if (progressive) return VisualRulebookCatalogPolicy.teachingStartupFact(summary);
+                            if (summary.ruleGroupInventoryComplete()) {
+                                VisualRulebookCatalogPolicy.validateRuleGroupFactBindings(
+                                        summary.ruleGroupIdentifiers(), summary.factualSummary());
+                            }
+                            return summary;
+                        })
                         .map(VisualRulebookCatalogPolicy::toPageFact)
                         .toList());
             } catch (AgentExecutionStoppedException stopped) {

@@ -72,15 +72,13 @@ class AnswerWalkthroughResolverTest {
     }
 
     @Test
-    void boundsTheStructuredStepCount() {
-        List<WalkthroughStepRequest> tooMany = IntStream.rangeClosed(1, 7)
+    void preservesEverySupportedStructuredStepBeyondTheOldPresentationCap() {
+        List<WalkthroughStepRequest> steps = IntStream.rangeClosed(1, 7)
                 .mapToObj(index -> step(
                         "Instruction " + index, "Explanation " + index, "RULE_ORDER", first))
                 .toList();
 
-        assertThatThrownBy(() -> resolver.resolve(
-                        request(AnswerAid.WALKTHROUGH, first), draft(tooMany)))
-                .hasMessageContaining("too many walkthrough steps");
+        assertThat(resolver.resolve(request(AnswerAid.WALKTHROUGH, first), draft(steps))).hasSize(7);
     }
 
     private ModelRequest request(AnswerAid aid, UUID... evidenceIds) {

@@ -118,6 +118,108 @@ class SpringAiTeachingOutlineModelTest {
     }
 
     @Test
+    void letsTheAgentGroupCanonicalVisualSlotsWithoutRepeatingOrRewritingSourceText() {
+        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        ChatModel chatModel = mock(ChatModel.class);
+        when(configuration.usesFake(Role.TEACHING, "player")).thenReturn(false);
+        when(configuration.modelFor(Role.TEACHING, "player")).thenReturn(chatModel);
+        when(chatModel.getDefaultOptions()).thenReturn(ToolCallingChatOptions.builder().build());
+        when(chatModel.getOptions()).thenReturn(ToolCallingChatOptions.builder().build());
+        when(chatModel.call(any(Prompt.class))).thenReturn(new ChatResponse(List.of(new Generation(
+                new AssistantMessage("""
+                        {"gameTitle":"海底远征","premise":"先完成准备，再轮流执行行动，直到触发结束。","topics":[
+                          {"key":"prepare-expedition","title":"完成远征准备","objective":"能按原页完成两项开局准备。",
+                           "required":true,"visualEvidenceRecommended":true,"teachingUnits":[
+                            {"teachingUnitId":"prepare-board","role":"SETUP",
+                             "sourceSlotIds":["page-1-rule-1","page-1-rule-2","page-1-rule-3",
+                               "page-1-rule-4","page-1-rule-5"]}]},
+                          {"key":"take-turns","title":"执行行动并判断结束","objective":"能执行回合行动并在正确时机结束。",
+                           "required":true,"visualEvidenceRecommended":false,"teachingUnits":[
+                            {"teachingUnitId":"take-action","role":"LEGAL_ACTION",
+                             "sourceSlotIds":["page-2-rule-1"]},
+                            {"teachingUnitId":"finish-game","role":"ENDING",
+                             "sourceSlotIds":["page-2-rule-2"]}]}
+                        ],"wholeGameUnderstanding":{
+                          "summary":"玩家先准备远征区域，再轮流行动，并持续检查结束条件。",
+                          "concepts":[
+                            {"conceptId":"expedition-state","label":"远征状态","explanation":"准备结果决定后续行动所在的区域。",
+                             "sourceSlotIds":["page-1-rule-1","page-1-rule-2","page-1-rule-3",
+                               "page-1-rule-4","page-1-rule-5"],
+                             "relatedTopicKeys":["prepare-expedition","take-turns"],"prerequisiteConceptIds":[]},
+                            {"conceptId":"ending-check","label":"结束检查","explanation":"行动推进后需要检查结束条件。",
+                             "sourceSlotIds":["page-2-rule-2"],"relatedTopicKeys":["take-turns"],
+                             "prerequisiteConceptIds":["expedition-state"]}],
+                          "topicDependencies":[{"prerequisiteTopicKey":"prepare-expedition",
+                            "dependentTopicKey":"take-turns","reason":"行动依赖已经完成的远征准备。"}]}}
+                        """)))));
+        SpringAiTeachingOutlineModel model = new SpringAiTeachingOutlineModel(
+                configuration, mock(VersionedAgentPrompts.class), new FakeTeachingOutlineModel());
+        PageInput first = new PageInput(
+                1,
+                """
+                        [Visual page catalog; verify against page image]
+                        Printed terms: SET UP; CHOOSE DIVE SITE; ASSEMBLE BOARD; PLACE MARKER; SELECT LEADER
+                        Visible facts:
+                        SET UP: Place the shared board in the center.
+                        CHOOSE DIVE SITE: Each player selects one available dive site.
+                        ASSEMBLE BOARD: Join the two board halves.
+                        PLACE MARKER: Put the round marker on space one.
+                        SELECT LEADER: Each player takes one available leader.
+                        Keywords: setup; dive site
+                        """,
+                List.of(),
+                List.of("SET UP", "CHOOSE DIVE SITE", "ASSEMBLE BOARD", "PLACE MARKER", "SELECT LEADER"),
+                true);
+        PageInput second = new PageInput(
+                2,
+                """
+                        [Visual page catalog; verify against page image]
+                        Printed terms: TAKE ACTION; END GAME
+                        Visible facts:
+                        TAKE ACTION: The active player resolves one available action.
+                        END GAME: Finish after the final ocean tile is revealed.
+                        Keywords: action; ending
+                        """,
+                List.of(),
+                List.of("TAKE ACTION", "END GAME"),
+                true);
+
+        OutlineDraft outline;
+        try {
+            outline = model.organize(new OutlineRequest(List.of(first, second), List.of(), "player"));
+        } finally {
+            model.close();
+        }
+
+        assertThat(outline.sourceCoverageInventoryComplete()).isTrue();
+        assertThat(outline.sourceCoverageSlots())
+                .extracting(slot -> slot.sourceIdentifier())
+                .containsExactly(
+                        "SET UP",
+                        "CHOOSE DIVE SITE",
+                        "ASSEMBLE BOARD",
+                        "PLACE MARKER",
+                        "SELECT LEADER",
+                        "TAKE ACTION",
+                        "END GAME");
+        assertThat(outline.sourceCoverageSlots().subList(0, 5))
+                .allSatisfy(slot -> assertThat(slot.teachingUnitId()).isEqualTo("prepare-board"));
+        assertThat(outline.topics()).extracting(TopicDraft::key)
+                .containsExactly("prepare-expedition", "take-turns");
+        assertThat(outline.topics().getFirst().coverageTags()).contains("source_coverage", "setup");
+        assertThat(outline.topics().get(1).coverageTags()).contains("source_coverage", "legal_action", "end");
+        assertThat(outline.wholeGameUnderstanding().concepts().getFirst().sourceIdentifiers())
+                .containsExactly("SET UP", "CHOOSE DIVE SITE", "ASSEMBLE BOARD", "PLACE MARKER", "SELECT LEADER");
+        ArgumentCaptor<Prompt> sent = ArgumentCaptor.forClass(Prompt.class);
+        verify(chatModel).call(sent.capture());
+        assertThat(sent.getValue().getInstructions())
+                .extracting(message -> message.getText())
+                .anySatisfy(text -> assertThat(text)
+                        .contains("page-1-rule-1", "page-2-rule-2", "SET UP: Place the shared board")
+                        .doesNotContain("sourceCoverageInventoryComplete"));
+    }
+
+    @Test
     void createsASourceDerivedFallbackWithoutMakingAnotherModelCall() {
         RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
         SpringAiTeachingOutlineModel model = new SpringAiTeachingOutlineModel(
@@ -365,7 +467,7 @@ class SpringAiTeachingOutlineModelTest {
     }
 
     @Test
-    void repairsOnlyInvalidSourceIdentifiersAndPreservesTheAgentOwnedOutline() {
+    void doesNotRewriteAnAgentSelectedSourceIdentifierWithAFreeTextSubstringHeuristic() {
         RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
         VersionedAgentPrompts prompts = mock(VersionedAgentPrompts.class);
         ChatModel chatModel = mock(ChatModel.class);
@@ -388,10 +490,7 @@ class SpringAiTeachingOutlineModelTest {
                     "relatedTopicKeys":["flow"],"prerequisiteConceptIds":[]
                   }],"topicDependencies":[]}}
                 """))));
-        ChatResponse patchResponse = new ChatResponse(List.of(new Generation(new AssistantMessage("""
-                {"replacements":[{"slotId":"flow-slot","sourceIdentifier":"R-canonical"}]}
-                """))));
-        when(chatModel.call(any(Prompt.class))).thenReturn(outlineResponse, patchResponse);
+        when(chatModel.call(any(Prompt.class))).thenReturn(outlineResponse);
         SpringAiTeachingOutlineModel model = new SpringAiTeachingOutlineModel(
                 configuration, prompts, new FakeTeachingOutlineModel());
 
@@ -413,17 +512,12 @@ class SpringAiTeachingOutlineModelTest {
             assertThat(topic.retrievalQueries()).containsExactly("中文提示");
         });
         assertThat(outline.sourceCoverageSlots()).singleElement().satisfies(slot ->
-                assertThat(slot.sourceIdentifier()).isEqualTo("R-canonical"));
+                assertThat(slot.sourceIdentifier()).isEqualTo("R-paraphrase"));
         assertThat(outline.wholeGameUnderstanding().summary()).isEqualTo("保留这份整体认识。");
         assertThat(outline.wholeGameUnderstanding().concepts()).singleElement().satisfies(concept ->
-                assertThat(concept.sourceIdentifiers()).containsExactly("R-canonical"));
+                assertThat(concept.sourceIdentifiers()).containsExactly("R-paraphrase"));
         ArgumentCaptor<Prompt> promptsSent = ArgumentCaptor.forClass(Prompt.class);
-        verify(chatModel, times(2)).call(promptsSent.capture());
-        assertThat(promptsSent.getAllValues().get(1).getInstructions())
-                .extracting(message -> message.getText())
-                .anySatisfy(text -> assertThat(text)
-                        .contains("flow-slot", "R-paraphrase", "R-canonical establishes the relation")
-                        .doesNotContain("Return a complete replacement outline"));
+        verify(chatModel).call(promptsSent.capture());
     }
 
     @Test

@@ -500,7 +500,6 @@ function hasStructuredAnswerDetails(answer: StructuredRuleAnswer) {
               ref="questionInput"
               v-model="questionModel"
               rows="3"
-              maxlength="800"
               :disabled="answerLoading || !online"
               :placeholder="t('lesson.answer.placeholder')"
               class="w-full resize-y rounded-2xl border border-ink/15 bg-canvas px-4 py-3 leading-7 outline-none transition placeholder:text-ink/35 focus:border-indigo focus:ring-4 focus:ring-indigo/10 disabled:cursor-not-allowed disabled:opacity-55"
@@ -790,11 +789,11 @@ function hasStructuredAnswerDetails(answer: StructuredRuleAnswer) {
               <div v-else-if="ruling && editingRuling" class="stack-y-lg">
                 <div>
                   <label for="ruling-verdict" class="text-sm font-semibold">{{ t('lesson.answer.ruling.verdict') }}</label>
-                  <textarea id="ruling-verdict" v-model="editedVerdictModel" rows="2" maxlength="2000" class="mt-2 w-full rounded-2xl border border-ink/15 bg-paper px-4 py-3 outline-none focus:border-indigo" />
+                  <textarea id="ruling-verdict" v-model="editedVerdictModel" rows="2" class="mt-2 w-full rounded-2xl border border-ink/15 bg-paper px-4 py-3 outline-none focus:border-indigo" />
                 </div>
                 <div>
                   <label for="ruling-explanation" class="text-sm font-semibold">{{ t('lesson.answer.ruling.explanation') }}</label>
-                  <textarea id="ruling-explanation" v-model="editedExplanationModel" rows="5" maxlength="20000" class="mt-2 w-full rounded-2xl border border-ink/15 bg-paper px-4 py-3 outline-none focus:border-indigo" />
+                  <textarea id="ruling-explanation" v-model="editedExplanationModel" rows="5" class="mt-2 w-full rounded-2xl border border-ink/15 bg-paper px-4 py-3 outline-none focus:border-indigo" />
                 </div>
                 <div class="flex flex-wrap gap-3">
                   <button class="min-h-11 rounded-xl bg-indigo px-5 text-sm font-semibold text-white disabled:opacity-40" :disabled="rulingSaving || !editedVerdict.trim() || !editedExplanation.trim()" @click="emit('saveRulingRevision')">{{ rulingSaving ? t('lesson.answer.ruling.saving') : t('lesson.answer.ruling.save') }}</button>

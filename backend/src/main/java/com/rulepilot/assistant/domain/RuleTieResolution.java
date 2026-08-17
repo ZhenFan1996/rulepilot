@@ -12,17 +12,13 @@ public record RuleTieResolution(
         List<UUID> citationIds) {
 
     public RuleTieResolution {
-        if (tieContext == null || tieContext.isBlank() || tieContext.length() > 500
-                || resolutionSteps == null || resolutionSteps.isEmpty() || resolutionSteps.size() > 6
-                || resolutionSteps.stream().anyMatch(step -> step == null || step.isBlank()
-                        || step.length() > 500 || step.contains("\n") || step.contains("\r"))
-                || finalOutcome == null || finalOutcome.isBlank() || finalOutcome.length() > 500
-                || basis == null || citationIds == null || citationIds.isEmpty() || citationIds.size() > 3) {
+        if (tieContext == null || tieContext.isBlank()
+                || resolutionSteps == null || resolutionSteps.isEmpty()
+                || resolutionSteps.stream().anyMatch(step -> step == null || step.isBlank())
+                || finalOutcome == null || finalOutcome.isBlank()
+                || basis == null || citationIds == null || citationIds.isEmpty()) {
             throw new IllegalArgumentException("rule tie resolution is invalid");
         }
-        tieContext = tieContext.strip();
-        resolutionSteps = resolutionSteps.stream().map(String::strip).toList();
-        finalOutcome = finalOutcome.strip();
         citationIds = List.copyOf(citationIds);
     }
 }

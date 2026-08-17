@@ -14,20 +14,15 @@ public record RuleOption(
         List<UUID> citationIds) {
 
     public RuleOption {
-        if (invalid(decisionContext, 240) || invalid(selectionRule, 400) || invalid(optionName, 160)
-                || invalid(availabilityCondition, 500) || invalid(result, 700) || basis == null
-                || citationIds == null || citationIds.isEmpty() || citationIds.size() > 3) {
+        if (invalid(decisionContext) || invalid(selectionRule) || invalid(optionName)
+                || invalid(availabilityCondition) || invalid(result) || basis == null
+                || citationIds == null || citationIds.isEmpty()) {
             throw new IllegalArgumentException("rule option is invalid");
         }
-        decisionContext = decisionContext.strip();
-        selectionRule = selectionRule.strip();
-        optionName = optionName.strip();
-        availabilityCondition = availabilityCondition.strip();
-        result = result.strip();
         citationIds = List.copyOf(citationIds);
     }
 
-    private static boolean invalid(String value, int maximum) {
-        return value == null || value.isBlank() || value.length() > maximum;
+    private static boolean invalid(String value) {
+        return value == null || value.isBlank();
     }
 }

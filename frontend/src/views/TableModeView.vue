@@ -373,7 +373,7 @@ onUnmounted(() => {
       <div v-if="session" class="fixed inset-x-0 bottom-0 z-30 border-t border-white/10 bg-ink-panel/95 px-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-3 backdrop-blur">
         <form class="mx-auto flex max-w-3xl gap-2" @submit.prevent="ask">
           <label for="table-question" class="sr-only">输入桌边规则问题</label>
-          <input id="table-question" v-model="question" maxlength="800" :disabled="asking" class="min-h-12 min-w-0 flex-1 rounded-xl border border-white/15 bg-white/10 px-4 text-base text-white placeholder:text-white/35 focus:border-amber-200 focus:outline-none" placeholder="要查哪条规则？">
+          <input id="table-question" v-model="question" :disabled="asking" class="min-h-12 min-w-0 flex-1 rounded-xl border border-white/15 bg-white/10 px-4 text-base text-white placeholder:text-white/35 focus:border-amber-200 focus:outline-none" placeholder="要查哪条规则？">
           <button :disabled="asking || !question.trim()" class="min-h-12 rounded-xl bg-amber-300 px-5 font-bold text-ink disabled:opacity-40">{{ asking ? `${elapsedSeconds}s` : '查规则' }}</button>
         </form>
         <div v-if="asking" class="mx-auto mt-2 max-w-3xl" role="status">

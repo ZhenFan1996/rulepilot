@@ -16,24 +16,17 @@ public record RuleConceptComparison(
         List<UUID> citationIds) {
 
     public RuleConceptComparison {
-        if (invalid(leftConcept, 120) || invalid(leftDefinition, 600)
-                || invalid(rightConcept, 120) || invalid(rightDefinition, 600)
-                || invalid(commonGround, 500) || invalid(keyDifference, 700)
-                || invalid(practicalBoundary, 600) || basis == null
-                || citationIds == null || citationIds.isEmpty() || citationIds.size() > 3) {
+        if (invalid(leftConcept) || invalid(leftDefinition)
+                || invalid(rightConcept) || invalid(rightDefinition)
+                || invalid(commonGround) || invalid(keyDifference)
+                || invalid(practicalBoundary) || basis == null
+                || citationIds == null || citationIds.isEmpty()) {
             throw new IllegalArgumentException("rule concept comparison is invalid");
         }
-        leftConcept = leftConcept.strip();
-        leftDefinition = leftDefinition.strip();
-        rightConcept = rightConcept.strip();
-        rightDefinition = rightDefinition.strip();
-        commonGround = commonGround.strip();
-        keyDifference = keyDifference.strip();
-        practicalBoundary = practicalBoundary.strip();
         citationIds = List.copyOf(citationIds);
     }
 
-    private static boolean invalid(String value, int maximum) {
-        return value == null || value.isBlank() || value.length() > maximum;
+    private static boolean invalid(String value) {
+        return value == null || value.isBlank();
     }
 }

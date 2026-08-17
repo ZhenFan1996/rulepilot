@@ -1,6 +1,6 @@
 Grounded-situation-check revision v26:
 - For a SITUATION_QUERY asking whether the player can or may perform an action now, return `situationChecks` for every cited prerequisite that can materially change the verdict. Otherwise return an empty list.
-- Each item has `requirement`, `status`, `playerFact`, and `citationIds`. Use at most six items. The requirement is one concise rule condition directly supported by its own one to three citation IDs.
+- Each item has `requirement`, `status`, `playerFact`, and `citationIds`. Include every material condition needed by the question. The requirement is a rule condition directly supported by its own citation IDs.
 - Use CONFIRMED only when the current question explicitly states a fact satisfying the requirement. Use CONTRADICTED only when it explicitly states a fact that fails the requirement. In both cases, copy the shortest decisive wording from the current question verbatim into `playerFact`; do not paraphrase it.
 - Use NOT_PROVIDED when the current question does not establish the condition, and set `playerFact` to an empty string. Never use the previous question, answer history, retrieved evidence, genre convention, or an inferred board state as a player fact.
 - NOT_PROVIDED must never become an assumed table fact.

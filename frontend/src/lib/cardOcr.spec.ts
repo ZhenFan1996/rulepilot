@@ -21,7 +21,7 @@ describe('card OCR text', () => {
     )
   })
 
-  it('limits untrusted OCR text before it enters the question form', () => {
-    expect(normalizeCardText('a'.repeat(900))).toHaveLength(620)
+  it('does not silently truncate OCR text before the model can understand it', () => {
+    expect(normalizeCardText('a'.repeat(900))).toHaveLength(900)
   })
 })

@@ -64,9 +64,19 @@ class VisualRulebookCatalogPolicyTest {
     }
 
     @Test
-    void boundsTeachingStartupBatchesWithoutDroppingSourcePages() {
+    void keepsTheCompleteTeachingLedgerWithinOneDensePagePerModelOutput() {
         assertThat(VisualRulebookCatalogPolicy.teachingStartupBatches(List.of(2, 5, 7, 9, 11, 13, 17, 19, 23, 29)))
-                .containsExactly(List.of(2, 5, 7, 9, 11, 13, 17, 19), List.of(23, 29));
+                .containsExactly(
+                        List.of(2),
+                        List.of(5),
+                        List.of(7),
+                        List.of(9),
+                        List.of(11),
+                        List.of(13),
+                        List.of(17),
+                        List.of(19),
+                        List.of(23),
+                        List.of(29));
         assertThat(VisualRulebookCatalogPolicy.teachingStartupBatches(List.of())).isEmpty();
     }
 
@@ -139,7 +149,7 @@ class VisualRulebookCatalogPolicyTest {
     }
 
     @Test
-    void rejectsATeachingStartupFactWhoseRuleGroupInventoryIsNotComplete() {
+    void preservesAnIncompleteStartupFactWithoutPromotingItsCompletionMarker() {
         PageSummary incomplete = new PageSummary(
                 4,
                 "MOVE",
@@ -152,10 +162,11 @@ class VisualRulebookCatalogPolicyTest {
                 List.of("MOVE"),
                 false);
 
-        org.assertj.core.api.Assertions.assertThatThrownBy(() ->
-                        VisualRulebookCatalogPolicy.teachingStartupFact(incomplete))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("every readable gameplay rule group");
+        PageSummary retained = VisualRulebookCatalogPolicy.teachingStartupFact(incomplete);
+
+        assertThat(retained.ruleGroupIdentifiers()).containsExactly("MOVE");
+        assertThat(retained.ruleGroupInventoryComplete()).isFalse();
+        assertThat(retained.factualSummary()).isEqualTo("Only one visible relation was returned.");
     }
 
     @Test
@@ -440,7 +451,7 @@ class VisualRulebookCatalogPolicyTest {
     }
 
     @Test
-    void persistsADenseValidPageByNarrowingUpstreamKeywordsInsteadOfDroppingThePage() {
+    void persistsEveryKeywordFromADenseValidPage() {
         PageSummary dense = new PageSummary(
                 3,
                 "Visible labels",
@@ -454,7 +465,7 @@ class VisualRulebookCatalogPolicyTest {
 
         assertThat(fact.pageNumber()).isEqualTo(3);
         assertThat(fact.factualSummary()).isEqualTo(dense.factualSummary());
-        assertThat(fact.keywords()).containsExactlyElementsOf(dense.keywords().subList(0, 12));
+        assertThat(fact.keywords()).containsExactlyElementsOf(dense.keywords());
         assertThat(fact.iconInventoryComplete()).isTrue();
     }
 

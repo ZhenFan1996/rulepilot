@@ -354,7 +354,7 @@ class StructuredRuleAnswerServiceTest {
     }
 
     @Test
-    void isolatesAnInternalReferenceInASelectedOptionalAidWithoutRepairingCoreProse() {
+    void preservesNaturalTechnicalTermsInASelectedOptionalAid() {
         RuleEvidenceHit source = source("Pay the cost before resolving the effect.");
         AtomicInteger revisions = new AtomicInteger();
         String verdict = "Pay first, then resolve.";
@@ -389,7 +389,10 @@ class StructuredRuleAnswerServiceTest {
         assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
         assertThat(answer.shortVerdict()).isEqualTo(verdict);
         assertThat(answer.explanation()).isEqualTo(explanation);
-        assertThat(answer.walkthroughSteps()).isEmpty();
+        assertThat(answer.walkthroughSteps()).singleElement().satisfies(step -> {
+            assertThat(step.instruction()).isEqualTo("Pay first.");
+            assertThat(step.explanation()).isEqualTo("Then resolve according to internal citationIds.");
+        });
         assertThat(revisions).hasValue(0);
     }
 
@@ -440,7 +443,7 @@ class StructuredRuleAnswerServiceTest {
     }
 
     @Test
-    void preservesARepairedCoreWithoutSpendingASecondCallOnAnOmittedPresentationAid() {
+    void publishesNaturalTechnicalTermsWithoutSpendingARepairCall() {
         RuleEvidenceHit source = source("Pay the cost before resolving the effect.");
         AtomicInteger revisions = new AtomicInteger();
         PlanningModel model = planningModel(
@@ -457,9 +460,9 @@ class StructuredRuleAnswerServiceTest {
 
         assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
         assertThat(answer.shortVerdict()).isEqualTo("Pay first.");
-        assertThat(answer.explanation()).isEqualTo("The cited rule says to resolve next.");
+        assertThat(answer.explanation()).isEqualTo("The internal chunkId says to resolve next.");
         assertThat(answer.walkthroughSteps()).isEmpty();
-        assertThat(revisions).hasValue(1);
+        assertThat(revisions).hasValue(0);
     }
 
     @Test

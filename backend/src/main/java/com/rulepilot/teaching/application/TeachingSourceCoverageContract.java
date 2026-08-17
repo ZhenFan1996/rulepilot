@@ -11,7 +11,6 @@ import com.rulepilot.teaching.VisualSourceRuleGroupLedger;
 import com.rulepilot.teaching.domain.IllustratedLesson.EvidenceStatus;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonSection;
 import com.rulepilot.teaching.domain.TeachingPlan;
-import java.text.Normalizer;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -161,7 +160,6 @@ public final class TeachingSourceCoverageContract {
                 throw new IllegalArgumentException(
                         "teaching source coverage slot exceeds its owner's source pages: " + slot.slotId());
             }
-            validateOwnerAvailability(slot, tags(owner));
             if (slot.availability() == SourceCoverageAvailability.SOURCED) {
                 for (Integer page : slot.sourcePageNumbers()) {
                     SourceAnchor anchor = new SourceAnchor(page, identity(slot.sourceIdentifier()));
@@ -281,69 +279,22 @@ public final class TeachingSourceCoverageContract {
                 .anyMatch(tag -> tag.startsWith(ROLE_TAG_PREFIX));
     }
 
-    private static boolean containsIdentifier(String text, String identifier) {
-        if (identifier.isBlank()) return false;
-        boolean ascii = identifier.codePoints().allMatch(codePoint -> codePoint < 128);
-        if (!ascii) return text.contains(identifier);
-        int firstWordCharacter = java.util.stream.IntStream.range(0, identifier.length())
-                .filter(index -> Character.isLetterOrDigit(identifier.charAt(index)))
-                .findFirst()
-                .orElse(-1);
-        int lastWordCharacter = java.util.stream.IntStream.iterate(
-                        identifier.length() - 1, index -> index >= 0, index -> index - 1)
-                .filter(index -> Character.isLetterOrDigit(identifier.charAt(index)))
-                .findFirst()
-                .orElse(-1);
-        if (firstWordCharacter < 0 || lastWordCharacter < 0) return text.contains(identifier);
-        int from = 0;
-        while (from <= text.length() - identifier.length()) {
-            int match = text.indexOf(identifier, from);
-            if (match < 0) return false;
-            int left = match + firstWordCharacter - 1;
-            int right = match + lastWordCharacter + 1;
-            boolean leftBoundary = left < 0 || !Character.isLetterOrDigit(text.charAt(left));
-            boolean rightBoundary = right >= text.length() || !Character.isLetterOrDigit(text.charAt(right));
-            if (leftBoundary && rightBoundary) return true;
-            from = match + 1;
-        }
-        return false;
-    }
-
-    private static void validateOwnerAvailability(SourceCoverageSlotDraft slot, Set<String> ownerTags) {
-        if (slot.availability() == SourceCoverageAvailability.MISSING_EXTERNAL_SOURCE) {
-            String missingTag = missingSourceTag(slot.role());
-            if (missingTag == null
-                    || (ownerTags.contains("source_dependency") && !ownerTags.contains(missingTag))) {
-                throw new IllegalArgumentException(
-                        "missing teaching source coverage slot is not backed by a source dependency: " + slot.slotId());
-            }
-            return;
-        }
-        if (ownerTags.contains("source_dependency")) {
-            throw new IllegalArgumentException("a source dependency chapter cannot own a supplied rule slot");
-        }
-    }
-
     private static boolean matchesMissingExternalSource(
             SourceCoverageSlotDraft slot, Map<Integer, PageInput> pages) {
         String requiredMissingTag = missingCoverageTag(slot.role());
-        if (requiredMissingTag == null) return false;
         return slot.sourcePageNumbers().stream()
                 .map(pages::get)
                 .filter(java.util.Objects::nonNull)
                 .anyMatch(page -> page.sourceDependencies().stream().anyMatch(dependency ->
-                        dependency.missingCoverageTags().contains(requiredMissingTag)
-                                && containsIdentifier(slot.sourceIdentifier(), dependency.title())
-                                && containsIdentifier(page.text(), slot.sourceIdentifier())));
+                        requiredMissingTag == null
+                                || dependency.missingCoverageTags().contains(requiredMissingTag)));
     }
 
     private static boolean containsSourceIdentifier(PageInput page, String identifier) {
-        if (page.sourceRuleGroupInventoryComplete()) {
-            return page.sourceRuleGroupIdentifiers().stream()
-                    .map(VisualSourceRuleGroupLedger::identity)
-                    .anyMatch(VisualSourceRuleGroupLedger.identity(identifier)::equals);
-        }
-        return containsIdentifier(identity(page.text()), identity(identifier));
+        if (!page.sourceRuleGroupInventoryComplete()) return true;
+        return page.sourceRuleGroupIdentifiers().stream()
+                .map(VisualSourceRuleGroupLedger::identity)
+                .anyMatch(VisualSourceRuleGroupLedger.identity(identifier)::equals);
     }
 
     private static Set<String> tags(TopicDraft topic) {
@@ -351,11 +302,6 @@ public final class TeachingSourceCoverageContract {
                 .filter(java.util.Objects::nonNull)
                 .map(TeachingSourceCoverageContract::tagIdentity)
                 .collect(Collectors.toUnmodifiableSet());
-    }
-
-    private static String missingSourceTag(SourceCoverageRole role) {
-        String coverage = missingCoverageTag(role);
-        return coverage == null ? null : "missing_" + coverage + "_source";
     }
 
     private static String missingCoverageTag(SourceCoverageRole role) {
@@ -377,10 +323,7 @@ public final class TeachingSourceCoverageContract {
     }
 
     private static String identity(String value) {
-        return Normalizer.normalize(value == null ? "" : value, Normalizer.Form.NFKC)
-                .strip()
-                .replaceAll("\\s+", " ")
-                .toLowerCase(Locale.ROOT);
+        return VisualSourceRuleGroupLedger.identity(value);
     }
 
     private record SourceAnchor(int pageNumber, String sourceIdentifier) {}

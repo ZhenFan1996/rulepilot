@@ -12,17 +12,14 @@ public record RulePriorityResolution(
         List<UUID> citationIds) {
 
     public RulePriorityResolution {
-        if (baseRule == null || baseRule.isBlank() || baseRule.length() > 500
-                || competingRule == null || competingRule.isBlank() || competingRule.length() > 500
-                || resolution == null || resolution.isBlank() || resolution.length() > 600
-                || basis == null || citationIds == null || citationIds.isEmpty() || citationIds.size() > 3
+        if (baseRule == null || baseRule.isBlank()
+                || competingRule == null || competingRule.isBlank()
+                || resolution == null || resolution.isBlank()
+                || basis == null || citationIds == null || citationIds.isEmpty()
                 || citationIds.stream().anyMatch(java.util.Objects::isNull)
                 || citationIds.stream().distinct().count() != citationIds.size()) {
             throw new IllegalArgumentException("rule priority resolution is invalid");
         }
-        baseRule = baseRule.strip();
-        competingRule = competingRule.strip();
-        resolution = resolution.strip();
         citationIds = List.copyOf(citationIds);
     }
 }

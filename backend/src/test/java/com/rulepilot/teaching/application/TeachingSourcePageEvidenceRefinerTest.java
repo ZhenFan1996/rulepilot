@@ -218,7 +218,7 @@ class TeachingSourcePageEvidenceRefinerTest {
     }
 
     @Test
-    void selectsPageDiverseEvidenceThenPresentsItInCanonicalPageOrder() {
+    void keepsAllBoundedPageEvidenceThenPresentsItInCanonicalPageOrder() {
         RuleEvidence pageTwoSearchHit = evidence(UUID.randomUUID(), 2, "Relevant hit on the first planned page.");
         RuleEvidence pageFiveSearchHit = evidence(UUID.randomUUID(), 5, "Relevant hit on the second planned page.");
         List<RuleEvidence> canonical = new java.util.ArrayList<>();
@@ -235,13 +235,13 @@ class TeachingSourcePageEvidenceRefinerTest {
         var result = refiner(scopes(), tools(canonical), new RecordingInvocations())
                 .refine(plan, plan.sections().getFirst(), runId, verified(2, pageTwoSearchHit, pageFiveSearchHit));
 
-        assertThat(result.evidence()).hasSize(8);
+        assertThat(result.evidence()).hasSize(12);
         assertThat(result.evidence()).extracting(RuleEvidence::pageFrom)
-                .containsExactly(2, 2, 2, 2, 5, 5, 5, 5);
+                .containsExactly(2, 2, 2, 2, 2, 2, 5, 5, 5, 5, 5, 5);
         assertThat(result.evidence().getFirst()).isEqualTo(pageTwoSearchHit);
-        assertThat(result.evidence().get(4)).isEqualTo(pageFiveSearchHit);
-        assertThat(result.evidence().stream().filter(source -> source.pageFrom() == 2)).hasSize(4);
-        assertThat(result.evidence().stream().filter(source -> source.pageFrom() == 5)).hasSize(4);
+        assertThat(result.evidence().get(6)).isEqualTo(pageFiveSearchHit);
+        assertThat(result.evidence().stream().filter(source -> source.pageFrom() == 2)).hasSize(6);
+        assertThat(result.evidence().stream().filter(source -> source.pageFrom() == 5)).hasSize(6);
     }
 
     @Test

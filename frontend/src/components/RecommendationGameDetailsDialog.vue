@@ -256,7 +256,7 @@ onBeforeUnmount(() => {
           </dl>
           <div v-if="details.editionImages.length" class="mt-6 border-t border-ink/10 pt-5">
             <h3 class="font-display text-xl font-semibold">{{ copy.editions }}</h3>
-            <ul class="mt-3 flex gap-3 overflow-x-auto pb-2"><li v-for="edition in details.editionImages.slice(0, 8)" :key="edition.versionId" class="w-28 shrink-0"><img :src="edition.imageUrl" :alt="edition.name" class="h-32 w-full rounded-lg bg-paper object-contain"><p class="mt-1 line-clamp-2 text-xs text-ink/55">{{ edition.name }}</p></li></ul>
+            <ul class="mt-3 flex gap-3 overflow-x-auto pb-2"><li v-for="edition in details.editionImages" :key="edition.versionId" class="w-28 shrink-0"><img :src="edition.imageUrl" :alt="edition.name" class="h-32 w-full rounded-lg bg-paper object-contain"><p class="mt-1 line-clamp-2 text-xs text-ink/55">{{ edition.name }}</p></li></ul>
           </div>
           <p class="mt-6 rounded-xl bg-indigo/5 px-4 py-3 text-xs leading-5 text-ink/50">{{ copy.evidence }}</p>
         </div>

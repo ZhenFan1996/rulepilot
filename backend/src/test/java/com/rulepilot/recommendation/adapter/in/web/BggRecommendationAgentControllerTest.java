@@ -93,9 +93,8 @@ class BggRecommendationAgentControllerTest {
     }
 
     @Test
-    void preservesFiveHundredUnicodeCharactersAndRejectsTheNextCharacterWithoutTruncation() throws Exception {
-        String accepted = "😀".repeat(500);
-        String rejected = accepted + "中";
+    void preservesALongNaturalUnicodeRequestWithoutAControllerSpecificCharacterLimit() throws Exception {
+        String accepted = "😀".repeat(1_500) + "  A\n中";
         List<String> receivedMessages = new ArrayList<>();
         when(agent.converse(any(), eq("zh-CN"), eq("player"))).thenAnswer(invocation -> {
             var command = invocation.getArgument(
@@ -125,18 +124,6 @@ class BggRecommendationAgentControllerTest {
                         .content(objectMapper.writeValueAsBytes(Map.of("message", accepted))))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.assistantMessage").value("完整收到。"));
-
-        mockMvc.perform(post("/api/v1/bgg/recommendation-agent")
-                        .principal(principal)
-                        .queryParam("locale", "zh-CN")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsBytes(Map.of("message", rejected))))
-                .andExpect(status().isBadRequest())
-                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
-                .andExpect(jsonPath("$.code").value("message_too_long"))
-                .andExpect(jsonPath("$.detail").value(org.hamcrest.Matchers.allOf(
-                        org.hamcrest.Matchers.containsString("500"),
-                        org.hamcrest.Matchers.containsString("没有被截断"))));
 
         assertThat(receivedMessages).containsExactly(accepted);
         verify(agent, times(1)).converse(any(), eq("zh-CN"), eq("player"));

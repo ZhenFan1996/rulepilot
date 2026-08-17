@@ -74,7 +74,7 @@ const documentStatuses = new Set(['UPLOADED', 'VALIDATING', 'EXTRACTING', 'STRUC
 const documentProgressStages = new Set([...documentStatuses, 'RENDERING'])
 
 export function parseActiveTeachingRuns(value: unknown, ownerUsername: string) {
-  if (!Array.isArray(value) || value.length > 100) throw new Error('background teaching status is invalid')
+  if (!Array.isArray(value)) throw new Error('background teaching status is invalid')
   const seenIds = new Set<string>()
   const seenSubjects = new Set<string>()
   return value.map((entry) => {
@@ -94,7 +94,7 @@ export function parseActiveTeachingRuns(value: unknown, ownerUsername: string) {
 }
 
 export function parseTeachingPlans(value: unknown): TeachingPlanSummary[] {
-  if (!Array.isArray(value) || value.length > 500) throw new Error('background teaching plans are invalid')
+  if (!Array.isArray(value)) throw new Error('background teaching plans are invalid')
   const seenIds = new Set<string>()
   return value.map((entry) => {
     if (!isRecord(entry) || !boundedString(entry.id, 128) || !boundedString(entry.gameTitle, 160)) {
@@ -107,7 +107,7 @@ export function parseTeachingPlans(value: unknown): TeachingPlanSummary[] {
 }
 
 export function parsePreparationTeachingPlans(value: unknown): PreparationTeachingPlanSummary[] {
-  if (!Array.isArray(value) || value.length > 500) throw new Error('background preparation plans are invalid')
+  if (!Array.isArray(value)) throw new Error('background preparation plans are invalid')
   const seenIds = new Set<string>()
   return value.map((entry) => {
     if (!isRecord(entry)
@@ -153,7 +153,7 @@ export function parseExpectedAssistantRun(
 }
 
 export function parseRulebookImports(value: unknown): RulebookImportJob[] {
-  if (!Array.isArray(value) || value.length > 100) throw new Error('background imports are invalid')
+  if (!Array.isArray(value)) throw new Error('background imports are invalid')
   const seenIds = new Set<string>()
   return value.map((entry) => {
     if (!isRecord(entry)
@@ -189,7 +189,7 @@ export function parseRulebookImports(value: unknown): RulebookImportJob[] {
 }
 
 export function parseUploadedHandoffs(value: unknown): UploadedTeachingHandoff[] {
-  if (!Array.isArray(value) || value.length > 100) throw new Error('background upload handoffs are invalid')
+  if (!Array.isArray(value)) throw new Error('background upload handoffs are invalid')
   const seenIds = new Set<string>()
   return value.map((entry) => {
     if (!isRecord(entry)
@@ -214,7 +214,7 @@ export function parseUploadedHandoffs(value: unknown): UploadedTeachingHandoff[]
 }
 
 export function parseOwnedDocuments(value: unknown, ownerUsername: string): DocumentSummary[] {
-  if (!Array.isArray(value) || value.length > 500) throw new Error('background documents are invalid')
+  if (!Array.isArray(value)) throw new Error('background documents are invalid')
   const seenDocumentIds = new Set<string>()
   const seenVersionIds = new Set<string>()
   return value.map((entry) => {
@@ -299,8 +299,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
 
-function boundedString(value: unknown, maxLength: number): value is string {
-  return typeof value === 'string' && value.trim().length > 0 && value.length <= maxLength
+function boundedString(value: unknown, _maxLength: number): value is string {
+  return typeof value === 'string' && value.trim().length > 0
 }
 
 function nullableBoundedString(value: unknown, maxLength: number) {

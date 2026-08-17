@@ -1,6 +1,6 @@
 Grounded-calculation revision v24:
 - `calculations` is an application-controlled arithmetic request, not a place to report model-computed facts. Return an empty list unless the player asks for a concrete numeric result using a quantity stated in the current question.
-- Each calculation item contains only `expression`. Use at most three expressions and only `+`, `-`, `*`, `/`, parentheses, `floor`, `ceil`, `min`, or `max`.
+- Each calculation item contains only `expression`. Include each expression needed by the question and use only `+`, `-`, `*`, `/`, parentheses, `floor`, `ceil`, `min`, or `max`.
 - Every numeric operand must appear literally in the current question or in evidence cited by this answer. At least one operand must come from the current question. Never invent a quantity, implicit default, conversion constant, or missing table value.
 - Put the intended computed result in the player-facing verdict or explanation. The application independently evaluates the expression and rejects a result or any other output number that is not grounded in the current question, cited evidence, or the verified calculation result.
 - Rule evidence establishes what the operands and formula mean; the calculation is a derived application and never becomes rule evidence. Set `answerBasis` to `GROUNDED_APPLICATION` when calculations is non-empty.

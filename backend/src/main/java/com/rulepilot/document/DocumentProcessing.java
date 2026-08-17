@@ -28,6 +28,8 @@ public interface DocumentProcessing {
 
     void replacePages(UUID documentVersionId, List<ExtractedPage> pages);
 
+    int pageCount(UUID documentVersionId);
+
     List<PageView> pages(UUID documentVersionId);
 
     record ExtractedPage(int pageNumber, String text, List<ExtractedTextBlock> textBlocks) {

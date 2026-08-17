@@ -4,12 +4,9 @@ import com.rulepilot.assistant.AssistantReadTools.RuleEvidence;
 import com.rulepilot.teaching.TeachingLessonModel.SectionDraft;
 import com.rulepilot.teaching.TeachingLessonModel.StepDraft;
 import com.rulepilot.teaching.TeachingLessonModel.TeachingUnitInput;
-import com.rulepilot.teaching.domain.IllustratedLesson.TeachingMove;
-import java.text.Normalizer;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -35,19 +32,7 @@ final class TeachingPlannedUnitCoveragePolicy {
         }
 
         Map<String, List<StepDraft>> stepsByUnit = new LinkedHashMap<>();
-        Set<String> independentlyCoveredUnits = draft.steps().stream()
-                .filter(step -> step.teachingUnitIds().size() == 1)
-                .map(step -> step.teachingUnitIds().getFirst())
-                .collect(Collectors.toCollection(LinkedHashSet::new));
         for (StepDraft step : draft.steps()) {
-            if (step.teachingUnitIds().size() > 1) {
-                if (step.kind() == TeachingMove.CHECK
-                        && independentlyCoveredUnits.containsAll(step.teachingUnitIds())) {
-                    continue;
-                }
-                throw new IllegalArgumentException(
-                        "one teaching step cannot absorb multiple independently planned teaching units");
-            }
             for (String unitId : step.teachingUnitIds()) {
                 if (!unitsById.containsKey(unitId)) {
                     throw new IllegalArgumentException("teaching step references an unknown planned teaching unit");
@@ -91,34 +76,6 @@ final class TeachingPlannedUnitCoveragePolicy {
         if (unknownCitation) {
             throw new IllegalArgumentException("teaching step cites evidence outside retrieval scope");
         }
-    }
-
-    static boolean containsIdentifier(String text, String identifier) {
-        String normalizedText = identity(text);
-        String normalizedIdentifier = identity(identifier);
-        if (normalizedIdentifier.isBlank()) return false;
-        boolean ascii = normalizedIdentifier.codePoints().allMatch(codePoint -> codePoint < 128);
-        if (!ascii) return normalizedText.contains(normalizedIdentifier);
-        int from = 0;
-        while (from <= normalizedText.length() - normalizedIdentifier.length()) {
-            int match = normalizedText.indexOf(normalizedIdentifier, from);
-            if (match < 0) return false;
-            int left = match - 1;
-            int right = match + normalizedIdentifier.length();
-            boolean leftBoundary = left < 0 || !Character.isLetterOrDigit(normalizedText.charAt(left));
-            boolean rightBoundary = right >= normalizedText.length()
-                    || !Character.isLetterOrDigit(normalizedText.charAt(right));
-            if (leftBoundary && rightBoundary) return true;
-            from = match + 1;
-        }
-        return false;
-    }
-
-    private static String identity(String value) {
-        return Normalizer.normalize(value == null ? "" : value, Normalizer.Form.NFKC)
-                .strip()
-                .replaceAll("\\s+", " ")
-                .toLowerCase(Locale.ROOT);
     }
 
     static final class MissingDirectUnitEvidenceException extends IllegalArgumentException {

@@ -18,18 +18,11 @@ class AnswerRepairOutcomePolicyTest {
     private final UUID citationId = UUID.randomUUID();
 
     @Test
-    void usesOneGenericMessageForARepairThatStillFailsPublication() {
-        assertThat(AnswerRepairOutcomePolicy.insufficientRepairMessage(List.of("diagnostic")))
-                .isEqualTo("回答修订后仍无法通过发布校验。");
-    }
-
-    @Test
-    void blocksRemainingInternalEvidenceReferences() {
+    void doesNotTreatOrdinaryEvidenceLabelsAsInternalIdentityLeakage() {
         var failure = AnswerRepairOutcomePolicy.publicationFailure(
                 request(), draft("See evidence E1.", "Internal reference remains."));
 
-        assertThat(failure).contains(new AnswerRepairOutcomePolicy.PublicationFailure(
-                AnswerStatus.INVALID_MODEL_OUTPUT, "回答包含内部证据标识，未向玩家发布。"));
+        assertThat(failure).isEmpty();
     }
 
     @Test

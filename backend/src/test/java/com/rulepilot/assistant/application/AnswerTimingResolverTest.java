@@ -72,19 +72,18 @@ class AnswerTimingResolverTest {
     }
 
     @Test
-    void rejectsDuplicateContextsAndBoundsTheResolutionCount() {
+    void rejectsDuplicateContextsAndPreservesEveryDistinctResolution() {
         assertThatThrownBy(() -> resolver.resolve(request(AnswerAid.TIMING), draft(List.of(
                         timing("Same context", "First", "Source", "NORMAL_TURN_ORDER", citationId),
                         timing(" same context ", "Second", "Source", "NORMAL_TURN_ORDER", citationId)))))
                 .hasMessageContaining("duplicate");
 
-        List<RuleTimingRequest> tooMany = IntStream.rangeClosed(1, 4)
+        List<RuleTimingRequest> resolutions = IntStream.rangeClosed(1, 4)
                 .mapToObj(index -> timing(
                         "Context " + index, "Order " + index, "Source " + index,
                         "NORMAL_TURN_ORDER", citationId))
                 .toList();
-        assertThatThrownBy(() -> resolver.resolve(request(AnswerAid.TIMING), draft(tooMany)))
-                .hasMessageContaining("too many timing resolutions");
+        assertThat(resolver.resolve(request(AnswerAid.TIMING), draft(resolutions))).hasSize(4);
     }
 
     private ModelRequest request(AnswerAid aid) {

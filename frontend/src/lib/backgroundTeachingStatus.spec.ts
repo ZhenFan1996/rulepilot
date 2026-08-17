@@ -25,14 +25,20 @@ describe('background teaching status', () => {
     expect(reconcileBackgroundTeaching([first], [replacement]).finished).toEqual([])
   })
 
-  it('ignores corrupt or unbounded session values', () => {
+  it('ignores corrupt session values without hiding valid work behind arbitrary item or title caps', () => {
     expect(parseBackgroundTeachingItems('{bad')).toEqual([])
     expect(parseBackgroundTeachingItems('[{"runId":"run-1"}]')).toEqual([])
-    expect(parseBackgroundTeachingItems(JSON.stringify([{ ...first, gameTitle: 'x'.repeat(161) }]))).toEqual([])
+    expect(parseBackgroundTeachingItems(JSON.stringify([{ ...first, gameTitle: 'x'.repeat(161) }]))).toEqual([
+      { ...first, gameTitle: 'x'.repeat(161) },
+    ])
     expect(parseBackgroundTeachingItems(JSON.stringify([{ ...first, terminalState: 'RUNNING' }]))).toEqual([])
     expect(parseBackgroundTeachingItems(JSON.stringify([{ ...first, terminalState: 'FAILED' }])))
       .toEqual([{ ...first, terminalState: 'FAILED' }])
-    expect(parseBackgroundTeachingItems(JSON.stringify(Array.from({ length: 25 }, () => first)))).toHaveLength(20)
+    expect(parseBackgroundTeachingItems(JSON.stringify(Array.from({ length: 25 }, (_, index) => ({
+      ...first,
+      runId: `run-${index}`,
+      planId: `plan-${index}`,
+    }))))).toHaveLength(25)
     expect(parseBackgroundTeachingItems(JSON.stringify([first]))).toEqual([first])
   })
 

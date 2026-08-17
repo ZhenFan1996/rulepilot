@@ -1,6 +1,5 @@
 package com.rulepilot.recommendation;
 
-import java.text.Normalizer;
 import java.util.List;
 import java.util.Objects;
 
@@ -16,14 +15,14 @@ public record CandidateClaim(
 
     public CandidateClaim {
         if (bggId <= 0) throw new IllegalArgumentException("candidate claim game id must be positive");
-        String checkedSubject = bounded(subject, 80, "candidate claim subject");
+        String checkedSubject = requiredToken(subject, "candidate claim subject");
         subject = checkedSubject;
         Type checkedType = Objects.requireNonNull(type, "candidate claim type is required");
         type = checkedType;
         relation = Objects.requireNonNull(relation, "candidate claim relation is required");
-        text = bounded(text, 600, "candidate claim text");
+        text = requiredText(text, "candidate claim text");
         evidence = evidence == null ? List.of() : List.copyOf(evidence);
-        if (evidence.size() > 5 || evidence.stream().anyMatch(Objects::isNull)) {
+        if (evidence.stream().anyMatch(Objects::isNull)) {
             throw new IllegalArgumentException("candidate claim evidence is invalid");
         }
         if (relation == Relation.UNKNOWN && !evidence.isEmpty()) {
@@ -79,11 +78,13 @@ public record CandidateClaim(
         OBSERVED
     }
 
-    private static String bounded(String value, int maximum, String label) {
-        String checked = Normalizer.normalize(value == null ? "" : value, Normalizer.Form.NFKC).strip();
-        if (checked.isBlank() || checked.codePointCount(0, checked.length()) > maximum) {
-            throw new IllegalArgumentException(label + " is invalid");
-        }
-        return checked;
+    private static String requiredToken(String value, String label) {
+        if (value == null || value.isBlank()) throw new IllegalArgumentException(label + " is invalid");
+        return value.strip();
+    }
+
+    private static String requiredText(String value, String label) {
+        if (value == null || value.isBlank()) throw new IllegalArgumentException(label + " is invalid");
+        return value;
     }
 }

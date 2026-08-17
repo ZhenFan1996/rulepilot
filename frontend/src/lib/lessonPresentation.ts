@@ -22,16 +22,8 @@ export interface PresentedPlan<T extends { gameTitle: string }> {
 }
 
 export function playerFacingTitle(rawTitle: string): string {
-  const source = rawTitle.trim().replace(/\.pdf$/i, '').replace(/[_]+/g, ' ').replace(/\s+/g, ' ')
-  const withoutLearningGuide = source
-    .replace(/\s*[:：—–-]?\s*learning\s+to\s+play(?:\s+(?:rules?|corpus\s+replay))?$/i, '')
-    .replace(/\s*[:：—–-]?\s*(?:base\s+game\s+)?rules?(?:\s+(?:corpus\s+)?replay)?$/i, '')
-    .replace(/\s*[:：—–-]?\s*(?:corpus\s+)?replay$/i, '')
-    .replace(/\s*[:：—–-]?\s*rulebook$/i, '')
-    .replace(/\s*[:：—–-]?\s*verification(?:\s+[\da-f-]{8,})?$/i, '')
-    .replace(/[\s:：—–-]+$/, '')
-    .trim()
-  return withoutLearningGuide || source || '未命名规则书'
+  const source = rawTitle.trim().replace(/\.pdf$/i, '').replace(/_+/g, ' ').replace(/\s+/g, ' ')
+  return source || '未命名规则书'
 }
 
 export function publicLessonTitle(lesson: LessonTitleIdentity): string {
@@ -100,7 +92,5 @@ function publicLessonScore(lesson: PublicLessonIdentity): number {
 }
 
 function titleKey(title: string) {
-  return title
-    .toLocaleLowerCase()
-    .replace(/[\s:：,，.。'’"“”!！?？()（）[\]{}—–_-]+/g, '')
+  return title.normalize('NFKC').trim().replace(/\s+/g, ' ').toLocaleLowerCase()
 }

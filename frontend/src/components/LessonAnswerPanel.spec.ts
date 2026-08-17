@@ -149,7 +149,7 @@ describe('LessonAnswerPanel', () => {
     expect(wrapper.emitted('saveRulingRevision')).toHaveLength(1)
   })
 
-  it('shows one progressive player answer instead of repeating a verdict as explanation and steps', () => {
+  it('preserves the model-authored explanation and complete procedure without lexical suppression', () => {
     const repetitiveAnswer = {
       ...answered,
       shortVerdict: '轮到你时，打出一张人格牌，然后执行该牌行动。',
@@ -170,9 +170,8 @@ describe('LessonAnswerPanel', () => {
     })
 
     expect(wrapper.text()).toContain(repetitiveAnswer.shortVerdict)
-    expect(wrapper.text()).not.toContain(repetitiveAnswer.explanation)
-    expect(wrapper.text()).not.toContain('照这个顺序做')
-    expect(wrapper.text()).not.toContain('这条答案如何得出')
+    expect(wrapper.text()).toContain(repetitiveAnswer.explanation)
+    expect(wrapper.text()).toContain('照这个顺序做')
     expect(wrapper.text()).toContain('直接核对规则依据')
   })
 

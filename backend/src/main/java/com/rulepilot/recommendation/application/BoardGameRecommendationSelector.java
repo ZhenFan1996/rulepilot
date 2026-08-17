@@ -107,11 +107,11 @@ class BoardGameRecommendationSelector {
                 details.maxPlayers(),
                 details.minimumPlayTimeMinutes(),
                 details.maximumPlayTimeMinutes(),
-                bounded(details.categories(), 12),
-                bounded(details.mechanics(), 12),
-                bounded(details.families(), 8),
-                bounded(details.designers(), 5),
-                bounded(details.publishers(), 5));
+                details.categories(),
+                details.mechanics(),
+                details.families(),
+                details.designers(),
+                details.publishers());
     }
 
     private RecommendedGame present(
@@ -184,7 +184,10 @@ class BoardGameRecommendationSelector {
             reasons.addFirst(new RecommendationReason(
                     ReasonKind.PREFERENCE_INFERENCE,
                     narrative.why(),
-                    List.of()));
+                    narrative.evidence().stream()
+                            .flatMap(observation -> observation.sourceIndexes().stream())
+                            .distinct()
+                            .toList()));
         }
         if (preferenceLink != null) {
             reasons.add(new RecommendationReason(
@@ -373,16 +376,16 @@ class BoardGameRecommendationSelector {
                             .map(Enum::name)
                             .collect(java.util.stream.Collectors.joining(", "))));
         }
-        addTaxonomy(values, bggId, "categories", details.categories(), 4);
-        addTaxonomy(values, bggId, "mechanics", details.mechanics(), 6);
-        addTaxonomy(values, bggId, "families", details.families(), 3);
+        addTaxonomy(values, bggId, "categories", details.categories());
+        addTaxonomy(values, bggId, "mechanics", details.mechanics());
+        addTaxonomy(values, bggId, "families", details.families());
         if (details.minimumAge() != null) {
             values.add(metadata(bggId, "minimumAge", details.minimumAge().toString()));
         }
-        addMetadata(values, bggId, "bestWith", List.of(details.bestWith()), 1);
-        addMetadata(values, bggId, "recommendedWith", List.of(details.recommendedWith()), 1);
-        addMetadata(values, bggId, "designers", details.designers(), 4);
-        addMetadata(values, bggId, "publishers", details.publishers(), 4);
+        addMetadata(values, bggId, "bestWith", List.of(details.bestWith()));
+        addMetadata(values, bggId, "recommendedWith", List.of(details.recommendedWith()));
+        addMetadata(values, bggId, "designers", details.designers());
+        addMetadata(values, bggId, "publishers", details.publishers());
         return List.copyOf(values);
     }
 
@@ -437,14 +440,12 @@ class BoardGameRecommendationSelector {
             List<CandidateObservation> target,
             int bggId,
             String attribute,
-            List<String> source,
-            int maximum) {
+            List<String> source) {
         String value = source.stream()
                 .filter(Objects::nonNull)
                 .map(String::strip)
                 .filter(item -> !item.isBlank())
                 .distinct()
-                .limit(maximum)
                 .collect(java.util.stream.Collectors.joining(", "));
         if (!value.isBlank()) target.add(taxonomy(bggId, attribute, value));
     }
@@ -453,14 +454,12 @@ class BoardGameRecommendationSelector {
             List<CandidateObservation> target,
             int bggId,
             String attribute,
-            List<String> source,
-            int maximum) {
+            List<String> source) {
         String value = source.stream()
                 .filter(Objects::nonNull)
                 .map(String::strip)
                 .filter(item -> !item.isBlank())
                 .distinct()
-                .limit(maximum)
                 .collect(java.util.stream.Collectors.joining(", "));
         if (!value.isBlank()) target.add(metadata(bggId, attribute, value));
     }
@@ -560,7 +559,6 @@ class BoardGameRecommendationSelector {
                 .map(String::strip)
                 .filter(value -> !value.isBlank())
                 .distinct()
-                .limit(4)
                 .toList();
     }
 
@@ -573,10 +571,8 @@ class BoardGameRecommendationSelector {
                 .flatMap(game -> game.observations().stream())
                 .filter(observation -> observation.text() != null
                         && !observation.text().isBlank()
-                        && observation.text().length() <= 600
                         && !observation.sourceIndexes().isEmpty()
                         && sourceIndexes.containsAll(observation.sourceIndexes()))
-                .limit(3)
                 .map(observation -> new RecommendationReason(
                         ReasonKind.WEB_RESEARCH,
                         observation.text(),
@@ -663,17 +659,6 @@ class BoardGameRecommendationSelector {
                 .filter(java.util.Objects::nonNull)
                 .filter(term -> referenceTerms.contains(normalized(term)))
                 .distinct()
-                .limit(4)
-                .toList();
-    }
-
-    private List<String> bounded(List<String> values, int maximum) {
-        return values.stream()
-                .filter(java.util.Objects::nonNull)
-                .map(String::strip)
-                .filter(value -> !value.isBlank())
-                .distinct()
-                .limit(maximum)
                 .toList();
     }
 
@@ -693,10 +678,7 @@ class BoardGameRecommendationSelector {
         PreferenceLink {
             evidenceQuote = evidenceQuote == null ? "" : evidenceQuote.strip().replaceAll("\\s+", " ");
             taxonomyTerms = taxonomyTerms == null ? List.of() : List.copyOf(taxonomyTerms);
-            if (evidenceQuote.isBlank()
-                    || evidenceQuote.length() > 120
-                    || taxonomyTerms.isEmpty()
-                    || taxonomyTerms.size() > 2) {
+            if (evidenceQuote.isBlank() || taxonomyTerms.isEmpty()) {
                 throw new IllegalArgumentException("recommendation preference link is invalid");
             }
         }

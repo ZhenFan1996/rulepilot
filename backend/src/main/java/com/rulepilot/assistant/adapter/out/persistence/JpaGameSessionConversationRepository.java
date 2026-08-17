@@ -111,16 +111,16 @@ class GameSessionConversationTurnEntity {
     @Column(name = "document_version_id", nullable = false)
     UUID documentVersionId;
 
-    @Column(nullable = false, length = 800)
+    @Column(nullable = false, columnDefinition = "text")
     String question;
 
     @Column(name = "answer_status", nullable = false)
     String answerStatus;
 
-    @Column(name = "short_verdict", nullable = false, length = 240)
+    @Column(name = "short_verdict", nullable = false, columnDefinition = "text")
     String shortVerdict;
 
-    @Column(nullable = false, length = 1500)
+    @Column(nullable = false, columnDefinition = "text")
     String explanation;
 
     @ElementCollection
@@ -131,7 +131,7 @@ class GameSessionConversationTurnEntity {
     @ElementCollection
     @CollectionTable(name = "game_session_turn_exception", joinColumns = @JoinColumn(name = "turn_id"))
     @OrderColumn(name = "position")
-    @Column(name = "exception_text", nullable = false, length = 400)
+    @Column(name = "exception_text", nullable = false, columnDefinition = "text")
     List<String> exceptions = new ArrayList<>();
 
     @Column(nullable = false)
@@ -220,7 +220,7 @@ class GameSessionConversationTurnEntity {
     @Column(name = "confirmed_ruling_version")
     Long confirmedRulingVersion;
 
-    @Column(length = 800)
+    @Column(columnDefinition = "text")
     String clarification;
 
     @Column(name = "created_by", nullable = false)
@@ -334,16 +334,16 @@ class GameSessionConversationTurnEntity {
 @Embeddable
 class PersistedRuleDecisionBranch {
 
-    @Column(name = "condition_text", nullable = false, length = 300)
+    @Column(name = "condition_text", nullable = false, columnDefinition = "text")
     String condition;
 
-    @Column(name = "outcome_text", nullable = false, length = 500)
+    @Column(name = "outcome_text", nullable = false, columnDefinition = "text")
     String outcome;
 
     @Column(nullable = false, length = 40)
     String basis;
 
-    @Column(name = "citation_ids", nullable = false, length = 110)
+    @Column(name = "citation_ids", nullable = false, columnDefinition = "text")
     String citationIds;
 
     protected PersistedRuleDecisionBranch() {}
@@ -367,13 +367,13 @@ class PersistedRuleDecisionBranch {
 @Embeddable
 class PersistedRuleExceptionClause {
 
-    @Column(name = "condition_text", nullable = false, length = 300)
+    @Column(name = "condition_text", nullable = false, columnDefinition = "text")
     String condition;
 
-    @Column(name = "effect_text", nullable = false, length = 500)
+    @Column(name = "effect_text", nullable = false, columnDefinition = "text")
     String effect;
 
-    @Column(name = "citation_ids", nullable = false, length = 110)
+    @Column(name = "citation_ids", nullable = false, columnDefinition = "text")
     String citationIds;
 
     protected PersistedRuleExceptionClause() {}
@@ -396,16 +396,16 @@ class PersistedRuleExceptionClause {
 @Embeddable
 class PersistedRuleTermDefinition {
 
-    @Column(name = "term_text", nullable = false, length = 120)
+    @Column(name = "term_text", nullable = false, columnDefinition = "text")
     String term;
 
-    @Column(name = "definition_text", nullable = false, length = 600)
+    @Column(name = "definition_text", nullable = false, columnDefinition = "text")
     String definition;
 
-    @Column(name = "boundary_text", nullable = false, length = 400)
+    @Column(name = "boundary_text", nullable = false, columnDefinition = "text")
     String boundary;
 
-    @Column(name = "citation_ids", nullable = false, length = 110)
+    @Column(name = "citation_ids", nullable = false, columnDefinition = "text")
     String citationIds;
 
     protected PersistedRuleTermDefinition() {}
@@ -429,19 +429,19 @@ class PersistedRuleTermDefinition {
 @Embeddable
 class PersistedRuleWorkedExample {
 
-    @Column(name = "setup_text", nullable = false, length = 500)
+    @Column(name = "setup_text", nullable = false, columnDefinition = "text")
     String setup;
 
-    @Column(name = "action_text", nullable = false, length = 700)
+    @Column(name = "action_text", nullable = false, columnDefinition = "text")
     String action;
 
-    @Column(name = "outcome_text", nullable = false, length = 500)
+    @Column(name = "outcome_text", nullable = false, columnDefinition = "text")
     String outcome;
 
     @Column(nullable = false, length = 40)
     String basis;
 
-    @Column(name = "citation_ids", nullable = false, length = 110)
+    @Column(name = "citation_ids", nullable = false, columnDefinition = "text")
     String citationIds;
 
     protected PersistedRuleWorkedExample() {}
@@ -466,19 +466,19 @@ class PersistedRuleWorkedExample {
 @Embeddable
 class PersistedRulePriorityResolution {
 
-    @Column(name = "base_rule", nullable = false, length = 500)
+    @Column(name = "base_rule", nullable = false, columnDefinition = "text")
     String baseRule;
 
-    @Column(name = "competing_rule", nullable = false, length = 500)
+    @Column(name = "competing_rule", nullable = false, columnDefinition = "text")
     String competingRule;
 
-    @Column(name = "resolution_text", nullable = false, length = 600)
+    @Column(name = "resolution_text", nullable = false, columnDefinition = "text")
     String resolution;
 
     @Column(nullable = false, length = 40)
     String basis;
 
-    @Column(name = "citation_ids", nullable = false, length = 110)
+    @Column(name = "citation_ids", nullable = false, columnDefinition = "text")
     String citationIds;
 
     protected PersistedRulePriorityResolution() {}
@@ -504,19 +504,19 @@ class PersistedRulePriorityResolution {
 @Embeddable
 class PersistedRuleTimingResolution {
 
-    @Column(name = "timing_context", nullable = false, length = 500)
+    @Column(name = "timing_context", nullable = false, columnDefinition = "text")
     String timingContext;
 
-    @Column(name = "resolution_order", nullable = false, length = 700)
+    @Column(name = "resolution_order", nullable = false, columnDefinition = "text")
     String resolutionOrder;
 
-    @Column(name = "order_source", nullable = false, length = 400)
+    @Column(name = "order_source", nullable = false, columnDefinition = "text")
     String orderSource;
 
     @Column(nullable = false, length = 40)
     String basis;
 
-    @Column(name = "citation_ids", nullable = false, length = 110)
+    @Column(name = "citation_ids", nullable = false, columnDefinition = "text")
     String citationIds;
 
     protected PersistedRuleTimingResolution() {}
@@ -542,26 +542,26 @@ class PersistedRuleTimingResolution {
 @Embeddable
 class PersistedRuleTieResolution {
 
-    @Column(name = "tie_context", nullable = false, length = 500)
+    @Column(name = "tie_context", nullable = false, columnDefinition = "text")
     String tieContext;
 
-    @Column(name = "resolution_steps", nullable = false, length = 3100)
+    @Column(name = "resolution_steps", nullable = false, columnDefinition = "text")
     String resolutionSteps;
 
-    @Column(name = "final_outcome", nullable = false, length = 500)
+    @Column(name = "final_outcome", nullable = false, columnDefinition = "text")
     String finalOutcome;
 
     @Column(nullable = false, length = 40)
     String basis;
 
-    @Column(name = "citation_ids", nullable = false, length = 110)
+    @Column(name = "citation_ids", nullable = false, columnDefinition = "text")
     String citationIds;
 
     protected PersistedRuleTieResolution() {}
 
     PersistedRuleTieResolution(RuleTieResolution item) {
         tieContext = item.tieContext();
-        resolutionSteps = String.join("\n", item.resolutionSteps());
+        resolutionSteps = encodeSteps(item.resolutionSteps());
         finalOutcome = item.finalOutcome();
         basis = item.basis().name();
         citationIds = item.citationIds().stream().map(UUID::toString)
@@ -574,35 +574,60 @@ class PersistedRuleTieResolution {
                 .toList();
         return new RuleTieResolution(
                 tieContext,
-                resolutionSteps.lines().toList(),
+                decodeSteps(resolutionSteps),
                 finalOutcome,
                 TieResolutionBasis.valueOf(basis),
                 citations);
+    }
+
+    private static String encodeSteps(List<String> steps) {
+        StringBuilder encoded = new StringBuilder("v1;");
+        steps.forEach(step -> encoded.append(step.length()).append(':').append(step));
+        return encoded.toString();
+    }
+
+    private static List<String> decodeSteps(String encoded) {
+        if (!encoded.startsWith("v1;")) return encoded.lines().toList();
+        List<String> steps = new ArrayList<>();
+        int cursor = 3;
+        while (cursor < encoded.length()) {
+            int separator = encoded.indexOf(':', cursor);
+            if (separator < 0) throw new IllegalArgumentException("persisted tie steps are invalid");
+            int length = Integer.parseInt(encoded.substring(cursor, separator));
+            int start = separator + 1;
+            int end = start + length;
+            if (length < 0 || end > encoded.length()) {
+                throw new IllegalArgumentException("persisted tie steps are invalid");
+            }
+            steps.add(encoded.substring(start, end));
+            cursor = end;
+        }
+        return List.copyOf(steps);
     }
 }
 
 @Embeddable
 class PersistedRuleScopeResolution {
 
-    @Column(name = "rule_context", nullable = false, length = 500)
+    @Column(name = "rule_context", nullable = false, columnDefinition = "text")
     String ruleContext;
 
-    @Column(name = "governing_condition", nullable = false, length = 500)
+    @Column(name = "governing_condition", nullable = false, columnDefinition = "text")
     String governingCondition;
 
-    @Column(name = "current_situation", nullable = false, length = 300)
+    @Column(name = "current_situation", nullable = false, columnDefinition = "text")
     String currentSituation;
 
     @Column(name = "match_status", nullable = false, length = 40)
     String matchStatus;
 
-    @Column(name = "effect_text", nullable = false, length = 600)
+    @Column(name = "effect_text", nullable = false, columnDefinition = "text")
     String effect;
 
     @Column(nullable = false, length = 40)
     String basis;
 
-    @Column(name = "citation_ids", nullable = false, length = 110)
+    @Column(name = "citation_ids", nullable = false, columnDefinition = "text")
     String citationIds;
 
     protected PersistedRuleScopeResolution() {}
@@ -631,31 +656,31 @@ class PersistedRuleScopeResolution {
 @Embeddable
 class PersistedRuleConceptComparison {
 
-    @Column(name = "left_concept", nullable = false, length = 120)
+    @Column(name = "left_concept", nullable = false, columnDefinition = "text")
     String leftConcept;
 
-    @Column(name = "left_definition", nullable = false, length = 600)
+    @Column(name = "left_definition", nullable = false, columnDefinition = "text")
     String leftDefinition;
 
-    @Column(name = "right_concept", nullable = false, length = 120)
+    @Column(name = "right_concept", nullable = false, columnDefinition = "text")
     String rightConcept;
 
-    @Column(name = "right_definition", nullable = false, length = 600)
+    @Column(name = "right_definition", nullable = false, columnDefinition = "text")
     String rightDefinition;
 
-    @Column(name = "common_ground", nullable = false, length = 500)
+    @Column(name = "common_ground", nullable = false, columnDefinition = "text")
     String commonGround;
 
-    @Column(name = "key_difference", nullable = false, length = 700)
+    @Column(name = "key_difference", nullable = false, columnDefinition = "text")
     String keyDifference;
 
-    @Column(name = "practical_boundary", nullable = false, length = 600)
+    @Column(name = "practical_boundary", nullable = false, columnDefinition = "text")
     String practicalBoundary;
 
     @Column(nullable = false, length = 40)
     String basis;
 
-    @Column(name = "citation_ids", nullable = false, length = 110)
+    @Column(name = "citation_ids", nullable = false, columnDefinition = "text")
     String citationIds;
 
     protected PersistedRuleConceptComparison() {}
@@ -686,25 +711,25 @@ class PersistedRuleConceptComparison {
 @Embeddable
 class PersistedRuleOption {
 
-    @Column(name = "decision_context", nullable = false, length = 240)
+    @Column(name = "decision_context", nullable = false, columnDefinition = "text")
     String decisionContext;
 
-    @Column(name = "selection_rule", nullable = false, length = 400)
+    @Column(name = "selection_rule", nullable = false, columnDefinition = "text")
     String selectionRule;
 
-    @Column(name = "option_name", nullable = false, length = 160)
+    @Column(name = "option_name", nullable = false, columnDefinition = "text")
     String optionName;
 
-    @Column(name = "availability_condition", nullable = false, length = 500)
+    @Column(name = "availability_condition", nullable = false, columnDefinition = "text")
     String availabilityCondition;
 
-    @Column(name = "result_text", nullable = false, length = 700)
+    @Column(name = "result_text", nullable = false, columnDefinition = "text")
     String result;
 
     @Column(nullable = false, length = 40)
     String basis;
 
-    @Column(name = "citation_ids", nullable = false, length = 110)
+    @Column(name = "citation_ids", nullable = false, columnDefinition = "text")
     String citationIds;
 
     protected PersistedRuleOption() {}
@@ -733,16 +758,16 @@ class PersistedRuleOption {
 @Embeddable
 class PersistedRuleWalkthroughStep {
 
-    @Column(nullable = false, length = 240)
+    @Column(nullable = false, columnDefinition = "text")
     String instruction;
 
-    @Column(nullable = false, length = 500)
+    @Column(nullable = false, columnDefinition = "text")
     String explanation;
 
     @Column(name = "order_basis", nullable = false, length = 40)
     String orderBasis;
 
-    @Column(name = "citation_ids", nullable = false, length = 110)
+    @Column(name = "citation_ids", nullable = false, columnDefinition = "text")
     String citationIds;
 
     protected PersistedRuleWalkthroughStep() {}
@@ -767,16 +792,16 @@ class PersistedRuleWalkthroughStep {
 @Embeddable
 class PersistedRuleSituationCheck {
 
-    @Column(nullable = false, length = 240)
+    @Column(nullable = false, columnDefinition = "text")
     String requirement;
 
     @Column(nullable = false, length = 40)
     String status;
 
-    @Column(name = "player_fact", nullable = false, length = 240)
+    @Column(name = "player_fact", nullable = false, columnDefinition = "text")
     String playerFact;
 
-    @Column(name = "citation_ids", nullable = false, length = 110)
+    @Column(name = "citation_ids", nullable = false, columnDefinition = "text")
     String citationIds;
 
     protected PersistedRuleSituationCheck() {}
@@ -830,7 +855,7 @@ class PersistedRuleCitation {
     @Column(name = "section_type", nullable = false)
     String sectionType;
 
-    @Column(nullable = false, length = 300)
+    @Column(nullable = false, columnDefinition = "text")
     String heading;
 
     @Column(nullable = false, columnDefinition = "text")

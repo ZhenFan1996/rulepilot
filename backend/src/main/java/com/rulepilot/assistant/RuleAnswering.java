@@ -431,106 +431,86 @@ public interface RuleAnswering {
 
     record SituationCheck(String requirement, String status, String playerFact) {
         public SituationCheck {
-            if (requirement == null || requirement.isBlank() || requirement.length() > 240
+            if (requirement == null || requirement.isBlank()
                     || !Set.of("CONFIRMED", "CONTRADICTED", "NOT_PROVIDED").contains(status)
-                    || playerFact == null || playerFact.length() > 240
+                    || playerFact == null
                     || ("NOT_PROVIDED".equals(status) != playerFact.isBlank())) {
                 throw new IllegalArgumentException("public rule situation check is invalid");
             }
-            requirement = requirement.strip();
-            playerFact = playerFact.strip();
         }
     }
 
     record WalkthroughStep(String instruction, String explanation, String orderBasis) {
         public WalkthroughStep {
-            if (instruction == null || instruction.isBlank() || instruction.length() > 240
-                    || explanation == null || explanation.isBlank() || explanation.length() > 500
+            if (instruction == null || instruction.isBlank()
+                    || explanation == null || explanation.isBlank()
                     || !Set.of("RULE_ORDER", "EXPLANATION_ORDER").contains(orderBasis)) {
                 throw new IllegalArgumentException("public rule walkthrough step is invalid");
             }
-            instruction = instruction.strip();
-            explanation = explanation.strip();
         }
     }
 
     record DecisionBranch(String condition, String outcome, String basis) {
         public DecisionBranch {
-            if (condition == null || condition.isBlank() || condition.length() > 300
-                    || outcome == null || outcome.isBlank() || outcome.length() > 500
+            if (condition == null || condition.isBlank()
+                    || outcome == null || outcome.isBlank()
                     || !Set.of("EXPLICIT_RULE", "RULEBOOK_EXAMPLE").contains(basis)) {
                 throw new IllegalArgumentException("public rule decision branch is invalid");
             }
-            condition = condition.strip();
-            outcome = outcome.strip();
         }
     }
 
     record ExceptionClause(String condition, String effect) {
         public ExceptionClause {
-            if (condition == null || condition.isBlank() || condition.length() > 300
-                    || effect == null || effect.isBlank() || effect.length() > 500) {
+            if (condition == null || condition.isBlank()
+                    || effect == null || effect.isBlank()) {
                 throw new IllegalArgumentException("public rule exception clause is invalid");
             }
-            condition = condition.strip();
-            effect = effect.strip();
         }
     }
 
     record TermDefinition(String term, String definition, String boundary) {
         public TermDefinition {
-            if (term == null || term.isBlank() || term.length() > 120
-                    || definition == null || definition.isBlank() || definition.length() > 600
-                    || boundary == null || boundary.length() > 400) {
+            if (term == null || term.isBlank()
+                    || definition == null || definition.isBlank()
+                    || boundary == null) {
                 throw new IllegalArgumentException("public rule term definition is invalid");
             }
-            term = term.strip();
-            definition = definition.strip();
-            boundary = boundary.strip();
         }
     }
 
     record WorkedExample(String setup, String action, String outcome, String basis) {
         public WorkedExample {
-            if (setup == null || setup.isBlank() || setup.length() > 500
-                    || action == null || action.isBlank() || action.length() > 700
-                    || outcome == null || outcome.isBlank() || outcome.length() > 500
+            if (setup == null || setup.isBlank()
+                    || action == null || action.isBlank()
+                    || outcome == null || outcome.isBlank()
                     || !Set.of("RULEBOOK_EXAMPLE", "EVIDENCE_BOUND_ILLUSTRATION").contains(basis)) {
                 throw new IllegalArgumentException("public rule worked example is invalid");
             }
-            setup = setup.strip();
-            action = action.strip();
-            outcome = outcome.strip();
         }
     }
 
     record RulePriorityResolution(String baseRule, String competingRule, String resolution, String basis) {
         public RulePriorityResolution {
-            if (baseRule == null || baseRule.isBlank() || baseRule.length() > 500
-                    || competingRule == null || competingRule.isBlank() || competingRule.length() > 500
-                    || resolution == null || resolution.isBlank() || resolution.length() > 600
+            if (baseRule == null || baseRule.isBlank()
+                    || competingRule == null || competingRule.isBlank()
+                    || resolution == null || resolution.isBlank()
                     || !Set.of("EXPLICIT_OVERRIDE", "IMPOSSIBILITY_PRIORITY", "CONFLICT_ONLY_OVERRIDE")
                             .contains(basis)) {
                 throw new IllegalArgumentException("public rule priority resolution is invalid");
             }
-            baseRule = baseRule.strip();
-            competingRule = competingRule.strip();
-            resolution = resolution.strip();
         }
     }
 
     record RuleTimingResolution(String timingContext, String resolutionOrder, String orderSource, String basis) {
         public RuleTimingResolution {
-            if (timingContext == null || timingContext.isBlank() || timingContext.length() > 500
-                    || resolutionOrder == null || resolutionOrder.isBlank() || resolutionOrder.length() > 700
-                    || orderSource == null || orderSource.isBlank() || orderSource.length() > 400
+            if (timingContext == null || timingContext.isBlank()
+                    || resolutionOrder == null || resolutionOrder.isBlank()
+                    || orderSource == null || orderSource.isBlank()
                     || !Set.of("CURRENT_PLAYER_CHOOSES", "PRINTED_TOP_TO_BOTTOM", "NORMAL_TURN_ORDER")
                             .contains(basis)) {
                 throw new IllegalArgumentException("public rule timing resolution is invalid");
             }
-            timingContext = timingContext.strip();
-            resolutionOrder = resolutionOrder.strip();
-            orderSource = orderSource.strip();
         }
     }
 
@@ -540,18 +520,14 @@ public interface RuleAnswering {
             String finalOutcome,
             String basis) {
         public RuleTieResolution {
-            if (tieContext == null || tieContext.isBlank() || tieContext.length() > 500
-                    || resolutionSteps == null || resolutionSteps.isEmpty() || resolutionSteps.size() > 6
-                    || resolutionSteps.stream().anyMatch(step -> step == null || step.isBlank()
-                            || step.length() > 500 || step.contains("\n") || step.contains("\r"))
-                    || finalOutcome == null || finalOutcome.isBlank() || finalOutcome.length() > 500
+            if (tieContext == null || tieContext.isBlank()
+                    || resolutionSteps == null || resolutionSteps.isEmpty()
+                    || resolutionSteps.stream().anyMatch(step -> step == null || step.isBlank())
+                    || finalOutcome == null || finalOutcome.isBlank()
                     || !Set.of("SINGLE_TIEBREAKER", "ORDERED_TIEBREAKERS", "RANK_REWARD_SHIFT", "POSITIONAL_PRIORITY")
                             .contains(basis)) {
                 throw new IllegalArgumentException("public rule tie resolution is invalid");
             }
-            tieContext = tieContext.strip();
-            resolutionSteps = resolutionSteps.stream().map(String::strip).toList();
-            finalOutcome = finalOutcome.strip();
         }
     }
 
@@ -563,19 +539,15 @@ public interface RuleAnswering {
             String effect,
             String basis) {
         public RuleScopeResolution {
-            if (ruleContext == null || ruleContext.isBlank() || ruleContext.length() > 500
-                    || governingCondition == null || governingCondition.isBlank() || governingCondition.length() > 500
-                    || currentSituation == null || currentSituation.isBlank() || currentSituation.length() > 300
+            if (ruleContext == null || ruleContext.isBlank()
+                    || governingCondition == null || governingCondition.isBlank()
+                    || currentSituation == null || currentSituation.isBlank()
                     || !Set.of("MATCHES_SCOPE", "OUTSIDE_SCOPE", "NEEDS_CONTEXT").contains(matchStatus)
-                    || effect == null || effect.isBlank() || effect.length() > 600
+                    || effect == null || effect.isBlank()
                     || !Set.of("PLAYER_COUNT", "ROLE_PRESENCE", "GAME_MODE", "VARIANT_SELECTION", "PLAYER_COUNT_EXCEPTION")
                             .contains(basis)) {
                 throw new IllegalArgumentException("public rule scope resolution is invalid");
             }
-            ruleContext = ruleContext.strip();
-            governingCondition = governingCondition.strip();
-            currentSituation = currentSituation.strip();
-            effect = effect.strip();
         }
     }
 
@@ -589,24 +561,17 @@ public interface RuleAnswering {
             String practicalBoundary,
             String basis) {
         public RuleConceptComparison {
-            if (leftConcept == null || leftConcept.isBlank() || leftConcept.length() > 120
-                    || leftDefinition == null || leftDefinition.isBlank() || leftDefinition.length() > 600
-                    || rightConcept == null || rightConcept.isBlank() || rightConcept.length() > 120
-                    || rightDefinition == null || rightDefinition.isBlank() || rightDefinition.length() > 600
-                    || commonGround == null || commonGround.isBlank() || commonGround.length() > 500
-                    || keyDifference == null || keyDifference.isBlank() || keyDifference.length() > 700
-                    || practicalBoundary == null || practicalBoundary.isBlank() || practicalBoundary.length() > 600
+            if (leftConcept == null || leftConcept.isBlank()
+                    || leftDefinition == null || leftDefinition.isBlank()
+                    || rightConcept == null || rightConcept.isBlank()
+                    || rightDefinition == null || rightDefinition.isBlank()
+                    || commonGround == null || commonGround.isBlank()
+                    || keyDifference == null || keyDifference.isBlank()
+                    || practicalBoundary == null || practicalBoundary.isBlank()
                     || !Set.of("ACTION_WINDOW", "RESOURCE_FUNCTION", "STORAGE_STATUS", "RULE_SCOPE", "DEFINITION_BOUNDARY")
                             .contains(basis)) {
                 throw new IllegalArgumentException("public rule concept comparison is invalid");
             }
-            leftConcept = leftConcept.strip();
-            leftDefinition = leftDefinition.strip();
-            rightConcept = rightConcept.strip();
-            rightDefinition = rightDefinition.strip();
-            commonGround = commonGround.strip();
-            keyDifference = keyDifference.strip();
-            practicalBoundary = practicalBoundary.strip();
         }
     }
 
@@ -618,21 +583,15 @@ public interface RuleAnswering {
             String result,
             String basis) {
         public RuleOption {
-            if (decisionContext == null || decisionContext.isBlank() || decisionContext.length() > 240
-                    || selectionRule == null || selectionRule.isBlank() || selectionRule.length() > 400
-                    || optionName == null || optionName.isBlank() || optionName.length() > 160
+            if (decisionContext == null || decisionContext.isBlank()
+                    || selectionRule == null || selectionRule.isBlank()
+                    || optionName == null || optionName.isBlank()
                     || availabilityCondition == null || availabilityCondition.isBlank()
-                    || availabilityCondition.length() > 500
-                    || result == null || result.isBlank() || result.length() > 700
+                    || result == null || result.isBlank()
                     || !Set.of("SOURCE_SELECTION", "TIMING_CATALOG", "ALTERNATIVE_ACTION", "EXCLUSIVE_CHOICE")
                             .contains(basis)) {
                 throw new IllegalArgumentException("public rule option is invalid");
             }
-            decisionContext = decisionContext.strip();
-            selectionRule = selectionRule.strip();
-            optionName = optionName.strip();
-            availabilityCondition = availabilityCondition.strip();
-            result = result.strip();
         }
     }
 }

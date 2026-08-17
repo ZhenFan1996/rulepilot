@@ -10,7 +10,6 @@ import java.time.Instant;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Locale;
 import java.util.Set;
 import java.util.UUID;
 import org.springframework.stereotype.Component;
@@ -19,8 +18,6 @@ import org.springframework.stereotype.Component;
 public class TeachingPlanFactory {
 
     private static final int MAX_TOPICS = 16;
-    private static final Set<String> SUPPLIED_COVERAGE_CLAIMS = Set.of(
-            "setup", "core_loop", "legal_action", "end", "scoring", "necessary_exception", "source_coverage");
 
     public TeachingPlan create(
             UUID documentVersionId,
@@ -90,17 +87,6 @@ public class TeachingPlanFactory {
             boolean ownsSourceSlots = outline.sourceCoverageSlots().stream()
                     .anyMatch(slot -> slot.ownerTopicKey().equals(topic.key()));
             if (!ownsSourceSlots) normalizedQueries(topic.retrievalQueries());
-            List<String> tags = normalizedTags(topic.coverageTags());
-            boolean missingSourceMarker = tags.stream()
-                    .anyMatch(tag -> tag.startsWith("missing_") && tag.endsWith("_source"));
-            if (missingSourceMarker && !tags.contains("source_dependency")) {
-                throw new IllegalArgumentException(
-                        "a missing source marker requires a source dependency topic");
-            }
-            if (tags.contains("source_dependency") && SUPPLIED_COVERAGE_CLAIMS.stream().anyMatch(tags::contains)) {
-                throw new IllegalArgumentException(
-                        "a source dependency cannot claim the unavailable procedure as covered");
-            }
         }
     }
 
@@ -116,16 +102,12 @@ public class TeachingPlanFactory {
     }
 
     private String normalizedKey(String value, int position) {
-        String key = value == null ? "" : value.toLowerCase(Locale.ROOT)
-                .replaceAll("[^a-z0-9]+", "-")
-                .replaceAll("(^-|-$)", "");
-        return key.isBlank() ? "topic-" + position : key.substring(0, Math.min(key.length(), 80));
+        return value == null || value.isBlank() ? "topic-" + position : value;
     }
 
     private List<String> normalizedTags(List<String> values) {
         return values == null ? List.of() : values.stream()
                 .filter(value -> value != null && !value.isBlank())
-                .map(value -> canonicalTag(value.toLowerCase(Locale.ROOT).replace('-', '_').strip()))
                 .distinct()
                 .toList();
     }
@@ -177,20 +159,7 @@ public class TeachingPlanFactory {
         }
         return values.stream()
                 .filter(value -> value != null && !value.isBlank())
-                .map(String::strip)
-                .filter(value -> value.length() <= 300)
                 .distinct()
-                .limit(8)
                 .toList();
-    }
-
-    private String canonicalTag(String tag) {
-        return switch (tag) {
-            case "game_setup", "table_setup" -> "setup";
-            case "turn", "turns", "turn_structure", "round_structure", "gameplay", "actions" -> "core_loop";
-            case "game_end", "end_game", "end_conditions", "ending" -> "end";
-            case "final_scoring", "score", "scores" -> "scoring";
-            default -> tag;
-        };
     }
 }

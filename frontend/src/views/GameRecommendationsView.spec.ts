@@ -169,6 +169,19 @@ describe('GameRecommendationsView', () => {
     expect(fetchMock.mock.calls.some(([input]) => String(input).includes('page=1') && String(input).includes('enrich=false'))).toBe(true)
   })
 
+  it('lets the catalog decide whether a one-character title query is meaningful', async () => {
+    const fetchMock = vi.fn(async (_input: string | URL | Request) => Response.json(catalog))
+    vi.stubGlobal('fetch', fetchMock)
+    const wrapper = await mountView()
+    await flushPromises()
+
+    await wrapper.get('input[type="search"]').setValue('翼')
+    await wrapper.get('form[role="search"]').trigger('submit')
+    await flushPromises()
+
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes('q=%E7%BF%BC'))).toBe(true)
+  })
+
   it('reuses an in-flight next-page prefetch and keeps enrichment for every visible page', async () => {
     let resolvePageOne!: (response: Response) => void
     const pageOneResponse = new Promise<Response>(resolve => { resolvePageOne = resolve })

@@ -29,13 +29,24 @@ class RulebookUnderstandingBuilderTest {
     }
 
     @Test
-    void derivesOriginalLanguageTermCandidatesWithoutTranslatingThem() {
+    void usesSourceHeadingsAsTermsWithoutGuessingTermsFromBodyCapitalization() {
         var understanding = builder.build(List.of(new ExtractedPage(2, "", List.of(
                 new ExtractedTextBlock(0, "FIRST ROUND", 80, 100, 300, 40),
                 new ExtractedTextBlock(1, "The Scout moves after a PLAYER action.", 80, 180, 600, 50)))));
 
         assertThat(understanding.terminology()).extracting(term -> term.term())
-                .contains("FIRST ROUND", "The Scout", "PLAYER");
+                .containsExactly("FIRST ROUND");
+    }
+
+    @Test
+    void retainsAHeadingUpToThePersistedTerminologyColumnWidth() {
+        String heading = "CONFIGURATION ".repeat(8).strip();
+
+        var understanding = builder.build(List.of(new ExtractedPage(2, "", List.of(
+                new ExtractedTextBlock(0, heading, 80, 100, 800, 40)))));
+
+        assertThat(heading.length()).isBetween(101, 120);
+        assertThat(understanding.terminology()).extracting(term -> term.term()).contains(heading.strip());
     }
 
     @Test

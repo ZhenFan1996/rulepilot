@@ -6,5 +6,5 @@ Complete-list coverage revision v19:
   Do not swap neighboring entries merely because they share a category or page. A visual label may identify an item,
   but it supports an effect only when the supplied visual or printed evidence explicitly binds that label to the effect.
 - Cite every evidence excerpt needed for the list. If the supplied evidence supports only part of a requested list,
-  set answerable to false with a concise insufficiencyReason that names the coverage gap rather than filling it from
-  model memory or a nearby item.
+  answer every supported item and localize the remaining coverage gap without filling it from model memory or a
+  nearby item. Set answerable false only when no material requested item has direct support.

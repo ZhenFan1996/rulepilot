@@ -110,7 +110,11 @@ final class RecommendationEvidenceReview {
                     state.profile,
                     request);
             for (JsonNode update : updates) {
-                preferenceClassification(update, request);
+                try {
+                    preferenceClassification(update, request);
+                } catch (InvalidAction invalid) {
+                    if (!unsupportedContextualInference(update, invalid)) throw invalid;
+                }
             }
         }
         boolean updated = false;
@@ -138,6 +142,10 @@ final class RecommendationEvidenceReview {
                 }
             } catch (InvalidAction invalid) {
                 if ("PREFERENCE_IS_CONTEXTUAL".equals(invalid.code)) continue;
+                if (strictStructure && unsupportedContextualInference(update, invalid)) {
+                    state.actions.add("IGNORED_UNSUPPORTED_CONTEXTUAL_PREFERENCE");
+                    continue;
+                }
                 if (strictStructure) {
                     throw invalid;
                 }
@@ -153,6 +161,11 @@ final class RecommendationEvidenceReview {
         }
         if (redundant) state.actions.add("IGNORED_REDUNDANT_PREFERENCE_UPDATE");
         return String.join(",", warnings);
+    }
+
+    private boolean unsupportedContextualInference(JsonNode update, InvalidAction invalid) {
+        return "PREFERENCE_EVIDENCE_CLASSIFICATION_INVALID".equals(invalid.code)
+                && "CONTEXTUAL_COMPLETE_GROUP".equals(update.path("evidenceClassification").asText());
     }
 
     private ArrayNode preferencePayloads(JsonNode updates) {

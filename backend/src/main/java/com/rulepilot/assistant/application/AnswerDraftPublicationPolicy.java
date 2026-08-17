@@ -11,10 +11,6 @@ final class AnswerDraftPublicationPolicy {
 
     private AnswerDraftPublicationPolicy() {}
 
-    static ModelDraft removePeripheralEndgameCitations(ModelRequest request, ModelDraft draft) {
-        return draft;
-    }
-
     static Preparation prepare(ModelRequest request, ModelDraft draft) {
         ModelDraft prepared = AnswerStructuredDraftPolicy.retainSelected(request, draft).draft();
         var playerFacingFailure = AnswerRepairOutcomePolicy.publicationFailure(request, prepared);
@@ -31,14 +27,6 @@ final class AnswerDraftPublicationPolicy {
 
         static Preparation ready(ModelDraft draft) {
             return new Preparation(draft, List.of(), null, null);
-        }
-
-        static Preparation readyWithWarning(ModelDraft draft, AnswerWarning warning) {
-            return new Preparation(draft, List.of(warning), null, null);
-        }
-
-        static Preparation rejected(String failureMessage) {
-            return new Preparation(null, List.of(), AnswerStatus.INVALID_MODEL_OUTPUT, failureMessage);
         }
 
         boolean ready() {

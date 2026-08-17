@@ -12,16 +12,11 @@ import java.util.List;
 /** Validates the schema and evidence scope of the model-selected tie-resolution aid. */
 final class AnswerTieResolver {
 
-    private static final int MAX_RESOLUTIONS = 3;
-    private static final int MAX_STEPS = 6;
-
     List<RuleTieResolution> resolve(ModelRequest request, ModelDraft draft) {
         if (request == null || draft == null) throw new IllegalArgumentException("tie input is invalid");
         List<RuleTieRequest> proposed = draft.tieResolutions();
         AnswerStructuredAidPolicy.validateSelection(request, AnswerAid.TIE, proposed.isEmpty(), "tie resolutions");
         if (proposed.isEmpty()) return List.of();
-        if (proposed.size() > MAX_RESOLUTIONS) throw new IllegalArgumentException("too many tie resolutions");
-
         LinkedHashSet<String> contexts = new LinkedHashSet<>();
         return proposed.stream()
                 .map(item -> resolveOne(request, draft, item))
@@ -38,17 +33,11 @@ final class AnswerTieResolver {
     }
 
     private RuleTieResolution resolveOne(ModelRequest modelRequest, ModelDraft draft, RuleTieRequest item) {
-        if (item == null || item.resolutionSteps() == null || item.resolutionSteps().isEmpty()
-                || item.resolutionSteps().size() > MAX_STEPS) {
+        if (item == null || item.resolutionSteps() == null || item.resolutionSteps().isEmpty()) {
             throw new IllegalArgumentException("tie steps are invalid");
         }
         List<String> steps = item.resolutionSteps().stream()
-                .map(step -> AnswerStructuredAidPolicy.requiredText(step, 500, "tie step"))
-                .peek(step -> {
-                    if (step.contains("\n") || step.contains("\r")) {
-                        throw new IllegalArgumentException("tie step must be a single ordered item");
-                    }
-                })
+                .map(step -> AnswerStructuredAidPolicy.requiredText(step, "tie step"))
                 .toList();
         TieResolutionBasis basis = AnswerStructuredAidPolicy.enumValue(
                 item.basis(), TieResolutionBasis.class, "tie basis");
@@ -56,9 +45,9 @@ final class AnswerTieResolver {
             throw new IllegalArgumentException("ordered tie-breakers require at least two steps");
         }
         return new RuleTieResolution(
-                AnswerStructuredAidPolicy.requiredText(item.tieContext(), 500, "tie context"),
+                AnswerStructuredAidPolicy.requiredText(item.tieContext(), "tie context"),
                 steps,
-                AnswerStructuredAidPolicy.requiredText(item.finalOutcome(), 500, "tie final outcome"),
+                AnswerStructuredAidPolicy.requiredText(item.finalOutcome(), "tie final outcome"),
                 basis,
                 AnswerStructuredAidPolicy.citations(
                         modelRequest, draft, item.citationIds(), "tie resolution"));

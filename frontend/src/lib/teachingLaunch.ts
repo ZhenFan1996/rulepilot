@@ -26,6 +26,6 @@ export function teachingLaunchDetail(event: Event): TeachingLaunchDetail | null 
   }
 }
 
-function bounded(value: unknown, maxLength: number): value is string {
-  return typeof value === 'string' && value.length > 0 && value.length <= maxLength
+function bounded(value: unknown, _maxLength: number): value is string {
+  return typeof value === 'string' && value.trim().length > 0
 }

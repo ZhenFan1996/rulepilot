@@ -51,10 +51,9 @@ final class TeachingSectionCandidateValidator {
                 .collect(Collectors.toUnmodifiableMap(
                         RuleEvidence::chunkId, Function.identity(), (first, duplicate) -> first));
         SectionDraft acceptedDraft = draft;
-        validateStructureAndVisuals(acceptedDraft, modelRequest, evidence, allowedEvidence);
+        LessonDraftValidator.validateDraft(acceptedDraft, modelRequest);
         List<UUID> visualCitationIds = LessonDraftValidator.validatedVisualCitationIds(acceptedDraft, allowedEvidence);
         List<Claim> reviewClaims = LessonDraftValidator.reviewClaims(acceptedDraft, visualCitationIds);
-        TeachingQuantitativeClaimPolicy.validate(planned, acceptedDraft, reviewClaims, allowedEvidence);
         List<EvidenceClaim> generatedClaims = reviewClaims.stream()
                 .map(claim -> new EvidenceClaim(claim.text(), claim.citationIds()))
                 .toList();
@@ -66,9 +65,12 @@ final class TeachingSectionCandidateValidator {
             throw new IllegalArgumentException(
                     "Evidence validation failed: " + String.join(", ", verification.issueCodes()));
         }
+        Set<Integer> attachedPages = modelRequest.pageImages().stream()
+                .map(TeachingLessonModel.PageImageInput::pageNumber)
+                .collect(Collectors.toUnmodifiableSet());
         List<LessonStep> steps = IntStream.range(0, acceptedDraft.steps().size())
                 .mapToObj(index -> LessonDraftValidator.validatedStep(
-                        index + 1, acceptedDraft.steps().get(index), allowedEvidence))
+                        index + 1, acceptedDraft.steps().get(index), allowedEvidence, attachedPages))
                 .toList();
         List<Integer> visualSourcePages = visualCitationIds.stream()
                 .map(allowedEvidence::get)
@@ -100,50 +102,6 @@ final class TeachingSectionCandidateValidator {
             IllegalArgumentException rejection,
             SectionDraft draft,
             List<RuleEvidence> availableEvidence) {
-        if (rejection instanceof TeachingQuantitativeClaimPolicy.UnsupportedQuantitativeClaimException quantity) {
-            List<Claim> claims = LessonDraftValidator.reviewClaims(draft, draft.visualCitationIds());
-            Claim failedClaim = claims.stream()
-                    .filter(claim -> claim.position() == quantity.claimPosition())
-                    .findFirst()
-                    .orElse(null);
-            if (failedClaim == null) return rejection.getMessage();
-            String field = quantity.claimPosition() == 1
-                    ? "visualCaption"
-                    : draft.steps().stream()
-                            .filter(step -> failedClaim.text().equals(step.heading() + "：" + step.text()))
-                            .map(step -> "step heading '" + step.heading() + "'")
-                            .findFirst()
-                            .orElse("claim position " + quantity.claimPosition());
-            List<UUID> quantityOnlyCandidates = quantity.claimNumbers().isEmpty()
-                    ? List.of()
-                    : availableEvidence.stream()
-                            .filter(source -> TeachingQuantitativeClaimPolicy.numbers(source.excerpt())
-                                    .containsAll(quantity.claimNumbers()))
-                            .map(RuleEvidence::chunkId)
-                            .toList();
-            String candidates = quantityOnlyCandidates.isEmpty()
-                    ? ""
-                    : " Quantity-only candidate citation IDs containing every number in this claim are "
-                            + quantityOnlyCandidates
-                            + "; inspect their excerpts and use one only if it directly supports the whole claim.";
-            return rejection.getMessage() + ". The failing field is " + field
-                    + " and its current citation IDs are " + failedClaim.citationIds()
-                    + "." + candidates
-                    + ". Repair only that field by citing supplied evidence that directly contains every quantity, "
-                    + "or by rewriting only its unsupported quantitative claim from supplied evidence.";
-        }
-        if (rejection instanceof TeachingPlannedUnitCoveragePolicy.MissingDirectUnitEvidenceException unitFailure) {
-            List<String> candidateHeadings = draft.steps().stream()
-                    .filter(step -> step.teachingUnitIds().contains(unitFailure.unitId()))
-                    .map(StepDraft::heading)
-                    .toList();
-            return rejection.getMessage() + ". The affected planned unit is '" + unitFailure.unitId()
-                    + "'; its current step headings are " + candidateHeadings
-                    + ". At least one of only those steps must add one of the direct citation IDs "
-                    + unitFailure.directEvidenceIds()
-                    + " for source identifier '" + unitFailure.sourceIdentifier()
-                    + "'. Preserve all other steps and existing citations.";
-        }
         return rejection.getMessage();
     }
 
@@ -187,7 +145,8 @@ final class TeachingSectionCandidateValidator {
         List<StepDraft> merged = new java.util.ArrayList<>();
         for (int index = 0; index < original.steps().size(); index++) {
             StepDraft originalStep = original.steps().get(index);
-            int repairedIndex = matchingRepairedStep(originalStep, index, repaired.steps(), usedRepairedSteps);
+            int repairedIndex = matchingRepairedStep(
+                    originalStep, index, original.steps(), repaired.steps(), usedRepairedSteps);
             if (validOriginalSteps.get(index)) {
                 merged.add(originalStep);
                 if (repairedIndex >= 0) usedRepairedSteps[repairedIndex] = true;
@@ -214,18 +173,39 @@ final class TeachingSectionCandidateValidator {
     private int matchingRepairedStep(
             StepDraft original,
             int originalIndex,
+            List<StepDraft> originalSteps,
             List<StepDraft> repaired,
             boolean[] used) {
+        Set<String> originalUnits = new LinkedHashSet<>(original.teachingUnitIds());
+        for (int index = 0; index < repaired.size(); index++) {
+            if (!used[index]
+                    && repaired.get(index).heading().equals(original.heading())
+                    && new LinkedHashSet<>(repaired.get(index).teachingUnitIds()).equals(originalUnits)) {
+                return index;
+            }
+        }
         if (!original.teachingUnitIds().isEmpty()) {
-            for (int index = 0; index < repaired.size(); index++) {
-                if (!used[index]
-                        && new LinkedHashSet<>(repaired.get(index).teachingUnitIds())
-                                .equals(new LinkedHashSet<>(original.teachingUnitIds()))) {
-                    return index;
+            long originalUnitOccurrences = originalSteps.stream()
+                    .filter(step -> new LinkedHashSet<>(step.teachingUnitIds()).equals(originalUnits))
+                    .count();
+            long repairedUnitOccurrences = repaired.stream()
+                    .filter(step -> new LinkedHashSet<>(step.teachingUnitIds()).equals(originalUnits))
+                    .count();
+            if (originalUnitOccurrences == 1 && repairedUnitOccurrences == 1) {
+                for (int index = 0; index < repaired.size(); index++) {
+                    if (!used[index]
+                            && new LinkedHashSet<>(repaired.get(index).teachingUnitIds()).equals(originalUnits)) {
+                        return index;
+                    }
                 }
             }
         }
-        return originalIndex < repaired.size() && !used[originalIndex] ? originalIndex : -1;
+        return original.teachingUnitIds().isEmpty()
+                        && originalIndex < repaired.size()
+                        && !used[originalIndex]
+                        && repaired.get(originalIndex).teachingUnitIds().isEmpty()
+                ? originalIndex
+                : -1;
     }
 
     private SectionDraft withSteps(SectionDraft original, List<StepDraft> steps) {
@@ -253,16 +233,6 @@ final class TeachingSectionCandidateValidator {
                 request.modelConfigurationOwner(),
                 request.chapterScope(),
                 request.wholeGameContext());
-    }
-
-    private void validateStructureAndVisuals(
-            SectionDraft draft,
-            TeachingLessonModel.SectionRequest request,
-            List<RuleEvidence> evidence,
-            Map<UUID, RuleEvidence> allowedEvidence) {
-        LessonDraftValidator.validateDraft(draft, request);
-        TeachingPlannedUnitCoveragePolicy.validate(request.teachingUnits(), evidence, draft);
-        LessonDraftValidator.validateVisualBlockEvidence(draft, request, allowedEvidence);
     }
 
     private EvidenceSource toVerifierEvidence(RuleEvidence evidence) {

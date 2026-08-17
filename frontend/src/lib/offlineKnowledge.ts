@@ -48,8 +48,8 @@ function storageKey(planId: string) {
   return /^[a-zA-Z0-9-]{1,80}$/.test(planId) ? `rulepilot:offline-knowledge:${planId}` : ''
 }
 
-function isString(value: unknown, max: number): value is string {
-  return typeof value === 'string' && value.length > 0 && value.length <= max
+function isString(value: unknown, _max: number): value is string {
+  return typeof value === 'string' && value.length > 0
 }
 
 function isCitation(value: unknown): value is OfflineCitation {
@@ -71,10 +71,8 @@ function isAnswer(value: unknown): value is OfflineAnswer {
     && isString(answer.explanation, 20_000)
     && Array.isArray(answer.citations)
     && answer.citations.length > 0
-    && answer.citations.length <= 20
     && answer.citations.every(isCitation)
     && Array.isArray(answer.exceptions)
-    && answer.exceptions.length <= 20
     && answer.exceptions.every((item) => isString(item, 2_000))
     && ['HIGH', 'MEDIUM', 'LOW'].includes(String(answer.confidence))
     && (answer.language === undefined || answer.language === 'zh-CN' || answer.language === 'en')
@@ -91,10 +89,8 @@ function isRuling(value: unknown): value is OfflineRuling {
     && isString(ruling.explanation, 20_000)
     && Array.isArray(ruling.citations)
     && ruling.citations.length > 0
-    && ruling.citations.length <= 20
     && ruling.citations.every(isRulingCitation)
     && Array.isArray(ruling.exceptions)
-    && ruling.exceptions.length <= 20
     && ruling.exceptions.every((item) => isString(item, 2_000))
     && ['HIGH', 'MEDIUM', 'LOW'].includes(String(ruling.confidence))
     && ruling.status === 'CONFIRMED'
@@ -107,7 +103,6 @@ function isRulingCitation(value: unknown): value is OfflineRulingCitation {
   const citation = value as unknown as Record<string, unknown>
   return isString(citation.chunkId, 80)
     && typeof citation.sectionType === 'string'
-    && citation.sectionType.length <= 80
 }
 
 function isEntry(value: unknown): value is OfflineKnowledgeEntry {

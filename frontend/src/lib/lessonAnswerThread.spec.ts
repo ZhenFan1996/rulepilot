@@ -53,7 +53,7 @@ describe('lessonAnswerThread', () => {
     ])
   })
 
-  it('keeps a bounded recent thread and rejects malformed browser data', () => {
+  it('keeps the complete valid thread and rejects malformed browser data', () => {
     rememberLessonAnswerThread(
       sessionStorage,
       alice,
@@ -61,7 +61,7 @@ describe('lessonAnswerThread', () => {
     )
 
     expect(readLessonAnswerThread(sessionStorage, alice).map(item => item.question))
-      .toEqual(Array.from({ length: 12 }, (_, index) => `问题 ${index + 4}`))
+      .toEqual(Array.from({ length: 15 }, (_, index) => `问题 ${index + 1}`))
 
     const key = sessionStorage.key(0)!
     sessionStorage.setItem(key, JSON.stringify([{ question: '<script>', answer: { status: 'ANSWERED' } }]))
@@ -137,7 +137,12 @@ describe('lessonAnswerThread', () => {
       ...checked,
       answer: { ...checked.answer, situationChecks: [{ requirement: '窗口开放', status: 'NOT_PROVIDED', playerFact: '我猜它开放' }] },
     }]))
-    expect(readLessonAnswerThread(sessionStorage, scope)).toEqual([])
+    expect(readLessonAnswerThread(sessionStorage, scope)).toEqual([
+      expect.objectContaining({
+        question: checked.question,
+        answer: expect.objectContaining({ situationChecks: [] }),
+      }),
+    ])
   })
 
   it('round-trips bounded walkthrough steps with explicit ordering provenance', () => {

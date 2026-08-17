@@ -2,6 +2,7 @@ package com.rulepilot.document.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -18,6 +19,32 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mockito;
 
 class DocumentProcessingServiceTest {
+
+    @Test
+    void countsPagesWithoutHydratingTheirTextBodies() {
+        RuleDocumentRepository repository = Mockito.mock(RuleDocumentRepository.class);
+        DocumentStorage storage = Mockito.mock(DocumentStorage.class);
+        DocumentProcessingService service = new DocumentProcessingService(repository, storage);
+        UUID versionId = UUID.randomUUID();
+        DocumentVersion readyVersion = new DocumentVersion(
+                versionId,
+                UUID.randomUUID(),
+                1,
+                "rules.pdf",
+                "documents/rules.pdf",
+                "a".repeat(64),
+                42,
+                "application/pdf",
+                ProcessingStatus.CHUNKING,
+                Instant.parse("2026-08-12T00:00:00Z"));
+        when(repository.findVersion(versionId)).thenReturn(Optional.of(readyVersion));
+        when(repository.countPages(versionId)).thenReturn(500);
+
+        assertThat(service.pageCount(versionId)).isEqualTo(500);
+
+        verify(repository).countPages(versionId);
+        verify(repository, never()).findPages(versionId);
+    }
 
     @Test
     void keepsEachObjectStorePageImageReadBounded() {

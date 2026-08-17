@@ -14,9 +14,11 @@ import java.util.Arrays;
 import java.util.Comparator;
 import java.util.EnumMap;
 import java.util.HashSet;
+import java.util.IllformedLocaleException;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.MissingResourceException;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -49,7 +51,6 @@ public class OfficialRulebookDiscoveryService {
             "^/file/download_redirect/[a-fA-F0-9]{48}/[^/]{1,512}$");
     private static final int MAX_SOURCE_INSPECTIONS = 4;
     private static final int MAX_RESOLVED_DOWNLOADS = 4;
-    private static final int MIN_SOURCE_LINK_SCORE = 3;
     private static final Set<String> RULE_TERMS = Set.of(
             "rules", "rulebook", "manual", "instructions", "regles", "regeln", "spielanleitung",
             "regolamento", "reglas", "pravila", "规则", "規則", "说明书", "說明書");
@@ -312,8 +313,8 @@ public class OfficialRulebookDiscoveryService {
             }
             if (page.provenance().sourceType() == SourceType.PUBLIC_WEB || page.depth() >= 1) continue;
             inspection.links().stream()
+                    .filter(link -> !isExplicitNonRuleDocument(link))
                     .map(link -> new ScoredLink(link, linkScore(link, request)))
-                    .filter(link -> link.score() >= MIN_SOURCE_LINK_SCORE)
                     .sorted(Comparator.comparingInt(ScoredLink::score).reversed()
                             .thenComparing(link -> link.link().target().toASCIIString()))
                     .limit(4)
@@ -477,13 +478,21 @@ public class OfficialRulebookDiscoveryService {
                 (target.getPath() == null ? "" : target.getPath()) + " "
                         + (target.getQuery() == null ? "" : target.getQuery()) + " "
                         + link.label());
-        if (NON_RULE_DOCUMENT_TERMS.stream().anyMatch(pathAndLabel::contains)) return -20;
         int score = looksLikeDirectPdf(target) ? 6 : 0;
         if (RULE_TERMS.stream().anyMatch(pathAndLabel::contains)) score += 5;
         if (DOWNLOAD_TERMS.stream().anyMatch(pathAndLabel::contains)) score += 3;
         if (DOCUMENT_TERMS.stream().anyMatch(term -> containsWord(pathAndLabel, term))) score += 2;
         if (titleTokens(request).stream().anyMatch(pathAndLabel::contains)) score += 4;
         return score;
+    }
+
+    private boolean isExplicitNonRuleDocument(OfficialRulebookSourceInspector.Link link) {
+        URI target = link.target();
+        String pathAndLabel = normalizedWords(
+                (target.getPath() == null ? "" : target.getPath()) + " "
+                        + (target.getQuery() == null ? "" : target.getQuery()) + " "
+                        + link.label());
+        return NON_RULE_DOCUMENT_TERMS.stream().anyMatch(pathAndLabel::contains);
     }
 
     private boolean containsWord(String words, String term) {
@@ -594,9 +603,15 @@ public class OfficialRulebookDiscoveryService {
         if (Set.of("dutch", "nederlands", "荷兰文").contains(words)) return "nl";
         if (Set.of("portuguese", "portugues", "葡萄牙文").contains(words)) return "pt";
         String tag = checked.replace('_', '-');
-        if (!tag.matches("(?i)[a-z]{2,3}(?:-[a-z]{4})?(?:-(?:[a-z]{2}|[0-9]{3}))?")) return "";
-        String canonical = Locale.forLanguageTag(tag).toLanguageTag();
-        return canonical.equalsIgnoreCase("und") ? "" : canonical;
+        try {
+            Locale parsed = new Locale.Builder().setLanguageTag(tag).build();
+            String canonical = parsed.toLanguageTag();
+            if (canonical.equalsIgnoreCase("und")) return "";
+            parsed.getISO3Language();
+            return canonical;
+        } catch (IllformedLocaleException | MissingResourceException invalid) {
+            return "";
+        }
     }
 
     private boolean looksLikeDirectPdf(URI uri) {

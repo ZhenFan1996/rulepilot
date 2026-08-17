@@ -20,6 +20,7 @@ import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IdentifierCellInput
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IdentifierCellVerificationRequest;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IdentifierReferencePage;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageTranscript;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.SourceDependency;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.TeachingPageRole;
 import com.rulepilot.teaching.VisualQuantityObservation.QuantityResolution;
@@ -33,6 +34,7 @@ import javax.imageio.ImageIO;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
@@ -44,8 +46,8 @@ import org.springframework.core.io.ClassPathResource;
 class SpringAiVisualRulebookPageCatalogModelTest {
 
     @Test
-    void teachingStartupPromptKeepsEvidenceAtomicAndDefersVisualEnrichment() throws IOException {
-        String prompt = new ClassPathResource("prompts/visual-page-teaching-catalog-v5-discriminated-quantities-system.txt")
+    void teachingStartupPromptKeepsLiteralQuantityEvidenceAtomicAndDefersVisualEnrichment() throws IOException {
+        String prompt = new ClassPathResource("prompts/visual-page-teaching-catalog-v6-literal-quantity-spans-system.txt")
                 .getContentAsString(StandardCharsets.UTF_8)
                 .replaceAll("\\s+", " ");
 
@@ -58,28 +60,38 @@ class SpringAiVisualRulebookPageCatalogModelTest {
                 "repetition count, multiplier",
                 "same-scope worked example",
                 "Never flatten a repeated calculation into one local subtotal",
-                "quantityObservations",
-                "ruleGroupIndex",
-                "variantAxis",
-                "variantCount",
-                "perVariantQuantity",
-                "originalSpan",
-                "REQUIRES_PAGE_INSPECTION",
-                "PER_VARIANT_EXACT",
-                "TOTAL_EXACT",
-                "never combine their fields",
-                "Do not return a product field",
-                "state the visible non-gameplay role",
+                "quantitySpans",
+                "do not return a separate quantityObservations array",
+                "quantity contract is copy-only",
+                "Do not classify a value as total, per-player, per-variant, range, threshold, or formula",
+                "Player-count, age, duration, publisher, and award badges are page metadata",
+                "A cross-reference to another numbered page in this same rulebook",
+                "is never a source dependency",
+                "return enough quantitySpans in that same ruleGroups object",
+                "Written counts are quantities too",
+                "scan each ruleGroups object",
+                "reread ambiguous digits from the image",
+                "stated comparison or threshold relationship are mutually coherent",
+                "keep the visible role in printedTerms",
                 "ruleGroups",
-                "identifier and fact",
+                "identifier, fact, and quantitySpans",
                 "The fact does not need to repeat or prefix itself with identifier",
+                "Use quantitySpans only for a visible number",
                 "ruleGroupInventoryComplete",
-                "must fit within 4,000 Unicode characters",
                 "every distinct readable gameplay group",
+                "Inventory each distinct labelled block, list row, table row, and worked example",
+                "never replace them with a heading-only overview",
                 "Do not inventory icons, propose rectangles or coordinates",
                 "Those belong to later enrichment")
                 .doesNotContain(
-                        "For every ruleGroupIdentifiers item", "quantifierScope", "resolution", "derivedTotal");
+                        "For every ruleGroupIdentifiers item",
+                        "quantifierScope",
+                        "resolution",
+                        "ruleGroupIndex",
+                        "originalSpan",
+                        "derivedTotal",
+                        "PER_VARIANT_EXACT",
+                        "TOTAL_EXACT");
     }
 
     @Test
@@ -92,7 +104,9 @@ class SpringAiVisualRulebookPageCatalogModelTest {
                   {"identifier":"地板线","fact":"回合结束时，地板线中的瓷砖按其位置扣分。"},
                   {"identifier":"如果刚放置的瓷砖的水平或垂直方向都没有直接相连的瓷砖",
                    "fact":"该瓷砖单独计 1 分。"}],
-                "ruleGroupInventoryComplete":true,"quantityObservations":[]}]}
+                "ruleGroupInventoryComplete":true,
+                "quantityObservations":[{"kind":"TOTAL_EXACT","pageNumber":4,"ruleGroupIndex":1,
+                  "total":1,"originalSpan":"score 1 point"}]}]}
                 """);
 
         assertThat(draft.pages()).singleElement().satisfies(page -> {
@@ -210,6 +224,121 @@ class SpringAiVisualRulebookPageCatalogModelTest {
             assertThat(observation.derivedTotal()).isEqualTo(4);
             assertThat(observation.resolution()).isEqualTo(QuantityResolution.EXACT);
         });
+    }
+
+    @Test
+    void discriminatedQuantityParserExtractsProvidedObservationsWithoutLexicalContentPolicing() {
+        var partial = SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalogV5("""
+                {"pages":[{"pageNumber":16,"printedTerms":["RESULT"],"factualSummary":[],
+                "keywords":["RESULT"],"sourceDependencies":[],
+                "ruleGroups":[{"identifier":"RESULT",
+                  "fact":"完成四个目标为普通成功，五个为出色，六个为卓越，七个为惊艳。"}],
+                "ruleGroupInventoryComplete":true,
+                "quantityObservations":[
+                  {"kind":"TOTAL_EXACT","pageNumber":16,"ruleGroupIndex":0,
+                   "total":4,"originalSpan":"4 Fair success"},
+                  {"kind":"TOTAL_EXACT","pageNumber":16,"ruleGroupIndex":0,
+                   "total":5,"originalSpan":"5 Impressive success"}]}]}
+                """);
+        assertThat(partial.pages().getFirst().quantityObservations()).hasSize(2);
+
+        var accepted = SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalogV5("""
+                {"pages":[{"pageNumber":16,"printedTerms":["RESULT"],"factualSummary":[],
+                "keywords":["RESULT"],"sourceDependencies":[],
+                "ruleGroups":[{"identifier":"RESULT",
+                  "fact":"三个或更少为失败，四个为普通成功，五个为出色，六个为卓越，七个为惊艳。"}],
+                "ruleGroupInventoryComplete":true,
+                "quantityObservations":[
+                  {"kind":"TOTAL_EXACT","pageNumber":16,"ruleGroupIndex":0,
+                   "total":3,"originalSpan":"3 or fewer Failure"},
+                  {"kind":"TOTAL_EXACT","pageNumber":16,"ruleGroupIndex":0,
+                   "total":4,"originalSpan":"4 Fair success"},
+                  {"kind":"TOTAL_EXACT","pageNumber":16,"ruleGroupIndex":0,
+                   "total":5,"originalSpan":"5 Impressive success"},
+                  {"kind":"TOTAL_EXACT","pageNumber":16,"ruleGroupIndex":0,
+                   "total":6,"originalSpan":"6 Tremendous success"},
+                  {"kind":"TOTAL_EXACT","pageNumber":16,"ruleGroupIndex":0,
+                   "total":7,"originalSpan":"7 Stunning success"}]}]}
+                """);
+
+        assertThat(accepted.pages().getFirst().quantityObservations()).hasSize(5);
+    }
+
+    @Test
+    void nonQuantitativeRuleGroupsStillAllowAnEmptyObservationArray() {
+        var accepted = SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalogV5("""
+                {"pages":[{"pageNumber":8,"printedTerms":["PASS"],"factualSummary":[],
+                "keywords":["PASS"],"sourceDependencies":[],
+                "ruleGroups":[{"identifier":"PASS","fact":"完成行动后，把回合交给下一位玩家。"}],
+                "ruleGroupInventoryComplete":true,"quantityObservations":[]}]}
+                """);
+
+        assertThat(accepted.pages().getFirst().quantityObservations()).isEmpty();
+    }
+
+    @Test
+    void literalQuantitySpansPreserveRangesAndTableThresholdsWithoutModelArithmetic() {
+        var accepted = SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalogV6("""
+                {"pages":[{"pageNumber":12,"printedTerms":["PLAYERS","RESULT"],"factualSummary":[],
+                "keywords":["PLAYERS","RESULT"],"externalDocumentDependencies":[],
+                "ruleGroups":[
+                  {"identifier":"PLAYERS","fact":"该模式支持1至4名玩家，时长80分钟。",
+                   "quantitySpans":["1-4 PLAYERS · 80 MIN"]},
+                  {"identifier":"RESULT","fact":"三个或更少为失败，四个为普通成功，七个为惊艳。",
+                   "quantitySpans":["3 or fewer Failure","4 Fair success","7 Stunning success"]}],
+                "ruleGroupInventoryComplete":true}]}
+                """);
+
+        assertThat(accepted.pages().getFirst().quantityObservations())
+                .hasSize(4)
+                .allSatisfy(observation -> {
+                    assertThat(observation.quantifierScope()).isEqualTo(QuantifierScope.LITERAL_SOURCE_SPAN);
+                    assertThat(observation.resolution()).isEqualTo(QuantityResolution.TRANSCRIBED_SOURCE_SPAN);
+                    assertThat(observation.variantCount()).isNull();
+                    assertThat(observation.perVariantQuantity()).isNull();
+                    assertThat(observation.derivedTotal()).isNull();
+                });
+
+        var partialEvidence = SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalogV6("""
+                {"pages":[{"pageNumber":12,"printedTerms":["PLAYERS"],"factualSummary":[],
+                "keywords":["PLAYERS"],"sourceDependencies":[],
+                "ruleGroups":[{"identifier":"PLAYERS","fact":"该模式支持1至4名玩家，时长80分钟。",
+                 "quantitySpans":["1-4 PLAYERS"]}],
+                "ruleGroupInventoryComplete":true}]}
+                """);
+        assertThat(partialEvidence.pages().getFirst().quantityObservations())
+                .singleElement()
+                .satisfies(observation -> assertThat(observation.originalSpan()).isEqualTo("1-4 PLAYERS"));
+    }
+
+    @Test
+    void literalQuantitySpansAcceptOnlyAnExactRedundantGroupIndexWithoutPolicingTheirMeaning() {
+        var accepted = SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalogV6("""
+                {"pages":[{"pageNumber":1,"printedTerms":["SETUP"],"factualSummary":[],
+                "keywords":["SETUP"],"sourceDependencies":[],
+                "ruleGroups":[
+                  {"identifier":"SETUP","fact":"每轮招募一名专家。","ruleGroupIndex":0},
+                  {"identifier":"GOAL","fact":"满足目标即可得分。","ruleGroupIndex":1}],
+                "ruleGroupInventoryComplete":true,
+                "quantityObservations":[
+                  {"pageNumber":1,"ruleGroupIndex":0,"originalSpan":"每轮招募一名专家"},
+                  {"pageNumber":1,"ruleGroupIndex":1,"originalSpan":"1-4 PLAYERS"}]}]}
+                """);
+
+        assertThat(accepted.pages().getFirst().quantityObservations())
+                .extracting(observation -> observation.ruleGroupIdentifier())
+                .containsExactly("SETUP", "GOAL");
+
+        assertThatThrownBy(() -> SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalogV6("""
+                {"pages":[{"pageNumber":1,"printedTerms":["SETUP"],"factualSummary":[],
+                "keywords":["SETUP"],"sourceDependencies":[],
+                "ruleGroups":[{"identifier":"SETUP","fact":"每轮招募一名专家。","ruleGroupIndex":1}],
+                "ruleGroupInventoryComplete":true,
+                "quantityObservations":[
+                  {"pageNumber":1,"ruleGroupIndex":0,"originalSpan":"每轮招募一名专家"}]}]}
+                """))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("redundant ruleGroupIndex");
     }
 
     @Test
@@ -424,8 +553,8 @@ class SpringAiVisualRulebookPageCatalogModelTest {
     }
 
     @Test
-    void progressiveV4RejectsAnUnclassifiedRuleGroupInsteadOfCallingTheInventoryComplete() {
-        assertThatThrownBy(() -> SpringAiVisualRulebookPageCatalogModel.parseProgressiveTeachingStartV4("""
+    void progressiveV4PreservesPartialRoleClassificationWithoutRejectingThePage() {
+        var draft = SpringAiVisualRulebookPageCatalogModel.parseProgressiveTeachingStartV4("""
                 {"pageSketches":[
                   {"pageNumber":12,"role":"GAMEPLAY_RULES","visibleHeading":"T-0",
                    "visibleTerms":["T-0","A-1"],"coverageTags":["core_loop"],
@@ -434,9 +563,12 @@ class SpringAiVisualRulebookPageCatalogModelTest {
                  "selectedPageFacts":{"pageNumber":12,"printedTerms":["T-0","A-1"],
                   "factualSummary":["T-0: The visible cycle advances.","A-1: A visible branch is available."],
                   "keywords":["T-0","A-1"],"quantityObservations":[]}}
-                """))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("classify every visible term exactly once");
+                """);
+
+        assertThat(draft.pages().getFirst().visibleTerms()).containsExactly("T-0", "A-1");
+        assertThat(draft.pages().getFirst().ruleGroupCoverage())
+                .extracting(com.rulepilot.teaching.VisualRulebookPageCatalogModel.RuleGroupCoverage::identifier)
+                .containsExactly("T-0");
     }
 
     @Test
@@ -569,6 +701,81 @@ class SpringAiVisualRulebookPageCatalogModelTest {
     }
 
     @Test
+    void transcribesAVisualRulebookPageWithTheDedicatedOcrModelAndNoSystemOrJsonContract() throws IOException {
+        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        ChatModel chatModel = mock(ChatModel.class);
+        OpenAiChatOptions defaults = OpenAiChatOptions.builder().model("qwen3.7-plus").build();
+        when(configuration.usesFake(Role.VISUAL, "owner")).thenReturn(false);
+        when(configuration.supportsVision(Role.VISUAL, "owner")).thenReturn(true);
+        when(configuration.providerFor(Role.VISUAL, "owner")).thenReturn("qwen");
+        when(configuration.modelFor(Role.VISUAL, "owner")).thenReturn(chatModel);
+        when(chatModel.getDefaultOptions()).thenReturn(defaults);
+        when(chatModel.getOptions()).thenReturn(defaults);
+        when(chatModel.call(any(Prompt.class))).thenReturn(response("玩家分数：9、13、16\n门槛：33"));
+        SpringAiVisualRulebookPageCatalogModel model = model(configuration);
+
+        PageTranscript transcript = model.transcribeTeachingPage(
+                new PageImageInput(16, "image/png", png()), "owner");
+
+        assertThat(transcript.pageNumber()).isEqualTo(16);
+        assertThat(transcript.text()).isEqualTo("玩家分数：9、13、16\n门槛：33");
+        assertThat(model.teachingPageTranscriptionExecutionIdentity("owner"))
+                .hasValueSatisfying(identity -> {
+                    assertThat(identity.provider()).isEqualTo("qwen");
+                    assertThat(identity.model()).isEqualTo("qwen3.5-ocr");
+                });
+        ArgumentCaptor<Prompt> prompt = ArgumentCaptor.forClass(Prompt.class);
+        verify(chatModel).call(prompt.capture());
+        assertThat(prompt.getValue().getInstructions()).singleElement().isInstanceOf(UserMessage.class);
+        assertThat(prompt.getValue().getInstructions().getFirst().getText()).contains(
+                "Copy all visible text from PDF page 16",
+                "Write ? for a character that cannot be read reliably");
+        OpenAiChatOptions options = (OpenAiChatOptions) prompt.getValue().getOptions();
+        assertThat(options.getModel()).isEqualTo("qwen3.5-ocr");
+        assertThat(options.getTemperature()).isEqualTo(0.01);
+        assertThat(options.getResponseFormat()).isNull();
+        assertThat(options.getExtraBody()).isNullOrEmpty();
+    }
+
+    @Test
+    void keepsAnOcrTranscriptBoundToItsExactPageInTheSemanticCatalogPrompt() throws IOException {
+        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        ChatModel chatModel = mock(ChatModel.class);
+        OpenAiChatOptions defaults = OpenAiChatOptions.builder().model("qwen3.7-plus").build();
+        when(configuration.usesFake(Role.VISUAL, "owner")).thenReturn(false);
+        when(configuration.supportsVision(Role.VISUAL, "owner")).thenReturn(true);
+        when(configuration.providerFor(Role.VISUAL, "owner")).thenReturn("qwen");
+        when(configuration.modelNameFor(Role.VISUAL, "owner")).thenReturn("qwen3.7-plus");
+        when(configuration.modelFor(Role.VISUAL, "owner")).thenReturn(chatModel);
+        when(chatModel.getDefaultOptions()).thenReturn(defaults);
+        when(chatModel.getOptions()).thenReturn(defaults);
+        when(chatModel.call(any(Prompt.class))).thenReturn(response("""
+                {"pages":[{"pageNumber":16,"printedTerms":"最终计分","keywords":["计分"],
+                 "externalDocumentDependencies":[],"ruleGroups":[{"identifier":"合作模式范例",
+                 "fact":"玩家分数为9、13、16，门槛为33。","quantitySpans":["9、13、16","33"]}],
+                 "ruleGroupInventoryComplete":true}]}
+                """));
+        SpringAiVisualRulebookPageCatalogModel model = model(configuration);
+
+        model.summarizeForTeaching(new CatalogRequest(
+                List.of(new PageImageInput(16, "image/png", png())),
+                "owner",
+                "Example Game",
+                List.of(new PageTranscript(16, "玩家分数：9、13、16\n门槛：33"))));
+
+        ArgumentCaptor<Prompt> prompt = ArgumentCaptor.forClass(Prompt.class);
+        verify(chatModel).call(prompt.capture());
+        assertThat(prompt.getValue().getInstructions().stream()
+                        .map(message -> message.getText().replaceAll("\\s+", " "))
+                        .toList())
+                .anySatisfy(text -> assertThat(text).contains(
+                        "--- PDF page 16 ---",
+                        "玩家分数：9、13、16",
+                        "门槛：33",
+                        "Do not replace transcript digits with a calculated or inferred value"));
+    }
+
+    @Test
     void routesOnlyTheQwenTeachingStartupRequestToTheFastStructuredVisualModel() throws IOException {
         RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
         ChatModel chatModel = mock(ChatModel.class);
@@ -583,10 +790,10 @@ class SpringAiVisualRulebookPageCatalogModelTest {
         when(chatModel.call(any(Prompt.class))).thenReturn(new ChatResponse(List.of(new Generation(
                 new AssistantMessage("""
                         {"pages":[{"pageNumber":1,"printedTerms":"SETUP",
-                         "factualSummary":[],"keywords":["setup"],
-                         "sourceDependencies":[],"ruleGroups":[{"identifier":"SETUP",
-                         "fact":"Each player takes one card."}],
-                         "ruleGroupInventoryComplete":true,"quantityObservations":[]}]}
+                         "keywords":["setup"],
+                         "externalDocumentDependencies":[],"ruleGroups":[{"identifier":"SETUP",
+                         "fact":"Each player takes a card.","quantitySpans":[]}],
+                         "ruleGroupInventoryComplete":true}]}
                         """)))));
         SpringAiVisualRulebookPageCatalogModel model = model(configuration);
 
@@ -603,24 +810,29 @@ class SpringAiVisualRulebookPageCatalogModelTest {
         verify(chatModel).call(prompt.capture());
         assertThat(prompt.getValue().getOptions()).isInstanceOf(OpenAiChatOptions.class);
         OpenAiChatOptions options = (OpenAiChatOptions) prompt.getValue().getOptions();
-        assertThat(options.getModel()).isEqualTo("qwen3.6-flash");
-        assertThat(options.getMaxTokens()).isEqualTo(3_200);
+        assertThat(options.getModel()).isEqualTo("qwen3.7-plus");
+        assertThat(options.getMaxTokens()).isEqualTo(4_800);
         assertThat(options.getExtraBody()).containsEntry("enable_thinking", false);
         assertThat(options.getResponseFormat().getType()).isEqualTo(Type.JSON_OBJECT);
         assertThat(options.getTemperature()).isZero();
-        assertThat(prompt.getValue().getInstructions().stream()
+        List<String> instructions = prompt.getValue().getInstructions().stream()
                         .map(message -> message.getText().replaceAll("\\s+", " "))
-                        .toList())
+                        .toList();
+        assertThat(instructions)
                 .anySatisfy(text -> assertThat(text).contains(
                 "A direction to another guide, sheet, booklet, or document",
-                "sourceDependencies",
+                "externalDocumentDependencies",
+                "documentTitle",
                 "missingCoverageTags",
-                "quantityObservations",
-                "REQUIRES_PAGE_INSPECTION",
+                "quantitySpans",
+                "do not return a separate quantityObservations array",
                 "not as an executable rule on this page"));
+        assertThat(instructions).anySatisfy(text -> assertThat(text).contains(
+                "separately titled file",
+                "return externalDocumentDependencies as an empty array"));
         assertThat(model.teachingStartupExecutionIdentity("owner")).hasValueSatisfying(identity -> {
             assertThat(identity.provider()).isEqualTo("qwen");
-            assertThat(identity.model()).isEqualTo("qwen3.6-flash");
+            assertThat(identity.model()).isEqualTo("qwen3.7-plus");
         });
 
         model.summarize(request);
@@ -648,32 +860,35 @@ class SpringAiVisualRulebookPageCatalogModelTest {
                 response("""
                         {"pages":[{"pageNumber":1,"printedTerms":["MOVE"],
                          "factualSummary":[],"keywords":["move"],"sourceDependencies":[],
-                         "ruleGroups":[{"identifier":"MOVE","fact":"Move one pawn."}],
-                         "ruleGroupInventoryComplete":true,
-                         "quantityObservations":[{"kind":"REQUIRES_PAGE_INSPECTION","pageNumber":1,
-                         "ruleGroupIndex":0,"variantAxis":"","total":1,"originalSpan":"one pawn"}]}]}
+                         "ruleGroups":[{"identifier":"MOVE","fact":"Move one pawn.",
+                         "quantitySpans":[{"total":1,"originalSpan":"one pawn"}]}],
+                         "ruleGroupInventoryComplete":true}]}
                         """),
                 response("""
                         {"pages":[{"pageNumber":1,"printedTerms":["MOVE"],
                          "factualSummary":[],"keywords":["move"],"sourceDependencies":[],
-                         "ruleGroups":[{"identifier":"MOVE","fact":"Move one pawn."}],
-                         "ruleGroupInventoryComplete":true,
-                         "quantityObservations":[{"kind":"REQUIRES_PAGE_INSPECTION","pageNumber":1,
-                         "ruleGroupIndex":0,"variantAxis":"","originalSpan":"one pawn"}]}]}
+                         "ruleGroups":[{"identifier":"MOVE","fact":"Move one pawn.",
+                         "quantitySpans":["one pawn"]}],
+                         "ruleGroupInventoryComplete":true}]}
                         """));
         SpringAiVisualRulebookPageCatalogModel model = model(configuration);
 
         CatalogDraft repaired = model.summarizeForTeaching(new CatalogRequest(
                 List.of(new PageImageInput(1, "image/png", png())), "owner", "Example Game"));
 
-        assertThat(repaired.pages()).singleElement().satisfies(page ->
-                assertThat(page.factualSummary()).isEqualTo("MOVE: Move one pawn."));
+        assertThat(repaired.pages()).singleElement().satisfies(page -> {
+            assertThat(page.factualSummary()).isEqualTo("MOVE: Move one pawn.");
+            assertThat(page.quantityObservations()).singleElement().satisfies(observation -> {
+                assertThat(observation.quantifierScope()).isEqualTo(QuantifierScope.LITERAL_SOURCE_SPAN);
+                assertThat(observation.resolution()).isEqualTo(QuantityResolution.TRANSCRIBED_SOURCE_SPAN);
+            });
+        });
         ArgumentCaptor<Prompt> prompts = ArgumentCaptor.forClass(Prompt.class);
         verify(chatModel, times(2)).call(prompts.capture());
         OpenAiChatOptions initialOptions = (OpenAiChatOptions) prompts.getAllValues().getFirst().getOptions();
         OpenAiChatOptions repairOptions = (OpenAiChatOptions) prompts.getAllValues().getLast().getOptions();
-        assertThat(initialOptions.getModel()).isEqualTo("qwen3.6-flash");
-        assertThat(initialOptions.getMaxTokens()).isEqualTo(3_200);
+        assertThat(initialOptions.getModel()).isEqualTo("qwen3.7-plus");
+        assertThat(initialOptions.getMaxTokens()).isEqualTo(4_800);
         assertThat(repairOptions.getModel()).isEqualTo("qwen3.7-plus");
         assertThat(repairOptions.getMaxTokens()).isEqualTo(4_800);
         assertThat(prompts.getAllValues().getLast().getInstructions().stream()
@@ -682,12 +897,13 @@ class SpringAiVisualRulebookPageCatalogModelTest {
                 .anySatisfy(text -> assertThat(text).contains(
                         "The previous ledger failed deterministic contract validation",
                         "each visible rule group as one ruleGroups object",
-                        "zero-based ruleGroupIndex",
-                        "PER_VARIANT_EXACT",
-                        "TOTAL_EXACT",
-                        "REQUIRES_PAGE_INSPECTION",
-                        "has no numeric fields",
-                        "omit only that optional observation while retaining its directly visible rule statement"));
+                        "identifier, its same-page fact, and quantitySpans",
+                        "never return a separate ruleGroupIdentifiers or quantityObservations array",
+                        "Do not return kind",
+                        "must bind every such value through one or more strings in its own quantitySpans",
+                        "Never calculate a replacement total",
+                        "Detected deterministic issue:",
+                        "quantitySpans must contain text"));
     }
 
     @Test
@@ -728,8 +944,8 @@ class SpringAiVisualRulebookPageCatalogModelTest {
         ArgumentCaptor<Prompt> prompt = ArgumentCaptor.forClass(Prompt.class);
         verify(chatModel).call(prompt.capture());
         OpenAiChatOptions options = (OpenAiChatOptions) prompt.getValue().getOptions();
-        assertThat(options.getModel()).isEqualTo("qwen3.6-flash");
-        assertThat(options.getMaxTokens()).isEqualTo(3_200);
+        assertThat(options.getModel()).isEqualTo("qwen3.7-plus");
+        assertThat(options.getMaxTokens()).isEqualTo(4_800);
     }
 
     @Test
@@ -743,7 +959,7 @@ class SpringAiVisualRulebookPageCatalogModelTest {
     }
 
     @Test
-    void progressiveTeachingStartUsesQwenFlashAndKeepsExactPageRolesSeparateFromSelectedFacts() throws IOException {
+    void progressiveTeachingStartUsesConfiguredQwenAndKeepsExactPageRolesSeparateFromSelectedFacts() throws IOException {
         RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
         ChatModel chatModel = mock(ChatModel.class);
         OpenAiChatOptions defaults = OpenAiChatOptions.builder().model("qwen3.7-plus").build();
@@ -819,7 +1035,7 @@ class SpringAiVisualRulebookPageCatalogModelTest {
         ArgumentCaptor<Prompt> prompt = ArgumentCaptor.forClass(Prompt.class);
         verify(chatModel).call(prompt.capture());
         OpenAiChatOptions options = (OpenAiChatOptions) prompt.getValue().getOptions();
-        assertThat(options.getModel()).isEqualTo("qwen3.6-flash");
+        assertThat(options.getModel()).isEqualTo("qwen3.7-plus");
         assertThat(options.getMaxTokens()).isEqualTo(1_600);
         assertThat(options.getExtraBody()).containsEntry("enable_thinking", false);
         assertThat(prompt.getValue().getInstructions().stream()
@@ -924,7 +1140,7 @@ class SpringAiVisualRulebookPageCatalogModelTest {
     }
 
     @Test
-    void progressiveTeachingStartCannotValidateARequiredFactThatWillBeTruncatedBeforeStorage() {
+    void progressiveTeachingStartPreservesARequiredFactBeyondTheHistoricalStorageLimit() {
         String oversizedFact = "CONTEXT: " + "x".repeat(4_050);
         String response = """
                 {"pageSketches":[
@@ -935,14 +1151,15 @@ class SpringAiVisualRulebookPageCatalogModelTest {
                   "factualSummary":["%s","LATE: Apply the visible late rule."],"keywords":["LATE"]}}
                 """.formatted(oversizedFact);
 
-        assertThatThrownBy(() -> SpringAiVisualRulebookPageCatalogModel.parseProgressiveTeachingStart(response))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("factualSummary")
-                .hasMessageContaining("4,000");
+        var draft = SpringAiVisualRulebookPageCatalogModel.parseProgressiveTeachingStart(response);
+
+        assertThat(draft.selectedPageFacts().factualSummary())
+                .contains(oversizedFact, "LATE: Apply the visible late rule.")
+                .hasSizeGreaterThan(4_000);
     }
 
     @Test
-    void progressiveTeachingStartRejectsAnOverCapacityInventoryInsteadOfTruncatingIt() {
+    void progressiveTeachingStartPreservesEveryDensePageRuleGroup() {
         String identifiers = java.util.stream.IntStream.rangeClosed(1, 9)
                 .mapToObj(index -> "\"GROUP_" + index + "\"")
                 .collect(java.util.stream.Collectors.joining(","));
@@ -958,24 +1175,29 @@ class SpringAiVisualRulebookPageCatalogModelTest {
                   "factualSummary":[%s],"keywords":["GROUPS"]}}
                 """.formatted(identifiers, facts);
 
-        assertThatThrownBy(() -> SpringAiVisualRulebookPageCatalogModel.parseProgressiveTeachingStart(response))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("at most 8");
+        var draft = SpringAiVisualRulebookPageCatalogModel.parseProgressiveTeachingStart(response);
+
+        assertThat(draft.pages()).singleElement().satisfies(page -> {
+            assertThat(page.visibleTerms()).hasSize(9);
+            assertThat(page.visibleTerms()).contains("GROUP_1", "GROUP_9");
+        });
+        assertThat(draft.selectedPageFacts().factualSummary())
+                .contains("GROUP_1: visible fact 1.", "GROUP_9: visible fact 9.");
     }
 
     @Test
-    void progressiveTeachingStartCannotCompleteAnEmptyGameplayInventory() {
-        assertThatThrownBy(() -> SpringAiVisualRulebookPageCatalogModel.parseProgressiveTeachingStart("""
+    void progressiveTeachingStartDoesNotRejectAnEmptyOptionalInventoryLocally() {
+        var draft = SpringAiVisualRulebookPageCatalogModel.parseProgressiveTeachingStart("""
                 {"pageSketches":[
                   {"pageNumber":4,"role":"GAMEPLAY_RULES","visibleHeading":"Turn",
                    "visibleTerms":[],"coverageTags":["core_loop","end","scoring"],
                    "ruleGroupInventoryComplete":true,"sourceDependencies":[]}],
                  "selectedPageFacts":{"pageNumber":4,"printedTerms":["TURN"],
                   "factualSummary":["TURN: A visible turn relation."],"keywords":["TURN"]}}
-                """))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("complete gameplay inventory")
-                .hasMessageContaining("empty");
+                """);
+
+        assertThat(draft.pages().getFirst().visibleTerms()).isEmpty();
+        assertThat(draft.pages().getFirst().ruleGroupInventoryComplete()).isTrue();
     }
 
     @Test
@@ -989,7 +1211,7 @@ class SpringAiVisualRulebookPageCatalogModelTest {
                    "visibleTerms":["take action"],"coverageTags":["core_loop","end","scoring"],
                    "ruleGroupInventoryComplete":true}],
                  "selectedPageFacts":{"pageNumber":2,"printedTerms":["take action"],
-                  "factualSummary":["当前玩家执行一个行动。"],"keywords":["take action","turn"]}}
+                  "factualSummary":["take action: 当前玩家执行一个行动。"],"keywords":["take action","turn"]}}
                 """))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("sourceDependencies");
@@ -1000,7 +1222,7 @@ class SpringAiVisualRulebookPageCatalogModelTest {
                    "visibleTerms":["take action"],"coverageTags":["core_loop","end","scoring"],
                    "ruleGroupInventoryComplete":true,"sourceDependencies":null}],
                  "selectedPageFacts":{"pageNumber":1,"printedTerms":["take action"],
-                  "factualSummary":["当前玩家执行一个行动。"],"keywords":["take action","turn"]}}
+                  "factualSummary":["take action: 当前玩家执行一个行动。"],"keywords":["take action","turn"]}}
                 """))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("sourceDependencies");
@@ -1037,18 +1259,20 @@ class SpringAiVisualRulebookPageCatalogModelTest {
     }
 
     @Test
-    void progressiveTeachingStartRejectsAnUnrecognizedMissingResponsibility() {
-        assertThatThrownBy(() -> SpringAiVisualRulebookPageCatalogModel.parseProgressiveTeachingStart("""
+    void progressiveTeachingStartPreservesModelOwnedMissingResponsibilities() {
+        var draft = SpringAiVisualRulebookPageCatalogModel.parseProgressiveTeachingStart("""
                 {"pageSketches":[
                   {"pageNumber":1,"role":"GAMEPLAY_RULES","visibleHeading":"Turn",
                    "visibleTerms":["take action"],"coverageTags":["core_loop","end","scoring"],
                    "ruleGroupInventoryComplete":true,
                    "sourceDependencies":[{"title":"Extra Notes","missingCoverageTags":["table_feel"]}]}],
                  "selectedPageFacts":{"pageNumber":1,"printedTerms":["take action"],
-                  "factualSummary":["当前玩家执行一个行动。"],"keywords":["take action","turn"]}}
-                """))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("source dependency");
+                  "factualSummary":["take action: 当前玩家执行一个行动。"],"keywords":["take action","turn"]}}
+                """);
+
+        assertThat(draft.pages()).singleElement().satisfies(page ->
+                assertThat(page.sourceDependencies()).containsExactly(
+                        new SourceDependency("Extra Notes", List.of("table_feel"))));
     }
 
     @Test
@@ -1085,15 +1309,16 @@ class SpringAiVisualRulebookPageCatalogModelTest {
     }
 
     @Test
-    void sourceDependencyRejectsAnOverlongTitleInsteadOfTruncatingIt() {
+    void sourceDependencyPreservesANaturallyLongTitle() {
         String title = "Guide " + "x".repeat(160);
 
-        assertThatThrownBy(() -> SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalog(
-                        teachingCatalogWithDependency(
-                                "{\"title\":\"" + title + "\",\"missingCoverageTags\":[\"setup\"]}")))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("source dependency")
-                .hasMessageContaining("title");
+        var draft = SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalog(
+                teachingCatalogWithDependency(
+                        "{\"title\":\"" + title + "\",\"missingCoverageTags\":[\"setup\"]}"));
+
+        assertThat(draft.pages()).singleElement().satisfies(page ->
+                assertThat(page.sourceDependencies()).containsExactly(
+                        new SourceDependency(title, List.of("setup"))));
     }
 
     @Test
@@ -1107,14 +1332,15 @@ class SpringAiVisualRulebookPageCatalogModelTest {
     }
 
     @Test
-    void sourceDependencyRejectsAnExtraInvalidResponsibilityInsteadOfTruncatingIt() {
-        assertThatThrownBy(() -> SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalog(
-                        teachingCatalogWithDependency(
-                                "{\"title\":\"Session Guide\",\"missingCoverageTags\":["
-                                        + "\"setup\",\"core_loop\",\"end\",\"scoring\",\"table_feel\"]}")))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("source dependency")
-                .hasMessageContaining("missingCoverageTags");
+    void sourceDependencyPreservesEveryExplicitMissingResponsibility() {
+        var draft = SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalog(
+                teachingCatalogWithDependency(
+                        "{\"title\":\"Session Guide\",\"missingCoverageTags\":["
+                                + "\"setup\",\"core_loop\",\"end\",\"scoring\",\"table_feel\"]}"));
+
+        assertThat(draft.pages()).singleElement().satisfies(page ->
+                assertThat(page.sourceDependencies()).containsExactly(new SourceDependency(
+                        "Session Guide", List.of("setup", "core_loop", "end", "scoring", "table_feel"))));
     }
 
     @Test
@@ -1241,7 +1467,7 @@ class SpringAiVisualRulebookPageCatalogModelTest {
     }
 
     @Test
-    void completeTeachingCatalogCannotValidateARequiredFactThatWillBeTruncatedBeforeStorage() {
+    void completeTeachingCatalogPreservesARequiredFactInsteadOfRejectingOrTruncatingIt() {
         String oversizedFact = "CONTEXT: " + "x".repeat(4_050);
         String response = """
                 {"pages":[{"pageNumber":4,"printedTerms":["LATE"],
@@ -1250,10 +1476,13 @@ class SpringAiVisualRulebookPageCatalogModelTest {
                 "ruleGroupInventoryComplete":true}]}
                 """.formatted(oversizedFact);
 
-        assertThatThrownBy(() -> SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalog(response))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("factualSummary")
-                .hasMessageContaining("4,000");
+        var draft = SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalog(response);
+
+        assertThat(draft.pages()).singleElement().satisfies(page -> {
+            assertThat(page.factualSummary()).contains(oversizedFact, "LATE: Apply the visible late rule.");
+            assertThat(page.factualSummary()).hasSizeGreaterThan(4_000);
+            assertThat(page.ruleGroupInventoryComplete()).isTrue();
+        });
     }
 
     @Test
@@ -1289,11 +1518,11 @@ class SpringAiVisualRulebookPageCatalogModelTest {
     }
 
     @Test
-    void completeTeachingCatalogRejectsAnOverCapacityInventoryInsteadOfTruncatingIt() {
-        String identifiers = java.util.stream.IntStream.rangeClosed(1, 17)
+    void completeTeachingCatalogPreservesEveryValidDensePageRuleGroup() {
+        String identifiers = java.util.stream.IntStream.rangeClosed(1, 33)
                 .mapToObj(index -> "\"GROUP_" + index + "\"")
                 .collect(java.util.stream.Collectors.joining(","));
-        String facts = java.util.stream.IntStream.rangeClosed(1, 17)
+        String facts = java.util.stream.IntStream.rangeClosed(1, 33)
                 .mapToObj(index -> "\"GROUP_" + index + ": visible fact " + index + ".\"")
                 .collect(java.util.stream.Collectors.joining(","));
         String response = """
@@ -1303,9 +1532,15 @@ class SpringAiVisualRulebookPageCatalogModelTest {
                 "ruleGroupInventoryComplete":true}]}
                 """.formatted(facts, identifiers);
 
-        assertThatThrownBy(() -> SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalog(response))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("at most 16");
+        var draft = SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalog(response);
+
+        assertThat(draft.pages()).singleElement().satisfies(page -> {
+            assertThat(page.ruleGroupIdentifiers()).hasSize(33);
+            assertThat(page.ruleGroupIdentifiers()).contains("GROUP_1", "GROUP_33");
+            assertThat(page.factualSummary()).contains(
+                    "GROUP_1: visible fact 1.", "GROUP_33: visible fact 33.");
+            assertThat(page.ruleGroupInventoryComplete()).isTrue();
+        });
     }
 
     @Test
@@ -1334,12 +1569,13 @@ class SpringAiVisualRulebookPageCatalogModelTest {
                 configuration,
                 new FakeVisualRulebookPageCatalogModel(),
                 new ClassPathResource("prompts/visual-page-catalog-v2-icon-inventory-system.txt"),
-                new ClassPathResource("prompts/visual-page-teaching-catalog-v5-discriminated-quantities-system.txt"),
+                new ClassPathResource("prompts/visual-page-teaching-catalog-v6-literal-quantity-spans-system.txt"),
                 new ClassPathResource("prompts/visual-page-progressive-teaching-start-v4-source-contract-system.txt"),
                 new ClassPathResource("prompts/visual-icon-localization-v2-system.txt"),
                 new ClassPathResource("prompts/visual-icon-crop-review-v4-system.txt"),
                 new ClassPathResource("prompts/visual-identifier-cell-v1-system.txt"),
                 new ClassPathResource("prompts/visual-identifier-reference-match-v1-system.txt"),
+                "qwen3.5-ocr",
                 4_800);
     }
 
@@ -1442,7 +1678,7 @@ class SpringAiVisualRulebookPageCatalogModelTest {
     }
 
     @Test
-    void bounds_overlong_optional_text_instead_of_discarding_the_icon_page() {
+    void preservesLongOptionalTextInsteadOfSilentlyTruncatingTheIconPage() {
         String longSummary = "visible rule ".repeat(300);
         String json = "{\"pages\":[{\"pageNumber\":6,\"printedTerms\":\"ICONS\","
                 + "\"factualSummary\":" + jsonString(longSummary) + ","
@@ -1452,9 +1688,8 @@ class SpringAiVisualRulebookPageCatalogModelTest {
         var draft = SpringAiVisualRulebookPageCatalogModel.parseCatalog(json);
 
         assertThat(draft.pages()).singleElement().satisfies(page -> {
-            assertThat(page.factualSummary()).hasSizeLessThanOrEqualTo(4_000);
-            assertThat(page.factualSummary()).hasSizeGreaterThan(1_600);
-            assertThat(page.keywords().getFirst()).hasSize(120);
+            assertThat(page.factualSummary()).isEqualTo(longSummary.strip());
+            assertThat(page.keywords().getFirst()).isEqualTo("x".repeat(180));
         });
     }
 
@@ -1750,6 +1985,36 @@ class SpringAiVisualRulebookPageCatalogModelTest {
                         "owner"))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("catalog request is invalid");
+    }
+
+    @Test
+    void rejectsMissingDuplicateOrCrossPageOcrTranscriptBindings() {
+        List<PageImageInput> pages = List.of(
+                new PageImageInput(3, "image/jpeg", new byte[] {3}),
+                new PageImageInput(4, "image/jpeg", new byte[] {4}));
+
+        assertThatThrownBy(() -> new CatalogRequest(
+                        pages,
+                        "owner",
+                        "Example",
+                        List.of(new PageTranscript(3, "page three"))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("bind every requested page exactly once");
+        assertThatThrownBy(() -> new CatalogRequest(
+                        pages,
+                        "owner",
+                        "Example",
+                        List.of(new PageTranscript(3, "first"), new PageTranscript(3, "duplicate"))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("bind every requested page exactly once");
+        assertThat(new CatalogRequest(
+                        pages,
+                        "owner",
+                        "Example",
+                        List.of(new PageTranscript(3, "page three"), new PageTranscript(4, "page four")))
+                .transcripts())
+                .extracting(PageTranscript::pageNumber)
+                .containsExactly(3, 4);
     }
 
     private static String jsonString(String value) {

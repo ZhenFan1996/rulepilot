@@ -126,9 +126,25 @@ class BggCatalogImportServiceTest {
         assertThat(bgg.exactQuery).isEqualTo("ＣＡＳＣＡＤＩＡ Collector");
     }
 
+    @Test
+    void acceptsASingleCharacterGameTitleForSearchAndExactMatching() {
+        FakeBgg bgg = new FakeBgg();
+        BggCatalogImportService service = new BggCatalogImportService(
+                bgg,
+                new MemoryCatalogRepository(),
+                Clock.fixed(Instant.parse("2026-07-19T00:00:00Z"), ZoneOffset.UTC));
+
+        assertThat(service.search("  碁  ")).isNotEmpty();
+        service.findExactCandidates("碁");
+
+        assertThat(bgg.searchQuery).isEqualTo("碁");
+        assertThat(bgg.exactQuery).isEqualTo("碁");
+    }
+
     private static final class FakeBgg implements BoardGameGeekCatalog {
         int detailCalls;
         int discoveryCalls;
+        String searchQuery;
         String exactQuery;
 
         @Override
@@ -138,6 +154,7 @@ class BggCatalogImportServiceTest {
 
         @Override
         public List<SearchResult> search(String query) {
+            searchQuery = query;
             return List.of(new SearchResult(266192, "Wingspan", 2019));
         }
 

@@ -102,7 +102,7 @@ export function teachingActivityText(
     if (activity.operation.startsWith('reviewObjectiveCoverage')) return `Checking ${target} for missing key steps`
     if (activity.operation.startsWith('validateTeachingSection')) {
       return activity.outcome === 'SUCCEEDED'
-        ? `${target} passed citation, structure, and quantity checks`
+        ? `${target} passed citation-ownership, rulebook-version, and structure checks`
         : `${target} needs a local revision before publication`
     }
     if (activity.operation.startsWith('publishTeachingSection')) {
@@ -131,7 +131,7 @@ export function teachingActivityText(
   if (activity.operation.startsWith('reviewObjectiveCoverage')) return `正在检查${target}有没有漏讲关键步骤`
   if (activity.operation.startsWith('validateTeachingSection')) {
     return activity.outcome === 'SUCCEEDED'
-      ? `${target}已完成引用、结构与数量校验`
+      ? `${target}已完成引用归属、规则书版本与结构校验`
       : `${target}需要局部修正后再发布`
   }
   if (activity.operation.startsWith('publishTeachingSection')) {
@@ -150,12 +150,9 @@ export function recentTeachingActivitySteps(
   plan: TeachingProgressPlan,
   activities: readonly TeachingActivitySummary[],
   locale: AppLocale = 'zh-CN',
-  limit = 6,
 ): PlayerFacingTeachingActivity[] {
-  const boundedLimit = Math.max(1, Math.min(12, limit))
   return activities
     .filter(activity => isPlayerFacingTeachingOperation(activity.operation))
-    .slice(-boundedLimit)
     .map(activity => ({
       sequence: activity.sequence,
       outcome: activity.outcome,
@@ -167,12 +164,9 @@ export function recentTeachingActivitySteps(
 export function recentTeachingPreparationActivitySteps(
   activities: readonly TeachingActivitySummary[],
   locale: AppLocale = 'zh-CN',
-  limit = 4,
 ): PlayerFacingTeachingActivity[] {
-  const boundedLimit = Math.max(1, Math.min(8, limit))
   return activities
     .filter(activity => isPlayerFacingTeachingPreparationOperation(activity.operation))
-    .slice(-boundedLimit)
     .map(activity => ({
       sequence: activity.sequence,
       outcome: activity.outcome,
@@ -273,7 +267,10 @@ function isPlayerFacingTeachingOperation(operation: string) {
 }
 
 function isPlayerFacingTeachingPreparationOperation(operation: string) {
-  return operation.startsWith('inspectTeachingVisualBatch')
+  return operation.startsWith('transcribeTeachingVisualPage')
+    || operation.startsWith('transcribeTeachingVisualRetry')
+    || operation.startsWith('inspectTeachingVisualBatch')
+    || operation.startsWith('inspectTeachingVisualPage')
     || operation.startsWith('inspectTeachingVisualRetry')
     || operation.startsWith('selectProgressiveTeachingStart')
     || operation.startsWith('organizeTeachingOutline')
@@ -287,9 +284,19 @@ function teachingPreparationActivityText(
   locale: AppLocale,
 ) {
   const failed = activity.outcome === 'FAILED' || activity.outcome === 'REJECTED'
+  const visualPageProgress = visualPreparationPageProgress(activity.operation)
   if (locale === 'en') {
+    if (activity.operation.startsWith('transcribeTeachingVisual')) {
+      if (visualPageProgress) return failed
+        ? `Text recognition for visual rulebook page ${visualPageProgress.page} of ${visualPageProgress.total} needs another pass`
+        : `Transcribing visual rulebook page ${visualPageProgress.page} of ${visualPageProgress.total}`
+      return failed ? 'A visual rulebook page needs another transcription pass' : 'Transcribing the visual rulebook page'
+    }
     if (activity.operation.startsWith('inspectTeachingVisual')) {
-      return failed ? 'Some visual rulebook pages need another pass' : 'Reading and grouping the visual rulebook pages'
+      if (visualPageProgress) return failed
+        ? `Rule grouping for visual rulebook page ${visualPageProgress.page} of ${visualPageProgress.total} needs another pass`
+        : `Organising the rules on visual rulebook page ${visualPageProgress.page} of ${visualPageProgress.total}`
+      return failed ? 'Some visual rulebook pages need another rule-grouping pass' : 'Organising the visual rulebook pages into rule groups'
     }
     if (activity.operation.startsWith('selectProgressiveTeachingStart')) {
       return failed ? 'Continuing with the complete rulebook plan' : 'Choosing the first rule pages that can be taught clearly'
@@ -307,8 +314,17 @@ function teachingPreparationActivityText(
     }
     return 'The chapter plan is ready for writing'
   }
+  if (activity.operation.startsWith('transcribeTeachingVisual')) {
+    if (visualPageProgress) return failed
+      ? `图像规则页第 ${visualPageProgress.page} / ${visualPageProgress.total} 页需要重新逐字识别`
+      : `正在逐字识别图像规则页第 ${visualPageProgress.page} / ${visualPageProgress.total} 页`
+    return failed ? '有一页图像规则书需要重新逐字识别' : '正在逐字识别图像规则页'
+  }
   if (activity.operation.startsWith('inspectTeachingVisual')) {
-    return failed ? '部分图像规则页需要重新读取' : '正在读取并归纳图像规则页'
+    if (visualPageProgress) return failed
+      ? `图像规则页第 ${visualPageProgress.page} / ${visualPageProgress.total} 页的规则整理需要重试`
+      : `正在整理图像规则页第 ${visualPageProgress.page} / ${visualPageProgress.total} 页的规则组`
+    return failed ? '部分图像规则页需要重新整理规则组' : '正在把图像规则页整理成规则组'
   }
   if (activity.operation.startsWith('selectProgressiveTeachingStart')) {
     return failed ? '正在改用完整规则书规划讲解' : '正在选择最先能够讲清楚的规则页'
@@ -325,6 +341,15 @@ function teachingPreparationActivityText(
     return failed ? '保留当前可用的章节边界' : '正在为每条规则安排清晰的讲解章节'
   }
   return '讲解章节规划已完成，准备编写正文'
+}
+
+function visualPreparationPageProgress(operation: string) {
+  const [kind, pageText, totalText] = operation.split('|')
+  if (kind !== 'inspectTeachingVisualPage' && kind !== 'transcribeTeachingVisualPage') return null
+  const page = Number(pageText)
+  const total = Number(totalText)
+  if (!Number.isInteger(page) || page < 1 || !Number.isInteger(total) || total < page) return null
+  return { page, total }
 }
 
 function publishedPositions(activities: TeachingActivity[]) {

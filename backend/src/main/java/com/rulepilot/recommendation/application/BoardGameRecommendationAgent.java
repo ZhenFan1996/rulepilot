@@ -10,7 +10,6 @@ import com.rulepilot.recommendation.ConstraintRange;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Objects;
-import java.util.Set;
 import java.util.function.Consumer;
 import jakarta.annotation.PreDestroy;
 import org.springframework.context.annotation.Profile;
@@ -32,23 +31,7 @@ public class BoardGameRecommendationAgent {
     static final String COMPARE_TOOL = "compare_candidates";
     static final String NO_MATCH_TOOL = "report_no_match";
     static final String RECOMMEND_TOOL = "recommend_games";
-    static final String PROMPT_VERSION = "recommendation-agent-v4-direct-target";
-
-    static final Set<String> COMPARISON_SUBJECTS = Set.of(
-            "playerCount",
-            "durationMinutes",
-            "complexity",
-            "bggType",
-            "categories",
-            "mechanics",
-            "families",
-            "minimumAge",
-            "bestWith",
-            "recommendedWith",
-            "designers",
-            "publishers",
-            "reportedExperience",
-            "rulebookFact");
+    static final String PROMPT_VERSION = "recommendation-agent-v6-lossless-prose";
 
     private final RecommendationReActLoop loop;
 
@@ -409,9 +392,7 @@ public class BoardGameRecommendationAgent {
 
     public record ComparisonAxis(String subject, List<ComparisonCell> cells) {
         public ComparisonAxis {
-            if (!COMPARISON_SUBJECTS.contains(subject)) {
-                throw new IllegalArgumentException("comparison subject is invalid");
-            }
+            if (subject == null || subject.isBlank()) throw new IllegalArgumentException("comparison subject is invalid");
             cells = List.copyOf(cells);
             if (cells.size() < 2 || cells.size() > 5) {
                 throw new IllegalArgumentException("comparison cells are invalid");

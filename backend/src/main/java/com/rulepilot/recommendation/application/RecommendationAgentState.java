@@ -97,13 +97,13 @@ final class RecommendationAgentState {
     void observeCandidate(int bggId, String name) {
         legalIds.add(bggId);
         if (candidateNames.containsKey(bggId) || candidateNames.size() < MAX_OBSERVED_CANDIDATES) {
-            candidateNames.put(bggId, bounded(name, 120));
+            candidateNames.put(bggId, name == null ? "" : name);
         }
     }
 
     void disableWebResearch(String code) {
         webResearchAvailable = false;
-        webResearchFailureCode = bounded(code, 80);
+        webResearchFailureCode = code == null ? "" : code;
         actions.add("WEB_RESEARCH_DEGRADED:" + webResearchFailureCode);
     }
 
@@ -130,12 +130,6 @@ final class RecommendationAgentState {
 
     long elapsedMs() {
         return Math.max(0, (System.nanoTime() - startedAtNanos) / 1_000_000);
-    }
-
-    private static String bounded(String value, int maximum) {
-        if (value == null) return "";
-        String checked = value.strip().replaceAll("\\s+", " ");
-        return checked.length() <= maximum ? checked : checked.substring(0, maximum);
     }
 
     record ContextualPreference(

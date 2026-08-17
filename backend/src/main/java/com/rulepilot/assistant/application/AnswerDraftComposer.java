@@ -59,7 +59,6 @@ final class AnswerDraftComposer {
                     AnswerStatus.INSUFFICIENT_EVIDENCE,
                     "现有证据未能直接回答这个问题。");
         }
-        draft = AnswerDraftPublicationPolicy.removePeripheralEndgameCitations(modelRequest, draft);
         AnswerPlayerFacingRepairPolicy.RepairPlan playerFacingRepair =
                 AnswerPlayerFacingRepairPolicy.planFor(modelRequest, draft);
         if (playerFacingRepair.required()) {
@@ -84,7 +83,7 @@ final class AnswerDraftComposer {
             if (draft == null || !draft.answerable()) {
                 return Result.failure(
                         AnswerStatus.INSUFFICIENT_EVIDENCE,
-                        AnswerRepairOutcomePolicy.insufficientRepairMessage(playerFacingRepair.feedback()));
+                        "回答修订后仍无法通过发布校验。");
             }
             draft = AnswerStructuredDraftPolicy.retainSelected(modelRequest, draft).draft();
             Optional<AnswerRepairOutcomePolicy.PublicationFailure> failure =
@@ -117,8 +116,8 @@ final class AnswerDraftComposer {
                     List.of(
                             "The draft failed the final schema or citation validation.",
                             "Return a complete answer using only citationIds present in supplied evidence.",
-                            "Keep shortVerdict nonblank, one or two plain sentences, and at most 200 characters; keep explanation nonblank and at most 1500 characters; keep citationIds nonempty.",
-                            "Preserve structured fields that already satisfy their contract unless they caused the stated validation failure. In particular, keep each termDefinitions definition at most 600 characters and boundary at most 400 characters.",
+                            "Keep shortVerdict and explanation nonblank, natural, and detailed enough to apply at the table; keep citationIds nonempty.",
+                            "Preserve structured fields that already satisfy their schema and evidence contract unless they caused the stated validation failure.",
                             "For a SOURCE request or a question asking where the rule appears, use one or two direct citationIds, keep the most direct clause first, answer the question in shortVerdict, and explain that clause in plain player language instead of redirecting to a page.",
                             "For a SOURCE request, do not add ownership or hand location, and do not change 'during a turn or phase' into 'at the end or completion of' that turn or phase unless the cited clause says so.",
                             "For a SOURCE request, preserve the exact grammatical number of every capitalized official term from the cited clause; do not invent a singular or plural form.",

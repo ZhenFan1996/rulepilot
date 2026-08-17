@@ -153,8 +153,8 @@ public record IllustratedLesson(
         }
 
         public VisualFocus {
-            if (pageNumber < 1 || label == null || label.isBlank() || label.length() > 80
-                    || visibleDescription == null || visibleDescription.length() > 240
+            if (pageNumber < 1 || label == null || label.isBlank()
+                    || visibleDescription == null
                     || x < 0 || x > 980 || y < 0 || y > 980
                     || width < 20 || width > 1_000 - x
                     || height < 20 || height > 1_000 - y) {

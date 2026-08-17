@@ -2,7 +2,6 @@ package com.rulepilot.recommendation.application;
 
 import static com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ASK_TOOL;
 import static com.rulepilot.recommendation.application.BoardGameRecommendationAgent.BROWSE_TOOL;
-import static com.rulepilot.recommendation.application.BoardGameRecommendationAgent.COMPARISON_SUBJECTS;
 import static com.rulepilot.recommendation.application.BoardGameRecommendationAgent.COMPARE_TOOL;
 import static com.rulepilot.recommendation.application.BoardGameRecommendationAgent.DISCOVER_TOOL;
 import static com.rulepilot.recommendation.application.BoardGameRecommendationAgent.LOOKUP_TOOL;
@@ -68,11 +67,6 @@ import org.slf4j.LoggerFactory;
 /** Implements the eleven allow-listed recommendation actions over application-owned tools. */
 final class RecommendationActions {
 
-    private static final int MAX_RECOMMENDATION_MESSAGE_CHARACTERS = 1_200;
-    private static final Set<String> OPTIONAL_PREFERENCE_LINK_ISSUES = Set.of(
-            "PREFERENCE_LINK_EVIDENCE_NOT_GROUNDED",
-            "PREFERENCE_LINK_QUOTE_NOT_GROUNDED",
-            "PREFERENCE_LINK_TAXONOMY_NOT_VERIFIED");
     private static final Logger LOGGER = LoggerFactory.getLogger(BoardGameRecommendationAgent.class);
 
     private final BoardGameRecommendationTools tools;
@@ -146,22 +140,15 @@ final class RecommendationActions {
             String locale) {
         requireObject(arguments, Set.of("message"), Set.of("referencedBggIds", "preferenceUpdates"));
         evidenceReview.applyPreferenceUpdates(arguments, state, request);
-        String message = text(arguments.path("message"), 1, 1_200);
+        String message = playerFacingText(arguments.path("message"));
         List<Integer> referencedIds = arguments.has("referencedBggIds")
                 ? ids(arguments.path("referencedBggIds"), 0, 5)
                 : List.of();
         if (referencedIds.stream().anyMatch(id -> !state.verified.containsKey(id))) {
             throw new InvalidAction("REPLY_ID_NOT_VERIFIED");
         }
-        Set<Integer> mentionedIds = state.verified.entrySet().stream()
-                .filter(entry -> mentionsObservedTitle(message, entry.getValue()))
-                .map(Map.Entry::getKey)
-                .collect(java.util.stream.Collectors.toUnmodifiableSet());
-        boolean omitsNamedEvidence = !new LinkedHashSet<>(referencedIds).containsAll(mentionedIds);
-        boolean introducesCandidateWithoutCards = referencedIds.stream().anyMatch(id ->
-                !Objects.equals(request.focusedBggId(), id)
-                        && !userMentionedObservedTitle(request, state.verified.get(id)));
-        if (omitsNamedEvidence || introducesCandidateWithoutCards) {
+        if (referencedIds.stream().anyMatch(id ->
+                !state.comparisonSubjectIds.contains(id) && !state.targetGameIds.contains(id))) {
             throw new InvalidAction("REPLY_RECOMMENDATION_REQUIRES_CARDS");
         }
         state.actions.add("REPLY_TO_USER");
@@ -181,12 +168,17 @@ final class RecommendationActions {
             String locale) {
         requireObject(arguments, Set.of("question"), Set.of("options", "preferenceUpdates"));
         evidenceReview.applyPreferenceUpdatesForRead(arguments, state, request);
-        String question = text(arguments.path("question"), 1, 500);
-        List<ClarificationOption> options = arguments.has("options")
-                ? strings(arguments.path("options"), 2, 3, 1, 60).stream()
+        String question = playerFacingText(arguments.path("question"));
+        List<ClarificationOption> options = List.of();
+        if (arguments.has("options")) {
+            try {
+                options = playerFacingStrings(arguments.path("options"), 2, 3).stream()
                         .map(option -> new ClarificationOption(option, option))
-                        .toList()
-                : List.of();
+                        .toList();
+            } catch (InvalidAction invalid) {
+                state.actions.add("DROPPED_OPTIONAL_CLARIFICATION_OPTIONS:" + invalid.code);
+            }
+        }
         state.actions.add("ASK_USER");
         return ActionOutcome.terminal(response(
                 Outcome.NEEDS_CLARIFICATION,
@@ -210,11 +202,8 @@ final class RecommendationActions {
         if (!state.comparisonSubjectIds.containsAll(candidateIds)) {
             throw new InvalidAction("COMPARISON_CANDIDATE_NOT_IN_CONVERSATION");
         }
-        List<String> subjects = strings(arguments.path("subjects"), 1, 3, 1, 40);
-        if (subjects.stream().anyMatch(subject -> !COMPARISON_SUBJECTS.contains(subject))) {
-            throw new InvalidAction("COMPARISON_SUBJECT_INVALID");
-        }
-        String message = text(arguments.path("message"), 1, 1_200);
+        List<String> subjects = playerFacingStrings(arguments.path("subjects"), 1, 3);
+        String message = playerFacingText(arguments.path("message"));
 
         List<ComparisonCandidate> candidates = games.stream()
                 .map(game -> new ComparisonCandidate(
@@ -309,8 +298,7 @@ final class RecommendationActions {
             // exclusion remains authoritative, while stale recommendation preferences do not.
             if (purpose == NamedGamePurpose.TARGET_GAME
                     && !state.excludedIds.contains(resolvedId)) {
-                String message = text(
-                        arguments.path("message"), 1, MAX_RECOMMENDATION_MESSAGE_CHARACTERS);
+                String message = playerFacingText(arguments.path("message"));
                 progress.accept(ProgressStage.COMPOSING_RESPONSE);
                 state.actions.add("RECOMMEND_GAMES");
                 List<RecommendedGame> games = selector.present(
@@ -422,7 +410,7 @@ final class RecommendationActions {
                 "preferenceUpdateWarning", preferenceWarning,
                 "guidance", eligible.isEmpty()
                         ? "The one bounded catalog browse produced no hard-gate-eligible game and is now complete. Use a different available capability or finish transparently; do not browse again in this run."
-                        : "These are broad catalog candidates, not proof of personal fit. Compare their observed facts before finishing; do not browse again in this run.",
+                        : "These are broad catalog candidates and prove only their listed BGG observations. If any player-requested selection criterion is absent from those observations, public discovery remains available and must supply that evidence before recommendation. Otherwise compare the facts and finish; do not browse again.",
                 "verifiedBggIds", eligible.stream().map(game -> game.ranking().bggId()).toList())));
     }
 
@@ -548,8 +536,7 @@ final class RecommendationActions {
                 Set.of("message", "selections"),
                 Set.of("referenceBggIds", "preferenceUpdates", "shortfall"));
         evidenceReview.applyPreferenceUpdates(arguments, state, request);
-        String proposedMessage = text(
-                arguments.path("message"), 1, MAX_RECOMMENDATION_MESSAGE_CHARACTERS);
+        String proposedMessage = playerFacingText(arguments.path("message"));
         List<Integer> rawReferenceIds = arguments.has("referenceBggIds")
                 ? ids(arguments.path("referenceBggIds"), 0, MAX_VERIFIED_GAMES)
                 : List.of();
@@ -596,10 +583,13 @@ final class RecommendationActions {
             try {
                 BoardGameRecommendationSelector.CandidateNarrative narrative = validatedCandidateNarrative(
                         selection,
-                        game);
+                        game,
+                        state);
                 if (narrative != null) narratives.put(id, narrative);
             } catch (InvalidAction invalid) {
                 state.actions.add("DROPPED_OPTIONAL_CANDIDATE_NARRATIVE:" + invalid.code);
+            } catch (IllegalArgumentException invalid) {
+                state.actions.add("DROPPED_OPTIONAL_CANDIDATE_NARRATIVE:INVALID_OPTIONAL_NARRATIVE");
             }
             if (selection.has("preferenceLink")) {
                 try {
@@ -607,8 +597,9 @@ final class RecommendationActions {
                             id,
                             validatedPreferenceLink(selection.path("preferenceLink"), game, userEvidence));
                 } catch (InvalidAction invalid) {
-                    if (!OPTIONAL_PREFERENCE_LINK_ISSUES.contains(invalid.code)) throw invalid;
                     state.actions.add("DROPPED_OPTIONAL_PREFERENCE_LINK:" + invalid.code);
+                } catch (IllegalArgumentException invalid) {
+                    state.actions.add("DROPPED_OPTIONAL_PREFERENCE_LINK:INVALID_OPTIONAL_LINK");
                 }
             }
         }
@@ -675,8 +666,8 @@ final class RecommendationActions {
         JsonNode shortfall = arguments.path("shortfall");
         requireObject(
                 shortfall,
-                Set.of("requestedCount", "availableCount", "relaxationOptions"),
-                Set.of());
+                Set.of("requestedCount", "availableCount"),
+                Set.of("relaxationOptions"));
         int proposedRequested = integer(
                 shortfall.path("requestedCount"), 1, state.maximumRecommendationResults, "SHORTFALL_COUNT_INVALID");
         int proposedAvailable = integer(
@@ -685,6 +676,17 @@ final class RecommendationActions {
             throw new InvalidAction("SHORTFALL_COUNT_INVALID");
         }
 
+        try {
+            return validatedShortfallRelaxationOptions(shortfall, state);
+        } catch (InvalidAction invalid) {
+            state.actions.add("DROPPED_OPTIONAL_SHORTFALL_RELAXATION:" + invalid.code);
+            return List.of();
+        }
+    }
+
+    private List<ClarificationOption> validatedShortfallRelaxationOptions(
+            JsonNode shortfall,
+            RecommendationAgentState state) {
         List<String> allowedSubjects = runtime.shortfallRelaxableSubjects(state.profile);
         JsonNode options = shortfall.path("relaxationOptions");
         int minimumOptions = allowedSubjects.isEmpty() ? 0 : 1;
@@ -700,7 +702,7 @@ final class RecommendationActions {
             if (!allowedSubjects.contains(subject) || !subjects.add(subject)) {
                 throw new InvalidAction("SHORTFALL_RELAXATION_INVALID");
             }
-            String reply = text(option.path("reply"), 4, 120);
+            String reply = playerFacingText(option.path("reply"));
             optionsForPlayer.add(new ClarificationOption(reply, reply));
         }
         return List.copyOf(optionsForPlayer);
@@ -708,7 +710,8 @@ final class RecommendationActions {
 
     private BoardGameRecommendationSelector.CandidateNarrative validatedCandidateNarrative(
             JsonNode selection,
-            Game game) {
+            Game game,
+            RecommendationAgentState state) {
         boolean hasNarrative = selection.has("why")
                 || selection.has("tradeoff")
                 || selection.has("internalEvidenceIds");
@@ -716,30 +719,70 @@ final class RecommendationActions {
         if (!selection.has("why") || !selection.has("internalEvidenceIds")) {
             throw new InvalidAction("CANDIDATE_NARRATIVE_INCOMPLETE");
         }
-        String why = text(selection.path("why"), 8, 500);
+        String why = playerFacingText(selection.path("why"));
         String tradeoff = selection.has("tradeoff")
-                ? text(selection.path("tradeoff"), 4, 320)
+                ? playerFacingText(selection.path("tradeoff"))
                 : "";
-        List<String> internalEvidenceIds = strings(selection.path("internalEvidenceIds"), 1, 5, 3, 80);
-        Map<String, CandidateObservation> observations = selector.observations(game).stream()
-                .collect(java.util.stream.Collectors.toUnmodifiableMap(
-                        CandidateObservation::id,
-                        observation -> observation));
-        if (internalEvidenceIds.stream().anyMatch(id -> !observations.containsKey(id))) {
+        Map<String, CandidateObservation> observations = narrativeObservations(game, state.research);
+        List<String> internalEvidenceIds = strings(
+                selection.path("internalEvidenceIds"),
+                1,
+                observations.size(),
+                3,
+                80);
+        List<String> candidateEvidenceIds = internalEvidenceIds.stream()
+                .filter(observations::containsKey)
+                .toList();
+        int droppedEvidenceIds = internalEvidenceIds.size() - candidateEvidenceIds.size();
+        if (candidateEvidenceIds.isEmpty()) {
             throw new InvalidAction("CANDIDATE_NARRATIVE_EVIDENCE_WRONG_CANDIDATE");
         }
-        List<String> visibleInternalIds = observations.keySet().stream()
-                .filter(id -> why.contains(id) || tradeoff.contains(id))
-                .sorted()
-                .limit(5)
-                .toList();
-        if (!visibleInternalIds.isEmpty()) {
-            throw new InvalidAction("CANDIDATE_NARRATIVE_INTERNAL_EVIDENCE_ID_VISIBLE");
+        if (droppedEvidenceIds > 0) {
+            state.actions.add("DROPPED_OPTIONAL_CROSS_CANDIDATE_EVIDENCE_IDS:" + droppedEvidenceIds);
         }
         return new BoardGameRecommendationSelector.CandidateNarrative(
                 why,
                 tradeoff,
-                internalEvidenceIds.stream().map(observations::get).toList());
+                candidateEvidenceIds.stream().map(observations::get).toList());
+    }
+
+    Map<String, CandidateObservation> narrativeObservations(Game game, Research research) {
+        LinkedHashMap<String, CandidateObservation> observations = selector.observations(game).stream()
+                .collect(java.util.stream.Collectors.toMap(
+                        CandidateObservation::id,
+                        observation -> observation,
+                        (first, ignored) -> first,
+                        LinkedHashMap::new));
+        observations.putAll(researchObservations(game.ranking().bggId(), research));
+        return java.util.Collections.unmodifiableMap(new LinkedHashMap<>(observations));
+    }
+
+    Map<String, CandidateObservation> researchObservations(int bggId, Research research) {
+        LinkedHashMap<String, CandidateObservation> observations = new LinkedHashMap<>();
+        if (research == null) return Map.of();
+        research.games().stream()
+                .filter(game -> game.bggId() == bggId)
+                .findFirst()
+                .ifPresent(game -> {
+                    int ordinal = 0;
+                    for (Observation observation : game.observations()) {
+                        if (observation == null
+                                || observation.text() == null
+                                || observation.text().isBlank()
+                                || observation.sourceIndexes().isEmpty()) {
+                            continue;
+                        }
+                        String id = "R" + bggId + ":" + (++ordinal);
+                        observations.put(id, new CandidateObservation(
+                                id,
+                                bggId,
+                                CandidateObservation.Kind.ATTRIBUTED_REPORT,
+                                "attributedReport",
+                                observation.text(),
+                                observation.sourceIndexes()));
+                    }
+                });
+        return java.util.Collections.unmodifiableMap(new LinkedHashMap<>(observations));
     }
 
     private BoardGameRecommendationSelector.PreferenceLink validatedPreferenceLink(
@@ -809,8 +852,8 @@ final class RecommendationActions {
                 "Use each allowed shortfall subject at most once and write one concrete direct player reply that relaxes only that bound.";
             case "CANDIDATE_NARRATIVE_EVIDENCE_WRONG_CANDIDATE" ->
                 "Every candidate narrative evidenceId must come from that same selected game's observation map. Do not move evidence across candidates.";
-            case "CANDIDATE_NARRATIVE_INTERNAL_EVIDENCE_ID_VISIBLE" ->
-                "Evidence IDs belong only in internalEvidenceIds. Remove them from player-visible why/tradeoff while preserving the natural cited values; do not add taxonomy or experience claims.";
+            case "INVALID_JSON" ->
+                "Return a fresh action with valid JSON arguments and escape string content correctly.";
             case "PREFERENCE_EVIDENCE_NOT_GROUNDED" ->
                 "Use the exact evidenceId shown beside the user-authored message that states this hard constraint, or continue without changing the typed profile.";
             case "PREFERENCE_EVIDENCE_CLASSIFICATION_INVALID" ->
@@ -878,11 +921,11 @@ final class RecommendationActions {
     Map<String, Object> gameObservation(Game game) {
         Map<String, Object> value = new LinkedHashMap<>();
         value.put("bggId", game.ranking().bggId());
-        value.put("name", runtime.bounded(game.ranking().sourceName(), 120));
+        value.put("name", game.ranking().sourceName());
         putIfKnown(value, "year", game.ranking().publicationYear());
         if (game.details() == null) return value;
         var details = game.details();
-        putIfText(value, "officialChineseName", details.officialChineseName(), 80);
+        putIfText(value, "officialChineseName", details.officialChineseName());
         Map<String, List<String>> observations = selector.observations(game).stream()
                 .collect(java.util.stream.Collectors.toMap(
                         CandidateObservation::id,
@@ -906,28 +949,16 @@ final class RecommendationActions {
         if (value != null) target.put(key, value);
     }
 
-    private void putIfText(Map<String, Object> target, String key, String value, int maximum) {
-        String checked = runtime.bounded(value, maximum);
-        if (!checked.isBlank()) target.put(key, checked);
-    }
-
-    private void putIfValues(
-            Map<String, Object> target,
-            String key,
-            List<String> values,
-            int maximumItems,
-            int maximumCharacters) {
-        List<String> checked = runtime.bounded(values, maximumItems, maximumCharacters);
-        if (!checked.isEmpty()) target.put(key, checked);
+    private void putIfText(Map<String, Object> target, String key, String value) {
+        if (value != null && !value.isBlank()) target.put(key, value);
     }
 
     List<Map<String, Object>> sourceObservations(List<Source> sources) {
         return sources.stream()
-                .limit(8)
                 .map(source -> Map.<String, Object>of(
                         "index", source.index(),
-                        "title", runtime.bounded(source.title(), 120),
-                        "domain", runtime.bounded(source.domain(), 100)))
+                        "title", source.title() == null ? "" : source.title(),
+                        "domain", source.domain() == null ? "" : source.domain()))
                 .toList();
     }
 
@@ -950,12 +981,11 @@ final class RecommendationActions {
                 .map(observation -> new Observation(
                         observation.text(),
                         observation.sourceIndexes().stream().map(remapped::get).toList()))
-                .limit(3)
                 .forEach(observation -> observations
                         .computeIfAbsent(game.bggId(), ignored -> new ArrayList<>())
                         .add(observation)));
         List<GameResearch> games = observations.entrySet().stream()
-                .map(entry -> new GameResearch(entry.getKey(), entry.getValue().stream().limit(4).toList()))
+                .map(entry -> new GameResearch(entry.getKey(), List.copyOf(entry.getValue())))
                 .toList();
         return new Research(games, List.copyOf(sources));
     }
@@ -984,10 +1014,9 @@ final class RecommendationActions {
                         .map(game -> new GameResearch(
                                 game.ranking().bggId(),
                                 List.of(new Observation(
-                                        runtime.bounded(candidate.fitObservation(), 240),
+                                        candidate.fitObservation(),
                                         candidate.sourceIndexes().stream()
                                                 .filter(sourceIndexes::contains)
-                                                .limit(3)
                                                 .toList()))))
                         .stream())
                 .filter(game -> game.observations().stream()
@@ -1035,6 +1064,24 @@ final class RecommendationActions {
         String value = node.asText().strip();
         if (value.length() < minimum || value.length() > maximum) throw new InvalidAction("TEXT_LENGTH_INVALID");
         return value;
+    }
+
+    private String playerFacingText(JsonNode node) {
+        if (!node.isTextual()) throw new InvalidAction("TEXT_ARGUMENT_REQUIRED");
+        String value = node.asText();
+        if (value.isBlank()) throw new InvalidAction("TEXT_LENGTH_INVALID");
+        return value;
+    }
+
+    private List<String> playerFacingStrings(JsonNode node, int minimumItems, int maximumItems) {
+        if (!node.isArray() || node.size() < minimumItems || node.size() > maximumItems) {
+            throw new InvalidAction("STRING_LIST_INVALID");
+        }
+        List<String> values = new ArrayList<>();
+        for (JsonNode value : node) values.add(playerFacingText(value));
+        List<String> distinct = values.stream().distinct().toList();
+        if (distinct.size() != values.size()) throw new InvalidAction("DUPLICATE_LIST_VALUE");
+        return distinct;
     }
 
     private List<String> strings(JsonNode node, int minimumItems, int maximumItems, int minimumLength, int maximumLength) {
@@ -1090,32 +1137,6 @@ final class RecommendationActions {
         List<E> distinct = values.stream().distinct().toList();
         if (distinct.size() != values.size()) throw new InvalidAction(code);
         return distinct;
-    }
-
-    private String normalizedEvidence(String value) {
-        return Normalizer.normalize(value == null ? "" : value, Normalizer.Form.NFKC)
-                .strip()
-                .replaceAll("\\s+", " ");
-    }
-
-    private boolean mentionsObservedTitle(String message, Game game) {
-        String normalizedMessage = normalizedEvidence(message).toLowerCase(Locale.ROOT);
-        List<String> titles = new ArrayList<>();
-        titles.add(game.ranking().sourceName());
-        if (game.details() != null) titles.add(game.details().officialChineseName());
-        return titles.stream()
-                .filter(Objects::nonNull)
-                .map(this::normalizedEvidence)
-                .map(value -> value.toLowerCase(Locale.ROOT))
-                .filter(value -> value.codePointCount(0, value.length()) >= 3)
-                .anyMatch(normalizedMessage::contains);
-    }
-
-    private boolean userMentionedObservedTitle(ConversationRequest request, Game game) {
-        return request.transcript().stream()
-                .filter(message -> "user".equals(message.role()))
-                .map(DialogueMessage::text)
-                .anyMatch(message -> mentionsObservedTitle(message, game));
     }
 
     private boolean playerAuthoredTitle(ConversationRequest request, String title) {

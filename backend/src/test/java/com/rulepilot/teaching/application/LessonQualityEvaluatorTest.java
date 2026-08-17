@@ -70,9 +70,9 @@ class LessonQualityEvaluatorTest {
                 .singleElement()
                 .satisfies(check -> {
                     assertThat(check.status()).isEqualTo(CheckStatus.NOT_EVALUATED);
-                    assertThat(check.summary()).contains("已核对 0 / 3");
+                    assertThat(check.summary()).contains("已完成发布校验 0 / 3");
                     assertThat(check.detail())
-                            .contains("不能确认整套讲解可以独立开桌")
+                            .contains("未完成引用归属、规则书版本与结构校验")
                             .doesNotContain("完整基础讲解已经可读");
                 });
         assertThat(report.checks())
@@ -80,15 +80,8 @@ class LessonQualityEvaluatorTest {
                 .extracting(check -> check.status())
                 .containsExactly(CheckStatus.PASS);
         assertThat(report.checks())
-                .filteredOn(check -> check.type() == CheckType.SETUP_EXECUTABILITY
-                        || check.type() == CheckType.END_AND_SCORING_COMPLETENESS)
-                .allSatisfy(check -> {
-                    assertThat(check.status()).isEqualTo(CheckStatus.NOT_EVALUATED);
-                    assertThat(check.summary()).contains("待核对");
-                    assertThat(check.detail())
-                            .contains("不能确认")
-                            .doesNotContain("可以使用");
-                });
+                .noneMatch(check -> check.type() == CheckType.SETUP_EXECUTABILITY
+                        || check.type() == CheckType.END_AND_SCORING_COMPLETENESS);
     }
 
     @Test
@@ -122,7 +115,7 @@ class LessonQualityEvaluatorTest {
     }
 
     @Test
-    void reportsTheValidatedPlanUnitReceiptSeparatelyFromChapterCountAndReviewState() {
+    void reportsSourceOwnerPageValidationWithoutClaimingPerRuleGroupSemanticReview() {
         UUID versionId = UUID.randomUUID();
         List<String> ruleGroups = List.of(
                 "turn start", "ordinary action", "alternative action", "movement",
@@ -165,8 +158,8 @@ class LessonQualityEvaluatorTest {
                 .singleElement()
                 .satisfies(check -> {
                     assertThat(check.status()).isEqualTo(CheckStatus.NOT_EVALUATED);
-                    assertThat(check.summary()).isEqualTo("来源规则组已核对 0 / 8");
-                    assertThat(check.detail()).contains("已有引用", "未通过");
+                    assertThat(check.summary()).isEqualTo("来源归属章节已完成发布校验 0 / 1");
+                    assertThat(check.detail()).contains("已有绑定页引用", "未完成发布校验");
                 });
 
         LessonSection supported = new LessonSection(
@@ -187,7 +180,7 @@ class LessonQualityEvaluatorTest {
                 .singleElement()
                 .satisfies(check -> {
                     assertThat(check.status()).isEqualTo(CheckStatus.PASS);
-                    assertThat(check.summary()).isEqualTo("来源规则组已核对 8 / 8");
+                    assertThat(check.summary()).isEqualTo("来源归属章节已完成发布校验 1 / 1");
                 });
 
         List<LessonStep> individuallyBoundSteps = java.util.stream.IntStream.range(0, ruleGroups.size())
@@ -217,7 +210,7 @@ class LessonQualityEvaluatorTest {
                 .singleElement()
                 .satisfies(check -> {
                     assertThat(check.status()).isEqualTo(CheckStatus.PASS);
-                    assertThat(check.summary()).isEqualTo("来源规则组已核对 8 / 8");
+                    assertThat(check.summary()).isEqualTo("来源归属章节已完成发布校验 1 / 1");
                 });
     }
 
@@ -272,10 +265,8 @@ class LessonQualityEvaluatorTest {
                     assertThat(check.detail()).contains("Quick Start Guide", "第 1 页", "不包含开局步骤");
                 });
         assertThat(report.checks())
-                .filteredOn(check -> check.type() == CheckType.SETUP_EXECUTABILITY)
-                .singleElement()
-                .extracting(check -> check.status())
-                .isEqualTo(CheckStatus.FAIL);
+                .noneMatch(check -> check.type() == CheckType.SETUP_EXECUTABILITY
+                        || check.type() == CheckType.END_AND_SCORING_COMPLETENESS);
     }
 
     @Test
@@ -323,7 +314,7 @@ class LessonQualityEvaluatorTest {
                 .singleElement()
                 .satisfies(check -> {
                     assertThat(check.status()).isEqualTo(CheckStatus.FAIL);
-                    assertThat(check.summary()).isEqualTo("来源规则组已核对 0 / 1");
+                    assertThat(check.summary()).isEqualTo("来源归属章节已完成发布校验 0 / 1");
                 });
     }
 

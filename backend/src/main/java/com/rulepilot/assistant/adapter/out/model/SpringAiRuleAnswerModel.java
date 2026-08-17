@@ -212,7 +212,6 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
             return draft.queries().stream()
                     .filter(query -> query != null && !query.isBlank())
                     .map(String::strip)
-                    .filter(query -> query.length() <= 500)
                     .distinct()
                     .limit(2)
                     .collect(Collectors.toUnmodifiableList());

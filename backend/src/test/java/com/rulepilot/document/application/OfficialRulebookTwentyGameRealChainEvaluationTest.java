@@ -533,6 +533,11 @@ class OfficialRulebookTwentyGameRealChainEvaluationTest {
         }
 
         @Override
+        public int countPages(UUID versionId) {
+            return 0;
+        }
+
+        @Override
         public List<DocumentProcessing.PageView> findPages(UUID versionId) {
             return List.of();
         }

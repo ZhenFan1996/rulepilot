@@ -162,12 +162,15 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   login: '登录后即可保留这次选择并继续找规则书。', loginAction: '打开桌游详情并继续',
   error: '这一步暂时没有完成；推荐对话和已选桌游不会受影响。', partialFailure: '已生成的章节仍可阅读，但后台生成或核对没有完整结束。可以安全重试，现有内容不会丢失。', retry: '重试当前步骤', close: '关闭小窗', change: '换一款',
   safe: '可以关闭这个小窗继续聊天；下载、规则书处理和讲解生成会继续。',
-  progress: '完整链路进度', current: '现在正在做', generationSteps: '讲解生成步骤', generationLatest: '最新实际进度', generationProcessHint: '后台会按下面的顺序推进；进入逐章生成后，这四步会对每一章重复。', planning: '规划中', pollingWarning: '暂时没有拿到最新进度，正在自动重试；已确认的进度不会倒退。',
+  progress: '完整链路进度', current: '现在正在做', generationSteps: '讲解生成步骤', generationLatest: '最新实际进度', generationProcessHint: '真实后台活动会在下方逐条追加；进入逐章生成后，第 4～7 步会按章节重复。', planning: '规划中', pollingWarning: '暂时没有拿到最新进度，正在自动重试；已确认的进度不会倒退。',
   generationProcess: [
+    '图片规则书先逐页识别可见文字；文字版直接读取原文',
+    '按页面整理规则组，并记录规则书要求的外部资料',
     '通读整本规则书，形成整局认识并规划章节',
-    '读取每一章需要引用的规则书页面',
-    '依据原文编写玩家可以直接照做的讲解',
-    '校验引用、章节结构与数量边界，通过后逐章发布',
+    '读取当前章节绑定的规则页与引用',
+    '依据原文生成玩家可以直接照做的讲解步骤',
+    '校验引用归属、规则书版本与章节结构',
+    '通过后立即发布当前章节，再继续下一章',
   ],
   generationFallback: {
     queued: '讲解准备任务已排队，等待后台开始通读规则书',
@@ -227,12 +230,15 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   login: 'Sign in to keep this selection and continue to its rulebook.', loginAction: 'Open game details and continue',
   error: 'This step did not complete. The conversation and selected game are unaffected.', partialFailure: 'Published chapters remain readable, but background generation or review did not finish. You can retry safely without losing existing content.', retry: 'Retry this step', close: 'Close', change: 'Choose another game',
   safe: 'You may close this panel and keep chatting. Download, rulebook processing, and guide generation will continue.',
-  progress: 'End-to-end progress', current: 'Working on', generationSteps: 'Guide generation steps', generationLatest: 'Latest actual progress', generationProcessHint: 'The background task follows this order. Once chapter writing starts, these four steps repeat for each chapter.', planning: 'Planning', pollingWarning: 'The latest update is temporarily unavailable. Retrying automatically without rolling back confirmed progress.',
+  progress: 'End-to-end progress', current: 'Working on', generationSteps: 'Guide generation steps', generationLatest: 'Latest actual progress', generationProcessHint: 'Real background activities are appended below. Once chapter writing starts, steps 4–7 repeat for each chapter.', planning: 'Planning', pollingWarning: 'The latest update is temporarily unavailable. Retrying automatically without rolling back confirmed progress.',
   generationProcess: [
+    'Transcribe each image-only page; read the original text directly when a text layer is available',
+    'Organise each page into rule groups and record any external material the rulebook requires',
     'Read the whole rulebook, form a whole-game view, and plan the chapters',
-    'Read the rulebook pages needed by each chapter',
-    'Write player-actionable guidance directly from the source',
-    'Check citations, chapter structure, and quantities, then publish each chapter',
+    'Read the source pages and citations bound to the current chapter',
+    'Generate player-actionable teaching steps directly from the source',
+    'Check citation ownership, rulebook version, and chapter structure',
+    'Publish the current chapter immediately, then continue with the next one',
   ],
   generationFallback: {
     queued: 'Guide preparation is queued and waiting to start reading the rulebook',
@@ -429,7 +435,7 @@ const journeyTeachingSteps = computed(() => {
     teachingRun.value.activities as unknown as TeachingActivity[],
     locale.value,
   ).map(step => ({ ...step, key: `chapter-${step.sequence}` }))
-  return [...preparationSteps, ...chapterSteps].slice(-6)
+  return [...preparationSteps, ...chapterSteps]
 })
 const teachingJourneyPhases = new Set([
   'TEACHING_PREPARATION_QUEUED', 'TEACHING_PREPARING', 'LESSON_GENERATION_QUEUED',
@@ -437,7 +443,7 @@ const teachingJourneyPhases = new Set([
 ])
 const showTeachingGenerationSteps = computed(() => teachingJourneyPhases.has(projection.value.phase))
 const visibleJourneyTeachingSteps = computed(() => {
-  if (journeyTeachingSteps.value.length) return journeyTeachingSteps.value
+  if (journeyTeachingSteps.value.length) return [...journeyTeachingSteps.value].reverse()
   const phase = projection.value.phase
   const preparationState = preparationRun.value?.run.state
   let text = copy.value.generationFallback.queued
@@ -1364,7 +1370,7 @@ onBeforeUnmount(() => {
             </li>
           </ol>
           <p class="mt-3 text-[11px] font-bold uppercase tracking-[0.08em] text-ink/45">{{ copy.generationLatest }}</p>
-          <ol class="mt-2 grid gap-2 sm:grid-cols-2">
+          <ol class="mt-2 grid max-h-72 gap-2 overflow-y-auto pr-1 sm:grid-cols-2">
             <li
               v-for="step in visibleJourneyTeachingSteps"
               :key="step.key"

@@ -66,8 +66,7 @@ export function useLessonGenerationPresentation(options: UseLessonGenerationPres
   const generationRemainingTime = computed(() => options.plan.value
     ? teachingRemainingTimeText(options.plan.value, options.generationRun.value, options.now.value, locale.value)
     : '')
-  const recentGenerationActivities = computed(() => generationActivities.value
-    .slice(-3)
+  const recentGenerationActivities = computed(() => [...generationActivities.value]
     .reverse()
     .map((activity) => ({
       sequence: activity.sequence,

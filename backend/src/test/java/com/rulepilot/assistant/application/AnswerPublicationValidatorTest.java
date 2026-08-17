@@ -85,23 +85,36 @@ class AnswerPublicationValidatorTest {
     }
 
     @Test
-    void rejectsTheKnownShortEvidenceHandleObservedInPlayerFacingProse() {
+    void preservesAPlayerFacingShortHandleBecauseOnlyTheTypedFullIdentityIsAuthoritative() {
         AnswerPublicationValidator validator = new AnswerPublicationValidator(verified());
         String shortHandle = chunkId.toString().substring(0, 8);
         ModelDraft leaking = new ModelDraft(
                 "按规则执行。", "来源 " + shortHandle + " 说明应这样处理。", List.of(chunkId), List.of(), "HIGH");
 
-        assertThatThrownBy(() -> validator.publish(versionId, leaking, List.of(evidence(versionId))))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("internal evidence");
+        var answer = validator.publish(versionId, leaking, List.of(evidence(versionId)));
+
+        assertThat(answer.explanation()).isEqualTo(leaking.explanation());
     }
 
     @Test
-    void rejectsInternalProtocolReferencesInsideStructuredPlayerFacingDetails() {
+    void preservesAnUnrelatedPublicIdentifierInsteadOfScanningEveryUuidAsInternal() {
+        AnswerPublicationValidator validator = new AnswerPublicationValidator(verified());
+        String publicScenarioId = UUID.randomUUID().toString();
+        String explanation = "Use public scenario " + publicScenarioId + "; it is printed on the setup card.";
+        ModelDraft natural = new ModelDraft(
+                "Use the printed scenario.", explanation, List.of(chunkId), List.of(), "HIGH");
+
+        var answer = validator.publish(versionId, natural, List.of(evidence(versionId)));
+
+        assertThat(answer.explanation()).isEqualTo(explanation);
+    }
+
+    @Test
+    void rejectsTheActiveEvidenceIdentityInsideStructuredPlayerFacingDetails() {
         AnswerPublicationValidator validator = new AnswerPublicationValidator(verified());
         RuleWalkthroughStep leakingStep = new RuleWalkthroughStep(
                 "Move the cobalt spindle.",
-                "Then run repairRuleTimingResolutions for " + UUID.randomUUID() + ".",
+                "Then use evidence " + chunkId + ".",
                 WalkthroughOrderBasis.RULE_ORDER,
                 List.of(chunkId));
 

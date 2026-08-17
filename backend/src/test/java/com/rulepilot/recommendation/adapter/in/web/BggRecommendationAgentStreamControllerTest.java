@@ -78,28 +78,45 @@ class BggRecommendationAgentStreamControllerTest {
     }
 
     @Test
-    void rejectsAnOversizedTurnBeforeStartingTheStreamOrCallingTheAgent() throws Exception {
+    void acceptsALongNaturalTurnAndPassesItUnchangedToTheStreamingAgent() throws Exception {
         BoardGameRecommendationAgent agent = mock(BoardGameRecommendationAgent.class);
         BggRecommendationPresentation presentation = mock(BggRecommendationPresentation.class);
+        String accepted = "😀".repeat(1_500) + "  A\n中";
+        when(agent.converse(any(), eq("zh-CN"), eq("player"), any())).thenAnswer(invocation -> {
+            var command = invocation.getArgument(0, BoardGameRecommendationAgent.ConversationRequest.class);
+            assertThat(command.message()).isEqualTo(accepted);
+            return new ConversationResponse(
+                    Outcome.CONVERSATION,
+                    DecisionMode.MODEL_ASSISTED,
+                    "完整收到。",
+                    RecommendationProfile.empty(),
+                    null,
+                    0,
+                    0,
+                    List.of());
+        });
+        when(presentation.localizeTaxonomy(List.of(), List.of(), "zh-CN"))
+                .thenReturn(new LocalizedTaxonomy(Map.of(), Map.of()));
         var controller = new BggRecommendationAgentStreamController(
                 agent, presentation, new SyncTaskExecutor());
-        var mockMvc = MockMvcBuilders.standaloneSetup(controller)
-                .setControllerAdvice(new RecommendationConversationExceptionHandler())
-                .build();
-        String rejected = "😀".repeat(500) + "中";
+        var mockMvc = MockMvcBuilders.standaloneSetup(controller).build();
 
-        mockMvc.perform(post("/api/v1/bgg/recommendation-agent/stream")
+        var pending = mockMvc.perform(post("/api/v1/bgg/recommendation-agent/stream")
                         .principal(() -> "player")
                         .queryParam("locale", "zh-CN")
                         .contentType(MediaType.APPLICATION_JSON)
                         .accept(MediaType.TEXT_EVENT_STREAM)
                         .content(new com.fasterxml.jackson.databind.ObjectMapper()
-                                .writeValueAsBytes(Map.of("message", rejected))))
-                .andExpect(status().isBadRequest())
-                .andExpect(request().asyncNotStarted())
-                .andExpect(jsonPath("$.code").value("message_too_long"));
+                                .writeValueAsBytes(Map.of("message", accepted))))
+                .andExpect(request().asyncStarted())
+                .andReturn();
 
-        verify(agent, never()).converse(any(), any(), any(), any());
+        String stream = mockMvc.perform(asyncDispatch(pending))
+                .andReturn()
+                .getResponse()
+                .getContentAsString(StandardCharsets.UTF_8);
+        assertThat(stream).contains("event:result", "完整收到。");
+        verify(agent).converse(any(), eq("zh-CN"), eq("player"), any());
     }
 
     @Test

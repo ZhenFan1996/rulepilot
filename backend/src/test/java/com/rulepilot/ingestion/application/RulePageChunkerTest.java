@@ -67,6 +67,22 @@ class RulePageChunkerTest {
     }
 
     @Test
+    void retainsNonEnglishRuleEvidenceEvenWhenLayoutHeuristicsMarkTheBottomBlockAsAFooter() {
+        String bottomRule = "ラウンド終了時、勝利点を 2 点得る。";
+        var page = new ExtractedPage(6, "得分\n" + bottomRule, List.of(
+                new ExtractedTextBlock(0, "得分", 50, 80, 240, 40),
+                new ExtractedTextBlock(1, bottomRule, 50, 950, 700, 24)));
+        var understanding = new RulebookUnderstandingBuilder().build(List.of(page));
+
+        assertThat(understanding.pageBlocks().getLast().role())
+                .isEqualTo(com.rulepilot.ingestion.layout.RulebookUnderstanding.BlockRole.FOOTER);
+
+        var chunks = chunker.chunk(List.of(page), understanding);
+
+        assertThat(chunks).extracting(chunk -> chunk.content()).anySatisfy(content -> assertThat(content).contains(bottomRule));
+    }
+
+    @Test
     void retainsImageOnlyPagesAsVisualEvidenceInsteadOfRejectingTheRulebook() {
         var chunks = chunker.chunk(List.of(new ExtractedPage(9, "")));
 

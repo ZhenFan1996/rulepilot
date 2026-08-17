@@ -1646,7 +1646,7 @@ class GroundedTeachingAgentTest {
     }
 
     @Test
-    void fallsBackToCompleteTextWhenVisualFocusCannotBeValidated() {
+    void dropsAnInvalidOptionalVisualFocusWithoutRewritingOrRecomposingTheStep() {
         UUID versionId = UUID.randomUUID();
         UUID chunkId = UUID.randomUUID();
         RuleEvidence visualEvidence = new RuleEvidence(
@@ -1714,11 +1714,12 @@ class GroundedTeachingAgentTest {
 
         assertThat(lesson.status()).isEqualTo(LessonStatus.COMPLETE);
         assertThat(lesson.sections().getFirst().steps()).singleElement().satisfies(step -> {
-            assertThat(step.kind()).isEqualTo(TeachingMove.DO);
+            assertThat(step.kind()).isEqualTo(TeachingMove.VISUAL);
+            assertThat(step.text()).isEqualTo("先在图中找到拼接后的主棋盘，再按同样关系摆到桌面中央。");
             assertThat(step.visualFocus()).isNull();
         });
-        assertThat(visualCompositions).hasValue(2);
-        assertThat(textCompositions).hasValue(1);
+        assertThat(visualCompositions).hasValue(1);
+        assertThat(textCompositions).hasValue(0);
     }
 
     @Test
@@ -1778,7 +1779,7 @@ class GroundedTeachingAgentTest {
     }
 
     @Test
-    void fallsBackToCitedTextWhenVisualRepairIsUnavailable() {
+    void doesNotCallVisualRepairWhenOnlyTheOptionalFocusIsInvalid() {
         UUID versionId = UUID.randomUUID();
         UUID chunkId = UUID.randomUUID();
         RuleEvidence visualEvidence = new RuleEvidence(
@@ -1845,7 +1846,7 @@ class GroundedTeachingAgentTest {
         assertThat(lesson.status()).isEqualTo(LessonStatus.COMPLETE);
         assertThat(lesson.sections().getFirst().steps().getFirst().visualFocus()).isNull();
         assertThat(visualCompositions).hasValue(1);
-        assertThat(textCompositions).hasValue(1);
+        assertThat(textCompositions).hasValue(0);
     }
 
     @Test
@@ -1886,7 +1887,7 @@ class GroundedTeachingAgentTest {
     }
 
     @Test
-    void withholdsUnresolvedExtractionMarkersInsteadOfInventingTheirMeaning() {
+    void preservesBracketedTermsAndEmojiWithoutAStaticContentVocabulary() {
         UUID versionId = UUID.randomUUID();
         UUID chunkId = UUID.randomUUID();
         RuleEvidence evidence = new RuleEvidence(
@@ -1918,9 +1919,12 @@ class GroundedTeachingAgentTest {
 
         var lesson = agent.create(plan(versionId), UUID.randomUUID());
 
-        assertThat(lesson.status()).isEqualTo(LessonStatus.INCOMPLETE);
-        assertThat(lesson.sections().getFirst().evidenceStatus())
-                .isEqualTo(EvidenceStatus.INSUFFICIENT_EVIDENCE);
+        assertThat(lesson.status()).isEqualTo(LessonStatus.COMPLETE);
+        assertThat(lesson.sections().getFirst().evidenceStatus()).isEqualTo(EvidenceStatus.SUPPORTED);
+        assertThat(lesson.sections().getFirst().steps()).singleElement().satisfies(step -> {
+            assertThat(step.heading()).isEqualTo("摆放 [BOOST] 与 👣 图标");
+            assertThat(step.text()).isEqualTo("把 [BOOST] 骰子和 👣 图标放在玩家板旁。");
+        });
     }
 
     @Test
@@ -2103,7 +2107,7 @@ class GroundedTeachingAgentTest {
     }
 
     @Test
-    void withholdsAWholePageFocusWhenTheModelAlsoFailsTheExplicitTextFallback() {
+    void preservesAValidWholePageFocusWithoutTreatingCropPreferenceAsAContentGate() {
         UUID versionId = UUID.randomUUID();
         UUID chunkId = UUID.randomUUID();
         RuleEvidence visualEvidence = new RuleEvidence(
@@ -2148,14 +2152,25 @@ class GroundedTeachingAgentTest {
 
         var lesson = agent.create(plan(versionId), UUID.randomUUID());
 
-        assertThat(lesson.status()).isEqualTo(LessonStatus.INCOMPLETE);
-        assertThat(compositions).hasValue(4);
-        assertThat(lesson.sections().getFirst().evidenceStatus())
-                .isEqualTo(EvidenceStatus.INSUFFICIENT_EVIDENCE);
+        assertThat(lesson.status()).isEqualTo(LessonStatus.COMPLETE);
+        assertThat(compositions).hasValue(1);
+        assertThat(lesson.sections().getFirst().evidenceStatus()).isEqualTo(EvidenceStatus.SUPPORTED);
+        assertThat(lesson.sections().getFirst().steps()).singleElement().satisfies(step -> {
+            assertThat(step.kind()).isEqualTo(TeachingMove.VISUAL);
+            assertThat(step.text()).isEqualTo("组装主棋盘并放到桌面中央。");
+            assertThat(step.visualFocus()).satisfies(focus -> {
+                assertThat(focus.pageNumber()).isEqualTo(4);
+                assertThat(focus.label()).isEqualTo("整页不是有效局部");
+                assertThat(focus.x()).isZero();
+                assertThat(focus.y()).isZero();
+                assertThat(focus.width()).isEqualTo(1_000);
+                assertThat(focus.height()).isEqualTo(1_000);
+            });
+        });
     }
 
     @Test
-    void withholdsAnUnbackedVisualBlockInsteadOfRewritingItsTeachingKind() {
+    void preservesAVisualTeachingMoveWithoutInventingOptionalFocusMetadata() {
         UUID versionId = UUID.randomUUID();
         UUID chunkId = UUID.randomUUID();
         AssistantReadTools tools = request -> List.of(evidence(chunkId, versionId));
@@ -2179,9 +2194,13 @@ class GroundedTeachingAgentTest {
 
         var lesson = agent.create(plan(versionId), UUID.randomUUID());
 
-        assertThat(lesson.status()).isEqualTo(LessonStatus.INCOMPLETE);
-        assertThat(lesson.sections().getFirst().evidenceStatus())
-                .isEqualTo(EvidenceStatus.INSUFFICIENT_EVIDENCE);
+        assertThat(lesson.status()).isEqualTo(LessonStatus.COMPLETE);
+        assertThat(lesson.sections().getFirst().evidenceStatus()).isEqualTo(EvidenceStatus.SUPPORTED);
+        assertThat(lesson.sections().getFirst().steps()).singleElement().satisfies(step -> {
+            assertThat(step.kind()).isEqualTo(TeachingMove.VISUAL);
+            assertThat(step.text()).isEqualTo("找到版图中央的放置区域。");
+            assertThat(step.visualFocus()).isNull();
+        });
     }
 
     @Test
@@ -2461,7 +2480,7 @@ class GroundedTeachingAgentTest {
     }
 
     @Test
-    void rejectsInferredEmojiUsedAsAMissingRulebookIcon() {
+    void preservesEmojiAsOrdinaryPlayerProseInsteadOfApplyingAnIconVocabulary() {
         UUID versionId = UUID.randomUUID();
         RuleEvidence evidence = evidence(UUID.randomUUID(), versionId);
         TeachingLessonModel model = request -> new SectionDraft(
@@ -2481,8 +2500,9 @@ class GroundedTeachingAgentTest {
 
         var lesson = agent.create(plan(versionId), UUID.randomUUID());
 
-        assertThat(lesson.status()).isEqualTo(LessonStatus.INCOMPLETE);
-        assertThat(lesson.sections().getFirst().evidenceStatus()).isEqualTo(EvidenceStatus.INSUFFICIENT_EVIDENCE);
+        assertThat(lesson.status()).isEqualTo(LessonStatus.COMPLETE);
+        assertThat(lesson.sections().getFirst().evidenceStatus()).isEqualTo(EvidenceStatus.SUPPORTED);
+        assertThat(lesson.sections().getFirst().steps().getFirst().text()).isEqualTo("领取一个🔬。");
     }
 
     @Test
@@ -2650,7 +2670,7 @@ class GroundedTeachingAgentTest {
     }
 
     @Test
-    void rejectsInternalShortEvidenceReferencesFromPlayerFacingSteps() {
+    void preservesAnOrdinaryShortLabelWithoutGuessingThatItIsAnInternalReference() {
         UUID versionId = UUID.randomUUID();
         RuleEvidence evidence = evidence(UUID.randomUUID(), versionId);
         TeachingLessonModel model = request -> new SectionDraft(
@@ -2673,9 +2693,10 @@ class GroundedTeachingAgentTest {
 
         var lesson = agent.create(plan(versionId), UUID.randomUUID());
 
-        assertThat(lesson.status()).isEqualTo(LessonStatus.INCOMPLETE);
-        assertThat(lesson.sections().getFirst().evidenceStatus())
-                .isEqualTo(EvidenceStatus.INSUFFICIENT_EVIDENCE);
+        assertThat(lesson.status()).isEqualTo(LessonStatus.COMPLETE);
+        assertThat(lesson.sections().getFirst().evidenceStatus()).isEqualTo(EvidenceStatus.SUPPORTED);
+        assertThat(lesson.sections().getFirst().steps().getFirst().text())
+                .isEqualTo("把主棋盘放到桌面中央 E1。");
     }
 
     @Test

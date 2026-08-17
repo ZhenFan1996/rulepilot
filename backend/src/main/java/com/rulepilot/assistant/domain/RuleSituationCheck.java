@@ -11,17 +11,14 @@ public record RuleSituationCheck(
         List<UUID> citationIds) {
 
     public RuleSituationCheck {
-        if (requirement == null || requirement.isBlank() || requirement.length() > 240
-                || status == null || playerFact == null || playerFact.length() > 240
-                || citationIds == null || citationIds.isEmpty() || citationIds.size() > 3
+        if (requirement == null || requirement.isBlank()
+                || status == null || playerFact == null
+                || citationIds == null || citationIds.isEmpty()
                 || citationIds.stream().anyMatch(java.util.Objects::isNull)) {
             throw new IllegalArgumentException("rule situation check is invalid");
         }
-        requirement = requirement.strip();
-        playerFact = playerFact.strip();
         citationIds = citationIds.stream().distinct().toList();
-        if (citationIds.isEmpty() || citationIds.size() > 3
-                || (status == SituationCheckStatus.NOT_PROVIDED) != playerFact.isEmpty()) {
+        if (citationIds.isEmpty() || (status == SituationCheckStatus.NOT_PROVIDED) != playerFact.isBlank()) {
             throw new IllegalArgumentException("rule situation check status and player fact disagree");
         }
     }

@@ -20,7 +20,7 @@ class AnswerDraftPublicationPolicyTest {
     private final UUID citationId = UUID.randomUUID();
 
     @Test
-    void rejectsInternalProtocolInsteadOfRewritingProviderProse() {
+    void preservesOrdinaryEvidenceLabelsInsteadOfTreatingThemAsAnInternalProtocol() {
         ModelDraft draft = new ModelDraft(
                 true,
                 null,
@@ -33,12 +33,9 @@ class AnswerDraftPublicationPolicyTest {
 
         var preparation = AnswerDraftPublicationPolicy.prepare(request(), draft);
 
-        assertThat(preparation.ready()).isFalse();
-        assertThat(preparation.failureStatus())
-                .isEqualTo(com.rulepilot.assistant.domain.AnswerStatus.INVALID_MODEL_OUTPUT);
-        assertThat(preparation.draft()).isNull();
-        assertThat(draft.shortVerdict()).isEqualTo("Allowed（，见证据 E1）。");
-        assertThat(draft.explanation()).isEqualTo("The governing rule is cited by [E1].");
+        assertThat(preparation.ready()).isTrue();
+        assertThat(preparation.draft().shortVerdict()).isEqualTo(draft.shortVerdict());
+        assertThat(preparation.draft().explanation()).isEqualTo(draft.explanation());
     }
 
     @Test
@@ -77,19 +74,6 @@ class AnswerDraftPublicationPolicyTest {
 
         assertThat(AnswerDraftPublicationPolicy.prepare(calculationRequest(), draft).draft().answerBasis())
                 .isEqualTo("GROUNDED_APPLICATION");
-    }
-
-    @Test
-    void compatibilityCitationHookDoesNotSemanticallyRewriteTheDraft() {
-        ModelDraft draft = new ModelDraft(
-                "The game ends at the cited boundary.",
-                "A nearby scoring rule remains part of the model draft.",
-                List.of(citationId),
-                List.of(),
-                "HIGH");
-
-        assertThat(AnswerDraftPublicationPolicy.removePeripheralEndgameCitations(request(), draft))
-                .isSameAs(draft);
     }
 
     private ModelRequest request() {

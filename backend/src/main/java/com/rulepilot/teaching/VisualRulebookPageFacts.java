@@ -181,14 +181,13 @@ public interface VisualRulebookPageFacts {
                     || iconOccurrences == null || sourceDependencies == null) {
                 throw new IllegalArgumentException("visual page fact is invalid");
             }
-            if (printedTerms.length() > 2_000 || factualSummary.length() > 4_000 || keywords.size() > 12
-                    || keywords.stream().anyMatch(keyword -> keyword == null || keyword.isBlank() || keyword.length() > 120)
-                    || visualAnchors.size() > 8
-                    || iconOccurrences.size() > 32
-                    || sourceDependencies.size() > 4
-                    || ruleGroupIdentifiers == null || ruleGroupIdentifiers.size() > 16
+            if (keywords.stream().anyMatch(keyword -> keyword == null || keyword.isBlank())
+                    || visualAnchors.stream().anyMatch(java.util.Objects::isNull)
+                    || iconOccurrences.stream().anyMatch(java.util.Objects::isNull)
+                    || sourceDependencies.stream().anyMatch(java.util.Objects::isNull)
+                    || ruleGroupIdentifiers == null
                     || ruleGroupIdentifiers.stream()
-                            .anyMatch(identifier -> identifier == null || identifier.isBlank() || identifier.length() > 120)) {
+                            .anyMatch(identifier -> identifier == null || identifier.isBlank())) {
                 throw new IllegalArgumentException("visual page fact is too large");
             }
             if (schemaVersion < 1 || schemaVersion > CURRENT_SCHEMA_VERSION) {
@@ -210,9 +209,8 @@ public interface VisualRulebookPageFacts {
 
         public String evidenceText() {
             String anchors = visualAnchors.stream()
-                    .limit(4)
-                    .map(anchor -> anchor.kind() + " | " + bounded(anchor.label(), 120)
-                            + " | " + bounded(anchor.visibleDescription(), 240)
+                    .map(anchor -> anchor.kind() + " | " + anchor.label()
+                            + " | " + anchor.visibleDescription()
                             + " | rect=" + anchor.x() + "," + anchor.y() + ","
                             + anchor.width() + "," + anchor.height())
                     .collect(java.util.stream.Collectors.joining("\n- ", "\n- ", ""));
@@ -232,9 +230,8 @@ public interface VisualRulebookPageFacts {
          */
         public String presentationEvidenceText() {
             String anchors = visualAnchors.stream()
-                    .limit(4)
-                    .map(anchor -> anchor.kind() + " | " + bounded(anchor.label(), 120)
-                            + " | " + bounded(anchor.visibleDescription(), 240)
+                    .map(anchor -> anchor.kind() + " | " + anchor.label()
+                            + " | " + anchor.visibleDescription()
                             + " | rect=" + anchor.x() + "," + anchor.y() + ","
                             + anchor.width() + "," + anchor.height())
                     .collect(java.util.stream.Collectors.joining("\n- ", "\n- ", ""));
@@ -255,9 +252,8 @@ public interface VisualRulebookPageFacts {
          */
         public String transcribedRuleEvidenceText() {
             String anchors = visualAnchors.stream()
-                    .limit(4)
-                    .map(anchor -> anchor.kind() + " | " + bounded(anchor.label(), 120)
-                            + " | " + bounded(anchor.visibleDescription(), 240)
+                    .map(anchor -> anchor.kind() + " | " + anchor.label()
+                            + " | " + anchor.visibleDescription()
                             + " | rect=" + anchor.x() + "," + anchor.y() + ","
                             + anchor.width() + "," + anchor.height())
                     .collect(java.util.stream.Collectors.joining("\n- ", "\n- ", ""));
@@ -280,9 +276,6 @@ public interface VisualRulebookPageFacts {
             return VisualTranscribedRuleEvidence.contains(value);
         }
 
-        private static String bounded(String value, int maximum) {
-            return value.length() <= maximum ? value : value.substring(0, maximum - 1).stripTrailing() + "…";
-        }
     }
 
     /**
@@ -304,7 +297,6 @@ public interface VisualRulebookPageFacts {
         public VisualAnchor {
             if (kind == null || kind.isBlank() || label == null || label.isBlank()
                     || visibleDescription == null || visibleDescription.isBlank()
-                    || kind.length() > 60 || label.length() > 180 || visibleDescription.length() > 480
                     || x < 0 || y < 0 || width < 20 || height < 20 || x + width > 1_000 || y + height > 1_000) {
                 throw new IllegalArgumentException("visual anchor is invalid");
             }
@@ -366,12 +358,11 @@ public interface VisualRulebookPageFacts {
         }
 
         public IconOccurrence {
-            if (groupKey == null || groupKey.isBlank() || groupKey.length() > 160
-                    || name == null || name.isBlank() || name.length() > 180
-                    || visualDescription == null || visualDescription.isBlank() || visualDescription.length() > 480
-                    || explanation == null || explanation.length() > 600
-                    || evidenceText == null || evidenceText.length() > 480
-                    || (verifiedVisualLabel != null && verifiedVisualLabel.length() > 80)
+            if (groupKey == null || groupKey.isBlank()
+                    || name == null || name.isBlank()
+                    || visualDescription == null || visualDescription.isBlank()
+                    || explanation == null
+                    || evidenceText == null
                     || meaningStatus == null
                     || x < 0 || y < 0 || width < 12 || height < 12
                     || x + width > 1_000 || y + height > 1_000) {

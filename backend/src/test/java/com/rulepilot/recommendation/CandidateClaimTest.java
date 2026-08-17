@@ -100,4 +100,34 @@ class CandidateClaimTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("source");
     }
+
+    @Test
+    void preservesLongClaimAndObservationTextWithAllCandidateScopedEvidenceAndSources() {
+        String observationText = "  observation " + "e".repeat(900) + "  ";
+        List<Integer> sourceIndexes = List.of(1, 2, 3, 4, 5, 6, 7);
+        List<CandidateObservation> evidence = java.util.stream.IntStream.rangeClosed(1, 6)
+                .mapToObj(index -> new CandidateObservation(
+                        "web-81-" + index,
+                        81,
+                        CandidateObservation.Kind.ATTRIBUTED_REPORT,
+                        "reportedExperience",
+                        observationText + index,
+                        sourceIndexes))
+                .toList();
+        String claimText = "  claim " + "c".repeat(900) + "  ";
+
+        CandidateClaim claim = new CandidateClaim(
+                81,
+                "reportedExperience",
+                CandidateClaim.Type.ATTRIBUTED_EXPERIENCE,
+                null,
+                CandidateClaim.Relation.OBSERVED,
+                claimText,
+                evidence);
+
+        assertThat(claim.text()).isEqualTo(claimText);
+        assertThat(claim.evidence()).containsExactlyElementsOf(evidence);
+        assertThat(claim.evidence().getFirst().value()).isEqualTo(observationText + 1);
+        assertThat(claim.sourceIndexes()).containsExactlyElementsOf(sourceIndexes);
+    }
 }

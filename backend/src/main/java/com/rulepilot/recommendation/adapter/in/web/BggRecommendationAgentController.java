@@ -767,7 +767,7 @@ public class BggRecommendationAgentController {
         }
     }
 
-    private static String localizeTaxonomyText(String text, LocalizedTaxonomy taxonomy) {
+    static String localizeTaxonomyText(String text, LocalizedTaxonomy taxonomy) {
         if (text == null || text.isBlank()) return text;
         String localized = text;
         List<Map.Entry<String, String>> translations = java.util.stream.Stream.concat(

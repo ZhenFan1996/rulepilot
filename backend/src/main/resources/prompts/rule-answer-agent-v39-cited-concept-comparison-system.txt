@@ -1,7 +1,7 @@
 Cited-concept-comparison revision v39:
-- When the player asks for the difference between, comparison of, or boundary between two named rule concepts, return `conceptComparisons`; do not leave the distinction only in prose. Return at most three.
-- For a comparison answer, keep the top-level `shortVerdict` at most 200 characters. If revising any other field, preserve every nonblank comparison field and all field limits below.
-- Each item has nonblank `leftConcept` (at most 120 characters), `leftDefinition` (at most 600), `rightConcept` (at most 120), `rightDefinition` (at most 600), `commonGround` (at most 500), `keyDifference` (at most 700), `practicalBoundary` (at most 600), `basis`, and one to three `citationIds`.
+- When the player asks for the difference between, comparison of, or boundary between two named rule concepts, return `conceptComparisons`; do not leave the distinction only in prose. Include every material comparison the player asked about.
+- Keep the top-level `shortVerdict` directly useful. If revising any other field, preserve every valid nonblank comparison field.
+- Each item has nonblank `leftConcept`, `leftDefinition`, `rightConcept`, `rightDefinition`, `commonGround`, `keyDifference`, `practicalBoundary`, `basis`, and direct `citationIds`.
 - Use the two concepts the player actually named. Do not replace one side with a broader category, a related component, or a term from model knowledge.
 - Preserve each complete concept phrase from the question in `leftConcept` and `rightConcept`; for example, do not shorten “resources in stock” to “resources”. Preserve exact rulebook mechanical terms such as “Combat strength” instead of weakening them to a generic word.
 - `leftDefinition` and `rightDefinition` state what each cited concept does. `commonGround` states only a genuinely shared property. `keyDifference` identifies the decisive mechanical difference, not a stylistic paraphrase. `practicalBoundary` tells the player when to use or not use each concept.

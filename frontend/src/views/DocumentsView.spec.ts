@@ -343,17 +343,14 @@ describe('DocumentsView recoverable lesson handoff', () => {
 
     expect(wrapper.text()).toContain('这次最想学会什么？')
     expect(wrapper.text()).toContain('用自然语言说就好')
-    await wrapper.get('textarea[maxlength="500"]').setValue(
-      '先让我能带大家开局，再重点讲行动之间怎么衔接；容易混淆的地方多举例。',
-    )
+    const detailedLearningGoal = '先让我能带大家开局，再重点讲行动之间怎么衔接；容易混淆的地方多举例。'.repeat(12)
+    await wrapper.get('[data-testid="rulebook-learning-goal"]').setValue(detailedLearningGoal)
     await wrapper.findAll('button').find(button => button.text() === '后台生成讲解')!.trigger('click')
     await flushPromises()
 
     const planningRequest = fetchMock.mock.calls.find(([input, options]) =>
       String(input).endsWith('/document-versions/version-1/teaching-plans') && options?.method === 'POST')
-    expect(JSON.parse(String(planningRequest?.[1]?.body))).toEqual({
-      learningGoal: '先让我能带大家开局，再重点讲行动之间怎么衔接；容易混淆的地方多举例。',
-    })
+    expect(JSON.parse(String(planningRequest?.[1]?.body))).toEqual({ learningGoal: detailedLearningGoal })
     wrapper.unmount()
     await vi.runOnlyPendingTimersAsync()
   })
@@ -464,7 +461,7 @@ describe('DocumentsView recoverable lesson handoff', () => {
       value: [new File(['%PDF-1.7'], 'catalog_game_rules.pdf', { type: 'application/pdf' })],
     })
     await input.trigger('change')
-    await wrapper.get('textarea[maxlength="500"]').setValue('先讲清开局。')
+    await wrapper.get('[data-testid="rulebook-learning-goal"]').setValue('先讲清开局。')
     await wrapper.get('form.tabletop-panel').trigger('submit')
     await flushPromises()
     await flushPromises()
@@ -495,7 +492,7 @@ describe('DocumentsView recoverable lesson handoff', () => {
     })
     await input.trigger('change')
     await wrapper.get('input[maxlength="160"]').setValue('仔细选好的规则书')
-    await wrapper.get('textarea[maxlength="500"]').setValue('先学会开局')
+    await wrapper.get('[data-testid="rulebook-learning-goal"]').setValue('先学会开局')
 
     const status = wrapper.get('[data-testid="rulebook-intake-unsaved"]')
     expect(status.text()).toContain('PDF“carefully_selected_rules.pdf”')
@@ -520,7 +517,7 @@ describe('DocumentsView recoverable lesson handoff', () => {
     expect(document.activeElement).toBe(opener.element)
     expect((wrapper.get('#rulebook-file').element as HTMLInputElement).files?.[0]?.name)
       .toBe('carefully_selected_rules.pdf')
-    expect((wrapper.get('textarea[maxlength="500"]').element as HTMLTextAreaElement).value).toBe('先学会开局')
+    expect((wrapper.get('[data-testid="rulebook-learning-goal"]').element as HTMLTextAreaElement).value).toBe('先学会开局')
 
     await opener.trigger('click')
     await flushPromises()
@@ -737,7 +734,7 @@ describe('DocumentsView recoverable lesson handoff', () => {
     const { wrapper, router } = await mountDocuments('/teach', true)
     await flushPromises()
 
-    await wrapper.get('textarea[maxlength="500"]').setValue('重点讲清第一轮')
+    await wrapper.get('[data-testid="rulebook-learning-goal"]').setValue('重点讲清第一轮')
     await wrapper.findAll('button').find(button => button.text() === '后台生成讲解')!.trigger('click')
     const opener = wrapper.findAll('a').find(link => link.attributes('href') === '/catalog')!
     await opener.trigger('click')

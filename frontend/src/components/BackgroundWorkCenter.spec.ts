@@ -149,6 +149,13 @@ describe('BackgroundWorkCenter request lifecycle', () => {
     expect(wrapper.text()).toContain('当前没有后台任务')
     expect(sessionStorage.getItem(backgroundWorkStorageKeys('player').dismissedImports))
       .toContain('import-failed-preparation')
+
+    notifyBackgroundWorkChanged({
+      dismissedImportIds: Array.from({ length: 101 }, (_, index) => `older-failed-import-${index}`),
+    })
+    await flushPromises()
+    expect(JSON.parse(sessionStorage.getItem(backgroundWorkStorageKeys('player').dismissedImports) ?? '[]'))
+      .toHaveLength(102)
     wrapper.unmount()
   })
 

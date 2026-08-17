@@ -7,14 +7,12 @@ import java.util.UUID;
 public record RuleExceptionClause(String condition, String effect, List<UUID> citationIds) {
 
     public RuleExceptionClause {
-        if (condition == null || condition.isBlank() || condition.length() > 300
-                || effect == null || effect.isBlank() || effect.length() > 500
-                || citationIds == null || citationIds.isEmpty() || citationIds.size() > 3
+        if (condition == null || condition.isBlank()
+                || effect == null || effect.isBlank()
+                || citationIds == null || citationIds.isEmpty()
                 || citationIds.stream().anyMatch(java.util.Objects::isNull)) {
             throw new IllegalArgumentException("rule exception clause is invalid");
         }
-        condition = condition.strip();
-        effect = effect.strip();
         citationIds = List.copyOf(citationIds);
     }
 }

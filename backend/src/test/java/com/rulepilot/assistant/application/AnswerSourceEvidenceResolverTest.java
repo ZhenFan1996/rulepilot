@@ -24,23 +24,23 @@ class AnswerSourceEvidenceResolverTest {
     private final UUID third = UUID.randomUUID();
 
     @Test
-    void validatesOneOrTwoDirectCitationsForASelectedSourceAid() {
+    void acceptsAllDistinctInScopeDirectCitationsForASelectedSourceAid() {
         assertThat(resolver.resolve(
                         request(AnswerAid.SOURCE),
-                        draft("DIRECT_RULE", List.of(first, second))))
-                .containsExactly(first, second);
+                        draft("DIRECT_RULE", List.of(first, second, third))))
+                .containsExactly(first, second, third);
         assertThat(AnswerSourceEvidenceResolver.requiresSourceEvidence(request(AnswerAid.SOURCE))).isTrue();
         assertThat(AnswerSourceEvidenceResolver.requiresSourceEvidence(request(AnswerAid.NONE))).isFalse();
     }
 
     @Test
-    void rejectsWrongBasisCitationPaddingAndOutOfScopeEvidence() {
+    void rejectsWrongBasisAndOutOfScopeEvidenceButCollapsesHarmlessDuplicates() {
         assertThatThrownBy(() -> resolver.resolve(
                         request(AnswerAid.SOURCE), draft("GROUNDED_APPLICATION", List.of(first))))
                 .hasMessageContaining("direct rule evidence");
-        assertThatThrownBy(() -> resolver.resolve(
-                        request(AnswerAid.SOURCE), draft("DIRECT_RULE", List.of(first, second, third))))
-                .hasMessageContaining("one or two");
+        assertThat(resolver.resolve(
+                        request(AnswerAid.SOURCE), draft("DIRECT_RULE", List.of(first, first))))
+                .containsExactly(first);
         assertThatThrownBy(() -> resolver.resolve(
                         request(AnswerAid.SOURCE), draft("DIRECT_RULE", List.of(UUID.randomUUID()))))
                 .hasMessageContaining("outside the answer scope");

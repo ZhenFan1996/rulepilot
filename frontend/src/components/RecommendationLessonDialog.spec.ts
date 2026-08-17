@@ -166,7 +166,7 @@ describe('RecommendationLessonDialog', () => {
     expect(wrapper.get('[data-testid="recommendation-lesson-backdrop"]').classes()).toContain('z-[100]')
     expect(wrapper.get('[data-testid="recommendation-lesson-surface"]').attributes('style'))
       .toContain('background-color: var(--color-canvas); opacity: 1')
-    expect(wrapper.text()).toContain('已有 1 / 3 章完成引用、结构与数量校验')
+    expect(wrapper.text()).toContain('已有 1 / 3 章完成引用归属、规则书版本与结构校验')
     expect(wrapper.get('[data-testid="chapter-list-stub"]').text()).toBe('目标')
 
     await vi.advanceTimersByTimeAsync(1_500)
@@ -241,7 +241,7 @@ describe('RecommendationLessonDialog', () => {
     })
     await flushPromises()
 
-    expect(wrapper.text()).toContain('已有 1 / 3 章完成引用、结构与数量校验')
+    expect(wrapper.text()).toContain('已有 1 / 3 章完成引用归属、规则书版本与结构校验')
     expect(wrapper.text()).not.toContain('3 / 3')
     expect(wrapper.get('[data-testid="recommendation-lesson-progress"]').attributes('style')).toContain('width: 33%')
     wrapper.unmount()

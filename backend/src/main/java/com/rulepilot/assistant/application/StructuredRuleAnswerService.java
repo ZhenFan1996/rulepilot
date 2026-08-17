@@ -587,9 +587,12 @@ public class StructuredRuleAnswerService implements RuleAnswering {
     /** Resolves the complete structured envelope once; unselected aids were already removed from the draft. */
     private StructuredDetails resolveStructuredDetails(
             UUID assistantRunId, ModelRequest modelRequest, ModelDraft draft) {
+        List<UUID> evidenceIds = modelRequest.evidence().stream()
+                .map(com.rulepilot.assistant.RuleAnswerModel.EvidenceInput::chunkId)
+                .toList();
         if (modelRequest.answerAid() != AnswerAid.CALCULATION
-                && !AnswerDraftSafetyPolicy.containsInternalCoreReference(draft)
-                && AnswerDraftSafetyPolicy.containsInternalEvidenceReference(draft)) {
+                && !AnswerDraftSafetyPolicy.containsInternalCoreReference(draft, evidenceIds)
+                && AnswerDraftSafetyPolicy.containsInternalEvidenceReference(draft, evidenceIds)) {
             LOGGER.warn(
                     "Ignoring optional {} presentation containing an internal reference while preserving the validated answer core",
                     modelRequest.answerAid());

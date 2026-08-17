@@ -15,6 +15,7 @@ import com.rulepilot.teaching.domain.IllustratedLesson.VisualFocus;
 import com.rulepilot.teaching.domain.IllustratedLesson.VisualKind;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
@@ -49,21 +50,14 @@ class LessonDraftValidatorTest {
     }
 
     @Test
-    void rejectsInternalEvidenceReferencesAndExtractionPlaceholders() {
+    void doesNotTreatSymbolsOrIdentifierLikeTextAsAReasonToRejectCitedProse() {
         UUID chunkId = UUID.randomUUID();
+        String text = "先找到 [cost] 与 🎲；若规则本身把该格称为 E1，就按规则原名说明。";
+        SectionDraft draft = textDraft(chunkId, text, "保留来源原词");
 
-        assertThatIllegalArgumentException()
-                .isThrownBy(() -> LessonDraftValidator.validateDraft(
-                        textDraft(chunkId, "参见 E1 后执行。", "内部引用"), textRequest(chunkId)))
-                .withMessageContaining("internal evidence references");
-        assertThatIllegalArgumentException()
-                .isThrownBy(() -> LessonDraftValidator.validateDraft(
-                        textDraft(chunkId, "支付 [cost] 后执行。", "提取占位符"), textRequest(chunkId)))
-                .withMessageContaining("extraction markers");
-        assertThatIllegalArgumentException()
-                .isThrownBy(() -> LessonDraftValidator.validateDraft(
-                        textDraft(chunkId, "支付 🎲 后执行。", "推测图标"), textRequest(chunkId)))
-                .withMessageContaining("inferred emoji");
+        LessonDraftValidator.validateDraft(draft, textRequest(chunkId));
+
+        assertThat(draft.steps().getFirst().text()).isEqualTo(text);
     }
 
     @Test
@@ -85,19 +79,30 @@ class LessonDraftValidatorTest {
         Map<UUID, RuleEvidence> allowedEvidence = Map.of(chunkId, evidence);
 
         LessonDraftValidator.validateDraft(draft, request);
-        LessonDraftValidator.validateVisualBlockEvidence(draft, request, allowedEvidence);
-        var step = LessonDraftValidator.validatedStep(1, draft.steps().getFirst(), allowedEvidence);
+        var step = LessonDraftValidator.validatedStep(1, draft.steps().getFirst(), allowedEvidence, Set.of(3));
 
         assertThat(LessonDraftValidator.validatedVisualCitationIds(draft, allowedEvidence)).containsExactly(chunkId);
         assertThat(step.visualFocus()).isEqualTo(new VisualFocus(3, "主棋盘", 150, 180, 450, 400));
     }
 
     @Test
-    void rejectsAnAlmostCompletePageAsAVisualFocus() {
-        assertThatIllegalArgumentException()
-                .isThrownBy(() -> LessonDraftValidator.validatedFocus(
-                        new VisualFocusDraft(3, "整页", 0, 0, 1_000, 1_000)))
-                .withMessageContaining("tight focus region");
+    void skipsOnlyAnUnboundOptionalVisualFocusAndKeepsTheCitedStepExact() {
+        UUID chunkId = UUID.randomUUID();
+        RuleEvidence evidence = evidence(chunkId, 3, "Place the board in the center.");
+        String text = "先按规则原文确认版图，再放到桌面中央。";
+        StepDraft draft = new StepDraft(
+                "确认版图",
+                TeachingMove.VISUAL,
+                text,
+                List.of(chunkId),
+                new VisualFocusDraft(9, "未附加页上的区域", 0, 0, 1_000, 1_000));
+
+        var step = LessonDraftValidator.validatedStep(1, draft, Map.of(chunkId, evidence), Set.of(3));
+
+        assertThat(step.text()).isEqualTo(text);
+        assertThat(step.heading()).isEqualTo(draft.heading());
+        assertThat(step.kind()).isEqualTo(TeachingMove.VISUAL);
+        assertThat(step.visualFocus()).isNull();
     }
 
     @Test

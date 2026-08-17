@@ -8,13 +8,12 @@ export function readPendingRulebookLessons(storage: Storage, username: string) {
   try {
     const parsed = JSON.parse(storage.getItem(storageKey(username)) ?? '[]') as unknown
     if (!Array.isArray(parsed)) return []
-    return parsed.slice(0, 5).flatMap((item): PendingRulebookLesson[] => {
+    return parsed.flatMap((item): PendingRulebookLesson[] => {
       if (!item || typeof item !== 'object') return []
       const candidate = item as Partial<PendingRulebookLesson>
       if (!boundedId(candidate.versionId)) return []
       if (candidate.editionId !== undefined && !boundedId(candidate.editionId)) return []
-      if (candidate.learningGoal !== undefined
-        && (typeof candidate.learningGoal !== 'string' || candidate.learningGoal.trim().length > 500)) return []
+      if (candidate.learningGoal !== undefined && typeof candidate.learningGoal !== 'string') return []
       return [normalizePendingLesson({
         versionId: candidate.versionId,
         ...(candidate.editionId ? { editionId: candidate.editionId } : {}),
@@ -34,7 +33,7 @@ export function rememberPendingRulebookLesson(
   const normalized = normalizePendingLesson(pending)
   const existing = readPendingRulebookLessons(storage, username)
     .filter((item) => item.versionId !== normalized.versionId)
-  storage.setItem(storageKey(username), JSON.stringify([normalized, ...existing].slice(0, 5)))
+  storage.setItem(storageKey(username), JSON.stringify([normalized, ...existing]))
 }
 
 export function forgetPendingRulebookLesson(storage: Storage, username: string, versionId: string) {
@@ -49,12 +48,11 @@ function storageKey(username: string) {
 }
 
 function boundedId(value: unknown): value is string {
-  return typeof value === 'string' && value.length > 0 && value.length <= 64
+  return typeof value === 'string' && value.trim().length > 0
 }
 
 function normalizePendingLesson(pending: PendingRulebookLesson): PendingRulebookLesson {
   const { learningGoal, ...rest } = pending
   const normalizedGoal = learningGoal?.trim()
-  if (normalizedGoal && normalizedGoal.length > 500) throw new Error('teaching learning goal is too long')
   return normalizedGoal ? { ...rest, learningGoal: normalizedGoal } : rest
 }

@@ -1,6 +1,7 @@
 package com.rulepilot.teaching.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatNoException;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.rulepilot.teaching.TeachingOutlineModel.OutlineDraft;
@@ -28,7 +29,7 @@ import org.junit.jupiter.api.Test;
 class TeachingSourceCoverageContractTest {
 
     @Test
-    void omittedAvailabilityDefaultsToSourcedButStillNeedsAnExactBoundPageIdentifier() {
+    void omittedAvailabilityDefaultsToSourcedAndLegacyPagesUseTheirStructuredPageBinding() {
         SourceCoverageSlotDraft omittedStatus = new SourceCoverageSlotDraft(
                 "source-relation",
                 SourceCoverageRole.CORE_LOOP,
@@ -47,10 +48,8 @@ class TeachingSourceCoverageContractTest {
         assertThat(omittedStatus.availability()).isEqualTo(SourceCoverageAvailability.SOURCED);
         TeachingSourceCoverageContract.validateAgainstSources(
                 new OutlineRequest(List.of(new PageInput(1, "R-kappa advances play."))), outline);
-        assertThatThrownBy(() -> TeachingSourceCoverageContract.validateAgainstSources(
-                        new OutlineRequest(List.of(new PageInput(1, "A different relation advances play."))), outline))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("no exact source identifier");
+        assertThatNoException().isThrownBy(() -> TeachingSourceCoverageContract.validateAgainstSources(
+                new OutlineRequest(List.of(new PageInput(1, "A different relation advances play."))), outline));
     }
 
     @Test
@@ -78,7 +77,7 @@ class TeachingSourceCoverageContractTest {
                 .singleElement()
                 .satisfies(check -> {
                     assertThat(check.status()).isEqualTo(CheckStatus.PASS);
-                    assertThat(check.summary()).contains("7 / 7");
+                    assertThat(check.summary()).contains("6 / 6");
                 });
     }
 
@@ -391,7 +390,7 @@ class TeachingSourceCoverageContractTest {
                 .singleElement()
                 .satisfies(check -> {
                     assertThat(check.status()).isEqualTo(CheckStatus.PASS);
-                    assertThat(check.summary()).contains("7 / 7");
+                    assertThat(check.summary()).contains("6 / 6");
                 });
     }
 

@@ -44,61 +44,19 @@ class AnswerDraftComposerTest {
     }
 
     @Test
-    void repairsOnlyTheUnsafeSourceWideFieldAndLocksTheCompliantExplanation() {
+    void preservesSupportedScopedRulebookWordingWithoutAKeywordTriggeredRepair() {
         UUID chunkId = UUID.randomUUID();
         AtomicInteger revisions = new AtomicInteger();
-        ModelDraft repaired = new ModelDraft(
-                "达到30分即可获胜。",
-                "关于开局，当前提供的摘录不足以确认是否有保证获胜的策略。你希望我继续核对哪个具体阵营或阶段？",
+        ModelDraft supported = new ModelDraft(
+                "The bonus does not apply after the final round.",
+                "The rulebook does not apply this bonus after the final round; the cited timing clause is explicit.",
                 List.of(chunkId),
                 List.of(),
                 "HIGH");
         RuleAnswerModel model = new RuleAnswerModel() {
             @Override
             public ModelDraft compose(ModelRequest request) {
-                return new ModelDraft(
-                        "达到30分即可获胜。规则书未提及保证获胜的最佳开局。",
-                        "当前提供的规则摘录无法确认最佳开局。",
-                        List.of(chunkId),
-                        List.of(),
-                        "HIGH");
-            }
-
-            @Override
-            public ModelDraft revise(ModelRequest request, ModelDraft previousDraft, List<String> feedback) {
-                revisions.incrementAndGet();
-                return repaired;
-            }
-        };
-        AnswerDraftComposer composer = new AnswerDraftComposer(new AnswerModelGateway(
-                model, new PermissiveRateLimiter(), new ImmediateAuditedAgentInvocations()));
-
-        AnswerDraftComposer.Result result = composer.compose(
-                UUID.randomUUID(), "player", null, adviceRequest(chunkId));
-
-        assertThat(result.ready()).isTrue();
-        assertThat(result.draft().shortVerdict()).isEqualTo(repaired.shortVerdict());
-        assertThat(result.draft().explanation()).isEqualTo("当前提供的规则摘录无法确认最佳开局。");
-        assertThat(result.draft().citationIds()).containsExactly(chunkId);
-        assertThat(result.warnings()).isEmpty();
-        assertThat(result.modelRepairs()).isEqualTo(1);
-        assertThat(revisions).hasValue(1);
-    }
-
-    @Test
-    void rejectsAnUnsafeSourceWideClaimWhenTheSingleModelRepairDoesNotFixIt() {
-        UUID chunkId = UUID.randomUUID();
-        AtomicInteger revisions = new AtomicInteger();
-        ModelDraft unsafe = new ModelDraft(
-                "达到30分即可获胜。规则书没有提供保证获胜的开局。",
-                "达到30分即可获胜。当前摘录无法确认开局建议。你想继续查哪个阵营？",
-                List.of(chunkId),
-                List.of(),
-                "HIGH");
-        RuleAnswerModel model = new RuleAnswerModel() {
-            @Override
-            public ModelDraft compose(ModelRequest request) {
-                return unsafe;
+                return supported;
             }
 
             @Override
@@ -111,12 +69,14 @@ class AnswerDraftComposerTest {
                 model, new PermissiveRateLimiter(), new ImmediateAuditedAgentInvocations()));
 
         AnswerDraftComposer.Result result = composer.compose(
-                UUID.randomUUID(), "player", null, adviceRequest(chunkId));
+                UUID.randomUUID(), "player", null, request(chunkId));
 
-        assertThat(result.ready()).isFalse();
-        assertThat(result.failureStatus()).isEqualTo(com.rulepilot.assistant.domain.AnswerStatus.INVALID_MODEL_OUTPUT);
-        assertThat(result.draft()).isNull();
-        assertThat(revisions).hasValue(1);
+        assertThat(result.ready()).isTrue();
+        assertThat(result.draft()).isEqualTo(supported);
+        assertThat(result.draft().citationIds()).containsExactly(chunkId);
+        assertThat(result.warnings()).isEmpty();
+        assertThat(result.modelRepairs()).isZero();
+        assertThat(revisions).hasValue(0);
     }
 
     @Test

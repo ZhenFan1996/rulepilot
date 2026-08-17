@@ -34,11 +34,19 @@ class LessonDraftPresentationNormalizerTest {
     }
 
     @Test
-    void detectsOnlyProtocolAndExtractionMarkers() {
-        assertThat(LessonDraftPresentationNormalizer.containsUnresolvedPdfMarker("找到 [cost]")).isTrue();
-        assertThat(LessonDraftPresentationNormalizer.containsUnresolvedEmojiIcon("找到 🧩")).isTrue();
-        assertThat(LessonDraftPresentationNormalizer.containsInternalShortEvidenceReference("参见 E1")).isTrue();
-        assertThat(LessonDraftPresentationNormalizer.containsInternalShortEvidenceReference("effectE12")).isFalse();
+    void leavesSymbolsBracketedTermsAndIdentifierLikeTextUntouched() {
+        UUID chunkId = UUID.randomUUID();
+        String text = "找到 [cost]、🧩 与规则书命名的 E1 区域后继续。";
+        SectionDraft draft = new SectionDraft(
+                "保留来源原词",
+                VisualKind.REFERENCE_CARD,
+                text,
+                List.of(chunkId),
+                List.of(new StepDraft("照原图确认", TeachingMove.DO, text, List.of(chunkId))));
+
+        assertThat(normalizer.normalize(draft, request(chunkId))).isSameAs(draft);
+        assertThat(draft.visualCaption()).isEqualTo(text);
+        assertThat(draft.steps().getFirst().text()).isEqualTo(text);
     }
 
     private SectionRequest request(UUID chunkId) {

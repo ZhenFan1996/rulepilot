@@ -229,7 +229,6 @@ onUnmounted(() => {
           id="recognized-card-text"
           v-model="recognizedText"
           rows="6"
-          maxlength="620"
           class="mt-2 w-full resize-y rounded-2xl border border-ink/15 bg-canvas px-4 py-3 leading-7 outline-none focus:border-indigo focus:ring-4 focus:ring-indigo/10"
         />
         <div class="mt-3 flex flex-wrap items-center justify-between gap-3">

@@ -10,7 +10,7 @@ import java.util.Locale;
 import java.util.Set;
 import java.util.UUID;
 
-/** Application-owned schema, selection, and citation bounds for one model-selected answer aid. */
+/** Application-owned schema, selection, and citation ownership for one model-selected answer aid. */
 final class AnswerStructuredAidPolicy {
 
     private AnswerStructuredAidPolicy() {}
@@ -33,7 +33,10 @@ final class AnswerStructuredAidPolicy {
 
     static List<UUID> citations(
             ModelRequest request, ModelDraft draft, List<UUID> proposed, String label) {
-        if (proposed == null || proposed.isEmpty() || proposed.size() > 3) {
+        if (proposed == null || proposed.isEmpty()) {
+            throw new IllegalArgumentException(label + " citations are invalid");
+        }
+        if (proposed.stream().anyMatch(java.util.Objects::isNull)) {
             throw new IllegalArgumentException(label + " citations are invalid");
         }
         List<UUID> citations = proposed.stream().distinct().toList();
@@ -41,31 +44,27 @@ final class AnswerStructuredAidPolicy {
                 .map(EvidenceInput::chunkId)
                 .collect(java.util.stream.Collectors.toUnmodifiableSet());
         Set<UUID> answerCitations = Set.copyOf(draft.citationIds());
-        if (citations.size() != proposed.size()
-                || citations.contains(null)
-                || !available.containsAll(citations)
+        if (!available.containsAll(citations)
                 || !answerCitations.containsAll(citations)) {
             throw new IllegalArgumentException(label + " cites evidence outside the answer scope");
         }
         return citations;
     }
 
-    static String requiredText(String value, int maximum, String label) {
-        if (value == null || value.isBlank() || value.length() > maximum) {
+    static String requiredText(String value, String label) {
+        if (value == null || value.isBlank()) {
             throw new IllegalArgumentException(label + " is invalid");
         }
-        return value.strip();
+        return value;
     }
 
-    static String optionalText(String value, int maximum, String label) {
-        if (value == null || value.isBlank()) return "";
-        if (value.length() > maximum) throw new IllegalArgumentException(label + " is too long");
-        return value.strip();
+    static String optionalText(String value) {
+        return value == null ? "" : value;
     }
 
     static <T extends Enum<T>> T enumValue(String value, Class<T> type, String label) {
         try {
-            return T.valueOf(type, requiredText(value, 80, label).toUpperCase(Locale.ROOT));
+            return T.valueOf(type, requiredText(value, label).strip().toUpperCase(Locale.ROOT));
         } catch (IllegalArgumentException invalid) {
             throw new IllegalArgumentException(label + " is invalid", invalid);
         }

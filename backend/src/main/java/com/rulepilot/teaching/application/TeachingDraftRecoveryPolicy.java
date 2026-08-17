@@ -1,12 +1,8 @@
 package com.rulepilot.teaching.application;
 
 import com.rulepilot.teaching.TeachingLessonModel;
-import com.rulepilot.teaching.TeachingLessonModel.SectionDraft;
-import com.rulepilot.teaching.domain.IllustratedLesson.VisualKind;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Objects;
-import java.util.UUID;
 
 /**
  * Owns bounded schema and visual fallback recovery only.
@@ -62,23 +58,4 @@ final class TeachingDraftRecoveryPolicy {
                 request.wholeGameContext());
     }
 
-    /** Keeps presentation metadata across a schema-only text fallback without changing any rule claim. */
-    SectionDraft preserveTextOnlyPresentationMetadata(SectionDraft previous, SectionDraft revised) {
-        if (previous == null || revised == null) return revised;
-        String caption = revised.visualCaption();
-        if (caption == null || caption.isBlank() || caption.length() > 240) {
-            caption = previous.visualCaption();
-        }
-        List<UUID> citations = revised.visualCitationIds();
-        if (citations == null || citations.isEmpty()) {
-            citations = previous.visualCitationIds();
-        }
-        VisualKind visualKind = revised.visualKind() == null ? previous.visualKind() : revised.visualKind();
-        if (Objects.equals(caption, revised.visualCaption())
-                && Objects.equals(citations, revised.visualCitationIds())
-                && visualKind == revised.visualKind()) {
-            return revised;
-        }
-        return new SectionDraft(revised.title(), visualKind, caption, citations, revised.steps());
-    }
 }

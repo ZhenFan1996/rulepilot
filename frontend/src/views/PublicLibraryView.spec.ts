@@ -45,15 +45,15 @@ describe('PublicLibraryView', () => {
     expect(wrapper.get('img[alt="Powered by BoardGameGeek"]').attributes('src')).toBe('/powered-by-bgg-rgb.svg')
   })
 
-  it('uses player-readable names, keeps the better duplicate, and lets a player search', async () => {
+  it('uses stored player-facing names, keeps an exact duplicate, and lets a player search', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => Response.json([
       {
-        teachingPlanId: 'root-old', rulebookTitle: 'Root Learning to Play Corpus Replay', officialSourceUrl: '',
+        teachingPlanId: 'root-old', rulebookTitle: 'root', officialSourceUrl: '',
         gameCover: null, publicGame: null, sectionCount: 10, stepCount: 55,
       },
       {
-        teachingPlanId: 'root-best', rulebookTitle: 'Root: Learning to Play Rules', officialSourceUrl: '',
-        gameCover: { gameName: 'Root: Learning to Play Rules', imageUrl: 'https://images.example/root.jpg', attributionUrl: 'https://boardgamegeek.com/root', attributionLabel: 'BoardGameGeek' },
+        teachingPlanId: 'root-best', rulebookTitle: 'Root', officialSourceUrl: '',
+        gameCover: { gameName: 'Root', imageUrl: 'https://images.example/root.jpg', attributionUrl: 'https://boardgamegeek.com/root', attributionLabel: 'BoardGameGeek' },
         publicGame: null, sectionCount: 14, stepCount: 63,
       },
       {
@@ -81,7 +81,7 @@ describe('PublicLibraryView', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('2 款游戏可直接阅读')
-    expect(wrapper.text()).not.toContain('Corpus Replay')
+    expect(wrapper.text()).toContain('Root')
     expect(wrapper.findAll('a[href="/read/root-best"]')).toHaveLength(1)
     expect(wrapper.find('a[href="/read/root-old"]').exists()).toBe(false)
     expect(wrapper.find('.lesson-cover').exists()).toBe(true)

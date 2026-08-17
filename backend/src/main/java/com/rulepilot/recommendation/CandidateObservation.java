@@ -1,6 +1,5 @@
 package com.rulepilot.recommendation;
 
-import java.text.Normalizer;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
@@ -15,14 +14,13 @@ public record CandidateObservation(
         List<Integer> sourceIndexes) {
 
     public CandidateObservation {
-        id = bounded(id, 80, "candidate observation id");
+        id = requiredToken(id, "candidate observation id");
         if (bggId <= 0) throw new IllegalArgumentException("candidate observation game id must be positive");
         kind = Objects.requireNonNull(kind, "candidate observation kind is required");
-        attribute = bounded(attribute, 80, "candidate observation attribute");
-        value = bounded(value, 600, "candidate observation value");
+        attribute = requiredToken(attribute, "candidate observation attribute");
+        value = requiredText(value, "candidate observation value");
         sourceIndexes = sourceIndexes == null ? List.of() : List.copyOf(sourceIndexes);
-        if (sourceIndexes.size() > 5
-                || sourceIndexes.stream().anyMatch(index -> index == null || index <= 0)
+        if (sourceIndexes.stream().anyMatch(index -> index == null || index <= 0)
                 || new LinkedHashSet<>(sourceIndexes).size() != sourceIndexes.size()) {
             throw new IllegalArgumentException("candidate observation source indexes are invalid");
         }
@@ -44,12 +42,14 @@ public record CandidateObservation(
         };
     }
 
-    private static String bounded(String value, int maximum, String label) {
-        String checked = Normalizer.normalize(value == null ? "" : value, Normalizer.Form.NFKC).strip();
-        if (checked.isBlank() || checked.codePointCount(0, checked.length()) > maximum) {
-            throw new IllegalArgumentException(label + " is invalid");
-        }
-        return checked;
+    private static String requiredToken(String value, String label) {
+        if (value == null || value.isBlank()) throw new IllegalArgumentException(label + " is invalid");
+        return value.strip();
+    }
+
+    private static String requiredText(String value, String label) {
+        if (value == null || value.isBlank()) throw new IllegalArgumentException(label + " is invalid");
+        return value;
     }
 
     public enum Kind {

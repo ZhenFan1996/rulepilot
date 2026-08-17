@@ -177,10 +177,10 @@ rulepilot:
     # Within each selected section, try at most two grounded steps for distinct local visuals; the enricher still
     # declines duplicate, text-only, or unrelated crops instead of decorating prose with page images.
     max-steps-per-section: ${VISUAL_MAX_STEPS_PER_SECTION:2}
-    # Keep Qwen at its verified one-request limit by default. Providers that have passed a real concurrency probe may
-    # opt into two or three independent step checks; the zero-capacity executor still rejects excess work rather than
-    # allowing a slow vision provider to build an expensive queue.
-    request-parallelism: ${VISUAL_REQUEST_PARALLELISM:1}
+    # Page ledgers are independent and retain their original order after completion. Three bounded requests keep a
+    # visual rulebook moving without creating an unbounded provider queue; deployments may still lower this when a
+    # provider account has a stricter rate limit.
+    request-parallelism: ${VISUAL_REQUEST_PARALLELISM:3}
     # Crop discovery can be much more expensive than the initial page catalog. Keep it conservative by default;
     # a verified crop arrives progressively and is never worth delaying another player's base lesson.
     enrichment:
