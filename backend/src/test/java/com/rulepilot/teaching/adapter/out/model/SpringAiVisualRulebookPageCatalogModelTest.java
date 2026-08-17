@@ -45,7 +45,7 @@ class SpringAiVisualRulebookPageCatalogModelTest {
 
     @Test
     void teachingStartupPromptKeepsEvidenceAtomicAndDefersVisualEnrichment() throws IOException {
-        String prompt = new ClassPathResource("prompts/visual-page-teaching-catalog-v4-bound-rule-groups-system.txt")
+        String prompt = new ClassPathResource("prompts/visual-page-teaching-catalog-v5-discriminated-quantities-system.txt")
                 .getContentAsString(StandardCharsets.UTF_8)
                 .replaceAll("\\s+", " ");
 
@@ -59,30 +59,32 @@ class SpringAiVisualRulebookPageCatalogModelTest {
                 "same-scope worked example",
                 "Never flatten a repeated calculation into one local subtotal",
                 "quantityObservations",
-                "quantifierScope",
                 "ruleGroupIndex",
                 "variantAxis",
                 "variantCount",
                 "perVariantQuantity",
-                "derivedTotal",
                 "originalSpan",
                 "REQUIRES_PAGE_INSPECTION",
+                "PER_VARIANT_EXACT",
+                "TOTAL_EXACT",
+                "never combine their fields",
+                "Do not return a product field",
                 "state the visible non-gameplay role",
                 "ruleGroups",
                 "identifier and fact",
                 "The fact does not need to repeat or prefix itself with identifier",
-                "UNRESOLVED is never a resolution",
                 "ruleGroupInventoryComplete",
                 "must fit within 4,000 Unicode characters",
                 "every distinct readable gameplay group",
                 "Do not inventory icons, propose rectangles or coordinates",
                 "Those belong to later enrichment")
-                .doesNotContain("For every ruleGroupIdentifiers item");
+                .doesNotContain(
+                        "For every ruleGroupIdentifiers item", "quantifierScope", "resolution", "derivedTotal");
     }
 
     @Test
     void pairedRuleGroupsProjectToTheExistingLedgerWithoutCrossArrayTextMatching() {
-        var draft = SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalogV4("""
+        var draft = SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalogV5("""
                 {"pages":[{"pageNumber":4,"printedTerms":["地板线","计分"],
                 "factualSummary":["本页说明回合结束后的计分流程。"],"keywords":["地板线","计分"],
                 "sourceDependencies":[],
@@ -107,7 +109,7 @@ class SpringAiVisualRulebookPageCatalogModelTest {
 
     @Test
     void pairedRuleGroupsRequireEachIdentifierAndFactButNotRepeatedPrefixText() {
-        assertThatThrownBy(() -> SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalogV4("""
+        assertThatThrownBy(() -> SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalogV5("""
                 {"pages":[{"pageNumber":4,"printedTerms":["MOVE"],"factualSummary":[],
                 "keywords":["MOVE"],"sourceDependencies":[],
                 "ruleGroups":[{"identifier":"MOVE"}],
@@ -116,7 +118,7 @@ class SpringAiVisualRulebookPageCatalogModelTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("exactly identifier and fact");
 
-        assertThatThrownBy(() -> SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalogV4("""
+        assertThatThrownBy(() -> SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalogV5("""
                 {"pages":[{"pageNumber":4,"printedTerms":["MOVE"],"factualSummary":[],
                 "keywords":["MOVE"],"sourceDependencies":[],
                 "ruleGroups":[{"identifier":"MOVE","fact":"移动一个棋子。"},
@@ -128,17 +130,15 @@ class SpringAiVisualRulebookPageCatalogModelTest {
     }
 
     @Test
-    void pairedRuleGroupsMakeTheUnresolvedQuantityEnumRolesUnambiguous() {
-        var draft = SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalogV4("""
+    void discriminatedQuantityKindsProjectToTheExistingDomainRoles() {
+        var draft = SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalogV5("""
                 {"pages":[{"pageNumber":19,"printedTerms":["K#2"],"factualSummary":[],
                 "keywords":["K#2"],"sourceDependencies":[],
                 "ruleGroups":[{"identifier":"K#2","fact":"在每个活跃缺口放置一个碎片，但缺口总数在图中无法可靠确认。"}],
                 "ruleGroupInventoryComplete":true,
-                "quantityObservations":[{"pageNumber":19,"ruleGroupIndex":0,
-                  "quantifierScope":"UNRESOLVED","variantAxis":"active notches","variantCount":null,
-                  "perVariantQuantity":null,"derivedTotal":null,
-                  "originalSpan":"one shard at every active notch",
-                  "resolution":"REQUIRES_PAGE_INSPECTION"}]}]}
+                "quantityObservations":[{"kind":"REQUIRES_PAGE_INSPECTION","pageNumber":19,
+                  "ruleGroupIndex":0,"variantAxis":"active notches",
+                  "originalSpan":"one shard at every active notch"}]}]}
                 """);
 
         assertThat(draft.pages().getFirst().quantityObservations()).singleElement().satisfies(observation -> {
@@ -146,31 +146,70 @@ class SpringAiVisualRulebookPageCatalogModelTest {
             assertThat(observation.resolution()).isEqualTo(QuantityResolution.REQUIRES_PAGE_INSPECTION);
         });
 
-        assertThatThrownBy(() -> SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalogV4("""
+        assertThatThrownBy(() -> SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalogV5("""
                 {"pages":[{"pageNumber":19,"printedTerms":["K#2"],"factualSummary":[],
                 "keywords":["K#2"],"sourceDependencies":[],
                 "ruleGroups":[{"identifier":"K#2","fact":"在每个活跃缺口放置一个碎片。"}],
                 "ruleGroupInventoryComplete":true,
-                "quantityObservations":[{"pageNumber":19,"ruleGroupIndex":0,
-                  "quantifierScope":"UNRESOLVED","variantAxis":"active notches","variantCount":null,
-                  "perVariantQuantity":null,"derivedTotal":null,
-                  "originalSpan":"one shard at every active notch","resolution":"UNRESOLVED"}]}]}
+                "quantityObservations":[{"kind":"REQUIRES_PAGE_INSPECTION","pageNumber":19,
+                  "ruleGroupIndex":0,"variantAxis":"active notches","total":1,
+                  "originalSpan":"one shard at every active notch"}]}]}
                 """))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("QuantityResolution.UNRESOLVED");
+                .hasMessageContaining("must contain only its exact fields");
 
-        assertThatThrownBy(() -> SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalogV4("""
+        assertThatThrownBy(() -> SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalogV5("""
                 {"pages":[{"pageNumber":19,"printedTerms":["K#2"],"factualSummary":[],
                 "keywords":["K#2"],"sourceDependencies":[],
                 "ruleGroups":[{"identifier":"K#2","fact":"该页显示一个可确定的总数。"}],
                 "ruleGroupInventoryComplete":true,
-                "quantityObservations":[{"pageNumber":19,"ruleGroupIndex":1,
-                  "quantifierScope":"TOTAL","variantAxis":"","variantCount":null,
-                  "perVariantQuantity":null,"derivedTotal":2,
-                  "originalSpan":"total 2","resolution":"EXACT"}]}]}
+                "quantityObservations":[{"kind":"TOTAL_EXACT","pageNumber":19,"ruleGroupIndex":1,
+                  "total":2,"originalSpan":"total 2"}]}]}
                 """))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("ruleGroupIndex must identify one ruleGroups item");
+    }
+
+    @Test
+    void discriminatedQuantityKindCannotExpressTheProductionCrossFieldFailure() {
+        var draft = SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalogV5("""
+                {"pages":[{"pageNumber":19,"printedTerms":["K#2"],"factualSummary":[],
+                "keywords":["K#2"],"sourceDependencies":[],
+                "ruleGroups":[{"identifier":"K#2","fact":"在每个活跃缺口放置一个碎片，但缺口总数在图中无法可靠确认。"}],
+                "ruleGroupInventoryComplete":true,
+                "quantityObservations":[{"kind":"REQUIRES_PAGE_INSPECTION","pageNumber":19,
+                  "ruleGroupIndex":0,"variantAxis":"active notches",
+                  "originalSpan":"one shard at every active notch"}]}]}
+                """);
+
+        assertThat(draft.pages().getFirst().quantityObservations()).singleElement().satisfies(observation -> {
+            assertThat(observation.quantifierScope()).isEqualTo(QuantifierScope.UNRESOLVED);
+            assertThat(observation.resolution()).isEqualTo(QuantityResolution.REQUIRES_PAGE_INSPECTION);
+            assertThat(observation.variantCount()).isNull();
+            assertThat(observation.perVariantQuantity()).isNull();
+            assertThat(observation.derivedTotal()).isNull();
+        });
+    }
+
+    @Test
+    void perVariantQuantityDerivesItsTotalInsteadOfRepeatingModelArithmetic() {
+        var draft = SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalogV5("""
+                {"pages":[{"pageNumber":7,"printedTerms":["R-Delta"],"factualSummary":[],
+                "keywords":["R-Delta"],"sourceDependencies":[],
+                "ruleGroups":[{"identifier":"R-Delta","fact":"四种颜色各放置一个棱柱。"}],
+                "ruleGroupInventoryComplete":true,
+                "quantityObservations":[{"kind":"PER_VARIANT_EXACT","pageNumber":7,
+                  "ruleGroupIndex":0,"variantAxis":"colors","variantCount":4,"perVariantQuantity":1,
+                  "originalSpan":"4 colors x 1 prism each"}]}]}
+                """);
+
+        assertThat(draft.pages().getFirst().quantityObservations()).singleElement().satisfies(observation -> {
+            assertThat(observation.quantifierScope()).isEqualTo(QuantifierScope.PER_VARIANT);
+            assertThat(observation.variantCount()).isEqualTo(4);
+            assertThat(observation.perVariantQuantity()).isEqualTo(1);
+            assertThat(observation.derivedTotal()).isEqualTo(4);
+            assertThat(observation.resolution()).isEqualTo(QuantityResolution.EXACT);
+        });
     }
 
     @Test
@@ -611,20 +650,16 @@ class SpringAiVisualRulebookPageCatalogModelTest {
                          "factualSummary":[],"keywords":["move"],"sourceDependencies":[],
                          "ruleGroups":[{"identifier":"MOVE","fact":"Move one pawn."}],
                          "ruleGroupInventoryComplete":true,
-                         "quantityObservations":[{"pageNumber":1,"ruleGroupIndex":0,
-                         "quantifierScope":"UNRESOLVED","variantAxis":"","variantCount":null,
-                         "perVariantQuantity":null,"derivedTotal":null,"originalSpan":"one pawn",
-                         "resolution":"UNRESOLVED"}]}]}
+                         "quantityObservations":[{"kind":"REQUIRES_PAGE_INSPECTION","pageNumber":1,
+                         "ruleGroupIndex":0,"variantAxis":"","total":1,"originalSpan":"one pawn"}]}]}
                         """),
                 response("""
                         {"pages":[{"pageNumber":1,"printedTerms":["MOVE"],
                          "factualSummary":[],"keywords":["move"],"sourceDependencies":[],
                          "ruleGroups":[{"identifier":"MOVE","fact":"Move one pawn."}],
                          "ruleGroupInventoryComplete":true,
-                         "quantityObservations":[{"pageNumber":1,"ruleGroupIndex":0,
-                         "quantifierScope":"UNRESOLVED","variantAxis":"","variantCount":null,
-                         "perVariantQuantity":null,"derivedTotal":null,"originalSpan":"one pawn",
-                         "resolution":"REQUIRES_PAGE_INSPECTION"}]}]}
+                         "quantityObservations":[{"kind":"REQUIRES_PAGE_INSPECTION","pageNumber":1,
+                         "ruleGroupIndex":0,"variantAxis":"","originalSpan":"one pawn"}]}]}
                         """));
         SpringAiVisualRulebookPageCatalogModel model = model(configuration);
 
@@ -648,9 +683,10 @@ class SpringAiVisualRulebookPageCatalogModelTest {
                         "The previous ledger failed deterministic contract validation",
                         "each visible rule group as one ruleGroups object",
                         "zero-based ruleGroupIndex",
-                        "quantifierScope UNRESOLVED",
-                        "resolution REQUIRES_PAGE_INSPECTION",
-                        "UNRESOLVED is never a resolution value",
+                        "PER_VARIANT_EXACT",
+                        "TOTAL_EXACT",
+                        "REQUIRES_PAGE_INSPECTION",
+                        "has no numeric fields",
                         "omit only that optional observation while retaining its directly visible rule statement"));
     }
 
@@ -1298,7 +1334,7 @@ class SpringAiVisualRulebookPageCatalogModelTest {
                 configuration,
                 new FakeVisualRulebookPageCatalogModel(),
                 new ClassPathResource("prompts/visual-page-catalog-v2-icon-inventory-system.txt"),
-                new ClassPathResource("prompts/visual-page-teaching-catalog-v4-bound-rule-groups-system.txt"),
+                new ClassPathResource("prompts/visual-page-teaching-catalog-v5-discriminated-quantities-system.txt"),
                 new ClassPathResource("prompts/visual-page-progressive-teaching-start-v4-source-contract-system.txt"),
                 new ClassPathResource("prompts/visual-icon-localization-v2-system.txt"),
                 new ClassPathResource("prompts/visual-icon-crop-review-v4-system.txt"),

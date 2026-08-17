@@ -75,11 +75,9 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
             complete replacement JSON object. Keep each visible rule group as one ruleGroups object with exactly an
             identifier and its same-page fact; never return a separate ruleGroupIdentifiers array. Bind every
             quantityObservations item with its zero-based ruleGroupIndex, where 0 means the first ruleGroups item; do
-            not repeat a rule-group identifier inside an observation. Each observation must use one of exactly three
-            valid enum shapes: (1) quantifierScope
-            PER_VARIANT with resolution EXACT, a visible non-empty variantAxis, and perVariantQuantity; (2)
-            quantifierScope TOTAL with resolution EXACT and derivedTotal; or (3) quantifierScope UNRESOLVED with
-            resolution REQUIRES_PAGE_INSPECTION and all numeric fields null. UNRESOLVED is never a resolution value.
+            not repeat a rule-group identifier inside an observation. Each observation has one kind and only that
+            kind's exact fields: PER_VARIANT_EXACT, TOTAL_EXACT, or REQUIRES_PAGE_INSPECTION. The inspection kind has
+            no numeric fields, so it cannot also claim a resolved scope or total.
             If a quantitative relation cannot satisfy one shape, omit only that optional observation while retaining
             its directly visible rule statement. Return every supplied page and the exact original field set as JSON
             only.
@@ -105,6 +103,18 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
             "derivedTotal",
             "originalSpan",
             "resolution");
+    private static final Set<String> PER_VARIANT_EXACT_QUANTITY_FIELDS = Set.of(
+            "kind",
+            "pageNumber",
+            "ruleGroupIndex",
+            "variantAxis",
+            "variantCount",
+            "perVariantQuantity",
+            "originalSpan");
+    private static final Set<String> TOTAL_EXACT_QUANTITY_FIELDS = Set.of(
+            "kind", "pageNumber", "ruleGroupIndex", "total", "originalSpan");
+    private static final Set<String> INSPECTION_QUANTITY_FIELDS = Set.of(
+            "kind", "pageNumber", "ruleGroupIndex", "variantAxis", "originalSpan");
     private static final Set<String> RULE_GROUP_COVERAGE_FIELDS = Set.of("identifier", "role");
     private final RuntimeModelConfiguration models;
     private final FakeVisualRulebookPageCatalogModel fake;
@@ -122,7 +132,7 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
             RuntimeModelConfiguration models,
             FakeVisualRulebookPageCatalogModel fake,
             @Value("classpath:prompts/visual-page-catalog-v2-icon-inventory-system.txt") Resource systemPrompt,
-            @Value("classpath:prompts/visual-page-teaching-catalog-v4-bound-rule-groups-system.txt")
+            @Value("classpath:prompts/visual-page-teaching-catalog-v5-discriminated-quantities-system.txt")
                     Resource teachingStartupPrompt,
             @Value("classpath:prompts/visual-page-progressive-teaching-start-v4-source-contract-system.txt")
                     Resource progressiveTeachingStartPrompt,
@@ -377,7 +387,7 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
                 })
                 .call()
                 .content();
-        return parseTeachingCatalogV4(content);
+        return parseTeachingCatalogV5(content);
     }
 
     private ProgressiveTeachingStartDraft progressiveTeachingStartOnce(CatalogRequest request, String owner) {
@@ -786,6 +796,10 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
         return parseCatalog(content, true, true, true);
     }
 
+    static CatalogDraft parseTeachingCatalogV5(String content) {
+        return parseCatalog(content, true, true, true, true);
+    }
+
     private static CatalogDraft parseCatalog(
             String content, boolean requireSourceDependencies, boolean requireQuantityObservations) {
         return parseCatalog(content, requireSourceDependencies, requireQuantityObservations, false);
@@ -796,6 +810,20 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
             boolean requireSourceDependencies,
             boolean requireQuantityObservations,
             boolean requireBoundRuleGroups) {
+        return parseCatalog(
+                content,
+                requireSourceDependencies,
+                requireQuantityObservations,
+                requireBoundRuleGroups,
+                false);
+    }
+
+    private static CatalogDraft parseCatalog(
+            String content,
+            boolean requireSourceDependencies,
+            boolean requireQuantityObservations,
+            boolean requireBoundRuleGroups,
+            boolean requireDiscriminatedQuantities) {
         if (content == null || content.isBlank()) {
             throw new IllegalArgumentException("visual page catalog model returned no content");
         }
@@ -848,8 +876,11 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
                         && ruleGroupCompleteness.isBoolean()
                         && ruleGroupCompleteness.booleanValue();
                 List<VisualQuantityObservation> quantityObservations = requireBoundRuleGroups
-                        ? boundQuantityObservations(
-                                page.get("quantityObservations"), requireQuantityObservations, boundRuleGroups)
+                        ? requireDiscriminatedQuantities
+                                ? discriminatedBoundQuantityObservations(
+                                        page.get("quantityObservations"), requireQuantityObservations, boundRuleGroups)
+                                : boundQuantityObservations(
+                                        page.get("quantityObservations"), requireQuantityObservations, boundRuleGroups)
                         : quantityObservations(page.get("quantityObservations"), requireQuantityObservations);
                 String printedTerms = joinedText(page.get("printedTerms"), "; ");
                 String factualSummary = joinedText(page.get("factualSummary"), "\n");
@@ -1239,6 +1270,100 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
         return List.copyOf(observations);
     }
 
+    private static List<VisualQuantityObservation> discriminatedBoundQuantityObservations(
+            JsonNode value, boolean required, List<ModelRuleGroup> ruleGroups) {
+        if (value == null || value.isMissingNode()) {
+            if (required) {
+                throw new IllegalArgumentException(
+                        "visual teaching catalog must return quantityObservations for every cataloged page");
+            }
+            return List.of();
+        }
+        if (!value.isArray() || value.size() > VisualQuantityObservation.MAX_OBSERVATIONS_PER_PAGE) {
+            throw new IllegalArgumentException("visual teaching quantityObservations are invalid");
+        }
+        List<VisualQuantityObservation> observations = new java.util.ArrayList<>();
+        for (JsonNode item : value) {
+            if (!item.isObject()) {
+                throw new IllegalArgumentException("visual teaching quantity observation must be an object");
+            }
+            try {
+                ModelQuantityKind kind = ModelQuantityKind.valueOf(requiredText(item.get("kind"), "kind", false));
+                Set<String> fields = new java.util.LinkedHashSet<>();
+                item.fieldNames().forEachRemaining(fields::add);
+                Set<String> expectedFields = switch (kind) {
+                    case PER_VARIANT_EXACT -> PER_VARIANT_EXACT_QUANTITY_FIELDS;
+                    case TOTAL_EXACT -> TOTAL_EXACT_QUANTITY_FIELDS;
+                    case REQUIRES_PAGE_INSPECTION -> INSPECTION_QUANTITY_FIELDS;
+                };
+                if (!fields.equals(expectedFields)) {
+                    throw new IllegalArgumentException(
+                            "quantity kind " + kind + " must contain only its exact fields " + expectedFields);
+                }
+                int ruleGroupIndex = requiredInteger(item.get("ruleGroupIndex"), "ruleGroupIndex");
+                if (ruleGroupIndex < 0 || ruleGroupIndex >= ruleGroups.size()) {
+                    throw new IllegalArgumentException("ruleGroupIndex must identify one ruleGroups item");
+                }
+                String ruleGroupIdentifier = ruleGroups.get(ruleGroupIndex).identifier();
+                int pageNumber = requiredInteger(item.get("pageNumber"), "pageNumber");
+                String originalSpan = requiredText(item.get("originalSpan"), "originalSpan", false);
+                observations.add(switch (kind) {
+                    case PER_VARIANT_EXACT -> perVariantObservation(
+                            item, pageNumber, ruleGroupIdentifier, originalSpan);
+                    case TOTAL_EXACT -> new VisualQuantityObservation(
+                            pageNumber,
+                            ruleGroupIdentifier,
+                            QuantifierScope.TOTAL,
+                            "",
+                            null,
+                            null,
+                            requiredInteger(item.get("total"), "total"),
+                            originalSpan,
+                            QuantityResolution.EXACT);
+                    case REQUIRES_PAGE_INSPECTION -> new VisualQuantityObservation(
+                            pageNumber,
+                            ruleGroupIdentifier,
+                            QuantifierScope.UNRESOLVED,
+                            requiredText(item.get("variantAxis"), "variantAxis", true),
+                            null,
+                            null,
+                            null,
+                            originalSpan,
+                            QuantityResolution.REQUIRES_PAGE_INSPECTION);
+                });
+            } catch (IllegalArgumentException invalidObservation) {
+                throw new IllegalArgumentException(
+                        "visual teaching quantity observation is invalid: " + invalidObservation.getMessage(),
+                        invalidObservation);
+            }
+        }
+        return List.copyOf(observations);
+    }
+
+    private static VisualQuantityObservation perVariantObservation(
+            JsonNode item, int pageNumber, String ruleGroupIdentifier, String originalSpan) {
+        Integer variantCount = nullableInteger(item.get("variantCount"), "variantCount");
+        int perVariantQuantity = requiredInteger(item.get("perVariantQuantity"), "perVariantQuantity");
+        Integer derivedTotal = null;
+        if (variantCount != null) {
+            try {
+                derivedTotal = Math.multiplyExact(variantCount, perVariantQuantity);
+            } catch (ArithmeticException overflow) {
+                throw new IllegalArgumentException("visual quantity derived total is outside the safe range", overflow);
+            }
+        }
+        return new VisualQuantityObservation(
+                pageNumber,
+                ruleGroupIdentifier,
+                QuantifierScope.PER_VARIANT,
+                requiredText(item.get("variantAxis"), "variantAxis", false),
+                variantCount,
+                perVariantQuantity,
+                derivedTotal,
+                originalSpan,
+                QuantityResolution.EXACT);
+    }
+
     private static VisualQuantityObservation quantityObservation(JsonNode item, String ruleGroupIdentifier) {
         return new VisualQuantityObservation(
                 requiredInteger(item.get("pageNumber"), "pageNumber"),
@@ -1250,6 +1375,12 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
                 nullableInteger(item.get("derivedTotal"), "derivedTotal"),
                 requiredText(item.get("originalSpan"), "originalSpan", false),
                 QuantityResolution.valueOf(requiredText(item.get("resolution"), "resolution", false)));
+    }
+
+    private enum ModelQuantityKind {
+        PER_VARIANT_EXACT,
+        TOTAL_EXACT,
+        REQUIRES_PAGE_INSPECTION
     }
 
     private static int requiredInteger(JsonNode value, String field) {

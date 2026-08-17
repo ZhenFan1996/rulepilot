@@ -23,27 +23,27 @@ item has exactly these fields:
   every distinct readable gameplay group. Set false if a group or governing relation is unreadable, more than sixteen
   groups are visible, or the output budget prevents a complete inventory. A fully checked non-gameplay page has an
   empty ruleGroups array and true;
-- quantityObservations: an explicit array with at most eight optional quantitative observations. Every item has
-  exactly pageNumber, ruleGroupIndex, quantifierScope, variantAxis, variantCount, perVariantQuantity, derivedTotal,
-  originalSpan, and resolution. pageNumber equals the containing page. ruleGroupIndex is the zero-based position of
-  the owning ruleGroups object: 0 means the first item, 1 the second, and so on. Do not repeat a rule-group identifier
-  inside an observation. originalSpan is an exact, single-line visible fragment of at most 240 characters and retains
-  each/every/per wording and any printed arithmetic.
+- quantityObservations: an explicit array with at most eight optional quantitative observations. Every observation
+  has exactly one kind plus that kind's fields. pageNumber equals the containing page. ruleGroupIndex is the zero-based
+  position of the owning ruleGroups object: 0 means the first item, 1 the second, and so on. Do not repeat a rule-group
+  identifier inside an observation. originalSpan is an exact, single-line visible fragment of at most 240 characters
+  and retains each/every/per wording and any printed arithmetic.
 
-quantifierScope and resolution are different enum fields. Use exactly one of these three shapes:
-1. PER_VARIANT + EXACT: the quantity applies separately along a visibly named variant/category/player axis.
-   variantAxis and perVariantQuantity are required. When variantCount is visible, derivedTotal equals
-   variantCount × perVariantQuantity; otherwise variantCount and derivedTotal are null.
-2. TOTAL + EXACT: a collective total is directly visible. derivedTotal is required; variantCount and
-   perVariantQuantity are null; variantAxis is empty.
-3. UNRESOLVED + REQUIRES_PAGE_INSPECTION: a digit, axis, operator, cardinality, or scope is ambiguous. Keep
-   originalSpan and any safely readable variantAxis; all numeric fields are null.
+Use exactly one of these three discriminated observation shapes; never combine their fields:
+1. PER_VARIANT_EXACT has exactly kind, pageNumber, ruleGroupIndex, variantAxis, variantCount,
+   perVariantQuantity, and originalSpan. variantAxis and perVariantQuantity are required. When the variant count is
+   visible, variantCount is that positive integer; otherwise it is null. Do not return a product field: the consumer
+   derives and verifies the total from the two visible operands.
+2. TOTAL_EXACT has exactly kind, pageNumber, ruleGroupIndex, total, and originalSpan. total is the positive collective
+   total directly visible on the page.
+3. REQUIRES_PAGE_INSPECTION has exactly kind, pageNumber, ruleGroupIndex, variantAxis, and originalSpan. Use it when a
+   digit, axis, operator, cardinality, or scope is ambiguous. variantAxis keeps any safely readable axis or is empty.
+   This shape has no numeric field and never publishes a guessed operand or total.
 
-The only quantifierScope values are PER_VARIANT, TOTAL, and UNRESOLVED. The only resolution values are EXACT and
-REQUIRES_PAGE_INSPECTION. UNRESOLVED is never a resolution. Never guess a total or return numeric strings. “4 colors ×
-1 each” preserves variantCount 4, perVariantQuantity 1, and derivedTotal 4; it never becomes a total of 1. If a visible
-quantitative statement cannot safely form an observation, omit only the observation and keep the rule statement in
-its ruleGroups fact.
+The only kind values are PER_VARIANT_EXACT, TOTAL_EXACT, and REQUIRES_PAGE_INSPECTION. Never return numeric strings.
+“4 colors × 1 each” preserves variantCount 4 and perVariantQuantity 1; it never becomes a total of 1.
+If a visible quantitative statement cannot safely form an observation, omit only the observation and keep the rule
+statement in its ruleGroups fact.
 
 The projected page ledger, including page-level facts, source-dependency facts, and every rule-group fact, must fit
 within 4,000 Unicode characters. Preserve complete governing relations instead of compressing them into labels or
