@@ -51,14 +51,14 @@ services:
       VISUAL_ENRICHMENT_BACKGROUND_MAX_POOL_SIZE: "1"
       VISUAL_ENRICHMENT_BACKGROUND_QUEUE_CAPACITY: "3"
       VISUAL_ENRICHMENT_REQUEST_PARALLELISM: "1"
-      # Vision work is optional after the cited text lesson exists. A single Qwen request avoids holding multiple
-      # rendered rulebook pages in the API process and protects ordinary reading, upload, and question requests.
-      VISUAL_REQUEST_PARALLELISM: ${PRODUCTION_VISUAL_REQUEST_PARALLELISM:-1}
+      # Vision work is optional after the cited text lesson exists. Three bounded Qwen requests reduce the long
+      # visual hold without allowing an unbounded burst of rendered rulebook pages in the API process.
+      VISUAL_REQUEST_PARALLELISM: ${PRODUCTION_VISUAL_REQUEST_PARALLELISM:-3}
       VISUAL_CATALOG_TIMEOUT: PT120S
       VISUAL_PROGRESSIVE_START_TIMEOUT: PT35S
       # Publish the cited text lesson first, then give the first visual pass enough breadth to cover the major
-      # gameplay chapters. Vision still runs one request at a time on this small host, so it cannot create a burst
-      # of rendered-page buffers or delay reading and answering requests.
+      # gameplay chapters. The bounded request pool protects reading, upload, and answer traffic while the single
+      # enrichment worker prevents several lessons from retaining rendered-page buffers at once.
       VISUAL_MAX_SECTIONS: ${PRODUCTION_VISUAL_MAX_SECTIONS:-6}
       VISUAL_MAX_STEPS_PER_SECTION: ${PRODUCTION_VISUAL_MAX_STEPS_PER_SECTION:-1}
       ANSWER_RATE_PROVIDER_CONCURRENCY: ${PRODUCTION_ANSWER_PROVIDER_CONCURRENCY:-2}
