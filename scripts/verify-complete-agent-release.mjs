@@ -1,44 +1,15 @@
 #!/usr/bin/env node
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
-const EXPECTED_CLAIMS = Object.freeze([
-  'goal-and-state', 'native-tool-choice', 'bounded-loop', 'role-scoped-tools', 'typed-observations',
-  'trusted-scope', 'grounded-completion', 'provenance-context', 'recovery-fallback', 'evaluation',
-  'product-completion', 'understandable-implementation',
-])
 const PLAYER_NEEDS = Object.freeze([
   'START_PLAYING', 'RESOLVE_EXCEPTION', 'MATCH_TABLE_STATE', 'IDENTIFY_SYMBOL', 'ASK_NATURALLY',
 ])
 
 function requireInvariant(condition, message) {
   if (!condition) throw new Error(message)
-}
-
-export function claimIssues(matrix, pathExists = () => true) {
-  const issues = []
-  if (matrix?.schemaVersion !== 1) issues.push('schemaVersion must be 1')
-  const claims = Array.isArray(matrix?.claims) ? matrix.claims : []
-  const ids = claims.map((claim) => claim?.id)
-  for (const id of EXPECTED_CLAIMS) {
-    if (ids.filter((candidate) => candidate === id).length !== 1) issues.push(`claim must appear once: ${id}`)
-  }
-  for (const claim of claims) {
-    for (const field of ['code', 'test']) {
-      if (typeof claim?.[field] !== 'string' || !pathExists(claim[field])) issues.push(`${claim?.id} ${field} is missing`)
-    }
-    for (const field of ['supportingCode', 'supportingTests']) {
-      if (claim?.[field] !== undefined && (!Array.isArray(claim[field])
-          || claim[field].some((path) => typeof path !== 'string' || !pathExists(path)))) {
-        issues.push(`${claim?.id} ${field} contains a missing path`)
-      }
-    }
-    if (typeof claim?.real !== 'string' || !claim.real) issues.push(`${claim?.id} real evidence is missing`)
-    if (typeof claim?.player !== 'string' || !claim.player) issues.push(`${claim?.id} player evidence is missing`)
-  }
-  return [...new Set(issues)]
 }
 
 export function verifyRealRelease({ security, baseline, providerReports, notBefore, now = new Date() }) {
@@ -88,7 +59,6 @@ export function verifyRealRelease({ security, baseline, providerReports, notBefo
   return {
     schemaVersion: 1,
     generatedAt: new Date().toISOString(),
-    completeAgentClaims: 12,
     realCorpusFamilies: 5,
     playerNeeds: [...PLAYER_NEEDS],
     providers: [...providers].sort(),
@@ -102,12 +72,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
   try {
     const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
     const load = (path) => JSON.parse(readFileSync(resolve(root, path), 'utf8'))
-    const matrix = load('examples/evaluation/complete-agent-release-v1.json')
-    const issues = claimIssues(matrix, (path) => existsSync(resolve(root, path)))
-    requireInvariant(issues.length === 0, issues.join('; '))
     if (!process.argv.includes('--real')) {
-      console.log('Complete Agent claim matrix verified: 12 direct code/test/real/player mappings.')
-      process.exit(0)
+      throw new Error('complete Agent release verification requires fresh real evidence; pass --real')
     }
     const result = verifyRealRelease({
       security: load('.local/agent-evaluation/security-agent-release-gate.json'),

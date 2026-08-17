@@ -1,10 +1,13 @@
 import assert from 'node:assert/strict'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import test from 'node:test'
 
 import {
   corpusManifestIssues,
-  executionStateIssues,
   localMarkdownTargets,
+  maintainedDocumentation,
 } from './verify-documentation.mjs'
 
 test('extracts repository-local Markdown targets without treating web or anchors as files', () => {
@@ -16,70 +19,26 @@ test('extracts repository-local Markdown targets without treating web or anchors
   ].join('\n')), ['../README.md'])
 })
 
-test('accepts one bounded current task with an archived-history link', () => {
-  const state = `# state
+test('discovers maintained Markdown without encoding phase names or dated history paths', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'rulepilot-docs-'))
+  try {
+    await mkdir(join(root, 'docs', 'roadmap', 'history'), { recursive: true })
+    await mkdir(join(root, 'docs', 'learning', 'new-phase'), { recursive: true })
+    await writeFile(join(root, 'README.md'), '# Root\n')
+    await writeFile(join(root, 'AGENTS.md'), '# Agents\n')
+    await writeFile(join(root, 'docs', 'roadmap', 'EXECUTION_STATE.md'), '# Arbitrary current state\n')
+    await writeFile(join(root, 'docs', 'learning', 'new-phase', 'NOTE.md'), '# New note\n')
+    await writeFile(join(root, 'docs', 'roadmap', 'history', 'old.md'), '# Archived\n')
 
-## Current task
-
-P19-01 — docs
-
-Status: IN_PROGRESS
-
-[history](history/EXECUTION_STATE-through-2026-08-02.md)
-`
-  assert.deepEqual(executionStateIssues(state), { currentTask: 'P19-01', issues: [] })
-})
-
-test('accepts an explicitly complete phase with a done final task', () => {
-  const state = `# state
-
-Phase status: COMPLETE
-
-## Current task
-
-P19-09 — release
-
-Status: DONE
-
-[history](history/EXECUTION_STATE-through-2026-08-02.md)
-`
-  assert.deepEqual(executionStateIssues(state), { currentTask: 'P19-09', issues: [] })
-})
-
-test('accepts an incomplete phase whose current task is explicitly blocked', () => {
-  const markdown = `# EXECUTION_STATE
-
-Complete history: history/EXECUTION_STATE-through-2026-08-02.md
-
-## Current phase
-
-Phase status: IN_PROGRESS
-
-## Current task
-
-P19-10 — Release audit
-
-Status: BLOCKED by the three-fix stop condition.
-`
-
-  assert.deepEqual(executionStateIssues(markdown).issues, [])
-})
-
-test('rejects ambiguous active state and an unbounded maintained log', () => {
-  const state = [
-    '## Current task',
-    '',
-    'P19-01 — docs',
-    '',
-    'Status: IN_PROGRESS',
-    'Status: IN_PROGRESS',
-    ...Array.from({ length: 251 }, () => 'history'),
-  ].join('\n')
-  const result = executionStateIssues(state)
-  assert.equal(result.currentTask, 'P19-01')
-  assert.match(result.issues.join('\n'), /one current IN_PROGRESS task or one current BLOCKED task/)
-  assert.match(result.issues.join('\n'), /maximum is 250/)
-  assert.match(result.issues.join('\n'), /does not link its preserved history/)
+    assert.deepEqual(maintainedDocumentation(root), [
+      'AGENTS.md',
+      'README.md',
+      'docs/learning/new-phase/NOTE.md',
+      'docs/roadmap/EXECUTION_STATE.md',
+    ])
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
 })
 
 test('validates the minimum private corpus inventory contract without game vocabulary', () => {

@@ -383,6 +383,54 @@ class OfficialRulebookDiscoveryServiceTest {
     }
 
     @Test
+    void usesTheObservedScriptOfAChineseCatalogDocumentTitleWhenNoExplicitLanguageNameIsPresent() {
+        GstoneRulebookCatalogLookup gstoneCatalog = request -> List.of(
+                new OfficialRulebookCandidateFinder.Candidate(
+                        "目录游戏", "https://www.gstonegames.com/game/info-1234.html", "集石", "", "基础版"));
+        OfficialRulebookSourceInspector inspector = source -> {
+            if (source.getPath().equals("/game/info-1234.html")) {
+                return Optional.of(new OfficialRulebookSourceInspector.Inspection(
+                        source,
+                        OfficialRulebookSourceInspector.MediaType.HTML,
+                        List.of(
+                                new OfficialRulebookSourceInspector.Link(
+                                        URI.create("https://www.gstonegames.com/game/doc-1111.html"),
+                                        "非官方游戏规则"),
+                                new OfficialRulebookSourceInspector.Link(
+                                        URI.create("https://www.gstonegames.com/game/doc-2222.html"),
+                                        "英文游戏规则"))));
+            }
+            if (source.getPath().equals("/game/doc-1111.html")
+                    || source.getPath().equals("/game/doc-2222.html")) {
+                return Optional.of(new OfficialRulebookSourceInspector.Inspection(
+                        source, OfficialRulebookSourceInspector.MediaType.IMAGE_GALLERY, List.of()));
+            }
+            return Optional.empty();
+        };
+        FakeFinder finder = new FakeFinder(List.of());
+        var service = new OfficialRulebookDiscoveryService(
+                catalog(), sourceIdentity(), finder, gstoneCatalog, inspector, "");
+
+        var result = service.discover(EDITION_ID, "zh-CN");
+
+        assertThat(result.candidates())
+                .filteredOn(candidate -> candidate.url().endsWith("/game/doc-1111.html"))
+                .singleElement()
+                .satisfies(candidate -> {
+                    assertThat(candidate.language()).isEqualTo("zh-CN");
+                    assertThat(candidate.languageVerified()).isTrue();
+                });
+        assertThat(result.candidates())
+                .filteredOn(candidate -> candidate.url().endsWith("/game/doc-2222.html"))
+                .singleElement()
+                .satisfies(candidate -> {
+                    assertThat(candidate.language()).isEqualTo("en");
+                    assertThat(candidate.languageVerified()).isTrue();
+                });
+        assertThat(finder.calls).isZero();
+    }
+
+    @Test
     void fallsBackToModelSearchWhenGstoneOnlyHasADifferentLanguage() {
         var finder = new FakeFinder(List.of(new OfficialRulebookCandidateFinder.Candidate(
                 "Chinese publisher rulebook",

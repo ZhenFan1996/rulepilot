@@ -61,6 +61,57 @@ class OfficialRulebookAcquisitionStratifiedRealEvaluationTest {
     private final ObjectMapper json = JsonMapper.builder().findAndAddModules().build();
 
     @Test
+    void resolvesAConfiguredChineseGstoneImageRulebookWithoutModelSearch() {
+        assumeTrue("true".equalsIgnoreCase(System.getenv("RULEPILOT_REAL_GSTONE_DISCOVERY_EVAL")));
+        String gameName = requiredEnvironment("RULEBOOK_GSTONE_GAME_NAME");
+        String expectedDocumentUrl = requiredEnvironment("RULEBOOK_GSTONE_EXPECTED_DOCUMENT_URL");
+        UUID editionId = UUID.fromString("5b19fbee-8353-43de-bdb6-820ec564136b");
+        CatalogGamePresentationLookup catalog = ignored -> Optional.of(new CatalogGamePresentationLookup.Presentation(
+                editionId,
+                gameName,
+                "Base",
+                "zh-CN",
+                null,
+                1,
+                "https://example.test/game.jpg",
+                1,
+                5,
+                120,
+                10,
+                "https://boardgamegeek.com/boardgame/1"));
+        CatalogGameSourceIdentityLookup identity = ignored -> Optional.of(
+                new CatalogGameSourceIdentityLookup.Identity(gameName, List.of(gameName), List.of()));
+        OfficialRulebookCandidateFinder disabledFinder = new OfficialRulebookCandidateFinder() {
+            @Override
+            public boolean configured() {
+                return false;
+            }
+
+            @Override
+            public List<OfficialRulebookCandidateFinder.Candidate> find(
+                    OfficialRulebookCandidateFinder.Request request) {
+                throw new AssertionError("deterministic Gstone discovery must not call model search");
+            }
+        };
+        var lookup = new HttpGstoneRulebookCatalogLookup(new OkHttpClient(), json, true);
+        var inspector = new HttpOfficialRulebookSourceInspector(Duration.ofSeconds(20), 1024 * 1024);
+        var discovery = new OfficialRulebookDiscoveryService(
+                catalog, identity, disabledFinder, lookup, inspector, "");
+
+        var candidate = discovery.discover(editionId, "zh-CN").candidates().stream()
+                .filter(value -> value.url().equals(expectedDocumentUrl))
+                .findFirst()
+                .orElseThrow();
+
+        assertThat(candidate.language()).isEqualTo("zh-CN");
+        assertThat(candidate.languageVerified()).isTrue();
+        assertThat(candidate.acquisitionMode())
+                .isEqualTo(OfficialRulebookDiscoveryService.AcquisitionMode.IMAGE_GALLERY);
+        assertThat(candidate.capability())
+                .isEqualTo(OfficialRulebookDiscoveryService.SourceCapability.CONTIGUOUS_RULE_PAGES);
+    }
+
+    @Test
     void writesASeparatedRealSourceOutcomeReportWithoutAnOverallSuccessClaim() throws Exception {
         assumeTrue("true".equalsIgnoreCase(System.getenv("RULEPILOT_REAL_RULEBOOK_STRATIFIED_EVAL")));
         var http = new OkHttpClient.Builder()
@@ -292,6 +343,14 @@ class OfficialRulebookAcquisitionStratifiedRealEvaluationTest {
     private OfficialRulebookCandidateFinder.Request request(String gameName, String language) {
         return new OfficialRulebookCandidateFinder.Request(
                 1, gameName, "base", null, language, List.of(gameName), List.of(), List.of());
+    }
+
+    private String requiredEnvironment(String name) {
+        String value = System.getenv(name);
+        if (value == null || value.isBlank()) {
+            throw new IllegalArgumentException(name + " is required");
+        }
+        return value.strip();
     }
 
     private Map<String, Object> outcome(

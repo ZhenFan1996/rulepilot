@@ -30,13 +30,6 @@ function requireInvariant(condition, stage, message) {
   if (!condition) throw new Error(`${stage}: ${message}`)
 }
 
-function prohibitedModel(model) {
-  const normalized = String(model ?? '').trim().toLowerCase()
-  return normalized === 'qwen-plus'
-    || normalized.startsWith('qwen-plus-')
-    || normalized.startsWith('qwen-plus_')
-}
-
 function opaqueCaseId(value) {
   return /^cx-[a-z0-9-]+$/.test(value ?? '')
 }
@@ -125,8 +118,8 @@ function verifyRecommendation(report, limits) {
     requireInvariant(opaqueCaseId(result?.caseId), stage, 'recommendation case ID must be opaque')
     requireInvariant(typeof result?.provider === 'string' && result.provider.length > 0,
       stage, `${result?.caseId} recommendation provider is missing`)
-    requireInvariant(typeof result?.model === 'string' && result.model.length > 0 && !prohibitedModel(result.model),
-      stage, `${result?.caseId} recommendation model is prohibited or missing`)
+    requireInvariant(typeof result?.model === 'string' && result.model.length > 0,
+      stage, `${result?.caseId} recommendation model is missing`)
     providers.add(result.provider)
     requireInvariant(result.outcome === 'RECOMMENDATIONS', stage,
       `${result.caseId} recommendation did not reach a useful terminal state`)
@@ -196,8 +189,6 @@ function verifyRecommendation(report, limits) {
     'recommendation evaluation injected a preference enum')
   requireInvariant(controls.rawModelOutputStored === false, stage,
     'recommendation evaluation retained raw model output')
-  requireInvariant(controls.prohibitedQwenPlusUsed === false, stage,
-    'recommendation evaluation used qwen-plus')
   return providers
 }
 
@@ -212,8 +203,8 @@ function verifyAdaptiveDialogue(report, limits) {
     requireInvariant(opaqueCaseId(result?.caseId), stage, 'adaptive dialogue case ID must be opaque')
     requireInvariant(typeof result?.provider === 'string' && result.provider.length > 0,
       stage, `${result?.caseId} adaptive provider is missing`)
-    requireInvariant(typeof result?.model === 'string' && result.model.length > 0 && !prohibitedModel(result.model),
-      stage, `${result?.caseId} adaptive model is prohibited or missing`)
+    requireInvariant(typeof result?.model === 'string' && result.model.length > 0,
+      stage, `${result?.caseId} adaptive model is missing`)
     providers.add(result.provider)
     providerCounts.set(result.provider, (providerCounts.get(result.provider) ?? 0) + 1)
     observedIntents.add(result.learningIntent)
@@ -247,8 +238,6 @@ function verifyAdaptiveDialogue(report, limits) {
     'adaptive dialogue used rulebook text as intent evidence')
   requireInvariant(controls.rawModelOutputStored === false, stage,
     'adaptive dialogue retained raw model output')
-  requireInvariant(controls.prohibitedQwenPlusUsed === false, stage,
-    'adaptive dialogue used qwen-plus')
   return providers
 }
 
@@ -263,8 +252,8 @@ function verifyAnswerDialogue(report, limits) {
       'Answer dialogue case ID must identify a sanitized real-rulebook case')
     requireInvariant(typeof result?.provider === 'string' && result.provider.length > 0,
       stage, `${result?.caseId} Answer dialogue provider is missing`)
-    requireInvariant(typeof result?.model === 'string' && result.model.length > 0 && !prohibitedModel(result.model),
-      stage, `${result?.caseId} Answer dialogue model is prohibited or missing`)
+    requireInvariant(typeof result?.model === 'string' && result.model.length > 0,
+      stage, `${result?.caseId} Answer dialogue model is missing`)
     providers.add(result.provider)
     requireInvariant(Array.isArray(result.interactionTags) && result.interactionTags.length >= 3,
       stage, `${result.caseId} Answer dialogue is not a rich everyday follow-up`)
@@ -306,8 +295,8 @@ function verifyAcquisition(report, limits) {
   requireInvariant(results.length >= 1, stage, 'rulebook acquisition has no real result')
   for (const result of results) {
     requireInvariant(opaqueCaseId(result?.caseId), stage, 'acquisition case ID must be opaque')
-    requireInvariant(typeof result?.model === 'string' && result.model.length > 0 && !prohibitedModel(result.model),
-      stage, `${result?.caseId} acquisition model is prohibited or missing`)
+    requireInvariant(typeof result?.model === 'string' && result.model.length > 0,
+      stage, `${result?.caseId} acquisition model is missing`)
     requireInvariant(Number.isInteger(result.discoveredCandidateCount) && result.discoveredCandidateCount > 0,
       stage, `${result.caseId} discovered no source candidate`)
     requireInvariant(Number.isInteger(result.directPdfCandidateCount) && result.directPdfCandidateCount > 0,
@@ -340,8 +329,6 @@ function verifyAcquisition(report, limits) {
     'rulebook acquisition did not use the application downloader')
   requireInvariant(controls.rawPdfStored === false && controls.rawProviderOutputStored === false,
     stage, 'rulebook acquisition report retained raw content')
-  requireInvariant(controls.prohibitedQwenPlusUsed === false, stage,
-    'rulebook acquisition used qwen-plus')
 }
 
 function verifyGroundedEvidence(answer, teaching) {

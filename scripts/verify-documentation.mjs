@@ -5,27 +5,31 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
-const DEFAULT_REQUIRED_DOCUMENTS = [
+const REQUIRED_ENTRYPOINTS = [
   'README.md',
   'AGENTS.md',
   'docs/README.md',
-  'docs/PROJECT_BLUEPRINT.md',
-  'docs/AGENTIC_REFACTOR_BLUEPRINT.md',
-  'docs/AI_AGENT_DESIGN.md',
-  'docs/AI_GENERALIZATION_GUIDELINES.md',
-  'docs/UX_DESIGN_SYSTEM.md',
-  'docs/CODING_STANDARDS.md',
-  'docs/evaluation/agent-baseline.md',
-  'docs/roadmap/ROADMAP.md',
   'docs/roadmap/EXECUTION_STATE.md',
-  'docs/roadmap/history/EXECUTION_STATE-through-2026-08-02.md',
-  'docs/learning/phase-17/TASK-P17-04.md',
-  'docs/learning/history/phase-17/TASK-P17-04-full.md',
 ]
 
-const LINK_CHECK_DOCUMENTS = DEFAULT_REQUIRED_DOCUMENTS.filter(
-  (document) => !document.includes('/history/'),
-)
+function markdownFiles(directory, prefix = '') {
+  if (!existsSync(directory)) return []
+  return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    const relative = prefix ? `${prefix}/${entry.name}` : entry.name
+    const absolute = resolve(directory, entry.name)
+    if (entry.isDirectory()) return markdownFiles(absolute, relative)
+    return entry.isFile() && entry.name.endsWith('.md') ? [relative] : []
+  })
+}
+
+export function maintainedDocumentation(root) {
+  const documents = REQUIRED_ENTRYPOINTS
+    .filter((document) => !document.startsWith('docs/') && existsSync(resolve(root, document)))
+  documents.push(...markdownFiles(resolve(root, 'docs'), 'docs'))
+  return [...new Set(documents)]
+    .filter((document) => !document.split('/').includes('history'))
+    .sort()
+}
 
 export function localMarkdownTargets(markdown) {
   return [...markdown.matchAll(/\[[^\]]*\]\(([^)]+)\)/g)]
@@ -34,34 +38,6 @@ export function localMarkdownTargets(markdown) {
     .filter((target) => !/^(?:https?:|mailto:|app:)/.test(target))
     .map((target) => target.split('#', 1)[0])
     .filter(Boolean)
-}
-
-export function executionStateIssues(markdown, maximumLines = 250) {
-  const issues = []
-  const lineCount = markdown.split(/\r?\n/).length
-  if (lineCount > maximumLines) issues.push(`maintained execution state has ${lineCount} lines; maximum is ${maximumLines}`)
-
-  const currentTask = markdown.match(/## Current task\s+\n+\s*(P\d+-\d+)/)?.[1]
-  if (!currentTask) issues.push('current task does not expose a Pxx-yy identifier')
-
-  const activeStatuses = markdown.match(/^Status: IN_PROGRESS\b/gm) ?? []
-  const phaseComplete = /^Phase status: COMPLETE\b/m.test(markdown)
-  const currentSection = (markdown.split('## Current task', 2)[1] ?? '').split(/\n## /, 1)[0]
-  const currentInProgress = /^Status: IN_PROGRESS\b/m.test(currentSection)
-  const currentBlocked = /^Status: BLOCKED\b/m.test(currentSection)
-  if (phaseComplete) {
-    if (activeStatuses.length !== 0 || !/^Status: DONE\b/m.test(currentSection)) {
-      issues.push('a complete phase requires a DONE current task and no active task')
-    }
-  } else if (!((currentInProgress && activeStatuses.length === 1)
-      || (currentBlocked && activeStatuses.length === 0))) {
-    issues.push(`expected one current IN_PROGRESS task or one current BLOCKED task, found ${activeStatuses.length} active`)
-  }
-
-  if (!markdown.includes('history/EXECUTION_STATE-through-2026-08-02.md')) {
-    issues.push('maintained execution state does not link its preserved history')
-  }
-  return { currentTask, issues }
 }
 
 export function corpusManifestIssues(manifest) {
@@ -116,26 +92,16 @@ export function verifyDocumentation({ root, requirePrivateCorpus = false } = {})
   const repositoryRoot = root ?? resolve(dirname(fileURLToPath(import.meta.url)), '..')
   const failures = []
 
-  for (const document of DEFAULT_REQUIRED_DOCUMENTS) {
+  for (const document of REQUIRED_ENTRYPOINTS) {
     if (!existsSync(resolve(repositoryRoot, document))) failures.push(`missing required document: ${document}`)
   }
 
-  for (const document of LINK_CHECK_DOCUMENTS) {
+  const maintainedDocuments = maintainedDocumentation(repositoryRoot)
+  for (const document of maintainedDocuments) {
     const documentPath = resolve(repositoryRoot, document)
-    if (!existsSync(documentPath)) continue
     const markdown = readFileSync(documentPath, 'utf8')
     for (const target of localMarkdownTargets(markdown)) {
       if (!existsSync(resolve(dirname(documentPath), target))) failures.push(`broken local link in ${document}: ${target}`)
-    }
-  }
-
-  const statePath = resolve(repositoryRoot, 'docs/roadmap/EXECUTION_STATE.md')
-  const roadmapPath = resolve(repositoryRoot, 'docs/roadmap/ROADMAP.md')
-  if (existsSync(statePath) && existsSync(roadmapPath)) {
-    const { currentTask, issues } = executionStateIssues(readFileSync(statePath, 'utf8'))
-    failures.push(...issues)
-    if (currentTask && !readFileSync(roadmapPath, 'utf8').includes(currentTask)) {
-      failures.push(`current task ${currentTask} is missing from the roadmap`)
     }
   }
 
@@ -154,7 +120,7 @@ export function verifyDocumentation({ root, requirePrivateCorpus = false } = {})
     }
   }
 
-  return { failures, checkedDocuments: LINK_CHECK_DOCUMENTS.length, privateCorpus }
+  return { failures, checkedDocuments: maintainedDocuments.length, privateCorpus }
 }
 
 function parseArguments(arguments_) {

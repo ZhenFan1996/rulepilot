@@ -88,3 +88,26 @@ test('retries a transient cutover failure and reports the successful attempt', a
   assert.equal(result.attempt, 2)
   assert.deepEqual(delays, [17])
 })
+
+test('treats the deployed page as availability, not an exact title-copy contract', async () => {
+  const result = await verifyProductionAvailability({
+    publicUrl: 'https://rulepilot.example',
+    fetchImpl: async (url) => {
+      if (new URL(url).pathname === '/') return new Response('<html><title>新的产品标题</title></html>')
+      return successfulFetch(url)
+    },
+    attempts: 1,
+  })
+  assert.equal(result.bggId, 42)
+
+  await assert.rejects(
+    verifyProductionAvailability({
+      publicUrl: 'https://rulepilot.example',
+      fetchImpl: async (url) => new URL(url).pathname === '/'
+        ? new Response('   ')
+        : successfulFetch(url),
+      attempts: 1,
+    }),
+    /empty or unsuccessful/,
+  )
+})

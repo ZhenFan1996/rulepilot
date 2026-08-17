@@ -455,7 +455,15 @@ public class OfficialRulebookDiscoveryService {
         if (containsAnyWord(words, Set.of("portuguese", "portugais", "portugues")) || compact.contains("葡萄牙文")) {
             return new LanguageResolution("pt", true);
         }
+        if (matchesDomain(page.provenance().sourceDomain(), Set.of("gstonegames.com"))
+                && compact.codePoints().anyMatch(this::isHan)) {
+            return new LanguageResolution("zh-CN", true);
+        }
         return new LanguageResolution(bounded(page.provenance().language(), 40), false);
+    }
+
+    private boolean isHan(int codePoint) {
+        return Character.UnicodeScript.of(codePoint) == Character.UnicodeScript.HAN;
     }
 
     private boolean containsAnyWord(String words, Set<String> terms) {

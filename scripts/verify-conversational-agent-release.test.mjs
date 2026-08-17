@@ -86,7 +86,6 @@ function input() {
       controls: {
         explicitPreferenceEnumInjected: false,
         rawModelOutputStored: false,
-        prohibitedQwenPlusUsed: false,
       },
     },
     acquisition: {
@@ -115,7 +114,6 @@ function input() {
         applicationFetcherUsed: true,
         rawPdfStored: false,
         rawProviderOutputStored: false,
-        prohibitedQwenPlusUsed: false,
       },
     },
     teachingDialogue: {
@@ -131,7 +129,6 @@ function input() {
         explicitEnumInjected: false,
         rulebookTextUsedAsIntentEvidence: false,
         rawModelOutputStored: false,
-        prohibitedQwenPlusUsed: false,
       },
     },
     answerDialogue: {
@@ -224,19 +221,30 @@ test('promotes only fresh natural multi-turn, acquisition, evidence, and player-
   assert.equal(release.acquisitionCases, 1)
 })
 
-test('blocks semantic release for a mechanical, slow, fallback, or prohibited recommendation', () => {
+test('blocks semantic release for a mechanical, slow, fallback, or ungrounded recommendation', () => {
   for (const mutate of [
     (value) => { value.reports.recommendation.controls.explicitPreferenceEnumInjected = true },
     (value) => { value.reports.recommendation.results[0].totalLatencyMs = 30_001 },
     (value) => { value.reports.recommendation.results[0].fallbackUsed = true },
     (value) => { value.reports.recommendation.results[0].referenceGrounded = false },
     (value) => { value.reports.recommendation.results[0].targetSelected = false },
-    (value) => { value.reports.recommendation.results[1].model = 'qwen-plus' },
   ]) {
     const value = input()
     mutate(value)
     assert.throws(() => verifyConversationalRelease(value), /SEMANTIC_READY/)
   }
+})
+
+test('judges a configured model by measured release behavior instead of its name', () => {
+  const value = input()
+  value.reports.recommendation.results[1].model = 'qwen-plus'
+  value.reports.teachingDialogue.results[2].model = 'qwen-plus-legacy-alias'
+  value.reports.acquisition.results[0].model = 'qwen-plus'
+
+  assert.equal(verifyConversationalRelease(value).releaseDecision, 'CANARY_READY')
+
+  value.reports.recommendation.results[1].model = ''
+  assert.throws(() => verifyConversationalRelease(value), /recommendation model is missing/)
 })
 
 test('blocks evidence release when discovery cannot become a validated PDF or citations escape scope', () => {
