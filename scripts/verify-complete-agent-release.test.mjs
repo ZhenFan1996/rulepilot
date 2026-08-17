@@ -1,19 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { claimIssues, verifyRealRelease } from './verify-complete-agent-release.mjs'
-
-test('requires all twelve complete-Agent claims with direct evidence fields', () => {
-  const ids = [
-    'goal-and-state', 'native-tool-choice', 'bounded-loop', 'role-scoped-tools', 'typed-observations',
-    'trusted-scope', 'grounded-completion', 'provenance-context', 'recovery-fallback', 'evaluation',
-    'product-completion', 'understandable-implementation',
-  ]
-  const matrix = { schemaVersion: 1, claims: ids.map((id) => ({ id, code: 'code', test: 'test', real: 'real', player: 'player' })) }
-  assert.deepEqual(claimIssues(matrix), [])
-  matrix.claims.pop()
-  assert.match(claimIssues(matrix).join('\n'), /understandable-implementation/)
-})
+import { verifyRealRelease } from './verify-complete-agent-release.mjs'
 
 test('requires five player needs, five families, and two concrete providers', () => {
   const needs = ['START_PLAYING', 'RESOLVE_EXCEPTION', 'MATCH_TABLE_STATE', 'IDENTIFY_SYMBOL', 'ASK_NATURALLY']

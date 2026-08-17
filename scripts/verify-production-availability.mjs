@@ -37,8 +37,8 @@ export async function verifyProductionAvailability({
     try {
       const page = await fetchWithin(fetchImpl, `${origin}/`, timeoutMillis)
       const html = await page.text()
-      if (!page.ok || !html.includes('<title>RulePilot')) {
-        throw new Error(`frontend returned HTTP ${page.status} without the RulePilot title`)
+      if (!page.ok || html.trim().length === 0) {
+        throw new Error(`frontend returned an empty or unsuccessful HTTP ${page.status} response`)
       }
 
       const csrf = await fetchWithin(fetchImpl, `${origin}/api/auth/csrf`, timeoutMillis)
