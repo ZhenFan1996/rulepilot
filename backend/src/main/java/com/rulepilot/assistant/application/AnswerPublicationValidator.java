@@ -241,11 +241,10 @@ final class AnswerPublicationValidator {
             List<RuleOption> ruleOptions) {
         String shortVerdict = draft.shortVerdict();
         String explanation = draft.explanation();
-        if (shortVerdict == null || shortVerdict.isBlank() || shortVerdict.length() > 240
-                || explanation == null || explanation.isBlank() || explanation.length() > 1500
-                || draft.citationIds().isEmpty() || draft.exceptions().size() > 6
-                || draft.exceptions().stream()
-                        .anyMatch(exception -> exception == null || exception.isBlank() || exception.length() > 400)) {
+        if (shortVerdict == null || shortVerdict.isBlank()
+                || explanation == null || explanation.isBlank()
+                || draft.citationIds().isEmpty()
+                || draft.exceptions().stream().anyMatch(exception -> exception == null || exception.isBlank())) {
             throw new IllegalArgumentException("model draft is incomplete");
         }
         String completeAnswer = shortVerdict + "\n" + explanation + "\n"
@@ -301,8 +300,7 @@ final class AnswerPublicationValidator {
                                 + option.result())
                         .collect(java.util.stream.Collectors.joining("\n"));
         List<UUID> evidenceIds = evidence.stream().map(hit -> hit.evidence().chunkId()).toList();
-        if (AnswerDraftSafetyPolicy.containsInternalEvidenceReference(completeAnswer)
-                || AnswerDraftSafetyPolicy.containsKnownEvidenceReference(completeAnswer, evidenceIds)) {
+        if (AnswerDraftSafetyPolicy.containsKnownEvidenceReference(completeAnswer, evidenceIds)) {
             throw new IllegalArgumentException("player-facing answer contains internal evidence references");
         }
         List<EvidenceClaim> claims = new java.util.ArrayList<>();

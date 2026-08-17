@@ -14,8 +14,8 @@ final class AnswerPermissionResolver {
         if (!requiresPermission(request) || !draft.answerable()) return List.of();
         List<UUID> citations = AnswerStructuredAidPolicy.citations(
                 request, draft, draft.citationIds(), "permission ruling");
-        AnswerStructuredAidPolicy.requiredText(draft.shortVerdict(), 800, "permission verdict");
-        AnswerStructuredAidPolicy.requiredText(draft.explanation(), 4_000, "permission explanation");
+        AnswerStructuredAidPolicy.requiredText(draft.shortVerdict(), "permission verdict");
+        AnswerStructuredAidPolicy.requiredText(draft.explanation(), "permission explanation");
         return citations;
     }
 

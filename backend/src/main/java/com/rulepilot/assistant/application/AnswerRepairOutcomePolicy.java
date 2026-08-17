@@ -11,18 +11,15 @@ final class AnswerRepairOutcomePolicy {
 
     private AnswerRepairOutcomePolicy() {}
 
-    static String insufficientRepairMessage(List<String> playerFacingRepair) {
-        return "回答修订后仍无法通过发布校验。";
-    }
-
     static Optional<PublicationFailure> publicationFailure(ModelRequest request, ModelDraft draft) {
-        if (AnswerDraftSafetyPolicy.containsInternalCoreReference(draft)) {
+        List<java.util.UUID> evidenceIds = request == null
+                ? List.of()
+                : request.evidence().stream()
+                        .map(com.rulepilot.assistant.RuleAnswerModel.EvidenceInput::chunkId)
+                        .toList();
+        if (AnswerDraftSafetyPolicy.containsInternalCoreReference(draft, evidenceIds)) {
             return Optional.of(new PublicationFailure(
                     AnswerStatus.INVALID_MODEL_OUTPUT, "回答包含内部证据标识，未向玩家发布。"));
-        }
-        if (AnswerSourceScopeRepairPolicy.requiresRepair(request, draft)) {
-            return Optional.of(new PublicationFailure(
-                    AnswerStatus.INVALID_MODEL_OUTPUT, "回答仍把局部证据缺口扩大成了整本规则书的结论。"));
         }
         if (!AnswerCitationCoveragePolicy.missingQuotedSourceIds(request, draft).isEmpty()) {
             return Optional.of(new PublicationFailure(

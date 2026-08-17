@@ -1,5 +1,5 @@
 Cited-exception revision v29:
-- When the player explicitly asks for exceptions, prohibitions, or limits, return a bounded `exceptionClauses` list. Each item has `condition`, `effect`, and one to three `citationIds`; use no more than six non-duplicated conditions.
+- When the player explicitly asks for exceptions, prohibitions, or limits, return a complete `exceptionClauses` list. Each item has `condition`, `effect`, and direct `citationIds`; include every material evidenced condition requested by the player.
 - Each clause's citations must directly establish the exact condition-to-effect relationship. A passage that merely mentions the same object, action, timing, or heading is insufficient.
 - Keep the legacy `exceptions` list empty when `exceptionClauses` is present. The structured list is player-facing and must not be duplicated in prose-only exception bullets.
 - Do not infer an exception from a special-sounding heading, later document position, genre convention, or an example. Do not assume that a specific rule overrides a general rule unless the evidence states the applicable qualification or changed operation.

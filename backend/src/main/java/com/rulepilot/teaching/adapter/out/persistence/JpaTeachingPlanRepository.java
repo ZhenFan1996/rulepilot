@@ -142,10 +142,10 @@ class TeachingPlanEntity {
     @Column(name = "document_version_id", nullable = false)
     UUID documentVersionId;
 
-    @Column(name = "learning_goal", length = 500)
+    @Column(name = "learning_goal", columnDefinition = "text")
     String learningGoal;
 
-    @Column(name = "game_title", nullable = false)
+    @Column(name = "game_title", nullable = false, columnDefinition = "text")
     String gameTitle;
 
     @Column(nullable = false, columnDefinition = "text")
@@ -218,10 +218,10 @@ class TeachingPlanSectionEntity {
     @Column(nullable = false)
     int position;
 
-    @Column(name = "topic_key", nullable = false)
+    @Column(name = "topic_key", nullable = false, columnDefinition = "text")
     String topicKey;
 
-    @Column(nullable = false)
+    @Column(nullable = false, columnDefinition = "text")
     String title;
 
     @Column(nullable = false, columnDefinition = "text")
@@ -236,10 +236,10 @@ class TeachingPlanSectionEntity {
     @Column(name = "retrieval_queries", nullable = false, columnDefinition = "text")
     String retrievalQueries;
 
-    @Column(name = "coverage_tags", nullable = false)
+    @Column(name = "coverage_tags", nullable = false, columnDefinition = "text")
     String coverageTags;
 
-    @Column(name = "source_page_numbers", nullable = false)
+    @Column(name = "source_page_numbers", nullable = false, columnDefinition = "text")
     String sourcePageNumbers;
 
     protected TeachingPlanSectionEntity() {}

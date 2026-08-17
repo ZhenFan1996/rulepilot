@@ -475,7 +475,7 @@ public class RecommendationConversationCoordinator {
             Instant activeStartedAt,
             ConversationResponse lastResponse,
             String lastResponseLocale) {
-        private static SessionSnapshot from(StoredConversation conversation) {
+        static SessionSnapshot from(StoredConversation conversation) {
             return new SessionSnapshot(
                     conversation.id(),
                     conversation.revision(),

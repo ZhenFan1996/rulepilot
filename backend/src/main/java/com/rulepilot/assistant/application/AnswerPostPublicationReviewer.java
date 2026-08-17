@@ -185,7 +185,6 @@ final class AnswerPostPublicationReviewer {
             throw new IllegalArgumentException("revised learning response is not answerable");
         }
         ModelDraft classified = AnswerBasisPolicy.classify(modelRequest, revised);
-        classified = AnswerDraftSafetyPolicy.normalizeSourceAbsenceClaims(modelRequest, classified);
         verifyPermissionRuling(modelRequest, classified);
         verifySourceEvidence(modelRequest, classified);
         return publicationValidator.publish(

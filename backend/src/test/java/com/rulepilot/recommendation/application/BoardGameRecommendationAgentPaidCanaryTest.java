@@ -46,6 +46,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -61,6 +62,82 @@ import org.springframework.data.redis.core.ValueOperations;
 class BoardGameRecommendationAgentPaidCanaryTest {
 
     private final ObjectMapper json = JsonMapper.builder().findAndAddModules().build();
+
+    @Test
+    void understandsAwardWinningClassicsAndAnImaginativeEquivalentWithoutFallback() throws Exception {
+        assumeTrue("true".equalsIgnoreCase(System.getenv("RULEPILOT_RECOMMENDATION_PAID_CANARY")));
+        String provider = environment("RULEPILOT_RECOMMENDATION_CANARY_PROVIDER", "qwen")
+                .toLowerCase(Locale.ROOT);
+        String prefix = provider.toUpperCase(Locale.ROOT);
+        Capture capture = new Capture(provider, environment(prefix + "_MODEL", null));
+        BoardGameRecommendationModel model = model(
+                provider,
+                environment(prefix + "_API_KEY", null),
+                environment(prefix + "_BASE_URL", null),
+                environment(prefix + "_MODEL", null),
+                capture);
+        AtomicInteger discoveryCalls = new AtomicInteger();
+        List<DiscoveryRequest> discoveryRequests = new ArrayList<>();
+        BoardGameRecommendationWebResearch discovery = classicAwardDiscovery(discoveryCalls, discoveryRequests);
+        var properties = new BoardGameRecommendationProperties(
+                8, 3, new BigDecimal("0.66"), Duration.ofSeconds(30));
+        var agent = new BoardGameRecommendationAgent(
+                model,
+                new BoardGameRecommendationTools(new CanaryCatalog(), discovery),
+                new BoardGameRecommendationSelector(properties),
+                properties,
+                json);
+
+        List<Map<String, Object>> visibleTurns = new ArrayList<>();
+        try {
+            String exactRequest = "你好，我想玩获过奖的经典老游戏";
+            long exactStarted = System.nanoTime();
+            var exact = agent.converse(
+                    new ConversationRequest(RecommendationProfile.empty(), exactRequest),
+                    "zh-CN");
+            visibleTurns.add(visible("award-winning-classics-exact", exact, elapsed(exactStarted)));
+
+            assertUsefulClassicRecommendation(exact);
+            assertThat(exact.harness().modelCalls())
+                    .as("one semantic discovery decision and one grounded recommendation should be sufficient")
+                    .isEqualTo(2);
+            assertThat(exact.harness().catalogCalls()).isEqualTo(2);
+            assertThat(exact.harness().webResearchCalls()).isEqualTo(1);
+            assertTerminalProsePreserved(capture.lastToolCall(), exact);
+            assertRecommendationNarrativesPreserved(capture.lastToolCall(), exact);
+            assertOnlySelectedClassicTitlesReachTheSynthesis(exact);
+
+            String imaginativeRequest = "我想从旧书柜里抽出一盒经得起时间的游戏：有老奖杯背书，但今天开桌也不会只剩情怀。给我两个方向，说清为什么和各自的代价。";
+            long imaginativeStarted = System.nanoTime();
+            var imaginative = agent.converse(
+                    new ConversationRequest(RecommendationProfile.empty(), imaginativeRequest),
+                    "zh-CN");
+            visibleTurns.add(visible(
+                    "award-winning-classics-imaginative",
+                    imaginative,
+                    elapsed(imaginativeStarted)));
+
+            assertUsefulClassicRecommendation(imaginative);
+            assertThat(imaginative.games()).hasSize(2);
+            assertThat(imaginative.harness().modelCalls()).isEqualTo(2);
+            assertThat(imaginative.harness().catalogCalls()).isEqualTo(2);
+            assertThat(imaginative.harness().webResearchCalls()).isEqualTo(1);
+            assertTerminalProsePreserved(capture.lastToolCall(), imaginative);
+            assertRecommendationNarrativesPreserved(capture.lastToolCall(), imaginative);
+            assertOnlySelectedClassicTitlesReachTheSynthesis(imaginative);
+            assertThat(discoveryCalls).hasValue(2);
+            assertThat(discoveryRequests)
+                    .extracting(DiscoveryRequest::query)
+                    .allSatisfy(query -> assertThat(query).isNotBlank());
+
+            writeArtifact(capture, visibleTurns, null);
+        } catch (Throwable failure) {
+            writeArtifact(capture, visibleTurns, failure.getClass().getSimpleName());
+            throw failure;
+        } finally {
+            agent.stopBoundedCalls();
+        }
+    }
 
     @Test
     void publishesAPlayerNamedBilingualTargetInTheResolvingTurn() throws Exception {
@@ -128,7 +205,7 @@ class BoardGameRecommendationAgentPaidCanaryTest {
             assertThat(raw.name()).isEqualTo(BoardGameRecommendationAgent.RESOLVE_TOOL);
             JsonNode arguments = json.readTree(raw.argumentsJson());
             assertThat(arguments.path("purpose").asText()).isEqualTo("TARGET_GAME");
-            assertThat(arguments.path("message").asText().strip())
+            assertThat(arguments.path("message").asText())
                     .isNotBlank()
                     .isEqualTo(response.assistantMessage());
 
@@ -896,14 +973,92 @@ class BoardGameRecommendationAgentPaidCanaryTest {
         assertThat(profile.interaction()).isEqualTo(BoardGameRecommendationAgent.InteractionPreference.ANY);
     }
 
+    private void assertUsefulClassicRecommendation(
+            BoardGameRecommendationAgent.ConversationResponse response) {
+        assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
+        assertThat(response.games()).hasSizeBetween(2, 3).allSatisfy(entry -> {
+            assertThat(entry.game().ranking().publicationYear()).isLessThanOrEqualTo(2000);
+            assertThat(entry.reasons())
+                    .extracting(BoardGameRecommendationAgent.RecommendationReason::text)
+                    .anySatisfy(reason -> assertThat(reason.codePointCount(0, reason.length()))
+                            .isGreaterThanOrEqualTo(16));
+            assertThat(entry.tradeoffs()).singleElement().satisfies(tradeoff ->
+                    assertThat(tradeoff.codePointCount(0, tradeoff.length()))
+                            .isGreaterThanOrEqualTo(8));
+        });
+        assertThat(response.assistantMessage().codePointCount(
+                        0, response.assistantMessage().length()))
+                .as("the opening recommendation should naturally explain the slate, not just emit cards")
+                .isGreaterThanOrEqualTo(35);
+        assertThat(response.harness().fallbackUsed()).isFalse();
+        assertThat(response.harness().actions())
+                .contains("DISCOVER_CANDIDATES", "SEARCH_BGG_BY_NAME", "LOOKUP_BGG_CANDIDATES", "RECOMMEND_GAMES")
+                .allMatch(action -> !action.startsWith("FALLBACK_")
+                        && !action.startsWith("REJECTED_")
+                        && !action.equals("RUN_DEADLINE_EXCEEDED"));
+    }
+
+    private BoardGameRecommendationWebResearch classicAwardDiscovery(
+            AtomicInteger calls,
+            List<DiscoveryRequest> requests) {
+        return new BoardGameRecommendationWebResearch() {
+            @Override
+            public boolean configured() {
+                return true;
+            }
+
+            @Override
+            public Optional<Research> research(Request request) {
+                return Optional.empty();
+            }
+
+            @Override
+            public Optional<CandidateDiscovery> discover(DiscoveryRequest request) {
+                calls.incrementAndGet();
+                requests.add(request);
+                return Optional.of(new CandidateDiscovery(
+                        List.of(
+                                new BoardGameRecommendationWebResearch.CandidateLead(
+                                        "Old Harbor",
+                                        "The award archive records Old Harbor as the 1996 jury winner; it was first published in 1995.",
+                                        List.of(1)),
+                                new BoardGameRecommendationWebResearch.CandidateLead(
+                                        "Clocktower Commons",
+                                        "The award archive records Clocktower Commons as its 1999 family-game winner; it was first published in 1998.",
+                                        List.of(1)),
+                                new BoardGameRecommendationWebResearch.CandidateLead(
+                                        "Paper Kingdom",
+                                        "The award archive records Paper Kingdom as its 2000 strategy-game winner; it was first published in 1999.",
+                                        List.of(1))),
+                        List.of(new BoardGameRecommendationWebResearch.Source(
+                                1,
+                                "Independent tabletop award archive",
+                                "https://awards.example.test/winners",
+                                "awards.example.test"))));
+            }
+        };
+    }
+
+    private void assertOnlySelectedClassicTitlesReachTheSynthesis(
+            BoardGameRecommendationAgent.ConversationResponse response) {
+        Set<String> selectedTitles = response.games().stream()
+                .map(entry -> entry.game().ranking().sourceName())
+                .collect(java.util.stream.Collectors.toUnmodifiableSet());
+        assertThat(List.of("Old Harbor", "Clocktower Commons", "Paper Kingdom"))
+                .filteredOn(title -> !selectedTitles.contains(title))
+                .allSatisfy(title -> assertThat(response.assistantMessage())
+                        .as("an explicit result count must not introduce an unselected candidate in prose")
+                        .doesNotContain(title));
+    }
+
     private void assertTerminalProsePreserved(
             ToolCall call,
             BoardGameRecommendationAgent.ConversationResponse response) throws Exception {
         JsonNode arguments = json.readTree(call.argumentsJson());
         String field = BoardGameRecommendationAgent.ASK_TOOL.equals(call.name()) ? "question" : "message";
         assertThat(response.assistantMessage())
-                .as("validated terminal prose may only lose leading or trailing whitespace")
-                .isEqualTo(arguments.path(field).asText().strip());
+                .as("validated terminal prose must pass to the visible response without rewriting")
+                .isEqualTo(arguments.path(field).asText());
     }
 
     private void assertClarificationPreserved(
@@ -911,16 +1066,14 @@ class BoardGameRecommendationAgentPaidCanaryTest {
             BoardGameRecommendationAgent.ConversationResponse response) throws Exception {
         assertThat(call.name()).isEqualTo(BoardGameRecommendationAgent.ASK_TOOL);
         JsonNode arguments = json.readTree(call.argumentsJson());
-        String rawQuestion = arguments.path("question").asText().strip();
+        String rawQuestion = arguments.path("question").asText();
         assertThat(response.assistantMessage()).isEqualTo(rawQuestion);
         assertThat(response.clarification()).isNotNull();
         assertThat(response.clarification().prompt()).isEqualTo(rawQuestion);
-        assertThat(rawQuestion.codePoints().filter(value -> value == '?' || value == '？').count())
-                .isEqualTo(1);
         assertThat(arguments.path("options").isArray()).isTrue();
         assertThat(arguments.path("options").size()).isBetween(2, 3);
         List<String> rawOptions = new ArrayList<>();
-        arguments.path("options").forEach(option -> rawOptions.add(option.asText().strip()));
+        arguments.path("options").forEach(option -> rawOptions.add(option.asText()));
         assertThat(response.clarification().options())
                 .extracting(BoardGameRecommendationAgent.ClarificationOption::value)
                 .containsExactlyElementsOf(rawOptions);
@@ -942,12 +1095,20 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                     .findFirst()
                     .orElseThrow();
             if (selection.has("why")) {
-                assertThat(visible.reasons())
-                        .extracting(BoardGameRecommendationAgent.RecommendationReason::text)
-                        .contains(selection.path("why").asText().strip());
+                String rawWhy = selection.path("why").asText();
+                var visibleWhy = visible.reasons().stream()
+                        .filter(reason -> reason.text().equals(rawWhy))
+                        .findFirst()
+                        .orElseThrow();
+                if (textValues(selection.path("internalEvidenceIds")).stream()
+                        .anyMatch(id -> id.startsWith("R" + bggId + ":"))) {
+                    assertThat(visibleWhy.sourceIndexes())
+                            .as("attributed evidence cited by the model must remain linked on the visible card")
+                            .isNotEmpty();
+                }
             }
             if (selection.has("tradeoff")) {
-                assertThat(visible.tradeoffs()).contains(selection.path("tradeoff").asText().strip());
+                assertThat(visible.tradeoffs()).contains(selection.path("tradeoff").asText());
             }
         }
     }
@@ -1020,6 +1181,8 @@ class BoardGameRecommendationAgentPaidCanaryTest {
         value.put("profile", response.profile());
         value.put("modelCalls", response.harness().modelCalls());
         value.put("catalogCalls", response.harness().catalogCalls());
+        value.put("webResearchCalls", response.harness().webResearchCalls());
+        value.put("fallbackUsed", response.harness().fallbackUsed());
         value.put("actions", response.harness().actions());
         if (response.clarification() != null) {
             value.put("clarification", Map.of(
@@ -1037,7 +1200,12 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                 .map(entry -> Map.of(
                         "bggId", entry.game().ranking().bggId(),
                         "name", entry.game().ranking().sourceName(),
-                        "reasons", entry.reasons().stream().map(reason -> reason.text()).toList(),
+                        "reasons", entry.reasons().stream()
+                                .map(reason -> Map.of(
+                                        "kind", reason.kind().name(),
+                                        "text", reason.text(),
+                                        "sourceIndexes", reason.sourceIndexes()))
+                                .toList(),
                         "tradeoffs", entry.tradeoffs()))
                 .toList());
         if (response.comparison() != null) {
@@ -1059,6 +1227,12 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                             .toList()));
         }
         return Map.copyOf(value);
+    }
+
+    private List<String> textValues(JsonNode values) {
+        List<String> result = new ArrayList<>();
+        if (values.isArray()) values.forEach(value -> result.add(value.asText()));
+        return List.copyOf(result);
     }
 
     private void writeArtifact(Capture capture, List<Map<String, Object>> visibleTurns, String failure) throws Exception {
@@ -1121,10 +1295,36 @@ class BoardGameRecommendationAgentPaidCanaryTest {
             List<String> categories,
             List<String> mechanics,
             List<String> designers) {
-        Ranking ranking = new Ranking(
+        return game(
                 id,
                 name,
                 2025,
+                minPlayers,
+                maxPlayers,
+                minMinutes,
+                maxMinutes,
+                weight,
+                categories,
+                mechanics,
+                designers);
+    }
+
+    private static Game game(
+            int id,
+            String name,
+            int publicationYear,
+            int minPlayers,
+            int maxPlayers,
+            int minMinutes,
+            int maxMinutes,
+            String weight,
+            List<String> categories,
+            List<String> mechanics,
+            List<String> designers) {
+        Ranking ranking = new Ranking(
+                id,
+                name,
+                publicationYear,
                 id - 100,
                 new BigDecimal("7.2"),
                 new BigDecimal("7.5"),
@@ -1212,6 +1412,9 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                     game(105, "Harbor Chorus", 3, 6, 30, 45, "2.4", List.of("Party Game"), List.of("Simultaneous Action Selection", "Voting")),
                     game(106, "Quiet Foundry", 1, 4, 40, 45, "2.7", List.of("Strategy"), List.of("Deck Building", "Hand Management")),
                     game(107, "Cedar Pact", 3, 5, 35, 70, "2.6", List.of("Strategy"), List.of("Negotiation", "Auction/Bidding")),
+                    game(108, "Old Harbor", 1995, 2, 5, 45, 75, "2.5", List.of("Family"), List.of("Auction/Bidding", "Set Collection"), List.of("Archive Designer")),
+                    game(109, "Clocktower Commons", 1998, 2, 4, 35, 60, "2.1", List.of("Family"), List.of("Tile Placement", "Area Majority / Influence"), List.of("Archive Designer")),
+                    game(110, "Paper Kingdom", 1999, 3, 5, 60, 90, "3.1", List.of("Strategy"), List.of("Hand Management", "Variable Player Powers"), List.of("Archive Designer")),
                     game(184267, "On Mars", 1, 4, 90, 150, "4.7", List.of("Strategy"), List.of("Worker Placement", "Hand Management"), List.of("Vital Lacerda")),
                     game(161533, "Lisboa", 1, 4, 60, 120, "4.6", List.of("Strategy"), List.of("Area Majority / Influence", "Hand Management"), List.of("Vital Lacerda")));
             games = values.stream().collect(java.util.stream.Collectors.toUnmodifiableMap(

@@ -10,14 +10,12 @@ public record RuleDecisionBranch(
         List<UUID> citationIds) {
 
     public RuleDecisionBranch {
-        if (condition == null || condition.isBlank() || condition.length() > 300
-                || outcome == null || outcome.isBlank() || outcome.length() > 500
-                || basis == null || citationIds == null || citationIds.isEmpty() || citationIds.size() > 3
+        if (condition == null || condition.isBlank()
+                || outcome == null || outcome.isBlank()
+                || basis == null || citationIds == null || citationIds.isEmpty()
                 || citationIds.stream().anyMatch(java.util.Objects::isNull)) {
             throw new IllegalArgumentException("rule decision branch is invalid");
         }
-        condition = condition.strip();
-        outcome = outcome.strip();
         citationIds = citationIds.stream().distinct().toList();
         if (citationIds.isEmpty()) throw new IllegalArgumentException("rule decision branch requires evidence");
     }

@@ -22,8 +22,8 @@ Schema contract:
   exceptions, confidence, answerBasis, calculations, situationChecks, walkthroughSteps, decisionBranches,
   exceptionClauses, termDefinitions, workedExamples, priorityResolutions, timingResolutions, tieResolutions,
   scopeResolutions, conceptComparisons, ruleOptions.
-- Use at most the one selected structured aid and leave unrelated arrays empty. Keep shortVerdict at most 240
-  characters and explanation at most 1500 characters. confidence is HIGH, MEDIUM, or LOW; answerBasis is DIRECT_RULE
+- Use at most the one selected structured aid and leave unrelated arrays empty. Keep the supported detail needed to
+  apply the answer at the table. confidence is HIGH, MEDIUM, or LOW; answerBasis is DIRECT_RULE
   or GROUNDED_APPLICATION.
 - If no material part has direct support, set answerable=false, give a concise insufficiencyReason, and leave every
   player-facing prose, citation, exception, and structured-aid field empty. Otherwise keep answerable=true.

@@ -11,9 +11,37 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.stream.IntStream;
 import org.junit.jupiter.api.Test;
 
 class TeachingSectionModelRequestFactoryTest {
+
+    @Test
+    void legacyPageLessUnitUsesTheAlreadyRetrievedEvidenceWithoutSubstringScoring() {
+        UUID versionId = UUID.randomUUID();
+        TeachingPlan.PlannedSection section = new TeachingPlan.PlannedSection(
+                1,
+                "legacy-flow",
+                "旧计划流程",
+                "按已检索证据讲清流程。",
+                true,
+                false,
+                List.of("teaching-unit-v1.bGVnYWN5LXVuaXQ.b3BhcXVlLXNvdXJjZS1uYW1l"),
+                List.of("source_coverage"),
+                List.of(4));
+        TeachingPlan plan = new TeachingPlan(
+                UUID.randomUUID(), versionId, "Game", "Premise", List.of(section), "player", Instant.now());
+        RuleEvidence evidence = new RuleEvidence(
+                UUID.randomUUID(), versionId, "RULE", "完全不同的页标题", "这里是已经检索到的规则正文。", 4, 4);
+
+        var request = new TeachingSectionModelRequestFactory(VisualRulebookPageFacts.empty())
+                .create(plan, section, List.of(), List.of(evidence), false, false);
+
+        assertThat(request.teachingUnits()).singleElement().satisfies(unit -> {
+            assertThat(unit.sourceIdentifiers()).containsExactly("opaque-source-name");
+            assertThat(unit.directEvidenceIds()).containsExactly(evidence.chunkId());
+        });
+    }
 
     @Test
     void bindsAPlannedUnitToAllRetrievedChunksOnItsCanonicalAnchorPage() {
@@ -54,6 +82,43 @@ class TeachingSectionModelRequestFactoryTest {
             assertThat(unit.directEvidenceIds())
                     .containsExactly(anchor.chunkId(), continuation.chunkId())
                     .doesNotContain(misleadingCrossReference.chunkId(), unrelatedPage.chunkId());
+        });
+    }
+
+    @Test
+    void passesEverySourceInALargeAgentChosenUnitToTheSectionModel() {
+        UUID versionId = UUID.randomUUID();
+        List<String> identifiers = IntStream.rangeClosed(1, 38)
+                .mapToObj(index -> "Reward relation " + index)
+                .toList();
+        Map<String, List<Integer>> sources = identifiers.stream().collect(java.util.stream.Collectors.toMap(
+                identifier -> identifier,
+                ignored -> List.of(8),
+                (first, duplicate) -> first,
+                java.util.LinkedHashMap::new));
+        TeachingPlan.PlannedSection section = new TeachingPlan.PlannedSection(
+                1,
+                "reward-resolution",
+                "结算完整奖励表",
+                "按规则表逐项说明奖励结算。",
+                true,
+                false,
+                List.of(TeachingUnitContract.encode(
+                        new TeachingUnitContract.Unit("complete-reward-table", sources))),
+                List.of("source_coverage"),
+                List.of(8));
+        TeachingPlan plan = new TeachingPlan(
+                UUID.randomUUID(), versionId, "Game", "Premise", List.of(section), "player", Instant.now());
+        RuleEvidence evidence = new RuleEvidence(
+                UUID.randomUUID(), versionId, "REWARD", "Reward table", "The complete reward table.", 8, 8);
+
+        var request = new TeachingSectionModelRequestFactory(VisualRulebookPageFacts.empty())
+                .create(plan, section, List.of(), List.of(evidence), false, false);
+
+        assertThat(request.teachingUnits()).singleElement().satisfies(unit -> {
+            assertThat(unit.unitId()).isEqualTo("complete-reward-table");
+            assertThat(unit.sourceIdentifiers()).containsExactlyElementsOf(identifiers);
+            assertThat(unit.directEvidenceIds()).containsExactly(evidence.chunkId());
         });
     }
 
@@ -193,6 +258,35 @@ class TeachingSectionModelRequestFactoryTest {
                 .containsExactly("apply-change-unit");
         assertThat(first.evidence()).extracting(source -> source.chunkId()).containsExactly(alpha.chunkId());
         assertThat(second.evidence()).extracting(source -> source.chunkId()).containsExactly(beta.chunkId());
+    }
+
+    @Test
+    void preservesEveryChapterObjectiveInLongAgentChosenLessonScope() {
+        UUID versionId = UUID.randomUUID();
+        List<TeachingPlan.PlannedSection> sections = IntStream.rangeClosed(1, 22)
+                .mapToObj(position -> new TeachingPlan.PlannedSection(
+                        position,
+                        "topic-" + position,
+                        "章节 " + position,
+                        "第 " + position + " 章的完整教学目标：" + ("保留来源边界与必要例外。".repeat(32)),
+                        true,
+                        false,
+                        List.of("rule-" + position),
+                        List.of("source_coverage"),
+                        List.of(position)))
+                .toList();
+        TeachingPlan plan = new TeachingPlan(
+                UUID.randomUUID(), versionId, "Game", "Premise", sections, "player", Instant.now());
+        RuleEvidence evidence = new RuleEvidence(
+                UUID.randomUUID(), versionId, "RULE", "Rule one", "Rule one evidence.", 1, 1);
+
+        var request = new TeachingSectionModelRequestFactory(VisualRulebookPageFacts.empty())
+                .create(plan, sections.getFirst(), List.of(), List.of(evidence), false, false);
+
+        assertThat(request.chapterScope()).hasSizeGreaterThan(4_000);
+        assertThat(request.chapterScope())
+                .contains("第22章《章节 22》")
+                .contains(sections.getLast().objective());
     }
 
     private TeachingPlan plan(UUID versionId) {

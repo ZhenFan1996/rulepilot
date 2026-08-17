@@ -29,7 +29,6 @@ public class TeachingSourcePageEvidenceRefiner implements TeachingEvidenceRefine
 
     private static final Logger LOGGER = LoggerFactory.getLogger(TeachingSourcePageEvidenceRefiner.class);
     private static final int MAX_EVIDENCE_PER_SECTION = 16;
-    private static final int MAX_EVIDENCE_CHUNKS_PER_PAGE = 4;
     private static final int MAX_OBSERVED_EVIDENCE = 32;
 
     private final NativeToolScopes scopes;
@@ -172,13 +171,16 @@ public class TeachingSourcePageEvidenceRefiner implements TeachingEvidenceRefine
                 pageEvidence.add(source);
             }
         }
-        for (int rank = 0; rank < MAX_EVIDENCE_CHUNKS_PER_PAGE; rank++) {
+        for (int rank = 0; selected.size() < MAX_EVIDENCE_PER_SECTION; rank++) {
+            boolean foundAtRank = false;
             for (List<RuleEvidence> pageEvidence : evidenceByPage.values()) {
                 if (rank >= pageEvidence.size()) continue;
+                foundAtRank = true;
                 RuleEvidence source = pageEvidence.get(rank);
                 selected.putIfAbsent(source.chunkId(), source);
                 if (selected.size() == MAX_EVIDENCE_PER_SECTION) return List.copyOf(selected.values());
             }
+            if (!foundAtRank) break;
         }
         return List.copyOf(selected.values());
     }
@@ -194,11 +196,7 @@ public class TeachingSourcePageEvidenceRefiner implements TeachingEvidenceRefine
         List<RuleEvidence> owned = evidence.stream()
                 .filter(source -> ownsSource(unit, identifier, source))
                 .toList();
-        return owned.stream()
-                .filter(source -> TeachingPlannedUnitCoveragePolicy.containsIdentifier(
-                        source.heading() + " " + source.excerpt(), identifier))
-                .findFirst()
-                .or(() -> owned.stream().findFirst());
+        return owned.stream().findFirst();
     }
 
     private boolean ownsSource(TeachingUnitContract.Unit unit, String identifier, RuleEvidence source) {
@@ -207,8 +205,7 @@ public class TeachingSourcePageEvidenceRefiner implements TeachingEvidenceRefine
             return java.util.stream.IntStream.rangeClosed(source.pageFrom(), source.pageTo())
                     .anyMatch(pages::contains);
         }
-        return TeachingPlannedUnitCoveragePolicy.containsIdentifier(
-                source.heading() + " " + source.excerpt(), identifier);
+        return true;
     }
 
     /** Keeps selection unchanged while presenting each Agent-owned source block before incidental context. */

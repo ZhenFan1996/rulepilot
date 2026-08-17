@@ -17,11 +17,6 @@ final class AnswerSourceEvidenceResolver {
         }
         List<UUID> citations = AnswerStructuredAidPolicy.citations(
                 request, draft, draft.citationIds(), "source-focused answer");
-        if (citations.size() > 2) {
-            throw new IllegalArgumentException("source-focused answer requires one or two direct citations");
-        }
-        AnswerStructuredAidPolicy.requiredText(draft.shortVerdict(), 800, "source-focused verdict");
-        AnswerStructuredAidPolicy.requiredText(draft.explanation(), 4_000, "source-focused explanation");
         return citations;
     }
 

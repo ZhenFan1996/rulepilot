@@ -24,9 +24,8 @@ import org.springframework.stereotype.Component;
 @Component
 public class FakeTeachingOutlineModel implements TeachingOutlineModel {
 
-    private static final int MAX_TOPIC_QUERIES = 8;
+    private static final int MAX_TOPIC_QUERIES = 16;
     private static final int MAX_SOURCE_PAGES_PER_TOPIC = 5;
-    private static final int MAX_VISUAL_SOURCE_TOPICS = 10;
     private static final int MAX_TOPICS = 16;
     private static final List<String> CORE_TAGS = List.of("setup", "core_loop", "end", "scoring");
 
@@ -107,14 +106,9 @@ public class FakeTeachingOutlineModel implements TeachingOutlineModel {
                 .filter(page -> !page.sourceDependencies().isEmpty())
                 .count();
         List<SourceTopic> sourceTopics = sourceTopics(sourcePages);
-        if (sourceTopics.size() > MAX_VISUAL_SOURCE_TOPICS
-                || sourceTopics.size() + dependencyTopics > MAX_TOPICS) {
-            sourceTopics = packConsecutiveSourceTopics(sourceTopics);
-        }
-        if (sourceTopics.size() > MAX_VISUAL_SOURCE_TOPICS
-                || sourceTopics.size() + dependencyTopics > MAX_TOPICS) {
+        if (sourceTopics.size() + dependencyTopics > MAX_TOPICS) {
             throw new IllegalArgumentException(
-                    "visual rulebook exceeds source-preserving fallback capacity; a semantic outline model is required");
+                    "visual rulebook cannot fit the source-preserving chapter budget without dropping a rule anchor");
         }
 
         LinkedHashSet<String> explicitlyMissing = sourcePages.stream()
@@ -243,51 +237,32 @@ public class FakeTeachingOutlineModel implements TeachingOutlineModel {
         };
     }
 
-    private List<List<String>> chunks(List<String> queries) {
-        List<List<String>> chunks = new ArrayList<>();
-        for (int start = 0; start < queries.size(); start += MAX_TOPIC_QUERIES) {
-            chunks.add(queries.subList(start, Math.min(start + MAX_TOPIC_QUERIES, queries.size())));
-        }
-        return List.copyOf(chunks);
-    }
-
     private List<SourceTopic> sourceTopics(List<PageInput> sourcePages) {
         List<SourceTopic> topics = new ArrayList<>();
+        LinkedHashSet<Integer> currentPages = new LinkedHashSet<>();
+        List<String> currentQueries = new ArrayList<>();
         for (PageInput page : sourcePages) {
-            List<List<String>> pageChunks = chunks(VisualSourceRuleGroupLedger.identifiers(page));
-            if (pageChunks.isEmpty()) {
-                pageChunks = List.of(List.of(
-                        "Inspect the cited rulebook page and report only directly visible rules."));
+            List<String> identifiers = VisualSourceRuleGroupLedger.identifiers(page);
+            if (identifiers.isEmpty()) {
+                identifiers = List.of("Inspect the cited rulebook page and report only directly visible rules.");
             }
-            for (int index = 0; index < pageChunks.size(); index++) {
-                topics.add(new SourceTopic(
-                        List.of(page.pageNumber()),
-                        pageChunks.get(index),
-                        index + 1,
-                        pageChunks.size()));
+            for (String identifier : identifiers) {
+                boolean newPage = !currentPages.contains(page.pageNumber());
+                if (!currentQueries.isEmpty()
+                        && (currentQueries.size() == MAX_TOPIC_QUERIES
+                                || (newPage && currentPages.size() == MAX_SOURCE_PAGES_PER_TOPIC))) {
+                    topics.add(new SourceTopic(List.copyOf(currentPages), List.copyOf(currentQueries), 0, 0));
+                    currentPages.clear();
+                    currentQueries.clear();
+                }
+                currentPages.add(page.pageNumber());
+                currentQueries.add(identifier);
             }
+        }
+        if (!currentQueries.isEmpty()) {
+            topics.add(new SourceTopic(List.copyOf(currentPages), List.copyOf(currentQueries), 0, 0));
         }
         return List.copyOf(topics);
-    }
-
-    private List<SourceTopic> packConsecutiveSourceTopics(List<SourceTopic> topics) {
-        List<SourceTopic> packed = new ArrayList<>();
-        SourceTopic current = null;
-        for (SourceTopic topic : topics) {
-            if (current == null) {
-                current = topic;
-                continue;
-            }
-            SourceTopic merged = current.mergeIfBounded(topic);
-            if (merged == null) {
-                packed.add(current);
-                current = topic;
-            } else {
-                current = merged;
-            }
-        }
-        if (current != null) packed.add(current);
-        return List.copyOf(packed);
     }
 
     private TopicDraft sourceDependencyTopic(PageInput page) {
@@ -327,16 +302,6 @@ public class FakeTeachingOutlineModel implements TeachingOutlineModel {
         private SourceTopic {
             pageNumbers = List.copyOf(pageNumbers);
             queries = List.copyOf(queries);
-        }
-
-        private SourceTopic mergeIfBounded(SourceTopic other) {
-            LinkedHashSet<Integer> mergedPages = new LinkedHashSet<>(pageNumbers);
-            mergedPages.addAll(other.pageNumbers);
-            LinkedHashSet<String> mergedQueries = new LinkedHashSet<>(queries);
-            mergedQueries.addAll(other.queries);
-            if (mergedPages.size() > MAX_SOURCE_PAGES_PER_TOPIC
-                    || mergedQueries.size() > MAX_TOPIC_QUERIES) return null;
-            return new SourceTopic(List.copyOf(mergedPages), List.copyOf(mergedQueries), 0, 0);
         }
 
         private TopicDraft toDraft(int sourceTopicNumber, List<String> coverageTags) {

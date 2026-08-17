@@ -25,12 +25,16 @@ class AnswerPlayerFacingRepairPolicyTest {
     void requestsOneBoundedRepairForInternalProtocolLeakage() {
         ModelDraft draft = draft(
                 "Allowed according to evidence E1.",
-                "Internal chunkId " + UUID.randomUUID() + " must not be shown.");
+                "Internal evidence identity " + citationId + " must not be shown.");
 
         assertThat(AnswerPlayerFacingRepairPolicy.feedbackFor(request(), draft))
-                .containsExactly(
-                        "PLAYER_FACING_OUTPUT: Remove UUIDs, chunk IDs, E-number evidence labels, retrieval wording, "
-                                + "and other internal references. Teach the same cited rule directly; preserve citationIds.");
+                .singleElement()
+                .asString()
+                .contains(
+                        "full evidence UUIDs",
+                        "Preserve ordinary rule identifiers",
+                        "supported prose",
+                        "preserve citationIds");
     }
 
     @Test
@@ -43,32 +47,13 @@ class AnswerPlayerFacingRepairPolicyTest {
     }
 
     @Test
-    void requestsTargetedRepairInsteadOfPublishingAWholeRulebookAbsenceClaim() {
+    void doesNotUseAPlayerFacingPhraseListAsASemanticPublicationGate() {
         ModelDraft draft = draft(
-                "达到30分即可获胜。",
-                "规则书没有提供保证获胜的最佳开局。");
+                "The bonus does not apply after the final round.",
+                "The rulebook does not apply this bonus after the final round; the cited timing clause is explicit.");
 
-        assertThat(AnswerPlayerFacingRepairPolicy.feedbackFor(adviceRequest(), draft))
-                .singleElement()
-                .asString()
-                .contains("SOURCE_SCOPE", "Preserve all other supported prose", "honest local boundary");
-        assertThat(AnswerPlayerFacingRepairPolicy.planFor(adviceRequest(), draft).editableFields())
-                .containsExactly(PlayerFacingField.EXPLANATION);
-    }
-
-    @Test
-    void locksEveryUnaffectedCoreFieldDuringAFieldLocalRepair() {
-        ModelDraft draft = draft(
-                "达到30分即可获胜。",
-                "规则书没有提供保证获胜的最佳开局。");
-
-        AnswerPlayerFacingRepairPolicy.RepairPlan plan =
-                AnswerPlayerFacingRepairPolicy.planFor(adviceRequest(), draft);
-
-        assertThat(plan.required()).isTrue();
-        assertThat(plan.editableFields()).containsExactly(PlayerFacingField.EXPLANATION);
-        assertThat(plan.editableFields())
-                .doesNotContain(PlayerFacingField.SHORT_VERDICT, PlayerFacingField.EXCEPTIONS);
+        assertThat(AnswerPlayerFacingRepairPolicy.feedbackFor(request(), draft)).isEmpty();
+        assertThat(AnswerPlayerFacingRepairPolicy.planFor(request(), draft).required()).isFalse();
     }
 
     @Test

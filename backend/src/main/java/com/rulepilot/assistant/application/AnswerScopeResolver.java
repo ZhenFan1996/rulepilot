@@ -13,21 +13,17 @@ import java.util.List;
 /** Validates the schema and evidence scope of the model-selected applicability aid. */
 final class AnswerScopeResolver {
 
-    private static final int MAX_RESOLUTIONS = 3;
-
     List<RuleScopeResolution> resolve(ModelRequest request, ModelDraft draft) {
         if (request == null || draft == null) throw new IllegalArgumentException("scope input is invalid");
         List<RuleScopeRequest> proposed = draft.scopeResolutions();
         AnswerStructuredAidPolicy.validateSelection(request, AnswerAid.SCOPE, proposed.isEmpty(), "scope resolutions");
         if (proposed.isEmpty()) return List.of();
-        if (proposed.size() > MAX_RESOLUTIONS) throw new IllegalArgumentException("too many scope resolutions");
-
         LinkedHashSet<String> situations = new LinkedHashSet<>();
         return proposed.stream()
                 .map(item -> resolveOne(request, draft, item))
                 .peek(item -> {
-                    String identity = AnswerStructuredAidPolicy.identityKey(
-                            item.ruleContext() + "\u0000" + item.currentSituation());
+                    String identity = AnswerStructuredAidPolicy.identityKey(item.ruleContext()) + "\u0000"
+                            + AnswerStructuredAidPolicy.identityKey(item.currentSituation());
                     if (!situations.add(identity)) throw new IllegalArgumentException("duplicate scope resolution");
                 })
                 .toList();
@@ -40,12 +36,12 @@ final class AnswerScopeResolver {
     private RuleScopeResolution resolveOne(ModelRequest modelRequest, ModelDraft draft, RuleScopeRequest item) {
         if (item == null) throw new IllegalArgumentException("scope item is null");
         return new RuleScopeResolution(
-                AnswerStructuredAidPolicy.requiredText(item.ruleContext(), 500, "scope rule context"),
-                AnswerStructuredAidPolicy.requiredText(item.governingCondition(), 500, "scope condition"),
-                AnswerStructuredAidPolicy.requiredText(item.currentSituation(), 300, "current situation"),
+                AnswerStructuredAidPolicy.requiredText(item.ruleContext(), "scope rule context"),
+                AnswerStructuredAidPolicy.requiredText(item.governingCondition(), "scope condition"),
+                AnswerStructuredAidPolicy.requiredText(item.currentSituation(), "current situation"),
                 AnswerStructuredAidPolicy.enumValue(
                         item.matchStatus(), ScopeMatchStatus.class, "scope match status"),
-                AnswerStructuredAidPolicy.requiredText(item.effect(), 600, "scope effect"),
+                AnswerStructuredAidPolicy.requiredText(item.effect(), "scope effect"),
                 AnswerStructuredAidPolicy.enumValue(item.basis(), ScopeBasis.class, "scope basis"),
                 AnswerStructuredAidPolicy.citations(
                         modelRequest, draft, item.citationIds(), "scope resolution"));

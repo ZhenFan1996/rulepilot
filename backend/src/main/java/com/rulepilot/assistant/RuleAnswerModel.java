@@ -106,11 +106,10 @@ public interface RuleAnswerModel {
             LearningIntent explicitLearningIntent,
             PlayerLocale outputLanguage) {
         public QuestionInterpretationRequest {
-            if (question == null || question.isBlank() || question.length() > 800
+            if (question == null || question.isBlank()
                     || deterministicType == null || deterministicMissingContext == null) {
                 throw new IllegalArgumentException("question interpretation request is invalid");
             }
-            question = question.strip();
             previousQuestion = optionalContext(previousQuestion);
             priorGroundedQuestion = optionalContext(priorGroundedQuestion);
             priorGroundedVerdict = optionalContext(priorGroundedVerdict);
@@ -143,8 +142,7 @@ public interface RuleAnswerModel {
 
         private static String optionalContext(String value) {
             if (value == null || value.isBlank()) return "";
-            String normalized = value.strip();
-            return normalized.length() <= 800 ? normalized : normalized.substring(0, 800);
+            return value;
         }
     }
 
@@ -389,15 +387,14 @@ public interface RuleAnswerModel {
 
     record RetrievalQueryRequest(String question, String previousQuestion) {
         public RetrievalQueryRequest {
-            if (question == null || question.isBlank() || question.length() > 800) {
+            if (question == null || question.isBlank()) {
                 throw new IllegalArgumentException("retrieval query request is invalid");
             }
-            question = question.strip();
             previousQuestion = optional(previousQuestion);
         }
 
         private static String optional(String value) {
-            return value == null || value.isBlank() ? "not provided" : value.strip();
+            return value == null || value.isBlank() ? "not provided" : value;
         }
     }
 
@@ -440,7 +437,7 @@ public interface RuleAnswerModel {
         }
 
         private static String optional(String value) {
-            return value == null || value.isBlank() ? "not provided" : value.strip();
+            return value == null || value.isBlank() ? "not provided" : value;
         }
 
         public String learningIntentForPrompt() {

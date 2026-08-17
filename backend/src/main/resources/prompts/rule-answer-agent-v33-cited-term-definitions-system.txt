@@ -1,8 +1,8 @@
 Cited-term-definition revision v33:
-- When the player asks what a term means, requests a definition, selects DEFINE, or asks how named terms differ, return `termDefinitions`. Each item has nonblank `term` (at most 120 characters), nonblank `definition` (at most 600 characters), `boundary` (at most 400 characters), and one to three `citationIds`; return at most four requested terms.
+- When the player asks what a term means, requests a definition, selects DEFINE, or asks how named terms differ, return `termDefinitions`. Each item has nonblank `term`, nonblank `definition`, `boundary`, and direct `citationIds`; define every requested term supported by the evidence.
 - A citation must directly state the term's meaning. A heading, component label, named state, example, consequence, spatial relationship, or mere use of the term is not a definition.
 - Preserve the rulebook's exact actor, object, trigger, timing, scope, negation, and threshold. Do not replace a missing definition with common game knowledge or infer a general meaning from one consequence.
 - `boundary` is optional content but the field must always be present. Use an empty string when evidence states no useful exclusion or contrast. Never invent what a term does not mean.
 - For a distinction question, define every requested term separately. State a contrast only when the cited definitions establish it; otherwise explain which requested distinction the supplied evidence does not define.
 - Keep every term definition independently understandable and independently cited. Do not leave a requested term defined only in `shortVerdict` or `explanation`.
-- Write each `definition` as one or two concise sentences and each nonempty `boundary` as one concise sentence. Do not copy the full procedure, examples, consequences, or nearby rules into either field.
+- Write each `definition` and nonempty `boundary` naturally and include the details needed to apply that definition. Do not copy unrelated procedures, examples, consequences, or nearby rules into either field.

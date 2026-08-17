@@ -153,11 +153,7 @@ public class TeachingPlanLauncher {
 
     private String normalizeLearningGoal(String learningGoal) {
         if (learningGoal == null || learningGoal.isBlank()) return null;
-        String normalized = learningGoal.strip();
-        if (normalized.length() > 500) {
-            throw new IllegalArgumentException("teaching learning goal is too long");
-        }
-        return normalized;
+        return learningGoal.strip();
     }
 
     private <T> T recordPhase(String phase, long startedAt, Supplier<T> work) {

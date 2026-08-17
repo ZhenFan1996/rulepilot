@@ -20,7 +20,7 @@ public final class PlayerFacingAnswerPresenter {
     public static PlayerFacingRuleAnswer present(
             StructuredRuleAnswer answer, String currentQuestion, PlayerLocale requestedLanguage) {
         if (answer == null) throw new IllegalArgumentException("answer is required");
-        String question = currentQuestion == null ? "" : currentQuestion.strip();
+        String question = currentQuestion == null ? "" : currentQuestion;
         PlayerLocale language = PlayerLocale.forQuestion(question, requestedLanguage);
         List<Citation> citations = answer.citations().stream()
                 .map(citation -> new Citation(
@@ -34,7 +34,7 @@ public final class PlayerFacingAnswerPresenter {
         }
         if (!answer.status().publishesConclusion()) {
             List<Citation> safeSources = answer.status() == AnswerStatus.INSUFFICIENT_EVIDENCE
-                    ? citations.stream().limit(3).toList()
+                    ? citations
                     : List.of();
             return safeFailure(answer.status(), language, question, safeSources, source(answer), answer.clarification());
         }
@@ -262,13 +262,12 @@ public final class PlayerFacingAnswerPresenter {
     }
 
     private static String safeQuestionDraft(String question) {
-        return AnswerDraftSafetyPolicy.containsInternalEvidenceReference(question) ? "" : question;
+        return question;
     }
 
     private static boolean usableClarification(String value, PlayerLocale expectedLanguage) {
         return value != null
                 && !value.isBlank()
-                && !AnswerDraftSafetyPolicy.containsInternalEvidenceReference(value)
                 && PlayerLocale.forQuestion(value, expectedLanguage) == expectedLanguage;
     }
 
@@ -289,8 +288,7 @@ public final class PlayerFacingAnswerPresenter {
         String combined = java.util.Arrays.stream(values)
                 .filter(Objects::nonNull)
                 .collect(java.util.stream.Collectors.joining("\n"));
-        return !AnswerDraftSafetyPolicy.containsInternalEvidenceReference(combined)
-                && !AnswerDraftSafetyPolicy.containsKnownEvidenceReference(
+        return !AnswerDraftSafetyPolicy.containsKnownEvidenceReference(
                         combined, answer.citations().stream().map(citation -> citation.chunkId()).toList());
     }
 

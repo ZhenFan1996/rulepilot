@@ -8,8 +8,12 @@ import com.rulepilot.teaching.TeachingOutlineModel;
 import com.rulepilot.teaching.TeachingOutlineModel.GlobalConceptDraft;
 import com.rulepilot.teaching.TeachingOutlineModel.OutlineGenerationException;
 import com.rulepilot.teaching.TeachingOutlineModel.SourceCoverageAvailability;
+import com.rulepilot.teaching.TeachingOutlineModel.SourceCoverageRole;
 import com.rulepilot.teaching.TeachingOutlineModel.SourceCoverageSlotDraft;
 import com.rulepilot.teaching.TeachingOutlineModel.TopicDependencyDraft;
+import com.rulepilot.teaching.TeachingOutlineModel.TopicDraft;
+import com.rulepilot.teaching.TeachingOutlineModel.WholeGameUnderstandingDraft;
+import com.rulepilot.teaching.VisualSourceRuleGroupLedger;
 import com.rulepilot.teaching.application.SourceLanguageRetrievalPolicy;
 import com.rulepilot.teaching.application.TeachingSourceCoverageContract;
 import jakarta.annotation.PreDestroy;
@@ -22,6 +26,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Locale;
+import java.util.Set;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -58,6 +63,8 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
     private final FakeTeachingOutlineModel fake;
     private final String outlineSystemPrompt;
     private final String outlineUserPrompt;
+    private final String canonicalLedgerSystemPrompt;
+    private final String canonicalLedgerUserPrompt;
     private final TeachingOutlineImagePreparer images = new TeachingOutlineImagePreparer();
     private final ExecutorService outlineCalls = Executors.newVirtualThreadPerTaskExecutor();
     private final double temperature;
@@ -78,7 +85,9 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
                 fake,
                 temperature,
                 read(new ClassPathResource("prompts/teaching-outline-v19-autonomous-units-system.txt")),
-                read(new ClassPathResource("prompts/teaching-outline-v19-user.txt")));
+                read(new ClassPathResource("prompts/teaching-outline-v19-user.txt")),
+                read(new ClassPathResource("prompts/teaching-outline-v20-canonical-ledger-system.txt")),
+                read(new ClassPathResource("prompts/teaching-outline-v20-canonical-ledger-user.txt")));
     }
 
     @Autowired
@@ -88,8 +97,18 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
             FakeTeachingOutlineModel fake,
             @Value("${rulepilot.teaching.outline-temperature:0.1}") double temperature,
             @Value("classpath:prompts/teaching-outline-v19-autonomous-units-system.txt") Resource outlineSystemPrompt,
-            @Value("classpath:prompts/teaching-outline-v19-user.txt") Resource outlineUserPrompt) {
-        this(models, prompts, fake, temperature, read(outlineSystemPrompt), read(outlineUserPrompt));
+            @Value("classpath:prompts/teaching-outline-v19-user.txt") Resource outlineUserPrompt,
+            @Value("classpath:prompts/teaching-outline-v20-canonical-ledger-system.txt") Resource canonicalLedgerSystemPrompt,
+            @Value("classpath:prompts/teaching-outline-v20-canonical-ledger-user.txt") Resource canonicalLedgerUserPrompt) {
+        this(
+                models,
+                prompts,
+                fake,
+                temperature,
+                read(outlineSystemPrompt),
+                read(outlineUserPrompt),
+                read(canonicalLedgerSystemPrompt),
+                read(canonicalLedgerUserPrompt));
     }
 
     SpringAiTeachingOutlineModel(
@@ -99,6 +118,26 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
             double temperature,
             String outlineSystemPrompt,
             String outlineUserPrompt) {
+        this(
+                models,
+                prompts,
+                fake,
+                temperature,
+                outlineSystemPrompt,
+                outlineUserPrompt,
+                read(new ClassPathResource("prompts/teaching-outline-v20-canonical-ledger-system.txt")),
+                read(new ClassPathResource("prompts/teaching-outline-v20-canonical-ledger-user.txt")));
+    }
+
+    SpringAiTeachingOutlineModel(
+            RuntimeModelConfiguration models,
+            VersionedAgentPrompts prompts,
+            FakeTeachingOutlineModel fake,
+            double temperature,
+            String outlineSystemPrompt,
+            String outlineUserPrompt,
+            String canonicalLedgerSystemPrompt,
+            String canonicalLedgerUserPrompt) {
         if (!Double.isFinite(temperature) || temperature < 0.0 || temperature > 2.0) {
             throw new IllegalArgumentException("teaching outline model temperature must be between 0 and 2");
         }
@@ -108,6 +147,8 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
         this.temperature = temperature;
         this.outlineSystemPrompt = outlineSystemPrompt;
         this.outlineUserPrompt = outlineUserPrompt;
+        this.canonicalLedgerSystemPrompt = canonicalLedgerSystemPrompt;
+        this.canonicalLedgerUserPrompt = canonicalLedgerUserPrompt;
     }
 
     @Override
@@ -544,6 +585,43 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
     }
 
     private OutlineDraft organizeOnce(OutlineRequest request, Role role, String owner, String repair) {
+        if (hasCanonicalVisualLedger(request)) {
+            return organizeCanonicalLedgerOnce(request, role, owner, repair);
+        }
+        return organizeLegacyOutlineOnce(request, role, owner, repair);
+    }
+
+    /**
+     * A complete visual ledger already owns exact identifiers and page bindings. Ask the model only for the semantic
+     * decisions that actually require it, then project those decisions back onto the immutable ledger. This keeps a
+     * dense rulebook from repeating every source string several times in the completion and makes source fidelity an
+     * application invariant rather than a copying task for the provider.
+     */
+    private OutlineDraft organizeCanonicalLedgerOnce(
+            OutlineRequest request, Role role, String owner, String repair) {
+        ChatClient.ChatClientRequestSpec prompt = ChatClient.create(models.modelFor(role, owner)).prompt();
+        OpenAiChatOptions.Builder options = providerOptions(role, owner);
+        if (options != null) {
+            options.model(models.modelNameFor(role, owner));
+            prompt = prompt.options(options);
+        } else {
+            prompt = prompt.options(ChatOptions.builder().temperature(temperature));
+        }
+        CompactOutlineDraft compact = prompt
+                .system(canonicalLedgerSystemPrompt)
+                .user(user -> user.text(canonicalLedgerUserPrompt)
+                        .param("learningGoal", request.learningGoalForPrompt())
+                        .param("sourceLedger", canonicalSourceLedger(request))
+                        .param("repair", repair))
+                .call()
+                .entity(compactOutlineConverter());
+        OutlineDraft outline = expandCanonicalOutline(request, compact);
+        TeachingSourceCoverageContract.requireCompleteModelContract(request, outline);
+        return outline;
+    }
+
+    private OutlineDraft organizeLegacyOutlineOnce(
+            OutlineRequest request, Role role, String owner, String repair) {
         ChatClient.ChatClientRequestSpec prompt = ChatClient.create(models.modelFor(role, owner)).prompt();
         OpenAiChatOptions.Builder options = providerOptions(role, owner);
         if (options != null) {
@@ -589,6 +667,257 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
         return outline;
     }
 
+    private boolean hasCanonicalVisualLedger(OutlineRequest request) {
+        return request != null
+                && !request.pages().isEmpty()
+                && request.pages().stream().allMatch(VisualSourceRuleGroupLedger::hasCompleteExactFactLedger)
+                && request.pages().stream().anyMatch(page -> !page.sourceRuleGroupIdentifiers().isEmpty());
+    }
+
+    static String canonicalSourceLedger(OutlineRequest request) {
+        List<CanonicalSourceSlot> slots = canonicalSourceSlots(request);
+        Map<Integer, List<CanonicalSourceSlot>> slotsByPage = slots.stream().collect(java.util.stream.Collectors.groupingBy(
+                CanonicalSourceSlot::pageNumber,
+                LinkedHashMap::new,
+                java.util.stream.Collectors.toList()));
+        StringBuilder ledger = new StringBuilder();
+        for (var page : request.pages()) {
+            ledger.append("PAGE ").append(page.pageNumber()).append('\n');
+            List<CanonicalSourceSlot> pageSlots = slotsByPage.getOrDefault(page.pageNumber(), List.of());
+            if (pageSlots.isEmpty()) {
+                ledger.append("CANONICAL_SLOTS: none (no independently teachable rule anchor)\n");
+            } else {
+                ledger.append("CANONICAL_SLOTS:\n");
+                for (CanonicalSourceSlot slot : pageSlots) {
+                    ledger.append("- ")
+                            .append(slot.slotId())
+                            .append(" | availability=")
+                            .append(slot.availability());
+                    if (slot.fixedRole() != null) {
+                        ledger.append(" | fixedRole=").append(slot.fixedRole());
+                    }
+                    ledger.append(" | identifier=").append(slot.sourceIdentifier()).append('\n');
+                }
+            }
+            ledger.append("PAGE_EVIDENCE_BEGIN\n")
+                    .append(page.text())
+                    .append("\nPAGE_EVIDENCE_END\n\n");
+        }
+        return ledger.toString().stripTrailing();
+    }
+
+    private static List<CanonicalSourceSlot> canonicalSourceSlots(OutlineRequest request) {
+        if (request == null || request.pages() == null) {
+            throw new IllegalArgumentException("canonical teaching source request is required");
+        }
+        List<CanonicalSourceSlot> slots = new ArrayList<>();
+        for (var page : request.pages()) {
+            for (int index = 0; index < page.sourceRuleGroupIdentifiers().size(); index++) {
+                slots.add(new CanonicalSourceSlot(
+                        "page-" + page.pageNumber() + "-rule-" + (index + 1),
+                        page.sourceRuleGroupIdentifiers().get(index),
+                        page.pageNumber(),
+                        SourceCoverageAvailability.SOURCED,
+                        null));
+            }
+            for (int dependencyIndex = 0; dependencyIndex < page.sourceDependencies().size(); dependencyIndex++) {
+                var dependency = page.sourceDependencies().get(dependencyIndex);
+                for (String missingTag : dependency.missingCoverageTags()) {
+                    slots.add(new CanonicalSourceSlot(
+                            "page-" + page.pageNumber() + "-dependency-" + (dependencyIndex + 1) + "-" + missingTag.replace('_', '-'),
+                            dependency.title(),
+                            page.pageNumber(),
+                            SourceCoverageAvailability.MISSING_EXTERNAL_SOURCE,
+                            roleForMissingCoverage(missingTag)));
+                }
+            }
+        }
+        return List.copyOf(slots);
+    }
+
+    private OutlineDraft expandCanonicalOutline(OutlineRequest request, CompactOutlineDraft compact) {
+        if (compact == null || compact.topics() == null || compact.topics().isEmpty()
+                || compact.wholeGameUnderstanding() == null) {
+            throw new IllegalArgumentException("compact teaching outline is incomplete");
+        }
+        List<CanonicalSourceSlot> canonicalSlots = canonicalSourceSlots(request);
+        Map<String, CanonicalSourceSlot> canonicalById = canonicalSlots.stream().collect(java.util.stream.Collectors.toMap(
+                CanonicalSourceSlot::slotId,
+                slot -> slot,
+                (first, duplicate) -> {
+                    throw new IllegalArgumentException("canonical teaching source slot IDs are not unique");
+                },
+                LinkedHashMap::new));
+        LinkedHashSet<String> assignedSlotIds = new LinkedHashSet<>();
+        LinkedHashSet<String> topicKeys = new LinkedHashSet<>();
+        LinkedHashSet<String> teachingUnitIds = new LinkedHashSet<>();
+        List<TopicDraft> topics = new ArrayList<>();
+        List<SourceCoverageSlotDraft> sourceSlots = new ArrayList<>();
+
+        for (CompactTopicDraft topic : compact.topics()) {
+            if (topic == null || topic.key() == null || !topic.key().matches("[a-z0-9]+(?:-[a-z0-9]+)*")
+                    || !topicKeys.add(topic.key()) || topic.teachingUnits() == null
+                    || topic.teachingUnits().isEmpty()) {
+                throw new IllegalArgumentException("compact teaching topic is invalid");
+            }
+            List<CanonicalSourceSlot> ownedCanonicalSlots = new ArrayList<>();
+            for (CompactTeachingUnitDraft unit : topic.teachingUnits()) {
+                if (unit == null || unit.teachingUnitId() == null
+                        || !unit.teachingUnitId().matches("[a-z0-9]+(?:-[a-z0-9]+)*")
+                        || !teachingUnitIds.add(unit.teachingUnitId())
+                        || unit.role() == null || unit.sourceSlotIds() == null || unit.sourceSlotIds().isEmpty()) {
+                    throw new IllegalArgumentException("compact teaching unit is invalid");
+                }
+                List<CanonicalSourceSlot> unitSlots = unit.sourceSlotIds().stream()
+                        .map(canonicalById::get)
+                        .toList();
+                if (unitSlots.contains(null)
+                        || unitSlots.stream().map(CanonicalSourceSlot::availability).distinct().count() != 1) {
+                    throw new IllegalArgumentException("compact teaching unit selected an unknown or mixed-availability source slot");
+                }
+                for (CanonicalSourceSlot canonical : unitSlots) {
+                    if (!assignedSlotIds.add(canonical.slotId())) {
+                        throw new IllegalArgumentException("compact teaching outline assigned a source slot more than once");
+                    }
+                    SourceCoverageRole role = canonical.fixedRole() == null ? unit.role() : canonical.fixedRole();
+                    if (canonical.fixedRole() != null && canonical.fixedRole() != unit.role()) {
+                        throw new IllegalArgumentException("compact teaching outline changed a missing-source role");
+                    }
+                    sourceSlots.add(new SourceCoverageSlotDraft(
+                            canonical.slotId(),
+                            role,
+                            canonical.sourceIdentifier(),
+                            List.of(canonical.pageNumber()),
+                            topic.key(),
+                            unit.teachingUnitId(),
+                            canonical.availability()));
+                    ownedCanonicalSlots.add(canonical);
+                }
+            }
+            List<Integer> sourcePages = ownedCanonicalSlots.stream()
+                    .map(CanonicalSourceSlot::pageNumber)
+                    .distinct()
+                    .toList();
+            topics.add(new TopicDraft(
+                    topic.key(),
+                    topic.objective(),
+                    topic.objective(),
+                    topic.required(),
+                    topic.visualEvidenceRecommended(),
+                    List.of(),
+                    canonicalCoverageTags(ownedCanonicalSlots, sourceSlots, topic.key()),
+                    sourcePages));
+        }
+        if (!assignedSlotIds.equals(canonicalById.keySet())) {
+            LinkedHashSet<String> missing = new LinkedHashSet<>(canonicalById.keySet());
+            missing.removeAll(assignedSlotIds);
+            throw new IllegalArgumentException("compact teaching outline omitted canonical source slots: " + missing);
+        }
+
+        Map<String, SourceCoverageSlotDraft> expandedSlotsById = sourceSlots.stream().collect(java.util.stream.Collectors.toMap(
+                SourceCoverageSlotDraft::slotId, slot -> slot, (first, duplicate) -> first, LinkedHashMap::new));
+        List<GlobalConceptDraft> concepts = canonicalConcepts(
+                compact.wholeGameUnderstanding().concepts(), expandedSlotsById, topicKeys);
+        OutlineDraft outline = new OutlineDraft(
+                compact.gameTitle(),
+                compact.premise(),
+                List.copyOf(topics),
+                List.copyOf(sourceSlots),
+                true,
+                new WholeGameUnderstandingDraft(
+                        compact.wholeGameUnderstanding().summary(),
+                        concepts,
+                        compact.wholeGameUnderstanding().topicDependencies()));
+        return outline;
+    }
+
+    private static List<String> canonicalCoverageTags(
+            List<CanonicalSourceSlot> canonicalSlots,
+            List<SourceCoverageSlotDraft> expandedSlots,
+            String topicKey) {
+        boolean hasSourced = canonicalSlots.stream()
+                .anyMatch(slot -> slot.availability() == SourceCoverageAvailability.SOURCED);
+        LinkedHashSet<String> tags = new LinkedHashSet<>();
+        if (hasSourced) {
+            tags.add("source_coverage");
+            expandedSlots.stream()
+                    .filter(slot -> slot.ownerTopicKey().equals(topicKey))
+                    .filter(slot -> slot.availability() == SourceCoverageAvailability.SOURCED)
+                    .map(SourceCoverageSlotDraft::role)
+                    .map(SpringAiTeachingOutlineModel::coverageTag)
+                    .filter(java.util.Objects::nonNull)
+                    .forEach(tags::add);
+        } else {
+            tags.add("source_dependency");
+            expandedSlots.stream()
+                    .filter(slot -> slot.ownerTopicKey().equals(topicKey))
+                    .map(SourceCoverageSlotDraft::role)
+                    .map(SpringAiTeachingOutlineModel::missingSourceTag)
+                    .filter(java.util.Objects::nonNull)
+                    .forEach(tags::add);
+        }
+        return List.copyOf(tags);
+    }
+
+    private static List<GlobalConceptDraft> canonicalConcepts(
+            List<CompactGlobalConceptDraft> drafts,
+            Map<String, SourceCoverageSlotDraft> slotsById,
+            Set<String> topicKeys) {
+        if (drafts == null || drafts.isEmpty()) {
+            throw new IllegalArgumentException("compact whole-game understanding has no concepts");
+        }
+        List<GlobalConceptDraft> concepts = new ArrayList<>();
+        for (CompactGlobalConceptDraft draft : drafts) {
+            if (draft == null || draft.sourceSlotIds() == null || draft.sourceSlotIds().isEmpty()
+                    || draft.relatedTopicKeys() == null
+                    || draft.relatedTopicKeys().isEmpty() || !topicKeys.containsAll(draft.relatedTopicKeys())) {
+                throw new IllegalArgumentException("compact whole-game concept is invalid");
+            }
+            List<SourceCoverageSlotDraft> selected = draft.sourceSlotIds().stream().map(slotsById::get).toList();
+            if (selected.contains(null)
+                    || selected.stream().anyMatch(slot -> slot.availability() != SourceCoverageAvailability.SOURCED)
+                    || selected.stream().anyMatch(slot -> !draft.relatedTopicKeys().contains(slot.ownerTopicKey()))) {
+                throw new IllegalArgumentException("compact whole-game concept selected an unavailable or unrelated source slot");
+            }
+            concepts.add(new GlobalConceptDraft(
+                    draft.conceptId(),
+                    draft.label(),
+                    draft.explanation(),
+                    selected.stream().map(SourceCoverageSlotDraft::sourceIdentifier).distinct().toList(),
+                    selected.stream().flatMap(slot -> slot.sourcePageNumbers().stream()).distinct().toList(),
+                    draft.relatedTopicKeys(),
+                    draft.prerequisiteConceptIds()));
+        }
+        return List.copyOf(concepts);
+    }
+
+    private static SourceCoverageRole roleForMissingCoverage(String coverageTag) {
+        return switch (coverageTag) {
+            case "setup" -> SourceCoverageRole.SETUP;
+            case "core_loop" -> SourceCoverageRole.CORE_LOOP;
+            case "end" -> SourceCoverageRole.ENDING;
+            case "scoring" -> SourceCoverageRole.SCORING;
+            default -> throw new IllegalArgumentException("unknown missing teaching source role");
+        };
+    }
+
+    private static String coverageTag(SourceCoverageRole role) {
+        return switch (role) {
+            case SETUP -> "setup";
+            case CORE_LOOP -> "core_loop";
+            case LEGAL_ACTION -> "legal_action";
+            case ENDING -> "end";
+            case SCORING -> "scoring";
+            case NECESSARY_EXCEPTION -> "necessary_exception";
+            case SUPPORTING_RULE -> null;
+        };
+    }
+
+    private static String missingSourceTag(SourceCoverageRole role) {
+        String coverage = coverageTag(role);
+        return coverage == null ? null : "missing_" + coverage + "_source";
+    }
+
     private StructuredOutputConverter<OutlineDraft> outlineConverter() {
         BeanOutputConverter<OutlineDraft> delegate = new BeanOutputConverter<>(OutlineDraft.class);
         return new StructuredOutputConverter<>() {
@@ -607,6 +936,34 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
                     try {
                         OutlineDraft repaired = delegate.convert(closed);
                         log.info("Accepted teaching outline after closing its single truncated root JSON object");
+                        return repaired;
+                    } catch (RuntimeException stillInvalid) {
+                        stillInvalid.addSuppressed(originalFailure);
+                        throw stillInvalid;
+                    }
+                }
+            }
+        };
+    }
+
+    private StructuredOutputConverter<CompactOutlineDraft> compactOutlineConverter() {
+        BeanOutputConverter<CompactOutlineDraft> delegate = new BeanOutputConverter<>(CompactOutlineDraft.class);
+        return new StructuredOutputConverter<>() {
+            @Override
+            public String getFormat() {
+                return delegate.getFormat();
+            }
+
+            @Override
+            public CompactOutlineDraft convert(String source) {
+                try {
+                    return delegate.convert(source);
+                } catch (RuntimeException originalFailure) {
+                    String closed = closeTruncatedRootObject(source);
+                    if (closed.equals(source)) throw originalFailure;
+                    try {
+                        CompactOutlineDraft repaired = delegate.convert(closed);
+                        log.info("Accepted compact teaching outline after closing its single truncated root JSON object");
                         return repaired;
                     } catch (RuntimeException stillInvalid) {
                         stillInvalid.addSuppressed(originalFailure);
@@ -650,17 +1007,55 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
         return candidate + '}';
     }
 
+    private record CanonicalSourceSlot(
+            String slotId,
+            String sourceIdentifier,
+            int pageNumber,
+            SourceCoverageAvailability availability,
+            SourceCoverageRole fixedRole) {}
+
+    private record CompactOutlineDraft(
+            String gameTitle,
+            String premise,
+            List<CompactTopicDraft> topics,
+            CompactWholeGameUnderstandingDraft wholeGameUnderstanding) {}
+
+    private record CompactTopicDraft(
+            String key,
+            String objective,
+            boolean required,
+            boolean visualEvidenceRecommended,
+            List<CompactTeachingUnitDraft> teachingUnits) {}
+
+    private record CompactTeachingUnitDraft(
+            String teachingUnitId,
+            SourceCoverageRole role,
+            List<String> sourceSlotIds) {}
+
+    private record CompactWholeGameUnderstandingDraft(
+            String summary,
+            List<CompactGlobalConceptDraft> concepts,
+            List<TopicDependencyDraft> topicDependencies) {}
+
+    private record CompactGlobalConceptDraft(
+            String conceptId,
+            String label,
+            String explanation,
+            List<String> sourceSlotIds,
+            List<String> relatedTopicKeys,
+            List<String> prerequisiteConceptIds) {}
+
     private record WholeGameContextPatch(
             List<WholeGameConceptPatchDraft> concepts,
             List<TopicDependencyDraft> topicDependencies) {
         private WholeGameContextPatch {
-            if (concepts == null || concepts.isEmpty() || concepts.size() > 32
+            if (concepts == null || concepts.isEmpty()
                     || concepts.stream().anyMatch(java.util.Objects::isNull)) {
                 throw new IllegalArgumentException("whole-game context concept patch is invalid");
             }
             concepts = List.copyOf(concepts);
             topicDependencies = topicDependencies == null ? List.of() : List.copyOf(topicDependencies);
-            if (topicDependencies.size() > 32 || topicDependencies.stream().anyMatch(java.util.Objects::isNull)) {
+            if (topicDependencies.stream().anyMatch(java.util.Objects::isNull)) {
                 throw new IllegalArgumentException("whole-game context dependency patch is invalid");
             }
         }
@@ -683,12 +1078,12 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
             if (conceptId == null || conceptId.isBlank() || conceptId.length() > 80
                     || !conceptId.matches("[a-z0-9]+(?:-[a-z0-9]+)*")
                     || label == null || label.isBlank() || label.length() > 160
-                    || explanation == null || explanation.isBlank() || explanation.length() > 800
-                    || sourceSlotIds == null || sourceSlotIds.isEmpty() || sourceSlotIds.size() > 16
+                    || explanation == null || explanation.isBlank()
+                    || sourceSlotIds == null || sourceSlotIds.isEmpty()
                     || sourceSlotIds.stream().anyMatch(slotId -> slotId == null || slotId.isBlank())
-                    || relatedTopicKeys == null || relatedTopicKeys.isEmpty() || relatedTopicKeys.size() > 16
+                    || relatedTopicKeys == null || relatedTopicKeys.isEmpty()
                     || relatedTopicKeys.stream().anyMatch(topicKey -> topicKey == null || topicKey.isBlank())
-                    || prerequisiteConceptIds == null || prerequisiteConceptIds.size() > 16
+                    || prerequisiteConceptIds == null
                     || prerequisiteConceptIds.stream().anyMatch(concept -> concept == null || concept.isBlank())) {
                 throw new IllegalArgumentException("whole-game concept connection patch is invalid");
             }
@@ -720,7 +1115,7 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
 
     private record SourceIdentifierPatches(List<SourceIdentifierPatch> replacements) {
         private SourceIdentifierPatches {
-            if (replacements == null || replacements.isEmpty() || replacements.size() > 128
+            if (replacements == null || replacements.isEmpty()
                     || replacements.stream().anyMatch(java.util.Objects::isNull)) {
                 throw new IllegalArgumentException("source identifier repair patch is invalid");
             }

@@ -78,8 +78,8 @@ class AnswerScopeResolverTest {
     }
 
     @Test
-    void boundsTheStructuredScopeCount() {
-        List<RuleScopeRequest> tooMany = IntStream.rangeClosed(1, 4)
+    void preservesEverySupportedScopeBeyondTheOldPresentationCap() {
+        List<RuleScopeRequest> resolutions = IntStream.rangeClosed(1, 4)
                 .mapToObj(index -> scope(
                         "Context " + index,
                         "Condition " + index,
@@ -90,8 +90,7 @@ class AnswerScopeResolverTest {
                         citationId))
                 .toList();
 
-        assertThatThrownBy(() -> resolver.resolve(request(AnswerAid.SCOPE), draft(tooMany)))
-                .hasMessageContaining("too many scope resolutions");
+        assertThat(resolver.resolve(request(AnswerAid.SCOPE), draft(resolutions))).hasSize(4);
     }
 
     private ModelRequest request(AnswerAid aid) {

@@ -16,7 +16,6 @@ import java.util.regex.Pattern;
 /** Admits only arithmetic whose operands are grounded in the current question or cited evidence. */
 final class AnswerCalculationResolver {
 
-    private static final int MAX_CALCULATIONS = 3;
     private static final Pattern NUMBER = Pattern.compile("(?<![\\p{L}\\p{N}.])\\d+(?:\\.\\d+)?");
     private final BoundedRuleCalculator calculator = new BoundedRuleCalculator();
 
@@ -26,7 +25,7 @@ final class AnswerCalculationResolver {
         AnswerStructuredAidPolicy.validateSelection(
                 request, AnswerAid.CALCULATION, requested.isEmpty(), "calculations");
         if (requested.isEmpty()) return List.of();
-        if (requested.size() > MAX_CALCULATIONS || draft.citationIds().isEmpty()) throw invalid();
+        if (draft.citationIds().isEmpty()) throw invalid();
 
         Set<BigDecimal> questionValues = values(request.question());
         if (questionValues.isEmpty()) throw invalid();

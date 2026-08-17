@@ -9,14 +9,14 @@ Each `ruleOptions` item must contain:
 - `availabilityCondition`: when or under what condition that option is available;
 - `result`: what happens when that option is used, including its immediate after-effect, cost, restriction, or non-effect;
 - `basis`: one of `SOURCE_SELECTION`, `TIMING_CATALOG`, `ALTERNATIVE_ACTION`, or `EXCLUSIVE_CHOICE`;
-- one to three `citationIds` that directly support that individual option.
+- `citationIds` that directly support that individual option.
 
-Return between two and eight items. If cited evidence says there are a specific number of ways, types, or options, return exactly that many. Do not merge two named options, invent a catch-all option, or omit a less attractive option. Repeat the exact same `decisionContext`, `selectionRule`, and `basis` across the set.
+Return every supported item requested by the player. If cited evidence says there are a specific number of ways, types, or options, return exactly that many. Do not merge two named options, invent a catch-all option, or omit a less attractive option.
 
 Use `SOURCE_SELECTION` when the player must choose where an item comes from; `TIMING_CATALOG` for named types whose availability differs by timing window; `ALTERNATIVE_ACTION` for distinct actions or conversions available for the same object; otherwise use `EXCLUSIVE_CHOICE` for a cited choose-one list.
 
-`selectionRule` is the rule shared by the entire set, never the timing or result of one item. For `TIMING_CATALOG` in English, repeat exactly `Each type may be played only in its stated timing window.` in every item; put Plot/Combat/Endgame-style differences only in `availabilityCondition`. Do not make unsupported frequency claims such as "no restriction on number of times." For other output languages, translate that same shared principle once and repeat the identical translation in every item.
+`selectionRule` states the choice rule for that option set, never the timing or result of one item. Put option-specific timing differences only in `availabilityCondition`. Do not make unsupported frequency claims.
 
 Preserve decisive details in the structured fields, not only in `explanation`: replacement or no-replacement effects, mandatory wording, exact costs and quantities, "only" timing restrictions, repeatability, and prohibitions. Every number in an option must occur in its cited evidence. If the evidence does not establish a complete list, do not claim completeness.
 
-Lexical fidelity is required for choice force: if the cited rule says `must`, include the literal word `must` or `required` in `selectionRule`; if it says an action may be done `multiple times`, include the literal phrase `multiple times` or `repeat` in `selectionRule` or the affected option result. For a source rule stated as "one of" several ways, explicitly say `exactly one` or `one of` in `selectionRule`.
+Preserve the cited rule's choice force and repeatability in natural player language. Do not turn permission into obligation, an exclusive choice into multiple choices, or a repeatable action into a one-time action.

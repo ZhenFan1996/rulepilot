@@ -11,22 +11,18 @@ import java.util.List;
 /** Validates the schema and evidence scope of the model-selected exception list. */
 final class AnswerExceptionClauseResolver {
 
-    private static final int MAX_CLAUSES = 6;
-
     List<RuleExceptionClause> resolve(ModelRequest request, ModelDraft draft) {
         if (request == null || draft == null) throw new IllegalArgumentException("exception clause input is invalid");
         List<ExceptionClauseRequest> proposed = draft.exceptionClauses();
         AnswerStructuredAidPolicy.validateSelection(
                 request, AnswerAid.EXCEPTIONS, proposed.isEmpty(), "exception clauses");
         if (proposed.isEmpty()) return List.of();
-        if (proposed.size() > MAX_CLAUSES) throw new IllegalArgumentException("too many exception clauses");
-
         LinkedHashSet<String> conditions = new LinkedHashSet<>();
         return proposed.stream()
                 .map(clause -> resolveOne(request, draft, clause))
                 .peek(clause -> {
                     if (!conditions.add(AnswerStructuredAidPolicy.identityKey(clause.condition()))) {
-                        throw new IllegalArgumentException("duplicate exception clause condition");
+                        throw new IllegalArgumentException("duplicate exception condition");
                     }
                 })
                 .toList();
@@ -39,8 +35,8 @@ final class AnswerExceptionClauseResolver {
     private RuleExceptionClause resolveOne(ModelRequest modelRequest, ModelDraft draft, ExceptionClauseRequest item) {
         if (item == null) throw new IllegalArgumentException("exception clause is null");
         return new RuleExceptionClause(
-                AnswerStructuredAidPolicy.requiredText(item.condition(), 300, "exception condition"),
-                AnswerStructuredAidPolicy.requiredText(item.effect(), 500, "exception effect"),
+                AnswerStructuredAidPolicy.requiredText(item.condition(), "exception condition"),
+                AnswerStructuredAidPolicy.requiredText(item.effect(), "exception effect"),
                 AnswerStructuredAidPolicy.citations(
                         modelRequest, draft, item.citationIds(), "exception clause"));
     }

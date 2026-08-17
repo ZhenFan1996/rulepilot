@@ -69,8 +69,8 @@ class AnswerWorkedExampleResolverTest {
     }
 
     @Test
-    void boundsTheStructuredExampleCount() {
-        List<WorkedExampleRequest> tooMany = IntStream.rangeClosed(1, 4)
+    void preservesEverySupportedExampleBeyondTheOldPresentationCap() {
+        List<WorkedExampleRequest> examples = IntStream.rangeClosed(1, 4)
                 .mapToObj(index -> example(
                         "Setup " + index,
                         "Action " + index,
@@ -79,8 +79,7 @@ class AnswerWorkedExampleResolverTest {
                         chunkId))
                 .toList();
 
-        assertThatThrownBy(() -> resolver.resolve(request(AnswerAid.EXAMPLE), draft(tooMany)))
-                .hasMessageContaining("too many worked examples");
+        assertThat(resolver.resolve(request(AnswerAid.EXAMPLE), draft(examples))).hasSize(4);
     }
 
     private ModelRequest request(AnswerAid aid) {

@@ -44,6 +44,8 @@ fi
 cd "$ROOT_DIR/backend"
 if [ "${RULEPILOT_RECOMMENDATION_CANARY_SCENARIO:-}" = "comparison-only" ]; then
 	./mvnw -q '-Dtest=BoardGameRecommendationAgentPaidCanaryTest#preservesANaturalComparisonWithoutASeparateDecisionReviewTurn' test
+elif [ "${RULEPILOT_RECOMMENDATION_CANARY_SCENARIO:-}" = "classic-awards" ]; then
+	./mvnw -q '-Dtest=BoardGameRecommendationAgentPaidCanaryTest#understandsAwardWinningClassicsAndAnImaginativeEquivalentWithoutFallback' test
 elif [ "${RULEPILOT_RECOMMENDATION_CANARY_SCENARIO:-}" = "creator-alias" ]; then
 	./mvnw -q '-Dtest=BoardGameRecommendationAgentPaidCanaryTest#resolvesAPlayerCreatorAliasThroughTheRealPublicDiscoveryTool' test
 elif [ "${RULEPILOT_RECOMMENDATION_CANARY_SCENARIO:-}" = "imaginative" ]; then

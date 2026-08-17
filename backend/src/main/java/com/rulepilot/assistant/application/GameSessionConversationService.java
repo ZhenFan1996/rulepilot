@@ -52,18 +52,12 @@ public class GameSessionConversationService {
         return Optional.of(new PriorTurnReference(
                 documentVersionId,
                 turn.question(),
-                bounded(answer.shortVerdict(), 800),
+                answer.shortVerdict(),
                 answer.citations().stream()
                         .filter(citation -> documentVersionId.equals(citation.documentVersionId()))
-                        .limit(8)
                         .map(citation -> new PriorCitationReference(
                                 citation.chunkId(), citation.documentVersionId(), citation.pageFrom(), citation.pageTo()))
                         .toList()));
     }
 
-    private String bounded(String value, int maximum) {
-        if (value == null || value.isBlank()) return "No prior grounded verdict";
-        String normalized = value.replaceAll("\\s+", " ").strip();
-        return normalized.length() <= maximum ? normalized : normalized.substring(0, maximum);
-    }
 }

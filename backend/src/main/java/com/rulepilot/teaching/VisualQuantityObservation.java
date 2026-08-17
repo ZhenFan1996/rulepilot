@@ -20,16 +20,12 @@ public record VisualQuantityObservation(
         String originalSpan,
         QuantityResolution resolution) {
 
-    public static final int MAX_OBSERVATIONS_PER_PAGE = 8;
-    private static final int MAX_QUANTITY = 1_000_000;
-
     public VisualQuantityObservation {
         if (pageNumber < 1
                 || ruleGroupIdentifier == null || ruleGroupIdentifier.isBlank()
-                || ruleGroupIdentifier.length() > 120
                 || quantifierScope == null
-                || variantAxis == null || variantAxis.length() > 120
-                || originalSpan == null || originalSpan.isBlank() || originalSpan.length() > 240
+                || variantAxis == null
+                || originalSpan == null || originalSpan.isBlank()
                 || originalSpan.codePoints().anyMatch(Character::isISOControl)
                 || resolution == null) {
             throw new IllegalArgumentException("visual quantity observation is invalid");
@@ -41,7 +37,16 @@ public record VisualQuantityObservation(
         variantAxis = variantAxis.strip();
         originalSpan = originalSpan.strip();
 
-        if (resolution == QuantityResolution.REQUIRES_PAGE_INSPECTION) {
+        if (resolution == QuantityResolution.TRANSCRIBED_SOURCE_SPAN) {
+            if (quantifierScope != QuantifierScope.LITERAL_SOURCE_SPAN
+                    || !variantAxis.isBlank()
+                    || variantCount != null
+                    || perVariantQuantity != null
+                    || derivedTotal != null) {
+                throw new IllegalArgumentException(
+                        "a transcribed quantity source span cannot publish interpreted quantity fields");
+            }
+        } else if (resolution == QuantityResolution.REQUIRES_PAGE_INSPECTION) {
             if (quantifierScope != QuantifierScope.UNRESOLVED) {
                 throw new IllegalArgumentException(
                         "quantity requiring page inspection must keep an unresolved scope");
@@ -98,6 +103,8 @@ public record VisualQuantityObservation(
                 .append(" | originalSpan=").append(originalSpan);
         if (resolution == QuantityResolution.REQUIRES_PAGE_INSPECTION) {
             evidence.append(" | inspect the cited page; no total was inferred");
+        } else if (resolution == QuantityResolution.TRANSCRIBED_SOURCE_SPAN) {
+            evidence.append(" | literal source span retained; no quantity semantics or arithmetic were inferred");
         }
         return evidence.toString();
     }
@@ -110,16 +117,11 @@ public record VisualQuantityObservation(
         String quantityEvidence = observations.stream()
                 .map(VisualQuantityObservation::evidenceText)
                 .collect(java.util.stream.Collectors.joining("\n"));
-        String combined = factualSummary.strip() + "\n" + quantityEvidence;
-        if (combined.length() > 4_000) {
-            throw new IllegalArgumentException(
-                    "visual factual summary and quantity observations exceed the 4,000 character limit");
-        }
-        return combined;
+        return factualSummary.strip() + "\n" + quantityEvidence;
     }
 
     private static void requirePositiveQuantity(Integer value, String field) {
-        if (value != null && (value < 1 || value > MAX_QUANTITY)) {
+        if (value != null && value < 1) {
             throw new IllegalArgumentException("visual quantity " + field + " is invalid");
         }
     }
@@ -127,11 +129,13 @@ public record VisualQuantityObservation(
     public enum QuantifierScope {
         PER_VARIANT,
         TOTAL,
-        UNRESOLVED
+        UNRESOLVED,
+        LITERAL_SOURCE_SPAN
     }
 
     public enum QuantityResolution {
         EXACT,
-        REQUIRES_PAGE_INSPECTION
+        REQUIRES_PAGE_INSPECTION,
+        TRANSCRIBED_SOURCE_SPAN
     }
 }

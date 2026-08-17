@@ -16,14 +16,12 @@ import org.junit.jupiter.api.Test;
 class SourceLanguageRetrievalPolicyTest {
 
     @Test
-    void rejectsTranslatedQueriesForAnEnglishRulebook() {
+    void acceptsTranslatedQueriesForAnEnglishRulebookWhenRetrievalCanUseSemanticSearch() {
         OutlineRequest request = englishRequest();
 
-        assertThatThrownBy(() -> SourceLanguageRetrievalPolicy.validate(
+        assertThatNoException().isThrownBy(() -> SourceLanguageRetrievalPolicy.validate(
                         request,
-                        outline(List.of("如何完成玩家设置？", "游戏什么时候结束？"))))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("source-language");
+                        outline(List.of("如何完成玩家设置？", "游戏什么时候结束？"))));
     }
 
     @Test
@@ -34,8 +32,8 @@ class SourceLanguageRetrievalPolicyTest {
     }
 
     @Test
-    void keepsValidationForTextRulebooksEvenWhenAPlannerAlsoSuppliesPageBindings() {
-        assertThatThrownBy(() -> SourceLanguageRetrievalPolicy.validate(
+    void pageBoundTopicsDoNotNeedToRepeatEnglishWordsInTheirSearchQueries() {
+        assertThatNoException().isThrownBy(() -> SourceLanguageRetrievalPolicy.validate(
                         englishRequest(),
                         new OutlineDraft(
                                 "SETI",
@@ -48,9 +46,7 @@ class SourceLanguageRetrievalPolicyTest {
                                         true,
                                         List.of("如何完成玩家设置？"),
                                         List.of("setup", "end", "scoring"),
-                                        List.of(1))))))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("source-language");
+                                        List.of(1))))));
     }
 
     @Test
@@ -62,12 +58,11 @@ class SourceLanguageRetrievalPolicyTest {
     }
 
     @Test
-    void stillRejectsAClaimedCanonicalSourceIdentifierThatIsAbsentFromItsBoundPage() {
+    void incompleteLegacyTextInventoryDoesNotUseSubstringMatchingAsASourceGate() {
         OutlineRequest request = englishRequest();
         OutlineDraft outline = outlineWithSourceSlot("翻译后的玩家设置");
 
-        assertThatThrownBy(() -> SourceLanguageRetrievalPolicy.validate(request, outline))
-                .isInstanceOf(TeachingSourceCoverageContract.MissingExactSourceIdentifierException.class);
+        assertThatNoException().isThrownBy(() -> SourceLanguageRetrievalPolicy.validate(request, outline));
     }
 
     private OutlineRequest englishRequest() {

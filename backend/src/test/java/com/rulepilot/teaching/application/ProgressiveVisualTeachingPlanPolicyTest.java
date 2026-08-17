@@ -55,7 +55,7 @@ class ProgressiveVisualTeachingPlanPolicyTest {
     }
 
     @Test
-    void explicitSourceContractCannotStartAfterItsSourcedSetupObligation() {
+    void modelSelectedGameplayPageCanStartBeforeOrAfterAnyFixedChapterTaxonomy() {
         var start = new ProgressiveTeachingStartDraft(
                 List.of(
                         pageWithRoles(1, "S-0", List.of("S-0"), List.of("setup"),
@@ -70,9 +70,10 @@ class ProgressiveVisualTeachingPlanPolicyTest {
                                 List.of(coverage("P-0", SourceCoverageRole.SCORING)))),
                 facts(2, "T-0; A-1", "T-0：可见循环推进；A-1：玩家执行可见行动。", "T-0"));
 
-        assertThatThrownBy(() -> ProgressiveVisualTeachingPlanPolicy.outline("Opaque game", pages(4), start))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("start from its sourced setup obligation");
+        assertThat(ProgressiveVisualTeachingPlanPolicy.outline("Opaque game", pages(4), start).topics())
+                .first()
+                .extracting(topic -> topic.sourcePageNumbers().getFirst())
+                .isEqualTo(2);
     }
 
     @Test
@@ -105,7 +106,7 @@ class ProgressiveVisualTeachingPlanPolicyTest {
     }
 
     @Test
-    void rejectsAnEndingOrScoringPageAsTheFastFirstChapterWhenEarlyJourneyRulesAreVisible() {
+    void doesNotOverrideTheModelsSelectedFirstPageUsingFixedEarlyJourneyTags() {
         var lateStart = new ProgressiveTeachingStartDraft(
                 List.of(
                         page(1, TeachingPageRole.GAMEPLAY_RULES, "Setup", List.of("table layout"), List.of("setup")),
@@ -114,9 +115,10 @@ class ProgressiveVisualTeachingPlanPolicyTest {
                                 List.of("end", "scoring"))),
                 facts(3, "Finish; Score", "结束条件成立后，所有玩家分别计算最终得分并比较胜负。", "score"));
 
-        assertThatThrownBy(() -> ProgressiveVisualTeachingPlanPolicy.outline("Game", pages(3), lateStart))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("early player journey");
+        assertThat(ProgressiveVisualTeachingPlanPolicy.outline("Game", pages(3), lateStart).topics())
+                .first()
+                .extracting(topic -> topic.sourcePageNumbers().getFirst())
+                .isEqualTo(3);
     }
 
     @Test
@@ -137,7 +139,7 @@ class ProgressiveVisualTeachingPlanPolicyTest {
     }
 
     @Test
-    void rejectsIncompleteBindingsAndMissingCoreCoverageInsteadOfGuessing() {
+    void rejectsUnknownPageBindingsButDoesNotRequireAFixedFourRoleChecklist() {
         var missingPage = new ProgressiveTeachingStartDraft(
                 List.of(
                         page(1, TeachingPageRole.GAMEPLAY_RULES, "A", List.of("a"), List.of("setup", "core_loop")),
@@ -153,9 +155,8 @@ class ProgressiveVisualTeachingPlanPolicyTest {
                         page(2, TeachingPageRole.GAMEPLAY_RULES, "B", List.of("b"), List.of("core_loop")),
                         page(3, TeachingPageRole.GAMEPLAY_RULES, "C", List.of("c"), List.of("end"))),
                 facts(2, "B", "当前玩家必须执行一个可见动作，然后结束回合。", "b"));
-        assertThatThrownBy(() -> ProgressiveVisualTeachingPlanPolicy.outline("Game", pages(3), missingScoring))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("core learning obligation");
+        assertThat(ProgressiveVisualTeachingPlanPolicy.outline("Game", pages(3), missingScoring).topics())
+                .hasSize(3);
     }
 
     @Test
@@ -186,7 +187,7 @@ class ProgressiveVisualTeachingPlanPolicyTest {
                 .satisfies(topic -> {
                     assertThat(topic.retrievalQueries()).containsExactly("Quick Start Guide");
                     assertThat(topic.sourcePageNumbers()).containsExactly(1);
-                    assertThat(topic.objective()).contains("只证明当前规则书要求另行查看", "不能补写开局步骤");
+                    assertThat(topic.objective()).contains("只证明当前规则书要求另行查看", "不要补写缺失资料中的规则");
                     assertThat(topic.required()).isTrue();
                 });
     }
@@ -231,7 +232,7 @@ class ProgressiveVisualTeachingPlanPolicyTest {
     }
 
     @Test
-    void aGenericExternalReferenceCannotWaiveAnUnidentifiedCoreObligation() {
+    void aGenericExternalReferenceDoesNotTriggerAFixedCoreObligationFailure() {
         var start = new ProgressiveTeachingStartDraft(
                 List.of(
                         new TeachingPageSketch(
@@ -246,13 +247,12 @@ class ProgressiveVisualTeachingPlanPolicyTest {
                                 List.of("end", "scoring"))),
                 facts(1, "take action", "当前玩家执行一个可见行动，然后结束本回合。", "take action"));
 
-        assertThatThrownBy(() -> ProgressiveVisualTeachingPlanPolicy.outline("Game", pages(2), start))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("core learning obligation");
+        assertThat(ProgressiveVisualTeachingPlanPolicy.outline("Game", pages(2), start).topics())
+                .hasSize(3);
     }
 
     @Test
-    void rejectsTheProgressiveShortcutWhenAnyGameplayPageCouldNotInventoryEveryVisibleRuleGroup() {
+    void preservesAUsableProgressivePlanWhenInventoryCompletenessIsNotDeclared() {
         var incompleteInventory = new ProgressiveTeachingStartDraft(
                 List.of(
                         new TeachingPageSketch(
@@ -271,14 +271,14 @@ class ProgressiveVisualTeachingPlanPolicyTest {
                                 true)),
                 facts(1, "move; build; trade; copy", "当前玩家选择并完整执行一个可见行动。", "move"));
 
-        assertThatThrownBy(() -> ProgressiveVisualTeachingPlanPolicy.outline(
-                        "Game", pages(2), incompleteInventory))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("every visible gameplay rule group");
+        var outline = ProgressiveVisualTeachingPlanPolicy.outline("Game", pages(2), incompleteInventory);
+
+        assertThat(outline.topics()).hasSize(2);
+        assertThat(outline.sourceCoverageInventoryComplete()).isFalse();
     }
 
     @Test
-    void rejectsASelectedNonGameplayOrEmptyFactPage() {
+    void rejectsASelectedNonGameplayPageButDoesNotScoreFactProseByLengthOrKeywordCount() {
         assertThatThrownBy(() -> new ProgressiveTeachingStartDraft(
                         List.of(page(1, TeachingPageRole.NON_GAMEPLAY, "Cover", List.of(), List.of())),
                         facts(1, "Cover", "这里只显示游戏名称和出版社标志。", "cover")))
@@ -289,13 +289,12 @@ class ProgressiveVisualTeachingPlanPolicyTest {
                 List.of(page(1, TeachingPageRole.GAMEPLAY_RULES, "A", List.of("a"),
                         List.of("setup", "core_loop", "end", "scoring"))),
                 new PageSummary(1, null, null, null));
-        assertThatThrownBy(() -> ProgressiveVisualTeachingPlanPolicy.outline("Game", pages(1), emptyFacts))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("facts are insufficient");
+        assertThat(ProgressiveVisualTeachingPlanPolicy.outline("Game", pages(1), emptyFacts).topics())
+                .hasSize(1);
     }
 
     @Test
-    void acceptsEightSelectedPageFactsButRejectsDefaultKeywordsAndLargerUnboundedSummaries() {
+    void keepsDefaultKeywordsAndAnyNumberOfFactLinesWithoutLocalQualityScoring() {
         List<TeachingPageSketch> sketches = List.of(page(
                 1,
                 TeachingPageRole.GAMEPLAY_RULES,
@@ -305,9 +304,8 @@ class ProgressiveVisualTeachingPlanPolicyTest {
         var defaultKeyword = new ProgressiveTeachingStartDraft(
                 sketches,
                 new PageSummary(1, "TAKE", "当前玩家必须拿取一个可见组件，然后结束当前回合。", null));
-        assertThatThrownBy(() -> ProgressiveVisualTeachingPlanPolicy.outline("Game", pages(1), defaultKeyword))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("facts are insufficient");
+        assertThat(ProgressiveVisualTeachingPlanPolicy.outline("Game", pages(1), defaultKeyword).topics())
+                .hasSize(1);
 
         var completeEightFacts = new ProgressiveTeachingStartDraft(
                 sketches,
@@ -328,9 +326,8 @@ class ProgressiveVisualTeachingPlanPolicyTest {
                         "执行规则组1。\n执行规则组2。\n执行规则组3。\n执行规则组4。\n执行规则组5。\n"
                                 + "执行规则组6。\n执行规则组7。\n执行规则组8。\n执行规则组9。",
                         List.of("TAKE", "REFILL")));
-        assertThatThrownBy(() -> ProgressiveVisualTeachingPlanPolicy.outline("Game", pages(1), tooManyFacts))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("facts are insufficient");
+        assertThat(ProgressiveVisualTeachingPlanPolicy.outline("Game", pages(1), tooManyFacts).topics())
+                .hasSize(1);
     }
 
     private TeachingPageSketch page(

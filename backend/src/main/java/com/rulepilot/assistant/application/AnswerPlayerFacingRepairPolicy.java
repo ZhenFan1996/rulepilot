@@ -7,6 +7,7 @@ import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Set;
+import java.util.UUID;
 
 /** Requests a bounded model repair only for player-facing protocol leakage. */
 final class AnswerPlayerFacingRepairPolicy {
@@ -19,35 +20,25 @@ final class AnswerPlayerFacingRepairPolicy {
 
     static RepairPlan planFor(ModelRequest request, ModelDraft draft) {
         if (request == null || draft == null) return new RepairPlan(Set.of(), List.of());
+        List<UUID> evidenceIds = request.evidence().stream()
+                .map(com.rulepilot.assistant.RuleAnswerModel.EvidenceInput::chunkId)
+                .toList();
         EnumSet<PlayerFacingField> editableFields = EnumSet.noneOf(PlayerFacingField.class);
         List<String> feedback = new ArrayList<>();
-        if (AnswerDraftSafetyPolicy.containsInternalEvidenceReference(draft.shortVerdict())) {
+        if (containsInternalReference(draft.shortVerdict(), evidenceIds)) {
             editableFields.add(PlayerFacingField.SHORT_VERDICT);
         }
-        if (AnswerDraftSafetyPolicy.containsInternalEvidenceReference(draft.explanation())) {
+        if (containsInternalReference(draft.explanation(), evidenceIds)) {
             editableFields.add(PlayerFacingField.EXPLANATION);
         }
-        if (draft.exceptions().stream().anyMatch(AnswerDraftSafetyPolicy::containsInternalEvidenceReference)) {
+        if (draft.exceptions().stream().anyMatch(value -> containsInternalReference(value, evidenceIds))) {
             editableFields.add(PlayerFacingField.EXCEPTIONS);
         }
         if (!editableFields.isEmpty()) {
             feedback.add(
-                    "PLAYER_FACING_OUTPUT: Remove UUIDs, chunk IDs, E-number evidence labels, retrieval wording, "
-                            + "and other internal references. Teach the same cited rule directly; preserve citationIds.");
-        }
-        EnumSet<PlayerFacingField> sourceScopeFields = EnumSet.noneOf(PlayerFacingField.class);
-        if (AnswerSourceScopeRepairPolicy.requiresRepair(draft.shortVerdict())) {
-            sourceScopeFields.add(PlayerFacingField.SHORT_VERDICT);
-        }
-        if (AnswerSourceScopeRepairPolicy.requiresRepair(draft.explanation())) {
-            sourceScopeFields.add(PlayerFacingField.EXPLANATION);
-        }
-        if (draft.exceptions().stream().anyMatch(AnswerSourceScopeRepairPolicy::requiresRepair)) {
-            sourceScopeFields.add(PlayerFacingField.EXCEPTIONS);
-        }
-        if (!sourceScopeFields.isEmpty()) {
-            editableFields.addAll(sourceScopeFields);
-            feedback.addAll(AnswerSourceScopeRepairPolicy.feedbackFor(request, draft));
+                    "PLAYER_FACING_OUTPUT: Remove the supplied full evidence UUIDs from player-facing prose. "
+                            + "Preserve ordinary rule identifiers, natural technical terms, and all supported prose; "
+                            + "teach the same cited rule directly and preserve citationIds.");
         }
         List<String> citationFeedback = AnswerCitationCoveragePolicy.repairFeedback(request, draft);
         if (!citationFeedback.isEmpty()) {
@@ -55,6 +46,10 @@ final class AnswerPlayerFacingRepairPolicy {
             feedback.addAll(citationFeedback);
         }
         return new RepairPlan(editableFields, feedback);
+    }
+
+    private static boolean containsInternalReference(String value, List<UUID> evidenceIds) {
+        return AnswerDraftSafetyPolicy.containsKnownEvidenceReference(value, evidenceIds);
     }
 
     record RepairPlan(Set<PlayerFacingField> editableFields, List<String> feedback) {

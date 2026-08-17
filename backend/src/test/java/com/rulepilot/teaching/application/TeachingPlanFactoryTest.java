@@ -1,7 +1,6 @@
 package com.rulepilot.teaching.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.rulepilot.teaching.TeachingOutlineModel.OutlineDraft;
 import com.rulepilot.teaching.TeachingOutlineModel.TopicDraft;
@@ -32,17 +31,19 @@ class TeachingPlanFactoryTest {
     }
 
     @Test
-    void rejectsInvalidTopicShapeAtTheModelBoundarySoStructuredRepairCanRun() {
-        assertThatThrownBy(() -> new TopicDraft(
-                        "setup",
-                        "Setup",
-                        "x".repeat(601),
-                        true,
-                        true,
-                        List.of("setup"),
-                        List.of("setup")))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessage("teaching outline topic is invalid");
+    void preservesARichAgentChosenObjectiveInsteadOfTreatingLengthAsInvalid() {
+        String objective = "Explain every source-backed choice and exception in a natural order. ".repeat(20);
+
+        var topic = new TopicDraft(
+                "setup",
+                "Setup",
+                objective,
+                true,
+                true,
+                List.of("setup"),
+                List.of("setup"));
+
+        assertThat(topic.objective()).isEqualTo(objective);
     }
 
     @Test
@@ -92,15 +93,16 @@ class TeachingPlanFactoryTest {
                 "player",
                 outline);
 
-        assertThat(plan.learningGoal()).isEqualTo("先学会开局，再用例子解释行动衔接。");
+        assertThat(plan.learningGoal()).isEqualTo("  先学会开局，再用例子解释行动衔接。  ");
         assertThat(plan.sections()).extracting(section -> section.coverageTags())
                 .contains(List.of("setup"), List.of("core_loop"), List.of("end", "scoring"));
     }
 
     @Test
-    void preservesUpToEightSourceDerivedRuleGroupsAsRequiredSectionIntents() {
+    void preservesEverySourceDerivedRuleGroupWithoutAnEightItemCutoff() {
         List<String> ruleGroups = List.of(
-                "move", "build", "trade", "copy", "recruit", "produce", "score", "pass");
+                "move", "build", "trade", "copy", "recruit", "produce", "score", "pass",
+                "rest", "upgrade", "reserve", "withdraw");
         var outline = new OutlineDraft(
                 "Game",
                 "Premise",
@@ -145,7 +147,7 @@ class TeachingPlanFactoryTest {
     }
 
     @Test
-    void rejectsAMissingSourceMarkerThatHasNoSourceDependencyTopic() {
+    void doesNotInferSourceAvailabilityFromCoverageTagSpelling() {
         var outline = new OutlineDraft(
                 "Game",
                 "Premise",
@@ -154,13 +156,13 @@ class TeachingPlanFactoryTest {
                         topic("actions", "Take actions", false, List.of("core_loop")),
                         topic("finish", "Finish and score", false, List.of("end", "scoring"))));
 
-        assertThatThrownBy(() -> new TeachingPlanFactory().create(UUID.randomUUID(), "player", outline))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("requires a source dependency");
+        var plan = new TeachingPlanFactory().create(UUID.randomUUID(), "player", outline);
+
+        assertThat(plan.sections().getFirst().coverageTags()).containsExactly("missing_setup_source");
     }
 
     @Test
-    void rejectsASourceDependencyThatAlsoClaimsTheMissingProcedureIsCovered() {
+    void doesNotRejectAWholeOutlineBecauseFreeFormTagsLookContradictory() {
         var outline = new OutlineDraft(
                 "Game",
                 "Premise",
@@ -173,9 +175,10 @@ class TeachingPlanFactoryTest {
                         topic("actions", "Take actions", false, List.of("core_loop")),
                         topic("finish", "Finish and score", false, List.of("end", "scoring"))));
 
-        assertThatThrownBy(() -> new TeachingPlanFactory().create(UUID.randomUUID(), "player", outline))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("cannot claim the unavailable procedure");
+        var plan = new TeachingPlanFactory().create(UUID.randomUUID(), "player", outline);
+
+        assertThat(plan.sections().getFirst().coverageTags())
+                .containsExactly("source_dependency", "missing_setup_source", "setup");
     }
 
     private TopicDraft topic(String key, String title, boolean visualEvidenceRecommended, List<String> tags) {

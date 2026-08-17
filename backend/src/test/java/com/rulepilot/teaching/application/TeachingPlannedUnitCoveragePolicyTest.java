@@ -36,7 +36,7 @@ class TeachingPlannedUnitCoveragePolicyTest {
     }
 
     @Test
-    void rejectsOneStepThatSilentlyAbsorbsTwoUnitsThePlannerKeptIndependent() {
+    void acceptsOneCoherentStepThatConnectsTwoAgentPlannedUnitsWithBothDirectSources() {
         List<TeachingUnitInput> units = List.of(
                 new TeachingUnitInput("first-decision", List.of("R-alpha"), List.of(alpha.chunkId())),
                 new TeachingUnitInput("conditional-procedure", List.of("R-gamma"), List.of(gamma.chunkId())));
@@ -46,10 +46,9 @@ class TeachingPlannedUnitCoveragePolicyTest {
                 List.of(alpha.chunkId(), gamma.chunkId()),
                 List.of("first-decision", "conditional-procedure"))));
 
-        assertThatThrownBy(() -> TeachingPlannedUnitCoveragePolicy.validate(
+        assertThatCode(() -> TeachingPlannedUnitCoveragePolicy.validate(
                         units, List.of(alpha, gamma), compressed))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("cannot absorb multiple");
+                .doesNotThrowAnyException();
     }
 
     @Test
@@ -81,7 +80,7 @@ class TeachingPlannedUnitCoveragePolicyTest {
     }
 
     @Test
-    void rejectsACrossUnitCheckWhenItIsTheOnlyStepClaimingOneUnit() {
+    void acceptsACrossUnitCheckWhenItDirectlyCitesEveryClaimedUnit() {
         List<TeachingUnitInput> units = List.of(
                 new TeachingUnitInput("first-decision", List.of("R-alpha"), List.of(alpha.chunkId())),
                 new TeachingUnitInput("conditional-procedure", List.of("R-gamma"), List.of(gamma.chunkId())));
@@ -98,10 +97,26 @@ class TeachingPlannedUnitCoveragePolicyTest {
                         List.of(alpha.chunkId(), gamma.chunkId()),
                         List.of("first-decision", "conditional-procedure"))));
 
-        assertThatThrownBy(() -> TeachingPlannedUnitCoveragePolicy.validate(
+        assertThatCode(() -> TeachingPlannedUnitCoveragePolicy.validate(
                         units, List.of(alpha, gamma), compressed))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
+    void aCrossUnitStepStillFailsWhenItDoesNotCiteOneUnitsDirectSource() {
+        List<TeachingUnitInput> units = List.of(
+                new TeachingUnitInput("first-decision", List.of("R-alpha"), List.of(alpha.chunkId())),
+                new TeachingUnitInput("conditional-procedure", List.of("R-gamma"), List.of(gamma.chunkId())));
+        SectionDraft unsupported = draft(List.of(step(
+                "关联两个流程",
+                "先按 R-alpha 作出选择，再处理 R-gamma 的条件。",
+                List.of(alpha.chunkId()),
+                List.of("first-decision", "conditional-procedure"))));
+
+        assertThatThrownBy(() -> TeachingPlannedUnitCoveragePolicy.validate(
+                        units, List.of(alpha, gamma), unsupported))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("cannot absorb multiple");
+                .hasMessageContaining("conditional-procedure", "must cite direct evidence");
     }
 
     @Test

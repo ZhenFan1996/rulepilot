@@ -80,11 +80,11 @@ class FakeTeachingOutlineModelTest {
         assertThat(outline.topics()).hasSize(3);
         assertThat(outline.topics()).extracting(topic -> topic.sourcePageNumbers())
                 .containsExactly(
-                        List.of(1, 2, 3, 4),
-                        List.of(5, 6, 7, 8),
-                        List.of(9, 10, 11, 12));
+                        List.of(1, 2, 3, 4, 5),
+                        List.of(6, 7, 8, 9, 10),
+                        List.of(11, 12));
         assertThat(outline.topics())
-                .allSatisfy(topic -> assertThat(topic.retrievalQueries()).hasSizeLessThanOrEqualTo(8));
+                .allSatisfy(topic -> assertThat(topic.retrievalQueries()).hasSizeLessThanOrEqualTo(16));
         assertThat(outline.topics()).flatExtracting(topic -> topic.sourcePageNumbers())
                 .containsExactlyElementsOf(IntStream.rangeClosed(1, 12).boxed().toList());
         assertThat(outline.topics().getFirst().coverageTags())
@@ -98,34 +98,36 @@ class FakeTeachingOutlineModelTest {
     }
 
     @Test
-    void visualFallbackKeepsEightRuleGroupsPerPageBoundToTheirExactSourcePage() {
+    void visualFallbackMayPackCompletePagesWhileKeepingEveryRuleGroupBoundToItsExactSourcePage() {
         var outline = model.organize(new OutlineRequest(List.of(
-                visualPage(1, "A1; A2; A3; A4; A5; A6; A7; A8", "Page one has eight independent rules."),
-                visualPage(2, "B1; B2; B3; B4; B5; B6; B7; B8", "Page two has eight independent rules."))));
+                completeVisualPage(1, "A1", "A2", "A3", "A4", "A5", "A6", "A7", "A8"),
+                completeVisualPage(2, "B1", "B2", "B3", "B4", "B5", "B6", "B7", "B8"))));
 
-        assertThat(outline.topics()).hasSize(2);
+        assertThat(outline.topics()).hasSize(1);
         assertThat(outline.topics().getFirst()).satisfies(topic -> {
-            assertThat(topic.retrievalQueries()).containsExactly("A1", "A2", "A3", "A4", "A5", "A6", "A7", "A8");
-            assertThat(topic.sourcePageNumbers()).containsExactly(1);
+            assertThat(topic.retrievalQueries()).containsExactly(
+                    "A1", "A2", "A3", "A4", "A5", "A6", "A7", "A8",
+                    "B1", "B2", "B3", "B4", "B5", "B6", "B7", "B8");
+            assertThat(topic.sourcePageNumbers()).containsExactly(1, 2);
         });
-        assertThat(outline.topics().get(1)).satisfies(topic -> {
-            assertThat(topic.retrievalQueries()).containsExactly("B1", "B2", "B3", "B4", "B5", "B6", "B7", "B8");
-            assertThat(topic.sourcePageNumbers()).containsExactly(2);
-        });
+        assertThat(outline.sourceCoverageSlots())
+                .filteredOn(slot -> slot.availability() == SourceCoverageAvailability.SOURCED
+                        && slot.sourceIdentifier().startsWith("A"))
+                .allSatisfy(slot -> assertThat(slot.sourcePageNumbers()).containsExactly(1));
+        assertThat(outline.sourceCoverageSlots())
+                .filteredOn(slot -> slot.availability() == SourceCoverageAvailability.SOURCED
+                        && slot.sourceIdentifier().startsWith("B"))
+                .allSatisfy(slot -> assertThat(slot.sourcePageNumbers()).containsExactly(2));
     }
 
     @Test
-    void visualFallbackSplitsMoreThanEightIdentifiersWithoutChangingTheirSourcePage() {
-        var outline = model.organize(new OutlineRequest(List.of(visualPage(
-                4,
-                "R1; R2; R3; R4; R5; R6; R7; R8; R9; R10; R11; R12",
-                "The page contains twelve independently labeled rule groups."))));
+    void visualFallbackKeepsACompleteTwelveAnchorPageInsideTheRealSixteenUnitChapterBoundary() {
+        var outline = model.organize(new OutlineRequest(List.of(completeVisualPage(
+                4, "R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8", "R9", "R10", "R11", "R12"))));
 
-        assertThat(outline.topics()).hasSize(2);
+        assertThat(outline.topics()).hasSize(1);
         assertThat(outline.topics().getFirst().retrievalQueries())
-                .containsExactly("R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8");
-        assertThat(outline.topics().get(1).retrievalQueries())
-                .containsExactly("R9", "R10", "R11", "R12");
+                .containsExactly("R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8", "R9", "R10", "R11", "R12");
         assertThat(outline.topics())
                 .allSatisfy(topic -> assertThat(topic.sourcePageNumbers()).containsExactly(4));
     }
@@ -193,26 +195,32 @@ class FakeTeachingOutlineModelTest {
         assertThat(outline.topics()).hasSize(4);
         assertThat(outline.topics()).allSatisfy(topic -> {
             assertThat(topic.sourcePageNumbers()).hasSizeLessThanOrEqualTo(5);
-            assertThat(topic.retrievalQueries()).hasSizeLessThanOrEqualTo(8);
+            assertThat(topic.retrievalQueries()).hasSizeLessThanOrEqualTo(16);
         });
         assertThat(outline.topics()).flatExtracting(topic -> topic.sourcePageNumbers())
                 .containsExactlyElementsOf(IntStream.rangeClosed(1, 17).boxed().toList());
     }
 
     @Test
-    void refusesToSilentlyDropDenseRuleGroupsBeyondThePackedFallbackCapacity() {
-        var pages = IntStream.rangeClosed(1, 17)
-                .mapToObj(page -> visualPage(
+    void streamsDenseRuleGroupsAcrossChapterBoundariesWithoutDroppingAnchors() {
+        var pages = IntStream.rangeClosed(1, 13)
+                .mapToObj(page -> completeVisualPage(
                         page,
                         IntStream.rangeClosed(1, 9)
                                 .mapToObj(group -> "P" + page + "G" + group)
-                                .collect(java.util.stream.Collectors.joining("; ")),
-                        "This page has nine independent page-owned rule groups."))
+                                .toArray(String[]::new)))
                 .toList();
 
-        assertThatThrownBy(() -> model.organize(new OutlineRequest(pages)))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("fallback capacity");
+        var outline = model.organize(new OutlineRequest(pages));
+
+        assertThat(outline.topics()).hasSizeLessThanOrEqualTo(16);
+        assertThat(outline.topics()).allSatisfy(topic -> {
+            assertThat(topic.sourcePageNumbers()).hasSizeLessThanOrEqualTo(5);
+            assertThat(topic.retrievalQueries()).hasSizeLessThanOrEqualTo(16);
+        });
+        assertThat(outline.sourceCoverageSlots())
+                .filteredOn(slot -> slot.availability() == SourceCoverageAvailability.SOURCED)
+                .hasSize(13 * 9);
     }
 
     @Test
@@ -253,5 +261,22 @@ class FakeTeachingOutlineModelTest {
                         + "\nVisible facts: "
                         + facts
                         + "\nKeywords: opaque");
+    }
+
+    private PageInput completeVisualPage(int number, String... identifiers) {
+        String terms = String.join("; ", identifiers);
+        String facts = java.util.Arrays.stream(identifiers)
+                .map(identifier -> identifier + ": Complete page-owned fact for " + identifier + ".")
+                .collect(java.util.stream.Collectors.joining("\n"));
+        return new PageInput(
+                number,
+                "[Visual page catalog; verify against page image]\nPrinted terms: "
+                        + terms
+                        + "\nVisible facts:\n"
+                        + facts
+                        + "\nKeywords: opaque",
+                List.of(),
+                List.of(identifiers),
+                true);
     }
 }

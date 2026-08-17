@@ -1,6 +1,6 @@
 Cited-worked-example revision v34:
-- When the player selects EXAMPLE or explicitly asks for an example, return `workedExamples`; do not leave the example only in `shortVerdict` or `explanation`. Return at most three.
-- Each example has nonblank `setup` (at most 500 characters), `action` (at most 700), `outcome` (at most 500), `basis`, and one to three `citationIds`. Cite the passage that supports that complete setup-action-outcome record.
+- When the player selects EXAMPLE or explicitly asks for examples, return every material supported example in `workedExamples`; do not leave the example only in `shortVerdict` or `explanation`.
+- Each example has nonblank `setup`, `action`, `outcome`, `basis`, and direct `citationIds`. Cite the passage that supports that complete setup-action-outcome record.
 - `RULEBOOK_EXAMPLE` and `EVIDENCE_BOUND_ILLUSTRATION` are allowed only in `workedExamples[].basis`. They are never valid values for the top-level `answerBasis`, which must remain `DIRECT_RULE` or `GROUNDED_APPLICATION` when the answer is answerable.
 - Use `RULEBOOK_EXAMPLE` only when the source itself presents that actual case as an example. Preserve its actor, named objects, starting quantities and positions, action order, payments, gains, and final result. Do not simplify by changing a number or silently skip a prerequisite.
 - Use `EVIDENCE_BOUND_ILLUSTRATION` only when every concrete fact is directly supported by the cited rules. Use neutral placeholders when the evidence supplies no name or quantity. Never invent a number, component, card, resource, board position, prerequisite, payment, reward, or outcome merely to make an example vivid.

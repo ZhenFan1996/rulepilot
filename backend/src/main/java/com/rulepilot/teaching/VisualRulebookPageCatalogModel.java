@@ -33,6 +33,28 @@ public interface VisualRulebookPageCatalogModel {
     }
 
     /**
+     * Whether this adapter can run a page-local document transcription before semantic rule grouping. The
+     * transcription is a separate, audited model call: implementations must not hide it inside
+     * {@link #summarizeForTeaching(CatalogRequest)}.
+     */
+    default boolean supportsTeachingPageTranscription(String modelConfigurationOwner) {
+        return false;
+    }
+
+    /**
+     * Copies visible page text without interpreting rules. The returned text is untrusted source input and must stay
+     * bound to the supplied page number when it is passed to the semantic catalog model.
+     */
+    default PageTranscript transcribeTeachingPage(PageImageInput page, String modelConfigurationOwner) {
+        throw new UnsupportedOperationException("visual page transcription is unavailable");
+    }
+
+    default Optional<ModelExecutionIdentity> teachingPageTranscriptionExecutionIdentity(
+            String modelConfigurationOwner) {
+        return Optional.empty();
+    }
+
+    /**
      * Selects one source page that can safely support the first cited lesson section while returning only a compact
      * structural sketch for every other supplied page. This is an optional fast path: implementations that cannot
      * provide exact structured page bindings leave the existing complete Teaching catalog unchanged.
@@ -117,18 +139,44 @@ public interface VisualRulebookPageCatalogModel {
         };
     }
 
+    record PageTranscript(int pageNumber, String text) {
+
+        public PageTranscript {
+            if (pageNumber < 1 || text == null || text.isBlank()) {
+                throw new IllegalArgumentException("visual page transcript is invalid");
+            }
+        }
+    }
+
     record CatalogRequest(
             List<PageImageInput> pages,
             String modelConfigurationOwner,
             String rulebookTitle,
-            PageViewport viewport) {
+            PageViewport viewport,
+            List<PageTranscript> transcripts) {
 
         public CatalogRequest(List<PageImageInput> pages, String modelConfigurationOwner) {
-            this(pages, modelConfigurationOwner, null, null);
+            this(pages, modelConfigurationOwner, null, null, List.of());
         }
 
         public CatalogRequest(List<PageImageInput> pages, String modelConfigurationOwner, String rulebookTitle) {
-            this(pages, modelConfigurationOwner, rulebookTitle, null);
+            this(pages, modelConfigurationOwner, rulebookTitle, null, List.of());
+        }
+
+        public CatalogRequest(
+                List<PageImageInput> pages,
+                String modelConfigurationOwner,
+                String rulebookTitle,
+                PageViewport viewport) {
+            this(pages, modelConfigurationOwner, rulebookTitle, viewport, List.of());
+        }
+
+        public CatalogRequest(
+                List<PageImageInput> pages,
+                String modelConfigurationOwner,
+                String rulebookTitle,
+                List<PageTranscript> transcripts) {
+            this(pages, modelConfigurationOwner, rulebookTitle, null, transcripts);
         }
 
         public CatalogRequest {
@@ -139,13 +187,23 @@ public interface VisualRulebookPageCatalogModel {
             modelConfigurationOwner = modelConfigurationOwner == null || modelConfigurationOwner.isBlank()
                     ? null
                     : modelConfigurationOwner.strip();
-            if (rulebookTitle != null && rulebookTitle.length() > 160) {
-                throw new IllegalArgumentException("visual page catalog rulebook title is invalid");
-            }
             rulebookTitle = rulebookTitle == null || rulebookTitle.isBlank() ? null : rulebookTitle.strip();
             if (viewport != null
                     && (pages.size() != 1 || pages.getFirst().pageNumber() != viewport.pageNumber())) {
                 throw new IllegalArgumentException("visual page viewport does not match its image");
+            }
+            transcripts = transcripts == null ? List.of() : List.copyOf(transcripts);
+            if (!transcripts.isEmpty()) {
+                Set<Integer> pageNumbers = pages.stream()
+                        .map(PageImageInput::pageNumber)
+                        .collect(java.util.stream.Collectors.toUnmodifiableSet());
+                Set<Integer> transcriptPages = transcripts.stream()
+                        .map(PageTranscript::pageNumber)
+                        .collect(java.util.stream.Collectors.toUnmodifiableSet());
+                if (transcriptPages.size() != transcripts.size() || !transcriptPages.equals(pageNumbers)) {
+                    throw new IllegalArgumentException(
+                            "visual page transcripts must bind every requested page exactly once");
+                }
             }
         }
     }
@@ -186,25 +244,21 @@ public interface VisualRulebookPageCatalogModel {
      */
     record SourceDependency(String title, List<String> missingCoverageTags) {
 
-        private static final Set<String> ALLOWED_MISSING_COVERAGE =
-                Set.of("setup", "core_loop", "end", "scoring");
-
         public SourceDependency {
-            if (title == null || title.isBlank() || title.length() > 160
-                    || missingCoverageTags == null || missingCoverageTags.size() > ALLOWED_MISSING_COVERAGE.size()
-                    || missingCoverageTags.stream()
-                            .anyMatch(tag -> tag == null || !ALLOWED_MISSING_COVERAGE.contains(tag))) {
+            if (title == null || title.isBlank()
+                    || missingCoverageTags == null
+                    || missingCoverageTags.stream().anyMatch(tag -> tag == null || tag.isBlank())) {
                 throw new IllegalArgumentException("visual teaching source dependency is invalid");
             }
-            title = title.strip().replaceAll("\\s+", " ");
-            missingCoverageTags = missingCoverageTags.stream().distinct().toList();
+            title = title.strip();
+            missingCoverageTags = missingCoverageTags.stream().map(String::strip).distinct().toList();
         }
     }
 
     /** Source-derived semantic role for one literal rule-group identifier on a progressive visual page. */
     record RuleGroupCoverage(String identifier, SourceCoverageRole role) {
         public RuleGroupCoverage {
-            if (identifier == null || identifier.isBlank() || identifier.length() > 120 || role == null) {
+            if (identifier == null || identifier.isBlank() || role == null) {
                 throw new IllegalArgumentException("visual teaching rule-group coverage is invalid");
             }
             identifier = identifier.strip();
@@ -221,56 +275,25 @@ public interface VisualRulebookPageCatalogModel {
             List<SourceDependency> sourceDependencies,
             List<RuleGroupCoverage> ruleGroupCoverage) {
 
-        private static final Set<String> ALLOWED_COVERAGE_TAGS =
-                Set.of("setup", "core_loop", "end", "scoring", "source_coverage");
-
         public TeachingPageSketch {
             if (pageNumber < 1 || role == null
-                    || (visibleHeading != null && visibleHeading.length() > 160)
-                    || visibleTerms == null || visibleTerms.size() > 8
-                    || visibleTerms.stream().anyMatch(term -> term == null || term.isBlank() || term.length() > 120)
-                    || coverageTags == null || coverageTags.size() > ALLOWED_COVERAGE_TAGS.size()
-                    || coverageTags.stream().anyMatch(tag -> tag == null || !ALLOWED_COVERAGE_TAGS.contains(tag))
-                    || sourceDependencies == null || sourceDependencies.size() > 4
-                    || ruleGroupCoverage == null || ruleGroupCoverage.size() > 8
+                    || visibleTerms == null
+                    || visibleTerms.stream().anyMatch(term -> term == null || term.isBlank())
+                    || coverageTags == null
+                    || coverageTags.stream().anyMatch(tag -> tag == null || tag.isBlank())
+                    || sourceDependencies == null
+                    || sourceDependencies.stream().anyMatch(java.util.Objects::isNull)
+                    || ruleGroupCoverage == null
                     || ruleGroupCoverage.stream().anyMatch(java.util.Objects::isNull)) {
                 throw new IllegalArgumentException("visual teaching page sketch is invalid");
             }
             visibleHeading = visibleHeading == null ? "" : visibleHeading.strip();
             visibleTerms = visibleTerms.stream().map(String::strip).distinct().toList();
-            coverageTags = coverageTags.stream().distinct().toList();
+            coverageTags = coverageTags.stream().map(String::strip).distinct().toList();
             sourceDependencies = sourceDependencies.stream().distinct().toList();
             ruleGroupCoverage = ruleGroupCoverage.stream().distinct().toList();
-            if (role != TeachingPageRole.GAMEPLAY_RULES && !coverageTags.isEmpty()) {
-                throw new IllegalArgumentException("non-gameplay visual pages cannot claim teaching coverage");
-            }
-            if (role != TeachingPageRole.GAMEPLAY_RULES && ruleGroupInventoryComplete) {
-                throw new IllegalArgumentException("non-gameplay visual pages cannot complete a gameplay inventory");
-            }
-            if (role == TeachingPageRole.GAMEPLAY_RULES && coverageTags.isEmpty()) {
-                throw new IllegalArgumentException("gameplay visual pages need a bounded teaching role");
-            }
-            if (role == TeachingPageRole.GAMEPLAY_RULES
-                    && ruleGroupInventoryComplete
-                    && visibleTerms.isEmpty()) {
-                throw new IllegalArgumentException("complete gameplay inventory cannot be empty");
-            }
             if (role != TeachingPageRole.GAMEPLAY_RULES && !ruleGroupCoverage.isEmpty()) {
                 throw new IllegalArgumentException("non-gameplay visual pages cannot own rule-group coverage");
-            }
-            if (!ruleGroupCoverage.isEmpty()) {
-                Set<String> visibleIdentities = visibleTerms.stream()
-                        .map(VisualSourceRuleGroupLedger::identity)
-                        .collect(java.util.stream.Collectors.toUnmodifiableSet());
-                Set<String> coveredIdentities = ruleGroupCoverage.stream()
-                        .map(RuleGroupCoverage::identifier)
-                        .map(VisualSourceRuleGroupLedger::identity)
-                        .collect(java.util.stream.Collectors.toUnmodifiableSet());
-                if (coveredIdentities.size() != ruleGroupCoverage.size()
-                        || !coveredIdentities.equals(visibleIdentities)) {
-                    throw new IllegalArgumentException(
-                            "visual teaching rule-group coverage must classify every visible term exactly once");
-                }
             }
         }
 
@@ -361,23 +384,19 @@ public interface VisualRulebookPageCatalogModel {
 
     record ModelExecutionIdentity(String provider, String model) {
         public ModelExecutionIdentity {
-            provider = auditValue(provider, "provider", 40);
-            model = auditValue(model, "model", 200);
+            provider = auditValue(provider, "provider");
+            model = auditValue(model, "model");
         }
 
         public String auditLabel() {
             return provider + "/" + model;
         }
 
-        private static String auditValue(String value, String label, int maxLength) {
+        private static String auditValue(String value, String label) {
             if (value == null || value.isBlank()) {
                 throw new IllegalArgumentException("visual model " + label + " is required");
             }
-            String normalized = value.strip().replaceAll("\\s+", " ");
-            if (normalized.length() > maxLength) {
-                throw new IllegalArgumentException("visual model " + label + " is too long");
-            }
-            return normalized;
+            return value.strip();
         }
     }
 
@@ -390,7 +409,7 @@ public interface VisualRulebookPageCatalogModel {
                 throw new IllegalArgumentException("visual identifier localization request is invalid");
             }
             identifiers = identifiers.stream().map(String::strip).distinct().toList();
-            if (identifiers.size() < 4 || identifiers.stream().anyMatch(value -> value.isBlank() || value.length() > 24)) {
+            if (identifiers.size() < 4 || identifiers.stream().anyMatch(String::isBlank)) {
                 throw new IllegalArgumentException("visual identifiers are invalid");
             }
             modelConfigurationOwner = modelConfigurationOwner == null || modelConfigurationOwner.isBlank()
@@ -407,7 +426,7 @@ public interface VisualRulebookPageCatalogModel {
 
     record IdentifierLocation(String identifier, int x, int y, int width, int height) {
         public IdentifierLocation {
-            if (identifier == null || identifier.isBlank() || identifier.length() > 24
+            if (identifier == null || identifier.isBlank()
                     || x < 0 || y < 0 || width < 4 || height < 4
                     || x + width > 1_000 || y + height > 1_000) {
                 throw new IllegalArgumentException("visual identifier location is invalid");
@@ -418,7 +437,7 @@ public interface VisualRulebookPageCatalogModel {
 
     record IdentifierCellInput(String identifier, PageImageInput image) {
         public IdentifierCellInput {
-            if (identifier == null || identifier.isBlank() || identifier.length() > 24 || image == null) {
+            if (identifier == null || identifier.isBlank() || image == null) {
                 throw new IllegalArgumentException("visual identifier cell is invalid");
             }
             identifier = identifier.strip();
@@ -447,7 +466,7 @@ public interface VisualRulebookPageCatalogModel {
 
     record IdentifierReferencePage(PageImageInput image, String evidenceText) {
         public IdentifierReferencePage {
-            if (image == null || evidenceText == null || evidenceText.isBlank() || evidenceText.length() > 1_600) {
+            if (image == null || evidenceText == null || evidenceText.isBlank()) {
                 throw new IllegalArgumentException("visual identifier reference page is invalid");
             }
             evidenceText = evidenceText.strip();
@@ -462,12 +481,11 @@ public interface VisualRulebookPageCatalogModel {
             String modelConfigurationOwner) {
         public IdentifierCellVerificationRequest {
             if (cell == null || referencePage == null || allowedLabels == null || allowedLabels.size() < 2
-                    || allowedLabels.size() > 12 || draftSummary == null || draftSummary.isBlank()
-                    || draftSummary.length() > 800) {
+                    || draftSummary == null || draftSummary.isBlank()) {
                 throw new IllegalArgumentException("identifier cell verification request is invalid");
             }
             allowedLabels = allowedLabels.stream().map(String::strip).filter(value -> !value.isBlank()).distinct().toList();
-            if (allowedLabels.size() < 2 || allowedLabels.stream().anyMatch(value -> value.length() > 60)) {
+            if (allowedLabels.size() < 2) {
                 throw new IllegalArgumentException("identifier cell verification labels are invalid");
             }
             draftSummary = draftSummary.strip();
@@ -478,10 +496,10 @@ public interface VisualRulebookPageCatalogModel {
 
     record IdentifierCellVerificationDraft(String identifier, String matchedLabel, int quantity, String factualSummary) {
         public IdentifierCellVerificationDraft {
-            if (identifier == null || identifier.isBlank() || identifier.length() > 24
-                    || matchedLabel == null || matchedLabel.isBlank() || matchedLabel.length() > 60
-                    || quantity < 0 || quantity > 99
-                    || factualSummary == null || factualSummary.isBlank() || factualSummary.length() > 800) {
+            if (identifier == null || identifier.isBlank()
+                    || matchedLabel == null || matchedLabel.isBlank()
+                    || quantity < 0
+                    || factualSummary == null || factualSummary.isBlank()) {
                 throw new IllegalArgumentException("identifier cell verification draft is invalid");
             }
             identifier = identifier.strip();
@@ -499,8 +517,8 @@ public interface VisualRulebookPageCatalogModel {
 
     record IdentifierCellFact(String identifier, String factualSummary) {
         public IdentifierCellFact {
-            if (identifier == null || identifier.isBlank() || identifier.length() > 24
-                    || factualSummary == null || factualSummary.isBlank() || factualSummary.length() > 800) {
+            if (identifier == null || identifier.isBlank()
+                    || factualSummary == null || factualSummary.isBlank()) {
                 throw new IllegalArgumentException("visual identifier cell fact is invalid");
             }
             identifier = identifier.strip();
@@ -615,9 +633,6 @@ public interface VisualRulebookPageCatalogModel {
             }
             if (!present && (x != 0 || y != 0 || width != 0 || height != 0)) {
                 throw new IllegalArgumentException("absent visual icon localization must not have a rectangle");
-            }
-            if (observedLabel != null && observedLabel.length() > 80) {
-                throw new IllegalArgumentException("visual icon localization label is invalid");
             }
             observedLabel = present && observedLabel != null ? observedLabel.strip() : "";
         }
@@ -747,19 +762,16 @@ public interface VisualRulebookPageCatalogModel {
 
         public PageSummary {
             if (pageNumber < 1
-                    || (printedTerms != null && printedTerms.length() > 1_600)
-                    || (factualSummary != null && factualSummary.length() > 4_000)
-                    || (keywords != null && (keywords.size() > 16
-                            || keywords.stream().anyMatch(keyword -> keyword == null || keyword.isBlank() || keyword.length() > 120)))
-                    || (visualAnchors != null && visualAnchors.size() > 8)
-                    || (iconOccurrences != null && iconOccurrences.size() > 32)
+                    || (keywords != null
+                            && keywords.stream().anyMatch(keyword -> keyword == null || keyword.isBlank()))
+                    || (visualAnchors != null && visualAnchors.stream().anyMatch(java.util.Objects::isNull))
+                    || (iconOccurrences != null && iconOccurrences.stream().anyMatch(java.util.Objects::isNull))
                     || sourceDependencies == null
-                    || sourceDependencies.size() > 4
-                    || ruleGroupIdentifiers == null || ruleGroupIdentifiers.size() > 16
+                    || sourceDependencies.stream().anyMatch(java.util.Objects::isNull)
+                    || ruleGroupIdentifiers == null
                     || ruleGroupIdentifiers.stream()
-                            .anyMatch(identifier -> identifier == null || identifier.isBlank() || identifier.length() > 120)
+                            .anyMatch(identifier -> identifier == null || identifier.isBlank())
                     || quantityObservations == null
-                    || quantityObservations.size() > VisualQuantityObservation.MAX_OBSERVATIONS_PER_PAGE
                     || quantityObservations.stream().anyMatch(java.util.Objects::isNull)) {
                 throw new IllegalArgumentException("visual page summary is invalid");
             }

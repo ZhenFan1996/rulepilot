@@ -12,16 +12,12 @@ import java.util.List;
 /** Validates the schema and evidence scope of the model-selected decision table. */
 final class AnswerDecisionTableResolver {
 
-    private static final int MAX_BRANCHES = 6;
-
     List<RuleDecisionBranch> resolve(ModelRequest request, ModelDraft draft) {
         if (request == null || draft == null) throw new IllegalArgumentException("decision table input is invalid");
         List<DecisionBranchRequest> proposed = draft.decisionBranches();
         AnswerStructuredAidPolicy.validateSelection(
                 request, AnswerAid.DECISION_TABLE, proposed.isEmpty(), "decision table");
         if (proposed.isEmpty()) return List.of();
-        if (proposed.size() > MAX_BRANCHES) throw new IllegalArgumentException("too many decision branches");
-
         LinkedHashSet<String> conditions = new LinkedHashSet<>();
         return proposed.stream()
                 .map(branch -> resolveOne(request, draft, branch))
@@ -40,8 +36,8 @@ final class AnswerDecisionTableResolver {
     private RuleDecisionBranch resolveOne(ModelRequest modelRequest, ModelDraft draft, DecisionBranchRequest item) {
         if (item == null) throw new IllegalArgumentException("decision branch is null");
         return new RuleDecisionBranch(
-                AnswerStructuredAidPolicy.requiredText(item.condition(), 300, "decision branch condition"),
-                AnswerStructuredAidPolicy.requiredText(item.outcome(), 500, "decision branch outcome"),
+                AnswerStructuredAidPolicy.requiredText(item.condition(), "decision branch condition"),
+                AnswerStructuredAidPolicy.requiredText(item.outcome(), "decision branch outcome"),
                 AnswerStructuredAidPolicy.enumValue(item.basis(), DecisionBranchBasis.class, "decision branch basis"),
                 AnswerStructuredAidPolicy.citations(
                         modelRequest, draft, item.citationIds(), "decision branch"));

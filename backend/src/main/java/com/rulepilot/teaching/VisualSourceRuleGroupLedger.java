@@ -9,12 +9,8 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 
-/** Extracts the bounded, page-owned rule-group identifiers already admitted by a visual page catalog. */
+/** Extracts page-owned rule-group identifiers already admitted by a visual page catalog. */
 public final class VisualSourceRuleGroupLedger {
-
-    private static final int PREFERRED_IDENTIFIERS_PER_PAGE = 8;
-    private static final int MAX_PRINTED_TERMS_PER_PAGE = 12;
-    private static final int MAX_IDENTIFIER_CHARACTERS = 160;
 
     private VisualSourceRuleGroupLedger() {}
 
@@ -25,15 +21,12 @@ public final class VisualSourceRuleGroupLedger {
         LinkedHashSet<String> identifiers = new LinkedHashSet<>();
         printedTerms(page.text()).stream()
                 .filter(value -> !describesSourceDependency(page, value))
-                .map(VisualSourceRuleGroupLedger::boundedIdentifier)
+                .map(String::strip)
                 .forEach(identifiers::add);
-        if (identifiers.size() < PREFERRED_IDENTIFIERS_PER_PAGE) {
-            visibleFacts(page.text()).stream()
-                    .filter(value -> !describesSourceDependency(page, value))
-                    .map(VisualSourceRuleGroupLedger::boundedIdentifier)
-                    .limit(PREFERRED_IDENTIFIERS_PER_PAGE - identifiers.size())
-                    .forEach(identifiers::add);
-        }
+        visibleFacts(page.text()).stream()
+                .filter(value -> !describesSourceDependency(page, value))
+                .map(String::strip)
+                .forEach(identifiers::add);
         return identifiers.stream().filter(value -> !value.isBlank()).toList();
     }
 
@@ -84,14 +77,14 @@ public final class VisualSourceRuleGroupLedger {
     }
 
     private static List<String> printedTerms(String text) {
-        return fieldValues(text, "Printed terms:", ";", MAX_PRINTED_TERMS_PER_PAGE);
+        return fieldValues(text, "Printed terms:", ";");
     }
 
     private static List<String> visibleFacts(String text) {
-        return fieldValues(text, "Visible facts:", "\n", PREFERRED_IDENTIFIERS_PER_PAGE);
+        return fieldValues(text, "Visible facts:", "\n");
     }
 
-    private static List<String> fieldValues(String text, String marker, String separator, int maximum) {
+    private static List<String> fieldValues(String text, String marker, String separator) {
         List<String> values = new ArrayList<>();
         boolean reading = false;
         for (String rawLine : text.split("\\R")) {
@@ -106,9 +99,7 @@ public final class VisualSourceRuleGroupLedger {
             Arrays.stream(line.split(separator))
                     .map(String::strip)
                     .filter(value -> !value.isBlank())
-                    .limit(maximum - values.size())
                     .forEach(values::add);
-            if (values.size() == maximum) break;
         }
         return List.copyOf(values);
     }
@@ -130,12 +121,5 @@ public final class VisualSourceRuleGroupLedger {
         return line.startsWith("Printed terms:")
                 || line.startsWith("Visible facts:")
                 || line.startsWith("Keywords:");
-    }
-
-    private static String boundedIdentifier(String value) {
-        String normalized = value.replaceAll("\\s+", " ").strip();
-        return normalized.length() <= MAX_IDENTIFIER_CHARACTERS
-                ? normalized
-                : normalized.substring(0, MAX_IDENTIFIER_CHARACTERS);
     }
 }

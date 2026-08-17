@@ -48,6 +48,22 @@ class TeachingOutlineImagePreparerTest {
     }
 
     @Test
+    void enlargesSmallImageGalleryPagesOnlyForRuleTranscription() throws Exception {
+        BufferedImage source = new BufferedImage(595, 793, BufferedImage.TYPE_INT_RGB);
+        ByteArrayOutputStream encoded = new ByteArrayOutputStream();
+        ImageIO.write(source, "png", encoded);
+
+        PageImageInput prepared = preparer.prepareForRuleTranscription(
+                new PageImageInput(16, "image/png", encoded.toByteArray()));
+        BufferedImage result = ImageIO.read(new ByteArrayInputStream(prepared.content()));
+
+        assertThat(prepared.pageNumber()).isEqualTo(16);
+        assertThat(prepared.mediaType()).isEqualTo("image/jpeg");
+        assertThat(result.getWidth()).isEqualTo(1_190);
+        assertThat(result.getHeight()).isEqualTo(1_586);
+    }
+
+    @Test
     void reducesLargeLessonEvidencePagesBeforeVisionModelUse() throws Exception {
         BufferedImage source = new BufferedImage(1800, 2400, BufferedImage.TYPE_INT_RGB);
         ByteArrayOutputStream encoded = new ByteArrayOutputStream();

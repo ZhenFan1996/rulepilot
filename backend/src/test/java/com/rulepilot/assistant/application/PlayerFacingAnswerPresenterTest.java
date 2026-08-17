@@ -107,7 +107,7 @@ class PlayerFacingAnswerPresenterTest {
     }
 
     @Test
-    void dropsOnlyAnUnsafeOptionalDetailInsteadOfReplacingTheValidatedCoreAnswer() {
+    void preservesAnOptionalDetailThatOnlyContainsOrdinaryProtocolLikeVocabulary() {
         UUID versionId = UUID.randomUUID();
         UUID chunkId = UUID.randomUUID();
         StructuredRuleAnswer answer = new StructuredRuleAnswer(
@@ -137,8 +137,40 @@ class PlayerFacingAnswerPresenterTest {
         assertThat(presented.status()).isEqualTo(AnswerStatus.ANSWERED);
         assertThat(presented.shortVerdict()).isEqualTo("Move one space.");
         assertThat(presented.explanation()).isEqualTo("The cited rule directly allows one space of movement.");
-        assertThat(presented.walkthroughSteps()).isEmpty();
-        assertThat(presented.toString()).doesNotContain("assistantRunId", "Internal protocol");
+        assertThat(presented.walkthroughSteps()).singleElement().satisfies(step -> {
+            assertThat(step.instruction()).isEqualTo("Call assistantRunId before moving.");
+            assertThat(step.explanation()).isEqualTo("Internal protocol detail.");
+        });
+    }
+
+    @Test
+    void preservesNaturalRulebookVocabularyInCoreAndCitationInsteadOfTreatingItAsProtocol() {
+        UUID versionId = UUID.randomUUID();
+        UUID chunkId = UUID.randomUUID();
+        String verdict = "Take one piece of ore.";
+        String explanation = "The cited collection rule gives that amount.";
+        String excerpt = "Take one ore chunk from the supply.";
+        StructuredRuleAnswer answer = new StructuredRuleAnswer(
+                versionId,
+                AnswerStatus.ANSWERED,
+                verdict,
+                explanation,
+                List.of(new RuleCitation(chunkId, versionId, "COLLECTION", "Collect ore", excerpt, 4, 4)),
+                List.of(),
+                AnswerConfidence.HIGH,
+                AnswerBasis.DIRECT_RULE,
+                false,
+                null,
+                null,
+                null);
+
+        var presented = PlayerFacingAnswerPresenter.present(answer, "How much ore do I take?", PlayerLocale.EN);
+
+        assertThat(presented.status()).isEqualTo(AnswerStatus.ANSWERED);
+        assertThat(presented.shortVerdict()).isEqualTo(verdict);
+        assertThat(presented.explanation()).isEqualTo(explanation);
+        assertThat(presented.citations()).singleElement().satisfies(citation ->
+                assertThat(citation.excerpt()).isEqualTo(excerpt));
     }
 
     @Test
@@ -224,7 +256,7 @@ class PlayerFacingAnswerPresenterTest {
     }
 
     @Test
-    void replacesSchemaDiagnosticsAndNeverCopiesProtocolIdentifiersIntoARecoveryDraft() {
+    void preservesModelClarificationAndThePlayersOwnRecoveryDraftWithoutKeywordCensorship() {
         UUID internalId = UUID.randomUUID();
         StructuredRuleAnswer failure = new StructuredRuleAnswer(
                 UUID.randomUUID(),
@@ -257,13 +289,10 @@ class PlayerFacingAnswerPresenterTest {
                 "Retry assistantRunId " + internalId,
                 PlayerLocale.EN);
 
-        assertThat(clarification.shortVerdict())
-                .isEqualTo("I couldn't verify a reliable answer from this attempt.");
-        assertThat(clarification.recovery().message()).doesNotContainIgnoringCase("schema");
-        assertThat(clarification.toString())
-                .doesNotContain("CLARIFICATION_REQUIRED", "repairRuleSituationCheck", "Schema output");
-        assertThat(invalid.recovery().draft()).isEmpty();
-        assertThat(invalid.toString()).doesNotContain(internalId.toString(), "assistantRunId");
+        assertThat(clarification.status()).isEqualTo(AnswerStatus.CLARIFICATION_REQUIRED);
+        assertThat(clarification.clarification())
+                .isEqualTo("Schema output validation failed; call repairRuleSituationCheck.");
+        assertThat(invalid.recovery().draft()).isEqualTo("Retry assistantRunId " + internalId);
     }
 
     @Test
@@ -289,7 +318,7 @@ class PlayerFacingAnswerPresenterTest {
     }
 
     @Test
-    void rejectsChinesePromptAndModelDiagnosticsAtThePublicationBoundary() {
+    void preservesAChineseClarificationWithoutTryingToClassifyItsVocabulary() {
         StructuredRuleAnswer leaked = new StructuredRuleAnswer(
                 UUID.randomUUID(),
                 AnswerStatus.CLARIFICATION_REQUIRED,
@@ -306,9 +335,7 @@ class PlayerFacingAnswerPresenterTest {
         var presented = PlayerFacingAnswerPresenter.present(
                 leaked, "青色立方体什么时候结算？", PlayerLocale.ZH_CN);
 
-        assertThat(presented.status()).isEqualTo(AnswerStatus.INVALID_MODEL_OUTPUT);
-        assertThat(presented.shortVerdict()).isEqualTo("这次结果没有通过可靠性核对。");
-        assertThat(presented.recovery().message()).doesNotContain("模型输出", "系统提示词");
-        assertThat(presented.toString()).doesNotContain("模型输出", "系统提示词");
+        assertThat(presented.status()).isEqualTo(AnswerStatus.CLARIFICATION_REQUIRED);
+        assertThat(presented.clarification()).isEqualTo("模型输出校验失败，请重试系统提示词。 ");
     }
 }

@@ -37,13 +37,13 @@ class AnswerRuleOptionResolverTest {
     }
 
     @Test
-    void routesByAcceptedAidAndRequiresTwoToEightOptions() {
+    void routesByAcceptedAidAndPreservesEvenASingleSupportedOption() {
         assertThat(resolver.requiresRuleOptions(request(AnswerAid.OPTIONS))).isTrue();
         assertThat(resolver.requiresRuleOptions(request(AnswerAid.NONE))).isFalse();
         assertThat(resolver.resolve(request(AnswerAid.OPTIONS), draft(List.of()))).isEmpty();
-        assertThatThrownBy(() -> resolver.resolve(
+        assertThat(resolver.resolve(
                         request(AnswerAid.OPTIONS), draft(List.of(option("Only", "Available", "Take it")))))
-                .hasMessageContaining("count");
+                .singleElement().extracting(result -> result.optionName()).isEqualTo("Only");
         assertThatThrownBy(() -> resolver.resolve(
                         request(AnswerAid.NONE),
                         draft(List.of(option("A", "Available", "Take A"), option("B", "Available", "Take B")))))

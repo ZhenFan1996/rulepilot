@@ -120,7 +120,7 @@ final class VisualRulebookCatalogPolicy {
                 summary.printedTerms(),
                 VisualQuantityObservation.appendEvidence(
                         summary.factualSummary(), summary.quantityObservations()),
-                summary.keywords().stream().distinct().limit(12).toList(),
+                summary.keywords().stream().distinct().toList(),
                 summary.visualAnchors(),
                 IconEvidencePolicy.sanitize(summary.iconOccurrences()),
                 summary.iconInventoryComplete(),
@@ -170,23 +170,22 @@ final class VisualRulebookCatalogPolicy {
     }
 
     /**
-     * The startup contract contains only bounded page facts, so a short rulebook can be read in one multi-image
-     * provider round trip. Longer documents remain bounded and independently retryable, while requests stay serial
-     * in production to respect the provider's effective concurrency limit.
+     * The Teaching ledger is deliberately complete, not a thumbnail summary: one dense page may contain sixteen
+     * rule groups plus quantity observations. Keep that output budget page-local from the first request. Sending the
+     * transport's eight-image maximum here made a valid provider response exceed its completion budget, after which
+     * the caller had to repeat the same work as single-page recovery requests. Page-local calls are independently
+     * retryable, preserve every successful page, and make real progress visible while the rulebook is read.
      */
     static List<List<Integer>> teachingStartupBatches(List<Integer> pages) {
-        java.util.ArrayList<List<Integer>> batches = new java.util.ArrayList<>();
-        int batchSize = com.rulepilot.teaching.VisualRulebookPageCatalogModel.MAX_PAGES_PER_REQUEST;
-        for (int start = 0; start < pages.size(); start += batchSize) {
-            batches.add(List.copyOf(pages.subList(start, Math.min(start + batchSize, pages.size()))));
-        }
-        return List.copyOf(batches);
+        return singlePageBatches(pages);
     }
 
     /** Model output cannot promote the bounded Teaching ledger into a completed icon or spatial audit. */
     static com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary teachingStartupFact(
             com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary summary) {
-        summary = requireCompleteRuleLedger(summary);
+        if (summary.ruleGroupInventoryComplete()) {
+            validateRuleGroupFactBindings(summary.ruleGroupIdentifiers(), summary.factualSummary());
+        }
         return new com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary(
                 summary.pageNumber(),
                 summary.printedTerms(),
@@ -197,18 +196,8 @@ final class VisualRulebookCatalogPolicy {
                 false,
                 summary.sourceDependencies(),
                 summary.ruleGroupIdentifiers(),
-                true,
+                summary.ruleGroupInventoryComplete(),
                 summary.quantityObservations());
-    }
-
-    static com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary requireCompleteRuleLedger(
-            com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary summary) {
-        if (!summary.ruleGroupInventoryComplete()) {
-            throw new IllegalArgumentException(
-                    "visual teaching page did not inventory every readable gameplay rule group");
-        }
-        validateRuleGroupFactBindings(summary.ruleGroupIdentifiers(), summary.factualSummary());
-        return summary;
     }
 
     /**
@@ -240,7 +229,6 @@ final class VisualRulebookCatalogPolicy {
             throw new IllegalArgumentException("icon tile audit page does not match its full-page summary");
         }
         Map<String, IconOccurrence> icons = mergedIcons(fullPage, tileAudit);
-        boolean withinLimit = icons.size() <= 32;
         // The four-tile pass is authorized to complete the icon inventory only. It has no whole-page rule-group
         // contract, so even an overreaching model response cannot promote partial rule observations to completeness.
         List<String> ruleGroups = fullPage.ruleGroupIdentifiers();
@@ -251,25 +239,23 @@ final class VisualRulebookCatalogPolicy {
                 && !fullPageOwnsCompleteFacts
                 && hasRuleGroupFactBindings(ruleGroups, tileAudit.factualSummary());
         String mergedFacts = fullPageOwnsCompleteFacts || (ruleGroupsComplete && !laterObservationRepairsCompleteFacts)
-                ? mergeBoundedLines(fullPage.factualSummary(), tileAudit.factualSummary(), 4_000, "\n")
-                : mergeBoundedLines(tileAudit.factualSummary(), fullPage.factualSummary(), 4_000, "\n");
+                ? mergeLines(fullPage.factualSummary(), tileAudit.factualSummary(), "\n")
+                : mergeLines(tileAudit.factualSummary(), fullPage.factualSummary(), "\n");
         if (ruleGroupsComplete) {
             validateRuleGroupFactBindings(ruleGroups, mergedFacts);
         }
         return new com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary(
                 fullPage.pageNumber(),
-                mergeBoundedLines(fullPage.printedTerms(), tileAudit.printedTerms(), 1_600, "; "),
+                mergeLines(fullPage.printedTerms(), tileAudit.printedTerms(), "; "),
                 mergedFacts,
                 Stream.concat(fullPage.keywords().stream(), tileAudit.keywords().stream())
                         .distinct()
-                        .limit(12)
                         .toList(),
                 fullPage.visualAnchors().isEmpty() ? tileAudit.visualAnchors() : fullPage.visualAnchors(),
-                icons.values().stream().limit(32).toList(),
-                tileAudit.iconInventoryComplete() && withinLimit,
+                List.copyOf(icons.values()),
+                tileAudit.iconInventoryComplete(),
                 Stream.concat(fullPage.sourceDependencies().stream(), tileAudit.sourceDependencies().stream())
                         .distinct()
-                        .limit(4)
                         .toList(),
                 ruleGroups,
                 ruleGroupsComplete,
@@ -292,7 +278,6 @@ final class VisualRulebookCatalogPolicy {
         }
         validateRuleGroupFactBindings(observation.ruleGroupIdentifiers(), observation.factualSummary());
         Map<String, IconOccurrence> icons = mergedIcons(observation, existing);
-        boolean withinLimit = icons.size() <= 32;
         return new com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary(
                 observation.pageNumber(),
                 observation.printedTerms(),
@@ -301,8 +286,8 @@ final class VisualRulebookCatalogPolicy {
                 observation.visualAnchors().isEmpty()
                         ? existing.visualAnchors()
                         : observation.visualAnchors(),
-                icons.values().stream().limit(32).toList(),
-                (observation.iconInventoryComplete() || existing.iconInventoryComplete()) && withinLimit,
+                List.copyOf(icons.values()),
+                observation.iconInventoryComplete() || existing.iconInventoryComplete(),
                 observation.sourceDependencies(),
                 observation.ruleGroupIdentifiers(),
                 true,
@@ -345,7 +330,6 @@ final class VisualRulebookCatalogPolicy {
                 .filter(observation -> identities.contains(
                         VisualSourceRuleGroupLedger.identity(observation.ruleGroupIdentifier())))
                 .distinct()
-                .limit(VisualQuantityObservation.MAX_OBSERVATIONS_PER_PAGE)
                 .toList();
     }
 
@@ -374,21 +358,16 @@ final class VisualRulebookCatalogPolicy {
         return VisualSourceRuleGroupLedger.hasExactFactBindings(identifiers, factualSummary);
     }
 
-    private static String mergeBoundedLines(String first, String second, int maxLength, String separator) {
-        LinkedHashSet<String> values = Stream.of(first, second)
+    private static String mergeLines(String first, String second, String separator) {
+        Stream<String> values = Stream.of(first, second)
                 .filter(java.util.Objects::nonNull)
-                .flatMap(value -> java.util.Arrays.stream(value.split(separator.equals("\n") ? "\\R+" : ";")))
+                .flatMap(value -> separator.equals("; ")
+                        ? java.util.Arrays.stream(value.split(";"))
+                        : Stream.of(value))
                 .map(String::strip)
                 .filter(value -> !value.isBlank())
-                .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
-        StringBuilder merged = new StringBuilder();
-        for (String value : values) {
-            int remaining = maxLength - merged.length() - (merged.isEmpty() ? 0 : separator.length());
-            if (remaining <= 0) break;
-            if (!merged.isEmpty()) merged.append(separator);
-            merged.append(value, 0, Math.min(value.length(), remaining));
-        }
-        return merged.toString();
+                .distinct();
+        return values.collect(java.util.stream.Collectors.joining(separator));
     }
 
     /**
