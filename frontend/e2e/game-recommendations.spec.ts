@@ -547,7 +547,7 @@ test('acknowledges a recommendation turn immediately and exposes honest remainin
   await expect(page.getByText('想找一款有探索感、但规则不太重的游戏')).toBeVisible()
 })
 
-test('keeps a pasted 501-character recommendation intact and sends exactly 500 characters', async ({ page }) => {
+test('keeps and sends a pasted 501-character recommendation intact', async ({ page }) => {
   await mockPublicDiscovery(page, true)
   await page.route('**/api/v1/bgg/recommendation-agent/session', route => route.fulfill({ status: 204 }))
   let submittedTurns = 0
@@ -565,16 +565,6 @@ test('keeps a pasted 501-character recommendation intact and sends exactly 500 c
   await composer.fill(overLimit)
 
   await expect(composer).toHaveValue(overLimit)
-  await expect(page.getByText('请删减 1 个字后再发送')).toBeVisible()
-  await expect(page.getByText('501 / 500')).toBeVisible()
-  await expect(send).toBeDisabled()
-  const form = page.locator('form').filter({ has: composer })
-  await form.evaluate(element => element.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
-  expect(submittedTurns).toBe(0)
-
-  const accepted = '😀'.repeat(500)
-  await composer.fill(accepted)
-  await expect(page.getByText('500 / 500')).toBeVisible()
   await expect(send).toBeEnabled()
   const acceptedRequest = page.waitForRequest((request) => {
     const url = new URL(request.url())
@@ -583,7 +573,7 @@ test('keeps a pasted 501-character recommendation intact and sends exactly 500 c
   await send.click()
   const request = await acceptedRequest
 
-  expect((request.postDataJSON() as { message: string }).message).toBe(accepted)
+  expect((request.postDataJSON() as { message: string }).message).toBe(overLimit)
   expect(submittedTurns).toBe(1)
 })
 

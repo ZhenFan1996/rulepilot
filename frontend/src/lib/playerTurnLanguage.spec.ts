@@ -14,8 +14,10 @@ describe('playerTurnLocale', () => {
     expect(playerTurnLocale(text, fallback)).toBe(expected)
   })
 
-  it('uses the UI locale only for a title or otherwise ambiguous fragment', () => {
+  it('uses the UI locale for a title or otherwise ambiguous fragment without a vocabulary list', () => {
     expect(playerTurnLocale('Concordia', 'zh-CN')).toBe('zh-CN')
     expect(playerTurnLocale('Concordia', 'en')).toBe('en')
+    expect(playerTurnLocale('Mosaic Field', 'zh-CN')).toBe('zh-CN')
+    expect(playerTurnLocale('Castles of Burgundy', 'zh-CN')).toBe('zh-CN')
   })
 })
