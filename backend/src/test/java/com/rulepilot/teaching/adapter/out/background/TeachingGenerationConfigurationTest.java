@@ -110,6 +110,32 @@ class TeachingGenerationConfigurationTest {
     }
 
     @Test
+    void startsTenIndependentVisualPageRequestsWithoutQueueing() throws InterruptedException {
+        var executor = new TeachingGenerationConfiguration().visualLocationExecutor(10);
+        var allStarted = new CountDownLatch(10);
+        var release = new CountDownLatch(1);
+        executor.initialize();
+
+        try {
+            for (int index = 0; index < 10; index++) {
+                executor.execute(() -> {
+                    allStarted.countDown();
+                    try {
+                        release.await(3, TimeUnit.SECONDS);
+                    } catch (InterruptedException interrupted) {
+                        Thread.currentThread().interrupt();
+                    }
+                });
+            }
+
+            assertThat(allStarted.await(1, TimeUnit.SECONDS)).isTrue();
+        } finally {
+            release.countDown();
+            executor.shutdown();
+        }
+    }
+
+    @Test
     void doesNotCreateTeachingExecutorsInThePdfWorkerRuntime() {
         contextRunner
                 .withPropertyValues("rulepilot.runtime.api-enabled=false")

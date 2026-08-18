@@ -68,7 +68,7 @@ class VisualRulebookCataloger {
             @Value("${rulepilot.visual.catalog-timeout:PT45S}") Duration visualCatalogTimeout,
             @Value("${rulepilot.visual.progressive-start-timeout:PT35S}") Duration progressiveStartTimeout,
             @Value("${rulepilot.visual.coverage-probe-pages:4}") int visualCoverageProbePages,
-            @Value("${rulepilot.visual.request-parallelism:3}") int visualRequestParallelism) {
+            @Value("${rulepilot.visual.request-parallelism:10}") int visualRequestParallelism) {
         this.pageImages = pageImages;
         this.visualCatalog = visualCatalog;
         this.visualFacts = visualFacts;
@@ -83,8 +83,8 @@ class VisualRulebookCataloger {
             throw new IllegalArgumentException("visual coverage probe pages must be between one and "
                     + VisualOutlineEvidencePolicy.MAX_INTERPRETED_VISUAL_PAGES);
         }
-        if (visualRequestParallelism < 1 || visualRequestParallelism > 4) {
-            throw new IllegalArgumentException("visual request parallelism must be between one and four");
+        if (visualRequestParallelism < 1 || visualRequestParallelism > 10) {
+            throw new IllegalArgumentException("visual request parallelism must be between one and ten");
         }
         this.visualCatalogTimeout = visualCatalogTimeout;
         this.progressiveStartTimeout = progressiveStartTimeout;
@@ -354,11 +354,13 @@ class VisualRulebookCataloger {
                             assistantRunId,
                             operationForIndex.apply(batchIndex))));
                 }
+                long windowDeadlineNanos = catalogWindowDeadline(visualCatalogTimeout);
                 for (int offset = 0; offset < futures.size(); offset++) {
                     int batchIndex = windowStart + offset;
                     List<Integer> batch = batches.get(batchIndex);
                     try {
-                        var draft = awaitCatalog(futures.get(offset), visualCatalogTimeout);
+                        var draft = awaitCatalogBefore(
+                                futures.get(offset), visualCatalogTimeout, windowDeadlineNanos);
                         Map<Integer, Long> returnedCounts = draft.pages().stream().collect(Collectors.groupingBy(
                                 VisualRulebookPageCatalogModel.PageSummary::pageNumber,
                                 Collectors.counting()));
@@ -408,20 +410,7 @@ class VisualRulebookCataloger {
             UUID assistantRunId,
             String operation) {
         List<PageImageInput> images = readTeachingPageImages(documentVersionId, batch);
-        List<VisualRulebookPageCatalogModel.PageTranscript> transcripts = visualCatalog
-                        .supportsTeachingPageTranscription(owner)
-                ? images.stream()
-                        .map(image -> invokeModel(
-                                assistantRunId,
-                                teachingTranscriptionOperation(operation, image.pageNumber()),
-                                600,
-                                teachingTranscriptionSuccessSummary(owner, image.pageNumber()),
-                                () -> visualCatalog.transcribeTeachingPage(image, owner),
-                                transcript -> Math.max(1, transcript.text().length() / 4)))
-                        .toList()
-                : List.of();
-        var request = new VisualRulebookPageCatalogModel.CatalogRequest(
-                images, owner, rulebookTitle, transcripts);
+        var request = new VisualRulebookPageCatalogModel.CatalogRequest(images, owner, rulebookTitle);
         return invokeModel(
                 assistantRunId,
                 operation,
@@ -429,22 +418,6 @@ class VisualRulebookCataloger {
                 teachingStartupSuccessSummary(owner),
                 () -> visualCatalog.summarizeForTeaching(request),
                 this::catalogOutputTokens);
-    }
-
-    private static String teachingTranscriptionOperation(String catalogOperation, int pageNumber) {
-        if (catalogOperation.startsWith("inspectTeachingVisualPage|")) {
-            return "transcribeTeachingVisualPage|" + catalogOperation.substring("inspectTeachingVisualPage|".length());
-        }
-        if (catalogOperation.startsWith("inspectTeachingVisualRetry|")) {
-            return "transcribeTeachingVisualRetry|" + pageNumber;
-        }
-        return "transcribeTeachingVisualPage|" + pageNumber;
-    }
-
-    private String teachingTranscriptionSuccessSummary(String owner, int pageNumber) {
-        return visualCatalog.teachingPageTranscriptionExecutionIdentity(owner)
-                .map(identity -> "PDF page " + pageNumber + " transcribed via " + identity.auditLabel())
-                .orElse("PDF page " + pageNumber + " transcribed");
     }
 
     private String teachingStartupSuccessSummary(String owner) {
@@ -860,11 +833,14 @@ class VisualRulebookCataloger {
                                 assistantRunId,
                                 "inspectRulebookVisualTile|" + pageNumber + "|" + (tileIndex + 1))));
                     }
+                    long windowDeadlineNanos = catalogWindowDeadline(visualCatalogTimeout);
                     for (int offset = 0; offset < futures.size(); offset++) {
                         int tileIndex = windowStart + offset;
                         try {
-                            VisualRulebookPageCatalogModel.PageSummary summary =
-                                    awaitCatalog(futures.get(offset), visualCatalogTimeout).pages().getFirst();
+                            VisualRulebookPageCatalogModel.PageSummary summary = awaitCatalogBefore(
+                                            futures.get(offset), visualCatalogTimeout, windowDeadlineNanos)
+                                    .pages()
+                                    .getFirst();
                             completed.add(new VisualPageTilePolicy.TileSummary(
                                     tiles.get(tileIndex).viewport(), summary));
                         } catch (RuntimeException failedTile) {
@@ -917,8 +893,8 @@ class VisualRulebookCataloger {
     }
 
     /**
-     * Submit only work that can start immediately. A future timeout must measure a provider call, not time spent
-     * waiting behind an earlier page in the executor queue. Replacing the executor after each window also prevents
+     * Submit only work that can start immediately. Every window shares one deadline from submission, so several slow
+     * provider calls cannot multiply the player-visible wait. Replacing the executor after each window also prevents
      * a provider that ignores interruption from starving every later page after one timeout.
      */
     private List<Integer> inspectInBoundedWindows(
@@ -949,11 +925,13 @@ class VisualRulebookCataloger {
                             assistantRunId,
                             operationForIndex.apply(batchIndex))));
                 }
+                long windowDeadlineNanos = catalogWindowDeadline(visualCatalogTimeout);
                 for (int offset = 0; offset < futures.size(); offset++) {
                     int batchIndex = windowStart + offset;
                     try {
-                        List<VisualRulebookPageCatalogModel.PageSummary> completed =
-                                awaitCatalog(futures.get(offset), visualCatalogTimeout).pages();
+                        List<VisualRulebookPageCatalogModel.PageSummary> completed = awaitCatalogBefore(
+                                        futures.get(offset), visualCatalogTimeout, windowDeadlineNanos)
+                                .pages();
                         if (verifyIconBounds) {
                             completed = completed.stream()
                                     .map(summary ->
@@ -1230,12 +1208,25 @@ class VisualRulebookCataloger {
 
     static VisualRulebookPageCatalogModel.CatalogDraft awaitCatalog(
             Future<VisualRulebookPageCatalogModel.CatalogDraft> future, Duration timeout) {
+        return awaitCatalogBefore(future, timeout, catalogWindowDeadline(timeout));
+    }
+
+    private static long catalogWindowDeadline(Duration timeout) {
+        return System.nanoTime() + timeout.toNanos();
+    }
+
+    private static VisualRulebookPageCatalogModel.CatalogDraft awaitCatalogBefore(
+            Future<VisualRulebookPageCatalogModel.CatalogDraft> future,
+            Duration configuredTimeout,
+            long deadlineNanos) {
         try {
-            return future.get(timeout.toMillis(), TimeUnit.MILLISECONDS);
+            long remainingNanos = Math.max(0L, deadlineNanos - System.nanoTime());
+            return future.get(remainingNanos, TimeUnit.NANOSECONDS);
         } catch (TimeoutException slowProvider) {
             future.cancel(true);
             throw new IllegalStateException(
-                    "visual rulebook catalog timed out after " + timeout.toSeconds() + " seconds", slowProvider);
+                    "visual rulebook catalog timed out after " + configuredTimeout.toSeconds() + " seconds",
+                    slowProvider);
         } catch (InterruptedException interrupted) {
             future.cancel(true);
             Thread.currentThread().interrupt();

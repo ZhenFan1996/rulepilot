@@ -81,16 +81,15 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
         ToolCallingChatOptions.Builder<?> options;
         if (model.getDefaultOptions() instanceof OpenAiChatOptions defaults) {
             OpenAiChatOptions.Builder builder = defaults.mutate();
-            builder.toolChoice("required");
+            // Conversational turns do not need an application action. Auto choice lets the same model either answer
+            // directly or enter the typed ReAct loop when external evidence or state mutation is actually needed.
+            builder.toolChoice("auto");
             if (usesDeepSeekNonThinkingGeneration(ownerUsername)) {
-                // DeepSeek V4 enables thinking by default, but its thinking mode rejects
-                // tool_choice. Recommendation turns must select an application-owned action,
-                // so use the provider's explicit non-thinking request mode.
+                // Keep the low-latency non-thinking request mode used by Recommendation. Auto tool choice remains
+                // available, so a direct conversational response does not become a forced action.
                 builder.extraBody(Map.of("thinking", Map.of("type", "disabled")));
             } else if ("qwen".equals(providerFor(ownerUsername))) {
-                // Qwen rejects required tool choice while thinking is enabled. Recommendation turns
-                // must stay inside the application-owned action protocol, so deterministic native
-                // tool selection takes priority over provider-specific hidden thinking output.
+                // Qwen's non-thinking mode keeps the direct-text versus action decision observable and bounded.
                 builder.extraBody(Map.of("enable_thinking", false));
             }
             builder.parallelToolCalls(false);

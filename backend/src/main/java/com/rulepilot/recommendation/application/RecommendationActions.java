@@ -133,6 +133,20 @@ final class RecommendationActions {
         }
     }
 
+    ActionOutcome directReply(String message, RecommendationAgentState state, String locale) {
+        if (message == null || message.isBlank()) {
+            throw new IllegalArgumentException("direct recommendation reply must not be blank");
+        }
+        state.actions.add("DIRECT_REPLY_TO_USER");
+        return ActionOutcome.terminal(response(
+                Outcome.CONVERSATION,
+                message,
+                state,
+                locale,
+                null,
+                List.of()));
+    }
+
     private ActionOutcome reply(
             JsonNode arguments,
             RecommendationAgentState state,
