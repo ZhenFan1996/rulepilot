@@ -146,9 +146,19 @@ public class TeachingPlanLauncher {
     }
 
     private String failureCode(Throwable failure) {
-        return failure instanceof IllegalArgumentException
+        return causedByInvalidPlan(failure)
                 ? "TEACHING_PREPARATION_INVALID_PLAN"
                 : "TEACHING_PREPARATION_FAILED";
+    }
+
+    private boolean causedByInvalidPlan(Throwable failure) {
+        Throwable current = failure;
+        while (current != null) {
+            if (current instanceof IllegalArgumentException) return true;
+            if (current.getCause() == current) return false;
+            current = current.getCause();
+        }
+        return false;
     }
 
     private String normalizeLearningGoal(String learningGoal) {

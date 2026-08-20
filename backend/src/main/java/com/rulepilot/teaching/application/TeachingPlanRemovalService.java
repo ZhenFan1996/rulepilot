@@ -2,6 +2,7 @@ package com.rulepilot.teaching.application;
 
 import com.rulepilot.assistant.AssistantRunMode;
 import com.rulepilot.assistant.AssistantRuns;
+import com.rulepilot.document.TeachingHandoffDismissals;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonStatus;
 import com.rulepilot.teaching.domain.TeachingPlan;
 import java.util.ArrayList;
@@ -23,20 +24,24 @@ public class TeachingPlanRemovalService {
     private final TeachingPlanRepository plans;
     private final IllustratedLessonRepository lessons;
     private final AssistantRuns runs;
+    private final TeachingHandoffDismissals handoffs;
 
     public TeachingPlanRemovalService(
             TeachingPlanRepository plans,
             IllustratedLessonRepository lessons,
-            AssistantRuns runs) {
+            AssistantRuns runs,
+            TeachingHandoffDismissals handoffs) {
         this.plans = plans;
         this.lessons = lessons;
         this.runs = runs;
+        this.handoffs = handoffs;
     }
 
     @Transactional
     public void removeOwned(UUID planId, String username) {
         TeachingPlan plan = plans.findByIdAndCreatedBy(planId, username)
                 .orElseThrow(() -> new IllegalArgumentException("teaching plan does not exist"));
+        handoffs.dismissOwnedForDocumentVersion(plan.documentVersionId(), username);
         cancel(plan.id(), username);
         plans.delete(plan.id());
     }

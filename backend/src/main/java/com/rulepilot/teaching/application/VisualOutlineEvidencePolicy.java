@@ -3,8 +3,6 @@ package com.rulepilot.teaching.application;
 import com.rulepilot.document.DocumentProcessing;
 import com.rulepilot.teaching.TeachingOutlineModel;
 import com.rulepilot.teaching.TeachingOutlineModel.PageInput;
-import com.rulepilot.teaching.VisualSourceRuleGroupLedger;
-import com.rulepilot.teaching.VisualRulebookPageClassifier;
 import java.text.Normalizer;
 import java.util.Collections;
 import java.util.LinkedHashSet;
@@ -17,73 +15,11 @@ import java.util.stream.Collectors;
 final class VisualOutlineEvidencePolicy {
 
     static final int MAX_INTERPRETED_VISUAL_PAGES = 4;
-    private static final Set<String> CORE_COVERAGE_TAGS = Set.of("setup", "core_loop", "end", "scoring");
-
     private VisualOutlineEvidencePolicy() {}
 
     static TeachingOutlineModel.OutlineDraft bindIconLegendEvidence(
             TeachingOutlineModel.OutlineDraft outline, List<DocumentProcessing.PageView> pages) {
         return outline;
-    }
-
-    static void validateVisualRulebookCoverage(
-            TeachingOutlineModel.OutlineDraft outline, List<PageInput> visualCatalogPages) {
-        Set<Integer> expected = visualCatalogPages.stream()
-                .filter(page -> VisualRulebookPageClassifier.isSubstantive(page.pageNumber(), page.text()))
-                .map(PageInput::pageNumber)
-                .collect(Collectors.toCollection(LinkedHashSet::new));
-        outline.topics().stream()
-                .filter(topic -> topic.coverageTags().stream()
-                        .map(VisualOutlineEvidencePolicy::identityKey)
-                        .noneMatch("source_dependency"::equals))
-                .flatMap(topic -> topic.sourcePageNumbers().stream())
-                .forEach(expected::remove);
-        if (!expected.isEmpty()) {
-            throw new IllegalArgumentException("visual rulebook outline omitted admitted source pages " + expected);
-        }
-        validateVisualSourceRuleGroups(outline, visualCatalogPages);
-    }
-
-    private static void validateVisualSourceRuleGroups(
-            TeachingOutlineModel.OutlineDraft outline, List<PageInput> visualCatalogPages) {
-        List<TeachingOutlineModel.TopicDraft> ruleTopics = outline.topics().stream()
-                .filter(topic -> topic.coverageTags().stream()
-                        .map(VisualOutlineEvidencePolicy::identityKey)
-                        .noneMatch("source_dependency"::equals))
-                .toList();
-        for (PageInput page : visualCatalogPages) {
-            if (!VisualRulebookPageClassifier.isSubstantive(page.pageNumber(), page.text())) continue;
-            for (String identifier : VisualSourceRuleGroupLedger.identifiers(page)) {
-                String required = VisualSourceRuleGroupLedger.identity(identifier);
-                boolean preserved = ruleTopics.stream()
-                        .filter(topic -> topic.sourcePageNumbers().contains(page.pageNumber()))
-                        .flatMap(topic -> topic.retrievalQueries().stream())
-                        .map(VisualSourceRuleGroupLedger::identity)
-                        .anyMatch(required::equals);
-                if (!preserved) {
-                    throw new IllegalArgumentException(
-                            "visual rulebook outline omitted source rule group on page "
-                                    + page.pageNumber() + ": " + identifier);
-                }
-            }
-        }
-    }
-
-    static void validateVisualCoreTopicBindings(
-            TeachingOutlineModel.OutlineDraft outline, List<PageInput> visualCatalogPages) {
-        Set<Integer> availablePages = visualCatalogPages.stream()
-                .map(PageInput::pageNumber)
-                .collect(Collectors.toUnmodifiableSet());
-        for (String tag : CORE_COVERAGE_TAGS) {
-            boolean bound = outline.topics().stream()
-                    .filter(topic -> accountsForCoreObligation(topic, tag))
-                    .flatMap(topic -> topic.sourcePageNumbers().stream())
-                    .anyMatch(availablePages::contains);
-            if (!bound) {
-                throw new IllegalArgumentException(
-                        "visual rulebook outline must bind core coverage or an explicit missing source for " + tag);
-            }
-        }
     }
 
     static void validateVisualSourceDependencies(
@@ -152,19 +88,6 @@ final class VisualOutlineEvidencePolicy {
                         "visual teaching outline omitted external source dependency " + dependency.title());
             }
         }));
-    }
-
-    private static boolean accountsForCoreObligation(TeachingOutlineModel.TopicDraft topic, String tag) {
-        Set<String> tags = topic.coverageTags().stream()
-                .map(VisualOutlineEvidencePolicy::identityKey)
-                .collect(Collectors.toUnmodifiableSet());
-        return tags.contains(tag)
-                || (tags.contains("source_dependency") && tags.contains("missing_" + tag + "_source"));
-    }
-
-    static TeachingOutlineModel.OutlineDraft bindVisualCoreTopicEvidence(
-            TeachingOutlineModel.OutlineDraft outline, List<PageInput> visualCatalogPages) {
-        return outline;
     }
 
     static Set<Integer> selectedVisualPageNumbers(

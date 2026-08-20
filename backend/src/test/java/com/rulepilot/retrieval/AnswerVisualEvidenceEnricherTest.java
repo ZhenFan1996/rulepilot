@@ -62,6 +62,24 @@ class AnswerVisualEvidenceEnricherTest {
     }
 
     @Test
+    void keepsACompleteDenseVisualPageAvailableToTheAnswerInsteadOfFailingTheTurn() {
+        RuleEvidenceHit placeholder = source(UUID.randomUUID(), 3, VISUAL_PLACEHOLDER);
+        Map<UUID, HybridEvidenceHit> evidence = new LinkedHashMap<>();
+        evidence.put(placeholder.chunkId(), new HybridEvidenceHit(placeholder, 0.2, 1, null, false));
+        String completePageFacts = "一条完整的可见规则事实。".repeat(400);
+
+        Set<UUID> enriched = enricher(List.of(placeholder)).enrich(
+                UUID.randomUUID(),
+                documentVersionId,
+                evidence,
+                Map.of(3, fact(3, completePageFacts)),
+                Set.of(3));
+
+        assertThat(enriched).containsExactly(placeholder.chunkId());
+        assertThat(evidence.get(placeholder.chunkId()).evidence().excerpt()).contains(completePageFacts);
+    }
+
+    @Test
     void removesAPlaceholderWhenTheTypedPageInventorySaysThereIsNoRuleContent() {
         RuleEvidenceHit placeholder = source(UUID.randomUUID(), 11, VISUAL_PLACEHOLDER);
         Map<UUID, HybridEvidenceHit> evidence = new LinkedHashMap<>();

@@ -36,13 +36,17 @@ export type RecommendationConversationSnapshot = {
   transcript: RecommendationConversationTurn[]
   knownGames: RecommendationConversationGame[]
   shownBggIds: number[]
+  selectedBggId: number | null
   failed: boolean
   pending: RecommendationConversationPending | null
 }
 
-type StoredRecommendationConversation = RecommendationConversationSnapshot & { version: 3 }
+type StoredRecommendationConversation = Omit<RecommendationConversationSnapshot, 'selectedBggId'> & {
+  version: 3
+  selectedBggId?: number | null
+}
 type PreviousRecommendationPending = Omit<RecommendationConversationPending, 'responseLocale'>
-type PreviousRecommendationConversation = Omit<RecommendationConversationSnapshot, 'responseLocale' | 'pending'> & {
+type PreviousRecommendationConversation = Omit<RecommendationConversationSnapshot, 'responseLocale' | 'pending' | 'selectedBggId'> & {
   version: 2
   pending: PreviousRecommendationPending | null
 }
@@ -145,6 +149,7 @@ function boundedSnapshot(snapshot: RecommendationConversationSnapshot): Recommen
     transcript,
     knownGames,
     shownBggIds,
+    selectedBggId: isPositiveInteger(snapshot.selectedBggId) ? snapshot.selectedBggId : null,
     failed: snapshot.failed === true,
     pending,
   }
@@ -189,6 +194,7 @@ function isStoredConversation(value: unknown): value is StoredRecommendationConv
     && value.shownBggIds.length <= MAX_SHOWN_GAMES
     && value.shownBggIds.every(isPositiveInteger)
     && new Set(value.shownBggIds).size === value.shownBggIds.length
+    && (value.selectedBggId === undefined || value.selectedBggId === null || isPositiveInteger(value.selectedBggId))
     && typeof value.failed === 'boolean'
     && (value.pending === null || isConversationPending(value.pending))
 }
@@ -242,6 +248,7 @@ function withoutVersion(value: StoredRecommendationConversation): Recommendation
     transcript: value.transcript.map(turn => ({ ...turn })),
     knownGames: value.knownGames.map(game => ({ ...game })),
     shownBggIds: [...value.shownBggIds],
+    selectedBggId: isPositiveInteger(value.selectedBggId) ? value.selectedBggId : null,
     failed: value.failed,
     pending: value.pending ? {
       message: value.pending.message,
@@ -262,6 +269,7 @@ function isEmptySnapshot(snapshot: RecommendationConversationSnapshot) {
   return !snapshot.transcript.some(turn => turn.role === 'user')
     && snapshot.knownGames.length === 0
     && snapshot.shownBggIds.length === 0
+    && snapshot.selectedBggId === null
     && !snapshot.failed
     && snapshot.pending === null
     && snapshot.conversationId === null

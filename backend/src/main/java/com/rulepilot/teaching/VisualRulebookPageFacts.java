@@ -70,7 +70,9 @@ public interface VisualRulebookPageFacts {
         // Schema 33 rejects summaries that would lose a bound rule-group fact at the durable 4,000-character edge.
         // Schema 34 embeds validated, page- and rule-group-bound quantity observations in the factual ledger while
         // preserving their original short source spans and refusing unsafe arithmetic.
-        public static final int CURRENT_SCHEMA_VERSION = 34;
+        // Schema 35 gives every visual rule group a page-local structural identity. Visible headings remain labels,
+        // so one heading can legitimately own several distinct list items without invalidating the whole page.
+        public static final int CURRENT_SCHEMA_VERSION = 35;
 
         public PageFact(int pageNumber, String printedTerms, String factualSummary, List<String> keywords) {
             this(

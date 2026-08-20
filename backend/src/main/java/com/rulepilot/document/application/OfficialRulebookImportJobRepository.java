@@ -33,6 +33,9 @@ public interface OfficialRulebookImportJobRepository {
 
     boolean failTeachingRecoveryExhausted(UUID jobId, UUID expectedPreparationRunId, Instant now);
 
+    boolean failTeachingTerminal(
+            UUID jobId, UUID expectedPreparationRunId, String errorCode, Instant now);
+
     boolean markTeachingReconciled(UUID jobId, UUID expectedPreparationRunId, Instant now);
 
     boolean dismissTeaching(
@@ -41,6 +44,8 @@ public interface OfficialRulebookImportJobRepository {
             OfficialRulebookImportJob.TeachingHandoffState expectedState,
             UUID expectedPreparationRunId,
             Instant now);
+
+    int dismissTeachingForDocumentVersion(UUID documentVersionId, String ownerUsername, Instant now);
 
     List<OfficialRulebookImportJob> claimReadyTeaching(int limit, Instant now);
 

@@ -185,11 +185,6 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
     }
 
     @Override
-    public OutlineDraft fallback(OutlineRequest request) {
-        return fake.organize(request);
-    }
-
-    @Override
     public OutlineDraft refineChapterOwnership(OutlineRequest request, OutlineDraft current, String feedback) {
         if (current == null || feedback == null || feedback.isBlank()) return current;
         Role role = roleFor(request);
@@ -250,6 +245,8 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
         RuntimeException firstFailure;
         try {
             return organizeOnce(request, role, owner, initialInstruction);
+        } catch (IncompleteCanonicalSlotOwnership incompleteOwnership) {
+            return repairMissingCanonicalSlotOwners(request, role, owner, incompleteOwnership);
         } catch (InvalidSourceCoverage invalidSource) {
             return repairSourceIdentifiers(request, role, owner, invalidSource);
         } catch (InvalidWholeGameUnderstanding invalidContext) {
@@ -274,6 +271,128 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
             failure.addSuppressed(firstFailure);
             throw failure;
         }
+    }
+
+    private OutlineDraft repairMissingCanonicalSlotOwners(
+            OutlineRequest request,
+            Role role,
+            String owner,
+            IncompleteCanonicalSlotOwnership failure) {
+        CompactOutlineDraft current = failure.compact;
+        Map<String, CompactTeachingUnitDraft> units = current.topics().stream()
+                .flatMap(topic -> topic.teachingUnits().stream())
+                .collect(java.util.stream.Collectors.toMap(
+                        CompactTeachingUnitDraft::teachingUnitId,
+                        unit -> unit,
+                        (first, duplicate) -> {
+                            throw new IllegalArgumentException("compact teaching unit IDs are not unique");
+                        },
+                        LinkedHashMap::new));
+        String frozenUnits = current.topics().stream()
+                .flatMap(topic -> topic.teachingUnits().stream().map(unit ->
+                        "topic=" + topic.key()
+                                + " | objective=" + topic.objective()
+                                + " | teachingUnitId=" + unit.teachingUnitId()
+                                + " | role=" + unit.role()
+                                + " | currentSourceSlotIds=" + unit.sourceSlotIds()))
+                .collect(java.util.stream.Collectors.joining("\n"));
+        Map<String, CanonicalSourceSlot> canonicalById = canonicalSourceSlots(request).stream()
+                .collect(java.util.stream.Collectors.toMap(
+                        CanonicalSourceSlot::slotId, slot -> slot, (first, duplicate) -> first, LinkedHashMap::new));
+        String missingSlots = failure.missingSlotIds.stream()
+                .map(canonicalById::get)
+                .map(slot -> slot.slotId()
+                        + " | page=" + slot.pageNumber()
+                        + " | identifier=" + slot.sourceIdentifier()
+                        + " | availability=" + slot.availability())
+                .collect(java.util.stream.Collectors.joining("\n"));
+        LinkedHashSet<Integer> missingPages = failure.missingSlotIds.stream()
+                .map(canonicalById::get)
+                .map(CanonicalSourceSlot::pageNumber)
+                .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+        String pageEvidence = request.pages().stream()
+                .filter(page -> missingPages.contains(page.pageNumber()))
+                .map(page -> "PAGE " + page.pageNumber() + "\n" + page.text())
+                .collect(java.util.stream.Collectors.joining("\n\n"));
+
+        ChatClient.ChatClientRequestSpec prompt = ChatClient.create(models.modelFor(role, owner)).prompt();
+        OpenAiChatOptions.Builder options = providerOptions(role, owner);
+        if (options != null) {
+            options.model(models.modelNameFor(role, owner)).maxTokens(1_200);
+            prompt = prompt.options(options);
+        } else {
+            prompt = prompt.options(ChatOptions.builder().temperature(temperature));
+        }
+        MissingSlotOwnershipPatch patch = prompt
+                .system("""
+                        You assign only source slots omitted from an otherwise frozen teaching plan. Return one JSON
+                        object with exactly assignments. Each assignment has exactly sourceSlotId and teachingUnitId.
+                        Return every supplied missing sourceSlotId exactly once and no other slot. Select one existing
+                        teachingUnitId whose objective and role can teach that source fact. Do not create, rename,
+                        reorder, or rewrite a topic, teaching unit, concept, objective, source slot, or rule fact.
+                        """)
+                .user("""
+                        Frozen teaching units:
+                        %s
+
+                        Missing source slots:
+                        %s
+
+                        Evidence for the missing slots:
+                        %s
+                        """.formatted(frozenUnits, missingSlots, pageEvidence))
+                .call()
+                .entity(MissingSlotOwnershipPatch.class);
+        CompactOutlineDraft repaired = applyMissingSlotOwnershipPatch(current, units, failure.missingSlotIds, patch);
+        OutlineDraft outline = expandCanonicalOutline(request, repaired);
+        TeachingSourceCoverageContract.requireCompleteModelContract(request, outline);
+        log.info(
+                "Assigned {} omitted canonical teaching source slot(s) without regenerating the outline",
+                failure.missingSlotIds.size());
+        return outline;
+    }
+
+    private CompactOutlineDraft applyMissingSlotOwnershipPatch(
+            CompactOutlineDraft current,
+            Map<String, CompactTeachingUnitDraft> units,
+            List<String> missingSlotIds,
+            MissingSlotOwnershipPatch patch) {
+        if (patch == null || patch.assignments() == null) {
+            throw new IllegalArgumentException("missing source-slot ownership repair returned no patch");
+        }
+        LinkedHashSet<String> expected = new LinkedHashSet<>(missingSlotIds);
+        Map<String, String> ownerBySlot = patch.assignments().stream()
+                .collect(java.util.stream.Collectors.toMap(
+                        MissingSlotOwnershipAssignment::sourceSlotId,
+                        MissingSlotOwnershipAssignment::teachingUnitId,
+                        (first, duplicate) -> {
+                            throw new IllegalArgumentException("missing source-slot ownership repair duplicated a slot");
+                        },
+                        LinkedHashMap::new));
+        if (!ownerBySlot.keySet().equals(expected) || ownerBySlot.values().stream().anyMatch(owner -> !units.containsKey(owner))) {
+            throw new IllegalArgumentException("missing source-slot ownership repair changed the requested boundary");
+        }
+        List<CompactTopicDraft> topics = current.topics().stream()
+                .map(topic -> new CompactTopicDraft(
+                        topic.key(),
+                        topic.objective(),
+                        topic.required(),
+                        topic.visualEvidenceRecommended(),
+                        topic.teachingUnits().stream()
+                                .map(unit -> {
+                                    List<String> additions = ownerBySlot.entrySet().stream()
+                                            .filter(entry -> entry.getValue().equals(unit.teachingUnitId()))
+                                            .map(Map.Entry::getKey)
+                                            .toList();
+                                    if (additions.isEmpty()) return unit;
+                                    List<String> slots = new ArrayList<>(unit.sourceSlotIds());
+                                    slots.addAll(additions);
+                                    return new CompactTeachingUnitDraft(unit.teachingUnitId(), unit.role(), List.copyOf(slots));
+                                })
+                                .toList()))
+                .toList();
+        return new CompactOutlineDraft(
+                current.gameTitle(), current.premise(), topics, current.wholeGameUnderstanding());
     }
 
     private OutlineDraft repairConceptSourceOwnership(
@@ -809,13 +928,28 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
         if (!assignedSlotIds.equals(canonicalById.keySet())) {
             LinkedHashSet<String> missing = new LinkedHashSet<>(canonicalById.keySet());
             missing.removeAll(assignedSlotIds);
-            throw new IllegalArgumentException("compact teaching outline omitted canonical source slots: " + missing);
+            throw new IncompleteCanonicalSlotOwnership(compact, List.copyOf(missing));
         }
 
         Map<String, SourceCoverageSlotDraft> expandedSlotsById = sourceSlots.stream().collect(java.util.stream.Collectors.toMap(
                 SourceCoverageSlotDraft::slotId, slot -> slot, (first, duplicate) -> first, LinkedHashMap::new));
-        List<GlobalConceptDraft> concepts = canonicalConcepts(
-                compact.wholeGameUnderstanding().concepts(), expandedSlotsById, topicKeys);
+        List<GlobalConceptDraft> concepts;
+        try {
+            concepts = canonicalConcepts(
+                    compact.wholeGameUnderstanding().concepts(), expandedSlotsById, topicKeys);
+        } catch (IllegalArgumentException invalidContext) {
+            OutlineDraft sourceOwnedOutline = new OutlineDraft(
+                    compact.gameTitle(),
+                    compact.premise(),
+                    List.copyOf(topics),
+                    List.copyOf(sourceSlots),
+                    true,
+                    new WholeGameUnderstandingDraft(
+                            compact.wholeGameUnderstanding().summary(),
+                            List.of(),
+                            compact.wholeGameUnderstanding().topicDependencies()));
+            throw new InvalidWholeGameUnderstanding(sourceOwnedOutline, invalidContext);
+        }
         OutlineDraft outline = new OutlineDraft(
                 compact.gameTitle(),
                 compact.premise(),
@@ -1035,6 +1169,10 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
             List<CompactGlobalConceptDraft> concepts,
             List<TopicDependencyDraft> topicDependencies) {}
 
+    private record MissingSlotOwnershipPatch(List<MissingSlotOwnershipAssignment> assignments) {}
+
+    private record MissingSlotOwnershipAssignment(String sourceSlotId, String teachingUnitId) {}
+
     private record CompactGlobalConceptDraft(
             String conceptId,
             String label,
@@ -1097,6 +1235,17 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
         private InvalidWholeGameUnderstanding(OutlineDraft outline, IllegalArgumentException cause) {
             super("whole-game understanding failed its source-bound contract", cause);
             this.outline = outline;
+        }
+    }
+
+    private static final class IncompleteCanonicalSlotOwnership extends IllegalArgumentException {
+        private final CompactOutlineDraft compact;
+        private final List<String> missingSlotIds;
+
+        private IncompleteCanonicalSlotOwnership(CompactOutlineDraft compact, List<String> missingSlotIds) {
+            super("compact teaching outline omitted canonical source slots: " + missingSlotIds);
+            this.compact = compact;
+            this.missingSlotIds = missingSlotIds;
         }
     }
 

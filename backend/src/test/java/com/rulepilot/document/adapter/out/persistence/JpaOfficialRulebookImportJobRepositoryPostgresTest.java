@@ -367,13 +367,14 @@ class JpaOfficialRulebookImportJobRepositoryPostgresTest {
         assertThat(afterExhaustion).isEmpty();
         assertThat(jdbc.queryForMap(
                         """
-                        SELECT teaching_handoff_state, teaching_error_code,
+                        SELECT teaching_handoff_state, teaching_error_code, teaching_preparation_run_id,
                                teaching_automatic_recovery_count, teaching_handoff_reconciled_at
                         FROM official_rulebook_import_job WHERE id = ?
                         """,
                         jobId))
                 .containsEntry("teaching_handoff_state", "FAILED")
                 .containsEntry("teaching_error_code", "TEACHING_RECOVERY_EXHAUSTED")
+                .containsEntry("teaching_preparation_run_id", recoveredRunId)
                 .doesNotContainEntry("teaching_handoff_reconciled_at", null);
         assertThat(jdbc.queryForObject(
                         "SELECT teaching_automatic_recovery_count FROM official_rulebook_import_job WHERE id = ?",
@@ -449,6 +450,61 @@ class JpaOfficialRulebookImportJobRepositoryPostgresTest {
                         "SELECT count(*) FROM document_version WHERE id = ?",
                         Integer.class,
                         versionId))
+                .isOne();
+    }
+
+    @Test
+    void deletingALessonWithdrawsThePersistedTeachingIntentForItsDocumentVersion() {
+        Instant now = Instant.parse("2026-08-10T03:15:00Z");
+        UUID dismissedVersionId = insertDocument("dismiss-version", "READY", now);
+        UUID retainedVersionId = insertDocument("retain-version", "READY", now);
+        UUID dismissedJobId = insertCompletedTeachingJob(dismissedVersionId, now);
+        UUID retainedJobId = insertCompletedTeachingJob(retainedVersionId, now);
+        UUID dismissedRunId = UUID.randomUUID();
+        UUID retainedRunId = UUID.randomUUID();
+        insertPreparationRun(dismissedRunId, dismissedVersionId, "FAILED", now.plusSeconds(1));
+        insertPreparationRun(retainedRunId, retainedVersionId, "FAILED", now.plusSeconds(1));
+        inTransaction(repository -> repository.claimReadyTeachingForDocument(
+                dismissedVersionId, 1, now.plusSeconds(2)));
+        inTransaction(repository -> repository.completeTeachingLaunch(
+                dismissedJobId, dismissedRunId, now.plusSeconds(3)));
+        inTransaction(repository -> repository.claimReadyTeachingForDocument(
+                retainedVersionId, 1, now.plusSeconds(2)));
+        inTransaction(repository -> repository.completeTeachingLaunch(
+                retainedJobId, retainedRunId, now.plusSeconds(3)));
+
+        int dismissed = inTransactionReturning(repository -> repository.dismissTeachingForDocumentVersion(
+                dismissedVersionId, "official-handoff-player", now.plusSeconds(4)));
+
+        assertThat(dismissed).isOne();
+        assertThat(jdbc.queryForMap(
+                        """
+                        SELECT teaching_handoff_state, teaching_learning_goal,
+                               teaching_preparation_run_id, teaching_error_code,
+                               teaching_automatic_recovery_count, teaching_handoff_updated_at
+                        FROM official_rulebook_import_job WHERE id = ?
+                        """,
+                        dismissedJobId))
+                .containsEntry("teaching_handoff_state", "NOT_REQUESTED")
+                .containsEntry("teaching_learning_goal", null)
+                .containsEntry("teaching_preparation_run_id", null)
+                .containsEntry("teaching_error_code", null)
+                .containsEntry("teaching_automatic_recovery_count", 0)
+                .containsEntry("teaching_handoff_updated_at", null);
+        assertThat(jdbc.queryForObject(
+                        "SELECT teaching_handoff_state FROM official_rulebook_import_job WHERE id = ?",
+                        String.class,
+                        retainedJobId))
+                .isEqualTo("LAUNCHED");
+        List<OfficialRulebookImportJob> unreconciledJobs =
+                inTransactionReturning(repository -> repository.findUnreconciledLaunchedTeaching(4));
+        assertThat(unreconciledJobs)
+                .extracting(OfficialRulebookImportJob::id)
+                .containsExactly(retainedJobId);
+        assertThat(jdbc.queryForObject(
+                        "SELECT count(*) FROM document_version WHERE id = ?",
+                        Integer.class,
+                        dismissedVersionId))
                 .isOne();
     }
 

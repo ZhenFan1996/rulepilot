@@ -130,82 +130,23 @@ public class TeachingPlanService {
             }
             TeachingSourceCoverageContract.validateAgainstSources(outlineRequest, outline);
             plans.validate(outline);
-            if (visualOnly) {
-                outline = VisualOutlineEvidencePolicy.bindVisualCoreTopicEvidence(outline, pages);
-                VisualOutlineEvidencePolicy.validateVisualCoreTopicBindings(outline, pages);
-            }
         } catch (IllegalArgumentException invalidOutline) {
-            if (!visualOnly) {
-                log.warn("Semantic teaching outline was incomplete; rejecting preparation: {}", invalidOutline.getMessage());
-                if (assistantRunId != null) {
-                    invocations.record(
-                            assistantRunId,
-                            ActivityType.VALIDATION,
-                            "rejectIncompleteSemanticOutline",
-                            ActivityOutcome.REJECTED,
-                            "Text rulebook preparation stopped before a generic low-detail plan could be published");
-                }
-                throw new IllegalStateException(
-                        "semantic teaching outline was incomplete; retry preparation",
-                        invalidOutline);
-            }
-            log.warn("Visual teaching outline was incomplete; continuing with a source-derived outline: {}", invalidOutline.getMessage());
+            log.warn("Source-bound teaching outline was incomplete; rejecting preparation: {}", invalidOutline.getMessage());
             if (assistantRunId != null) {
                 invocations.record(
                         assistantRunId,
                         ActivityType.VALIDATION,
-                        "fallbackToSourceOutline",
+                        "rejectIncompleteSemanticOutline",
                         ActivityOutcome.REJECTED,
-                        "Model outline was incomplete; continuing with a rulebook-derived lesson plan");
+                        "Lesson preparation stopped because the source-bound plan did not satisfy its authoritative contract");
             }
-            outline = preferDocumentTitle(
-                    playerGameTitle, VisualOutlineEvidencePolicy.bindIconLegendEvidence(
-                            outlines.fallback(outlineRequest), documentPages), outlineRequest.pages());
-            VisualOutlineEvidencePolicy.validateVisualSourceDependencies(outline, pages);
-            TeachingSourceCoverageContract.validateAgainstSources(outlineRequest, outline);
-            plans.validate(outline);
-            if (visualOnly) {
-                outline = VisualOutlineEvidencePolicy.bindVisualCoreTopicEvidence(outline, pages);
-                VisualOutlineEvidencePolicy.validateVisualCoreTopicBindings(outline, pages);
-            }
-        }
-        if (visualOnly) {
-            try {
-                VisualOutlineEvidencePolicy.validateVisualRulebookCoverage(outline, pages);
-            } catch (IllegalArgumentException incompleteCoverage) {
-                log.warn(
-                        "Teaching outline shortened the visual source ledger; using the complete source-derived outline: {}",
-                        incompleteCoverage.getMessage());
-                if (assistantRunId != null) {
-                    invocations.record(
-                            assistantRunId,
-                            ActivityType.VALIDATION,
-                            "fallbackToCompleteSourceLedger",
-                            ActivityOutcome.REJECTED,
-                            "Model outline omitted a source page or rule group; the complete page-owned source ledger was retained");
-                }
-                outline = preferDocumentTitle(
-                        playerGameTitle, VisualOutlineEvidencePolicy.bindIconLegendEvidence(
-                                outlines.fallback(outlineRequest), documentPages), outlineRequest.pages());
-                log.info(
-                        "Using complete source-ledger teaching outline for documentVersionId={}: {}",
-                        documentVersionId,
-                        outline.topics().stream()
-                                .map(topic -> topic.key() + "=" + topic.sourcePageNumbers()
-                                        + " tags=" + topic.coverageTags())
-                                .toList());
-                outline = VisualOutlineEvidencePolicy.bindVisualCoreTopicEvidence(outline, pages);
-                VisualOutlineEvidencePolicy.validateVisualSourceDependencies(outline, pages);
-                TeachingSourceCoverageContract.validateAgainstSources(outlineRequest, outline);
-                plans.validate(outline);
-                VisualOutlineEvidencePolicy.validateVisualCoreTopicBindings(outline, pages);
-                VisualOutlineEvidencePolicy.validateVisualRulebookCoverage(outline, pages);
-            }
+            throw new IllegalStateException(
+                    "source-bound teaching outline was incomplete; retry preparation",
+                    invalidOutline);
         }
         if (visualOnly || hasStructuredSourceDependencies(pages)) {
             VisualOutlineEvidencePolicy.validateVisualSourceDependencies(outline, pages);
         }
-        if (visualOnly) validateVisualPageBindings(outline, documentPages);
         if (textRulebookVisualCatalogAvailable && assistantRunId != null) {
             invocations.record(
                     assistantRunId,
@@ -527,18 +468,6 @@ public class TeachingPlanService {
                         + dependency.reason().length())
                 .sum();
         return Math.max(1, characters / 4);
-    }
-
-    private void validateVisualPageBindings(
-            TeachingOutlineModel.OutlineDraft outline, List<DocumentProcessing.PageView> documentPages) {
-        Set<Integer> knownPages = documentPages.stream()
-                .map(DocumentProcessing.PageView::pageNumber)
-                .collect(java.util.stream.Collectors.toSet());
-        boolean invalid = outline.topics().stream().anyMatch(topic -> topic.sourcePageNumbers().isEmpty()
-                || topic.sourcePageNumbers().stream().anyMatch(page -> !knownPages.contains(page)));
-        if (invalid) {
-            throw new IllegalArgumentException("visual rulebook outline must bind every topic to cataloged source pages");
-        }
     }
 
 }

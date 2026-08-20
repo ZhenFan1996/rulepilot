@@ -97,6 +97,16 @@ class FailedTeachingHandoffRemovalServiceTest {
         assertThat(service().findOwned(Origin.UPLOAD, handoffId, "alice")).isEmpty();
     }
 
+    @Test
+    void persistsThePlayersDeletionIntentAcrossOfficialAndUploadedHandoffs() {
+        UUID versionId = UUID.randomUUID();
+
+        service().dismissOwnedForDocumentVersion(versionId, " alice ");
+
+        verify(officialImports).dismissTeachingForDocumentVersion(versionId, "alice", NOW);
+        verify(uploads).dismissOwnedForDocumentVersion(versionId, "alice");
+    }
+
     private FailedTeachingHandoffRemovalService service() {
         return new FailedTeachingHandoffRemovalService(
                 officialImports,

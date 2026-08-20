@@ -113,12 +113,12 @@ class SpringAiVisualRulebookPageCatalogModelTest {
 
         assertThat(draft.pages()).singleElement().satisfies(page -> {
             assertThat(page.ruleGroupIdentifiers()).containsExactly(
-                    "地板线",
-                    "如果刚放置的瓷砖的水平或垂直方向都没有直接相连的瓷砖");
+                    "page-4-group-1",
+                    "page-4-group-2");
             assertThat(page.factualSummary()).isEqualTo("""
                     本页说明回合结束后的计分流程。
-                    地板线: 回合结束时，地板线中的瓷砖按其位置扣分。
-                    如果刚放置的瓷砖的水平或垂直方向都没有直接相连的瓷砖: 该瓷砖单独计 1 分。""");
+                    page-4-group-1: [地板线] 回合结束时，地板线中的瓷砖按其位置扣分。
+                    page-4-group-2: [如果刚放置的瓷砖的水平或垂直方向都没有直接相连的瓷砖] 该瓷砖单独计 1 分。""");
             assertThat(page.ruleGroupInventoryComplete()).isTrue();
         });
     }
@@ -134,15 +134,26 @@ class SpringAiVisualRulebookPageCatalogModelTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("exactly identifier and fact");
 
-        assertThatThrownBy(() -> SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalogV5("""
+        var repeatedHeading = SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalogV5("""
                 {"pages":[{"pageNumber":4,"printedTerms":["MOVE"],"factualSummary":[],
                 "keywords":["MOVE"],"sourceDependencies":[],
                 "ruleGroups":[{"identifier":"MOVE","fact":"移动一个棋子。"},
                               {"identifier":" move ","fact":"再次移动一个棋子。"}],
                 "ruleGroupInventoryComplete":true,"quantityObservations":[]}]}
+                """);
+
+        assertThat(repeatedHeading.pages().getFirst().ruleGroupIdentifiers())
+                .containsExactly("page-4-group-1", "page-4-group-2");
+
+        assertThatThrownBy(() -> SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalogV5("""
+                {"pages":[{"pageNumber":4,"printedTerms":["MOVE"],"factualSummary":[],
+                "keywords":["MOVE"],"sourceDependencies":[],
+                "ruleGroups":[{"identifier":"MOVE","fact":"移动一个棋子。"},
+                              {"identifier":" move ","fact":" 移动一个棋子。 "}],
+                "ruleGroupInventoryComplete":true,"quantityObservations":[]}]}
                 """))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("duplicated");
+                .hasMessageContaining("exactly duplicated");
     }
 
     @Test
@@ -345,7 +356,7 @@ class SpringAiVisualRulebookPageCatalogModelTest {
 
         assertThat(accepted.pages().getFirst().quantityObservations())
                 .extracting(observation -> observation.ruleGroupIdentifier())
-                .containsExactly("SETUP", "GOAL");
+                .containsExactly("page-1-group-1", "page-1-group-2");
 
         assertThatThrownBy(() -> SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalogV6("""
                 {"pages":[{"pageNumber":1,"printedTerms":["SETUP"],"factualSummary":[],
@@ -820,7 +831,7 @@ class SpringAiVisualRulebookPageCatalogModelTest {
         CatalogDraft teachingDraft = model.summarizeForTeaching(request);
 
         assertThat(teachingDraft.pages()).singleElement().satisfies(page -> {
-            assertThat(page.ruleGroupIdentifiers()).containsExactly("SETUP");
+            assertThat(page.ruleGroupIdentifiers()).containsExactly("page-1-group-1");
             assertThat(page.ruleGroupInventoryComplete()).isTrue();
         });
 
@@ -895,7 +906,7 @@ class SpringAiVisualRulebookPageCatalogModelTest {
                 List.of(new PageImageInput(1, "image/png", png())), "owner", "Example Game"));
 
         assertThat(repaired.pages()).singleElement().satisfies(page -> {
-            assertThat(page.factualSummary()).isEqualTo("MOVE: Move one pawn.");
+            assertThat(page.factualSummary()).isEqualTo("page-1-group-1: [MOVE] Move one pawn.");
             assertThat(page.quantityObservations()).singleElement().satisfies(observation -> {
                 assertThat(observation.quantifierScope()).isEqualTo(QuantifierScope.LITERAL_SOURCE_SPAN);
                 assertThat(observation.resolution()).isEqualTo(QuantityResolution.TRANSCRIBED_SOURCE_SPAN);

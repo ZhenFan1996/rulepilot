@@ -220,20 +220,143 @@ class SpringAiTeachingOutlineModelTest {
     }
 
     @Test
-    void createsASourceDerivedFallbackWithoutMakingAnotherModelCall() {
+    void repairsOnlyCanonicalWholeGameConceptsWithoutRegeneratingValidSlotOwnership() {
         RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        ChatModel chatModel = mock(ChatModel.class);
+        when(configuration.usesFake(Role.TEACHING, "player")).thenReturn(false);
+        when(configuration.modelFor(Role.TEACHING, "player")).thenReturn(chatModel);
+        when(chatModel.getDefaultOptions()).thenReturn(ToolCallingChatOptions.builder().build());
+        when(chatModel.getOptions()).thenReturn(ToolCallingChatOptions.builder().build());
+        ChatResponse invalidConcept = new ChatResponse(List.of(new Generation(new AssistantMessage("""
+                {"gameTitle":"轨道协作","premise":"先接通线路，再检查共同终点。","topics":[
+                  {"key":"connect-route","objective":"能完成线路连接。","required":true,
+                   "visualEvidenceRecommended":true,"teachingUnits":[
+                    {"teachingUnitId":"connect","role":"CORE_LOOP","sourceSlotIds":["page-1-rule-1"]}]},
+                  {"key":"check-arrival","objective":"能判断共同终点。","required":true,
+                   "visualEvidenceRecommended":false,"teachingUnits":[
+                    {"teachingUnitId":"arrival","role":"ENDING","sourceSlotIds":["page-1-rule-2"]}]}
+                ],"wholeGameUnderstanding":{"summary":"线路连接后才能检查共同终点。","concepts":[
+                  {"conceptId":"shared-state","label":"共同状态","explanation":"终点检查依赖已经连接的线路。",
+                   "sourceSlotIds":["page-1-rule-2"],"relatedTopicKeys":["connect-route"],
+                   "prerequisiteConceptIds":[]}],"topicDependencies":[]}}
+                """))));
+        ChatResponse conceptPatch = new ChatResponse(List.of(new Generation(new AssistantMessage("""
+                {"concepts":[
+                  {"conceptId":"route-state","label":"线路状态","explanation":"线路连接形成可供终点检查的共同状态。",
+                   "sourceSlotIds":["page-1-rule-1"],"relatedTopicKeys":["connect-route"],
+                   "prerequisiteConceptIds":[]},
+                  {"conceptId":"arrival-check","label":"终点检查","explanation":"共同终点必须在线路状态建立后检查。",
+                   "sourceSlotIds":["page-1-rule-2"],"relatedTopicKeys":["check-arrival"],
+                   "prerequisiteConceptIds":["route-state"]}],
+                 "topicDependencies":[{"prerequisiteTopicKey":"connect-route",
+                   "dependentTopicKey":"check-arrival","reason":"先连接线路，才能判断共同终点。"}]}
+                """))));
+        when(chatModel.call(any(Prompt.class))).thenReturn(invalidConcept, conceptPatch);
         SpringAiTeachingOutlineModel model = new SpringAiTeachingOutlineModel(
                 configuration, mock(VersionedAgentPrompts.class), new FakeTeachingOutlineModel());
-
-        var outline = model.fallback(new OutlineRequest(
-
-                List.of(new PageInput(1, "SETTING UP A GAME: Give each player two power tokens.")),
+        PageInput page = new PageInput(
+                1,
+                """
+                        [Visual page catalog; verify against page image]
+                        Printed terms: CONNECT ROUTE; CHECK ARRIVAL
+                        Visible facts:
+                        CONNECT ROUTE: Join one open rail to the shared route.
+                        CHECK ARRIVAL: Check the shared destination after the route is complete.
+                        Keywords: route; destination
+                        """,
                 List.of(),
-                "player"));
+                List.of("CONNECT ROUTE", "CHECK ARRIVAL"),
+                true);
 
-        assertThat(outline.topics()).anyMatch(topic -> topic.coverageTags().contains("setup"));
-        assertThat(outline.topics()).anyMatch(topic -> topic.coverageTags().contains("scoring"));
-        verify(configuration, never()).modelFor(Role.TEACHING, "player");
+        OutlineDraft outline;
+        try {
+            outline = model.organize(new OutlineRequest(List.of(page), List.of(), "player"));
+        } finally {
+            model.close();
+        }
+
+        assertThat(outline.topics()).extracting(TopicDraft::key)
+                .containsExactly("connect-route", "check-arrival");
+        assertThat(outline.sourceCoverageSlots())
+                .extracting(slot -> slot.slotId())
+                .containsExactly("page-1-rule-1", "page-1-rule-2");
+        assertThat(outline.wholeGameUnderstanding().concepts())
+                .extracting(concept -> concept.conceptId())
+                .containsExactly("route-state", "arrival-check");
+        ArgumentCaptor<Prompt> promptsSent = ArgumentCaptor.forClass(Prompt.class);
+        verify(chatModel, times(2)).call(promptsSent.capture());
+        assertThat(promptsSent.getAllValues().get(1).getInstructions())
+                .extracting(message -> message.getText())
+                .anySatisfy(text -> assertThat(text)
+                        .contains("repair only the shared source-bound mental model")
+                        .doesNotContain("Rebuild the complete outline"));
+        assertThat(promptsSent.getAllValues().get(1).getInstructions())
+                .extracting(message -> message.getText())
+                .anySatisfy(text -> assertThat(text).contains("page-1-rule-1", "page-1-rule-2"));
+    }
+
+    @Test
+    void assignsOnlyOmittedCanonicalSlotsWithoutRegeneratingTheValidPlan() {
+        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        ChatModel chatModel = mock(ChatModel.class);
+        when(configuration.usesFake(Role.TEACHING, "player")).thenReturn(false);
+        when(configuration.modelFor(Role.TEACHING, "player")).thenReturn(chatModel);
+        when(chatModel.getDefaultOptions()).thenReturn(ToolCallingChatOptions.builder().build());
+        when(chatModel.getOptions()).thenReturn(ToolCallingChatOptions.builder().build());
+        ChatResponse incomplete = new ChatResponse(List.of(new Generation(new AssistantMessage("""
+                {"gameTitle":"共同远征","premise":"完成准备后依次行动。","topics":[
+                  {"key":"play-round","objective":"能完成准备并执行一轮。","required":true,
+                   "visualEvidenceRecommended":true,"teachingUnits":[
+                    {"teachingUnitId":"round-flow","role":"CORE_LOOP","sourceSlotIds":["page-1-rule-1"]}]}
+                ],"wholeGameUnderstanding":{"summary":"准备状态决定一轮如何开始。","concepts":[
+                  {"conceptId":"round-state","label":"轮次状态","explanation":"准备完成后进入行动。",
+                   "sourceSlotIds":["page-1-rule-1"],"relatedTopicKeys":["play-round"],
+                   "prerequisiteConceptIds":[]}],"topicDependencies":[]}}
+                """))));
+        ChatResponse ownershipPatch = new ChatResponse(List.of(new Generation(new AssistantMessage("""
+                {"assignments":[{"sourceSlotId":"page-1-rule-2","teachingUnitId":"round-flow"}]}
+                """))));
+        when(chatModel.call(any(Prompt.class))).thenReturn(incomplete, ownershipPatch);
+        SpringAiTeachingOutlineModel model = new SpringAiTeachingOutlineModel(
+                configuration, mock(VersionedAgentPrompts.class), new FakeTeachingOutlineModel());
+        PageInput page = new PageInput(
+                1,
+                """
+                        [Visual page catalog; verify against page image]
+                        Printed terms: PREPARE; TAKE A TURN
+                        Visible facts:
+                        PREPARE: Put the shared marker on the first space.
+                        TAKE A TURN: The active player resolves one action.
+                        Keywords: prepare; turn
+                        """,
+                List.of(),
+                List.of("PREPARE", "TAKE A TURN"),
+                true);
+
+        OutlineDraft outline;
+        try {
+            outline = model.organize(new OutlineRequest(List.of(page), List.of(), "player"));
+        } finally {
+            model.close();
+        }
+
+        assertThat(outline.topics()).extracting(TopicDraft::key).containsExactly("play-round");
+        assertThat(outline.sourceCoverageSlots())
+                .extracting(slot -> slot.slotId())
+                .containsExactly("page-1-rule-1", "page-1-rule-2");
+        assertThat(outline.sourceCoverageSlots())
+                .extracting(slot -> slot.teachingUnitId())
+                .containsOnly("round-flow");
+        ArgumentCaptor<Prompt> promptsSent = ArgumentCaptor.forClass(Prompt.class);
+        verify(chatModel, times(2)).call(promptsSent.capture());
+        assertThat(promptsSent.getAllValues().get(1).getInstructions())
+                .extracting(message -> message.getText())
+                .anySatisfy(text -> assertThat(text)
+                        .contains("assign only source slots omitted")
+                        .doesNotContain("Rebuild the complete outline"));
+        assertThat(promptsSent.getAllValues().get(1).getInstructions())
+                .extracting(message -> message.getText())
+                .anySatisfy(text -> assertThat(text).contains("page-1-rule-2", "round-flow"));
     }
 
     @Test

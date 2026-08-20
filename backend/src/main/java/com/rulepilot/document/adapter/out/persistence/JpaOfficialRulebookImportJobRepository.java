@@ -241,7 +241,6 @@ class JpaOfficialRulebookImportJobRepository implements OfficialRulebookImportJo
                         """
                         update OfficialRulebookImportJobEntity job
                         set job.teachingHandoffState = 'FAILED',
-                            job.teachingPreparationRunId = null,
                             job.teachingErrorCode = 'TEACHING_RECOVERY_EXHAUSTED',
                             job.teachingHandoffReconciledAt = :now,
                             job.teachingHandoffUpdatedAt = :now,
@@ -252,6 +251,34 @@ class JpaOfficialRulebookImportJobRepository implements OfficialRulebookImportJo
                           and job.teachingHandoffReconciledAt is null
                           and job.teachingAutomaticRecoveryCount = 1
                         """)
+                .setParameter("now", now)
+                .setParameter("jobId", jobId)
+                .setParameter("expectedRunId", expectedPreparationRunId)
+                .executeUpdate() == 1;
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public boolean failTeachingTerminal(
+            UUID jobId, UUID expectedPreparationRunId, String errorCode, Instant now) {
+        if (errorCode == null || errorCode.isBlank() || errorCode.length() > 64) {
+            throw new IllegalArgumentException("terminal teaching failure code is invalid");
+        }
+        return entityManager
+                .createQuery(
+                        """
+                        update OfficialRulebookImportJobEntity job
+                        set job.teachingHandoffState = 'FAILED',
+                            job.teachingErrorCode = :errorCode,
+                            job.teachingHandoffReconciledAt = :now,
+                            job.teachingHandoffUpdatedAt = :now,
+                            job.updatedAt = :now
+                        where job.id = :jobId
+                          and job.teachingHandoffState = 'LAUNCHED'
+                          and job.teachingPreparationRunId = :expectedRunId
+                          and job.teachingHandoffReconciledAt is null
+                        """)
+                .setParameter("errorCode", errorCode.strip())
                 .setParameter("now", now)
                 .setParameter("jobId", jobId)
                 .setParameter("expectedRunId", expectedPreparationRunId)
@@ -309,6 +336,32 @@ class JpaOfficialRulebookImportJobRepository implements OfficialRulebookImportJo
                 .setParameter("now", now);
         if (expectedPreparationRunId != null) update.setParameter("expectedRunId", expectedPreparationRunId);
         return update.executeUpdate() == 1;
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public int dismissTeachingForDocumentVersion(
+            UUID documentVersionId, String ownerUsername, Instant now) {
+        return entityManager
+                .createQuery(
+                        """
+                        update OfficialRulebookImportJobEntity job
+                        set job.teachingHandoffState = 'NOT_REQUESTED',
+                            job.teachingLearningGoal = null,
+                            job.teachingPreparationRunId = null,
+                            job.teachingErrorCode = null,
+                            job.teachingHandoffReconciledAt = null,
+                            job.teachingAutomaticRecoveryCount = 0,
+                            job.teachingHandoffUpdatedAt = null,
+                            job.updatedAt = :now
+                        where job.documentVersionId = :versionId
+                          and job.ownerUsername = :owner
+                          and job.teachingHandoffState <> 'NOT_REQUESTED'
+                        """)
+                .setParameter("versionId", documentVersionId)
+                .setParameter("owner", ownerUsername)
+                .setParameter("now", now)
+                .executeUpdate();
     }
 
     @Override

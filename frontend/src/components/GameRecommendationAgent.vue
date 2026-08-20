@@ -229,6 +229,7 @@ let restoringConversation = false
 let serverRestoreGeneration = 0
 let turnCancellationGeneration = 0
 let disposed = false
+let selectedBggIdToRestore: number | null = null
 
 const sessionKnown = computed(() => props.sessionIdentity !== null)
 const signedIn = computed(() => props.sessionIdentity === undefined
@@ -588,6 +589,7 @@ function selectGame(game: RecommendationGame) {
     conversationRole.value = 'recommendation'
   }
   selectedGame.value = game
+  selectedBggIdToRestore = game.bggId
   activeFocusedBggId.value = game.bggId
   openSurface.value = 'journey'
 }
@@ -705,6 +707,7 @@ function conversationSnapshot(): RecommendationConversationSnapshot {
     transcript: playerConversationTranscript().map(({ role, text }) => ({ role, text })),
     knownGames: minimalKnownGames(),
     shownBggIds: [...seenBggIds.value],
+    selectedBggId: selectedGame.value?.bggId ?? selectedBggIdToRestore,
     failed: Boolean(failed.value && pending),
     pending,
   }
@@ -715,7 +718,7 @@ function persistRecommendationConversation(owner = restoredConversationOwner) {
   rememberRecommendationConversation(sessionStorage, owner, conversationSnapshot())
 }
 
-function clearVisibleRecommendationConversation() {
+function clearVisibleRecommendationConversation(preserveSelectedIdentity = false) {
   conversationId.value = null
   conversationRevision.value = 0
   profile.value = emptyProfile()
@@ -731,6 +734,7 @@ function clearVisibleRecommendationConversation() {
   rememberedKnownGames.value = []
   activeFocusedBggId.value = null
   selectedGame.value = null
+  if (!preserveSelectedIdentity) selectedBggIdToRestore = null
   detailsGame.value = null
   journeyStatus.value = null
   conversationRole.value = 'recommendation'
@@ -754,6 +758,7 @@ function restoreRecommendationConversation(owner: string) {
   }
   rememberedKnownGames.value = snapshot.knownGames.map(game => ({ ...game }))
   seenBggIds.value = [...snapshot.shownBggIds]
+  selectedBggIdToRestore = snapshot.selectedBggId
   failed.value = Boolean(snapshot.failed && snapshot.pending)
   failedTurnLocale.value = failed.value
     ? snapshot.pending?.responseLocale ?? snapshot.responseLocale
@@ -807,7 +812,8 @@ function isRecommendationServerSession(value: unknown): value is RecommendationS
 
 function applyServerRecommendationConversation(session: RecommendationServerSession) {
   const pending = lastRequest.value ? copiedPendingRequest(lastRequest.value) : null
-  clearVisibleRecommendationConversation()
+  const selectedBggId = selectedGame.value?.bggId ?? selectedBggIdToRestore
+  clearVisibleRecommendationConversation(true)
   conversationId.value = session.conversationId
   conversationRevision.value = session.revision
   profile.value = canonicalRecommendationProfile(session.profile)
@@ -831,6 +837,12 @@ function applyServerRecommendationConversation(session: RecommendationServerSess
       ...(latest.comparison?.candidates.map(candidate => candidate.game) ?? []),
     ]
     knownGames.value = responseGames
+    const restoredSelection = responseGames.find(game => game.bggId === selectedBggId)
+    if (restoredSelection) {
+      selectedGame.value = restoredSelection
+      activeFocusedBggId.value = restoredSelection.bggId
+      selectedBggIdToRestore = restoredSelection.bggId
+    }
     rememberedKnownGames.value = minimalKnownGames()
     const lastAssistant = [...messages.value].reverse().find(message => message.role === 'assistant')
     if (lastAssistant) lastAssistant.response = latest
@@ -925,6 +937,7 @@ function reset(preserveJourney = false) {
   }
   if (!preserveJourney) {
     selectedGame.value = null
+    selectedBggIdToRestore = null
     detailsGame.value = null
     journeyStatus.value = null
     conversationRole.value = 'recommendation'
@@ -1033,7 +1046,7 @@ watch(
   { immediate: true },
 )
 watch(
-  [profile, messages, rememberedKnownGames, seenBggIds, failed, lastRequest, conversationId, conversationRevision, loading],
+  [profile, messages, rememberedKnownGames, seenBggIds, selectedGame, failed, lastRequest, conversationId, conversationRevision, loading],
   () => { persistRecommendationConversation() },
   { deep: true, flush: 'post' },
 )

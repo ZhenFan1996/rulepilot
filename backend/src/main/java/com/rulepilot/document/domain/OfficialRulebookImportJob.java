@@ -161,7 +161,8 @@ public record OfficialRulebookImportJob(
             boolean failed = state == TeachingHandoffState.FAILED;
             if (notRequested != (updatedAt == null)
                     || notRequested && (learningGoal != null || preparationRunId != null || errorCode != null)
-                    || launched != (preparationRunId != null)
+                    || launched && preparationRunId == null
+                    || !launched && !failed && preparationRunId != null
                     || failed != (errorCode != null)) {
                 throw new IllegalArgumentException("teaching handoff shape is invalid");
             }

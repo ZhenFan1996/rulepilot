@@ -21,6 +21,10 @@ public interface RulebookTeachingEvidenceFreshness {
         IN_PROGRESS,
         /** A plan and at least one source-cited player-readable section are still persisted. */
         REUSABLE,
+        /** The last preparation failed because of a transient provider, timeout, or worker condition. */
+        RETRYABLE_FAILURE,
+        /** The last preparation deterministically failed its source-bound plan contract. */
+        TERMINAL_FAILURE,
         /** The referenced run ended without a reusable Teaching result, or its derived evidence is stale. */
         REFRESH_REQUIRED
     }

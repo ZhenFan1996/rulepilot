@@ -13,7 +13,7 @@ public final class VisualTranscribedRuleEvidence {
     private VisualTranscribedRuleEvidence() {}
 
     public static String render(String factualSummary) {
-        if (factualSummary == null || factualSummary.isBlank() || factualSummary.length() > 4_000) {
+        if (factualSummary == null || factualSummary.isBlank()) {
             throw new IllegalArgumentException("visual transcription factual summary is invalid");
         }
         return MARKER + " Only the statements under Visible rule facts are rule evidence. "

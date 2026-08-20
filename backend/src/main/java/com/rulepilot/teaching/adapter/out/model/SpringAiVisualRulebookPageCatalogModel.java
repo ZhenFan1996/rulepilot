@@ -1040,8 +1040,9 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
                 List<SourceDependency> dependencies = sourceDependencies(
                         sourceDependencyInventory, externalDocumentShape ? "documentTitle" : "title");
                 JsonNode ruleGroupInventory = page.get("ruleGroupIdentifiers");
+                int pageNumber = page.path("pageNumber").asInt();
                 List<ModelRuleGroup> boundRuleGroups = requireBoundRuleGroups
-                        ? strictBoundRuleGroups(page.get("ruleGroups"))
+                        ? strictBoundRuleGroups(pageNumber, page.get("ruleGroups"))
                         : List.of();
                 JsonNode ruleGroupCompleteness = page.get("ruleGroupInventoryComplete");
                 if (requireSourceDependencies && !requireBoundRuleGroups
@@ -1078,7 +1079,7 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
                 String factualSummary = joinedText(page.get("factualSummary"), "\n");
                 if (requireBoundRuleGroups && !boundRuleGroups.isEmpty()) {
                     String boundFacts = boundRuleGroups.stream()
-                            .map(group -> group.identifier() + ": " + group.fact())
+                            .map(group -> group.identifier() + ": [" + group.label() + "] " + group.fact())
                             .collect(java.util.stream.Collectors.joining("\n"));
                     factualSummary = factualSummary.isBlank()
                             ? boundFacts
@@ -1102,7 +1103,7 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
                     validateRuleGroupFactBindings(ruleGroupIdentifiers, factualSummary, "visual teaching");
                 }
                 summaries.add(new PageSummary(
-                        page.path("pageNumber").asInt(),
+                        pageNumber,
                         printedTerms,
                         factualSummary,
                         normalizedStrings(page.get("keywords")),
@@ -1124,12 +1125,15 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
         return strictIdentifiers(value, "visual teaching catalog");
     }
 
-    private static List<ModelRuleGroup> strictBoundRuleGroups(JsonNode value) {
+    private static List<ModelRuleGroup> strictBoundRuleGroups(int pageNumber, JsonNode value) {
+        if (pageNumber <= 0) {
+            throw new IllegalArgumentException("visual teaching catalog pageNumber must be positive");
+        }
         if (value == null || !value.isArray()) {
             throw new IllegalArgumentException("visual teaching catalog must return ruleGroups for every page");
         }
         List<ModelRuleGroup> groups = new java.util.ArrayList<>();
-        java.util.LinkedHashSet<String> identities = new java.util.LinkedHashSet<>();
+        java.util.LinkedHashSet<String> exactGroups = new java.util.LinkedHashSet<>();
         for (JsonNode item : value) {
             if (!item.isObject()) {
                 throw new IllegalArgumentException("visual teaching catalog ruleGroups item must be an object");
@@ -1146,17 +1150,20 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
                 throw new IllegalArgumentException(
                         "visual teaching catalog redundant ruleGroupIndex must equal the ruleGroups array position");
             }
-            String identifier = requiredText(item.get("identifier"), "identifier", false).strip();
+            String label = requiredText(item.get("identifier"), "identifier", false).strip();
             String fact = requiredText(item.get("fact"), "fact", false).strip();
-            String identity = VisualSourceRuleGroupLedger.identity(identifier);
-            if (!identities.add(identity)) {
+            String exactGroup = VisualSourceRuleGroupLedger.identity(label)
+                    + "\u0000"
+                    + VisualSourceRuleGroupLedger.identity(fact);
+            if (!exactGroups.add(exactGroup)) {
                 throw new IllegalArgumentException(
-                        "visual teaching catalog rule-group identifier is invalid or duplicated");
+                        "visual teaching catalog contains an exactly duplicated rule group");
             }
             if (fact.indexOf('\n') >= 0 || fact.indexOf('\r') >= 0) {
                 throw new IllegalArgumentException("visual teaching catalog rule-group fact must be a single line");
             }
-            groups.add(new ModelRuleGroup(identifier, fact));
+            groups.add(new ModelRuleGroup(
+                    "page-" + pageNumber + "-group-" + (groups.size() + 1), label, fact));
         }
         return List.copyOf(groups);
     }
@@ -1882,7 +1889,7 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
         return value == null || value.isBlank() ? fallback : value;
     }
 
-    private record ModelRuleGroup(String identifier, String fact) {}
+    private record ModelRuleGroup(String identifier, String label, String fact) {}
 
     static CatalogDraft normalizePageBindings(CatalogRequest request, CatalogDraft draft) {
         if (draft == null) throw new IllegalArgumentException("visual page catalog model returned no draft");
