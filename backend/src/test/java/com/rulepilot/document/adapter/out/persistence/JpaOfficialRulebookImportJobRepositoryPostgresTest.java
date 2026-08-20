@@ -496,7 +496,9 @@ class JpaOfficialRulebookImportJobRepositoryPostgresTest {
                         String.class,
                         retainedJobId))
                 .isEqualTo("LAUNCHED");
-        assertThat(inTransactionReturning(repository -> repository.findUnreconciledLaunchedTeaching(4)))
+        List<OfficialRulebookImportJob> unreconciledJobs =
+                inTransactionReturning(repository -> repository.findUnreconciledLaunchedTeaching(4));
+        assertThat(unreconciledJobs)
                 .extracting(OfficialRulebookImportJob::id)
                 .containsExactly(retainedJobId);
         assertThat(jdbc.queryForObject(
