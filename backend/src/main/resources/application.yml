@@ -222,6 +222,10 @@ rulepilot:
     dataset: ${ANSWER_REGRESSION_DATASET:}
     name: ${ANSWER_REGRESSION_NAME:external-answer-regressions}
   models:
+    credential-encryption-key: ${MODEL_CREDENTIAL_ENCRYPTION_KEY:}
+    credential-encryption-key-version: ${MODEL_CREDENTIAL_ENCRYPTION_KEY_VERSION:1}
+    default-monthly-token-limit: ${MODEL_DEFAULT_MONTHLY_TOKEN_LIMIT:2000000}
+    per-call-reservation-tokens: ${MODEL_PER_CALL_RESERVATION_TOKENS:16000}
     request-timeout: ${MODEL_REQUEST_TIMEOUT:PT2M}
     startup-allowed-users: ${RULEPILOT_MODELS_STARTUP_ALLOWED_USERS:}
     openai:

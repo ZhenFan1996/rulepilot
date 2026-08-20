@@ -20,6 +20,7 @@ describe('RegisterView', () => {
     expect(wrapper.get('[data-testid="auth-return-context"]').text()).toContain('回到刚才的页面')
     expect(wrapper.get('a[href="/login?redirect=/lessons?filter=pending"]')).toBeTruthy()
     await wrapper.get('input[name="username"]').setValue(' Player ')
+    await wrapper.get('input[name="email"]').setValue(' Player@Example.com ')
     await wrapper.get('input[name="password"]').setValue('test-password')
     await wrapper.get('input[name="confirmation"]').setValue('test-password')
     await wrapper.get('form').trigger('submit')
@@ -27,6 +28,10 @@ describe('RegisterView', () => {
 
     expect(router.currentRoute.value.fullPath).toBe('/lessons?filter=pending')
     const loginRequest = vi.mocked(fetch).mock.calls.find(([input]) => String(input).includes('/api/auth/login'))
+    const registrationRequest = vi.mocked(fetch).mock.calls.find(([input]) => String(input).includes('/api/auth/register'))
+    expect(JSON.parse(String(registrationRequest?.[1]?.body))).toMatchObject({
+      username: ' Player ', email: 'Player@Example.com',
+    })
     expect(String(loginRequest?.[1]?.body)).toContain('username=player')
     wrapper.unmount()
   })
@@ -104,6 +109,30 @@ describe('RegisterView', () => {
     expect(confirmation.attributes('aria-invalid')).toBe('true')
     expect(confirmation.attributes('aria-describedby')).toBe('auth-register-error')
     expect(document.activeElement).toBe(confirmation.element)
+    wrapper.unmount()
+  })
+
+  it('keeps the form and focuses email when that address is already registered', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      if (String(input).includes('/api/auth/csrf')) return response({ headerName: 'X-CSRF-TOKEN', token: 'token' })
+      return response({ code: 'EMAIL_ALREADY_REGISTERED' }, 409)
+    }))
+    const router = memoryRouter()
+    await router.push('/register')
+    await router.isReady()
+    const wrapper = mount(RegisterView, { attachTo: document.body, global: { plugins: [router] } })
+
+    await wrapper.get('input[name="username"]').setValue('another-player')
+    const email = wrapper.get('input[name="email"]')
+    await email.setValue('player@example.com')
+    await wrapper.get('input[name="password"]').setValue('test-password')
+    await wrapper.get('input[name="confirmation"]').setValue('test-password')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    expect(wrapper.get('[role="alert"]').text()).toContain('这个邮箱已经注册过账号')
+    expect(email.attributes('aria-invalid')).toBe('true')
+    expect(document.activeElement).toBe(email.element)
     wrapper.unmount()
   })
 
@@ -220,9 +249,9 @@ function successfulRegistrationFetch() {
   })
 }
 
-function response(body: unknown) {
+function response(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
-    status: 200,
+    status,
     headers: { 'Content-Type': 'application/json' },
   })
 }

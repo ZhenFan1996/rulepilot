@@ -85,6 +85,31 @@ public class BggRecommendationAgentController {
                 .orElseGet(() -> ResponseEntity.noContent().build());
     }
 
+    @PostMapping("/api/v1/bgg/recommendation-agent/sessions")
+    ResponseEntity<RecommendationSessionResponse> startNew(Principal principal) {
+        if (conversations == null) return ResponseEntity.notFound().build();
+        return ResponseEntity.ok(RecommendationSessionResponse.from(
+                conversations.startNew(principal.getName()), presentation));
+    }
+
+    @GetMapping("/api/v1/bgg/recommendation-agent/sessions")
+    List<RecommendationSessionResponse> recent(Principal principal) {
+        if (conversations == null) return List.of();
+        return conversations.recent(principal.getName(), 50).stream()
+                .map(snapshot -> RecommendationSessionResponse.from(snapshot, presentation))
+                .toList();
+    }
+
+    @GetMapping("/api/v1/bgg/recommendation-agent/sessions/{conversationId}")
+    ResponseEntity<RecommendationSessionResponse> find(
+            @PathVariable UUID conversationId,
+            Principal principal) {
+        if (conversations == null) return ResponseEntity.notFound().build();
+        return conversations.find(conversationId, principal.getName())
+                .map(snapshot -> ResponseEntity.ok(RecommendationSessionResponse.from(snapshot, presentation)))
+                .orElseGet(() -> ResponseEntity.notFound().build());
+    }
+
     @DeleteMapping("/api/v1/bgg/recommendation-agent/sessions/{conversationId}")
     ResponseEntity<Void> delete(
             @PathVariable UUID conversationId,

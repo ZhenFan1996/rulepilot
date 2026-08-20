@@ -232,8 +232,8 @@ onBeforeUnmount(() => {
     <section class="order-1 min-w-0 lg:order-2">
       <div
         data-testid="rulebook-page-stage"
-        class="relative mx-auto grid max-w-5xl place-items-center overflow-hidden rounded-lg bg-white p-2 shadow-2xl shadow-ink/20 sm:p-4"
-        style="min-height: min(24rem, calc(100vh - 9rem))"
+        class="relative mx-auto grid w-full max-w-6xl place-items-center overflow-hidden rounded-lg bg-ink/5 p-1 shadow-2xl shadow-ink/20 sm:p-2"
+        :class="imageLoading || imageFailed ? 'min-h-72' : ''"
         :aria-busy="imageLoading ? 'true' : 'false'"
       >
         <img
@@ -248,7 +248,7 @@ onBeforeUnmount(() => {
           :aria-hidden="imageLoading ? 'true' : undefined"
           class="mx-auto h-auto w-auto max-w-full object-contain"
           :class="[
-            dialogMode ? 'max-h-[calc(100vh-10rem)]' : 'max-h-[calc(100vh-9rem)]',
+            dialogMode ? 'max-h-[calc(100vh-9rem)]' : 'max-h-[calc(100vh-8rem)]',
             imageLoading ? 'invisible absolute inset-0' : '',
           ]"
           @load="commitDisplayedImage"

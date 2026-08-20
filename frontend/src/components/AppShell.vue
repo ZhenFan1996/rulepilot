@@ -50,8 +50,8 @@ const navigation = [
   { name: 'home', path: '/', labelKey: 'nav.home', icon: 'compass' },
   { name: 'game-recommendations', path: '/discover', labelKey: 'nav.discover', icon: 'meeple' },
   { name: 'public-library', path: '/library', labelKey: 'nav.library', icon: 'library' },
-  { name: 'teach', path: '/teach', labelKey: 'nav.rulebook', icon: 'rulebook' },
-  { name: 'lessons', path: '/lessons', labelKey: 'nav.lessons', icon: 'cards' },
+  { name: 'rulebooks', path: '/rulebooks', labelKey: 'nav.rulebook', icon: 'rulebook' },
+  { name: 'work-status', path: '/work', labelKey: 'nav.lessons', icon: 'cards' },
   { name: 'catalog', path: '/catalog', labelKey: 'nav.games', icon: 'meeple' },
   { name: 'account', path: '/account', labelKey: 'nav.account', icon: 'players' },
 ] as const
@@ -59,8 +59,9 @@ const mobileNavigation = navigation.filter((item) => item.name !== 'account' && 
 
 const currentNavigationName = computed(() => {
   if (route.name === 'catalog-manage') return 'catalog'
+  if (route.name === 'teach' || route.name === 'rulebook-reader') return 'rulebooks'
   if (route.name === 'public-lesson' || route.name === 'public-lesson-questions') return 'public-library'
-  if (route.name === 'lesson' || route.name === 'lesson-questions') return 'lessons'
+  if (route.name === 'lessons' || route.name === 'lesson' || route.name === 'lesson-questions') return 'work-status'
   if (route.name === 'game-discovery' || route.name === 'game-catalog-browse') return 'game-recommendations'
   return route.name
 })
@@ -123,23 +124,7 @@ function updateBackgroundWorkStatus(
   backgroundFinishedTitle.value = finishedTitle
 }
 
-const backgroundShortcutTitle = computed(() => {
-  if (backgroundActiveCount.value) {
-    return backgroundActiveCount.value === 1 && backgroundActiveTitle.value
-      ? t('shell.lesson.oneActive', { title: backgroundActiveTitle.value })
-      : t('shell.lesson.manyActive', { count: backgroundActiveCount.value })
-  }
-  if (!backgroundFinishedCount.value) return t('shell.lesson.none')
-  return backgroundFinishedCount.value === 1 && backgroundFinishedTitle.value
-    ? t('shell.lesson.oneFinished', { title: backgroundFinishedTitle.value })
-    : t('shell.lesson.manyFinished', { count: backgroundFinishedCount.value })
-})
-
-const backgroundShortcutAction = computed(() => backgroundActiveCount.value
-  ? t('shell.lesson.viewProgress')
-  : backgroundFinishedCount.value
-    ? t('shell.lesson.viewResult')
-    : t('shell.lesson.openStatus'))
+const onWorkStatusPage = computed(() => route.name === 'work-status')
 
 function openBackgroundWork(event: MouseEvent) {
   backgroundWorkCenter.value?.openCenter(event.currentTarget as HTMLElement)
@@ -182,11 +167,23 @@ onBeforeUnmount(() => {
           v-for="item in navigation"
           :key="item.name"
           :to="item.path"
+          :data-testid="item.name === 'work-status' ? 'work-status-navigation-link' : undefined"
           class="drawer-link group flex min-h-11 items-center gap-3 px-3 text-sm font-semibold transition-[color,background-color,translate]"
           :class="currentNavigationName === item.name ? 'border-[#d5b46a]/55 bg-[#f8efdf] text-[#27312e] drawer-link-active' : 'border-transparent text-[#f5f0e8]/66 hover:translate-x-0.5 hover:bg-white/7 hover:text-[#f5f0e8]'"
         >
           <TabletopGlyph :name="item.icon" :size="19" class="shrink-0" :class="currentNavigationName === item.name ? 'text-copper' : 'text-[#f5f0e8]/48 group-hover:text-[#f5f0e8]'" />
-          <span>{{ t(item.labelKey) }}</span>
+          <span class="min-w-0 flex-1">{{ t(item.labelKey) }}</span>
+          <span v-if="item.name === 'work-status' && backgroundActiveCount" data-testid="work-status-navigation-active" class="grid min-w-5 place-items-center rounded-full bg-copper px-1.5 text-xs text-white">{{ backgroundActiveCount }}</span>
+          <span v-else-if="item.name === 'work-status' && backgroundFinishedCount" data-testid="work-status-navigation-finished" class="size-2 rounded-full bg-emerald-500" aria-hidden="true" />
+        </RouterLink>
+        <RouterLink
+          v-if="isAdmin"
+          :to="{ name: 'admin-models' }"
+          class="drawer-link flex min-h-11 items-center gap-3 px-3 text-sm font-semibold transition-colors"
+          :class="currentNavigationName === 'admin-models' ? 'border-[#d5b46a]/55 bg-[#f8efdf] text-[#27312e]' : 'border-transparent text-[#f5f0e8]/58 hover:bg-white/7 hover:text-[#f5f0e8]'"
+        >
+          <TabletopGlyph name="players" :size="19" class="shrink-0" />
+          <span>{{ t('nav.adminModels') }}</span>
         </RouterLink>
         <RouterLink
           v-if="isAdmin"
@@ -270,42 +267,26 @@ onBeforeUnmount(() => {
     </main>
 
     <BackgroundWorkCenter
-      v-if="username && !immersive"
+      v-if="username && !immersive && !onWorkStatusPage"
       ref="backgroundWorkCenter"
       :username="username"
       @status="updateBackgroundWorkStatus"
     />
-
-    <button
-      v-if="username && !immersive"
-      type="button"
-      data-testid="background-work-persistent-shortcut"
-      class="fixed bottom-20 left-3 right-3 z-40 mx-auto flex min-h-16 max-w-md items-center gap-3 rounded-2xl border border-copper/35 bg-paper/97 px-4 py-3 text-left text-ink shadow-xl backdrop-blur transition hover:border-copper/60 lg:bottom-6 lg:left-auto lg:right-6 lg:mx-0 lg:w-96"
-      :aria-label="`${t('shell.guideStatus')}：${backgroundShortcutTitle}。${backgroundShortcutAction}`"
-      aria-haspopup="dialog"
-      @click="openBackgroundWork"
-    >
-      <span class="grid size-10 shrink-0 place-items-center rounded-full bg-copper/12 text-copper" aria-hidden="true">
-        <TabletopGlyph name="cards" :size="19" />
-      </span>
-      <span class="min-w-0 flex-1">
-        <span class="block text-[0.6875rem] font-bold uppercase tracking-[0.12em] text-copper">{{ t('shell.guideStatus') }}</span>
-        <span class="mt-0.5 block truncate text-sm font-semibold">{{ backgroundShortcutTitle }}</span>
-      </span>
-      <span class="shrink-0 text-sm font-semibold text-indigo underline underline-offset-4">
-        {{ backgroundShortcutAction }}
-      </span>
-    </button>
 
     <nav v-if="!immersive" class="fixed inset-x-0 bottom-0 z-40 grid grid-cols-5 border-t border-ink/10 bg-paper/97 px-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-2 mobile-navigation backdrop-blur lg:hidden" :aria-label="t('shell.primaryNav')">
       <RouterLink
         v-for="item in mobileNavigation"
         :key="item.name"
         :to="item.path"
+        :data-testid="item.name === 'work-status' ? 'work-status-mobile-navigation-link' : undefined"
         class="flex min-h-12 flex-col items-center justify-center gap-0.5 rounded-xl px-1 py-1.5 text-center text-[0.65rem] font-semibold"
         :class="currentNavigationName === item.name ? 'bg-felt text-white' : 'text-ink/55'"
       >
-        <TabletopGlyph :name="item.icon" :size="18" />
+        <span class="relative">
+          <TabletopGlyph :name="item.icon" :size="18" />
+          <span v-if="item.name === 'work-status' && backgroundActiveCount" data-testid="work-status-mobile-navigation-active" class="absolute -right-3 -top-2 grid min-w-4 place-items-center rounded-full bg-copper px-1 text-[0.58rem] leading-4 text-white">{{ backgroundActiveCount }}</span>
+          <span v-else-if="item.name === 'work-status' && backgroundFinishedCount" class="absolute -right-1.5 -top-1 size-1.5 rounded-full bg-emerald-500" aria-hidden="true" />
+        </span>
         <span>{{ t(item.labelKey) }}</span>
       </RouterLink>
     </nav>

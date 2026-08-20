@@ -28,6 +28,45 @@ describe('streamGameRecommendation', () => {
     expect(result).toMatchObject(payload)
   })
 
+  it('preserves measured candidate and hard-constraint counts from progress events', async () => {
+    const payload = {
+      outcome: 'no_match', mode: 'model_assisted', assistantMessage: '没有匹配。',
+      profile: { players: 4, maxMinutes: 120, maxWeight: null, type: 'all', interaction: 'any' },
+      clarification: null, sourceCount: 20, candidatesEvaluated: 6, games: [],
+    }
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(
+      `event: progress\ndata: {"stage":"verifying_bgg_candidates","elapsedMs":120,"observedCandidates":8,"verifiedCandidates":6,"hardRejectedCandidates":3,"sourceCount":20}\n\nevent: result\ndata: ${JSON.stringify(payload)}\n\n`,
+      { headers: { 'Content-Type': 'text/event-stream' } },
+    )))
+    const progress: unknown[] = []
+
+    await streamGameRecommendation('/stream', { method: 'POST' }, update => progress.push(update))
+
+    expect(progress).toEqual([expect.objectContaining({
+      observedCandidates: 8,
+      verifiedCandidates: 6,
+      hardRejectedCandidates: 3,
+      sourceCount: 20,
+    })])
+  })
+
+  it('publishes only an explicitly validated message field as an answer preview', async () => {
+    const payload = {
+      outcome: 'conversation', mode: 'model_assisted', assistantMessage: '我会选左边这款。',
+      profile: { players: null, maxMinutes: null, maxWeight: null, type: 'all', interaction: 'any' },
+      clarification: null, sourceCount: 1, candidatesEvaluated: 1, games: [],
+    }
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(
+      `event: answer_part\ndata: {"field":"message","text":"我会选左边这款。"}\n\nevent: result\ndata: ${JSON.stringify(payload)}\n\n`,
+      { headers: { 'Content-Type': 'text/event-stream' } },
+    )))
+    const previews: string[] = []
+
+    await streamGameRecommendation('/stream', { method: 'POST' }, () => undefined, text => previews.push(text))
+
+    expect(previews).toEqual(['我会选左边这款。'])
+  })
+
   it('keeps JSON response compatibility during a rolling deployment', async () => {
     const payload = {
       outcome: 'unavailable', mode: 'model_assisted', assistantMessage: '暂时不可用。',

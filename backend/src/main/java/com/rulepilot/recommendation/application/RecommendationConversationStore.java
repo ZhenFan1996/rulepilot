@@ -18,9 +18,17 @@ public interface RecommendationConversationStore {
             ConversationState initialState,
             Instant now);
 
+    StoredConversation createNew(
+            UUID conversationId,
+            String ownerUsername,
+            ConversationState initialState,
+            Instant now);
+
     Optional<StoredConversation> findOwned(UUID conversationId, String ownerUsername);
 
     Optional<StoredConversation> findLatestOwned(String ownerUsername);
+
+    List<StoredConversation> findRecentOwned(String ownerUsername, int limit);
 
     boolean claimTurn(
             UUID conversationId,

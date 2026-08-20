@@ -9,7 +9,7 @@ import { useLocale } from '@/lib/locale'
 
 interface CsrfResponse { headerName: string; token: string }
 
-type RegistrationFailure = 'mismatch' | 'taken' | 'requirements' | 'connection' | 'unavailable' | 'created-login'
+type RegistrationFailure = 'mismatch' | 'taken' | 'email-taken' | 'requirements' | 'connection' | 'unavailable' | 'created-login'
 
 class RegistrationRequestError extends Error {
   constructor(readonly failure: RegistrationFailure) {
@@ -21,12 +21,14 @@ const router = useRouter()
 const route = useRoute()
 const { t } = useLocale()
 const username = ref('')
+const email = ref('')
 const password = ref('')
 const confirmation = ref('')
 const isSubmitting = ref(false)
 const accountCreated = ref(false)
 const failure = ref<RegistrationFailure | null>(null)
 const usernameInput = ref<HTMLInputElement | null>(null)
+const emailInput = ref<HTMLInputElement | null>(null)
 const confirmationInput = ref<HTMLInputElement | null>(null)
 const errorSummary = ref<HTMLElement | null>(null)
 const returnPath = computed(() => safeKnownAuthReturnPath(router, route.query.redirect))
@@ -35,11 +37,13 @@ const loginTarget = computed(() => returnPath.value
   : { name: 'login' })
 const inputsLocked = computed(() => isSubmitting.value || accountCreated.value)
 const usernameInvalid = computed(() => failure.value === 'taken' || failure.value === 'requirements')
+const emailInvalid = computed(() => failure.value === 'email-taken' || failure.value === 'requirements')
 const passwordInvalid = computed(() => failure.value === 'requirements')
 const confirmationInvalid = computed(() => failure.value === 'mismatch')
 const errorMessage = computed(() => failure.value ? ({
   mismatch: t('auth.register.mismatch'),
   taken: t('auth.register.taken'),
+  'email-taken': t('auth.register.emailTaken'),
   requirements: t('auth.register.requirements'),
   connection: t('auth.connection'),
   unavailable: t('auth.unavailable'),
@@ -58,6 +62,7 @@ async function exposeFailure(nextFailure: RegistrationFailure) {
   failure.value = nextFailure
   await nextTick()
   if (nextFailure === 'mismatch') confirmationInput.value?.focus()
+  else if (nextFailure === 'email-taken') emailInput.value?.focus()
   else if (nextFailure === 'taken' || nextFailure === 'requirements') usernameInput.value?.focus()
   else errorSummary.value?.focus()
 }
@@ -80,13 +85,17 @@ async function register() {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json', [csrf.headerName]: csrf.token },
-        body: JSON.stringify({ username: username.value, password: password.value }),
+        body: JSON.stringify({ username: username.value, email: email.value, password: password.value }),
       })
-      if (response.status === 409) throw new RegistrationRequestError('taken')
+      if (response.status === 409) {
+        const conflict = await response.json().catch(() => null) as { code?: string } | null
+        throw new RegistrationRequestError(conflict?.code === 'EMAIL_ALREADY_REGISTERED' ? 'email-taken' : 'taken')
+      }
       if (response.status === 400) throw new RegistrationRequestError('requirements')
       if (!response.ok) throw new RegistrationRequestError('unavailable')
       accountCreated.value = true
       username.value = username.value.trim().toLowerCase()
+      email.value = email.value.trim().toLowerCase()
     }
 
     const body = new URLSearchParams({ username: username.value.trim().toLowerCase(), password: password.value })
@@ -127,6 +136,10 @@ async function register() {
         <label class="block text-sm font-semibold">{{ t('auth.username') }}
           <input ref="usernameInput" v-model="username" name="username" autocomplete="username" required minlength="3" maxlength="40" :disabled="inputsLocked" :aria-invalid="usernameInvalid ? 'true' : undefined" :aria-describedby="usernameInvalid ? 'auth-register-username-hint auth-register-error' : 'auth-register-username-hint'" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-4 py-3 outline-none focus:border-indigo focus:ring-4 focus:ring-indigo/10 disabled:opacity-50" @input="clearFailure">
           <span id="auth-register-username-hint" class="mt-1.5 block font-normal text-ink/40">{{ t('auth.register.usernameHint') }}</span>
+        </label>
+        <label class="block text-sm font-semibold">{{ t('auth.email') }}
+          <input ref="emailInput" v-model="email" name="email" type="email" autocomplete="email" required maxlength="254" :disabled="inputsLocked" :aria-invalid="emailInvalid ? 'true' : undefined" :aria-describedby="emailInvalid ? 'auth-register-email-hint auth-register-error' : 'auth-register-email-hint'" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-4 py-3 outline-none focus:border-indigo focus:ring-4 focus:ring-indigo/10 disabled:opacity-50" @input="clearFailure">
+          <span id="auth-register-email-hint" class="mt-1.5 block font-normal text-ink/40">{{ t('auth.register.emailHint') }}</span>
         </label>
         <label class="block text-sm font-semibold">{{ t('auth.password') }}
           <input v-model="password" name="password" type="password" autocomplete="new-password" required minlength="8" :disabled="inputsLocked" :aria-invalid="passwordInvalid ? 'true' : undefined" :aria-describedby="passwordInvalid ? 'auth-register-password-hint auth-register-error' : 'auth-register-password-hint'" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-4 py-3 outline-none focus:border-indigo focus:ring-4 focus:ring-indigo/10 disabled:opacity-50" @input="clearFailure">

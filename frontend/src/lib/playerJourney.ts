@@ -26,6 +26,13 @@ export type OfficialImportFailureKind =
   | 'INTERRUPTED'
   | 'OTHER'
 
+export type TeachingRecoveryAction =
+  | 'WAIT'
+  | 'OPEN_PROGRESS'
+  | 'RETRY_TEACHING'
+  | 'RETRY_DOCUMENT'
+  | 'NONE'
+
 export interface OfficialImportRecovery {
   state: OfficialImportRecoveryState
   failureKind: OfficialImportFailureKind
@@ -46,6 +53,7 @@ export interface PlayerJourneyImportJob {
   teachingHandoffState: TeachingHandoffState
   teachingPreparationRunId: string | null
   teachingErrorCode?: string | null
+  teachingNextAction?: TeachingRecoveryAction
   recovery?: OfficialImportRecovery
   updatedAt?: string
 }
@@ -167,12 +175,14 @@ export function derivePlayerJourney(input: PlayerJourneyInput): PlayerJourneyPro
 
   if (canReadLesson) {
     const fullyComplete = input.lesson?.status === 'COMPLETE' && teachingState === 'COMPLETED'
+    const retryTeaching = input.importJob?.teachingNextAction === 'RETRY_TEACHING'
+      || input.importJob?.teachingNextAction === undefined && FAILED_RUN_STATES.has(teachingState ?? '')
     return projection({
       phase: fullyComplete ? 'LESSON_COMPLETE' : 'LESSON_READABLE',
       state: fullyComplete ? 'complete' : 'ready',
       progress: fullyComplete ? 100 : lessonProgress(availableSections, totalSections),
-      retryAction: FAILED_RUN_STATES.has(teachingState ?? '') ? 'GENERATE_LESSON' : null,
-      errorCode: FAILED_RUN_STATES.has(teachingState ?? '')
+      retryAction: retryTeaching ? 'GENERATE_LESSON' : null,
+      errorCode: retryTeaching
         ? input.teachingRun?.run.lastErrorCode ?? teachingState
         : null,
       canReadRulebook,
@@ -194,8 +204,19 @@ export function derivePlayerJourney(input: PlayerJourneyInput): PlayerJourneyPro
     )
   }
   if (input.importJob?.teachingHandoffState === 'FAILED') {
+    if (input.importJob.teachingNextAction === 'WAIT') {
+      return projection({
+        phase: 'TEACHING_PREPARATION_QUEUED', state: 'active', progress: 76, retryAction: null,
+        errorCode: null, canReadRulebook, canReadLesson: false, availableSections, totalSections, latestActivity,
+      })
+    }
+    const retryAction = input.importJob.teachingNextAction === 'RETRY_DOCUMENT'
+      ? 'IMPORT_RULEBOOK'
+      : input.importJob.teachingNextAction === 'NONE' || input.importJob.teachingNextAction === 'OPEN_PROGRESS'
+        ? null
+        : 'PREPARE_TEACHING'
     return failed(
-      'PREPARE_TEACHING',
+      retryAction,
       input.importJob.teachingErrorCode ?? 'TEACHING_HANDOFF_FAILED',
       availableSections,
       totalSections,

@@ -2,6 +2,7 @@ package com.rulepilot.catalog.application;
 
 import com.rulepilot.catalog.BggGameType;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog;
+import com.rulepilot.catalog.CatalogGameSelectionLookup;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.CandidateSet;
 import com.rulepilot.catalog.application.BggRankedCatalog.Page;
 import com.rulepilot.catalog.application.BggRankedCatalog.Query;
@@ -23,7 +24,8 @@ import org.springframework.stereotype.Service;
 
 @Service
 @Profile("!test")
-public class BggRankedCatalogService implements BggRankedCatalog, BoardGameRecommendationCatalog {
+public class BggRankedCatalogService
+        implements BggRankedCatalog, BoardGameRecommendationCatalog, CatalogGameSelectionLookup {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(BggRankedCatalogService.class);
     private final BggRankedCatalogRepository repository;
@@ -106,6 +108,19 @@ public class BggRankedCatalogService implements BggRankedCatalog, BoardGameRecom
         List<RankedGame> ranked = repository.findByIds(ids);
         Map<Integer, DiscoveryGame> details = details(ranked);
         return ranked.stream().map(game -> new BrowseGame(game, null, details.get(game.bggId()))).toList();
+    }
+
+    @Override
+    public Optional<GameSelection> find(int bggId) {
+        if (bggId <= 0) throw new IllegalArgumentException("BGG id must be positive");
+        return browseIds(List.of(bggId)).stream().findFirst().map(game -> {
+            DiscoveryGame details = game.details();
+            return new GameSelection(
+                    bggId,
+                    game.ranked().sourceName(),
+                    details == null ? "" : details.chineseName(),
+                    details == null ? "" : details.thumbnailUrl());
+        });
     }
 
     @Override

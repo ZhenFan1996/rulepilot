@@ -55,6 +55,7 @@ class UserRuleDocumentControllerTest {
                         com.rulepilot.document.application.UploadedRulebookTeachingHandoffStore.State.WAITING_FOR_DOCUMENT,
                         null,
                         null,
+                        1,
                         now,
                         now)));
         when(catalog.findEdition(editionId)).thenReturn(java.util.Optional.of(
@@ -68,6 +69,9 @@ class UserRuleDocumentControllerTest {
             assertThat(item.rulebookTitle()).isEqualTo("rules_v4_final.pdf");
             assertThat(item.documentVersionId()).isEqualTo(versionId);
             assertThat(item.state()).isEqualTo("WAITING_FOR_DOCUMENT");
+            assertThat(item.automaticRecoveryCount()).isOne();
+            assertThat(item.nextAction())
+                    .isEqualTo(UserRuleDocumentController.TeachingRecoveryAction.WAIT);
         });
     }
 
@@ -141,7 +145,46 @@ class UserRuleDocumentControllerTest {
         });
         assertThat(response.teachingHandoffState())
                 .isEqualTo(OfficialRulebookImportJob.TeachingHandoffState.WAITING_FOR_DOCUMENT);
+        assertThat(response.teachingNextAction())
+                .isEqualTo(UserRuleDocumentController.TeachingRecoveryAction.WAIT);
         verify(imports).enqueue(command, "alice");
+    }
+
+    @Test
+    void exposesWhetherAFailedUploadNeedsTeachingOrDocumentRecovery() {
+        Instant now = Instant.parse("2026-08-10T00:00:00Z");
+        var teachingFailure = new UploadedRulebookTeachingHandoffService.HandoffView(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                null,
+                "rules.pdf",
+                com.rulepilot.document.application.UploadedRulebookTeachingHandoffStore.State.FAILED,
+                UUID.randomUUID(),
+                "TEACHING_RECOVERY_EXHAUSTED",
+                1,
+                now,
+                now);
+        var documentFailure = new UploadedRulebookTeachingHandoffService.HandoffView(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                null,
+                "rules.pdf",
+                com.rulepilot.document.application.UploadedRulebookTeachingHandoffStore.State.FAILED,
+                null,
+                "DOCUMENT_PROCESSING_FAILED",
+                0,
+                now,
+                now);
+
+        var retryTeaching = UserRuleDocumentController.UploadedRulebookTeachingHandoffResponse.from(
+                teachingFailure, mock(CatalogEditionLookup.class));
+        var retryDocument = UserRuleDocumentController.UploadedRulebookTeachingHandoffResponse.from(
+                documentFailure, mock(CatalogEditionLookup.class));
+
+        assertThat(retryTeaching.nextAction())
+                .isEqualTo(UserRuleDocumentController.TeachingRecoveryAction.RETRY_TEACHING);
+        assertThat(retryDocument.nextAction())
+                .isEqualTo(UserRuleDocumentController.TeachingRecoveryAction.RETRY_DOCUMENT);
     }
 
     @Test
@@ -279,6 +322,7 @@ class UserRuleDocumentControllerTest {
                 com.rulepilot.document.application.UploadedRulebookTeachingHandoffStore.State.WAITING_FOR_DOCUMENT,
                 null,
                 null,
+                0,
                 now,
                 now);
         when(handoffs.retry(handoffId, failedRunId, "alice")).thenReturn(view);

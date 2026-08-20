@@ -196,8 +196,8 @@ final class RecommendationActions {
             String locale) {
         requireObject(
                 arguments,
-                Set.of("candidateBggIds", "subjects", "preferredBggId", "message", "internalEvidenceIds"),
-                Set.of("preferenceUpdates"));
+                Set.of("candidateBggIds", "subjects", "preferredBggId"),
+                Set.of("message", "internalEvidenceIds", "preferenceUpdates"));
         evidenceReview.applyPreferenceUpdatesForRead(arguments, state, request);
         List<Integer> candidateIds = ids(arguments.path("candidateBggIds"), 2, 5);
         List<Game> games = candidateIds.stream().map(state.verified::get).toList();
@@ -213,7 +213,6 @@ final class RecommendationActions {
             throw new InvalidAction("COMPARISON_PREFERENCE_INVALID");
         }
 
-        String message = playerFacingText(arguments.path("message"));
         Map<String, CandidateObservation> availableEvidence = games.stream()
                 .flatMap(game -> narrativeObservations(game, state.research).entrySet().stream())
                 .collect(java.util.stream.Collectors.toMap(
@@ -221,26 +220,6 @@ final class RecommendationActions {
                         Map.Entry::getValue,
                         (first, ignored) -> first,
                         LinkedHashMap::new));
-        List<String> internalEvidenceIds = strings(
-                arguments.path("internalEvidenceIds"),
-                1,
-                availableEvidence.size(),
-                3,
-                80);
-        List<CandidateObservation> messageEvidence = internalEvidenceIds.stream()
-                .map(availableEvidence::get)
-                .toList();
-        if (messageEvidence.stream().anyMatch(Objects::isNull)) {
-            throw new InvalidAction("COMPARISON_MESSAGE_EVIDENCE_NOT_GROUNDED");
-        }
-        if (messageEvidence.stream().anyMatch(observation -> !subjects.contains(observation.attribute()))) {
-            throw new InvalidAction("COMPARISON_MESSAGE_EVIDENCE_OUTSIDE_AXES");
-        }
-        if (preferredBggId != null
-                && messageEvidence.stream().noneMatch(observation -> observation.bggId() == preferredBggId)) {
-            throw new InvalidAction("COMPARISON_PREFERENCE_EVIDENCE_MISSING");
-        }
-
         List<ComparisonCandidate> candidates = games.stream()
                 .map(game -> new ComparisonCandidate(
                         game,
@@ -259,6 +238,14 @@ final class RecommendationActions {
                                 .toList()))
                 .toList();
         state.comparison = new CandidateComparison(candidates, axes);
+        String message = comparisonMessage(
+                arguments,
+                state,
+                games,
+                subjects,
+                preferredBggId,
+                availableEvidence,
+                locale);
         state.actions.add("COMPARE_CANDIDATES");
         return ActionOutcome.terminal(response(
                 Outcome.CONVERSATION,
@@ -267,6 +254,57 @@ final class RecommendationActions {
                 locale,
                 null,
                 List.of()));
+    }
+
+    private String comparisonMessage(
+            JsonNode arguments,
+            RecommendationAgentState state,
+            List<Game> games,
+            List<String> subjects,
+            Integer preferredBggId,
+            Map<String, CandidateObservation> availableEvidence,
+            String locale) {
+        try {
+            if (!arguments.has("message") || !arguments.has("internalEvidenceIds")) {
+                throw new InvalidAction("COMPARISON_MESSAGE_INCOMPLETE");
+            }
+            String message = playerFacingText(arguments.path("message"));
+            List<String> internalEvidenceIds = strings(
+                    arguments.path("internalEvidenceIds"),
+                    1,
+                    availableEvidence.size(),
+                    3,
+                    80);
+            List<CandidateObservation> messageEvidence = internalEvidenceIds.stream()
+                    .map(availableEvidence::get)
+                    .toList();
+            if (messageEvidence.stream().anyMatch(Objects::isNull)) {
+                throw new InvalidAction("COMPARISON_MESSAGE_EVIDENCE_NOT_GROUNDED");
+            }
+            if (messageEvidence.stream().anyMatch(observation -> !subjects.contains(observation.attribute()))) {
+                throw new InvalidAction("COMPARISON_MESSAGE_EVIDENCE_OUTSIDE_AXES");
+            }
+            if (preferredBggId != null
+                    && messageEvidence.stream().noneMatch(observation -> observation.bggId() == preferredBggId)) {
+                throw new InvalidAction("COMPARISON_PREFERENCE_EVIDENCE_MISSING");
+            }
+            return message;
+        } catch (InvalidAction invalid) {
+            state.actions.add("DROPPED_OPTIONAL_COMPARISON_MESSAGE:" + invalid.code);
+            return safeComparisonContinuation(games, locale);
+        }
+    }
+
+    private String safeComparisonContinuation(List<Game> games, String locale) {
+        String first = games.getFirst().ranking().sourceName();
+        String second = games.get(1).ranking().sourceName();
+        String subject = games.size() == 2
+                ? (runtime.chinese(locale) ? "《" + first + "》和《" + second + "》" : first + " and " + second)
+                : (runtime.chinese(locale) ? "这几款" : "These candidates");
+        return runtime.chinese(locale)
+                ? subject + "现在还没有拉开到让我放心替你拍板的程度。能核对的差异我保留在下面；没有来源的桌感我先不替你猜。你最在意哪一项，我们就沿那一项接着聊。"
+                : subject
+                        + " are still too close for me to make the call confidently. I kept the differences we can verify below; tell me which one matters most and we can follow that thread.";
     }
 
     private Integer preferredComparisonId(JsonNode node) {

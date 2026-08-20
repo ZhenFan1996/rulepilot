@@ -170,4 +170,8 @@ export type RecommendationProgressStage =
 export type RecommendationProgressUpdate = {
   stage: RecommendationProgressStage
   elapsedMs: number
+  observedCandidates: number
+  verifiedCandidates: number
+  hardRejectedCandidates: number
+  sourceCount: number
 }

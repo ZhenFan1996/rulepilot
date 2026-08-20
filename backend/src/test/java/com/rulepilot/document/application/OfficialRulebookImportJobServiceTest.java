@@ -621,6 +621,35 @@ class OfficialRulebookImportJobServiceTest {
         assertThat(jobs.automaticallyRecovered).doesNotContain(failed.id());
     }
 
+    @Test
+    void preservesPlayerCancellationInsteadOfAutomaticallyRestartingTheGuide() {
+        FakeJobs jobs = new FakeJobs();
+        UUID editionId = automaticTeachingCommand().editionId();
+        UUID documentVersionId = UUID.randomUUID();
+        UUID cancelledRunId = UUID.randomUUID();
+        var cancelled = launchedJob(jobs, editionId, documentVersionId, cancelledRunId, SOURCE);
+        RulebookTeachingEvidenceFreshness freshness = mock(RulebookTeachingEvidenceFreshness.class);
+        when(freshness.assess(documentVersionId, cancelledRunId, "alice"))
+                .thenReturn(ReuseAssessment.CANCELLED);
+        var service = new OfficialRulebookImportJobService(
+                jobs,
+                mock(RuleDocumentRepository.class),
+                mock(OfficialRulebookImportService.class),
+                mock(TaskExecutor.class),
+                (edition, language) -> false,
+                catalog(editionId, GAME_ID, "Opaque Edition", "en"),
+                freshness,
+                Clock.fixed(NOW, ZoneOffset.UTC));
+
+        var result = service.reconcileLaunched(4);
+
+        assertThat(result.restarted()).isZero();
+        assertThat(result.settled()).isOne();
+        assertThat(jobs.findOwned(cancelled.id(), "alice").orElseThrow().teachingHandoff().state())
+                .isEqualTo(TeachingHandoffState.NOT_REQUESTED);
+        assertThat(jobs.automaticallyRecovered).doesNotContain(cancelled.id());
+    }
+
     private OfficialRulebookImportJob launchedJob(
             FakeJobs jobs,
             UUID editionId,
@@ -1109,7 +1138,28 @@ class OfficialRulebookImportJobServiceTest {
                 OfficialRulebookImportJob.TeachingHandoffState expectedState,
                 UUID expectedPreparationRunId,
                 Instant now) {
-            return false;
+            var job = values.get(jobId);
+            if (job == null
+                    || !job.ownerUsername().equals(ownerUsername)
+                    || job.teachingHandoff().state() != expectedState
+                    || !java.util.Objects.equals(
+                            job.teachingHandoff().preparationRunId(), expectedPreparationRunId)) {
+                return false;
+            }
+            values.put(jobId, copy(
+                    job,
+                    job.stage(),
+                    job.downloadedBytes(),
+                    job.totalBytes(),
+                    job.documentVersionId(),
+                    job.duplicate(),
+                    job.errorCode(),
+                    TeachingHandoff.notRequested(),
+                    now,
+                    job.completedAt()));
+            automaticallyRecovered.remove(jobId);
+            reconciled.remove(jobId);
+            return true;
         }
 
         @Override

@@ -1734,7 +1734,7 @@ class BoardGameRecommendationAgentTest {
     @Test
     void preservesPlayerAndDurationRangesAsAtomicGroundedPreferenceUpdates() {
         assertThat(BoardGameRecommendationAgent.PROMPT_VERSION)
-                .isEqualTo("recommendation-agent-v12-grounded-natural-comparison");
+                .isEqualTo("recommendation-agent-v13-localized-partial-comparison");
         assertThat(BoardGameRecommendationAgent.class.getResource(
                         "/prompts/recommendation-agent-v1-system.txt"))
                 .as("the production-replayed v1 prompt remains reproducible after activating v2")
@@ -2256,6 +2256,8 @@ class BoardGameRecommendationAgentTest {
                             .contains(
                                     "Do not ask merely because a useful request is broad or the profile is empty",
                                     "Speak like a decision partner at the table, not a task runner or completion report",
+                                    "offer a modest first-person opinion",
+                                    "language of their actual group and planned session",
                                     "prefer one plain question about the intended play situation");
                     assertThat(request.tools()).extracting(ToolSpec::name)
                             .contains(
@@ -3748,6 +3750,83 @@ class BoardGameRecommendationAgentTest {
     }
 
     @Test
+    void keepsTheVerifiedComparisonWhenOptionalNarrativeFieldsAreMissing() {
+        TrackingCatalog catalog = catalogWithThreeShortGames();
+        ScriptedModel model = new ScriptedModel(List.of(
+                ignored -> action(
+                        "load-comparison-on-demand",
+                        BoardGameRecommendationAgent.LOOKUP_TOOL,
+                        "{\"bggIds\":[60,61]}"),
+                ignored -> action(
+                        "comparison-without-optional-narrative",
+                        BoardGameRecommendationAgent.COMPARE_TOOL,
+                        "{\"candidateBggIds\":[60,61],\"subjects\":[\"durationMinutes\"],"
+                                + "\"preferredBggId\":60}")));
+
+        var response = agent(model, catalog, noResearch()).converse(
+                new ConversationRequest(
+                        RecommendationProfile.empty(),
+                        "这两款先按时长比一下，别因为文案出错把结果丢掉。",
+                        List.of(),
+                        List.of(new DialogueMessage("user", "这两款先按时长比一下。")),
+                        null,
+                        List.of(
+                                new BoardGameRecommendationAgent.KnownGame(60, "Glass Orchard", "Glass Orchard"),
+                                new BoardGameRecommendationAgent.KnownGame(61, "Loom City", "Loom City")),
+                        List.of(60, 61)),
+                "zh-CN");
+
+        assertThat(response.outcome()).isEqualTo(Outcome.CONVERSATION);
+        assertThat(response.comparison().axes()).hasSize(1);
+        assertThat(response.comparison().axes().getFirst().cells()).allSatisfy(cell ->
+                assertThat(cell.known()).isTrue());
+        assertThat(response.assistantMessage()).contains("Glass Orchard", "Loom City", "能核对的差异");
+        assertThat(response.harness().modelCalls()).isEqualTo(2);
+        assertThat(response.harness().fallbackUsed()).isFalse();
+        assertThat(response.harness().actions()).containsExactly(
+                "LOOKUP_BGG_CANDIDATES",
+                "DROPPED_OPTIONAL_COMPARISON_MESSAGE:COMPARISON_MESSAGE_INCOMPLETE",
+                "COMPARE_CANDIDATES");
+    }
+
+    @Test
+    void keepsTheVerifiedComparisonWhenNarrativeEvidenceUsesAnUnselectedAxis() {
+        TrackingCatalog catalog = catalogWithThreeShortGames();
+        ScriptedModel model = new ScriptedModel(List.of(
+                ignored -> action(
+                        "load-comparison-on-demand",
+                        BoardGameRecommendationAgent.LOOKUP_TOOL,
+                        "{\"bggIds\":[60,61]}"),
+                ignored -> action(
+                        "comparison-with-overreaching-narrative",
+                        BoardGameRecommendationAgent.COMPARE_TOOL,
+                        "{\"candidateBggIds\":[60,61],\"subjects\":[\"durationMinutes\"],"
+                                + "\"preferredBggId\":60,\"message\":\"Pick Glass Orchard for its complexity.\","
+                                + "\"internalEvidenceIds\":[\"B60:complexity\"]}")));
+
+        var response = agent(model, catalog, noResearch()).converse(
+                new ConversationRequest(
+                        RecommendationProfile.empty(),
+                        "Compare the two candidates on duration.",
+                        List.of(),
+                        List.of(new DialogueMessage("user", "Compare the two candidates on duration.")),
+                        null,
+                        List.of(
+                                new BoardGameRecommendationAgent.KnownGame(60, "Glass Orchard", "Glass Orchard"),
+                                new BoardGameRecommendationAgent.KnownGame(61, "Loom City", "Loom City")),
+                        List.of(60, 61)),
+                "en");
+
+        assertThat(response.outcome()).isEqualTo(Outcome.CONVERSATION);
+        assertThat(response.assistantMessage()).doesNotContain("for its complexity");
+        assertThat(response.harness().fallbackUsed()).isFalse();
+        assertThat(response.harness().actions()).containsExactly(
+                "LOOKUP_BGG_CANDIDATES",
+                "DROPPED_OPTIONAL_COMPARISON_MESSAGE:COMPARISON_MESSAGE_EVIDENCE_OUTSIDE_AXES",
+                "COMPARE_CANDIDATES");
+    }
+
+    @Test
     void rejectsAnUnverifiedComparisonCandidateAndAllowsTheAgentToCorrectItsStructuredAction() {
         TrackingCatalog catalog = catalogWithThreeShortGames();
         ScriptedModel model = new ScriptedModel(List.of(
@@ -3774,16 +3853,6 @@ class BoardGameRecommendationAgentTest {
                 request -> {
                     assertThat(request.messages().getLast().content())
                             .contains("COMPARISON_PREFERENCE_INVALID");
-                    return action(
-                            "compare-with-evidence-outside-axis",
-                            BoardGameRecommendationAgent.COMPARE_TOOL,
-                            "{\"candidateBggIds\":[60,61],\"subjects\":[\"durationMinutes\"],"
-                                    + "\"preferredBggId\":60,\"message\":\"Pick Glass Orchard for its complexity.\","
-                                    + "\"internalEvidenceIds\":[\"B60:complexity\"]}");
-                },
-                request -> {
-                    assertThat(request.messages().getLast().content())
-                            .contains("COMPARISON_MESSAGE_EVIDENCE_OUTSIDE_AXES");
                     return action(
                             "compare-corrected",
                             BoardGameRecommendationAgent.COMPARE_TOOL,
@@ -3812,7 +3881,6 @@ class BoardGameRecommendationAgentTest {
                 "LOOKUP_BGG_CANDIDATES",
                 "REJECTED_ACTION:COMPARISON_CANDIDATE_NOT_VERIFIED",
                 "REJECTED_ACTION:COMPARISON_PREFERENCE_INVALID",
-                "REJECTED_ACTION:COMPARISON_MESSAGE_EVIDENCE_OUTSIDE_AXES",
                 "COMPARE_CANDIDATES");
     }
 

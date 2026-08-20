@@ -169,6 +169,7 @@ jobs:
           qwen_key_present=false
           deepseek_enabled=false
           deepseek_key_present=false
+          model_credential_key_present=false
           managed_runtime_keys=' TEACHING_PROVIDER TEACHING_MODEL_PROVIDER VISUAL_PROVIDER VISUAL_MODEL_PROVIDER ANSWER_PROVIDER ANSWER_MODEL_PROVIDER BGG_TRANSLATION_ENABLED BGG_TRANSLATION_TIMEOUT BGG_TRANSLATION_CACHE_TTL BGG_TRANSLATION_HOURLY_LIMIT BGG_TRANSLATION_PROVIDER_CONCURRENCY BGG_CACHE_PREWARM_ENABLED BGG_CACHE_PREWARM_GAME_COUNT BGG_CACHE_PREWARM_COHORT_SIZE BGG_CACHE_PREWARM_TRANSLATION_COHORT_SIZE BGG_CACHE_PREWARM_RESUME_DELAY BGG_CACHE_PREWARM_LEASE_DURATION BGG_RECOMMENDATION_AGENT_ENABLED BGG_RECOMMENDATION_PROVIDER BGG_RECOMMENDATION_MODEL_PROVIDER BGG_RECOMMENDATION_MODEL_CANDIDATE_LIMIT BGG_RECOMMENDATION_AGENT_TIMEOUT BGG_RECOMMENDATION_WEB_RESEARCH_ENABLED BGG_RECOMMENDATION_WEB_RESEARCH_TIMEOUT WEB_SEARCH_MODEL QWEN_MODEL QWEN_VISION_CAPABLE RULEBOOK_DISCOVERY_MODEL RULEBOOK_DISCOVERY_NEGATIVE_CACHE_TTL RULEBOOK_DISCOVERY_HOURLY_LIMIT RULEBOOK_DISCOVERY_PROVIDER_CONCURRENCY '
           while IFS= read -r line || [[ -n "$line" ]]; do
             if [[ "$line" == BGG_API_TOKEN=* ]]; then
@@ -186,6 +187,9 @@ jobs:
             elif [[ "$line" == DEEPSEEK_API_KEY=* ]]; then
               printf '%s\n' "$line"
               [[ -n "${line#DEEPSEEK_API_KEY=}" ]] && deepseek_key_present=true
+            elif [[ "$line" == MODEL_CREDENTIAL_ENCRYPTION_KEY=* ]]; then
+              printf '%s\n' "$line"
+              [[ -n "${line#MODEL_CREDENTIAL_ENCRYPTION_KEY=}" ]] && model_credential_key_present=true
             elif [[ "$managed_runtime_keys" == *" ${line%%=*} "* ]]; then
               continue
             else
@@ -202,6 +206,9 @@ jobs:
           if [[ "$deepseek_enabled" != true || "$deepseek_key_present" != true ]]; then
             echo "Production DeepSeek configuration is required for persistent Chinese catalog translations" >&2
             exit 1
+          fi
+          if [[ "$model_credential_key_present" != true ]]; then
+            printf 'MODEL_CREDENTIAL_ENCRYPTION_KEY=%s\n' "$(openssl rand -base64 32 | tr -d '\n')" >> "$temporary_env"
           fi
           printf '%s\n' \
             'TEACHING_PROVIDER=spring-ai' \

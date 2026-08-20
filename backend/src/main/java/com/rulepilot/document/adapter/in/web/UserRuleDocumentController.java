@@ -358,6 +358,7 @@ public class UserRuleDocumentController {
             UUID teachingPreparationRunId,
             String teachingErrorCode,
             int teachingAutomaticRecoveryCount,
+            TeachingRecoveryAction teachingNextAction,
             java.time.Instant downloadCompletedAt,
             java.time.Instant importCompletedAt,
             java.time.Instant teachingHandoffUpdatedAt,
@@ -390,6 +391,8 @@ public class UserRuleDocumentController {
                     job.teachingHandoff().preparationRunId(),
                     job.teachingHandoff().errorCode(),
                     job.teachingHandoff().automaticRecoveryCount(),
+                    teachingRecoveryAction(
+                            job.teachingHandoff().state(), job.teachingHandoff().errorCode()),
                     job.downloadCompletedAt(),
                     job.completedAt(),
                     job.teachingHandoff().updatedAt(),
@@ -409,6 +412,8 @@ public class UserRuleDocumentController {
             String state,
             UUID preparationRunId,
             String errorCode,
+            int automaticRecoveryCount,
+            TeachingRecoveryAction nextAction,
             java.time.Instant createdAt,
             java.time.Instant updatedAt) {
 
@@ -429,8 +434,42 @@ public class UserRuleDocumentController {
                     view.state().name(),
                     view.preparationRunId(),
                     view.errorCode(),
+                    view.automaticRecoveryCount(),
+                    teachingRecoveryAction(view.state(), view.errorCode()),
                     view.createdAt(),
                     view.updatedAt());
         }
+    }
+
+    enum TeachingRecoveryAction {
+        WAIT,
+        OPEN_PROGRESS,
+        RETRY_TEACHING,
+        RETRY_DOCUMENT,
+        NONE
+    }
+
+    private static TeachingRecoveryAction teachingRecoveryAction(
+            OfficialRulebookImportJob.TeachingHandoffState state, String errorCode) {
+        return switch (state) {
+            case WAITING_FOR_DOCUMENT, LAUNCHING -> TeachingRecoveryAction.WAIT;
+            case LAUNCHED -> TeachingRecoveryAction.OPEN_PROGRESS;
+            case FAILED -> "DOCUMENT_PROCESSING_FAILED".equals(errorCode)
+                    ? TeachingRecoveryAction.RETRY_DOCUMENT
+                    : TeachingRecoveryAction.RETRY_TEACHING;
+            case NOT_REQUESTED -> TeachingRecoveryAction.NONE;
+        };
+    }
+
+    private static TeachingRecoveryAction teachingRecoveryAction(
+            com.rulepilot.document.application.UploadedRulebookTeachingHandoffStore.State state,
+            String errorCode) {
+        return switch (state) {
+            case WAITING_FOR_DOCUMENT, LAUNCHING -> TeachingRecoveryAction.WAIT;
+            case LAUNCHED -> TeachingRecoveryAction.OPEN_PROGRESS;
+            case FAILED -> "DOCUMENT_PROCESSING_FAILED".equals(errorCode)
+                    ? TeachingRecoveryAction.RETRY_DOCUMENT
+                    : TeachingRecoveryAction.RETRY_TEACHING;
+        };
     }
 }

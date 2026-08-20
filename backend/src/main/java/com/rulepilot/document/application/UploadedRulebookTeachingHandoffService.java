@@ -2,6 +2,8 @@ package com.rulepilot.document.application;
 
 import com.rulepilot.document.PublicRulebookReferenceLookup.Reference;
 import com.rulepilot.document.UploadedRulebookTeachingHandoffs;
+import com.rulepilot.document.RulebookTeachingEvidenceFreshness;
+import com.rulepilot.document.RulebookTeachingEvidenceFreshness.ReuseAssessment;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
@@ -17,21 +19,32 @@ public class UploadedRulebookTeachingHandoffService implements UploadedRulebookT
 
     private final UploadedRulebookTeachingHandoffStore handoffs;
     private final RuleDocumentRepository documents;
+    private final RulebookTeachingEvidenceFreshness teachingEvidenceFreshness;
     private final Clock clock;
 
     @Autowired
     public UploadedRulebookTeachingHandoffService(
             UploadedRulebookTeachingHandoffStore handoffs,
-            RuleDocumentRepository documents) {
-        this(handoffs, documents, Clock.systemUTC());
+            RuleDocumentRepository documents,
+            RulebookTeachingEvidenceFreshness teachingEvidenceFreshness) {
+        this(handoffs, documents, teachingEvidenceFreshness, Clock.systemUTC());
     }
 
     UploadedRulebookTeachingHandoffService(
             UploadedRulebookTeachingHandoffStore handoffs,
             RuleDocumentRepository documents,
             Clock clock) {
+        this(handoffs, documents, RulebookTeachingEvidenceFreshness.alwaysCurrent(), clock);
+    }
+
+    UploadedRulebookTeachingHandoffService(
+            UploadedRulebookTeachingHandoffStore handoffs,
+            RuleDocumentRepository documents,
+            RulebookTeachingEvidenceFreshness teachingEvidenceFreshness,
+            Clock clock) {
         this.handoffs = handoffs;
         this.documents = documents;
+        this.teachingEvidenceFreshness = teachingEvidenceFreshness;
         this.clock = clock;
     }
 
@@ -124,6 +137,44 @@ public class UploadedRulebookTeachingHandoffService implements UploadedRulebookT
         return handoffs.failInterruptedLaunches(Instant.now(clock));
     }
 
+    @Override
+    public Reconciliation reconcileLaunched(int limit) {
+        int checkedLimit = checkedClaimLimit(limit);
+        int restarted = 0;
+        int settled = 0;
+        int exhausted = 0;
+        for (var handoff : handoffs.findUnreconciledLaunched(checkedLimit)) {
+            ReuseAssessment assessment = teachingEvidenceFreshness.assess(
+                    handoff.documentVersionId(), handoff.preparationRunId(), handoff.ownerUsername());
+            if (assessment == ReuseAssessment.CANCELLED) {
+                if (handoffs.dismissCancelled(handoff.id(), handoff.preparationRunId())) settled++;
+            } else if (assessment == ReuseAssessment.TERMINAL_FAILURE) {
+                if (handoffs.failTerminal(
+                        handoff.id(),
+                        handoff.preparationRunId(),
+                        "TEACHING_PREPARATION_INVALID_PLAN",
+                        Instant.now(clock))) {
+                    exhausted++;
+                }
+            } else if (assessment == ReuseAssessment.REFRESH_REQUIRED
+                    || assessment == ReuseAssessment.RETRYABLE_FAILURE) {
+                if (handoffs.retryAutomatically(
+                        handoff.id(), handoff.preparationRunId(), Instant.now(clock))) {
+                    restarted++;
+                } else if (handoff.automaticRecoveryCount() == 1
+                        && handoffs.failRecoveryExhausted(
+                                handoff.id(), handoff.preparationRunId(), Instant.now(clock))) {
+                    exhausted++;
+                }
+            } else if (assessment == ReuseAssessment.REUSABLE
+                    && handoffs.markReconciled(
+                            handoff.id(), handoff.preparationRunId(), Instant.now(clock))) {
+                settled++;
+            }
+        }
+        return new Reconciliation(restarted, settled, exhausted);
+    }
+
     private HandoffView view(UploadedRulebookTeachingHandoffStore.Snapshot snapshot) {
         Reference reference = documents.findReferences(List.of(snapshot.documentVersionId()))
                 .get(snapshot.documentVersionId());
@@ -142,6 +193,7 @@ public class UploadedRulebookTeachingHandoffService implements UploadedRulebookT
                 snapshot.state(),
                 snapshot.preparationRunId(),
                 snapshot.errorCode(),
+                snapshot.automaticRecoveryCount(),
                 snapshot.createdAt(),
                 snapshot.updatedAt());
     }
@@ -166,6 +218,7 @@ public class UploadedRulebookTeachingHandoffService implements UploadedRulebookT
             UploadedRulebookTeachingHandoffStore.State state,
             UUID preparationRunId,
             String errorCode,
+            int automaticRecoveryCount,
             Instant createdAt,
             Instant updatedAt) {}
 }

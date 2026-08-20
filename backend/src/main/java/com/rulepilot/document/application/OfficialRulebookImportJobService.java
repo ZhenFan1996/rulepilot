@@ -341,7 +341,16 @@ public class OfficialRulebookImportJobService implements RulebookTeachingHandoff
             var handoff = job.teachingHandoff();
             ReuseAssessment assessment = teachingEvidenceFreshness.assess(
                     job.documentVersionId(), handoff.preparationRunId(), job.ownerUsername());
-            if (assessment == ReuseAssessment.TERMINAL_FAILURE) {
+            if (assessment == ReuseAssessment.CANCELLED) {
+                if (jobs.dismissTeaching(
+                        job.id(),
+                        job.ownerUsername(),
+                        TeachingHandoffState.LAUNCHED,
+                        handoff.preparationRunId(),
+                        Instant.now(clock))) {
+                    settled++;
+                }
+            } else if (assessment == ReuseAssessment.TERMINAL_FAILURE) {
                 if (jobs.failTeachingTerminal(
                         job.id(), handoff.preparationRunId(), "TEACHING_PREPARATION_INVALID_PLAN", Instant.now(clock))) {
                     exhausted++;

@@ -17,6 +17,7 @@ import type {
   RecommendationClarification,
   RecommendationGame,
   RecommendationMessage,
+  RecommendationProgressUpdate,
   RecommendationProgressStage,
   RecommendationProfile,
   RecommendationServerSession,
@@ -44,7 +45,7 @@ const copy = {
     description: '可以像和朋友一样聊：说一个游戏、一个感觉，或者上一批哪里不对。我会沿着上下文继续，不用按表格报条件。',
     initial: '晚上好。想一起挑一款，还是先聊聊最近喜欢的桌游？游戏名、气氛、人数，想到什么就说什么。',
     inputLabel: '聊聊你想玩的游戏', inputPlaceholder: '例如：想找和花砖物语机制接近、但互动再多一点的游戏', send: '发送', sending: '正在接着你的话想…',
-    reset: '清空这次对话', error: '刚才没有接上。你写下的条件还在，可以直接重试。', retry: '重试', profile: '这次想找',
+    reset: '清空这次对话', newChat: '建立新聊天', chatHistory: '聊天记录', chatUntitled: '新的桌游聊天', error: '刚才没有接上。你写下的条件还在，可以直接重试。', retry: '重试', profile: '这次想找',
     players: '{value} 人', duration: '{value} 分钟内', durationAny: '时长不限', weight: '复杂度 ≤ {value}', weightAny: '复杂度不限',
     source: '从完整 BGG 目录中核对了 {count} 款候选。', more: '换一批',
     understanding: '目前记下的偏好', basedOn: '你提到：“{value}”', low: '可能', medium: '大概', high: '明确',
@@ -54,7 +55,7 @@ const copy = {
     starters: ['想找和我喜欢的一款机制相近的', '先聊聊最近流行什么', '朋友聚会，想热闹但不要尴尬', '我不确定，先问我一个问题吧'],
     type: '类型：{value}', interaction: '互动：{value}',
     journeyWorking: '正在为《{game}》获取规则书并生成讲解 · {progress}%', journeyReady: '《{game}》的基础讲解可读',
-    journeyFailed: '《{game}》的准备流程需要处理', journeyStatusLabel: '讲解状态', journeyOpen: '打开进度', journeyRead: '打开讲解', journeyProgress: '查看进度', journeyDialog: '规则书与讲解进度',
+    journeyFailed: '《{game}》的准备流程需要处理', journeyStatusLabel: '从推荐到答疑', journeyOpen: '打开进度', journeyRead: '打开讲解', journeyReadRulebook: '阅读规则书', journeyProgress: '查看详细进度', journeyAllWork: '全部任务', journeyDialog: '规则书与讲解进度',
     recommendationRole: '继续推荐', answerRole: '规则答疑', roleLabel: '切换任务',
     loginRequired: '推荐需要登录；你写的条件已保留在这个浏览器会话中。登录后回来检查一下，再发送。',
     login: '登录并继续', register: '创建账号', checkingSession: '正在确认登录…',
@@ -66,7 +67,7 @@ const copy = {
     description: 'Talk as you would with a friend: name a game, describe a feeling, or say what missed the mark. I will continue from context; no form-filling required.',
     initial: 'Good evening. Want to choose a game together, or chat about what you have enjoyed lately? Start anywhere—a title, a mood, or the group.',
     inputLabel: 'Tell us what you want to play', inputPlaceholder: 'For example: something with similar mechanisms to a tile-drafting game, but more interaction', send: 'Send', sending: 'Thinking from where we left off…',
-    reset: 'Clear this conversation', error: 'That reply did not come through. Your preferences are still here.', retry: 'Retry', profile: 'Looking for',
+    reset: 'Clear this conversation', newChat: 'New chat', chatHistory: 'Chat history', chatUntitled: 'New board-game chat', error: 'That reply did not come through. Your preferences are still here.', retry: 'Retry', profile: 'Looking for',
     players: '{value} players', duration: 'Up to {value} min', durationAny: 'Any duration', weight: 'Complexity ≤ {value}', weightAny: 'Any complexity',
     source: 'Checked {count} candidates against the complete BGG catalog.', more: 'Try another batch',
     understanding: 'Preferences so far', basedOn: 'You said: “{value}”', low: 'Maybe', medium: 'Likely', high: 'Clear',
@@ -76,7 +77,7 @@ const copy = {
     starters: ['Find something mechanically similar to a game I like', 'Let’s chat about what is popular', 'Lively with friends, but not awkward', 'I am not sure—ask me one useful question'],
     type: 'Type: {value}', interaction: 'Interaction: {value}',
     journeyWorking: 'Getting the rulebook and building a guide for {game} · {progress}%', journeyReady: 'Base guide ready for {game}',
-    journeyFailed: 'The preparation flow for {game} needs attention', journeyStatusLabel: 'Guide status', journeyOpen: 'Open progress', journeyRead: 'Open guide', journeyProgress: 'View progress', journeyDialog: 'Rulebook and guide progress',
+    journeyFailed: 'The preparation flow for {game} needs attention', journeyStatusLabel: 'Recommendation to Q&A', journeyOpen: 'Continue this journey', journeyRead: 'Open guide', journeyReadRulebook: 'Read rulebook', journeyProgress: 'Open detailed progress', journeyAllWork: 'All work', journeyDialog: 'Rulebook and guide progress',
     recommendationRole: 'Recommendations', answerRole: 'Rules Q&A', roleLabel: 'Switch task',
     loginRequired: 'Sign in to use recommendations. Your draft is saved in this browser session; review it and send after you return.',
     login: 'Sign in and continue', register: 'Create account', checkingSession: 'Checking sign-in…',
@@ -192,6 +193,8 @@ const draft = ref(restoredDraft())
 const loading = ref(false)
 const loadingStage = ref<LoadingStage>('requesting')
 const reportedLoadingStages = ref<RecommendationProgressStage[]>([])
+const latestRecommendationProgress = ref<RecommendationProgressUpdate | null>(null)
+const streamedRecommendationMessage = ref('')
 const loadingElapsedSeconds = ref(0)
 const failed = ref(false)
 const activeTurnLocale = ref<AppLocale | null>(null)
@@ -203,6 +206,8 @@ const knownGames = ref<RecommendationGame[]>([])
 const rememberedKnownGames = ref<RecommendationConversationGame[]>([])
 const activeFocusedBggId = ref<number | null>(null)
 const selectedGame = ref<RecommendationGame | null>(null)
+const journeyGames = ref<RecommendationGame[]>([])
+const journeyStatuses = ref<Record<number, RecommendationJourneyStatus>>({})
 const detailsGame = ref<RecommendationGame | null>(null)
 const openSurface = ref<'none' | 'game-details' | 'journey' | 'rulebook' | 'lesson'>('none')
 const journeyStatus = ref<RecommendationJourneyStatus | null>(null)
@@ -218,6 +223,9 @@ const resetError = ref('')
 const restoreRecommendationInputAfterReset = ref(false)
 const conversationId = ref<string | null>(null)
 const conversationRevision = ref(0)
+const conversationHistory = ref<RecommendationServerSession[]>([])
+const conversationHistoryOpen = ref(false)
+const conversationNavigationPending = ref(false)
 const serverSessionReady = ref(props.sessionIdentity === undefined || !explicitSessionOwner(props.sessionIdentity))
 let messageId = 1
 let csrf: { headerName: string; token: string } | null = null
@@ -230,6 +238,45 @@ let serverRestoreGeneration = 0
 let turnCancellationGeneration = 0
 let disposed = false
 let selectedBggIdToRestore: number | null = null
+
+function journeyStorageKey(owner = restoredConversationOwner) {
+  return owner ? `rulepilot:recommendation-journeys:v1:${encodeURIComponent(owner)}` : null
+}
+
+function isStoredJourneyGame(value: unknown): value is RecommendationGame {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const game = value as Partial<RecommendationGame>
+  return Number.isSafeInteger(game.bggId) && Number(game.bggId) > 0
+    && typeof game.name === 'string' && Boolean(game.name.trim())
+    && typeof game.originalName === 'string'
+    && typeof game.thumbnailUrl === 'string'
+    && Array.isArray(game.categories)
+    && Array.isArray(game.mechanics)
+}
+
+function restoreJourneyGames(owner: string | null) {
+  journeyGames.value = []
+  journeyStatuses.value = {}
+  const key = journeyStorageKey(owner)
+  if (!key) return
+  try {
+    const parsed = JSON.parse(sessionStorage.getItem(key) ?? '[]') as unknown
+    if (!Array.isArray(parsed)) return
+    journeyGames.value = parsed.filter(isStoredJourneyGame)
+  } catch {
+    sessionStorage.removeItem(key)
+  }
+}
+
+function persistJourneyGames(owner = restoredConversationOwner) {
+  const key = journeyStorageKey(owner)
+  if (!key) return
+  try {
+    sessionStorage.setItem(key, JSON.stringify(journeyGames.value))
+  } catch {
+    // Server-side jobs continue even when this browser cannot persist navigation shortcuts.
+  }
+}
 
 const sessionKnown = computed(() => props.sessionIdentity !== null)
 const signedIn = computed(() => props.sessionIdentity === undefined
@@ -251,6 +298,21 @@ const reportedLoadingSteps = computed(() => reportedLoadingStages.value.map((sta
   label: loadingCopy[activeTurnLocale.value ?? locale.value][stage],
   current: index === stages.length - 1,
 })))
+const recommendationEvidenceSummary = computed(() => {
+  const progress = latestRecommendationProgress.value
+  if (!progress || progress.observedCandidates === 0) return ''
+  const localeForTurn = activeTurnLocale.value ?? locale.value
+  if (localeForTurn === 'en') {
+    const source = progress.stage === 'researching_game_fit'
+      ? 'Sources: BGG facts and attributed public play reports.'
+      : 'Source: BGG catalog and game-detail facts.'
+    return `${source} ${progress.observedCandidates} candidates seen · ${progress.verifiedCandidates} facts checked · ${progress.hardRejectedCandidates} removed by your hard constraints. Next: ${loadingCopy.en[progress.stage]}`
+  }
+  const source = progress.stage === 'researching_game_fit'
+    ? '来源：BGG 事实与有出处的公开游玩资料。'
+    : '来源：BGG 目录与游戏详情事实。'
+  return `${source}目录候选 ${progress.observedCandidates} 款 · 已核对 ${progress.verifiedCandidates} 款 · 按你的硬条件排除 ${progress.hardRejectedCandidates} 款。下一步：${loadingCopy['zh-CN'][progress.stage]}`
+})
 const recommendationSoftBudgetReached = computed(() => loading.value && loadingElapsedSeconds.value >= 8)
 const hasVerifiedCandidates = computed(() => messages.value.some(message =>
   Boolean(message.response?.games.length || message.response?.comparison?.candidates.length)))
@@ -313,13 +375,16 @@ function complexityRangeLabel(minimum: number | null, maximum: number | null) {
   return t('weight', { value: maximum ?? 0 })
 }
 
-const compactJourneyText = computed(() => {
-  if (!selectedGame.value) return ''
-  const parameters = { game: selectedGame.value.name, progress: journeyStatus.value?.projection.progress ?? 5 }
-  if (journeyStatus.value?.projection.state === 'failed' || journeyStatus.value?.projection.retryAction) return t('journeyFailed', parameters)
-  if (journeyStatus.value?.projection.canReadLesson) return t('journeyReady', parameters)
+function journeyText(game: RecommendationGame, status?: RecommendationJourneyStatus | null) {
+  const parameters = { game: game.name, progress: status?.projection.progress ?? 5 }
+  if (status?.projection.state === 'failed' || status?.projection.retryAction) return t('journeyFailed', parameters)
+  if (status?.projection.canReadLesson) return t('journeyReady', parameters)
   return t('journeyWorking', parameters)
-})
+}
+
+function statusForJourney(game: RecommendationGame) {
+  return journeyStatuses.value[game.bggId]
+}
 
 const answerWorkspaceReady = computed(() => Boolean(
   journeyStatus.value?.projection.canAskQuestions
@@ -365,6 +430,8 @@ function beginLoading() {
   if (loadingClock) clearInterval(loadingClock)
   loadingStage.value = 'requesting'
   reportedLoadingStages.value = []
+  latestRecommendationProgress.value = null
+  streamedRecommendationMessage.value = ''
   loadingElapsedSeconds.value = 0
   const startedAt = Date.now()
   loadingClock = setInterval(() => { loadingElapsedSeconds.value = Math.floor((Date.now() - startedAt) / 1000) }, 1000)
@@ -471,11 +538,14 @@ async function submitPendingTurn(
       }),
       signal: activeRequest.signal,
     }, update => {
+      latestRecommendationProgress.value = update
       loadingStage.value = update.stage
       if (reportedLoadingStages.value.at(-1) !== update.stage) {
         reportedLoadingStages.value = [...reportedLoadingStages.value, update.stage]
       }
       loadingElapsedSeconds.value = Math.max(loadingElapsedSeconds.value, Math.floor(update.elapsedMs / 1000))
+    }, text => {
+      streamedRecommendationMessage.value = text
     })
     if (serverResponse.clientTurnId && serverResponse.clientTurnId !== pending.clientTurnId) {
       throw new Error('recommendation response belongs to another client turn')
@@ -589,6 +659,11 @@ function selectGame(game: RecommendationGame) {
     conversationRole.value = 'recommendation'
   }
   selectedGame.value = game
+  journeyGames.value = [
+    ...journeyGames.value.filter(candidate => candidate.bggId !== game.bggId),
+    game,
+  ]
+  persistJourneyGames()
   selectedBggIdToRestore = game.bggId
   activeFocusedBggId.value = game.bggId
   openSurface.value = 'journey'
@@ -606,6 +681,19 @@ function selectFromDetails(game: RecommendationGame) {
 
 function updateJourneyStatus(value: RecommendationJourneyStatus) {
   journeyStatus.value = value
+  journeyStatuses.value = { ...journeyStatuses.value, [value.game.bggId]: value }
+}
+
+function removeCurrentJourney() {
+  const game = selectedGame.value
+  if (!game) return
+  journeyGames.value = journeyGames.value.filter(candidate => candidate.bggId !== game.bggId)
+  const nextStatuses = { ...journeyStatuses.value }
+  delete nextStatuses[game.bggId]
+  journeyStatuses.value = nextStatuses
+  journeyStatus.value = null
+  openSurface.value = 'none'
+  persistJourneyGames()
 }
 
 function openRulebook(value: RecommendationJourneyStatus) {
@@ -624,6 +712,38 @@ function openJourneyDock() {
     openLesson(status)
     return
   }
+  openSurface.value = 'journey'
+}
+
+function activateJourneyCard(game: RecommendationGame, target?: EventTarget | null) {
+  selectedGame.value = game
+  selectedBggIdToRestore = game.bggId
+  activeFocusedBggId.value = game.bggId
+  journeyStatus.value = statusForJourney(game) ?? null
+  journeyDock.value = target instanceof HTMLButtonElement ? target : null
+}
+
+function openJourneyCard(game: RecommendationGame, target?: EventTarget | null) {
+  activateJourneyCard(game, target)
+  openJourneyDock()
+}
+
+function openJourneyProgressCard(game: RecommendationGame, target?: EventTarget | null) {
+  activateJourneyCard(game, target)
+  openJourneyProgress()
+}
+
+function openJourneyRulebookCard(game: RecommendationGame, status: RecommendationJourneyStatus) {
+  activateJourneyCard(game)
+  openRulebook(status)
+}
+
+function openJourneyLessonCard(game: RecommendationGame, status: RecommendationJourneyStatus) {
+  activateJourneyCard(game)
+  openLesson(status)
+}
+
+function openJourneyProgress() {
   openSurface.value = 'journey'
 }
 
@@ -913,6 +1033,76 @@ async function restoreServerRecommendationConversation(
   }
 }
 
+async function loadConversationHistory() {
+  if (!restoredConversationOwner) return
+  try {
+    const result = await fetch('/api/v1/bgg/recommendation-agent/sessions', { credentials: 'include' })
+    if (!result.ok) return
+    const candidates = await result.json() as unknown
+    if (!Array.isArray(candidates)) return
+    conversationHistory.value = candidates.filter(isRecommendationServerSession)
+  } catch {
+    // The active conversation remains usable while history is temporarily unavailable.
+  }
+}
+
+async function toggleConversationHistory() {
+  conversationHistoryOpen.value = !conversationHistoryOpen.value
+  if (conversationHistoryOpen.value) await loadConversationHistory()
+}
+
+function conversationHistoryTitle(session: RecommendationServerSession) {
+  const firstPlayerTurn = session.transcript.find(turn => turn.role === 'user')?.text.trim()
+  return firstPlayerTurn || t('chatUntitled')
+}
+
+async function startNewConversation() {
+  if (loading.value || conversationNavigationPending.value || !restoredConversationOwner) return
+  conversationNavigationPending.value = true
+  try {
+    const token = await csrfToken()
+    const result = await fetch('/api/v1/bgg/recommendation-agent/sessions', {
+      method: 'POST', credentials: 'include', headers: { [token.headerName]: token.token },
+    })
+    if (!result.ok) throw new RecommendationRequestError(result.status)
+    const candidate = await result.json() as unknown
+    if (!isRecommendationServerSession(candidate)) throw new Error('new recommendation session is invalid')
+    restoringConversation = true
+    applyServerRecommendationConversation(candidate)
+    restoringConversation = false
+    conversationHistoryOpen.value = false
+    persistRecommendationConversation()
+    await loadConversationHistory()
+    await nextTick()
+    recommendationInput.value?.focus({ preventScroll: true })
+  } finally {
+    restoringConversation = false
+    conversationNavigationPending.value = false
+  }
+}
+
+async function openConversationFromHistory(session: RecommendationServerSession) {
+  if (loading.value || conversationNavigationPending.value || session.conversationId === conversationId.value) return
+  conversationNavigationPending.value = true
+  try {
+    const result = await fetch(
+      `/api/v1/bgg/recommendation-agent/sessions/${encodeURIComponent(session.conversationId)}`,
+      { credentials: 'include' },
+    )
+    if (!result.ok) throw new RecommendationRequestError(result.status)
+    const candidate = await result.json() as unknown
+    if (!isRecommendationServerSession(candidate)) throw new Error('recommendation session is invalid')
+    restoringConversation = true
+    applyServerRecommendationConversation(candidate)
+    restoringConversation = false
+    conversationHistoryOpen.value = false
+    persistRecommendationConversation()
+  } finally {
+    restoringConversation = false
+    conversationNavigationPending.value = false
+  }
+}
+
 function reset(preserveJourney = false) {
   turnCancellationGeneration += 1
   activeRequest?.abort()
@@ -1024,6 +1214,7 @@ watch(
     if (restoredConversationOwner) {
       if (loading.value && lastRequest.value) failed.value = true
       persistRecommendationConversation(restoredConversationOwner)
+      persistJourneyGames(restoredConversationOwner)
     }
     turnCancellationGeneration += 1
     activeRequest?.abort()
@@ -1033,6 +1224,7 @@ watch(
     restoringConversation = true
     restoredConversationOwner = owner
     clearVisibleRecommendationConversation()
+    restoreJourneyGames(owner)
     if (owner) {
       loginGateVisible.value = false
       restoreRecommendationConversation(owner)
@@ -1050,6 +1242,7 @@ watch(
   () => { persistRecommendationConversation() },
   { deep: true, flush: 'post' },
 )
+watch(journeyGames, () => { persistJourneyGames() }, { deep: true, flush: 'post' })
 watch(
   () => [messages.value.length, loading.value, loadingStage.value],
   () => { void scrollConversationToLatest() },
@@ -1062,6 +1255,7 @@ onBeforeUnmount(() => {
   turnCancellationGeneration += 1
   if (loading.value && lastRequest.value) failed.value = true
   persistRecommendationConversation()
+  persistJourneyGames()
   activeRequest?.abort()
   endLoading()
 })
@@ -1070,7 +1264,7 @@ onBeforeUnmount(() => {
 <template>
   <section class="py-7 sm:py-9" aria-labelledby="recommendation-agent-title">
     <div class="tabletop-panel player-board tabletop-felt overflow-hidden p-1">
-      <div class="grid gap-px overflow-hidden rounded-[1.15rem] bg-white/10 lg:grid-cols-[minmax(16rem,0.7fr)_minmax(28rem,1.3fr)]">
+      <div class="grid gap-px overflow-hidden rounded-[1.15rem] bg-white/10 lg:grid-cols-[minmax(14rem,0.46fr)_minmax(38rem,1.54fr)]">
         <div class="bg-felt-deep px-5 py-6 sm:px-7 sm:py-8">
           <p class="text-xs font-bold uppercase tracking-[0.16em] text-[#e8bd6a]">{{ t('eyebrow') }}</p>
           <h2 id="recommendation-agent-title" class="mt-2 max-w-xl font-display text-4xl font-semibold leading-none tracking-tight text-white sm:text-5xl">{{ t('title') }}</h2>
@@ -1081,7 +1275,16 @@ onBeforeUnmount(() => {
             <p class="recommendation-understanding-copy mt-3 text-sm leading-6">{{ response.userModel.summary }}</p>
             <ul v-if="response.userModel.hypotheses.length" class="mt-3 stack-y-sm"><li v-for="hypothesis in response.userModel.hypotheses" :key="`${hypothesis.text}-${hypothesis.basedOn}`" class="recommendation-hypothesis text-xs leading-5"><span class="mr-2 font-semibold text-[#e8bd6a]">{{ confidenceLabel(hypothesis.confidence, response.responseLocale) }}</span>{{ hypothesis.text }}<span class="recommendation-basis block">{{ responseT(response, 'basedOn', { value: hypothesis.basedOn }) }}</span></li></ul>
           </details>
-          <button v-if="canResetRecommendation" type="button" :disabled="loading" class="recommendation-reset mt-5 min-h-11 text-sm font-semibold underline decoration-light-soft underline-offset-4 disabled:cursor-not-allowed disabled:opacity-40" @click="requestReset">{{ t('reset') }}</button>
+          <div v-if="sessionKnown" class="mt-5 flex flex-wrap gap-x-4 gap-y-2">
+            <button type="button" :disabled="loading || conversationNavigationPending" class="recommendation-reset min-h-11 text-sm font-semibold underline decoration-light-soft underline-offset-4 disabled:cursor-not-allowed disabled:opacity-40" @click="startNewConversation">{{ t('newChat') }}</button>
+            <button type="button" :disabled="loading || conversationNavigationPending" class="recommendation-reset min-h-11 text-sm font-semibold underline decoration-light-soft underline-offset-4 disabled:cursor-not-allowed disabled:opacity-40" :aria-expanded="conversationHistoryOpen" @click="toggleConversationHistory">{{ t('chatHistory') }}</button>
+            <button v-if="canResetRecommendation" type="button" :disabled="loading || conversationNavigationPending" class="recommendation-reset min-h-11 text-sm font-semibold underline decoration-light-soft underline-offset-4 disabled:cursor-not-allowed disabled:opacity-40" @click="requestReset">{{ t('reset') }}</button>
+          </div>
+          <ul v-if="conversationHistoryOpen" class="mt-2 grid gap-2 rounded-xl border border-white/10 bg-black/10 p-2">
+            <li v-for="session in conversationHistory" :key="session.conversationId">
+              <button type="button" class="w-full rounded-lg px-3 py-2 text-left text-xs leading-5 text-white/70 hover:bg-white/10" :class="session.conversationId === conversationId ? 'bg-white/10 font-semibold text-white' : ''" @click="openConversationFromHistory(session)">{{ conversationHistoryTitle(session) }}</button>
+            </li>
+          </ul>
         </div>
 
         <div data-testid="recommendation-chat-workspace" class="min-w-0 bg-paper text-ink">
@@ -1090,20 +1293,8 @@ onBeforeUnmount(() => {
             <button type="button" class="min-h-11 rounded-xl px-4 text-sm font-semibold" :class="conversationRole === 'rule-qa' ? 'bg-indigo text-white' : 'border border-ink/12 text-ink/60'" :aria-pressed="conversationRole === 'rule-qa'" @click="switchToQuestions()">{{ t('answerRole') }}</button>
           </nav>
 
-          <div v-if="selectedGame && openSurface !== 'journey'" data-testid="player-journey-continuation" class="mx-4 my-3 flex flex-col overflow-hidden rounded-2xl border border-copper/25 bg-canvas elevation-sm hover:border-copper/45 sm:mx-6 sm:flex-row">
-            <button ref="journeyDock" data-testid="player-journey-dock" type="button" class="flex min-h-16 min-w-0 flex-1 items-center gap-3 px-4 py-3 text-left" @click="openJourneyDock">
-              <span class="grid size-9 shrink-0 place-items-center rounded-full bg-copper/10 font-mono text-xs font-bold text-copper">{{ journeyStatus ? `${journeyStatus.projection.progress}%` : '…' }}</span>
-              <span class="min-w-0 flex-1">
-                <span class="block text-[0.6875rem] font-bold uppercase tracking-[0.12em] text-copper">{{ t('journeyStatusLabel') }}</span>
-                <span class="mt-0.5 block text-sm font-semibold text-ink">{{ compactJourneyText }}</span>
-              </span>
-              <span class="shrink-0 text-sm font-semibold text-indigo underline">{{ t(journeyStatus?.projection.canReadLesson && journeyStatus.plan?.id ? 'journeyRead' : 'journeyOpen') }}</span>
-            </button>
-            <button v-if="journeyStatus?.projection.canReadLesson && journeyStatus.plan?.id" data-testid="player-journey-progress-button" type="button" class="min-h-11 w-full shrink-0 border-t border-copper/20 px-4 text-sm font-semibold text-ink/55 underline sm:w-auto sm:border-l sm:border-t-0" @click="openSurface = 'journey'">{{ t('journeyProgress') }}</button>
-          </div>
-
           <div v-show="conversationRole === 'recommendation'">
-            <div ref="conversationScroller" data-testid="recommendation-conversation" class="max-h-[70vh] min-h-72 scroll-pb-8 stack-y-md overflow-y-auto px-4 py-5 pb-8 sm:min-h-[31rem] sm:px-6 sm:py-7 sm:pb-9 lg:max-h-[46rem]" aria-live="polite">
+            <div ref="conversationScroller" data-testid="recommendation-conversation" class="max-h-[76vh] min-h-80 scroll-pb-8 stack-y-md overflow-y-auto px-4 py-5 pb-8 sm:min-h-[38rem] sm:px-6 sm:py-7 sm:pb-9 lg:max-h-[54rem]" aria-live="polite">
               <div v-for="message in messages" :key="message.id" data-conversation-message :data-has-recommendations="message.response?.games.length ? 'true' : 'false'" class="flex min-w-0" :class="message.role === 'user' ? 'justify-end' : 'justify-start'">
                 <p v-if="message.role === 'user'" class="max-w-[88%] rounded-2xl rounded-br-sm bg-felt px-4 py-3 text-sm leading-6 text-white">{{ message.text }}</p>
                 <article v-else class="min-w-0 w-full" :data-testid="message.response?.games.length ? 'assistant-recommendation-turn' : 'assistant-conversation-turn'">
@@ -1127,6 +1318,24 @@ onBeforeUnmount(() => {
                   </div>
                 </article>
               </div>
+              <article v-for="game in journeyGames" :key="`journey-${game.bggId}`" data-testid="player-journey-continuation" :data-bgg-id="game.bggId" class="overflow-hidden rounded-2xl border border-copper/25 bg-canvas elevation-sm hover:border-copper/45">
+                <button data-testid="player-journey-dock" type="button" class="flex min-h-20 w-full min-w-0 items-center gap-3 px-4 py-3 text-left" @click="openJourneyCard(game, $event.currentTarget)">
+                  <img v-if="game.thumbnailUrl" :src="game.thumbnailUrl" :alt="game.name" class="h-14 w-11 shrink-0 rounded-md bg-paper object-contain" referrerpolicy="no-referrer">
+                  <span v-else class="grid size-11 shrink-0 place-items-center rounded-lg bg-copper/10 font-mono text-xs font-bold text-copper">{{ statusForJourney(game) ? `${statusForJourney(game)?.projection.progress}%` : '…' }}</span>
+                  <span class="min-w-0 flex-1">
+                    <span class="block text-[0.6875rem] font-bold uppercase tracking-[0.12em] text-copper">{{ t('journeyStatusLabel') }} · {{ game.name }}</span>
+                    <span class="mt-1 block text-sm font-semibold leading-5 text-ink">{{ journeyText(game, statusForJourney(game)) }}</span>
+                    <span v-if="statusForJourney(game)" class="mt-1 block text-xs text-ink/45">{{ statusForJourney(game)?.projection.progress }}% · {{ t('journeyProgress') }}</span>
+                  </span>
+                  <span class="shrink-0 text-sm font-semibold text-indigo underline">{{ t(statusForJourney(game)?.projection.canReadLesson && statusForJourney(game)?.plan?.id ? 'journeyRead' : 'journeyOpen') }}</span>
+                </button>
+                <div class="flex flex-col border-t border-copper/20 sm:flex-row">
+                  <button data-testid="player-journey-progress-button" type="button" class="inline-flex min-h-11 w-full items-center justify-center px-3 text-sm font-semibold text-indigo underline sm:flex-1" @click="openJourneyProgressCard(game, $event.currentTarget)">{{ t('journeyProgress') }}</button>
+                  <button v-if="statusForJourney(game)?.projection.canReadRulebook && statusForJourney(game)?.importJob?.documentVersionId" type="button" class="inline-flex min-h-11 w-full items-center justify-center border-t border-copper/20 px-3 text-sm font-semibold text-indigo underline sm:flex-1 sm:border-l sm:border-t-0" @click="openJourneyRulebookCard(game, statusForJourney(game)!)">{{ t('journeyReadRulebook') }}</button>
+                  <button v-if="statusForJourney(game)?.projection.canReadLesson && statusForJourney(game)?.plan?.id" type="button" class="inline-flex min-h-11 w-full items-center justify-center border-t border-copper/20 px-3 text-sm font-semibold text-indigo underline sm:flex-1 sm:border-l sm:border-t-0" @click="openJourneyLessonCard(game, statusForJourney(game)!)">{{ t('journeyRead') }}</button>
+                  <RouterLink v-if="statusForJourney(game)?.plan?.id" data-testid="player-journey-all-work-link" :to="{ path: '/work', query: { started: statusForJourney(game)?.plan?.id } }" class="inline-flex min-h-11 w-full items-center justify-center border-t border-copper/20 px-3 text-sm font-semibold text-ink/55 underline sm:flex-1 sm:border-l sm:border-t-0">{{ t('journeyAllWork') }}</RouterLink>
+                </div>
+              </article>
               <div v-if="loading" class="flex items-start gap-3 rounded-2xl rounded-bl-sm border border-ink/8 bg-canvas px-4 py-3 text-ink/55" role="status">
                 <span class="flex gap-1" aria-hidden="true"><span class="size-1.5 animate-pulse rounded-full bg-copper" /><span class="size-1.5 animate-pulse rounded-full bg-copper [animation-delay:160ms]" /><span class="size-1.5 animate-pulse rounded-full bg-copper [animation-delay:320ms]" /></span>
                 <div class="min-w-0 flex-1">
@@ -1142,6 +1351,8 @@ onBeforeUnmount(() => {
                       <span>{{ step.label }}</span>
                     </li>
                   </ol>
+                  <p v-if="recommendationEvidenceSummary" data-testid="recommendation-evidence-summary" class="mt-2 rounded-lg bg-paper px-3 py-2 text-xs leading-5 text-ink/55">{{ recommendationEvidenceSummary }}</p>
+                  <p v-if="streamedRecommendationMessage" data-testid="recommendation-validated-answer-preview" class="mt-2 rounded-lg border border-emerald-200 bg-emerald-50/70 px-3 py-2 text-sm leading-6 text-emerald-950">{{ streamedRecommendationMessage }}</p>
                   <p v-if="recommendationSoftBudgetReached" data-testid="recommendation-soft-budget" class="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-950">{{ recommendationSoftBudgetCopy }}</p>
                 </div>
               </div>
@@ -1179,7 +1390,7 @@ onBeforeUnmount(() => {
 
     <Teleport to="body">
       <div v-if="selectedGame" v-show="openSurface === 'journey'" data-testid="player-journey-backdrop" class="fixed inset-0 z-[100] overflow-y-auto bg-ink/45 px-3 py-6 backdrop-blur-[2px] sm:px-6" @click.self="openSurface = 'none'">
-        <div ref="journeyDialog" tabindex="-1" class="mx-auto w-full max-w-3xl outline-none" role="dialog" aria-modal="true" :aria-label="t('journeyDialog')">
+        <div ref="journeyDialog" tabindex="-1" class="mx-auto w-full max-w-5xl outline-none" role="dialog" aria-modal="true" :aria-label="t('journeyDialog')">
           <RecommendationRulebookHandoff
             :key="selectedGame.bggId"
             :game="selectedGame"
@@ -1190,30 +1401,33 @@ onBeforeUnmount(() => {
             @open-rulebook="openRulebook"
             @open-lesson="openLesson"
             @ask-questions="switchToQuestions"
+            @remove="removeCurrentJourney"
           />
         </div>
       </div>
     </Teleport>
 
-    <RecommendationGameDetailsDialog v-if="detailsGame" :game="detailsGame" :open="openSurface === 'game-details'" @close="openSurface = 'none'" @select="selectFromDetails" />
-    <RecommendationRulebookDialog
-      v-if="selectedGame && journeyStatus?.importJob?.documentVersionId"
-      :open="openSurface === 'rulebook'"
-      :version-id="journeyStatus.importJob.documentVersionId"
-      :title="selectedGame.name"
-      :restore-focus="journeySurfaceReturnTarget"
-      @close="openSurface = 'none'"
-    />
-    <RecommendationLessonDialog
-      v-if="journeyStatus?.plan?.id"
-      :open="openSurface === 'lesson'"
-      :plan-id="journeyStatus.plan.id"
-      :initial-plan="journeyStatus.plan"
-      :initial-lesson="journeyStatus.lesson"
-      :restore-focus="journeySurfaceReturnTarget"
-      @close="openSurface = 'none'"
-      @ask-questions="switchToQuestions()"
-    />
+    <Teleport to="body">
+      <RecommendationGameDetailsDialog v-if="detailsGame" :game="detailsGame" :open="openSurface === 'game-details'" @close="openSurface = 'none'" @select="selectFromDetails" />
+      <RecommendationRulebookDialog
+        v-if="selectedGame && journeyStatus?.importJob?.documentVersionId"
+        :open="openSurface === 'rulebook'"
+        :version-id="journeyStatus.importJob.documentVersionId"
+        :title="selectedGame.name"
+        :restore-focus="journeySurfaceReturnTarget"
+        @close="openSurface = 'none'"
+      />
+      <RecommendationLessonDialog
+        v-if="journeyStatus?.plan?.id"
+        :open="openSurface === 'lesson'"
+        :plan-id="journeyStatus.plan.id"
+        :initial-plan="journeyStatus.plan"
+        :initial-lesson="journeyStatus.lesson"
+        :restore-focus="journeySurfaceReturnTarget"
+        @close="openSurface = 'none'"
+        @ask-questions="switchToQuestions()"
+      />
+    </Teleport>
     <ConversationResetDialog
       kind="recommendation"
       :open="resetDialogOpen"

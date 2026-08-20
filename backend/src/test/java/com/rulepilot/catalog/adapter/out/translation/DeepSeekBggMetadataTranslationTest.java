@@ -11,6 +11,7 @@ import static org.mockito.Mockito.when;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rulepilot.catalog.BggMetadataTranslation.Translation;
 import com.rulepilot.catalog.BggMetadataTranslation.Request;
+import com.rulepilot.catalog.BggMetadataTranslation.PrewarmStatus;
 import com.rulepilot.catalog.application.BggMetadataTranslationStore;
 import com.sun.net.httpserver.HttpServer;
 import java.net.InetSocketAddress;
@@ -229,6 +230,19 @@ class DeepSeekBggMetadataTranslationTest {
         var adapter = adapter(calls, redis.template(), "http://provider.invalid");
 
         assertThat(adapter.translate(REQUEST)).isEmpty();
+
+        verify(calls, never()).newCall(org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
+    void reportsWhyPrewarmPausedWithoutExposingProviderDetails() {
+        RedisMocks redis = redisWithMissAndBudget(61L);
+        OkHttpClient calls = mock(OkHttpClient.class);
+        var adapter = adapter(calls, redis.template(), "http://provider.invalid");
+
+        assertThat(adapter.prewarm(REQUEST).status()).isEqualTo(PrewarmStatus.RETRY_HOURLY_BUDGET);
+        assertThat(adapter.prewarm(new Request(0, "", "", List.of(), List.of())).status())
+                .isEqualTo(PrewarmStatus.SKIPPED_INVALID_SOURCE);
 
         verify(calls, never()).newCall(org.mockito.ArgumentMatchers.any());
     }

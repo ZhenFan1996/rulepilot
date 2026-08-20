@@ -1,5 +1,6 @@
 package com.rulepilot.identity.application;
 
+import com.rulepilot.identity.AccountEmailRegistry;
 import java.nio.charset.StandardCharsets;
 import java.util.Locale;
 import java.util.regex.Pattern;
@@ -19,15 +20,21 @@ public class RegisterAccountService {
 
     private final UserDetailsManager users;
     private final PasswordEncoder passwordEncoder;
+    private final AccountEmailRegistry emails;
 
-    RegisterAccountService(UserDetailsManager users, PasswordEncoder passwordEncoder) {
+    RegisterAccountService(
+            UserDetailsManager users,
+            PasswordEncoder passwordEncoder,
+            AccountEmailRegistry emails) {
         this.users = users;
         this.passwordEncoder = passwordEncoder;
+        this.emails = emails;
     }
 
     @Transactional
-    public RegistrationResult register(String requestedUsername, String password) {
+    public RegistrationResult register(String requestedUsername, String requestedEmail, String password) {
         String username = normalizeUsername(requestedUsername);
+        String email = normalizeEmail(requestedEmail);
         validatePassword(password);
         if (users.userExists(username)) {
             return new RegistrationResult(username, false);
@@ -37,10 +44,25 @@ public class RegisterAccountService {
                     .password(passwordEncoder.encode(password))
                     .roles("USER")
                     .build());
+            if (!emails.claim(username, email)) {
+                throw new EmailAlreadyRegisteredException();
+            }
             return new RegistrationResult(username, true);
         } catch (DuplicateKeyException exception) {
             return new RegistrationResult(username, false);
         }
+    }
+
+    private String normalizeEmail(String requestedEmail) {
+        String email = requestedEmail == null ? "" : requestedEmail.trim().toLowerCase(Locale.ROOT);
+        int at = email.indexOf('@');
+        boolean oneSeparator = at > 0 && at == email.lastIndexOf('@') && at < email.length() - 1;
+        boolean safeCharacters = email.chars().noneMatch(character -> Character.isWhitespace(character)
+                || Character.isISOControl(character));
+        if (!oneSeparator || !safeCharacters || email.length() > 254) {
+            throw new IllegalArgumentException("Email address is invalid");
+        }
+        return email;
     }
 
     private String normalizeUsername(String username) {

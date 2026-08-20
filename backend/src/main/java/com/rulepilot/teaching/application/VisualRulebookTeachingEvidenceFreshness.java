@@ -58,12 +58,41 @@ final class VisualRulebookTeachingEvidenceFreshness implements RulebookTeachingE
             return ReuseAssessment.IN_PROGRESS;
         }
         if (preparation.orElseThrow().state() != AssistantRunState.COMPLETED) {
+            if ("AGENT_CANCELLED".equals(preparation.orElseThrow().lastErrorCode())) {
+                return ReuseAssessment.CANCELLED;
+            }
             return "TEACHING_PREPARATION_INVALID_PLAN".equals(preparation.orElseThrow().lastErrorCode())
                     ? ReuseAssessment.TERMINAL_FAILURE
                     : ReuseAssessment.RETRYABLE_FAILURE;
         }
         var plan = plans.findLatest(documentVersionId, owner);
-        if (plan.isEmpty() || lessons.findLatestByPlan(plan.orElseThrow().id())
+        if (plan.isEmpty()) return ReuseAssessment.REFRESH_REQUIRED;
+        var latestGeneration = runs.findLatestOwned(
+                        com.rulepilot.assistant.AssistantRunMode.TEACHING,
+                        plan.orElseThrow().id(),
+                        owner)
+                .map(AssistantRuns.RunDetails::run);
+        if (latestGeneration
+                .map(AssistantRuns.RunSnapshot::state)
+                .filter(state -> !state.terminal())
+                .isPresent()) {
+            return ReuseAssessment.IN_PROGRESS;
+        }
+        if (latestGeneration
+                .map(AssistantRuns.RunSnapshot::lastErrorCode)
+                .filter("AGENT_CANCELLED"::equals)
+                .isPresent()) {
+            return ReuseAssessment.CANCELLED;
+        }
+        if (latestGeneration
+                .map(AssistantRuns.RunSnapshot::state)
+                .filter(AssistantRunState.FAILED::equals)
+                .isPresent()) {
+            // A cited first section remains readable, but a transient continuation, provider, or queue failure still
+            // deserves the handoff's single bounded recovery so the player is not stranded with an unfinished guide.
+            return ReuseAssessment.RETRYABLE_FAILURE;
+        }
+        if (lessons.findLatestByPlan(plan.orElseThrow().id())
                 .filter(lesson -> lesson.sections().stream().anyMatch(section ->
                         (section.evidenceStatus() == EvidenceStatus.SUPPORTED
                                 || section.evidenceStatus() == EvidenceStatus.CITED_DRAFT)

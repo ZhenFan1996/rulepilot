@@ -106,6 +106,9 @@ public class BggRecommendationAgentStreamController {
                             presentation);
             if (!open.get()) return;
             emitter.send(SseEmitter.event()
+                    .name("answer_part")
+                    .data(new AnswerPart("message", presented.assistantMessage())));
+            emitter.send(SseEmitter.event()
                     .name("result")
                     .data(presented));
             emitter.complete();
@@ -127,9 +130,15 @@ public class BggRecommendationAgentStreamController {
         if (!open.get()) return;
         try {
             emitter.send(SseEmitter.event()
+                    .id(Long.toString(update.elapsedMs()))
                     .name("progress")
                     .data(new ProgressResponse(
-                            update.stage().name().toLowerCase(Locale.ROOT), update.elapsedMs())));
+                            update.stage().name().toLowerCase(Locale.ROOT),
+                            update.elapsedMs(),
+                            update.observedCandidates(),
+                            update.verifiedCandidates(),
+                            update.hardRejectedCandidates(),
+                            update.sourceCount())));
         } catch (IOException | RuntimeException exception) {
             open.set(false);
             LOGGER.debug("Recommendation progress stream disconnected before completion");
@@ -149,7 +158,15 @@ public class BggRecommendationAgentStreamController {
         }
     }
 
-    record ProgressResponse(String stage, long elapsedMs) {}
+    record ProgressResponse(
+            String stage,
+            long elapsedMs,
+            int observedCandidates,
+            int verifiedCandidates,
+            int hardRejectedCandidates,
+            int sourceCount) {}
+
+    record AnswerPart(String field, String text) {}
 
     record StreamError(String code) {}
 }

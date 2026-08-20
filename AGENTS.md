@@ -94,7 +94,9 @@ observability, and repository commands cannot meet the need.
 - Real-corpus failures become sanitized evaluation cases, not production vocabulary. Do not add a game title, component, role, mechanic label, page number, or answer-bearing synonym to production decision logic merely to repair one replay.
 - A deterministic AI heuristic must state a game-independent invariant and pass cross-rulebook positive and negative tests. Prefer terminology and rule relationships derived from the active document.
 - The model may use only allow-listed tools with validated parameters.
-- Never expose hidden chain-of-thought; expose concise execution status only.
+- Stream player-safe agent replies, tool-result summaries, evidence decisions, failure reasons, retries, and next
+  actions so long-running work remains understandable. Do not expose private model reasoning, internal prompts,
+  credentials, or sensitive tool parameters.
 - Enforce step, token, timeout, and tool-call budgets.
 - Do not call paid or real external models in normal CI.
 

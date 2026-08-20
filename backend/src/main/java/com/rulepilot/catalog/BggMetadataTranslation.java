@@ -8,6 +8,32 @@ public interface BggMetadataTranslation {
 
     Optional<Translation> translate(Request request);
 
+    default PrewarmResult prewarm(Request request) {
+        return translate(request).isPresent()
+                ? new PrewarmResult(PrewarmStatus.READY)
+                : new PrewarmResult(PrewarmStatus.RETRY_LATER);
+    }
+
+    enum PrewarmStatus {
+        READY,
+        SKIPPED_INVALID_SOURCE,
+        RETRY_NOT_CONFIGURED,
+        RETRY_PROVIDER_BUSY,
+        RETRY_HOURLY_BUDGET,
+        RETRY_PROVIDER_UNAVAILABLE,
+        RETRY_LATER
+    }
+
+    record PrewarmResult(PrewarmStatus status) {
+        public PrewarmResult {
+            if (status == null) throw new IllegalArgumentException("BGG translation prewarm status is required");
+        }
+
+        public boolean advanceCursor() {
+            return status == PrewarmStatus.READY || status == PrewarmStatus.SKIPPED_INVALID_SOURCE;
+        }
+    }
+
     record Request(
             int bggId,
             String gameName,

@@ -45,6 +45,17 @@ public class UploadedRulebookTeachingLauncher {
         if (unusable > 0) {
             LOGGER.warn("Failed {} uploaded-rulebook teaching handoffs whose documents could not be processed", unusable);
         }
+        var reconciliation = handoffs.reconcileLaunched(batchSize);
+        if (reconciliation.restarted() > 0) {
+            LOGGER.warn(
+                    "Restarted {} uploaded-rulebook teaching handoffs whose persisted Teaching result was missing or transiently failed",
+                    reconciliation.restarted());
+        }
+        if (reconciliation.exhausted() > 0) {
+            LOGGER.warn(
+                    "Stopped {} uploaded-rulebook teaching handoffs after bounded recovery was exhausted",
+                    reconciliation.exhausted());
+        }
         launch(handoffs.claimReady(batchSize));
     }
 

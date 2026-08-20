@@ -1,8 +1,11 @@
 package com.rulepilot.modelconfig.adapter.in.web;
 
 import com.rulepilot.modelconfig.RuntimeModelConfiguration;
+import com.rulepilot.modelconfig.ModelAccountQuota;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration.Snapshot;
 import java.security.Principal;
+import java.time.Clock;
+import java.time.LocalDate;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -17,14 +20,22 @@ import org.springframework.web.bind.annotation.RestController;
 public class ModelConfigurationController {
 
     private final RuntimeModelConfiguration configuration;
+    private final ModelAccountQuota quota;
 
-    public ModelConfigurationController(RuntimeModelConfiguration configuration) {
+    public ModelConfigurationController(RuntimeModelConfiguration configuration, ModelAccountQuota quota) {
         this.configuration = configuration;
+        this.quota = quota;
     }
 
     @GetMapping
     Snapshot read(Principal principal) {
         return configuration.snapshot(principal.getName());
+    }
+
+    @GetMapping("/usage")
+    ModelAccountQuota.AccountUsage usage(Principal principal) {
+        LocalDate today = LocalDate.now(Clock.systemUTC());
+        return quota.usage(principal.getName(), today.withDayOfMonth(1));
     }
 
     @PutMapping("/providers/{provider}")

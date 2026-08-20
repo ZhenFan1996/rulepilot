@@ -223,7 +223,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div v-if="open" class="fixed inset-0 z-50 overflow-y-auto bg-ink/40 px-3 py-6 backdrop-blur-[2px] sm:px-6" @click.self="emit('close')">
-    <section ref="dialog" tabindex="-1" class="mx-auto w-full max-w-5xl overflow-hidden rounded-3xl border border-gold/25 bg-canvas shadow-2xl outline-none" role="dialog" aria-modal="true" :aria-label="copy.dialog">
+    <section ref="dialog" tabindex="-1" class="mx-auto w-full max-w-6xl overflow-y-auto rounded-3xl border border-gold/25 bg-canvas shadow-2xl outline-none sm:max-h-[calc(100vh-3rem)]" role="dialog" aria-modal="true" :aria-label="copy.dialog">
       <header class="app-sticky-top sticky z-10 flex items-start justify-between border-b border-ink/10 bg-paper/95 px-5 py-4 backdrop-blur sm:px-7">
         <div><p class="tabletop-kicker">{{ copy.eyebrow }}</p><h2 class="mt-1 font-display text-2xl font-semibold">{{ details?.name ?? game.name }}</h2></div>
         <button type="button" data-modal-initial-focus class="grid min-h-11 min-w-11 place-items-center rounded-lg text-2xl text-ink/45 hover:bg-ink/5" :aria-label="copy.close" @click="emit('close')">×</button>
@@ -231,9 +231,9 @@ onBeforeUnmount(() => {
 
       <div v-if="loading" class="grid min-h-96 place-items-center p-8 text-sm text-ink/50" role="status">{{ copy.loading }}</div>
       <div v-else-if="error" class="grid min-h-80 place-items-center p-8 text-center" role="alert"><div><p>{{ copy.error }}</p><button type="button" class="mt-4 min-h-11 rounded-lg bg-indigo px-5 font-semibold text-white" @click="load">{{ copy.retry }}</button></div></div>
-      <div v-else-if="details" class="grid gap-7 p-5 sm:p-7 lg:grid-cols-[18rem_minmax(0,1fr)]">
-        <div class="self-start rounded-2xl border border-ink/8 bg-paper p-4">
-          <img v-if="details.imageUrl || details.thumbnailUrl" :src="details.imageUrl || details.thumbnailUrl" :alt="details.name" class="mx-auto aspect-[4/5] h-auto w-full object-contain" referrerpolicy="no-referrer">
+      <div v-else-if="details" class="grid items-start gap-6 p-4 sm:p-6 lg:grid-cols-[minmax(15rem,21rem)_minmax(0,1fr)] lg:gap-8">
+        <div class="self-start rounded-2xl border border-ink/8 bg-paper p-3 sm:p-4">
+          <img v-if="details.imageUrl || details.thumbnailUrl" :src="details.imageUrl || details.thumbnailUrl" :alt="details.name" class="mx-auto h-auto max-h-[min(62vh,42rem)] w-auto max-w-full object-contain" referrerpolicy="no-referrer">
           <div class="mt-4 flex flex-col gap-2">
             <button type="button" class="min-h-12 rounded-xl bg-felt px-5 text-sm font-semibold text-white" @click="emit('select', game)">{{ copy.select }}</button>
             <a :href="details.bggUrl" target="_blank" rel="noopener noreferrer" class="inline-flex min-h-11 items-center justify-center text-sm font-semibold text-indigo">{{ copy.source }} ↗</a>
@@ -256,7 +256,7 @@ onBeforeUnmount(() => {
           </dl>
           <div v-if="details.editionImages.length" class="mt-6 border-t border-ink/10 pt-5">
             <h3 class="font-display text-xl font-semibold">{{ copy.editions }}</h3>
-            <ul class="mt-3 flex gap-3 overflow-x-auto pb-2"><li v-for="edition in details.editionImages" :key="edition.versionId" class="w-28 shrink-0"><img :src="edition.imageUrl" :alt="edition.name" class="h-32 w-full rounded-lg bg-paper object-contain"><p class="mt-1 line-clamp-2 text-xs text-ink/55">{{ edition.name }}</p></li></ul>
+            <ul class="mt-3 flex gap-3 overflow-x-auto pb-2"><li v-for="edition in details.editionImages" :key="edition.versionId" class="w-28 shrink-0"><img :src="edition.imageUrl" :alt="edition.name" loading="lazy" class="h-32 w-full rounded-lg bg-paper object-contain"><p class="mt-1 line-clamp-2 text-xs text-ink/55">{{ edition.name }}</p></li></ul>
           </div>
           <p class="mt-6 rounded-xl bg-indigo/5 px-4 py-3 text-xs leading-5 text-ink/50">{{ copy.evidence }}</p>
         </div>

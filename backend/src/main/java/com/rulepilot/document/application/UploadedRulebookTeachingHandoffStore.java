@@ -35,6 +35,18 @@ public interface UploadedRulebookTeachingHandoffStore {
 
     int failInterruptedLaunches(Instant now);
 
+    List<RecoveryCandidate> findUnreconciledLaunched(int limit);
+
+    boolean retryAutomatically(UUID handoffId, UUID expectedPreparationRunId, Instant now);
+
+    boolean failRecoveryExhausted(UUID handoffId, UUID expectedPreparationRunId, Instant now);
+
+    boolean failTerminal(UUID handoffId, UUID expectedPreparationRunId, String errorCode, Instant now);
+
+    boolean markReconciled(UUID handoffId, UUID expectedPreparationRunId, Instant now);
+
+    boolean dismissCancelled(UUID handoffId, UUID expectedPreparationRunId);
+
     enum State {
         WAITING_FOR_DOCUMENT,
         LAUNCHING,
@@ -50,6 +62,20 @@ public interface UploadedRulebookTeachingHandoffStore {
             State state,
             UUID preparationRunId,
             String errorCode,
+            int automaticRecoveryCount,
             Instant createdAt,
-            Instant updatedAt) {}
+            Instant updatedAt) {
+        public Snapshot {
+            if (automaticRecoveryCount < 0) {
+                throw new IllegalArgumentException("uploaded teaching recovery count is invalid");
+            }
+        }
+    }
+
+    record RecoveryCandidate(
+            UUID id,
+            UUID documentVersionId,
+            String ownerUsername,
+            UUID preparationRunId,
+            int automaticRecoveryCount) {}
 }

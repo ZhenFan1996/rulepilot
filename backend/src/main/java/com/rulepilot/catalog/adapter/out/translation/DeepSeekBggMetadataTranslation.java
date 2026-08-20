@@ -129,35 +129,45 @@ public class DeepSeekBggMetadataTranslation implements BggMetadataTranslation {
 
     @Override
     public Optional<Translation> translate(Request request) {
-        if (!validRequest(request)) return Optional.empty();
+        return attempt(request).translation();
+    }
+
+    @Override
+    public PrewarmResult prewarm(Request request) {
+        Attempt attempt = attempt(request);
+        return new PrewarmResult(attempt.translation().isPresent() ? PrewarmStatus.READY : attempt.status());
+    }
+
+    private Attempt attempt(Request request) {
+        if (!validRequest(request)) return Attempt.empty(PrewarmStatus.SKIPPED_INVALID_SOURCE);
         String sourceDigest = sourceDigest(request);
         String cacheKey = cacheKey(request, sourceDigest);
         Optional<Translation> cached = cached(cacheKey, request);
-        if (cached.isPresent()) return cached;
+        if (cached.isPresent()) return Attempt.ready(cached.orElseThrow());
         Optional<Translation> persisted = persisted(sourceDigest, request);
         if (persisted.isPresent()) {
             cache(cacheKey, persisted.orElseThrow());
-            return persisted;
+            return Attempt.ready(persisted.orElseThrow());
         }
-        if (!configured()) return Optional.empty();
+        if (!configured()) return Attempt.empty(PrewarmStatus.RETRY_NOT_CONFIGURED);
 
         Object keyLock = keyLocks[Math.floorMod(cacheKey.hashCode(), keyLocks.length)];
         synchronized (keyLock) {
             cached = cached(cacheKey, request);
-            if (cached.isPresent()) return cached;
+            if (cached.isPresent()) return Attempt.ready(cached.orElseThrow());
             persisted = persisted(sourceDigest, request);
             if (persisted.isPresent()) {
                 cache(cacheKey, persisted.orElseThrow());
-                return persisted;
+                return Attempt.ready(persisted.orElseThrow());
             }
-            if (!providerPermits.tryAcquire()) return Optional.empty();
+            if (!providerPermits.tryAcquire()) return Attempt.empty(PrewarmStatus.RETRY_PROVIDER_BUSY);
             try {
-                if (!acquireHourlyAllowance()) return Optional.empty();
+                if (!acquireHourlyAllowance()) return Attempt.empty(PrewarmStatus.RETRY_HOURLY_BUDGET);
                 Optional<Translation> translated = requestTranslation(request);
-                if (translated.isEmpty()) return Optional.empty();
+                if (translated.isEmpty()) return Attempt.empty(PrewarmStatus.RETRY_PROVIDER_UNAVAILABLE);
                 persist(request.bggId(), sourceDigest, translated.orElseThrow());
                 cache(cacheKey, translated.orElseThrow());
-                return translated;
+                return Attempt.ready(translated.orElseThrow());
             } finally {
                 providerPermits.release();
             }
@@ -384,5 +394,20 @@ public class DeepSeekBggMetadataTranslation implements BggMetadataTranslation {
             throw new IllegalArgumentException("DeepSeek base URL must be HTTPS without credentials");
         }
         return uri.toASCIIString();
+    }
+
+    private record Attempt(Optional<Translation> translation, PrewarmStatus status) {
+        private Attempt {
+            translation = translation == null ? Optional.empty() : translation;
+            if (status == null) throw new IllegalArgumentException("BGG translation attempt status is required");
+        }
+
+        static Attempt ready(Translation translation) {
+            return new Attempt(Optional.of(translation), PrewarmStatus.READY);
+        }
+
+        static Attempt empty(PrewarmStatus status) {
+            return new Attempt(Optional.empty(), status);
+        }
     }
 }

@@ -25,6 +25,8 @@ public interface RulebookTeachingEvidenceFreshness {
         RETRYABLE_FAILURE,
         /** The last preparation deterministically failed its source-bound plan contract. */
         TERMINAL_FAILURE,
+        /** The player explicitly cancelled the referenced preparation; recovery must preserve that intent. */
+        CANCELLED,
         /** The referenced run ended without a reusable Teaching result, or its derived evidence is stale. */
         REFRESH_REQUIRED
     }

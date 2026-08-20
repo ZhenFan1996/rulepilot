@@ -61,7 +61,9 @@ describe('AppShell', () => {
         { path: '/library', name: 'public-library', component: { template: '<div />' } },
         { path: '/catalog', name: 'catalog', component: { template: '<div />' } },
         { path: '/teach', name: 'teach', component: { template: '<div />' } },
+        { path: '/rulebooks', name: 'rulebooks', component: { template: '<div />' } },
         { path: '/lessons', name: 'lessons', component: { template: '<div />' } },
+        { path: '/work', name: 'work-status', component: { template: '<div />' } },
         { path: '/account', name: 'account', component: { template: '<div />' } },
         { path: '/login', name: 'login', component: { template: '<div />' } },
       ],
@@ -85,11 +87,10 @@ describe('AppShell', () => {
     expect(backgroundWorkTrigger.element.parentElement?.id).toBe('background-work-desktop-trigger')
     expect(backgroundWorkTrigger.classes()).not.toContain('fixed')
     expect(wrapper.get('[data-testid="background-work-trigger-mobile"]').element.closest('header')).not.toBeNull()
-    const persistentShortcut = wrapper.get('[data-testid="background-work-persistent-shortcut"]')
-    expect(persistentShortcut.text()).toContain('讲解状态')
-    expect(persistentShortcut.text()).toContain('《星际探索》仍在后台准备')
-    expect(persistentShortcut.text()).toContain('看进度')
-    await persistentShortcut.trigger('click')
+    expect(wrapper.find('[data-testid="background-work-persistent-shortcut"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="work-status-navigation-link"]').attributes('href')).toBe('/work')
+    expect(wrapper.get('[data-testid="work-status-navigation-active"]').text()).toBe('1')
+    await backgroundWorkTrigger.trigger('click')
     await flushPromises()
     expect(wrapper.text()).toContain('星际探索')
     expect(wrapper.text()).toContain('可以继续浏览')
@@ -110,9 +111,9 @@ describe('AppShell', () => {
 
     document.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Escape' }))
     await flushPromises()
-    expect(document.activeElement).toBe(persistentShortcut.element)
+    expect(document.activeElement).toBe(backgroundWorkTrigger.element)
     expect(document.body.style.overflow).toBe('')
-    await persistentShortcut.trigger('click')
+    await backgroundWorkTrigger.trigger('click')
 
     await wrapper.findAll('button').find(button => button.text() === '清除已结束任务')!.trigger('click')
     await flushPromises()
@@ -202,8 +203,7 @@ describe('AppShell', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('讲解完成')
-    expect(wrapper.get('[data-testid="background-work-persistent-shortcut"]').text())
-      .toContain('《星际探索》的后台处理已经结束')
+    expect(wrapper.find('[data-testid="work-status-navigation-finished"]').exists()).toBe(true)
     wrapper.unmount()
   })
 
@@ -226,14 +226,12 @@ describe('AppShell', () => {
     const wrapper = mount(AppShell, { slots: { default: '<p>页面内容</p>' }, global: { plugins: [router] } })
     await flushPromises()
     expect(wrapper.get('[data-testid="background-work-trigger-desktop"]').text()).not.toContain('1')
-    expect(wrapper.get('[data-testid="background-work-persistent-shortcut"]').text())
-      .toContain('随时回来查看规则书与讲解进度')
+    expect(wrapper.find('[data-testid="work-status-navigation-active"]').exists()).toBe(false)
 
     notifyTeachingLaunched({ planId: 'plan-2', runId: 'run-2', gameTitle: '卡坦岛' })
     await flushPromises()
 
-    expect(wrapper.get('[data-testid="background-work-persistent-shortcut"]').text())
-      .toContain('《卡坦岛》仍在后台准备')
+    expect(wrapper.get('[data-testid="work-status-navigation-active"]').text()).toBe('1')
     await wrapper.get('[data-testid="background-work-trigger-desktop"]').trigger('click')
     expect(wrapper.text()).toContain('卡坦岛')
     expect(sessionStorage.getItem(playerStorageKeys.activeTeaching)).toContain('run-2')

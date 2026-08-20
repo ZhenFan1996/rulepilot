@@ -180,6 +180,23 @@ class RecommendationConversationCoordinatorTest {
     }
 
     @Test
+    void startsANewConversationWithoutDeletingTheExistingConversation() {
+        RecommendationConversationCoordinator coordinator = coordinator(
+                mock(BoardGameRecommendationAgent.class), new InMemoryStore());
+
+        var first = coordinator.startNew("alice");
+        var second = coordinator.startNew("alice");
+
+        assertThat(second.conversationId()).isNotEqualTo(first.conversationId());
+        assertThat(coordinator.find(first.conversationId(), "alice")).isPresent();
+        assertThat(coordinator.find(second.conversationId(), "alice")).isPresent();
+        assertThat(coordinator.recent("alice", 10))
+                .extracting(RecommendationConversationCoordinator.SessionSnapshot::conversationId)
+                .containsExactlyInAnyOrder(first.conversationId(), second.conversationId());
+        assertThat(coordinator.find(first.conversationId(), "bob")).isEmpty();
+    }
+
+    @Test
     void rejectsInvalidInputBeforeCreatingPersistentState() {
         BoardGameRecommendationAgent agent = mock(BoardGameRecommendationAgent.class);
         when(agent.validatedConversationRequest(any()))
@@ -264,6 +281,19 @@ class RecommendationConversationCoordinatorTest {
         }
 
         @Override
+        public synchronized StoredConversation createNew(
+                UUID conversationId,
+                String ownerUsername,
+                ConversationState initialState,
+                Instant now) {
+            StoredConversation created = new StoredConversation(
+                    conversationId, ownerUsername, 0, initialState,
+                    null, null, null, null, null, null, null, now, now);
+            values.put(conversationId, created);
+            return created;
+        }
+
+        @Override
         public synchronized Optional<StoredConversation> findOwned(UUID conversationId, String ownerUsername) {
             return Optional.ofNullable(values.get(conversationId))
                     .filter(value -> value.ownerUsername().equals(ownerUsername));
@@ -273,7 +303,16 @@ class RecommendationConversationCoordinatorTest {
         public synchronized Optional<StoredConversation> findLatestOwned(String ownerUsername) {
             return values.values().stream()
                     .filter(value -> value.ownerUsername().equals(ownerUsername))
-                    .findFirst();
+                    .max(java.util.Comparator.comparing(StoredConversation::updatedAt));
+        }
+
+        @Override
+        public synchronized List<StoredConversation> findRecentOwned(String ownerUsername, int limit) {
+            return values.values().stream()
+                    .filter(value -> value.ownerUsername().equals(ownerUsername))
+                    .sorted(java.util.Comparator.comparing(StoredConversation::updatedAt).reversed())
+                    .limit(limit)
+                    .toList();
         }
 
         @Override

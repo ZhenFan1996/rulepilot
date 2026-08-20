@@ -7,7 +7,6 @@ import { useLocale } from '@/lib/locale'
 
 interface RulebookPage {
   pageNumber: number
-  text: string
   characterCount: number
 }
 
@@ -72,10 +71,16 @@ async function load() {
   error.value = false
   pages.value = []
   try {
-    const response = await fetch(`/api/v1/document-versions/${encodeURIComponent(versionId)}/pages`, {
+    let response = await fetch(`/api/v1/document-versions/${encodeURIComponent(versionId)}/pages/summaries`, {
       credentials: 'include',
       signal: controller.signal,
     })
+    if (response.status === 404) {
+      response = await fetch(`/api/v1/document-versions/${encodeURIComponent(versionId)}/pages`, {
+        credentials: 'include',
+        signal: controller.signal,
+      })
+    }
     if (!response.ok) throw new Error('pages unavailable')
     const incoming = await response.json() as RulebookPage[]
     if (!isCurrentRequest(request, versionId, controller)) return
