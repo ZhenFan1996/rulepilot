@@ -1006,6 +1006,141 @@ class GroundedTeachingAgentTest {
     }
 
     @Test
+    void retriesOnlyInvalidDraftChaptersOnceAndKeepsAlreadyPublishedChaptersReadable() {
+        UUID versionId = UUID.randomUUID();
+        UUID chunkId = UUID.randomUUID();
+        AtomicInteger failedChapterCompositions = new AtomicInteger();
+        AtomicInteger failedChapterRevisions = new AtomicInteger();
+        RecordingInvocations invocations = new RecordingInvocations();
+        TeachingLessonModel model = new TeachingLessonModel() {
+            @Override
+            public SectionDraft compose(SectionRequest request) {
+                if (!request.topicKey().equals(TeachingSectionType.COMPONENTS.name())) {
+                    return oneStepDraft(chunkId, "按引用完成这一节。");
+                }
+                if (failedChapterCompositions.incrementAndGet() == 1) {
+                    return oneStepDraft(UUID.randomUUID(), "这次返回了无法归属的引用。");
+                }
+                return oneStepDraft(chunkId, "把组件按规则书列出的清单放在桌边。");
+            }
+
+            @Override
+            public SectionDraft revise(
+                    SectionRequest request,
+                    SectionDraft previousDraft,
+                    List<String> feedback) {
+                failedChapterRevisions.incrementAndGet();
+                return oneStepDraft(UUID.randomUUID(), "第一次定向修复仍没有通过引用校验。");
+            }
+        };
+        List<IllustratedLesson> publications = new ArrayList<>();
+        GroundedTeachingAgent agent = new GroundedTeachingAgent(
+                request -> List.of(evidence(chunkId, versionId)),
+                model,
+                new PolicyEvidenceVerifier(),
+                acceptedCritic(),
+                invocations,
+                18,
+                2);
+
+        IllustratedLesson lesson = agent.createBase(
+                continuityPlan(versionId), UUID.randomUUID(), null, publications::add);
+
+        assertThat(lesson.status()).isEqualTo(LessonStatus.COMPLETE);
+        assertThat(lesson.sections()).extracting(LessonSection::evidenceStatus)
+                .containsOnly(EvidenceStatus.SUPPORTED);
+        assertThat(lesson.sections().get(1).steps().getFirst().text())
+                .isEqualTo("把组件按规则书列出的清单放在桌边。");
+        assertThat(failedChapterCompositions).hasValue(2);
+        assertThat(failedChapterRevisions).hasValue(1);
+        assertThat(publications.stream().map(snapshot -> snapshot.sections().size()).toList())
+                .isSorted();
+        assertThat(invocations.diagnostics)
+                .filteredOn(diagnostic -> diagnostic.operation().equals("retryIncompleteTeachingSections"))
+                .containsExactly(new Diagnostic(
+                        "retryIncompleteTeachingSections",
+                        ActivityOutcome.SUCCEEDED,
+                        "Retrying 1 cited sections whose generated draft did not pass validation"));
+    }
+
+    @Test
+    void doesNotRetryAChapterWhenItsRuleEvidenceIsMissing() {
+        UUID versionId = UUID.randomUUID();
+        UUID chunkId = UUID.randomUUID();
+        AtomicInteger compositions = new AtomicInteger();
+        RecordingInvocations invocations = new RecordingInvocations();
+        GroundedTeachingAgent agent = new GroundedTeachingAgent(
+                request -> request.query().contains(TeachingSectionType.COMPONENTS.name())
+                        ? List.of()
+                        : List.of(evidence(chunkId, versionId)),
+                request -> {
+                    compositions.incrementAndGet();
+                    return oneStepDraft(chunkId, "按引用完成这一节。");
+                },
+                new PolicyEvidenceVerifier(),
+                acceptedCritic(),
+                invocations,
+                18,
+                2);
+
+        IllustratedLesson lesson = agent.createBase(
+                continuityPlan(versionId), UUID.randomUUID(), null, ignored -> {});
+
+        assertThat(lesson.status()).isEqualTo(LessonStatus.INCOMPLETE);
+        assertThat(lesson.sections().get(1).evidenceStatus())
+                .isEqualTo(EvidenceStatus.INSUFFICIENT_EVIDENCE);
+        assertThat(compositions).hasValue(2);
+        assertThat(invocations.diagnostics)
+                .noneMatch(diagnostic -> diagnostic.operation().equals("retryIncompleteTeachingSections"));
+    }
+
+    @Test
+    void stopsAfterOneAutomaticRetryWhenTheDraftStillFailsValidation() {
+        UUID versionId = UUID.randomUUID();
+        UUID chunkId = UUID.randomUUID();
+        AtomicInteger failedChapterCompositions = new AtomicInteger();
+        AtomicInteger failedChapterRevisions = new AtomicInteger();
+        RecordingInvocations invocations = new RecordingInvocations();
+        TeachingLessonModel model = new TeachingLessonModel() {
+            @Override
+            public SectionDraft compose(SectionRequest request) {
+                if (!request.topicKey().equals(TeachingSectionType.COMPONENTS.name())) {
+                    return oneStepDraft(chunkId, "按引用完成这一节。");
+                }
+                failedChapterCompositions.incrementAndGet();
+                return oneStepDraft(UUID.randomUUID(), "无法归属的引用。");
+            }
+
+            @Override
+            public SectionDraft revise(
+                    SectionRequest request,
+                    SectionDraft previousDraft,
+                    List<String> feedback) {
+                failedChapterRevisions.incrementAndGet();
+                return oneStepDraft(UUID.randomUUID(), "定向修复后仍无法归属。");
+            }
+        };
+        GroundedTeachingAgent agent = new GroundedTeachingAgent(
+                request -> List.of(evidence(chunkId, versionId)),
+                model,
+                new PolicyEvidenceVerifier(),
+                acceptedCritic(),
+                invocations,
+                18,
+                2);
+
+        IllustratedLesson lesson = agent.createBase(
+                continuityPlan(versionId), UUID.randomUUID(), null, ignored -> {});
+
+        assertThat(lesson.status()).isEqualTo(LessonStatus.INCOMPLETE);
+        assertThat(failedChapterCompositions).hasValue(2);
+        assertThat(failedChapterRevisions).hasValue(1);
+        assertThat(invocations.diagnostics)
+                .filteredOn(diagnostic -> diagnostic.operation().equals("retryIncompleteTeachingSections"))
+                .hasSize(1);
+    }
+
+    @Test
     void doesNotRewriteNaturalPunctuationWhenTheSemanticCriticAcceptsTheDraft() {
         UUID versionId = UUID.randomUUID();
         UUID chunkId = UUID.randomUUID();

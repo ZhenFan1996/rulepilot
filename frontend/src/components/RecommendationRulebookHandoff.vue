@@ -160,8 +160,12 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   } satisfies Record<OfficialImportFailureKind, string>,
   unavailable: '当前没有找到可审阅的规则书来源。你仍可粘贴公开 PDF 链接或上传自己的规则书。',
   login: '登录后即可保留这次选择并继续找规则书。', loginAction: '打开桌游详情并继续',
-  error: '这一步暂时没有完成；推荐对话和已选桌游不会受影响。', partialFailure: '已生成的章节仍可阅读，但后台生成或核对没有完整结束。可以安全重试，现有内容不会丢失。', retry: '重试当前步骤', close: '关闭小窗', change: '换一款',
-  safe: '可以关闭这个小窗继续聊天；下载、规则书处理和讲解生成会继续。',
+  error: '这一步暂时没有完成；推荐对话和已选桌游不会受影响。', partialFailure: '已生成的章节仍可阅读，但后台生成或核对没有完整结束。可以安全重试，现有内容不会丢失。',
+  missingChapterEvidence: (titles: string) => `“${titles}”对应的规则页没有提供足够依据，所以没有猜测并发布；其他已校验章节仍可阅读。`,
+  invalidChapterAfterRetry: (titles: string) => `“${titles}”的草稿没有通过引用或结构校验；后台已自动只重试这部分一次，仍未通过，因此保留其他已发布章节并停下。`,
+  invalidChapter: (titles: string) => `“${titles}”的草稿没有通过引用或结构校验，因此没有发布；其他已校验章节仍可阅读。`,
+  retry: '重试当前步骤', close: '关闭小窗', change: '换一款',
+  safe: '可以关闭这个小窗继续聊天；下载和讲解会继续。关闭后，页面上的“讲解状态”入口会一直显示，也可以随时打开“我的讲解”。',
   progress: '完整链路进度', current: '现在正在做', generationSteps: '讲解生成步骤', generationLatest: '最新实际进度', generationProcessHint: '真实后台活动会在下方逐条追加；进入逐章生成后，第 4～7 步会按章节重复。', planning: '规划中', pollingWarning: '暂时没有拿到最新进度，正在自动重试；已确认的进度不会倒退。',
   generationProcess: [
     '图片规则书先逐页识别可见文字；文字版直接读取原文',
@@ -228,8 +232,12 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   } satisfies Record<OfficialImportFailureKind, string>,
   unavailable: 'No reviewable rulebook source was found. You can still paste a public PDF URL or upload your own rulebook.',
   login: 'Sign in to keep this selection and continue to its rulebook.', loginAction: 'Open game details and continue',
-  error: 'This step did not complete. The conversation and selected game are unaffected.', partialFailure: 'Published chapters remain readable, but background generation or review did not finish. You can retry safely without losing existing content.', retry: 'Retry this step', close: 'Close', change: 'Choose another game',
-  safe: 'You may close this panel and keep chatting. Download, rulebook processing, and guide generation will continue.',
+  error: 'This step did not complete. The conversation and selected game are unaffected.', partialFailure: 'Published chapters remain readable, but background generation or review did not finish. You can retry safely without losing existing content.',
+  missingChapterEvidence: (titles: string) => `The cited rulebook pages did not provide enough support for “${titles}”, so RulePilot did not guess or publish it. Other validated chapters remain readable.`,
+  invalidChapterAfterRetry: (titles: string) => `The draft for “${titles}” did not pass citation or structure checks. The background run retried only that work once and stopped when it still did not pass; other published chapters remain readable.`,
+  invalidChapter: (titles: string) => `The draft for “${titles}” did not pass citation or structure checks, so it was not published. Other validated chapters remain readable.`,
+  retry: 'Retry this step', close: 'Close', change: 'Choose another game',
+  safe: 'You may close this panel and keep chatting. Download and guide generation will continue. The “Guide status” shortcut stays visible, and My guides is always available.',
   progress: 'End-to-end progress', current: 'Working on', generationSteps: 'Guide generation steps', generationLatest: 'Latest actual progress', generationProcessHint: 'Real background activities are appended below. Once chapter writing starts, steps 4–7 repeat for each chapter.', planning: 'Planning', pollingWarning: 'The latest update is temporarily unavailable. Retrying automatically without rolling back confirmed progress.',
   generationProcess: [
     'Transcribe each image-only page; read the original text directly when a text layer is available',
@@ -417,6 +425,23 @@ const journeyDetail = computed(() => {
     )
   }
   return ''
+})
+const teachingFailureDetail = computed(() => {
+  const unfinished = lesson.value?.sections
+    .filter(section => section.evidenceStatus === 'INSUFFICIENT_EVIDENCE') ?? []
+  if (unfinished.length === 0) return copy.value.partialFailure
+  const titles = unfinished.map(section => section.title).join(locale.value === 'zh-CN' ? '、' : ', ')
+  const activities = teachingRun.value?.activities ?? []
+  const rejectedPublications = activities.filter(activity =>
+    activity.outcome === 'REJECTED' && activity.operation.startsWith('publishTeachingSection|'))
+  const missingEvidence = rejectedPublications.some(activity =>
+    activity.summary.includes('NO_VALID_BASE_EVIDENCE'))
+  if (missingEvidence) return copy.value.missingChapterEvidence(titles)
+  const automaticallyRetried = activities.some(activity =>
+    activity.operation.startsWith('retryIncompleteTeachingSections'))
+  return automaticallyRetried
+    ? copy.value.invalidChapterAfterRetry(titles)
+    : copy.value.invalidChapter(titles)
 })
 const journeyTeachingSteps = computed(() => {
   const preparationSteps = recentTeachingPreparationActivitySteps(
@@ -1402,7 +1427,7 @@ onBeforeUnmount(() => {
             </div>
           </template>
           <template v-else>
-            <p>{{ projection.canReadLesson ? copy.partialFailure : copy.error }}</p>
+            <p>{{ projection.canReadLesson ? teachingFailureDetail : copy.error }}</p>
             <button v-if="projection.retryAction" type="button" :disabled="retrying" class="mt-2 min-h-11 font-semibold underline disabled:opacity-40" @click="retryJourney">{{ copy.retry }}</button>
           </template>
         </div>

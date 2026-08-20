@@ -6,7 +6,7 @@ const enabled = process.env.RULEPILOT_PRODUCTION_RECOMMENDATION_JOURNEY === 'tru
 const TARGET_BGG_ID = positiveIntegerEnvironment('RULEPILOT_RECOMMENDATION_TARGET_BGG_ID', 230802)
 const TARGET_NAME = aliasPattern(process.env.RULEPILOT_RECOMMENDATION_TARGET_NAMES ?? '花砖物语|Azul')
 const RECOMMENDATION_PROMPT = process.env.RULEPILOT_RECOMMENDATION_PROMPT
-  ?? '我今晚已经决定玩花砖物语（Azul），第一次开桌。请直接帮我找到这款，不要换成相似游戏；找到后我想接着读规则书、听讲解，再问几个问题。'
+  ?? '我们今晚第一次玩花砖物语，规则书还没看。能帮我把这款找出来，然后带我们从规则书、讲解一路到现场答疑吗？'
 const PRESERVED_DRAFT = '下次我还想给完全没玩过桌游的家人找一款更轻松的。'
 const RULE_QUESTION = process.env.RULEPILOT_RECOMMENDATION_RULE_QUESTION
   ?? '我从一个工厂展示板拿走同色砖以后，剩下的砖要放到哪里？请用日常的话简短回答，并引用规则书页码。'
@@ -115,7 +115,11 @@ interface RunDetailsResponse {
 interface LessonMilestoneResponse {
   id: string
   status: 'COMPLETE' | 'DRAFT_READY' | 'INCOMPLETE'
-  sections: Array<{ evidenceStatus: 'SUPPORTED' | 'CITED_DRAFT' | 'INSUFFICIENT_EVIDENCE' }>
+  sections: Array<{
+    position?: number
+    title?: string
+    evidenceStatus: 'SUPPORTED' | 'CITED_DRAFT' | 'INSUFFICIENT_EVIDENCE'
+  }>
 }
 
 interface ImportMilestoneObservation {
@@ -131,10 +135,19 @@ interface CsrfToken {
 }
 
 interface FirstCitedLessonObservation {
+  planId: string
   teachingPreparationStartedMs: number
   firstCitedLessonMs: number
   preparationRunCreatedAt: string | null
   firstCitedPublicationActivityAt: string | null
+}
+
+interface CompletedLessonObservation {
+  teachingRunState: string
+  lessonStatus: LessonMilestoneResponse['status']
+  sectionCount: number
+  citedDraftSectionCount: number
+  insufficientSectionCount: number
 }
 
 interface ProductionJourneyReport {
@@ -159,6 +172,8 @@ interface ProductionJourneyReport {
   myGuidesEntryVisibleBeforeLesson: boolean
   myGuidesPlanListed: boolean
   planGameTitleMatchesSelection: boolean
+  globalStatusVisibleAfterClosing: boolean
+  globalStatusReopened: boolean
   recommendationMs: number | null
   detailsDialogOpenedAndClosed: boolean
   discoveryMs: number | null
@@ -194,6 +209,11 @@ interface ProductionJourneyReport {
   teachingHandoffState: string | null
   teachingPreparationState: string | null
   teachingPreparationErrorCode: string | null
+  teachingGenerationState: string | null
+  lessonStatus: string | null
+  citedDraftSectionCount: number
+  insufficientSectionCount: number
+  lessonCompletionMs: number | null
   rulebookReadableMs: number | null
   renderedRulebookPage: boolean
   lessonReadableMs: number | null
@@ -385,6 +405,7 @@ async function waitForFirstCitedLesson(
           section.evidenceStatus === 'SUPPORTED' || section.evidenceStatus === 'CITED_DRAFT')
           && (!requireCurrentPublicationActivity || firstCitedPublicationActivityAt !== null)) {
           return {
+            planId: plan.id,
             teachingPreparationStartedMs: teachingPreparationStartedMs ?? elapsed(importStartedAt),
             firstCitedLessonMs: elapsed(importStartedAt),
             preparationRunCreatedAt,
@@ -396,6 +417,79 @@ async function waitForFirstCitedLesson(
     await new Promise(resolve => setTimeout(resolve, 500))
   }
   throw new Error('The first source-cited lesson section did not become readable')
+}
+
+function unfinishedSectionSummary(lesson: LessonMilestoneResponse) {
+  const unfinished = lesson.sections.filter(section => section.evidenceStatus !== 'SUPPORTED')
+  if (unfinished.length === 0) return 'no unfinished section details were returned'
+  return unfinished.map((section, index) => {
+    const identity = section.title?.trim()
+      || (section.position ? `section ${section.position}` : `section ${index + 1}`)
+    return `${identity}=${section.evidenceStatus}`
+  }).join(', ')
+}
+
+async function waitForCompletedLesson(
+  request: APIRequestContext,
+  planId: string,
+): Promise<CompletedLessonObservation> {
+  const deadline = Date.now() + 20 * 60_000
+  let latestRunState = 'NOT_STARTED'
+  let latestRunError: string | null = null
+  let latestLesson: LessonMilestoneResponse | null = null
+  while (Date.now() < deadline) {
+    const runResponse = await request.get(
+      `/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=${encodeURIComponent(planId)}`,
+    )
+    expect([200, 404], `Teaching run returned HTTP ${runResponse.status()}`)
+      .toContain(runResponse.status())
+    if (runResponse.ok()) {
+      const details = await runResponse.json() as RunDetailsResponse
+      latestRunState = details.run.state
+      latestRunError = details.run.lastErrorCode
+      if (['FAILED', 'DEGRADED', 'INSUFFICIENT_EVIDENCE'].includes(latestRunState)) {
+        const latestFailure = details.activities
+          .filter(activity => activity.outcome !== 'SUCCEEDED')
+          .sort((left, right) => Date.parse(right.occurredAt) - Date.parse(left.occurredAt))[0]
+        const diagnostic = latestFailure
+          ? `${latestFailure.operation}: ${latestFailure.summary}`
+          : latestRunError ?? 'no failure detail was recorded'
+        throw new Error(`Teaching generation ended as ${latestRunState}: ${diagnostic}`)
+      }
+    }
+
+    const lessonResponse = await request.get(
+      `/api/v1/teaching-plans/${encodeURIComponent(planId)}/illustrated-lessons/latest`,
+    )
+    expect([200, 404], `Illustrated lesson returned HTTP ${lessonResponse.status()}`)
+      .toContain(lessonResponse.status())
+    if (lessonResponse.ok()) latestLesson = await lessonResponse.json() as LessonMilestoneResponse
+
+    if (latestLesson && latestRunState === 'COMPLETED') {
+      const citedDraftSectionCount = latestLesson.sections
+        .filter(section => section.evidenceStatus === 'CITED_DRAFT').length
+      const insufficientSectionCount = latestLesson.sections
+        .filter(section => section.evidenceStatus === 'INSUFFICIENT_EVIDENCE').length
+      const everySectionSupported = latestLesson.sections.length > 0
+        && latestLesson.sections.every(section => section.evidenceStatus === 'SUPPORTED')
+      if (latestLesson.status === 'COMPLETE' && everySectionSupported) {
+        return {
+          teachingRunState: latestRunState,
+          lessonStatus: latestLesson.status,
+          sectionCount: latestLesson.sections.length,
+          citedDraftSectionCount,
+          insufficientSectionCount,
+        }
+      }
+      throw new Error(
+        `Teaching run completed without a complete lesson: lesson=${latestLesson.status}; ${unfinishedSectionSummary(latestLesson)}`,
+      )
+    }
+    await new Promise(resolve => setTimeout(resolve, 500))
+  }
+  throw new Error(
+    `Teaching lesson did not complete; run=${latestRunState}; lesson=${latestLesson?.status ?? 'NOT_PUBLISHED'}; error=${latestRunError ?? 'NONE'}; ${latestLesson ? unfinishedSectionSummary(latestLesson) : 'no lesson was published'}`,
+  )
 }
 
 async function retainReport(path: string, report: ProductionJourneyReport) {
@@ -469,6 +563,7 @@ test('recommendation becomes one readable, taught, and answerable production jou
   let importRequestCount = 0
   let observedDocumentVersionId: string | null = null
   let observedPreparationRunId: string | null = null
+  let observedTeachingPlanId: string | null = null
   let observedImportRequest: {
     editionId?: string
     discoveredForEditionId?: string
@@ -492,7 +587,8 @@ test('recommendation becomes one readable, taught, and answerable production jou
     boundGameInCatalog: false, boundBggId: null, boundGameName: null, boundEditionId: null,
     candidateEditionMatchesSelection: false, importEditionMatchesSelection: false,
     documentEditionMatchesSelection: false, myGuidesEntryVisibleBeforeLesson: false, myGuidesPlanListed: false,
-    planGameTitleMatchesSelection: false, recommendationMs: null, detailsDialogOpenedAndClosed: false,
+    planGameTitleMatchesSelection: false, globalStatusVisibleAfterClosing: false, globalStatusReopened: false,
+    recommendationMs: null, detailsDialogOpenedAndClosed: false,
     discoveryMs: null, sourceDomain: null, sourceUrl: null, sourceMode: null, importRequestCount: 0,
     importReused: null, teachingEvidenceRefreshRequested: false,
     importDuplicate: null, downloadedBytes: null, importMs: null,
@@ -507,6 +603,8 @@ test('recommendation becomes one readable, taught, and answerable production jou
     pdfDownloadToTeachingStartMs: null, pdfDownloadToFirstCitedLessonMs: null,
     documentProgressStage: null, documentProgressComplete: null, teachingHandoffState: null,
     teachingPreparationState: null, teachingPreparationErrorCode: null,
+    teachingGenerationState: null, lessonStatus: null, citedDraftSectionCount: 0,
+    insufficientSectionCount: 0, lessonCompletionMs: null,
     rulebookReadableMs: null, renderedRulebookPage: false, lessonReadableMs: null,
     lessonDockText: null,
     lessonSectionCount: 0, citedLessonStep: false, answerMs: null, answerStatus: null,
@@ -642,6 +740,24 @@ test('recommendation becomes one readable, taught, and answerable production jou
     expect(launchedJob.sourceDomain, 'The official import response changed the selected source domain')
       .toBe(gstoneCandidate!.sourceDomain)
 
+    report.stage = 'close-and-recover-background-status'
+    await page.getByTestId('player-journey-surface')
+      .getByRole('button', { name: '关闭小窗' })
+      .click()
+    const globalStatusShortcut = page.getByTestId('background-work-persistent-shortcut')
+    await expect(globalStatusShortcut).toBeVisible({ timeout: 60_000 })
+    await expect(globalStatusShortcut).toContainText('讲解状态')
+    report.globalStatusVisibleAfterClosing = true
+    await globalStatusShortcut.click()
+    const backgroundWork = page.getByRole('dialog', { name: '后台任务' })
+    await expect(backgroundWork).toBeVisible()
+    await expect(backgroundWork).toContainText(boundGame.game.name)
+    report.globalStatusReopened = true
+    await backgroundWork.getByRole('button', { name: '关闭后台任务' }).click()
+    await page.getByTestId('player-journey-dock').click()
+    await expect(page.getByTestId('player-journey-surface')).toBeVisible()
+    report.stage = 'import'
+
     const importObservation = await waitForCompletedImport(page.request, launchedJob.id, importStartedAt)
     const completedJob = importObservation.job
     expect(completedJob.downloadedBytes).toBeGreaterThan(0)
@@ -713,6 +829,7 @@ test('recommendation becomes one readable, taught, and answerable production jou
       requiresPersistedPublicationActivity(report),
       completedJob.teachingHandoffUpdatedAt,
     )
+    observedTeachingPlanId = firstCitedLesson.planId
     report.teachingPreparationStartedMs = firstCitedLesson.teachingPreparationStartedMs
     report.firstCitedLessonMs = firstCitedLesson.firstCitedLessonMs
     report.preparationRunCreatedAt = firstCitedLesson.preparationRunCreatedAt
@@ -782,10 +899,18 @@ test('recommendation becomes one readable, taught, and answerable production jou
 
     report.stage = 'lesson'
     const lessonStartedAt = performance.now()
+    const completedLesson = await waitForCompletedLesson(page.request, firstCitedLesson.planId)
+    report.teachingGenerationState = completedLesson.teachingRunState
+    report.lessonStatus = completedLesson.lessonStatus
+    report.lessonSectionCount = completedLesson.sectionCount
+    report.citedDraftSectionCount = completedLesson.citedDraftSectionCount
+    report.insufficientSectionCount = completedLesson.insufficientSectionCount
+    report.lessonCompletionMs = elapsed(lessonStartedAt)
     const journeyDock = page.getByTestId('player-journey-dock')
     await expect(journeyDock).toBeVisible()
     await expect(journeyDock).toContainText('打开讲解', { timeout: 60_000 })
-    await expect(journeyDock).toContainText(/基础讲解可读|准备流程需要处理/)
+    await expect(journeyDock).toContainText('基础讲解可读')
+    await expect(journeyDock).not.toContainText('准备流程需要处理')
     report.lessonDockText = (await journeyDock.innerText()).trim()
     report.lessonReadableMs = elapsed(lessonStartedAt)
     await journeyDock.click()
@@ -796,8 +921,7 @@ test('recommendation becomes one readable, taught, and answerable production jou
     expect(report.lessonSurfaceOpaque).toBe(true)
     await expect(lesson.getByText('每个步骤都保留原规则书页码；答疑只使用同一份规则书。')).toBeVisible({ timeout: 60_000 })
     const lessonSections = lesson.getByTestId('lesson-reading-column').locator('section')
-    report.lessonSectionCount = await lessonSections.count()
-    expect(report.lessonSectionCount).toBeGreaterThan(0)
+    expect(await lessonSections.count()).toBe(report.lessonSectionCount)
     await expect(lesson.getByRole('link', { name: /来源：第 \d+(?:、\d+)* 页/ }).first()).toBeVisible()
     report.citedLessonStep = true
     report.confirmedMilestonesFinal = await page.getByTestId('player-journey-surface')
@@ -849,11 +973,25 @@ test('recommendation becomes one readable, taught, and answerable production jou
       message: 'The recommendation workspace did not restore a matching verified game card',
     }).toBeGreaterThan(0)
     await expect(targetDetailsButton.first()).toBeVisible()
-    report.recommendationRestored = true
     await roleSwitcher.getByRole('button', { name: '规则答疑' }).click()
     await expect(answerWorkspace.locator('#lesson-answer-evidence-title')).toBeVisible()
-    report.answerRestored = true
     await roleSwitcher.getByRole('button', { name: '继续推荐' }).click()
+
+    report.stage = 'refresh-restoration'
+    await page.reload()
+    const restoredComposer = page.getByLabel('聊聊你想玩的游戏')
+    await expect(restoredComposer).toBeVisible({ timeout: 60_000 })
+    await expect(restoredComposer).toHaveValue(PRESERVED_DRAFT)
+    await expect(page.getByRole('button', {
+      name: new RegExp(`查看完整资料：(?:${TARGET_NAME.source})`, 'i'),
+    }).first()).toBeVisible({ timeout: 60_000 })
+    report.recommendationRestored = true
+    const restoredRoleSwitcher = page.getByTestId('agent-role-switcher')
+    await restoredRoleSwitcher.getByRole('button', { name: '规则答疑' }).click()
+    const restoredAnswerWorkspace = page.getByTestId('recommendation-answer-workspace')
+    await expect(restoredAnswerWorkspace.locator('#lesson-answer-evidence-title')).toBeVisible({ timeout: 60_000 })
+    report.answerRestored = true
+    await restoredRoleSwitcher.getByRole('button', { name: '继续推荐' }).click()
 
     await expect(page).toHaveURL(/\/discover$/)
     expect(pageErrors, 'The production journey emitted uncaught browser errors').toEqual([])
@@ -887,6 +1025,33 @@ test('recommendation becomes one readable, taught, and answerable production jou
         }
       } catch {
         // The browser report must still be retained if its final diagnostic read is unavailable.
+      }
+    }
+    if (observedTeachingPlanId) {
+      try {
+        const [runResponse, lessonResponse] = await Promise.all([
+          page.request.get(
+            `/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=${encodeURIComponent(observedTeachingPlanId)}`,
+          ),
+          page.request.get(
+            `/api/v1/teaching-plans/${encodeURIComponent(observedTeachingPlanId)}/illustrated-lessons/latest`,
+          ),
+        ])
+        if (runResponse.ok()) {
+          const details = await runResponse.json() as RunDetailsResponse
+          report.teachingGenerationState = details.run.state
+        }
+        if (lessonResponse.ok()) {
+          const latestLesson = await lessonResponse.json() as LessonMilestoneResponse
+          report.lessonStatus = latestLesson.status
+          report.lessonSectionCount = latestLesson.sections.length
+          report.citedDraftSectionCount = latestLesson.sections
+            .filter(section => section.evidenceStatus === 'CITED_DRAFT').length
+          report.insufficientSectionCount = latestLesson.sections
+            .filter(section => section.evidenceStatus === 'INSUFFICIENT_EVIDENCE').length
+        }
+      } catch {
+        // Preserve the primary failure while retaining any earlier teaching diagnostics.
       }
     }
     await guidesPage?.close().catch(() => undefined)

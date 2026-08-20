@@ -41,6 +41,8 @@ const loginReminderVisible = ref(false)
 const backgroundWorkCenter = ref<{ openCenter: (trigger?: HTMLElement | null) => void } | null>(null)
 const backgroundActiveCount = ref(0)
 const backgroundFinishedCount = ref(0)
+const backgroundActiveTitle = ref('')
+const backgroundFinishedTitle = ref('')
 let disposed = false
 const sessionController = new AbortController()
 
@@ -109,10 +111,28 @@ function showLoginReminder(event: Event) {
     && (event.detail as { showReminder?: unknown } | null)?.showReminder === false)
 }
 
-function updateBackgroundWorkStatus(activeCount: number, finishedCount: number) {
+function updateBackgroundWorkStatus(
+  activeCount: number,
+  finishedCount: number,
+  activeTitle: string,
+  finishedTitle: string,
+) {
   backgroundActiveCount.value = activeCount
   backgroundFinishedCount.value = finishedCount
+  backgroundActiveTitle.value = activeTitle
+  backgroundFinishedTitle.value = finishedTitle
 }
+
+const backgroundShortcutTitle = computed(() => {
+  if (backgroundActiveCount.value) {
+    return backgroundActiveCount.value === 1 && backgroundActiveTitle.value
+      ? t('shell.lesson.oneActive', { title: backgroundActiveTitle.value })
+      : t('shell.lesson.manyActive', { count: backgroundActiveCount.value })
+  }
+  return backgroundFinishedCount.value === 1 && backgroundFinishedTitle.value
+    ? t('shell.lesson.oneFinished', { title: backgroundFinishedTitle.value })
+    : t('shell.lesson.manyFinished', { count: backgroundFinishedCount.value })
+})
 
 function openBackgroundWork(event: MouseEvent) {
   backgroundWorkCenter.value?.openCenter(event.currentTarget as HTMLElement)
@@ -248,6 +268,27 @@ onBeforeUnmount(() => {
       :username="username"
       @status="updateBackgroundWorkStatus"
     />
+
+    <button
+      v-if="username && !immersive && (backgroundActiveCount || backgroundFinishedCount)"
+      type="button"
+      data-testid="background-work-persistent-shortcut"
+      class="fixed bottom-20 left-3 right-3 z-40 mx-auto flex min-h-16 max-w-md items-center gap-3 rounded-2xl border border-copper/35 bg-paper/97 px-4 py-3 text-left text-ink shadow-xl backdrop-blur transition hover:border-copper/60 lg:bottom-6 lg:left-auto lg:right-6 lg:mx-0 lg:w-96"
+      :aria-label="`${t('shell.guideStatus')}：${backgroundShortcutTitle}。${t(backgroundActiveCount ? 'shell.lesson.viewProgress' : 'shell.lesson.viewResult')}`"
+      aria-haspopup="dialog"
+      @click="openBackgroundWork"
+    >
+      <span class="grid size-10 shrink-0 place-items-center rounded-full bg-copper/12 text-copper" aria-hidden="true">
+        <TabletopGlyph name="cards" :size="19" />
+      </span>
+      <span class="min-w-0 flex-1">
+        <span class="block text-[0.6875rem] font-bold uppercase tracking-[0.12em] text-copper">{{ t('shell.guideStatus') }}</span>
+        <span class="mt-0.5 block truncate text-sm font-semibold">{{ backgroundShortcutTitle }}</span>
+      </span>
+      <span class="shrink-0 text-sm font-semibold text-indigo underline underline-offset-4">
+        {{ t(backgroundActiveCount ? 'shell.lesson.viewProgress' : 'shell.lesson.viewResult') }}
+      </span>
+    </button>
 
     <nav v-if="!immersive" class="fixed inset-x-0 bottom-0 z-40 grid grid-cols-5 border-t border-ink/10 bg-paper/97 px-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-2 mobile-navigation backdrop-blur lg:hidden" :aria-label="t('shell.primaryNav')">
       <RouterLink
