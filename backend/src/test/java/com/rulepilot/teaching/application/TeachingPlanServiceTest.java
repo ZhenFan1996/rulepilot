@@ -361,7 +361,7 @@ class TeachingPlanServiceTest {
     }
 
     @Test
-    void modelSchemaFailureCannotFanOutFromASourceLedgerWithoutWholeGameUnderstanding() {
+    void modelSchemaFailureDoesNotEnterASourceLedgerFallbackThatCannotSatisfyTheSemanticContract() {
         UUID documentVersionId = UUID.randomUUID();
         UUID assistantRunId = UUID.randomUUID();
         List<PageView> visualPages = IntStream.rangeClosed(1, 24)
@@ -387,20 +387,10 @@ class TeachingPlanServiceTest {
         when(visualCataloger.catalogVisualPages(
                         documentVersionId, visualPages, "Opaque Rulebook", "alice", assistantRunId))
                 .thenReturn(completeLedger);
-        var sourceFallback = new FakeTeachingOutlineModel();
-        com.rulepilot.teaching.TeachingOutlineModel outlines = new com.rulepilot.teaching.TeachingOutlineModel() {
-            @Override
-            public OutlineDraft organize(OutlineRequest request) {
-                throw new OutlineGenerationException(
-                        "teaching outline generation returned no valid outline",
-                        new IllegalArgumentException("teaching outline topic is invalid"));
-            }
-
-            @Override
-            public OutlineDraft fallback(OutlineRequest request) {
-                return sourceFallback.organize(request);
-            }
-        };
+        com.rulepilot.teaching.TeachingOutlineModel outlines = mock(com.rulepilot.teaching.TeachingOutlineModel.class);
+        when(outlines.organize(any())).thenThrow(new OutlineGenerationException(
+                "teaching outline generation returned no valid outline",
+                new IllegalArgumentException("teaching outline topic is invalid")));
         when(publication.publish(any(TeachingPlan.class), eq("Opaque Rulebook")))
                 .thenAnswer(invocation -> invocation.getArgument(0));
         TeachingPlanService service = new TeachingPlanService(
@@ -416,8 +406,9 @@ class TeachingPlanServiceTest {
 
         assertThatThrownBy(() -> service.create(
                         documentVersionId, "Teach the complete source without guessing", "alice", assistantRunId))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("whole-game understanding");
+                .isInstanceOf(OutlineGenerationException.class)
+                .hasRootCauseMessage("teaching outline topic is invalid");
+        verify(outlines, never()).fallback(any());
         verifyNoInteractions(publication);
     }
 
@@ -464,39 +455,6 @@ class TeachingPlanServiceTest {
                 .hasRootCauseMessage("teaching outline topic is invalid");
         verify(outlines, never()).fallback(any());
         verifyNoInteractions(publication);
-    }
-
-    @Test
-    void visualOutlineFailureRecoveryRequiresAnExactOneToOneDocumentPageLedger() {
-        List<PageView> documentPages = List.of(new PageView(1, "", 0), new PageView(2, "", 0));
-        PageInput first = completeVisualPage(
-                1, "FIRST OPAQUE GROUP", "A complete first-page relation is directly visible.", List.of());
-        PageInput second = completeVisualPage(
-                2, "SECOND OPAQUE GROUP", "A complete second-page relation is directly visible.", List.of());
-
-        assertThat(TeachingPlanService.hasCompleteVisualSourceLedger(
-                        List.of(first, second), documentPages))
-                .isTrue();
-        assertThat(TeachingPlanService.hasCompleteVisualSourceLedger(
-                        List.of(first), documentPages))
-                .isFalse();
-        assertThat(TeachingPlanService.hasCompleteVisualSourceLedger(
-                        List.of(first, first), documentPages))
-                .isFalse();
-        assertThat(TeachingPlanService.hasCompleteVisualSourceLedger(
-                        List.of(
-                                first,
-                                new PageInput(
-                                        2,
-                                        TeachingOutlineRevisionPolicy.VISUAL_CATALOG_PREFIX
-                                                + "\nPrinted terms: SECOND OPAQUE GROUP"
-                                                + "\nVisible facts: A fact without the exact identifier prefix."
-                                                + "\nKeywords: opaque",
-                                        List.of(),
-                                        List.of("SECOND OPAQUE GROUP"),
-                                        true)),
-                        documentPages))
-                .isFalse();
     }
 
     @Test

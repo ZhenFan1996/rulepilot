@@ -55,8 +55,7 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
 
     private static final Logger log = LoggerFactory.getLogger(SpringAiTeachingOutlineModel.class);
     private static final int MAX_OUTLINE_COMPLETION_TOKENS = 10_000;
-    private static final long MAX_REPAIR_ELAPSED_NANOS = java.time.Duration.ofSeconds(30).toNanos();
-    private static final long OUTLINE_DEADLINE_SECONDS = 60;
+    private static final long OUTLINE_DEADLINE_SECONDS = 120;
 
     private final RuntimeModelConfiguration models;
     private final VersionedAgentPrompts prompts;
@@ -248,7 +247,6 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
     }
 
     private OutlineDraft organizeWithRepair(OutlineRequest request, Role role, String owner, String initialInstruction) {
-        long startedAt = System.nanoTime();
         RuntimeException firstFailure;
         try {
             return organizeOnce(request, role, owner, initialInstruction);
@@ -260,7 +258,7 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
             }
             return repairWholeGameUnderstanding(request, role, owner, invalidContext);
         } catch (RuntimeException failure) {
-            if (isTimeout(failure) || System.nanoTime() - startedAt > MAX_REPAIR_ELAPSED_NANOS) throw failure;
+            if (isTimeout(failure)) throw failure;
             firstFailure = failure;
             log.warn("First teaching-outline model response failed: {}", failure.getMessage());
         }

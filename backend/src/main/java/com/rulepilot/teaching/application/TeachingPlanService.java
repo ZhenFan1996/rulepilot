@@ -11,7 +11,6 @@ import com.rulepilot.teaching.TeachingOutlineModel;
 import com.rulepilot.teaching.TeachingOutlineModel.OutlineGenerationException;
 import com.rulepilot.teaching.TeachingOutlineModel.OutlineRequest;
 import com.rulepilot.teaching.TeachingOutlineModel.PageInput;
-import com.rulepilot.teaching.VisualSourceRuleGroupLedger;
 import com.rulepilot.teaching.VisualRulebookPageFacts.PageFact;
 import com.rulepilot.teaching.domain.TeachingPlan;
 import java.util.List;
@@ -301,10 +300,10 @@ public class TeachingPlanService {
                     () -> outlines.organize(request),
                     this::outlineOutputTokens);
         } catch (OutlineGenerationException generationFailure) {
-            if (!visualOnly || !hasCompleteVisualSourceLedger(pages, documentPages)) throw generationFailure;
             log.warn(
-                    "Visual semantic outline generation failed after a complete source ledger was built; "
-                            + "continuing with the deterministic source outline (failureType={})",
+                    "Teaching outline generation failed before a source-bound whole-game plan was available "
+                            + "(visualOnly={}, failureType={})",
+                    visualOnly,
                     generationFailure.getCause() == null
                             ? generationFailure.getClass().getSimpleName()
                             : generationFailure.getCause().getClass().getSimpleName());
@@ -312,31 +311,16 @@ public class TeachingPlanService {
                 invocations.record(
                         assistantRunId,
                         ActivityType.VALIDATION,
-                        "fallbackFromVisualOutlineGenerationFailure",
+                        "rejectTeachingOutlineGenerationFailure",
                         ActivityOutcome.REJECTED,
-                        "Semantic outline generation was unavailable; the complete page-owned source ledger was retained");
+                        "Lesson preparation stopped because no source-bound whole-game outline survived the bounded model repair");
             }
-            organized = outlines.fallback(request);
+            throw generationFailure;
         }
         return preferDocumentTitle(
                 playerGameTitle,
                 VisualOutlineEvidencePolicy.bindIconLegendEvidence(organized, documentPages),
                 pages);
-    }
-
-    static boolean hasCompleteVisualSourceLedger(
-            List<PageInput> pages, List<DocumentProcessing.PageView> documentPages) {
-        if (pages == null || pages.isEmpty() || documentPages == null || documentPages.isEmpty()) return false;
-        Set<Integer> expectedPages = documentPages.stream()
-                .map(DocumentProcessing.PageView::pageNumber)
-                .collect(java.util.stream.Collectors.toUnmodifiableSet());
-        Set<Integer> catalogedPages = pages.stream()
-                .map(PageInput::pageNumber)
-                .collect(java.util.stream.Collectors.toUnmodifiableSet());
-        return pages.size() == documentPages.size()
-                && expectedPages.size() == documentPages.size()
-                && catalogedPages.equals(expectedPages)
-                && pages.stream().allMatch(VisualSourceRuleGroupLedger::hasCompleteExactFactLedger);
     }
 
     private TeachingOutlineModel.OutlineDraft refineChapterOwnership(
