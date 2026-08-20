@@ -276,6 +276,36 @@ class SpringAiTeachingOutlineModelTest {
     }
 
     @Test
+    void doesNotSpendTheSingleRepairOnAProviderTimeout() {
+        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        VersionedAgentPrompts prompts = mock(VersionedAgentPrompts.class);
+        ChatModel chatModel = mock(ChatModel.class);
+        when(configuration.usesFake(Role.TEACHING, "player")).thenReturn(false);
+        when(configuration.modelFor(Role.TEACHING, "player")).thenReturn(chatModel);
+        when(chatModel.getDefaultOptions()).thenReturn(ToolCallingChatOptions.builder().build());
+        when(chatModel.getOptions()).thenReturn(ToolCallingChatOptions.builder().build());
+        when(prompts.teachingOutlineSystem()).thenReturn("Return a bounded outline.");
+        when(prompts.teachingOutlineUser()).thenReturn("{pages}\n{repair}");
+        when(chatModel.call(any(Prompt.class))).thenThrow(
+                new RuntimeException("provider request failed", new SocketTimeoutException("read timed out")));
+        SpringAiTeachingOutlineModel model = new SpringAiTeachingOutlineModel(
+                configuration, prompts, new FakeTeachingOutlineModel());
+
+        try {
+            assertThatThrownBy(() -> model.organize(new OutlineRequest(
+                            List.of(new PageInput(1, "OPAQUE source relation")),
+                            List.of(),
+                            "player")))
+                    .isInstanceOf(OutlineGenerationException.class)
+                    .hasRootCauseInstanceOf(SocketTimeoutException.class);
+        } finally {
+            model.close();
+        }
+
+        verify(chatModel).call(any(Prompt.class));
+    }
+
+    @Test
     void givesOwnershipRefinementTheEntireCurrentOutlineInsteadOfOnlyTheConflictSummary() {
         OutlineDraft outline = new OutlineDraft(
                 "Game",
