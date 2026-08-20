@@ -4,12 +4,12 @@ import com.rulepilot.identity.AccountDirectory;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
 @Repository
-@ConditionalOnBean(JdbcTemplate.class)
+@ConditionalOnProperty(name = "rulepilot.persistence.jdbc-adapters-enabled", havingValue = "true", matchIfMissing = true)
 public class JdbcAccountDirectory implements AccountDirectory {
 
     private final JdbcTemplate jdbc;
