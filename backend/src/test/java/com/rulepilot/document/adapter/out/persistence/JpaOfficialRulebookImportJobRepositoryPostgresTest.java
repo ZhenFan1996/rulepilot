@@ -538,6 +538,7 @@ class JpaOfficialRulebookImportJobRepositoryPostgresTest {
 
     private static void insertPreparationRun(UUID runId, UUID versionId, String state, Instant now) {
         boolean failed = "FAILED".equals(state);
+        boolean terminal = failed || "COMPLETED".equals(state);
         OffsetDateTime timestamp = OffsetDateTime.ofInstant(now, ZoneOffset.UTC);
         jdbc.update(
                 """
@@ -551,7 +552,7 @@ class JpaOfficialRulebookImportJobRepositoryPostgresTest {
                 state,
                 timestamp,
                 timestamp,
-                failed ? timestamp : null,
+                terminal ? timestamp : null,
                 failed ? "TEACHING_PREPARATION_FAILED" : null);
     }
 
