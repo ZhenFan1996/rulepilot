@@ -19,7 +19,11 @@ import {
   mergeDocumentProgress,
   parseDocumentProgressSnapshot,
 } from '@/lib/documentProgress'
-import { acceptProgressiveLesson, teachingRunIsActive } from '@/lib/liveLesson'
+import {
+  acceptProgressiveLesson,
+  teachingLessonNeedsFinalSnapshot,
+  teachingRunIsActive,
+} from '@/lib/liveLesson'
 import { useLocale } from '@/lib/locale'
 import { playerFacingLanguageName } from '@/lib/playerFacingLanguage'
 import { playerWorkStatus, type PlayerWorkStage } from '@/lib/playerWorkStatus'
@@ -997,6 +1001,7 @@ function scheduleJourney(delay: number) {
   const current = projection.value
   const generationStillRunning = Boolean(plan.value && !teachingRun.value)
     || teachingRunIsActive(teachingRun.value?.run.state)
+    || teachingLessonNeedsFinalSnapshot(teachingRun.value?.run.state, lesson.value?.status)
   if (current.state === 'complete' || current.state === 'failed' || current.state === 'ready' && !generationStillRunning) return
   journeyTimer = setTimeout(() => { void refreshJourney() }, delay)
 }

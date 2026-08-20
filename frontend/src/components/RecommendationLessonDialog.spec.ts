@@ -187,6 +187,54 @@ describe('RecommendationLessonDialog', () => {
     wrapper.unmount()
   })
 
+  it('reconciles a readable seed after the run completes but the persisted lesson is still a draft', async () => {
+    let lessonReads = 0
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const path = String(input)
+      if (path === '/api/v1/teaching-plans/plan-1') return Response.json(plan)
+      if (path.includes('/illustrated-lessons/latest')) {
+        lessonReads += 1
+        return Response.json(lessonReads === 1
+          ? {
+              id: 'lesson-1', teachingPlanId: 'plan-1', status: 'DRAFT_READY',
+              sections: [section(1, '目标'), section(2, '回合')],
+            }
+          : {
+              id: 'lesson-1', teachingPlanId: 'plan-1', status: 'COMPLETE',
+              sections: [section(1, '目标'), section(2, '回合'), section(3, '计分')],
+            })
+      }
+      if (path.includes('/assistant-runs/latest')) {
+        return Response.json(run('COMPLETED', '2026-08-10T00:03:00Z'))
+      }
+      return new Response(null, { status: 404 })
+    }))
+    const wrapper = mount(RecommendationLessonDialog, {
+      props: {
+        open: true,
+        planId: 'plan-1',
+        initialPlan: plan,
+        initialLesson: {
+          id: 'lesson-1', teachingPlanId: 'plan-1', status: 'DRAFT_READY',
+          sections: [section(1, '目标'), section(2, '回合')],
+        },
+      },
+      global: { stubs: { LessonChapterList: ChapterListStub, teleport: true } },
+    })
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="chapter-list-stub"]').text()).toBe('目标|回合')
+    expect(wrapper.text()).not.toContain('完整讲解已经生成')
+
+    await vi.advanceTimersByTimeAsync(1_500)
+    await flushPromises()
+
+    expect(lessonReads).toBe(2)
+    expect(wrapper.get('[data-testid="chapter-list-stub"]').text()).toBe('目标|回合|计分')
+    expect(wrapper.text()).toContain('完整讲解已经生成')
+    wrapper.unmount()
+  })
+
   it('keeps polling when readable content arrives before the persisted run snapshot', async () => {
     let runReads = 0
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {

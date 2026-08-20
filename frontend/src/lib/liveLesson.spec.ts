@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest'
 
-import { acceptProgressiveLesson, teachingRunIsActive } from './liveLesson'
+import {
+  acceptProgressiveLesson,
+  teachingLessonNeedsFinalSnapshot,
+  teachingRunIsActive,
+} from './liveLesson'
 
 describe('live lesson snapshots', () => {
   it('accepts added chapters without allowing a stale response to remove readable content', () => {
@@ -19,5 +23,14 @@ describe('live lesson snapshots', () => {
     expect(teachingRunIsActive('COMPLETED')).toBe(false)
     expect(teachingRunIsActive('INSUFFICIENT_EVIDENCE')).toBe(false)
     expect(teachingRunIsActive(null)).toBe(false)
+  })
+
+  it('reconciles a completed run until the lesson reaches a final persisted status', () => {
+    expect(teachingLessonNeedsFinalSnapshot('COMPLETED', null)).toBe(true)
+    expect(teachingLessonNeedsFinalSnapshot('COMPLETED', 'DRAFT_READY')).toBe(true)
+    expect(teachingLessonNeedsFinalSnapshot('COMPLETED', 'COMPLETE')).toBe(false)
+    expect(teachingLessonNeedsFinalSnapshot('COMPLETED', 'INCOMPLETE')).toBe(false)
+    expect(teachingLessonNeedsFinalSnapshot('FAILED', 'DRAFT_READY')).toBe(false)
+    expect(teachingLessonNeedsFinalSnapshot('LESSON_COMPOSITION', 'DRAFT_READY')).toBe(false)
   })
 })

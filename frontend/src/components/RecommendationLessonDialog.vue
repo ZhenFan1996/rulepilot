@@ -3,7 +3,11 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 
 import LessonChapterList from '@/components/LessonChapterList.vue'
 import { useModalFocus } from '@/composables/useModalFocus'
-import { acceptProgressiveLesson, teachingRunIsActive } from '@/lib/liveLesson'
+import {
+  acceptProgressiveLesson,
+  teachingLessonNeedsFinalSnapshot,
+  teachingRunIsActive,
+} from '@/lib/liveLesson'
 import { useLocale } from '@/lib/locale'
 import { mergeTeachingRunProgress, teachingActivityText, type TeachingRunProgress } from '@/lib/teachingProgress'
 
@@ -274,7 +278,11 @@ async function refresh(request: number, planId: string) {
 
 function scheduleRefresh(request: number, planId: string, delay = 1_500) {
   clearTimer()
-  if (isCurrentGeneration(request, planId) && (!run.value || active.value)) {
+  const finalSnapshotPending = teachingLessonNeedsFinalSnapshot(
+    run.value?.run.state,
+    lesson.value?.status,
+  )
+  if (isCurrentGeneration(request, planId) && (!run.value || active.value || finalSnapshotPending)) {
     timer = setTimeout(() => {
       timer = null
       void refresh(request, planId)

@@ -1160,7 +1160,10 @@ test('recommendation becomes one readable, taught, and answerable production jou
     expect(report.lessonSurfaceOpaque).toBe(true)
     await expect(lesson.getByText('每个步骤都保留原规则书页码；答疑只使用同一份规则书。')).toBeVisible({ timeout: 60_000 })
     const lessonSections = lesson.getByTestId('lesson-reading-column').locator('section')
-    expect(await lessonSections.count()).toBe(report.lessonSectionCount)
+    await expect.poll(async () => lessonSections.count(), {
+      timeout: 60_000,
+      message: 'The reopened guide reader did not reconcile to the completed lesson snapshot',
+    }).toBe(report.lessonSectionCount)
     await expect(lesson.getByRole('link', { name: /来源：第 \d+(?:、\d+)* 页/ }).first()).toBeVisible()
     report.citedLessonStep = true
     report.confirmedMilestonesFinal = await page.getByTestId('player-journey-surface')
