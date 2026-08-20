@@ -2,12 +2,12 @@ package com.rulepilot.identity.adapter.out.persistence;
 
 import com.rulepilot.identity.AccountEmailRegistry;
 import java.util.Map;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
 
 @Repository
-@ConditionalOnBean(NamedParameterJdbcTemplate.class)
+@ConditionalOnProperty(name = "rulepilot.persistence.jdbc-adapters-enabled", havingValue = "true", matchIfMissing = true)
 public class JdbcAccountEmailRegistry implements AccountEmailRegistry {
 
     private final NamedParameterJdbcTemplate jdbc;
