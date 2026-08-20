@@ -18,6 +18,16 @@ public interface UploadedRulebookTeachingHandoffs {
 
     int failInterruptedLaunches();
 
+    Reconciliation reconcileLaunched(int limit);
+
+    record Reconciliation(int restarted, int settled, int exhausted) {
+        public Reconciliation {
+            if (restarted < 0 || settled < 0 || exhausted < 0) {
+                throw new IllegalArgumentException("uploaded teaching reconciliation counts are invalid");
+            }
+        }
+    }
+
     record ReadyHandoff(
             UUID handoffId,
             UUID documentVersionId,

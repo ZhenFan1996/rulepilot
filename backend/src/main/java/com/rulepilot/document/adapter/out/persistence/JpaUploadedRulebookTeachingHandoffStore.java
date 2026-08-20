@@ -48,6 +48,8 @@ class JpaUploadedRulebookTeachingHandoffStore implements UploadedRulebookTeachin
                             state = 'WAITING_FOR_DOCUMENT',
                             preparation_run_id = NULL,
                             error_code = NULL,
+                            automatic_recovery_count = 0,
+                            reconciled_at = NULL,
                             updated_at = EXCLUDED.updated_at
                         WHERE uploaded_rulebook_teaching_handoff.state = 'FAILED'
                         """)
@@ -98,6 +100,8 @@ class JpaUploadedRulebookTeachingHandoffStore implements UploadedRulebookTeachin
                 set handoff.state = 'WAITING_FOR_DOCUMENT',
                     handoff.preparationRunId = null,
                     handoff.errorCode = null,
+                    handoff.automaticRecoveryCount = 0,
+                    handoff.reconciledAt = null,
                     handoff.updatedAt = :now
                 where handoff.id = :handoffId
                   and handoff.ownerUsername = :owner
@@ -247,6 +251,7 @@ class JpaUploadedRulebookTeachingHandoffStore implements UploadedRulebookTeachin
                         set handoff.state = 'LAUNCHED',
                             handoff.preparationRunId = :runId,
                             handoff.errorCode = null,
+                            handoff.reconciledAt = null,
                             handoff.updatedAt = :now
                         where handoff.id = :handoffId and handoff.state = 'LAUNCHING'
                         """)
@@ -294,6 +299,137 @@ class JpaUploadedRulebookTeachingHandoffStore implements UploadedRulebookTeachin
                 .executeUpdate();
     }
 
+    @Override
+    @Transactional(readOnly = true)
+    public List<RecoveryCandidate> findUnreconciledLaunched(int limit) {
+        if (limit < 1 || limit > 20) {
+            throw new IllegalArgumentException("uploaded teaching recovery limit is invalid");
+        }
+        return entityManager
+                .createQuery(
+                        """
+                        select handoff from UploadedRulebookTeachingHandoffEntity handoff
+                        where handoff.state = 'LAUNCHED' and handoff.reconciledAt is null
+                        order by handoff.updatedAt
+                        """,
+                        UploadedRulebookTeachingHandoffEntity.class)
+                .setMaxResults(limit)
+                .getResultList()
+                .stream()
+                .map(entity -> new RecoveryCandidate(
+                        entity.id,
+                        entity.documentVersionId,
+                        entity.ownerUsername,
+                        entity.preparationRunId,
+                        entity.automaticRecoveryCount))
+                .toList();
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public boolean retryAutomatically(UUID handoffId, UUID expectedPreparationRunId, Instant now) {
+        return entityManager
+                .createQuery(
+                        """
+                        update UploadedRulebookTeachingHandoffEntity handoff
+                        set handoff.state = 'WAITING_FOR_DOCUMENT',
+                            handoff.preparationRunId = null,
+                            handoff.errorCode = null,
+                            handoff.reconciledAt = null,
+                            handoff.automaticRecoveryCount = handoff.automaticRecoveryCount + 1,
+                            handoff.updatedAt = :now
+                        where handoff.id = :handoffId
+                          and handoff.state = 'LAUNCHED'
+                          and handoff.preparationRunId = :expectedRunId
+                          and handoff.automaticRecoveryCount = 0
+                        """)
+                .setParameter("handoffId", handoffId)
+                .setParameter("expectedRunId", expectedPreparationRunId)
+                .setParameter("now", now)
+                .executeUpdate() == 1;
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public boolean failRecoveryExhausted(UUID handoffId, UUID expectedPreparationRunId, Instant now) {
+        return failLaunched(
+                handoffId,
+                expectedPreparationRunId,
+                "TEACHING_RECOVERY_EXHAUSTED",
+                now,
+                "and handoff.automaticRecoveryCount = 1");
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public boolean failTerminal(
+            UUID handoffId, UUID expectedPreparationRunId, String errorCode, Instant now) {
+        if (errorCode == null || errorCode.isBlank() || errorCode.length() > 64) {
+            throw new IllegalArgumentException("uploaded terminal teaching failure is invalid");
+        }
+        return failLaunched(handoffId, expectedPreparationRunId, errorCode.strip(), now, "");
+    }
+
+    private boolean failLaunched(
+            UUID handoffId,
+            UUID expectedPreparationRunId,
+            String errorCode,
+            Instant now,
+            String additionalCondition) {
+        return entityManager
+                .createQuery(
+                        """
+                        update UploadedRulebookTeachingHandoffEntity handoff
+                        set handoff.state = 'FAILED',
+                            handoff.errorCode = :errorCode,
+                            handoff.reconciledAt = :now,
+                            handoff.updatedAt = :now
+                        where handoff.id = :handoffId
+                          and handoff.state = 'LAUNCHED'
+                          and handoff.preparationRunId = :expectedRunId
+                        """ + additionalCondition)
+                .setParameter("handoffId", handoffId)
+                .setParameter("expectedRunId", expectedPreparationRunId)
+                .setParameter("errorCode", errorCode)
+                .setParameter("now", now)
+                .executeUpdate() == 1;
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public boolean markReconciled(UUID handoffId, UUID expectedPreparationRunId, Instant now) {
+        return entityManager
+                .createQuery(
+                        """
+                        update UploadedRulebookTeachingHandoffEntity handoff
+                        set handoff.reconciledAt = :now
+                        where handoff.id = :handoffId
+                          and handoff.state = 'LAUNCHED'
+                          and handoff.preparationRunId = :expectedRunId
+                          and handoff.reconciledAt is null
+                        """)
+                .setParameter("handoffId", handoffId)
+                .setParameter("expectedRunId", expectedPreparationRunId)
+                .setParameter("now", now)
+                .executeUpdate() == 1;
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public boolean dismissCancelled(UUID handoffId, UUID expectedPreparationRunId) {
+        return entityManager
+                .createQuery(
+                        """
+                        delete from UploadedRulebookTeachingHandoffEntity handoff
+                        where handoff.id = :handoffId
+                          and handoff.state = 'LAUNCHED'
+                          and handoff.preparationRunId = :expectedRunId
+                        """)
+                .setParameter("handoffId", handoffId)
+                .setParameter("expectedRunId", expectedPreparationRunId)
+                .executeUpdate() == 1;
+    }
+
     private Snapshot findOwnedByVersion(UUID documentVersionId, String ownerUsername) {
         return entityManager
                 .createQuery(
@@ -324,6 +460,8 @@ class UploadedRulebookTeachingHandoffEntity {
     @Column(name = "error_code") String errorCode;
     @Column(name = "created_at", nullable = false) Instant createdAt;
     @Column(name = "updated_at", nullable = false) Instant updatedAt;
+    @Column(name = "automatic_recovery_count", nullable = false) int automaticRecoveryCount;
+    @Column(name = "reconciled_at") Instant reconciledAt;
 
     protected UploadedRulebookTeachingHandoffEntity() {}
 
@@ -336,6 +474,7 @@ class UploadedRulebookTeachingHandoffEntity {
                 UploadedRulebookTeachingHandoffStore.State.valueOf(state),
                 preparationRunId,
                 errorCode,
+                automaticRecoveryCount,
                 createdAt,
                 updatedAt);
     }

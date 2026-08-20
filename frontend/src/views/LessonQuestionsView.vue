@@ -81,6 +81,7 @@ const {
   answerError,
   answerOutcome,
   agentTrace,
+  streamedAnswerParts,
   answerElapsedSeconds,
   answerSoftBudgetReached,
   cancelAnswer,
@@ -454,6 +455,7 @@ onUnmounted(() => {
             :answer-elapsed-seconds="answerElapsedSeconds"
             :answer-soft-budget-reached="answerSoftBudgetReached"
             :agent-trace="agentTrace"
+            :streamed-answer-parts="streamedAnswerParts"
             :online="online"
             :ruling="ruling"
             :ruling-saving="rulingSaving"

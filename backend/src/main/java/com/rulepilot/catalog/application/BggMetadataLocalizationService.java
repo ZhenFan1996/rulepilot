@@ -2,6 +2,8 @@ package com.rulepilot.catalog.application;
 
 import com.rulepilot.catalog.BggMetadataTranslation;
 import com.rulepilot.catalog.BggMetadataTranslation.Request;
+import com.rulepilot.catalog.BggMetadataTranslation.PrewarmResult;
+import com.rulepilot.catalog.BggMetadataTranslation.PrewarmStatus;
 import com.rulepilot.catalog.BggMetadataTranslation.Translation;
 import com.rulepilot.catalog.application.BoardGameGeekCatalog.DiscoveryGame;
 import java.util.List;
@@ -62,18 +64,20 @@ public class BggMetadataLocalizationService {
     }
 
     /** Persists the same zh-CN translation that a later game-detail request will consume. */
-    public boolean prewarm(DiscoveryGame game) {
+    public PrewarmResult prewarm(DiscoveryGame game) {
         String description = normalizedDescription(game.description());
-        if (description.isBlank() && game.categories().isEmpty() && game.mechanics().isEmpty()) return true;
+        if (description.isBlank() && game.categories().isEmpty() && game.mechanics().isEmpty()) {
+            return new PrewarmResult(PrewarmStatus.SKIPPED_INVALID_SOURCE);
+        }
         String sourceName = SimplifiedChineseText.normalize(game.name());
         String displayName = game.chineseName().isBlank() ? sourceName : game.chineseName();
         Request request = new Request(
                 game.bggId(), displayName, description, game.categories(), game.mechanics());
         try {
-            return translations.translate(request).isPresent();
+            return translations.prewarm(request);
         } catch (RuntimeException exception) {
             LOGGER.warn("BGG metadata translation prewarm paused at bggId={}", game.bggId());
-            return false;
+            return new PrewarmResult(PrewarmStatus.RETRY_PROVIDER_UNAVAILABLE);
         }
     }
 

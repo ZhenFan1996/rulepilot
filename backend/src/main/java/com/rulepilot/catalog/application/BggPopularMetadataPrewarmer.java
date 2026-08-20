@@ -1,6 +1,7 @@
 package com.rulepilot.catalog.application;
 
 import com.rulepilot.catalog.application.BggPopularMetadataPrewarmProgress.Cohort;
+import com.rulepilot.catalog.BggMetadataTranslation.PrewarmResult;
 import com.rulepilot.catalog.application.BoardGameGeekCatalog.DiscoveryGame;
 import java.time.Clock;
 import java.time.Duration;
@@ -181,7 +182,20 @@ class BggPopularMetadataPrewarmer {
             }
             for (Integer id : ids) {
                 DiscoveryGame game = details.get(id);
-                if (game != null && !localization.prewarm(game)) return next;
+                if (game != null) {
+                    PrewarmResult result = localization.prewarm(game);
+                    if (!result.advanceCursor()) {
+                        LOGGER.warn(
+                                "BGG popular metadata translation paused at ranked offset {} with status {}",
+                                next,
+                                result.status());
+                        return next;
+                    }
+                    if (result.status()
+                            == com.rulepilot.catalog.BggMetadataTranslation.PrewarmStatus.SKIPPED_INVALID_SOURCE) {
+                        LOGGER.info("BGG popular metadata translation skipped invalid source at ranked offset {}", next);
+                    }
+                }
                 next++;
             }
         }

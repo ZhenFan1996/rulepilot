@@ -71,10 +71,22 @@ const router = createRouter({
       meta: routeMeta('route.title.addRulebook'),
     },
     {
+      path: '/rulebooks',
+      name: 'rulebooks',
+      component: () => import('@/views/RulebookLibraryView.vue'),
+      meta: routeMeta('route.title.rulebook'),
+    },
+    {
       path: '/lessons',
       name: 'lessons',
       component: () => import('@/views/LessonsView.vue'),
       meta: routeMeta('route.title.guides'),
+    },
+    {
+      path: '/work',
+      name: 'work-status',
+      component: () => import('@/views/LessonsView.vue'),
+      meta: routeMeta('route.title.workStatus'),
     },
     {
       path: '/account',
@@ -93,6 +105,12 @@ const router = createRouter({
       name: 'agent-audit',
       component: () => import('@/views/AgentAuditView.vue'),
       meta: routeMeta('route.title.agentAudit'),
+    },
+    {
+      path: '/admin/models',
+      name: 'admin-models',
+      component: () => import('@/views/AdminModelManagementView.vue'),
+      meta: routeMeta('route.title.adminModels'),
     },
     {
       path: '/lesson/:planId?',

@@ -50,6 +50,22 @@ public class PostgresRecommendationConversationStore implements RecommendationCo
             String ownerUsername,
             ConversationState initialState,
             Instant now) {
+        jdbc.queryForObject(
+                "select pg_advisory_xact_lock(hashtextextended(:owner, 0)) is null",
+                Map.of("owner", ownerUsername),
+                Boolean.class);
+        Optional<StoredConversation> existing = findLatestOwned(ownerUsername);
+        if (existing.isPresent()) return existing.get();
+        return createNew(conversationId, ownerUsername, initialState, now);
+    }
+
+    @Override
+    @Transactional
+    public StoredConversation createNew(
+            UUID conversationId,
+            String ownerUsername,
+            ConversationState initialState,
+            Instant now) {
         jdbc.update(
                 """
                 insert into recommendation_conversation (
@@ -57,14 +73,13 @@ public class PostgresRecommendationConversationStore implements RecommendationCo
                 ) values (
                     :id, :owner, 0, cast(:stateJson as jsonb), :now, :now
                 )
-                on conflict (owner_username) do nothing
                 """,
                 new MapSqlParameterSource()
                         .addValue("id", conversationId)
                         .addValue("owner", ownerUsername)
                         .addValue("stateJson", write(initialState))
                         .addValue("now", Timestamp.from(now)));
-        return findLatestOwned(ownerUsername)
+        return findOwned(conversationId, ownerUsername)
                 .orElseThrow(() -> new IllegalStateException("recommendation conversation was not created"));
     }
 
@@ -80,8 +95,18 @@ public class PostgresRecommendationConversationStore implements RecommendationCo
     @Transactional(readOnly = true)
     public Optional<StoredConversation> findLatestOwned(String ownerUsername) {
         return one(
-                SELECT_COLUMNS + " where owner_username = :owner",
+                SELECT_COLUMNS + " where owner_username = :owner order by updated_at desc, id desc limit 1",
                 Map.of("owner", ownerUsername));
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<StoredConversation> findRecentOwned(String ownerUsername, int limit) {
+        if (limit < 1 || limit > 100) throw new IllegalArgumentException("conversation page size is invalid");
+        return jdbc.query(
+                SELECT_COLUMNS + " where owner_username = :owner order by updated_at desc, id desc limit :limit",
+                new MapSqlParameterSource().addValue("owner", ownerUsername).addValue("limit", limit),
+                this::row);
     }
 
     @Override

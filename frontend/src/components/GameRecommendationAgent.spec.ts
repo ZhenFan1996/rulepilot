@@ -16,6 +16,14 @@ const game = {
   playingTimeMinutes: 70, averageWeight: 2.5, categories: ['动物'], mechanics: ['卡牌轮抽'],
   bggUrl: 'https://boardgamegeek.com/boardgame/266192',
 }
+const secondGame = {
+  ...game,
+  bggId: 342942,
+  name: '方舟动物园',
+  originalName: 'Ark Nova',
+  thumbnailUrl: 'https://example.test/ark-nova.jpg',
+  bggUrl: 'https://boardgamegeek.com/boardgame/342942',
+}
 
 describe('GameRecommendationAgent', () => {
   const mountedAgents: Array<ReturnType<typeof mount>> = []
@@ -241,6 +249,36 @@ describe('GameRecommendationAgent', () => {
 
     expect(restored.get('[data-testid="player-journey-continuation"]').text()).toContain('展翅翱翔')
     expect(restored.get('[data-testid="player-journey-dock"]').text()).toContain('打开进度')
+  })
+
+  it('keeps independent journey cards in the chat when the player starts another game', async () => {
+    sessionStorage.setItem(
+      'rulepilot:recommendation-journeys:v1:alice',
+      JSON.stringify([game, secondGame]),
+    )
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      if (String(input) === '/api/v1/bgg/recommendation-agent/session') {
+        return new Response(null, { status: 204 })
+      }
+      return new Response(null, { status: 404 })
+    }))
+
+    const wrapper = await mountAgent({ RecommendationRulebookHandoff: true }, { sessionIdentity: 'alice' })
+    await flushPromises()
+
+    const cards = wrapper.findAll('[data-testid="player-journey-continuation"]')
+    expect(cards).toHaveLength(2)
+    expect(cards[0]!.text()).toContain('展翅翱翔')
+    expect(cards[1]!.text()).toContain('方舟动物园')
+
+    await cards[0]!.get('[data-testid="player-journey-dock"]').trigger('click')
+    await flushPromises()
+    expect(document.body.querySelector('[data-testid="player-journey-backdrop"]')?.getAttribute('style') ?? '')
+      .not.toContain('display: none')
+
+    wrapper.unmount()
+    const restored = await mountAgent({ RecommendationRulebookHandoff: true }, { sessionIdentity: 'alice' })
+    expect(restored.findAll('[data-testid="player-journey-continuation"]')).toHaveLength(2)
   })
 
   it('restores the owner-scoped server conversation as authoritative and continues at its revision', async () => {
@@ -1215,6 +1253,48 @@ describe('GameRecommendationAgent', () => {
     expect(wrapper.text()).not.toContain('这段对话已经保存在服务器。')
   })
 
+  it('starts a separate server conversation and keeps the previous chat available in history', async () => {
+    const oldId = '2efc8376-883b-4ec0-b310-e1fc39a75473'
+    const newId = '6b97841c-2a4d-49e9-a451-a58ee02f4583'
+    const session = (conversationId: string, transcript: Array<{ role: 'user' | 'assistant'; text: string }>) => ({
+      conversationId, revision: transcript.length ? 2 : 0, profile: baseProfile,
+      transcript, knownGames: [], shownBggIds: [], processing: false, processingSince: null,
+      latestResponse: null,
+    })
+    const oldSession = session(oldId, [
+      { role: 'user', text: '想找适合四个人的合作游戏' },
+      { role: 'assistant', text: '我们可以从合作强度聊起。' },
+    ])
+    const newSession = session(newId, [])
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const path = String(input)
+      if (path === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      if (path === '/api/v1/bgg/recommendation-agent/session') return Response.json(oldSession)
+      if (path === '/api/v1/bgg/recommendation-agent/sessions' && init?.method === 'POST') {
+        return Response.json(newSession)
+      }
+      if (path === '/api/v1/bgg/recommendation-agent/sessions') return Response.json([newSession, oldSession])
+      if (path.endsWith(`/sessions/${oldId}`)) return Response.json(oldSession)
+      return new Response(null, { status: 404 })
+    }))
+    const wrapper = await mountAgent({}, { sessionIdentity: 'alice' })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('想找适合四个人的合作游戏')
+    await wrapper.findAll('button').find(button => button.text() === '建立新聊天')!.trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('晚上好')
+    expect(wrapper.text()).not.toContain('我们可以从合作强度聊起')
+
+    await wrapper.findAll('button').find(button => button.text() === '聊天记录')!.trigger('click')
+    await flushPromises()
+    const previous = wrapper.findAll('button').find(button => button.text().includes('想找适合四个人'))!
+    expect(previous.exists()).toBe(true)
+    await previous.trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('我们可以从合作强度聊起')
+  })
+
   it('opens the rulebook handoff directly from a recommendation card', async () => {
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
       const path = String(input)
@@ -1404,7 +1484,15 @@ describe('GameRecommendationAgent', () => {
     const dock = wrapper.get('[data-testid="player-journey-dock"]')
     expect(dock.text()).toContain('基础讲解可读')
     expect(dock.text()).toContain('打开讲解')
-    expect(wrapper.get('[data-testid="player-journey-progress-button"]').text()).toBe('查看进度')
+    const progressLink = wrapper.get('[data-testid="player-journey-progress-button"]')
+    expect(progressLink.text()).toBe('查看详细进度')
+    expect(wrapper.get('[data-testid="player-journey-all-work-link"]').attributes('href')).toBe('/work?started=plan-1')
+
+    await progressLink.trigger('click')
+    await flushPromises()
+    expect(document.body.querySelector('[data-testid="player-journey-backdrop"]')?.getAttribute('style')).not.toContain('display: none')
+    document.body.querySelector<HTMLButtonElement>('[data-testid="close-journey"]')!.click()
+    await flushPromises()
 
     await dock.trigger('click')
     await flushPromises()

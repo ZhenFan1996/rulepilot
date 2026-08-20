@@ -127,6 +127,24 @@ describe('derivePlayerJourney', () => {
     })
   })
 
+  it('uses the server recovery action instead of guessing from a failed handoff', () => {
+    const recovering = importJob({
+      stage: 'COMPLETED', documentVersionId: 'version-1', teachingHandoffState: 'FAILED',
+      teachingErrorCode: 'TEACHING_RUN_FAILED', teachingNextAction: 'WAIT',
+    })
+    expect(derivePlayerJourney(input({ gameBound: true, importJob: recovering }))).toMatchObject({
+      phase: 'TEACHING_PREPARATION_QUEUED', state: 'active', retryAction: null, errorCode: null,
+    })
+
+    expect(derivePlayerJourney(input({
+      gameBound: true,
+      importJob: { ...recovering, teachingNextAction: 'RETRY_TEACHING' },
+    }))).toMatchObject({
+      phase: 'FAILED', state: 'failed', retryAction: 'PREPARE_TEACHING',
+      errorCode: 'TEACHING_RUN_FAILED',
+    })
+  })
+
   it('offers original-source retry only when the server recovery policy allows it', () => {
     const baseFailure = importJob({
       stage: 'FAILED', errorCode: 'INVALID_PDF_SOURCE',

@@ -1,5 +1,7 @@
 package com.rulepilot.assistant.adapter.in.web;
 
+import com.rulepilot.assistant.AgentExecutionControl.ActivitySnapshot;
+import com.rulepilot.assistant.AssistantRuns;
 import com.rulepilot.assistant.PlayerLocale;
 import com.rulepilot.assistant.QuestionUnderstanding.QuestionContext;
 import com.rulepilot.assistant.application.AnswerFeedbackService;
@@ -15,7 +17,9 @@ import com.rulepilot.gamesession.GameSessionContextLookup;
 import java.io.IOException;
 import java.security.Principal;
 import java.time.Instant;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
@@ -47,17 +51,20 @@ public class StructuredRuleAnswerController {
     private final GameSessionConversationService conversations;
     private final AnswerFeedbackService feedback;
     private final TaskExecutor streamExecutor;
+    private final AssistantRuns runs;
 
     public StructuredRuleAnswerController(
             StructuredRuleAnswerService answers,
             GameSessionContextLookup sessions,
             GameSessionConversationService conversations,
             AnswerFeedbackService feedback,
+            AssistantRuns runs,
             @Qualifier("structuredRuleAnswerStreamExecutor") TaskExecutor streamExecutor) {
         this.answers = answers;
         this.sessions = sessions;
         this.conversations = conversations;
         this.feedback = feedback;
+        this.runs = runs;
         this.streamExecutor = streamExecutor;
     }
 
@@ -80,16 +87,31 @@ public class StructuredRuleAnswerController {
         String username = principal.getName();
         try {
             streamExecutor.execute(() -> {
+                PlayerActivityPump[] activityPump = new PlayerActivityPump[1];
                 try {
                     AnswerResponse response = createAnswer(
                             versionId,
                             request,
                             username,
-                            runId -> send(emitter, open, "run", new StreamRun(runId)));
+                            runId -> {
+                                send(emitter, open, "run", new StreamRun(runId));
+                                activityPump[0] = new PlayerActivityPump(
+                                        emitter,
+                                        open,
+                                        runId,
+                                        username,
+                                        PlayerLocale.forQuestion(
+                                                request.question(), PlayerLocale.fromRequest(request.language())));
+                                activityPump[0].start();
+                            });
+                    if (activityPump[0] != null) activityPump[0].finish();
                     if (!open.get()) return;
+                    send(emitter, open, "answer_part", new AnswerPart("verdict", response.answer().shortVerdict()));
+                    send(emitter, open, "answer_part", new AnswerPart("explanation", response.answer().explanation()));
                     send(emitter, open, "result", response);
                     if (open.getAndSet(false)) emitter.complete();
                 } catch (RuntimeException exception) {
+                    if (activityPump[0] != null) activityPump[0].finish();
                     LOGGER.warn(
                             "Structured answer stream did not complete: {}: {}",
                             exception.getClass().getSimpleName(),
@@ -137,11 +159,144 @@ public class StructuredRuleAnswerController {
 
     private void send(SseEmitter emitter, AtomicBoolean open, String event, Object data) {
         if (!open.get()) return;
-        try {
-            emitter.send(SseEmitter.event().name(event).data(data));
-        } catch (IOException | RuntimeException exception) {
-            open.set(false);
-            LOGGER.debug("Structured answer stream disconnected before completion");
+        synchronized (emitter) {
+            if (!open.get()) return;
+            try {
+                emitter.send(SseEmitter.event().name(event).data(data));
+            } catch (IOException | RuntimeException exception) {
+                open.set(false);
+                LOGGER.debug("Structured answer stream disconnected before completion");
+            }
+        }
+    }
+
+    static PlayerActivity playerActivity(ActivitySnapshot activity, PlayerLocale locale) {
+        String operation = activity.operation();
+        String actor = "answer_agent";
+        String stage;
+        if (operation.startsWith("nativeTool|search_rule_evidence") || operation.equals("hybridRuleSearch")) {
+            actor = "rulebook_search";
+            stage = "searching_evidence";
+        } else if (operation.startsWith("nativeTool|search_rule_relationships")) {
+            actor = "rulebook_search";
+            stage = "checking_exceptions";
+        } else if (operation.startsWith("nativeTool|expand_rule_evidence_context")) {
+            actor = "rulebook_reader";
+            stage = "expanding_context";
+        } else if (operation.startsWith("nativeTool|read_rule_pages")) {
+            actor = "rulebook_reader";
+            stage = "reading_pages";
+        } else if (activity.type() == com.rulepilot.assistant.AgentExecutionControl.ActivityType.MODEL) {
+            stage = "composing_answer";
+        } else if (activity.type() == com.rulepilot.assistant.AgentExecutionControl.ActivityType.CRITIC) {
+            actor = "answer_reviewer";
+            stage = "reviewing_support";
+        } else if (activity.type() == com.rulepilot.assistant.AgentExecutionControl.ActivityType.VALIDATION) {
+            actor = "answer_validator";
+            stage = "validating_citations";
+        } else {
+            actor = "rulebook_tool";
+            stage = "checking_rule_details";
+        }
+        boolean english = locale == PlayerLocale.EN;
+        String message = switch (stage) {
+            case "searching_evidence" -> english
+                    ? "Searching the indexed rulebook for direct evidence"
+                    : "正在规则书索引中查找直接依据";
+            case "checking_exceptions" -> english
+                    ? "Checking exception and override clauses"
+                    : "正在核对例外与覆盖条款";
+            case "expanding_context" -> english
+                    ? "Reading the context around the matched citation"
+                    : "正在阅读命中引用前后的完整语境";
+            case "reading_pages" -> english
+                    ? "Reading the exact rulebook pages"
+                    : "正在读取对应的规则书原页";
+            case "composing_answer" -> english
+                    ? "Composing only from verified evidence"
+                    : "正在只根据已核实证据组织回答";
+            case "reviewing_support" -> english
+                    ? "Reviewing whether each conclusion is supported"
+                    : "正在复核每个结论是否有依据";
+            case "validating_citations" -> english
+                    ? "Validating citation ownership and page boundaries"
+                    : "正在校验引用归属与页码边界";
+            default -> english ? "Checking a rule-specific detail" : "正在核对具体规则细节";
+        };
+        String nextAction = switch (stage) {
+            case "searching_evidence", "checking_exceptions" -> english
+                    ? "Next: read the strongest matching rule in context"
+                    : "下一步：阅读最强命中规则的上下文";
+            case "expanding_context", "reading_pages" -> english
+                    ? "Next: verify what the cited text actually supports"
+                    : "下一步：核对原文实际支持的结论边界";
+            case "composing_answer" -> english
+                    ? "Next: validate the answer and citations"
+                    : "下一步：校验回答与引用";
+            default -> english
+                    ? "Next: publish the supported answer"
+                    : "下一步：发布有依据的回答";
+        };
+        return new PlayerActivity(
+                activity.sequence(),
+                actor,
+                stage,
+                message,
+                activity.outcome().name().toLowerCase(java.util.Locale.ROOT),
+                nextAction,
+                activity.latencyMs());
+    }
+
+    private final class PlayerActivityPump {
+        private final SseEmitter emitter;
+        private final AtomicBoolean open;
+        private final UUID runId;
+        private final String username;
+        private final PlayerLocale locale;
+        private final Map<Long, String> deliveredStatuses = new HashMap<>();
+        private final AtomicBoolean finished = new AtomicBoolean();
+
+        private PlayerActivityPump(
+                SseEmitter emitter,
+                AtomicBoolean open,
+                UUID runId,
+                String username,
+                PlayerLocale locale) {
+            this.emitter = emitter;
+            this.open = open;
+            this.runId = runId;
+            this.username = username;
+            this.locale = locale;
+        }
+
+        private void start() {
+            Thread.startVirtualThread(() -> {
+                while (open.get() && !finished.get()) {
+                    flush();
+                    try {
+                        Thread.sleep(500);
+                    } catch (InterruptedException interrupted) {
+                        Thread.currentThread().interrupt();
+                        return;
+                    }
+                }
+            });
+        }
+
+        private void finish() {
+            finished.set(true);
+            flush();
+        }
+
+        private synchronized void flush() {
+            if (!open.get()) return;
+            runs.findOwned(runId, username).ifPresent(details -> details.activities().stream()
+                    .filter(activity -> !activity.outcome().name().equals(
+                            deliveredStatuses.get(activity.sequence())))
+                    .forEach(activity -> {
+                        deliveredStatuses.put(activity.sequence(), activity.outcome().name());
+                        send(emitter, open, "activity", playerActivity(activity, locale));
+                    }));
         }
     }
 
@@ -206,6 +361,17 @@ public class StructuredRuleAnswerController {
     record StreamAccepted(String state) {}
 
     record StreamRun(UUID runId) {}
+
+    record PlayerActivity(
+            long sequence,
+            String actor,
+            String stage,
+            String message,
+            String status,
+            String nextAction,
+            long latencyMs) {}
+
+    record AnswerPart(String field, String text) {}
 
     record StreamError(String code) {}
 

@@ -1,0 +1,108 @@
+package com.rulepilot.modelconfig.adapter.out;
+
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+import com.rulepilot.modelconfig.ModelAccountQuota;
+import com.rulepilot.modelconfig.RuntimeModelConfiguration;
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.util.UUID;
+import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
+import org.springframework.ai.chat.metadata.ChatResponseMetadata;
+import org.springframework.ai.chat.metadata.Usage;
+import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.chat.prompt.Prompt;
+import reactor.core.publisher.Flux;
+
+class QuotaAwareChatModelTest {
+
+    private static final Instant NOW = Instant.parse("2026-08-21T08:00:00Z");
+
+    @Test
+    void reservesThenSettlesTheProvidersReportedTokenUsage() {
+        ChatModel delegate = mock(ChatModel.class);
+        ModelAccountQuota quota = mock(ModelAccountQuota.class);
+        Prompt prompt = mock(Prompt.class);
+        ChatResponse response = responseWithUsage(120, 35);
+        UUID id = UUID.randomUUID();
+        when(quota.reserve(any())).thenReturn(new ModelAccountQuota.Reservation(
+                id, ModelAccountQuota.CredentialSource.PLATFORM, 16_000));
+        when(delegate.call(prompt)).thenReturn(response);
+
+        model(delegate, quota).call(prompt);
+
+        ArgumentCaptor<ModelAccountQuota.Request> request = ArgumentCaptor.forClass(ModelAccountQuota.Request.class);
+        verify(quota).reserve(request.capture());
+        org.assertj.core.api.Assertions.assertThat(request.getValue().username()).isEqualTo("alice");
+        org.assertj.core.api.Assertions.assertThat(request.getValue().credentialSource())
+                .isEqualTo(ModelAccountQuota.CredentialSource.PLATFORM);
+        verify(quota).settle(id, new ModelAccountQuota.Usage(120, 35, "SUCCESS"), NOW);
+        verify(quota, never()).release(any(), any(), any());
+    }
+
+    @Test
+    void releasesTheReservationWhenTheProviderFails() {
+        ChatModel delegate = mock(ChatModel.class);
+        ModelAccountQuota quota = mock(ModelAccountQuota.class);
+        Prompt prompt = mock(Prompt.class);
+        UUID id = UUID.randomUUID();
+        when(quota.reserve(any())).thenReturn(new ModelAccountQuota.Reservation(
+                id, ModelAccountQuota.CredentialSource.PLATFORM, 16_000));
+        when(delegate.call(prompt)).thenThrow(new IllegalStateException("provider down"));
+
+        assertThatThrownBy(() -> model(delegate, quota).call(prompt))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("provider down");
+        verify(quota).release(id, "PROVIDER_FAILED", NOW);
+        verify(quota, never()).settle(any(), any(), any());
+    }
+
+    @Test
+    void keepsTheReservationOpenForTheWholeStreamAndSettlesOnceOnCompletion() {
+        ChatModel delegate = mock(ChatModel.class);
+        ModelAccountQuota quota = mock(ModelAccountQuota.class);
+        Prompt prompt = mock(Prompt.class);
+        UUID id = UUID.randomUUID();
+        when(quota.reserve(any())).thenReturn(new ModelAccountQuota.Reservation(
+                id, ModelAccountQuota.CredentialSource.PERSONAL, 16_000));
+        ChatResponse streamedResponse = responseWithUsage(80, 20);
+        when(delegate.stream(prompt)).thenReturn(Flux.just(streamedResponse));
+
+        model(delegate, quota).stream(prompt).blockLast();
+
+        verify(quota).settle(id, new ModelAccountQuota.Usage(80, 20, "SUCCESS"), NOW);
+        verify(quota, never()).release(any(), any(), any());
+    }
+
+    private QuotaAwareChatModel model(ChatModel delegate, ModelAccountQuota quota) {
+        return new QuotaAwareChatModel(
+                delegate,
+                quota,
+                "alice",
+                ModelAccountQuota.CredentialSource.PLATFORM,
+                RuntimeModelConfiguration.Role.RECOMMENDATION,
+                "qwen",
+                "qwen3.7-plus",
+                16_000,
+                Clock.fixed(NOW, ZoneOffset.UTC));
+    }
+
+    private ChatResponse responseWithUsage(int promptTokens, int completionTokens) {
+        Usage usage = mock(Usage.class);
+        when(usage.getPromptTokens()).thenReturn(promptTokens);
+        when(usage.getCompletionTokens()).thenReturn(completionTokens);
+        ChatResponseMetadata metadata = mock(ChatResponseMetadata.class);
+        when(metadata.getUsage()).thenReturn(usage);
+        ChatResponse response = mock(ChatResponse.class);
+        when(response.getMetadata()).thenReturn(metadata);
+        return response;
+    }
+}

@@ -543,13 +543,16 @@ describe('LessonAnswerPanel', () => {
         ...baseProps,
         answerLoading: true,
         activeLearningIntent: 'VERIFY',
-        agentTrace: [{ sequence: 2, kind: 'tool', label: '重新读取引用页', status: 'running' }],
+        agentTrace: [{ sequence: 2, kind: 'tool', label: '重新读取引用页', status: 'running', actor: '规则书阅读器', stage: 'reading_pages' }],
+        streamedAnswerParts: { verdict: '先结算当前效果。', explanation: '' },
       },
       global: { stubs: { VoiceQuestionCapture: true } },
     })
 
     expect(observed.text()).toContain('正在处理“重新查规则并核对”请求')
     expect(observed.text()).toContain('重新读取引用页')
+    expect(observed.text()).toContain('规则书阅读器')
+    expect(observed.get('[data-testid="validated-answer-preview"]').text()).toContain('先结算当前效果。')
     expect(observed.text()).not.toContain('等待这次答疑的最新进度')
 
     setLocale('en')
@@ -559,6 +562,24 @@ describe('LessonAnswerPanel', () => {
     })
     expect(english.get('[data-testid="player-work-status"]').text()).toBe('Checking answer')
     expect(english.text()).toContain('Question received. Waiting for the latest verified progress')
+  })
+
+  it('keeps the player-safe execution process collapsed but reviewable after the final answer', () => {
+    const wrapper = mount(LessonAnswerPanel, {
+      props: {
+        ...baseProps,
+        answer: answered,
+        answeredQuestion: '什么时候结算？',
+        answerTurns: [{ question: '什么时候结算？', answer: answered, learningIntent: null }],
+        agentTrace: [{ sequence: 3, kind: 'verification', label: '正在校验引用归属与页码边界', status: 'done', actor: '引用校验', stage: 'validating_citations' }],
+      },
+      global: { stubs: { VoiceQuestionCapture: true } },
+    })
+
+    const process = wrapper.get('[data-testid="answer-execution-process"]')
+    expect(process.attributes('open')).toBeUndefined()
+    expect(process.text()).toContain('引用校验')
+    expect(process.text()).toContain('正在校验引用归属与页码边界')
   })
 
   it('keeps prior cited answers visible and lets the player cancel a slow answer', async () => {

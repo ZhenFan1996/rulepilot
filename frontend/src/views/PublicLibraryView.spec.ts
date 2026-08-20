@@ -39,7 +39,7 @@ describe('PublicLibraryView', () => {
     expect(wrapper.get('img[alt="翼展 的游戏封面"]').attributes('src')).toBe('/api/public/lessons/plan-1/cover')
     expect(wrapper.get('img[alt="翼展 的游戏封面"]').classes()).toContain('object-contain')
     expect(wrapper.text()).toContain('首页')
-    expect(wrapper.text()).toContain('我的讲解')
+    expect(wrapper.text()).toContain('讲解与任务')
     expect(wrapper.get('a[href="/read/plan-1"]')).toBeTruthy()
     expect(wrapper.get('a[href="/discover/266192"]').text()).toContain('桌游资料')
     expect(wrapper.get('img[alt="Powered by BoardGameGeek"]').attributes('src')).toBe('/powered-by-bgg-rgb.svg')

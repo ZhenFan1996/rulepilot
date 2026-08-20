@@ -24,11 +24,10 @@ services:
       context: ../backend
       dockerfile: Dockerfile.runtime
     environment:
-      # Spring's API call graph does not need the JVM's 1 MiB default thread stacks. Halving them leaves useful
-      # cgroup headroom for requests on this 1-core host without constraining the lesson-generation heap.
-      # Let Serial GC return memory after an upload or a burst of generated lesson data. The default free-heap
-      # ratio kept most of the 320 MiB maximum committed while idle and forced this 2 GiB host into swap.
-      JAVA_TOOL_OPTIONS: -Xms96m -Xmx320m -Xss512k -XX:+UseSerialGC -XX:MinHeapFreeRatio=10 -XX:MaxHeapFreeRatio=20
+      # The production host has two vCPUs and 4 GiB RAM. G1 keeps request pauses bounded while one region set is
+      # reclaimed concurrently; the former Serial GC accumulated more than 36 seconds of full-stop pauses in one
+      # hour. The larger cgroup below leaves native/metaspace and image-buffer headroom outside this 384 MiB heap.
+      JAVA_TOOL_OPTIONS: -Xms128m -Xmx384m -Xss512k -XX:+UseG1GC -XX:MaxGCPauseMillis=200 -XX:InitiatingHeapOccupancyPercent=35 -XX:+ParallelRefProcEnabled
       # Model calls are network-bound. Two bounded runs prevent one player's preparation or lesson from making a
       # second player wait minutes for the first section. One lane is reserved for outline + first cited section;
       # one continuation lane finishes chapters and review, preserving the existing two-call host ceiling.
@@ -64,18 +63,19 @@ services:
       ANSWER_RATE_PROVIDER_CONCURRENCY: ${PRODUCTION_ANSWER_PROVIDER_CONCURRENCY:-2}
       SERVER_TOMCAT_THREADS_MAX: ${PRODUCTION_TOMCAT_MAX_THREADS:-16}
       SERVER_TOMCAT_THREADS_MIN_SPARE: "4"
-      SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: "4"
-      SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE: "0"
+      # A guide page reads several independent persisted snapshots. Six connections cover one page fan-out plus
+      # background bookkeeping without exceeding PostgreSQL's 30-connection host budget.
+      SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: "6"
+      SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE: "2"
       # The web application calls its model adapters directly. The optional MCP endpoint is
       # useful for local integrations, but costs a small host a full server/tool graph without
       # serving reader traffic.
       SPRING_AI_MCP_SERVER_ENABLED: "false"
       MANAGEMENT_TRACING_SAMPLING_PROBABILITY: "0.0"
-    # PDF pages are stored outside the heap while they are resized for a vision call. The 320 MiB heap cap stays
-    # fixed; this extra native headroom prevents the API cgroup from throttling those short-lived image buffers.
-    # The API keeps its Java heap at 320 MiB. A 640 MiB cgroup leaves measured room for two short-lived resized
-    # image buffers without forcing kernel reclaim, while the host retains more than 250 MiB for the other services.
-    mem_limit: 640m
+    # Measured production RSS repeatedly reached the former 640 MiB hard limit and forced reclaim/swap. 896 MiB
+    # keeps the 384 MiB heap, ~190 MiB metaspace, thread stacks and bounded image buffers inside the cgroup while
+    # leaving more than 1 GiB host headroom with the current worker, database, gateway and observability services.
+    mem_limit: 896m
 
   worker:
     image: ${RULEPILOT_BACKEND_IMAGE:-rulepilot-backend:local}

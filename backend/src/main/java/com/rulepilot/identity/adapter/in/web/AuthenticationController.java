@@ -41,19 +41,28 @@ public class AuthenticationController {
 
     @PostMapping("/register")
     ResponseEntity<RegistrationResponse> register(@RequestBody RegistrationRequest request) {
-        RegisterAccountService.RegistrationResult result =
-                registerAccountService.register(request.username(), request.password());
-        if (!result.created()) {
-            return ResponseEntity.status(HttpStatus.CONFLICT).build();
+        RegisterAccountService.RegistrationResult result;
+        try {
+            result = registerAccountService.register(request.username(), request.email(), request.password());
+        } catch (com.rulepilot.identity.application.EmailAlreadyRegisteredException exception) {
+            return ResponseEntity.status(HttpStatus.CONFLICT)
+                    .body(new RegistrationResponse(null, "EMAIL_ALREADY_REGISTERED"));
+        } catch (IllegalArgumentException exception) {
+            return ResponseEntity.badRequest()
+                    .body(new RegistrationResponse(null, "INVALID_REGISTRATION"));
         }
-        return ResponseEntity.status(HttpStatus.CREATED).body(new RegistrationResponse(result.username()));
+        if (!result.created()) {
+            return ResponseEntity.status(HttpStatus.CONFLICT)
+                    .body(new RegistrationResponse(null, "USERNAME_ALREADY_REGISTERED"));
+        }
+        return ResponseEntity.status(HttpStatus.CREATED).body(new RegistrationResponse(result.username(), null));
     }
 
     record CsrfResponse(String headerName, String parameterName, String token) {}
 
     record SessionResponse(String username, List<String> roles) {}
 
-    record RegistrationRequest(String username, String password) {}
+    record RegistrationRequest(String username, String email, String password) {}
 
-    record RegistrationResponse(String username) {}
+    record RegistrationResponse(String username, String code) {}
 }

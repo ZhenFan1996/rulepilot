@@ -3,6 +3,9 @@ package com.rulepilot.assistant.adapter.in.web;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.rulepilot.assistant.AgentExecutionControl.ActivityOutcome;
+import com.rulepilot.assistant.AgentExecutionControl.ActivitySnapshot;
+import com.rulepilot.assistant.AgentExecutionControl.ActivityType;
 import com.rulepilot.assistant.PlayerLocale;
 import com.rulepilot.assistant.application.PlayerFacingAnswerPresenter;
 import com.rulepilot.assistant.domain.AnswerBasis;
@@ -70,5 +73,30 @@ class StructuredRuleAnswerControllerContractTest {
         assertThat(restoredJson.path("answer").toString())
                 .doesNotContain(versionId.toString(), chunkId.toString(), rulingId.toString())
                 .doesNotContain("documentVersionId", "chunkId", "confirmedRulingId", "assistantRunId");
+    }
+
+    @Test
+    void projectsAuditActivityToAnAllowListedPlayerSafeStreamMessage() throws Exception {
+        ActivitySnapshot raw = new ActivitySnapshot(
+                4,
+                ActivityType.TOOL,
+                "nativeTool|read_rule_pages|internal-provider-argument",
+                ActivityOutcome.SUCCEEDED,
+                200,
+                40,
+                81,
+                "raw tool result must not cross the stream boundary",
+                Instant.parse("2026-08-21T00:00:00Z"));
+
+        var projected = StructuredRuleAnswerController.playerActivity(raw, PlayerLocale.EN);
+        String json = new ObjectMapper().writeValueAsString(projected);
+
+        assertThat(json)
+                .contains("\"actor\":\"rulebook_reader\"")
+                .contains("\"stage\":\"reading_pages\"")
+                .contains("\"message\":\"Reading the exact rulebook pages\"")
+                .contains("\"status\":\"succeeded\"")
+                .contains("\"nextAction\":\"Next: verify what the cited text actually supports\"")
+                .doesNotContain("internal-provider-argument", "raw tool result", "operation", "summary");
     }
 }

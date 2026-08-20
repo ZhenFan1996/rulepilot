@@ -166,7 +166,7 @@ describe('LessonsView', () => {
     expect(runReads).toBe(1)
     expect(wrapper.text()).not.toContain('立即阅读完整讲解')
 
-    await vi.advanceTimersByTimeAsync(1_500)
+    await vi.advanceTimersByTimeAsync(4_000)
     await flushPromises()
     expect(runReads).toBe(2)
     expect(lessonReads).toBe(2)
@@ -415,7 +415,7 @@ describe('LessonsView', () => {
     expect(wrapper.text()).toContain('完整基础讲解已经可读')
     expect(wrapper.text()).toContain('立即阅读完整讲解')
     expect(wrapper.text()).not.toContain('目录已生成')
-    await vi.advanceTimersByTimeAsync(1500)
+    await vi.advanceTimersByTimeAsync(4_000)
     await flushPromises()
     expect(wrapper.text()).toContain('正在补充图片或核对细节')
     expect(wrapper.text()).toContain('立即阅读完整讲解')
@@ -473,7 +473,7 @@ describe('LessonsView', () => {
     const wrapper = mount(LessonsView, { global: { plugins: [router] } })
     await flushPromises()
 
-    await vi.advanceTimersByTimeAsync(1500)
+    await vi.advanceTimersByTimeAsync(4_000)
     await flushPromises()
     expect(wrapper.text()).toContain('重新生成')
     await vi.advanceTimersByTimeAsync(5000)
@@ -524,13 +524,13 @@ describe('LessonsView', () => {
     const wrapper = mount(LessonsView, { global: { plugins: [router] } })
     await flushPromises()
 
-    await vi.advanceTimersByTimeAsync(1500)
+    await vi.advanceTimersByTimeAsync(4_000)
     await flushPromises()
     expect(wrapper.get('[data-testid="player-work-status"]').text()).toBe('正在组织讲解')
     expect(wrapper.text()).not.toContain('次内容处理')
     expect(wrapper.text()).toContain('正在自动重试')
 
-    await vi.advanceTimersByTimeAsync(1500)
+    await vi.advanceTimersByTimeAsync(4_000)
     await flushPromises()
     expect(wrapper.get('[data-testid="player-work-status"]').text()).toBe('正在组织讲解')
     expect(wrapper.text()).not.toContain('次内容处理')

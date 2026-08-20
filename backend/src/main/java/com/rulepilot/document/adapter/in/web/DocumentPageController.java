@@ -4,6 +4,7 @@ import com.rulepilot.document.DocumentProcessing;
 import com.rulepilot.document.DocumentPageImages;
 import com.rulepilot.document.DocumentVersionScopeLookup;
 import java.security.Principal;
+import java.time.Duration;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
@@ -46,6 +47,12 @@ public class DocumentPageController {
         return documents.pages(versionId).stream().map(PageResponse::from).toList();
     }
 
+    @GetMapping("/summaries")
+    List<PageSummaryResponse> pageSummaries(@PathVariable UUID versionId, Principal principal) {
+        requireOwned(versionId, principal);
+        return documents.pages(versionId).stream().map(PageSummaryResponse::from).toList();
+    }
+
     @GetMapping("/{pageNumber}/image")
     ResponseEntity<byte[]> pageImage(
             @PathVariable UUID versionId, @PathVariable int pageNumber, Principal principal) {
@@ -53,10 +60,13 @@ public class DocumentPageController {
         var image = pageImages.read(versionId, Set.of(pageNumber)).stream()
                 .findFirst()
                 .orElseThrow(() -> new IllegalArgumentException("document page image does not exist"));
+        byte[] content = MediaType.IMAGE_JPEG_VALUE.equalsIgnoreCase(image.mediaType())
+                ? image.content()
+                : imageCropper.crop(image, 0, 0, 1_000, 1_000, 0);
         return ResponseEntity.ok()
                 .contentType(MediaType.IMAGE_JPEG)
-                .cacheControl(CacheControl.noStore())
-                .body(imageCropper.crop(image, 0, 0, 1_000, 1_000, 0));
+                .cacheControl(CacheControl.maxAge(Duration.ofHours(12)).cachePrivate())
+                .body(content);
     }
 
     @GetMapping("/{pageNumber}/image/crop")
@@ -102,6 +112,13 @@ public class DocumentPageController {
     record PageResponse(int pageNumber, String text, int characterCount) {
         static PageResponse from(DocumentProcessing.PageView page) {
             return new PageResponse(page.pageNumber(), page.text(), page.characterCount());
+        }
+    }
+
+
+    record PageSummaryResponse(int pageNumber, int characterCount) {
+        static PageSummaryResponse from(DocumentProcessing.PageView page) {
+            return new PageSummaryResponse(page.pageNumber(), page.characterCount());
         }
     }
 }

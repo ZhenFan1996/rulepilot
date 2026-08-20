@@ -56,6 +56,7 @@ class FailedTeachingHandoffRemovalServiceTest {
                 UploadedRulebookTeachingHandoffStore.State.FAILED,
                 null,
                 "TEACHING_HANDOFF_LAUNCH_FAILED",
+                0,
                 NOW.minusSeconds(60),
                 NOW);
         when(uploads.findOwned(handoffId, "alice")).thenReturn(Optional.of(snapshot));
@@ -89,6 +90,7 @@ class FailedTeachingHandoffRemovalServiceTest {
                 UploadedRulebookTeachingHandoffStore.State.WAITING_FOR_DOCUMENT,
                 null,
                 null,
+                0,
                 NOW.minusSeconds(60),
                 NOW);
         when(uploads.findOwned(handoffId, "alice")).thenReturn(Optional.of(snapshot));

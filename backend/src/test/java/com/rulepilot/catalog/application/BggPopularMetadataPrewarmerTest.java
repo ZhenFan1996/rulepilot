@@ -91,6 +91,33 @@ class BggPopularMetadataPrewarmerTest {
         assertThat(translations.translatedIds).containsExactly(1, 2);
     }
 
+    @Test
+    void skipsOnePermanentlyInvalidSourceWithoutBlockingTheRestOfTheRankedCohort() {
+        MemoryRankedCatalog ranked = new MemoryRankedCatalog(20);
+        RecordingBgg bgg = new RecordingBgg();
+        RecordingTranslation translations = new RecordingTranslation(-1, 2);
+        RecordingProgress progress = new RecordingProgress(new Cohort(
+                UUID.randomUUID(), "a".repeat(64), 0, 20, 0, 3));
+        var prewarmer = new BggPopularMetadataPrewarmer(
+                ranked,
+                bgg,
+                new BggMetadataLocalizationService(translations),
+                progress,
+                new SyncTaskExecutor(),
+                CLOCK,
+                true,
+                20,
+                20,
+                3,
+                Duration.ofMinutes(30));
+
+        prewarmer.prewarm();
+
+        assertThat(progress.metadataNext).isEqualTo(20);
+        assertThat(progress.translationNext).isEqualTo(3);
+        assertThat(translations.translatedIds).containsExactly(1, 3);
+    }
+
     private static List<Integer> ids(int first, int last) {
         return java.util.stream.IntStream.rangeClosed(first, last).boxed().toList();
     }
@@ -199,10 +226,16 @@ class BggPopularMetadataPrewarmerTest {
 
     private static final class RecordingTranslation implements BggMetadataTranslation {
         private final int unavailableId;
+        private final int invalidSourceId;
         private final List<Integer> translatedIds = new ArrayList<>();
 
         private RecordingTranslation(int unavailableId) {
+            this(unavailableId, -1);
+        }
+
+        private RecordingTranslation(int unavailableId, int invalidSourceId) {
             this.unavailableId = unavailableId;
+            this.invalidSourceId = invalidSourceId;
         }
 
         @Override
@@ -210,6 +243,18 @@ class BggPopularMetadataPrewarmerTest {
             translatedIds.add(request.bggId());
             if (request.bggId() == unavailableId) return Optional.empty();
             return Optional.of(new Translation("中文简介", List.of("策略"), List.of("卡牌轮抽")));
+        }
+
+        @Override
+        public PrewarmResult prewarm(Request request) {
+            if (request.bggId() == invalidSourceId) {
+                return new PrewarmResult(PrewarmStatus.SKIPPED_INVALID_SOURCE);
+            }
+            if (request.bggId() == unavailableId) {
+                translatedIds.add(request.bggId());
+                return new PrewarmResult(PrewarmStatus.RETRY_PROVIDER_UNAVAILABLE);
+            }
+            return BggMetadataTranslation.super.prewarm(request);
         }
     }
 

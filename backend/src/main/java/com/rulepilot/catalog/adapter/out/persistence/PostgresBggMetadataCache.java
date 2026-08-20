@@ -92,6 +92,7 @@ public class PostgresBggMetadataCache implements BggMetadataCache {
     }
 
     @Override
+    @Transactional
     public void putDiscoveryGames(List<DiscoveryGame> games, CacheWindow window) {
         for (DiscoveryGame game : games) {
             put("DISCOVERY", game.bggId(), game, window);
@@ -100,6 +101,7 @@ public class PostgresBggMetadataCache implements BggMetadataCache {
     }
 
     @Override
+    @Transactional
     public void putGame(GameDetails game, CacheWindow window) {
         put("GAME", game.bggId(), game, window);
         upsertOfficialChineseNames(game.bggId(), game.officialChineseNames(), window.cachedAt());

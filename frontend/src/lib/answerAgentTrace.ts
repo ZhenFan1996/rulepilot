@@ -12,6 +12,37 @@ export interface AnswerAgentTraceItem {
   kind: 'decision' | 'tool' | 'verification'
   label: string
   status: 'running' | 'done' | 'stopped'
+  actor?: string
+  stage?: string
+  nextAction?: string
+}
+
+export function streamedAnswerTraceItem(
+  activity: import('@/lib/structuredAnswerStream').AnswerStreamActivity,
+  locale: 'zh-CN' | 'en' = 'zh-CN',
+): AnswerAgentTraceItem {
+  const status = activity.status === 'running' ? 'running'
+    : activity.status === 'succeeded' ? 'done' : 'stopped'
+  const actor = streamActor(activity.actor, locale)
+  const label = activity.message || streamStage(activity.stage, locale)
+  const kind = activity.actor === 'answer_reviewer' || activity.actor === 'answer_validator'
+    ? 'verification'
+    : activity.actor === 'answer_agent' ? 'decision' : 'tool'
+  return { sequence: activity.sequence, kind, label, status, actor, stage: activity.stage, nextAction: activity.nextAction }
+}
+
+function streamActor(actor: import('@/lib/structuredAnswerStream').AnswerStreamActivity['actor'], locale: 'zh-CN' | 'en') {
+  const labels = locale === 'en'
+    ? { answer_agent: 'Answer agent', rulebook_search: 'Rulebook search', rulebook_reader: 'Rulebook reader', answer_reviewer: 'Evidence reviewer', answer_validator: 'Citation validator', rulebook_tool: 'Rulebook tool' }
+    : { answer_agent: '答疑 Agent', rulebook_search: '规则检索', rulebook_reader: '规则书阅读器', answer_reviewer: '证据复核', answer_validator: '引用校验', rulebook_tool: '规则工具' }
+  return labels[actor]
+}
+
+function streamStage(stage: import('@/lib/structuredAnswerStream').AnswerStreamActivity['stage'], locale: 'zh-CN' | 'en') {
+  const labels = locale === 'en'
+    ? { searching_evidence: 'Searching the indexed rulebook for direct evidence', checking_exceptions: 'Checking exceptions and override clauses', expanding_context: 'Reading the surrounding context of the citation', reading_pages: 'Reading the exact rulebook pages', composing_answer: 'Composing only from verified evidence', reviewing_support: 'Reviewing whether each claim is supported', validating_citations: 'Validating citation ownership and page boundaries', checking_rule_details: 'Checking a rule-specific detail' }
+    : { searching_evidence: '正在索引规则书中查找直接依据', checking_exceptions: '正在核对例外与覆盖条款', expanding_context: '正在阅读引用前后的完整语境', reading_pages: '正在读取对应的规则书原页', composing_answer: '正在只根据已核实证据组织回答', reviewing_support: '正在复核每个结论是否有依据', validating_citations: '正在校验引用归属与页码边界', checking_rule_details: '正在核对具体规则细节' }
+  return labels[stage]
 }
 
 /** Maps audited execution to player-safe decisions without exposing prompts, excerpts, or hidden reasoning. */

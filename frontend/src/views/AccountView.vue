@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 
 import AppShell from '@/components/AppShell.vue'
@@ -12,16 +12,66 @@ interface ModelSnapshot {
   providers: Array<{ configured: boolean }>
   assignments: { recommendation: string; teaching: string; visual: string; answer: string; critic: string }
 }
+interface AccountUsage {
+  platformAccessEnabled: boolean
+  monthlyTokenLimit: number
+  platformTokensCharged: number
+  platformTokensReserved: number
+  personalTokensUsed: number
+  platformTokensRemaining: number
+}
+type GridSlot = 'FAVORITE_GAME' | 'FAVORITE_ART' | 'FAVORITE_DESIGNER' | 'FAVORITE_MECHANISM' | 'FAVORITE_THEME' | 'FAVORITE_PUBLISHER' | 'FAVORITE_EXPANSION' | 'FAVORITE_COMPONENT' | 'WISHLIST_GAME'
+interface GridSelection { slot: GridSlot; bggId: number; gameName: string; chineseName: string; thumbnailUrl: string }
+interface CatalogGame { bggId: number; name: string; originalName: string; thumbnailUrl: string; publicationYear: number | null }
+interface CatalogResponse { games: CatalogGame[] }
 
-const { t } = useLocale()
+const { locale, t } = useLocale()
 const session = ref<Session | null>(null)
 const plans = ref<TeachingPlan[]>([])
 const models = ref<ModelSnapshot | null>(null)
+const usage = ref<AccountUsage | null>(null)
+const grid = ref<GridSelection[]>([])
 const loading = ref(true)
 const errorMessage = ref('')
+const gridDialogOpen = ref(false)
+const activeSlot = ref<GridSlot | null>(null)
+const searchInput = ref<HTMLInputElement | null>(null)
+const searchQuery = ref('')
+const searchResults = ref<CatalogGame[]>([])
+const searchLoading = ref(false)
+const gridSaving = ref(false)
+const gridError = ref('')
+let searchTimer: number | undefined
+let searchController: AbortController | null = null
+
+const slotDefinitions = computed<Array<{ slot: GridSlot; zh: string; en: string; hintZh: string; hintEn: string }>>(() => [
+  { slot: 'FAVORITE_GAME', zh: '最爱的桌游', en: 'Favorite game', hintZh: '总会想再开一局', hintEn: 'The one you always return to' },
+  { slot: 'FAVORITE_ART', zh: '最喜欢的美术', en: 'Favorite art', hintZh: '一眼就爱上的视觉', hintEn: 'The visual world you love most' },
+  { slot: 'FAVORITE_DESIGNER', zh: '最喜欢的设计师', en: 'Favorite designer', hintZh: '用一款代表作来表达', hintEn: 'Choose their defining game' },
+  { slot: 'FAVORITE_MECHANISM', zh: '最喜欢的机制', en: 'Favorite mechanism', hintZh: '用最能代表它的游戏', hintEn: 'Pick the game that embodies it' },
+  { slot: 'FAVORITE_THEME', zh: '最喜欢的主题', en: 'Favorite theme', hintZh: '最想沉浸进去的世界', hintEn: 'The world you want to inhabit' },
+  { slot: 'FAVORITE_PUBLISHER', zh: '最喜欢的出版社', en: 'Favorite publisher', hintZh: '挑一款代表作品', hintEn: 'Choose a representative title' },
+  { slot: 'FAVORITE_EXPANSION', zh: '最爱的扩展', en: 'Favorite expansion', hintZh: '让本体变得更好的那盒', hintEn: 'The box that made the base better' },
+  { slot: 'FAVORITE_COMPONENT', zh: '最喜欢的配件', en: 'Favorite component', hintZh: '最想拿在手里的那套组件', hintEn: 'Components you love handling' },
+  { slot: 'WISHLIST_GAME', zh: '最想玩的桌游', en: 'Wishlist game', hintZh: '下一款最想上桌的游戏', hintEn: 'The next game you want to table' },
+])
 
 const connectedModels = computed(() => models.value?.providers.filter((item) => item.configured).length ?? 0)
 const initial = computed(() => session.value?.username.slice(0, 1).toUpperCase() ?? '?')
+const selectionBySlot = computed(() => new Map(grid.value.map(selection => [selection.slot, selection])))
+const activeSlotDefinition = computed(() => slotDefinitions.value.find(item => item.slot === activeSlot.value) ?? null)
+
+function slotLabel(definition: { zh: string; en: string }) {
+  return locale.value === 'zh-CN' ? definition.zh : definition.en
+}
+
+function slotHint(definition: { hintZh: string; hintEn: string }) {
+  return locale.value === 'zh-CN' ? definition.hintZh : definition.hintEn
+}
+
+function displayName(selection: GridSelection) {
+  return locale.value === 'zh-CN' && selection.chineseName ? selection.chineseName : selection.gameName
+}
 
 async function load() {
   loading.value = true
@@ -31,6 +81,8 @@ async function load() {
       fetch('/api/auth/session', { credentials: 'include' }),
       fetch('/api/v1/teaching-plans', { credentials: 'include' }),
       fetch('/api/v1/model-configuration', { credentials: 'include' }),
+      fetch('/api/v1/model-configuration/usage', { credentials: 'include' }),
+      fetch('/api/v1/account/board-game-grid', { credentials: 'include' }),
     ])
     if (responses.some((response) => response.status === 401)) {
       notifyLoginRequired()
@@ -41,6 +93,8 @@ async function load() {
     session.value = await responses[0]!.json() as Session
     plans.value = await responses[1]!.json() as TeachingPlan[]
     models.value = await responses[2]!.json() as ModelSnapshot
+    usage.value = await responses[3]!.json() as AccountUsage
+    grid.value = await responses[4]!.json() as GridSelection[]
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : t('account.error')
   } finally {
@@ -48,7 +102,86 @@ async function load() {
   }
 }
 
+async function openGridPicker(slot: GridSlot) {
+  activeSlot.value = slot
+  searchQuery.value = ''
+  searchResults.value = []
+  gridError.value = ''
+  gridDialogOpen.value = true
+  await nextTick()
+  searchInput.value?.focus()
+}
+
+function closeGridPicker() {
+  if (gridSaving.value) return
+  gridDialogOpen.value = false
+  searchController?.abort()
+  activeSlot.value = null
+}
+
+function scheduleSearch() {
+  window.clearTimeout(searchTimer)
+  searchController?.abort()
+  const query = searchQuery.value.trim()
+  if (!query) {
+    searchResults.value = []
+    searchLoading.value = false
+    return
+  }
+  searchTimer = window.setTimeout(() => void searchGames(query), 250)
+}
+
+async function searchGames(query: string) {
+  searchController = new AbortController()
+  searchLoading.value = true
+  gridError.value = ''
+  try {
+    const params = new URLSearchParams({ q: query, locale: locale.value, size: '12', page: '0', sort: 'rank', enrich: 'true' })
+    const response = await fetch(`/api/v1/bgg/catalog?${params.toString()}`, { credentials: 'include', signal: searchController.signal })
+    if (!response.ok) throw new Error(locale.value === 'zh-CN' ? '暂时搜不到桌游，请稍后再试。' : 'Games could not be searched right now.')
+    searchResults.value = ((await response.json()) as CatalogResponse).games
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') return
+    gridError.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    searchLoading.value = false
+  }
+}
+
+async function csrfToken() {
+  const response = await fetch('/api/auth/csrf', { credentials: 'include' })
+  if (!response.ok) throw new Error(locale.value === 'zh-CN' ? '登录状态已失效。' : 'Your session has expired.')
+  return await response.json() as { headerName: string; token: string }
+}
+
+async function chooseGame(game: CatalogGame) {
+  if (!activeSlot.value || gridSaving.value) return
+  gridSaving.value = true
+  gridError.value = ''
+  try {
+    const csrf = await csrfToken()
+    const response = await fetch(`/api/v1/account/board-game-grid/${activeSlot.value}`, {
+      method: 'PUT', credentials: 'include',
+      headers: { 'Content-Type': 'application/json', [csrf.headerName]: csrf.token },
+      body: JSON.stringify({ bggId: game.bggId }),
+    })
+    if (!response.ok) throw new Error(locale.value === 'zh-CN' ? '这款桌游暂时无法保存。' : 'This game could not be saved.')
+    const saved = await response.json() as GridSelection
+    grid.value = [...grid.value.filter(item => item.slot !== saved.slot), saved]
+    gridSaving.value = false
+    closeGridPicker()
+  } catch (error) {
+    gridError.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    gridSaving.value = false
+  }
+}
+
 onMounted(load)
+onBeforeUnmount(() => {
+  window.clearTimeout(searchTimer)
+  searchController?.abort()
+})
 </script>
 
 <template>
@@ -70,7 +203,7 @@ onMounted(load)
         </header>
 
         <div class="mt-8 grid gap-5 sm:grid-cols-2">
-          <RouterLink :to="{ name: 'lessons' }" class="rounded-xl border border-ink/10 bg-paper p-6 hover:border-copper/40">
+          <RouterLink :to="{ name: 'work-status' }" class="rounded-xl border border-ink/10 bg-paper p-6 hover:border-copper/40">
             <p class="text-sm text-ink/45">{{ t('account.guides') }}</p>
             <p class="mt-2 font-display text-3xl font-semibold">{{ t('account.guideCount', { count: plans.length }) }}</p>
             <p class="mt-4 text-sm text-indigo">{{ t('account.guideAction') }}</p>
@@ -81,6 +214,52 @@ onMounted(load)
             <p class="mt-4 text-sm text-indigo">{{ t('account.modelAction') }}</p>
           </RouterLink>
         </div>
+
+        <section class="mt-8 rounded-[1.5rem] border border-copper/20 bg-paper p-5 shadow-sm sm:p-7">
+          <div class="flex flex-wrap items-end justify-between gap-4">
+            <div>
+              <p class="text-xs font-bold uppercase tracking-[0.18em] text-copper">Board game nine</p>
+              <h2 class="mt-2 font-display text-3xl font-semibold">{{ locale === 'zh-CN' ? '我的桌游九宫格' : 'My board game nine' }}</h2>
+              <p class="mt-2 max-w-2xl text-sm leading-6 text-ink/55">{{ locale === 'zh-CN' ? '九款游戏，九个角度。这些都是你亲自选择的桌游身份，不会从人数、难度或一次对话里替你猜。' : 'Nine games, nine facets of your taste. Every answer is chosen by you—never inferred from group size, weight, or a single chat.' }}</p>
+            </div>
+            <span class="rounded-full bg-canvas px-3 py-1.5 text-xs font-semibold text-ink/55">{{ grid.length }} / 9</span>
+          </div>
+          <div class="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-3">
+            <button
+              v-for="definition in slotDefinitions"
+              :key="definition.slot"
+              type="button"
+              class="group relative min-h-48 overflow-hidden rounded-2xl border border-ink/10 bg-canvas text-left transition hover:-translate-y-0.5 hover:border-copper/45 hover:shadow-lg focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo"
+              :aria-label="`${slotLabel(definition)}：${selectionBySlot.get(definition.slot) ? displayName(selectionBySlot.get(definition.slot)!) : (locale === 'zh-CN' ? '未选择' : 'Not selected')}`"
+              @click="openGridPicker(definition.slot)"
+            >
+              <template v-if="selectionBySlot.get(definition.slot)">
+                <img v-if="selectionBySlot.get(definition.slot)!.thumbnailUrl" :src="selectionBySlot.get(definition.slot)!.thumbnailUrl" :alt="displayName(selectionBySlot.get(definition.slot)!)" class="absolute inset-0 size-full object-cover" loading="lazy" referrerpolicy="no-referrer">
+                <div class="absolute inset-0 bg-gradient-to-t from-ink via-ink/20 to-transparent" />
+                <div class="absolute inset-x-0 bottom-0 p-3 text-white sm:p-4">
+                  <p class="text-[0.68rem] font-bold uppercase tracking-[0.12em] text-white/70">{{ slotLabel(definition) }}</p>
+                  <p class="mt-1 line-clamp-2 font-display text-lg font-semibold leading-tight">{{ displayName(selectionBySlot.get(definition.slot)!) }}</p>
+                </div>
+              </template>
+              <div v-else class="flex h-full min-h-48 flex-col justify-between p-4">
+                <span class="grid size-9 place-items-center rounded-full border border-dashed border-copper/45 text-xl text-copper">＋</span>
+                <div>
+                  <p class="font-display text-lg font-semibold">{{ slotLabel(definition) }}</p>
+                  <p class="mt-1 text-xs leading-5 text-ink/45">{{ slotHint(definition) }}</p>
+                </div>
+              </div>
+            </button>
+          </div>
+        </section>
+
+        <section v-if="usage" class="mt-8 rounded-xl border border-ink/10 bg-paper p-6">
+          <div class="flex items-center justify-between gap-4">
+            <div><h2 class="font-display text-2xl font-semibold">{{ locale === 'zh-CN' ? '本月模型额度' : 'Monthly model allowance' }}</h2><p class="mt-1 text-sm text-ink/50">{{ usage.platformAccessEnabled ? (locale === 'zh-CN' ? '正在使用平台额度；自己的 API Key 不扣这里。' : 'Platform allowance is active; BYOK usage is tracked separately.') : (locale === 'zh-CN' ? '平台额度已暂停，可使用自己的 API Key。' : 'Platform allowance is paused; BYOK remains available.') }}</p></div>
+            <p class="font-display text-2xl font-semibold">{{ usage.platformTokensRemaining.toLocaleString() }}</p>
+          </div>
+          <div class="mt-4 h-2 overflow-hidden rounded-full bg-canvas"><div class="h-full rounded-full bg-copper" :style="{ width: `${Math.min(100, usage.monthlyTokenLimit ? (usage.platformTokensCharged + usage.platformTokensReserved) / usage.monthlyTokenLimit * 100 : 100)}%` }" /></div>
+          <div class="mt-3 flex justify-between text-xs text-ink/45"><span>{{ locale === 'zh-CN' ? `已用 ${usage.platformTokensCharged.toLocaleString()}` : `${usage.platformTokensCharged.toLocaleString()} used` }}</span><span>{{ locale === 'zh-CN' ? `总额 ${usage.monthlyTokenLimit.toLocaleString()}` : `${usage.monthlyTokenLimit.toLocaleString()} total` }}</span></div>
+        </section>
 
         <section class="mt-8 rounded-xl border border-ink/10 bg-paper p-6">
           <h2 class="font-display text-2xl font-semibold">{{ t('account.assignments') }}</h2>
@@ -94,5 +273,24 @@ onMounted(load)
         </section>
       </template>
     </section>
+
+    <div v-if="gridDialogOpen" class="fixed inset-0 z-50 grid place-items-end bg-ink/60 p-0 sm:place-items-center sm:p-6" @click.self="closeGridPicker">
+      <section role="dialog" aria-modal="true" :aria-label="activeSlotDefinition ? slotLabel(activeSlotDefinition) : ''" class="max-h-[88vh] w-full overflow-y-auto rounded-t-[1.75rem] bg-paper p-5 shadow-2xl sm:max-w-3xl sm:rounded-[1.75rem] sm:p-7">
+        <div class="flex items-start justify-between gap-4">
+          <div><p class="text-xs font-bold uppercase tracking-[0.16em] text-copper">{{ activeSlotDefinition ? slotLabel(activeSlotDefinition) : '' }}</p><h2 class="mt-2 font-display text-3xl font-semibold">{{ locale === 'zh-CN' ? '选一款代表你的桌游' : 'Choose the game that represents you' }}</h2></div>
+          <button type="button" class="grid size-11 place-items-center rounded-full border border-ink/10 text-xl" :aria-label="locale === 'zh-CN' ? '关闭' : 'Close'" @click="closeGridPicker">×</button>
+        </div>
+        <label class="mt-6 block"><span class="sr-only">{{ locale === 'zh-CN' ? '搜索桌游' : 'Search games' }}</span><input ref="searchInput" v-model="searchQuery" type="search" class="min-h-12 w-full rounded-xl border border-ink/15 bg-canvas px-4 outline-none focus:border-indigo" :placeholder="locale === 'zh-CN' ? '输入中文名或英文名，例如：璀璨宝石' : 'Search by English or Chinese title'" @input="scheduleSearch"></label>
+        <p v-if="searchLoading" class="mt-5 text-sm text-ink/50" role="status">{{ locale === 'zh-CN' ? '正在本地桌游库里找…' : 'Searching the local game library…' }}</p>
+        <p v-if="gridError" class="mt-5 rounded-xl bg-red-50 p-4 text-sm text-red-800" role="alert">{{ gridError }}</p>
+        <div v-if="searchResults.length" class="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
+          <button v-for="game in searchResults" :key="game.bggId" type="button" class="overflow-hidden rounded-xl border border-ink/10 bg-canvas text-left transition hover:border-copper/45 hover:shadow-md disabled:opacity-50" :disabled="gridSaving" @click="chooseGame(game)">
+            <div class="aspect-[4/5] bg-ink/5"><img v-if="game.thumbnailUrl" :src="game.thumbnailUrl" :alt="game.name" class="size-full object-cover" loading="lazy" referrerpolicy="no-referrer"><div v-else class="grid size-full place-items-center px-3 text-center text-xs text-ink/35">{{ locale === 'zh-CN' ? '暂无封面' : 'No cover' }}</div></div>
+            <div class="p-3"><p class="line-clamp-2 font-semibold leading-tight">{{ game.name }}</p><p v-if="game.originalName && game.originalName !== game.name" class="mt-1 line-clamp-1 text-xs text-ink/45">{{ game.originalName }}</p></div>
+          </button>
+        </div>
+        <p v-else-if="searchQuery.trim() && !searchLoading && !gridError" class="mt-6 rounded-xl border border-dashed border-ink/15 p-6 text-center text-sm text-ink/45">{{ locale === 'zh-CN' ? '没有找到。可以换一个中文名、英文名或简称。' : 'No match yet. Try another title or alias.' }}</p>
+      </section>
+    </div>
   </AppShell>
 </template>

@@ -68,6 +68,7 @@ interface RulebookCandidateResponse {
 
 interface OfficialImportJob extends PlayerJourneyImportJob {
   title?: string
+  editionId?: string
   sourceDomain?: string
   duplicate: boolean
 }
@@ -125,6 +126,7 @@ const emit = defineEmits<{
   'open-rulebook': [value: RecommendationJourneyStatus]
   'open-lesson': [value: RecommendationJourneyStatus]
   'ask-questions': [value: RecommendationJourneyStatus]
+  remove: []
 }>()
 const { locale } = useLocale()
 
@@ -169,7 +171,7 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   invalidChapterEvidence: (titles: string) => `“${titles}”读取到的依据没有通过来源或规则书版本校验，因此没有进入正文生成；其他已校验章节仍可阅读。`,
   invalidChapterAfterRetry: (titles: string) => `“${titles}”的草稿没有通过引用或结构校验；后台已自动只重试这部分一次，仍未通过，因此保留其他已发布章节并停下。`,
   invalidChapter: (titles: string) => `“${titles}”的草稿没有通过引用或结构校验，因此没有发布；其他已校验章节仍可阅读。`,
-  retry: '重试当前步骤', close: '关闭小窗', change: '换一款',
+  retry: '重试当前步骤', pause: '暂停生成', resume: '继续生成', remove: '删除讲解', removeConfirm: '确认删除这份讲解及其生成任务？规则书会保留，已生成章节会被删除。', removeYes: '确认删除', removeNo: '先保留', close: '关闭小窗', change: '换一款',
   safe: '可以关闭这个小窗继续聊天；下载和讲解会继续。关闭后，页面上的“讲解状态”入口会一直显示，也可以随时打开“我的讲解”。',
   progress: '完整链路进度', current: '现在正在做', generationSteps: '讲解生成步骤', generationLatest: '最新实际进度', generationProcessHint: '真实后台活动会在下方逐条追加；进入逐章生成后，第 4～7 步会按章节重复。', planning: '规划中', pollingWarning: '暂时没有拿到最新进度，正在自动重试；已确认的进度不会倒退。',
   generationProcess: [
@@ -242,7 +244,7 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   invalidChapterEvidence: (titles: string) => `The evidence read for “${titles}” did not pass source or rulebook-version validation, so chapter writing did not start. Other validated chapters remain readable.`,
   invalidChapterAfterRetry: (titles: string) => `The draft for “${titles}” did not pass citation or structure checks. The background run retried only that work once and stopped when it still did not pass; other published chapters remain readable.`,
   invalidChapter: (titles: string) => `The draft for “${titles}” did not pass citation or structure checks, so it was not published. Other validated chapters remain readable.`,
-  retry: 'Retry this step', close: 'Close', change: 'Choose another game',
+  retry: 'Retry this step', pause: 'Pause generation', resume: 'Resume generation', remove: 'Delete guide', removeConfirm: 'Delete this guide and its generation work? The rulebook stays, but published chapters are removed.', removeYes: 'Delete guide', removeNo: 'Keep it', close: 'Close', change: 'Choose another game',
   safe: 'You may close this panel and keep chatting. Download and guide generation will continue. The “Guide status” shortcut stays visible, and My guides is always available.',
   progress: 'End-to-end progress', current: 'Working on', generationSteps: 'Guide generation steps', generationLatest: 'Latest actual progress', generationProcessHint: 'Real background activities are appended below. Once chapter writing starts, steps 4–7 repeat for each chapter.', planning: 'Planning', pollingWarning: 'The latest update is temporarily unavailable. Retrying automatically without rolling back confirmed progress.',
   generationProcess: [
@@ -297,6 +299,9 @@ const teachingRunId = ref<string | null>(null)
 const lesson = ref<IllustratedLesson | null>(null)
 const pollingWarning = ref(false)
 const retrying = ref(false)
+const paused = ref(false)
+const deleteConfirmOpen = ref(false)
+const deleting = ref(false)
 let csrf: CsrfResponse | null = null
 let sequence = 0
 let findingClock: ReturnType<typeof setInterval> | null = null
@@ -598,10 +603,42 @@ async function prepare() {
     if (!response.ok) throw new Error('selection failed')
     imported.value = normalizeImportedGame(await response.json() as ImportedGame)
     persistJourney()
+    if (await restoreServerJourney(request)) return
     await discover(request)
   } catch {
     if (request === sequence) state.value = 'error'
   }
+}
+
+async function restoreServerJourney(request: number) {
+  if (!imported.value || request !== sequence) return false
+  const response = await fetch(
+    `/api/v1/documents/official-imports?editionId=${encodeURIComponent(imported.value.edition.id)}`,
+    { credentials: 'include' },
+  )
+  if (request !== sequence) return false
+  if (response.status === 401 || response.status === 403) {
+    requireLogin()
+    return true
+  }
+  if (!response.ok) return false
+  const jobs = await response.json() as OfficialImportJob[]
+  if (request !== sequence || !Array.isArray(jobs)) return false
+  const matching = jobs
+    .map(normalizeImportJob)
+    .find(job => job.editionId === imported.value?.edition.id && job.teachingHandoffState !== 'NOT_REQUESTED')
+  if (!matching) return false
+  importJob.value = matching
+  preparationRunId.value = matching.teachingPreparationRunId
+  consent.value = true
+  identityConfirmed.value = true
+  pollingWarning.value = false
+  state.value = matching.stage === 'FAILED' && matching.recovery?.canOpenSourceInBrowser
+    ? 'browser-required'
+    : 'journey'
+  persistJourney()
+  if (state.value === 'journey') scheduleJourney(0)
+  return true
 }
 
 async function discover(request = sequence) {
@@ -995,6 +1032,87 @@ async function launchLesson(planId: string, clearFailedRun: boolean) {
   if (clearFailedRun) teachingRun.value = null
 }
 
+const activeGenerationRunId = computed(() => {
+  if (teachingRunId.value && teachingRunIsActive(teachingRun.value?.run.state)) return teachingRunId.value
+  if (preparationRunId.value && preparationRun.value && !runTerminal(preparationRun.value.run.state)) {
+    return preparationRunId.value
+  }
+  return null
+})
+
+async function pauseGeneration() {
+  const runId = activeGenerationRunId.value
+  if (!runId || retrying.value) return
+  retrying.value = true
+  try {
+    const token = await csrfToken()
+    const response = await fetch(`/api/v1/assistant-runs/${encodeURIComponent(runId)}/cancellation`, {
+      method: 'POST', credentials: 'include', headers: { [token.headerName]: token.token },
+    })
+    if (!response.ok) throw new Error('teaching cancellation failed')
+    paused.value = true
+    persistJourney()
+    scheduleJourney(0)
+  } finally {
+    retrying.value = false
+  }
+}
+
+async function resumeGeneration() {
+  if (retrying.value) return
+  retrying.value = true
+  try {
+    paused.value = false
+    if (plan.value) {
+      await launchLesson(plan.value.id, true)
+    } else if (importJob.value) {
+      const token = await csrfToken()
+      const response = await fetch(
+        `/api/v1/documents/official-imports/${encodeURIComponent(importJob.value.id)}/teaching-retry`, {
+          method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/json', [token.headerName]: token.token },
+          body: JSON.stringify({ expectedPreparationRunId: preparationRunId.value }),
+        },
+      )
+      if (!response.ok) throw new Error('teaching resume failed')
+      importJob.value = normalizeImportJob(await response.json() as OfficialImportJob)
+      preparationRunId.value = importJob.value.teachingPreparationRunId
+    }
+    persistJourney()
+    scheduleJourney(0)
+  } finally {
+    retrying.value = false
+  }
+}
+
+async function deleteTeachingJourney() {
+  if (deleting.value) return
+  deleting.value = true
+  try {
+    const token = await csrfToken()
+    if (plan.value) {
+      const response = await fetch(`/api/v1/teaching-plans/${encodeURIComponent(plan.value.id)}`, {
+        method: 'DELETE', credentials: 'include', headers: { [token.headerName]: token.token },
+      })
+      if (!response.ok && response.status !== 404) throw new Error('teaching deletion failed')
+    } else if (activeGenerationRunId.value) {
+      const response = await fetch(
+        `/api/v1/assistant-runs/${encodeURIComponent(activeGenerationRunId.value)}/cancellation`, {
+          method: 'POST', credentials: 'include', headers: { [token.headerName]: token.token },
+        },
+      )
+      if (!response.ok && response.status !== 404) throw new Error('teaching cancellation failed')
+    }
+    sessionStorage.removeItem(storageKey())
+    deleteConfirmOpen.value = false
+    resetJourneyState()
+    emit('remove')
+    emit('close')
+  } finally {
+    deleting.value = false
+  }
+}
+
 function scheduleJourney(delay: number) {
   clearJourneyTimer()
   if (!importJob.value || state.value === 'login') return
@@ -1191,6 +1309,7 @@ function persistJourney() {
       preparationRunId: preparationRunId.value,
       planId: plan.value?.id ?? null,
       teachingRunId: teachingRunId.value,
+      paused: paused.value,
     }))
   } catch {
     // Server state remains authoritative when browser storage is unavailable.
@@ -1210,6 +1329,7 @@ function restoreJourney() {
       importJob?: OfficialImportJob
       preparationRunId?: string
       teachingRunId?: string
+      paused?: boolean
     }
     if (!stored.imported) return false
     const restoredImported = normalizeImportedGame(stored.imported)
@@ -1227,6 +1347,7 @@ function restoreJourney() {
       importJob.value = normalizeImportJob(stored.importJob)
       preparationRunId.value = stored.preparationRunId ?? stored.importJob.teachingPreparationRunId
       teachingRunId.value = stored.teachingRunId ?? null
+      paused.value = stored.paused === true
       consent.value = true
       identityConfirmed.value = true
       state.value = importJob.value.stage === 'FAILED' && importJob.value.recovery?.canOpenSourceInBrowser
@@ -1450,8 +1571,18 @@ onBeforeUnmount(() => {
           </div>
         </div>
         <div class="mt-4 flex flex-wrap gap-x-5 gap-y-2">
+          <button v-if="activeGenerationRunId && !paused" type="button" :disabled="retrying" class="min-h-11 text-sm font-semibold text-amber-700 underline disabled:opacity-40" @click="pauseGeneration">{{ copy.pause }}</button>
+          <button v-if="paused" type="button" :disabled="retrying" class="min-h-11 text-sm font-semibold text-indigo underline disabled:opacity-40" @click="resumeGeneration">{{ copy.resume }}</button>
+          <button type="button" :disabled="deleting" class="min-h-11 text-sm font-semibold text-red-700 underline disabled:opacity-40" @click="deleteConfirmOpen = true">{{ copy.remove }}</button>
           <RouterLink to="/catalog" class="inline-flex min-h-11 items-center text-sm font-semibold text-indigo underline">{{ copy.catalog }} →</RouterLink>
           <button type="button" class="min-h-11 text-sm font-semibold text-ink/50 underline" @click="emit('change')">{{ copy.change }}</button>
+        </div>
+        <div v-if="deleteConfirmOpen" class="mt-3 rounded-xl border border-red-200 bg-red-50 p-4 text-sm leading-6 text-red-900" role="alertdialog" :aria-label="copy.remove">
+          <p>{{ copy.removeConfirm }}</p>
+          <div class="mt-3 flex flex-wrap gap-3">
+            <button type="button" :disabled="deleting" class="min-h-11 rounded-lg bg-red-700 px-4 font-semibold text-white disabled:opacity-40" @click="deleteTeachingJourney">{{ copy.removeYes }}</button>
+            <button type="button" :disabled="deleting" class="min-h-11 rounded-lg border border-red-300 px-4 font-semibold disabled:opacity-40" @click="deleteConfirmOpen = false">{{ copy.removeNo }}</button>
+          </div>
         </div>
       </div>
 

@@ -152,6 +152,24 @@ public class RecommendationConversationCoordinator {
         return conversations.findLatestOwned(owner(ownerUsername)).map(SessionSnapshot::from);
     }
 
+    public SessionSnapshot startNew(String ownerUsername) {
+        String owner = owner(ownerUsername);
+        ConversationState empty = new ConversationState(
+                RecommendationProfile.empty(), List.of(), List.of(), List.of());
+        return SessionSnapshot.from(conversations.createNew(UUID.randomUUID(), owner, empty, clock.instant()));
+    }
+
+    public Optional<SessionSnapshot> find(UUID conversationId, String ownerUsername) {
+        if (conversationId == null) return Optional.empty();
+        return conversations.findOwned(conversationId, owner(ownerUsername)).map(SessionSnapshot::from);
+    }
+
+    public List<SessionSnapshot> recent(String ownerUsername, int limit) {
+        return conversations.findRecentOwned(owner(ownerUsername), limit).stream()
+                .map(SessionSnapshot::from)
+                .toList();
+    }
+
     public void delete(UUID conversationId, String ownerUsername) {
         if (conversationId == null || !conversations.deleteOwned(conversationId, owner(ownerUsername))) {
             throw conflict(Code.NOT_FOUND, "recommendation conversation does not exist");

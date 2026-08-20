@@ -43,7 +43,7 @@ describe('RecommendationRulebookDialog', () => {
     await wrapper.get('[data-testid="rulebook-page-loader"]').trigger('load')
     expect(wrapper.get('[data-testid="rulebook-page-image"]').attributes('src')).toBe('/api/v1/document-versions/document-1/pages/2/image')
     expect(fetchMock).toHaveBeenCalledTimes(1)
-    expect(fetchMock.mock.calls[0]![0]).toBe('/api/v1/document-versions/document-1/pages')
+    expect(fetchMock.mock.calls[0]![0]).toBe('/api/v1/document-versions/document-1/pages/summaries')
     expect(fetchMock.mock.calls[0]![1]).toMatchObject({ credentials: 'include' })
     expect(fetchMock.mock.calls[0]![1].signal).toBeInstanceOf(AbortSignal)
 

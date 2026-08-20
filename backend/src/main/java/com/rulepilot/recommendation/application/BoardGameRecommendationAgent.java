@@ -31,7 +31,7 @@ public class BoardGameRecommendationAgent {
     static final String COMPARE_TOOL = "compare_candidates";
     static final String NO_MATCH_TOOL = "report_no_match";
     static final String RECOMMEND_TOOL = "recommend_games";
-    static final String PROMPT_VERSION = "recommendation-agent-v12-grounded-natural-comparison";
+    static final String PROMPT_VERSION = "recommendation-agent-v13-localized-partial-comparison";
 
     private final RecommendationReActLoop loop;
 
@@ -114,10 +114,28 @@ public class BoardGameRecommendationAgent {
         COMPOSING_RESPONSE
     }
 
-    public record ProgressUpdate(ProgressStage stage, long elapsedMs) {
+    public record ProgressUpdate(
+            ProgressStage stage,
+            long elapsedMs,
+            int observedCandidates,
+            int verifiedCandidates,
+            int hardRejectedCandidates,
+            int sourceCount) {
+        public ProgressUpdate(ProgressStage stage, long elapsedMs) {
+            this(stage, elapsedMs, 0, 0, 0, 0);
+        }
+
         public ProgressUpdate {
             Objects.requireNonNull(stage, "progress stage is required");
-            if (elapsedMs < 0) throw new IllegalArgumentException("elapsedMs must not be negative");
+            if (elapsedMs < 0
+                    || observedCandidates < 0
+                    || verifiedCandidates < 0
+                    || hardRejectedCandidates < 0
+                    || sourceCount < 0
+                    || verifiedCandidates > observedCandidates
+                    || hardRejectedCandidates > verifiedCandidates) {
+                throw new IllegalArgumentException("recommendation progress is invalid");
+            }
         }
     }
 

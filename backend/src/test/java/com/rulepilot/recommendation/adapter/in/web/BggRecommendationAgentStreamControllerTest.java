@@ -128,7 +128,8 @@ class BggRecommendationAgentStreamControllerTest {
                 .thenReturn(new LocalizedTaxonomy(Map.of(), Map.of()));
         when(agent.converse(any(), eq("zh-CN"), eq("player"), any())).thenAnswer(invocation -> {
             Consumer<ProgressUpdate> progress = invocation.getArgument(3);
-            progress.accept(new ProgressUpdate(ProgressStage.SEARCHING_BGG_CATALOG, 18));
+            progress.accept(new ProgressUpdate(
+                    ProgressStage.SEARCHING_BGG_CATALOG, 18, 8, 6, 3, 20));
             return new ConversationResponse(
                     Outcome.NO_MATCH,
                     DecisionMode.MODEL_ASSISTED,
@@ -159,8 +160,12 @@ class BggRecommendationAgentStreamControllerTest {
         assertThat(stream)
                 .contains("event:progress")
                 .contains("searching_bgg_catalog")
+                .contains("\"observedCandidates\":8")
+                .contains("\"verifiedCandidates\":6")
+                .contains("\"hardRejectedCandidates\":3")
+                .contains("event:answer_part")
                 .contains("event:result")
                 .contains("没有未经验证的推荐")
-                .containsSubsequence("event:progress", "event:result");
+                .containsSubsequence("event:progress", "event:answer_part", "event:result");
     }
 }

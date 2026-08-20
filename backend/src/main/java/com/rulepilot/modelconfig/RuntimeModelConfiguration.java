@@ -2,7 +2,10 @@ package com.rulepilot.modelconfig;
 
 import com.rulepilot.modelconfig.ModelProviderProperties.Provider;
 import com.rulepilot.modelconfig.adapter.out.ChatModelFactory;
+import com.rulepilot.modelconfig.adapter.out.QuotaAwareChatModel;
 import java.net.URI;
+import java.time.Clock;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -13,11 +16,13 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicReference;
 import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
 
 @Component
 @EnableConfigurationProperties(ModelProviderProperties.class)
@@ -38,6 +43,11 @@ public class RuntimeModelConfiguration {
     private final State personalDefaultState;
     private final Set<String> startupAllowedUsers;
     private final boolean deepSeekGenerationThinking;
+    private final ModelConfigurationStore store;
+    private final ModelCredentialCipher credentialCipher;
+    private final ModelAccountQuota quota;
+    private final long perCallReservationTokens;
+    private final AtomicReference<State> platformState;
     private final ConcurrentMap<String, AtomicReference<State>> userStates = new ConcurrentHashMap<>();
 
     public RuntimeModelConfiguration(
@@ -55,8 +65,56 @@ public class RuntimeModelConfiguration {
             @Value("${rulepilot.bgg.recommendation-agent.model-provider:qwen}") String recommendationProvider,
             @Value("${rulepilot.models.deepseek.generation-thinking:false}") boolean deepSeekGenerationThinking,
             @Value("${rulepilot.models.startup-allowed-users:}") String startupAllowedUsers) {
+        this(
+                factory,
+                properties,
+                teachingAdapter,
+                teachingProvider,
+                visualAdapter,
+                visualProvider,
+                answerAdapter,
+                answerProvider,
+                criticAdapter,
+                criticProvider,
+                recommendationAdapter,
+                recommendationProvider,
+                deepSeekGenerationThinking,
+                startupAllowedUsers,
+                null,
+                null,
+                null,
+                16_000);
+    }
+
+    @Autowired
+    public RuntimeModelConfiguration(
+            ChatModelFactory factory,
+            ModelProviderProperties properties,
+            @Value("${rulepilot.teaching.provider:fake}") String teachingAdapter,
+            @Value("${rulepilot.teaching.model-provider:gemini}") String teachingProvider,
+            @Value("${rulepilot.visual.provider:fake}") String visualAdapter,
+            @Value("${rulepilot.visual.model-provider:gemini}") String visualProvider,
+            @Value("${rulepilot.answer.provider:fake}") String answerAdapter,
+            @Value("${rulepilot.answer.model-provider:gemini}") String answerProvider,
+            @Value("${rulepilot.critic.provider:fake}") String criticAdapter,
+            @Value("${rulepilot.critic.model-provider:gemini}") String criticProvider,
+            @Value("${rulepilot.bgg.recommendation-agent.provider:fake}") String recommendationAdapter,
+            @Value("${rulepilot.bgg.recommendation-agent.model-provider:qwen}") String recommendationProvider,
+            @Value("${rulepilot.models.deepseek.generation-thinking:false}") boolean deepSeekGenerationThinking,
+            @Value("${rulepilot.models.startup-allowed-users:}") String startupAllowedUsers,
+            ModelConfigurationStore store,
+            ModelCredentialCipher credentialCipher,
+            ModelAccountQuota quota,
+            @Value("${rulepilot.models.per-call-reservation-tokens:16000}") long perCallReservationTokens) {
+        if (perCallReservationTokens < 1) {
+            throw new IllegalArgumentException("Per-call model quota reservation must be positive");
+        }
         this.factory = factory;
         this.deepSeekGenerationThinking = deepSeekGenerationThinking;
+        this.store = store;
+        this.credentialCipher = credentialCipher;
+        this.quota = quota;
+        this.perCallReservationTokens = perCallReservationTokens;
         Map<String, ConfiguredProvider> providers = new LinkedHashMap<>();
         addStartupProvider(providers, "gemini", properties.gemini());
         addStartupProvider(providers, "openai", properties.openai());
@@ -78,24 +136,47 @@ public class RuntimeModelConfiguration {
                 new Assignments("fake", "fake", "fake", "fake", "fake"),
                 0);
         this.startupAllowedUsers = parseStartupAllowedUsers(startupAllowedUsers);
+        this.platformState = new AtomicReference<>(durable() ? loadPlatform() : this.startupState);
     }
 
     public ChatModel modelFor(Role role) {
-        State current = currentState();
-        return modelFor(role, current);
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (authentication != null
+                && authentication.isAuthenticated()
+                && !"anonymousUser".equals(authentication.getName())) {
+            return modelFor(role, authentication.getName());
+        }
+        return modelFor(role, startupState);
     }
 
     public ChatModel modelFor(Role role, String username) {
-        return modelFor(role, stateForOrStartup(username));
+        if (username == null || username.isBlank()) return modelFor(role, startupState);
+        State state = stateFor(username);
+        ConfiguredProvider configured = configured(role, state);
+        if (quota == null) return configured.model();
+        return new QuotaAwareChatModel(
+                configured.model(),
+                quota,
+                required(username, "username", 160),
+                configured.credentialSource(),
+                role,
+                configured.id(),
+                configured.modelName(),
+                perCallReservationTokens,
+                Clock.systemUTC());
     }
 
     private ChatModel modelFor(Role role, State current) {
+        return configured(role, current).model();
+    }
+
+    private ConfiguredProvider configured(Role role, State current) {
         String provider = current.assignments().forRole(role);
         ConfiguredProvider configured = current.providers().get(provider);
         if (configured == null) {
             throw new IllegalStateException("model provider '" + provider + "' is not configured");
         }
-        return configured.model();
+        return configured;
     }
 
     public boolean usesFake(Role role) {
@@ -156,6 +237,7 @@ public class RuntimeModelConfiguration {
         return configured != null && configured.visionCapable();
     }
 
+    @Transactional
     public synchronized Snapshot configure(
             String username,
             String provider,
@@ -172,23 +254,52 @@ public class RuntimeModelConfiguration {
         AtomicReference<State> userState = userState(username);
         State current = userState.get();
         Map<String, ConfiguredProvider> providers = new LinkedHashMap<>(current.providers());
-        providers.put(id, new ConfiguredProvider(id, checkedBaseUrl, checkedModel, client, visionCapable));
+        providers.put(id, new ConfiguredProvider(
+                id,
+                checkedBaseUrl,
+                checkedModel,
+                client,
+                visionCapable,
+                ModelAccountQuota.CredentialSource.PERSONAL));
         Assignments assignments = visionCapable ? current.assignments() : current.assignments().withoutVisual(id);
-        userState.set(new State(Map.copyOf(providers), assignments, current.revision() + 1));
+        long revision = current.revision() + 1;
+        if (managedPersistence()) {
+            var encrypted = credentialCipher.encrypt(personalContext(username, id), checkedApiKey);
+            revision = store.savePersonalProvider(
+                    required(username, "username", 160),
+                    new ModelConfigurationStore.StoredProvider(
+                            id, encrypted, checkedBaseUrl, checkedModel, visionCapable, 0),
+                    Instant.now());
+            if (!assignments.equals(current.assignments())) {
+                revision = store.savePersonalAssignments(username, stored(assignments), Instant.now());
+            }
+        }
+        userState.set(new State(Map.copyOf(providers), assignments, revision));
         return snapshot(username);
     }
 
+    @Transactional
     public synchronized Snapshot disable(String username, String provider) {
         String id = providerId(provider);
         AtomicReference<State> userState = userState(username);
         State current = userState.get();
         Map<String, ConfiguredProvider> providers = new LinkedHashMap<>(current.providers());
         providers.remove(id);
-        Assignments assignments = current.assignments().replace(id, "fake");
-        userState.set(new State(Map.copyOf(providers), assignments, current.revision() + 1));
+        ConfiguredProvider platformProvider = platformState.get().providers().get(id);
+        if (platformProvider != null) providers.put(id, platformProvider);
+        Assignments assignments = platformProvider == null
+                ? current.assignments().replace(id, "fake")
+                : current.assignments();
+        long revision = current.revision() + 1;
+        if (durable()) {
+            revision = store.removePersonalProvider(username, id, Instant.now());
+            revision = store.savePersonalAssignments(username, stored(assignments), Instant.now());
+        }
+        userState.set(new State(Map.copyOf(providers), assignments, revision));
         return snapshot(username);
     }
 
+    @Transactional
     public synchronized Snapshot assign(
             String username,
             String teaching,
@@ -204,8 +315,100 @@ public class RuntimeModelConfiguration {
                 selectable(answer, current.providers()),
                 selectable(critic, current.providers()),
                 selectable(recommendation, current.providers()));
-        userState.set(new State(current.providers(), assignments, current.revision() + 1));
+        long revision = durable()
+                ? store.savePersonalAssignments(username, stored(assignments), Instant.now())
+                : current.revision() + 1;
+        userState.set(new State(current.providers(), assignments, revision));
         return snapshot(username);
+    }
+
+    @Transactional
+    public synchronized Snapshot configurePlatform(
+            String administrator,
+            String provider,
+            String apiKey,
+            String baseUrl,
+            String model,
+            boolean visionCapable) {
+        requireDurableCredentials();
+        String actor = required(administrator, "administrator", 160);
+        String id = providerId(provider);
+        String checkedModel = required(model, "model name", 200);
+        String checkedBaseUrl = "gemini".equals(id) ? "" : validBaseUrl(baseUrl);
+        String checkedApiKey = required(apiKey, "API key", 4096);
+        ChatModel client = factory.create(id, checkedApiKey, checkedBaseUrl, checkedModel);
+        State current = platformState.get();
+        Map<String, ConfiguredProvider> providers = new LinkedHashMap<>(current.providers());
+        providers.put(id, new ConfiguredProvider(
+                id,
+                checkedBaseUrl,
+                checkedModel,
+                client,
+                visionCapable,
+                ModelAccountQuota.CredentialSource.PLATFORM));
+        Assignments assignments = visionCapable ? current.assignments() : current.assignments().withoutVisual(id);
+        Instant updatedAt = Instant.now();
+        long revision = store.savePlatformProvider(
+                actor,
+                new ModelConfigurationStore.StoredProvider(
+                        id,
+                        credentialCipher.encrypt(platformContext(id), checkedApiKey),
+                        checkedBaseUrl,
+                        checkedModel,
+                        visionCapable,
+                        0),
+                updatedAt);
+        if (!assignments.equals(current.assignments())) {
+            revision = store.savePlatformAssignments(actor, stored(assignments), updatedAt);
+        }
+        replacePlatform(new State(Map.copyOf(providers), assignments, revision));
+        return platformSnapshot();
+    }
+
+    @Transactional
+    public synchronized Snapshot disablePlatform(String administrator, String provider) {
+        requireDurableCredentials();
+        String actor = required(administrator, "administrator", 160);
+        String id = providerId(provider);
+        State current = platformState.get();
+        Map<String, ConfiguredProvider> providers = new LinkedHashMap<>(current.providers());
+        providers.remove(id);
+        ConfiguredProvider startupProvider = startupState.providers().get(id);
+        if (startupProvider != null) providers.put(id, startupProvider);
+        Assignments assignments = startupProvider == null
+                ? current.assignments().replace(id, "fake")
+                : current.assignments();
+        Instant updatedAt = Instant.now();
+        long revision = store.removePlatformProvider(actor, id, updatedAt);
+        revision = store.savePlatformAssignments(actor, stored(assignments), updatedAt);
+        replacePlatform(new State(Map.copyOf(providers), assignments, revision));
+        return platformSnapshot();
+    }
+
+    @Transactional
+    public synchronized Snapshot assignPlatform(
+            String administrator,
+            String teaching,
+            String visual,
+            String answer,
+            String critic,
+            String recommendation) {
+        requireDurableCredentials();
+        String actor = required(administrator, "administrator", 160);
+        State current = platformState.get();
+        Assignments assignments = new Assignments(
+                selectable(teaching, current.providers()),
+                selectableVisual(visual, current.providers()),
+                selectable(answer, current.providers()),
+                selectable(critic, current.providers()),
+                selectable(recommendation, current.providers()));
+        long revision = store.savePlatformAssignments(actor, stored(assignments), Instant.now());
+        replacePlatform(new State(current.providers(), assignments, revision));
+        return platformSnapshot();
+    }
+
+    public Snapshot platformSnapshot() {
+        return snapshot(platformState.get(), false, false);
     }
 
     public synchronized Snapshot assign(
@@ -215,7 +418,13 @@ public class RuntimeModelConfiguration {
     }
 
     public Snapshot snapshot(String username) {
-        State current = stateFor(username);
+        return snapshot(
+                stateFor(username),
+                !durable(),
+                startupAllowedUsers.contains(required(username, "username", 160)));
+    }
+
+    private Snapshot snapshot(State current, boolean volatileSecrets, boolean managedStartupAccess) {
         List<ProviderView> providers = new ArrayList<>();
         for (String id : SUPPORTED) {
             ConfiguredProvider configured = current.providers().get(id);
@@ -225,14 +434,15 @@ public class RuntimeModelConfiguration {
                     configured == null ? defaultBaseUrl(id) : configured.baseUrl(),
                     configured == null ? defaultModel(id) : configured.modelName(),
                     configured != null,
-                    configured == null ? defaultVisionCapable(id) : configured.visionCapable()));
+                    configured == null ? defaultVisionCapable(id) : configured.visionCapable(),
+                    configured == null ? "NONE" : configured.credentialSource().name()));
         }
         return new Snapshot(
                 List.copyOf(providers),
                 current.assignments(),
                 current.revision(),
-                true,
-                startupAllowedUsers.contains(required(username, "username", 160)));
+                volatileSecrets,
+                managedStartupAccess);
     }
 
     private State currentState() {
@@ -247,6 +457,9 @@ public class RuntimeModelConfiguration {
         String owner = required(username, "username", 160);
         AtomicReference<State> personal = userStates.get(owner);
         if (personal != null) return personal.get();
+        if (durable()) {
+            return userStates.computeIfAbsent(owner, ignored -> new AtomicReference<>(loadPersonal(owner))).get();
+        }
         return startupAllowedUsers.contains(owner) ? startupState : personalDefaultState;
     }
 
@@ -256,8 +469,113 @@ public class RuntimeModelConfiguration {
 
     private AtomicReference<State> userState(String username) {
         String owner = required(username, "username", 160);
-        State initial = startupAllowedUsers.contains(owner) ? startupState : personalDefaultState;
+        State initial = durable()
+                ? loadPersonal(owner)
+                : startupAllowedUsers.contains(owner) ? startupState : personalDefaultState;
         return userStates.computeIfAbsent(owner, ignored -> new AtomicReference<>(initial));
+    }
+
+    private State loadPersonal(String username) {
+        return store.personal(username)
+                .map(stored -> restoredPersonal(username, platformState.get(), stored))
+                .orElseGet(platformState::get);
+    }
+
+    private State loadPlatform() {
+        return store.platform()
+                .map(stored -> restoredPlatform(stored, startupState))
+                .orElse(startupState);
+    }
+
+    private State restoredPersonal(
+            String username,
+            State platform,
+            ModelConfigurationStore.StoredConfiguration stored) {
+        Map<String, ConfiguredProvider> providers = new LinkedHashMap<>(platform.providers());
+        for (ModelConfigurationStore.StoredProvider provider : stored.providers()) {
+            String id = providerId(provider.provider());
+            String apiKey = credentialCipher.decrypt(personalContext(username, id), provider.encryptedApiKey());
+            ChatModel client = factory.create(id, apiKey, provider.baseUrl(), provider.model());
+            providers.put(id, new ConfiguredProvider(
+                    id,
+                    provider.baseUrl(),
+                    provider.model(),
+                    client,
+                    provider.visionCapable(),
+                    ModelAccountQuota.CredentialSource.PERSONAL));
+        }
+        Assignments assignments = stored.assignments() == null
+                ? platform.assignments()
+                : restoredAssignments(stored.assignments(), providers);
+        return new State(Map.copyOf(providers), assignments, stored.revision());
+    }
+
+    private State restoredPlatform(ModelConfigurationStore.StoredConfiguration stored, State fallback) {
+        Map<String, ConfiguredProvider> providers = new LinkedHashMap<>(fallback.providers());
+        for (ModelConfigurationStore.StoredProvider provider : stored.providers()) {
+            String id = providerId(provider.provider());
+            String apiKey = credentialCipher.decrypt(platformContext(id), provider.encryptedApiKey());
+            ChatModel client = factory.create(id, apiKey, provider.baseUrl(), provider.model());
+            providers.put(id, new ConfiguredProvider(
+                    id,
+                    provider.baseUrl(),
+                    provider.model(),
+                    client,
+                    provider.visionCapable(),
+                    ModelAccountQuota.CredentialSource.PLATFORM));
+        }
+        Assignments assignments = stored.assignments() == null
+                ? fallback.assignments()
+                : restoredAssignments(stored.assignments(), providers);
+        return new State(Map.copyOf(providers), assignments, stored.revision());
+    }
+
+    private Assignments restoredAssignments(
+            ModelConfigurationStore.StoredAssignments stored,
+            Map<String, ConfiguredProvider> providers) {
+        return new Assignments(
+                selectable(stored.teaching(), providers),
+                selectableVisual(stored.visual(), providers),
+                selectable(stored.answer(), providers),
+                selectable(stored.critic(), providers),
+                selectable(stored.recommendation(), providers));
+    }
+
+    private ModelConfigurationStore.StoredAssignments stored(Assignments assignments) {
+        return new ModelConfigurationStore.StoredAssignments(
+                assignments.teaching(),
+                assignments.visual(),
+                assignments.answer(),
+                assignments.critic(),
+                assignments.recommendation(),
+                0);
+    }
+
+    private boolean durable() {
+        return store != null && credentialCipher != null && credentialCipher.available();
+    }
+
+    private boolean managedPersistence() {
+        return store != null && credentialCipher != null;
+    }
+
+    private void requireDurableCredentials() {
+        if (!managedPersistence() || !credentialCipher.available()) {
+            throw new IllegalStateException("Durable model credentials are not configured");
+        }
+    }
+
+    private void replacePlatform(State replacement) {
+        platformState.set(replacement);
+        userStates.clear();
+    }
+
+    private String personalContext(String username, String provider) {
+        return "PERSONAL|" + required(username, "username", 160) + "|" + provider;
+    }
+
+    private String platformContext(String provider) {
+        return "PLATFORM|" + provider;
     }
 
     private Set<String> parseStartupAllowedUsers(String value) {
@@ -276,7 +594,13 @@ public class RuntimeModelConfiguration {
         String baseUrl = "gemini".equals(id) ? "" : validBaseUrl(properties.baseUrl());
         String model = required(properties.model(), "model name", 200);
         ChatModel client = factory.create(id, properties.apiKey(), baseUrl, model);
-        providers.put(id, new ConfiguredProvider(id, baseUrl, model, client, properties.visionCapable()));
+        providers.put(id, new ConfiguredProvider(
+                id,
+                baseUrl,
+                model,
+                client,
+                properties.visionCapable(),
+                ModelAccountQuota.CredentialSource.PLATFORM));
     }
 
     private String assignment(String adapter, String provider, Map<String, ConfiguredProvider> providers) {
@@ -387,7 +711,12 @@ public class RuntimeModelConfiguration {
     }
 
     private record ConfiguredProvider(
-            String id, String baseUrl, String modelName, ChatModel model, boolean visionCapable) {}
+            String id,
+            String baseUrl,
+            String modelName,
+            ChatModel model,
+            boolean visionCapable,
+            ModelAccountQuota.CredentialSource credentialSource) {}
 
     private record State(Map<String, ConfiguredProvider> providers, Assignments assignments, long revision) {}
 
@@ -397,7 +726,8 @@ public class RuntimeModelConfiguration {
             String baseUrl,
             String model,
             boolean apiKeyConfigured,
-            boolean visionCapable) {}
+            boolean visionCapable,
+            String credentialSource) {}
 
     public record Assignments(String teaching, String visual, String answer, String critic, String recommendation) {
         String forRole(Role role) {

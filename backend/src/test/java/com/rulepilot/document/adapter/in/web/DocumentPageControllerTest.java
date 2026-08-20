@@ -1,6 +1,7 @@
 package com.rulepilot.document.adapter.in.web;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.tuple;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -27,6 +28,22 @@ class DocumentPageControllerTest {
     private final DocumentVersionScopeLookup versions = mock(DocumentVersionScopeLookup.class);
     private final DocumentPageController controller =
             new DocumentPageController(documents, pageImages, new RulePageImageCropper(), versions);
+
+    @Test
+    void listsPageSummariesWithoutPublishingExtractedRulebookText() {
+        UUID versionId = UUID.randomUUID();
+        when(versions.findVersion(versionId)).thenReturn(java.util.Optional.of(
+                new DocumentVersionScopeLookup.VersionScope(versionId, null, "READY", "player", "Rules")));
+        when(documents.pages(versionId)).thenReturn(List.of(
+                new DocumentProcessing.PageView(1, "private extracted text", 22),
+                new DocumentProcessing.PageView(2, "more private extracted text", 27)));
+
+        var summaries = controller.pageSummaries(versionId, () -> "player");
+
+        assertThat(summaries).extracting("pageNumber", "characterCount")
+                .containsExactly(tuple(1, 22), tuple(2, 27));
+        assertThat(summaries.getFirst().toString()).doesNotContain("private extracted text");
+    }
 
     @Test
     void servesTheWholeEvidencePageAsANormalizedBrowserSafeJpeg() throws Exception {
@@ -69,6 +86,21 @@ class DocumentPageControllerTest {
         BufferedImage preview = ImageIO.read(new ByteArrayInputStream(response.getBody()));
         assertThat(preview.getWidth()).isEqualTo(453);
         assertThat(preview.getHeight()).isEqualTo(680);
+    }
+
+    @Test
+    void servesStoredJpegPagesWithoutASecondLossyEncodingAndAllowsPrivateBrowserCaching() {
+        UUID versionId = UUID.randomUUID();
+        when(versions.findVersion(versionId)).thenReturn(java.util.Optional.of(
+                new DocumentVersionScopeLookup.VersionScope(versionId, null, "READY", "player", "Rules")));
+        byte[] jpeg = new byte[] {(byte) 0xff, (byte) 0xd8, 1, 2, 3, (byte) 0xff, (byte) 0xd9};
+        when(pageImages.read(versionId, Set.of(3)))
+                .thenReturn(List.of(new PageImage(3, "image/jpeg", jpeg, 1_600, 2_400)));
+
+        var response = controller.pageImage(versionId, 3, () -> "player");
+
+        assertThat(response.getBody()).containsExactly(jpeg);
+        assertThat(response.getHeaders().getCacheControl()).contains("private").contains("max-age");
     }
 
     @Test

@@ -3,6 +3,7 @@ import { computed, getCurrentScope, onScopeDispose, ref } from 'vue'
 import type { AppLocale } from '@/lib/locale'
 import {
   answerAgentTrace,
+  streamedAnswerTraceItem,
   type AnswerAgentActivity,
   type AnswerAgentTraceItem,
 } from '@/lib/answerAgentTrace'
@@ -95,6 +96,7 @@ export function useLessonAnswers(options: UseLessonAnswersOptions) {
   const answerError = ref('')
   const answerOutcome = ref<'none' | 'failed' | 'cancelled'>('none')
   const agentTrace = ref<AnswerAgentTraceItem[]>([])
+  const streamedAnswerParts = ref<{ verdict: string; explanation: string }>({ verdict: '', explanation: '' })
   const answerElapsedSeconds = ref(0)
   const answerSoftBudgetReached = computed(() =>
     answerLoading.value && answerElapsedSeconds.value >= ANSWER_SOFT_BUDGET_SECONDS)
@@ -105,7 +107,6 @@ export function useLessonAnswers(options: UseLessonAnswersOptions) {
   let activeTraceController: AbortController | null = null
   let activeAnswerRunId: string | null = null
   let activeCancellationCsrf: CsrfResponse | null = null
-  let traceSequence = 0
   let disposed = false
 
   function isCurrentAnswerRequest(answerRequest: number, lessonRequest: number, planId: string) {
@@ -131,6 +132,7 @@ export function useLessonAnswers(options: UseLessonAnswersOptions) {
     answerError.value = ''
     answerOutcome.value = 'none'
     agentTrace.value = []
+    streamedAnswerParts.value = { verdict: '', explanation: '' }
     clearActiveServerAnswer()
   }
 
@@ -169,6 +171,7 @@ export function useLessonAnswers(options: UseLessonAnswersOptions) {
     answerOutcome.value = 'none'
     answer.value = null
     agentTrace.value = []
+    streamedAnswerParts.value = { verdict: '', explanation: '' }
     answerRulingReference.value = null
     try {
       const csrfResponse = await fetch('/api/auth/csrf', {
@@ -187,8 +190,7 @@ export function useLessonAnswers(options: UseLessonAnswersOptions) {
       const csrf = (await csrfResponse.json()) as CsrfResponse
       activeCancellationCsrf = csrf
       const previousTurn = answerTurns.value.at(-1)
-      const submittedAt = Date.now()
-      startTracePolling(context, answerRequest, lessonRequest, submittedAt)
+      startRunIdentityFallback(context, answerRequest, lessonRequest)
       const response = await streamStructuredAnswer(`/api/v1/document-versions/${context.documentVersionId}/answers/stream`, {
         method: 'POST',
         credentials: 'include',
@@ -202,7 +204,22 @@ export function useLessonAnswers(options: UseLessonAnswersOptions) {
           language: context.locale,
         }),
       }, (runId) => {
-        if (isCurrentAnswerRequest(answerRequest, lessonRequest, context.planId)) activeAnswerRunId = runId
+        if (isCurrentAnswerRequest(answerRequest, lessonRequest, context.planId)) {
+          activeAnswerRunId = runId
+          stopTracePolling()
+        }
+      }, {
+        onActivity: (activity) => {
+          if (!isCurrentAnswerRequest(answerRequest, lessonRequest, context.planId)) return
+          const item = streamedAnswerTraceItem(activity, context.locale)
+          const current = agentTrace.value.findIndex(existing => existing.sequence === item.sequence)
+          if (current < 0) agentTrace.value = [...agentTrace.value, item]
+          else agentTrace.value = agentTrace.value.map((existing, index) => index === current ? item : existing)
+        },
+        onAnswerPart: (part) => {
+          if (!isCurrentAnswerRequest(answerRequest, lessonRequest, context.planId)) return
+          streamedAnswerParts.value = { ...streamedAnswerParts.value, [part.field]: part.text }
+        },
       })
       if (!isCurrentAnswerRequest(answerRequest, lessonRequest, context.planId)) return
       const creation = parseAnswerCreation(response)
@@ -222,8 +239,6 @@ export function useLessonAnswers(options: UseLessonAnswersOptions) {
       ]
       question.value = ''
       options.onReceived(context, text, received, rulingReference)
-      stopTracePolling()
-      agentTrace.value = []
     } catch (error) {
       if (!isCurrentAnswerRequest(answerRequest, lessonRequest, context.planId)) return
       if (error instanceof StructuredAnswerRequestError && error.status === 401) {
@@ -267,68 +282,39 @@ export function useLessonAnswers(options: UseLessonAnswersOptions) {
     answerOutcome.value = 'cancelled'
   }
 
-  function startTracePolling(
-    context: AnswerContext,
-    answerRequest: number,
-    lessonRequest: number,
-    submittedAt: number,
-  ) {
-    stopTracePolling()
-    if (options.canRead?.() === false) return
-    const trace = ++traceSequence
-    const poll = async () => {
-      if (trace !== traceSequence
-        || options.canRead?.() === false
-        || !isCurrentAnswerRequest(answerRequest, lessonRequest, context.planId)
-        || !answerLoading.value) return
-      activeTraceController?.abort()
-      const controller = new AbortController()
-      activeTraceController = controller
-      try {
-        const params = new URLSearchParams({ mode: 'QUESTION_ANSWER', subjectId: context.documentVersionId })
-        const traceUrl = activeAnswerRunId
-          ? `/api/v1/assistant-runs/${encodeURIComponent(activeAnswerRunId)}`
-          : `/api/v1/assistant-runs/latest?${params}`
-        const response = await fetch(traceUrl, {
-          credentials: 'include',
-          signal: controller.signal,
-        })
-        if (response.ok
-          && trace === traceSequence
-          && activeTraceController === controller
-          && isCurrentAnswerRequest(answerRequest, lessonRequest, context.planId)) {
-          const details = await response.json() as AnswerRunDetails
-          const createdAt = Date.parse(details.run.createdAt)
-          if (activeTraceController === controller
-            && trace === traceSequence
-            && isCurrentAnswerRequest(answerRequest, lessonRequest, context.planId)
-            && details.run.subjectId === context.documentVersionId
-            && createdAt >= submittedAt - 1_000) {
-            activeAnswerRunId = details.run.id
-            agentTrace.value = answerAgentTrace(details.activities, context.locale)
-          }
-        }
-      } catch {
-        // The answer request remains authoritative; progress polling retries without replacing the answer state.
-      } finally {
-        if (activeTraceController === controller) activeTraceController = null
-      }
-      if (trace === traceSequence
-        && options.canRead?.() !== false
-        && isCurrentAnswerRequest(answerRequest, lessonRequest, context.planId)
-        && answerLoading.value) {
-        traceTimer = setTimeout(poll, 600)
-      }
-    }
-    traceTimer = setTimeout(poll, 250)
-  }
-
   function stopTracePolling() {
-    traceSequence += 1
     if (traceTimer !== null) clearTimeout(traceTimer)
     traceTimer = null
     activeTraceController?.abort()
     activeTraceController = null
+  }
+
+  function startRunIdentityFallback(context: AnswerContext, answerRequest: number, lessonRequest: number) {
+    stopTracePolling()
+    if (options.canRead?.() === false) return
+    traceTimer = setTimeout(async () => {
+      traceTimer = null
+      if (!isCurrentAnswerRequest(answerRequest, lessonRequest, context.planId) || !answerLoading.value) return
+      const controller = new AbortController()
+      activeTraceController = controller
+      try {
+        const parameters = new URLSearchParams({ mode: 'QUESTION_ANSWER', subjectId: context.documentVersionId })
+        const response = await fetch(`/api/v1/assistant-runs/latest?${parameters}`, {
+          credentials: 'include',
+          signal: controller.signal,
+        })
+        if (!response.ok || activeTraceController !== controller
+          || !isCurrentAnswerRequest(answerRequest, lessonRequest, context.planId)) return
+        const details = await response.json() as AnswerRunDetails
+        if (details.run.subjectId !== context.documentVersionId) return
+        activeAnswerRunId = details.run.id
+        if (!agentTrace.value.length) agentTrace.value = answerAgentTrace(details.activities, context.locale)
+      } catch {
+        // The SSE remains authoritative; this single lookup only recovers a lost run identity for cancellation.
+      } finally {
+        if (activeTraceController === controller) activeTraceController = null
+      }
+    }, 250)
   }
 
   function cancelReadTransport() {
@@ -391,6 +377,7 @@ export function useLessonAnswers(options: UseLessonAnswersOptions) {
     answerError,
     answerOutcome,
     agentTrace,
+    streamedAnswerParts,
     answerElapsedSeconds,
     answerSoftBudgetReached,
     cancelReadTransport,
@@ -423,14 +410,6 @@ function answerRequestFailureCopy(failure: AnswerRequestFailure, locale: AppLoca
   return '这次没有成功发送问题。问题仍保留在这里；检查后可以直接重试。'
 }
 
-interface AnswerRunDetails {
-  run: {
-    id: string
-    subjectId: string
-    createdAt: string
-  }
-  activities: AnswerAgentActivity[]
-}
 
 function parseAnswerCreation(value: unknown): AnswerCreation | null {
   if (!isRecord(value) || !isAnswerRulingReference(value.rulingReference)
@@ -466,4 +445,9 @@ function safeRulingReference(value: unknown, citationCount: number): AnswerRulin
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+interface AnswerRunDetails {
+  run: { id: string; subjectId: string }
+  activities: AnswerAgentActivity[]
 }

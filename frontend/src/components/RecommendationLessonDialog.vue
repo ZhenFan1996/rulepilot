@@ -85,6 +85,7 @@ let requestSequence = 0
 let timer: ReturnType<typeof setTimeout> | null = null
 let disposed = false
 let activeController: AbortController | null = null
+let missingRunRefreshes = 0
 
 useModalFocus({
   dialog,
@@ -282,7 +283,11 @@ function scheduleRefresh(request: number, planId: string, delay = 1_500) {
     run.value?.run.state,
     lesson.value?.status,
   )
-  if (isCurrentGeneration(request, planId) && (!run.value || active.value || finalSnapshotPending)) {
+  const retryMissingRun = !run.value && missingRunRefreshes < 2
+  if (isCurrentGeneration(request, planId)
+    && document.visibilityState !== 'hidden'
+    && (retryMissingRun || active.value || finalSnapshotPending)) {
+    if (retryMissingRun) missingRunRefreshes += 1
     timer = setTimeout(() => {
       timer = null
       void refresh(request, planId)
@@ -301,6 +306,7 @@ function cancelRequests() {
   activeController?.abort()
   activeController = null
   loading.value = false
+  missingRunRefreshes = 0
 }
 
 watch(() => [props.open, props.planId] as const, ([open]) => {

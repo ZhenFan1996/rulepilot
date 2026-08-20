@@ -8,6 +8,8 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.rulepilot.document.PublicRulebookReferenceLookup.Reference;
+import com.rulepilot.document.RulebookTeachingEvidenceFreshness;
+import com.rulepilot.document.RulebookTeachingEvidenceFreshness.ReuseAssessment;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
@@ -28,6 +30,9 @@ class UploadedRulebookTeachingHandoffServiceTest {
                     UploadedRulebookTeachingHandoffStore.class,
                     () -> mock(UploadedRulebookTeachingHandoffStore.class));
             context.registerBean(RuleDocumentRepository.class, () -> mock(RuleDocumentRepository.class));
+            context.registerBean(
+                    RulebookTeachingEvidenceFreshness.class,
+                    RulebookTeachingEvidenceFreshness::alwaysCurrent);
             context.register(UploadedRulebookTeachingHandoffService.class);
 
             context.refresh();
@@ -117,6 +122,7 @@ class UploadedRulebookTeachingHandoffServiceTest {
                 UploadedRulebookTeachingHandoffStore.State.LAUNCHED,
                 failedRunId,
                 null,
+                0,
                 NOW,
                 NOW)));
         when(store.retry(handoffId, failedRunId, "alice", NOW)).thenReturn(waiting);
@@ -129,6 +135,82 @@ class UploadedRulebookTeachingHandoffServiceTest {
         assertThat(retried.id()).isEqualTo(handoffId);
         assertThat(retried.state()).isEqualTo(UploadedRulebookTeachingHandoffStore.State.WAITING_FOR_DOCUMENT);
         verify(store).retry(handoffId, failedRunId, "alice", NOW);
+    }
+
+    @Test
+    void retriesOneTransientUploadedPreparationAndThenStopsTheSameFailure() {
+        UploadedRulebookTeachingHandoffStore store = mock(UploadedRulebookTeachingHandoffStore.class);
+        RuleDocumentRepository documents = mock(RuleDocumentRepository.class);
+        RulebookTeachingEvidenceFreshness freshness = mock(RulebookTeachingEvidenceFreshness.class);
+        UUID handoffId = UUID.randomUUID();
+        UUID versionId = UUID.randomUUID();
+        UUID firstRunId = UUID.randomUUID();
+        when(store.findUnreconciledLaunched(4)).thenReturn(List.of(
+                new UploadedRulebookTeachingHandoffStore.RecoveryCandidate(
+                        handoffId, versionId, "alice", firstRunId, 0)));
+        when(freshness.assess(versionId, firstRunId, "alice"))
+                .thenReturn(ReuseAssessment.RETRYABLE_FAILURE);
+        when(store.retryAutomatically(handoffId, firstRunId, NOW)).thenReturn(true);
+        var service = new UploadedRulebookTeachingHandoffService(
+                store, documents, freshness, Clock.fixed(NOW, ZoneOffset.UTC));
+
+        var result = service.reconcileLaunched(4);
+
+        assertThat(result.restarted()).isOne();
+        assertThat(result.exhausted()).isZero();
+        verify(store).retryAutomatically(handoffId, firstRunId, NOW);
+    }
+
+    @Test
+    void removesACancelledUploadedIntentInsteadOfResurrectingIt() {
+        UploadedRulebookTeachingHandoffStore store = mock(UploadedRulebookTeachingHandoffStore.class);
+        RuleDocumentRepository documents = mock(RuleDocumentRepository.class);
+        RulebookTeachingEvidenceFreshness freshness = mock(RulebookTeachingEvidenceFreshness.class);
+        UUID handoffId = UUID.randomUUID();
+        UUID versionId = UUID.randomUUID();
+        UUID cancelledRunId = UUID.randomUUID();
+        when(store.findUnreconciledLaunched(4)).thenReturn(List.of(
+                new UploadedRulebookTeachingHandoffStore.RecoveryCandidate(
+                        handoffId, versionId, "alice", cancelledRunId, 0)));
+        when(freshness.assess(versionId, cancelledRunId, "alice"))
+                .thenReturn(ReuseAssessment.CANCELLED);
+        when(store.dismissCancelled(handoffId, cancelledRunId)).thenReturn(true);
+        var service = new UploadedRulebookTeachingHandoffService(
+                store, documents, freshness, Clock.fixed(NOW, ZoneOffset.UTC));
+
+        var result = service.reconcileLaunched(4);
+
+        assertThat(result.restarted()).isZero();
+        assertThat(result.settled()).isOne();
+        verify(store).dismissCancelled(handoffId, cancelledRunId);
+    }
+
+    @Test
+    void exposesThePersistedAutomaticRecoveryCountAfterRefresh() {
+        UploadedRulebookTeachingHandoffStore store = mock(UploadedRulebookTeachingHandoffStore.class);
+        RuleDocumentRepository documents = mock(RuleDocumentRepository.class);
+        UUID handoffId = UUID.randomUUID();
+        UUID versionId = UUID.randomUUID();
+        UUID editionId = UUID.randomUUID();
+        var recovered = new UploadedRulebookTeachingHandoffStore.Snapshot(
+                handoffId,
+                versionId,
+                "alice",
+                null,
+                UploadedRulebookTeachingHandoffStore.State.LAUNCHED,
+                UUID.randomUUID(),
+                null,
+                1,
+                NOW,
+                NOW);
+        when(store.findRecentOwned("alice", 20)).thenReturn(List.of(recovered));
+        when(documents.findReferences(List.of(versionId))).thenReturn(Map.of(
+                versionId, new Reference(versionId, editionId, "SETI Rules", null, null)));
+
+        var recent = service(store, documents).recentOwned("alice");
+
+        assertThat(recent).singleElement().satisfies(item ->
+                assertThat(item.automaticRecoveryCount()).isOne());
     }
 
     private UploadedRulebookTeachingHandoffService service(
@@ -151,6 +233,7 @@ class UploadedRulebookTeachingHandoffServiceTest {
                 state,
                 null,
                 null,
+                0,
                 NOW,
                 NOW);
     }

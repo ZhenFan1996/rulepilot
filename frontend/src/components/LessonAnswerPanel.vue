@@ -29,6 +29,7 @@ const props = withDefaults(defineProps<{
   answerElapsedSeconds?: number
   answerSoftBudgetReached?: boolean
   agentTrace?: AnswerAgentTraceItem[]
+  streamedAnswerParts?: { verdict: string; explanation: string }
   online: boolean
   ruling: ConfirmedRuling | null
   rulingSaving: boolean
@@ -41,6 +42,7 @@ const props = withDefaults(defineProps<{
   showHeader?: boolean
 }>(), {
   agentTrace: () => [],
+  streamedAnswerParts: () => ({ verdict: '', explanation: '' }),
   answerElapsedSeconds: 0,
   answerSoftBudgetReached: false,
   clearThreadDisabled: false,
@@ -76,6 +78,7 @@ const editedExplanationModel = computed({
   set: (value: string) => emit('update:edited-explanation', value),
 })
 const previousAnswerTurns = computed(() => props.answer ? props.answerTurns.slice(0, -1) : props.answerTurns)
+const executionProcessTitle = computed(() => locale.value === 'en' ? 'Agent execution process' : 'Agent 执行过程')
 const currentAnswerTurn = computed(() => props.answer ? props.answerTurns.at(-1) ?? null : null)
 const primaryCitation = computed(() => props.answer?.citations.at(0) ?? null)
 const additionalCitations = computed(() => props.answer?.citations.slice(1) ?? [])
@@ -543,10 +546,15 @@ function hasStructuredAnswerDetails(answer: StructuredRuleAnswer) {
             <ol v-if="agentTrace.length" class="stack-y-sm text-xs leading-5 text-ink/60" :aria-label="t('lesson.answer.agentTrace')">
               <li v-for="item in agentTrace" :key="item.sequence" class="flex items-start gap-2">
                 <span :class="item.status === 'running' ? 'animate-pulse bg-copper' : item.status === 'done' ? 'bg-emerald-500' : 'bg-amber-500'" class="mt-1.5 size-2 shrink-0 rounded-full" aria-hidden="true" />
-                <span>{{ item.label }}</span>
+                <span><strong v-if="item.actor" class="font-semibold text-ink/55">{{ item.actor }} · </strong>{{ item.label }}<small v-if="item.status === 'running' && item.nextAction" class="mt-0.5 block text-[0.6875rem] text-ink/40">{{ item.nextAction }}</small></span>
               </li>
             </ol>
             <p v-else class="rounded-xl bg-paper px-3 py-2 text-xs leading-5 text-ink/55">{{ t('lesson.answer.waitingForTrace') }}</p>
+            <div v-if="streamedAnswerParts.verdict || streamedAnswerParts.explanation" data-testid="validated-answer-preview" class="rounded-xl border border-emerald-200 bg-emerald-50/70 px-3 py-2 text-xs leading-5 text-emerald-950">
+              <p class="font-semibold">{{ locale === 'en' ? 'Validated answer so far' : '已验证的回答' }}</p>
+              <p v-if="streamedAnswerParts.verdict" class="mt-1 font-medium">{{ streamedAnswerParts.verdict }}</p>
+              <p v-if="streamedAnswerParts.explanation" class="mt-1 text-emerald-900/75">{{ streamedAnswerParts.explanation }}</p>
+            </div>
             <p class="text-xs leading-5 text-ink/50">{{ t('lesson.answer.foreignLanguage') }}</p>
             <div class="h-4 w-4/5 animate-pulse rounded bg-ink/10" />
             <div class="h-4 w-3/5 animate-pulse rounded bg-ink/10" />
@@ -554,6 +562,15 @@ function hasStructuredAnswerDetails(answer: StructuredRuleAnswer) {
           </div>
         </div>
         <div v-if="answer" class="min-w-0">
+          <details v-if="agentTrace.some(item => item.actor)" data-testid="answer-execution-process" class="mb-3 rounded-2xl border border-ink/8 bg-paper/70 px-4 py-3 text-xs leading-5 text-ink/55">
+            <summary class="cursor-pointer font-semibold text-ink/65">{{ executionProcessTitle }}</summary>
+            <ol class="mt-3 stack-y-sm">
+              <li v-for="item in agentTrace" :key="item.sequence" class="flex items-start gap-2">
+                <span :class="item.status === 'done' ? 'bg-emerald-500' : 'bg-amber-500'" class="mt-1.5 size-2 shrink-0 rounded-full" aria-hidden="true" />
+                <span><strong v-if="item.actor" class="font-semibold">{{ item.actor }} · </strong>{{ item.label }}<small v-if="item.nextAction" class="mt-0.5 block text-[0.6875rem] text-ink/40">{{ item.nextAction }}</small></span>
+              </li>
+            </ol>
+          </details>
           <article v-if="answer" class="overflow-hidden rounded-3xl border border-ink/10 bg-canvas" aria-live="polite">
             <div class="p-5 sm:p-6">
               <p class="text-xs font-semibold text-ink/45">{{ currentAnswerTurn?.learningIntent ? learningIntentLabel(currentAnswerTurn.learningIntent) : t('lesson.answer.youAsked') }}：{{ answeredQuestion }}</p>

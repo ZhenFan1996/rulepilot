@@ -73,7 +73,7 @@ function answerThreadScope(): LessonAnswerThreadScope | null {
 
 const {
   question, answer, answeredQuestion, answerTurns, activeLearningIntent, answerLoading, answerError, answerOutcome,
-  agentTrace, answerElapsedSeconds, answerSoftBudgetReached, answerRulingReference,
+  agentTrace, streamedAnswerParts, answerElapsedSeconds, answerSoftBudgetReached, answerRulingReference,
   cancelAnswer, clearAnswerFeedback, resetConversation, restoreConversation, submitQuestion,
 } = useLessonAnswers({
   currentContext: () => versionId.value && online.value
@@ -270,7 +270,7 @@ onUnmounted(() => {
             :question="question" :answer="answer" :answered-question="answeredQuestion" :answer-turns="answerTurns"
             :active-learning-intent="activeLearningIntent" :answer-loading="answerLoading" :answer-error="answerError" :answer-outcome="answerOutcome"
             :answer-elapsed-seconds="answerElapsedSeconds" :answer-soft-budget-reached="answerSoftBudgetReached"
-            :agent-trace="agentTrace" :online="online" :ruling="ruling"
+            :agent-trace="agentTrace" :streamed-answer-parts="streamedAnswerParts" :online="online" :ruling="ruling"
             :ruling-saving="rulingSaving" :clear-thread-disabled="rulingSaving || editingRuling" :ruling-error="rulingError" :ruling-conflict="rulingConflict"
             :editing-ruling="editingRuling" :edited-verdict="editedVerdict" :edited-explanation="editedExplanation"
             @update:question="question = $event" @update:editing-ruling="editingRuling = $event"

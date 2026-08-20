@@ -131,6 +131,84 @@ class VisualRulebookTeachingEvidenceFreshnessTest {
     }
 
     @Test
+    void preservesExplicitCancellationInsteadOfMakingItRetryable() {
+        UUID preparationRunId = preparationRunId();
+        when(runs.findOwned(preparationRunId, "alice")).thenReturn(Optional.of(details(
+                preparationRunId, AssistantRunState.FAILED, "AGENT_CANCELLED")));
+
+        assertThat(freshness.assess(documentVersionId, preparationRunId, "alice"))
+                .isEqualTo(ReuseAssessment.CANCELLED);
+    }
+
+    @Test
+    void preservesCancellationOfTheDownstreamLessonGeneration() {
+        UUID preparationRunId = preparationRunId();
+        TeachingPlan plan = mock(TeachingPlan.class);
+        UUID planId = UUID.randomUUID();
+        UUID generationRunId = UUID.randomUUID();
+        when(plan.id()).thenReturn(planId);
+        when(runs.findOwned(preparationRunId, "alice")).thenReturn(Optional.of(details(
+                preparationRunId, AssistantRunState.COMPLETED)));
+        when(plans.findLatest(documentVersionId, "alice")).thenReturn(Optional.of(plan));
+        when(runs.findLatestOwned(AssistantRunMode.TEACHING, planId, "alice"))
+                .thenReturn(Optional.of(details(
+                        generationRunId,
+                        AssistantRunMode.TEACHING,
+                        planId,
+                        AssistantRunState.FAILED,
+                        "AGENT_CANCELLED")));
+
+        assertThat(freshness.assess(documentVersionId, preparationRunId, "alice"))
+                .isEqualTo(ReuseAssessment.CANCELLED);
+    }
+
+    @Test
+    void retriesAFailedContinuationWhileKeepingItsReadableFirstSection() {
+        UUID preparationRunId = preparationRunId();
+        TeachingPlan plan = mock(TeachingPlan.class);
+        UUID planId = UUID.randomUUID();
+        UUID generationRunId = UUID.randomUUID();
+        when(plan.id()).thenReturn(planId);
+        when(runs.findOwned(preparationRunId, "alice")).thenReturn(Optional.of(details(
+                preparationRunId, AssistantRunState.COMPLETED)));
+        when(plans.findLatest(documentVersionId, "alice")).thenReturn(Optional.of(plan));
+        when(runs.findLatestOwned(AssistantRunMode.TEACHING, planId, "alice"))
+                .thenReturn(Optional.of(details(
+                        generationRunId,
+                        AssistantRunMode.TEACHING,
+                        planId,
+                        AssistantRunState.FAILED,
+                        "TEACHING_CONTINUATION_QUEUE_FULL")));
+        when(lessons.findLatestByPlan(planId)).thenReturn(Optional.of(readableLesson(planId)));
+
+        assertThat(freshness.assess(documentVersionId, preparationRunId, "alice"))
+                .isEqualTo(ReuseAssessment.RETRYABLE_FAILURE);
+    }
+
+    @Test
+    void keepsTheHandoffUnreconciledWhileRemainingChaptersAreStillRunning() {
+        UUID preparationRunId = preparationRunId();
+        TeachingPlan plan = mock(TeachingPlan.class);
+        UUID planId = UUID.randomUUID();
+        UUID generationRunId = UUID.randomUUID();
+        when(plan.id()).thenReturn(planId);
+        when(runs.findOwned(preparationRunId, "alice")).thenReturn(Optional.of(details(
+                preparationRunId, AssistantRunState.COMPLETED)));
+        when(plans.findLatest(documentVersionId, "alice")).thenReturn(Optional.of(plan));
+        when(runs.findLatestOwned(AssistantRunMode.TEACHING, planId, "alice"))
+                .thenReturn(Optional.of(details(
+                        generationRunId,
+                        AssistantRunMode.TEACHING,
+                        planId,
+                        AssistantRunState.RETRIEVING,
+                        null)));
+        when(lessons.findLatestByPlan(planId)).thenReturn(Optional.of(readableLesson(planId)));
+
+        assertThat(freshness.assess(documentVersionId, preparationRunId, "alice"))
+                .isEqualTo(ReuseAssessment.IN_PROGRESS);
+    }
+
+    @Test
     void keepsADeterministicallyInvalidPlanTerminalInsteadOfBlindlyRegeneratingIt() {
         UUID preparationRunId = preparationRunId();
         when(runs.findOwned(preparationRunId, "alice")).thenReturn(Optional.of(details(
@@ -185,17 +263,31 @@ class VisualRulebookTeachingEvidenceFreshnessTest {
     }
 
     private AssistantRuns.RunDetails details(UUID runId, AssistantRunState state, String errorCode) {
-        Instant now = Instant.parse("2026-08-17T00:00:00Z");
-        var run = new AssistantRuns.RunSnapshot(
+        return details(
                 runId,
                 AssistantRunMode.TEACHING_PREPARATION,
                 documentVersionId,
+                state,
+                errorCode);
+    }
+
+    private AssistantRuns.RunDetails details(
+            UUID runId,
+            AssistantRunMode mode,
+            UUID subjectId,
+            AssistantRunState state,
+            String errorCode) {
+        Instant now = Instant.parse("2026-08-17T00:00:00Z");
+        var run = new AssistantRuns.RunSnapshot(
+                runId,
+                mode,
+                subjectId,
                 "alice",
                 state,
                 3,
                 now,
                 now,
-                null,
+                state.terminal() ? now : null,
                 errorCode);
         var budget = new AgentExecutionControl.BudgetSnapshot(
                 40, 72, 36, 160_000, 0, 0, 0, now.plusSeconds(600), null);

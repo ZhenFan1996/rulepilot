@@ -23,6 +23,7 @@ export async function streamGameRecommendation(
   url: string,
   init: RequestInit,
   onProgress: (update: RecommendationProgressUpdate) => void,
+  onAnswerPart: (text: string) => void = () => undefined,
 ) {
   const response = await fetch(url, init)
   if (!response.ok) throw new RecommendationRequestError(response.status)
@@ -36,12 +37,22 @@ export async function streamGameRecommendation(
   const decoder = new TextDecoder()
   let buffer = ''
   let result: RecommendationAgentResponse | null = null
+  let latestProgressElapsed = -1
 
   const consume = (event: StreamEvent) => {
     if (event.event === 'progress') {
-      onProgress(JSON.parse(event.data) as RecommendationProgressUpdate)
+      const update = parseProgress(JSON.parse(event.data) as unknown)
+      if (update && update.elapsedMs >= latestProgressElapsed) {
+        latestProgressElapsed = update.elapsedMs
+        onProgress(update)
+      }
     } else if (event.event === 'result') {
       result = JSON.parse(event.data) as RecommendationAgentResponse
+    } else if (event.event === 'answer_part') {
+      const payload = JSON.parse(event.data) as { field?: unknown; text?: unknown }
+      if (payload.field === 'message' && typeof payload.text === 'string' && payload.text.trim()) {
+        onAnswerPart(payload.text)
+      }
     } else if (event.event === 'error') {
       const payload = JSON.parse(event.data) as { code?: unknown }
       throw new RecommendationStreamError(typeof payload.code === 'string' ? payload.code : 'recommendation_unavailable')
@@ -67,6 +78,33 @@ export async function streamGameRecommendation(
   }
   if (!result) throw new Error('recommendation stream ended without a result')
   return result
+}
+
+function parseProgress(value: unknown): RecommendationProgressUpdate | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const candidate = value as Record<string, unknown>
+  const stage = candidate.stage
+  const stages = new Set([
+    'understanding_request', 'selecting_tools', 'searching_bgg_catalog', 'reading_game_details',
+    'discovering_candidates', 'verifying_bgg_candidates', 'researching_game_fit', 'composing_response',
+  ])
+  if (typeof stage !== 'string' || !stages.has(stage)) return null
+  if (!Number.isSafeInteger(candidate.elapsedMs) || (candidate.elapsedMs as number) < 0) return null
+  const count = (key: string) => Number.isSafeInteger(candidate[key]) && (candidate[key] as number) >= 0
+    ? candidate[key] as number
+    : 0
+  const observedCandidates = count('observedCandidates')
+  const verifiedCandidates = count('verifiedCandidates')
+  const hardRejectedCandidates = count('hardRejectedCandidates')
+  if (verifiedCandidates > observedCandidates || hardRejectedCandidates > verifiedCandidates) return null
+  return {
+    stage: stage as RecommendationProgressUpdate['stage'],
+    elapsedMs: candidate.elapsedMs as number,
+    observedCandidates,
+    verifiedCandidates,
+    hardRejectedCandidates,
+    sourceCount: count('sourceCount'),
+  }
 }
 
 function parseEvent(raw: string): StreamEvent | null {

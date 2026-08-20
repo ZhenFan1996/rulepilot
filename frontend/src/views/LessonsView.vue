@@ -579,9 +579,9 @@ function clearProgressTimer() {
   pollTimer = undefined
 }
 
-function scheduleProgressRefresh(delay = 1500) {
+function scheduleProgressRefresh(delay = 4_000) {
   clearProgressTimer()
-  if (disposed || plansNeedingRefresh().length === 0) return
+  if (disposed || document.visibilityState === 'hidden' || plansNeedingRefresh().length === 0) return
   pollTimer = setTimeout(() => {
     pollTimer = undefined
     void refreshProgress(plansNeedingRefresh())
@@ -604,6 +604,16 @@ function scheduleJourneyRefresh() {
   clearJourneyTimer()
   if (disposed || !pendingJourneys.value.some(journey => journey.state === 'active')) return
   journeyTimer = setTimeout(() => { void loadPlans(true) }, 4_000)
+}
+
+function handleVisibilityChange() {
+  if (document.visibilityState === 'hidden') {
+    cancelProgressReads()
+    clearProgressTimer()
+    clearJourneyTimer()
+    return
+  }
+  void loadPlans(true)
 }
 
 async function loadPlans(background = false) {
@@ -940,11 +950,13 @@ function updateSessionIdentity(username: string) {
 
 onMounted(() => {
   disposed = false
+  document.addEventListener('visibilitychange', handleVisibilityChange)
   clockTimer = setInterval(() => { now.value = Date.now() }, 1000)
   void loadPlans()
 })
 onBeforeUnmount(() => {
   disposed = true
+  document.removeEventListener('visibilitychange', handleVisibilityChange)
   latestListRequest++
   activeListController?.abort()
   activeListController = null
