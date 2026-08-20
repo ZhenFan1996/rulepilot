@@ -5,3 +5,7 @@ spring:
       - org.springframework.boot.hibernate.autoconfigure.HibernateJpaAutoConfiguration
       - org.springframework.boot.flyway.autoconfigure.FlywayAutoConfiguration
       - org.springframework.boot.session.data.redis.autoconfigure.SessionDataRedisAutoConfiguration
+
+rulepilot:
+  persistence:
+    jdbc-adapters-enabled: false

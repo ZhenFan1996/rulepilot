@@ -12,14 +12,14 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
 
 @Repository
-@ConditionalOnBean(NamedParameterJdbcTemplate.class)
+@ConditionalOnProperty(name = "rulepilot.persistence.jdbc-adapters-enabled", havingValue = "true", matchIfMissing = true)
 public class PostgresModelAccountQuota implements ModelAccountQuota {
 
     private final NamedParameterJdbcTemplate jdbc;
