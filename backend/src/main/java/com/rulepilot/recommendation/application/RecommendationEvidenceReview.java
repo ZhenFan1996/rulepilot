@@ -209,7 +209,9 @@ final class RecommendationEvidenceReview {
         }
         String field = text(update.path("field"), 1, 40);
         JsonNode value = update.path("value");
-        boolean exactPlayerCount = "players".equals(field) && value.canConvertToInt()
+        boolean exactPlayerCount = ("players".equals(field) || "playerCount".equals(field))
+                        && value.isIntegralNumber()
+                        && value.canConvertToInt()
                 || "playerCount".equals(field)
                         && value.isObject()
                         && value.path("minimum").canConvertToInt()
@@ -319,7 +321,9 @@ final class RecommendationEvidenceReview {
         JsonNode value = update.path("value");
         int players = "players".equals(field)
                 ? integer(value, 1, 20, "PLAYERS_OUT_OF_RANGE")
-                : integer(value.path("minimum"), 1, 20, "PLAYERS_OUT_OF_RANGE");
+                : value.isIntegralNumber()
+                        ? integer(value, 1, 20, "PLAYERS_OUT_OF_RANGE")
+                        : integer(value.path("minimum"), 1, 20, "PLAYERS_OUT_OF_RANGE");
         String contextualField = "players".equals(field) ? field : "playerCount";
         state.contextualPreferences.put(
                 contextualField,

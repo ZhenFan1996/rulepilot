@@ -210,7 +210,7 @@ final class RecommendationActions {
             String locale) {
         requireObject(
                 arguments,
-                Set.of("message", "candidateBggIds", "subjects"),
+                Set.of("candidateBggIds", "subjects", "preferredBggId"),
                 Set.of("preferenceUpdates"));
         evidenceReview.applyPreferenceUpdatesForRead(arguments, state, request);
         List<Integer> candidateIds = ids(arguments.path("candidateBggIds"), 2, 5);
@@ -222,7 +222,10 @@ final class RecommendationActions {
             throw new InvalidAction("COMPARISON_CANDIDATE_NOT_IN_CONVERSATION");
         }
         List<String> subjects = playerFacingStrings(arguments.path("subjects"), 1, 3);
-        String message = playerFacingText(arguments.path("message"));
+        Integer preferredBggId = preferredComparisonId(arguments.path("preferredBggId"));
+        if (preferredBggId != null && !candidateIds.contains(preferredBggId)) {
+            throw new InvalidAction("COMPARISON_PREFERENCE_INVALID");
+        }
 
         List<ComparisonCandidate> candidates = games.stream()
                 .map(game -> new ComparisonCandidate(
@@ -235,7 +238,7 @@ final class RecommendationActions {
                         games.stream()
                                 .map(game -> new ComparisonCell(
                                         game.ranking().bggId(),
-                                        selector.observations(game).stream()
+                                        narrativeObservations(game, state.research).values().stream()
                                                 .filter(observation -> observation.attribute().equals(subject))
                                                 .findFirst()
                                                 .orElse(null)))
@@ -245,11 +248,47 @@ final class RecommendationActions {
         state.actions.add("COMPARE_CANDIDATES");
         return ActionOutcome.terminal(response(
                 Outcome.CONVERSATION,
-                message,
+                comparisonMessage(games, preferredBggId, locale),
                 state,
                 locale,
                 null,
                 List.of()));
+    }
+
+    private Integer preferredComparisonId(JsonNode node) {
+        if (node == null || node.isNull()) return null;
+        if (node.isIntegralNumber() && node.canConvertToInt()) {
+            int value = node.intValue();
+            if (value > 0) return value;
+        } else if (node.isTextual()) {
+            try {
+                int value = Integer.parseInt(node.asText());
+                if (value > 0) return value;
+            } catch (NumberFormatException ignored) {
+                // Exact membership in candidateBggIds remains the authoritative identity boundary below.
+            }
+        }
+        throw new InvalidAction("COMPARISON_PREFERENCE_INVALID");
+    }
+
+    private String comparisonMessage(List<Game> games, Integer preferredBggId, String locale) {
+        if (preferredBggId == null) {
+            return runtime.chinese(locale)
+                    ? "这两款我不想硬分胜负：能核对的差异都在下面，真正的选择取决于你们更在意哪一边。"
+                    : "I would not force a winner between these games: the checkable differences are below, and the choice depends on which side matters more to your group.";
+        }
+        Game preferred = games.stream()
+                .filter(game -> game.ranking().bggId() == preferredBggId)
+                .findFirst()
+                .orElseThrow();
+        String name = runtime.chinese(locale) && !preferred.details().officialChineseName().isBlank()
+                ? preferred.details().officialChineseName()
+                : preferred.ranking().sourceName();
+        return runtime.chinese(locale)
+                ? "真要替你们拍板，我会先选《" + name
+                        + "》。我把能核对的差异放在下面；这是基于现有资料的取舍，不是来源替你们下的结论。"
+                : "If I had to make the call for your group, I would start with “" + name
+                        + ".” The checkable differences are below; this is my tradeoff based on the available evidence, not a conclusion made by the sources.";
     }
 
     private ActionOutcome noMatch(JsonNode arguments, RecommendationAgentState state, String locale) {
@@ -518,6 +557,7 @@ final class RecommendationActions {
         if (ids.stream().anyMatch(id -> !state.verified.containsKey(id))) {
             throw new InvalidAction("GAME_NOT_VERIFIED");
         }
+        state.researchAttempted = true;
         progress.accept(ProgressStage.RESEARCHING_GAME_FIT);
         state.webResearchCalls++;
         List<BoardGameRecommendationWebResearch.Candidate> candidates = ids.stream()
@@ -796,7 +836,7 @@ final class RecommendationActions {
                                 id,
                                 bggId,
                                 CandidateObservation.Kind.ATTRIBUTED_REPORT,
-                                "attributedReport",
+                                "reportedExperience",
                                 observation.text(),
                                 observation.sourceIndexes()));
                     }

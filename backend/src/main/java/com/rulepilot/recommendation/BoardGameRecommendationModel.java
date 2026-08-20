@@ -72,14 +72,24 @@ public interface BoardGameRecommendationModel {
         }
     }
 
-    record Request(List<Message> messages, List<ToolSpec> tools, int maxOutputTokens) {
+    enum ToolChoice {
+        AUTO,
+        REQUIRED
+    }
+
+    record Request(List<Message> messages, List<ToolSpec> tools, int maxOutputTokens, ToolChoice toolChoice) {
+        public Request(List<Message> messages, List<ToolSpec> tools, int maxOutputTokens) {
+            this(messages, tools, maxOutputTokens, ToolChoice.AUTO);
+        }
+
         public Request {
             if (messages == null
                     || messages.isEmpty()
                     || tools == null
                     || tools.isEmpty()
                     || maxOutputTokens < 128
-                    || maxOutputTokens > 2_048) {
+                    || maxOutputTokens > 2_048
+                    || toolChoice == null) {
                 throw new IllegalArgumentException("recommendation model request is invalid");
             }
             messages = List.copyOf(messages);

@@ -21,9 +21,15 @@ import com.rulepilot.recommendation.BoardGameRecommendationModel;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.ToolCall;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.Turn;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch;
+import com.rulepilot.recommendation.CandidateObservation;
+import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Candidate;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.CandidateDiscovery;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.DiscoveryRequest;
+import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.GameResearch;
+import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Observation;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Research;
+import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Request;
+import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Source;
 import com.rulepilot.recommendation.adapter.out.research.ResponsesApiBoardGameRecommendationWebResearch;
 import com.rulepilot.recommendation.adapter.out.model.SpringAiBoardGameRecommendationModel;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ConversationRequest;
@@ -368,7 +374,7 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                             || action.equals("SEARCH_BGG_BY_NAME")
                             || action.startsWith("FALLBACK_")
                             || action.startsWith("REJECTED_"));
-            assertTerminalProsePreserved(capture.lastToolCall(), comparison);
+            assertStructuredComparisonDecision(capture.lastToolCall(), comparison);
             assertThat(discoveryCalls).hasValue(1);
             assertThat(discoveryRequests).hasSize(1);
             assertThat(visibleTurns)
@@ -1010,21 +1016,113 @@ class BoardGameRecommendationAgentPaidCanaryTest {
             assertThat(response.harness().fallbackUsed()).isFalse();
 
             JsonNode rawAction = json.readTree(capture.lastArguments(BoardGameRecommendationAgent.COMPARE_TOOL));
-            assertThat(rawAction.has("decision")).isFalse();
-            assertThat(rawAction.has("decisionMode")).isFalse();
-            assertThat(rawAction.has("decisionEvidenceIds")).isFalse();
+            assertThat(rawAction.has("message")).isFalse();
+            assertThat(rawAction.has("preferredBggId")).isTrue();
             assertThat(rawAction.path("candidateBggIds").size()).isEqualTo(2);
             assertThat(rawAction.path("subjects").size()).isEqualTo(3);
-
-            String rawMessage = rawAction.path("message").asText();
             String visible = response.assistantMessage();
             assertThat(visible)
-                    .as("the model's validated natural comparison must reach the player verbatim")
-                    .isEqualTo(rawMessage);
+                    .as("the visible decision must distinguish application judgment from source observations")
+                    .contains("能核对的差异", "不是来源替你们下的结论");
             assertThat(visible.codePointCount(0, visible.length()))
-                    .as("the evidence boundary must not flatten the comparison into a generic sentence")
-                    .isGreaterThanOrEqualTo(70);
+                    .isGreaterThanOrEqualTo(35);
 
+            writeArtifact(capture, visibleTurns, null);
+        } catch (Throwable failure) {
+            writeArtifact(capture, visibleTurns, failure.getClass().getSimpleName());
+            throw failure;
+        } finally {
+            agent.stopBoundedCalls();
+        }
+    }
+
+    @Test
+    void answersADeeperSourceBackedComparisonWithoutVerifiedCardFallback() throws Exception {
+        assumeTrue("true".equalsIgnoreCase(System.getenv("RULEPILOT_RECOMMENDATION_PAID_CANARY")));
+        String provider = environment("RULEPILOT_RECOMMENDATION_CANARY_PROVIDER", "qwen")
+                .toLowerCase(Locale.ROOT);
+        String prefix = provider.toUpperCase(Locale.ROOT);
+        Capture capture = new Capture(provider, environment(prefix + "_MODEL", null));
+        BoardGameRecommendationModel model = model(
+                provider,
+                environment(prefix + "_API_KEY", null),
+                environment(prefix + "_BASE_URL", null),
+                environment(prefix + "_MODEL", null),
+                capture);
+        AtomicInteger researchCalls = new AtomicInteger();
+        BoardGameRecommendationWebResearch research = new BoardGameRecommendationWebResearch() {
+            @Override
+            public boolean configured() {
+                return true;
+            }
+
+            @Override
+            public Optional<Research> research(Request request) {
+                researchCalls.incrementAndGet();
+                assertThat(request.candidates()).extracting(Candidate::bggId).containsExactlyInAnyOrder(101, 105);
+                assertThat(request.question()).isNotBlank();
+                return Optional.of(new Research(
+                        List.of(
+                                new GameResearch(101, List.of(new Observation(
+                                        "Four-player reports describe deliberate market watching with turns resolved one at a time; first games need an explanation of collection timing, while repeated plays expose more drafting counterplay.",
+                                        List.of(1)))),
+                                new GameResearch(105, List.of(new Observation(
+                                        "Four-player reports describe simultaneous choices and frequent table discussion; newcomers can act quickly, though voting outcomes depend strongly on the group and can feel noisy.",
+                                        List.of(2))))),
+                        List.of(
+                                new Source(1, "Independent River Market play report", "https://reports.example.test/river", "reports.example.test"),
+                                new Source(2, "Independent Harbor Chorus play report", "https://reports.example.test/harbor", "reports.example.test"))));
+            }
+        };
+        var properties = new BoardGameRecommendationProperties(
+                8, 3, new BigDecimal("0.66"), Duration.ofSeconds(30));
+        var agent = new BoardGameRecommendationAgent(
+                model,
+                new BoardGameRecommendationTools(new CanaryCatalog(), research),
+                new BoardGameRecommendationSelector(properties),
+                properties,
+                json);
+        List<Map<String, Object>> visibleTurns = new ArrayList<>();
+        String requestText = "我们周末四个人玩，其中两位第一次玩。River Market 和 Harbor Chorus 到底怎么选？"
+                + "我更想知道实际互动、会不会等太久、教起来累不累，以及多玩几次还有没有变化。"
+                + "能查到玩家体验的话帮我看看，最后直接给个建议；查不到的别猜。";
+
+        try {
+            long started = System.nanoTime();
+            var response = agent.converse(
+                    new ConversationRequest(
+                            RecommendationProfile.empty(),
+                            requestText,
+                            List.of(),
+                            List.of(new DialogueMessage("user", requestText)),
+                            null,
+                            List.of(
+                                    new KnownGame(101, "River Market", "River Market"),
+                                    new KnownGame(105, "Harbor Chorus", "Harbor Chorus")),
+                            List.of(101, 105)),
+                    "zh-CN");
+            visibleTurns.add(visible("deep-source-backed-comparison", response, elapsed(started)));
+
+            assertThat(response.outcome()).isEqualTo(Outcome.CONVERSATION);
+            assertThat(response.comparison()).isNotNull();
+            assertThat(response.comparison().candidates()).hasSize(2);
+            assertThat(response.comparison().axes())
+                    .flatExtracting(BoardGameRecommendationAgent.ComparisonAxis::cells)
+                    .anySatisfy(cell -> assertThat(cell.observation())
+                            .isNotNull()
+                            .extracting(CandidateObservation::kind)
+                            .isEqualTo(CandidateObservation.Kind.ATTRIBUTED_REPORT));
+            assertThat(response.researchSources()).hasSize(2);
+            assertThat(response.harness().catalogCalls()).isEqualTo(1);
+            assertThat(response.harness().webResearchCalls()).isEqualTo(1);
+            assertThat(response.harness().modelCalls()).isLessThanOrEqualTo(4);
+            assertThat(response.harness().fallbackUsed()).isFalse();
+            assertThat(response.harness().actions())
+                    .containsSubsequence("LOOKUP_BGG_CANDIDATES", "RESEARCH_GAME_FIT", "COMPARE_CANDIDATES")
+                    .noneMatch(action -> action.startsWith("REJECTED_")
+                            || action.startsWith("FALLBACK_")
+                            || action.equals("RUN_DEADLINE_EXCEEDED"));
+            assertStructuredComparisonDecision(capture.lastToolCall(), response);
             writeArtifact(capture, visibleTurns, null);
         } catch (Throwable failure) {
             writeArtifact(capture, visibleTurns, failure.getClass().getSimpleName());
@@ -1305,6 +1403,30 @@ class BoardGameRecommendationAgentPaidCanaryTest {
         assertThat(response.assistantMessage())
                 .as("validated terminal prose must pass to the visible response without rewriting")
                 .isEqualTo(arguments.path(field).asText());
+    }
+
+    private void assertStructuredComparisonDecision(
+            ToolCall call,
+            BoardGameRecommendationAgent.ConversationResponse response) throws Exception {
+        assertThat(call.name()).isEqualTo(BoardGameRecommendationAgent.COMPARE_TOOL);
+        JsonNode arguments = json.readTree(call.argumentsJson());
+        assertThat(arguments.has("message"))
+                .as("free-form factual prose must not bypass the comparison cells")
+                .isFalse();
+        assertThat(arguments.has("preferredBggId")).isTrue();
+        if (arguments.path("preferredBggId").isNull()) {
+            assertThat(response.assistantMessage()).contains("能核对的差异都在下面");
+            return;
+        }
+        int preferredBggId = arguments.path("preferredBggId").asInt();
+        String preferredName = response.comparison().candidates().stream()
+                .filter(candidate -> candidate.game().ranking().bggId() == preferredBggId)
+                .map(candidate -> candidate.game().ranking().sourceName())
+                .findFirst()
+                .orElseThrow();
+        assertThat(response.assistantMessage())
+                .contains(preferredName)
+                .contains("能核对的差异", "不是来源替你们下的结论");
     }
 
     private void assertClarificationPreserved(
