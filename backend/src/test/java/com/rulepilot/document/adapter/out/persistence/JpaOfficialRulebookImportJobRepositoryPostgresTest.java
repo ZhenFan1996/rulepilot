@@ -57,7 +57,7 @@ class JpaOfficialRulebookImportJobRepositoryPostgresTest {
                 .applySetting("jakarta.persistence.jdbc.url", POSTGRES.getJdbcUrl())
                 .applySetting("jakarta.persistence.jdbc.user", POSTGRES.getUsername())
                 .applySetting("jakarta.persistence.jdbc.password", POSTGRES.getPassword())
-                .applySetting("hibernate.hbm2ddl.auto", "none")
+                .applySetting("hibernate.hbm2ddl.auto", "validate")
                 .build();
         sessionFactory = new MetadataSources(registry)
                 .addAnnotatedClass(OfficialRulebookImportJobEntity.class)
@@ -79,6 +79,21 @@ class JpaOfficialRulebookImportJobRepositoryPostgresTest {
         jdbc.update("DELETE FROM assistant_run WHERE owner_username = 'official-handoff-player'");
         jdbc.update("DELETE FROM document_version WHERE object_key LIKE 'official-handoff-test/%'");
         jdbc.update("DELETE FROM rule_document WHERE created_by IN ('official-handoff-player', 'other-identity-player')");
+    }
+
+    @Test
+    void migratedImportJobSchemaMatchesTheProductionHibernateMapping() {
+        assertThat(sessionFactory.isOpen()).isTrue();
+        assertThat(jdbc.queryForObject(
+                        """
+                        SELECT data_type
+                        FROM information_schema.columns
+                        WHERE table_schema = 'public'
+                          AND table_name = 'official_rulebook_import_job'
+                          AND column_name = 'teaching_automatic_recovery_count'
+                        """,
+                        String.class))
+                .isEqualTo("integer");
     }
 
     @Test
