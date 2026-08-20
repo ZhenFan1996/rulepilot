@@ -93,12 +93,16 @@ public class PostgresBggMetadataCache implements BggMetadataCache {
 
     @Override
     public void putDiscoveryGames(List<DiscoveryGame> games, CacheWindow window) {
-        for (DiscoveryGame game : games) put("DISCOVERY", game.bggId(), game, window);
+        for (DiscoveryGame game : games) {
+            put("DISCOVERY", game.bggId(), game, window);
+            upsertOfficialChineseNames(game.bggId(), List.of(game.chineseName()), window.cachedAt());
+        }
     }
 
     @Override
     public void putGame(GameDetails game, CacheWindow window) {
         put("GAME", game.bggId(), game, window);
+        upsertOfficialChineseNames(game.bggId(), game.officialChineseNames(), window.cachedAt());
     }
 
     @Override
@@ -199,6 +203,31 @@ public class PostgresBggMetadataCache implements BggMetadataCache {
                         .addValue("cachedAt", Timestamp.from(window.cachedAt()))
                         .addValue("freshUntil", Timestamp.from(window.freshUntil()))
                         .addValue("staleUntil", Timestamp.from(window.staleUntil())));
+    }
+
+    private void upsertOfficialChineseNames(int bggId, List<String> names, Instant observedAt) {
+        MapSqlParameterSource[] aliases = names.stream()
+                .filter(java.util.Objects::nonNull)
+                .map(String::strip)
+                .filter(name -> !name.isBlank())
+                .distinct()
+                .map(name -> new MapSqlParameterSource()
+                        .addValue("bggId", bggId)
+                        .addValue("alias", name)
+                        .addValue("locale", "zh")
+                        .addValue("source", "BGG_OFFICIAL_VERSION")
+                        .addValue("observedAt", Timestamp.from(observedAt)))
+                .toArray(MapSqlParameterSource[]::new);
+        if (aliases.length == 0) return;
+        jdbc.batchUpdate(
+                """
+                INSERT INTO bgg_game_name_alias (bgg_id, alias, locale, source, observed_at)
+                VALUES (:bggId, :alias, :locale, :source, :observedAt)
+                ON CONFLICT (bgg_id, alias, locale) DO UPDATE SET
+                    source = EXCLUDED.source,
+                    observed_at = GREATEST(bgg_game_name_alias.observed_at, EXCLUDED.observed_at)
+                """,
+                aliases);
     }
 
     private List<Integer> checkedIds(List<Integer> values) {

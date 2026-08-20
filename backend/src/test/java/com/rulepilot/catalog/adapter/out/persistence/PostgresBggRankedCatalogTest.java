@@ -34,6 +34,7 @@ class PostgresBggRankedCatalogTest {
             .withPassword("rulepilot-test");
 
     private static PostgresBggRankedCatalog repository;
+    private static NamedParameterJdbcTemplate jdbc;
 
     @BeforeAll
     static void migrate() {
@@ -45,7 +46,8 @@ class PostgresBggRankedCatalogTest {
                 .migrate();
         DriverManagerDataSource dataSource = new DriverManagerDataSource(
                 POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());
-        repository = new PostgresBggRankedCatalog(new NamedParameterJdbcTemplate(dataSource));
+        jdbc = new NamedParameterJdbcTemplate(dataSource);
+        repository = new PostgresBggRankedCatalog(jdbc);
     }
 
     private static void enableProductionExtensions() {
@@ -68,6 +70,11 @@ class PostgresBggRankedCatalogTest {
         Snapshot snapshot = new Snapshot(
                 Instant.parse("2026-08-07T08:00:00Z"), LocalDate.parse("2026-08-07"), 3, "a".repeat(64));
         repository.publish(importId, snapshot);
+        jdbc.getJdbcTemplate().update(
+                """
+                INSERT INTO bgg_game_name_alias (bgg_id, alias, locale, source, observed_at)
+                VALUES (10, '百变策略', 'zh', 'BGG_OFFICIAL_VERSION', TIMESTAMPTZ '2026-08-07T08:00:00Z')
+                """);
 
         assertThat(repository.findSnapshot()).contains(snapshot);
         assertThat(repository.find(new Query("", BggGameType.ALL, Sort.HOT, 0, 20, List.of(20))).games())
@@ -80,6 +87,9 @@ class PostgresBggRankedCatalogTest {
                 .extracting(RankedGame::bggId)
                 .containsExactly(10);
         assertThat(repository.find(new Query("100%", BggGameType.ALL, Sort.RANK, 0, 20, List.of())).games())
+                .extracting(RankedGame::sourceName)
+                .containsExactly("Strategy 100%");
+        assertThat(repository.find(new Query("百变", BggGameType.ALL, Sort.RANK, 0, 20, List.of())).games())
                 .extracting(RankedGame::sourceName)
                 .containsExactly("Strategy 100%");
         assertThat(repository.find(new Query("", BggGameType.EXPANSION, Sort.RATING, 0, 20, List.of())).games())

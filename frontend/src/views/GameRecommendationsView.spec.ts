@@ -44,6 +44,8 @@ const catalog = {
 }
 
 describe('GameRecommendationsView', () => {
+  let router: ReturnType<typeof createRouter>
+
   beforeEach(() => {
     setLocale('zh-CN')
     vi.stubGlobal('scrollTo', vi.fn())
@@ -53,8 +55,8 @@ describe('GameRecommendationsView', () => {
     vi.unstubAllGlobals()
   })
 
-  async function mountView() {
-    const router = createRouter({
+  async function mountView(initialRoute = '/discover/catalog') {
+    router = createRouter({
       history: createMemoryHistory(),
       routes: [
         { path: '/', name: 'home', component: { template: '<div />' } },
@@ -69,7 +71,7 @@ describe('GameRecommendationsView', () => {
         { path: '/login', name: 'login', component: { template: '<div />' } },
       ],
     })
-    await router.push('/discover/catalog')
+    await router.push(initialRoute)
     await router.isReady()
     return mount(GameRecommendationsView, { global: { plugins: [router] } })
   }
@@ -90,7 +92,11 @@ describe('GameRecommendationsView', () => {
     const attribution = wrapper.get('a[href="https://boardgamegeek.com"]')
     expect(attribution.get('img').attributes('src')).toBe('/powered-by-bgg-rgb.svg')
     expect(attribution.get('img').attributes('alt')).toBe('Powered by BoardGameGeek')
-    expect(wrapper.text()).not.toContain('第 1 / 378 页')
+    expect(wrapper.text()).toContain('第 1 / 378 页')
+    expect(wrapper.get('[data-testid="catalog-pagination"]').attributes('aria-label')).toBe('桌游目录分页')
+    expect(wrapper.get('[data-testid="catalog-page-1"]').attributes('aria-current')).toBe('page')
+    expect(wrapper.get('[data-testid="catalog-page-2"]').text()).toBe('2')
+    expect(wrapper.get('[data-testid="catalog-page-378"]').text()).toBe('378')
     expect((wrapper.findAll('select')[0]!.element as HTMLSelectElement).value).toBe('rank')
   })
 
@@ -144,7 +150,7 @@ describe('GameRecommendationsView', () => {
     })).toBe(true)
   })
 
-  it('searches the imported full catalog and appends a prefetched next batch', async () => {
+  it('searches the imported full catalog and navigates to a prefetched numbered page', async () => {
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
       const url = String(input)
       return Response.json(url.includes('page=1') ? {
@@ -162,11 +168,39 @@ describe('GameRecommendationsView', () => {
     await flushPromises()
     expect(fetchMock.mock.calls.some(([input]) => String(input).includes('q=Wingspan'))).toBe(true)
 
-    await wrapper.get('nav button').trigger('click')
+    await wrapper.get('[data-testid="catalog-page-2"]').trigger('click')
     await flushPromises()
     expect(wrapper.text()).toContain('CATAN')
-    expect(wrapper.text()).toContain('已展示 2 款')
+    expect(wrapper.text()).not.toContain('展翅翱翔')
+    expect(wrapper.text()).toContain('第 2 / 378 页')
+    expect(wrapper.text()).toContain('本页 1 款')
+    expect(router.currentRoute.value.query).toMatchObject({ q: 'Wingspan', page: '2' })
     expect(fetchMock.mock.calls.some(([input]) => String(input).includes('page=1') && String(input).includes('enrich=false'))).toBe(true)
+  })
+
+  it('restores filters, a Chinese title query, and the selected page from the URL', async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const request = new URL(String(input), 'http://localhost')
+      return Response.json({
+        ...catalog,
+        page: Number(request.searchParams.get('page')),
+        sort: request.searchParams.get('sort'),
+        type: request.searchParams.get('type'),
+      })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const wrapper = await mountView('/discover/catalog?sort=rating&type=strategy&q=%E8%8C%B6%E5%9B%AD&page=3')
+    await flushPromises()
+
+    expect((wrapper.get('input[type="search"]').element as HTMLInputElement).value).toBe('茶园')
+    expect((wrapper.findAll('select')[0]!.element as HTMLSelectElement).value).toBe('rating')
+    expect((wrapper.findAll('select')[1]!.element as HTMLSelectElement).value).toBe('strategy')
+    expect(wrapper.text()).toContain('第 3 / 378 页')
+    expect(fetchMock.mock.calls.some(([input]) => {
+      const url = String(input)
+      return url.includes('q=%E8%8C%B6%E5%9B%AD') && url.includes('page=2')
+    })).toBe(true)
   })
 
   it('lets the catalog decide whether a one-character title query is meaningful', async () => {
@@ -182,7 +216,7 @@ describe('GameRecommendationsView', () => {
     expect(fetchMock.mock.calls.some(([input]) => String(input).includes('q=%E7%BF%BC'))).toBe(true)
   })
 
-  it('reuses an in-flight next-page prefetch and keeps enrichment for every visible page', async () => {
+  it('reuses an in-flight next-page prefetch and ignores enrichment from the page that is no longer visible', async () => {
     let resolvePageOne!: (response: Response) => void
     const pageOneResponse = new Promise<Response>(resolve => { resolvePageOne = resolve })
     let resolvePageZeroRich!: (response: Response) => void
@@ -201,7 +235,7 @@ describe('GameRecommendationsView', () => {
 
     const wrapper = await mountView()
     await flushPromises()
-    await wrapper.get('nav button').trigger('click')
+    await wrapper.get('[data-testid="catalog-page-2"]').trigger('click')
     await flushPromises()
 
     expect(fetchMock.mock.calls.filter(([input]) =>
@@ -218,7 +252,7 @@ describe('GameRecommendationsView', () => {
       games: [{ ...catalog.games[0], name: '第一页已补齐' }],
     }))
     await flushPromises()
-    expect(wrapper.text()).toContain('第一页已补齐')
+    expect(wrapper.text()).not.toContain('第一页已补齐')
     expect(wrapper.text()).toContain('Page One Base')
 
     resolvePageOneRich(Response.json({
@@ -230,7 +264,7 @@ describe('GameRecommendationsView', () => {
       games: [{ ...pageOneGame, name: '第二页已补齐' }],
     }))
     await flushPromises()
-    expect(wrapper.text()).toContain('第一页已补齐')
+    expect(wrapper.text()).not.toContain('第一页已补齐')
     expect(wrapper.text()).toContain('第二页已补齐')
   })
 
@@ -281,7 +315,7 @@ describe('GameRecommendationsView', () => {
     expect(wrapper.text()).not.toContain('展翅翱翔')
   })
 
-  it('preserves current cards and offers an explicit retry after append failure', async () => {
+  it('preserves current cards and offers an explicit retry after page navigation fails', async () => {
     let pageOneAttempts = 0
     const pageOneGame = { ...catalog.games[0], bggId: 13, name: '重试后的游戏', originalName: 'Retried Game', nameLocalized: true }
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
@@ -297,15 +331,17 @@ describe('GameRecommendationsView', () => {
 
     const wrapper = await mountView()
     await flushPromises()
-    await wrapper.get('nav button').trigger('click')
+    await wrapper.get('[data-testid="catalog-page-2"]').trigger('click')
     await flushPromises()
 
     expect(wrapper.text()).toContain('展翅翱翔')
-    expect(wrapper.text()).toContain('下一批暂时没取到')
-    await wrapper.findAll('button').find(button => button.text() === '重试下一批')!.trigger('click')
+    expect(wrapper.text()).toContain('这一页暂时没取到，当前页仍然保留')
+    await wrapper.findAll('button').find(button => button.text() === '重试这一页')!.trigger('click')
     await flushPromises()
     expect(wrapper.text()).toContain('重试后的游戏')
-    expect(wrapper.text()).not.toContain('下一批暂时没取到')
+    expect(wrapper.text()).not.toContain('展翅翱翔')
+    expect(wrapper.text()).not.toContain('这一页暂时没取到')
+    expect(wrapper.text()).toContain('第 2 / 2 页')
   })
 
   it('aborts a pending base request when the view unmounts', async () => {

@@ -51,7 +51,9 @@ class PostgresBggMetadataCacheTest {
 
     @BeforeEach
     void clearCache() {
-        new JdbcTemplate(jdbc.getJdbcTemplate().getDataSource()).update("DELETE FROM bgg_metadata_cache");
+        JdbcTemplate template = new JdbcTemplate(jdbc.getJdbcTemplate().getDataSource());
+        template.update("DELETE FROM bgg_metadata_cache");
+        template.update("DELETE FROM bgg_game_name_alias");
     }
 
     @Test
@@ -84,6 +86,18 @@ class PostgresBggMetadataCacheTest {
 
         assertThat(stale.freshAt(cachedAt.plusSeconds(7_200))).isFalse();
         assertThat(repository.game(1, cachedAt.plusSeconds(86_400))).isEmpty();
+    }
+
+    @Test
+    void retainsOfficialChineseAliasesAfterTheMetadataCacheExpires() {
+        Instant cachedAt = Instant.parse("2026-08-07T08:00:00Z");
+        repository.putDiscoveryGames(List.of(discovery(266192, "Wingspan")), window(cachedAt));
+
+        repository.prune(cachedAt.plusSeconds(86_400), 10, 1_000_000);
+
+        assertThat(jdbc.getJdbcTemplate().queryForList(
+                        "SELECT alias FROM bgg_game_name_alias WHERE bgg_id = 266192", String.class))
+                .containsExactly("展翅翱翔");
     }
 
     @Test
