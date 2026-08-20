@@ -135,12 +135,15 @@ public class BggRankedCatalogService implements BggRankedCatalog, BoardGameRecom
         }
         LinkedHashMap<Integer, RankedGame> matches = new LinkedHashMap<>();
         for (String name : checked) {
-            List<RankedGame> candidates =
-                    repository.find(new Query(name, BggGameType.ALL, Sort.RANK, 0, 5, List.of())).games();
-            candidates.stream()
-                    .filter(game -> normalizedTitle(game.sourceName()).equals(normalizedTitle(name)))
+            List<RankedGame> exact = localExactMatches(name);
+            if (exact.size() == 1) {
+                RankedGame game = exact.getFirst();
+                matches.putIfAbsent(game.bggId(), game);
+                continue;
+            }
+            if (exact.size() > 1) continue;
+            repository.find(new Query(name, BggGameType.ALL, Sort.RANK, 0, 5, List.of())).games().stream()
                     .findFirst()
-                    .or(() -> candidates.stream().findFirst())
                     .ifPresent(game -> matches.putIfAbsent(game.bggId(), game));
         }
         return matches.values().stream().map(this::recommendationRanking).toList();
@@ -152,11 +155,7 @@ public class BggRankedCatalogService implements BggRankedCatalog, BoardGameRecom
         List<String> aliases = explicitReferenceAliases(checked);
         LinkedHashMap<Integer, RankedGame> localExact = new LinkedHashMap<>();
         for (String alias : aliases) {
-            String normalizedAlias = normalizedTitle(alias);
-            repository.find(new Query(alias, BggGameType.ALL, Sort.RANK, 0, 5, List.of())).games().stream()
-                    .filter(game -> normalizedTitle(game.sourceName()).equals(normalizedAlias))
-                    .findFirst()
-                    .ifPresent(game -> localExact.putIfAbsent(game.bggId(), game));
+            localExactMatches(alias).forEach(game -> localExact.putIfAbsent(game.bggId(), game));
         }
         if (localExact.size() > 1) return List.of();
         if (localExact.size() == 1) {
@@ -182,6 +181,15 @@ public class BggRankedCatalogService implements BggRankedCatalog, BoardGameRecom
         return List.of(ranked
                 .map(value -> recommendationGame(value, details))
                 .orElseGet(() -> recommendationGame(details)));
+    }
+
+    private List<RankedGame> localExactMatches(String name) {
+        List<RankedGame> exact = repository.findExactName(name);
+        if (!exact.isEmpty()) return exact;
+        String normalizedName = normalizedTitle(name);
+        return repository.find(new Query(name, BggGameType.ALL, Sort.RANK, 0, 5, List.of())).games().stream()
+                .filter(game -> normalizedTitle(game.sourceName()).equals(normalizedName))
+                .toList();
     }
 
     /**

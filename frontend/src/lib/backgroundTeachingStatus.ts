@@ -13,6 +13,7 @@ export interface BackgroundTeachingTransition {
 const STORAGE_KEY_PREFIXES = {
   activeTeaching: 'rulepilot:active-teaching-runs',
   completedTeaching: 'rulepilot:completed-teaching-runs',
+  dismissedTeachingRuns: 'rulepilot:dismissed-teaching-runs',
   dismissedImports: 'rulepilot:dismissed-official-imports',
   dismissedUploadHandoffs: 'rulepilot:dismissed-upload-teaching-handoffs',
 } as const

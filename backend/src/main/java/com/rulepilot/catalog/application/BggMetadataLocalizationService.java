@@ -3,6 +3,7 @@ package com.rulepilot.catalog.application;
 import com.rulepilot.catalog.BggMetadataTranslation;
 import com.rulepilot.catalog.BggMetadataTranslation.Request;
 import com.rulepilot.catalog.BggMetadataTranslation.Translation;
+import com.rulepilot.catalog.application.BoardGameGeekCatalog.DiscoveryGame;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -58,6 +59,22 @@ public class BggMetadataLocalizationService {
             officialNameLocalized = !game.officialChineseNames().isEmpty() && !name.equals(sourceName);
         }
         return source(game, name, officialNameLocalized, description);
+    }
+
+    /** Persists the same zh-CN translation that a later game-detail request will consume. */
+    public boolean prewarm(DiscoveryGame game) {
+        String description = normalizedDescription(game.description());
+        if (description.isBlank() && game.categories().isEmpty() && game.mechanics().isEmpty()) return true;
+        String sourceName = SimplifiedChineseText.normalize(game.name());
+        String displayName = game.chineseName().isBlank() ? sourceName : game.chineseName();
+        Request request = new Request(
+                game.bggId(), displayName, description, game.categories(), game.mechanics());
+        try {
+            return translations.translate(request).isPresent();
+        } catch (RuntimeException exception) {
+            LOGGER.warn("BGG metadata translation prewarm paused at bggId={}", game.bggId());
+            return false;
+        }
     }
 
     private String normalizedDescription(String source) {

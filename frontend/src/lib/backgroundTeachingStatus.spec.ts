@@ -46,6 +46,7 @@ describe('background teaching status', () => {
     const player = backgroundWorkStorageKeys(' player@example.com ')
     const other = backgroundWorkStorageKeys('other@example.com')
     expect(player.activeTeaching).toBe('rulepilot:active-teaching-runs:player%40example.com')
+    expect(player.dismissedTeachingRuns).toBe('rulepilot:dismissed-teaching-runs:player%40example.com')
     sessionStorage.setItem(player.activeTeaching, 'player')
     sessionStorage.setItem(other.activeTeaching, 'other')
     sessionStorage.setItem('rulepilot:active-teaching-runs', 'legacy')

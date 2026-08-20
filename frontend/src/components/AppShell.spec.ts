@@ -117,6 +117,8 @@ describe('AppShell', () => {
     await wrapper.findAll('button').find(button => button.text() === '清除已结束任务')!.trigger('click')
     await flushPromises()
     expect(wrapper.text()).not.toContain('星际探索')
+    expect(JSON.parse(localStorage.getItem(playerStorageKeys.dismissedTeachingRuns) ?? '[]'))
+      .toContain('run-1')
     wrapper.unmount()
   })
 
@@ -224,6 +226,8 @@ describe('AppShell', () => {
     const wrapper = mount(AppShell, { slots: { default: '<p>页面内容</p>' }, global: { plugins: [router] } })
     await flushPromises()
     expect(wrapper.get('[data-testid="background-work-trigger-desktop"]').text()).not.toContain('1')
+    expect(wrapper.get('[data-testid="background-work-persistent-shortcut"]').text())
+      .toContain('随时回来查看规则书与讲解进度')
 
     notifyTeachingLaunched({ planId: 'plan-2', runId: 'run-2', gameTitle: '卡坦岛' })
     await flushPromises()

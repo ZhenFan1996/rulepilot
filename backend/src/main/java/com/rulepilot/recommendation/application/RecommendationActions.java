@@ -196,7 +196,7 @@ final class RecommendationActions {
             String locale) {
         requireObject(
                 arguments,
-                Set.of("candidateBggIds", "subjects", "preferredBggId"),
+                Set.of("candidateBggIds", "subjects", "preferredBggId", "message", "internalEvidenceIds"),
                 Set.of("preferenceUpdates"));
         evidenceReview.applyPreferenceUpdatesForRead(arguments, state, request);
         List<Integer> candidateIds = ids(arguments.path("candidateBggIds"), 2, 5);
@@ -211,6 +211,34 @@ final class RecommendationActions {
         Integer preferredBggId = preferredComparisonId(arguments.path("preferredBggId"));
         if (preferredBggId != null && !candidateIds.contains(preferredBggId)) {
             throw new InvalidAction("COMPARISON_PREFERENCE_INVALID");
+        }
+
+        String message = playerFacingText(arguments.path("message"));
+        Map<String, CandidateObservation> availableEvidence = games.stream()
+                .flatMap(game -> narrativeObservations(game, state.research).entrySet().stream())
+                .collect(java.util.stream.Collectors.toMap(
+                        Map.Entry::getKey,
+                        Map.Entry::getValue,
+                        (first, ignored) -> first,
+                        LinkedHashMap::new));
+        List<String> internalEvidenceIds = strings(
+                arguments.path("internalEvidenceIds"),
+                1,
+                availableEvidence.size(),
+                3,
+                80);
+        List<CandidateObservation> messageEvidence = internalEvidenceIds.stream()
+                .map(availableEvidence::get)
+                .toList();
+        if (messageEvidence.stream().anyMatch(Objects::isNull)) {
+            throw new InvalidAction("COMPARISON_MESSAGE_EVIDENCE_NOT_GROUNDED");
+        }
+        if (messageEvidence.stream().anyMatch(observation -> !subjects.contains(observation.attribute()))) {
+            throw new InvalidAction("COMPARISON_MESSAGE_EVIDENCE_OUTSIDE_AXES");
+        }
+        if (preferredBggId != null
+                && messageEvidence.stream().noneMatch(observation -> observation.bggId() == preferredBggId)) {
+            throw new InvalidAction("COMPARISON_PREFERENCE_EVIDENCE_MISSING");
         }
 
         List<ComparisonCandidate> candidates = games.stream()
@@ -234,7 +262,7 @@ final class RecommendationActions {
         state.actions.add("COMPARE_CANDIDATES");
         return ActionOutcome.terminal(response(
                 Outcome.CONVERSATION,
-                comparisonMessage(games, preferredBggId, locale),
+                message,
                 state,
                 locale,
                 null,
@@ -255,26 +283,6 @@ final class RecommendationActions {
             }
         }
         throw new InvalidAction("COMPARISON_PREFERENCE_INVALID");
-    }
-
-    private String comparisonMessage(List<Game> games, Integer preferredBggId, String locale) {
-        if (preferredBggId == null) {
-            return runtime.chinese(locale)
-                    ? "这两款我不想硬分胜负：能核对的差异都在下面，真正的选择取决于你们更在意哪一边。"
-                    : "I would not force a winner between these games: the checkable differences are below, and the choice depends on which side matters more to your group.";
-        }
-        Game preferred = games.stream()
-                .filter(game -> game.ranking().bggId() == preferredBggId)
-                .findFirst()
-                .orElseThrow();
-        String name = runtime.chinese(locale) && !preferred.details().officialChineseName().isBlank()
-                ? preferred.details().officialChineseName()
-                : preferred.ranking().sourceName();
-        return runtime.chinese(locale)
-                ? "真要替你们拍板，我会先选《" + name
-                        + "》。我把能核对的差异放在下面；这是基于现有资料的取舍，不是来源替你们下的结论。"
-                : "If I had to make the call for your group, I would start with “" + name
-                        + ".” The checkable differences are below; this is my tradeoff based on the available evidence, not a conclusion made by the sources.";
     }
 
     private ActionOutcome noMatch(JsonNode arguments, RecommendationAgentState state, String locale) {

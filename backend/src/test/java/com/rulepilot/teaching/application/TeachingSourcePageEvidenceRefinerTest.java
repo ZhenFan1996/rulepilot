@@ -12,6 +12,7 @@ import com.rulepilot.assistant.AgentExecutionStoppedException;
 import com.rulepilot.assistant.AgentExecutionStoppedException.StopReason;
 import com.rulepilot.assistant.AssistantReadTools;
 import com.rulepilot.assistant.AssistantReadTools.RuleEvidence;
+import com.rulepilot.assistant.AssistantReadTools.RulePageImage;
 import com.rulepilot.assistant.AuditedAgentInvocations;
 import com.rulepilot.assistant.NativeAgentTool.ToolScope;
 import com.rulepilot.assistant.NativeToolScopes;
@@ -50,6 +51,45 @@ class TeachingSourcePageEvidenceRefinerTest {
         assertThat(result.evidence()).containsExactly(searchHit, laterClause);
         assertThat(invocations.toolCalls).hasValue(1);
         verify(tools).readRuleEvidencePages(versionId, Set.of(2), false);
+    }
+
+    @Test
+    void keepsTheCompleteVisualTranscriptWhenTheCanonicalPageStillContainsTheImagePlaceholder() {
+        UUID sourceId = UUID.randomUUID();
+        RuleEvidence visualTranscript = new RuleEvidence(
+                sourceId,
+                versionId,
+                "SETUP",
+                "Setup",
+                "[rule-group:prepare-board] Put the board in the middle, then give every player one marker.",
+                2,
+                2,
+                List.of(new RulePageImage(2, "image/png", new byte[] {1, 2, 3}, 100, 80)));
+        RuleEvidence canonicalPlaceholder = evidence(
+                sourceId,
+                2,
+                TeachingVisualEvidenceSelector.VISUAL_PAGE_PLACEHOLDER);
+        TeachingPlan plan = plan(List.of(2));
+
+        var result = refiner(scopes(), tools(List.of(canonicalPlaceholder)), new RecordingInvocations())
+                .refine(plan, plan.sections().getFirst(), runId, verified(1, visualTranscript));
+
+        assertThat(result.state()).isEqualTo(TeachingSectionEvidenceRetriever.State.VERIFIED);
+        assertThat(result.evidence()).containsExactly(visualTranscript);
+    }
+
+    @Test
+    void stillRejectsDifferentTextForTheSameCanonicalEvidenceIdentity() {
+        UUID sourceId = UUID.randomUUID();
+        RuleEvidence first = evidence(sourceId, 2, "Place one marker beside the board.");
+        RuleEvidence conflicting = evidence(sourceId, 2, "Place two markers beside the board.");
+        TeachingPlan plan = plan(List.of(2));
+
+        var result = refiner(scopes(), tools(List.of(conflicting)), new RecordingInvocations())
+                .refine(plan, plan.sections().getFirst(), runId, verified(1, first));
+
+        assertThat(result.state()).isEqualTo(TeachingSectionEvidenceRetriever.State.INVALID);
+        assertThat(result.evidence()).isEmpty();
     }
 
     @Test

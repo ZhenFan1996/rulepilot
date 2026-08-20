@@ -14,6 +14,7 @@ import {
   type PlayerRuleCitation,
 } from '@/lib/playerAnswerContract'
 import { playerWorkStatus } from '@/lib/playerWorkStatus'
+import { streamStructuredAnswer } from '@/lib/structuredAnswerStream'
 
 interface TeachingPlan {
   id: string
@@ -54,16 +55,15 @@ const feedbackByTurn = ref<Record<string, FeedbackRating>>({})
 const feedbackSubmitting = ref(false)
 const errorMessage = ref('')
 const elapsedSeconds = ref(0)
+const answerRunStarted = ref(false)
 let elapsedTimer: number | undefined
 
 const latestTurn = computed(() => turns.value[turns.value.length - 1] ?? null)
 const earlierTurns = computed(() => turns.value.slice(0, -1).reverse())
 const displayPlanTitle = computed(() => plan.value ? playerFacingTitle(plan.value.gameTitle) : '')
-const stageMessage = computed(() => {
-  if (elapsedSeconds.value < 3) return '正在理解问题…'
-  if (elapsedSeconds.value < 8) return '正在规则书里查找相关条目…'
-  return '正在核对结论与出处；可以留在此页等待。'
-})
+const stageMessage = computed(() => answerRunStarted.value
+  ? '答疑任务已经开始，正在核对规则原文与引用…'
+  : '正在提交问题并建立答疑任务…')
 const answerWorkStatus = computed(() => playerWorkStatus('CHECKING_ANSWER', {
   capability: turns.value.length > 0 ? 'answer' : 'rulebook',
   readiness: turns.value.length > 0 ? 'usable' : 'unavailable',
@@ -157,18 +157,17 @@ async function ask() {
   if (!text || !plan.value || !session.value || asking.value) return
   asking.value = true
   elapsedSeconds.value = 0
+  answerRunStarted.value = false
   errorMessage.value = ''
   elapsedTimer = window.setInterval(() => (elapsedSeconds.value += 1), 1_000)
   try {
     const csrf = await csrfToken()
-    const response = await fetch(`/api/v1/document-versions/${plan.value.documentVersionId}/answers`, {
+    const creation = await streamStructuredAnswer(`/api/v1/document-versions/${plan.value.documentVersionId}/answers/stream`, {
       method: 'POST',
       credentials: 'include',
       headers: { 'Content-Type': 'application/json', [csrf.headerName]: csrf.token },
       body: JSON.stringify({ question: text, gameSessionId: session.value.id }),
-    })
-    if (!response.ok) throw new Error('这次裁定没有完成，请重试。')
-    const creation = await response.json() as unknown
+    }, () => { answerRunStarted.value = true })
     if (!isRecord(creation) || typeof creation.conversationTurnId !== 'string') {
       throw new Error('这次裁定返回了无法显示的内容，请重试。')
     }

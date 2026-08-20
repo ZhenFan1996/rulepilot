@@ -693,7 +693,7 @@ public class GroundedTeachingAgent {
                 false,
                 true,
                 "NO_VALID_BASE_EVIDENCE",
-                "NO_VALID_BASE_EVIDENCE",
+                "BASE_EVIDENCE_IDENTITY_INVALID",
                 "CITED_BASE_SECTION_PUBLISHED",
                 "BASE_DRAFT_WITHHELD");
         private static final GenerationMode COMPATIBILITY_COMPLETE = new GenerationMode(

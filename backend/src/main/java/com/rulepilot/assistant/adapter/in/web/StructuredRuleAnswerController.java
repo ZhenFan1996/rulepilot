@@ -12,11 +12,19 @@ import com.rulepilot.assistant.domain.AnswerFeedback.Rating;
 import com.rulepilot.assistant.domain.GameSessionConversationTurn;
 import com.rulepilot.assistant.domain.StructuredRuleAnswer;
 import com.rulepilot.gamesession.GameSessionContextLookup;
+import java.io.IOException;
 import java.security.Principal;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Consumer;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Profile;
+import org.springframework.core.task.TaskExecutor;
+import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -24,32 +32,79 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 @RestController
 @Profile("!test")
 @RequestMapping("/api/v1/document-versions/{versionId}/answers")
 public class StructuredRuleAnswerController {
 
+    private static final Logger LOGGER = LoggerFactory.getLogger(StructuredRuleAnswerController.class);
+    private static final long STREAM_TIMEOUT_MILLIS = 40_000;
+
     private final StructuredRuleAnswerService answers;
     private final GameSessionContextLookup sessions;
     private final GameSessionConversationService conversations;
     private final AnswerFeedbackService feedback;
+    private final TaskExecutor streamExecutor;
 
     public StructuredRuleAnswerController(
             StructuredRuleAnswerService answers,
             GameSessionContextLookup sessions,
             GameSessionConversationService conversations,
-            AnswerFeedbackService feedback) {
+            AnswerFeedbackService feedback,
+            @Qualifier("structuredRuleAnswerStreamExecutor") TaskExecutor streamExecutor) {
         this.answers = answers;
         this.sessions = sessions;
         this.conversations = conversations;
         this.feedback = feedback;
+        this.streamExecutor = streamExecutor;
     }
 
-    @PostMapping
+    @PostMapping(produces = MediaType.APPLICATION_JSON_VALUE)
     AnswerResponse answer(
             @PathVariable UUID versionId, @RequestBody AnswerRequest request, Principal principal) {
+        return createAnswer(versionId, request, principal.getName(), ignored -> {});
+    }
+
+    @PostMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    SseEmitter answerStream(
+            @PathVariable UUID versionId, @RequestBody AnswerRequest request, Principal principal) {
+        SseEmitter emitter = new SseEmitter(STREAM_TIMEOUT_MILLIS);
+        AtomicBoolean open = new AtomicBoolean(true);
+        emitter.onCompletion(() -> open.set(false));
+        emitter.onTimeout(() -> open.set(false));
+        emitter.onError(ignored -> open.set(false));
+        send(emitter, open, "accepted", new StreamAccepted("answer_received"));
+        if (!open.get()) return emitter;
         String username = principal.getName();
+        try {
+            streamExecutor.execute(() -> {
+                try {
+                    AnswerResponse response = createAnswer(
+                            versionId,
+                            request,
+                            username,
+                            runId -> send(emitter, open, "run", new StreamRun(runId)));
+                    if (!open.get()) return;
+                    send(emitter, open, "result", response);
+                    if (open.getAndSet(false)) emitter.complete();
+                } catch (RuntimeException exception) {
+                    LOGGER.warn("Structured answer stream did not complete: {}", exception.getClass().getSimpleName());
+                    sendError(emitter, open, "answer_unavailable");
+                }
+            });
+        } catch (RuntimeException exception) {
+            sendError(emitter, open, "answer_unavailable");
+        }
+        return emitter;
+    }
+
+    private AnswerResponse createAnswer(
+            UUID versionId,
+            AnswerRequest request,
+            String username,
+            Consumer<UUID> runStarted) {
         var session = validateSession(request.gameSessionId(), versionId, username);
         var priorTurn = session == null
                 ? null
@@ -65,7 +120,8 @@ public class StructuredRuleAnswerController {
                         outputLanguage,
                         priorTurn),
                 username,
-                request.gameSessionId());
+                request.gameSessionId(),
+                runStarted);
         GameSessionConversationTurn turn = session == null
                 ? null
                 : conversations.record(session.sessionId(), request.question(), creation.answer(), username);
@@ -73,6 +129,27 @@ public class StructuredRuleAnswerController {
                 PlayerFacingAnswerPresenter.present(creation.answer(), request.question(), outputLanguage),
                 turn == null ? null : turn.id(),
                 RulingReference.from(creation.answer()));
+    }
+
+    private void send(SseEmitter emitter, AtomicBoolean open, String event, Object data) {
+        if (!open.get()) return;
+        try {
+            emitter.send(SseEmitter.event().name(event).data(data));
+        } catch (IOException | RuntimeException exception) {
+            open.set(false);
+            LOGGER.debug("Structured answer stream disconnected before completion");
+        }
+    }
+
+    private void sendError(SseEmitter emitter, AtomicBoolean open, String code) {
+        if (!open.getAndSet(false)) return;
+        try {
+            emitter.send(SseEmitter.event().name("error").data(new StreamError(code)));
+        } catch (IOException | RuntimeException ignored) {
+            // The client may already have closed the stream.
+        } finally {
+            emitter.complete();
+        }
     }
 
     @GetMapping("/conversation")
@@ -121,6 +198,12 @@ public class StructuredRuleAnswerController {
             PlayerFacingRuleAnswer answer,
             UUID conversationTurnId,
             RulingReference rulingReference) {}
+
+    record StreamAccepted(String state) {}
+
+    record StreamRun(UUID runId) {}
+
+    record StreamError(String code) {}
 
     record ConversationTurnResponse(
             UUID id,

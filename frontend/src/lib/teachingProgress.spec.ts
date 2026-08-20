@@ -5,9 +5,11 @@ import {
   processedTeachingChapterCount,
   recentTeachingActivitySteps,
   recentTeachingPreparationActivitySteps,
+  rejectedTeachingChapterCount,
   supportedTeachingChapterCount,
   teachingActivityCursor,
   teachingActivityText,
+  teachingChapterFailureText,
   teachingRemainingTimeText,
   type TeachingActivity,
   type TeachingRunProgress,
@@ -60,12 +62,56 @@ describe('teaching progress', () => {
     expect(teachingActivityText(plan, activities, activities[0])).toBe('正在依据规则书编写第 1 章“完成开局设置”')
     expect(processedTeachingChapterCount(snapshot)).toBe(2)
     expect(supportedTeachingChapterCount(snapshot)).toBe(1)
+    expect(rejectedTeachingChapterCount(snapshot)).toBe(1)
     expect(teachingRemainingTimeText(plan, run('run-1', []), Date.parse('2026-07-21T00:02:00Z')))
       .toContain('第一节完成后')
     expect(teachingActivityText(plan, activities, activities[0], 'en'))
       .toBe('Writing chapter 1 “完成开局设置” from the rulebook')
     expect(teachingRemainingTimeText(plan, run('run-1', []), Date.parse('2026-07-21T00:02:00Z'), 'en'))
       .toContain('After the first chapter is ready')
+  })
+
+  it('reports exact processed and rejected chapter counts with a player-facing failure category', () => {
+    const activities = [1, 2].map(position => activity(
+      position,
+      `publishTeachingSection|${position}`,
+      'REJECTED',
+      'Teaching section withheld: NO_VALID_BASE_EVIDENCE',
+    ))
+    const snapshot = run('run-visual-failed', activities)
+
+    expect(processedTeachingChapterCount(snapshot)).toBe(2)
+    expect(supportedTeachingChapterCount(snapshot)).toBe(0)
+    expect(rejectedTeachingChapterCount(snapshot)).toBe(2)
+    expect(teachingChapterFailureText(snapshot)).toBe('引用页没有形成可供这些章节发布的规则依据。')
+    expect(teachingChapterFailureText(snapshot, 'en'))
+      .toBe('The cited pages did not yield publishable rule evidence for these chapters.')
+  })
+
+  it('distinguishes an invalid evidence identity from an empty page read', () => {
+    const snapshot = run('run-invalid-evidence', [activity(
+      1,
+      'publishTeachingSection|1',
+      'REJECTED',
+      'Teaching section withheld: BASE_EVIDENCE_IDENTITY_INVALID',
+    )])
+
+    expect(teachingChapterFailureText(snapshot))
+      .toBe('引用页依据没有通过来源或规则书版本校验。')
+    expect(teachingChapterFailureText(snapshot, 'en'))
+      .toBe('The cited page evidence did not pass source or rulebook-version validation.')
+  })
+
+  it('uses the latest publication outcome when one bounded retry succeeds', () => {
+    const snapshot = run('run-recovered', [
+      activity(1, 'publishTeachingSection|1', 'REJECTED', 'Teaching section withheld: BASE_DRAFT_WITHHELD'),
+      activity(2, 'publishTeachingSection|1', 'SUCCEEDED', 'Teaching section published: CITED_BASE_SECTION_PUBLISHED'),
+    ])
+
+    expect(processedTeachingChapterCount(snapshot)).toBe(1)
+    expect(supportedTeachingChapterCount(snapshot)).toBe(1)
+    expect(rejectedTeachingChapterCount(snapshot)).toBe(0)
+    expect(teachingChapterFailureText(snapshot)).toBe('')
   })
 
   it('explains that remaining visual pages are read only after the starter chapter is ready', () => {

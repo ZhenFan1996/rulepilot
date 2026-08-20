@@ -82,7 +82,7 @@ describe('RecommendationAnswerWorkspace', () => {
         id: 'session-1', editionId: 'edition-1', documentVersionId: 'document-1',
       })
       if (path.includes('/answers/conversation?')) return Response.json([])
-      if (path === '/api/v1/document-versions/document-1/answers' && init?.method === 'POST') return Response.json({
+      if (path === '/api/v1/document-versions/document-1/answers/stream' && init?.method === 'POST') return Response.json({
         answer, conversationTurnId: 'turn-1', rulingReference,
       })
       return new Response(null, { status: 404 })
@@ -109,7 +109,7 @@ describe('RecommendationAnswerWorkspace', () => {
     panel.vm.$emit('ask')
     await flushPromises()
 
-    const submitted = requests.find(request => request.path === '/api/v1/document-versions/document-1/answers' && request.init?.method === 'POST')
+    const submitted = requests.find(request => request.path === '/api/v1/document-versions/document-1/answers/stream' && request.init?.method === 'POST')
     expect(JSON.parse(String(submitted?.init?.body))).toMatchObject({
       question: 'When does the bird power resolve?',
       gameSessionId: 'session-1',

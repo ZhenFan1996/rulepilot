@@ -162,6 +162,7 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   login: '登录后即可保留这次选择并继续找规则书。', loginAction: '打开桌游详情并继续',
   error: '这一步暂时没有完成；推荐对话和已选桌游不会受影响。', partialFailure: '已生成的章节仍可阅读，但后台生成或核对没有完整结束。可以安全重试，现有内容不会丢失。',
   missingChapterEvidence: (titles: string) => `“${titles}”对应的规则页没有提供足够依据，所以没有猜测并发布；其他已校验章节仍可阅读。`,
+  invalidChapterEvidence: (titles: string) => `“${titles}”读取到的依据没有通过来源或规则书版本校验，因此没有进入正文生成；其他已校验章节仍可阅读。`,
   invalidChapterAfterRetry: (titles: string) => `“${titles}”的草稿没有通过引用或结构校验；后台已自动只重试这部分一次，仍未通过，因此保留其他已发布章节并停下。`,
   invalidChapter: (titles: string) => `“${titles}”的草稿没有通过引用或结构校验，因此没有发布；其他已校验章节仍可阅读。`,
   retry: '重试当前步骤', close: '关闭小窗', change: '换一款',
@@ -234,6 +235,7 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   login: 'Sign in to keep this selection and continue to its rulebook.', loginAction: 'Open game details and continue',
   error: 'This step did not complete. The conversation and selected game are unaffected.', partialFailure: 'Published chapters remain readable, but background generation or review did not finish. You can retry safely without losing existing content.',
   missingChapterEvidence: (titles: string) => `The cited rulebook pages did not provide enough support for “${titles}”, so RulePilot did not guess or publish it. Other validated chapters remain readable.`,
+  invalidChapterEvidence: (titles: string) => `The evidence read for “${titles}” did not pass source or rulebook-version validation, so chapter writing did not start. Other validated chapters remain readable.`,
   invalidChapterAfterRetry: (titles: string) => `The draft for “${titles}” did not pass citation or structure checks. The background run retried only that work once and stopped when it still did not pass; other published chapters remain readable.`,
   invalidChapter: (titles: string) => `The draft for “${titles}” did not pass citation or structure checks, so it was not published. Other validated chapters remain readable.`,
   retry: 'Retry this step', close: 'Close', change: 'Choose another game',
@@ -434,6 +436,10 @@ const teachingFailureDetail = computed(() => {
   const activities = teachingRun.value?.activities ?? []
   const rejectedPublications = activities.filter(activity =>
     activity.outcome === 'REJECTED' && activity.operation.startsWith('publishTeachingSection|'))
+  const invalidEvidence = rejectedPublications.some(activity =>
+    activity.summary.includes('BASE_EVIDENCE_IDENTITY_INVALID')
+      || activity.summary.includes('RETRIEVED_EVIDENCE_INVALID'))
+  if (invalidEvidence) return copy.value.invalidChapterEvidence(titles)
   const missingEvidence = rejectedPublications.some(activity =>
     activity.summary.includes('NO_VALID_BASE_EVIDENCE'))
   if (missingEvidence) return copy.value.missingChapterEvidence(titles)

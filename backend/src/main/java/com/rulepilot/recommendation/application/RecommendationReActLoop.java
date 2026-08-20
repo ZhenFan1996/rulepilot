@@ -454,7 +454,7 @@ final class RecommendationReActLoop {
 
                 After any supplied lookup, browse, discovery, or research action, the protocol requires another supplied action rather than bare assistant text. This keeps sourced claims attached to candidate-scoped observations and visible sources. Choose only from the actions supplied on that turn. For two or more compared candidates, finish through the supplied structured comparison action; after attributed multi-candidate research, an unstructured reply is unavailable. For selectable cards, finish through the supplied card action.
 
-                Recommendation cards are an Agent decision, not the default response shape. Emit them only through the supplied card action when the current conversational goal asks for candidates or a selectable exact title. Recommend only verified, hard-eligible IDs and honor an explicit result count. Give every card a specific why and useful tradeoff, citing the same candidate's observations internally; a public-source criterion must cite that candidate's attributed R observation. Separate facts from judgment naturally, keep uncertainty local, and do not infer table feel from taxonomy alone. In comparisons, unsupported requested qualities stay unknown and taxonomy must not be converted into play-feel conclusions. Select only observed comparison axes and, when justified, one preferred candidate; the application renders the decision sentence and the observed cells, so do not generate free-form comparison prose. The UI displays card reasons and tradeoffs immediately below a card overview, so do not repeat those fields in a card message. Do not present an unselected candidate as part of the recommendation. Finish as soon as the evidence is sufficient.
+                Recommendation cards are an Agent decision, not the default response shape. Emit them only through the supplied card action when the current conversational goal asks for candidates or a selectable exact title. Recommend only verified, hard-eligible IDs and honor an explicit result count. Give every card a specific why and useful tradeoff, citing the same candidate's observations internally; a public-source criterion must cite that candidate's attributed R observation. Separate facts from judgment naturally, keep uncertainty local, and do not infer table feel from taxonomy alone. In comparisons, unsupported requested qualities stay unknown and taxonomy must not be converted into play-feel conclusions. Select only observed comparison axes and, when justified, one preferred candidate. Write the comparison message yourself as one concise, natural continuation of the conversation: make the useful choice first and name the tradeoff that could reverse it. Every factual clause must stay within the literal meaning of a selected observation. A mechanism or category label may be named, but it cannot serve as causal evidence for another quality; an attributed report supports only the experience it explicitly describes, not an unstated cause or consequence. Do not fill gaps about teaching effort, waiting, interaction, accessibility, strategic depth, or replayability unless a selected observation says so. Cite every observation used through internalEvidenceIds. The application publishes that message byte-for-byte beside the observed cells, which already carry the detailed comparison; do not recite every axis or narrate that a comparison was completed. The UI displays card reasons and tradeoffs immediately below a card overview, so do not repeat those fields in a card message. Do not present an unselected candidate as part of the recommendation. Finish as soon as the evidence is sufficient.
                 """;
     }
 
@@ -521,6 +521,7 @@ final class RecommendationReActLoop {
                                 ? comparisonAction(
                                         comparableIds,
                                         availableComparisonSubjects(state, comparableIds),
+                                        comparableEvidenceIds(state, comparableIds),
                                         preferenceEvidenceIds)
                         : NO_MATCH_TOOL.equals(action.name())
                                 ? noMatchAction(relaxableSubjects)
@@ -587,6 +588,18 @@ final class RecommendationReActLoop {
                 .map(CandidateObservation::attribute)
                 .forEach(subjects::add);
         return List.copyOf(subjects);
+    }
+
+    private List<String> comparableEvidenceIds(
+            RecommendationAgentState state,
+            List<Integer> comparableIds) {
+        return comparableIds.stream()
+                .map(state.verified::get)
+                .filter(Objects::nonNull)
+                .flatMap(game -> actionExecutor.narrativeObservations(game, state.research).values().stream())
+                .map(CandidateObservation::id)
+                .distinct()
+                .toList();
     }
 
     private int recommendationMinimumCount(
@@ -700,7 +713,7 @@ final class RecommendationReActLoop {
                         RESEARCH_TOOL,
                         "Research current reception or player-reported experience for already-verified games. For a comparison, include every compared bggId in this one bounded call and ask one combined question; after it returns, compare with the attributed R observations or leave unsupported qualities unknown.",
                         "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"bggIds\":{\"type\":\"array\",\"minItems\":1,\"maxItems\":5,\"items\":{\"type\":\"integer\",\"minimum\":1}},\"question\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":300}},\"required\":[\"bggIds\",\"question\"]}"),
-                comparisonAction(List.of(), List.of(), preferenceEvidenceIds),
+                comparisonAction(List.of(), List.of(), List.of(), preferenceEvidenceIds),
                 noMatchAction(List.of()),
                 recommendationAction(1, maximumResultCount, List.of(), List.of(), preferenceEvidenceIds, null));
     }
@@ -708,22 +721,28 @@ final class RecommendationReActLoop {
     private static ToolSpec comparisonAction(
             List<Integer> comparableIds,
             List<String> availableSubjects,
+            List<String> availableEvidenceIds,
             List<String> preferenceEvidenceIds) {
         String idConstraint = comparableIds.isEmpty()
                 ? "\"minimum\":1"
                 : "\"enum\":" + comparableIds;
+        String evidenceConstraint = availableEvidenceIds.isEmpty()
+                ? "\"minLength\":3,\"maxLength\":80"
+                : "\"enum\":" + jsonArray(availableEvidenceIds);
         return new ToolSpec(
                 COMPARE_TOOL,
                 "Compare two to five verified conversation candidates on one to three axes. Available observed attributes in this turn are "
                         + availableSubjects
-                        + ". Prefer reportedExperience when attributed research was requested. The UI renders the selected cells and a safe conversational decision sentence. Choose preferredBggId only when those displayed cells are enough for a useful recommendation; use null when they are not. Leave unsupported qualities unknown and never turn taxonomy into play feel. Persist any explicit current-turn numeric or type correction in preferenceUpdates in this same call. Never use this to replace candidates.",
+                        + ". Prefer reportedExperience when attributed research was requested. Write message as a concise, warm continuation, not a completion report: make the choice first when justified and name the tradeoff that could reverse it. The observed cells below the message already carry details, so do not recite every axis. Every factual clause must remain within the literal meaning of its selected observation: a label cannot prove another quality, and a report cannot prove an unstated cause or consequence. The message is published exactly as written. Cite every observation used in message through internalEvidenceIds; IDs must belong to the compared candidates and selected subjects. Choose preferredBggId only when those observed cells are enough for a useful recommendation; use null when they are not. Leave unsupported qualities unknown and never turn taxonomy into play feel. Persist any explicit current-turn numeric or type correction in preferenceUpdates in this same call. Never use this to replace candidates.",
                 "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"candidateBggIds\":{\"type\":\"array\",\"minItems\":2,\"maxItems\":5,\"uniqueItems\":true,\"items\":{\"type\":\"integer\","
                         + idConstraint
                         + "}},\"subjects\":{\"type\":\"array\",\"description\":\"One to three observation attribute names from runMemory. Unknown attributes remain visibly unknown instead of invalidating the comparison.\",\"minItems\":1,\"maxItems\":3,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"minLength\":1}},\"preferredBggId\":{\"description\":\"The one candidate you would choose from the displayed observed cells, or null when the evidence does not support choosing.\",\"anyOf\":[{\"type\":\"integer\","
                         + idConstraint
-                        + "},{\"type\":\"null\"}]},\"preferenceUpdates\":"
+                        + "},{\"type\":\"null\"}]},\"message\":{\"type\":\"string\",\"description\":\"A concise natural locale-matched decision and reversible tradeoff. Use only the literal meaning of selected observations; never add a cause or consequence to a taxonomy label or player report. It is shown exactly as written; keep internal evidence IDs out of this prose.\",\"minLength\":1},\"internalEvidenceIds\":{\"type\":\"array\",\"description\":\"Machine-only support for observations actually used in message. Every ID must belong to a compared candidate and one of subjects.\",\"minItems\":1,\"uniqueItems\":true,\"items\":{\"type\":\"string\","
+                        + evidenceConstraint
+                        + "}},\"preferenceUpdates\":"
                         + preferenceSchema(preferenceEvidenceIds)
-                        + "},\"required\":[\"candidateBggIds\",\"subjects\",\"preferredBggId\"]}");
+                        + "},\"required\":[\"candidateBggIds\",\"subjects\",\"preferredBggId\",\"message\",\"internalEvidenceIds\"]}");
     }
 
     private static ToolSpec noMatchAction(List<String> relaxableSubjects) {

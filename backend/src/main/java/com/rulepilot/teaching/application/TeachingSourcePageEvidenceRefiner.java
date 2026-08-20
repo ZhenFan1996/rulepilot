@@ -110,6 +110,9 @@ public class TeachingSourcePageEvidenceRefiner implements TeachingEvidenceRefine
             if (!onAllowedPage) continue;
             RuleEvidence existing = merged.get(source.chunkId());
             if (existing != null && !sameEvidence(existing, source)) {
+                if (isCanonicalPlaceholderForDerivedVisualTranscript(existing, source)) {
+                    continue;
+                }
                 return invalid(totalToolCalls);
             }
             merged.put(source.chunkId(), source);
@@ -252,6 +255,30 @@ public class TeachingSourcePageEvidenceRefiner implements TeachingEvidenceRefine
                 && first.sectionType().equals(second.sectionType())
                 && first.heading().equals(second.heading())
                 && first.excerpt().equals(second.excerpt())
+                && first.pageFrom() == second.pageFrom()
+                && first.pageTo() == second.pageTo();
+    }
+
+    /**
+     * The canonical text index deliberately stores an image-only sentinel, while the visual evidence resolver can
+     * project a complete, page-bound rule ledger onto that same immutable source identity. Re-reading the canonical
+     * page must not misclassify that derived transcript as a conflicting snapshot. Every other same-ID text change
+     * remains a hard conflict.
+     */
+    private boolean isCanonicalPlaceholderForDerivedVisualTranscript(
+            RuleEvidence derived, RuleEvidence canonical) {
+        return sameEvidenceIdentity(derived, canonical)
+                && TeachingVisualEvidenceSelector.isVisualPageEvidence(canonical)
+                && !TeachingVisualEvidenceSelector.isVisualPageEvidence(derived)
+                && derived.pageImages().stream().anyMatch(image -> image.pageNumber() >= derived.pageFrom()
+                        && image.pageNumber() <= derived.pageTo());
+    }
+
+    private boolean sameEvidenceIdentity(RuleEvidence first, RuleEvidence second) {
+        return first.chunkId().equals(second.chunkId())
+                && first.documentVersionId().equals(second.documentVersionId())
+                && first.sectionType().equals(second.sectionType())
+                && first.heading().equals(second.heading())
                 && first.pageFrom() == second.pageFrom()
                 && first.pageTo() == second.pageTo();
     }

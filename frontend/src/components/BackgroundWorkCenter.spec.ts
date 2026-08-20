@@ -590,7 +590,20 @@ describe('BackgroundWorkCenter request lifecycle', () => {
       const path = String(input)
       if (path.includes('/api/v1/assistant-runs/active')) return response([])
       if (path.endsWith('/api/v1/assistant-runs/run-failed')) {
-        return response({ run: teachingRun('run-failed', 'plan-failed', 'player', 'FAILED') })
+        return response({
+          run: {
+            ...teachingRun('run-failed', 'plan-failed', 'player', 'INSUFFICIENT_EVIDENCE'),
+            createdAt: '2026-08-20T06:00:00Z', updatedAt: '2026-08-20T06:00:08Z',
+            completedAt: '2026-08-20T06:00:08Z', lastErrorCode: null,
+          },
+          budget: { usedModelCalls: 0, maxModelCalls: 36 },
+          activities: Array.from({ length: 8 }, (_, index) => teachingActivity(
+            index + 1,
+            `publishTeachingSection|${index + 1}`,
+            'REJECTED',
+            'Teaching section withheld: NO_VALID_BASE_EVIDENCE',
+          )),
+        })
       }
       if (isBackgroundBaseList(path)) return response([])
       return new Response(null, { status: 404 })
@@ -601,8 +614,35 @@ describe('BackgroundWorkCenter request lifecycle', () => {
 
     expect(wrapper.text()).toContain('失败的讲解')
     expect(wrapper.text()).toContain('需要处理')
+    expect(wrapper.text()).toContain('已处理 8 章')
+    expect(wrapper.text()).toContain('8 章未发布')
+    expect(wrapper.text()).toContain('引用页没有形成可供这些章节发布的规则依据')
     expect(wrapper.text()).not.toContain('已完成')
-    expect(sessionStorage.getItem(keys.completedTeaching)).toContain('"terminalState":"FAILED"')
+    expect(sessionStorage.getItem(keys.completedTeaching)).toContain('"terminalState":"INSUFFICIENT_EVIDENCE"')
+    wrapper.unmount()
+  })
+
+  it('does not resurrect a durably dismissed Teaching result from a stale tab snapshot', async () => {
+    const keys = backgroundWorkStorageKeys('player')
+    const finished = {
+      runId: 'run-cleared', planId: 'plan-cleared', gameTitle: '已经清除的讲解', terminalState: 'FAILED',
+    }
+    sessionStorage.setItem(keys.completedTeaching, JSON.stringify([finished]))
+    localStorage.setItem(keys.dismissedTeachingRuns, JSON.stringify(['run-cleared']))
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const path = String(input)
+      if (path.includes('/api/v1/assistant-runs/active')) return response([])
+      if (isBackgroundBaseList(path)) return response([])
+      return new Response(null, { status: 404 })
+    }))
+
+    const wrapper = await mountCenter('player')
+    await flushPromises()
+    await openCenter(wrapper)
+
+    expect(wrapper.text()).toContain('当前没有后台任务')
+    expect(wrapper.text()).not.toContain('已经清除的讲解')
+    expect(sessionStorage.getItem(keys.completedTeaching)).toBe('[]')
     wrapper.unmount()
   })
 

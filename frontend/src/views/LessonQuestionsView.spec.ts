@@ -29,7 +29,7 @@ describe('LessonQuestionsView', () => {
       }
       if (path.endsWith('/illustrated-lessons/latest')) return Response.json(lessonFixture())
       if (path === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
-      if (path.endsWith('/answers') && init?.method === 'POST') {
+      if (path.endsWith('/answers/stream') && init?.method === 'POST') {
         answerRequest = JSON.parse(String(init.body)) as Record<string, unknown>
         return new Response(null, { status: 503 })
       }
@@ -73,7 +73,7 @@ describe('LessonQuestionsView', () => {
       if (path.includes('/plan-1/illustrated-lessons/latest')) return Promise.resolve(Response.json(lessonFixture()))
       if (path.includes('/plan-2/illustrated-lessons/latest')) return Promise.resolve(Response.json(lessonFixture('第二份准备', '第二份结算', 'plan-2')))
       if (path === '/api/auth/csrf') return Promise.resolve(Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' }))
-      if (path.endsWith('/answers') && init?.method === 'POST') {
+      if (path.endsWith('/answers/stream') && init?.method === 'POST') {
         return new Promise<Response>((resolve) => { resolveAnswer = resolve })
       }
       return Promise.resolve(new Response(null, { status: 404 }))
@@ -109,7 +109,7 @@ describe('LessonQuestionsView', () => {
       if (path === '/api/v1/teaching-plans/plan-1') return Response.json(planFixture('plan-1', '星际探索'))
       if (path.endsWith('/illustrated-lessons/latest')) return Response.json(lessonFixture())
       if (path === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
-      if (path.endsWith('/answers') && init?.method === 'POST') {
+      if (path.endsWith('/answers/stream') && init?.method === 'POST') {
         answerRequests.push(JSON.parse(String(init.body)) as Record<string, unknown>)
         return Response.json({
           answer: {
@@ -156,7 +156,7 @@ describe('LessonQuestionsView', () => {
       if (path === '/api/v1/teaching-plans/plan-1') return Response.json(planFixture('plan-1', 'Deep Space'))
       if (path.endsWith('/illustrated-lessons/latest')) return Response.json(lessonFixture('Setup', 'Scoring'))
       if (path === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
-      if (path.endsWith('/answers') && init?.method === 'POST') {
+      if (path.endsWith('/answers/stream') && init?.method === 'POST') {
         answerRequests.push(JSON.parse(String(init.body)) as Record<string, unknown>)
         return Response.json({
           answer: {

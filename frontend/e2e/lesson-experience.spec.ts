@@ -118,7 +118,7 @@ test('keeps the tabletop guide and agent workspace usable on mobile', async ({ p
   await page.route('**/api/auth/csrf', route => route.fulfill({
     json: { headerName: 'X-CSRF-TOKEN', token: 'csrf' },
   }))
-  await page.route('**/api/v1/document-versions/version-1/answers', (route) => {
+  await page.route('**/api/v1/document-versions/version-1/answers/stream', (route) => {
     answerRequest = route.request().postDataJSON() as Record<string, unknown>
     return route.fulfill({ json: {
       answer: {

@@ -77,6 +77,36 @@ public class PostgresBggRankedCatalog implements BggRankedCatalogRepository {
     }
 
     @Override
+    public List<RankedGame> findExactName(String name) {
+        String checked = name == null ? "" : name.strip().replaceAll("\\s+", " ");
+        if (checked.isBlank()) return List.of();
+        if (checked.length() > 120) {
+            throw new IllegalArgumentException("BGG exact name must contain at most 120 characters");
+        }
+        return jdbc.query(
+                "SELECT " + COLUMNS + " FROM bgg_ranked_game g WHERE "
+                        + "lower(g.source_name) = lower(:name) OR EXISTS ("
+                        + "SELECT 1 FROM bgg_game_name_alias alias "
+                        + "WHERE alias.bgg_id = g.bgg_id AND lower(alias.alias) = lower(:name)) "
+                        + "ORDER BY g.overall_rank ASC NULLS LAST, g.users_rated DESC, g.bgg_id ASC LIMIT 3",
+                new MapSqlParameterSource().addValue("name", checked),
+                this::mapGame);
+    }
+
+    @Override
+    public List<RankedGame> findRankedRange(int offset, int limit) {
+        if (offset < 0 || limit < 1 || limit > 20) {
+            throw new IllegalArgumentException("BGG ranked range is invalid");
+        }
+        return jdbc.query(
+                "SELECT " + COLUMNS + " FROM bgg_ranked_game g WHERE NOT g.is_expansion "
+                        + "ORDER BY g.overall_rank ASC NULLS LAST, g.users_rated DESC, g.bgg_id ASC "
+                        + "LIMIT :limit OFFSET :offset",
+                new MapSqlParameterSource().addValue("limit", limit).addValue("offset", offset),
+                this::mapGame);
+    }
+
+    @Override
     public List<RankedGame> findByIds(List<Integer> bggIds) {
         if (bggIds == null || bggIds.isEmpty()) return List.of();
         MapSqlParameterSource parameters = new MapSqlParameterSource().addValue("bggIds", bggIds);

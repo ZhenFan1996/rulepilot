@@ -14,6 +14,11 @@ import {
   type PlayerRuleCitation,
 } from '@/lib/playerAnswerContract'
 import { playerTurnLocale } from '@/lib/playerTurnLanguage'
+import {
+  StructuredAnswerRequestError,
+  StructuredAnswerStreamError,
+  streamStructuredAnswer,
+} from '@/lib/structuredAnswerStream'
 
 const ANSWER_SOFT_BUDGET_SECONDS = 8
 
@@ -184,7 +189,7 @@ export function useLessonAnswers(options: UseLessonAnswersOptions) {
       const previousTurn = answerTurns.value.at(-1)
       const submittedAt = Date.now()
       startTracePolling(context, answerRequest, lessonRequest, submittedAt)
-      const response = await fetch(`/api/v1/document-versions/${context.documentVersionId}/answers`, {
+      const response = await streamStructuredAnswer(`/api/v1/document-versions/${context.documentVersionId}/answers/stream`, {
         method: 'POST',
         credentials: 'include',
         signal: controller.signal,
@@ -196,17 +201,11 @@ export function useLessonAnswers(options: UseLessonAnswersOptions) {
           learningIntent,
           language: context.locale,
         }),
+      }, (runId) => {
+        if (isCurrentAnswerRequest(answerRequest, lessonRequest, context.planId)) activeAnswerRunId = runId
       })
       if (!isCurrentAnswerRequest(answerRequest, lessonRequest, context.planId)) return
-      if (response.status === 401) {
-        await options.requestLogin()
-        return
-      }
-      if (!response.ok) {
-        failureKind = 'unavailable'
-        throw new Error('answer unavailable')
-      }
-      const creation = parseAnswerCreation(await response.json() as unknown)
+      const creation = parseAnswerCreation(response)
       if (!creation) {
         failureKind = 'unavailable'
         throw new Error('player answer response is invalid')
@@ -225,8 +224,15 @@ export function useLessonAnswers(options: UseLessonAnswersOptions) {
       options.onReceived(context, text, received, rulingReference)
       stopTracePolling()
       agentTrace.value = []
-    } catch {
+    } catch (error) {
       if (!isCurrentAnswerRequest(answerRequest, lessonRequest, context.planId)) return
+      if (error instanceof StructuredAnswerRequestError && error.status === 401) {
+        await options.requestLogin()
+        return
+      }
+      if (error instanceof StructuredAnswerRequestError || error instanceof StructuredAnswerStreamError) {
+        failureKind = 'unavailable'
+      }
       answerError.value = answerRequestFailureCopy(failureKind, responseLocale)
       answerOutcome.value = 'failed'
     } finally {
@@ -280,7 +286,10 @@ export function useLessonAnswers(options: UseLessonAnswersOptions) {
       activeTraceController = controller
       try {
         const params = new URLSearchParams({ mode: 'QUESTION_ANSWER', subjectId: context.documentVersionId })
-        const response = await fetch(`/api/v1/assistant-runs/latest?${params}`, {
+        const traceUrl = activeAnswerRunId
+          ? `/api/v1/assistant-runs/${encodeURIComponent(activeAnswerRunId)}`
+          : `/api/v1/assistant-runs/latest?${params}`
+        const response = await fetch(traceUrl, {
           credentials: 'include',
           signal: controller.signal,
         })
