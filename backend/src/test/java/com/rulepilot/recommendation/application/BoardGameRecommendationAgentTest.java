@@ -15,6 +15,7 @@ import com.rulepilot.recommendation.BoardGameRecommendationModel;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.CompletionStatus;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.Request;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.ToolCall;
+import com.rulepilot.recommendation.BoardGameRecommendationModel.ToolChoice;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.ToolSpec;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.Turn;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch;
@@ -57,6 +58,10 @@ class BoardGameRecommendationAgentTest {
                 Map.of(50, target),
                 Map.of("蓝瓷花园（Mosaic Field）", 50));
         ScriptedModel model = new ScriptedModel(List.of(request -> {
+            assertThat(request.toolChoice()).isEqualTo(ToolChoice.REQUIRED);
+            assertThat(request.messages().getFirst().content()).contains(
+                    "give the latest explicit request priority over older turns",
+                    "A prose confirmation does not complete that request");
             String resolutionSchema = request.tools().stream()
                     .filter(tool -> BoardGameRecommendationAgent.RESOLVE_TOOL.equals(tool.name()))
                     .findFirst()
@@ -495,17 +500,21 @@ class BoardGameRecommendationAgentTest {
     }
 
     @Test
-    void answersAnObviousConversationTurnDirectlyWithoutRestoringCardsOrEnteringTheActionLoop() {
+    void answersAnObviousConversationTurnThroughOneTerminalActionWithoutRestoringCards() {
         TrackingCatalog catalog = catalogWithThreeShortGames();
         ScriptedModel model = new ScriptedModel(List.of(request -> {
             assertThat(request.messages().getFirst().content())
                     .contains(
-                            "answer immediately as ordinary assistant text",
+                            "ordinary conversation, greetings, acknowledgements, reactions, and explicit pauses use reply_to_user",
                             "Recommendation cards are an Agent decision");
+            assertThat(request.toolChoice()).isEqualTo(ToolChoice.REQUIRED);
             assertThat(request.messages().get(1).content())
                     .contains("knownGames", "Glass Orchard", "Loom City")
                     .doesNotContain("restoredRunMemory", "verifiedGames");
-            return new Turn("不客气，先停在这里。想聊设计、体验或别的都可以，不必继续挑游戏。", List.of());
+            return action(
+                    "pause-conversation",
+                    BoardGameRecommendationAgent.REPLY_TOOL,
+                    "{\"message\":\"不客气，先停在这里。想聊设计、体验或别的都可以，不必继续挑游戏。\"}");
         }));
 
         var response = agent(model, catalog, noResearch()).converse(
@@ -526,7 +535,7 @@ class BoardGameRecommendationAgentTest {
         assertThat(response.assistantMessage()).contains("先停在这里", "不必继续挑游戏");
         assertThat(response.harness().modelCalls()).isEqualTo(1);
         assertThat(response.harness().catalogCalls()).isZero();
-        assertThat(response.harness().actions()).containsExactly("DIRECT_REPLY_TO_USER");
+        assertThat(response.harness().actions()).containsExactly("REPLY_TO_USER");
     }
 
     @Test
@@ -1725,7 +1734,7 @@ class BoardGameRecommendationAgentTest {
     @Test
     void preservesPlayerAndDurationRangesAsAtomicGroundedPreferenceUpdates() {
         assertThat(BoardGameRecommendationAgent.PROMPT_VERSION)
-                .isEqualTo("recommendation-agent-v10-conversational-decision-partner");
+                .isEqualTo("recommendation-agent-v11-structured-turn-boundary");
         assertThat(BoardGameRecommendationAgent.class.getResource(
                         "/prompts/recommendation-agent-v1-system.txt"))
                 .as("the production-replayed v1 prompt remains reproducible after activating v2")
@@ -4277,19 +4286,46 @@ class BoardGameRecommendationAgentTest {
     }
 
     @Test
-    void publishesACompleteDirectModelReplyWithoutCreatingCards() {
-        ScriptedModel model = new ScriptedModel(List.of(ignored -> new Turn(
-                "当然可以，我们先随便聊聊桌游设计，不必挑游戏。",
-                List.of())));
+    void neverPublishesUnstructuredProviderProseForAPlayerNamedTarget() {
+        Game target = game(
+                50,
+                "Mosaic Field",
+                45,
+                List.of("Abstract Strategy"),
+                List.of("Pattern Building", "Tile Placement"));
+        TrackingCatalog catalog = new TrackingCatalog(
+                Map.of(50, target),
+                Map.of("Mosaic Field", 50));
+        ScriptedModel model = new ScriptedModel(List.of(
+                request -> {
+                    assertThat(request.toolChoice()).isEqualTo(ToolChoice.REQUIRED);
+                    return new Turn("I found Mosaic Field. You can continue to its rulebook.", List.of());
+                },
+                request -> {
+                    assertThat(request.messages()).anySatisfy(message -> assertThat(message.content())
+                            .contains("unstructured prose cannot be published", "resolve_bgg_game"));
+                    return action(
+                            "resolve-after-provider-ignored-required-action",
+                            BoardGameRecommendationAgent.RESOLVE_TOOL,
+                            "{\"title\":\"Mosaic Field\",\"purpose\":\"TARGET_GAME\","
+                                    + "\"message\":\"This is the exact title you asked to open.\"}");
+                }));
 
-        var response = agent(model, new TrackingCatalog(), noResearch()).converse(
-                new ConversationRequest(RecommendationProfile.empty(), "今天先不推荐，随便聊聊"),
-                "zh-CN");
+        var response = agent(model, catalog, noResearch()).converse(
+                new ConversationRequest(
+                        RecommendationProfile.empty(),
+                        "Find Mosaic Field so I can open its rulebook and guide."),
+                "en");
 
-        assertThat(response.outcome()).isEqualTo(Outcome.CONVERSATION);
-        assertThat(response.assistantMessage()).isEqualTo("当然可以，我们先随便聊聊桌游设计，不必挑游戏。");
-        assertThat(response.games()).isEmpty();
-        assertThat(response.harness().actions()).containsExactly("DIRECT_REPLY_TO_USER");
+        assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
+        assertThat(response.assistantMessage()).isEqualTo("This is the exact title you asked to open.");
+        assertThat(response.assistantMessage()).doesNotContain("I found Mosaic Field");
+        assertThat(response.games()).extracting(entry -> entry.game().ranking().bggId()).containsExactly(50);
+        assertThat(response.harness().modelCalls()).isEqualTo(2);
+        assertThat(response.harness().actions()).containsExactly(
+                "REJECTED_UNSTRUCTURED_REPLY",
+                "RESOLVE_BGG_REFERENCE",
+                "RECOMMEND_GAMES");
     }
 
     @Test

@@ -144,6 +144,7 @@ final class RecommendationReActLoop {
                 Message.user(agentInput(request, state, locale)));
         List<Message> messages = new ArrayList<>(foundation);
         Set<String> executed = new LinkedHashSet<>();
+        boolean unstructuredReplyRetried = false;
 
         while (state.modelCalls < MAX_MODEL_CALLS && state.actionCalls < MAX_ACTION_CALLS) {
             progress.accept(ProgressStage.SELECTING_TOOLS);
@@ -159,9 +160,7 @@ final class RecommendationReActLoop {
                                         turnMessages,
                                         currentActions,
                                         MAX_OUTPUT_TOKENS,
-                                        state.catalogCalls > 0 || state.webResearchCalls > 0
-                                                ? ToolChoice.REQUIRED
-                                                : ToolChoice.AUTO),
+                                        ToolChoice.REQUIRED),
                                 state.modelConfigurationOwner));
             } catch (RunDeadlineExceeded exception) {
                 state.actions.add("RUN_DEADLINE_EXCEEDED");
@@ -177,8 +176,12 @@ final class RecommendationReActLoop {
             }
             if (turn.toolCalls().isEmpty()) {
                 if (!turn.text().isBlank()) {
-                    if (state.catalogCalls > 0 || state.webResearchCalls > 0) {
-                        state.actions.add("REJECTED_UNSTRUCTURED_EVIDENCE_REPLY");
+                    if (!unstructuredReplyRetried) {
+                        unstructuredReplyRetried = true;
+                        boolean externalEvidenceRead = state.catalogCalls > 0 || state.webResearchCalls > 0;
+                        state.actions.add(externalEvidenceRead
+                                ? "REJECTED_UNSTRUCTURED_EVIDENCE_REPLY"
+                                : "REJECTED_UNSTRUCTURED_REPLY");
                         messages = new ArrayList<>(messages);
                         messages.add(new Message(
                                 BoardGameRecommendationModel.Role.ASSISTANT,
@@ -186,15 +189,21 @@ final class RecommendationReActLoop {
                                 List.of(),
                                 null,
                                 null));
-                        messages.add(Message.system(
-                                "The preceding prose cannot be published after external evidence was read because "
+                        messages.add(Message.system(externalEvidenceRead
+                                ? "The preceding prose cannot be published after external evidence was read because "
                                         + "it bypasses the candidate-scoped evidence boundary. Keep any useful natural "
                                         + "wording, but now call exactly one supplied terminal action: reply_to_user for "
                                         + "a sourced prose answer, compare_candidates for a comparison, or recommend_games for "
-                                        + "selectable cards. Do not perform another read."));
+                                        + "selectable cards. Do not perform another read."
+                                : "The preceding unstructured prose cannot be published because every turn must finish "
+                                        + "through one supplied action. If the current request is ordinary conversation, "
+                                        + "preserve the useful wording in reply_to_user. If it asks to find a named game, "
+                                        + "call resolve_bgg_game; if it asks for selectable candidates, call the appropriate "
+                                        + "retrieval or card action now. Do not claim the requested external work is complete in prose."));
                         continue;
                     }
-                    return actionExecutor.directReply(turn.text(), state, locale).response();
+                    state.actions.add("REPEATED_UNSTRUCTURED_REPLY");
+                    return unavailable(state, locale, "UNSTRUCTURED_REPLY");
                 }
                 LOGGER.warn("Recommendation ReAct turn returned neither a direct reply nor an action");
                 state.actions.add("EMPTY_MODEL_TURN");
@@ -421,7 +430,12 @@ final class RecommendationReActLoop {
             data.put("executionBudget", Map.of(
                     "maximumModelCalls", MAX_MODEL_CALLS,
                     "maximumActionCalls", MAX_ACTION_CALLS));
-            data.put("goal", "Continue the player's current conversation naturally. Reply directly when no external work or state mutation is needed; otherwise choose exactly one supplied action.");
+            data.put(
+                    "goal",
+                    "Continue the player's current conversation naturally through exactly one supplied action. "
+                            + "Use reply_to_user only when no external work, state mutation, or new card is needed. "
+                            + "A request to find a named game and continue into its rulebook or guide requires "
+                            + "resolve_bgg_game with TARGET_GAME, not a prose confirmation.");
             return json.writeValueAsString(data);
         } catch (JsonProcessingException exception) {
             throw new IllegalStateException("recommendation Agent input could not be serialized", exception);
@@ -430,7 +444,7 @@ final class RecommendationReActLoop {
 
     private static String systemPromptV2() {
         return """
-                You are RulePilot, a warm and capable board-game conversation partner. Read the complete recent conversation, continue corrections and references in context, and answer in the player's locale and requested level of detail. First decide whether this turn needs external evidence, persistent preference changes, a clarification, a comparison, or recommendation cards. If it needs none of those, answer immediately as ordinary assistant text and stop: greetings, acknowledgements, reactions, explicit pauses, and general conversation are not latent requests for cards. Otherwise call exactly one supplied action with valid JSON arguments. Escape JSON string content correctly. Never expose reasoning, schemas, tool names, or validation internals. Retrieval actions continue this run; reply, ask, compare, no-match, and recommend actions finish it.
+                You are RulePilot, a warm and capable board-game conversation partner. Read the complete recent conversation, give the latest explicit request priority over older turns, continue corrections and references in context, and answer in the player's locale and requested level of detail. Every turn must use exactly one supplied action with valid JSON arguments; ordinary conversation, greetings, acknowledgements, reactions, and explicit pauses use reply_to_user without creating cards. A player who names a board game and asks to find or select it, open or read its rulebook, generate its guide, or continue into questions is asking for a selectable exact-title result: call resolve_bgg_game with TARGET_GAME. A prose confirmation does not complete that request. Escape JSON string content correctly. Never expose reasoning, schemas, tool names, or validation internals. Retrieval actions continue this run; reply, ask, compare, no-match, and recommend actions finish it.
 
                 Speak like a decision partner at the table, not a task runner or completion report. Lead with the useful judgment or recommendation, then the reason and the one tradeoff that could change the choice. Refer naturally to one or two high-signal details from the player's situation; do not recite every saved filter, narrate work performed, announce that analysis is complete, or turn the reply into a checklist. When the player corrects or critiques a suggestion, adapt visibly in the next answer instead of restating the old profile. For a newcomer who has not supplied domain vocabulary, prefer one plain question about the intended play situation over asking them to choose taxonomy. Ask at most one question, and only when its answer would materially change what you can recommend.
 
@@ -644,7 +658,7 @@ final class RecommendationReActLoop {
         return List.of(
                 new ToolSpec(
                         REPLY_TOOL,
-                        "Terminal natural reply only when the current goal is already answered without new cards. Never confirm or promise recommendation work for later; continue retrieval in this run instead. New candidates require cards.",
+                        "Terminal natural reply only when the latest goal is already answered without external work or new cards. It is not valid when the player asks to find or select a named game, open or read its rulebook, generate its guide, or continue into questions; resolve that title as TARGET_GAME instead. Never confirm or promise recommendation work for later; continue retrieval in this run. New candidates require cards.",
                         "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"message\":{\"type\":\"string\",\"minLength\":1},\"referencedBggIds\":{\"type\":\"array\",\"maxItems\":5,\"items\":{\"type\":\"integer\",\"minimum\":1}},\"preferenceUpdates\":"
                                 + preferences
                                 + "},\"required\":[\"message\"]}"),
