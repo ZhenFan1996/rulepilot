@@ -499,8 +499,8 @@ test('keeps full-catalog browsing separate from the conversational recommendatio
   await page.getByRole('button', { name: '搜索', exact: true }).click()
   await searchRequest
   await expect(page.locator('#game-catalog').getByRole('link', { name: /展翅翱翔/ })).toHaveAttribute('href', '/discover/266192')
-  await expect(page.getByText('第 1 / 378 页')).toHaveCount(0)
-  await expect(page.getByRole('button', { name: '再看一批' })).toBeVisible()
+  await expect(page.getByText('第 1 / 378 页')).toBeVisible()
+  await expect(page.getByRole('button', { name: '前往第 2 页' })).toBeVisible()
 
   await page.getByRole('link', { name: /让推荐助手帮我挑/ }).click()
   await expect(page).toHaveURL('/discover')

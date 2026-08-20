@@ -3,7 +3,7 @@ import { expect, test } from '@playwright/test'
 const firstBase = game(42, '第一页基础资料')
 const secondBase = game(43, '第二页基础资料')
 
-test('promotes next-page prefetch while both visible pages continue enriching', async ({ page }) => {
+test('promotes the next-page prefetch, replaces the visible page, and ignores stale enrichment', async ({ page }) => {
   let releasePageOne!: () => void
   const pageOneGate = new Promise<void>(resolve => { releasePageOne = resolve })
   let releaseFirstEnrichment!: () => void
@@ -40,7 +40,7 @@ test('promotes next-page prefetch while both visible pages continue enriching', 
 
   await page.goto('/discover/catalog')
   await expect(page.getByRole('heading', { name: '第一页基础资料' })).toBeVisible()
-  await page.getByRole('button', { name: '再看一批' }).click()
+  await page.getByRole('button', { name: '前往第 2 页' }).click()
   expect(pageOneBaseRequests).toBe(1)
 
   releasePageOne()
@@ -48,9 +48,10 @@ test('promotes next-page prefetch while both visible pages continue enriching', 
   expect(pageOneBaseRequests).toBe(1)
 
   releaseFirstEnrichment()
-  await expect(page.getByRole('heading', { name: '第一页已补齐' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '第一页已补齐' })).toHaveCount(0)
   await expect(page.getByRole('heading', { name: '第二页已补齐' })).toBeVisible()
-  await expect(page.getByText('已展示 2 款')).toBeVisible()
+  await expect(page.getByText('第 2 / 2 页')).toBeVisible()
+  await expect(page.getByText('本页 1 款')).toBeVisible()
 })
 
 function catalogPage(page: number, entry: ReturnType<typeof game>, taxonomyTranslated: boolean) {
