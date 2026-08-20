@@ -314,6 +314,22 @@ class SpringAiVisualRulebookPageCatalogModelTest {
     }
 
     @Test
+    void literalQuantitySpansCollapseExactDuplicatesWithoutDroppingDistinctEvidence() {
+        var accepted = SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalogV6("""
+                {"pages":[{"pageNumber":9,"printedTerms":["ROUND END"],"factualSummary":[],
+                "keywords":["ROUND END"],"externalDocumentDependencies":[],
+                "ruleGroups":[{"identifier":"ROUND END",
+                  "fact":"结算两次奖励，然后把标记移到第三格。",
+                  "quantitySpans":["Score both bonuses","Score both bonuses","Move to space 3"]}],
+                "ruleGroupInventoryComplete":true}]}
+                """);
+
+        assertThat(accepted.pages().getFirst().quantityObservations())
+                .extracting(observation -> observation.originalSpan())
+                .containsExactly("Score both bonuses", "Move to space 3");
+    }
+
+    @Test
     void literalQuantitySpansAcceptOnlyAnExactRedundantGroupIndexWithoutPolicingTheirMeaning() {
         var accepted = SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalogV6("""
                 {"pages":[{"pageNumber":1,"printedTerms":["SETUP"],"factualSummary":[],
