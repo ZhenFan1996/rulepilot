@@ -89,6 +89,11 @@ interface AnswerResponse {
   }
 }
 
+interface ConversationTurnResponse extends AnswerResponse {
+  id: string
+  question: string
+}
+
 interface DocumentProgressResponse {
   stage: string
   complete: boolean
@@ -276,19 +281,6 @@ interface ProductionJourneyReport {
 
 function elapsed(startedAt: number) {
   return Math.round(performance.now() - startedAt)
-}
-
-function ssePayload<T>(body: string, eventName: string): T {
-  for (const block of body.replaceAll('\r\n', '\n').split('\n\n')) {
-    let event = 'message'
-    const data: string[] = []
-    for (const line of block.split('\n')) {
-      if (line.startsWith('event:')) event = line.slice(6).trim()
-      if (line.startsWith('data:')) data.push(line.slice(5).trimStart())
-    }
-    if (event === eventName && data.length) return JSON.parse(data.join('\n')) as T
-  }
-  throw new Error(`SSE stream ended without ${eventName}`)
 }
 
 function persistedDuration(from: string | null, to: string | null) {
@@ -1196,16 +1188,27 @@ test('recommendation becomes one readable, taught, and answerable production jou
     await page.getByRole('button', { name: '提交问题' }).click()
     const answerResponse = await answerResponsePromise
     expect(answerResponse.ok(), `Answer endpoint returned HTTP ${answerResponse.status()}`).toBe(true)
-    const answerPayload = ssePayload<AnswerResponse>(
-      (await answerResponse.body()).toString('utf8'),
-      'result',
-    )
-    report.answerStatus = answerPayload.answer.status
-    report.answerCitationCount = answerPayload.answer.citations.length
-    expect(['ANSWERED', 'ANSWERED_WITH_WARNING']).toContain(report.answerStatus)
-    expect(report.answerCitationCount).toBeGreaterThan(0)
     await expect(answerWorkspace.locator('#lesson-answer-evidence-title')).toBeVisible({ timeout: 4 * 60_000 })
     await expect(answerWorkspace.getByText(/第 \d+(?:\s*[–-]\s*\d+)? 页/).first()).toBeVisible()
+    const answerSessionId = await page.evaluate(
+      versionId => localStorage.getItem(`rulepilot:recommendation-answer-session:${versionId}`),
+      completedJob.documentVersionId,
+    )
+    expect(answerSessionId, 'The answer workspace did not persist its server conversation identity').toBeTruthy()
+    const conversationResponse = await page.request.get(
+      `/api/v1/document-versions/${encodeURIComponent(completedJob.documentVersionId)}/answers/conversation?${new URLSearchParams({
+        gameSessionId: answerSessionId!,
+        language: 'zh-CN',
+      })}`,
+    )
+    expect(conversationResponse.ok(), `Answer conversation returned HTTP ${conversationResponse.status()}`).toBe(true)
+    const conversation = await conversationResponse.json() as ConversationTurnResponse[]
+    const persistedAnswer = conversation.findLast(turn => turn.question === RULE_QUESTION)
+    expect(persistedAnswer, 'The visible answer was not persisted in the server conversation').toBeDefined()
+    report.answerStatus = persistedAnswer!.answer.status
+    report.answerCitationCount = persistedAnswer!.answer.citations.length
+    expect(['ANSWERED', 'ANSWERED_WITH_WARNING']).toContain(report.answerStatus)
+    expect(report.answerCitationCount).toBeGreaterThan(0)
     report.answerMs = elapsed(answerStartedAt)
     report.citedAnswer = true
 
