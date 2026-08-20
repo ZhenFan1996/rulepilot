@@ -181,15 +181,17 @@ class JpaOfficialRulebookImportJobRepositoryPostgresTest {
         UUID reusedJobId = insertJob("NOT_REQUESTED", null, oldCreatedAt);
         UUID newerJobId = insertJob("NOT_REQUESTED", null, newerCreatedAt);
 
-        assertThat(inTransactionReturning(repository ->
-                        repository.findRecentOwned("postgres-regression-player", 1)))
+        var beforeReuse = inTransactionReturning(repository ->
+                repository.findRecentOwned("postgres-regression-player", 1));
+        assertThat(beforeReuse)
                 .extracting(OfficialRulebookImportJob::id)
                 .containsExactly(newerJobId);
 
         inTransaction(repository -> repository.recordReuse(reusedJobId, reusedAt));
 
-        assertThat(inTransactionReturning(repository ->
-                        repository.findRecentOwned("postgres-regression-player", 1)))
+        var afterReuse = inTransactionReturning(repository ->
+                repository.findRecentOwned("postgres-regression-player", 1));
+        assertThat(afterReuse)
                 .singleElement()
                 .satisfies(job -> {
                     assertThat(job.id()).isEqualTo(reusedJobId);
