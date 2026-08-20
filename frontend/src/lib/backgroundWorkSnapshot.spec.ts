@@ -8,6 +8,8 @@ import {
   parseOwnedDocuments,
   parsePreparationTeachingPlans,
   parseRulebookImports,
+  parseTeachingProgressPlan,
+  parseTeachingRunProgress,
   parseTeachingPlans,
   parseUploadedHandoffs,
   validateDocumentRelationships,
@@ -59,6 +61,34 @@ describe('background work snapshot boundary', () => {
       id: `plan-${index}`,
       gameTitle: index === 500 ? longNaturalTitle : `游戏 ${index}`,
     })))[500]?.gameTitle).toBe(longNaturalTitle)
+  })
+
+  it('keeps real Teaching activities and chapter positions for the global progress surface', () => {
+    const expected = { id: 'run-1', mode: 'TEACHING' as const, subjectId: 'plan-1', ownerUsername: 'player' }
+    const progress = parseTeachingRunProgress({
+      run: {
+        ...run, createdAt: '2026-08-13T00:00:00Z', completedAt: null, lastErrorCode: null,
+      },
+      budget: { usedModelCalls: 2, maxModelCalls: 36 },
+      activities: [{
+        sequence: 4, type: 'MODEL', operation: 'composeTeachingSection|3',
+        summary: 'Writing chapter three', outcome: 'RUNNING', latencyMs: 120,
+        occurredAt: '2026-08-13T00:00:01Z',
+      }],
+    }, expected)
+    const plan = parseTeachingProgressPlan({
+      id: 'plan-1', gameTitle: '可信标题',
+      sections: [{ position: 1, title: '开局', visualEvidenceRecommended: true }],
+    }, 'plan-1')
+
+    expect(progress.activities).toEqual([expect.objectContaining({
+      sequence: 4, operation: 'composeTeachingSection|3', outcome: 'RUNNING',
+    })])
+    expect(plan.sections).toEqual([{ position: 1, title: '开局', visualEvidenceRecommended: true }])
+    expect(() => parseTeachingProgressPlan({
+      id: 'plan-1', gameTitle: '可信标题',
+      sections: [{ position: 2, title: '跳号章节', visualEvidenceRecommended: false }],
+    }, 'plan-1')).toThrow()
   })
 
   it('requires imports and upload handoffs to bind to coherent document versions', () => {

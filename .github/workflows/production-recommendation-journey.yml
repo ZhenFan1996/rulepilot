@@ -33,7 +33,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: production-recommendation-journey
+  group: production-runtime
   cancel-in-progress: false
 
 jobs:

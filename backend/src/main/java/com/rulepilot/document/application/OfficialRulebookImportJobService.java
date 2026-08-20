@@ -5,6 +5,7 @@ import com.rulepilot.catalog.CatalogEditionLookup.EditionReference;
 import com.rulepilot.catalog.CatalogEditionLanguageConfirmation;
 import com.rulepilot.document.RulebookTeachingHandoffs;
 import com.rulepilot.document.RulebookTeachingEvidenceFreshness;
+import com.rulepilot.document.RulebookTeachingEvidenceFreshness.ReuseAssessment;
 import com.rulepilot.document.domain.DocumentSourceType;
 import com.rulepilot.document.domain.OfficialRulebookImportJob;
 import com.rulepilot.document.domain.OfficialRulebookImportJob.TeachingHandoffState;
@@ -330,6 +331,33 @@ public class OfficialRulebookImportJobService implements RulebookTeachingHandoff
         return jobs.failInterruptedTeachingLaunches(Instant.now(clock));
     }
 
+    @Override
+    public Reconciliation reconcileLaunched(int limit) {
+        int checkedLimit = checkedClaimLimit(limit);
+        int restarted = 0;
+        int settled = 0;
+        int exhausted = 0;
+        for (var job : jobs.findUnreconciledLaunchedTeaching(checkedLimit)) {
+            var handoff = job.teachingHandoff();
+            ReuseAssessment assessment = teachingEvidenceFreshness.assess(
+                    job.documentVersionId(), handoff.preparationRunId(), job.ownerUsername());
+            if (assessment == ReuseAssessment.REFRESH_REQUIRED) {
+                if (jobs.retryTeachingAutomatically(
+                        job.id(), handoff.preparationRunId(), Instant.now(clock))) {
+                    restarted++;
+                } else if (handoff.automaticRecoveryCount() == 1
+                        && jobs.failTeachingRecoveryExhausted(
+                                job.id(), handoff.preparationRunId(), Instant.now(clock))) {
+                    exhausted++;
+                }
+            } else if (assessment == ReuseAssessment.REUSABLE
+                    && jobs.markTeachingReconciled(job.id(), handoff.preparationRunId(), Instant.now(clock))) {
+                settled++;
+            }
+        }
+        return new Reconciliation(restarted, settled, exhausted);
+    }
+
     private OfficialRulebookImportJob ensureTeachingRequested(
             OfficialRulebookImportJob job, Command command) {
         if (!command.startTeaching()) {
@@ -337,10 +365,10 @@ public class OfficialRulebookImportJobService implements RulebookTeachingHandoff
         }
         if (job.teachingHandoff().state() == TeachingHandoffState.LAUNCHED
                 && job.documentVersionId() != null
-                && teachingEvidenceFreshness.requiresRefresh(
+                && teachingEvidenceFreshness.assess(
                         job.documentVersionId(),
                         job.teachingHandoff().preparationRunId(),
-                        job.ownerUsername())) {
+                        job.ownerUsername()) == ReuseAssessment.REFRESH_REQUIRED) {
             jobs.retryTeaching(
                     job.id(), job.teachingHandoff().preparationRunId(), Instant.now(clock));
             return requireOwned(job.id(), job.ownerUsername());

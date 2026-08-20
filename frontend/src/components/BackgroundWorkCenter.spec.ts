@@ -115,6 +115,148 @@ describe('BackgroundWorkCenter request lifecycle', () => {
     wrapper.unmount()
   })
 
+  it('keeps the missing-result reason and bounded recovery visible after the launch dialog is closed', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const path = String(input)
+      if (path.includes('/api/v1/assistant-runs/active')) return response([])
+      if (path.endsWith('/api/v1/documents/official-imports')) return response([{
+        id: 'import-recovering', title: '关闭弹窗后仍可追踪', sourceDomain: 'publisher.example',
+        stage: 'COMPLETED', downloadedBytes: 4096, totalBytes: 4096,
+        documentVersionId: 'version-recovering', errorCode: null,
+        teachingHandoffState: 'WAITING_FOR_DOCUMENT', teachingPreparationRunId: null,
+        teachingErrorCode: null, teachingAutomaticRecoveryCount: 1,
+        downloadCompletedAt: '2026-08-20T06:00:00Z', importCompletedAt: '2026-08-20T06:00:00Z',
+        teachingHandoffUpdatedAt: '2026-08-20T06:00:05Z', updatedAt: '2026-08-20T06:00:05Z',
+      }])
+      if (path.endsWith('/api/v1/documents')) return response([{
+        document: { id: 'document-recovering', title: 'rules.pdf', createdBy: 'player' },
+        latestVersion: { id: 'version-recovering', status: 'READY' },
+      }])
+      if (path.endsWith('/api/v1/documents/upload-teaching-handoffs')) return response([])
+      return new Response(null, { status: 404 })
+    }))
+
+    const wrapper = await mountCenter('player')
+    await flushPromises()
+    await openCenter(wrapper)
+
+    expect(wrapper.text()).toContain('关闭弹窗后仍可追踪')
+    expect(wrapper.text()).toContain('上一次任务没有留下可读章节，正在进行第 1 / 1 次自动恢复')
+    wrapper.unmount()
+  })
+
+  it('stops claiming progress when the single automatic recovery still produced no readable chapter', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const path = String(input)
+      if (path.includes('/api/v1/assistant-runs/active')) return response([])
+      if (path.endsWith('/api/v1/documents/official-imports')) return response([{
+        id: 'import-recovery-exhausted', title: '需要人工重试的讲解', sourceDomain: 'publisher.example',
+        stage: 'COMPLETED', downloadedBytes: 4096, totalBytes: 4096,
+        documentVersionId: 'version-recovery-exhausted', errorCode: null,
+        teachingHandoffState: 'FAILED', teachingPreparationRunId: null,
+        teachingErrorCode: 'TEACHING_RECOVERY_EXHAUSTED', teachingAutomaticRecoveryCount: 1,
+        downloadCompletedAt: '2026-08-20T06:00:00Z', importCompletedAt: '2026-08-20T06:00:00Z',
+        teachingHandoffUpdatedAt: '2026-08-20T06:00:10Z', updatedAt: '2026-08-20T06:00:10Z',
+      }])
+      if (path.endsWith('/api/v1/documents')) return response([{
+        document: { id: 'document-recovery-exhausted', title: 'rules.pdf', createdBy: 'player' },
+        latestVersion: { id: 'version-recovery-exhausted', status: 'READY' },
+      }])
+      if (path.endsWith('/api/v1/documents/upload-teaching-handoffs')) return response([])
+      return new Response(null, { status: 404 })
+    }))
+
+    const wrapper = await mountCenter('player')
+    await flushPromises()
+    await openCenter(wrapper)
+
+    expect(wrapper.text()).toContain('自动恢复后仍没有生成可读章节')
+    expect(wrapper.text()).toContain('已完成第 1 / 1 次自动恢复；请打开讲解中心重试')
+    expect(wrapper.text()).not.toContain('正在自动恢复')
+    wrapper.unmount()
+  })
+
+  it('shows the latest real chapter operation and persisted publication count after the launch dialog is gone', async () => {
+    const activities = [
+      teachingActivity(1, 'publishTeachingSection|1', 'SUCCEEDED', 'Teaching section published: CITED_BASE_SECTION_PUBLISHED'),
+      teachingActivity(2, 'publishTeachingSection|2', 'SUCCEEDED', 'Teaching section published: CITED_BASE_SECTION_PUBLISHED'),
+      teachingActivity(3, 'composeTeachingSection|3', 'RUNNING', 'Writing the next section'),
+    ]
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const path = String(input)
+      if (path.includes('/api/v1/assistant-runs/active')) {
+        return response([teachingRun('run-live', 'plan-live', 'player', 'RETRIEVING')])
+      }
+      if (path.endsWith('/api/v1/assistant-runs/run-live')) {
+        return response({
+          run: {
+            ...teachingRun('run-live', 'plan-live', 'player', 'RETRIEVING'),
+            createdAt: '2026-08-20T06:00:00Z', updatedAt: '2026-08-20T06:00:03Z',
+            completedAt: null, lastErrorCode: null,
+          },
+          budget: { usedModelCalls: 3, maxModelCalls: 36 },
+          activities,
+        })
+      }
+      if (path.endsWith('/api/v1/teaching-plans')) {
+        return response([{
+          id: 'plan-live', gameTitle: '持续可追踪的讲解',
+          sections: Array.from({ length: 5 }, (_, index) => ({
+            position: index + 1, title: `章节 ${index + 1}`, visualEvidenceRecommended: false,
+          })),
+        }])
+      }
+      if (isBackgroundBaseList(path)) return response([])
+      return new Response(null, { status: 404 })
+    }))
+
+    const wrapper = await mountCenter('player')
+    await flushPromises()
+    await openCenter(wrapper)
+
+    expect(wrapper.text()).toContain('正在依据规则书编写第 3 章“章节 3”')
+    expect(wrapper.text()).toContain('已发布 2 / 5 章')
+    wrapper.unmount()
+  })
+
+  it('shows the real visual-rulebook page while preparation is still planning chapters', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const path = String(input)
+      if (path.includes('/api/v1/assistant-runs/active')) return response([])
+      if (path.endsWith('/api/v1/documents/official-imports')) return response([{
+        id: 'import-visual', title: '图像规则讲解', sourceDomain: 'publisher.example', stage: 'COMPLETED',
+        downloadedBytes: 4096, totalBytes: 4096, documentVersionId: 'version-visual', errorCode: null,
+        teachingHandoffState: 'LAUNCHED', teachingPreparationRunId: 'prep-visual', teachingErrorCode: null,
+        downloadCompletedAt: '2026-08-20T06:00:00Z', importCompletedAt: '2026-08-20T06:00:00Z',
+        teachingHandoffUpdatedAt: '2026-08-20T06:00:01Z', updatedAt: '2026-08-20T06:00:01Z',
+      }])
+      if (path.endsWith('/api/v1/documents')) return response([{
+        document: { id: 'document-visual', title: 'rules.pdf', createdBy: 'player' },
+        latestVersion: { id: 'version-visual', status: 'READY' },
+      }])
+      if (path.endsWith('/api/v1/documents/upload-teaching-handoffs')) return response([])
+      if (path.endsWith('/api/v1/assistant-runs/prep-visual')) return response({
+        run: {
+          ...preparationRun('prep-visual', 'version-visual', 'player', 'LESSON_PLANNING'),
+          createdAt: '2026-08-20T06:00:01Z', updatedAt: '2026-08-20T06:00:04Z',
+          completedAt: null, lastErrorCode: null,
+        },
+        budget: { usedModelCalls: 3, maxModelCalls: 36 },
+        activities: [teachingActivity(
+          5, 'inspectTeachingVisualPage|3|12', 'RUNNING', 'Inspecting visual page three',
+        )],
+      })
+      return new Response(null, { status: 404 })
+    }))
+
+    const wrapper = await mountCenter('player')
+    await flushPromises()
+    await openCenter(wrapper)
+
+    expect(wrapper.text()).toContain('正在整理图像规则页第 3 / 12 页的规则组')
+    wrapper.unmount()
+  })
+
   it('removes a dismissed failed preparation from background work while retaining its official import', async () => {
     let dismissed = false
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
@@ -728,6 +870,13 @@ function teachingRun(id: string, subjectId: string, ownerUsername: string, state
 
 function preparationRun(id: string, subjectId: string, ownerUsername: string, state: string) {
   return { id, mode: 'TEACHING_PREPARATION', subjectId, ownerUsername, state }
+}
+
+function teachingActivity(sequence: number, operation: string, outcome: string, summary: string) {
+  return {
+    sequence, type: operation.startsWith('publish') ? 'VALIDATION' : 'MODEL', operation, summary, outcome,
+    latencyMs: 10, occurredAt: `2026-08-20T06:00:0${sequence}Z`,
+  }
 }
 
 function isBackgroundBaseList(path: string) {

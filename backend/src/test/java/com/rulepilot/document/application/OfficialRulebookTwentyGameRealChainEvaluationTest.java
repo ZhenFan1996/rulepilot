@@ -634,6 +634,11 @@ class OfficialRulebookTwentyGameRealChainEvaluationTest {
         }
 
         @Override
+        public List<OfficialRulebookImportJob> findUnreconciledLaunchedTeaching(int limit) {
+            return List.of();
+        }
+
+        @Override
         public void recordReuse(UUID jobId, Instant now) {
             var job = jobs.get(jobId);
             jobs.put(jobId, copy(
@@ -668,6 +673,21 @@ class OfficialRulebookTwentyGameRealChainEvaluationTest {
         @Override
         public boolean retryTeaching(UUID jobId, UUID expectedPreparationRunId, Instant now) {
             throw new UnsupportedOperationException("not used by real-chain evaluation");
+        }
+
+        @Override
+        public boolean retryTeachingAutomatically(UUID jobId, UUID expectedPreparationRunId, Instant now) {
+            return false;
+        }
+
+        @Override
+        public boolean failTeachingRecoveryExhausted(UUID jobId, UUID expectedPreparationRunId, Instant now) {
+            return false;
+        }
+
+        @Override
+        public boolean markTeachingReconciled(UUID jobId, UUID expectedPreparationRunId, Instant now) {
+            return false;
         }
 
         @Override
@@ -712,6 +732,7 @@ class OfficialRulebookTwentyGameRealChainEvaluationTest {
                             job.teachingHandoff().learningGoal(),
                             null,
                             null,
+                            job.teachingHandoff().automaticRecoveryCount(),
                             now),
                     now,
                     job.completedAt())));
@@ -739,6 +760,7 @@ class OfficialRulebookTwentyGameRealChainEvaluationTest {
                             job.teachingHandoff().learningGoal(),
                             preparationRunId,
                             null,
+                            job.teachingHandoff().automaticRecoveryCount(),
                             now),
                     now,
                     job.completedAt()));
@@ -760,6 +782,7 @@ class OfficialRulebookTwentyGameRealChainEvaluationTest {
                             job.teachingHandoff().learningGoal(),
                             null,
                             errorCode,
+                            job.teachingHandoff().automaticRecoveryCount(),
                             now),
                     now,
                     job.completedAt()));

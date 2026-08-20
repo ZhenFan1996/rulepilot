@@ -210,6 +210,7 @@ class UserRuleDocumentControllerTest {
                         null,
                         preparationRunId,
                         null,
+                        0,
                         handoffLaunchedAt),
                 createdAt,
                 handoffLaunchedAt,
@@ -222,6 +223,7 @@ class UserRuleDocumentControllerTest {
         assertThat(response.importCompletedAt()).isEqualTo(importCompletedAt);
         assertThat(response.teachingHandoffUpdatedAt()).isEqualTo(handoffLaunchedAt);
         assertThat(response.teachingPreparationRunId()).isEqualTo(preparationRunId);
+        assertThat(response.teachingAutomaticRecoveryCount()).isZero();
     }
 
     @Test

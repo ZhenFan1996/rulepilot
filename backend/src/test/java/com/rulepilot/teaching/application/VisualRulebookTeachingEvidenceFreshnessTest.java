@@ -12,8 +12,16 @@ import com.rulepilot.document.DocumentProcessing;
 import com.rulepilot.document.DocumentProcessing.PageView;
 import com.rulepilot.document.DocumentVersionScopeLookup;
 import com.rulepilot.document.DocumentVersionScopeLookup.VersionScope;
+import com.rulepilot.document.RulebookTeachingEvidenceFreshness.ReuseAssessment;
 import com.rulepilot.teaching.VisualRulebookPageFacts;
 import com.rulepilot.teaching.VisualRulebookPageFacts.PageFact;
+import com.rulepilot.teaching.domain.IllustratedLesson;
+import com.rulepilot.teaching.domain.IllustratedLesson.EvidenceStatus;
+import com.rulepilot.teaching.domain.IllustratedLesson.LessonSection;
+import com.rulepilot.teaching.domain.IllustratedLesson.LessonStatus;
+import com.rulepilot.teaching.domain.IllustratedLesson.LessonStep;
+import com.rulepilot.teaching.domain.IllustratedLesson.TeachingMove;
+import com.rulepilot.teaching.domain.TeachingPlan;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
@@ -29,8 +37,10 @@ class VisualRulebookTeachingEvidenceFreshnessTest {
     private final DocumentVersionScopeLookup scopes = mock(DocumentVersionScopeLookup.class);
     private final VisualRulebookPageFacts facts = mock(VisualRulebookPageFacts.class);
     private final AssistantRuns runs = mock(AssistantRuns.class);
+    private final TeachingPlanRepository plans = mock(TeachingPlanRepository.class);
+    private final IllustratedLessonRepository lessons = mock(IllustratedLessonRepository.class);
     private final VisualRulebookTeachingEvidenceFreshness freshness =
-            new VisualRulebookTeachingEvidenceFreshness(documents, scopes, facts, runs);
+            new VisualRulebookTeachingEvidenceFreshness(documents, scopes, facts, runs, plans, lessons);
 
     @BeforeEach
     void readyOwnedDocument() {
@@ -40,6 +50,7 @@ class VisualRulebookTeachingEvidenceFreshnessTest {
 
     @Test
     void refreshesAVisualRulebookWhenAnyPageFactUsesAnOlderSchema() {
+        reusableCompletedPreparation();
         when(documents.pages(documentVersionId)).thenReturn(List.of(
                 new PageView(1, "", 0),
                 new PageView(2, "", 0)));
@@ -47,12 +58,13 @@ class VisualRulebookTeachingEvidenceFreshnessTest {
                 completePageFact(1, PageFact.CURRENT_SCHEMA_VERSION),
                 completePageFact(2, PageFact.CURRENT_SCHEMA_VERSION - 1)));
 
-        assertThat(freshness.requiresRefresh(documentVersionId, UUID.randomUUID(), "alice"))
-                .isTrue();
+        assertThat(freshness.assess(documentVersionId, preparationRunId(), "alice"))
+                .isEqualTo(ReuseAssessment.REFRESH_REQUIRED);
     }
 
     @Test
     void reusesACompleteCurrentVisualLedger() {
+        reusableCompletedPreparation();
         when(documents.pages(documentVersionId)).thenReturn(List.of(
                 new PageView(1, "", 0),
                 new PageView(2, "", 0)));
@@ -60,17 +72,18 @@ class VisualRulebookTeachingEvidenceFreshnessTest {
                 completePageFact(1, PageFact.CURRENT_SCHEMA_VERSION),
                 completePageFact(2, PageFact.CURRENT_SCHEMA_VERSION)));
 
-        assertThat(freshness.requiresRefresh(documentVersionId, UUID.randomUUID(), "alice"))
-                .isFalse();
+        assertThat(freshness.assess(documentVersionId, preparationRunId(), "alice"))
+                .isEqualTo(ReuseAssessment.REUSABLE);
     }
 
     @Test
     void doesNotTreatATextRulebookAsVisualDerivedEvidence() {
+        reusableCompletedPreparation();
         when(documents.pages(documentVersionId)).thenReturn(List.of(
                 new PageView(1, "Take one action.", 16)));
 
-        assertThat(freshness.requiresRefresh(documentVersionId, UUID.randomUUID(), "alice"))
-                .isFalse();
+        assertThat(freshness.assess(documentVersionId, preparationRunId(), "alice"))
+                .isEqualTo(ReuseAssessment.REUSABLE);
     }
 
     @Test
@@ -79,8 +92,66 @@ class VisualRulebookTeachingEvidenceFreshnessTest {
         when(runs.findOwned(preparationRunId, "alice")).thenReturn(Optional.of(details(
                 preparationRunId, AssistantRunState.LESSON_PLANNING)));
 
-        assertThat(freshness.requiresRefresh(documentVersionId, preparationRunId, "alice"))
-                .isFalse();
+        assertThat(freshness.assess(documentVersionId, preparationRunId, "alice"))
+                .isEqualTo(ReuseAssessment.IN_PROGRESS);
+    }
+
+    @Test
+    void restartsACompletedPreparationWhosePlanWasNotPersisted() {
+        UUID preparationRunId = preparationRunId();
+        when(runs.findOwned(preparationRunId, "alice")).thenReturn(Optional.of(details(
+                preparationRunId, AssistantRunState.COMPLETED)));
+
+        assertThat(freshness.assess(documentVersionId, preparationRunId, "alice"))
+                .isEqualTo(ReuseAssessment.REFRESH_REQUIRED);
+    }
+
+    @Test
+    void restartsACompletedPreparationWhoseFirstReadableSectionIsMissing() {
+        UUID preparationRunId = preparationRunId();
+        TeachingPlan plan = mock(TeachingPlan.class);
+        UUID planId = UUID.randomUUID();
+        when(plan.id()).thenReturn(planId);
+        when(runs.findOwned(preparationRunId, "alice")).thenReturn(Optional.of(details(
+                preparationRunId, AssistantRunState.COMPLETED)));
+        when(plans.findLatest(documentVersionId, "alice")).thenReturn(Optional.of(plan));
+
+        assertThat(freshness.assess(documentVersionId, preparationRunId, "alice"))
+                .isEqualTo(ReuseAssessment.REFRESH_REQUIRED);
+    }
+
+    @Test
+    void restartsATerminalPreparationThatFailedInsteadOfTreatingItAsCurrent() {
+        UUID preparationRunId = preparationRunId();
+        when(runs.findOwned(preparationRunId, "alice")).thenReturn(Optional.of(details(
+                preparationRunId, AssistantRunState.FAILED)));
+
+        assertThat(freshness.assess(documentVersionId, preparationRunId, "alice"))
+                .isEqualTo(ReuseAssessment.REFRESH_REQUIRED);
+    }
+
+    private UUID preparationRunId() {
+        return UUID.nameUUIDFromBytes(("preparation:" + documentVersionId).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    }
+
+    private void reusableCompletedPreparation() {
+        UUID preparationRunId = preparationRunId();
+        TeachingPlan plan = mock(TeachingPlan.class);
+        UUID planId = UUID.randomUUID();
+        when(plan.id()).thenReturn(planId);
+        when(runs.findOwned(preparationRunId, "alice")).thenReturn(Optional.of(details(
+                preparationRunId, AssistantRunState.COMPLETED)));
+        when(plans.findLatest(documentVersionId, "alice")).thenReturn(Optional.of(plan));
+        when(lessons.findLatestByPlan(planId)).thenReturn(Optional.of(readableLesson(planId)));
+    }
+
+    private IllustratedLesson readableLesson(UUID planId) {
+        var step = new LessonStep(1, "Take the first action", TeachingMove.DO, "Take one action.", List.of(2), List.of());
+        var section = new LessonSection(
+                1, "first-turn", List.of("turn"), "First turn", true, EvidenceStatus.SUPPORTED,
+                null, null, List.of(), List.of(), List.of(step));
+        return new IllustratedLesson(
+                UUID.randomUUID(), planId, LessonStatus.DRAFT_READY, List.of(section), Instant.parse("2026-08-17T00:00:00Z"));
     }
 
     private PageFact completePageFact(int pageNumber, int schemaVersion) {

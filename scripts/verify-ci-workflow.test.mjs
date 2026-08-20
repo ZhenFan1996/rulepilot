@@ -18,6 +18,18 @@ const productionRecommendationWorkflow = await readFile(
   new URL('../.github/workflows/production-recommendation-journey.yml', import.meta.url),
   'utf8',
 )
+const productionOrdinaryUserWorkflow = await readFile(
+  new URL('../.github/workflows/production-ordinary-user-smoke.yml', import.meta.url),
+  'utf8',
+)
+const productionRealRulebookWorkflow = await readFile(
+  new URL('../.github/workflows/production-real-rulebook-experience.yml', import.meta.url),
+  'utf8',
+)
+const publicLessonCandidateWorkflow = await readFile(
+  new URL('../.github/workflows/public-lesson-candidate.yml', import.meta.url),
+  'utf8',
+)
 const productionRecommendationConfig = await readFile(
   new URL('../frontend/playwright.recommendation-production.config.ts', import.meta.url),
   'utf8',
@@ -75,6 +87,18 @@ test('production recommendation journey tests the deployed main release without 
   assert.match(productionRecommendationSpec, /name: '规则答疑'/)
   assert.doesNotMatch(productionRecommendationWorkflow, /echo "\$player_password"/)
   assert.doesNotMatch(productionRecommendationWorkflow, /'bash -s' -- "\$DEPLOY_PATH" "\$player_password"/)
+})
+
+test('deployments and production journeys share one non-cancelling runtime lock', () => {
+  for (const workflow of [
+    deploymentWorkflow,
+    productionRecommendationWorkflow,
+    productionOrdinaryUserWorkflow,
+    productionRealRulebookWorkflow,
+    publicLessonCandidateWorkflow,
+  ]) {
+    assert.match(workflow, /concurrency:\s*\n\s+group: production-runtime\s*\n\s+cancel-in-progress: false/)
+  }
 })
 
 test('failed production recommendation journeys retain bounded API diagnostics without reading environment values', () => {
