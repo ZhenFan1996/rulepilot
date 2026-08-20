@@ -628,8 +628,25 @@ class OfficialRulebookTwentyGameRealChainEvaluationTest {
         public List<OfficialRulebookImportJob> findRecentOwned(String ownerUsername, int limit) {
             return jobs.values().stream()
                     .filter(job -> job.ownerUsername().equals(ownerUsername))
+                    .sorted(java.util.Comparator.comparing(OfficialRulebookImportJob::updatedAt).reversed())
                     .limit(limit)
                     .toList();
+        }
+
+        @Override
+        public void recordReuse(UUID jobId, Instant now) {
+            var job = jobs.get(jobId);
+            jobs.put(jobId, copy(
+                    job,
+                    job.stage(),
+                    job.downloadedBytes(),
+                    job.totalBytes(),
+                    job.documentVersionId(),
+                    job.duplicate(),
+                    job.errorCode(),
+                    job.teachingHandoff(),
+                    now,
+                    job.completedAt()));
         }
 
         @Override

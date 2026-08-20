@@ -174,6 +174,33 @@ class JpaOfficialRulebookImportJobRepositoryPostgresTest {
     }
 
     @Test
+    void reusedWorkBecomesTheMostRecentOwnedStatusWithoutChangingItsCreationTime() {
+        Instant oldCreatedAt = Instant.parse("2026-08-10T01:35:00Z");
+        Instant newerCreatedAt = oldCreatedAt.plusSeconds(30);
+        Instant reusedAt = newerCreatedAt.plusSeconds(30);
+        UUID reusedJobId = insertJob("NOT_REQUESTED", null, oldCreatedAt);
+        UUID newerJobId = insertJob("NOT_REQUESTED", null, newerCreatedAt);
+
+        var beforeReuse = inTransactionReturning(repository ->
+                repository.findRecentOwned("postgres-regression-player", 1));
+        assertThat(beforeReuse)
+                .extracting(OfficialRulebookImportJob::id)
+                .containsExactly(newerJobId);
+
+        inTransaction(repository -> repository.recordReuse(reusedJobId, reusedAt));
+
+        var afterReuse = inTransactionReturning(repository ->
+                repository.findRecentOwned("postgres-regression-player", 1));
+        assertThat(afterReuse)
+                .singleElement()
+                .satisfies(job -> {
+                    assertThat(job.id()).isEqualTo(reusedJobId);
+                    assertThat(job.createdAt()).isEqualTo(oldCreatedAt);
+                    assertThat(job.updatedAt()).isEqualTo(reusedAt);
+                });
+    }
+
+    @Test
     void promptClaimScopesTheOfficialHandoffToTheReadyDocumentVersion() {
         Instant now = Instant.parse("2026-08-10T01:45:00Z");
         UUID matchingVersionId = insertDocument("matching", "READY", now);
