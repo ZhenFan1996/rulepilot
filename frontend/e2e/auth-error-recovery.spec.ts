@@ -50,6 +50,7 @@ test('retries only sign-in after registration already created the account', asyn
   await page.goto('/register?redirect=/lessons?filter=pending')
 
   await page.locator('input[name="username"]').fill('new-player')
+  await page.locator('input[name="email"]').fill('new-player@example.test')
   await page.locator('input[name="password"]').fill('test-password')
   await page.locator('input[name="confirmation"]').fill('test-password')
   await page.getByRole('button', { name: '创建并登录' }).click()

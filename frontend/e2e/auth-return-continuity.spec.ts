@@ -18,6 +18,7 @@ test('returns a newly registered player to the exact page without leaving auth f
   await expect(page.getByTestId('auth-return-context')).toContainText('创建并登录后')
 
   await page.getByLabel('用户名').fill('new-player')
+  await page.locator('input[name="email"]').fill('new-player@example.test')
   await page.locator('input[name="password"]').fill('test-password')
   await page.locator('input[name="confirmation"]').fill('test-password')
   await page.getByRole('button', { name: '创建并登录' }).click()
@@ -34,6 +35,7 @@ test('keeps a retryable registration on the same retained destination', async ({
   await page.goto('/register?redirect=/lessons?filter=pending')
 
   await page.getByLabel('用户名').fill('already-used')
+  await page.locator('input[name="email"]').fill('already-used@example.test')
   await page.locator('input[name="password"]').fill('retry-password')
   await page.locator('input[name="confirmation"]').fill('retry-password')
   await page.getByRole('button', { name: '创建并登录' }).click()

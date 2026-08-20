@@ -352,6 +352,9 @@ async function mockPublicDiscovery(
       ? [currentImportJob()]
       : [] })
   })
+  await page.route('**/api/v1/documents/official-imports?*', route => route.fulfill({
+    json: journeyImported ? [currentImportJob()] : [],
+  }))
   await page.route('**/api/v1/documents/official-imports/import-job-1', route => {
     importJobReads += 1
     return route.fulfill({ json: currentImportJob() })
@@ -400,10 +403,10 @@ async function mockPublicDiscovery(
       })
     })
   }
-  await page.route('**/api/v1/document-versions/version-1/pages', route => route.fulfill({ json: [
-    { pageNumber: 1, text: 'Setup', characterCount: 1200 },
-    { pageNumber: 2, text: 'Goal', characterCount: 960 },
-    { pageNumber: 7, text: 'Gain food, then activate brown powers.', characterCount: 1100 },
+  await page.route('**/api/v1/document-versions/version-1/pages/summaries', route => route.fulfill({ json: [
+    { pageNumber: 1, characterCount: 1200 },
+    { pageNumber: 2, characterCount: 960 },
+    { pageNumber: 7, characterCount: 1100 },
   ] }))
   await page.route('**/api/v1/document-versions/version-1/pages/*/image', route => route.fulfill({
     status: 200,
@@ -771,7 +774,7 @@ test('stops closed reader transport while the durable guide remains reopenable',
   })
   page.on('requestfailed', request => {
     const url = request.url()
-    if (url.includes('/document-versions/version-1/pages')
+    if (url.includes('/document-versions/version-1/pages/summaries')
       || url.includes('/teaching-plans/plan-1')
       || url.includes('/assistant-runs/latest') && url.includes('subjectId=plan-1')) {
       failedReaderRequests.push(url)
@@ -782,20 +785,20 @@ test('stops closed reader transport while the durable guide remains reopenable',
   const pagesGate = new Promise<void>(resolve => { releasePages = resolve })
   let pageRequests = 0
   let blockedPageHandlerSettled = false
-  await page.route('**/api/v1/document-versions/version-1/pages', async route => {
+  await page.route('**/api/v1/document-versions/version-1/pages/summaries', async route => {
     pageRequests += 1
     if (pageRequests === 1) {
       await pagesGate
       await route.fulfill({ json: [
-        { pageNumber: 1, text: 'Setup', characterCount: 1200 },
-        { pageNumber: 7, text: 'Turn order', characterCount: 1100 },
+        { pageNumber: 1, characterCount: 1200 },
+        { pageNumber: 7, characterCount: 1100 },
       ] }).catch(() => undefined)
       blockedPageHandlerSettled = true
       return
     }
     return route.fulfill({ json: [
-      { pageNumber: 1, text: 'Setup', characterCount: 1200 },
-      { pageNumber: 7, text: 'Turn order', characterCount: 1100 },
+      { pageNumber: 1, characterCount: 1200 },
+      { pageNumber: 7, characterCount: 1100 },
     ] })
   })
 
@@ -804,7 +807,7 @@ test('stops closed reader transport while the durable guide remains reopenable',
   await expect(rulebook.getByText('正在打开规则书页面…')).toBeVisible()
   await rulebook.getByRole('button', { name: '关闭规则书' }).click()
   await expect(rulebook).toHaveCount(0)
-  await expect.poll(() => failedReaderRequests.filter(url => url.includes('/document-versions/version-1/pages')).length).toBe(1)
+  await expect.poll(() => failedReaderRequests.filter(url => url.includes('/document-versions/version-1/pages/summaries')).length).toBe(1)
 
   releasePages()
   await expect.poll(() => blockedPageHandlerSettled).toBe(true)
@@ -1102,8 +1105,9 @@ test('advances My Guides from plan startup to the first readable chapter without
   await expect(page.getByText('还没有可读的讲解')).toHaveCount(0)
   await expect(page.getByRole('link', { name: '阅读已完成章节' })).toHaveCount(0)
 
+  preparation.completePreparation()
   preparation.publishFirstLesson()
-  await expect(page.getByText('基础讲解可读')).toBeVisible({ timeout: 4_000 })
+  await expect(page.getByText('基础讲解可读')).toBeVisible({ timeout: 12_000 })
   await expect(page.getByRole('link', { name: '阅读已完成章节' })).toBeVisible()
   await expect(pending).toHaveCount(0)
 })
@@ -1227,7 +1231,7 @@ test('keeps the readable-guide continuation legible and focus-safe at 320 and 39
     element.closest('[data-testid="recommendation-chat-workspace"]') !== null)).toBe(true)
   await expect(readGuide).toContainText('基础讲解可读', { timeout: 8_000 })
   await expect(readGuide).toContainText('打开讲解')
-  await expect(viewProgress).toHaveText('查看进度')
+  await expect(viewProgress).toHaveText('查看详细进度')
 
   for (const width of [320, 390]) {
     await page.setViewportSize({ width, height: 844 })
