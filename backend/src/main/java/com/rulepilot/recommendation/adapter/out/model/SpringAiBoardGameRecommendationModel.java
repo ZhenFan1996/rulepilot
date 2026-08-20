@@ -81,9 +81,11 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
         ToolCallingChatOptions.Builder<?> options;
         if (model.getDefaultOptions() instanceof OpenAiChatOptions defaults) {
             OpenAiChatOptions.Builder builder = defaults.mutate();
-            // Conversational turns do not need an application action. Auto choice lets the same model either answer
-            // directly or enter the typed ReAct loop when external evidence or state mutation is actually needed.
-            builder.toolChoice("auto");
+            // The first conversational turn may answer directly. Once the application has read external evidence,
+            // it requires a supplied action so prose cannot bypass the typed publication boundary.
+            builder.toolChoice(request.toolChoice() == BoardGameRecommendationModel.ToolChoice.REQUIRED
+                    ? "required"
+                    : "auto");
             if (usesDeepSeekNonThinkingGeneration(ownerUsername)) {
                 // Keep the low-latency non-thinking request mode used by Recommendation. Auto tool choice remains
                 // available, so a direct conversational response does not become a forced action.

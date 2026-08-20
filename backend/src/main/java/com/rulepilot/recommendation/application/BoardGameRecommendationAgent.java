@@ -31,7 +31,7 @@ public class BoardGameRecommendationAgent {
     static final String COMPARE_TOOL = "compare_candidates";
     static final String NO_MATCH_TOOL = "report_no_match";
     static final String RECOMMEND_TOOL = "recommend_games";
-    static final String PROMPT_VERSION = "recommendation-agent-v9-adaptive-tool-use";
+    static final String PROMPT_VERSION = "recommendation-agent-v10-conversational-decision-partner";
 
     private final RecommendationReActLoop loop;
 

@@ -460,7 +460,7 @@ class BggRecommendationAgentControllerTest {
     }
 
     @Test
-    void presentsAComparisonAsCandidateFactsAndExplicitUnknownCellsWithoutObservationIds() {
+    void presentsAComparisonWithAttributedReportsSourcesAndExplicitUnknownCellsWithoutObservationIds() {
         Game first = comparisonGame(301, "Opaque One", 45, List.of("Pattern Building"));
         Game second = comparisonGame(302, "Opaque Two", 75, List.of("Open Drafting"));
         var comparison = new BoardGameRecommendationAgent.CandidateComparison(
@@ -492,7 +492,15 @@ class BggRecommendationAgentControllerTest {
                         new BoardGameRecommendationAgent.ComparisonAxis(
                                 "reportedExperience",
                                 List.of(
-                                        new BoardGameRecommendationAgent.ComparisonCell(301, null),
+                                        new BoardGameRecommendationAgent.ComparisonCell(
+                                                301,
+                                                new CandidateObservation(
+                                                        "R301:1",
+                                                        301,
+                                                        CandidateObservation.Kind.ATTRIBUTED_REPORT,
+                                                        "reportedExperience",
+                                                        "A sourced four-player report describes deliberate interaction.",
+                                                        List.of(7))),
                                         new BoardGameRecommendationAgent.ComparisonCell(302, null)))));
         when(agent.converse(any(), eq("zh-CN"), eq("player"))).thenReturn(new ConversationResponse(
                 Outcome.CONVERSATION,
@@ -503,7 +511,11 @@ class BggRecommendationAgentControllerTest {
                 0,
                 2,
                 new BoardGameRecommendationAgent.UserModelView("", List.of()),
-                List.of(),
+                List.of(new BoardGameRecommendationAgent.ResearchSource(
+                        7,
+                        "Independent play report",
+                        "https://reports.example.test/opaque-one",
+                        "reports.example.test")),
                 new BoardGameRecommendationAgent.HarnessTrace(1, 1, 0, false, List.of("COMPARE_CANDIDATES")),
                 List.of(),
                 comparison));
@@ -530,10 +542,24 @@ class BggRecommendationAgentControllerTest {
             assertThat(axis.cells()).extracting(cell -> cell.value())
                     .containsExactly("Pattern Building", "Open Drafting");
         });
-        assertThat(response.comparison().axes().get(1).cells()).allSatisfy(cell -> {
-            assertThat(cell.status()).isEqualTo("unknown");
-            assertThat(cell.observationKind()).isEmpty();
-            assertThat(cell.value()).isEmpty();
+        assertThat(response.comparison().axes().get(1)).satisfies(axis -> {
+            assertThat(axis.label()).isEqualTo("有来源的玩家体验");
+            assertThat(axis.capability()).isEqualTo("attributed_report");
+            assertThat(axis.cells().getFirst()).satisfies(cell -> {
+                assertThat(cell.status()).isEqualTo("observed");
+                assertThat(cell.observationKind()).isEqualTo("attributed_report");
+                assertThat(cell.value()).isEqualTo(
+                        "A sourced four-player report describes deliberate interaction.");
+            });
+            assertThat(axis.cells().getLast()).satisfies(cell -> {
+                assertThat(cell.status()).isEqualTo("unknown");
+                assertThat(cell.observationKind()).isEmpty();
+                assertThat(cell.value()).isEmpty();
+            });
+        });
+        assertThat(response.researchSources()).singleElement().satisfies(source -> {
+            assertThat(source.index()).isEqualTo(7);
+            assertThat(source.title()).isEqualTo("Independent play report");
         });
     }
 

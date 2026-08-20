@@ -42,6 +42,7 @@ final class RecommendationAgentState {
     boolean catalogBrowseAttempted;
     boolean discoveryAttempted;
     boolean discoveryProducedVerifiedGames;
+    boolean researchAttempted;
     boolean clarificationBlockedByExecutionFailure;
     String webResearchFailureCode = "";
     int modelCalls;
@@ -122,6 +123,7 @@ final class RecommendationAgentState {
         catalogBrowseAttempted = false;
         discoveryAttempted = false;
         discoveryProducedVerifiedGames = false;
+        researchAttempted = false;
         research = Research.empty();
         if (selectionWorkObserved) {
             actions.add("RECONSIDER_SELECTION_AFTER_PREFERENCE_UPDATE");

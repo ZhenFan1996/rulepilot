@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { RouterLink } from 'vue-router'
+import { RouterLink, useRoute, useRouter } from 'vue-router'
 
 import AppShell from '@/components/AppShell.vue'
 import TabletopGlyph from '@/components/TabletopGlyph.vue'
@@ -48,6 +48,8 @@ interface CatalogResponse {
 }
 
 const { locale } = useLocale()
+const route = useRoute()
+const router = useRouter()
 const copy = {
   'zh-CN': {
     eyebrow: '桌游目录',
@@ -61,11 +63,12 @@ const copy = {
     all: '全部基础游戏', abstract: '抽象策略', customizable: '可定制游戏', children: '儿童游戏', family: '家庭游戏', party: '聚会游戏', strategy: '策略游戏', thematic: '主题游戏', war: '战争游戏', expansion: '扩展',
     scope: 'BGG 收录 {sourceCount} 条，当前找到 {total} 条。', sourceDate: '资料更新于 {date}',
     loading: '正在读取 BGG 桌游目录', unavailableTitle: '桌游目录还在准备', unavailableDescription: '暂时可以继续使用推荐对话、个人游戏和规则书功能。',
-    errorTitle: '桌游目录暂时打不开', errorDescription: '筛选条件已经保留，可以稍后重试。', retry: '再试一次', appendError: '下一批暂时没取到，已经展示的桌游仍然保留。', retryAppend: '重试下一批',
+    errorTitle: '桌游目录暂时打不开', errorDescription: '筛选条件已经保留，可以稍后重试。', retry: '再试一次', pageError: '这一页暂时没取到，当前页仍然保留。', retryPage: '重试这一页',
     players: '{min}–{max} 人', minutes: '约 {minutes} 分钟', rating: '玩家评分 {rating}', geekRating: 'Geek 评分 {rating}', votes: '{count} 人评分', weight: '复杂度 {weight} / 5',
     rank: '总榜 #{rank}', hotRank: '热榜 #{rank}', noRank: '尚未进入总榜', detailPending: '详细资料将在打开游戏时继续读取',
     categoriesAria: '游戏类型和机制', coverAlt: '{game} 的 BGG 封面', emptyTitle: '没有匹配的桌游', emptyDescription: '试试减少搜索词或选择其他 BGG 类型榜。',
-    loadMore: '再看一批', loadingMore: '正在取下一批…', shown: '已展示 {shown} 款', enriching: '更多封面和游戏资料正在补齐…', officialSource: '数据由 BoardGameGeek 提供', taxonomyFallback: '机制和类型暂时保留 BGG 原文',
+    shown: '本页 {shown} 款', enriching: '更多封面和游戏资料正在补齐…', officialSource: '数据由 BoardGameGeek 提供', taxonomyFallback: '机制和类型暂时保留 BGG 原文',
+    pagination: '桌游目录分页', pageSummary: '第 {current} / {total} 页', previousPage: '上一页', nextPage: '下一页', goToPage: '前往第 {page} 页',
   },
   en: {
     eyebrow: 'Game catalog', title: 'Browse at your own pace',
@@ -77,10 +80,11 @@ const copy = {
     all: 'All base games', abstract: 'Abstract', customizable: 'Customizable', children: "Children's", family: 'Family', party: 'Party', strategy: 'Strategy', thematic: 'Thematic', war: 'War', expansion: 'Expansions',
     scope: 'BGG lists {sourceCount} records; {total} match these filters.', sourceDate: 'Updated {date}', loading: 'Loading the BGG catalog',
     unavailableTitle: 'The game catalog is still being prepared', unavailableDescription: 'Recommendations, your games, and rulebooks are still available.',
-    errorTitle: 'The game catalog is unavailable', errorDescription: 'Your filters are still here. Try again later.', retry: 'Try again', appendError: 'The next batch could not be loaded. Your current games are still here.', retryAppend: 'Retry next batch',
+    errorTitle: 'The game catalog is unavailable', errorDescription: 'Your filters are still here. Try again later.', retry: 'Try again', pageError: 'This page could not be loaded. Your current page is still here.', retryPage: 'Retry this page',
     players: '{min}–{max} players', minutes: 'About {minutes} min', rating: 'Player rating {rating}', geekRating: 'Geek rating {rating}', votes: '{count} ratings', weight: 'Complexity {weight} / 5',
     rank: 'Overall #{rank}', hotRank: 'Hot #{rank}', noRank: 'Not yet ranked', detailPending: 'Rich details will continue loading when you open the game', categoriesAria: 'Game types and mechanisms', coverAlt: '{game} BGG cover',
-    emptyTitle: 'No games match', emptyDescription: 'Try fewer title words or another BGG ranking family.', loadMore: 'Show another batch', loadingMore: 'Loading another batch…', shown: '{shown} games shown', enriching: 'Adding covers, player fit, and localized details in the background…', officialSource: 'Data provided by BoardGameGeek', taxonomyFallback: 'Showing BGG source taxonomy',
+    emptyTitle: 'No games match', emptyDescription: 'Try fewer title words or another BGG ranking family.', shown: '{shown} games on this page', enriching: 'Adding covers, player fit, and localized details in the background…', officialSource: 'Data provided by BoardGameGeek', taxonomyFallback: 'Showing BGG source taxonomy',
+    pagination: 'Game catalog pages', pageSummary: 'Page {current} of {total}', previousPage: 'Previous', nextPage: 'Next', goToPage: 'Go to page {page}',
   },
 } as const
 type CopyKey = keyof typeof copy['zh-CN']
@@ -91,6 +95,8 @@ function t(key: CopyKey, parameters: Record<string, string | number> = {}) {
 }
 
 const typeOptions: CatalogType[] = ['all', 'abstract', 'customizable', 'children', 'family', 'party', 'strategy', 'thematic', 'war', 'expansion']
+const catalogSorts = new Set<CatalogSort>(['hot', 'rating', 'rank'])
+const catalogTypes = new Set<CatalogType>(typeOptions)
 const games = ref<CatalogGame[]>([])
 const ready = ref(false)
 const sourceCount = ref(0)
@@ -101,6 +107,7 @@ const taxonomyTranslated = ref(false)
 const loading = ref(true)
 const enriching = ref(false)
 const loadFailed = ref(false)
+const failedPage = ref<number | null>(null)
 const sort = ref<CatalogSort>('rank')
 const type = ref<CatalogType>('all')
 const page = ref(0)
@@ -114,6 +121,38 @@ const enrichmentControllers = new Map<number, { generation: number; controller: 
 const prefetches = new Map<string, PrefetchRecord>()
 const visiblePages = new Set<number>()
 const translatedPages = new Set<number>()
+
+interface PaginationItem {
+  key: string
+  page: number | null
+  label: string
+}
+
+const paginationItems = computed<PaginationItem[]>(() => {
+  if (totalPages.value <= 1) return []
+  const selected = new Set<number>([0, totalPages.value - 1])
+  for (let candidate = page.value - 1; candidate <= page.value + 1; candidate++) {
+    if (candidate >= 0 && candidate < totalPages.value) selected.add(candidate)
+  }
+  if (page.value <= 2) {
+    for (let candidate = 0; candidate < Math.min(4, totalPages.value); candidate++) selected.add(candidate)
+  }
+  if (page.value >= totalPages.value - 3) {
+    for (let candidate = Math.max(0, totalPages.value - 4); candidate < totalPages.value; candidate++) {
+      selected.add(candidate)
+    }
+  }
+  const ordered = [...selected].sort((left, right) => left - right)
+  const items: PaginationItem[] = []
+  ordered.forEach((candidate, index) => {
+    const previous = ordered[index - 1]
+    if (previous !== undefined && candidate - previous > 1) {
+      items.push({ key: `gap-${previous}-${candidate}`, page: null, label: '…' })
+    }
+    items.push({ key: `page-${candidate}`, page: candidate, label: String(candidate + 1) })
+  })
+  return items
+})
 
 interface CatalogQuery {
   sort: CatalogSort
@@ -132,6 +171,41 @@ const filterActive = computed(() => sort.value !== 'rank' || type.value !== 'all
 
 function querySnapshot(): CatalogQuery {
   return { sort: sort.value, type: type.value, search: submittedQuery.value, locale: locale.value }
+}
+
+function firstQueryValue(value: unknown) {
+  return Array.isArray(value) ? value[0] : value
+}
+
+function normalizedSearch(value: unknown) {
+  return typeof value === 'string' ? value.trim().replace(/\s+/g, ' ') : ''
+}
+
+function routeCatalogState() {
+  const routeSort = firstQueryValue(route.query.sort)
+  const routeType = firstQueryValue(route.query.type)
+  const routeSearch = normalizedSearch(firstQueryValue(route.query.q))
+  const routePage = Number.parseInt(String(firstQueryValue(route.query.page) ?? '1'), 10)
+  return {
+    sort: typeof routeSort === 'string' && catalogSorts.has(routeSort as CatalogSort) ? routeSort as CatalogSort : 'rank',
+    type: typeof routeType === 'string' && catalogTypes.has(routeType as CatalogType) ? routeType as CatalogType : 'all',
+    search: routeSearch,
+    page: Number.isSafeInteger(routePage) && routePage > 0 ? routePage - 1 : 0,
+  }
+}
+
+function syncRoute(pageNumber: number) {
+  const query: Record<string, string> = {}
+  if (sort.value !== 'rank') query.sort = sort.value
+  if (type.value !== 'all') query.type = type.value
+  if (submittedQuery.value) query.q = submittedQuery.value
+  if (pageNumber > 0) query.page = String(pageNumber + 1)
+  const current = routeCatalogState()
+  if (current.sort === sort.value
+    && current.type === type.value
+    && current.search === submittedQuery.value
+    && current.page === pageNumber) return
+  void router.replace({ query })
 }
 
 function catalogRequest(query: CatalogQuery, pageNumber: number, enrich: boolean) {
@@ -184,7 +258,7 @@ function cancelQueryWork() {
   syncEnriching()
 }
 
-function beginReplacementQuery(query: CatalogQuery) {
+function beginReplacementQuery(query: CatalogQuery, targetPage: number) {
   queryGeneration += 1
   cancelQueryWork()
   activeQuery = query
@@ -196,9 +270,24 @@ function beginReplacementQuery(query: CatalogQuery) {
   total.value = 0
   totalPages.value = 0
   sourceDate.value = null
-  page.value = 0
+  page.value = targetPage
+  loadFailed.value = false
+  failedPage.value = null
   taxonomyTranslated.value = query.locale !== 'zh-CN'
   return queryGeneration
+}
+
+function preparePageNavigation(query: CatalogQuery) {
+  activeBaseRequest?.controller.abort()
+  activeBaseRequest = null
+  enrichmentControllers.forEach(entry => entry.controller.abort())
+  enrichmentControllers.clear()
+  visiblePages.clear()
+  translatedPages.clear()
+  loadFailed.value = false
+  failedPage.value = null
+  taxonomyTranslated.value = query.locale !== 'zh-CN'
+  syncEnriching()
 }
 
 async function enrichPage(generation: number, query: CatalogQuery, pageNumber: number) {
@@ -258,19 +347,16 @@ async function loadBasePage(generation: number, query: CatalogQuery, pageNumber:
   return data
 }
 
-async function loadCatalog(append = false) {
-  if (append && loading.value) return
-  const query = append && activeQuery ? activeQuery : querySnapshot()
-  const generation = append ? queryGeneration : beginReplacementQuery(query)
-  const targetPage = append ? page.value + 1 : 0
+async function loadPage(generation: number, query: CatalogQuery, targetPage: number) {
   loading.value = true
   loadFailed.value = false
+  failedPage.value = null
   try {
     const data = await loadBasePage(generation, query, targetPage)
     if (!isCurrentQuery(generation, query)) return
     updateSummary(data)
     page.value = data.page
-    games.value = append ? [...games.value, ...data.games.filter(next => !games.value.some(game => game.bggId === next.bggId))] : data.games
+    games.value = data.games
     visiblePages.add(data.page)
     if (data.taxonomyTranslated) translatedPages.add(data.page)
     else translatedPages.delete(data.page)
@@ -278,23 +364,46 @@ async function loadCatalog(append = false) {
     loading.value = false
     void enrichPage(generation, query, data.page)
     prefetchNextPage(generation, query, data)
+    syncRoute(data.page)
   } catch (error) {
     if (isAbortError(error) || !isCurrentQuery(generation, query)) return
     loadFailed.value = true
+    failedPage.value = targetPage
   } finally {
     if (isCurrentQuery(generation, query)) loading.value = false
     if (activeBaseRequest?.generation === generation) activeBaseRequest = null
   }
 }
 
+async function replaceCatalog(targetPage = 0) {
+  const query = querySnapshot()
+  const generation = beginReplacementQuery(query, targetPage)
+  await loadPage(generation, query, targetPage)
+}
+
+async function navigateToPage(targetPage: number) {
+  if (loading.value || targetPage < 0 || targetPage >= totalPages.value || targetPage === page.value) return
+  const query = activeQuery ?? querySnapshot()
+  const generation = activeQuery ? queryGeneration : beginReplacementQuery(query, targetPage)
+  if (activeQuery) preparePageNavigation(query)
+  await loadPage(generation, query, targetPage)
+}
+
+function retryFailedPage() {
+  const targetPage = failedPage.value
+  if (targetPage === null) return
+  if (games.value.length) void navigateToPage(targetPage)
+  else void replaceCatalog(targetPage)
+}
+
 function applyFilters() {
-  void loadCatalog(false)
+  void replaceCatalog(0)
 }
 
 function searchGames() {
-  const checked = searchQuery.value.trim().replace(/\s+/g, ' ')
+  const checked = normalizedSearch(searchQuery.value)
   submittedQuery.value = checked
-  void loadCatalog(false)
+  void replaceCatalog(0)
 }
 
 function clearFilters() {
@@ -302,7 +411,7 @@ function clearFilters() {
   type.value = 'all'
   searchQuery.value = ''
   submittedQuery.value = ''
-  void loadCatalog(false)
+  void replaceCatalog(0)
 }
 
 function playerTime(game: CatalogGame) {
@@ -316,8 +425,28 @@ function hideBrokenImage(event: Event) {
   ;(event.currentTarget as HTMLImageElement).hidden = true
 }
 
-onMounted(() => void loadCatalog(false))
-watch(locale, () => void loadCatalog(false))
+onMounted(() => {
+  const state = routeCatalogState()
+  sort.value = state.sort
+  type.value = state.type
+  searchQuery.value = state.search
+  submittedQuery.value = state.search
+  void replaceCatalog(state.page)
+})
+watch(locale, () => void replaceCatalog(page.value))
+watch(() => route.fullPath, () => {
+  if (disposed) return
+  const state = routeCatalogState()
+  if (state.sort === sort.value
+    && state.type === type.value
+    && state.search === submittedQuery.value
+    && state.page === page.value) return
+  sort.value = state.sort
+  type.value = state.type
+  searchQuery.value = state.search
+  submittedQuery.value = state.search
+  void replaceCatalog(state.page)
+})
 onBeforeUnmount(() => {
   disposed = true
   queryGeneration += 1
@@ -381,7 +510,7 @@ onBeforeUnmount(() => {
           <div v-for="index in 8" :key="index" class="animate-pulse rounded-2xl border border-ink/10 bg-paper p-3"><div class="aspect-[4/3] rounded-xl bg-ink/8" /><div class="mt-3 h-4 w-2/3 rounded bg-ink/8" /></div>
         </div>
         <div v-else-if="loadFailed && !games.length" class="mt-7 rounded-2xl border border-danger/20 bg-danger/5 p-6" role="alert">
-          <h3 class="font-display text-2xl font-semibold">{{ t('errorTitle') }}</h3><p class="mt-2 text-sm text-ink/60">{{ t('errorDescription') }}</p><button type="button" class="mt-4 min-h-11 rounded-lg bg-ink px-5 text-sm font-semibold text-canvas" @click="loadCatalog(false)">{{ t('retry') }}</button>
+          <h3 class="font-display text-2xl font-semibold">{{ t('errorTitle') }}</h3><p class="mt-2 text-sm text-ink/60">{{ t('errorDescription') }}</p><button type="button" class="mt-4 min-h-11 rounded-lg bg-ink px-5 text-sm font-semibold text-canvas" @click="retryFailedPage">{{ t('retry') }}</button>
         </div>
         <div v-else-if="!ready" class="mt-7 rounded-2xl border border-copper/25 bg-copper/5 p-7" role="status">
           <h3 class="font-display text-2xl font-semibold">{{ t('unavailableTitle') }}</h3><p class="mt-2 max-w-2xl text-sm leading-6 text-ink/60">{{ t('unavailableDescription') }}</p>
@@ -409,13 +538,35 @@ onBeforeUnmount(() => {
         </TransitionGroup>
         <div v-else-if="ready && !loading" class="mt-7 rounded-2xl border border-dashed border-ink/15 bg-paper p-7 text-center"><h3 class="font-display text-2xl font-semibold">{{ t('emptyTitle') }}</h3><p class="mt-2 text-sm text-ink/55">{{ t('emptyDescription') }}</p><button type="button" class="mt-4 min-h-11 rounded-lg border border-ink/15 px-5 text-sm font-semibold" @click="clearFilters">{{ t('clear') }}</button></div>
 
-        <nav v-if="ready && games.length" class="mt-8 flex flex-col items-center gap-3" :aria-label="t('shown', { shown: games.length })">
-          <span class="text-sm text-ink/55">{{ t('shown', { shown: games.length }) }}</span>
-          <div v-if="loadFailed" class="rounded-xl border border-danger/20 bg-danger/5 px-4 py-3 text-center text-sm text-danger" role="alert">
-            <p>{{ t('appendError') }}</p>
-            <button type="button" class="mt-2 min-h-11 font-semibold underline" @click="loadCatalog(true)">{{ t('retryAppend') }}</button>
+        <nav v-if="ready && games.length" data-testid="catalog-pagination" class="player-board mt-8 flex flex-col gap-4 rounded-2xl border border-ink/10 bg-paper/80 px-4 py-5 sm:px-6" :aria-label="t('pagination')">
+          <div class="flex flex-col gap-1 text-center sm:flex-row sm:items-center sm:justify-between sm:text-left">
+            <strong class="font-display text-lg">{{ t('pageSummary', { current: page + 1, total: totalPages }) }}</strong>
+            <span class="text-sm text-ink/55">{{ t('shown', { shown: games.length }) }}</span>
           </div>
-          <button v-if="games.length < total && !loadFailed" type="button" :disabled="loading" class="min-h-12 min-w-48 rounded-xl border border-ink/15 bg-paper px-6 text-sm font-semibold elevation-sm disabled:opacity-50" @click="loadCatalog(true)">{{ loading ? t('loadingMore') : t('loadMore') }}</button>
+          <div v-if="loadFailed" class="rounded-xl border border-danger/20 bg-danger/5 px-4 py-3 text-center text-sm text-danger" role="alert">
+            <p>{{ t('pageError') }}</p>
+            <button type="button" class="mt-2 min-h-11 font-semibold underline" @click="retryFailedPage">{{ t('retryPage') }}</button>
+          </div>
+          <div class="flex flex-wrap items-center justify-center gap-2">
+            <button type="button" :disabled="loading || page === 0" class="min-h-11 rounded-xl border border-ink/15 bg-canvas px-4 text-sm font-semibold transition hover:border-copper hover:text-copper disabled:cursor-not-allowed disabled:opacity-35" @click="navigateToPage(page - 1)">{{ t('previousPage') }}</button>
+            <template v-for="item in paginationItems" :key="item.key">
+              <span v-if="item.page === null" class="flex min-h-11 min-w-9 items-center justify-center text-ink/40" aria-hidden="true">{{ item.label }}</span>
+              <button
+                v-else
+                type="button"
+                :data-testid="`catalog-page-${item.page + 1}`"
+                :aria-current="item.page === page ? 'page' : undefined"
+                :aria-label="t('goToPage', { page: item.page + 1 })"
+                :disabled="loading"
+                class="min-h-11 min-w-11 rounded-xl border px-3 text-sm font-bold transition disabled:cursor-wait disabled:opacity-50"
+                :class="item.page === page ? 'border-felt bg-felt text-white elevation-sm' : 'border-ink/15 bg-canvas text-ink/65 hover:border-copper hover:text-copper'"
+                @click="navigateToPage(item.page)"
+              >
+                {{ item.label }}
+              </button>
+            </template>
+            <button type="button" :disabled="loading || page >= totalPages - 1" class="min-h-11 rounded-xl border border-ink/15 bg-canvas px-4 text-sm font-semibold transition hover:border-copper hover:text-copper disabled:cursor-not-allowed disabled:opacity-35" @click="navigateToPage(page + 1)">{{ t('nextPage') }}</button>
+          </div>
         </nav>
       </section>
     </div>

@@ -136,7 +136,16 @@ public class PostgresBggRankedCatalog implements BggRankedCatalogRepository {
             String column = TYPE_COLUMNS.get(type);
             if (column != null) clauses.add("g." + column + " IS NOT NULL");
         }
-        if (search != null && !search.isBlank()) clauses.add("lower(g.source_name) LIKE lower(:search) ESCAPE E'\\\\'");
+        if (search != null && !search.isBlank()) {
+            clauses.add("""
+                    (lower(g.source_name) LIKE lower(:search) ESCAPE E'\\\\'
+                     OR EXISTS (
+                         SELECT 1
+                         FROM bgg_game_name_alias alias
+                         WHERE alias.bgg_id = g.bgg_id
+                           AND lower(alias.alias) LIKE lower(:search) ESCAPE E'\\\\'))
+                    """.strip());
+        }
         return String.join(" AND ", clauses);
     }
 

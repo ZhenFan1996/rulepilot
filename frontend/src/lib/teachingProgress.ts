@@ -85,6 +85,9 @@ export function teachingActivityText(
       : `第 ${chapter.position} 章“${chapter.title}”`
     : locale === 'en' ? 'this part of the guide' : '当前内容'
   if (locale === 'en') {
+    if (activity.operation.startsWith('retryIncompleteTeachingSections')) {
+      return 'A chapter draft did not pass its checks; retrying only the unfinished chapters once'
+    }
     if (activity.operation.startsWith('readTeachingSourcePages')
       || activity.operation.startsWith('readRuleEvidencePages')) return `Reading the cited rulebook pages for ${target}`
     if (activity.operation.startsWith('readProgressiveVisualPages')) return `Starter guide ready; opening the remaining cited pages from the PDF`
@@ -111,6 +114,9 @@ export function teachingActivityText(
         : `${target} was not published; other validated chapters remain available`
     }
     return 'Organising and reviewing the guide'
+  }
+  if (activity.operation.startsWith('retryIncompleteTeachingSections')) {
+    return '有章节草稿没有通过校验，正在只重试未完成章节一次；已发布内容不会重做'
   }
   if (activity.operation.startsWith('readTeachingSourcePages')
     || activity.operation.startsWith('readRuleEvidencePages')) return `正在读取${target}引用的规则书页面`
@@ -253,7 +259,8 @@ function isTeachingContractRepair(operation: string) {
 }
 
 function isPlayerFacingTeachingOperation(operation: string) {
-  return operation.startsWith('readTeachingSourcePages')
+  return operation.startsWith('retryIncompleteTeachingSections')
+    || operation.startsWith('readTeachingSourcePages')
     || operation.startsWith('readRuleEvidencePages')
     || operation.startsWith('searchRuleEvidence')
     || operation.startsWith('inspectRequiredVisualPage')

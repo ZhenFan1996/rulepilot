@@ -179,6 +179,25 @@ describe('teaching progress', () => {
       '校验发现局部问题，正在修正第 2 章“走完第一轮”',
     ])
   })
+
+  it('shows the one bounded unfinished-chapter retry as real progress', () => {
+    const activities = [
+      activity(1, 'publishTeachingSection|2', 'REJECTED', 'Teaching section withheld: BASE_DRAFT_WITHHELD'),
+      activity(2, 'retryIncompleteTeachingSections', 'SUCCEEDED'),
+      activity(3, 'composeTeachingSection|2', 'RUNNING'),
+    ]
+
+    expect(recentTeachingActivitySteps(plan, activities).map(step => step.text)).toEqual([
+      '第 2 章“走完第一轮”本次未发布，其他已校验章节不受影响',
+      '有章节草稿没有通过校验，正在只重试未完成章节一次；已发布内容不会重做',
+      '正在依据规则书编写第 2 章“走完第一轮”',
+    ])
+    expect(recentTeachingActivitySteps(plan, activities, 'en').map(step => step.text)).toEqual([
+      'chapter 2 “走完第一轮” was not published; other validated chapters remain available',
+      'A chapter draft did not pass its checks; retrying only the unfinished chapters once',
+      'Writing chapter 2 “走完第一轮” from the rulebook',
+    ])
+  })
 })
 
 function run(id: string, activities: TeachingActivity[]): TeachingRunProgress {

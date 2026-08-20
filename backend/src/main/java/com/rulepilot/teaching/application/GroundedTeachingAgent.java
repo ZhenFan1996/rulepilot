@@ -267,6 +267,9 @@ public class GroundedTeachingAgent {
         Map<String, LessonSection> reusable = reusableSections(plan, previousLesson);
         int queriesPerTopic = baseQueryBudget(plan);
         List<LessonSection> sections = new ArrayList<>();
+        Set<Integer> invalidDraftPositions = new LinkedHashSet<>();
+        Set<Integer> missingEvidencePositions = new LinkedHashSet<>();
+        int retrievalToolCalls = 0;
         for (TeachingPlan.PlannedSection planned : plan.sections()) {
             SectionOutcome outcome = baseSection(
                     plan,
@@ -275,6 +278,8 @@ public class GroundedTeachingAgent {
                     reusable,
                     assistantRunId,
                     queriesPerTopic);
+            retrievalToolCalls += outcome.retrievalToolCalls();
+            trackFailure(outcome, invalidDraftPositions, missingEvidencePositions);
             sections.add(outcome.section());
             publishProgress(progressPublisher, lessonId, plan, sections, createdAt);
             recordPublication(
@@ -292,7 +297,10 @@ public class GroundedTeachingAgent {
                 createdAt,
                 reusable,
                 queriesPerTopic,
-                sections);
+                sections,
+                invalidDraftPositions,
+                missingEvidencePositions,
+                retrievalToolCalls);
     }
 
     IllustratedLesson continueBase(
@@ -334,6 +342,7 @@ public class GroundedTeachingAgent {
                     completed.put(outcome.position(), outcome);
                     while (completed.containsKey(sections.size() + 1)) {
                         SectionOutcome contiguous = completed.remove(sections.size() + 1);
+                        continuation.track(contiguous);
                         sections.add(contiguous.section());
                         publishProgress(progressPublisher, lessonId, plan, sections, createdAt);
                         recordPublication(
@@ -345,7 +354,65 @@ public class GroundedTeachingAgent {
                 }
             }
         }
-        return lesson(lessonId, plan, sections, createdAt);
+        IllustratedLesson firstPass = lesson(lessonId, plan, sections, createdAt);
+        if (firstPass.status() == LessonStatus.INCOMPLETE
+                && continuation.canRetryInvalidDrafts(maxToolCalls)) {
+            return retryInvalidDraftSections(continuation, progressPublisher);
+        }
+        return firstPass;
+    }
+
+    private IllustratedLesson retryInvalidDraftSections(
+            BaseLessonContinuation continuation,
+            Consumer<IllustratedLesson> progressPublisher) {
+        List<Integer> positions = List.copyOf(continuation.invalidDraftPositions);
+        invocations.record(
+                continuation.assistantRunId,
+                ActivityType.VALIDATION,
+                "retryIncompleteTeachingSections",
+                ActivityOutcome.SUCCEEDED,
+                "Retrying " + positions.size() + " cited sections whose generated draft did not pass validation");
+        for (int position : positions) {
+            int remainingToolBudget = maxToolCalls - continuation.retrievalToolCalls;
+            if (remainingToolBudget <= 0) break;
+            TeachingPlan.PlannedSection planned = continuation.plan.sections().get(position - 1);
+            SectionOutcome outcome = baseSection(
+                    continuation.plan,
+                    planned,
+                    lessonAssembly.continuityContext(continuation.sections),
+                    continuation.reusableSections,
+                    continuation.assistantRunId,
+                    Math.min(continuation.queriesPerTopic, remainingToolBudget),
+                    false);
+            continuation.replace(outcome);
+            publishProgress(
+                    progressPublisher,
+                    continuation.lessonId,
+                    continuation.plan,
+                    continuation.sections,
+                    continuation.createdAt);
+            recordPublication(
+                    continuation.assistantRunId,
+                    planned,
+                    outcome.publicationOutcome(),
+                    outcome.publicationCategory());
+        }
+        return lesson(
+                continuation.lessonId,
+                continuation.plan,
+                continuation.sections,
+                continuation.createdAt);
+    }
+
+    private static void trackFailure(
+            SectionOutcome outcome,
+            Set<Integer> invalidDraftPositions,
+            Set<Integer> missingEvidencePositions) {
+        if (outcome.failure() == SectionFailure.INVALID_DRAFT) {
+            invalidDraftPositions.add(outcome.position());
+        } else if (outcome.failure() == SectionFailure.MISSING_EVIDENCE) {
+            missingEvidencePositions.add(outcome.position());
+        }
     }
 
     static final class BaseLessonContinuation {
@@ -356,6 +423,9 @@ public class GroundedTeachingAgent {
         private final Map<String, LessonSection> reusableSections;
         private final int queriesPerTopic;
         private final List<LessonSection> sections;
+        private final Set<Integer> invalidDraftPositions;
+        private final Set<Integer> missingEvidencePositions;
+        private int retrievalToolCalls;
 
         private BaseLessonContinuation(
                 TeachingPlan plan,
@@ -364,7 +434,10 @@ public class GroundedTeachingAgent {
                 Instant createdAt,
                 Map<String, LessonSection> reusableSections,
                 int queriesPerTopic,
-                List<LessonSection> sections) {
+                List<LessonSection> sections,
+                Set<Integer> invalidDraftPositions,
+                Set<Integer> missingEvidencePositions,
+                int retrievalToolCalls) {
             this.plan = plan;
             this.assistantRunId = assistantRunId;
             this.lessonId = lessonId;
@@ -372,10 +445,32 @@ public class GroundedTeachingAgent {
             this.reusableSections = reusableSections;
             this.queriesPerTopic = queriesPerTopic;
             this.sections = sections;
+            this.invalidDraftPositions = invalidDraftPositions;
+            this.missingEvidencePositions = missingEvidencePositions;
+            this.retrievalToolCalls = retrievalToolCalls;
         }
 
         boolean hasRemainingWork() {
             return sections.size() < plan.sections().size();
+        }
+
+        private void track(SectionOutcome outcome) {
+            retrievalToolCalls += outcome.retrievalToolCalls();
+            trackFailure(outcome, invalidDraftPositions, missingEvidencePositions);
+        }
+
+        private void replace(SectionOutcome outcome) {
+            int position = outcome.position();
+            sections.set(position - 1, outcome.section());
+            invalidDraftPositions.remove(position);
+            missingEvidencePositions.remove(position);
+            track(outcome);
+        }
+
+        private boolean canRetryInvalidDrafts(int maxToolCalls) {
+            return missingEvidencePositions.isEmpty()
+                    && !invalidDraftPositions.isEmpty()
+                    && maxToolCalls - retrievalToolCalls >= invalidDraftPositions.size();
         }
     }
 
@@ -386,6 +481,24 @@ public class GroundedTeachingAgent {
             Map<String, LessonSection> reusableSections,
             UUID assistantRunId,
             int queriesPerTopic) {
+        return baseSection(
+                plan,
+                planned,
+                priorSections,
+                reusableSections,
+                assistantRunId,
+                queriesPerTopic,
+                true);
+    }
+
+    private SectionOutcome baseSection(
+            TeachingPlan plan,
+            TeachingPlan.PlannedSection planned,
+            List<PriorSectionContext> priorSections,
+            Map<String, LessonSection> reusableSections,
+            UUID assistantRunId,
+            int queriesPerTopic,
+            boolean allowValidationRevision) {
         return generateSection(
                 plan,
                 planned,
@@ -394,7 +507,8 @@ public class GroundedTeachingAgent {
                 assistantRunId,
                 queriesPerTopic,
                 planned.position() - 1,
-                GenerationMode.PROGRESSIVE_BASE);
+                GenerationMode.PROGRESSIVE_BASE,
+                allowValidationRevision);
     }
 
     private int baseQueryBudget(TeachingPlan plan) {
@@ -410,12 +524,13 @@ public class GroundedTeachingAgent {
             UUID assistantRunId,
             int queryBudget,
             int sectionIndex,
-            GenerationMode mode) {
+            GenerationMode mode,
+            boolean allowValidationRevision) {
         LessonSection reusable = reusableSections.get(planned.topicKey());
         if (reusable != null) {
             return new SectionOutcome(
                     planned.position(), planned, reusable, null, 0,
-                    ActivityOutcome.SUCCEEDED, "REUSED_VERIFIED_SECTION");
+                    ActivityOutcome.SUCCEEDED, "REUSED_VERIFIED_SECTION", SectionFailure.NONE);
         }
         TeachingSectionEvidenceRetriever.Result resolution = evidenceRetriever.retrieve(
                 plan, planned, assistantRunId, queryBudget, mode.bindVisualPageEvidence());
@@ -432,7 +547,8 @@ public class GroundedTeachingAgent {
                     ActivityOutcome.REJECTED,
                     resolution.state() == TeachingSectionEvidenceRetriever.State.EMPTY
                             ? mode.noEvidenceCategory()
-                            : mode.invalidEvidenceCategory());
+                            : mode.invalidEvidenceCategory(),
+                    SectionFailure.MISSING_EVIDENCE);
         }
         try {
             TeachingSectionDraftCandidate composed = sectionDraftComposer.compose(
@@ -442,20 +558,21 @@ public class GroundedTeachingAgent {
                     resolution.evidence(),
                     assistantRunId,
                     sectionIndex,
-                    mode.includeVisualEvidence() && planned.visualEvidenceRecommended());
+                    mode.includeVisualEvidence() && planned.visualEvidenceRecommended(),
+                    allowValidationRevision);
             LessonSection published = mode.publishAfterDeterministicValidation()
                     ? basePublication.publish(composed)
                     : composed.section();
             return new SectionOutcome(
                     planned.position(), planned, published, composed, resolution.toolCalls(),
-                    ActivityOutcome.SUCCEEDED, mode.publishedCategory());
+                    ActivityOutcome.SUCCEEDED, mode.publishedCategory(), SectionFailure.NONE);
         } catch (AgentExecutionStoppedException stopped) {
             throw stopped;
         } catch (RuntimeException invalidDraft) {
             log.warn("Teaching section {} was withheld: {}", planned.topicKey(), invalidDraft.getMessage());
             return new SectionOutcome(
                     planned.position(), planned, lessonAssembly.insufficient(planned), null, resolution.toolCalls(),
-                    ActivityOutcome.REJECTED, mode.withheldCategory());
+                    ActivityOutcome.REJECTED, mode.withheldCategory(), SectionFailure.INVALID_DRAFT);
         }
     }
 
@@ -501,7 +618,8 @@ public class GroundedTeachingAgent {
                     assistantRunId,
                     Math.min(queriesPerTopic, maxToolCalls - toolCalls),
                     sections.size(),
-                    GenerationMode.COMPATIBILITY_COMPLETE);
+                    GenerationMode.COMPATIBILITY_COMPLETE,
+                    true);
             toolCalls += outcome.retrievalToolCalls();
             sections.add(outcome.section());
             if (outcome.reviewCandidate() != null) reviewCandidates.add(outcome.reviewCandidate());
@@ -595,7 +713,14 @@ public class GroundedTeachingAgent {
             TeachingSectionDraftCandidate reviewCandidate,
             int retrievalToolCalls,
             ActivityOutcome publicationOutcome,
-            String publicationCategory) {}
+            String publicationCategory,
+            SectionFailure failure) {}
+
+    private enum SectionFailure {
+        NONE,
+        MISSING_EVIDENCE,
+        INVALID_DRAFT
+    }
 
     private int estimateTokens(String value) {
         return value == null ? 0 : Math.max(1, (value.length() + 3) / 4);

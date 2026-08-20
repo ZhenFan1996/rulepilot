@@ -47,7 +47,7 @@ import { TEACHING_LAUNCHED_EVENT, teachingLaunchDetail } from '@/lib/teachingLau
 
 const props = defineProps<{ username: string }>()
 const emit = defineEmits<{
-  status: [activeCount: number, finishedCount: number]
+  status: [activeCount: number, finishedCount: number, activeTitle: string, finishedTitle: string]
 }>()
 
 const dialog = ref<HTMLElement | null>(null)
@@ -71,6 +71,8 @@ const { locale } = useLocale()
 const open = ref(false)
 const loading = ref(true)
 const unavailable = ref(false)
+const clearingFinished = ref(false)
+const dismissError = ref('')
 const activeTeaching = ref<BackgroundTeachingItem[]>([])
 const completedTeaching = ref<BackgroundTeachingItem[]>([])
 const teachingStates = ref<Record<string, string>>({})
@@ -118,6 +120,7 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   bytes: (done: string, total: string) => `${done} / ${total}`, pages: (done: number, total: number) => `第 ${done} / ${total} 页`,
   browserRequired: '需要在来源网站刷新链接或登录',
   openRulebooks: '打开规则书', openLessons: '打开讲解中心',
+  clearing: '正在清除…', clearFailed: '有些失败记录没有清除成功，请稍后重试。',
 } : {
   trigger: 'Background work', title: 'Background work', close: 'Close background work', empty: 'No background work right now.',
   safe: 'You can keep browsing. Leaving this page will not interrupt these tasks.', retrying: 'Progress is temporarily unavailable; retrying automatically.',
@@ -137,6 +140,7 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   bytes: (done: string, total: string) => `${done} / ${total}`, pages: (done: number, total: number) => `Page ${done} / ${total}`,
   browserRequired: 'Refresh the link or sign in on the source site',
   openRulebooks: 'Open rulebooks', openLessons: 'Open lesson center',
+  clearing: 'Clearing…', clearFailed: 'Some failed records could not be cleared. Please try again.',
 })
 
 function workStatus(
@@ -458,6 +462,8 @@ const workItems = computed<WorkItem[]>(() => {
 })
 const activeCount = computed(() => workItems.value.filter(item => item.state === 'active').length)
 const finishedCount = computed(() => workItems.value.filter(item => item.state !== 'active').length)
+const firstActiveTitle = computed(() => workItems.value.find(item => item.state === 'active')?.title ?? '')
+const firstFinishedTitle = computed(() => workItems.value.find(item => item.state !== 'active')?.title ?? '')
 
 function clearTimer() {
   if (timer) clearTimeout(timer)
@@ -869,11 +875,10 @@ function invalidateRefresh() {
   activeRefreshController = null
 }
 
-function dismissFinished() {
+async function dismissFinished() {
+  if (clearingFinished.value) return
   invalidateRefresh()
-  completedTeaching.value = []
   const keys = backgroundWorkStorageKeys(account)
-  sessionStorage.removeItem(keys.completedTeaching)
   const activeTransitionImportIds = new Set(preparationTeachingTransitions.value
     .filter(transition => transition.source === 'import')
     .map(transition => transition.sourceId))
@@ -883,21 +888,81 @@ function dismissFinished() {
   const finishedImports = imports.value
     .filter(officialImportFinished)
     .filter(job => !activeTransitionImportIds.has(job.id))
-    .map(job => job.id)
-  dismissedImportIds.value = new Set([...dismissedImportIds.value, ...finishedImports])
-  safelyStore(keys.dismissedImports, [...dismissedImportIds.value])
+  const finishedImportIds = finishedImports.map(job => job.id)
   const finishedUploadHandoffs = uploadedTeachingHandoffs.value
     .filter(uploadedTeachingHandoffFinished)
     .filter(handoff => !activeTransitionUploadIds.has(handoff.id))
-    .map(handoff => handoff.id)
-  dismissedUploadedHandoffIds.value = new Set([
-    ...dismissedUploadedHandoffIds.value,
-    ...finishedUploadHandoffs,
-  ])
-  safelyStore(keys.dismissedUploadHandoffs, [...dismissedUploadedHandoffIds.value])
-  for (const importId of finishedImports) preparationTeachingPlanIds.delete(`import:${importId}`)
-  for (const handoffId of finishedUploadHandoffs) preparationTeachingPlanIds.delete(`upload:${handoffId}`)
-  schedule(refreshGeneration, account)
+  const finishedUploadIds = finishedUploadHandoffs.map(handoff => handoff.id)
+  const persistentTargets = [
+    ...finishedImports
+      .filter(officialImportNeedsPersistentDismissal)
+      .map(job => ({ kind: 'import' as const, id: job.id })),
+    ...finishedUploadHandoffs
+      .filter(uploadedTeachingHandoffFailed)
+      .map(handoff => ({ kind: 'upload' as const, id: handoff.id })),
+  ]
+  clearingFinished.value = true
+  dismissError.value = ''
+  try {
+    const rejected = new Set<string>()
+    if (persistentTargets.length > 0) {
+      let csrf: { headerName: string; token: string } | null = null
+      try {
+        const response = await fetch('/api/auth/csrf', { credentials: 'include' })
+        if (!response.ok) throw new Error('csrf unavailable')
+        csrf = await response.json() as { headerName: string; token: string }
+      } catch {
+        for (const target of persistentTargets) rejected.add(`${target.kind}:${target.id}`)
+      }
+      if (csrf) {
+        await Promise.all(persistentTargets.map(async (target) => {
+          const source = target.kind === 'import' ? 'official-imports' : 'uploads'
+          try {
+            const response = await fetch(
+              `/api/v1/teaching-preparation-failures/${source}/${encodeURIComponent(target.id)}`,
+              { method: 'DELETE', credentials: 'include', headers: { [csrf.headerName]: csrf.token } },
+            )
+            if (!response.ok) rejected.add(`${target.kind}:${target.id}`)
+          } catch {
+            rejected.add(`${target.kind}:${target.id}`)
+          }
+        }))
+      }
+    }
+    const dismissedImports = finishedImportIds
+      .filter(id => !rejected.has(`import:${id}`))
+    const dismissedUploads = finishedUploadIds
+      .filter(id => !rejected.has(`upload:${id}`))
+    dismissedImportIds.value = new Set([...dismissedImportIds.value, ...dismissedImports])
+    dismissedUploadedHandoffIds.value = new Set([
+      ...dismissedUploadedHandoffIds.value,
+      ...dismissedUploads,
+    ])
+    safelyStoreDismissed(keys.dismissedImports, [...dismissedImportIds.value])
+    safelyStoreDismissed(keys.dismissedUploadHandoffs, [...dismissedUploadedHandoffIds.value])
+    for (const importId of dismissedImports) preparationTeachingPlanIds.delete(`import:${importId}`)
+    for (const handoffId of dismissedUploads) preparationTeachingPlanIds.delete(`upload:${handoffId}`)
+    if (rejected.size > 0) dismissError.value = copy.value.clearFailed
+    completedTeaching.value = []
+    sessionStorage.removeItem(keys.completedTeaching)
+  } finally {
+    clearingFinished.value = false
+    schedule(refreshGeneration, account)
+  }
+}
+
+function officialImportNeedsPersistentDismissal(job: RulebookImportJob) {
+  if (job.stage === 'FAILED'
+    || job.teachingHandoffState === 'FAILED'
+    || job.teachingErrorCode === 'DOCUMENT_PROCESSING_FAILED') return true
+  const document = job.documentVersionId
+    ? documents.value.find(entry => entry.latestVersion.id === job.documentVersionId)
+    : undefined
+  if (document?.latestVersion.status === 'FAILED') return true
+  const runState = job.teachingPreparationRunId
+    ? preparationStates.value[job.teachingPreparationRunId]
+    : undefined
+  return Boolean(runState && terminalTeachingStates.has(runState) && runState !== 'COMPLETED')
 }
 
 function handleVisibility() {
@@ -932,8 +997,8 @@ function handleBackgroundWorkChanged(event: Event) {
       detail.dismissedUploadedHandoffIds,
     )
     const keys = backgroundWorkStorageKeys(account)
-    safelyStore(keys.dismissedImports, [...dismissedImportIds.value])
-    safelyStore(keys.dismissedUploadHandoffs, [...dismissedUploadedHandoffIds.value])
+    safelyStoreDismissed(keys.dismissedImports, [...dismissedImportIds.value])
+    safelyStoreDismissed(keys.dismissedUploadHandoffs, [...dismissedUploadedHandoffIds.value])
   }
   void refresh()
 }
@@ -953,7 +1018,17 @@ function openCenter(trigger?: HTMLElement | null) {
 
 defineExpose({ openCenter })
 
-watch([activeCount, finishedCount], ([active, finished]) => emit('status', active, finished), { immediate: true })
+watch(
+  [activeCount, finishedCount, firstActiveTitle, firstFinishedTitle],
+  ([active, finished, activeTitle, finishedTitle]) => emit(
+    'status',
+    active,
+    finished,
+    activeTitle,
+    finishedTitle,
+  ),
+  { immediate: true },
+)
 
 onMounted(() => {
   document.addEventListener('visibilitychange', handleVisibility)
@@ -990,6 +1065,7 @@ function switchAccount(nextUsername: string) {
   preparationTeachingPlanIds.clear()
   dismissedImportIds.value = new Set()
   dismissedUploadedHandoffIds.value = new Set()
+  dismissError.value = ''
   titles.clear()
   clearLegacyBackgroundWorkStorage(sessionStorage)
   if (!account) {
@@ -1010,12 +1086,27 @@ function switchAccount(nextUsername: string) {
 
 function readStoredIds(key: string) {
   try {
-    const stored = JSON.parse(sessionStorage.getItem(key) ?? '[]') as unknown
-    if (!Array.isArray(stored)) return new Set<string>()
-    return new Set(stored
+    const stored = [localStorage.getItem(key), sessionStorage.getItem(key)]
+      .flatMap((value) => {
+        if (!value) return []
+        const parsed = JSON.parse(value) as unknown
+        return Array.isArray(parsed) ? parsed : []
+      })
+    const ids = new Set(stored
       .filter((value): value is string => typeof value === 'string' && value.trim().length > 0))
+    safelyStoreDismissed(key, [...ids])
+    return ids
   } catch {
     return new Set<string>()
+  }
+}
+
+function safelyStoreDismissed(key: string, value: unknown) {
+  safelyStore(key, value)
+  try {
+    localStorage.setItem(key, JSON.stringify(value))
+  } catch {
+    // Durable server state remains authoritative when browser storage is unavailable or full.
   }
 }
 
@@ -1043,6 +1134,7 @@ function safelyStore(key: string, value: unknown) {
 
         <div class="flex-1 overflow-y-auto px-4 py-5 sm:px-5">
           <p v-if="unavailable" class="rounded-lg bg-amber-50 px-4 py-3 text-sm text-amber-900" role="status">{{ copy.retrying }}</p>
+          <p v-if="dismissError" class="mb-3 rounded-lg bg-red-50 px-4 py-3 text-sm text-red-800" role="alert">{{ dismissError }}</p>
           <p v-if="loading" class="py-8 text-center text-sm text-ink/45">{{ copy.title }}…</p>
           <p v-else-if="workItems.length === 0" class="rounded-xl border border-dashed border-ink/18 bg-paper px-5 py-10 text-center text-sm text-ink/50">{{ copy.empty }}</p>
           <ol v-else class="stack-y-md">
@@ -1070,7 +1162,7 @@ function safelyStore(key: string, value: unknown) {
           </ol>
         </div>
         <footer v-if="finishedCount" class="border-t border-ink/10 bg-paper px-5 py-3 text-right">
-          <button type="button" class="min-h-11 text-sm font-semibold text-ink/55 hover:text-ink" @click="dismissFinished">{{ locale === 'zh-CN' ? '清除已结束任务' : 'Clear finished work' }}</button>
+          <button type="button" class="min-h-11 text-sm font-semibold text-ink/55 hover:text-ink disabled:cursor-wait disabled:opacity-55" :disabled="clearingFinished" @click="dismissFinished">{{ clearingFinished ? copy.clearing : locale === 'zh-CN' ? '清除已结束任务' : 'Clear finished work' }}</button>
         </footer>
       </aside>
     </div>

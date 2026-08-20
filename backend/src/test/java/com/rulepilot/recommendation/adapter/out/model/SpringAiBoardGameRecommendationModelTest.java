@@ -10,6 +10,7 @@ import com.rulepilot.modelconfig.RuntimeModelConfiguration;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.Message;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.CompletionStatus;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.Request;
+import com.rulepilot.recommendation.BoardGameRecommendationModel.ToolChoice;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.ToolSpec;
 import java.util.List;
 import org.junit.jupiter.api.Test;
@@ -63,6 +64,43 @@ class SpringAiBoardGameRecommendationModelTest {
         assertThat(options.getExtraBody())
                 .containsExactlyInAnyOrderEntriesOf(
                         java.util.Map.of("thinking", java.util.Map.of("type", "disabled")));
+    }
+
+    @Test
+    void requiresOneOfTheAdvertisedActionsAfterTheApplicationHasReadExternalEvidence() {
+        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        ChatModel chatModel = mock(ChatModel.class);
+        when(configuration.modelFor(RuntimeModelConfiguration.Role.RECOMMENDATION)).thenReturn(chatModel);
+        when(configuration.providerFor(RuntimeModelConfiguration.Role.RECOMMENDATION)).thenReturn("qwen");
+        when(configuration.modelNameFor(RuntimeModelConfiguration.Role.RECOMMENDATION)).thenReturn("qwen3.7-plus");
+        when(chatModel.getDefaultOptions()).thenReturn(OpenAiChatOptions.builder()
+                .apiKey("test-key")
+                .baseUrl("https://provider.example/v1")
+                .model("qwen3.7-plus")
+                .build());
+        AssistantMessage output = AssistantMessage.builder()
+                .content("")
+                .toolCalls(List.of(new AssistantMessage.ToolCall(
+                        "compare-1", "function", "compare_candidates",
+                        "{\"message\":\"A grounded comparison\"}")))
+                .build();
+        when(chatModel.call(any(Prompt.class))).thenReturn(new ChatResponse(List.of(new Generation(output))));
+        var adapter = new SpringAiBoardGameRecommendationModel(configuration);
+
+        adapter.next(new Request(
+                List.of(Message.system("Use the supplied action."), Message.user("Compare them.")),
+                List.of(new ToolSpec(
+                        "compare_candidates",
+                        "Publish an attributed comparison",
+                        "{\"type\":\"object\"}")),
+                1_200,
+                ToolChoice.REQUIRED));
+
+        ArgumentCaptor<Prompt> prompt = ArgumentCaptor.forClass(Prompt.class);
+        verify(chatModel).call(prompt.capture());
+        OpenAiChatOptions options = (OpenAiChatOptions) prompt.getValue().getOptions();
+        assertThat(options.getToolChoice()).isEqualTo("required");
+        assertThat(options.getParallelToolCalls()).isFalse();
     }
 
     @Test

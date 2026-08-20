@@ -890,7 +890,7 @@ class BoardGameRecommendationAgentTest {
                     assertThat(request.messages().get(1).content())
                             .contains(
                                     "\"semanticPublicDiscovery\":true",
-                                    "\"subjectiveFitResearch\":true");
+                                    "\"subjectiveFitResearch\":false");
                     return action(
                             "inspect-empty",
                             BoardGameRecommendationAgent.SEARCH_TOOL,
@@ -909,6 +909,7 @@ class BoardGameRecommendationAgentTest {
                     assertThat(request.tools()).extracting(tool -> tool.name())
                             .containsExactly(
                                     BoardGameRecommendationAgent.REPLY_TOOL,
+                                    BoardGameRecommendationAgent.RESEARCH_TOOL,
                                     BoardGameRecommendationAgent.RECOMMEND_TOOL);
                     assertThat(request.messages().getLast().content())
                             .contains(
@@ -919,7 +920,7 @@ class BoardGameRecommendationAgentTest {
                                     "already resolved and hydrated",
                                     "\"recommendableBggIds\":[60,61]",
                                     "\"semanticPublicDiscovery\":false",
-                                    "\"subjectiveFitResearch\":false")
+                                    "\"subjectiveFitResearch\":true")
                             .doesNotContain("\"candidateBggIds\"");
                     assertThat(request.tools().stream()
                                     .filter(tool -> BoardGameRecommendationAgent.RECOMMEND_TOOL.equals(tool.name()))
@@ -1003,6 +1004,7 @@ class BoardGameRecommendationAgentTest {
                     assertThat(request.tools()).extracting(tool -> tool.name())
                             .containsExactly(
                                     BoardGameRecommendationAgent.REPLY_TOOL,
+                                    BoardGameRecommendationAgent.RESEARCH_TOOL,
                                     BoardGameRecommendationAgent.RECOMMEND_TOOL);
                     assertThat(request.messages().getLast().content())
                             .contains(
@@ -1292,6 +1294,7 @@ class BoardGameRecommendationAgentTest {
                     assertThat(request.tools()).extracting(tool -> tool.name())
                             .containsExactly(
                                     BoardGameRecommendationAgent.REPLY_TOOL,
+                                    BoardGameRecommendationAgent.RESEARCH_TOOL,
                                     BoardGameRecommendationAgent.RECOMMEND_TOOL);
                     assertThat(request.tools().stream()
                                     .filter(tool -> BoardGameRecommendationAgent.RECOMMEND_TOOL.equals(tool.name()))
@@ -1722,7 +1725,7 @@ class BoardGameRecommendationAgentTest {
     @Test
     void preservesPlayerAndDurationRangesAsAtomicGroundedPreferenceUpdates() {
         assertThat(BoardGameRecommendationAgent.PROMPT_VERSION)
-                .isEqualTo("recommendation-agent-v9-adaptive-tool-use");
+                .isEqualTo("recommendation-agent-v10-conversational-decision-partner");
         assertThat(BoardGameRecommendationAgent.class.getResource(
                         "/prompts/recommendation-agent-v1-system.txt"))
                 .as("the production-replayed v1 prompt remains reproducible after activating v2")
@@ -2241,7 +2244,10 @@ class BoardGameRecommendationAgentTest {
         ScriptedModel model = new ScriptedModel(List.of(
                 request -> {
                     assertThat(request.messages().getFirst().content())
-                            .contains("Do not ask merely because a useful request is broad or the profile is empty");
+                            .contains(
+                                    "Do not ask merely because a useful request is broad or the profile is empty",
+                                    "Speak like a decision partner at the table, not a task runner or completion report",
+                                    "prefer one plain question about the intended play situation");
                     assertThat(request.tools()).extracting(ToolSpec::name)
                             .contains(
                                     BoardGameRecommendationAgent.SEARCH_TOOL,
@@ -2993,11 +2999,11 @@ class BoardGameRecommendationAgentTest {
     @Test
     void inBandClassificationKeepsACompleteGroupCountAsAVisibleReversibleAssumption() {
         ScriptedModel model = new ScriptedModel(List.of(ignored -> action(
-                "reply-with-contextual-count",
-                BoardGameRecommendationAgent.REPLY_TOOL,
-                "{\"message\":\"我先按你和爸妈三个人来理解，人数有变化随时改。\","
+                        "reply-with-contextual-count",
+                        BoardGameRecommendationAgent.REPLY_TOOL,
+                        "{\"message\":\"我先按你和爸妈三个人来理解，人数有变化随时改。\","
                         + "\"preferenceUpdates\":[{\"field\":\"playerCount\","
-                        + "\"value\":{\"minimum\":3,\"maximum\":3},\"evidence\":\"U1\","
+                        + "\"value\":3,\"evidence\":\"U1\","
                         + "\"evidenceClassification\":\"CONTEXTUAL_COMPLETE_GROUP\"}]}")));
 
         var response = agent(model, new TrackingCatalog(), noResearch()).converse(
@@ -3249,20 +3255,20 @@ class BoardGameRecommendationAgentTest {
                     assertThat(comparisonTool.description())
                             .contains(
                                     "verified conversation candidates",
-                                    "rather than narrating every cell",
+                                    "safe conversational decision sentence",
                                     "Persist any explicit current-turn numeric or type correction");
-                    assertThat(schema(comparisonTool).at("/properties/message/description").asText())
-                            .contains("without repeating the structured comparison cells");
+                    assertThat(schema(comparisonTool).at("/properties/message").isMissingNode()).isTrue();
+                    assertThat(schema(comparisonTool).at("/properties/preferredBggId/anyOf")).hasSize(2);
                     assertThat(schema(comparisonTool).at("/properties/preferenceUpdates/type").asText())
                             .isEqualTo("array");
                     assertThat(comparisonTool.inputSchema())
-                            .contains("\"required\":[\"message\",\"candidateBggIds\",\"subjects\"]")
+                            .contains("\"required\":[\"candidateBggIds\",\"subjects\",\"preferredBggId\"]")
                             .doesNotContain("decisionMode", "decisionEvidenceIds");
                     return action(
                             "compare-restored",
                             BoardGameRecommendationAgent.COMPARE_TOOL,
-                            "{\"message\":\"Glass Orchard 的标注时长是 40..55 分钟，Loom City 是 45..60 分钟；两款的实际桌感都没有资料支持，我把这项留成待核对。只按标注时长上限，我会选 Glass Orchard。\","
-                                    + "\"candidateBggIds\":[60,61],\"subjects\":[\"durationMinutes\",\"mechanics\",\"获奖沿革\"]}");
+                            "{\"candidateBggIds\":[60,61],\"subjects\":[\"durationMinutes\",\"mechanics\",\"获奖沿革\"],"
+                                    + "\"preferredBggId\":60}");
                 }));
 
         var response = agent(model, catalog, noResearch()).converse(
@@ -3282,7 +3288,7 @@ class BoardGameRecommendationAgentTest {
         assertThat(response.outcome()).isEqualTo(Outcome.CONVERSATION);
         assertThat(response.games()).isEmpty();
         assertThat(response.assistantMessage()).isEqualTo(
-                "Glass Orchard 的标注时长是 40..55 分钟，Loom City 是 45..60 分钟；两款的实际桌感都没有资料支持，我把这项留成待核对。只按标注时长上限，我会选 Glass Orchard。");
+                "真要替你们拍板，我会先选《Glass Orchard》。我把能核对的差异放在下面；这是基于现有资料的取舍，不是来源替你们下的结论。");
         assertThat(response.comparison().candidates())
                 .extracting(candidate -> candidate.game().ranking().bggId())
                 .containsExactly(60, 61);
@@ -3303,9 +3309,327 @@ class BoardGameRecommendationAgentTest {
     }
 
     @Test
+    void requiresAStructuredTerminalActionAfterExternalEvidenceWasRead() {
+        TrackingCatalog catalog = catalogWithThreeShortGames();
+        ScriptedModel model = new ScriptedModel(List.of(
+                ignored -> action(
+                        "load-comparison-on-demand",
+                        BoardGameRecommendationAgent.LOOKUP_TOOL,
+                        "{\"bggIds\":[60,61]}"),
+                ignored -> new Turn(
+                        "我已经查完了：两款实际桌感都很好，我会直接选 Glass Orchard。",
+                        List.of()),
+                request -> {
+                    assertThat(request.messages().getLast().content())
+                            .contains(
+                                    "cannot be published after external evidence was read",
+                                    "compare_candidates",
+                                    "Do not perform another read");
+                    assertThat(request.tools()).extracting(ToolSpec::name)
+                            .contains(BoardGameRecommendationAgent.COMPARE_TOOL);
+                    return action(
+                            "grounded-comparison",
+                            BoardGameRecommendationAgent.COMPARE_TOOL,
+                            "{\"candidateBggIds\":[60,61],\"subjects\":[\"durationMinutes\",\"reportedExperience\"],"
+                                    + "\"preferredBggId\":60}");
+                }));
+
+        var response = agent(model, catalog, noResearch()).converse(
+                new ConversationRequest(
+                        RecommendationProfile.empty(),
+                        "这两款实际玩起来怎么选？",
+                        List.of(),
+                        List.of(new DialogueMessage("user", "这两款实际玩起来怎么选？")),
+                        null,
+                        List.of(
+                                new BoardGameRecommendationAgent.KnownGame(60, "玻璃果园", "Glass Orchard"),
+                                new BoardGameRecommendationAgent.KnownGame(61, "织机城", "Loom City")),
+                        List.of(60, 61)),
+                "zh-CN");
+
+        assertThat(response.outcome()).isEqualTo(Outcome.CONVERSATION);
+        assertThat(response.comparison()).isNotNull();
+        assertThat(response.assistantMessage()).contains("基于现有资料的取舍", "不是来源替你们下的结论");
+        assertThat(response.harness().modelCalls()).isEqualTo(3);
+        assertThat(response.harness().actions()).containsExactly(
+                "LOOKUP_BGG_CANDIDATES",
+                "REJECTED_UNSTRUCTURED_EVIDENCE_REPLY",
+                "COMPARE_CANDIDATES");
+    }
+
+    @Test
+    void rejectsAnUnstructuredReplyAfterMultiCandidateResearchEvenIfAModelCallsAHiddenTool() {
+        TrackingCatalog catalog = catalogWithThreeShortGames();
+        ScriptedModel model = new ScriptedModel(List.of(
+                ignored -> action(
+                        "load-comparison-on-demand",
+                        BoardGameRecommendationAgent.LOOKUP_TOOL,
+                        "{\"bggIds\":[60,61]}"),
+                ignored -> action(
+                        "research-both",
+                        BoardGameRecommendationAgent.RESEARCH_TOOL,
+                        "{\"bggIds\":[60,61],\"question\":\"reported four-player experience\"}"),
+                request -> {
+                    assertThat(request.tools()).extracting(ToolSpec::name)
+                            .contains(BoardGameRecommendationAgent.COMPARE_TOOL)
+                            .doesNotContain(
+                                    BoardGameRecommendationAgent.RESEARCH_TOOL,
+                                    BoardGameRecommendationAgent.REPLY_TOOL);
+                    return action(
+                            "attempt-hidden-reply",
+                            BoardGameRecommendationAgent.REPLY_TOOL,
+                            "{\"message\":\"两款都很适合新手，我直接替你选。\",\"referencedBggIds\":[60,61]}");
+                },
+                request -> {
+                    assertThat(request.messages().getLast().content())
+                            .contains(
+                                    "ACTION_NOT_AVAILABLE",
+                                    "Choose one action from the supplied list");
+                    return action(
+                            "grounded-comparison",
+                            BoardGameRecommendationAgent.COMPARE_TOOL,
+                            "{\"candidateBggIds\":[60,61],\"subjects\":[\"reportedExperience\",\"durationMinutes\"],"
+                                    + "\"preferredBggId\":null}");
+                }));
+
+        var response = agent(model, catalog, emptyConfiguredResearch()).converse(
+                new ConversationRequest(
+                        RecommendationProfile.empty(),
+                        "我们四个人实际玩起来怎么选？",
+                        List.of(),
+                        List.of(new DialogueMessage("user", "我们四个人实际玩起来怎么选？")),
+                        null,
+                        List.of(
+                                new BoardGameRecommendationAgent.KnownGame(60, "玻璃果园", "Glass Orchard"),
+                                new BoardGameRecommendationAgent.KnownGame(61, "织机城", "Loom City")),
+                        List.of(60, 61)),
+                "zh-CN");
+
+        assertThat(response.comparison()).isNotNull();
+        assertThat(response.assistantMessage()).contains("不想硬分胜负", "能核对的差异都在下面");
+        assertThat(response.harness().actions()).containsExactly(
+                "LOOKUP_BGG_CANDIDATES",
+                "RESEARCH_GAME_FIT",
+                "REJECTED_UNAVAILABLE_ACTION",
+                "COMPARE_CANDIDATES");
+    }
+
+    @Test
+    void researchesEveryVerifiedComparisonCandidateOnceAndPublishesAttributedCellsAndSources() {
+        TrackingCatalog catalog = catalogWithThreeShortGames();
+        AtomicInteger researchCalls = new AtomicInteger();
+        BoardGameRecommendationWebResearch research = new BoardGameRecommendationWebResearch() {
+            @Override
+            public boolean configured() {
+                return true;
+            }
+
+            @Override
+            public Optional<Research> research(BoardGameRecommendationWebResearch.Request request) {
+                researchCalls.incrementAndGet();
+                assertThat(request.candidates()).extracting(candidate -> candidate.bggId())
+                        .containsExactly(60, 61);
+                assertThat(request.question()).contains("four-player", "waiting time", "new players");
+                return Optional.of(new Research(
+                        List.of(
+                                new GameResearch(
+                                        60,
+                                        List.of(new Observation(
+                                                "A four-player report describes visible drafting competition and longer waits while newcomers learn the collection timing.",
+                                                List.of(1)))),
+                                new GameResearch(
+                                        61,
+                                        List.of(new Observation(
+                                                "A four-player report describes simultaneous choices and short waits, while voting outcomes vary by group.",
+                                                List.of(2))))),
+                        List.of(
+                                new Source(
+                                        1,
+                                        "Glass Orchard play report",
+                                        "https://reports.example.test/glass",
+                                        "reports.example.test"),
+                                new Source(
+                                        2,
+                                        "Loom City play report",
+                                        "https://reports.example.test/loom",
+                                        "reports.example.test"))));
+            }
+
+            @Override
+            public Optional<CandidateDiscovery> discover(DiscoveryRequest request) {
+                throw new AssertionError("known verified games need attributed research, not candidate discovery");
+            }
+        };
+        ScriptedModel model = new ScriptedModel(List.of(
+                ignored -> action(
+                        "load-comparison-on-demand",
+                        BoardGameRecommendationAgent.LOOKUP_TOOL,
+                        "{\"bggIds\":[60,61]}"),
+                request -> {
+                    assertThat(request.toolChoice())
+                            .isEqualTo(BoardGameRecommendationModel.ToolChoice.REQUIRED);
+                    assertThat(request.tools()).extracting(ToolSpec::name)
+                            .contains(BoardGameRecommendationAgent.RESEARCH_TOOL);
+                    assertThat(request.tools().stream()
+                                    .filter(tool -> BoardGameRecommendationAgent.RESEARCH_TOOL.equals(tool.name()))
+                                    .findFirst()
+                                    .orElseThrow()
+                                    .description())
+                            .contains("include every compared bggId", "one bounded call");
+                    return action(
+                            "research-both",
+                            BoardGameRecommendationAgent.RESEARCH_TOOL,
+                            "{\"bggIds\":[60,61],\"question\":\"four-player interaction, waiting time, and burden for new players\"}");
+                },
+                request -> {
+                    assertThat(request.toolChoice())
+                            .isEqualTo(BoardGameRecommendationModel.ToolChoice.REQUIRED);
+                    assertThat(request.tools()).extracting(ToolSpec::name)
+                            .contains(BoardGameRecommendationAgent.COMPARE_TOOL)
+                            .doesNotContain(
+                                    BoardGameRecommendationAgent.RESEARCH_TOOL,
+                                    BoardGameRecommendationAgent.REPLY_TOOL);
+                    assertThat(request.messages().getLast().content())
+                            .contains(
+                                    "\"attribute\":\"reportedExperience\"",
+                                    "\"kind\":\"ATTRIBUTED_REPORT\"",
+                                    "Glass Orchard play report",
+                                    "Loom City play report");
+                    assertThat(request.tools().stream()
+                                    .filter(tool -> BoardGameRecommendationAgent.COMPARE_TOOL.equals(tool.name()))
+                                    .findFirst()
+                                    .orElseThrow()
+                                    .description())
+                            .contains("reportedExperience", "Leave unsupported qualities unknown");
+                    return action(
+                            "compare-with-reports",
+                            BoardGameRecommendationAgent.COMPARE_TOOL,
+                            "{\"candidateBggIds\":[60,61],"
+                                    + "\"subjects\":[\"reportedExperience\",\"durationMinutes\",\"replayVariety\"],"
+                                    + "\"preferredBggId\":61}");
+                }));
+
+        var response = agent(model, catalog, research).converse(
+                new ConversationRequest(
+                        RecommendationProfile.empty(),
+                        "结合有来源的玩家报告深入比较这两款的四人互动、等待和新手负担。",
+                        List.of(),
+                        List.of(new DialogueMessage(
+                                "user", "结合有来源的玩家报告深入比较这两款的四人互动、等待和新手负担。")),
+                        null,
+                        List.of(
+                                new BoardGameRecommendationAgent.KnownGame(60, "Glass Orchard", "Glass Orchard"),
+                                new BoardGameRecommendationAgent.KnownGame(61, "Loom City", "Loom City")),
+                        List.of(60, 61)),
+                "zh-CN");
+
+        assertThat(researchCalls).hasValue(1);
+        assertThat(response.outcome()).isEqualTo(Outcome.CONVERSATION);
+        assertThat(response.assistantMessage()).isEqualTo(
+                "真要替你们拍板，我会先选《Loom City》。我把能核对的差异放在下面；这是基于现有资料的取舍，不是来源替你们下的结论。");
+        assertThat(response.comparison().axes().getFirst().subject()).isEqualTo("reportedExperience");
+        assertThat(response.comparison().axes().getFirst().cells()).allSatisfy(cell -> {
+            assertThat(cell.known()).isTrue();
+            assertThat(cell.observation().attribute()).isEqualTo("reportedExperience");
+            assertThat(cell.observation().kind()).isEqualTo(com.rulepilot.recommendation.CandidateObservation.Kind.ATTRIBUTED_REPORT);
+        });
+        assertThat(response.comparison().axes().getLast().cells()).allSatisfy(cell ->
+                assertThat(cell.known()).isFalse());
+        assertThat(response.researchSources()).extracting(source -> source.index())
+                .containsExactly(1, 2);
+        assertThat(response.harness().modelCalls()).isEqualTo(3);
+        assertThat(response.harness().catalogCalls()).isEqualTo(1);
+        assertThat(response.harness().webResearchCalls()).isEqualTo(1);
+        assertThat(response.harness().fallbackUsed()).isFalse();
+        assertThat(response.harness().actions()).containsExactly(
+                "LOOKUP_BGG_CANDIDATES", "RESEARCH_GAME_FIT", "COMPARE_CANDIDATES");
+    }
+
+    @Test
+    void keepsVerifiedGameResearchAvailableAfterOneMistakenCandidateDiscovery() {
+        TrackingCatalog catalog = catalogWithThreeShortGames();
+        AtomicInteger discoveryCalls = new AtomicInteger();
+        AtomicInteger researchCalls = new AtomicInteger();
+        BoardGameRecommendationWebResearch research = new BoardGameRecommendationWebResearch() {
+            @Override
+            public boolean configured() {
+                return true;
+            }
+
+            @Override
+            public Optional<Research> research(BoardGameRecommendationWebResearch.Request request) {
+                researchCalls.incrementAndGet();
+                return Optional.of(new Research(
+                        List.of(
+                                new GameResearch(60, List.of(new Observation("Sourced report for Glass Orchard.", List.of(1)))),
+                                new GameResearch(61, List.of(new Observation("Sourced report for Loom City.", List.of(2))))),
+                        List.of(
+                                new Source(1, "Report one", "https://reports.example.test/one", "reports.example.test"),
+                                new Source(2, "Report two", "https://reports.example.test/two", "reports.example.test"))));
+            }
+
+            @Override
+            public Optional<CandidateDiscovery> discover(DiscoveryRequest request) {
+                discoveryCalls.incrementAndGet();
+                return Optional.empty();
+            }
+        };
+        ScriptedModel model = new ScriptedModel(List.of(
+                ignored -> action(
+                        "load-comparison-on-demand",
+                        BoardGameRecommendationAgent.LOOKUP_TOOL,
+                        "{\"bggIds\":[60,61]}"),
+                ignored -> action(
+                        "mistaken-candidate-discovery",
+                        BoardGameRecommendationAgent.DISCOVER_TOOL,
+                        "{\"query\":\"Glass Orchard and Loom City player reports\"}"),
+                request -> {
+                    assertThat(request.tools()).extracting(ToolSpec::name)
+                            .contains(BoardGameRecommendationAgent.RESEARCH_TOOL)
+                            .doesNotContain(BoardGameRecommendationAgent.DISCOVER_TOOL);
+                    assertThat(request.messages().getLast().content())
+                            .contains(
+                                    "\"semanticPublicDiscovery\":false",
+                                    "\"subjectiveFitResearch\":true");
+                    return action(
+                            "recover-with-verified-game-research",
+                            BoardGameRecommendationAgent.RESEARCH_TOOL,
+                            "{\"bggIds\":[60,61],\"question\":\"reported four-player experience\"}");
+                },
+                ignored -> action(
+                        "compare-after-recovery",
+                        BoardGameRecommendationAgent.COMPARE_TOOL,
+                        "{\"candidateBggIds\":[60,61],\"subjects\":[\"reportedExperience\"],"
+                                + "\"preferredBggId\":null}")));
+
+        var response = agent(model, catalog, research).converse(
+                new ConversationRequest(
+                        RecommendationProfile.empty(),
+                        "深入比较这两款的玩家报告。",
+                        List.of(),
+                        List.of(new DialogueMessage("user", "深入比较这两款的玩家报告。")),
+                        null,
+                        List.of(
+                                new BoardGameRecommendationAgent.KnownGame(60, "Glass Orchard", "Glass Orchard"),
+                                new BoardGameRecommendationAgent.KnownGame(61, "Loom City", "Loom City")),
+                        List.of(60, 61)),
+                "zh-CN");
+
+        assertThat(discoveryCalls).hasValue(1);
+        assertThat(researchCalls).hasValue(1);
+        assertThat(response.outcome()).isEqualTo(Outcome.CONVERSATION);
+        assertThat(response.researchSources()).hasSize(2);
+        assertThat(response.harness().fallbackUsed()).isFalse();
+        assertThat(response.harness().actions()).containsExactly(
+                "LOOKUP_BGG_CANDIDATES",
+                "DISCOVER_CANDIDATES",
+                "RESEARCH_GAME_FIT",
+                "COMPARE_CANDIDATES");
+    }
+
+    @Test
     void persistsAnExplicitFollowUpCorrectionInTheSameComparisonAction() {
         TrackingCatalog catalog = catalogWithThreeShortGames();
-        String rawMessage = "三个人玩时，两款都符合人数；Glass Orchard 更短，Loom City 的机制组合更多，按今晚想快开局就选前者。";
         ScriptedModel model = new ScriptedModel(List.of(
                 request -> action(
                         "load-comparison-on-demand",
@@ -3323,8 +3647,8 @@ class BoardGameRecommendationAgentTest {
                     return action(
                             "three-player-comparison",
                             BoardGameRecommendationAgent.COMPARE_TOOL,
-                            "{\"message\":\"" + rawMessage + "\","
-                                    + "\"candidateBggIds\":[60,61],\"subjects\":[\"playerCount\",\"durationMinutes\"],"
+                            "{\"candidateBggIds\":[60,61],\"subjects\":[\"playerCount\",\"durationMinutes\"],"
+                                    + "\"preferredBggId\":60,"
                                     + "\"preferenceUpdates\":[{\"field\":\"playerCount\",\"value\":3,\"evidence\":\"U2\",\"evidenceClassification\":\"DIRECT\"}]}" );
                 }));
 
@@ -3347,7 +3671,7 @@ class BoardGameRecommendationAgentTest {
                 "zh-CN");
 
         assertThat(response.outcome()).isEqualTo(Outcome.CONVERSATION);
-        assertThat(response.assistantMessage()).isEqualTo(rawMessage);
+        assertThat(response.assistantMessage()).contains("我会先选《Glass Orchard》", "不是来源替你们下的结论");
         assertThat(response.profile().playerCount().minimum()).isEqualTo(3);
         assertThat(response.profile().playerCount().maximum()).isEqualTo(3);
         assertThat(response.harness().modelCalls()).isEqualTo(2);
@@ -3360,10 +3684,8 @@ class BoardGameRecommendationAgentTest {
     }
 
     @Test
-    void preservesANaturalComparisonWithoutASecondDecisionContract() {
+    void publishesAStructuredChoiceWithoutFreeFormFactualOverreach() {
         TrackingCatalog catalog = catalogWithThreeShortGames();
-        String rawMessage = "Glass Orchard 的标注时长是 40..55 分钟，Loom City 是 45..60 分钟；其他桌感没有报告支持。";
-        String rawDecision = "因此只按已显示的标注时长上限，选择 Glass Orchard。";
         ScriptedModel model = new ScriptedModel(List.of(
                 ignored -> action(
                         "load-comparison-on-demand",
@@ -3372,8 +3694,8 @@ class BoardGameRecommendationAgentTest {
                 ignored -> action(
                         "comparison-with-joint-visible-evidence",
                         BoardGameRecommendationAgent.COMPARE_TOOL,
-                        "{\"message\":\"" + rawMessage + rawDecision + "\","
-                                + "\"candidateBggIds\":[60,61],\"subjects\":[\"durationMinutes\"]}")));
+                        "{\"candidateBggIds\":[60,61],\"subjects\":[\"durationMinutes\"],"
+                                + "\"preferredBggId\":\"60\"}")));
 
         var response = agent(model, catalog, noResearch()).converse(
                 new ConversationRequest(
@@ -3389,7 +3711,8 @@ class BoardGameRecommendationAgentTest {
                 "zh-CN");
 
         assertThat(response.outcome()).isEqualTo(Outcome.CONVERSATION);
-        assertThat(response.assistantMessage()).isEqualTo(rawMessage + rawDecision);
+        assertThat(response.assistantMessage()).isEqualTo(
+                "真要替你们拍板，我会先选《Glass Orchard》。我把能核对的差异放在下面；这是基于现有资料的取舍，不是来源替你们下的结论。");
         assertThat(response.harness().modelCalls()).isEqualTo(2);
         assertThat(response.harness().actions()).containsExactly(
                 "LOOKUP_BGG_CANDIDATES", "COMPARE_CANDIDATES");
@@ -3406,16 +3729,25 @@ class BoardGameRecommendationAgentTest {
                 ignored -> action(
                         "compare-unverified",
                         BoardGameRecommendationAgent.COMPARE_TOOL,
-                        "{\"message\":\"The verified duration facts are enough for this comparison.\","
-                                + "\"candidateBggIds\":[60,999],\"subjects\":[\"durationMinutes\"]}"),
+                        "{\"candidateBggIds\":[60,999],\"subjects\":[\"durationMinutes\"],"
+                                + "\"preferredBggId\":60}"),
                 request -> {
                     assertThat(request.messages().getLast().content())
                             .contains("COMPARISON_CANDIDATE_NOT_VERIFIED");
                     return action(
+                            "compare-invalid-preference",
+                            BoardGameRecommendationAgent.COMPARE_TOOL,
+                            "{\"candidateBggIds\":[60,61],\"subjects\":[\"durationMinutes\"],"
+                                    + "\"preferredBggId\":\"999\"}");
+                },
+                request -> {
+                    assertThat(request.messages().getLast().content())
+                            .contains("COMPARISON_PREFERENCE_INVALID");
+                    return action(
                             "compare-corrected",
                             BoardGameRecommendationAgent.COMPARE_TOOL,
-                            "{\"message\":\"Glass Orchard lists 40..55, so choose it on that observed duration.\","
-                                    + "\"candidateBggIds\":[60,61],\"subjects\":[\"durationMinutes\"]}");
+                            "{\"candidateBggIds\":[60,61],\"subjects\":[\"durationMinutes\"],"
+                                    + "\"preferredBggId\":60}");
                 }));
 
         var response = agent(model, catalog, noResearch()).converse(
@@ -3437,6 +3769,7 @@ class BoardGameRecommendationAgentTest {
         assertThat(response.harness().actions()).containsExactly(
                 "LOOKUP_BGG_CANDIDATES",
                 "REJECTED_ACTION:COMPARISON_CANDIDATE_NOT_VERIFIED",
+                "REJECTED_ACTION:COMPARISON_PREFERENCE_INVALID",
                 "COMPARE_CANDIDATES");
     }
 
@@ -3778,7 +4111,8 @@ class BoardGameRecommendationAgentTest {
                     assertThat(request.messages().getFirst().content())
                             .contains(
                                     "Choose a read only when the current turn actually needs information outside the conversation",
-                                    "Public discovery is required whenever any requested selection criterion",
+                                    "Public candidate discovery and verified-game research are different capabilities",
+                                    "never use discovery to investigate a game already named or verified",
                                     "A catalog browse is only a broad exploration or a filter over persisted numeric/type constraints",
                                     "Avoid repeated reads");
                     assertThat(request.tools()).extracting(ToolSpec::name)

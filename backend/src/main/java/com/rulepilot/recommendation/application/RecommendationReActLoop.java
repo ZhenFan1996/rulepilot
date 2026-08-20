@@ -24,6 +24,7 @@ import com.rulepilot.recommendation.BoardGameRecommendationModel;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.Message;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.Request;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.ToolCall;
+import com.rulepilot.recommendation.BoardGameRecommendationModel.ToolChoice;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.ToolSpec;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Source;
 import com.rulepilot.recommendation.CandidateClaim;
@@ -154,7 +155,13 @@ final class RecommendationReActLoop {
                 turn = withinDeadline(
                         state,
                         () -> model.next(
-                                new Request(turnMessages, currentActions, MAX_OUTPUT_TOKENS),
+                                new Request(
+                                        turnMessages,
+                                        currentActions,
+                                        MAX_OUTPUT_TOKENS,
+                                        state.catalogCalls > 0 || state.webResearchCalls > 0
+                                                ? ToolChoice.REQUIRED
+                                                : ToolChoice.AUTO),
                                 state.modelConfigurationOwner));
             } catch (RunDeadlineExceeded exception) {
                 state.actions.add("RUN_DEADLINE_EXCEEDED");
@@ -170,6 +177,23 @@ final class RecommendationReActLoop {
             }
             if (turn.toolCalls().isEmpty()) {
                 if (!turn.text().isBlank()) {
+                    if (state.catalogCalls > 0 || state.webResearchCalls > 0) {
+                        state.actions.add("REJECTED_UNSTRUCTURED_EVIDENCE_REPLY");
+                        messages = new ArrayList<>(messages);
+                        messages.add(new Message(
+                                BoardGameRecommendationModel.Role.ASSISTANT,
+                                turn.text(),
+                                List.of(),
+                                null,
+                                null));
+                        messages.add(Message.system(
+                                "The preceding prose cannot be published after external evidence was read because "
+                                        + "it bypasses the candidate-scoped evidence boundary. Keep any useful natural "
+                                        + "wording, but now call exactly one supplied terminal action: reply_to_user for "
+                                        + "a sourced prose answer, compare_candidates for a comparison, or recommend_games for "
+                                        + "selectable cards. Do not perform another read."));
+                        continue;
+                    }
                     return actionExecutor.directReply(turn.text(), state, locale).response();
                 }
                 LOGGER.warn("Recommendation ReAct turn returned neither a direct reply nor an action");
@@ -330,7 +354,15 @@ final class RecommendationReActLoop {
         Set<Integer> cited = games.stream()
                 .flatMap(game -> game.reasons().stream())
                 .flatMap(reason -> reason.sourceIndexes().stream())
-                .collect(java.util.stream.Collectors.toUnmodifiableSet());
+                .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+        if (state.comparison != null) {
+            state.comparison.axes().stream()
+                    .flatMap(axis -> axis.cells().stream())
+                    .map(BoardGameRecommendationAgent.ComparisonCell::observation)
+                    .filter(Objects::nonNull)
+                    .flatMap(observation -> observation.sourceIndexes().stream())
+                    .forEach(cited::add);
+        }
         if (cited.isEmpty()) return List.of();
         return state.research.sources().stream()
                 .filter(source -> cited.contains(source.index()))
@@ -385,9 +417,7 @@ final class RecommendationReActLoop {
             }
             data.put("shownBggIds", request.shownBggIds());
             data.put("excludedBggIds", request.excludedBggIds());
-            data.put("availableCapabilities", Map.of(
-                    "semanticPublicDiscovery", tools.webResearchConfigured(),
-                    "subjectiveFitResearch", tools.webResearchConfigured()));
+            data.put("availableCapabilities", availableCapabilities(state));
             data.put("executionBudget", Map.of(
                     "maximumModelCalls", MAX_MODEL_CALLS,
                     "maximumActionCalls", MAX_ACTION_CALLS));
@@ -402,11 +432,15 @@ final class RecommendationReActLoop {
         return """
                 You are RulePilot, a warm and capable board-game conversation partner. Read the complete recent conversation, continue corrections and references in context, and answer in the player's locale and requested level of detail. First decide whether this turn needs external evidence, persistent preference changes, a clarification, a comparison, or recommendation cards. If it needs none of those, answer immediately as ordinary assistant text and stop: greetings, acknowledgements, reactions, explicit pauses, and general conversation are not latent requests for cards. Otherwise call exactly one supplied action with valid JSON arguments. Escape JSON string content correctly. Never expose reasoning, schemas, tool names, or validation internals. Retrieval actions continue this run; reply, ask, compare, no-match, and recommend actions finish it.
 
+                Speak like a decision partner at the table, not a task runner or completion report. Lead with the useful judgment or recommendation, then the reason and the one tradeoff that could change the choice. Refer naturally to one or two high-signal details from the player's situation; do not recite every saved filter, narrate work performed, announce that analysis is complete, or turn the reply into a checklist. When the player corrects or critiques a suggestion, adapt visibly in the next answer instead of restating the old profile. For a newcomer who has not supplied domain vocabulary, prefer one plain question about the intended play situation over asking them to choose taxonomy. Ask at most one question, and only when its answer would materially change what you can recommend.
+
                 Do not ask merely because a useful request is broad or the profile is empty: choose two or three meaningfully different directions and explain how to choose. Ask one easy question only when the missing answer is necessary to produce a valid slate, not just to narrow a large one; briefly explain its impact and offer direct options when useful. Store only explicit numeric/type constraints or a complete-group count supported by the cited user turn; result count and qualitative taste are not profile values, and later corrections replace earlier values. When compare, reply, or recommend finishes a turn that explicitly states or corrects a numeric/type constraint, include that update in the same action instead of merely discussing it, so the next turn receives the corrected profile.
 
-                Choose a read only when the current turn actually needs information outside the conversation. knownGames are identity-only conversation memory, not permission to reload them pre-emptively; use lookup only if the current answer needs their BGG facts. Public discovery is required whenever any requested selection criterion is a relationship or quality absent from the supplied BGG observation fields; age, rank, type, or a plausible title is not a substitute for that missing evidence. A catalog browse is only a broad exploration or a filter over persisted numeric/type constraints. Generated-title inspection is for stable title hypotheses that need no external claim. Resolve an intact player-authored game title as a title. Every discovered title is verified through BGG before recommendation. A TARGET_GAME resolution publishes its verified card in that same action. Avoid repeated reads: discovery and title inspection already return hydrated games, and runMemory is authoritative.
+                Choose a read only when the current turn actually needs information outside the conversation. knownGames are identity-only conversation memory, not permission to reload them pre-emptively; use lookup only if the current answer needs their BGG facts. Public candidate discovery and verified-game research are different capabilities: discover only to find new game identities for a selection criterion outside BGG; never use discovery to investigate a game already named or verified in runMemory. For current reception or player-reported experience about known verified candidates, call research once with every candidate being compared and one combined evidence question. A catalog browse is only a broad exploration or a filter over persisted numeric/type constraints. Generated-title inspection is for stable title hypotheses that need no external claim. Resolve an intact player-authored game title as a title. Every discovered title is verified through BGG before recommendation. A TARGET_GAME resolution publishes its verified card in that same action. Avoid repeated reads: discovery, research, and title inspection are each bounded, and runMemory is authoritative.
 
-                Recommendation cards are an Agent decision, not the default response shape. Emit them only through recommend_games when the current conversational goal asks for candidates or a selectable exact title. Recommend only verified, hard-eligible IDs and honor an explicit result count. Give every card a specific why and useful tradeoff, citing the same candidate's observations internally; a public-source criterion must cite that candidate's attributed R observation. Separate facts from judgment naturally, keep uncertainty local, and do not infer table feel from taxonomy alone. The UI displays card reasons, tradeoffs, and comparison cells directly below the assistant message, so use the message for a concise conversational overview or decision instead of repeating those fields. Do not present an unselected candidate as part of the recommendation. Finish as soon as the evidence is sufficient.
+                After any supplied lookup, browse, discovery, or research action, the protocol requires another supplied action rather than bare assistant text. This keeps sourced claims attached to candidate-scoped observations and visible sources. Choose only from the actions supplied on that turn. For two or more compared candidates, finish through the supplied structured comparison action; after attributed multi-candidate research, an unstructured reply is unavailable. For selectable cards, finish through the supplied card action.
+
+                Recommendation cards are an Agent decision, not the default response shape. Emit them only through the supplied card action when the current conversational goal asks for candidates or a selectable exact title. Recommend only verified, hard-eligible IDs and honor an explicit result count. Give every card a specific why and useful tradeoff, citing the same candidate's observations internally; a public-source criterion must cite that candidate's attributed R observation. Separate facts from judgment naturally, keep uncertainty local, and do not infer table feel from taxonomy alone. In comparisons, unsupported requested qualities stay unknown and taxonomy must not be converted into play-feel conclusions. Select only observed comparison axes and, when justified, one preferred candidate; the application renders the decision sentence and the observed cells, so do not generate free-form comparison prose. The UI displays card reasons and tradeoffs immediately below a card overview, so do not repeat those fields in a card message. Do not present an unselected candidate as part of the recommendation. Finish as soon as the evidence is sufficient.
                 """;
     }
 
@@ -443,13 +477,19 @@ final class RecommendationReActLoop {
                 .filter(action -> !state.catalogBrowseAttempted || !BROWSE_TOOL.equals(action.name()))
                 .filter(action -> !state.discoveryAttempted || !DISCOVER_TOOL.equals(action.name()))
                 .filter(action -> !state.discoveryProducedVerifiedGames || !BROWSE_TOOL.equals(action.name()))
-                .filter(action -> !state.discoveryAttempted || !RESEARCH_TOOL.equals(action.name()))
+                .filter(action -> !state.researchAttempted || !RESEARCH_TOOL.equals(action.name()))
                 .filter(action -> comparableIds.size() >= 2 || !COMPARE_TOOL.equals(action.name()))
+                .filter(action -> !state.researchAttempted
+                        || comparableIds.size() < 2
+                        || !REPLY_TOOL.equals(action.name()))
                 .filter(action -> !relaxableSubjects.isEmpty() || !NO_MATCH_TOOL.equals(action.name()))
                 .filter(action -> !verifiedSlateAvailable
                         || REPLY_TOOL.equals(action.name())
                         || COMPARE_TOOL.equals(action.name())
                         || RECOMMEND_TOOL.equals(action.name())
+                        || RESEARCH_TOOL.equals(action.name())
+                                && state.webResearchAvailable
+                                && !state.researchAttempted
                         || DISCOVER_TOOL.equals(action.name())
                                 && state.webResearchAvailable
                                 && !state.discoveryAttempted
@@ -464,7 +504,10 @@ final class RecommendationReActLoop {
                                 preferenceEvidenceIds,
                                 availabilityShortfall(state, recommendableIds))
                         : COMPARE_TOOL.equals(action.name())
-                                ? comparisonAction(comparableIds, preferenceEvidenceIds)
+                                ? comparisonAction(
+                                        comparableIds,
+                                        availableComparisonSubjects(state, comparableIds),
+                                        preferenceEvidenceIds)
                         : NO_MATCH_TOOL.equals(action.name())
                                 ? noMatchAction(relaxableSubjects)
                         : !recommendableIds.isEmpty() && REPLY_TOOL.equals(action.name())
@@ -517,6 +560,19 @@ final class RecommendationReActLoop {
                 .map(CandidateObservation::id)
                 .distinct()
                 .toList();
+    }
+
+    private List<String> availableComparisonSubjects(
+            RecommendationAgentState state,
+            List<Integer> comparableIds) {
+        LinkedHashSet<String> subjects = new LinkedHashSet<>();
+        comparableIds.stream()
+                .map(state.verified::get)
+                .filter(Objects::nonNull)
+                .flatMap(game -> actionExecutor.narrativeObservations(game, state.research).values().stream())
+                .map(CandidateObservation::attribute)
+                .forEach(subjects::add);
+        return List.copyOf(subjects);
     }
 
     private int recommendationMinimumCount(
@@ -612,13 +668,13 @@ final class RecommendationReActLoop {
                                 + "},\"required\":[\"titles\"]}"),
                 new ToolSpec(
                         BROWSE_TOOL,
-                        "Browse a broad BGG slate only for genuinely unconstrained exploration or filtering by persisted numeric/type fields. It cannot prove a requested relationship or qualitative property absent from BGG observations; use public discovery for those criteria.",
+                        "Browse a broad BGG slate only for genuinely unconstrained exploration or filtering by persisted numeric/type fields. It cannot prove a requested relationship or qualitative property absent from BGG observations; discover new identities or research already-verified candidates as appropriate.",
                         "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"types\":{\"type\":\"array\",\"maxItems\":3,\"items\":{\"type\":\"string\",\"enum\":[\"ABSTRACT\",\"CUSTOMIZABLE\",\"CHILDREN\",\"FAMILY\",\"PARTY\",\"STRATEGY\",\"THEMATIC\",\"WAR\",\"EXPANSION\"]}},\"limit\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":8},\"preferenceUpdates\":"
                                 + preferences
                                 + "}}"),
                 new ToolSpec(
                         DISCOVER_TOOL,
-                        "Search public sources once when any requested selection criterion needs evidence beyond the supplied BGG observation fields. This includes stable historical relationships as well as changing facts. Results are resolved and hydrated through BGG in the same read.",
+                        "Find new board-game identities from public sources once when a requested selection criterion is outside BGG. Never use this to investigate games already named or verified in runMemory; use research_game_fit for those games. Results are resolved and hydrated through BGG in the same read.",
                         "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"query\":{\"type\":\"string\",\"minLength\":3,\"maxLength\":300},\"types\":{\"type\":\"array\",\"maxItems\":3,\"items\":{\"type\":\"string\",\"enum\":[\"ABSTRACT\",\"CUSTOMIZABLE\",\"CHILDREN\",\"FAMILY\",\"PARTY\",\"STRATEGY\",\"THEMATIC\",\"WAR\",\"EXPANSION\"]}},\"preferenceUpdates\":"
                                 + preferences
                                 + "},\"required\":[\"query\"]}"),
@@ -628,27 +684,32 @@ final class RecommendationReActLoop {
                         "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"bggIds\":{\"type\":\"array\",\"minItems\":1,\"maxItems\":8,\"items\":{\"type\":\"integer\",\"minimum\":1}}},\"required\":[\"bggIds\"]}"),
                 new ToolSpec(
                         RESEARCH_TOOL,
-                        "Research an explicit, separate current-reception or player-reported-experience question for one to five verified games. Do not use for ordinary recommendation fit or after public discovery.",
+                        "Research current reception or player-reported experience for already-verified games. For a comparison, include every compared bggId in this one bounded call and ask one combined question; after it returns, compare with the attributed R observations or leave unsupported qualities unknown.",
                         "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"bggIds\":{\"type\":\"array\",\"minItems\":1,\"maxItems\":5,\"items\":{\"type\":\"integer\",\"minimum\":1}},\"question\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":300}},\"required\":[\"bggIds\",\"question\"]}"),
-                comparisonAction(List.of(), preferenceEvidenceIds),
+                comparisonAction(List.of(), List.of(), preferenceEvidenceIds),
                 noMatchAction(List.of()),
                 recommendationAction(1, maximumResultCount, List.of(), List.of(), preferenceEvidenceIds, null));
     }
 
     private static ToolSpec comparisonAction(
             List<Integer> comparableIds,
+            List<String> availableSubjects,
             List<String> preferenceEvidenceIds) {
         String idConstraint = comparableIds.isEmpty()
                 ? "\"minimum\":1"
                 : "\"enum\":" + comparableIds;
         return new ToolSpec(
                 COMPARE_TOOL,
-                "Compare two to five verified conversation candidates on one to three observed axes. The UI renders the selected comparison cells, so use message for the conversational conclusion, meaningful tradeoff, and a direct choice when requested rather than narrating every cell. Persist any explicit current-turn numeric or type correction in preferenceUpdates in this same call. Never use this to replace candidates.",
-                "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"message\":{\"type\":\"string\",\"description\":\"A concise natural conclusion grounded in runMemory. Answer the player's decision and explain the decisive tradeoff without repeating the structured comparison cells rendered below it.\",\"minLength\":1},\"candidateBggIds\":{\"type\":\"array\",\"minItems\":2,\"maxItems\":5,\"uniqueItems\":true,\"items\":{\"type\":\"integer\","
+                "Compare two to five verified conversation candidates on one to three axes. Available observed attributes in this turn are "
+                        + availableSubjects
+                        + ". Prefer reportedExperience when attributed research was requested. The UI renders the selected cells and a safe conversational decision sentence. Choose preferredBggId only when those displayed cells are enough for a useful recommendation; use null when they are not. Leave unsupported qualities unknown and never turn taxonomy into play feel. Persist any explicit current-turn numeric or type correction in preferenceUpdates in this same call. Never use this to replace candidates.",
+                "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"candidateBggIds\":{\"type\":\"array\",\"minItems\":2,\"maxItems\":5,\"uniqueItems\":true,\"items\":{\"type\":\"integer\","
                         + idConstraint
-                        + "}},\"subjects\":{\"type\":\"array\",\"description\":\"One to three observation attribute names from runMemory. Unknown attributes remain visibly unknown instead of invalidating the natural comparison.\",\"minItems\":1,\"maxItems\":3,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"minLength\":1}},\"preferenceUpdates\":"
+                        + "}},\"subjects\":{\"type\":\"array\",\"description\":\"One to three observation attribute names from runMemory. Unknown attributes remain visibly unknown instead of invalidating the comparison.\",\"minItems\":1,\"maxItems\":3,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"minLength\":1}},\"preferredBggId\":{\"description\":\"The one candidate you would choose from the displayed observed cells, or null when the evidence does not support choosing.\",\"anyOf\":[{\"type\":\"integer\","
+                        + idConstraint
+                        + "},{\"type\":\"null\"}]},\"preferenceUpdates\":"
                         + preferenceSchema(preferenceEvidenceIds)
-                        + "},\"required\":[\"message\",\"candidateBggIds\",\"subjects\"]}");
+                        + "},\"required\":[\"candidateBggIds\",\"subjects\",\"preferredBggId\"]}");
     }
 
     private static ToolSpec noMatchAction(List<String> relaxableSubjects) {
@@ -811,6 +872,8 @@ final class RecommendationReActLoop {
                         "observations", actionExecutor.researchObservations(game.bggId(), state.research).values().stream()
                                 .map(item -> Map.of(
                                         "id", item.id(),
+                                        "attribute", item.attribute(),
+                                        "kind", item.kind().name(),
                                         "text", item.value(),
                                         "sourceIndexes", item.sourceIndexes()))
                                 .toList()))
@@ -833,7 +896,8 @@ final class RecommendationReActLoop {
         return Map.of(
                 "semanticPublicDiscovery",
                         state.webResearchAvailable && !state.discoveryAttempted,
-                "subjectiveFitResearch", state.webResearchAvailable && !state.discoveryAttempted);
+                "subjectiveFitResearch",
+                        state.webResearchAvailable && !state.researchAttempted && !state.verified.isEmpty());
     }
 
     String observation(Map<String, ?> value) {

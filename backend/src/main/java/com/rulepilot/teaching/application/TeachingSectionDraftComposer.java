@@ -57,6 +57,26 @@ final class TeachingSectionDraftComposer {
             UUID assistantRunId,
             int sectionIndex,
             boolean includeVisualEvidence) {
+        return compose(
+                plan,
+                planned,
+                priorSections,
+                evidence,
+                assistantRunId,
+                sectionIndex,
+                includeVisualEvidence,
+                true);
+    }
+
+    TeachingSectionDraftCandidate compose(
+            TeachingPlan plan,
+            TeachingPlan.PlannedSection planned,
+            List<PriorSectionContext> priorSections,
+            List<RuleEvidence> evidence,
+            UUID assistantRunId,
+            int sectionIndex,
+            boolean includeVisualEvidence,
+            boolean allowValidationRevision) {
         TeachingLessonModel.SectionRequest modelRequest = requestFactory.create(
                 plan,
                 planned,
@@ -93,7 +113,9 @@ final class TeachingSectionDraftComposer {
         draft = normalizeDraft(draft, modelRequest, evidence);
         boolean hasPageImages = !modelRequest.pageImages().isEmpty();
         boolean hasOnlyVisualPageEvidence = hasOnlyVisualPageEvidence(evidence);
-        int maxRepairAttempts = draftRecoveryPolicy.maxRepairAttempts(hasPageImages);
+        int maxRepairAttempts = allowValidationRevision
+                ? draftRecoveryPolicy.maxRepairAttempts(hasPageImages)
+                : 0;
         for (int repair = 0; ; repair++) {
             try {
                 LessonSection accepted = validatedSection(

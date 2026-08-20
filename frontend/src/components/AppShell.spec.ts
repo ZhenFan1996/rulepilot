@@ -85,7 +85,11 @@ describe('AppShell', () => {
     expect(backgroundWorkTrigger.element.parentElement?.id).toBe('background-work-desktop-trigger')
     expect(backgroundWorkTrigger.classes()).not.toContain('fixed')
     expect(wrapper.get('[data-testid="background-work-trigger-mobile"]').element.closest('header')).not.toBeNull()
-    await backgroundWorkTrigger.trigger('click')
+    const persistentShortcut = wrapper.get('[data-testid="background-work-persistent-shortcut"]')
+    expect(persistentShortcut.text()).toContain('讲解状态')
+    expect(persistentShortcut.text()).toContain('《星际探索》仍在后台准备')
+    expect(persistentShortcut.text()).toContain('看进度')
+    await persistentShortcut.trigger('click')
     await flushPromises()
     expect(wrapper.text()).toContain('星际探索')
     expect(wrapper.text()).toContain('可以继续浏览')
@@ -104,12 +108,15 @@ describe('AppShell', () => {
     expect(wrapper.text()).not.toContain('生成成功')
     expect(fetchMock.mock.calls.filter(([input]) => String(input).includes('/api/v1/teaching-plans'))).toHaveLength(1)
 
-    await wrapper.findAll('button').find(button => button.text() === '清除已结束任务')!.trigger('click')
-    expect(wrapper.text()).not.toContain('星际探索')
     document.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Escape' }))
     await flushPromises()
-    expect(document.activeElement).toBe(backgroundWorkTrigger.element)
+    expect(document.activeElement).toBe(persistentShortcut.element)
     expect(document.body.style.overflow).toBe('')
+    await persistentShortcut.trigger('click')
+
+    await wrapper.findAll('button').find(button => button.text() === '清除已结束任务')!.trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).not.toContain('星际探索')
     wrapper.unmount()
   })
 
@@ -193,6 +200,8 @@ describe('AppShell', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('讲解完成')
+    expect(wrapper.get('[data-testid="background-work-persistent-shortcut"]').text())
+      .toContain('《星际探索》的后台处理已经结束')
     wrapper.unmount()
   })
 
@@ -219,6 +228,8 @@ describe('AppShell', () => {
     notifyTeachingLaunched({ planId: 'plan-2', runId: 'run-2', gameTitle: '卡坦岛' })
     await flushPromises()
 
+    expect(wrapper.get('[data-testid="background-work-persistent-shortcut"]').text())
+      .toContain('《卡坦岛》仍在后台准备')
     await wrapper.get('[data-testid="background-work-trigger-desktop"]').trigger('click')
     expect(wrapper.text()).toContain('卡坦岛')
     expect(sessionStorage.getItem(playerStorageKeys.activeTeaching)).toContain('run-2')
@@ -321,6 +332,10 @@ describe('AppShell', () => {
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
       const path = String(input)
       if (path.includes('/api/auth/session')) return response({ username: 'player' })
+      if (path === '/api/auth/csrf') return response({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      if (path.includes('/api/v1/teaching-preparation-failures/official-imports/')) {
+        return new Response(null, { status: 204 })
+      }
       if (path.includes('/api/v1/assistant-runs/preparation-failed')) {
         return response({ run: preparationRun('preparation-failed', 'version-import-failed', 'FAILED') })
       }
@@ -353,8 +368,10 @@ describe('AppShell', () => {
     expect(wrapper.text()).toContain('讲解准备没有完成，可在讲解中心重试')
 
     await wrapper.findAll('button').find(button => button.text() === '清除已结束任务')!.trigger('click')
+    await flushPromises()
     expect(wrapper.text()).not.toContain('失败的官方讲解')
     expect(sessionStorage.getItem(playerStorageKeys.dismissedImports)).toContain('import-failed-preparation')
+    expect(localStorage.getItem(playerStorageKeys.dismissedImports)).toContain('import-failed-preparation')
 
     await vi.advanceTimersByTimeAsync(15_000)
     await flushPromises()
@@ -369,6 +386,10 @@ describe('AppShell', () => {
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
       const path = String(input)
       if (path.includes('/api/auth/session')) return response({ username: 'player' })
+      if (path === '/api/auth/csrf') return response({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      if (path.includes('/api/v1/teaching-preparation-failures/official-imports/')) {
+        return new Response(null, { status: 204 })
+      }
       if (path.includes('/api/v1/assistant-runs/preparation-active')) {
         activePreparationReads += 1
         return response({
@@ -412,6 +433,7 @@ describe('AppShell', () => {
     expect(wrapper.text()).toContain('仍在准备的讲解')
     expect(wrapper.text()).toContain('下载失败的规则书')
     await wrapper.findAll('button').find(button => button.text() === '清除已结束任务')!.trigger('click')
+    await flushPromises()
     expect(wrapper.text()).toContain('仍在准备的讲解')
     expect(wrapper.text()).not.toContain('下载失败的规则书')
     expect(sessionStorage.getItem(playerStorageKeys.dismissedImports))
@@ -430,6 +452,10 @@ describe('AppShell', () => {
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
       const path = String(input)
       if (path.includes('/api/auth/session')) return response({ username: 'player' })
+      if (path === '/api/auth/csrf') return response({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      if (path.includes('/api/v1/teaching-preparation-failures/uploads/')) {
+        return new Response(null, { status: 204 })
+      }
       if (path.includes('/api/v1/assistant-runs/active')) return response([])
       if (path.endsWith('/api/v1/documents/official-imports')) return response([])
       if (path.endsWith('/api/v1/documents/upload-teaching-handoffs')) return response([{
@@ -456,6 +482,7 @@ describe('AppShell', () => {
     expect(wrapper.text()).toContain('失败的上传讲解')
     expect(wrapper.text()).toContain('规则书读取失败')
     await wrapper.findAll('button').find(button => button.text() === '清除已结束任务')!.trigger('click')
+    await flushPromises()
     expect(wrapper.text()).not.toContain('失败的上传讲解')
     expect(sessionStorage.getItem(playerStorageKeys.dismissedUploadHandoffs))
       .toContain('upload-handoff-failed-document')
@@ -473,6 +500,10 @@ describe('AppShell', () => {
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
       const path = String(input)
       if (path.includes('/api/auth/session')) return response({ username: 'player' })
+      if (path === '/api/auth/csrf') return response({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      if (path.includes('/api/v1/teaching-preparation-failures/uploads/')) {
+        return new Response(null, { status: 204 })
+      }
       if (path.includes('/api/v1/assistant-runs/active')) return response([])
       if (path.endsWith('/api/v1/documents/official-imports')) return response([])
       if (path.endsWith('/api/v1/documents/upload-teaching-handoffs')) return response([{
@@ -495,6 +526,7 @@ describe('AppShell', () => {
     expect(wrapper.text()).toContain('已删除规则书的失败任务')
     expect(wrapper.text()).toContain('规则书读取失败')
     await wrapper.findAll('button').find(button => button.text() === '清除已结束任务')!.trigger('click')
+    await flushPromises()
     expect(wrapper.text()).not.toContain('已删除规则书的失败任务')
     wrapper.unmount()
   })

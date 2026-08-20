@@ -13,6 +13,7 @@ enableAutoUnmount(afterEach)
 describe('BackgroundWorkCenter request lifecycle', () => {
   afterEach(() => {
     sessionStorage.clear()
+    localStorage.clear()
     setLocale('zh-CN')
     setVisibility('visible')
     vi.useRealTimers()
@@ -157,6 +158,62 @@ describe('BackgroundWorkCenter request lifecycle', () => {
     expect(JSON.parse(sessionStorage.getItem(backgroundWorkStorageKeys('player').dismissedImports) ?? '[]'))
       .toHaveLength(102)
     wrapper.unmount()
+  })
+
+  it('durably clears a failed persisted item so a stale server snapshot cannot resurrect it after remount', async () => {
+    const failedImport = {
+      id: 'import-stale-after-clear', title: '已清除的失败讲解', sourceDomain: 'publisher.example',
+      stage: 'COMPLETED', downloadedBytes: 4096, totalBytes: 4096, documentVersionId: 'version-stale',
+      errorCode: null, teachingHandoffState: 'FAILED', teachingPreparationRunId: null,
+      teachingErrorCode: 'TEACHING_PREPARATION_FAILED', downloadCompletedAt: '2026-08-16T08:00:00Z',
+      importCompletedAt: '2026-08-16T08:00:00Z', teachingHandoffUpdatedAt: '2026-08-16T08:01:00Z',
+      updatedAt: new Date().toISOString(),
+    }
+    const requests: Array<{ path: string; method: string }> = []
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const path = String(input)
+      const method = init?.method ?? 'GET'
+      requests.push({ path, method })
+      if (path === '/api/auth/csrf') {
+        return response({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      }
+      if (path === '/api/v1/teaching-preparation-failures/official-imports/import-stale-after-clear'
+        && method === 'DELETE') return new Response(null, { status: 204 })
+      if (path.includes('/api/v1/assistant-runs/active')) return response([])
+      if (path.endsWith('/api/v1/documents/official-imports')) return response([failedImport])
+      if (path.endsWith('/api/v1/documents')) return response([{
+        document: { id: 'document-stale', title: 'rules.pdf', createdBy: 'player' },
+        latestVersion: { id: 'version-stale', status: 'READY' },
+      }])
+      if (path.endsWith('/api/v1/documents/upload-teaching-handoffs')) return response([])
+      return new Response(null, { status: 404 })
+    }))
+
+    const first = await mountCenter('player')
+    await flushPromises()
+    await openCenter(first)
+    expect(first.text()).toContain('已清除的失败讲解')
+
+    await first.findAll('button').find(button => button.text() === '清除已结束任务')!.trigger('click')
+    await flushPromises()
+
+    expect(requests).toContainEqual({
+      path: '/api/v1/teaching-preparation-failures/official-imports/import-stale-after-clear',
+      method: 'DELETE',
+    })
+    expect(first.text()).not.toContain('已清除的失败讲解')
+    const dismissedKey = backgroundWorkStorageKeys('player').dismissedImports
+    expect(JSON.parse(localStorage.getItem(dismissedKey) ?? '[]'))
+      .toContain('import-stale-after-clear')
+    first.unmount()
+
+    const remounted = await mountCenter('player')
+    await flushPromises()
+    await openCenter(remounted)
+
+    expect(remounted.text()).not.toContain('已清除的失败讲解')
+    expect(remounted.text()).toContain('当前没有后台任务')
+    remounted.unmount()
   })
 
   it.each([
