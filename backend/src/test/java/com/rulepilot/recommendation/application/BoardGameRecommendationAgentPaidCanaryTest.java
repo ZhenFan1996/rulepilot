@@ -124,8 +124,11 @@ class BoardGameRecommendationAgentPaidCanaryTest {
             assertThat(response.harness().catalogCalls()).isZero();
             assertThat(response.harness().webResearchCalls()).isZero();
             assertThat(response.harness().fallbackUsed()).isFalse();
-            assertThat(response.harness().actions()).containsExactly("DIRECT_REPLY_TO_USER");
-            assertThat(response.assistantMessage()).isEqualTo(capture.lastAssistantText());
+            assertThat(response.harness().actions()).containsExactly("REPLY_TO_USER");
+            ToolCall conversationRaw = capture.lastToolCall();
+            assertThat(conversationRaw.name()).isEqualTo(BoardGameRecommendationAgent.REPLY_TOOL);
+            assertThat(json.readTree(conversationRaw.argumentsJson()).path("message").asText())
+                    .isEqualTo(response.assistantMessage());
 
             String recommendationRequest = "现在请按 3 人、60 分钟内，明确推荐两款并说明各自取舍。";
             int recommendationRawStart = capture.callCount();
@@ -421,6 +424,16 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                     new KnownGame(103, "Clockwork Gallery", "Clockwork Gallery"),
                     new KnownGame(104, "Lantern Route", "Lantern Route"),
                     new KnownGame(105, "Harbor Chorus", "Harbor Chorus"));
+            List<DialogueMessage> restoredConversation = List.of(
+                    new DialogueMessage("user", "我们之前聊过几款三到五人的游戏，先保留差异，不急着马上决定。"),
+                    new DialogueMessage("assistant", "可以，我会把已确认的候选和取舍留在这次对话里。"),
+                    new DialogueMessage("user", "先比较时间和复杂度，但不要把机制标签直接说成桌面气氛。"),
+                    new DialogueMessage("assistant", "明白；能核对的数字会单列，主观体验没有来源时会明确留空。"),
+                    new DialogueMessage("user", "人数暂时按五人，时间三十分钟，类型先看派对游戏。"),
+                    new DialogueMessage("assistant", "这些条件已经记下，之后的明确更正会覆盖它们。"),
+                    new DialogueMessage("user", "前面那些候选都先放着，我现在已经自己选定了一款。"),
+                    new DialogueMessage("assistant", "好，直接告诉我准确标题，我会按你当前的选择继续。"),
+                    new DialogueMessage("user", requestText));
             long started = System.nanoTime();
             var response = agent.converse(
                     new ConversationRequest(
@@ -432,12 +445,12 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                                     BoardGameRecommendationAgent.InteractionPreference.COMPETITIVE),
                             requestText,
                             List.of(),
-                            List.of(new DialogueMessage("user", requestText)),
+                            restoredConversation,
                             null,
                             knownGames,
                             knownGames.stream().map(KnownGame::bggId).toList()),
                     "zh-CN");
-            visibleTurns.add(visible("bilingual-direct-target", response, elapsed(started)));
+            visibleTurns.add(visible("restored-conversation-bilingual-direct-target", response, elapsed(started)));
 
             assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
             assertThat(response.games())
@@ -447,7 +460,7 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                     .as("verified target identity and its player-facing card belong to one Agent turn")
                     .isEqualTo(1);
             assertThat(response.harness().actions())
-                    .containsSubsequence("RESTORE_KNOWN_BGG_CANDIDATES", "RESOLVE_BGG_REFERENCE", "RECOMMEND_GAMES")
+                    .containsSubsequence("RESOLVE_BGG_REFERENCE", "RECOMMEND_GAMES")
                     .noneMatch(action -> action.equals("RUN_DEADLINE_EXCEEDED")
                             || action.startsWith("FALLBACK_")
                             || action.startsWith("REJECTED_"));
