@@ -707,6 +707,7 @@ describe('RecommendationRulebookHandoff', () => {
         preparationRunId: 'preparation-run-1',
       }))
       let lessonRequests = 0
+      let teachingRunRequests = 0
       vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
         const path = String(input)
         if (path === '/api/v1/document-versions/version-1/progress/snapshot') {
@@ -726,9 +727,11 @@ describe('RecommendationRulebookHandoff', () => {
         if (path === '/api/v1/document-versions/version-1/teaching-plans/latest') {
           return Response.json(planFixture('plan-1', 'version-1'))
         }
-        if (path === '/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=plan-1') {
+        if (path === '/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=plan-1'
+          || path === '/api/v1/assistant-runs/teaching-run-1') {
+          teachingRunRequests += 1
           return Response.json({
-            ...runSnapshot('teaching-run-1', 'LESSON_COMPOSITION'),
+            ...runSnapshot('teaching-run-1', teachingRunRequests === 1 ? 'LESSON_COMPOSITION' : 'COMPLETED'),
             activities: [
               {
                 sequence: 1,
@@ -747,9 +750,11 @@ describe('RecommendationRulebookHandoff', () => {
         }
         if (path === '/api/v1/teaching-plans/plan-1/illustrated-lessons/latest') {
           lessonRequests += 1
-          return lessonRequests === 1
-            ? new Response(null, { status: 404 })
-            : Response.json({ ...lessonFixture('lesson-1'), status: 'DRAFT_READY' })
+          if (lessonRequests === 1) return new Response(null, { status: 404 })
+          if (lessonRequests === 2) {
+            return Response.json({ ...lessonFixture('lesson-1'), status: 'DRAFT_READY' })
+          }
+          return Response.json({ ...lessonFixture('lesson-1'), status: 'COMPLETE' })
         }
         return new Response(null, { status: 404 })
       }))
@@ -783,6 +788,8 @@ describe('RecommendationRulebookHandoff', () => {
       await vi.runOnlyPendingTimersAsync()
       await flushPromises()
       expect(lessonRequests).toBe(3)
+      expect(wrapper.text()).toContain('完整讲解已经生成')
+      expect(vi.getTimerCount()).toBe(0)
     } finally {
       wrapper?.unmount()
       vi.useRealTimers()
