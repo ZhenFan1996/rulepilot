@@ -3,6 +3,7 @@ package com.rulepilot.catalog.adapter.out.translation;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rulepilot.catalog.BggMetadataTranslation;
+import com.rulepilot.catalog.application.BggMetadataTranslationStore;
 import com.rulepilot.catalog.application.SimplifiedChineseText;
 import java.io.IOException;
 import java.net.URI;
@@ -49,6 +50,7 @@ public class DeepSeekBggMetadataTranslation implements BggMetadataTranslation {
     private final Call.Factory calls;
     private final ObjectMapper json;
     private final StringRedisTemplate redis;
+    private final BggMetadataTranslationStore persistentTranslations;
     private final boolean enabled;
     private final String apiKey;
     private final String endpoint;
@@ -63,6 +65,7 @@ public class DeepSeekBggMetadataTranslation implements BggMetadataTranslation {
     public DeepSeekBggMetadataTranslation(
             ObjectMapper json,
             StringRedisTemplate redis,
+            BggMetadataTranslationStore persistentTranslations,
             @Value("${rulepilot.bgg.translation.enabled:false}") boolean enabled,
             @Value("${rulepilot.models.deepseek.api-key:}") String apiKey,
             @Value("${rulepilot.models.deepseek.base-url:https://api.deepseek.com}") String baseUrl,
@@ -79,6 +82,7 @@ public class DeepSeekBggMetadataTranslation implements BggMetadataTranslation {
                         .build(),
                 json,
                 redis,
+                persistentTranslations,
                 enabled,
                 apiKey,
                 secureBaseUrl(baseUrl),
@@ -93,6 +97,7 @@ public class DeepSeekBggMetadataTranslation implements BggMetadataTranslation {
             Call.Factory calls,
             ObjectMapper json,
             StringRedisTemplate redis,
+            BggMetadataTranslationStore persistentTranslations,
             boolean enabled,
             String apiKey,
             String baseUrl,
@@ -104,6 +109,7 @@ public class DeepSeekBggMetadataTranslation implements BggMetadataTranslation {
         this.calls = calls;
         this.json = json;
         this.redis = redis;
+        this.persistentTranslations = persistentTranslations;
         this.enabled = enabled;
         this.apiKey = apiKey == null ? "" : apiKey.strip();
         this.endpoint = (baseUrl.endsWith("/") ? baseUrl : baseUrl + "/") + "chat/completions";
@@ -123,20 +129,34 @@ public class DeepSeekBggMetadataTranslation implements BggMetadataTranslation {
 
     @Override
     public Optional<Translation> translate(Request request) {
-        if (!configured() || !validRequest(request)) return Optional.empty();
-        String cacheKey = cacheKey(request);
+        if (!validRequest(request)) return Optional.empty();
+        String sourceDigest = sourceDigest(request);
+        String cacheKey = cacheKey(request, sourceDigest);
         Optional<Translation> cached = cached(cacheKey, request);
         if (cached.isPresent()) return cached;
+        Optional<Translation> persisted = persisted(sourceDigest, request);
+        if (persisted.isPresent()) {
+            cache(cacheKey, persisted.orElseThrow());
+            return persisted;
+        }
+        if (!configured()) return Optional.empty();
 
         Object keyLock = keyLocks[Math.floorMod(cacheKey.hashCode(), keyLocks.length)];
         synchronized (keyLock) {
             cached = cached(cacheKey, request);
             if (cached.isPresent()) return cached;
+            persisted = persisted(sourceDigest, request);
+            if (persisted.isPresent()) {
+                cache(cacheKey, persisted.orElseThrow());
+                return persisted;
+            }
             if (!providerPermits.tryAcquire()) return Optional.empty();
             try {
                 if (!acquireHourlyAllowance()) return Optional.empty();
                 Optional<Translation> translated = requestTranslation(request);
-                if (translated.isEmpty() || !cache(cacheKey, translated.get())) return Optional.empty();
+                if (translated.isEmpty()) return Optional.empty();
+                persist(request.bggId(), sourceDigest, translated.orElseThrow());
+                cache(cacheKey, translated.orElseThrow());
                 return translated;
             } finally {
                 providerPermits.release();
@@ -168,6 +188,17 @@ public class DeepSeekBggMetadataTranslation implements BggMetadataTranslation {
         }
     }
 
+    private Optional<Translation> persisted(String sourceDigest, Request request) {
+        try {
+            return persistentTranslations
+                    .find(request.bggId(), sourceDigest)
+                    .map(translation -> normalizedTranslation(translation, request));
+        } catch (RuntimeException exception) {
+            LOGGER.warn("Persistent BGG metadata translations are temporarily unavailable");
+            return Optional.empty();
+        }
+    }
+
     private boolean acquireHourlyAllowance() {
         String key = "rulepilot:bgg:metadata-translation:budget:" + HOUR.format(clock.instant());
         try {
@@ -181,13 +212,19 @@ public class DeepSeekBggMetadataTranslation implements BggMetadataTranslation {
         }
     }
 
-    private boolean cache(String key, Translation translation) {
+    private void cache(String key, Translation translation) {
         try {
             redis.opsForValue().set(key, json.writeValueAsString(translation), cacheTtl);
-            return true;
         } catch (IOException | RuntimeException exception) {
-            LOGGER.warn("BGG metadata translation could not be cached; using source values");
-            return false;
+            LOGGER.warn("BGG metadata translation could not be copied to the Redis hot cache");
+        }
+    }
+
+    private void persist(int bggId, String sourceDigest, Translation translation) {
+        try {
+            persistentTranslations.save(bggId, sourceDigest, translation, clock.instant());
+        } catch (RuntimeException exception) {
+            LOGGER.warn("BGG metadata translation could not be persisted for bggId={}", bggId);
         }
     }
 
@@ -238,6 +275,27 @@ public class DeepSeekBggMetadataTranslation implements BggMetadataTranslation {
         List<String> categories = translatedTerms(translated.get("categories"), request.categories());
         List<String> mechanics = translatedTerms(translated.get("mechanics"), request.mechanics());
         return Optional.of(new Translation(description, categories, mechanics));
+    }
+
+    private Translation normalizedTranslation(Translation translated, Request request) {
+        String description = translatedDescription(
+                translated.description() == null ? null : json.getNodeFactory().textNode(translated.description()),
+                request.description());
+        List<String> categories = normalizedTerms(translated.categories(), request.categories());
+        List<String> mechanics = normalizedTerms(translated.mechanics(), request.mechanics());
+        return new Translation(description, categories, mechanics);
+    }
+
+    private List<String> normalizedTerms(List<String> translated, List<String> source) {
+        if (translated == null || translated.size() != source.size()) return source;
+        List<String> values = new ArrayList<>(source.size());
+        for (int index = 0; index < source.size(); index++) {
+            String candidate = translated.get(index);
+            values.add(candidate == null || candidate.isBlank()
+                    ? source.get(index)
+                    : SimplifiedChineseText.normalize(candidate.strip()));
+        }
+        return List.copyOf(values);
     }
 
     private String translatedDescription(JsonNode node, String source) {
@@ -296,9 +354,12 @@ public class DeepSeekBggMetadataTranslation implements BggMetadataTranslation {
         return normalized.length() <= maximum ? normalized : normalized.substring(0, maximum);
     }
 
-    private String cacheKey(Request request) {
-        return "rulepilot:bgg:metadata-translation:zh-CN:v4:" + request.bggId() + ":"
-                + digest(requestPayload(request, request.description()));
+    private String cacheKey(Request request, String sourceDigest) {
+        return "rulepilot:bgg:metadata-translation:zh-CN:v4:" + request.bggId() + ":" + sourceDigest;
+    }
+
+    private String sourceDigest(Request request) {
+        return digest(requestPayload(request, request.description()));
     }
 
     private String digest(String value) {

@@ -135,6 +135,21 @@ interface CsrfToken {
   token: string
 }
 
+interface ModelConfigurationResponse {
+  providers: Array<{
+    id: string
+    configured: boolean
+    visionCapable: boolean
+  }>
+  assignments: {
+    teaching: string
+    visual: string
+    answer: string
+    critic: string
+    recommendation: string
+  }
+}
+
 interface FirstCitedLessonObservation {
   planId: string
   teachingPreparationStartedMs: number
@@ -166,6 +181,9 @@ interface TeachingWaitProgress {
   publishedSectionCount: number
   citedDraftSectionCount: number
   insufficientSectionCount: number
+  teachingHandoffState: ImportJob['teachingHandoffState'] | null
+  teachingHandoffErrorCode: string | null
+  teachingAutomaticRecoveryCount: number | null
 }
 
 interface ProductionJourneyReport {
@@ -173,6 +191,8 @@ interface ProductionJourneyReport {
   completed: boolean
   stage: string
   targetBggId: number
+  modelAssignments: ModelConfigurationResponse['assignments'] | null
+  visualModelVisionCapable: boolean | null
   routeStayedOnDiscover: boolean
   journeyBackdropVisible: boolean
   journeySurfaceOpaque: boolean
@@ -225,6 +245,7 @@ interface ProductionJourneyReport {
   documentProgressStage: string | null
   documentProgressComplete: boolean | null
   teachingHandoffState: string | null
+  teachingHandoffErrorCode: string | null
   teachingAutomaticRecoveryCount: number | null
   teachingPreparationState: string | null
   teachingPreparationErrorCode: string | null
@@ -257,12 +278,36 @@ function elapsed(startedAt: number) {
   return Math.round(performance.now() - startedAt)
 }
 
+function ssePayload<T>(body: string, eventName: string): T {
+  for (const block of body.replaceAll('\r\n', '\n').split('\n\n')) {
+    let event = 'message'
+    const data: string[] = []
+    for (const line of block.split('\n')) {
+      if (line.startsWith('event:')) event = line.slice(6).trim()
+      if (line.startsWith('data:')) data.push(line.slice(5).trimStart())
+    }
+    if (event === eventName && data.length) return JSON.parse(data.join('\n')) as T
+  }
+  throw new Error(`SSE stream ended without ${eventName}`)
+}
+
 function persistedDuration(from: string | null, to: string | null) {
   if (!from || !to) return null
   const startedAt = Date.parse(from)
   const reachedAt = Date.parse(to)
   if (!Number.isFinite(startedAt) || !Number.isFinite(reachedAt) || reachedAt < startedAt) return null
   return Math.round(reachedAt - startedAt)
+}
+
+function configuredProductionRole(
+  configuration: ModelConfigurationResponse,
+  role: 'teaching' | 'visual' | 'answer' | 'recommendation',
+) {
+  const assignment = configuration.assignments[role]
+  expect(assignment, `Production ${role} role has no model assignment`).not.toBe('fake')
+  const provider = configuration.providers.find(candidate => candidate.id === assignment)
+  expect(provider?.configured, `Production ${role} provider '${assignment}' is not configured`).toBe(true)
+  return provider!
 }
 
 async function login(page: Page, username: string, password: string) {
@@ -361,8 +406,9 @@ async function retryFailedReusedTeaching(
 
 async function waitForFirstCitedLesson(
   request: APIRequestContext,
+  importJobId: string,
   versionId: string,
-  preparationRunId: string,
+  initialPreparationRunId: string,
   importStartedAt: number,
   requireCurrentPublicationActivity: boolean,
   currentHandoffAt: string | null,
@@ -376,8 +422,17 @@ async function waitForFirstCitedLesson(
   let preparationDetails: RunDetailsResponse | null = null
   let teachingDetails: RunDetailsResponse | null = null
   let latestLesson: LessonMilestoneResponse | null = null
+  let preparationRunId = initialPreparationRunId
+  let terminalObservedAt: number | null = null
+  let terminalGenerationKey = ''
   const progress = teachingProgressReporter(onProgress)
   while (Date.now() < deadline) {
+    const importResponse = await request.get(
+      `/api/v1/documents/official-imports/${encodeURIComponent(importJobId)}`,
+    )
+    expect(importResponse.ok(), `Import reconciliation returned HTTP ${importResponse.status()}`).toBe(true)
+    const currentJob = await importResponse.json() as ImportJob
+    if (currentJob.teachingPreparationRunId) preparationRunId = currentJob.teachingPreparationRunId
     const runResponse = await request.get(`/api/v1/assistant-runs/${encodeURIComponent(preparationRunId)}`)
     expect([200, 404], `Teaching preparation returned HTTP ${runResponse.status()}`)
       .toContain(runResponse.status())
@@ -387,9 +442,6 @@ async function waitForFirstCitedLesson(
       preparationRunCreatedAt = details.run.createdAt
       if (details.run.state !== 'RECEIVED' && teachingPreparationStartedMs === null) {
         teachingPreparationStartedMs = elapsed(importStartedAt)
-      }
-      if (details.run.state === 'FAILED') {
-        throw new Error(`Teaching preparation failed with ${details.run.lastErrorCode ?? 'UNKNOWN_PREPARATION_ERROR'}`)
       }
     }
     if (!plan) {
@@ -420,9 +472,6 @@ async function waitForFirstCitedLesson(
               || Date.parse(activity.occurredAt) >= handoffTimestamp))
           .sort((left, right) => Date.parse(left.occurredAt) - Date.parse(right.occurredAt))[0]
         if (firstPublication) firstCitedPublicationActivityAt = firstPublication.occurredAt
-        if (teachingDetails.run.state === 'FAILED') {
-          throw new Error(`Teaching generation failed with ${teachingDetails.run.lastErrorCode ?? 'UNKNOWN_TEACHING_ERROR'}`)
-        }
       }
       const lessonResponse = await request.get(
         `/api/v1/teaching-plans/${encodeURIComponent(plan.id)}/illustrated-lessons/latest`,
@@ -436,7 +485,7 @@ async function waitForFirstCitedLesson(
           section.evidenceStatus === 'SUPPORTED' || section.evidenceStatus === 'CITED_DRAFT')
           && (!requireCurrentPublicationActivity || firstCitedPublicationActivityAt !== null)) {
           await progress.emit(teachingWaitProgress(
-            'FIRST_CITED_SECTION', preparationDetails, plan.id, teachingDetails, latestLesson,
+            'FIRST_CITED_SECTION', preparationDetails, plan.id, teachingDetails, latestLesson, currentJob,
           ))
           return {
             planId: plan.id,
@@ -448,9 +497,28 @@ async function waitForFirstCitedLesson(
         }
       }
     }
+    const terminalTeaching = teachingDetails
+      && ['FAILED', 'DEGRADED', 'INSUFFICIENT_EVIDENCE'].includes(teachingDetails.run.state)
+    const nextTerminalGenerationKey = terminalTeaching
+      ? `${teachingDetails?.run.createdAt}:${teachingDetails?.run.state}`
+      : ''
+    if (nextTerminalGenerationKey !== terminalGenerationKey) {
+      terminalGenerationKey = nextTerminalGenerationKey
+      terminalObservedAt = terminalTeaching ? Date.now() : null
+    }
     await progress.emit(teachingWaitProgress(
-      'FIRST_CITED_SECTION', preparationDetails, plan?.id ?? null, teachingDetails, latestLesson,
+      'FIRST_CITED_SECTION', preparationDetails, plan?.id ?? null, teachingDetails, latestLesson, currentJob,
     ))
+    if (currentJob.teachingHandoffState === 'FAILED') {
+      throw new Error(
+        `Teaching recovery ended with ${currentJob.teachingErrorCode ?? 'UNKNOWN_TEACHING_HANDOFF_ERROR'}; ${teachingFailureDiagnostic(currentJob, teachingDetails, latestLesson)}`,
+      )
+    }
+    if (terminalObservedAt !== null && Date.now() - terminalObservedAt >= 15_000) {
+      throw new Error(
+        `Teaching reached a terminal state but its persisted recovery did not advance within 15 seconds; ${teachingFailureDiagnostic(currentJob, teachingDetails, latestLesson)}`,
+      )
+    }
     await new Promise(resolve => setTimeout(resolve, 500))
   }
   throw new Error(`The first source-cited lesson section did not become readable; latest=${JSON.stringify(progress.latest())}`)
@@ -543,6 +611,7 @@ function teachingWaitProgress(
   planId: string | null,
   teaching: RunDetailsResponse | null,
   lesson: LessonMilestoneResponse | null,
+  handoff: ImportJob | null = null,
 ): TeachingWaitProgress {
   const sections = lesson?.sections ?? []
   return {
@@ -561,7 +630,28 @@ function teachingWaitProgress(
       section.evidenceStatus === 'SUPPORTED' || section.evidenceStatus === 'CITED_DRAFT').length,
     citedDraftSectionCount: sections.filter(section => section.evidenceStatus === 'CITED_DRAFT').length,
     insufficientSectionCount: sections.filter(section => section.evidenceStatus === 'INSUFFICIENT_EVIDENCE').length,
+    teachingHandoffState: handoff?.teachingHandoffState ?? null,
+    teachingHandoffErrorCode: handoff?.teachingErrorCode ?? null,
+    teachingAutomaticRecoveryCount: handoff?.teachingAutomaticRecoveryCount ?? null,
   }
+}
+
+function teachingFailureDiagnostic(
+  job: ImportJob,
+  teaching: RunDetailsResponse | null,
+  lesson: LessonMilestoneResponse | null,
+) {
+  const sections = lesson?.sections ?? []
+  const published = sections.filter(section =>
+    section.evidenceStatus === 'SUPPORTED' || section.evidenceStatus === 'CITED_DRAFT').length
+  const insufficient = sections.filter(section => section.evidenceStatus === 'INSUFFICIENT_EVIDENCE').length
+  const latestFailure = teaching?.activities
+    .filter(activity => activity.outcome !== 'SUCCEEDED')
+    .sort((left, right) => Date.parse(right.occurredAt) - Date.parse(left.occurredAt))[0]
+  const latest = latestFailure
+    ? `${latestFailure.operation}: ${latestFailure.summary}`
+    : teaching?.run.lastErrorCode ?? 'no rejected activity was recorded'
+  return `attempt ${Math.min(2, job.teachingAutomaticRecoveryCount + 1)} of 2; chapters published=${published}, insufficient=${insufficient}, total=${sections.length}; latest=${latest}`
 }
 
 function teachingProgressReporter(
@@ -676,6 +766,7 @@ test('recommendation becomes one readable, taught, and answerable production jou
 
   const report: ProductionJourneyReport = {
     generatedAt: new Date().toISOString(), completed: false, stage: 'login', targetBggId: TARGET_BGG_ID,
+    modelAssignments: null, visualModelVisionCapable: null,
     routeStayedOnDiscover: false, journeyBackdropVisible: false, journeySurfaceOpaque: false,
     lessonBackdropVisible: false, lessonSurfaceOpaque: false,
     confirmedMilestonesAtSourceReview: 0, confirmedMilestonesFinal: 0,
@@ -697,6 +788,7 @@ test('recommendation becomes one readable, taught, and answerable production jou
     teachingPreparationStartedMs: null, firstCitedLessonMs: null,
     pdfDownloadToTeachingStartMs: null, pdfDownloadToFirstCitedLessonMs: null,
     documentProgressStage: null, documentProgressComplete: null, teachingHandoffState: null,
+    teachingHandoffErrorCode: null,
     teachingAutomaticRecoveryCount: null,
     teachingPreparationState: null, teachingPreparationErrorCode: null,
     teachingGenerationState: null, teachingProgressObservedAt: null, teachingObservedPlanId: null,
@@ -723,6 +815,11 @@ test('recommendation becomes one readable, taught, and answerable production jou
       report.teachingLatestPreparationOperation = progress.preparationOperation
     }
     if (progress.teachingState) report.teachingGenerationState = progress.teachingState
+    if (progress.teachingHandoffState) report.teachingHandoffState = progress.teachingHandoffState
+    if (progress.teachingHandoffErrorCode) report.teachingHandoffErrorCode = progress.teachingHandoffErrorCode
+    if (progress.teachingAutomaticRecoveryCount !== null) {
+      report.teachingAutomaticRecoveryCount = progress.teachingAutomaticRecoveryCount
+    }
     if (progress.teachingOperation) report.teachingLatestGenerationOperation = progress.teachingOperation
     if (progress.lessonStatus) report.lessonStatus = progress.lessonStatus
     report.lessonSectionCount = progress.sectionCount
@@ -735,6 +832,20 @@ test('recommendation becomes one readable, taught, and answerable production jou
 
   try {
     await login(page, username, password)
+    report.stage = 'model-role-preflight'
+    const modelConfigurationResponse = await page.request.get('/api/v1/model-configuration')
+    expect(modelConfigurationResponse.ok(),
+      `Model configuration returned HTTP ${modelConfigurationResponse.status()}`).toBe(true)
+    const modelConfiguration = await modelConfigurationResponse.json() as ModelConfigurationResponse
+    configuredProductionRole(modelConfiguration, 'recommendation')
+    configuredProductionRole(modelConfiguration, 'teaching')
+    const visualProvider = configuredProductionRole(modelConfiguration, 'visual')
+    configuredProductionRole(modelConfiguration, 'answer')
+    expect(visualProvider.visionCapable,
+      `Production visual provider '${visualProvider.id}' cannot inspect rulebook page images`).toBe(true)
+    report.modelAssignments = modelConfiguration.assignments
+    report.visualModelVisionCapable = visualProvider.visionCapable
+    await retainReport(reportFile, report)
     report.stage = 'recommendation'
     await page.goto('/discover')
     const recommendationStartedAt = performance.now()
@@ -945,6 +1056,7 @@ test('recommendation becomes one readable, taught, and answerable production jou
 
     const firstCitedLesson = await waitForFirstCitedLesson(
       page.request,
+      completedJob.id,
       completedJob.documentVersionId!,
       completedJob.teachingPreparationRunId!,
       importStartedAt,
@@ -1074,14 +1186,17 @@ test('recommendation becomes one readable, taught, and answerable production jou
     const answerStartedAt = performance.now()
     const answerResponsePromise = page.waitForResponse(response => {
       const url = new URL(response.url())
-      return url.pathname === `/api/v1/document-versions/${completedJob.documentVersionId}/answers`
+      return url.pathname === `/api/v1/document-versions/${completedJob.documentVersionId}/answers/stream`
         && response.request().method() === 'POST'
     }, { timeout: 4 * 60_000 })
     await page.getByLabel('向规则书提问').fill(RULE_QUESTION)
     await page.getByRole('button', { name: '提交问题' }).click()
     const answerResponse = await answerResponsePromise
     expect(answerResponse.ok(), `Answer endpoint returned HTTP ${answerResponse.status()}`).toBe(true)
-    const answerPayload = await answerResponse.json() as AnswerResponse
+    const answerPayload = ssePayload<AnswerResponse>(
+      (await answerResponse.body()).toString('utf8'),
+      'result',
+    )
     report.answerStatus = answerPayload.answer.status
     report.answerCitationCount = answerPayload.answer.citations.length
     expect(['ANSWERED', 'ANSWERED_WITH_WARNING']).toContain(report.answerStatus)

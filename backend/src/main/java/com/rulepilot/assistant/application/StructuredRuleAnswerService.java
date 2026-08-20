@@ -49,6 +49,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.Consumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -281,9 +282,20 @@ public class StructuredRuleAnswerService implements RuleAnswering {
 
     public AnswerCreation answerWithRun(
             String question, QuestionContext context, String username, UUID gameSessionId) {
+        return answerWithRun(question, context, username, gameSessionId, ignored -> {});
+    }
+
+    public AnswerCreation answerWithRun(
+            String question,
+            QuestionContext context,
+            String username,
+            UUID gameSessionId,
+            Consumer<UUID> runStarted) {
+        Consumer<UUID> checkedListener = runStarted == null ? ignored -> {} : runStarted;
         return Observation.createNotStarted("rulepilot.answer.workflow", observations)
                 .contextualName("answer-workflow")
-                .observe(() -> answerWithRunObserved(question, context, username, gameSessionId, true));
+                .observe(() -> answerWithRunObserved(
+                        question, context, username, gameSessionId, true, checkedListener));
     }
 
     @Override
@@ -353,11 +365,21 @@ public class StructuredRuleAnswerService implements RuleAnswering {
     }
 
     private AnswerCreation answerWithRunObserved(
-            String question, QuestionContext context, String username, UUID gameSessionId, boolean useCache) {
+            String question,
+            QuestionContext context,
+            String username,
+            UUID gameSessionId,
+            boolean useCache,
+            Consumer<UUID> runStarted) {
         RunSnapshot run = runLifecycle.start(
                 AssistantRunMode.QUESTION_ANSWER,
                 gameSessionId == null ? context.documentVersionId() : gameSessionId,
                 username);
+        try {
+            runStarted.accept(run.id());
+        } catch (RuntimeException exception) {
+            LOGGER.debug("Answer progress listener disconnected after run creation");
+        }
         try {
             StructuredRuleAnswer answer = answerInternal(
                     question, context, username, gameSessionId, run.id(), useCache);

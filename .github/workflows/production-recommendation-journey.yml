@@ -178,10 +178,10 @@ jobs:
           )
           echo "Active production services:"
           "${compose[@]}" ps api worker
-          echo "API logs from the last 10 minutes (bounded to 125 lines):"
-          "${compose[@]}" logs --since 10m --tail 125 --no-color api
-          echo "Worker logs from the last 10 minutes (bounded to 125 lines):"
-          "${compose[@]}" logs --since 10m --tail 125 --no-color worker
+          echo "API logs from the last 35 minutes (bounded to 500 lines):"
+          "${compose[@]}" logs --since 35m --tail 500 --no-color api
+          echo "Worker logs from the last 35 minutes (bounded to 500 lines):"
+          "${compose[@]}" logs --since 35m --tail 500 --no-color worker
           REMOTE
           chmod 600 "$diagnostic_file"
 

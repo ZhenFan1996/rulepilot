@@ -456,7 +456,7 @@ async function mockPublicDiscovery(
     expansionIds: [], playerCount: 1, roundNumber: 1, phase: '规则问答', activePlayer: null,
   } }))
   await page.route('**/api/v1/document-versions/version-1/answers/conversation?*', route => route.fulfill({ json: [] }))
-  await page.route('**/api/v1/document-versions/version-1/answers', route => route.fulfill({ json: {
+  await page.route('**/api/v1/document-versions/version-1/answers/stream', route => route.fulfill({ json: {
     answer: ruleAnswer, conversationTurnId: 'turn-1', rulingReference: {
       citationIds: ['answer-chunk-1'], confirmedRulingId: null, confirmedRulingVersion: null,
     },
@@ -973,7 +973,7 @@ test('keeps recommendation, rulebook reading, progressive teaching, and grounded
   await expect(page.getByTestId('recommendation-answer-workspace')).toContainText('已绑定规则书，可以开始提问')
 
   const answerRequestPromise = page.waitForRequest(request =>
-    request.url().endsWith('/api/v1/document-versions/version-1/answers') && request.method() === 'POST')
+    request.url().endsWith('/api/v1/document-versions/version-1/answers/stream') && request.method() === 'POST')
   await page.getByLabel('向规则书提问').fill('获得食物以后，什么时候发动棕色能力？')
   await page.getByRole('button', { name: '提交问题' }).click()
   const answerRequest = await answerRequestPromise

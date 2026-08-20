@@ -181,17 +181,58 @@ export function recentTeachingPreparationActivitySteps(
 }
 
 export function processedTeachingChapterCount(run: TeachingRunProgress | null) {
-  return publishedPositions(run?.activities ?? []).size
+  return latestPublicationActivities(run?.activities ?? []).size
 }
 
 export function supportedTeachingChapterCount(run: TeachingRunProgress | null) {
-  return publishedPositions((run?.activities ?? []).filter((activity) =>
+  return publishedPositions([...latestPublicationActivities(run?.activities ?? []).values()].filter((activity) =>
     activity.outcome === 'SUCCEEDED'
       && (activity.summary.includes('POST_PUBLICATION_REVIEW_ACCEPTED')
         || activity.summary.includes('REUSED_VERIFIED_SECTION')
         || activity.summary.includes('CITED_BASE_SECTION_PUBLISHED')
         || activity.summary.includes('DRAFT_ACCEPTED')),
   )).size
+}
+
+export function rejectedTeachingChapterCount(run: TeachingRunProgress | null) {
+  return [...latestPublicationActivities(run?.activities ?? []).values()]
+    .filter(activity => activity.outcome === 'REJECTED').length
+}
+
+export function teachingChapterFailureText(
+  run: TeachingRunProgress | null,
+  locale: AppLocale = 'zh-CN',
+) {
+  const rejected = [...latestPublicationActivities(run?.activities ?? []).values()]
+    .filter(activity => activity.outcome === 'REJECTED')
+  if (rejected.length === 0) return ''
+  const summaries = rejected.map(activity => activity.summary)
+  if (summaries.some(summary => summary.includes('TOOL_BUDGET_EXHAUSTED'))) {
+    return locale === 'en'
+      ? 'The bounded rule-evidence read budget was exhausted before every chapter was supported.'
+      : '规则依据读取次数已用完，仍有章节没有得到依据。'
+  }
+  if (summaries.some(summary => summary.includes('RETRIEVED_EVIDENCE_INVALID')
+    || summary.includes('BASE_EVIDENCE_IDENTITY_INVALID'))) {
+    return locale === 'en'
+      ? 'The cited page evidence did not pass source or rulebook-version validation.'
+      : '引用页依据没有通过来源或规则书版本校验。'
+  }
+  if (summaries.some(summary => summary.includes('NO_VALID_BASE_EVIDENCE')
+    || summary.includes('NO_RETRIEVED_EVIDENCE'))) {
+    return locale === 'en'
+      ? 'The cited pages did not yield publishable rule evidence for these chapters.'
+      : '引用页没有形成可供这些章节发布的规则依据。'
+  }
+  if (summaries.some(summary => summary.includes('DRAFT_WITHHELD')
+    || summary.includes('BASE_DRAFT_WITHHELD'))) {
+    return locale === 'en'
+      ? 'The chapter draft still failed citation or structure validation after its bounded repair.'
+      : '章节草稿在有限修正后仍未通过引用或结构校验。'
+  }
+  return locale === 'en'
+    ? 'Some chapters did not pass the publication boundary.'
+    : '有章节没有通过发布校验。'
 }
 
 export function teachingElapsedLabel(run: TeachingRunProgress | null, now: number) {
@@ -366,5 +407,15 @@ function publishedPositions(activities: TeachingActivity[]) {
     .filter((activity) => activity.operation.startsWith('publishTeachingSection|'))
     .map((activity) => operationPosition(activity.operation))
     .filter((position): position is number => position !== null))
+}
+
+function latestPublicationActivities(activities: TeachingActivity[]) {
+  const latest = new Map<number, TeachingActivity>()
+  for (const activity of activities) {
+    if (!activity.operation.startsWith('publishTeachingSection|')) continue
+    const position = operationPosition(activity.operation)
+    if (position !== null) latest.set(position, activity)
+  }
+  return latest
 }
 import type { AppLocale } from './locale'

@@ -167,7 +167,9 @@ jobs:
           found=false
           qwen_enabled=false
           qwen_key_present=false
-          managed_recommendation_keys=' BGG_RECOMMENDATION_AGENT_ENABLED BGG_RECOMMENDATION_PROVIDER BGG_RECOMMENDATION_MODEL_PROVIDER BGG_RECOMMENDATION_MODEL_CANDIDATE_LIMIT BGG_RECOMMENDATION_AGENT_TIMEOUT BGG_RECOMMENDATION_WEB_RESEARCH_ENABLED BGG_RECOMMENDATION_WEB_RESEARCH_TIMEOUT WEB_SEARCH_MODEL QWEN_MODEL QWEN_VISION_CAPABLE RULEBOOK_DISCOVERY_MODEL RULEBOOK_DISCOVERY_NEGATIVE_CACHE_TTL RULEBOOK_DISCOVERY_HOURLY_LIMIT RULEBOOK_DISCOVERY_PROVIDER_CONCURRENCY '
+          deepseek_enabled=false
+          deepseek_key_present=false
+          managed_runtime_keys=' TEACHING_PROVIDER TEACHING_MODEL_PROVIDER VISUAL_PROVIDER VISUAL_MODEL_PROVIDER ANSWER_PROVIDER ANSWER_MODEL_PROVIDER BGG_TRANSLATION_ENABLED BGG_TRANSLATION_TIMEOUT BGG_TRANSLATION_CACHE_TTL BGG_TRANSLATION_HOURLY_LIMIT BGG_TRANSLATION_PROVIDER_CONCURRENCY BGG_CACHE_PREWARM_ENABLED BGG_CACHE_PREWARM_GAME_COUNT BGG_CACHE_PREWARM_COHORT_SIZE BGG_CACHE_PREWARM_TRANSLATION_COHORT_SIZE BGG_CACHE_PREWARM_RESUME_DELAY BGG_CACHE_PREWARM_LEASE_DURATION BGG_RECOMMENDATION_AGENT_ENABLED BGG_RECOMMENDATION_PROVIDER BGG_RECOMMENDATION_MODEL_PROVIDER BGG_RECOMMENDATION_MODEL_CANDIDATE_LIMIT BGG_RECOMMENDATION_AGENT_TIMEOUT BGG_RECOMMENDATION_WEB_RESEARCH_ENABLED BGG_RECOMMENDATION_WEB_RESEARCH_TIMEOUT WEB_SEARCH_MODEL QWEN_MODEL QWEN_VISION_CAPABLE RULEBOOK_DISCOVERY_MODEL RULEBOOK_DISCOVERY_NEGATIVE_CACHE_TTL RULEBOOK_DISCOVERY_HOURLY_LIMIT RULEBOOK_DISCOVERY_PROVIDER_CONCURRENCY '
           while IFS= read -r line || [[ -n "$line" ]]; do
             if [[ "$line" == BGG_API_TOKEN=* ]]; then
               printf 'BGG_API_TOKEN=%s\n' "$token"
@@ -178,7 +180,13 @@ jobs:
             elif [[ "$line" == QWEN_API_KEY=* ]]; then
               printf '%s\n' "$line"
               [[ -n "${line#QWEN_API_KEY=}" ]] && qwen_key_present=true
-            elif [[ "$managed_recommendation_keys" == *" ${line%%=*} "* ]]; then
+            elif [[ "$line" == DEEPSEEK_ENABLED=true ]]; then
+              printf '%s\n' "$line"
+              deepseek_enabled=true
+            elif [[ "$line" == DEEPSEEK_API_KEY=* ]]; then
+              printf '%s\n' "$line"
+              [[ -n "${line#DEEPSEEK_API_KEY=}" ]] && deepseek_key_present=true
+            elif [[ "$managed_runtime_keys" == *" ${line%%=*} "* ]]; then
               continue
             else
               printf '%s\n' "$line"
@@ -188,10 +196,31 @@ jobs:
             printf 'BGG_API_TOKEN=%s\n' "$token" >> "$temporary_env"
           fi
           if [[ "$qwen_enabled" != true || "$qwen_key_present" != true ]]; then
-            echo "Production Qwen configuration is required for the recommendation Agent" >&2
+            echo "Production Qwen configuration is required for recommendation, teaching, visual evidence, and answers" >&2
+            exit 1
+          fi
+          if [[ "$deepseek_enabled" != true || "$deepseek_key_present" != true ]]; then
+            echo "Production DeepSeek configuration is required for persistent Chinese catalog translations" >&2
             exit 1
           fi
           printf '%s\n' \
+            'TEACHING_PROVIDER=spring-ai' \
+            'TEACHING_MODEL_PROVIDER=qwen' \
+            'VISUAL_PROVIDER=spring-ai' \
+            'VISUAL_MODEL_PROVIDER=qwen' \
+            'ANSWER_PROVIDER=spring-ai' \
+            'ANSWER_MODEL_PROVIDER=qwen' \
+            'BGG_TRANSLATION_ENABLED=true' \
+            'BGG_TRANSLATION_TIMEOUT=PT20S' \
+            'BGG_TRANSLATION_CACHE_TTL=P30D' \
+            'BGG_TRANSLATION_HOURLY_LIMIT=60' \
+            'BGG_TRANSLATION_PROVIDER_CONCURRENCY=2' \
+            'BGG_CACHE_PREWARM_ENABLED=true' \
+            'BGG_CACHE_PREWARM_GAME_COUNT=2000' \
+            'BGG_CACHE_PREWARM_COHORT_SIZE=500' \
+            'BGG_CACHE_PREWARM_TRANSLATION_COHORT_SIZE=60' \
+            'BGG_CACHE_PREWARM_RESUME_DELAY=PT2H' \
+            'BGG_CACHE_PREWARM_LEASE_DURATION=PT30M' \
             'BGG_RECOMMENDATION_AGENT_ENABLED=true' \
             'BGG_RECOMMENDATION_PROVIDER=spring-ai' \
             'BGG_RECOMMENDATION_MODEL_PROVIDER=qwen' \

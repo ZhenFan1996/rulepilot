@@ -29,7 +29,7 @@ describe('RulebookReaderView', () => {
       }
       if (path.endsWith('/api/auth/session')) return Response.json({ username: 'player' })
       if (path.endsWith('/api/auth/csrf')) return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
-      if (path.endsWith('/api/v1/document-versions/version-1/answers') && options?.method === 'POST') {
+      if (path.endsWith('/api/v1/document-versions/version-1/answers/stream') && options?.method === 'POST') {
         return Response.json({
           answer: {
             language: 'zh-CN',
@@ -88,7 +88,7 @@ describe('RulebookReaderView', () => {
     await flushPromises()
 
     const answerRequest = fetchMock.mock.calls.find(([input, options]) =>
-      String(input).endsWith('/api/v1/document-versions/version-1/answers') && options?.method === 'POST')
+      String(input).endsWith('/api/v1/document-versions/version-1/answers/stream') && options?.method === 'POST')
     expect(JSON.parse(String(answerRequest?.[1]?.body))).toMatchObject({
       question: '开局先做什么？', language: 'zh-CN',
     })

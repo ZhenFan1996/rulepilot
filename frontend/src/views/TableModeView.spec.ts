@@ -12,7 +12,7 @@ describe('TableModeView answer status', () => {
 
   it('uses the shared checking status and explains low confidence in player-facing language', async () => {
     let finishAnswer: ((response: Response) => void) | undefined
-    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const path = String(input)
       if (path === '/api/v1/teaching-plans/plan-1') return Response.json({
         id: 'plan-1', documentVersionId: 'version-1', gameTitle: 'Opaque Game',
@@ -20,11 +20,12 @@ describe('TableModeView answer status', () => {
       if (path === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
       if (path === '/api/v1/game-sessions' && init?.method === 'POST') return Response.json({ id: 'session-1' })
       if (path.includes('/answers/conversation?')) return Response.json([])
-      if (path === '/api/v1/document-versions/version-1/answers' && init?.method === 'POST') {
+      if (path.includes('/answers/stream') && init?.method === 'POST') {
         return await new Promise<Response>((resolve) => { finishAnswer = resolve })
       }
       return new Response(null, { status: 404 })
-    }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
     const router = createRouter({
       history: createMemoryHistory(),
       routes: [
@@ -46,8 +47,10 @@ describe('TableModeView answer status', () => {
     const status = wrapper.get('[data-testid="player-work-status"]')
     expect(status.text()).toBe('正在核对回答')
     expect(status.attributes('data-player-work-terminality')).toBe('active')
-    expect(wrapper.text()).toContain('正在理解问题')
+    expect(wrapper.text()).toContain('正在提交问题并建立答疑任务')
 
+    await vi.waitFor(() => expect(fetchMock.mock.calls.map(([input]) => String(input)).join('\n'))
+      .toContain('/api/v1/document-versions/version-1/answers/stream'))
     await vi.waitFor(() => expect(finishAnswer).toBeTypeOf('function'))
     finishAnswer!(Response.json({
       conversationTurnId: 'turn-1',

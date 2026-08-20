@@ -1029,14 +1029,16 @@ class BoardGameRecommendationAgentPaidCanaryTest {
             assertThat(response.harness().fallbackUsed()).isFalse();
 
             JsonNode rawAction = json.readTree(capture.lastArguments(BoardGameRecommendationAgent.COMPARE_TOOL));
-            assertThat(rawAction.has("message")).isFalse();
+            assertThat(rawAction.path("message").asText()).isNotBlank();
+            assertThat(rawAction.path("internalEvidenceIds").isArray()).isTrue();
+            assertThat(rawAction.path("internalEvidenceIds")).isNotEmpty();
             assertThat(rawAction.has("preferredBggId")).isTrue();
             assertThat(rawAction.path("candidateBggIds").size()).isEqualTo(2);
             assertThat(rawAction.path("subjects").size()).isEqualTo(3);
             String visible = response.assistantMessage();
             assertThat(visible)
-                    .as("the visible decision must distinguish application judgment from source observations")
-                    .contains("能核对的差异", "不是来源替你们下的结论");
+                    .as("validated comparison prose must be published without a template rewrite")
+                    .isEqualTo(rawAction.path("message").asText());
             assertThat(visible.codePointCount(0, visible.length()))
                     .isGreaterThanOrEqualTo(35);
 
@@ -1423,12 +1425,21 @@ class BoardGameRecommendationAgentPaidCanaryTest {
             BoardGameRecommendationAgent.ConversationResponse response) throws Exception {
         assertThat(call.name()).isEqualTo(BoardGameRecommendationAgent.COMPARE_TOOL);
         JsonNode arguments = json.readTree(call.argumentsJson());
-        assertThat(arguments.has("message"))
-                .as("free-form factual prose must not bypass the comparison cells")
-                .isFalse();
+        assertThat(arguments.path("message").asText()).isNotBlank();
+        assertThat(response.assistantMessage())
+                .as("candidate-scoped validated comparison prose must remain byte-for-byte visible")
+                .isEqualTo(arguments.path("message").asText());
+        Set<String> visibleEvidenceIds = response.comparison().axes().stream()
+                .flatMap(axis -> axis.cells().stream())
+                .filter(BoardGameRecommendationAgent.ComparisonCell::known)
+                .map(cell -> cell.observation().id())
+                .collect(java.util.stream.Collectors.toUnmodifiableSet());
+        List<String> internalEvidenceIds = new ArrayList<>();
+        arguments.path("internalEvidenceIds").forEach(value -> internalEvidenceIds.add(value.asText()));
+        assertThat(internalEvidenceIds).isNotEmpty().doesNotHaveDuplicates();
+        assertThat(internalEvidenceIds).allMatch(visibleEvidenceIds::contains);
         assertThat(arguments.has("preferredBggId")).isTrue();
         if (arguments.path("preferredBggId").isNull()) {
-            assertThat(response.assistantMessage()).contains("能核对的差异都在下面");
             return;
         }
         int preferredBggId = arguments.path("preferredBggId").asInt();
@@ -1437,9 +1448,13 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                 .map(candidate -> candidate.game().ranking().sourceName())
                 .findFirst()
                 .orElseThrow();
-        assertThat(response.assistantMessage())
-                .contains(preferredName)
-                .contains("能核对的差异", "不是来源替你们下的结论");
+        assertThat(arguments.path("message").asText()).contains(preferredName);
+        Set<String> preferredEvidenceIds = response.comparison().axes().stream()
+                .flatMap(axis -> axis.cells().stream())
+                .filter(cell -> cell.bggId() == preferredBggId && cell.known())
+                .map(cell -> cell.observation().id())
+                .collect(java.util.stream.Collectors.toUnmodifiableSet());
+        assertThat(internalEvidenceIds).anyMatch(preferredEvidenceIds::contains);
     }
 
     private void assertClarificationPreserved(

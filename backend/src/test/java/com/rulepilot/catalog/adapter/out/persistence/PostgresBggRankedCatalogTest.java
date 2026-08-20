@@ -92,6 +92,15 @@ class PostgresBggRankedCatalogTest {
         assertThat(repository.find(new Query("百变", BggGameType.ALL, Sort.RANK, 0, 20, List.of())).games())
                 .extracting(RankedGame::sourceName)
                 .containsExactly("Strategy 100%");
+        assertThat(repository.findExactName("百变策略"))
+                .extracting(RankedGame::bggId)
+                .containsExactly(10);
+        assertThat(repository.findExactName("strategy 100%"))
+                .extracting(RankedGame::bggId)
+                .containsExactly(10);
+        assertThat(repository.findExactName("百变"))
+                .as("partial aliases are useful for browsing but must not establish one exact game identity")
+                .isEmpty();
         assertThat(repository.find(new Query("", BggGameType.EXPANSION, Sort.RATING, 0, 20, List.of())).games())
                 .extracting(RankedGame::bggId)
                 .containsExactly(30);

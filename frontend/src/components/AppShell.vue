@@ -129,10 +129,17 @@ const backgroundShortcutTitle = computed(() => {
       ? t('shell.lesson.oneActive', { title: backgroundActiveTitle.value })
       : t('shell.lesson.manyActive', { count: backgroundActiveCount.value })
   }
+  if (!backgroundFinishedCount.value) return t('shell.lesson.none')
   return backgroundFinishedCount.value === 1 && backgroundFinishedTitle.value
     ? t('shell.lesson.oneFinished', { title: backgroundFinishedTitle.value })
     : t('shell.lesson.manyFinished', { count: backgroundFinishedCount.value })
 })
+
+const backgroundShortcutAction = computed(() => backgroundActiveCount.value
+  ? t('shell.lesson.viewProgress')
+  : backgroundFinishedCount.value
+    ? t('shell.lesson.viewResult')
+    : t('shell.lesson.openStatus'))
 
 function openBackgroundWork(event: MouseEvent) {
   backgroundWorkCenter.value?.openCenter(event.currentTarget as HTMLElement)
@@ -270,11 +277,11 @@ onBeforeUnmount(() => {
     />
 
     <button
-      v-if="username && !immersive && (backgroundActiveCount || backgroundFinishedCount)"
+      v-if="username && !immersive"
       type="button"
       data-testid="background-work-persistent-shortcut"
       class="fixed bottom-20 left-3 right-3 z-40 mx-auto flex min-h-16 max-w-md items-center gap-3 rounded-2xl border border-copper/35 bg-paper/97 px-4 py-3 text-left text-ink shadow-xl backdrop-blur transition hover:border-copper/60 lg:bottom-6 lg:left-auto lg:right-6 lg:mx-0 lg:w-96"
-      :aria-label="`${t('shell.guideStatus')}：${backgroundShortcutTitle}。${t(backgroundActiveCount ? 'shell.lesson.viewProgress' : 'shell.lesson.viewResult')}`"
+      :aria-label="`${t('shell.guideStatus')}：${backgroundShortcutTitle}。${backgroundShortcutAction}`"
       aria-haspopup="dialog"
       @click="openBackgroundWork"
     >
@@ -286,7 +293,7 @@ onBeforeUnmount(() => {
         <span class="mt-0.5 block truncate text-sm font-semibold">{{ backgroundShortcutTitle }}</span>
       </span>
       <span class="shrink-0 text-sm font-semibold text-indigo underline underline-offset-4">
-        {{ t(backgroundActiveCount ? 'shell.lesson.viewProgress' : 'shell.lesson.viewResult') }}
+        {{ backgroundShortcutAction }}
       </span>
     </button>
 

@@ -140,6 +140,46 @@ class GroundedTeachingAgentTest {
     }
 
     @Test
+    void recordsAnEvidenceIdentityFailureSeparatelyFromAnEmptyPageRead() {
+        UUID versionId = UUID.randomUUID();
+        UUID chunkId = UUID.randomUUID();
+        AtomicInteger modelCalls = new AtomicInteger();
+        RecordingInvocations invocations = new RecordingInvocations();
+        TeachingEvidenceRefiner invalidatingRefiner = (plan, planned, runId, deterministic) ->
+                new TeachingSectionEvidenceRetriever.Result(
+                        List.of(),
+                        deterministic.toolCalls() + 1,
+                        TeachingSectionEvidenceRetriever.State.INVALID);
+        GroundedTeachingAgent agent = new GroundedTeachingAgent(
+                request -> List.of(evidence(chunkId, versionId)),
+                request -> {
+                    modelCalls.incrementAndGet();
+                    return oneStepDraft(chunkId, "不应生成这一章。");
+                },
+                new PolicyEvidenceVerifier(),
+                acceptedCritic(),
+                invocations,
+                VisualRulebookPageFacts.empty(),
+                VisualRulebookPageCatalogModel.unavailable(),
+                4,
+                1,
+                1,
+                invalidatingRefiner);
+
+        IllustratedLesson lesson = agent.createBase(
+                plan(versionId), UUID.randomUUID(), null, ignored -> {});
+
+        assertThat(lesson.status()).isEqualTo(LessonStatus.INCOMPLETE);
+        assertThat(lesson.sections().getFirst().evidenceStatus())
+                .isEqualTo(EvidenceStatus.INSUFFICIENT_EVIDENCE);
+        assertThat(modelCalls).hasValue(0);
+        assertThat(invocations.diagnostics).contains(new Diagnostic(
+                "publishTeachingSection|1",
+                ActivityOutcome.REJECTED,
+                "Teaching section withheld: BASE_EVIDENCE_IDENTITY_INVALID"));
+    }
+
+    @Test
     void givesImageOnlyRulebookPagesToTheBaseLessonModel() {
         UUID versionId = UUID.randomUUID();
         UUID chunkId = UUID.randomUUID();

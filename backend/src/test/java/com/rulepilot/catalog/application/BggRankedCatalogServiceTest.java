@@ -80,7 +80,7 @@ class BggRankedCatalogServiceTest {
     }
 
     @Test
-    void resolvesAnExactLocalizedAliasThroughBggAndHydratesItsCanonicalDetails() {
+    void resolvesAnExactOfficialChineseAliasLocallyAndHydratesItsCanonicalDetails() {
         MemoryRepository repository = new MemoryRepository();
         FakeBgg bgg = new FakeBgg();
         BggRankedCatalogService service = new BggRankedCatalogService(repository, bgg);
@@ -92,7 +92,7 @@ class BggRankedCatalogServiceTest {
             assertThat(game.ranking().sourceName()).isEqualTo("Game 20");
             assertThat(game.details().mechanics()).contains("Worker Placement", "Deck Building");
         });
-        assertThat(bgg.searchQueries).containsExactly("白塔庭院");
+        assertThat(bgg.searchQueries).isEmpty();
     }
 
     @Test
@@ -139,6 +139,16 @@ class BggRankedCatalogServiceTest {
         assertThat(bgg.searchQueries).isEmpty();
     }
 
+    @Test
+    void rejectsOneChineseAliasThatBelongsToMultipleCatalogIdentities() {
+        MemoryRepository repository = new MemoryRepository();
+        FakeBgg bgg = new FakeBgg();
+        BggRankedCatalogService service = new BggRankedCatalogService(repository, bgg);
+
+        assertThat(service.resolveReferenceTitle("同名桌游")).isEmpty();
+        assertThat(bgg.searchQueries).isEmpty();
+    }
+
     private static final class MemoryRepository implements BggRankedCatalogRepository {
         private Query query;
 
@@ -159,6 +169,15 @@ class BggRankedCatalogServiceTest {
                     query.page(),
                     query.size(),
                     List.of(game(10, 10), game(20, 20)));
+        }
+
+        @Override
+        public List<RankedGame> findExactName(String name) {
+            return switch (name) {
+                case "白塔庭院" -> List.of(game(20, 20));
+                case "同名桌游" -> List.of(game(10, 10), game(20, 20));
+                default -> List.of();
+            };
         }
 
         @Override

@@ -121,10 +121,16 @@ class StructuredRuleAnswerServiceTest {
                 new SimpleMeterRegistry(),
                 null);
 
+        AtomicReference<UUID> streamedRunId = new AtomicReference<>();
         var creation = service.answerWithRun(
-                "When does this resolve?", new QuestionContext(versionId), "player", null);
+                "When does this resolve?",
+                new QuestionContext(versionId),
+                "player",
+                null,
+                streamedRunId::set);
 
         assertThat(creation.answer().status()).isEqualTo(AnswerStatus.MODEL_TIMEOUT);
+        assertThat(streamedRunId).hasValue(runId);
         verify(runs).fail(eq(runId), eq(1L), eq("AGENT_TIMEOUT"), any());
     }
 

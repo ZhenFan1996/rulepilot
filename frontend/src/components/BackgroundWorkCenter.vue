@@ -48,9 +48,12 @@ import {
 import { TEACHING_LAUNCHED_EVENT, teachingLaunchDetail } from '@/lib/teachingLaunch'
 import {
   mergeTeachingRunProgress,
+  processedTeachingChapterCount,
   recentTeachingActivitySteps,
   recentTeachingPreparationActivitySteps,
+  rejectedTeachingChapterCount,
   supportedTeachingChapterCount,
+  teachingChapterFailureText,
   type TeachingProgressPlan,
   type TeachingRunProgress,
 } from '@/lib/teachingProgress'
@@ -97,6 +100,7 @@ const preparationSubjects = ref<Record<string, string>>({})
 const preparationRunDetails = ref<Record<string, TeachingRunProgress>>({})
 const preparationTeachingTransitions = ref<PreparationTeachingTransition[]>([])
 const preparationTeachingPlanIds = new Map<string, { documentVersionId: string; planId: string }>()
+const dismissedTeachingRunIds = ref<Set<string>>(new Set())
 const dismissedImportIds = ref<Set<string>>(new Set())
 const dismissedUploadedHandoffIds = ref<Set<string>>(new Set())
 const titles = new Map<string, string>()
@@ -133,6 +137,10 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   publishedChapters: (done: number, total: number | null) => total
     ? `已发布 ${done} / ${total} 章`
     : `已发布 ${done} 章`,
+  processedChapters: (done: number, total: number | null) => total
+    ? `已处理 ${done} / ${total} 章`
+    : `已处理 ${done} 章`,
+  rejectedChapters: (done: number) => `${done} 章未发布`,
   noPublishedChapter: '尚未发布可读章节',
   recoveringMissingResult: '准备任务已经结束，但还没有找到可读章节；后台正在自动恢复',
   automaticRecovery: '上一次任务没有留下可读章节，正在进行第 1 / 1 次自动恢复',
@@ -162,6 +170,10 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   publishedChapters: (done: number, total: number | null) => total
     ? `${done} of ${total} chapters published`
     : `${done} chapters published`,
+  processedChapters: (done: number, total: number | null) => total
+    ? `${done} of ${total} chapters processed`
+    : `${done} chapters processed`,
+  rejectedChapters: (done: number) => `${done} chapters not published`,
   noPublishedChapter: 'No readable chapter has been published yet',
   recoveringMissingResult: 'Preparation ended without a readable chapter; background recovery is running',
   automaticRecovery: 'The previous task left no readable chapter; automatic recovery 1 of 1 is running',
@@ -328,10 +340,18 @@ function latestTeachingDetail(item: BackgroundTeachingItem) {
 
 function teachingProgressContext(item: BackgroundTeachingItem) {
   const run = teachingRunDetails.value[item.runId]
+  const processed = processedTeachingChapterCount(run ?? null)
   const published = supportedTeachingChapterCount(run ?? null)
+  const rejected = rejectedTeachingChapterCount(run ?? null)
   const total = teachingPlanDetails.value[item.planId]?.sections.length ?? null
-  const progress = published > 0 ? copy.value.publishedChapters(published, total) : copy.value.noPublishedChapter
-  return run?.run.lastErrorCode ? `${progress} · ${copy.value.failureCode(run.run.lastErrorCode)}` : progress
+  const details = [
+    processed > 0 ? copy.value.processedChapters(processed, total) : '',
+    published > 0 ? copy.value.publishedChapters(published, total) : copy.value.noPublishedChapter,
+    rejected > 0 ? copy.value.rejectedChapters(rejected) : '',
+    teachingChapterFailureText(run ?? null, locale.value),
+    run?.run.lastErrorCode ? copy.value.failureCode(run.run.lastErrorCode) : '',
+  ].filter(Boolean)
+  return details.join(' · ')
 }
 
 function documentStage(progress: DocumentProgress | undefined, status: string) {
@@ -423,7 +443,9 @@ const workItems = computed<WorkItem[]>(() => {
     detail: latestTeachingDetail(item), context: teachingProgressContext(item),
     state: 'active', progress: null, target: { name: 'lessons' },
   }))
-  const finishedTeachingItems = completedTeaching.value.map((item): WorkItem => ({
+  const finishedTeachingItems = completedTeaching.value
+    .filter(item => !dismissedTeachingRunIds.value.has(item.runId))
+    .map((item): WorkItem => ({
     id: `teaching-finished:${item.runId}`, kind: 'lesson', title: item.gameTitle,
     status: item.terminalState && item.terminalState !== 'COMPLETED'
       ? workStatus('NEEDS_ACTION', 'rulebook', 'usable', 'terminal', 'needs-action')
@@ -664,8 +686,11 @@ async function loadTeachingSnapshot(
   }))
   const retained = confirmations.filter((item): item is BackgroundTeachingItem => item !== null)
   const transition = reconcileBackgroundTeaching(previous, [...active, ...retained])
-  const notices = new Map(completedTeaching.value.map(item => [item.planId, item]))
+  const notices = new Map(completedTeaching.value
+    .filter(item => !dismissedTeachingRunIds.value.has(item.runId))
+    .map(item => [item.planId, item]))
   for (const item of transition.finished) {
+    if (dismissedTeachingRunIds.value.has(item.runId)) continue
     notices.set(item.planId, {
       ...item,
       terminalState: confirmedTerminalStates.get(item.planId) ?? item.terminalState,
@@ -889,6 +914,7 @@ async function bridgeCompletedPreparations(
       teaching.states[run.id] = run.state
       transitionById.delete(transition.id)
       if (terminalTeachingStates.has(run.state)) {
+        if (dismissedTeachingRunIds.value.has(run.id)) return
         completedByPlan.set(planId, {
           runId: run.id,
           planId,
@@ -1018,6 +1044,7 @@ async function dismissFinished() {
     .filter(uploadedTeachingHandoffFinished)
     .filter(handoff => !activeTransitionUploadIds.has(handoff.id))
   const finishedUploadIds = finishedUploadHandoffs.map(handoff => handoff.id)
+  const finishedTeachingRunIds = completedTeaching.value.map(item => item.runId)
   const persistentTargets = [
     ...finishedImports
       .filter(officialImportNeedsPersistentDismissal)
@@ -1063,6 +1090,11 @@ async function dismissFinished() {
       ...dismissedUploadedHandoffIds.value,
       ...dismissedUploads,
     ])
+    dismissedTeachingRunIds.value = new Set([
+      ...dismissedTeachingRunIds.value,
+      ...finishedTeachingRunIds,
+    ])
+    safelyStoreDismissed(keys.dismissedTeachingRuns, [...dismissedTeachingRunIds.value])
     safelyStoreDismissed(keys.dismissedImports, [...dismissedImportIds.value])
     safelyStoreDismissed(keys.dismissedUploadHandoffs, [...dismissedUploadedHandoffIds.value])
     for (const importId of dismissedImports) preparationTeachingPlanIds.delete(`import:${importId}`)
@@ -1121,7 +1153,12 @@ function handleBackgroundWorkChanged(event: Event) {
       dismissedUploadedHandoffIds.value,
       detail.dismissedUploadedHandoffIds,
     )
+    dismissedTeachingRunIds.value = withDismissedIds(
+      dismissedTeachingRunIds.value,
+      detail.dismissedTeachingRunIds,
+    )
     const keys = backgroundWorkStorageKeys(account)
+    safelyStoreDismissed(keys.dismissedTeachingRuns, [...dismissedTeachingRunIds.value])
     safelyStoreDismissed(keys.dismissedImports, [...dismissedImportIds.value])
     safelyStoreDismissed(keys.dismissedUploadHandoffs, [...dismissedUploadedHandoffIds.value])
   }
@@ -1193,6 +1230,7 @@ function switchAccount(nextUsername: string) {
   preparationTeachingPlanIds.clear()
   dismissedImportIds.value = new Set()
   dismissedUploadedHandoffIds.value = new Set()
+  dismissedTeachingRunIds.value = new Set()
   dismissError.value = ''
   titles.clear()
   clearLegacyBackgroundWorkStorage(sessionStorage)
@@ -1202,7 +1240,9 @@ function switchAccount(nextUsername: string) {
   }
   const keys = backgroundWorkStorageKeys(account)
   activeTeaching.value = parseBackgroundTeachingItems(sessionStorage.getItem(keys.activeTeaching))
+  dismissedTeachingRunIds.value = readStoredIds(keys.dismissedTeachingRuns)
   completedTeaching.value = parseBackgroundTeachingItems(sessionStorage.getItem(keys.completedTeaching))
+    .filter(item => !dismissedTeachingRunIds.value.has(item.runId))
   dismissedImportIds.value = readStoredIds(keys.dismissedImports)
   dismissedUploadedHandoffIds.value = readStoredIds(keys.dismissedUploadHandoffs)
   for (const item of [...activeTeaching.value, ...completedTeaching.value]) {

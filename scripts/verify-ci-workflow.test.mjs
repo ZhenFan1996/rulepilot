@@ -105,8 +105,8 @@ test('failed production recommendation journeys retain bounded API diagnostics w
   assert.match(productionRecommendationWorkflow, /name: Collect bounded API diagnostics after a failed journey/)
   assert.match(productionRecommendationWorkflow, /if: failure\(\)/)
   assert.match(productionRecommendationWorkflow, /api-diagnostics\.log/)
-  assert.match(productionRecommendationWorkflow, /logs --since 10m --tail 125 --no-color api/)
-  assert.match(productionRecommendationWorkflow, /logs --since 10m --tail 125 --no-color worker/)
+  assert.match(productionRecommendationWorkflow, /logs --since 35m --tail 500 --no-color api/)
+  assert.match(productionRecommendationWorkflow, /logs --since 35m --tail 500 --no-color worker/)
   assert.match(productionRecommendationWorkflow, /Refusing to inspect an active release outside/)
   assert.doesNotMatch(productionRecommendationWorkflow, /(?:cat|sed|grep|rg) [^\n]*\.env/)
 })
@@ -120,6 +120,35 @@ test('production deployment synchronizes the protected BGG credential without pa
   assert.match(deploymentWorkflow, /mv "\$temporary_env" "\$env_file"/)
   assert.doesNotMatch(deploymentWorkflow, /echo "\$BGG_API_TOKEN"/)
   assert.doesNotMatch(deploymentWorkflow, /'bash -s' -- "\$DEPLOY_PATH" "\$BGG_API_TOKEN"/)
+})
+
+test('production deployment assigns every player-facing Agent role to a configured vision-capable runtime', () => {
+  assert.match(deploymentWorkflow, /'TEACHING_PROVIDER=spring-ai'/)
+  assert.match(deploymentWorkflow, /'TEACHING_MODEL_PROVIDER=qwen'/)
+  assert.match(deploymentWorkflow, /'VISUAL_PROVIDER=spring-ai'/)
+  assert.match(deploymentWorkflow, /'VISUAL_MODEL_PROVIDER=qwen'/)
+  assert.match(deploymentWorkflow, /'ANSWER_PROVIDER=spring-ai'/)
+  assert.match(deploymentWorkflow, /'ANSWER_MODEL_PROVIDER=qwen'/)
+  assert.match(deploymentWorkflow, /'QWEN_VISION_CAPABLE=true'/)
+  assert.match(deploymentWorkflow, /qwen_enabled.*qwen_key_present/s)
+  assert.match(productionRecommendationSpec, /configuredProductionRole\(modelConfiguration, 'recommendation'\)/)
+  assert.match(productionRecommendationSpec, /configuredProductionRole\(modelConfiguration, 'teaching'\)/)
+  assert.match(productionRecommendationSpec, /configuredProductionRole\(modelConfiguration, 'visual'\)/)
+  assert.match(productionRecommendationSpec, /configuredProductionRole\(modelConfiguration, 'answer'\)/)
+  assert.match(productionRecommendationSpec, /visualProvider\.visionCapable/)
+})
+
+test('production deployment enables the staged persistent Chinese catalog cache only with DeepSeek configured', () => {
+  assert.match(deploymentWorkflow, /deepseek_enabled.*deepseek_key_present/s)
+  assert.match(deploymentWorkflow, /'BGG_TRANSLATION_ENABLED=true'/)
+  assert.match(deploymentWorkflow, /'BGG_CACHE_PREWARM_ENABLED=true'/)
+  assert.match(deploymentWorkflow, /'BGG_CACHE_PREWARM_GAME_COUNT=2000'/)
+  assert.match(deploymentWorkflow, /'BGG_CACHE_PREWARM_COHORT_SIZE=500'/)
+  assert.match(deploymentWorkflow, /'BGG_CACHE_PREWARM_TRANSLATION_COHORT_SIZE=60'/)
+  assert.match(
+    deploymentWorkflow,
+    /Production DeepSeek configuration is required for persistent Chinese catalog translations/,
+  )
 })
 
 test('production deployment uses the standalone deterministic availability verification', () => {

@@ -269,7 +269,11 @@ rulepilot:
       cleanup-delay: ${BGG_CACHE_CLEANUP_DELAY:PT1H}
       prewarm:
         enabled: ${BGG_CACHE_PREWARM_ENABLED:true}
-        game-count: ${BGG_CACHE_PREWARM_GAME_COUNT:500}
+        game-count: ${BGG_CACHE_PREWARM_GAME_COUNT:2000}
+        cohort-size: ${BGG_CACHE_PREWARM_COHORT_SIZE:500}
+        translation-cohort-size: ${BGG_CACHE_PREWARM_TRANSLATION_COHORT_SIZE:60}
+        resume-delay: ${BGG_CACHE_PREWARM_RESUME_DELAY:PT2H}
+        lease-duration: ${BGG_CACHE_PREWARM_LEASE_DURATION:PT30M}
     ranked-catalog:
       minimum-rows: ${BGG_RANKED_CATALOG_MINIMUM_ROWS:100000}
       maximum-rows: ${BGG_RANKED_CATALOG_MAXIMUM_ROWS:500000}

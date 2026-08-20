@@ -2,13 +2,16 @@ package com.rulepilot.catalog.adapter.out.translation;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.rulepilot.catalog.BggMetadataTranslation.Translation;
 import com.rulepilot.catalog.BggMetadataTranslation.Request;
+import com.rulepilot.catalog.application.BggMetadataTranslationStore;
 import com.sun.net.httpserver.HttpServer;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
@@ -43,7 +46,9 @@ class DeepSeekBggMetadataTranslationTest {
         server.start();
         try {
             RedisMocks redis = redisWithMissAndBudget(1L);
-            var adapter = adapter(redis.template(), "http://127.0.0.1:" + server.getAddress().getPort());
+            MemoryTranslationStore store = new MemoryTranslationStore();
+            var adapter = adapter(
+                    redis.template(), store, true, "http://127.0.0.1:" + server.getAddress().getPort());
 
             var translation = adapter.translate(REQUEST);
 
@@ -67,6 +72,10 @@ class DeepSeekBggMetadataTranslationTest {
                     .startsWith("rulepilot:bgg:metadata-translation:zh-CN:v4:266192:")
                     .doesNotContain("Build a bird reserve", "Animals", "Card Drafting");
             assertThat(value.getValue()).contains("建造一座鸟类保护区。", "动物", "卡牌轮抽");
+            assertThat(store.values).hasSize(1).allSatisfy((storedKey, stored) -> {
+                assertThat(storedKey).startsWith("266192:");
+                assertThat(stored.description()).isEqualTo("建造一座鸟类保护区。");
+            });
         } finally {
             server.stop(0);
         }
@@ -91,6 +100,73 @@ class DeepSeekBggMetadataTranslationTest {
         });
         verify(redis.values(), never()).increment(anyString());
         verify(calls, never()).newCall(org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
+    void servesDurableMetadataAfterRestartEvenWhenTheProviderIsDisabled() throws Exception {
+        HttpServer server = responseServer(Map.of(
+                "description", "持久化中文简介。",
+                "categories", List.of("动物"),
+                "mechanics", List.of("卡牌轮抽")));
+        server.start();
+        try {
+            MemoryTranslationStore store = new MemoryTranslationStore();
+            RedisMocks initialRedis = redisWithMissAndBudget(1L);
+            assertThat(adapter(
+                                    initialRedis.template(),
+                                    store,
+                                    true,
+                                    "http://127.0.0.1:" + server.getAddress().getPort())
+                            .translate(REQUEST))
+                    .isPresent();
+
+            RedisMocks restartedRedis = redisWithMissAndBudget(1L);
+            OkHttpClient unavailableProvider = mock(OkHttpClient.class);
+            var restarted = adapter(
+                    unavailableProvider,
+                    restartedRedis.template(),
+                    store,
+                    false,
+                    "http://provider.invalid");
+
+            assertThat(restarted.translate(REQUEST)).hasValueSatisfying(value ->
+                    assertThat(value.description()).isEqualTo("持久化中文简介。"));
+            verify(restartedRedis.values(), never()).increment(anyString());
+            verify(unavailableProvider, never()).newCall(org.mockito.ArgumentMatchers.any());
+            verify(restartedRedis.values()).set(
+                    anyString(), anyString(), org.mockito.ArgumentMatchers.eq(Duration.ofDays(30)));
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void returnsAndPersistsAValidTranslationWhenTheRedisWriteFails() throws Exception {
+        HttpServer server = responseServer(Map.of(
+                "description", "可用中文简介。",
+                "categories", List.of("动物"),
+                "mechanics", List.of("卡牌轮抽")));
+        server.start();
+        try {
+            RedisMocks redis = redisWithMissAndBudget(1L);
+            doThrow(new IllegalStateException("redis unavailable"))
+                    .when(redis.values())
+                    .set(anyString(), anyString(), org.mockito.ArgumentMatchers.any(Duration.class));
+            MemoryTranslationStore store = new MemoryTranslationStore();
+
+            var result = adapter(
+                            redis.template(),
+                            store,
+                            true,
+                            "http://127.0.0.1:" + server.getAddress().getPort())
+                    .translate(REQUEST);
+
+            assertThat(result).hasValueSatisfying(value ->
+                    assertThat(value.description()).isEqualTo("可用中文简介。"));
+            assertThat(store.values).hasSize(1);
+        } finally {
+            server.stop(0);
+        }
     }
 
     @Test
@@ -206,18 +282,36 @@ class DeepSeekBggMetadataTranslationTest {
     }
 
     private DeepSeekBggMetadataTranslation adapter(StringRedisTemplate redis, String baseUrl) {
-        return adapter(new OkHttpClient(), redis, baseUrl);
+        return adapter(redis, new MemoryTranslationStore(), true, baseUrl);
+    }
+
+    private DeepSeekBggMetadataTranslation adapter(
+            StringRedisTemplate redis,
+            BggMetadataTranslationStore store,
+            boolean enabled,
+            String baseUrl) {
+        return adapter(new OkHttpClient(), redis, store, enabled, baseUrl);
     }
 
     private DeepSeekBggMetadataTranslation adapter(
             okhttp3.Call.Factory calls,
             StringRedisTemplate redis,
             String baseUrl) {
+        return adapter(calls, redis, new MemoryTranslationStore(), true, baseUrl);
+    }
+
+    private DeepSeekBggMetadataTranslation adapter(
+            okhttp3.Call.Factory calls,
+            StringRedisTemplate redis,
+            BggMetadataTranslationStore store,
+            boolean enabled,
+            String baseUrl) {
         return new DeepSeekBggMetadataTranslation(
                 calls,
                 new ObjectMapper(),
                 redis,
-                true,
+                store,
+                enabled,
                 "secret-key",
                 baseUrl,
                 "deepseek-v4-flash",
@@ -228,4 +322,18 @@ class DeepSeekBggMetadataTranslationTest {
     }
 
     private record RedisMocks(StringRedisTemplate template, ValueOperations<String, String> values) {}
+
+    private static final class MemoryTranslationStore implements BggMetadataTranslationStore {
+        private final Map<String, Translation> values = new java.util.LinkedHashMap<>();
+
+        @Override
+        public java.util.Optional<Translation> find(int bggId, String sourceSha256) {
+            return java.util.Optional.ofNullable(values.get(bggId + ":" + sourceSha256));
+        }
+
+        @Override
+        public void save(int bggId, String sourceSha256, Translation translation, Instant translatedAt) {
+            values.put(bggId + ":" + sourceSha256, translation);
+        }
+    }
 }

@@ -1734,7 +1734,7 @@ class BoardGameRecommendationAgentTest {
     @Test
     void preservesPlayerAndDurationRangesAsAtomicGroundedPreferenceUpdates() {
         assertThat(BoardGameRecommendationAgent.PROMPT_VERSION)
-                .isEqualTo("recommendation-agent-v11-structured-turn-boundary");
+                .isEqualTo("recommendation-agent-v12-grounded-natural-comparison");
         assertThat(BoardGameRecommendationAgent.class.getResource(
                         "/prompts/recommendation-agent-v1-system.txt"))
                 .as("the production-replayed v1 prompt remains reproducible after activating v2")
@@ -3264,20 +3264,25 @@ class BoardGameRecommendationAgentTest {
                     assertThat(comparisonTool.description())
                             .contains(
                                     "verified conversation candidates",
-                                    "safe conversational decision sentence",
+                                    "concise, warm continuation",
+                                    "published exactly as written",
                                     "Persist any explicit current-turn numeric or type correction");
-                    assertThat(schema(comparisonTool).at("/properties/message").isMissingNode()).isTrue();
+                    assertThat(schema(comparisonTool).at("/properties/message/type").asText()).isEqualTo("string");
+                    assertThat(schema(comparisonTool).at("/properties/internalEvidenceIds/items/enum"))
+                            .isNotEmpty();
                     assertThat(schema(comparisonTool).at("/properties/preferredBggId/anyOf")).hasSize(2);
                     assertThat(schema(comparisonTool).at("/properties/preferenceUpdates/type").asText())
                             .isEqualTo("array");
                     assertThat(comparisonTool.inputSchema())
-                            .contains("\"required\":[\"candidateBggIds\",\"subjects\",\"preferredBggId\"]")
+                            .contains("\"required\":[\"candidateBggIds\",\"subjects\",\"preferredBggId\",\"message\",\"internalEvidenceIds\"]")
                             .doesNotContain("decisionMode", "decisionEvidenceIds");
                     return action(
                             "compare-restored",
                             BoardGameRecommendationAgent.COMPARE_TOOL,
                             "{\"candidateBggIds\":[60,61],\"subjects\":[\"durationMinutes\",\"mechanics\",\"获奖沿革\"],"
-                                    + "\"preferredBggId\":60}");
+                                    + "\"preferredBggId\":60,"
+                                    + "\"message\":\"你们想兼顾时间和机制，我会先选 Glass Orchard：它的标注时长更短；两款的机制差异在表里，获奖沿革目前没有可核对资料。\","
+                                    + "\"internalEvidenceIds\":[\"B60:durationMinutes\",\"B60:mechanics\",\"B61:durationMinutes\",\"B61:mechanics\"]}");
                 }));
 
         var response = agent(model, catalog, noResearch()).converse(
@@ -3297,7 +3302,7 @@ class BoardGameRecommendationAgentTest {
         assertThat(response.outcome()).isEqualTo(Outcome.CONVERSATION);
         assertThat(response.games()).isEmpty();
         assertThat(response.assistantMessage()).isEqualTo(
-                "真要替你们拍板，我会先选《Glass Orchard》。我把能核对的差异放在下面；这是基于现有资料的取舍，不是来源替你们下的结论。");
+                "你们想兼顾时间和机制，我会先选 Glass Orchard：它的标注时长更短；两款的机制差异在表里，获奖沿革目前没有可核对资料。");
         assertThat(response.comparison().candidates())
                 .extracting(candidate -> candidate.game().ranking().bggId())
                 .containsExactly(60, 61);
@@ -3340,7 +3345,9 @@ class BoardGameRecommendationAgentTest {
                             "grounded-comparison",
                             BoardGameRecommendationAgent.COMPARE_TOOL,
                             "{\"candidateBggIds\":[60,61],\"subjects\":[\"durationMinutes\",\"reportedExperience\"],"
-                                    + "\"preferredBggId\":60}");
+                                    + "\"preferredBggId\":60,"
+                                    + "\"message\":\"只看目前能核对的时长，我先选 Glass Orchard；真实桌感没有报告支持，我先不替你猜。\","
+                                    + "\"internalEvidenceIds\":[\"B60:durationMinutes\",\"B61:durationMinutes\"]}");
                 }));
 
         var response = agent(model, catalog, noResearch()).converse(
@@ -3358,7 +3365,8 @@ class BoardGameRecommendationAgentTest {
 
         assertThat(response.outcome()).isEqualTo(Outcome.CONVERSATION);
         assertThat(response.comparison()).isNotNull();
-        assertThat(response.assistantMessage()).contains("基于现有资料的取舍", "不是来源替你们下的结论");
+        assertThat(response.assistantMessage()).isEqualTo(
+                "只看目前能核对的时长，我先选 Glass Orchard；真实桌感没有报告支持，我先不替你猜。");
         assertThat(response.harness().modelCalls()).isEqualTo(3);
         assertThat(response.harness().actions()).containsExactly(
                 "LOOKUP_BGG_CANDIDATES",
@@ -3398,7 +3406,9 @@ class BoardGameRecommendationAgentTest {
                             "grounded-comparison",
                             BoardGameRecommendationAgent.COMPARE_TOOL,
                             "{\"candidateBggIds\":[60,61],\"subjects\":[\"reportedExperience\",\"durationMinutes\"],"
-                                    + "\"preferredBggId\":null}");
+                                    + "\"preferredBggId\":null,"
+                                    + "\"message\":\"现有资料只够比较标注时长，实际四人桌感还没有报告支持；如果只凭这些信息，我不会硬替你们分胜负。\","
+                                    + "\"internalEvidenceIds\":[\"B60:durationMinutes\",\"B61:durationMinutes\"]}");
                 }));
 
         var response = agent(model, catalog, emptyConfiguredResearch()).converse(
@@ -3415,7 +3425,8 @@ class BoardGameRecommendationAgentTest {
                 "zh-CN");
 
         assertThat(response.comparison()).isNotNull();
-        assertThat(response.assistantMessage()).contains("不想硬分胜负", "能核对的差异都在下面");
+        assertThat(response.assistantMessage()).isEqualTo(
+                "现有资料只够比较标注时长，实际四人桌感还没有报告支持；如果只凭这些信息，我不会硬替你们分胜负。");
         assertThat(response.harness().actions()).containsExactly(
                 "LOOKUP_BGG_CANDIDATES",
                 "RESEARCH_GAME_FIT",
@@ -3515,7 +3526,9 @@ class BoardGameRecommendationAgentTest {
                             BoardGameRecommendationAgent.COMPARE_TOOL,
                             "{\"candidateBggIds\":[60,61],"
                                     + "\"subjects\":[\"reportedExperience\",\"durationMinutes\",\"replayVariety\"],"
-                                    + "\"preferredBggId\":61}");
+                                    + "\"preferredBggId\":61,"
+                                    + "\"message\":\"你们有新手又怕等，我会选 Loom City：玩家报告里它是同时选择、等待更短；但投票结果更吃具体玩家组合，这点可能让你们改选 Glass Orchard。\","
+                                    + "\"internalEvidenceIds\":[\"R60:1\",\"R61:1\"]}");
                 }));
 
         var response = agent(model, catalog, research).converse(
@@ -3535,7 +3548,7 @@ class BoardGameRecommendationAgentTest {
         assertThat(researchCalls).hasValue(1);
         assertThat(response.outcome()).isEqualTo(Outcome.CONVERSATION);
         assertThat(response.assistantMessage()).isEqualTo(
-                "真要替你们拍板，我会先选《Loom City》。我把能核对的差异放在下面；这是基于现有资料的取舍，不是来源替你们下的结论。");
+                "你们有新手又怕等，我会选 Loom City：玩家报告里它是同时选择、等待更短；但投票结果更吃具体玩家组合，这点可能让你们改选 Glass Orchard。");
         assertThat(response.comparison().axes().getFirst().subject()).isEqualTo("reportedExperience");
         assertThat(response.comparison().axes().getFirst().cells()).allSatisfy(cell -> {
             assertThat(cell.known()).isTrue();
@@ -3609,7 +3622,9 @@ class BoardGameRecommendationAgentTest {
                         "compare-after-recovery",
                         BoardGameRecommendationAgent.COMPARE_TOOL,
                         "{\"candidateBggIds\":[60,61],\"subjects\":[\"reportedExperience\"],"
-                                + "\"preferredBggId\":null}")));
+                                + "\"preferredBggId\":null,"
+                                + "\"message\":\"两份玩家报告都给了有用线索，但没有哪一边足够替你们直接拍板；我会先看你们更怕等待，还是更怕结果受桌上气氛影响。\","
+                                + "\"internalEvidenceIds\":[\"R60:1\",\"R61:1\"]}")));
 
         var response = agent(model, catalog, research).converse(
                 new ConversationRequest(
@@ -3658,6 +3673,8 @@ class BoardGameRecommendationAgentTest {
                             BoardGameRecommendationAgent.COMPARE_TOOL,
                             "{\"candidateBggIds\":[60,61],\"subjects\":[\"playerCount\",\"durationMinutes\"],"
                                     + "\"preferredBggId\":60,"
+                                    + "\"message\":\"改成三个人后，我会先选 Glass Orchard：它支持三人，标注时长也更短；如果你们更在意另一款的机制，再把机制加进比较。\","
+                                    + "\"internalEvidenceIds\":[\"B60:playerCount\",\"B60:durationMinutes\",\"B61:playerCount\",\"B61:durationMinutes\"],"
                                     + "\"preferenceUpdates\":[{\"field\":\"playerCount\",\"value\":3,\"evidence\":\"U2\",\"evidenceClassification\":\"DIRECT\"}]}" );
                 }));
 
@@ -3680,7 +3697,8 @@ class BoardGameRecommendationAgentTest {
                 "zh-CN");
 
         assertThat(response.outcome()).isEqualTo(Outcome.CONVERSATION);
-        assertThat(response.assistantMessage()).contains("我会先选《Glass Orchard》", "不是来源替你们下的结论");
+        assertThat(response.assistantMessage()).isEqualTo(
+                "改成三个人后，我会先选 Glass Orchard：它支持三人，标注时长也更短；如果你们更在意另一款的机制，再把机制加进比较。");
         assertThat(response.profile().playerCount().minimum()).isEqualTo(3);
         assertThat(response.profile().playerCount().maximum()).isEqualTo(3);
         assertThat(response.harness().modelCalls()).isEqualTo(2);
@@ -3704,7 +3722,9 @@ class BoardGameRecommendationAgentTest {
                         "comparison-with-joint-visible-evidence",
                         BoardGameRecommendationAgent.COMPARE_TOOL,
                         "{\"candidateBggIds\":[60,61],\"subjects\":[\"durationMinutes\"],"
-                                + "\"preferredBggId\":\"60\"}")));
+                                + "\"preferredBggId\":\"60\","
+                                + "\"message\":\"只按时长选，我会拿 Glass Orchard：它标注 40 到 55 分钟，比 Loom City 的 45 到 60 分钟更稳一点。\","
+                                + "\"internalEvidenceIds\":[\"B60:durationMinutes\",\"B61:durationMinutes\"]}")));
 
         var response = agent(model, catalog, noResearch()).converse(
                 new ConversationRequest(
@@ -3721,7 +3741,7 @@ class BoardGameRecommendationAgentTest {
 
         assertThat(response.outcome()).isEqualTo(Outcome.CONVERSATION);
         assertThat(response.assistantMessage()).isEqualTo(
-                "真要替你们拍板，我会先选《Glass Orchard》。我把能核对的差异放在下面；这是基于现有资料的取舍，不是来源替你们下的结论。");
+                "只按时长选，我会拿 Glass Orchard：它标注 40 到 55 分钟，比 Loom City 的 45 到 60 分钟更稳一点。");
         assertThat(response.harness().modelCalls()).isEqualTo(2);
         assertThat(response.harness().actions()).containsExactly(
                 "LOOKUP_BGG_CANDIDATES", "COMPARE_CANDIDATES");
@@ -3739,7 +3759,8 @@ class BoardGameRecommendationAgentTest {
                         "compare-unverified",
                         BoardGameRecommendationAgent.COMPARE_TOOL,
                         "{\"candidateBggIds\":[60,999],\"subjects\":[\"durationMinutes\"],"
-                                + "\"preferredBggId\":60}"),
+                                + "\"preferredBggId\":60,\"message\":\"Pick Glass Orchard.\","
+                                + "\"internalEvidenceIds\":[\"B60:durationMinutes\"]}"),
                 request -> {
                     assertThat(request.messages().getLast().content())
                             .contains("COMPARISON_CANDIDATE_NOT_VERIFIED");
@@ -3747,16 +3768,28 @@ class BoardGameRecommendationAgentTest {
                             "compare-invalid-preference",
                             BoardGameRecommendationAgent.COMPARE_TOOL,
                             "{\"candidateBggIds\":[60,61],\"subjects\":[\"durationMinutes\"],"
-                                    + "\"preferredBggId\":\"999\"}");
+                                    + "\"preferredBggId\":\"999\",\"message\":\"Pick the unknown game.\","
+                                    + "\"internalEvidenceIds\":[\"B60:durationMinutes\"]}");
                 },
                 request -> {
                     assertThat(request.messages().getLast().content())
                             .contains("COMPARISON_PREFERENCE_INVALID");
                     return action(
+                            "compare-with-evidence-outside-axis",
+                            BoardGameRecommendationAgent.COMPARE_TOOL,
+                            "{\"candidateBggIds\":[60,61],\"subjects\":[\"durationMinutes\"],"
+                                    + "\"preferredBggId\":60,\"message\":\"Pick Glass Orchard for its complexity.\","
+                                    + "\"internalEvidenceIds\":[\"B60:complexity\"]}");
+                },
+                request -> {
+                    assertThat(request.messages().getLast().content())
+                            .contains("COMPARISON_MESSAGE_EVIDENCE_OUTSIDE_AXES");
+                    return action(
                             "compare-corrected",
                             BoardGameRecommendationAgent.COMPARE_TOOL,
                             "{\"candidateBggIds\":[60,61],\"subjects\":[\"durationMinutes\"],"
-                                    + "\"preferredBggId\":60}");
+                                    + "\"preferredBggId\":60,\"message\":\"For the shorter listed duration, pick Glass Orchard.\","
+                                    + "\"internalEvidenceIds\":[\"B60:durationMinutes\",\"B61:durationMinutes\"]}");
                 }));
 
         var response = agent(model, catalog, noResearch()).converse(
@@ -3779,6 +3812,7 @@ class BoardGameRecommendationAgentTest {
                 "LOOKUP_BGG_CANDIDATES",
                 "REJECTED_ACTION:COMPARISON_CANDIDATE_NOT_VERIFIED",
                 "REJECTED_ACTION:COMPARISON_PREFERENCE_INVALID",
+                "REJECTED_ACTION:COMPARISON_MESSAGE_EVIDENCE_OUTSIDE_AXES",
                 "COMPARE_CANDIDATES");
     }
 

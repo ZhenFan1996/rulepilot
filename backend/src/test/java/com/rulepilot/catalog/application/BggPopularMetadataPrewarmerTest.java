@@ -2,7 +2,9 @@ package com.rulepilot.catalog.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.rulepilot.catalog.BggMetadataTranslation;
 import com.rulepilot.catalog.BggGameType;
+import com.rulepilot.catalog.application.BggPopularMetadataPrewarmProgress.Cohort;
 import com.rulepilot.catalog.application.BggRankedCatalog.Page;
 import com.rulepilot.catalog.application.BggRankedCatalog.Query;
 import com.rulepilot.catalog.application.BggRankedCatalog.RankedGame;
@@ -13,6 +15,11 @@ import com.rulepilot.catalog.application.BoardGameGeekCatalog.GameMatch;
 import com.rulepilot.catalog.application.BoardGameGeekCatalog.HotGame;
 import com.rulepilot.catalog.application.BoardGameGeekCatalog.SearchResult;
 import java.math.BigDecimal;
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -23,20 +30,65 @@ import org.springframework.core.task.SyncTaskExecutor;
 
 class BggPopularMetadataPrewarmerTest {
 
+    private static final Clock CLOCK = Clock.fixed(Instant.parse("2026-08-20T08:00:00Z"), ZoneOffset.UTC);
+
     @Test
-    void hydratesTheConfiguredRankPrefixInBggSizedBatchesWithoutLimitingRecommendationRecall() {
+    void hydratesOneFiveHundredStyleCohortAndAdvancesTranslationsIndependently() {
         MemoryRankedCatalog ranked = new MemoryRankedCatalog(60);
         RecordingBgg bgg = new RecordingBgg();
+        RecordingTranslation translations = new RecordingTranslation(-1);
+        RecordingProgress progress = new RecordingProgress(new Cohort(
+                UUID.randomUUID(), "a".repeat(64), 0, 45, 0, 3));
         var prewarmer = new BggPopularMetadataPrewarmer(
-                ranked, bgg, new SyncTaskExecutor(), true, 45);
+                ranked,
+                bgg,
+                new BggMetadataLocalizationService(translations),
+                progress,
+                new SyncTaskExecutor(),
+                CLOCK,
+                true,
+                45,
+                45,
+                3,
+                Duration.ofMinutes(30));
 
         prewarmer.prewarm();
 
-        assertThat(bgg.batches).hasSize(3);
+        assertThat(bgg.batches).hasSize(4);
         assertThat(bgg.batches.get(0)).containsExactlyElementsOf(ids(1, 20));
         assertThat(bgg.batches.get(1)).containsExactlyElementsOf(ids(21, 40));
         assertThat(bgg.batches.get(2)).containsExactlyElementsOf(ids(41, 45));
-        assertThat(ranked.queries).allSatisfy(query -> assertThat(query.size()).isEqualTo(20));
+        assertThat(bgg.batches.get(3)).containsExactly(1, 2, 3);
+        assertThat(translations.translatedIds).containsExactly(1, 2, 3);
+        assertThat(progress.metadataNext).isEqualTo(45);
+        assertThat(progress.translationNext).isEqualTo(3);
+    }
+
+    @Test
+    void stopsOnlyTheTranslationCursorAtTheFirstUnavailableTranslation() {
+        MemoryRankedCatalog ranked = new MemoryRankedCatalog(20);
+        RecordingBgg bgg = new RecordingBgg();
+        RecordingTranslation translations = new RecordingTranslation(2);
+        RecordingProgress progress = new RecordingProgress(new Cohort(
+                UUID.randomUUID(), "a".repeat(64), 0, 20, 0, 3));
+        var prewarmer = new BggPopularMetadataPrewarmer(
+                ranked,
+                bgg,
+                new BggMetadataLocalizationService(translations),
+                progress,
+                new SyncTaskExecutor(),
+                CLOCK,
+                true,
+                20,
+                20,
+                3,
+                Duration.ofMinutes(30));
+
+        prewarmer.prewarm();
+
+        assertThat(progress.metadataNext).isEqualTo(20);
+        assertThat(progress.translationNext).isEqualTo(1);
+        assertThat(translations.translatedIds).containsExactly(1, 2);
     }
 
     private static List<Integer> ids(int first, int last) {
@@ -45,7 +97,6 @@ class BggPopularMetadataPrewarmerTest {
 
     private static final class MemoryRankedCatalog implements BggRankedCatalogRepository {
         private final int count;
-        private final List<Query> queries = new ArrayList<>();
 
         private MemoryRankedCatalog(int count) {
             this.count = count;
@@ -53,12 +104,12 @@ class BggPopularMetadataPrewarmerTest {
 
         @Override
         public Optional<Snapshot> findSnapshot() {
-            return Optional.empty();
+            return Optional.of(new Snapshot(
+                    CLOCK.instant(), LocalDate.parse("2026-08-20"), count, "a".repeat(64)));
         }
 
         @Override
         public Page find(Query query) {
-            queries.add(query);
             int start = query.page() * query.size() + 1;
             List<RankedGame> games = java.util.stream.IntStream.range(start, Math.min(start + query.size(), count + 1))
                     .mapToObj(id -> new RankedGame(
@@ -66,6 +117,22 @@ class BggPopularMetadataPrewarmerTest {
                             Map.of(BggGameType.STRATEGY, id)))
                     .toList();
             return new Page(count, query.page(), query.size(), games);
+        }
+
+        @Override
+        public List<RankedGame> findRankedRange(int offset, int limit) {
+            return java.util.stream.IntStream.range(offset + 1, Math.min(offset + limit, count) + 1)
+                    .mapToObj(id -> new RankedGame(
+                            id,
+                            "Game " + id,
+                            2026,
+                            id,
+                            BigDecimal.ONE,
+                            BigDecimal.ONE,
+                            100,
+                            false,
+                            Map.of(BggGameType.STRATEGY, id)))
+                    .toList();
         }
 
         @Override
@@ -106,12 +173,70 @@ class BggPopularMetadataPrewarmerTest {
         @Override
         public List<DiscoveryGame> gameDetails(List<Integer> bggIds) {
             batches.add(List.copyOf(bggIds));
-            return List.of();
+            return bggIds.stream()
+                    .map(id -> new DiscoveryGame(
+                            id,
+                            id,
+                            "Game " + id,
+                            "游戏 " + id,
+                            2026,
+                            "",
+                            2,
+                            4,
+                            60,
+                            BigDecimal.ONE,
+                            BigDecimal.ONE,
+                            List.of("Strategy"),
+                            List.of("Card Drafting")))
+                    .toList();
         }
 
         @Override
         public GameDetails game(int bggId) {
             throw new UnsupportedOperationException();
+        }
+    }
+
+    private static final class RecordingTranslation implements BggMetadataTranslation {
+        private final int unavailableId;
+        private final List<Integer> translatedIds = new ArrayList<>();
+
+        private RecordingTranslation(int unavailableId) {
+            this.unavailableId = unavailableId;
+        }
+
+        @Override
+        public Optional<Translation> translate(Request request) {
+            translatedIds.add(request.bggId());
+            if (request.bggId() == unavailableId) return Optional.empty();
+            return Optional.of(new Translation("中文简介", List.of("策略"), List.of("卡牌轮抽")));
+        }
+    }
+
+    private static final class RecordingProgress implements BggPopularMetadataPrewarmProgress {
+        private final Cohort cohort;
+        private int metadataNext = -1;
+        private int translationNext = -1;
+
+        private RecordingProgress(Cohort cohort) {
+            this.cohort = cohort;
+        }
+
+        @Override
+        public Optional<Cohort> claim(
+                String snapshotSha256,
+                int targetCount,
+                int metadataCohortSize,
+                int translationCohortSize,
+                Instant claimedAt,
+                Duration leaseDuration) {
+            return Optional.of(cohort);
+        }
+
+        @Override
+        public void complete(Cohort cohort, int metadataNextOffset, int translationNextOffset, Instant completedAt) {
+            metadataNext = metadataNextOffset;
+            translationNext = translationNextOffset;
         }
     }
 }

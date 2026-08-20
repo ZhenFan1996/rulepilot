@@ -14,6 +14,20 @@ public interface BggRankedCatalogRepository {
 
     Page find(Query query);
 
+    default List<RankedGame> findExactName(String name) {
+        return List.of();
+    }
+
+    default List<RankedGame> findRankedRange(int offset, int limit) {
+        if (offset < 0 || limit < 1 || limit > 20) {
+            throw new IllegalArgumentException("BGG ranked range is invalid");
+        }
+        if (offset % limit != 0) return List.of();
+        return find(new Query("", com.rulepilot.catalog.BggGameType.ALL, BggRankedCatalog.Sort.RANK,
+                        offset / limit, limit, List.of()))
+                .games();
+    }
+
     default List<RankedGame> findByIds(List<Integer> bggIds) {
         return List.of();
     }
