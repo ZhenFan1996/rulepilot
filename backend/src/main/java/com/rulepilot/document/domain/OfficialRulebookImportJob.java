@@ -143,10 +143,13 @@ public record OfficialRulebookImportJob(
             String learningGoal,
             UUID preparationRunId,
             String errorCode,
+            int automaticRecoveryCount,
             Instant updatedAt) {
 
         public TeachingHandoff {
-            if (state == null) throw new IllegalArgumentException("teaching handoff state is required");
+            if (state == null || automaticRecoveryCount < 0 || automaticRecoveryCount > 1) {
+                throw new IllegalArgumentException("teaching handoff state is required");
+            }
             if (learningGoal != null) {
                 learningGoal = learningGoal.strip();
                 if (learningGoal.isBlank()) {
@@ -165,12 +168,12 @@ public record OfficialRulebookImportJob(
         }
 
         public static TeachingHandoff notRequested() {
-            return new TeachingHandoff(TeachingHandoffState.NOT_REQUESTED, null, null, null, null);
+            return new TeachingHandoff(TeachingHandoffState.NOT_REQUESTED, null, null, null, 0, null);
         }
 
         public static TeachingHandoff requested(String learningGoal, Instant now) {
             return new TeachingHandoff(
-                    TeachingHandoffState.WAITING_FOR_DOCUMENT, normalizeGoal(learningGoal), null, null, now);
+                    TeachingHandoffState.WAITING_FOR_DOCUMENT, normalizeGoal(learningGoal), null, null, 0, now);
         }
 
         private static String normalizeGoal(String learningGoal) {

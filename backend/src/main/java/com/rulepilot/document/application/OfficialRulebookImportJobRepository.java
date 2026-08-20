@@ -21,11 +21,19 @@ public interface OfficialRulebookImportJobRepository {
 
     List<OfficialRulebookImportJob> findRecentOwned(String ownerUsername, int limit);
 
+    List<OfficialRulebookImportJob> findUnreconciledLaunchedTeaching(int limit);
+
     void recordReuse(UUID jobId, Instant now);
 
     void requestTeaching(UUID jobId, String learningGoal, Instant now);
 
     boolean retryTeaching(UUID jobId, UUID expectedPreparationRunId, Instant now);
+
+    boolean retryTeachingAutomatically(UUID jobId, UUID expectedPreparationRunId, Instant now);
+
+    boolean failTeachingRecoveryExhausted(UUID jobId, UUID expectedPreparationRunId, Instant now);
+
+    boolean markTeachingReconciled(UUID jobId, UUID expectedPreparationRunId, Instant now);
 
     boolean dismissTeaching(
             UUID jobId,

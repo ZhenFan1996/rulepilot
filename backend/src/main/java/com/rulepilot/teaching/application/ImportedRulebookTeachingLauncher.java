@@ -45,6 +45,17 @@ public class ImportedRulebookTeachingLauncher {
         if (unusable > 0) {
             LOGGER.warn("Failed {} imported-rulebook teaching handoffs whose documents could not be processed", unusable);
         }
+        var reconciliation = handoffs.reconcileLaunched(batchSize);
+        if (reconciliation.restarted() > 0) {
+            LOGGER.warn(
+                    "Restarted {} imported-rulebook teaching handoffs whose persisted Teaching result was missing or unusable",
+                    reconciliation.restarted());
+        }
+        if (reconciliation.exhausted() > 0) {
+            LOGGER.warn(
+                    "Stopped {} imported-rulebook teaching handoffs after the single automatic recovery still produced no reusable result",
+                    reconciliation.exhausted());
+        }
         launch(handoffs.claimReady(batchSize));
     }
 

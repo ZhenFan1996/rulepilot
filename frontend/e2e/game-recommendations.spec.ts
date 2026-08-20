@@ -175,6 +175,7 @@ async function mockPublicDiscovery(
   let firstLessonPublished = !holdPreparation
   let preparationCompleted = !holdPreparation
   let preparationRetryAccepted = false
+  let guideCompleted = false
   let importStarts = 0
   let preparationRetryRequests = 0
   let documentReady = !streamDocumentProgress
@@ -199,7 +200,7 @@ async function mockPublicDiscovery(
     if (mode === 'TEACHING_PREPARATION' && holdPreparation && !preparationCompleted) {
       return route.fulfill({ json: [assistantRun('preparation-run-1', 'LESSON_PLANNING', 1).run] })
     }
-    if (mode === 'TEACHING' && !holdPreparation) {
+    if (mode === 'TEACHING' && !holdPreparation && !guideCompleted) {
       return route.fulfill({ json: [assistantRun('teaching-run-1', 'LESSON_COMPOSITION', 2).run] })
     }
     return route.fulfill({ json: [] })
@@ -428,16 +429,17 @@ async function mockPublicDiscovery(
     if (url.includes('mode=QUESTION_ANSWER')) return route.fulfill({ status: 404 })
     if (!firstLessonPublished) return route.fulfill({ status: 404 })
     teachingPoll += 1
-    const completed = !holdPreparation && teachingPoll >= 3
+    const completed = guideCompleted || (!holdPreparation && teachingPoll >= 3)
     return route.fulfill({ json: assistantRun('teaching-run-1', completed ? 'COMPLETED' : 'LESSON_COMPOSITION', teachingPoll) })
   })
   await page.route('**/api/v1/assistant-runs/teaching-run-1', route => {
     teachingPoll += 1
-    const completed = !holdPreparation && teachingPoll >= 3
+    const completed = guideCompleted || (!holdPreparation && teachingPoll >= 3)
     return route.fulfill({ json: assistantRun('teaching-run-1', completed ? 'COMPLETED' : 'LESSON_COMPOSITION', teachingPoll) })
   })
   await page.route('**/api/v1/teaching-plans/plan-1/illustrated-lessons/latest', route => {
     if (!firstLessonPublished) return route.fulfill({ status: 404 })
+    if (guideCompleted) return route.fulfill({ json: completeLesson })
     lessonPoll += 1
     if (lessonPoll === 1) return route.fulfill({ status: 404 })
     return route.fulfill({ json: lessonPoll >= 3 ? completeLesson : draftLesson })
@@ -463,6 +465,7 @@ async function mockPublicDiscovery(
     publishPlan: () => { planPublished = true },
     publishFirstLesson: () => { firstLessonPublished = true },
     completePreparation: () => { preparationCompleted = true },
+    completeGuide: () => { guideCompleted = true },
     planReads: () => planReads,
     importStarts: () => importStarts,
     importJobReads: () => importJobReads,
@@ -744,7 +747,7 @@ test('keeps a corrected reference title in conversational context on mobile', as
 })
 
 test('stops closed reader transport while the durable guide remains reopenable', async ({ page }) => {
-  await mockPublicDiscovery(page, true)
+  const progress = await mockPublicDiscovery(page, true)
   await page.goto('/discover')
 
   await page.getByLabel('聊聊你想玩的游戏').fill('4 个人，90 分钟内，想要中等策略')
@@ -758,6 +761,7 @@ test('stops closed reader transport while the durable guide remains reopenable',
   await journey.getByRole('checkbox', { name: /我已比较以上游戏、版本和语言/ }).check()
   await journey.getByRole('checkbox', { name: /确认该链接来自有权提供/ }).check()
   await journey.getByRole('button', { name: '下载规则书并生成讲解' }).click()
+  progress.completeGuide()
   await expect(journey.getByText('讲解已经完整生成并通过后台收尾。')).toBeVisible({ timeout: 8_000 })
 
   const failedReaderRequests: string[] = []

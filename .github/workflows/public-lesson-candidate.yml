@@ -24,7 +24,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: public-lesson-candidate-${{ inputs.plan_id || inputs.lesson_title }}
+  group: production-runtime
   cancel-in-progress: false
 
 jobs:

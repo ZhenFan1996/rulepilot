@@ -124,6 +124,7 @@ class FailedTeachingHandoffRemovalServiceTest {
                         null,
                         runId,
                         null,
+                        0,
                         NOW),
                 NOW.minusSeconds(120),
                 NOW,

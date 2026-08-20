@@ -11,6 +11,7 @@ import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.List;
 import java.util.UUID;
 import org.flywaydb.core.Flyway;
 import org.hibernate.SessionFactory;
@@ -292,6 +293,95 @@ class JpaOfficialRulebookImportJobRepositoryPostgresTest {
     }
 
     @Test
+    void reconcilesOnlyTheExactLaunchedRunAndRemovesItFromTheRecoveryQueue() {
+        Instant now = Instant.parse("2026-08-10T02:45:00Z");
+        UUID versionId = insertDocument("reconcile", "READY", now);
+        UUID jobId = insertCompletedTeachingJob(versionId, now);
+        UUID runId = UUID.randomUUID();
+        insertPreparationRun(runId, versionId, "COMPLETED", now.plusSeconds(1));
+        inTransaction(repository -> repository.claimReadyTeachingForDocument(versionId, 1, now.plusSeconds(2)));
+        inTransaction(repository -> repository.completeTeachingLaunch(jobId, runId, now.plusSeconds(3)));
+
+        var before = inTransactionReturning(repository -> repository.findUnreconciledLaunchedTeaching(4));
+        boolean stale = inTransactionReturning(repository -> repository.markTeachingReconciled(
+                jobId, UUID.randomUUID(), now.plusSeconds(4)));
+        boolean settled = inTransactionReturning(repository -> repository.markTeachingReconciled(
+                jobId, runId, now.plusSeconds(5)));
+        var after = inTransactionReturning(repository -> repository.findUnreconciledLaunchedTeaching(4));
+
+        assertThat(before).extracting(OfficialRulebookImportJob::id).containsExactly(jobId);
+        assertThat(stale).isFalse();
+        assertThat(settled).isTrue();
+        assertThat(after).isEmpty();
+        assertThat(jdbc.queryForObject(
+                        "SELECT teaching_handoff_reconciled_at FROM official_rulebook_import_job WHERE id = ?",
+                        OffsetDateTime.class,
+                        jobId))
+                .isEqualTo(OffsetDateTime.ofInstant(now.plusSeconds(5), ZoneOffset.UTC));
+    }
+
+    @Test
+    void automaticallyRestartsAMissingTeachingResultOnlyOnceUntilThePlayerRetries() {
+        Instant now = Instant.parse("2026-08-10T02:50:00Z");
+        UUID versionId = insertDocument("bounded-recovery", "READY", now);
+        UUID jobId = insertCompletedTeachingJob(versionId, now);
+        UUID firstRunId = UUID.randomUUID();
+        UUID recoveredRunId = UUID.randomUUID();
+        insertPreparationRun(firstRunId, versionId, "COMPLETED", now.plusSeconds(1));
+        insertPreparationRun(recoveredRunId, versionId, "FAILED", now.plusSeconds(4));
+        inTransaction(repository -> repository.claimReadyTeachingForDocument(versionId, 1, now.plusSeconds(2)));
+        inTransaction(repository -> repository.completeTeachingLaunch(jobId, firstRunId, now.plusSeconds(3)));
+
+        boolean automatic = inTransactionReturning(repository -> repository.retryTeachingAutomatically(
+                jobId, firstRunId, now.plusSeconds(4)));
+        boolean duplicateAutomatic = inTransactionReturning(repository -> repository.retryTeachingAutomatically(
+                jobId, firstRunId, now.plusSeconds(5)));
+        inTransaction(repository -> repository.claimReadyTeachingForDocument(versionId, 1, now.plusSeconds(6)));
+        inTransaction(repository -> repository.completeTeachingLaunch(jobId, recoveredRunId, now.plusSeconds(7)));
+        List<OfficialRulebookImportJob> unreconciled =
+                inTransactionReturning(repository -> repository.findUnreconciledLaunchedTeaching(4));
+        boolean exhausted = inTransactionReturning(repository -> repository.failTeachingRecoveryExhausted(
+                jobId, recoveredRunId, now.plusSeconds(8)));
+        List<OfficialRulebookImportJob> afterExhaustion =
+                inTransactionReturning(repository -> repository.findUnreconciledLaunchedTeaching(4));
+
+        assertThat(automatic).isTrue();
+        assertThat(duplicateAutomatic).isFalse();
+        assertThat(unreconciled).extracting(OfficialRulebookImportJob::id).containsExactly(jobId);
+        assertThat(exhausted).isTrue();
+        assertThat(afterExhaustion).isEmpty();
+        assertThat(jdbc.queryForMap(
+                        """
+                        SELECT teaching_handoff_state, teaching_error_code,
+                               teaching_automatic_recovery_count, teaching_handoff_reconciled_at
+                        FROM official_rulebook_import_job WHERE id = ?
+                        """,
+                        jobId))
+                .containsEntry("teaching_handoff_state", "FAILED")
+                .containsEntry("teaching_error_code", "TEACHING_RECOVERY_EXHAUSTED")
+                .doesNotContainEntry("teaching_handoff_reconciled_at", null);
+        assertThat(jdbc.queryForObject(
+                        "SELECT teaching_automatic_recovery_count FROM official_rulebook_import_job WHERE id = ?",
+                        Integer.class,
+                        jobId))
+                .isOne();
+
+        boolean playerRetry = inTransactionReturning(repository -> repository.retryTeaching(
+                jobId, null, now.plusSeconds(9)));
+        assertThat(playerRetry).isTrue();
+        assertThat(jdbc.queryForObject(
+                        "SELECT teaching_handoff_state FROM official_rulebook_import_job WHERE id = ?",
+                        String.class,
+                        jobId))
+                .isEqualTo("WAITING_FOR_DOCUMENT");
+        assertThat(jdbc.queryForObject(
+                        "SELECT teaching_automatic_recovery_count FROM official_rulebook_import_job WHERE id = ?",
+                        Integer.class,
+                        jobId))
+                .isZero();
+    }
+
+    @Test
     void dismissesOnlyTheExactOwnedFailedPreparationAndKeepsTheOfficialImport() {
         Instant now = Instant.parse("2026-08-10T03:00:00Z");
         UUID versionId = insertDocument("dismiss", "READY", now);
@@ -448,6 +538,7 @@ class JpaOfficialRulebookImportJobRepositoryPostgresTest {
 
     private static void insertPreparationRun(UUID runId, UUID versionId, String state, Instant now) {
         boolean failed = "FAILED".equals(state);
+        boolean terminal = failed || "COMPLETED".equals(state);
         OffsetDateTime timestamp = OffsetDateTime.ofInstant(now, ZoneOffset.UTC);
         jdbc.update(
                 """
@@ -461,7 +552,7 @@ class JpaOfficialRulebookImportJobRepositoryPostgresTest {
                 state,
                 timestamp,
                 timestamp,
-                failed ? timestamp : null,
+                terminal ? timestamp : null,
                 failed ? "TEACHING_PREPARATION_FAILED" : null);
     }
 

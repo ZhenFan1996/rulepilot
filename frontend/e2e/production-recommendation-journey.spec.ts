@@ -57,6 +57,7 @@ interface ImportJob {
   teachingHandoffState: 'NOT_REQUESTED' | 'WAITING_FOR_DOCUMENT' | 'LAUNCHING' | 'LAUNCHED' | 'FAILED'
   teachingPreparationRunId: string | null
   teachingErrorCode: string | null
+  teachingAutomaticRecoveryCount: number
   downloadCompletedAt: string | null
   importCompletedAt: string | null
   teachingHandoffUpdatedAt: string | null
@@ -150,6 +151,23 @@ interface CompletedLessonObservation {
   insufficientSectionCount: number
 }
 
+interface TeachingWaitProgress {
+  phase: 'FIRST_CITED_SECTION' | 'COMPLETE_LESSON'
+  observedAt: string
+  preparationState: string | null
+  preparationOperation: string | null
+  preparationErrorCode: string | null
+  planId: string | null
+  teachingState: string | null
+  teachingOperation: string | null
+  teachingErrorCode: string | null
+  lessonStatus: LessonMilestoneResponse['status'] | null
+  sectionCount: number
+  publishedSectionCount: number
+  citedDraftSectionCount: number
+  insufficientSectionCount: number
+}
+
 interface ProductionJourneyReport {
   generatedAt: string
   completed: boolean
@@ -207,9 +225,15 @@ interface ProductionJourneyReport {
   documentProgressStage: string | null
   documentProgressComplete: boolean | null
   teachingHandoffState: string | null
+  teachingAutomaticRecoveryCount: number | null
   teachingPreparationState: string | null
   teachingPreparationErrorCode: string | null
   teachingGenerationState: string | null
+  teachingProgressObservedAt: string | null
+  teachingObservedPlanId: string | null
+  teachingLatestPreparationOperation: string | null
+  teachingLatestGenerationOperation: string | null
+  teachingPublishedSectionCount: number
   lessonStatus: string | null
   citedDraftSectionCount: number
   insufficientSectionCount: number
@@ -342,18 +366,24 @@ async function waitForFirstCitedLesson(
   importStartedAt: number,
   requireCurrentPublicationActivity: boolean,
   currentHandoffAt: string | null,
+  onProgress?: (progress: TeachingWaitProgress) => Promise<void> | void,
 ): Promise<FirstCitedLessonObservation> {
   const deadline = Date.now() + 20 * 60_000
   let plan: TeachingPlanResponse | null = null
   let teachingPreparationStartedMs: number | null = null
   let preparationRunCreatedAt: string | null = null
   let firstCitedPublicationActivityAt: string | null = null
+  let preparationDetails: RunDetailsResponse | null = null
+  let teachingDetails: RunDetailsResponse | null = null
+  let latestLesson: LessonMilestoneResponse | null = null
+  const progress = teachingProgressReporter(onProgress)
   while (Date.now() < deadline) {
     const runResponse = await request.get(`/api/v1/assistant-runs/${encodeURIComponent(preparationRunId)}`)
     expect([200, 404], `Teaching preparation returned HTTP ${runResponse.status()}`)
       .toContain(runResponse.status())
     if (runResponse.ok()) {
       const details = await runResponse.json() as RunDetailsResponse
+      preparationDetails = details
       preparationRunCreatedAt = details.run.createdAt
       if (details.run.state !== 'RECEIVED' && teachingPreparationStartedMs === null) {
         teachingPreparationStartedMs = elapsed(importStartedAt)
@@ -377,7 +407,7 @@ async function waitForFirstCitedLesson(
       expect([200, 404], `Teaching run returned HTTP ${teachingRunResponse.status()}`)
         .toContain(teachingRunResponse.status())
       if (teachingRunResponse.ok()) {
-        const teachingDetails = await teachingRunResponse.json() as RunDetailsResponse
+        teachingDetails = await teachingRunResponse.json() as RunDetailsResponse
         const handoffTimestamp = currentHandoffAt ? Date.parse(currentHandoffAt) : Number.NEGATIVE_INFINITY
         const firstPublication = teachingDetails.activities
           .filter(activity =>
@@ -401,9 +431,13 @@ async function waitForFirstCitedLesson(
         .toContain(lessonResponse.status())
       if (lessonResponse.ok()) {
         const lesson = await lessonResponse.json() as LessonMilestoneResponse
+        latestLesson = lesson
         if (lesson.sections.some(section =>
           section.evidenceStatus === 'SUPPORTED' || section.evidenceStatus === 'CITED_DRAFT')
           && (!requireCurrentPublicationActivity || firstCitedPublicationActivityAt !== null)) {
+          await progress.emit(teachingWaitProgress(
+            'FIRST_CITED_SECTION', preparationDetails, plan.id, teachingDetails, latestLesson,
+          ))
           return {
             planId: plan.id,
             teachingPreparationStartedMs: teachingPreparationStartedMs ?? elapsed(importStartedAt),
@@ -414,9 +448,12 @@ async function waitForFirstCitedLesson(
         }
       }
     }
+    await progress.emit(teachingWaitProgress(
+      'FIRST_CITED_SECTION', preparationDetails, plan?.id ?? null, teachingDetails, latestLesson,
+    ))
     await new Promise(resolve => setTimeout(resolve, 500))
   }
-  throw new Error('The first source-cited lesson section did not become readable')
+  throw new Error(`The first source-cited lesson section did not become readable; latest=${JSON.stringify(progress.latest())}`)
 }
 
 function unfinishedSectionSummary(lesson: LessonMilestoneResponse) {
@@ -432,11 +469,14 @@ function unfinishedSectionSummary(lesson: LessonMilestoneResponse) {
 async function waitForCompletedLesson(
   request: APIRequestContext,
   planId: string,
+  onProgress?: (progress: TeachingWaitProgress) => Promise<void> | void,
 ): Promise<CompletedLessonObservation> {
   const deadline = Date.now() + 20 * 60_000
   let latestRunState = 'NOT_STARTED'
   let latestRunError: string | null = null
+  let latestRunDetails: RunDetailsResponse | null = null
   let latestLesson: LessonMilestoneResponse | null = null
+  const progress = teachingProgressReporter(onProgress)
   while (Date.now() < deadline) {
     const runResponse = await request.get(
       `/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=${encodeURIComponent(planId)}`,
@@ -445,6 +485,7 @@ async function waitForCompletedLesson(
       .toContain(runResponse.status())
     if (runResponse.ok()) {
       const details = await runResponse.json() as RunDetailsResponse
+      latestRunDetails = details
       latestRunState = details.run.state
       latestRunError = details.run.lastErrorCode
       if (['FAILED', 'DEGRADED', 'INSUFFICIENT_EVIDENCE'].includes(latestRunState)) {
@@ -464,6 +505,10 @@ async function waitForCompletedLesson(
     expect([200, 404], `Illustrated lesson returned HTTP ${lessonResponse.status()}`)
       .toContain(lessonResponse.status())
     if (lessonResponse.ok()) latestLesson = await lessonResponse.json() as LessonMilestoneResponse
+
+    await progress.emit(teachingWaitProgress(
+      'COMPLETE_LESSON', null, planId, latestRunDetails, latestLesson,
+    ))
 
     if (latestLesson && latestRunState === 'COMPLETED') {
       const citedDraftSectionCount = latestLesson.sections
@@ -488,8 +533,58 @@ async function waitForCompletedLesson(
     await new Promise(resolve => setTimeout(resolve, 500))
   }
   throw new Error(
-    `Teaching lesson did not complete; run=${latestRunState}; lesson=${latestLesson?.status ?? 'NOT_PUBLISHED'}; error=${latestRunError ?? 'NONE'}; ${latestLesson ? unfinishedSectionSummary(latestLesson) : 'no lesson was published'}`,
+    `Teaching lesson did not complete; run=${latestRunState}; lesson=${latestLesson?.status ?? 'NOT_PUBLISHED'}; error=${latestRunError ?? 'NONE'}; ${latestLesson ? unfinishedSectionSummary(latestLesson) : 'no lesson was published'}; latest=${JSON.stringify(progress.latest())}`,
   )
+}
+
+function teachingWaitProgress(
+  phase: TeachingWaitProgress['phase'],
+  preparation: RunDetailsResponse | null,
+  planId: string | null,
+  teaching: RunDetailsResponse | null,
+  lesson: LessonMilestoneResponse | null,
+): TeachingWaitProgress {
+  const sections = lesson?.sections ?? []
+  return {
+    phase,
+    observedAt: new Date().toISOString(),
+    preparationState: preparation?.run.state ?? null,
+    preparationOperation: preparation?.activities.at(-1)?.operation ?? null,
+    preparationErrorCode: preparation?.run.lastErrorCode ?? null,
+    planId,
+    teachingState: teaching?.run.state ?? null,
+    teachingOperation: teaching?.activities.at(-1)?.operation ?? null,
+    teachingErrorCode: teaching?.run.lastErrorCode ?? null,
+    lessonStatus: lesson?.status ?? null,
+    sectionCount: sections.length,
+    publishedSectionCount: sections.filter(section =>
+      section.evidenceStatus === 'SUPPORTED' || section.evidenceStatus === 'CITED_DRAFT').length,
+    citedDraftSectionCount: sections.filter(section => section.evidenceStatus === 'CITED_DRAFT').length,
+    insufficientSectionCount: sections.filter(section => section.evidenceStatus === 'INSUFFICIENT_EVIDENCE').length,
+  }
+}
+
+function teachingProgressReporter(
+  onProgress?: (progress: TeachingWaitProgress) => Promise<void> | void,
+) {
+  let fingerprint = ''
+  let loggedAt = 0
+  let last: TeachingWaitProgress | null = null
+  return {
+    async emit(progress: TeachingWaitProgress) {
+      const nextFingerprint = JSON.stringify({ ...progress, observedAt: undefined })
+      const now = Date.now()
+      if (nextFingerprint === fingerprint && now - loggedAt < 30_000) return
+      fingerprint = nextFingerprint
+      loggedAt = now
+      last = progress
+      console.log(`[production-teaching-progress] ${JSON.stringify(progress)}`)
+      await onProgress?.(progress)
+    },
+    latest() {
+      return last
+    },
+  }
 }
 
 async function retainReport(path: string, report: ProductionJourneyReport) {
@@ -602,14 +697,40 @@ test('recommendation becomes one readable, taught, and answerable production jou
     teachingPreparationStartedMs: null, firstCitedLessonMs: null,
     pdfDownloadToTeachingStartMs: null, pdfDownloadToFirstCitedLessonMs: null,
     documentProgressStage: null, documentProgressComplete: null, teachingHandoffState: null,
+    teachingAutomaticRecoveryCount: null,
     teachingPreparationState: null, teachingPreparationErrorCode: null,
-    teachingGenerationState: null, lessonStatus: null, citedDraftSectionCount: 0,
+    teachingGenerationState: null, teachingProgressObservedAt: null, teachingObservedPlanId: null,
+    teachingLatestPreparationOperation: null, teachingLatestGenerationOperation: null,
+    teachingPublishedSectionCount: 0,
+    lessonStatus: null, citedDraftSectionCount: 0,
     insufficientSectionCount: 0, lessonCompletionMs: null,
     rulebookReadableMs: null, renderedRulebookPage: false, lessonReadableMs: null,
     lessonDockText: null,
     lessonSectionCount: 0, citedLessonStep: false, answerMs: null, answerStatus: null,
     answerCitationCount: 0, citedAnswer: false,
     recommendationRestored: false, answerRestored: false, pageErrorCount: 0,
+  }
+
+  const recordTeachingProgress = async (progress: TeachingWaitProgress) => {
+    report.stage = progress.phase === 'FIRST_CITED_SECTION'
+      ? 'teaching-first-cited-section'
+      : 'teaching-complete-lesson'
+    report.teachingProgressObservedAt = progress.observedAt
+    report.teachingObservedPlanId = progress.planId
+    if (progress.preparationState) report.teachingPreparationState = progress.preparationState
+    if (progress.preparationErrorCode) report.teachingPreparationErrorCode = progress.preparationErrorCode
+    if (progress.preparationOperation) {
+      report.teachingLatestPreparationOperation = progress.preparationOperation
+    }
+    if (progress.teachingState) report.teachingGenerationState = progress.teachingState
+    if (progress.teachingOperation) report.teachingLatestGenerationOperation = progress.teachingOperation
+    if (progress.lessonStatus) report.lessonStatus = progress.lessonStatus
+    report.lessonSectionCount = progress.sectionCount
+    report.teachingPublishedSectionCount = progress.publishedSectionCount
+    report.citedDraftSectionCount = progress.citedDraftSectionCount
+    report.insufficientSectionCount = progress.insufficientSectionCount
+    report.generatedAt = new Date().toISOString()
+    await retainReport(reportFile, report)
   }
 
   try {
@@ -804,6 +925,7 @@ test('recommendation becomes one readable, taught, and answerable production jou
         'Fresh import milestones could not be ordered from PDF completion to handoff').not.toBeNull()
     }
     report.teachingHandoffState = completedJob.teachingHandoffState
+    report.teachingAutomaticRecoveryCount = completedJob.teachingAutomaticRecoveryCount
     const progressResponse = await page.request.get(
       `/api/v1/document-versions/${encodeURIComponent(completedJob.documentVersionId!)}/progress/snapshot`,
     )
@@ -828,6 +950,7 @@ test('recommendation becomes one readable, taught, and answerable production jou
       importStartedAt,
       requiresPersistedPublicationActivity(report),
       completedJob.teachingHandoffUpdatedAt,
+      recordTeachingProgress,
     )
     observedTeachingPlanId = firstCitedLesson.planId
     report.teachingPreparationStartedMs = firstCitedLesson.teachingPreparationStartedMs
@@ -899,7 +1022,11 @@ test('recommendation becomes one readable, taught, and answerable production jou
 
     report.stage = 'lesson'
     const lessonStartedAt = performance.now()
-    const completedLesson = await waitForCompletedLesson(page.request, firstCitedLesson.planId)
+    const completedLesson = await waitForCompletedLesson(
+      page.request,
+      firstCitedLesson.planId,
+      recordTeachingProgress,
+    )
     report.teachingGenerationState = completedLesson.teachingRunState
     report.lessonStatus = completedLesson.lessonStatus
     report.lessonSectionCount = completedLesson.sectionCount

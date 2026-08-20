@@ -81,8 +81,8 @@ export function teachingActivityText(
   const chapter = chapterForActivity(plan, activities, activity)
   const target = chapter
     ? locale === 'en'
-      ? `chapter ${chapter.position} “${chapter.title}”`
-      : `第 ${chapter.position} 章“${chapter.title}”`
+      ? chapter.title ? `chapter ${chapter.position} “${chapter.title}”` : `chapter ${chapter.position}`
+      : chapter.title ? `第 ${chapter.position} 章“${chapter.title}”` : `第 ${chapter.position} 章`
     : locale === 'en' ? 'this part of the guide' : '当前内容'
   if (locale === 'en') {
     if (activity.operation.startsWith('retryIncompleteTeachingSections')) {
@@ -235,7 +235,9 @@ function operationPosition(operation: string) {
 function chapterFor(plan: TeachingProgressPlan, operation: string) {
   const position = operationPosition(operation)
   if (!position) return null
-  return plan.sections.find((section) => section.position === position) ?? plan.sections[position - 1] ?? null
+  return plan.sections.find((section) => section.position === position)
+    ?? plan.sections[position - 1]
+    ?? { position, title: '', visualEvidenceRecommended: false }
 }
 
 function chapterForActivity(

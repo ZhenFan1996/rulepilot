@@ -16,6 +16,7 @@ import static org.mockito.Mockito.when;
 import com.rulepilot.catalog.CatalogEditionLookup;
 import com.rulepilot.catalog.CatalogEditionLanguageConfirmation;
 import com.rulepilot.document.RulebookTeachingEvidenceFreshness;
+import com.rulepilot.document.RulebookTeachingEvidenceFreshness.ReuseAssessment;
 import com.rulepilot.document.domain.DocumentSourceType;
 import com.rulepilot.document.domain.DocumentVersion;
 import com.rulepilot.document.domain.OfficialRulebookImportJob;
@@ -469,8 +470,8 @@ class OfficialRulebookImportJobServiceTest {
         jobs.claimReadyTeachingForDocument(documentVersionId, 1, NOW);
         jobs.completeTeachingLaunch(completed.id(), oldPreparationRunId, NOW);
         RulebookTeachingEvidenceFreshness freshness = mock(RulebookTeachingEvidenceFreshness.class);
-        when(freshness.requiresRefresh(documentVersionId, oldPreparationRunId, "alice"))
-                .thenReturn(true);
+        when(freshness.assess(documentVersionId, oldPreparationRunId, "alice"))
+                .thenReturn(ReuseAssessment.REFRESH_REQUIRED);
         OfficialRulebookImportService imports = mock(OfficialRulebookImportService.class);
         TaskExecutor executor = mock(TaskExecutor.class);
         OfficialRulebookImportJobService service = new OfficialRulebookImportJobService(
@@ -489,7 +490,7 @@ class OfficialRulebookImportJobServiceTest {
         assertThat(launch.job().teachingHandoff().state())
                 .isEqualTo(TeachingHandoffState.WAITING_FOR_DOCUMENT);
         assertThat(launch.job().teachingHandoff().preparationRunId()).isNull();
-        verify(freshness).requiresRefresh(documentVersionId, oldPreparationRunId, "alice");
+        verify(freshness).assess(documentVersionId, oldPreparationRunId, "alice");
         verifyNoInteractions(executor, imports);
     }
 
@@ -511,6 +512,8 @@ class OfficialRulebookImportJobServiceTest {
                 UUID.randomUUID(), "alice", null, "More recent unrelated rules",
                 DocumentSourceType.BASE_RULEBOOK, SOURCE + "?other", NOW.minusSeconds(1)));
         RulebookTeachingEvidenceFreshness freshness = mock(RulebookTeachingEvidenceFreshness.class);
+        when(freshness.assess(documentVersionId, preparationRunId, "alice"))
+                .thenReturn(ReuseAssessment.REUSABLE);
         OfficialRulebookImportJobService service = new OfficialRulebookImportJobService(
                 jobs,
                 mock(RuleDocumentRepository.class),
@@ -528,7 +531,77 @@ class OfficialRulebookImportJobServiceTest {
         assertThat(launch.job().updatedAt()).isEqualTo(NOW);
         assertThat(service.recentOwned("alice")).first().extracting(OfficialRulebookImportJob::id)
                 .isEqualTo(completed.id());
-        verify(freshness).requiresRefresh(documentVersionId, preparationRunId, "alice");
+        verify(freshness).assess(documentVersionId, preparationRunId, "alice");
+    }
+
+    @Test
+    void reconcilesCompletedHandoffsByRestartingOnlyMissingTeachingResults() {
+        FakeJobs jobs = new FakeJobs();
+        UUID editionId = automaticTeachingCommand().editionId();
+        UUID brokenVersionId = UUID.randomUUID();
+        UUID brokenRunId = UUID.randomUUID();
+        UUID usableVersionId = UUID.randomUUID();
+        UUID usableRunId = UUID.randomUUID();
+        var broken = launchedJob(jobs, editionId, brokenVersionId, brokenRunId, SOURCE);
+        var usable = launchedJob(jobs, editionId, usableVersionId, usableRunId, SOURCE + "?usable");
+        RulebookTeachingEvidenceFreshness freshness = mock(RulebookTeachingEvidenceFreshness.class);
+        when(freshness.assess(brokenVersionId, brokenRunId, "alice"))
+                .thenReturn(ReuseAssessment.REFRESH_REQUIRED);
+        when(freshness.assess(usableVersionId, usableRunId, "alice"))
+                .thenReturn(ReuseAssessment.REUSABLE);
+        var service = new OfficialRulebookImportJobService(
+                jobs,
+                mock(RuleDocumentRepository.class),
+                mock(OfficialRulebookImportService.class),
+                mock(TaskExecutor.class),
+                (edition, language) -> false,
+                catalog(editionId, GAME_ID, "Opaque Edition", "en"),
+                freshness,
+                Clock.fixed(NOW, ZoneOffset.UTC));
+
+        var result = service.reconcileLaunched(4);
+
+        assertThat(result.restarted()).isEqualTo(1);
+        assertThat(result.settled()).isEqualTo(1);
+        assertThat(result.exhausted()).isZero();
+        assertThat(jobs.findOwned(broken.id(), "alice").orElseThrow().teachingHandoff().state())
+                .isEqualTo(TeachingHandoffState.WAITING_FOR_DOCUMENT);
+        assertThat(jobs.findOwned(usable.id(), "alice").orElseThrow().teachingHandoff().state())
+                .isEqualTo(TeachingHandoffState.LAUNCHED);
+        assertThat(jobs.reconciled).containsExactly(usable.id());
+
+        UUID recoveredRunId = UUID.randomUUID();
+        jobs.claimReadyTeachingForDocument(brokenVersionId, 1, NOW.plusSeconds(1));
+        jobs.completeTeachingLaunch(broken.id(), recoveredRunId, NOW.plusSeconds(2));
+        when(freshness.assess(brokenVersionId, recoveredRunId, "alice"))
+                .thenReturn(ReuseAssessment.REFRESH_REQUIRED);
+
+        var secondPass = service.reconcileLaunched(4);
+
+        assertThat(secondPass.restarted()).isZero();
+        assertThat(secondPass.settled()).isZero();
+        assertThat(secondPass.exhausted()).isOne();
+        assertThat(jobs.findOwned(broken.id(), "alice").orElseThrow().teachingHandoff().state())
+                .isEqualTo(TeachingHandoffState.FAILED);
+        assertThat(jobs.findOwned(broken.id(), "alice").orElseThrow().teachingHandoff().errorCode())
+                .isEqualTo("TEACHING_RECOVERY_EXHAUSTED");
+        assertThat(jobs.reconciled).containsExactly(usable.id());
+    }
+
+    private OfficialRulebookImportJob launchedJob(
+            FakeJobs jobs,
+            UUID editionId,
+            UUID documentVersionId,
+            UUID preparationRunId,
+            String source) {
+        var job = OfficialRulebookImportJob.queued(
+                UUID.randomUUID(), "alice", editionId, "Example Rules", DocumentSourceType.BASE_RULEBOOK,
+                source, true, null, NOW.minusSeconds(30));
+        jobs.insert(job);
+        jobs.complete(job.id(), documentVersionId, false, NOW.minusSeconds(20));
+        jobs.claimReadyTeachingForDocument(documentVersionId, 1, NOW.minusSeconds(10));
+        jobs.completeTeachingLaunch(job.id(), preparationRunId, NOW.minusSeconds(5));
+        return jobs.findOwned(job.id(), "alice").orElseThrow();
     }
 
     @Test
@@ -823,6 +896,8 @@ class OfficialRulebookImportJobServiceTest {
     private static final class FakeJobs implements OfficialRulebookImportJobRepository {
         private final Map<UUID, OfficialRulebookImportJob> values = new LinkedHashMap<>();
         private final List<OfficialRulebookImportJob.Stage> stages = new ArrayList<>();
+        private final List<UUID> reconciled = new ArrayList<>();
+        private final java.util.Set<UUID> automaticallyRecovered = new java.util.HashSet<>();
 
         private long downloadWriteCount() {
             return stages.stream().filter(stage -> stage == OfficialRulebookImportJob.Stage.DOWNLOADING).count();
@@ -873,6 +948,15 @@ class OfficialRulebookImportJobServiceTest {
         }
 
         @Override
+        public List<OfficialRulebookImportJob> findUnreconciledLaunchedTeaching(int limit) {
+            return values.values().stream()
+                    .filter(job -> job.teachingHandoff().state() == TeachingHandoffState.LAUNCHED)
+                    .filter(job -> !reconciled.contains(job.id()))
+                    .limit(limit)
+                    .toList();
+        }
+
+        @Override
         public void recordReuse(UUID jobId, Instant now) {
             var job = values.get(jobId);
             values.put(jobId, copy(job, job.stage(), job.downloadedBytes(), job.totalBytes(),
@@ -896,10 +980,70 @@ class OfficialRulebookImportJobServiceTest {
                             && java.util.Objects.equals(
                                     job.teachingHandoff().preparationRunId(), expectedPreparationRunId);
             if (!eligible) return false;
+            automaticallyRecovered.remove(jobId);
+            reconciled.remove(jobId);
             values.put(jobId, copy(job, job.stage(), job.downloadedBytes(), job.totalBytes(),
                     job.documentVersionId(), job.duplicate(), job.errorCode(),
                     TeachingHandoff.requested(job.teachingHandoff().learningGoal(), now),
                     now, job.completedAt()));
+            return true;
+        }
+
+        @Override
+        public boolean retryTeachingAutomatically(UUID jobId, UUID expectedPreparationRunId, Instant now) {
+            var job = values.get(jobId);
+            if (job == null
+                    || automaticallyRecovered.contains(jobId)
+                    || job.teachingHandoff().state() != TeachingHandoffState.LAUNCHED
+                    || !java.util.Objects.equals(job.teachingHandoff().preparationRunId(), expectedPreparationRunId)) {
+                return false;
+            }
+            automaticallyRecovered.add(jobId);
+            values.put(jobId, copy(job, job.stage(), job.downloadedBytes(), job.totalBytes(),
+                    job.documentVersionId(), job.duplicate(), job.errorCode(),
+                    new TeachingHandoff(
+                            TeachingHandoffState.WAITING_FOR_DOCUMENT,
+                            job.teachingHandoff().learningGoal(),
+                            null,
+                            null,
+                            1,
+                            now),
+                    now, job.completedAt()));
+            return true;
+        }
+
+        @Override
+        public boolean failTeachingRecoveryExhausted(UUID jobId, UUID expectedPreparationRunId, Instant now) {
+            var job = values.get(jobId);
+            if (job == null
+                    || job.teachingHandoff().state() != TeachingHandoffState.LAUNCHED
+                    || job.teachingHandoff().automaticRecoveryCount() != 1
+                    || !java.util.Objects.equals(job.teachingHandoff().preparationRunId(), expectedPreparationRunId)) {
+                return false;
+            }
+            values.put(jobId, copy(job, job.stage(), job.downloadedBytes(), job.totalBytes(),
+                    job.documentVersionId(), job.duplicate(), job.errorCode(),
+                    new TeachingHandoff(
+                            TeachingHandoffState.FAILED,
+                            job.teachingHandoff().learningGoal(),
+                            null,
+                            "TEACHING_RECOVERY_EXHAUSTED",
+                            1,
+                            now),
+                    now, job.completedAt()));
+            return true;
+        }
+
+        @Override
+        public boolean markTeachingReconciled(UUID jobId, UUID expectedPreparationRunId, Instant now) {
+            var job = values.get(jobId);
+            if (job == null
+                    || job.teachingHandoff().state() != TeachingHandoffState.LAUNCHED
+                    || !java.util.Objects.equals(job.teachingHandoff().preparationRunId(), expectedPreparationRunId)
+                    || reconciled.contains(jobId)) {
+                return false;
+            }
+            reconciled.add(jobId);
             return true;
         }
 
@@ -938,6 +1082,7 @@ class OfficialRulebookImportJobServiceTest {
                         job.teachingHandoff().learningGoal(),
                         null,
                         null,
+                        job.teachingHandoff().automaticRecoveryCount(),
                         now);
                 values.put(job.id(), copy(job, job.stage(), job.downloadedBytes(), job.totalBytes(),
                         job.documentVersionId(), job.duplicate(), job.errorCode(), launching, now, job.completedAt()));
@@ -955,6 +1100,7 @@ class OfficialRulebookImportJobServiceTest {
                     job.teachingHandoff().learningGoal(),
                     preparationRunId,
                     null,
+                    job.teachingHandoff().automaticRecoveryCount(),
                     now);
             values.put(jobId, copy(job, job.stage(), job.downloadedBytes(), job.totalBytes(),
                     job.documentVersionId(), job.duplicate(), job.errorCode(), launched, now, job.completedAt()));
@@ -968,6 +1114,7 @@ class OfficialRulebookImportJobServiceTest {
                     job.teachingHandoff().learningGoal(),
                     null,
                     errorCode,
+                    job.teachingHandoff().automaticRecoveryCount(),
                     now);
             values.put(jobId, copy(job, job.stage(), job.downloadedBytes(), job.totalBytes(),
                     job.documentVersionId(), job.duplicate(), job.errorCode(), failed, now, job.completedAt()));
@@ -1012,6 +1159,7 @@ class OfficialRulebookImportJobServiceTest {
                             job.teachingHandoff().learningGoal(),
                             null,
                             "IMPORT_FAILED",
+                            job.teachingHandoff().automaticRecoveryCount(),
                             now);
             values.put(jobId, copy(job, OfficialRulebookImportJob.Stage.FAILED,
                     job.downloadedBytes(), job.totalBytes(), null, false, errorCode, handoff, now, now));

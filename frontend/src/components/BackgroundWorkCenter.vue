@@ -22,6 +22,8 @@ import {
   parseOwnedDocuments,
   parsePreparationTeachingPlans,
   parseRulebookImports,
+  parseTeachingProgressPlan,
+  parseTeachingRunProgress,
   parseTeachingPlans,
   parseUploadedHandoffs,
   terminalAssistantRunStates,
@@ -44,6 +46,14 @@ import {
   type PlayerWorkStatus,
 } from '@/lib/playerWorkStatus'
 import { TEACHING_LAUNCHED_EVENT, teachingLaunchDetail } from '@/lib/teachingLaunch'
+import {
+  mergeTeachingRunProgress,
+  recentTeachingActivitySteps,
+  recentTeachingPreparationActivitySteps,
+  supportedTeachingChapterCount,
+  type TeachingProgressPlan,
+  type TeachingRunProgress,
+} from '@/lib/teachingProgress'
 
 const props = defineProps<{ username: string }>()
 const emit = defineEmits<{
@@ -76,12 +86,15 @@ const dismissError = ref('')
 const activeTeaching = ref<BackgroundTeachingItem[]>([])
 const completedTeaching = ref<BackgroundTeachingItem[]>([])
 const teachingStates = ref<Record<string, string>>({})
+const teachingRunDetails = ref<Record<string, TeachingRunProgress>>({})
+const teachingPlanDetails = ref<Record<string, TeachingProgressPlan>>({})
 const imports = ref<RulebookImportJob[]>([])
 const uploadedTeachingHandoffs = ref<UploadedTeachingHandoff[]>([])
 const documents = ref<DocumentSummary[]>([])
 const documentProgress = ref<Record<string, DocumentProgress>>({})
 const preparationStates = ref<Record<string, string>>({})
 const preparationSubjects = ref<Record<string, string>>({})
+const preparationRunDetails = ref<Record<string, TeachingRunProgress>>({})
 const preparationTeachingTransitions = ref<PreparationTeachingTransition[]>([])
 const preparationTeachingPlanIds = new Map<string, { documentVersionId: string; planId: string }>()
 const dismissedImportIds = ref<Set<string>>(new Set())
@@ -117,6 +130,15 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   teachingPlanningEvidence: '正在确定各章节需要核对的规则', teachingRetrieving: '正在查找各章节需要的规则依据',
   teachingVerifying: '正在逐条核对讲解与规则依据', teachingComposing: '正在把规则整理成可读的讲解',
   teachingPackaging: '正在补充规则页与图示', teachingReviewing: '正在复核讲解中的规则结论',
+  publishedChapters: (done: number, total: number | null) => total
+    ? `已发布 ${done} / ${total} 章`
+    : `已发布 ${done} 章`,
+  noPublishedChapter: '尚未发布可读章节',
+  recoveringMissingResult: '准备任务已经结束，但还没有找到可读章节；后台正在自动恢复',
+  automaticRecovery: '上一次任务没有留下可读章节，正在进行第 1 / 1 次自动恢复',
+  recoveryExhausted: '自动恢复后仍没有生成可读章节',
+  recoveryExhaustedContext: '已完成第 1 / 1 次自动恢复；请打开讲解中心重试',
+  failureCode: (code: string) => `失败记录：${code}`,
   bytes: (done: string, total: string) => `${done} / ${total}`, pages: (done: number, total: number) => `第 ${done} / ${total} 页`,
   browserRequired: '需要在来源网站刷新链接或登录',
   openRulebooks: '打开规则书', openLessons: '打开讲解中心',
@@ -137,6 +159,15 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   teachingPlanningEvidence: 'Deciding which rules each section must verify', teachingRetrieving: 'Finding rule evidence for each section',
   teachingVerifying: 'Checking each guide claim against the rules', teachingComposing: 'Turning the rules into a readable guide',
   teachingPackaging: 'Adding rule pages and visual references', teachingReviewing: 'Reviewing the guide\'s rule claims',
+  publishedChapters: (done: number, total: number | null) => total
+    ? `${done} of ${total} chapters published`
+    : `${done} chapters published`,
+  noPublishedChapter: 'No readable chapter has been published yet',
+  recoveringMissingResult: 'Preparation ended without a readable chapter; background recovery is running',
+  automaticRecovery: 'The previous task left no readable chapter; automatic recovery 1 of 1 is running',
+  recoveryExhausted: 'Automatic recovery still produced no readable chapter',
+  recoveryExhaustedContext: 'Automatic recovery 1 of 1 finished; open the lesson center to retry',
+  failureCode: (code: string) => `Failure record: ${code}`,
   bytes: (done: string, total: string) => `${done} / ${total}`, pages: (done: number, total: number) => `Page ${done} / ${total}`,
   browserRequired: 'Refresh the link or sign in on the source site',
   openRulebooks: 'Open rulebooks', openLessons: 'Open lesson center',
@@ -188,8 +219,13 @@ function formatBytes(value: number) {
 function importStage(job: RulebookImportJob) {
   if (job.stage === 'COMPLETED') {
     if (job.teachingErrorCode === 'DOCUMENT_PROCESSING_FAILED') return copy.value.rulebookFailed
-    if (job.teachingHandoffState === 'WAITING_FOR_DOCUMENT') return copy.value.waitingForTeaching
-    if (job.teachingHandoffState === 'LAUNCHING') return copy.value.launchingTeaching
+    if (job.teachingErrorCode === 'TEACHING_RECOVERY_EXHAUSTED') return copy.value.recoveryExhausted
+    if (job.teachingHandoffState === 'WAITING_FOR_DOCUMENT') return job.teachingAutomaticRecoveryCount
+      ? copy.value.automaticRecovery
+      : copy.value.waitingForTeaching
+    if (job.teachingHandoffState === 'LAUNCHING') return job.teachingAutomaticRecoveryCount
+      ? copy.value.automaticRecovery
+      : copy.value.launchingTeaching
     if (job.teachingHandoffState === 'LAUNCHED') return copy.value.teachingLaunched
     if (job.teachingHandoffState === 'FAILED') return copy.value.teachingLaunchFailed
   }
@@ -277,6 +313,27 @@ function teachingStateDetail(state: string | undefined) {
   }[state ?? ''] ?? copy.value.safe
 }
 
+function latestPreparationDetail(runId: string | null | undefined, fallbackState: string) {
+  const run = runId ? preparationRunDetails.value[runId] : undefined
+  return recentTeachingPreparationActivitySteps(run?.activities ?? [], locale.value).at(-1)?.text
+    ?? preparationStage(fallbackState)
+}
+
+function latestTeachingDetail(item: BackgroundTeachingItem) {
+  const run = teachingRunDetails.value[item.runId]
+  const plan = teachingPlanDetails.value[item.planId] ?? { sections: [] }
+  return recentTeachingActivitySteps(plan, run?.activities ?? [], locale.value).at(-1)?.text
+    ?? teachingStateDetail(teachingStates.value[item.runId] ?? run?.run.state)
+}
+
+function teachingProgressContext(item: BackgroundTeachingItem) {
+  const run = teachingRunDetails.value[item.runId]
+  const published = supportedTeachingChapterCount(run ?? null)
+  const total = teachingPlanDetails.value[item.planId]?.sections.length ?? null
+  const progress = published > 0 ? copy.value.publishedChapters(published, total) : copy.value.noPublishedChapter
+  return run?.run.lastErrorCode ? `${progress} · ${copy.value.failureCode(run.run.lastErrorCode)}` : progress
+}
+
 function documentStage(progress: DocumentProgress | undefined, status: string) {
   const stage = progress?.stage ?? status
   return {
@@ -306,11 +363,12 @@ const workItems = computed<WorkItem[]>(() => {
       || !processingVersionIds.has(job.documentVersionId))
     .filter(job => job.teachingHandoffState === 'WAITING_FOR_DOCUMENT'
       || job.teachingHandoffState === 'LAUNCHING'
+      || job.teachingHandoffState === 'FAILED'
       || job.stage !== 'COMPLETED'
       || Date.now() - Date.parse(job.updatedAt) < 15 * 60_000)
     .filter((job) => {
       const runId = job.teachingPreparationRunId
-      return !runId || !preparationStates.value[runId]
+      return job.teachingHandoffState === 'FAILED' || !runId || !preparationStates.value[runId]
     })
     .map((job): WorkItem => {
       const document = job.documentVersionId
@@ -320,7 +378,9 @@ const workItems = computed<WorkItem[]>(() => {
       const progress = job.stage === 'DOWNLOADING' && job.totalBytes
         ? Math.min(100, Math.round(job.downloadedBytes / job.totalBytes * 100))
         : job.stage === 'COMPLETED' ? 100 : null
-      const context = job.stage === 'FAILED' && job.errorCode === 'SOURCE_BROWSER_REQUIRED'
+      const context = job.teachingErrorCode === 'TEACHING_RECOVERY_EXHAUSTED'
+        ? copy.value.recoveryExhaustedContext
+        : job.stage === 'FAILED' && job.errorCode === 'SOURCE_BROWSER_REQUIRED'
         ? copy.value.browserRequired
         : job.stage === 'DOWNLOADING' && job.downloadedBytes > 0
         ? job.totalBytes
@@ -360,7 +420,7 @@ const workItems = computed<WorkItem[]>(() => {
   const teachingItems = activeTeaching.value.map((item): WorkItem => ({
     id: `teaching:${item.runId}`, kind: 'lesson', title: item.gameTitle,
     status: workStatus('ORGANIZING_GUIDE', 'rulebook', 'usable', 'active'),
-    detail: teachingStateDetail(teachingStates.value[item.runId]), context: '',
+    detail: latestTeachingDetail(item), context: teachingProgressContext(item),
     state: 'active', progress: null, target: { name: 'lessons' },
   }))
   const finishedTeachingItems = completedTeaching.value.map((item): WorkItem => ({
@@ -368,7 +428,8 @@ const workItems = computed<WorkItem[]>(() => {
     status: item.terminalState && item.terminalState !== 'COMPLETED'
       ? workStatus('NEEDS_ACTION', 'rulebook', 'usable', 'terminal', 'needs-action')
       : workStatus('GUIDE_COMPLETE', 'guide', 'complete', 'terminal'),
-    detail: '', context: '', state: item.terminalState && item.terminalState !== 'COMPLETED' ? 'failed' : 'complete',
+    detail: latestTeachingDetail(item), context: teachingProgressContext(item),
+    state: item.terminalState && item.terminalState !== 'COMPLETED' ? 'failed' : 'complete',
     progress: item.terminalState && item.terminalState !== 'COMPLETED' ? null : 100,
     target: { name: 'lessons' },
   }))
@@ -377,7 +438,7 @@ const workItems = computed<WorkItem[]>(() => {
       kind: 'lesson',
       title: transition.title,
       status: workStatus('ORGANIZING_GUIDE', 'rulebook', 'usable', 'active'),
-      detail: copy.value.launchingTeaching,
+      detail: transition.planId ? copy.value.launchingTeaching : copy.value.recoveringMissingResult,
       context: '',
       state: 'active',
       progress: null,
@@ -396,8 +457,10 @@ const workItems = computed<WorkItem[]>(() => {
       status: failed
         ? workStatus('NEEDS_ACTION', 'rulebook', 'usable', 'terminal', 'needs-action')
         : workStatus('ORGANIZING_GUIDE', 'rulebook', 'usable', 'active'),
-      detail: preparationStage(runState),
-      context: '',
+      detail: latestPreparationDetail(runId, runState),
+      context: runState === 'FAILED'
+        ? copy.value.failureCode(preparationRunDetails.value[runId]?.run.lastErrorCode ?? runState)
+        : '',
       state: failed ? 'failed' : 'active',
       progress: null,
       target: { name: 'lessons' },
@@ -425,7 +488,7 @@ const workItems = computed<WorkItem[]>(() => {
             ? documentStage(documentSnapshot, documentStatus)
             : handoff.state === 'LAUNCHING'
               ? copy.value.launchingTeaching
-              : preparationStage(runState ?? 'RECEIVED')
+              : latestPreparationDetail(handoff.preparationRunId, runState ?? 'RECEIVED')
       return {
         id: `uploaded-teaching:${handoff.id}`,
         kind: handoff.state === 'WAITING_FOR_DOCUMENT' || documentFailed ? 'rulebook' : 'lesson',
@@ -488,6 +551,8 @@ interface TeachingRefreshSnapshot {
   active: BackgroundTeachingItem[]
   completed: BackgroundTeachingItem[]
   states: Record<string, string>
+  runDetails: Record<string, TeachingRunProgress>
+  planDetails: Record<string, TeachingProgressPlan>
   resolvedTitles: Map<string, string>
   degraded: boolean
 }
@@ -508,6 +573,7 @@ interface DocumentRefreshSnapshot {
   progress: Record<string, DocumentProgress>
   preparationStates: Record<string, string>
   preparationSubjects: Record<string, string>
+  preparationRunDetails: Record<string, TeachingRunProgress>
   degraded: boolean
 }
 
@@ -525,10 +591,34 @@ async function loadTeachingSnapshot(
   const runPayload = await responseJson<unknown>('/api/v1/assistant-runs/active?mode=TEACHING', signal)
   const runs = parseActiveTeachingRuns(runPayload, targetAccount)
   const resolvedTitles = new Map(titles)
-  if (runs.some(run => !resolvedTitles.has(run.subjectId))) {
+  const runDetails: Record<string, TeachingRunProgress> = { ...teachingRunDetails.value }
+  const planDetails: Record<string, TeachingProgressPlan> = { ...teachingPlanDetails.value }
+  let degraded = false
+  await Promise.all(runs.map(async (run) => {
+    try {
+      const payload = await responseJson<unknown>(
+        `/api/v1/assistant-runs/${encodeURIComponent(run.id)}`,
+        signal,
+      )
+      runDetails[run.id] = mergeTeachingRunProgress(
+        teachingRunDetails.value[run.id] ?? null,
+        parseTeachingRunProgress(payload, {
+          id: run.id, mode: 'TEACHING', subjectId: run.subjectId, ownerUsername: targetAccount,
+        }),
+      )!
+    } catch {
+      if (signal.aborted) throw new DOMException('Aborted', 'AbortError')
+      if (teachingRunDetails.value[run.id]) runDetails[run.id] = teachingRunDetails.value[run.id]!
+    }
+  }))
+  if (runs.some(run => !resolvedTitles.has(run.subjectId) || !planDetails[run.subjectId])) {
     const planPayload = await responseJson<unknown>('/api/v1/teaching-plans', signal)
-    for (const plan of parseTeachingPlans(planPayload)) {
+    const summaries = parseTeachingPlans(planPayload)
+    const rawPlans = Array.isArray(planPayload) ? planPayload : []
+    for (let index = 0; index < summaries.length; index++) {
+      const plan = summaries[index]!
       resolvedTitles.set(plan.id, playerFacingTitle(plan.gameTitle))
+      planDetails[plan.id] = parseTeachingProgressPlan(rawPlans[index], plan.id)
     }
   }
   const states = Object.fromEntries(runs.map(run => [run.id, run.state]))
@@ -540,7 +630,6 @@ async function loadTeachingSnapshot(
   const previous = activeTeaching.value
   const activePlanIds = new Set(active.map(item => item.planId))
   const missing = previous.filter(item => !activePlanIds.has(item.planId))
-  let degraded = false
   const confirmedTerminalStates = new Map<string, BackgroundTeachingItem['terminalState']>()
   const confirmations = await Promise.all(missing.map(async (item) => {
     try {
@@ -548,6 +637,17 @@ async function loadTeachingSnapshot(
       const run = parseExpectedAssistantRun(details, {
         id: item.runId, mode: 'TEACHING', subjectId: item.planId, ownerUsername: targetAccount,
       })
+      try {
+        const progress = parseTeachingRunProgress(details, {
+          id: item.runId, mode: 'TEACHING', subjectId: item.planId, ownerUsername: targetAccount,
+        })
+        runDetails[item.runId] = mergeTeachingRunProgress(
+          teachingRunDetails.value[item.runId] ?? null,
+          progress,
+        )!
+      } catch {
+        // The authoritative run state remains usable when optional activity detail is unavailable.
+      }
       states[item.runId] = run.state
       if (terminalTeachingStates.has(run.state)) {
         confirmedTerminalStates.set(item.planId, run.state as BackgroundTeachingItem['terminalState'])
@@ -575,6 +675,8 @@ async function loadTeachingSnapshot(
     active: transition.active,
     completed: [...notices.values()],
     states,
+    runDetails,
+    planDetails,
     resolvedTitles,
     degraded,
   }
@@ -606,6 +708,7 @@ async function loadDocumentSnapshot(
   let degraded = false
   const nextPreparationStates: Record<string, string> = {}
   const nextPreparationSubjects: Record<string, string> = {}
+  const nextPreparationRunDetails: Record<string, TeachingRunProgress> = {}
   await Promise.all([...expectedPreparationSubjects].map(async ([runId, versionId]) => {
     const previousState = preparationSubjects.value[runId] === versionId
       ? preparationStates.value[runId]
@@ -613,6 +716,9 @@ async function loadDocumentSnapshot(
     if (previousState && terminalTeachingStates.has(previousState)) {
       nextPreparationStates[runId] = previousState
       nextPreparationSubjects[runId] = versionId
+      if (preparationRunDetails.value[runId]) {
+        nextPreparationRunDetails[runId] = preparationRunDetails.value[runId]!
+      }
       return
     }
     try {
@@ -622,12 +728,26 @@ async function loadDocumentSnapshot(
       })
       nextPreparationStates[runId] = run.state
       nextPreparationSubjects[runId] = run.subjectId
+      try {
+        const progress = parseTeachingRunProgress(details, {
+          id: runId, mode: 'TEACHING_PREPARATION', subjectId: versionId, ownerUsername: targetAccount,
+        })
+        nextPreparationRunDetails[runId] = mergeTeachingRunProgress(
+          preparationRunDetails.value[runId] ?? null,
+          progress,
+        )!
+      } catch {
+        // State and ownership are still authoritative; detailed activities are optional enrichment.
+      }
     } catch {
       if (signal.aborted) throw new DOMException('Aborted', 'AbortError')
       degraded = true
       if (previousState) {
         nextPreparationStates[runId] = previousState
         nextPreparationSubjects[runId] = versionId
+      }
+      if (preparationRunDetails.value[runId]) {
+        nextPreparationRunDetails[runId] = preparationRunDetails.value[runId]!
       }
     }
   }))
@@ -658,6 +778,7 @@ async function loadDocumentSnapshot(
     progress: nextProgress,
     preparationStates: nextPreparationStates,
     preparationSubjects: nextPreparationSubjects,
+    preparationRunDetails: nextPreparationRunDetails,
     degraded,
   }
 }
@@ -674,6 +795,7 @@ async function bridgeCompletedPreparations(
     const runId = job.teachingPreparationRunId
     const versionId = job.documentVersionId
     if (!runId || !versionId
+      || job.teachingHandoffState === 'FAILED'
       || rulebooks.preparationStates[runId] !== 'COMPLETED'
       || dismissedImportIds.value.has(job.id)) continue
     candidatesByVersion.set(versionId, {
@@ -842,6 +964,8 @@ function commitRefresh(
   activeTeaching.value = teaching.active
   completedTeaching.value = teaching.completed
   teachingStates.value = teaching.states
+  teachingRunDetails.value = teaching.runDetails
+  teachingPlanDetails.value = teaching.planDetails
   titles.clear()
   for (const [planId, title] of teaching.resolvedTitles) titles.set(planId, title)
   imports.value = rulebooks.imports
@@ -850,6 +974,7 @@ function commitRefresh(
   documentProgress.value = rulebooks.progress
   preparationStates.value = rulebooks.preparationStates
   preparationSubjects.value = rulebooks.preparationSubjects
+  preparationRunDetails.value = rulebooks.preparationRunDetails
   preparationTeachingTransitions.value = transitions
   preparationTeachingPlanIds.clear()
   for (const [id, plan] of planIds) preparationTeachingPlanIds.set(id, plan)
@@ -1055,12 +1180,15 @@ function switchAccount(nextUsername: string) {
   activeTeaching.value = []
   completedTeaching.value = []
   teachingStates.value = {}
+  teachingRunDetails.value = {}
+  teachingPlanDetails.value = {}
   imports.value = []
   uploadedTeachingHandoffs.value = []
   documents.value = []
   documentProgress.value = {}
   preparationStates.value = {}
   preparationSubjects.value = {}
+  preparationRunDetails.value = {}
   preparationTeachingTransitions.value = []
   preparationTeachingPlanIds.clear()
   dismissedImportIds.value = new Set()

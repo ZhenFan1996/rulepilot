@@ -1,3 +1,5 @@
+import type { TeachingProgressPlan, TeachingRunProgress } from './teachingProgress'
+
 export interface TeachingPlanSummary {
   id: string
   gameTitle: string
@@ -29,6 +31,7 @@ export interface RulebookImportJob {
   teachingHandoffState?: 'NOT_REQUESTED' | 'WAITING_FOR_DOCUMENT' | 'LAUNCHING' | 'LAUNCHED' | 'FAILED'
   teachingPreparationRunId?: string | null
   teachingErrorCode?: string | null
+  teachingAutomaticRecoveryCount?: number
   downloadCompletedAt?: string | null
   importCompletedAt?: string | null
   teachingHandoffUpdatedAt?: string | null
@@ -152,6 +155,80 @@ export function parseExpectedAssistantRun(
   return run
 }
 
+export function parseTeachingRunProgress(
+  value: unknown,
+  expected: Omit<AssistantRunSnapshot, 'state' | 'updatedAt'>,
+): TeachingRunProgress {
+  const run = parseExpectedAssistantRun(value, expected)
+  if (!isRecord(value)
+    || !isRecord(value.run)
+    || !validTimestamp(value.run.createdAt)
+    || !validTimestamp(value.run.updatedAt)
+    || !nullableTimestamp(value.run.completedAt)
+    || !nullableBoundedString(value.run.lastErrorCode, 160)
+    || !isRecord(value.budget)
+    || !nonNegativeInteger(value.budget.usedModelCalls)
+    || !nonNegativeInteger(value.budget.maxModelCalls)
+    || !Array.isArray(value.activities)) {
+    throw new Error('background teaching progress is invalid')
+  }
+  const activities = value.activities.map((entry) => {
+    if (!isRecord(entry)
+      || !nonNegativeInteger(entry.sequence)
+      || !['TOOL', 'MODEL', 'CRITIC', 'VALIDATION'].includes(String(entry.type))
+      || typeof entry.operation !== 'string' || entry.operation.trim().length === 0
+      || typeof entry.summary !== 'string'
+      || !['RUNNING', 'SUCCEEDED', 'FAILED', 'REJECTED'].includes(String(entry.outcome))
+      || !nonNegativeInteger(entry.latencyMs)
+      || !validTimestamp(entry.occurredAt)) {
+      throw new Error('background teaching activity is invalid')
+    }
+    return entry as unknown as TeachingRunProgress['activities'][number]
+  })
+  return {
+    run: {
+      id: run.id,
+      subjectId: run.subjectId,
+      state: run.state,
+      createdAt: value.run.createdAt,
+      updatedAt: value.run.updatedAt,
+      completedAt: value.run.completedAt as string | null,
+      lastErrorCode: value.run.lastErrorCode as string | null,
+    },
+    budget: {
+      usedModelCalls: value.budget.usedModelCalls,
+      maxModelCalls: value.budget.maxModelCalls,
+    },
+    activities,
+  }
+}
+
+export function parseTeachingProgressPlan(value: unknown, expectedPlanId: string): TeachingProgressPlan & {
+  id: string
+  gameTitle: string
+} {
+  if (!isRecord(value)
+    || value.id !== expectedPlanId
+    || typeof value.gameTitle !== 'string' || value.gameTitle.trim().length === 0
+    || value.sections !== undefined && !Array.isArray(value.sections)) {
+    throw new Error('background teaching plan progress is invalid')
+  }
+  const sections = (value.sections ?? []).map((entry, index) => {
+    if (!isRecord(entry)
+      || !Number.isInteger(entry.position) || entry.position !== index + 1
+      || typeof entry.title !== 'string' || entry.title.trim().length === 0
+      || typeof entry.visualEvidenceRecommended !== 'boolean') {
+      throw new Error('background teaching plan section is invalid')
+    }
+    return {
+      position: entry.position,
+      title: entry.title,
+      visualEvidenceRecommended: entry.visualEvidenceRecommended,
+    }
+  })
+  return { id: expectedPlanId, gameTitle: value.gameTitle, sections }
+}
+
 export function parseRulebookImports(value: unknown): RulebookImportJob[] {
   if (!Array.isArray(value)) throw new Error('background imports are invalid')
   const seenIds = new Set<string>()
@@ -170,6 +247,9 @@ export function parseRulebookImports(value: unknown): RulebookImportJob[] {
       || !importHandoffStates.has(entry.teachingHandoffState)
       || !nullableBoundedString(entry.teachingPreparationRunId, 128)
       || !nullableBoundedString(entry.teachingErrorCode, 160)
+      || entry.teachingAutomaticRecoveryCount !== undefined
+        && (!nonNegativeInteger(entry.teachingAutomaticRecoveryCount)
+          || entry.teachingAutomaticRecoveryCount > 1)
       || !nullableTimestamp(entry.downloadCompletedAt)
       || !nullableTimestamp(entry.importCompletedAt)
       || !nullableTimestamp(entry.teachingHandoffUpdatedAt)
