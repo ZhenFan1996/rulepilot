@@ -499,13 +499,17 @@ class OfficialRulebookImportJobServiceTest {
         UUID editionId = automaticTeachingCommand().editionId();
         UUID documentVersionId = UUID.randomUUID();
         UUID preparationRunId = UUID.randomUUID();
+        Instant originalActivity = NOW.minus(Duration.ofHours(1));
         var completed = OfficialRulebookImportJob.queued(
-                UUID.randomUUID(), "alice", editionId, "Example Rules",
-                DocumentSourceType.BASE_RULEBOOK, SOURCE, true, null, NOW);
+                UUID.randomUUID(), "alice", editionId, "Example Rules", DocumentSourceType.BASE_RULEBOOK,
+                SOURCE, true, null, originalActivity);
         jobs.insert(completed);
-        jobs.complete(completed.id(), documentVersionId, false, NOW);
-        jobs.claimReadyTeachingForDocument(documentVersionId, 1, NOW);
-        jobs.completeTeachingLaunch(completed.id(), preparationRunId, NOW);
+        jobs.complete(completed.id(), documentVersionId, false, originalActivity);
+        jobs.claimReadyTeachingForDocument(documentVersionId, 1, originalActivity);
+        jobs.completeTeachingLaunch(completed.id(), preparationRunId, originalActivity);
+        jobs.insert(OfficialRulebookImportJob.queued(
+                UUID.randomUUID(), "alice", null, "More recent unrelated rules",
+                DocumentSourceType.BASE_RULEBOOK, SOURCE + "?other", NOW.minusSeconds(1)));
         RulebookTeachingEvidenceFreshness freshness = mock(RulebookTeachingEvidenceFreshness.class);
         OfficialRulebookImportJobService service = new OfficialRulebookImportJobService(
                 jobs,
@@ -521,6 +525,9 @@ class OfficialRulebookImportJobServiceTest {
 
         assertThat(launch.job().teachingHandoff().state()).isEqualTo(TeachingHandoffState.LAUNCHED);
         assertThat(launch.job().teachingHandoff().preparationRunId()).isEqualTo(preparationRunId);
+        assertThat(launch.job().updatedAt()).isEqualTo(NOW);
+        assertThat(service.recentOwned("alice")).first().extracting(OfficialRulebookImportJob::id)
+                .isEqualTo(completed.id());
         verify(freshness).requiresRefresh(documentVersionId, preparationRunId, "alice");
     }
 
@@ -858,7 +865,19 @@ class OfficialRulebookImportJobServiceTest {
 
         @Override
         public List<OfficialRulebookImportJob> findRecentOwned(String ownerUsername, int limit) {
-            return values.values().stream().filter(job -> job.ownerUsername().equals(ownerUsername)).limit(limit).toList();
+            return values.values().stream()
+                    .filter(job -> job.ownerUsername().equals(ownerUsername))
+                    .sorted(java.util.Comparator.comparing(OfficialRulebookImportJob::updatedAt).reversed())
+                    .limit(limit)
+                    .toList();
+        }
+
+        @Override
+        public void recordReuse(UUID jobId, Instant now) {
+            var job = values.get(jobId);
+            values.put(jobId, copy(job, job.stage(), job.downloadedBytes(), job.totalBytes(),
+                    job.documentVersionId(), job.duplicate(), job.errorCode(),
+                    job.teachingHandoff(), now, job.completedAt()));
         }
 
         @Override

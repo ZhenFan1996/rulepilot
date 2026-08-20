@@ -140,13 +140,13 @@ public class OfficialRulebookImportJobService implements RulebookTeachingHandoff
         }
         confirmCatalogLanguageAfterPlayerReview(checked, identityReview);
         if (active.isPresent()) {
-            return new Launch(ensureTeachingRequested(active.orElseThrow(), checked), true);
+            return reusedLaunch(active.orElseThrow(), checked);
         }
         if (checked.startTeaching()) {
             var completed = jobs.findCompletedOwnedBySourceAndEdition(
                     owner, checked.officialSourceUrl(), checked.editionId());
             if (completed.isPresent()) {
-                return new Launch(ensureTeachingRequested(completed.orElseThrow(), checked), true);
+                return reusedLaunch(completed.orElseThrow(), checked);
             }
         }
         Instant now = Instant.now(clock);
@@ -161,6 +161,12 @@ public class OfficialRulebookImportJobService implements RulebookTeachingHandoff
             return new Launch(requireOwned(job.id(), owner), false);
         }
         return new Launch(job, false);
+    }
+
+    private Launch reusedLaunch(OfficialRulebookImportJob job, Command command) {
+        jobs.recordReuse(job.id(), Instant.now(clock));
+        OfficialRulebookImportJob current = requireOwned(job.id(), job.ownerUsername());
+        return new Launch(ensureTeachingRequested(current, command), true);
     }
 
     private OfficialRulebookImportIdentity.Review reviewIdentity(

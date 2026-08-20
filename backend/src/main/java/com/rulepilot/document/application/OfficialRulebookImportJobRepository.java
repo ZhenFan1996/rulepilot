@@ -21,6 +21,8 @@ public interface OfficialRulebookImportJobRepository {
 
     List<OfficialRulebookImportJob> findRecentOwned(String ownerUsername, int limit);
 
+    void recordReuse(UUID jobId, Instant now);
+
     void requestTeaching(UUID jobId, String learningGoal, Instant now);
 
     boolean retryTeaching(UUID jobId, UUID expectedPreparationRunId, Instant now);

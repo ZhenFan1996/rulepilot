@@ -113,7 +113,7 @@ class JpaOfficialRulebookImportJobRepository implements OfficialRulebookImportJo
     public List<OfficialRulebookImportJob> findRecentOwned(String ownerUsername, int limit) {
         return entityManager
                 .createQuery(
-                        "select job from OfficialRulebookImportJobEntity job where job.ownerUsername = :owner order by job.createdAt desc",
+                        "select job from OfficialRulebookImportJobEntity job where job.ownerUsername = :owner order by job.updatedAt desc, job.createdAt desc",
                         OfficialRulebookImportJobEntity.class)
                 .setParameter("owner", ownerUsername)
                 .setMaxResults(limit)
@@ -121,6 +121,17 @@ class JpaOfficialRulebookImportJobRepository implements OfficialRulebookImportJo
                 .stream()
                 .map(OfficialRulebookImportJobEntity::toDomain)
                 .toList();
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void recordReuse(UUID jobId, Instant now) {
+        entityManager
+                .createQuery(
+                        "update OfficialRulebookImportJobEntity job set job.updatedAt = :now where job.id = :jobId and job.updatedAt < :now")
+                .setParameter("now", now)
+                .setParameter("jobId", jobId)
+                .executeUpdate();
     }
 
     @Override
