@@ -6,6 +6,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.rulepilot.assistant.AssistantRuns;
+import com.rulepilot.document.TeachingHandoffDismissals;
 import com.rulepilot.teaching.domain.IllustratedLesson;
 import com.rulepilot.teaching.domain.TeachingPlan;
 import java.time.Instant;
@@ -19,7 +20,8 @@ class TeachingPlanRemovalServiceTest {
     private final TeachingPlanRepository plans = mock(TeachingPlanRepository.class);
     private final IllustratedLessonRepository lessons = mock(IllustratedLessonRepository.class);
     private final AssistantRuns runs = mock(AssistantRuns.class);
-    private final TeachingPlanRemovalService service = new TeachingPlanRemovalService(plans, lessons, runs);
+    private final TeachingHandoffDismissals handoffs = mock(TeachingHandoffDismissals.class);
+    private final TeachingPlanRemovalService service = new TeachingPlanRemovalService(plans, lessons, runs, handoffs);
 
     @Test
     void removesOnlyAnOwnedPlan() {
@@ -29,6 +31,7 @@ class TeachingPlanRemovalServiceTest {
         service.removeOwned(plan.id(), "alice");
 
         verify(plans).delete(plan.id());
+        verify(handoffs).dismissOwnedForDocumentVersion(plan.documentVersionId(), "alice");
         verify(runs).deleteOwned(com.rulepilot.assistant.AssistantRunMode.TEACHING, plan.id(), "alice");
         verify(runs).deleteOwned(com.rulepilot.assistant.AssistantRunMode.VISUAL_ENRICHMENT, plan.id(), "alice");
     }

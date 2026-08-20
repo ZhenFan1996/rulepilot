@@ -121,13 +121,23 @@ class VisualRulebookTeachingEvidenceFreshnessTest {
     }
 
     @Test
-    void restartsATerminalPreparationThatFailedInsteadOfTreatingItAsCurrent() {
+    void marksATransientPreparationFailureAsRetryable() {
         UUID preparationRunId = preparationRunId();
         when(runs.findOwned(preparationRunId, "alice")).thenReturn(Optional.of(details(
                 preparationRunId, AssistantRunState.FAILED)));
 
         assertThat(freshness.assess(documentVersionId, preparationRunId, "alice"))
-                .isEqualTo(ReuseAssessment.REFRESH_REQUIRED);
+                .isEqualTo(ReuseAssessment.RETRYABLE_FAILURE);
+    }
+
+    @Test
+    void keepsADeterministicallyInvalidPlanTerminalInsteadOfBlindlyRegeneratingIt() {
+        UUID preparationRunId = preparationRunId();
+        when(runs.findOwned(preparationRunId, "alice")).thenReturn(Optional.of(details(
+                preparationRunId, AssistantRunState.FAILED, "TEACHING_PREPARATION_INVALID_PLAN")));
+
+        assertThat(freshness.assess(documentVersionId, preparationRunId, "alice"))
+                .isEqualTo(ReuseAssessment.TERMINAL_FAILURE);
     }
 
     private UUID preparationRunId() {
@@ -171,6 +181,10 @@ class VisualRulebookTeachingEvidenceFreshnessTest {
     }
 
     private AssistantRuns.RunDetails details(UUID runId, AssistantRunState state) {
+        return details(runId, state, null);
+    }
+
+    private AssistantRuns.RunDetails details(UUID runId, AssistantRunState state, String errorCode) {
         Instant now = Instant.parse("2026-08-17T00:00:00Z");
         var run = new AssistantRuns.RunSnapshot(
                 runId,
@@ -182,7 +196,7 @@ class VisualRulebookTeachingEvidenceFreshnessTest {
                 now,
                 now,
                 null,
-                null);
+                errorCode);
         var budget = new AgentExecutionControl.BudgetSnapshot(
                 40, 72, 36, 160_000, 0, 0, 0, now.plusSeconds(600), null);
         return new AssistantRuns.RunDetails(run, List.of(), budget, List.of());

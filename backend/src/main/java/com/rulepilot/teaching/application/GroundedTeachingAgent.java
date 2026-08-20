@@ -535,7 +535,16 @@ public class GroundedTeachingAgent {
         TeachingSectionEvidenceRetriever.Result resolution = evidenceRetriever.retrieve(
                 plan, planned, assistantRunId, queryBudget, mode.bindVisualPageEvidence());
         if (evidenceRefiner != null) {
-            resolution = evidenceRefiner.refine(plan, planned, assistantRunId, resolution);
+            try {
+                resolution = evidenceRefiner.refine(plan, planned, assistantRunId, resolution);
+            } catch (AgentExecutionStoppedException stopped) {
+                throw stopped;
+            } catch (RuntimeException optionalRefinementFailure) {
+                log.warn(
+                        "Optional teaching evidence refinement failed for topic {}; retaining verified base evidence: {}",
+                        planned.topicKey(),
+                        optionalRefinementFailure.getMessage());
+            }
         }
         if (!resolution.verified()) {
             return new SectionOutcome(

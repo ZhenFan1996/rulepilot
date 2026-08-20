@@ -19,6 +19,8 @@ public interface UploadedRulebookTeachingHandoffStore {
             State expectedState,
             UUID expectedPreparationRunId);
 
+    int dismissOwnedForDocumentVersion(UUID documentVersionId, String ownerUsername);
+
     List<Snapshot> findRecentOwned(String ownerUsername, int limit);
 
     List<Snapshot> claimReady(int limit, Instant now);

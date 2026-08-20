@@ -48,9 +48,19 @@ final class TeachingSectionEvidenceRetriever {
             int queryBudget,
             boolean bindVisualPageEvidence) {
         if (bindVisualPageEvidence && ProgressiveVisualTeachingPlanPolicy.isProgressive(plan)) {
-            List<RuleEvidence> evidence = visualEvidenceResolver.resolve(
-                    plan, planned, List.of(), assistantRunId);
-            return verifiedResult(plan, evidence, 1);
+            try {
+                List<RuleEvidence> evidence = visualEvidenceResolver.resolve(
+                        plan, planned, List.of(), assistantRunId);
+                return verifiedResult(plan, evidence, 1);
+            } catch (AgentExecutionStoppedException stopped) {
+                throw stopped;
+            } catch (RuntimeException visualFailure) {
+                log.warn(
+                        "Teaching visual evidence resolution failed for topic {}: {}",
+                        planned.topicKey(),
+                        visualFailure.getMessage());
+                return new Result(List.of(), 1, State.EMPTY);
+            }
         }
         Map<UUID, RuleEvidence> evidenceById = new LinkedHashMap<>();
         List<List<RuleEvidence>> evidenceByIntent = new ArrayList<>();
@@ -86,16 +96,31 @@ final class TeachingSectionEvidenceRetriever {
                 ? List.of()
                 : TeachingEvidenceRetrievalPolicy.balancedEvidence(evidenceByIntent);
         if (bindVisualPageEvidence) {
-            evidence = visualEvidenceResolver.resolve(plan, planned, evidence, assistantRunId);
+            try {
+                evidence = visualEvidenceResolver.resolve(plan, planned, evidence, assistantRunId);
+            } catch (AgentExecutionStoppedException stopped) {
+                throw stopped;
+            } catch (RuntimeException visualFailure) {
+                log.warn(
+                        "Optional visual evidence resolution failed for topic {}; retaining text evidence: {}",
+                        planned.topicKey(),
+                        visualFailure.getMessage());
+            }
         }
         return verifiedResult(plan, evidence, toolCalls);
     }
 
     private Result verifiedResult(TeachingPlan plan, List<RuleEvidence> evidence, int toolCalls) {
         if (evidence.isEmpty()) return new Result(List.of(), toolCalls, State.EMPTY);
-        boolean verified = evidenceVerifier.verify(new VerificationRequest(
-                        plan.documentVersionId(), evidence.stream().map(this::toVerifierEvidence).toList(), List.of()))
-                .verified();
+        boolean verified;
+        try {
+            verified = evidenceVerifier.verify(new VerificationRequest(
+                            plan.documentVersionId(), evidence.stream().map(this::toVerifierEvidence).toList(), List.of()))
+                    .verified();
+        } catch (RuntimeException verificationFailure) {
+            log.warn("Teaching evidence verification failed: {}", verificationFailure.getMessage());
+            verified = false;
+        }
         return verified
                 ? new Result(evidence, toolCalls, State.VERIFIED)
                 : new Result(List.of(), toolCalls, State.INVALID);

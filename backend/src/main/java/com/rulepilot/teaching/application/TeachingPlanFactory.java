@@ -17,8 +17,6 @@ import org.springframework.stereotype.Component;
 @Component
 public class TeachingPlanFactory {
 
-    private static final int MAX_TOPICS = 16;
-
     public TeachingPlan create(
             UUID documentVersionId,
             String createdBy,
@@ -71,7 +69,7 @@ public class TeachingPlanFactory {
     void validate(OutlineDraft outline) {
         if (outline == null || outline.gameTitle() == null || outline.gameTitle().isBlank()
                 || outline.premise() == null || outline.premise().isBlank()
-                || outline.topics().isEmpty() || outline.topics().size() > MAX_TOPICS) {
+                || outline.topics().isEmpty()) {
             throw new IllegalArgumentException("model did not produce a usable teaching outline");
         }
         TeachingSourceCoverageContract.validateStructure(outline);

@@ -978,7 +978,12 @@ test('recommendation becomes one readable, taught, and answerable production jou
     await expect(backgroundWork).toContainText(boundGame.game.name)
     report.globalStatusReopened = true
     await backgroundWork.getByRole('button', { name: '关闭后台任务' }).click()
-    await page.getByTestId('player-journey-dock').click()
+    const journeyProgressButton = page.getByTestId('player-journey-progress-button')
+    if (await journeyProgressButton.isVisible()) {
+      await journeyProgressButton.click()
+    } else {
+      await page.getByTestId('player-journey-dock').click()
+    }
     await expect(page.getByTestId('player-journey-surface')).toBeVisible()
     report.stage = 'import'
 

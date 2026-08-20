@@ -686,6 +686,12 @@ class OfficialRulebookTwentyGameRealChainEvaluationTest {
         }
 
         @Override
+        public boolean failTeachingTerminal(
+                UUID jobId, UUID expectedPreparationRunId, String errorCode, Instant now) {
+            return false;
+        }
+
+        @Override
         public boolean markTeachingReconciled(UUID jobId, UUID expectedPreparationRunId, Instant now) {
             return false;
         }
@@ -698,6 +704,12 @@ class OfficialRulebookTwentyGameRealChainEvaluationTest {
                 UUID expectedPreparationRunId,
                 Instant now) {
             return false;
+        }
+
+        @Override
+        public int dismissTeachingForDocumentVersion(
+                UUID documentVersionId, String ownerUsername, Instant now) {
+            return 0;
         }
 
         @Override

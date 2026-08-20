@@ -147,6 +147,21 @@ class JpaUploadedRulebookTeachingHandoffStore implements UploadedRulebookTeachin
     }
 
     @Override
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public int dismissOwnedForDocumentVersion(UUID documentVersionId, String ownerUsername) {
+        return entityManager
+                .createQuery(
+                        """
+                        delete from UploadedRulebookTeachingHandoffEntity handoff
+                        where handoff.documentVersionId = :versionId
+                          and handoff.ownerUsername = :owner
+                        """)
+                .setParameter("versionId", documentVersionId)
+                .setParameter("owner", ownerUsername)
+                .executeUpdate();
+    }
+
+    @Override
     public List<Snapshot> findRecentOwned(String ownerUsername, int limit) {
         return entityManager
                 .createQuery(

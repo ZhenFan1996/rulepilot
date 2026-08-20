@@ -341,7 +341,13 @@ public class OfficialRulebookImportJobService implements RulebookTeachingHandoff
             var handoff = job.teachingHandoff();
             ReuseAssessment assessment = teachingEvidenceFreshness.assess(
                     job.documentVersionId(), handoff.preparationRunId(), job.ownerUsername());
-            if (assessment == ReuseAssessment.REFRESH_REQUIRED) {
+            if (assessment == ReuseAssessment.TERMINAL_FAILURE) {
+                if (jobs.failTeachingTerminal(
+                        job.id(), handoff.preparationRunId(), "TEACHING_PREPARATION_INVALID_PLAN", Instant.now(clock))) {
+                    exhausted++;
+                }
+            } else if (assessment == ReuseAssessment.REFRESH_REQUIRED
+                    || assessment == ReuseAssessment.RETRYABLE_FAILURE) {
                 if (jobs.retryTeachingAutomatically(
                         job.id(), handoff.preparationRunId(), Instant.now(clock))) {
                     restarted++;
@@ -364,14 +370,16 @@ public class OfficialRulebookImportJobService implements RulebookTeachingHandoff
             return job;
         }
         if (job.teachingHandoff().state() == TeachingHandoffState.LAUNCHED
-                && job.documentVersionId() != null
-                && teachingEvidenceFreshness.assess(
-                        job.documentVersionId(),
-                        job.teachingHandoff().preparationRunId(),
-                        job.ownerUsername()) == ReuseAssessment.REFRESH_REQUIRED) {
-            jobs.retryTeaching(
-                    job.id(), job.teachingHandoff().preparationRunId(), Instant.now(clock));
-            return requireOwned(job.id(), job.ownerUsername());
+                && job.documentVersionId() != null) {
+            ReuseAssessment assessment = teachingEvidenceFreshness.assess(
+                    job.documentVersionId(),
+                    job.teachingHandoff().preparationRunId(),
+                    job.ownerUsername());
+            if (assessment != ReuseAssessment.REUSABLE && assessment != ReuseAssessment.IN_PROGRESS) {
+                jobs.retryTeaching(
+                        job.id(), job.teachingHandoff().preparationRunId(), Instant.now(clock));
+                return requireOwned(job.id(), job.ownerUsername());
+            }
         }
         if (job.teachingHandoff().state() != TeachingHandoffState.NOT_REQUESTED
                 && job.teachingHandoff().state() != TeachingHandoffState.FAILED) {

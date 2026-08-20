@@ -58,7 +58,9 @@ final class VisualRulebookTeachingEvidenceFreshness implements RulebookTeachingE
             return ReuseAssessment.IN_PROGRESS;
         }
         if (preparation.orElseThrow().state() != AssistantRunState.COMPLETED) {
-            return ReuseAssessment.REFRESH_REQUIRED;
+            return "TEACHING_PREPARATION_INVALID_PLAN".equals(preparation.orElseThrow().lastErrorCode())
+                    ? ReuseAssessment.TERMINAL_FAILURE
+                    : ReuseAssessment.RETRYABLE_FAILURE;
         }
         var plan = plans.findLatest(documentVersionId, owner);
         if (plan.isEmpty() || lessons.findLatestByPlan(plan.orElseThrow().id())

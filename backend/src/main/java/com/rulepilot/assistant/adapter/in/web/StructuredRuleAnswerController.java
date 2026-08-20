@@ -90,7 +90,11 @@ public class StructuredRuleAnswerController {
                     send(emitter, open, "result", response);
                     if (open.getAndSet(false)) emitter.complete();
                 } catch (RuntimeException exception) {
-                    LOGGER.warn("Structured answer stream did not complete: {}", exception.getClass().getSimpleName());
+                    LOGGER.warn(
+                            "Structured answer stream did not complete: {}: {}",
+                            exception.getClass().getSimpleName(),
+                            exception.getMessage(),
+                            exception);
                     sendError(emitter, open, "answer_unavailable");
                 }
             });

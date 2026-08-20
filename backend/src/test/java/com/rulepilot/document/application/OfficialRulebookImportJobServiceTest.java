@@ -585,7 +585,40 @@ class OfficialRulebookImportJobServiceTest {
                 .isEqualTo(TeachingHandoffState.FAILED);
         assertThat(jobs.findOwned(broken.id(), "alice").orElseThrow().teachingHandoff().errorCode())
                 .isEqualTo("TEACHING_RECOVERY_EXHAUSTED");
+        assertThat(jobs.findOwned(broken.id(), "alice").orElseThrow().teachingHandoff().preparationRunId())
+                .isEqualTo(recoveredRunId);
         assertThat(jobs.reconciled).containsExactly(usable.id());
+    }
+
+    @Test
+    void preservesTheFailedRunAndDoesNotBlindlyRetryADeterministicallyInvalidPlan() {
+        FakeJobs jobs = new FakeJobs();
+        UUID editionId = automaticTeachingCommand().editionId();
+        UUID documentVersionId = UUID.randomUUID();
+        UUID failedRunId = UUID.randomUUID();
+        var failed = launchedJob(jobs, editionId, documentVersionId, failedRunId, SOURCE);
+        RulebookTeachingEvidenceFreshness freshness = mock(RulebookTeachingEvidenceFreshness.class);
+        when(freshness.assess(documentVersionId, failedRunId, "alice"))
+                .thenReturn(ReuseAssessment.TERMINAL_FAILURE);
+        var service = new OfficialRulebookImportJobService(
+                jobs,
+                mock(RuleDocumentRepository.class),
+                mock(OfficialRulebookImportService.class),
+                mock(TaskExecutor.class),
+                (edition, language) -> false,
+                catalog(editionId, GAME_ID, "Opaque Edition", "en"),
+                freshness,
+                Clock.fixed(NOW, ZoneOffset.UTC));
+
+        var result = service.reconcileLaunched(4);
+
+        assertThat(result.restarted()).isZero();
+        assertThat(result.exhausted()).isOne();
+        var handoff = jobs.findOwned(failed.id(), "alice").orElseThrow().teachingHandoff();
+        assertThat(handoff.state()).isEqualTo(TeachingHandoffState.FAILED);
+        assertThat(handoff.preparationRunId()).isEqualTo(failedRunId);
+        assertThat(handoff.errorCode()).isEqualTo("TEACHING_PREPARATION_INVALID_PLAN");
+        assertThat(jobs.automaticallyRecovered).doesNotContain(failed.id());
     }
 
     private OfficialRulebookImportJob launchedJob(
@@ -1026,9 +1059,31 @@ class OfficialRulebookImportJobServiceTest {
                     new TeachingHandoff(
                             TeachingHandoffState.FAILED,
                             job.teachingHandoff().learningGoal(),
-                            null,
+                            expectedPreparationRunId,
                             "TEACHING_RECOVERY_EXHAUSTED",
                             1,
+                            now),
+                    now, job.completedAt()));
+            return true;
+        }
+
+        @Override
+        public boolean failTeachingTerminal(
+                UUID jobId, UUID expectedPreparationRunId, String errorCode, Instant now) {
+            var job = values.get(jobId);
+            if (job == null
+                    || job.teachingHandoff().state() != TeachingHandoffState.LAUNCHED
+                    || !java.util.Objects.equals(job.teachingHandoff().preparationRunId(), expectedPreparationRunId)) {
+                return false;
+            }
+            values.put(jobId, copy(job, job.stage(), job.downloadedBytes(), job.totalBytes(),
+                    job.documentVersionId(), job.duplicate(), job.errorCode(),
+                    new TeachingHandoff(
+                            TeachingHandoffState.FAILED,
+                            job.teachingHandoff().learningGoal(),
+                            expectedPreparationRunId,
+                            errorCode,
+                            job.teachingHandoff().automaticRecoveryCount(),
                             now),
                     now, job.completedAt()));
             return true;
@@ -1055,6 +1110,12 @@ class OfficialRulebookImportJobServiceTest {
                 UUID expectedPreparationRunId,
                 Instant now) {
             return false;
+        }
+
+        @Override
+        public int dismissTeachingForDocumentVersion(
+                UUID documentVersionId, String ownerUsername, Instant now) {
+            return 0;
         }
 
         @Override

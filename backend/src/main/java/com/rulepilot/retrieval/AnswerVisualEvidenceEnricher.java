@@ -92,10 +92,21 @@ final class AnswerVisualEvidenceEnricher {
                 }
                 continue;
             }
-            if (existing != null && !AnswerEvidencePolicy.isVisualPlaceholder(existing)) {
-                evidenceById.put(source.chunkId(), enrichedTextHit(existing, fact, rankByPage.get(source.pageFrom())));
-            } else {
-                evidenceById.put(source.chunkId(), visualOnlyHit(source, fact, rankByPage.get(source.pageFrom())));
+            try {
+                if (existing != null && !AnswerEvidencePolicy.isVisualPlaceholder(existing)) {
+                    evidenceById.put(
+                            source.chunkId(), enrichedTextHit(existing, fact, rankByPage.get(source.pageFrom())));
+                } else {
+                    evidenceById.put(source.chunkId(), visualOnlyHit(source, fact, rankByPage.get(source.pageFrom())));
+                }
+            } catch (RuntimeException invalidOptionalVisualEvidence) {
+                if (existing == null || AnswerEvidencePolicy.isVisualPlaceholder(existing)) {
+                    evidenceById.remove(source.chunkId());
+                }
+                LOGGER.warn(
+                        "Ignoring invalid optional visual evidence on page {} while retaining canonical text evidence",
+                        source.pageFrom());
+                continue;
             }
             enriched.add(source.chunkId());
         }

@@ -4,6 +4,7 @@ import com.rulepilot.document.FailedTeachingHandoffRemovals;
 import com.rulepilot.document.FailedTeachingHandoffRemovals.Candidate;
 import com.rulepilot.document.FailedTeachingHandoffRemovals.HandoffState;
 import com.rulepilot.document.FailedTeachingHandoffRemovals.Origin;
+import com.rulepilot.document.TeachingHandoffDismissals;
 import com.rulepilot.document.domain.OfficialRulebookImportJob;
 import com.rulepilot.document.domain.ProcessingStatus;
 import java.time.Clock;
@@ -17,7 +18,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 @Service
 @Profile("!test")
-public class FailedTeachingHandoffRemovalService implements FailedTeachingHandoffRemovals {
+public class FailedTeachingHandoffRemovalService implements FailedTeachingHandoffRemovals, TeachingHandoffDismissals {
 
     private final OfficialRulebookImportJobRepository officialImports;
     private final UploadedRulebookTeachingHandoffStore uploads;
@@ -75,6 +76,16 @@ public class FailedTeachingHandoffRemovalService implements FailedTeachingHandof
                     UploadedRulebookTeachingHandoffStore.State.valueOf(candidate.handoffState().name()),
                     candidate.preparationRunId());
         };
+    }
+
+    @Override
+    @Transactional
+    public void dismissOwnedForDocumentVersion(UUID documentVersionId, String ownerUsername) {
+        if (documentVersionId == null) throw new IllegalArgumentException("teaching document version is required");
+        String owner = checkedOwner(ownerUsername);
+        Instant now = Instant.now(clock);
+        officialImports.dismissTeachingForDocumentVersion(documentVersionId, owner, now);
+        uploads.dismissOwnedForDocumentVersion(documentVersionId, owner);
     }
 
     private Optional<Candidate> officialCandidate(OfficialRulebookImportJob job) {

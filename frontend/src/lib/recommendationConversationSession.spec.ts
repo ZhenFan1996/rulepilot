@@ -25,6 +25,7 @@ const snapshot: RecommendationConversationSnapshot = {
   ],
   knownGames: [{ bggId: 1, name: '候选一', originalName: 'Candidate One' }],
   shownBggIds: [1],
+  selectedBggId: 1,
   failed: true,
   pending: {
     message: '换一批',

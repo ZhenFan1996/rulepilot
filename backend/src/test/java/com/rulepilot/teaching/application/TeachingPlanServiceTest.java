@@ -241,7 +241,7 @@ class TeachingPlanServiceTest {
     }
 
     @Test
-    void sourceLedgerFallbackCannotReplaceTheMissingWholeGameUnderstanding() {
+    void invalidSourceDependencyCannotBeReplacedByALowerQualityFallback() {
         UUID documentVersionId = UUID.randomUUID();
         List<PageView> visualPages = List.of(new PageView(1, "", 0));
         DocumentProcessing documents = mock(DocumentProcessing.class);
@@ -262,7 +262,6 @@ class TeachingPlanServiceTest {
                                 + "Printed terms: PLAY A CARD; First Session Booklet\n"
                                 + "Visible facts: 当前玩家打出一张牌并执行行动。\nKeywords: action",
                         List.of(new SourceDependency("First Session Booklet", List.of("setup"))))));
-        var fallback = new FakeTeachingOutlineModel();
         com.rulepilot.teaching.TeachingOutlineModel outlines = new com.rulepilot.teaching.TeachingOutlineModel() {
             @Override
             public OutlineDraft organize(OutlineRequest request) {
@@ -270,11 +269,6 @@ class TeachingPlanServiceTest {
                         "overconfident",
                         List.of("setup", "core_loop", "end", "scoring", "source_coverage"),
                         List.of(1))));
-            }
-
-            @Override
-            public OutlineDraft fallback(OutlineRequest request) {
-                return fallback.organize(request);
             }
         };
         when(publication.publish(any(TeachingPlan.class), eq("Example Game")))
@@ -292,7 +286,7 @@ class TeachingPlanServiceTest {
 
         assertThatThrownBy(() -> service.create(documentVersionId, "Teach this safely", "alice", null))
                 .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("whole-game understanding")
+                .hasMessageContaining("source-bound teaching outline")
                 .hasMessageContaining("retry preparation");
         verifyNoInteractions(publication);
     }
@@ -317,7 +311,6 @@ class TeachingPlanServiceTest {
                         1,
                         "GROUP A; GROUP B; GROUP C; GROUP D; GROUP E",
                         "Five independent source relations are visible on this page.")));
-        var fallback = new FakeTeachingOutlineModel();
         com.rulepilot.teaching.TeachingOutlineModel outlines = new com.rulepilot.teaching.TeachingOutlineModel() {
             @Override
             public OutlineDraft organize(OutlineRequest request) {
@@ -333,11 +326,6 @@ class TeachingPlanServiceTest {
                                 List.of("GROUP A", "GROUP B", "GROUP C", "GROUP D"),
                                 List.of("setup", "core_loop", "end", "scoring", "source_coverage"),
                                 List.of(1))));
-            }
-
-            @Override
-            public OutlineDraft fallback(OutlineRequest request) {
-                return fallback.organize(request);
             }
         };
         when(publication.publish(any(TeachingPlan.class), eq("Example Game")))
@@ -408,7 +396,6 @@ class TeachingPlanServiceTest {
                         documentVersionId, "Teach the complete source without guessing", "alice", assistantRunId))
                 .isInstanceOf(OutlineGenerationException.class)
                 .hasRootCauseMessage("teaching outline topic is invalid");
-        verify(outlines, never()).fallback(any());
         verifyNoInteractions(publication);
     }
 
@@ -453,7 +440,6 @@ class TeachingPlanServiceTest {
                         documentVersionId, "Teach this source", "alice", null))
                 .isInstanceOf(OutlineGenerationException.class)
                 .hasRootCauseMessage("teaching outline topic is invalid");
-        verify(outlines, never()).fallback(any());
         verifyNoInteractions(publication);
     }
 
@@ -485,7 +471,6 @@ class TeachingPlanServiceTest {
         assertThatThrownBy(() -> service.create(documentVersionId, null, "alice", null))
                 .isInstanceOf(OutlineGenerationException.class)
                 .hasRootCauseMessage("teaching outline topic is invalid");
-        verify(outlines, never()).fallback(any());
         verifyNoInteractions(publication);
     }
 
@@ -524,7 +509,6 @@ class TeachingPlanServiceTest {
                         documentVersionId, "Teach the complete source", "alice", null))
                 .isInstanceOfSatisfying(AgentExecutionStoppedException.class,
                         stopped -> assertThat(stopped.reason()).isEqualTo(StopReason.CANCELLED));
-        verify(outlines, never()).fallback(any());
         verifyNoInteractions(publication);
     }
 
@@ -615,7 +599,6 @@ class TeachingPlanServiceTest {
             assertThat(section.coverageTags()).contains("setup", "core_loop", "end", "scoring");
         });
         verify(outlines).refineChapterOwnership(any(), any(), any());
-        verify(outlines, never()).fallback(any());
     }
 
     @Test
@@ -651,7 +634,6 @@ class TeachingPlanServiceTest {
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("whole-game understanding")
                 .hasMessageContaining("retry preparation");
-        verify(outlines, never()).fallback(any());
         verifyNoInteractions(publication);
     }
 
@@ -772,213 +754,6 @@ class TeachingPlanServiceTest {
                 .hasValueSatisfying(feedback -> assertThat(feedback)
                         .contains("Page 2:", "Opaque source content")
                         .doesNotContain("Page 1:", "Page 3:"));
-    }
-
-    @Test
-    void visualCoverageAdmissionDoesNotClassifyCoversOrEndingsByWords() {
-        List<PageInput> pages = List.of(
-                visualPage(1, "COVER", "A non-trivial factual ledger describing visible identity artwork."),
-                visualPage(2, "QXZ", "A non-trivial factual ledger describing an unfamiliar operation."));
-        OutlineDraft onlySecond = outline(List.of(new TopicDraft(
-                "opaque",
-                "Opaque",
-                "Own only the second source page.",
-                true,
-                true,
-                List.of("QXZ", "A non-trivial factual ledger describing an unfamiliar operation."),
-                List.of("core_loop"),
-                List.of(2))));
-
-        assertThatThrownBy(() -> VisualOutlineEvidencePolicy.validateVisualRulebookCoverage(onlySecond, pages))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("[1]");
-
-        OutlineDraft dependencyDoesNotCoverRules = outline(List.of(
-                topic("missing-source", List.of("source_dependency", "missing_setup_source"), List.of(1)),
-                new TopicDraft(
-                        "opaque",
-                        "Opaque",
-                        "Own only the second source page.",
-                        true,
-                        true,
-                        List.of("QXZ", "A non-trivial factual ledger describing an unfamiliar operation."),
-                        List.of("core_loop"),
-                        List.of(2))));
-        assertThatThrownBy(() -> VisualOutlineEvidencePolicy.validateVisualRulebookCoverage(
-                        dependencyDoesNotCoverRules, pages))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("[1]");
-
-        OutlineDraft both = outline(List.of(new TopicDraft(
-                "opaque",
-                "Opaque",
-                "Preserve both page ledgers.",
-                true,
-                true,
-                List.of(
-                        "COVER",
-                        "A non-trivial factual ledger describing visible identity artwork.",
-                        "QXZ",
-                        "A non-trivial factual ledger describing an unfamiliar operation."),
-                List.of("core_loop"),
-                List.of(1, 2))));
-        VisualOutlineEvidencePolicy.validateVisualRulebookCoverage(both, pages);
-    }
-
-    @Test
-    void visualCoverageRejectsAReferencedPageWhenItsFifthSourceRuleGroupWasDropped() {
-        List<PageInput> pages = List.of(visualPage(
-                1,
-                "GROUP A; GROUP B; GROUP C; GROUP D; GROUP E",
-                "Five independent opaque source groups are visible on this page."));
-        OutlineDraft shortened = outline(List.of(new TopicDraft(
-                "shortened",
-                "Shortened",
-                "Keep only part of the page ledger.",
-                true,
-                true,
-                List.of("GROUP A", "GROUP B", "GROUP C", "GROUP D"),
-                List.of("setup", "core_loop", "end", "scoring", "source_coverage"),
-                List.of(1))));
-
-        assertThatThrownBy(() -> VisualOutlineEvidencePolicy.validateVisualRulebookCoverage(shortened, pages))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("GROUP E")
-                .hasMessageContaining("page 1");
-    }
-
-    @Test
-    void visualCoverageRejectsARewrittenIdentifierThatCannotProveTheSourceGroupWasPreserved() {
-        List<PageInput> pages = List.of(visualPage(
-                1,
-                "OPAQUE SOURCE IDENTIFIER",
-                "A directly visible source rule relation accompanies the identifier."));
-        OutlineDraft rewritten = outline(List.of(new TopicDraft(
-                "rewritten",
-                "Rewritten",
-                "Replace the source identifier with a plausible paraphrase.",
-                true,
-                true,
-                List.of("similar sounding summary"),
-                List.of("setup", "core_loop", "end", "scoring", "source_coverage"),
-                List.of(1))));
-
-        assertThatThrownBy(() -> VisualOutlineEvidencePolicy.validateVisualRulebookCoverage(rewritten, pages))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("OPAQUE SOURCE IDENTIFIER");
-    }
-
-    @Test
-    void visualCoverageRejectsSourceRuleGroupsMovedToDifferentPages() {
-        List<PageInput> pages = List.of(
-                visualPage(1, "PAGE ONE GROUP", "A complete first-page source relation."),
-                visualPage(2, "PAGE TWO GROUP", "A complete second-page source relation."));
-        OutlineDraft swapped = outline(List.of(
-                new TopicDraft(
-                        "first",
-                        "First",
-                        "Incorrectly bind the second identifier to the first page.",
-                        true,
-                        true,
-                        List.of("PAGE TWO GROUP"),
-                        List.of("setup", "core_loop", "source_coverage"),
-                        List.of(1)),
-                new TopicDraft(
-                        "second",
-                        "Second",
-                        "Incorrectly bind the first identifier to the second page.",
-                        true,
-                        true,
-                        List.of("PAGE ONE GROUP"),
-                        List.of("end", "scoring", "source_coverage"),
-                        List.of(2))));
-
-        assertThatThrownBy(() -> VisualOutlineEvidencePolicy.validateVisualRulebookCoverage(swapped, pages))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("page 1")
-                .hasMessageContaining("PAGE ONE GROUP");
-    }
-
-    @Test
-    void visualCoverageAcceptsEveryExactSourceRuleGroupOnItsOwnPageAfterIdentityNormalization() {
-        List<PageInput> pages = List.of(visualPage(
-                1,
-                "FIRST OPAQUE GROUP; SECOND OPAQUE GROUP",
-                "Two independent source relations are visible."));
-        OutlineDraft complete = outline(List.of(new TopicDraft(
-                "complete-ledger",
-                "Complete ledger",
-                "Preserve every source identifier on its owning page.",
-                true,
-                true,
-                List.of(
-                        "  first   opaque group ",
-                        "second opaque group",
-                        "Two independent source relations are visible."),
-                List.of("setup", "core_loop", "end", "scoring", "source_coverage"),
-                List.of(1))));
-
-        VisualOutlineEvidencePolicy.validateVisualRulebookCoverage(complete, pages);
-    }
-
-    @Test
-    void visualCoverageDoesNotCountAnExternalSourceTitleAsAnExecutableRuleGroup() {
-        List<PageInput> pages = List.of(new PageInput(
-                1,
-                TeachingOutlineRevisionPolicy.VISUAL_CATALOG_PREFIX
-                        + "\nPrinted terms: PLAY A CARD; First Session Booklet"
-                        + "\nVisible facts: The current player executes the visible card action."
-                        + "\nKeywords: opaque",
-                List.of(new SourceDependency("First Session Booklet", List.of("setup")))));
-        OutlineDraft separated = outline(List.of(
-                new TopicDraft(
-                        "page-rule",
-                        "Page rule",
-                        "Teach only the directly visible action.",
-                        true,
-                        true,
-                        List.of("PLAY A CARD", "The current player executes the visible card action."),
-                        List.of("core_loop", "end", "scoring", "source_coverage"),
-                        List.of(1)),
-                new TopicDraft(
-                        "missing-source",
-                        "Missing source",
-                        "Name the external source without reconstructing it.",
-                        true,
-                        false,
-                        List.of("First Session Booklet"),
-                        List.of("source_dependency", "missing_setup_source"),
-                        List.of(1))));
-
-        VisualOutlineEvidencePolicy.validateVisualRulebookCoverage(separated, pages);
-    }
-
-    @Test
-    void visualCoreValidationUsesStructuredTagsAndKnownPageBindingsOnly() {
-        List<PageInput> pages = List.of(
-                visualPage(1, "A", "A complete first page factual observation ledger."),
-                visualPage(2, "B", "A complete second page factual observation ledger."));
-        OutlineDraft complete = outline(List.of(
-                topic("s", List.of("setup"), List.of(1)),
-                topic("c", List.of("core_loop"), List.of(1)),
-                topic("e", List.of("end"), List.of(2)),
-                topic("p", List.of("scoring"), List.of(2))));
-
-        VisualOutlineEvidencePolicy.validateVisualCoreTopicBindings(complete, pages);
-
-        OutlineDraft setupExplicitlyMissing = outline(List.of(
-                topic("missing-setup", List.of("source_dependency", "missing_setup_source"), List.of(1)),
-                topic("c", List.of("core_loop"), List.of(1)),
-                topic("e", List.of("end"), List.of(2)),
-                topic("p", List.of("scoring"), List.of(2))));
-        VisualOutlineEvidencePolicy.validateVisualCoreTopicBindings(setupExplicitlyMissing, pages);
-        assertThat(setupExplicitlyMissing.topics()).flatExtracting(TopicDraft::coverageTags)
-                .doesNotContain("setup");
-
-        OutlineDraft missingScoring = outline(complete.topics().subList(0, 3));
-        assertThatThrownBy(() -> VisualOutlineEvidencePolicy.validateVisualCoreTopicBindings(missingScoring, pages))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("scoring");
     }
 
     @Test

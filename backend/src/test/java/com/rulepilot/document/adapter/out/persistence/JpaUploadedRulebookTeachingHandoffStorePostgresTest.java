@@ -259,6 +259,47 @@ class JpaUploadedRulebookTeachingHandoffStorePostgresTest {
                 .isOne();
     }
 
+    @Test
+    void deletingALessonWithdrawsOnlyThePersistedUploadHandoffForItsDocumentVersion() {
+        Instant now = Instant.parse("2026-08-10T11:45:00Z");
+        UUID dismissedVersionId = insertDocument("READY");
+        UUID retainedVersionId = insertDocument("READY");
+        UUID dismissedHandoffId = UUID.randomUUID();
+        UUID retainedHandoffId = UUID.randomUUID();
+        inTransactionReturning(store -> store.request(
+                dismissedHandoffId,
+                dismissedVersionId,
+                "upload-handoff-player",
+                "讲清准备流程。",
+                now));
+        inTransactionReturning(store -> store.request(
+                retainedHandoffId,
+                retainedVersionId,
+                "upload-handoff-player",
+                "讲清回合流程。",
+                now));
+
+        int dismissed = inTransactionReturning(store -> store.dismissOwnedForDocumentVersion(
+                dismissedVersionId, "upload-handoff-player"));
+
+        assertThat(dismissed).isOne();
+        assertThat(jdbc.queryForObject(
+                        "SELECT count(*) FROM uploaded_rulebook_teaching_handoff WHERE id = ?",
+                        Integer.class,
+                        dismissedHandoffId))
+                .isZero();
+        assertThat(jdbc.queryForObject(
+                        "SELECT count(*) FROM uploaded_rulebook_teaching_handoff WHERE id = ?",
+                        Integer.class,
+                        retainedHandoffId))
+                .isOne();
+        assertThat(jdbc.queryForObject(
+                        "SELECT count(*) FROM document_version WHERE id = ?",
+                        Integer.class,
+                        dismissedVersionId))
+                .isOne();
+    }
+
     private static UUID insertDocument(String status) {
         UUID documentId = UUID.randomUUID();
         UUID versionId = UUID.randomUUID();

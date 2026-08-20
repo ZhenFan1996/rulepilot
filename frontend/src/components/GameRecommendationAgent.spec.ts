@@ -190,6 +190,59 @@ describe('GameRecommendationAgent', () => {
     expect(otherAccount.text()).not.toContain('上次已核对候选')
   })
 
+  it('restores the selected verified game identity so its guide and Q&A can be found after refresh', async () => {
+    const conversationId = '2efc8376-883b-4ec0-b310-e1fc39a75473'
+    const recommendation = {
+      conversationId,
+      revision: 1,
+      outcome: 'recommendations' as const,
+      mode: 'model_assisted' as const,
+      assistantMessage: '这款已经核对，可以继续准备规则书。',
+      profile: baseProfile,
+      clarification: null,
+      sourceCount: 1,
+      candidatesEvaluated: 1,
+      games: [{ game, matches: [], tradeoffs: [] }],
+    }
+    let restoring = false
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const path = String(input)
+      if (path === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      if (path === '/api/v1/bgg/recommendation-agent/session') {
+        if (!restoring) return new Response(null, { status: 204 })
+        return Response.json({
+          conversationId,
+          revision: 1,
+          profile: baseProfile,
+          transcript: [
+            { role: 'user', text: '找一款自然主题游戏' },
+            { role: 'assistant', text: recommendation.assistantMessage },
+          ],
+          knownGames: [{ bggId: game.bggId, name: game.name, originalName: game.originalName }],
+          shownBggIds: [game.bggId],
+          processing: false,
+          latestResponse: recommendation,
+        })
+      }
+      return Response.json(recommendation)
+    }))
+    const wrapper = await mountAgent({ RecommendationRulebookHandoff: true }, { sessionIdentity: 'alice' })
+    await flushPromises()
+    await wrapper.get('textarea').setValue('找一款自然主题游戏')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    await wrapper.findAll('button').find(button => button.text() === '选这款，找规则书')!.trigger('click')
+    await flushPromises()
+    wrapper.unmount()
+
+    restoring = true
+    const restored = await mountAgent({ RecommendationRulebookHandoff: true }, { sessionIdentity: 'alice' })
+    await flushPromises()
+
+    expect(restored.get('[data-testid="player-journey-continuation"]').text()).toContain('展翅翱翔')
+    expect(restored.get('[data-testid="player-journey-dock"]').text()).toContain('打开进度')
+  })
+
   it('restores the owner-scoped server conversation as authoritative and continues at its revision', async () => {
     const conversationId = '2efc8376-883b-4ec0-b310-e1fc39a75473'
     const englishGame = { ...game, name: 'Wingspan', nameLocalized: false }
