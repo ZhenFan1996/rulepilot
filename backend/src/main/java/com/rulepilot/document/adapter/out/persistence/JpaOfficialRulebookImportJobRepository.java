@@ -200,7 +200,7 @@ class JpaOfficialRulebookImportJobRepository implements OfficialRulebookImportJo
                   and job.documentVersionId is not null
                   and (job.teachingHandoffState <> 'FAILED'
                        or coalesce(job.teachingErrorCode, '') <> 'DOCUMENT_PROCESSING_FAILED')
-                  and """ + eligibleState);
+                  and (""" + eligibleState + ")");
         update.setParameter("now", now).setParameter("jobId", jobId);
         if (expectedPreparationRunId != null) update.setParameter("expectedRunId", expectedPreparationRunId);
         return update.executeUpdate() == 1;
