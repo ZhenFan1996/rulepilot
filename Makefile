@@ -13,7 +13,7 @@ AGENT_BASELINE_MANIFEST ?= .local/agent-evaluation/manifest.json
 AGENT_BASELINE_OUTPUT ?= .local/agent-evaluation/application-harness-baseline.json
 AGENT_TOOL_PROBE_OUTPUT ?= .local/agent-evaluation/provider-capabilities.json
 
-.PHONY: help bootstrap dev dev-split dev-stop demo-data product-eval corpus-preflight corpus-cover-discover corpus-generate agent-baseline agent-tool-probe agent-tool-loop-real agent-answer-real agent-teaching-real agent-visual-real agent-context-real agent-recommendation-real agent-rulebook-acquisition-real agent-security-real agent-release-real format backend-test frontend-test integration-test performance-test security-test e2e verify compose-up compose-down deployment-up deployment-down production-up production-down
+.PHONY: help bootstrap dev dev-split dev-stop demo-data product-eval corpus-preflight corpus-cover-discover corpus-generate agent-baseline agent-tool-probe agent-tool-loop-real agent-answer-real agent-teaching-real agent-visual-real agent-context-real agent-recommendation-real agent-rulebook-acquisition-real agent-security-real agent-release-real mcp-grafana-setup mcp-grafana-smoke mcp-tempo-smoke mcp-context7-smoke mcp-smoke format backend-test frontend-test integration-test performance-test security-test e2e verify compose-up compose-down deployment-up deployment-down production-up production-down
 
 help: ## Show the available repository commands
 	@awk 'BEGIN {FS = ":.*##"; printf "RulePilot commands:\n\n"} /^[a-zA-Z0-9_-]+:.*##/ {printf "  %-20s %s\n", $$1, $$2} END {printf "\n"}' $(MAKEFILE_LIST)
@@ -88,6 +88,20 @@ agent-security-real: ## Validate adversarial tools and all five ignored real-rul
 agent-release-real: ## Regenerate and verify the complete Agent across providers, corpus, player needs, and viewports
 	@sh scripts/run-complete-agent-release.sh
 
+mcp-grafana-setup: ## Install pinned Grafana MCP and create or reuse its local Viewer credential
+	@sh scripts/setup-grafana-mcp.sh
+
+mcp-grafana-smoke: ## Exercise the local Grafana MCP handshake and one read-only query
+	@node scripts/smoke-grafana-mcp.mjs
+
+mcp-tempo-smoke: ## Exercise the embedded local Tempo MCP and one read-only trace query
+	@node scripts/smoke-tempo-mcp.mjs
+
+mcp-context7-smoke: ## Exercise the remote read-only Context7 MCP with a generic library query
+	@node scripts/smoke-context7-mcp.mjs
+
+mcp-smoke: mcp-grafana-smoke mcp-tempo-smoke mcp-context7-smoke ## Exercise every project-scoped MCP integration
+
 format: ## Format backend and frontend sources (planned)
 	@echo "format is not available yet; formatter configuration is pending."
 	@exit 2
@@ -128,6 +142,10 @@ e2e: ## Run Playwright end-to-end tests
 verify: ## Verify repository structure, Compose config, backend, and frontend
 	@sh scripts/verify-foundation.sh
 	@node --test scripts/verify-documentation.test.mjs
+	@node --test scripts/verify-grafana-mcp.test.mjs
+	@node --test scripts/verify-tempo-mcp.test.mjs
+	@node --test scripts/verify-context7-mcp.test.mjs
+	@node --test scripts/verify-mcp-guidance.test.mjs
 	@sh scripts/verify-compose.sh config
 	@sh scripts/run-deployment.sh config
 	@sh scripts/verify-architecture.sh
