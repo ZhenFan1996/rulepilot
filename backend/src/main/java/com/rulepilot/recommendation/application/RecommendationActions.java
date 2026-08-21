@@ -17,6 +17,7 @@ import static com.rulepilot.recommendation.application.RecommendationReActLoop.M
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.rulepilot.catalog.BggGameType;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.Game;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.ToolCall;
@@ -131,6 +132,40 @@ final class RecommendationActions {
             if (!ASK_TOOL.equals(call.name())) state.clarificationBlockedByExecutionFailure = true;
             return rejected(state, "ACTION_UNAVAILABLE", "The action failed. Choose another useful action or respond transparently.");
         }
+    }
+
+    Optional<ConversationResponse> resolveExplicitTarget(
+            String title,
+            RecommendationAgentState state,
+            ConversationRequest request,
+            String locale,
+            Consumer<ProgressStage> progress) {
+        ObjectNode arguments = json.createObjectNode();
+        arguments.put("title", title);
+        arguments.put("purpose", NamedGamePurpose.TARGET_GAME.name());
+        ActionOutcome outcome = execute(
+                new ToolCall("explicit-target-fast-path", RESOLVE_TOOL, arguments.toString()),
+                state,
+                request,
+                locale,
+                progress);
+        if (outcome.response() == null) return Optional.empty();
+        ConversationResponse response = outcome.response();
+        if (response.outcome() != Outcome.RECOMMENDATIONS) return Optional.of(response);
+        return Optional.of(new ConversationResponse(
+                response.outcome(),
+                DecisionMode.MODEL_FAST_PATH,
+                response.assistantMessage(),
+                response.profile(),
+                response.clarification(),
+                response.sourceCount(),
+                response.candidatesEvaluated(),
+                response.userModel(),
+                response.researchSources(),
+                response.harness(),
+                response.games(),
+                response.comparison(),
+                response.shortfall()));
     }
 
     private ActionOutcome reply(

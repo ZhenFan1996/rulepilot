@@ -54,6 +54,82 @@ import org.junit.jupiter.api.Test;
 class BoardGameRecommendationAgentTest {
 
     @Test
+    void resolvesAnExplicitlySelectedCurrentTargetWithoutAPlanningModelTurn() {
+        Game target = game(
+                71,
+                "Harbor Nova",
+                50,
+                List.of("Strategy"),
+                List.of("Open Drafting", "Set Collection"));
+        TrackingCatalog catalog = new TrackingCatalog(
+                Map.of(71, target),
+                Map.of("星港（Harbor Nova）", 71));
+        ScriptedModel model = new ScriptedModel(List.of());
+        List<ProgressUpdate> progress = new ArrayList<>();
+
+        var response = agent(model, catalog, noResearch()).converse(
+                new ConversationRequest(
+                        RecommendationProfile.empty(),
+                        "今晚已经决定玩星港（Harbor Nova），请直接找到这款并打开规则书。"),
+                "zh-CN",
+                progress::add);
+
+        assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
+        assertThat(response.mode()).isEqualTo(DecisionMode.MODEL_FAST_PATH);
+        assertThat(response.games()).extracting(entry -> entry.game().ranking().bggId())
+                .containsExactly(71);
+        assertThat(response.harness().modelCalls()).isZero();
+        assertThat(response.harness().catalogCalls()).isEqualTo(1);
+        assertThat(response.harness().actions()).containsExactly(
+                "RESOLVE_BGG_REFERENCE", "RECOMMEND_GAMES");
+        assertThat(catalog.lastResolvedTitle).isEqualTo("星港（Harbor Nova）");
+        assertThat(progress)
+                .extracting(ProgressUpdate::action)
+                .contains(ProgressAction.RESOLVE_BGG_GAME)
+                .doesNotContain(ProgressAction.CHOOSE_NEXT_ACTION);
+    }
+
+    @Test
+    void leavesAComparisonBetweenTwoNamedGamesUnderTheConversationModel() {
+        ScriptedModel model = new ScriptedModel(List.of(ignored -> action(
+                "compare-as-conversation",
+                BoardGameRecommendationAgent.REPLY_TOOL,
+                "{\"message\":\"我会按你指定的两个对象比较，不会把其中一个误当成已选目标。\"}")));
+        TrackingCatalog catalog = new TrackingCatalog();
+
+        var response = agent(model, catalog, noResearch()).converse(
+                new ConversationRequest(
+                        RecommendationProfile.empty(),
+                        "请比较《Harbor Nova》和《Loom City》，告诉我核心差别。"),
+                "zh-CN");
+
+        assertThat(response.outcome()).isEqualTo(Outcome.CONVERSATION);
+        assertThat(response.harness().modelCalls()).isEqualTo(1);
+        assertThat(response.harness().catalogCalls()).isZero();
+        assertThat(catalog.calls).isZero();
+    }
+
+    @Test
+    void leavesAnOpenQuestionAboutOneNamedGameUnderTheConversationModel() {
+        ScriptedModel model = new ScriptedModel(List.of(ignored -> action(
+                "discuss-title",
+                BoardGameRecommendationAgent.REPLY_TOOL,
+                "{\"message\":\"这是一个开放问题，需要先理解你想了解的资料范围。\"}")));
+        TrackingCatalog catalog = new TrackingCatalog();
+
+        var response = agent(model, catalog, noResearch()).converse(
+                new ConversationRequest(
+                        RecommendationProfile.empty(),
+                        "《Harbor Nova》的美术是谁画的？"),
+                "zh-CN");
+
+        assertThat(response.outcome()).isEqualTo(Outcome.CONVERSATION);
+        assertThat(response.harness().modelCalls()).isEqualTo(1);
+        assertThat(response.harness().catalogCalls()).isZero();
+        assertThat(catalog.calls).isZero();
+    }
+
+    @Test
     void returnsAPlayerNamedTargetAsASelectableRecommendationCardInTheResolvingTurn() {
         Game target = game(
                 50,

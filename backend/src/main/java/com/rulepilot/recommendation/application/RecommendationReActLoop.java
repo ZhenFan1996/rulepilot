@@ -197,6 +197,19 @@ final class RecommendationReActLoop {
             progress.complete();
             return response;
         }
+        Optional<String> explicitTargetTitle = BoardGameTitleGrounding.explicitTargetTitle(request.message());
+        if (explicitTargetTitle.isPresent()) {
+            state.actionCalls++;
+            progress.start(ProgressStage.READING_GAME_DETAILS, ProgressAction.RESOLVE_BGG_GAME);
+            Optional<ConversationResponse> exactTarget = actionExecutor.resolveExplicitTarget(
+                    explicitTargetTitle.orElseThrow(),
+                    state,
+                    request,
+                    locale,
+                    progress);
+            progress.complete();
+            if (exactTarget.isPresent()) return exactTarget.orElseThrow();
+        }
         if (!model.configured(state.modelConfigurationOwner)) {
             progress.start(ProgressStage.SELECTING_TOOLS, ProgressAction.CHOOSE_NEXT_ACTION);
             progress.fail();
