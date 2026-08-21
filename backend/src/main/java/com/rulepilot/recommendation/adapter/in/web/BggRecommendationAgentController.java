@@ -365,7 +365,9 @@ public class BggRecommendationAgentController {
                     response.candidatesEvaluated(),
                     UserModelResponse.from(response.userModel()),
                     response.researchSources().stream().map(ResearchSourceResponse::from).toList(),
-                    HarnessResponse.from(response.harness()),
+                    response.mode() == BoardGameRecommendationAgent.DecisionMode.MODEL_FAST_PATH
+                            ? null
+                            : HarnessResponse.from(response.harness()),
                     response.comparison() == null
                             ? null
                             : CandidateComparisonResponse.from(response.comparison(), taxonomy, locale, presentation),

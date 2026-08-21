@@ -3,7 +3,6 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 
 import ConversationResetDialog from '@/components/ConversationResetDialog.vue'
-import PlayerWorkStatusText from '@/components/PlayerWorkStatusText.vue'
 import RecommendationGameCard from '@/components/RecommendationGameCard.vue'
 import RecommendationAnswerWorkspace from '@/components/RecommendationAnswerWorkspace.vue'
 import RecommendationGameDetailsDialog from '@/components/RecommendationGameDetailsDialog.vue'
@@ -26,7 +25,6 @@ import { useModalFocus } from '@/composables/useModalFocus'
 import { notifyLoginRequired } from '@/lib/authSession'
 import { RecommendationRequestError, RecommendationStreamError, streamGameRecommendation } from '@/lib/gameRecommendationStream'
 import { useLocale, type AppLocale } from '@/lib/locale'
-import { playerWorkStatus } from '@/lib/playerWorkStatus'
 import { playerTurnLocale } from '@/lib/playerTurnLanguage'
 import { canonicalRecommendationProfile, emptyRecommendationProfile } from '@/lib/recommendationProfile'
 import {
@@ -44,7 +42,7 @@ const copy = {
     eyebrow: '一起挑一款', title: '今晚想玩什么？',
     description: '可以像和朋友一样聊：说一个游戏、一个感觉，或者上一批哪里不对。我会沿着上下文继续，不用按表格报条件。',
     initial: '晚上好。想一起挑一款，还是先聊聊最近喜欢的桌游？游戏名、气氛、人数，想到什么就说什么。',
-    inputLabel: '聊聊你想玩的游戏', inputPlaceholder: '例如：想找和花砖物语机制接近、但互动再多一点的游戏', send: '发送', sending: '正在接着你的话想…',
+    inputLabel: '聊聊你想玩的游戏', inputPlaceholder: '例如：想找和花砖物语机制接近、但互动再多一点的游戏', send: '发送', sending: '正在接着你的话想…', workingReply: '正在回复', workingSearch: '正在查找桌游', replyingDetail: '正在生成回复…',
     reset: '清空这次对话', newChat: '建立新聊天', chatHistory: '聊天记录', chatUntitled: '新的桌游聊天', error: '刚才没有接上。你写下的条件还在，可以直接重试。', retry: '重试', profile: '这次想找',
     players: '{value} 人', duration: '{value} 分钟内', durationAny: '时长不限', weight: '复杂度 ≤ {value}', weightAny: '复杂度不限',
     source: '从完整 BGG 目录中核对了 {count} 款候选。', more: '换一批',
@@ -61,15 +59,15 @@ const copy = {
     login: '登录并继续', register: '创建账号', checkingSession: '正在确认登录…',
     resetFailed: '服务器没有确认删除，当前对话仍然保留。请重试。',
     restoredGames: '上次已核对候选：{games}。可以直接继续比较。',
-    executionAudit: '查看本轮 Agent 执行记录', executionFast: '轻量模型直答（不进入工具流程）', executionModel: '模型参与并按证据边界执行',
-    executionCounts: '用时 {seconds}s · 判断 {model} 轮 · 动作 {actions} 次 · BGG {catalog} 次 · 公开资料 {web} 次',
-    executionBoundary: '这里记录可复盘的判断轮次、能力调用、候选变化和失败/重试；不包含隐藏提示词、敏感参数或模型私有思维链。',
+    executionAudit: '查看本轮查找记录', executionFast: '直接回复', executionModel: '按资料边界完成查找与核对',
+    executionCounts: '用时 {seconds}s · BGG 核对 {catalog} 次 · 公开资料查证 {web} 次',
+    executionBoundary: '这里记录实际查找、核对、候选变化和失败恢复；不会展示系统内部实现细节。',
   },
   en: {
     eyebrow: 'Choose together', title: 'What should we play tonight?',
     description: 'Talk as you would with a friend: name a game, describe a feeling, or say what missed the mark. I will continue from context; no form-filling required.',
     initial: 'Good evening. Want to choose a game together, or chat about what you have enjoyed lately? Start anywhere—a title, a mood, or the group.',
-    inputLabel: 'Tell us what you want to play', inputPlaceholder: 'For example: something with similar mechanisms to a tile-drafting game, but more interaction', send: 'Send', sending: 'Thinking from where we left off…',
+    inputLabel: 'Tell us what you want to play', inputPlaceholder: 'For example: something with similar mechanisms to a tile-drafting game, but more interaction', send: 'Send', sending: 'Thinking from where we left off…', workingReply: 'Replying', workingSearch: 'Finding board games', replyingDetail: 'Writing the reply…',
     reset: 'Clear this conversation', newChat: 'New chat', chatHistory: 'Chat history', chatUntitled: 'New board-game chat', error: 'That reply did not come through. Your preferences are still here.', retry: 'Retry', profile: 'Looking for',
     players: '{value} players', duration: 'Up to {value} min', durationAny: 'Any duration', weight: 'Complexity ≤ {value}', weightAny: 'Any complexity',
     source: 'Checked {count} candidates against the complete BGG catalog.', more: 'Try another batch',
@@ -86,9 +84,9 @@ const copy = {
     login: 'Sign in and continue', register: 'Create account', checkingSession: 'Checking sign-in…',
     resetFailed: 'The server did not confirm deletion, so this conversation is still intact. Try again.',
     restoredGames: 'Previously verified candidates: {games}. You can continue comparing them here.',
-    executionAudit: 'View this Agent run', executionFast: 'Lightweight model reply (no tool workflow)', executionModel: 'Model-assisted execution within the evidence boundary',
-    executionCounts: '{seconds}s · {model} decision rounds · {actions} actions · {catalog} BGG calls · {web} public-source calls',
-    executionBoundary: 'This replayable record shows decision rounds, capability calls, candidate changes, and failures or retries. It does not contain hidden prompts, sensitive parameters, or private model chain-of-thought.',
+    executionAudit: 'View this search record', executionFast: 'Direct reply', executionModel: 'Search and checks completed within the evidence boundary',
+    executionCounts: '{seconds}s · {catalog} BGG checks · {web} public-source checks',
+    executionBoundary: 'This record shows actual searches, checks, candidate changes, and recovery without exposing internal implementation details.',
   },
 } as const
 
@@ -98,7 +96,7 @@ const loadingCopy = {
     selecting_tools: '正在确认下一步该核对什么…',
     searching_bgg_catalog: '正在桌游目录里查找…', reading_game_details: '正在翻看这款游戏的详细资料…',
     discovering_candidates: '正在补充更贴近这个感觉的候选…', verifying_bgg_candidates: '正在核对人数、时长和玩法…',
-    researching_game_fit: '正在看看实际游玩感受…', composing_response: '已经找到几款，马上整理好…',
+    researching_game_fit: '正在看看实际游玩感受…', composing_response: '正在整理已经核对的结果…',
   },
   en: {
     requesting: 'Got it. Continuing from here…', understanding_request: 'Understanding this turn in the context of the conversation…',
@@ -112,8 +110,8 @@ const loadingCopy = {
 const progressActionCopy: Record<AppLocale, Record<RecommendationProgressAction, string>> = {
   'zh-CN': {
     understand_request: '读取当前消息与对话上下文',
-    direct_reply_fast_path: '用轻量模型直接组织自然回复，不进入工具流程',
-    choose_next_action: '判断下一步是直接回答、查 BGG、查公开资料还是整理结果',
+    direct_reply_fast_path: '正在组织回复',
+    choose_next_action: '正在确认需要核对的资料',
     reply_to_user: '根据当前对话直接组织回答', ask_user: '确认一个会改变结果的必要信息',
     resolve_bgg_game: '在 BGG 核对玩家提到的完整游戏名',
     inspect_candidate_titles: '按候选标题搜索 BGG 并读取详情', browse_bgg_catalog: '按当前条件浏览 BGG 候选',
@@ -123,8 +121,8 @@ const progressActionCopy: Record<AppLocale, Record<RecommendationProgressAction,
   },
   en: {
     understand_request: 'Read the current message and conversation context',
-    direct_reply_fast_path: 'Use a lightweight model reply without entering the tool workflow',
-    choose_next_action: 'Choose between replying, BGG lookup, public research, or composing',
+    direct_reply_fast_path: 'Compose the reply',
+    choose_next_action: 'Confirm what information needs checking',
     reply_to_user: 'Compose a direct response from the conversation', ask_user: 'Ask for one necessary choice that changes the result',
     resolve_bgg_game: 'Resolve the player-authored title in BGG',
     inspect_candidate_titles: 'Search candidate titles and load their BGG details', browse_bgg_catalog: 'Browse BGG under the current constraints',
@@ -320,8 +318,37 @@ useModalFocus({
   restoreFocus: journeyReturnTarget,
 })
 
+const publiclyReportedActions = new Set<RecommendationProgressAction>([
+  'resolve_bgg_game',
+  'inspect_candidate_titles',
+  'browse_bgg_catalog',
+  'discover_public_candidates',
+  'lookup_bgg_games',
+  'research_game_fit',
+  'compare_candidates',
+  'report_no_match',
+  'recommend_games',
+])
+
+const externalWorkActive = computed(() => {
+  const progress = latestRecommendationProgress.value
+  return Boolean(progress && (
+    progress.catalogCalls > 0
+    || progress.webResearchCalls > 0
+    || (progress.action !== null && publiclyReportedActions.has(progress.action))
+  ))
+})
+
+const loadingWorkTitle = computed(() => translated(
+  activeTurnLocale.value ?? locale.value,
+  externalWorkActive.value ? 'workingSearch' : 'workingReply',
+))
+
 const loadingMessage = computed(() => {
-  const message = loadingCopy[activeTurnLocale.value ?? locale.value][loadingStage.value]
+  const turnLocale = activeTurnLocale.value ?? locale.value
+  const message = externalWorkActive.value
+    ? loadingCopy[turnLocale][loadingStage.value]
+    : translated(turnLocale, 'replyingDetail')
   return loadingElapsedSeconds.value > 0 ? `${message} ${loadingElapsedSeconds.value}s` : message
 })
 
@@ -330,26 +357,22 @@ function progressStepLabel(update: RecommendationProgressUpdate) {
   const action = update.action
     ? progressActionCopy[turnLocale][update.action]
     : loadingCopy[turnLocale][update.stage]
-  const cycle = update.decisionCycle > 0
-    ? turnLocale === 'zh-CN' ? `第 ${update.decisionCycle} 轮 · ` : `Round ${update.decisionCycle} · `
-    : ''
   const phase = turnLocale === 'zh-CN'
     ? { started: '开始', completed: '完成', retrying: '未通过校验，重新选择', failed: '失败' }[update.phase]
     : { started: 'Started', completed: 'Completed', retrying: 'Validation failed; choosing again', failed: 'Failed' }[update.phase]
-  const calls = update.catalogCalls + update.webResearchCalls > 0
-    ? turnLocale === 'zh-CN'
-      ? ` · BGG ${update.catalogCalls} 次 / 公开资料 ${update.webResearchCalls} 次`
-      : ` · ${update.catalogCalls} BGG / ${update.webResearchCalls} public-source calls`
-    : ''
-  return `${cycle}${phase}：${action}${calls}`
+  return `${phase}：${action}`
 }
 
-const reportedLoadingSteps = computed(() => reportedLoadingStages.value.map((update, index, events) => ({
-  update,
-  label: progressStepLabel(update),
-  current: index === events.length - 1 && update.phase === 'started',
-  icon: update.phase === 'failed' ? '!' : update.phase === 'retrying' ? '↻' : update.phase === 'completed' ? '✓' : '●',
-})))
+const reportedLoadingSteps = computed(() => {
+  const events = reportedLoadingStages.value.filter(update =>
+    update.action !== null && publiclyReportedActions.has(update.action))
+  return events.map((update, index) => ({
+    update,
+    label: progressStepLabel(update),
+    current: index === events.length - 1 && update.phase === 'started',
+    icon: update.phase === 'failed' ? '!' : update.phase === 'retrying' ? '↻' : update.phase === 'completed' ? '✓' : '●',
+  }))
+})
 const recommendationEvidenceSummary = computed(() => {
   const progress = latestRecommendationProgress.value
   if (!progress || progress.observedCandidates === 0) return ''
@@ -365,7 +388,7 @@ const recommendationEvidenceSummary = computed(() => {
     : '来源：BGG 目录与游戏详情事实。'
   return `${source}目录候选 ${progress.observedCandidates} 款 · 已核对 ${progress.verifiedCandidates} 款 · 按你的硬条件排除 ${progress.hardRejectedCandidates} 款。下一步：${loadingCopy['zh-CN'][progress.stage]}`
 })
-const recommendationSoftBudgetReached = computed(() => loading.value && loadingElapsedSeconds.value >= 8)
+const recommendationSoftBudgetReached = computed(() => loading.value && externalWorkActive.value && loadingElapsedSeconds.value >= 8)
 const hasVerifiedCandidates = computed(() => messages.value.some(message =>
   Boolean(message.response?.games.length || message.response?.comparison?.candidates.length)))
 const recommendationSoftBudgetCopy = computed(() => {
@@ -379,10 +402,6 @@ const recommendationSoftBudgetCopy = computed(() => {
     ? 'There is not yet a new candidate safe to show. Catalog facts and fit tradeoffs still need checking; unfinished candidates stay hidden.'
     : '目前还没有足以展示的新候选；还需核对目录事实与匹配取舍，未完成候选不会提前显示。'
 })
-const recommendationWorkStatus = computed(() => playerWorkStatus('FINDING_GAME', {
-  capability: 'none', readiness: 'unavailable', terminality: 'active', outcome: 'none',
-}, activeTurnLocale.value ?? locale.value))
-
 const failureMessage = computed(() => translated(failedTurnLocale.value ?? locale.value, 'error'))
 const retryLabel = computed(() => translated(failedTurnLocale.value ?? locale.value, 'retry'))
 const loginLocale = computed(() => activeTurnLocale.value ?? locale.value)
@@ -484,7 +503,7 @@ function auditActionLabel(action: string, turnLocale: AppLocale) {
     RESEARCH_GAME_FIT: 'Check attributed play experience', RESEARCH_GAME_QUESTION: 'Research a candidate question', COMPARE_CANDIDATES: 'Compare candidate evidence',
     REPORT_NO_MATCH: 'Report the hard-constraint shortfall', RECOMMEND_GAMES: 'Validate and publish recommendation cards', RECOMMENDATION_AVAILABILITY_SHORTFALL: 'Record an availability shortfall',
   }
-  if (action.startsWith('DIRECT_REPLY_FAST_PATH:')) return turnLocale === 'zh-CN' ? '轻量模型直答：不调用 BGG 或公开资料工具' : 'Lightweight model reply: no BGG or public-source tool'
+  if (action.startsWith('DIRECT_REPLY_FAST_PATH:')) return turnLocale === 'zh-CN' ? '直接回复' : 'Direct reply'
   if (action.startsWith('REJECTED_ACTION:') || action.startsWith('REJECTED_UNAVAILABLE_ACTION') || action.startsWith('REJECTED_REPEATED_ACTION')) {
     return turnLocale === 'zh-CN' ? '动作未通过确定性校验，重新选择下一步' : 'Action failed deterministic validation; choose again'
   }
@@ -1408,9 +1427,9 @@ onBeforeUnmount(() => {
                     <span v-for="label in toolLabelsFor(message.response)" :key="label" class="rounded-full border border-ink/10 bg-paper px-2.5 py-1">{{ label }}</span>
                   </div>
 
-                  <details v-if="message.response?.harness" data-testid="recommendation-execution-audit" class="mt-2 max-w-[94%] rounded-xl border border-ink/8 bg-paper/65 px-3 py-2 text-xs text-ink/55">
+                  <details v-if="message.response?.harness && message.response.mode !== 'model_fast_path'" data-testid="recommendation-execution-audit" class="mt-2 max-w-[94%] rounded-xl border border-ink/8 bg-paper/65 px-3 py-2 text-xs text-ink/55">
                     <summary class="min-h-8 cursor-pointer py-1 font-semibold text-ink/65">{{ responseT(message.response, 'executionAudit') }}</summary>
-                    <p class="mt-2 font-semibold text-ink/65">{{ responseT(message.response, message.response.mode === 'model_fast_path' ? 'executionFast' : 'executionModel') }}</p>
+                    <p class="mt-2 font-semibold text-ink/65">{{ responseT(message.response, 'executionModel') }}</p>
                     <p class="mt-1 leading-5">
                       {{ responseT(message.response, 'executionCounts', {
                         seconds: ((message.response.harness.totalElapsedMs ?? 0) / 1000).toFixed(1),
@@ -1423,7 +1442,6 @@ onBeforeUnmount(() => {
                     <ol v-if="executionAuditSteps(message.response).length" class="mt-2 grid gap-1.5 border-l border-ink/10 pl-3">
                       <li v-for="step in executionAuditSteps(message.response)" :key="step.key" class="leading-5">
                         <span class="text-ink/65">{{ step.label }}</span>
-                        <code class="ml-1 break-all text-[0.625rem] text-ink/35">{{ step.code }}</code>
                       </li>
                     </ol>
                     <p class="mt-2 border-t border-ink/8 pt-2 leading-5 text-ink/45">{{ responseT(message.response, 'executionBoundary') }}</p>
@@ -1461,11 +1479,7 @@ onBeforeUnmount(() => {
               <div v-if="loading" class="flex items-start gap-3 rounded-2xl rounded-bl-sm border border-ink/8 bg-canvas px-4 py-3 text-ink/55" role="status">
                 <span class="flex gap-1" aria-hidden="true"><span class="size-1.5 animate-pulse rounded-full bg-copper" /><span class="size-1.5 animate-pulse rounded-full bg-copper [animation-delay:160ms]" /><span class="size-1.5 animate-pulse rounded-full bg-copper [animation-delay:320ms]" /></span>
                 <div class="min-w-0 flex-1">
-                  <PlayerWorkStatusText
-                    :status="recommendationWorkStatus"
-                    as="strong"
-                    class="block text-sm font-semibold text-ink/70"
-                  />
+                  <strong data-testid="player-work-status" class="block text-sm font-semibold text-ink/70">{{ loadingWorkTitle }}</strong>
                   <span class="mt-0.5 block text-xs">{{ loadingMessage }}</span>
                   <ol v-if="reportedLoadingSteps.length" data-testid="recommendation-progress-steps" class="mt-3 grid gap-1.5 text-xs leading-5">
                     <li v-for="(step, index) in reportedLoadingSteps" :key="`${step.update.stage}-${step.update.phase}-${step.update.action}-${step.update.elapsedMs}-${index}`" class="flex items-start gap-2" :class="step.current ? 'font-semibold text-ink/70' : step.update.phase === 'failed' ? 'text-red-700' : step.update.phase === 'retrying' ? 'text-amber-700' : 'text-ink/50'">
@@ -1474,7 +1488,7 @@ onBeforeUnmount(() => {
                     </li>
                   </ol>
                   <p v-if="recommendationEvidenceSummary" data-testid="recommendation-evidence-summary" class="mt-2 rounded-lg bg-paper px-3 py-2 text-xs leading-5 text-ink/55">{{ recommendationEvidenceSummary }}</p>
-                  <p v-if="streamedRecommendationMessage" data-testid="recommendation-validated-answer-preview" class="mt-2 rounded-lg border border-emerald-200 bg-emerald-50/70 px-3 py-2 text-sm leading-6 text-emerald-950">{{ streamedRecommendationMessage }}</p>
+                  <p v-if="streamedRecommendationMessage" data-testid="recommendation-answer-preview" class="mt-2 max-w-[88%] rounded-2xl rounded-bl-sm border border-ink/8 bg-paper px-4 py-3 text-sm leading-6 text-ink/72">{{ streamedRecommendationMessage }}</p>
                   <p v-if="recommendationSoftBudgetReached" data-testid="recommendation-soft-budget" class="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-950">{{ recommendationSoftBudgetCopy }}</p>
                 </div>
               </div>

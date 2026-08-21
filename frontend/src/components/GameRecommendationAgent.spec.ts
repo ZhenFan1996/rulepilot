@@ -933,11 +933,12 @@ describe('GameRecommendationAgent', () => {
     expect(recommendationTurns[0]!.text()).toContain('展翅翱翔')
     expect(recommendationTurns[0]!.text()).toContain('完整目录按标题找候选')
     const audit = recommendationTurns[0]!.get('[data-testid="recommendation-execution-audit"]')
-    expect(audit.text()).toContain('查看本轮 Agent 执行记录')
-    expect(audit.text()).toContain('判断 4 轮')
-    expect(audit.text()).toContain('BGG 2 次')
+    expect(audit.text()).toContain('查看本轮查找记录')
+    expect(audit.text()).not.toContain('判断 4 轮')
+    expect(audit.text()).toContain('BGG 核对 2 次')
     expect(audit.text()).toContain('按候选标题搜索 BGG')
-    expect(audit.text()).toContain('不包含隐藏提示词、敏感参数或模型私有思维链')
+    expect(audit.text()).not.toContain('SEARCH_BGG_BY_NAME')
+    expect(audit.text()).toContain('不会展示系统内部实现细节')
     const conversationTurns = wrapper.findAll('[data-testid="assistant-conversation-turn"]')
     expect(conversationTurns.at(-1)?.text()).toContain('沿着刚才的方向继续聊')
     expect(conversationTurns.at(-1)?.text()).not.toContain('展翅翱翔')
@@ -1515,7 +1516,7 @@ describe('GameRecommendationAgent', () => {
     expect(document.body.querySelector('[data-testid="lesson-dialog-stub"]')?.textContent).toBe('plan-1')
   })
 
-  it('shows the real action phases and repeated decision cycles reported by the stream', async () => {
+  it('shows real external-work phases without exposing decision-cycle internals', async () => {
     vi.useFakeTimers()
     const encoder = new TextEncoder()
     let streamController: ReadableStreamDefaultController<Uint8Array> | undefined
@@ -1531,28 +1532,30 @@ describe('GameRecommendationAgent', () => {
     await wrapper.get('textarea').setValue('想找有探索感的桌游')
     await wrapper.get('form').trigger('submit')
     await flushPromises()
-    expect(wrapper.get('[data-testid="player-work-status"]').text()).toBe('正在查找桌游')
-    expect(wrapper.get('[role="status"]').text()).toContain('收到，接着聊下去')
+    expect(wrapper.get('[data-testid="player-work-status"]').text()).toBe('正在回复')
+    expect(wrapper.get('[role="status"]').text()).toContain('正在生成回复')
 
     streamController?.enqueue(encoder.encode('event: progress\ndata: {"stage":"searching_bgg_catalog","phase":"started","action":"browse_bgg_catalog","elapsedMs":120,"decisionCycle":1,"modelCalls":1,"actionCalls":1,"catalogCalls":1}\n\n'))
     await flushPromises()
+    expect(wrapper.get('[data-testid="player-work-status"]').text()).toBe('正在查找桌游')
     expect(wrapper.get('[role="status"]').text()).toContain('正在桌游目录里查找')
-    expect(wrapper.get('[data-testid="recommendation-progress-steps"]').text()).toContain('第 1 轮 · 开始：按当前条件浏览 BGG 候选')
+    expect(wrapper.get('[data-testid="recommendation-progress-steps"]').text()).toContain('开始：按当前条件浏览 BGG 候选')
 
     streamController?.enqueue(encoder.encode('event: progress\ndata: {"stage":"searching_bgg_catalog","phase":"completed","action":"browse_bgg_catalog","elapsedMs":170,"decisionCycle":1,"modelCalls":1,"actionCalls":1,"catalogCalls":1,"observedCandidates":8,"verifiedCandidates":5,"hardRejectedCandidates":2}\n\n'))
     streamController?.enqueue(encoder.encode('event: progress\ndata: {"stage":"verifying_bgg_candidates","phase":"started","action":"lookup_bgg_games","elapsedMs":180,"decisionCycle":2,"modelCalls":2,"actionCalls":2,"catalogCalls":2,"observedCandidates":8,"verifiedCandidates":5,"hardRejectedCandidates":2}\n\n'))
     await flushPromises()
     const reportedSteps = wrapper.get('[data-testid="recommendation-progress-steps"]')
-    expect(reportedSteps.text()).toContain('第 1 轮 · 完成：按当前条件浏览 BGG 候选')
-    expect(reportedSteps.text()).toContain('第 2 轮 · 开始：读取候选的 BGG 人数、时长与机制详情')
-    expect(reportedSteps.text()).toContain('BGG 2 次 / 公开资料 0 次')
+    expect(reportedSteps.text()).toContain('完成：按当前条件浏览 BGG 候选')
+    expect(reportedSteps.text()).toContain('开始：读取候选的 BGG 人数、时长与机制详情')
+    expect(reportedSteps.text()).not.toContain('第 2 轮')
+    expect(reportedSteps.text()).not.toContain('BGG 2 次 / 公开资料 0 次')
     expect(reportedSteps.findAll('li')).toHaveLength(3)
 
     streamController?.enqueue(encoder.encode('event: progress\ndata: {"stage":"selecting_tools","phase":"started","action":"choose_next_action","elapsedMs":220,"decisionCycle":3,"modelCalls":3,"actionCalls":2,"catalogCalls":2}\n\n'))
     streamController?.enqueue(encoder.encode('event: progress\ndata: {"stage":"selecting_tools","phase":"completed","action":"choose_next_action","elapsedMs":230,"decisionCycle":3,"modelCalls":3,"actionCalls":2,"catalogCalls":2}\n\n'))
     await flushPromises()
-    expect(reportedSteps.findAll('li')).toHaveLength(5)
-    expect(reportedSteps.findAll('li').at(-1)?.text()).toContain('第 3 轮 · 完成：判断下一步是直接回答、查 BGG、查公开资料还是整理结果')
+    expect(reportedSteps.findAll('li')).toHaveLength(3)
+    expect(reportedSteps.text()).not.toContain('判断下一步')
 
     await vi.advanceTimersByTimeAsync(8_000)
     expect(wrapper.get('[role="status"]').text()).toContain('正在确认下一步该核对什么')
@@ -1569,5 +1572,47 @@ describe('GameRecommendationAgent', () => {
     await flushPromises()
     expect(wrapper.find('[role="status"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="recommendation-soft-budget"]').exists()).toBe(false)
+  })
+
+  it('shows streamed conversational text without exposing routing or model internals', async () => {
+    const encoder = new TextEncoder()
+    let streamController: ReadableStreamDefaultController<Uint8Array> | undefined
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      if (String(input) === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      return new Response(new ReadableStream<Uint8Array>({
+        start(controller) { streamController = controller },
+      }), { headers: { 'Content-Type': 'text/event-stream' } })
+    }))
+    const wrapper = await mountAgent()
+    await flushPromises()
+
+    await wrapper.get('textarea').setValue('你好')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    streamController?.enqueue(encoder.encode('event: progress\ndata: {"stage":"understanding_request","phase":"completed","action":"understand_request","elapsedMs":2,"decisionCycle":0,"modelCalls":0,"actionCalls":0,"catalogCalls":0}\n\n'))
+    streamController?.enqueue(encoder.encode('event: progress\ndata: {"stage":"composing_response","phase":"started","action":null,"elapsedMs":3,"decisionCycle":0,"modelCalls":0,"actionCalls":0,"catalogCalls":0}\n\n'))
+    streamController?.enqueue(encoder.encode('event: answer_part\ndata: {"field":"message","text":"嗨，"}\n\n'))
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="player-work-status"]').text()).toBe('正在回复')
+    expect(wrapper.get('[data-testid="recommendation-answer-preview"]').text()).toBe('嗨，')
+    expect(wrapper.find('[data-testid="recommendation-progress-steps"]').exists()).toBe(false)
+    expect(wrapper.get('[role="status"]').text()).not.toContain('第 1 轮')
+    expect(wrapper.get('[role="status"]').text()).not.toContain('轻量模型')
+    expect(wrapper.get('[role="status"]').text()).not.toContain('工具流程')
+
+    streamController?.enqueue(encoder.encode('event: answer_part\ndata: {"field":"message","text":"嗨，今天想聊哪款桌游？"}\n\n'))
+    streamController?.enqueue(encoder.encode(`event: result\ndata: ${JSON.stringify({
+      outcome: 'conversation', mode: 'model_fast_path', assistantMessage: '嗨，今天想聊哪款桌游？',
+      profile: baseProfile, clarification: null, sourceCount: 0, candidatesEvaluated: 0, games: [],
+      harness: { modelCalls: 1, catalogCalls: 0, webResearchCalls: 0, fallbackUsed: false, actions: ['DIRECT_REPLY_FAST_PATH:GREETING'], totalElapsedMs: 6400 },
+    })}\n\n`))
+    streamController?.close()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('嗨，今天想聊哪款桌游？')
+    expect(wrapper.find('[data-testid="recommendation-execution-audit"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('DIRECT_REPLY_FAST_PATH')
+    expect(wrapper.text()).not.toContain('轻量模型')
   })
 })

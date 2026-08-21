@@ -134,7 +134,7 @@ export type RecommendationAgentResponse = {
     fallbackUsed: boolean
     actions: string[]
     totalElapsedMs?: number
-  }
+  } | null
   games: RecommendedGame[]
 }
 
