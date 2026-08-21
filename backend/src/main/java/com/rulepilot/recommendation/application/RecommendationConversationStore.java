@@ -1,5 +1,6 @@
 package com.rulepilot.recommendation.application;
 
+import com.rulepilot.catalog.BoardGameRecommendationCatalog.Game;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ConversationResponse;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.DialogueMessage;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.KnownGame;
@@ -64,12 +65,22 @@ public interface RecommendationConversationStore {
             RecommendationProfile profile,
             List<DialogueMessage> transcript,
             List<KnownGame> knownGames,
-            List<Integer> shownBggIds) {
+            List<Integer> shownBggIds,
+            List<Game> verifiedGames) {
+        public ConversationState(
+                RecommendationProfile profile,
+                List<DialogueMessage> transcript,
+                List<KnownGame> knownGames,
+                List<Integer> shownBggIds) {
+            this(profile, transcript, knownGames, shownBggIds, List.of());
+        }
+
         public ConversationState {
             profile = profile == null ? RecommendationProfile.empty() : profile;
             transcript = transcript == null ? List.of() : List.copyOf(transcript);
             knownGames = knownGames == null ? List.of() : List.copyOf(knownGames);
             shownBggIds = shownBggIds == null ? List.of() : List.copyOf(shownBggIds);
+            verifiedGames = verifiedGames == null ? List.of() : List.copyOf(verifiedGames);
         }
     }
 

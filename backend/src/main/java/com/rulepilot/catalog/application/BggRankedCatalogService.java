@@ -119,6 +119,20 @@ public class BggRankedCatalogService
         if (ids.isEmpty() || ids.size() > 12 || ids.stream().anyMatch(id -> id <= 0)) {
             throw new IllegalArgumentException("BGG lookup requires one to twelve positive ids");
         }
+        return detailedGames(ids);
+    }
+
+    public List<BrowseGame> coverDetails(List<Integer> bggIds) {
+        List<Integer> ids = bggIds == null
+                ? List.of()
+                : bggIds.stream().filter(java.util.Objects::nonNull).distinct().toList();
+        if (ids.isEmpty() || ids.size() > 20 || ids.stream().anyMatch(id -> id <= 0)) {
+            throw new IllegalArgumentException("BGG cover lookup requires one to twenty positive ids");
+        }
+        return detailedGames(ids);
+    }
+
+    private List<BrowseGame> detailedGames(List<Integer> ids) {
         List<RankedGame> ranked = repository.findByIds(ids);
         Map<Integer, DiscoveryGame> details = details(ranked);
         return ranked.stream().map(game -> new BrowseGame(game, null, details.get(game.bggId()))).toList();
@@ -141,6 +155,20 @@ public class BggRankedCatalogService
                     details == null ? "" : details.thumbnailUrl(),
                     details == null ? "" : details.imageUrl());
         });
+    }
+
+    @Override
+    public List<GameSelection> findAll(List<Integer> bggIds) {
+        List<Integer> ids = bggIds == null
+                ? List.of()
+                : bggIds.stream()
+                        .filter(java.util.Objects::nonNull)
+                        .filter(id -> id > 0)
+                        .distinct()
+                        .limit(20)
+                        .toList();
+        if (ids.isEmpty()) return List.of();
+        return repository.findSelectionsByIds(ids).stream().map(this::selectionGame).toList();
     }
 
     @Override

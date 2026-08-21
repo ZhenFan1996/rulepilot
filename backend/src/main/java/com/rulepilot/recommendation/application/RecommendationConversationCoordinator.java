@@ -110,7 +110,7 @@ public class RecommendationConversationCoordinator {
         if (completedWhileClaiming.isPresent()) return completedWhileClaiming.get();
 
         try {
-            ConversationResponse response = agent.converse(effectiveRequest, locale, owner, progressListener);
+            ConversationResponse response = agent.conversePersisted(effectiveRequest, locale, owner, progressListener);
             ConversationState nextState = nextState(claimed.state(), effectiveRequest, response);
             Instant completedAt = clock.instant();
             boolean completed = conversations.completeTurn(
@@ -293,7 +293,8 @@ public class RecommendationConversationCoordinator {
                 state.transcript(),
                 turn.focusedBggId(),
                 state.knownGames(),
-                state.shownBggIds());
+                state.shownBggIds(),
+                state.verifiedGames());
     }
 
     private static ConversationState importedState(ConversationRequest request) {
@@ -301,7 +302,8 @@ public class RecommendationConversationCoordinator {
                 request.profile(),
                 boundedTranscript(request.transcript()),
                 boundedKnownGames(request.knownGames()),
-                boundedIds(request.shownBggIds()));
+                boundedIds(request.shownBggIds()),
+                List.of());
     }
 
     private static ConversationState nextState(
@@ -330,11 +332,22 @@ public class RecommendationConversationCoordinator {
             response.comparison().candidates()
                     .forEach(candidate -> shown.add(candidate.game().ranking().bggId()));
         }
+
+        Map<Integer, Game> verified = new LinkedHashMap<>();
+        response.games().stream().map(BoardGameRecommendationAgent.RecommendedGame::game)
+                .forEach(game -> verified.putIfAbsent(game.ranking().bggId(), game));
+        if (response.comparison() != null) {
+            response.comparison().candidates().stream()
+                    .map(BoardGameRecommendationAgent.ComparisonCandidate::game)
+                    .forEach(game -> verified.putIfAbsent(game.ranking().bggId(), game));
+        }
+        previous.verifiedGames().forEach(game -> verified.putIfAbsent(game.ranking().bggId(), game));
         return new ConversationState(
                 response.profile(),
                 boundedTranscript(transcript),
                 boundedKnownGames(new ArrayList<>(games.values())),
-                boundedIds(new ArrayList<>(shown)));
+                boundedIds(new ArrayList<>(shown)),
+                verified.values().stream().limit(RecommendationAgentState.MAX_VERIFIED_GAMES).toList());
     }
 
     private static KnownGame knownGame(Game game) {

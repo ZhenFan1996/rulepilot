@@ -54,6 +54,8 @@ public class IdentitySecurityConfiguration {
                                 "/api/v1/bgg/hot",
                                 "/api/v1/bgg/search",
                                 "/api/v1/bgg/catalog",
+                                "/api/v1/bgg/catalog/covers",
+                                "/api/v1/bgg/catalog/covers/*/image",
                                 "/api/v1/bgg/discovery",
                                 "/api/v1/bgg/recommendations",
                                 "/api/public/lessons/**",

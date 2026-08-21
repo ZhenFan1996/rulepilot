@@ -47,6 +47,12 @@ interface CatalogResponse {
   games: CatalogGame[]
 }
 
+interface CatalogCover {
+  bggId: number
+  thumbnailUrl: string
+  imageUrl: string
+}
+
 const { locale } = useLocale()
 const route = useRoute()
 const router = useRouter()
@@ -66,8 +72,8 @@ const copy = {
     errorTitle: '桌游目录暂时打不开', errorDescription: '筛选条件已经保留，可以稍后重试。', retry: '再试一次', pageError: '这一页暂时没取到，当前页仍然保留。', retryPage: '重试这一页',
     players: '{min}–{max} 人', minutes: '约 {minutes} 分钟', rating: '玩家评分 {rating}', geekRating: 'Geek 评分 {rating}', votes: '{count} 人评分', weight: '复杂度 {weight} / 5',
     rank: '总榜 #{rank}', hotRank: '热榜 #{rank}', noRank: '尚未进入总榜', detailPending: '详细资料将在打开游戏时继续读取',
-    categoriesAria: '游戏类型和机制', coverAlt: '{game} 的 BGG 封面', emptyTitle: '没有匹配的桌游', emptyDescription: '试试减少搜索词或选择其他 BGG 类型榜。',
-    shown: '本页 {shown} 款', officialSource: '数据由 BoardGameGeek 提供', taxonomyFallback: '机制和类型暂时保留 BGG 原文',
+    coverAlt: '{game} 的 BGG 封面', emptyTitle: '没有匹配的桌游', emptyDescription: '试试减少搜索词或选择其他 BGG 类型榜。',
+    shown: '本页 {shown} 款', officialSource: '数据由 BoardGameGeek 提供',
     pagination: '桌游目录分页', pageSummary: '第 {current} / {total} 页', previousPage: '上一页', nextPage: '下一页', goToPage: '前往第 {page} 页',
   },
   en: {
@@ -82,8 +88,8 @@ const copy = {
     unavailableTitle: 'The game catalog is still being prepared', unavailableDescription: 'Recommendations, your games, and rulebooks are still available.',
     errorTitle: 'The game catalog is unavailable', errorDescription: 'Your filters are still here. Try again later.', retry: 'Try again', pageError: 'This page could not be loaded. Your current page is still here.', retryPage: 'Retry this page',
     players: '{min}–{max} players', minutes: 'About {minutes} min', rating: 'Player rating {rating}', geekRating: 'Geek rating {rating}', votes: '{count} ratings', weight: 'Complexity {weight} / 5',
-    rank: 'Overall #{rank}', hotRank: 'Hot #{rank}', noRank: 'Not yet ranked', detailPending: 'Rich details will continue loading when you open the game', categoriesAria: 'Game types and mechanisms', coverAlt: '{game} BGG cover',
-    emptyTitle: 'No games match', emptyDescription: 'Try fewer title words or another BGG ranking family.', shown: '{shown} games on this page', officialSource: 'Data provided by BoardGameGeek', taxonomyFallback: 'Showing BGG source taxonomy',
+    rank: 'Overall #{rank}', hotRank: 'Hot #{rank}', noRank: 'Not yet ranked', detailPending: 'Rich details will continue loading when you open the game', coverAlt: '{game} BGG cover',
+    emptyTitle: 'No games match', emptyDescription: 'Try fewer title words or another BGG ranking family.', shown: '{shown} games on this page', officialSource: 'Data provided by BoardGameGeek',
     pagination: 'Game catalog pages', pageSummary: 'Page {current} of {total}', previousPage: 'Previous', nextPage: 'Next', goToPage: 'Go to page {page}',
   },
 } as const
@@ -103,7 +109,6 @@ const sourceCount = ref(0)
 const total = ref(0)
 const totalPages = ref(0)
 const sourceDate = ref<string | null>(null)
-const taxonomyTranslated = ref(false)
 const loading = ref(true)
 const loadFailed = ref(false)
 const failedPage = ref<number | null>(null)
@@ -116,9 +121,8 @@ let queryGeneration = 0
 let disposed = false
 let activeQuery: CatalogQuery | null = null
 let activeBaseRequest: { generation: number; controller: AbortController } | null = null
+let activeCoverRequest: { generation: number; controller: AbortController } | null = null
 const prefetches = new Map<string, PrefetchRecord>()
-const visiblePages = new Set<number>()
-const translatedPages = new Set<number>()
 
 interface PaginationItem {
   key: string
@@ -232,14 +236,11 @@ function isCurrentQuery(generation: number, query: CatalogQuery) {
   return !disposed && generation === queryGeneration && activeQuery === query
 }
 
-function syncTaxonomyTranslation() {
-  taxonomyTranslated.value = activeQuery?.locale !== 'zh-CN'
-    || ([...visiblePages].length > 0 && [...visiblePages].every(pageNumber => translatedPages.has(pageNumber)))
-}
-
 function cancelQueryWork() {
   activeBaseRequest?.controller.abort()
   activeBaseRequest = null
+  activeCoverRequest?.controller.abort()
+  activeCoverRequest = null
   prefetches.forEach(entry => entry.controller.abort())
   prefetches.clear()
 }
@@ -248,8 +249,6 @@ function beginReplacementQuery(query: CatalogQuery, targetPage: number) {
   queryGeneration += 1
   cancelQueryWork()
   activeQuery = query
-  visiblePages.clear()
-  translatedPages.clear()
   games.value = []
   ready.value = false
   sourceCount.value = 0
@@ -259,18 +258,16 @@ function beginReplacementQuery(query: CatalogQuery, targetPage: number) {
   page.value = targetPage
   loadFailed.value = false
   failedPage.value = null
-  taxonomyTranslated.value = query.locale !== 'zh-CN'
   return queryGeneration
 }
 
-function preparePageNavigation(query: CatalogQuery) {
+function preparePageNavigation() {
   activeBaseRequest?.controller.abort()
   activeBaseRequest = null
-  visiblePages.clear()
-  translatedPages.clear()
+  activeCoverRequest?.controller.abort()
+  activeCoverRequest = null
   loadFailed.value = false
   failedPage.value = null
-  taxonomyTranslated.value = query.locale !== 'zh-CN'
 }
 
 function prefetchNextPage(generation: number, query: CatalogQuery, data: CatalogResponse) {
@@ -304,6 +301,34 @@ async function loadBasePage(generation: number, query: CatalogQuery, pageNumber:
   return data
 }
 
+async function enrichMissingCovers(generation: number, query: CatalogQuery, pageNumber: number, pageGames: CatalogGame[]) {
+  const missingIds = pageGames.filter(game => !game.thumbnailUrl).map(game => game.bggId)
+  if (!missingIds.length || !isCurrentQuery(generation, query)) return
+  const controller = new AbortController()
+  activeCoverRequest?.controller.abort()
+  activeCoverRequest = { generation, controller }
+  const parameters = new URLSearchParams()
+  missingIds.forEach(id => parameters.append('bggId', String(id)))
+  try {
+    const response = await fetch(`/api/v1/bgg/catalog/covers?${parameters.toString()}`, {
+      credentials: 'include',
+      signal: controller.signal,
+    })
+    if (!response.ok) return
+    const covers = await response.json() as CatalogCover[]
+    if (!isCurrentQuery(generation, query) || page.value !== pageNumber || activeCoverRequest?.controller !== controller) return
+    const byId = new Map(covers.map(cover => [cover.bggId, cover]))
+    games.value = games.value.map(game => {
+      const cover = byId.get(game.bggId)
+      return cover ? { ...game, thumbnailUrl: cover.thumbnailUrl || cover.imageUrl } : game
+    })
+  } catch (error) {
+    if (!isAbortError(error)) return
+  } finally {
+    if (activeCoverRequest?.controller === controller) activeCoverRequest = null
+  }
+}
+
 async function loadPage(generation: number, query: CatalogQuery, targetPage: number) {
   loading.value = true
   loadFailed.value = false
@@ -314,11 +339,8 @@ async function loadPage(generation: number, query: CatalogQuery, targetPage: num
     updateSummary(data)
     page.value = data.page
     games.value = data.games
-    visiblePages.add(data.page)
-    if (data.taxonomyTranslated) translatedPages.add(data.page)
-    else translatedPages.delete(data.page)
-    syncTaxonomyTranslation()
     loading.value = false
+    void enrichMissingCovers(generation, query, data.page, data.games)
     prefetchNextPage(generation, query, data)
     syncRoute(data.page)
   } catch (error) {
@@ -341,7 +363,7 @@ async function navigateToPage(targetPage: number) {
   if (loading.value || targetPage < 0 || targetPage >= totalPages.value || targetPage === page.value) return
   const query = activeQuery ?? querySnapshot()
   const generation = activeQuery ? queryGeneration : beginReplacementQuery(query, targetPage)
-  if (activeQuery) preparePageNavigation(query)
+  if (activeQuery) preparePageNavigation()
   await loadPage(generation, query, targetPage)
 }
 
@@ -377,8 +399,12 @@ function playerTime(game: CatalogGame) {
   return values.join(' · ')
 }
 
-function hideBrokenImage(event: Event) {
-  ;(event.currentTarget as HTMLImageElement).hidden = true
+function coverImageUrl(game: CatalogGame) {
+  return `/api/v1/bgg/catalog/covers/${game.bggId}/image`
+}
+
+function hideBrokenImage(game: CatalogGame) {
+  games.value = games.value.map(candidate => candidate.bggId === game.bggId ? { ...candidate, thumbnailUrl: '' } : candidate)
 }
 
 onMounted(() => {
@@ -459,7 +485,6 @@ onBeforeUnmount(() => {
         <p v-if="ready" class="mt-4 text-sm text-ink/50">
           {{ t('scope', { sourceCount: sourceCount.toLocaleString(), total: total.toLocaleString() }) }}
           <span v-if="sourceDate"> · {{ t('sourceDate', { date: sourceDate }) }}</span>
-          <span v-if="locale === 'zh-CN' && !taxonomyTranslated"> · {{ t('taxonomyFallback') }}</span>
         </p>
 
         <div v-if="loading && !games.length" class="mt-7 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4" :aria-label="t('loading')">
@@ -472,10 +497,10 @@ onBeforeUnmount(() => {
           <h3 class="font-display text-2xl font-semibold">{{ t('unavailableTitle') }}</h3><p class="mt-2 max-w-2xl text-sm leading-6 text-ink/60">{{ t('unavailableDescription') }}</p>
         </div>
         <TransitionGroup v-if="games.length" tag="div" name="tile" class="mt-7 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4" :class="loading ? 'opacity-70' : ''">
-          <article v-for="game in games" :key="game.bggId" class="game-tile group min-w-0 p-3">
+          <article v-for="(game, index) in games" :key="game.bggId" class="game-tile group min-w-0 p-3">
             <RouterLink :to="{ name: 'game-discovery', params: { bggId: game.bggId } }" class="block">
               <div class="relative flex aspect-[4/3] items-center justify-center overflow-hidden rounded-lg border border-ink/6 bg-canvas p-3 text-ink/25">
-                <img v-if="game.thumbnailUrl" :src="game.thumbnailUrl" :alt="t('coverAlt', { game: game.name })" loading="lazy" class="h-full w-full object-contain" @error="hideBrokenImage">
+                <img v-if="game.thumbnailUrl" :key="`${game.bggId}-${game.thumbnailUrl}`" :src="coverImageUrl(game)" :alt="t('coverAlt', { game: game.name })" :loading="index < 4 ? 'eager' : 'lazy'" :fetchpriority="index < 4 ? 'high' : 'auto'" decoding="async" class="h-full w-full object-contain" @error="hideBrokenImage(game)">
                 <TabletopGlyph v-else name="cards" :size="48" />
                 <span v-if="game.hotRank" class="absolute left-2 top-2 rounded-full bg-copper px-2.5 py-1 text-xs font-bold text-white">{{ t('hotRank', { rank: game.hotRank }) }}</span>
               </div>
@@ -486,9 +511,6 @@ onBeforeUnmount(() => {
             <p class="text-xs leading-5 text-ink/45">{{ t('geekRating', { rating: game.geekRating.toFixed(2) }) }} · {{ t('votes', { count: game.usersRated.toLocaleString() }) }}</p>
             <p v-if="playerTime(game)" class="mt-1 text-xs leading-5 text-ink/55">{{ playerTime(game) }}<span v-if="game.averageWeight !== null"> · {{ t('weight', { weight: game.averageWeight.toFixed(1) }) }}</span></p>
             <p v-else class="mt-1 text-xs leading-5 text-ink/40">{{ t('detailPending') }}</p>
-            <ul v-if="game.categories.length || game.mechanics.length" class="mt-3 flex flex-wrap gap-1.5" :aria-label="t('categoriesAria')">
-              <li v-for="item in [...game.categories, ...game.mechanics]" :key="item" class="tabletop-chip">{{ item }}</li>
-            </ul>
           </article>
         </TransitionGroup>
         <div v-else-if="ready && !loading" class="mt-7 rounded-2xl border border-dashed border-ink/15 bg-paper p-7 text-center"><h3 class="font-display text-2xl font-semibold">{{ t('emptyTitle') }}</h3><p class="mt-2 text-sm text-ink/55">{{ t('emptyDescription') }}</p><button type="button" class="mt-4 min-h-11 rounded-lg border border-ink/15 px-5 text-sm font-semibold" @click="clearFilters">{{ t('clear') }}</button></div>

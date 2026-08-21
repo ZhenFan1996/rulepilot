@@ -86,8 +86,8 @@ describe('GameRecommendationsView', () => {
     expect(wrapper.text()).toContain('当前找到 7,543 条')
     expect(wrapper.text()).toContain('展翅翱翔')
     expect(wrapper.text()).toContain('Wingspan')
-    expect(wrapper.text()).toContain('动物')
-    expect(wrapper.text()).toContain('卡牌轮抽')
+    expect(wrapper.text()).not.toContain('动物')
+    expect(wrapper.text()).not.toContain('卡牌轮抽')
     expect(wrapper.get('a[href="/discover/266192"]').attributes('href')).toBe('/discover/266192')
     const attribution = wrapper.get('a[href="https://boardgamegeek.com"]')
     expect(attribution.get('img').attributes('src')).toBe('/powered-by-bgg-rgb.svg')
@@ -108,9 +108,38 @@ describe('GameRecommendationsView', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('展翅翱翔')
-    expect(wrapper.text()).toContain('卡牌轮抽')
+    expect(wrapper.text()).toContain('1–5 人')
+    expect(wrapper.text()).not.toContain('卡牌轮抽')
     expect(fetchMock.mock.calls.some(([input]) => String(input).includes('enrich=true'))).toBe(false)
     expect(fetchMock.mock.calls.some(([input]) => String(input).includes('enrich=false'))).toBe(true)
+  })
+
+  it('paints catalog text before asynchronously filling missing covers', async () => {
+    let resolveCovers!: (response: Response) => void
+    const coversResponse = new Promise<Response>(resolve => { resolveCovers = resolve })
+    const fetchMock = vi.fn((input: string | URL | Request) => {
+      const url = String(input)
+      if (url.includes('/api/v1/bgg/catalog/covers?')) return coversResponse
+      return Promise.resolve(Response.json({
+        ...catalog,
+        total: 1,
+        totalPages: 1,
+        games: [{ ...catalog.games[0], thumbnailUrl: '' }],
+      }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const wrapper = await mountView()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('展翅翱翔')
+    expect(wrapper.find('img[alt="展翅翱翔 的 BGG 封面"]').exists()).toBe(false)
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes('bggId=266192'))).toBe(true)
+
+    resolveCovers(Response.json([{ bggId: 266192, thumbnailUrl: 'https://example.test/fresh-cover.jpg', imageUrl: '' }]))
+    await flushPromises()
+
+    expect(wrapper.get('img[alt="展翅翱翔 的 BGG 封面"]').attributes('src')).toBe('/api/v1/bgg/catalog/covers/266192/image')
   })
 
   it('sends rating and BGG type filters to the server-side catalog query', async () => {
