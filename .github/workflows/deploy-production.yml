@@ -404,7 +404,10 @@ jobs:
           docker image inspect "$backend_image" >/dev/null
           install -d -m 0755 "${release_dir}"
           tar -xzf "${archive}" -C "${release_dir}"
-          ln -s "${application_root}/.env" "${release_dir}/.env"
+          # A GitHub Actions rerun reuses the same release id and may resume after
+          # extraction. Replace only this known deployment-owned symlink so the
+          # activation remains safe and idempotent.
+          ln -sfn "${application_root}/.env" "${release_dir}/.env"
 
           cd "${release_dir}"
           sh scripts/run-production.sh config

@@ -195,6 +195,7 @@ test('production deployment reclaims only inactive releases and restores current
   assert.match(deploymentWorkflow, /Restoring API and worker from the current release after failed activation/)
   assert.match(deploymentWorkflow, /\.yml up -d --no-build api worker/)
   assert.match(deploymentWorkflow, /Ensuring the current release remains available while the replacement image builds/)
+  assert.match(deploymentWorkflow, /ln -sfn "\$\{application_root\}\/\.env" "\$\{release_dir\}\/\.env"/)
   assert.doesNotMatch(deploymentWorkflow, /\.yml stop worker api/)
   assert.doesNotMatch(deploymentWorkflow, /docker builder prune --all/)
   assert.doesNotMatch(deploymentWorkflow, /docker image prune --all/)
