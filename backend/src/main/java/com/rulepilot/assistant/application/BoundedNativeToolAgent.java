@@ -17,6 +17,7 @@ import java.time.Instant;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
@@ -70,8 +71,12 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
         Map<String, Integer> failedCallCounts = new HashMap<>();
         int toolCalls = 0;
         boolean finalResponseOnly = false;
+        boolean requiredOnlyInstructionAdded = false;
 
-        for (int iteration = 1; iteration <= request.maxIterations(); iteration++) {
+        for (int iteration = 1; iteration <= request.maxIterations() + 1; iteration++) {
+            // A tool read on the last acquisition turn still needs one tool-free protocol decision. This extra turn
+            // cannot expand the evidence search because the registry advertises no tools in final-response mode.
+            if (iteration > request.maxIterations() && !finalResponseOnly) break;
             if (Instant.now().isAfter(request.scope().deadlineAt())) {
                 return fallback(request, "TIMEOUT", iteration - 1, toolCalls, observations);
             }
@@ -81,12 +86,29 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
                 return fallback(request, stopReason(exception), iteration - 1, toolCalls, observations);
             }
 
+            List<String> missingCompletionTools = missingCompletionTools(request, observations);
+            boolean reserveRemainingCallsForRequiredTools = !finalResponseOnly
+                    && !missingCompletionTools.isEmpty()
+                    && (iteration == request.maxIterations()
+                            || request.maxToolCalls() - toolCalls <= missingCompletionTools.size());
+            Set<String> toolsAllowedThisTurn = reserveRemainingCallsForRequiredTools
+                    ? Set.copyOf(missingCompletionTools)
+                    : request.allowedTools();
+            if (reserveRemainingCallsForRequiredTools && !requiredOnlyInstructionAdded && iteration > 1) {
+                conversation.appendApplicationInstruction(
+                        "The remaining observation budget is reserved for the required confirmation tool(s): "
+                                + String.join(", ", missingCompletionTools)
+                                + ". Use only those tools with locators already present in prior observations. "
+                                + "If no prior candidate can satisfy the requirement, stop without inventing one.");
+                requiredOnlyInstructionAdded = true;
+            }
+
             ModelTurn turn;
             List<com.rulepilot.assistant.NativeToolModel.ToolSpec> advertisedTools =
-                    finalResponseOnly ? List.of() : tools.specifications(request.role(), request.allowedTools());
+                    finalResponseOnly ? List.of() : tools.specifications(request.role(), toolsAllowedThisTurn);
             if (!finalResponseOnly
-                    && !request.allowedTools().isEmpty()
-                    && advertisedTools.size() != request.allowedTools().size()) {
+                    && !toolsAllowedThisTurn.isEmpty()
+                    && advertisedTools.size() != toolsAllowedThisTurn.size()) {
                 return fallback(request, "TOOL_ALLOWLIST_UNAVAILABLE", iteration - 1, toolCalls, observations);
             }
             try {
@@ -118,12 +140,7 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
             }
 
             if (turn.toolCalls().isEmpty()) {
-                List<String> missingCompletionTools = request.requiredToolsBeforeCompletion().stream()
-                        .filter(required -> observations.stream().noneMatch(observation ->
-                                required.equals(observation.toolName())
-                                        && observation.observation().status() != ObservationStatus.ERROR))
-                        .sorted()
-                        .toList();
+                missingCompletionTools = missingCompletionTools(request, observations);
                 if (!missingCompletionTools.isEmpty()) {
                     boolean recorded = recordDiagnostic(
                             request.scope().runId(),
@@ -132,7 +149,7 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
                             ActivityOutcome.REJECTED,
                             "native completion missing required observation");
                     if (!recorded) return fallback(request, "AUDIT_FAILED", iteration, toolCalls, observations);
-                    if (iteration == request.maxIterations()) {
+                    if (iteration >= request.maxIterations()) {
                         return fallback(
                                 request, "COMPLETION_REQUIREMENT_UNMET", iteration, toolCalls, observations);
                     }
@@ -156,7 +173,7 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
                                     ? "native model returned neither a tool call nor a terminal status"
                                     : "native model returned a nonconforming terminal status");
                     if (!recorded) return fallback(request, "AUDIT_FAILED", iteration, toolCalls, observations);
-                    if (iteration == request.maxIterations()) {
+                    if (iteration >= request.maxIterations()) {
                         return fallback(
                                 request,
                                 emptyCompletion ? "EMPTY_MODEL_RESULT" : "COMPLETION_PROTOCOL_REJECTED",
@@ -198,7 +215,26 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
             }
 
             conversation.appendAssistant(turn.text(), turn.toolCalls(), advertisedTools);
+            boolean requiredToolContractRepair = false;
             for (ModelToolCall call : turn.toolCalls()) {
+                List<String> stillMissingCompletionTools = missingCompletionTools(request, observations);
+                boolean mustReserveThisSlot = toolsAllowedThisTurn.contains(call.name())
+                        && !stillMissingCompletionTools.isEmpty()
+                        && !stillMissingCompletionTools.contains(call.name())
+                        && request.maxToolCalls() - toolCalls <= stillMissingCompletionTools.size();
+                if (mustReserveThisSlot) {
+                    boolean recorded = recordDiagnostic(
+                            request.scope().runId(),
+                            ActivityType.VALIDATION,
+                            "nativeRequiredToolBudgetReservation",
+                            ActivityOutcome.REJECTED,
+                            "optional native tool call rejected to preserve required confirmation budget");
+                    if (!recorded) return fallback(request, "AUDIT_FAILED", iteration, toolCalls, observations);
+                    conversation.appendTool(call, "{\"status\":\"ERROR\",\"code\":\"TOOL_BUDGET_RESERVED\","
+                            + "\"data\":{},\"evidenceCount\":0}");
+                    requiredToolContractRepair = true;
+                    continue;
+                }
                 if (toolCalls >= request.maxToolCalls()) {
                     if (completionRequirementsSatisfied(request, observations)) {
                         return completedAtToolLimit(request, iteration, toolCalls, observations);
@@ -236,7 +272,20 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
                                             request.role(), call.name(), call.argumentsJson(), request.scope())),
                             result -> estimateTokens(observationJson(result)));
                 } catch (NativeAgentConversation.StaleSchemaException exception) {
-                    return fallback(request, "TOOL_SCHEMA_STALE", iteration, toolCalls, observations);
+                    if (!reserveRemainingCallsForRequiredTools || iteration == request.maxIterations()) {
+                        return fallback(request, "TOOL_SCHEMA_STALE", iteration, toolCalls, observations);
+                    }
+                    boolean recorded = recordDiagnostic(
+                            request.scope().runId(),
+                            ActivityType.VALIDATION,
+                            "nativeRequiredToolContractRepair",
+                            ActivityOutcome.REJECTED,
+                            "native model selected a tool outside the required-only portfolio");
+                    if (!recorded) return fallback(request, "AUDIT_FAILED", iteration, toolCalls, observations);
+                    conversation.appendTool(call, "{\"status\":\"ERROR\",\"code\":\"TOOL_NOT_ADVERTISED\","
+                            + "\"data\":{},\"evidenceCount\":0}");
+                    requiredToolContractRepair = true;
+                    continue;
                 } catch (RuntimeException exception) {
                     return fallback(request, stopReason(exception), iteration, toolCalls, observations);
                 }
@@ -270,9 +319,12 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
                             toolExecution.observation().media());
                 }
             }
-            if (!request.requiredToolsBeforeCompletion().isEmpty()
-                    && completionRequirementsSatisfied(request, observations)) {
-                return completedAfterRequiredEvidence(request, iteration, toolCalls, observations);
+            if (requiredToolContractRepair) {
+                conversation.appendApplicationInstruction(
+                        "The application rejected a tool outside the required-only portfolio. Retry once using only: "
+                                + String.join(", ", missingCompletionTools(request, observations))
+                                + ". Use locators already present in prior observations; do not search again.");
+                continue;
             }
             if (finalResponseTriggered(request, observations)) {
                 finalResponseOnly = true;
@@ -280,6 +332,10 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
                         "The configured evidence-acquisition budget is complete. No more tools are available. Return "
                                 + "the final response required by the system instructions now, using only the prior "
                                 + "successful observations. Do not request another tool.");
+            } else if (request.completeAfterRequiredTools()
+                    && !request.requiredToolsBeforeCompletion().isEmpty()
+                    && completionRequirementsSatisfied(request, observations)) {
+                return completedAfterRequiredEvidence(request, iteration, toolCalls, observations);
             }
         }
         return fallback(request, "ITERATION_LIMIT", request.maxIterations(), toolCalls, observations);
@@ -300,7 +356,17 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
             RunRequest request, List<ObservationRecord> observations) {
         return request.requiredToolsBeforeCompletion().stream().allMatch(required -> observations.stream()
                 .anyMatch(observation -> required.equals(observation.toolName())
-                        && observation.observation().status() != ObservationStatus.ERROR));
+                        && observation.observation().status() == ObservationStatus.SUCCESS));
+    }
+
+    private List<String> missingCompletionTools(
+            RunRequest request, List<ObservationRecord> observations) {
+        return request.requiredToolsBeforeCompletion().stream()
+                .filter(required -> observations.stream().noneMatch(observation ->
+                        required.equals(observation.toolName())
+                                && observation.observation().status() == ObservationStatus.SUCCESS))
+                .sorted()
+                .toList();
     }
 
     private RunResult completedAtToolLimit(

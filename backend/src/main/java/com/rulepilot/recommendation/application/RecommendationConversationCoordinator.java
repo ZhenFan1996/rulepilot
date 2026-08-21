@@ -334,7 +334,6 @@ public class RecommendationConversationCoordinator {
         appendUnlessDuplicate(transcript, new DialogueMessage("assistant", response.assistantMessage()));
 
         Map<Integer, KnownGame> games = new LinkedHashMap<>();
-        previous.knownGames().forEach(game -> games.putIfAbsent(game.bggId(), game));
         response.games().stream().map(BoardGameRecommendationAgent.RecommendedGame::game)
                 .map(RecommendationConversationCoordinator::knownGame)
                 .forEach(game -> games.putIfAbsent(game.bggId(), game));
@@ -344,6 +343,7 @@ public class RecommendationConversationCoordinator {
                     .map(RecommendationConversationCoordinator::knownGame)
                     .forEach(game -> games.putIfAbsent(game.bggId(), game));
         }
+        previous.knownGames().forEach(game -> games.putIfAbsent(game.bggId(), game));
 
         LinkedHashSet<Integer> shown = new LinkedHashSet<>(previous.shownBggIds());
         response.games().forEach(game -> shown.add(game.game().ranking().bggId()));

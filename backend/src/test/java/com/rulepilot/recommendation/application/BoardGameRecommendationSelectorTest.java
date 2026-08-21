@@ -85,6 +85,35 @@ class BoardGameRecommendationSelectorTest {
     }
 
     @Test
+    void exposesABoundedPublisherDescriptionAsCandidateScopedMetadata() {
+        String description = "Build a floating archive where players preserve memories.   "
+                + "Each round introduces a new island. ".repeat(80);
+
+        var observations = selector.observations(gameWithDescription(41, description));
+
+        assertThat(observations)
+                .filteredOn(observation -> observation.attribute().equals("publisherDescription"))
+                .singleElement()
+                .satisfies(observation -> {
+                    assertThat(observation.id()).isEqualTo("B41:publisherDescription");
+                    assertThat(observation.kind())
+                            .isEqualTo(com.rulepilot.recommendation.CandidateObservation.Kind.STRUCTURED_METADATA);
+                    assertThat(observation.value())
+                            .startsWith("Build a floating archive")
+                            .endsWith("…")
+                            .doesNotContain("  ");
+                    assertThat(observation.value().codePointCount(0, observation.value().length()))
+                            .isEqualTo(BoardGameRecommendationSelector.MAX_PUBLISHER_DESCRIPTION_CODE_POINTS + 1);
+                });
+    }
+
+    @Test
+    void omitsAnAbsentPublisherDescriptionInsteadOfInventingOne() {
+        assertThat(selector.observations(game(42, 60, new BigDecimal("2.2"), List.of("Drafting"))))
+                .noneMatch(observation -> observation.attribute().equals("publisherDescription"));
+    }
+
+    @Test
     void keepsEachPreferenceInferenceAttachedToItsOwnQuoteAndCandidateTaxonomy() {
         Game pattern = game(1, 50, new BigDecimal("2.2"), List.of("Pattern Building"));
         Game drafting = game(2, 55, new BigDecimal("2.4"), List.of("Open Drafting"));
@@ -323,6 +352,42 @@ class BoardGameRecommendationSelectorTest {
                         List.of(),
                         List.of(),
                         List.of()));
+    }
+
+    private Game gameWithDescription(int id, String description) {
+        return new Game(
+                new Ranking(
+                        id,
+                        "Game " + id,
+                        2024,
+                        id,
+                        new BigDecimal("7.0"),
+                        new BigDecimal("7.3"),
+                        500,
+                        List.of(BggGameType.STRATEGY)),
+                new Details(
+                        "Game " + id,
+                        "",
+                        "",
+                        2,
+                        4,
+                        60,
+                        new BigDecimal("2.2"),
+                        List.of("Strategy"),
+                        List.of("Open Drafting"),
+                        45,
+                        60,
+                        10,
+                        10,
+                        "3",
+                        "2-4",
+                        2,
+                        100,
+                        List.of(),
+                        List.of(),
+                        List.of(),
+                        description,
+                        ""));
     }
 
     private Game gameWithRanges(

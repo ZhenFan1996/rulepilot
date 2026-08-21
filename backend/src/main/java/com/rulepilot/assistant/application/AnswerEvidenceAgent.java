@@ -77,6 +77,15 @@ public class AnswerEvidenceAgent implements AnswerEvidenceRefiner {
             the player's distinctive wording before reading the best candidate page. Stop requesting tools after the
             useful exact pages have been read. Any terminal prose is ignored by the application; only canonical page
             observations can become answer evidence. Do not invent identifiers or scope.
+            For an ADVICE-only request, after reading the exact candidate page return exactly EVIDENCE_READY only when
+            that page itself contains source-authored guidance in the requested scope. Otherwise return exactly
+            EVIDENCE_NOT_FOUND. A scoring rule, victory condition, legal action, or statement that another resource has
+            tips must return EVIDENCE_NOT_FOUND.
+            For a COMPLETE_LIST obligation, one exact-page read does not by itself prove completeness. After reading a
+            candidate page, verify that the canonical pages explicitly enumerate the requested list or jointly cover
+            every requested item. Continue searching for the missing list-level rule when they do not. Return exactly
+            EVIDENCE_READY only after that coverage check; if the bounded evidence cannot establish completeness,
+            return exactly EVIDENCE_NOT_FOUND.
             The current player question is authoritative. Selected reference context may resolve an omitted subject,
             but it may not replace an object explicitly named in the current question. A player-supplied page number
             is only a scoped locator to inspect, never evidence that the page entails the requested rule.
@@ -137,6 +146,7 @@ public class AnswerEvidenceAgent implements AnswerEvidenceRefiner {
         if (!AnswerEvidenceRefinementPolicy.requiresRefinement(question, context, questionPlan, deterministic)) {
             return deterministic;
         }
+        Set<String> requiredEvidenceTools = requiredEvidenceTools(questionPlan, context);
         var scope = scopes.create(username, context.documentVersionId(), assistantRunId);
         if (scope.isEmpty()) return deterministic;
 
@@ -154,9 +164,13 @@ public class AnswerEvidenceAgent implements AnswerEvidenceRefiner {
                     refinementBudget(questionPlan, context),
                     384,
                     toolPortfolio(question, context, questionPlan),
-                    requiredEvidenceTools(questionPlan, context),
+                    requiredEvidenceTools,
                     refinementToolBudget(questionPlan, context),
-                    ""));
+                    "",
+                    requiresSourceAuthoredAdvice(questionPlan)
+                            ? Map.of("read_rule_pages", 1)
+                            : Map.of(),
+                    !requiresCompleteListCertification(questionPlan)));
         } catch (RuntimeException failure) {
             LOGGER.warn(
                     "Answer evidence refinement failed for document version {}; preserving deterministic evidence",
@@ -174,6 +188,23 @@ public class AnswerEvidenceAgent implements AnswerEvidenceRefiner {
                 result.toolCalls(),
                 exactPageGroups.size(),
                 exactPageGroups.stream().mapToInt(Set::size).sum());
+        if (!requiredEvidenceTools.isEmpty() && exactPageGroups.isEmpty()) {
+            LOGGER.info(
+                    "Answer evidence refinement did not complete its required exact-page confirmation; withholding candidate evidence");
+            return new AnswerEvidenceRetriever.Result(List.of(), AnswerEvidenceRetriever.State.READY);
+        }
+        if (requiresSourceAuthoredAdvice(questionPlan)
+                && (result.status() != RunStatus.COMPLETED || !"EVIDENCE_READY".equals(result.text()))) {
+            LOGGER.info(
+                    "Answer evidence refinement did not certify source-authored advice; withholding candidate evidence");
+            return new AnswerEvidenceRetriever.Result(List.of(), AnswerEvidenceRetriever.State.READY);
+        }
+        if (requiresCompleteListCertification(questionPlan)
+                && (result.status() != RunStatus.COMPLETED || !certifiesEvidenceReady(result.text()))) {
+            LOGGER.info(
+                    "Answer evidence refinement did not certify complete-list coverage; withholding candidate evidence");
+            return new AnswerEvidenceRetriever.Result(List.of(), AnswerEvidenceRetriever.State.READY);
+        }
         boolean completedWithCanonicalPages = result.status() == RunStatus.COMPLETED
                 && result.toolCalls() > 0
                 && !exactPageGroups.isEmpty();
@@ -233,19 +264,34 @@ public class AnswerEvidenceAgent implements AnswerEvidenceRefiner {
 
     private int refinementBudget(AnswerQuestionPlan questionPlan, QuestionContext context) {
         if (usesPriorPages(questionPlan, context)) return 2;
-        if (questionPlan.subquestions().size() > 1 || requiresSourceAuthoredAdvice(questionPlan)) return 5;
-        return 4;
+        if (questionPlan.subquestions().size() > 1) return 5;
+        if (requiresCompleteListCertification(questionPlan)) return 5;
+        if (!requiredEvidenceTools(questionPlan, context).isEmpty()) return 4;
+        return 3;
     }
 
     private int refinementToolBudget(AnswerQuestionPlan questionPlan, QuestionContext context) {
         if (usesPriorPages(questionPlan, context)) return 1;
-        if (questionPlan.subquestions().size() > 1 || requiresSourceAuthoredAdvice(questionPlan)) return 5;
-        return 4;
+        if (questionPlan.subquestions().size() > 1) return 5;
+        if (requiresSourceAuthoredAdvice(questionPlan)) return 4;
+        if (requiresCompleteListCertification(questionPlan)) return 4;
+        return 3;
     }
 
     private boolean requiresSourceAuthoredAdvice(AnswerQuestionPlan questionPlan) {
         return questionPlan.evidenceNeeds().contains(
                 com.rulepilot.assistant.RuleAnswerModel.EvidenceNeed.ADVICE);
+    }
+
+    private boolean requiresCompleteListCertification(AnswerQuestionPlan questionPlan) {
+        return questionPlan.evidenceNeeds().contains(
+                com.rulepilot.assistant.RuleAnswerModel.EvidenceNeed.COMPLETE_LIST);
+    }
+
+    private boolean certifiesEvidenceReady(String text) {
+        if (text == null || text.isBlank()) return false;
+        String[] lines = text.strip().split("\\R");
+        return "EVIDENCE_READY".equals(lines[lines.length - 1].strip());
     }
 
     private boolean requiresNumericalScopeAudit(AnswerQuestionPlan questionPlan) {

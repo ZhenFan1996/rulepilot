@@ -107,7 +107,7 @@ export type RecommendationAgentResponse = {
   clientTurnId?: string | null
   replayed?: boolean
   outcome: 'conversation' | 'needs_clarification' | 'recommendations' | 'no_match' | 'unavailable'
-  mode: 'model_assisted' | 'model_fast_path'
+  mode: 'model_assisted' | 'model_fast_path' | 'local_fast_path'
   responseLocale?: 'zh-CN' | 'en'
   assistantMessage: string
   profile: RecommendationProfile

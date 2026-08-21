@@ -22,6 +22,8 @@ import java.util.List;
 import java.util.Map;
 import java.net.SocketTimeoutException;
 import java.util.concurrent.TimeoutException;
+import java.util.regex.Pattern;
+import java.util.stream.IntStream;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.ai.chat.messages.AssistantMessage;
@@ -32,6 +34,55 @@ import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.model.tool.ToolCallingChatOptions;
 
 class SpringAiTeachingOutlineModelTest {
+
+    @Test
+    void canonicalPageEvidenceKeepsSourceCentredRulesFromTheMiddleAndTail() {
+        String text = "opening ".repeat(700)
+                + "MIDDLE RULE: Spend exactly two markers before moving. "
+                + "background ".repeat(700)
+                + "TAIL RULE: End immediately when the final space is filled. "
+                + "appendix ".repeat(250);
+        PageInput page = new PageInput(
+                1,
+                text,
+                List.of(),
+                List.of("MIDDLE RULE", "TAIL RULE"),
+                true);
+
+        String evidence = SpringAiTeachingOutlineModel.canonicalPageEvidence(page, 800);
+
+        assertThat(evidence)
+                .hasSizeLessThanOrEqualTo(800)
+                .contains("MIDDLE RULE", "Spend exactly two markers", "TAIL RULE", "End immediately");
+    }
+
+    @Test
+    void canonicalLedgerBoundsLongRulebookEvidenceWithoutDroppingAnySourceSlot() {
+        List<PageInput> pages = IntStream.rangeClosed(1, 40)
+                .mapToObj(page -> new PageInput(
+                        page,
+                        "page preface ".repeat(600)
+                                + "RULE " + page + ": Perform the page-specific verified action. "
+                                + "page appendix ".repeat(600),
+                        List.of(),
+                        List.of("RULE " + page),
+                        true))
+                .toList();
+
+        String ledger = SpringAiTeachingOutlineModel.canonicalSourceLedger(
+                new OutlineRequest(pages, List.of(), "player"));
+        var evidenceMatcher = Pattern.compile(
+                        "PAGE_EVIDENCE_BEGIN\\n(.*?)\\nPAGE_EVIDENCE_END",
+                        Pattern.DOTALL)
+                .matcher(ledger);
+        int evidenceCharacters = 0;
+        while (evidenceMatcher.find()) evidenceCharacters += evidenceMatcher.group(1).length();
+
+        assertThat(evidenceCharacters)
+                .isLessThanOrEqualTo(SpringAiTeachingOutlineModel.MAX_CANONICAL_LEDGER_EVIDENCE_CHARACTERS);
+        IntStream.rangeClosed(1, 40).forEach(page -> assertThat(ledger)
+                .contains("page-" + page + "-rule-1", "RULE " + page, "page-specific verified action"));
+    }
 
     @Test
     void closesOnlyASingleMissingRootObjectDelimiterWithoutRepairingTruncatedContent() {

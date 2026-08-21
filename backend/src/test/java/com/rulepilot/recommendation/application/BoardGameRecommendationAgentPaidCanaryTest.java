@@ -1414,6 +1414,13 @@ class BoardGameRecommendationAgentPaidCanaryTest {
             ToolCall call,
             BoardGameRecommendationAgent.ConversationResponse response) throws Exception {
         JsonNode arguments = json.readTree(call.argumentsJson());
+        if (BoardGameRecommendationAgent.RECOMMEND_TOOL.equals(call.name())
+                || (BoardGameRecommendationAgent.RESOLVE_TOOL.equals(call.name())
+                        && "TARGET_GAME".equals(arguments.path("purpose").asText()))) {
+            assertThat(arguments.has("message")).isFalse();
+            assertThat(response.assistantMessage()).isNotBlank();
+            return;
+        }
         String field = BoardGameRecommendationAgent.ASK_TOOL.equals(call.name()) ? "question" : "message";
         assertThat(response.assistantMessage())
                 .as("validated terminal prose must pass to the visible response without rewriting")
@@ -1481,31 +1488,18 @@ class BoardGameRecommendationAgentPaidCanaryTest {
             ToolCall call,
             BoardGameRecommendationAgent.ConversationResponse response) throws Exception {
         assertThat(call.name()).isEqualTo(BoardGameRecommendationAgent.RECOMMEND_TOOL);
-        JsonNode selections = json.readTree(call.argumentsJson()).path("selections");
+        JsonNode arguments = json.readTree(call.argumentsJson());
+        assertThat(arguments.has("message")).isFalse();
+        JsonNode selections = arguments.path("selections");
+        assertThat(selections.isArray()).isTrue();
+        assertThat(selections.size()).isEqualTo(response.games().size());
         for (JsonNode selection : selections) {
-            assertThat(selection.path("internalEvidenceIds").isArray()).isTrue();
-            assertThat(selection.path("internalEvidenceIds").isEmpty()).isFalse();
+            assertThat(selection.fieldNames()).toIterable().containsExactly("bggId");
             int bggId = selection.path("bggId").asInt();
-            var visible = response.games().stream()
+            assertThat(response.games().stream()
                     .filter(entry -> entry.game().ranking().bggId() == bggId)
                     .findFirst()
-                    .orElseThrow();
-            if (selection.has("why")) {
-                String rawWhy = selection.path("why").asText();
-                var visibleWhy = visible.reasons().stream()
-                        .filter(reason -> reason.text().equals(rawWhy))
-                        .findFirst()
-                        .orElseThrow();
-                if (textValues(selection.path("internalEvidenceIds")).stream()
-                        .anyMatch(id -> id.startsWith("R" + bggId + ":"))) {
-                    assertThat(visibleWhy.sourceIndexes())
-                            .as("attributed evidence cited by the model must remain linked on the visible card")
-                            .isNotEmpty();
-                }
-            }
-            if (selection.has("tradeoff")) {
-                assertThat(visible.tradeoffs()).contains(selection.path("tradeoff").asText());
-            }
+                    .isPresent()).isTrue();
         }
     }
 

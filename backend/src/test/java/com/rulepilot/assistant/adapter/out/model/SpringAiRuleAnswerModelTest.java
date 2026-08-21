@@ -241,6 +241,31 @@ class SpringAiRuleAnswerModelTest {
     }
 
     @Test
+    void keepsValidRetrievalPlanWithoutARepairCallWhenOnlyPresentationHintIsUnknown() {
+        Fixture fixture = fixture("""
+                {"questionType":"RULE_QUERY","referenceBinding":"CURRENT_QUESTION","terms":["when"],
+                 "ruleObjectSpans":[],"pageHints":[],"missingContext":[],"learningIntent":null,"answerAid":"SEQUENCE",
+                 "subquestions":[{"questionSpan":"when does Daylight end","evidenceNeeds":["SEQUENCE"]}]}
+                """);
+
+        var result = fixture.model.interpretQuestion(new QuestionInterpretationRequest(
+                "when does Daylight end",
+                "",
+                "",
+                "",
+                QuestionType.RULE_QUERY,
+                Set.of(),
+                PlayerLocale.EN));
+
+        assertThat(result).hasValueSatisfying(draft -> {
+            assertThat(draft.answerAid()).isEqualTo(AnswerAid.NONE);
+            assertThat(draft.subquestions().getFirst().evidenceNeeds())
+                    .containsExactly(EvidenceNeed.SEQUENCE);
+        });
+        verify(fixture.chatModel).call(any(Prompt.class));
+    }
+
+    @Test
     void rejectsQuestionInterpretationWithFieldsOutsideTheVersionedContract() {
         Fixture fixture = fixture("""
                 {"questionType":"RULE_QUERY","referenceBinding":"CURRENT_QUESTION","terms":[],
@@ -370,6 +395,81 @@ class SpringAiRuleAnswerModelTest {
                         "LEGACY_COMPOSE_PROMPT_SHOULD_NOT_APPEAR",
                         "LEGACY_COMPOSE_USER_SHOULD_NOT_APPEAR");
         assertThat(captured.getValue().getInstructions().getFirst().getText().length()).isLessThan(2_500);
+    }
+
+    @Test
+    void ignoresARepeatedKnownLockedFieldWithoutLettingItMutateThePreviousDraft() {
+        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        ChatModel chatModel = mock(ChatModel.class);
+        VersionedAgentPrompts prompts = mock(VersionedAgentPrompts.class);
+        UUID trustedCitation = UUID.randomUUID();
+        UUID repeatedUntrustedCitation = UUID.randomUUID();
+        when(configuration.usesFake(Role.ANSWER)).thenReturn(false);
+        when(configuration.modelFor(Role.ANSWER)).thenReturn(chatModel);
+        when(chatModel.getDefaultOptions()).thenReturn(ToolCallingChatOptions.builder().build());
+        when(chatModel.getOptions()).thenReturn(ToolCallingChatOptions.builder().build());
+        when(chatModel.call(any(Prompt.class))).thenReturn(new ChatResponse(List.of(new Generation(
+                new AssistantMessage("""
+                        {"explanation":"The evidence confirms the complete winning sequence.",
+                         "citationIds":["%s"]}
+                        """.formatted(repeatedUntrustedCitation))))));
+        SpringAiRuleAnswerModel model = new SpringAiRuleAnswerModel(
+                configuration, new FakeRuleAnswerModel(), prompts, 0.42, 0.0);
+        ModelRequest request = new ModelRequest(
+                "How do I win?",
+                QuestionType.RULE_QUERY,
+                new AnswerContext(null, null, PlayerLocale.EN),
+                List.of(new EvidenceInput(trustedCitation, "RULE", "Victory", "Complete victory rule.", 2, 2)));
+        ModelDraft previous = new ModelDraft(
+                "Win by completing the sequence.",
+                "Internal citation marker " + trustedCitation,
+                List.of(trustedCitation),
+                List.of(),
+                "HIGH");
+
+        ModelDraft repaired = model.revisePlayerFacing(
+                request,
+                previous,
+                List.of("Remove internal evidence identifiers from player prose."),
+                Set.of(PlayerFacingField.EXPLANATION),
+                null);
+
+        assertThat(repaired.explanation()).isEqualTo("The evidence confirms the complete winning sequence.");
+        assertThat(repaired.citationIds()).containsExactly(trustedCitation);
+        verify(chatModel, times(1)).call(any(Prompt.class));
+    }
+
+    @Test
+    void rejectsAnUnknownFieldEvenWhenTheEditableFieldIsPresent() {
+        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        ChatModel chatModel = mock(ChatModel.class);
+        VersionedAgentPrompts prompts = mock(VersionedAgentPrompts.class);
+        UUID citation = UUID.randomUUID();
+        when(configuration.usesFake(Role.ANSWER)).thenReturn(false);
+        when(configuration.modelFor(Role.ANSWER)).thenReturn(chatModel);
+        when(chatModel.getDefaultOptions()).thenReturn(ToolCallingChatOptions.builder().build());
+        when(chatModel.getOptions()).thenReturn(ToolCallingChatOptions.builder().build());
+        when(chatModel.call(any(Prompt.class))).thenReturn(new ChatResponse(List.of(new Generation(
+                new AssistantMessage("""
+                        {"explanation":"Player-safe prose.","privateReasoning":"must not be accepted"}
+                        """)))));
+        SpringAiRuleAnswerModel model = new SpringAiRuleAnswerModel(
+                configuration, new FakeRuleAnswerModel(), prompts, 0.42, 0.0);
+        ModelRequest request = new ModelRequest(
+                "How do I win?",
+                QuestionType.RULE_QUERY,
+                new AnswerContext(null, null, PlayerLocale.EN),
+                List.of(new EvidenceInput(citation, "RULE", "Victory", "Complete victory rule.", 2, 2)));
+        ModelDraft previous = new ModelDraft(
+                "Verdict.", "Unsafe internal marker.", List.of(citation), List.of(), "HIGH");
+
+        assertThatThrownBy(() -> model.revisePlayerFacing(
+                        request,
+                        previous,
+                        List.of("Remove internal detail."),
+                        Set.of(PlayerFacingField.EXPLANATION),
+                        null))
+                .hasMessageContaining("outside its edit scope");
     }
 
     @Test

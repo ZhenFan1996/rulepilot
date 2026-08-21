@@ -16,8 +16,8 @@ Question fields:
 - questionType is LESSON_STEP_FOLLOW_UP, RULE_QUERY, or SITUATION_QUERY.
 - terms contains at most twelve short exact terms copied from the current or selected reference question. Invent no
   synonym or game vocabulary.
-- ruleObjectSpans contains zero to four exact verbatim named-object spans from the current question only. Every span
-  must appear in a current-question subquestion.
+- ruleObjectSpans contains zero to four exact verbatim named-object spans from the current question only. Keep a
+  named condition object here even when independently verifiable subquestion spans naturally omit that repeated noun.
 - pageHints contains zero to four {"questionSpan":"exact current span","pageNumber":1} objects. The decimal page
   number must occur in that span. A page hint is a retrieval locator, never evidence, a citation, or a rule claim.
 

@@ -106,6 +106,37 @@ class RecommendationConversationCoordinatorTest {
     }
 
     @Test
+    void retainsNewlyObservedGameIdentityWhenLongTermIdentityMemoryIsFull() {
+        BoardGameRecommendationAgent agent = mock(BoardGameRecommendationAgent.class);
+        java.util.concurrent.atomic.AtomicInteger nextId = new java.util.concurrent.atomic.AtomicInteger();
+        when(agent.conversePersisted(any(), eq("zh-CN"), eq("alice"), any(), any()))
+                .thenAnswer(ignored -> {
+                    int id = nextId.incrementAndGet();
+                    return responseWithGame("第 " + id + " 款", verifiedGame(id));
+                });
+        RecommendationConversationCoordinator coordinator = coordinator(agent, new InMemoryStore());
+
+        RecommendationConversationCoordinator.TurnResult result = null;
+        for (int turn = 0; turn < 61; turn++) {
+            result = coordinator.converse(
+                    new SessionTurn(
+                            result == null ? null : result.conversationId(),
+                            result == null ? 0 : result.revision(),
+                            UUID.randomUUID(),
+                            request("下一款 " + turn)),
+                    "zh-CN",
+                    "alice",
+                    ignored -> {});
+        }
+
+        assertThat(coordinator.latest("alice").orElseThrow().state().knownGames())
+                .hasSize(RecommendationConversationCoordinator.MAX_KNOWN_GAMES)
+                .extracting(BoardGameRecommendationAgent.KnownGame::bggId)
+                .contains(61)
+                .doesNotContain(1);
+    }
+
+    @Test
     void rejectsCrossOwnerLookupStaleRevisionsAndTurnIdReuseWithDifferentInput() {
         BoardGameRecommendationAgent agent = mock(BoardGameRecommendationAgent.class);
         when(agent.conversePersisted(any(), any(), any(), any(), any())).thenReturn(response("Done."));
@@ -300,17 +331,21 @@ class RecommendationConversationCoordinatorTest {
     }
 
     private Game verifiedGame() {
+        return verifiedGame(60);
+    }
+
+    private Game verifiedGame(int id) {
         return new Game(
                 new Ranking(
-                        60,
-                        "Foundry City",
+                        id,
+                        "Foundry City " + id,
                         2018,
                         12,
                         new BigDecimal("8.1"),
                         new BigDecimal("8.3"),
                         10_000),
                 new Details(
-                        "Foundry City",
+                        "Foundry City " + id,
                         "铸城",
                         "https://images.example/60.jpg",
                         2,

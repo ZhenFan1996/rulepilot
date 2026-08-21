@@ -22,19 +22,21 @@ public class SearchRuleEvidenceNativeTool implements NativeAgentTool {
             {
               "type": "object",
               "properties": {
-                "query": {"type": "string", "minLength": 1, "maxLength": 500},
-                "limit": {"type": "integer", "minimum": 1, "maximum": 6},
+                "query": {"type": "string", "description": "One unresolved rule obligation using the player's distinctive wording plus the relevant active-rulebook terms; do not bundle unrelated questions.", "minLength": 1, "maxLength": 500},
+                "limit": {"type": "integer", "description": "Smallest useful candidate count; prefer 3 and use up to 6 only for a complete list or ambiguous terminology.", "minimum": 1, "maximum": 6},
                 "sectionTypes": {
                   "type": "array",
+                  "description": "Optional application-known section type filters. Use an empty array when the plan supplied no reliable section scope.",
                   "items": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_]{1,49}$"},
                   "maxItems": 6,
                   "uniqueItems": true
                 },
                 "currentSectionType": {
+                  "description": "Optional current lesson section for a local follow-up; null when there is no section-bound context.",
                   "type": ["string", "null"],
                   "pattern": "^[A-Za-z][A-Za-z0-9_]{1,49}$"
                 },
-                "includeAdjacentContext": {"type": "boolean"}
+                "includeAdjacentContext": {"type": "boolean", "description": "Request bounded neighboring chunks only when a condition, exception, or list continuation may cross a chunk boundary."}
               },
               "required": ["query", "limit", "sectionTypes", "includeAdjacentContext"],
               "additionalProperties": false
@@ -56,7 +58,11 @@ public class SearchRuleEvidenceNativeTool implements NativeAgentTool {
 
     @Override
     public String description() {
-        return "Search the active rulebook version for cited rule evidence relevant to one bounded player need.";
+        return "Use when supplied evidence misses one accepted obligation. Search the active immutable rulebook for "
+                + "one condition, exception, list item, example, or advice need per call; do not retry a failed query "
+                + "with superficial synonyms. Results are candidate excerpts and locators, not a ruling or proof of "
+                + "applicability. Read useful exact pages before deciding. Stop when the obligation is covered or the "
+                + "bounded independent queries are exhausted.";
     }
 
     @Override

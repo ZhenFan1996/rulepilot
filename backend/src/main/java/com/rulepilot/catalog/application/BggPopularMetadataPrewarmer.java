@@ -1,5 +1,6 @@
 package com.rulepilot.catalog.application;
 
+import com.rulepilot.catalog.CatalogCoverImages;
 import com.rulepilot.catalog.application.BggPopularMetadataPrewarmProgress.Cohort;
 import com.rulepilot.catalog.BggMetadataTranslation.PrewarmResult;
 import com.rulepilot.catalog.application.BoardGameGeekCatalog.DiscoveryGame;
@@ -7,6 +8,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -35,6 +37,8 @@ class BggPopularMetadataPrewarmer {
     private final BggMetadataLocalizationService localization;
     private final BggPopularMetadataPrewarmProgress progress;
     private final TaskExecutor executor;
+    private final CatalogCoverImages coverImages;
+    private final TaskExecutor coverExecutor;
     private final Clock clock;
     private final boolean enabled;
     private final int targetGameCount;
@@ -50,6 +54,8 @@ class BggPopularMetadataPrewarmer {
             BggMetadataLocalizationService localization,
             BggPopularMetadataPrewarmProgress progress,
             @Qualifier("bggPopularPrewarmExecutor") TaskExecutor executor,
+            CatalogCoverImages coverImages,
+            @Qualifier("bggCoverPrewarmExecutor") TaskExecutor coverExecutor,
             @Value("${rulepilot.bgg.cache.prewarm.enabled:true}") boolean enabled,
             @Value("${rulepilot.bgg.cache.prewarm.game-count:2000}") int targetGameCount,
             @Value("${rulepilot.bgg.cache.prewarm.cohort-size:500}") int metadataCohortSize,
@@ -61,6 +67,8 @@ class BggPopularMetadataPrewarmer {
                 localization,
                 progress,
                 executor,
+                coverImages,
+                coverExecutor,
                 Clock.systemUTC(),
                 enabled,
                 targetGameCount,
@@ -75,6 +83,8 @@ class BggPopularMetadataPrewarmer {
             BggMetadataLocalizationService localization,
             BggPopularMetadataPrewarmProgress progress,
             TaskExecutor executor,
+            CatalogCoverImages coverImages,
+            TaskExecutor coverExecutor,
             Clock clock,
             boolean enabled,
             int targetGameCount,
@@ -87,6 +97,8 @@ class BggPopularMetadataPrewarmer {
         this.localization = localization;
         this.progress = progress;
         this.executor = executor;
+        this.coverImages = coverImages;
+        this.coverExecutor = coverExecutor;
         this.clock = clock;
         this.enabled = enabled;
         this.targetGameCount = targetGameCount;
@@ -100,7 +112,7 @@ class BggPopularMetadataPrewarmer {
         schedule();
     }
 
-    @Scheduled(fixedDelayString = "${rulepilot.bgg.cache.prewarm.resume-delay:PT2H}")
+    @Scheduled(fixedDelayString = "${rulepilot.bgg.cache.prewarm.resume-delay:PT1H}")
     void resume() {
         schedule();
     }
@@ -156,7 +168,7 @@ class BggPopularMetadataPrewarmer {
             List<Integer> ids = rankedIds(next, Math.min(BGG_BATCH_SIZE, end - next));
             if (ids.isEmpty()) return next;
             try {
-                bgg.gameDetails(ids);
+                warmCovers(bgg.gameDetails(ids));
             } catch (RuntimeException exception) {
                 LOGGER.warn("BGG popular metadata hydration paused at ranked offset {}", next);
                 return next;
@@ -164,6 +176,27 @@ class BggPopularMetadataPrewarmer {
             next += ids.size();
         }
         return next;
+    }
+
+    private void warmCovers(List<DiscoveryGame> games) {
+        CompletableFuture<?>[] warmups = games.stream()
+                .map(this::coverSource)
+                .filter(source -> !source.isBlank())
+                .map(source -> CompletableFuture.runAsync(() -> warmCover(source), coverExecutor))
+                .toArray(CompletableFuture[]::new);
+        CompletableFuture.allOf(warmups).join();
+    }
+
+    private String coverSource(DiscoveryGame game) {
+        return !game.imageUrl().isBlank() ? game.imageUrl() : game.thumbnailUrl();
+    }
+
+    private void warmCover(String source) {
+        try {
+            coverImages.read(source);
+        } catch (RuntimeException unavailable) {
+            LOGGER.debug("A BGG cover could not be prewarmed and will retry on demand");
+        }
     }
 
     private int translate(int start, int end) {

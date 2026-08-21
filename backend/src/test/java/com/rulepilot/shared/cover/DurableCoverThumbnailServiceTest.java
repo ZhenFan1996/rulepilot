@@ -3,6 +3,10 @@ package com.rulepilot.shared.cover;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.rulepilot.shared.cover.CoverThumbnailCache.Thumbnail;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.HexFormat;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
@@ -44,6 +48,31 @@ class DurableCoverThumbnailServiceTest {
         org.assertj.core.api.Assertions.assertThatIllegalArgumentException()
                 .isThrownBy(() -> service.thumbnailFor("https://user@example.test/cover.jpg"));
         assertThat(fetches).hasValue(0);
+    }
+
+    @Test
+    void doesNotReuseTheLegacyLowResolutionCacheEntry() {
+        String source = "https://cf.geekdo-images.com/game.jpg";
+        MemoryCache cache = new MemoryCache();
+        cache.entries.put(digest(source), new Thumbnail(new byte[] {1}));
+        AtomicInteger fetches = new AtomicInteger();
+        var service = new DurableCoverThumbnailService(cache, ignored -> {
+            fetches.incrementAndGet();
+            return new Thumbnail(new byte[] {2});
+        });
+
+        assertThat(service.thumbnailFor(source).content()).containsExactly(2);
+        assertThat(fetches).hasValue(1);
+        assertThat(cache.entries).hasSize(2);
+    }
+
+    private static String digest(String source) {
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
+                    .digest(source.getBytes(StandardCharsets.UTF_8)));
+        } catch (NoSuchAlgorithmException unavailable) {
+            throw new IllegalStateException(unavailable);
+        }
     }
 
     private static final class MemoryCache implements CoverThumbnailCache {

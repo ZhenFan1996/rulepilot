@@ -42,6 +42,8 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.model.ChatModel;
@@ -57,14 +59,15 @@ class BoardGameRecommendationAgentRealConversationEvaluationTest {
         assumeTrue("true".equalsIgnoreCase(System.getenv("RULEPILOT_REAL_RECOMMENDATION_AGENT_EVAL")));
         List<Map<String, Object>> results = new ArrayList<>();
         double temperature = evaluationTemperature();
+        List<String> providers = evaluationProviders();
 
-        for (String providerName : List.of("deepseek", "qwen")) {
+        for (String providerName : providers) {
             Provider provider = provider(providerName);
             assertThat(prohibitedModel(provider.model())).isFalse();
             results.add(runConversation(provider, temperature));
         }
 
-        assertThat(results).hasSize(2).allSatisfy(result -> {
+        assertThat(results).hasSize(providers.size()).allSatisfy(result -> {
             assertThat(result).containsEntry("outcome", "RECOMMENDATIONS")
                     .containsEntry("continuationResolved", true)
                     .containsEntry("openingPlayersUnspecified", true)
@@ -75,7 +78,7 @@ class BoardGameRecommendationAgentRealConversationEvaluationTest {
                     .containsEntry("everydayMaxMinutes", 60)
                     .containsEntry("everydayPreferenceUpdates", true)
                     .containsEntry("everydayOpeningPlayersUnspecified", true)
-                    .containsEntry("everydayOpeningContextualPlayers", 3)
+                    .containsEntry("everydayOpeningContextualSafe", true)
                     .containsEntry("everydayOpeningOutcome", "RECOMMENDATIONS")
                     .containsEntry("datedRelationshipOutcome", "RECOMMENDATIONS")
                     .containsEntry("datedRelationshipDiscovered", true)
@@ -89,15 +92,20 @@ class BoardGameRecommendationAgentRealConversationEvaluationTest {
                     .containsEntry("revisionFollowupOutcome", "RECOMMENDATIONS")
                     .containsEntry("negatedInteractionUnspecified", true)
                     .containsEntry("qualitativeWeightUnspecified", true)
+                    .containsEntry("instantReplyOutcome", "CONVERSATION")
+                    .containsEntry("instantReplyLocal", true)
+                    .containsEntry("instantReplyModelCalls", 0)
                     .containsEntry("dynamicCountOutcome", "RECOMMENDATIONS")
                     .containsEntry("dynamicCount", 5)
                     .containsEntry("dynamicCountDidNotSetPlayers", true)
+                    .containsEntry("recommendationPayloadsContainIdsOnly", true)
                     .containsEntry("refreshOutcome", "RECOMMENDATIONS")
                     .containsEntry("refreshOverlap", 0)
                     .containsEntry("fallbackUsed", false);
             assertThat((Integer) result.get("recommendationCount")).isGreaterThanOrEqualTo(2);
             assertThat((Integer) result.get("everydayRecommendationCount")).isGreaterThanOrEqualTo(2);
             assertThat((Long) result.get("totalLatencyMs")).isLessThanOrEqualTo(30_000L);
+            assertThat((Long) result.get("instantReplyFirstPartMs")).isBetween(0L, 250L);
             assertThat(result.get("scenarioTags"))
                     .isEqualTo(List.of(
                             "comparison-correction",
@@ -129,6 +137,18 @@ class BoardGameRecommendationAgentRealConversationEvaluationTest {
                         "prohibitedQwenPlusUsed", false))) + "\n", StandardCharsets.UTF_8);
     }
 
+    private List<String> evaluationProviders() {
+        String configured = System.getenv("RULEPILOT_REAL_RECOMMENDATION_PROVIDERS");
+        if (configured == null || configured.isBlank()) return List.of("deepseek", "qwen");
+        List<String> providers = java.util.Arrays.stream(configured.split(","))
+                .map(String::strip)
+                .filter(value -> !value.isBlank())
+                .distinct()
+                .toList();
+        assertThat(providers).isNotEmpty().allMatch(Set.of("deepseek", "qwen")::contains);
+        return providers;
+    }
+
     private Map<String, Object> runConversation(Provider provider, double temperature) {
         activeRawModelCapture = new RawModelCapture(provider.name(), provider.model(), temperature, json);
         UnlockableCatalog catalog = new UnlockableCatalog();
@@ -141,6 +161,7 @@ class BoardGameRecommendationAgentRealConversationEvaluationTest {
                 properties,
                 json);
         try {
+            InstantReplyEvaluation instantReply = runInstantReply(agent);
             activeRawModelCapture.scenario("comparison-correction");
             String opening = "我想找和《马赛克花园》机制接近的游戏。";
             long openingStarted = System.nanoTime();
@@ -244,7 +265,10 @@ class BoardGameRecommendationAgentRealConversationEvaluationTest {
             result.put("everydayMaxMinutes", everyday.maxMinutes());
             result.put("everydayPreferenceUpdates", everyday.preferenceUpdates());
             result.put("everydayOpeningPlayersUnspecified", everyday.openingPlayersUnspecified());
-            result.put("everydayOpeningContextualPlayers", everyday.openingContextualPlayers());
+            if (everyday.openingContextualPlayers() != null) {
+                result.put("everydayOpeningContextualPlayers", everyday.openingContextualPlayers());
+            }
+            result.put("everydayOpeningContextualSafe", everyday.openingContextualSafe());
             result.put("everydayOpeningOutcome", everyday.openingOutcome());
             result.put("everydayOpeningRecommendationCount", everyday.openingRecommendationCount());
             result.put("everydayRecommendationCount", everyday.recommendationCount());
@@ -281,6 +305,11 @@ class BoardGameRecommendationAgentRealConversationEvaluationTest {
             result.put("negatedInteractionUnspecified", semanticBoundary.negatedInteractionUnspecified());
             result.put("qualitativeWeightOutcome", semanticBoundary.qualitativeWeightOutcome());
             result.put("qualitativeWeightUnspecified", semanticBoundary.qualitativeWeightUnspecified());
+            result.put("instantReplyOutcome", instantReply.outcome());
+            result.put("instantReplyFirstPartMs", instantReply.firstPartMs());
+            result.put("instantReplyTotalMs", instantReply.totalMs());
+            result.put("instantReplyLocal", instantReply.local());
+            result.put("instantReplyModelCalls", instantReply.modelCalls());
             result.put("semanticBoundaryLatencyMs", semanticBoundary.latencyMs());
             result.put("semanticBoundaryActions", semanticBoundary.actions());
             result.put("scenarioTags", List.of(
@@ -368,11 +397,44 @@ class BoardGameRecommendationAgentRealConversationEvaluationTest {
                     .distinct()
                     .toList());
             result.put("rawModelTurnCount", activeRawModelCapture.count());
+            result.put(
+                    "recommendationPayloadsContainIdsOnly",
+                    activeRawModelCapture.recommendationPayloadsContainIdsOnly());
             return Map.copyOf(result);
         } finally {
             agent.stopBoundedCalls();
             activeRawModelCapture = null;
         }
+    }
+
+    private InstantReplyEvaluation runInstantReply(BoardGameRecommendationAgent agent) {
+        activeRawModelCapture.scenario("instant-local-reply");
+        AtomicLong firstPartAt = new AtomicLong();
+        AtomicReference<String> firstPart = new AtomicReference<>("");
+        AtomicReference<String> latestPart = new AtomicReference<>("");
+        long startedAt = System.nanoTime();
+        var response = agent.converse(
+                new ConversationRequest(RecommendationProfile.empty(), "等等"),
+                "zh-CN",
+                null,
+                ignored -> {},
+                accumulated -> {
+                    firstPartAt.compareAndSet(0L, System.nanoTime());
+                    firstPart.compareAndSet("", accumulated);
+                    latestPart.set(accumulated);
+                });
+        long completedAt = System.nanoTime();
+        assertThat(response.outcome()).isEqualTo(Outcome.CONVERSATION);
+        assertThat(response.harness().actions()).contains("DIRECT_REPLY_FAST_PATH:PAUSE");
+        assertThat(response.harness().modelCalls()).isZero();
+        assertThat(firstPartAt.get()).isPositive();
+        assertThat(latestPart.get()).isEqualTo(response.assistantMessage());
+        return new InstantReplyEvaluation(
+                response.outcome().name(),
+                Duration.ofNanos(firstPartAt.get() - startedAt).toMillis(),
+                Duration.ofNanos(completedAt - startedAt).toMillis(),
+                !firstPart.get().isBlank() && firstPart.get().equals(response.assistantMessage()),
+                response.harness().modelCalls());
     }
 
     private TargetEvaluation runTargetSelection(Provider provider) {
@@ -440,15 +502,15 @@ class BoardGameRecommendationAgentRealConversationEvaluationTest {
             assertThat(first.profile().players())
                     .as("a contextual group interpretation must not become a confirmed hard filter")
                     .isNull();
-            assertThat(first.userModel().hypotheses())
-                    .as("the natural three-player interpretation should remain visible and reversible")
-                    .anySatisfy(hypothesis -> {
-                        assertThat(hypothesis.field()).isEqualTo("players");
-                        assertThat(hypothesis.value()).isEqualTo("3");
-                    });
+            List<BoardGameRecommendationAgent.PreferenceHypothesisView> groupHypotheses = first.userModel().hypotheses().stream()
+                    .filter(hypothesis -> Set.of("players", "playerCount").contains(hypothesis.field()))
+                    .toList();
+            assertThat(groupHypotheses)
+                    .as("an optional contextual group interpretation must be exact and reversible")
+                    .allSatisfy(hypothesis -> assertThat(hypothesis.value()).isEqualTo("3"));
             assertThat(first.games()).hasSizeBetween(2, 3);
             assertThat(first.harness().actions())
-                    .contains("RECORD_CONTEXTUAL_PREFERENCE", "RECOMMEND_GAMES")
+                    .contains("RECOMMEND_GAMES")
                     .doesNotContain("ASK_USER");
             assertThat(first.harness().fallbackUsed()).isFalse();
             assertThat(openingLatencyMs).isLessThanOrEqualTo(30_000L);
@@ -492,12 +554,12 @@ class BoardGameRecommendationAgentRealConversationEvaluationTest {
                     second.outcome().name(),
                     transcript.size(),
                     first.profile().players() == null,
-                    first.userModel().hypotheses().stream()
-                            .filter(hypothesis -> "players".equals(hypothesis.field()))
+                    groupHypotheses.stream()
                             .map(BoardGameRecommendationAgent.PreferenceHypothesisView::value)
                             .map(Integer::valueOf)
                             .findFirst()
                             .orElse(null),
+                    groupHypotheses.stream().allMatch(hypothesis -> "3".equals(hypothesis.value())),
                     first.outcome().name(),
                     first.games().size(),
                     second.profile().players(),
@@ -1023,6 +1085,7 @@ class BoardGameRecommendationAgentRealConversationEvaluationTest {
         private final ObjectMapper json;
         private final Path output;
         private final List<Map<String, Object>> turns = new ArrayList<>();
+        private final List<String> recommendationArguments = new ArrayList<>();
         private String scenario = "unassigned";
 
         private RawModelCapture(String provider, String model, double temperature, ObjectMapper json) {
@@ -1055,6 +1118,10 @@ class BoardGameRecommendationAgentRealConversationEvaluationTest {
         }
 
         private synchronized void record(BoardGameRecommendationModel.Turn turn) {
+            turn.toolCalls().stream()
+                    .filter(call -> BoardGameRecommendationAgent.RECOMMEND_TOOL.equals(call.name()))
+                    .map(BoardGameRecommendationModel.ToolCall::argumentsJson)
+                    .forEach(recommendationArguments::add);
             List<Map<String, String>> calls = turn.toolCalls().stream()
                     .map(call -> Map.of(
                             "id", call.id(),
@@ -1086,6 +1153,26 @@ class BoardGameRecommendationAgentRealConversationEvaluationTest {
             return turns.size();
         }
 
+        private synchronized boolean recommendationPayloadsContainIdsOnly() {
+            if (recommendationArguments.isEmpty()) return false;
+            try {
+                for (String argumentsJson : recommendationArguments) {
+                    var arguments = json.readTree(argumentsJson);
+                    if (arguments.has("message") || !arguments.path("selections").isArray()) return false;
+                    for (var selection : arguments.path("selections")) {
+                        if (!selection.isObject()
+                                || selection.size() != 1
+                                || !selection.path("bggId").canConvertToInt()) {
+                            return false;
+                        }
+                    }
+                }
+                return true;
+            } catch (java.io.IOException invalidJson) {
+                return false;
+            }
+        }
+
         private double temperature() {
             return temperature;
         }
@@ -1107,6 +1194,7 @@ class BoardGameRecommendationAgentRealConversationEvaluationTest {
             int naturalTurnCount,
             boolean openingPlayersUnspecified,
             Integer openingContextualPlayers,
+            boolean openingContextualSafe,
             String openingOutcome,
             int openingRecommendationCount,
             Integer players,
@@ -1172,6 +1260,13 @@ class BoardGameRecommendationAgentRealConversationEvaluationTest {
             boolean fallbackUsed,
             long latencyMs,
             List<String> actions) {}
+
+    private record InstantReplyEvaluation(
+            String outcome,
+            long firstPartMs,
+            long totalMs,
+            boolean local,
+            int modelCalls) {}
 
     private static final class UnlockableCatalog implements BoardGameRecommendationCatalog {
         private final Map<Integer, Game> games;

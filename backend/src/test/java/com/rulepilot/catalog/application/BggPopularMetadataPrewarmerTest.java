@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.rulepilot.catalog.BggMetadataTranslation;
 import com.rulepilot.catalog.BggGameType;
+import com.rulepilot.catalog.CatalogCoverImages;
 import com.rulepilot.catalog.application.BggPopularMetadataPrewarmProgress.Cohort;
 import com.rulepilot.catalog.application.BggRankedCatalog.Page;
 import com.rulepilot.catalog.application.BggRankedCatalog.Query;
@@ -48,6 +49,7 @@ class BggPopularMetadataPrewarmerTest {
         MemoryRankedCatalog ranked = new MemoryRankedCatalog(60);
         RecordingBgg bgg = new RecordingBgg();
         RecordingTranslation translations = new RecordingTranslation(-1);
+        RecordingCoverImages covers = new RecordingCoverImages();
         RecordingProgress progress = new RecordingProgress(new Cohort(
                 UUID.randomUUID(), "a".repeat(64), 0, 45, 0, 3));
         var prewarmer = new BggPopularMetadataPrewarmer(
@@ -55,6 +57,8 @@ class BggPopularMetadataPrewarmerTest {
                 bgg,
                 new BggMetadataLocalizationService(translations),
                 progress,
+                new SyncTaskExecutor(),
+                covers,
                 new SyncTaskExecutor(),
                 CLOCK,
                 true,
@@ -71,6 +75,9 @@ class BggPopularMetadataPrewarmerTest {
         assertThat(bgg.batches.get(2)).containsExactlyElementsOf(ids(41, 45));
         assertThat(bgg.batches.get(3)).containsExactly(1, 2, 3);
         assertThat(translations.translatedIds).containsExactly(1, 2, 3);
+        assertThat(covers.sources).hasSize(45);
+        assertThat(covers.sources.getFirst()).isEqualTo("https://example.test/1.jpg");
+        assertThat(covers.sources.getLast()).isEqualTo("https://example.test/45.jpg");
         assertThat(progress.metadataNext).isEqualTo(45);
         assertThat(progress.translationNext).isEqualTo(3);
     }
@@ -87,6 +94,8 @@ class BggPopularMetadataPrewarmerTest {
                 bgg,
                 new BggMetadataLocalizationService(translations),
                 progress,
+                new SyncTaskExecutor(),
+                new RecordingCoverImages(),
                 new SyncTaskExecutor(),
                 CLOCK,
                 true,
@@ -114,6 +123,8 @@ class BggPopularMetadataPrewarmerTest {
                 bgg,
                 new BggMetadataLocalizationService(translations),
                 progress,
+                new SyncTaskExecutor(),
+                new RecordingCoverImages(),
                 new SyncTaskExecutor(),
                 CLOCK,
                 true,
@@ -218,7 +229,7 @@ class BggPopularMetadataPrewarmerTest {
                             "Game " + id,
                             "游戏 " + id,
                             2026,
-                            "",
+                            "https://example.test/" + id + ".jpg",
                             2,
                             4,
                             60,
@@ -232,6 +243,16 @@ class BggPopularMetadataPrewarmerTest {
         @Override
         public GameDetails game(int bggId) {
             throw new UnsupportedOperationException();
+        }
+    }
+
+    private static final class RecordingCoverImages implements CatalogCoverImages {
+        private final List<String> sources = new ArrayList<>();
+
+        @Override
+        public byte[] read(String sourceUrl) {
+            sources.add(sourceUrl);
+            return new byte[] {1};
         }
     }
 

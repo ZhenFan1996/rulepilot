@@ -32,4 +32,16 @@ class BggCacheConfiguration {
         executor.setWaitForTasksToCompleteOnShutdown(false);
         return executor;
     }
+
+    @Bean(name = "bggCoverPrewarmExecutor")
+    @ConditionalOnProperty(name = "rulepilot.runtime.worker-enabled", havingValue = "true")
+    ThreadPoolTaskExecutor bggCoverPrewarmExecutor() {
+        var executor = new ThreadPoolTaskExecutor();
+        executor.setThreadNamePrefix("bgg-cover-prewarm-");
+        executor.setCorePoolSize(2);
+        executor.setMaxPoolSize(4);
+        executor.setQueueCapacity(40);
+        executor.setWaitForTasksToCompleteOnShutdown(false);
+        return executor;
+    }
 }

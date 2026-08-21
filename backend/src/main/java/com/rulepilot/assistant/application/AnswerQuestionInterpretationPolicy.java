@@ -124,22 +124,25 @@ final class AnswerQuestionInterpretationPolicy {
             } else {
                 return Optional.empty();
             }
+            Set<com.rulepilot.assistant.RuleAnswerModel.EvidenceNeed> evidenceNeeds =
+                    new LinkedHashSet<>(subquestion.evidenceNeeds());
+            if (AnswerEvidenceNeedClassifier.explicitlyRequestsAdvice(subquestion.questionSpan())) {
+                evidenceNeeds.add(com.rulepilot.assistant.RuleAnswerModel.EvidenceNeed.ADVICE);
+            }
+            if (AnswerEvidenceNeedClassifier.explicitlyRequestsCompleteVictoryRoutes(
+                    subquestion.questionSpan())) {
+                evidenceNeeds.add(com.rulepilot.assistant.RuleAnswerModel.EvidenceNeed.DIRECT_RULE);
+                evidenceNeeds.add(com.rulepilot.assistant.RuleAnswerModel.EvidenceNeed.COMPLETE_LIST);
+            }
+            if (evidenceNeeds.size() > 3) return Optional.empty();
             AnswerQuestionPlan.Subquestion acceptedSubquestion = new AnswerQuestionPlan.Subquestion(
-                    subquestion.questionSpan(), subquestion.evidenceNeeds(), owner);
+                    subquestion.questionSpan(), Set.copyOf(evidenceNeeds), owner);
             if (!accepted.contains(acceptedSubquestion)) accepted.add(acceptedSubquestion);
         }
         if (accepted.size() != proposed.size()) return Optional.empty();
         boolean coversCurrentTurn = accepted.stream()
                 .anyMatch(subquestion -> subquestion.owner() == AnswerQuestionPlan.QuestionOwner.CURRENT_QUESTION);
         if (!coversCurrentTurn) return Optional.empty();
-        boolean coversEveryCurrentObject = currentRuleObjects.stream()
-                .map(this::normalize)
-                .allMatch(object -> accepted.stream()
-                        .filter(subquestion -> subquestion.owner() == AnswerQuestionPlan.QuestionOwner.CURRENT_QUESTION)
-                        .map(AnswerQuestionPlan.Subquestion::text)
-                        .map(this::normalize)
-                        .anyMatch(span -> containsGroundedSpan(span, object)));
-        if (!coversEveryCurrentObject) return Optional.empty();
         List<AnswerQuestionPlan.Subquestion> currentFirst = accepted.stream()
                 .sorted(java.util.Comparator.comparingInt(subquestion ->
                         subquestion.owner() == AnswerQuestionPlan.QuestionOwner.CURRENT_QUESTION ? 0 : 1))

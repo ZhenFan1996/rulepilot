@@ -21,10 +21,11 @@ import javax.imageio.stream.ImageOutputStream;
 /** Converts bounded source artwork into the small JPEG used by catalog and identity cards. */
 final class CoverThumbnailer {
 
-    private static final int MAX_WIDTH = 480;
-    private static final int MAX_HEIGHT = 640;
+    private static final int MAX_WIDTH = 960;
+    private static final int MAX_HEIGHT = 1_280;
     private static final int MAX_SOURCE_EDGE = 6_000;
     private static final long MAX_SOURCE_PIXELS = 18_000_000L;
+    private static final float[] JPEG_QUALITIES = {0.82f, 0.70f, 0.58f};
 
     Thumbnail create(byte[] sourceContent) {
         BufferedImage source = read(sourceContent);
@@ -72,6 +73,15 @@ final class CoverThumbnailer {
     }
 
     private byte[] writeJpeg(BufferedImage image) {
+        byte[] latest = new byte[0];
+        for (float quality : JPEG_QUALITIES) {
+            latest = encodeJpeg(image, quality);
+            if (latest.length <= Thumbnail.MAX_CONTENT_BYTES) return latest;
+        }
+        throw new IllegalArgumentException("cover thumbnail is too large after bounded compression");
+    }
+
+    private byte[] encodeJpeg(BufferedImage image, float quality) {
         Iterator<ImageWriter> writers = ImageIO.getImageWritersByFormatName("jpeg");
         if (!writers.hasNext()) throw new IllegalStateException("JPEG encoder is unavailable");
         ImageWriter writer = writers.next();
@@ -81,7 +91,7 @@ final class CoverThumbnailer {
             ImageWriteParam parameters = writer.getDefaultWriteParam();
             if (parameters.canWriteCompressed()) {
                 parameters.setCompressionMode(ImageWriteParam.MODE_EXPLICIT);
-                parameters.setCompressionQuality(0.82f);
+                parameters.setCompressionQuality(quality);
             }
             writer.write(null, new IIOImage(image, null, null), parameters);
             return output.toByteArray();

@@ -53,8 +53,17 @@ public record AnswerQuestionPlan(
 
     static AnswerQuestionPlan fallback(UnderstoodQuestion question) {
         if (question == null) throw new IllegalArgumentException("understood question is required");
+        Set<EvidenceNeed> needs;
+        if (AnswerEvidenceNeedClassifier.explicitlyRequestsAdvice(question.originalQuestion())) {
+            needs = Set.of(EvidenceNeed.ADVICE);
+        } else if (AnswerEvidenceNeedClassifier.explicitlyRequestsCompleteVictoryRoutes(
+                question.originalQuestion())) {
+            needs = Set.of(EvidenceNeed.DIRECT_RULE, EvidenceNeed.COMPLETE_LIST);
+        } else {
+            needs = Set.of(EvidenceNeed.DIRECT_RULE);
+        }
         return new AnswerQuestionPlan(
-                List.of(new Subquestion(question.originalQuestion(), Set.of(EvidenceNeed.DIRECT_RULE))),
+                List.of(new Subquestion(question.originalQuestion(), needs)),
                 false,
                 AnswerAid.NONE,
                 ReferenceBinding.CURRENT_QUESTION);
