@@ -42,4 +42,28 @@ describe('AccountView board game nine', () => {
     expect(wrapper.text()).toContain('幽港迷城')
     vi.useRealTimers()
   })
+
+  it('renders the account when an older usage response omits the computed remaining field', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const path = String(input)
+      if (path === '/api/auth/session') return Response.json({ username: 'alice', roles: ['USER'] })
+      if (path === '/api/v1/teaching-plans') return Response.json([])
+      if (path === '/api/v1/model-configuration') return Response.json({ providers: [], assignments: { recommendation: 'fake', teaching: 'fake', visual: 'fake', answer: 'fake', critic: 'fake' } })
+      if (path === '/api/v1/model-configuration/usage') return Response.json({ platformAccessEnabled: true, monthlyTokenLimit: 100000, platformTokensCharged: 1000, platformTokensReserved: 250, personalTokensUsed: 0, periodStart: '2026-08-01', revision: 1 })
+      if (path === '/api/v1/account/board-game-grid') return Response.json([])
+      return new Response(null, { status: 404 })
+    }))
+    const router = createRouter({ history: createMemoryHistory(), routes: [
+      { path: '/', component: AccountView }, { path: '/work', name: 'work-status', component: { template: '<div />' } }, { path: '/settings/models', name: 'model-settings', component: { template: '<div />' } },
+    ] })
+    await router.push('/')
+    await router.isReady()
+
+    const wrapper = mount(AccountView, { global: { plugins: [router], stubs: { AppShell: { template: '<div><slot /></div>' } } } })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('alice')
+    expect(wrapper.text()).toContain('98,750')
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false)
+  })
 })
