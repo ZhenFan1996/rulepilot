@@ -929,16 +929,7 @@ function confirmDestructiveAction() {
   else void confirmCleanDuplicates()
 }
 
-function updateSessionIdentity(username: string) {
-  if (disposed) return
-  const normalizedUsername = username.trim()
-  if (!shellIdentityResolved) {
-    shellIdentityResolved = true
-    shellUsername = normalizedUsername
-    return
-  }
-  if (normalizedUsername === shellUsername) return
-  shellUsername = normalizedUsername
+function clearPlanSessionState() {
   plans.value = []
   guideImports.value = []
   guideUploadHandoffs.value = []
@@ -952,6 +943,38 @@ function updateSessionIdentity(username: string) {
   terminalSettlingReads.clear()
   showingAllVersions.value = false
   planFilter.value = 'READABLE'
+}
+
+function enterSignedOutState() {
+  loginRequired.value = true
+  loading.value = false
+  errorMessage.value = ''
+  latestListRequest++
+  activeListController?.abort()
+  activeListController = null
+  cancelProgressReads()
+  clearProgressTimer()
+  clearJourneyTimer()
+  clearPlanSessionState()
+}
+
+function updateSessionIdentity(username: string) {
+  if (disposed) return
+  const normalizedUsername = username.trim()
+  if (!shellIdentityResolved) {
+    shellIdentityResolved = true
+    shellUsername = normalizedUsername
+    if (!normalizedUsername) enterSignedOutState()
+    return
+  }
+  if (normalizedUsername === shellUsername) return
+  shellUsername = normalizedUsername
+  if (!normalizedUsername) {
+    enterSignedOutState()
+    return
+  }
+  clearPlanSessionState()
+  loginRequired.value = false
   void loadPlans()
 }
 

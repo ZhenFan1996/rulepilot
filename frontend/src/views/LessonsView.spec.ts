@@ -13,8 +13,6 @@ describe('LessonsView', () => {
   })
 
   it('shows one route-owned sign-in recovery instead of reload and upload noise', async () => {
-    const loginRequired = vi.fn()
-    window.addEventListener(LOGIN_REQUIRED_EVENT, loginRequired)
     vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 401 })))
     const router = createMemoryRouter()
     await router.push('/lessons?filter=pending')
@@ -32,11 +30,27 @@ describe('LessonsView', () => {
     expect(wrapper.find('main a[href="/teach"]').exists()).toBe(false)
     expect(wrapper.findAll('button').some(button => button.text() === '重新加载')).toBe(false)
     expect(wrapper.text()).not.toContain('当前页面已保留')
-    expect(loginRequired).toHaveBeenCalled()
-    expect(loginRequired.mock.calls.every(([event]) =>
-      (event as CustomEvent).detail?.showReminder === false)).toBe(true)
 
-    window.removeEventListener(LOGIN_REQUIRED_EVENT, loginRequired)
+    wrapper.unmount()
+  })
+
+  it('stops the private-list loader as soon as the shell resolves a signed-out session', async () => {
+    const never = new Promise<Response>(() => undefined)
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const path = String(input)
+      if (path.includes('/api/auth/session')) return new Response(null, { status: 401 })
+      if (path.startsWith('/api/v1/')) return never
+      return new Response(null, { status: 404 })
+    }))
+    const router = createMemoryRouter()
+    await router.push('/lessons')
+    await router.isReady()
+    const wrapper = mount(LessonsView, {
+      global: { plugins: [router], stubs: { BackgroundWorkCenter: true } },
+    })
+
+    await vi.waitFor(() => expect(wrapper.find('[data-testid="signed-out-guides-gate"]').exists()).toBe(true))
+    expect(wrapper.text()).not.toContain('正在加载讲解计划')
     wrapper.unmount()
   })
 
@@ -719,7 +733,7 @@ describe('LessonsView', () => {
     expect(fetchMock.mock.calls.every(([, options]) => !options?.method || options.method === 'GET')).toBe(true)
   })
 
-  it('replaces account progress reads and ignores their late settlement', async () => {
+  it('cancels account progress reads on sign-out and ignores their late settlement', async () => {
     let releaseOldRun!: (value: Response) => void
     let releaseOldLesson!: (value: Response) => void
     const oldRun = new Promise<Response>((resolve) => { releaseOldRun = resolve })
@@ -773,11 +787,10 @@ describe('LessonsView', () => {
     expect(wrapper.text()).toContain('旧账户讲解')
 
     window.dispatchEvent(new Event(LOGIN_REQUIRED_EVENT))
-    await vi.waitFor(() => expect(wrapper.text()).toContain('当前账户讲解'))
+    await vi.waitFor(() => expect(wrapper.find('[data-testid="signed-out-guides-gate"]').exists()).toBe(true))
     expect(oldSignals.every(signal => signal.aborted)).toBe(true)
-    expect(wrapper.get('[data-testid="player-work-status"]').text()).toBe('需要处理')
-    expect(wrapper.text()).not.toContain('讲解完成')
     expect(wrapper.text()).not.toContain('旧账户讲解')
+    expect(planReads).toBe(1)
     expect(sessionReads).toBe(1)
 
     releaseOldRun(Response.json({
@@ -791,7 +804,7 @@ describe('LessonsView', () => {
     }))
     await flushPromises()
 
-    expect(wrapper.text()).toContain('当前账户讲解')
+    expect(wrapper.find('[data-testid="signed-out-guides-gate"]').exists()).toBe(true)
     expect(wrapper.text()).not.toContain('旧账户讲解')
     expect(wrapper.text()).not.toContain('正在自动重试')
     expect(fetchMock.mock.calls.some(([input]) => /cancel|cancellation/i.test(String(input)))).toBe(false)
