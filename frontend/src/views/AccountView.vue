@@ -255,7 +255,6 @@ onBeforeUnmount(() => {
   disposed = true
   window.clearTimeout(searchTimer)
   searchController?.abort()
-  coverController?.abort()
 })
 </script>
 
