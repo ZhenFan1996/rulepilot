@@ -12,6 +12,7 @@ import com.rulepilot.catalog.application.BggRankedCatalog.Sort;
 import com.rulepilot.catalog.application.BoardGameGeekCatalog.DiscoveryGame;
 import com.rulepilot.catalog.application.BoardGameGeekCatalog.GameDetails;
 import com.rulepilot.catalog.application.BoardGameGeekCatalog.HotGame;
+import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -19,6 +20,7 @@ import java.util.Map;
 import java.util.Optional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 
@@ -30,10 +32,20 @@ public class BggRankedCatalogService
     private static final Logger LOGGER = LoggerFactory.getLogger(BggRankedCatalogService.class);
     private final BggRankedCatalogRepository repository;
     private final BoardGameGeekCatalog bgg;
+    private final BggMetadataCache metadataCache;
 
-    public BggRankedCatalogService(BggRankedCatalogRepository repository, BoardGameGeekCatalog bgg) {
+    @Autowired
+    public BggRankedCatalogService(
+            BggRankedCatalogRepository repository,
+            BoardGameGeekCatalog bgg,
+            BggMetadataCache metadataCache) {
         this.repository = repository;
         this.bgg = bgg;
+        this.metadataCache = metadataCache;
+    }
+
+    BggRankedCatalogService(BggRankedCatalogRepository repository, BoardGameGeekCatalog bgg) {
+        this(repository, bgg, null);
     }
 
     @Override
@@ -58,7 +70,9 @@ public class BggRankedCatalogService
         if (page < 0 || page > 10_000) throw new IllegalArgumentException("page must be between 0 and 10000");
         if (size < 1 || size > 20) throw new IllegalArgumentException("size must be between 1 and 20");
 
-        List<HotGame> hotGames = checkedSort == Sort.HOT ? hotGames() : List.of();
+        List<HotGame> hotGames = checkedSort == Sort.HOT
+                ? includeDetails ? hotGames() : storedHotGames()
+                : List.of();
         List<Integer> hotIds = hotGames.stream().map(HotGame::bggId).toList();
         Page ranked = repository.find(new Query(checkedSearch, checkedType, checkedSort, page, size, hotIds));
         Map<Integer, Integer> hotRanks = hotGames.stream().collect(java.util.stream.Collectors.toMap(
@@ -66,7 +80,7 @@ public class BggRankedCatalogService
                 HotGame::rank,
                 Math::min,
                 LinkedHashMap::new));
-        Map<Integer, DiscoveryGame> details = includeDetails ? details(ranked.games()) : Map.of();
+        Map<Integer, DiscoveryGame> details = includeDetails ? details(ranked.games()) : storedDetails(ranked.games());
         List<BrowseGame> games = ranked.games().stream()
                 .map(game -> new BrowseGame(game, hotRanks.get(game.bggId()), details.get(game.bggId())))
                 .toList();
@@ -428,6 +442,16 @@ public class BggRankedCatalogService
         }
     }
 
+    private List<HotGame> storedHotGames() {
+        if (metadataCache == null) return List.of();
+        try {
+            return metadataCache.hotGames(Instant.now()).map(BggMetadataCache.Cached::value).orElseGet(List::of);
+        } catch (RuntimeException exception) {
+            LOGGER.warn("Stored BGG hot ranking is unavailable; using the ranked catalog order");
+            return List.of();
+        }
+    }
+
     private Map<Integer, DiscoveryGame> details(List<RankedGame> games) {
         if (games.isEmpty() || !bgg.configured()) return Map.of();
         try {
@@ -435,6 +459,21 @@ public class BggRankedCatalogService
                     .collect(java.util.stream.Collectors.toUnmodifiableMap(DiscoveryGame::bggId, game -> game));
         } catch (RuntimeException exception) {
             LOGGER.warn("BGG batch details are unavailable; serving the ranked CSV snapshot");
+            return Map.of();
+        }
+    }
+
+    private Map<Integer, DiscoveryGame> storedDetails(List<RankedGame> games) {
+        if (games.isEmpty() || metadataCache == null) return Map.of();
+        try {
+            return metadataCache.discoveryGames(
+                            games.stream().map(RankedGame::bggId).toList(), Instant.now())
+                    .entrySet()
+                    .stream()
+                    .collect(java.util.stream.Collectors.toUnmodifiableMap(
+                            Map.Entry::getKey, entry -> entry.getValue().value()));
+        } catch (RuntimeException exception) {
+            LOGGER.warn("Stored BGG details are unavailable; serving the ranked catalog without blocking");
             return Map.of();
         }
     }

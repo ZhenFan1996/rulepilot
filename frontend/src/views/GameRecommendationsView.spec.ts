@@ -100,29 +100,17 @@ describe('GameRecommendationsView', () => {
     expect((wrapper.findAll('select')[0]!.element as HTMLSelectElement).value).toBe('rank')
   })
 
-  it('paints ranked data before the slower BGG detail hydration finishes', async () => {
-    let resolveRich!: (response: Response) => void
-    const richResponse = new Promise<Response>(resolve => { resolveRich = resolve })
-    const base = {
-      ...catalog,
-      total: 1,
-      totalPages: 1,
-      taxonomyTranslated: false,
-      games: [{ ...catalog.games[0], name: 'Wingspan', nameLocalized: false, originalName: 'Wingspan', detailsAvailable: false, thumbnailUrl: '', minPlayers: null, maxPlayers: null, playingTimeMinutes: null, averageWeight: null, categories: [], mechanics: [] }],
-    }
-    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) =>
-      String(input).includes('enrich=true') ? richResponse : Response.json(base)))
+  it('renders stored BGG details in one non-blocking catalog request', async () => {
+    const fetchMock = vi.fn(async (_input: string | URL | Request) => Response.json({ ...catalog, total: 1, totalPages: 1 }))
+    vi.stubGlobal('fetch', fetchMock)
 
     const wrapper = await mountView()
-    await vi.waitFor(() => expect(wrapper.text()).toContain('Wingspan'))
-
-    expect(wrapper.text()).toContain('更多封面和游戏资料正在补齐')
-    expect(wrapper.text()).not.toContain('卡牌轮抽')
-
-    resolveRich(Response.json({ ...catalog, total: 1, totalPages: 1 }))
     await flushPromises()
+
     expect(wrapper.text()).toContain('展翅翱翔')
     expect(wrapper.text()).toContain('卡牌轮抽')
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes('enrich=true'))).toBe(false)
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes('enrich=false'))).toBe(true)
   })
 
   it('sends rating and BGG type filters to the server-side catalog query', async () => {
@@ -216,18 +204,12 @@ describe('GameRecommendationsView', () => {
     expect(fetchMock.mock.calls.some(([input]) => String(input).includes('q=%E7%BF%BC'))).toBe(true)
   })
 
-  it('reuses an in-flight next-page prefetch and ignores enrichment from the page that is no longer visible', async () => {
+  it('reuses an in-flight next-page prefetch without starting a remote enrichment request', async () => {
     let resolvePageOne!: (response: Response) => void
     const pageOneResponse = new Promise<Response>(resolve => { resolvePageOne = resolve })
-    let resolvePageZeroRich!: (response: Response) => void
-    const pageZeroRich = new Promise<Response>(resolve => { resolvePageZeroRich = resolve })
-    let resolvePageOneRich!: (response: Response) => void
-    const pageOneRich = new Promise<Response>(resolve => { resolvePageOneRich = resolve })
     const pageOneGame = { ...catalog.games[0], bggId: 13, name: 'Page One Base', originalName: 'Page One Base', nameLocalized: false }
     const fetchMock = vi.fn((input: string | URL | Request) => {
       const url = String(input)
-      if (url.includes('page=1') && url.includes('enrich=true')) return pageOneRich
-      if (url.includes('page=0') && url.includes('enrich=true')) return pageZeroRich
       if (url.includes('page=1') && url.includes('enrich=false')) return pageOneResponse
       return Promise.resolve(Response.json({ ...catalog, sort: 'rank', total: 2, totalPages: 2 }))
     })
@@ -243,42 +225,13 @@ describe('GameRecommendationsView', () => {
     resolvePageOne(Response.json({ ...catalog, sort: 'rank', total: 2, totalPages: 2, page: 1, games: [pageOneGame] }))
     await flushPromises()
     expect(wrapper.text()).toContain('Page One Base')
-
-    resolvePageZeroRich(Response.json({
-      ...catalog,
-      sort: 'rank',
-      total: 2,
-      totalPages: 2,
-      games: [{ ...catalog.games[0], name: '第一页已补齐' }],
-    }))
-    await flushPromises()
-    expect(wrapper.text()).not.toContain('第一页已补齐')
-    expect(wrapper.text()).toContain('Page One Base')
-
-    resolvePageOneRich(Response.json({
-      ...catalog,
-      sort: 'rank',
-      total: 2,
-      totalPages: 2,
-      page: 1,
-      games: [{ ...pageOneGame, name: '第二页已补齐' }],
-    }))
-    await flushPromises()
-    expect(wrapper.text()).not.toContain('第一页已补齐')
-    expect(wrapper.text()).toContain('第二页已补齐')
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes('enrich=true'))).toBe(false)
   })
 
   it('aborts old query work and clears old cards when a replacement query fails', async () => {
-    let resolveOldRich!: (response: Response) => void
-    const oldRich = new Promise<Response>(resolve => { resolveOldRich = resolve })
-    let oldRichSignal: AbortSignal | undefined
     let oldPrefetchSignal: AbortSignal | undefined
     const fetchMock = vi.fn((input: string | URL | Request, options?: RequestInit) => {
       const url = String(input)
-      if (url.includes('enrich=true') && !url.includes('q=missing')) {
-        oldRichSignal = options?.signal ?? undefined
-        return oldRich
-      }
       if (url.includes('page=1') && url.includes('enrich=false') && !url.includes('q=missing')) {
         oldPrefetchSignal = options?.signal ?? undefined
         return new Promise<Response>(() => undefined)
@@ -295,13 +248,8 @@ describe('GameRecommendationsView', () => {
     await wrapper.get('input[type="search"]').setValue('missing')
     await wrapper.get('form[role="search"]').trigger('submit')
     await flushPromises()
-    expect(oldRichSignal?.aborted).toBe(true)
     expect(oldPrefetchSignal?.aborted).toBe(true)
     expect(wrapper.text()).toContain('桌游目录暂时打不开')
-    expect(wrapper.text()).not.toContain('展翅翱翔')
-
-    resolveOldRich(Response.json(catalog))
-    await flushPromises()
     expect(wrapper.text()).not.toContain('展翅翱翔')
   })
 
@@ -357,7 +305,7 @@ describe('GameRecommendationsView', () => {
     expect(baseSignal?.aborted).toBe(true)
   })
 
-  it('aborts progressive enrichment and prefetch transport when the view unmounts', async () => {
+  it('aborts outstanding page prefetch transport when the view unmounts', async () => {
     const pending = new Promise<Response>(() => undefined)
     const requests: Array<{ url: string; signal: AbortSignal }> = []
     const fetchMock = vi.fn((input: string | URL | Request, options?: RequestInit) => {
@@ -372,14 +320,14 @@ describe('GameRecommendationsView', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     const wrapper = await mountView()
-    await vi.waitFor(() => expect(requests.filter(({ url }) => url.includes('/api/v1/bgg/catalog'))).toHaveLength(3))
+    await vi.waitFor(() => expect(requests.filter(({ url }) => url.includes('/api/v1/bgg/catalog'))).toHaveLength(2))
     wrapper.unmount()
 
     const baseRequest = requests.find(({ url }) => url.includes('enrich=false') && url.includes('page=0'))!
     const outstandingRequests = requests.filter(({ url }) =>
-      url.includes('/api/auth/session') || url.includes('enrich=true') || url.includes('page=1'))
+      url.includes('/api/auth/session') || url.includes('page=1'))
     expect(baseRequest.signal.aborted).toBe(false)
-    expect(outstandingRequests).toHaveLength(3)
+    expect(outstandingRequests).toHaveLength(2)
     expect(outstandingRequests.every(({ signal }) => signal.aborted)).toBe(true)
   })
 

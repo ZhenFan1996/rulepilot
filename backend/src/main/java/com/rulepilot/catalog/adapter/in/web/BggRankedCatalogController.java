@@ -74,7 +74,9 @@ public class BggRankedCatalogController {
                 .flatMap(game -> game.mechanics().stream())
                 .distinct()
                 .toList();
-        LocalizedDiscoveryTaxonomy taxonomy = localization.localizeDiscoveryTaxonomy(categories, mechanics, locale);
+        LocalizedDiscoveryTaxonomy taxonomy = enrich
+                ? localization.localizeDiscoveryTaxonomy(categories, mechanics, locale)
+                : localization.sourceDiscoveryTaxonomy(categories, mechanics);
         return CatalogResponse.from(result, taxonomy, locale);
     }
 

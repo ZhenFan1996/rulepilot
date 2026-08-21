@@ -134,51 +134,68 @@ public class PostgresBggRankedCatalog implements BggRankedCatalogRepository {
                 .addValue("search", escapedSearch(checked))
                 .addValue("prefix", escapedPrefix(checked))
                 .addValue("limit", maximum);
+        String matchParameter = checked.codePointCount(0, checked.length()) < 3 ? "prefix" : "search";
         return jdbc.query(
-                """
+                selectionSearchSql(matchParameter),
+                parameters,
+                this::mapSelection);
+    }
+
+    private String selectionSearchSql(String matchParameter) {
+        String sourceMatch = "lower(g.source_name) LIKE lower(:" + matchParameter + ") ESCAPE E'\\\\'";
+        String aliasMatch = "lower(alias.alias) LIKE lower(:" + matchParameter + ") ESCAPE E'\\\\'";
+        return """
+                WITH source_matches AS MATERIALIZED (
+                    SELECT g.bgg_id,
+                           CASE WHEN lower(g.source_name) = lower(:query) THEN 0
+                                WHEN lower(g.source_name) LIKE lower(:prefix) ESCAPE E'\\\\' THEN 1
+                                ELSE 2 END AS relevance,
+                           NULL::text AS chinese_alias
+                    FROM bgg_ranked_game g
+                    WHERE %s
+                    ORDER BY relevance, g.is_expansion ASC,
+                             g.overall_rank ASC NULLS LAST, g.users_rated DESC, g.bgg_id ASC
+                    LIMIT :limit
+                ), alias_matches AS MATERIALIZED (
+                    SELECT alias.bgg_id,
+                           min(CASE WHEN lower(alias.alias) = lower(:query) THEN 0
+                                    WHEN lower(alias.alias) LIKE lower(:prefix) ESCAPE E'\\\\' THEN 1
+                                    ELSE 2 END) AS relevance,
+                           min(alias.alias) FILTER (WHERE alias.locale LIKE 'zh%%') AS chinese_alias,
+                           g.is_expansion, g.overall_rank, g.users_rated
+                    FROM bgg_game_name_alias alias
+                    JOIN bgg_ranked_game g ON g.bgg_id = alias.bgg_id
+                    WHERE %s
+                    GROUP BY alias.bgg_id, g.is_expansion, g.overall_rank, g.users_rated
+                    ORDER BY relevance, g.is_expansion ASC,
+                             g.overall_rank ASC NULLS LAST, g.users_rated DESC, alias.bgg_id ASC
+                    LIMIT :limit
+                ), best_matches AS (
+                    SELECT candidate.bgg_id,
+                           min(candidate.relevance) AS relevance,
+                           min(candidate.chinese_alias) AS chinese_alias
+                    FROM (
+                        SELECT bgg_id, relevance, chinese_alias FROM source_matches
+                        UNION ALL
+                        SELECT bgg_id, relevance, chinese_alias FROM alias_matches
+                    ) candidate
+                    GROUP BY candidate.bgg_id
+                )
                 SELECT g.bgg_id, g.source_name, g.publication_year,
-                       COALESCE(NULLIF(discovery.payload->>'chineseName', ''), matched_alias.alias, '') AS chinese_name,
+                       COALESCE(NULLIF(discovery.payload->>'chineseName', ''), match.chinese_alias, '') AS chinese_name,
                        COALESCE(NULLIF(discovery.payload->>'thumbnailUrl', ''), game_cache.payload->>'thumbnailUrl', '') AS thumbnail_url,
                        COALESCE(NULLIF(discovery.payload->>'imageUrl', ''), NULLIF(game_cache.payload->>'imageUrl', ''),
                                 NULLIF(discovery.payload->>'thumbnailUrl', ''), game_cache.payload->>'thumbnailUrl', '') AS image_url
-                FROM bgg_ranked_game g
+                FROM best_matches match
+                JOIN bgg_ranked_game g ON g.bgg_id = match.bgg_id
                 LEFT JOIN bgg_metadata_cache discovery
                   ON discovery.cache_kind = 'DISCOVERY' AND discovery.bgg_id = g.bgg_id
                 LEFT JOIN bgg_metadata_cache game_cache
                   ON game_cache.cache_kind = 'GAME' AND game_cache.bgg_id = g.bgg_id
-                LEFT JOIN LATERAL (
-                    SELECT alias.alias
-                    FROM bgg_game_name_alias alias
-                    WHERE alias.bgg_id = g.bgg_id
-                      AND alias.locale LIKE 'zh%'
-                      AND lower(alias.alias) LIKE lower(:search) ESCAPE E'\\\\'
-                    ORDER BY CASE
-                        WHEN lower(alias.alias) = lower(:query) THEN 0
-                        WHEN lower(alias.alias) LIKE lower(:prefix) ESCAPE E'\\\\' THEN 1
-                        ELSE 2 END,
-                        length(alias.alias), alias.alias
-                    LIMIT 1
-                ) matched_alias ON TRUE
-                WHERE (lower(g.source_name) LIKE lower(:search) ESCAPE E'\\\\'
-                    OR EXISTS (
-                        SELECT 1 FROM bgg_game_name_alias alias
-                        WHERE alias.bgg_id = g.bgg_id
-                          AND lower(alias.alias) LIKE lower(:search) ESCAPE E'\\\\'))
-                ORDER BY CASE
-                    WHEN lower(g.source_name) = lower(:query) OR EXISTS (
-                        SELECT 1 FROM bgg_game_name_alias alias
-                        WHERE alias.bgg_id = g.bgg_id AND lower(alias.alias) = lower(:query)) THEN 0
-                    WHEN lower(g.source_name) LIKE lower(:prefix) ESCAPE E'\\\\' OR EXISTS (
-                        SELECT 1 FROM bgg_game_name_alias alias
-                        WHERE alias.bgg_id = g.bgg_id
-                          AND lower(alias.alias) LIKE lower(:prefix) ESCAPE E'\\\\') THEN 1
-                    ELSE 2 END,
-                    g.is_expansion ASC,
-                    g.overall_rank ASC NULLS LAST, g.users_rated DESC, g.bgg_id ASC
+                ORDER BY match.relevance, g.is_expansion ASC,
+                         g.overall_rank ASC NULLS LAST, g.users_rated DESC, g.bgg_id ASC
                 LIMIT :limit
-                """,
-                parameters,
-                this::mapSelection);
+                """.formatted(sourceMatch, aliasMatch);
     }
 
     @Override

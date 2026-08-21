@@ -287,31 +287,7 @@ async function mockPublicDiscovery(
       sort: url.searchParams.get('sort'),
       type: url.searchParams.get('type'),
     }
-    if (url.searchParams.get('enrich') === 'true') {
-      await new Promise(resolve => setTimeout(resolve, 1_500))
-      await route.fulfill({ json: requestedCatalog })
-      return
-    }
-    await route.fulfill({
-      json: {
-        ...requestedCatalog,
-        taxonomyTranslated: false,
-        games: [{
-          ...catalog.games[0],
-          name: 'Wingspan',
-          originalName: 'Wingspan',
-          nameLocalized: false,
-          detailsAvailable: false,
-          thumbnailUrl: '',
-          minPlayers: null,
-          maxPlayers: null,
-          playingTimeMinutes: null,
-          averageWeight: null,
-          categories: [],
-          mechanics: [],
-        }],
-      },
-    })
+    await route.fulfill({ json: requestedCatalog })
   })
   await page.route('**/api/v1/bgg/games/266192/import', route => route.fulfill({ json: {
     game: { id: 'game-1', name: '展翅翱翔' },
@@ -482,15 +458,19 @@ async function mockPublicDiscovery(
 }
 
 test('keeps full-catalog browsing separate from the conversational recommendation journey', async ({ page }) => {
+  const catalogRequests: string[] = []
+  page.on('request', request => {
+    if (request.url().includes('/api/v1/bgg/catalog?')) catalogRequests.push(request.url())
+  })
   await mockPublicDiscovery(page, true)
   await page.goto('/discover/catalog')
 
   await expect(page.getByRole('heading', { level: 1 })).toContainText('按自己的节奏慢慢挑')
   await expect(page.getByText('BGG 收录 162,686 条')).toBeVisible()
-  await expect(page.locator('#game-catalog').getByRole('heading', { level: 3, name: 'Wingspan' })).toBeVisible()
-  await expect(page.getByText('更多封面和游戏资料正在补齐')).toBeVisible()
-  await expect(page.locator('#game-catalog').getByText('展翅翱翔')).toBeVisible()
+  await expect(page.locator('#game-catalog').getByRole('heading', { level: 3, name: '展翅翱翔' })).toBeVisible()
+  await expect(page.locator('#game-catalog').getByText('Wingspan')).toBeVisible()
   await expect(page.locator('#game-catalog li', { hasText: '卡牌轮抽' })).toBeVisible()
+  expect(catalogRequests.some(url => url.includes('enrich=true'))).toBe(false)
   await expect(page.getByRole('link', { name: '数据由 BoardGameGeek 提供' }).locator('img')).toHaveAttribute('src', '/powered-by-bgg-rgb.svg')
 
   await page.getByRole('combobox', { name: '排序' }).selectOption('rating')

@@ -41,6 +41,7 @@ const gridSaving = ref(false)
 const gridError = ref('')
 let searchTimer: number | undefined
 let searchController: AbortController | null = null
+const searchDebounceMs = 60
 const searchCache = new Map<string, CatalogGame[]>()
 
 const slotDefinitions = computed<Array<{ slot: GridSlot; zh: string; en: string; hintZh: string; hintEn: string }>>(() => [
@@ -148,7 +149,7 @@ function scheduleSearch() {
     searchLoading.value = false
     return
   }
-  searchTimer = window.setTimeout(() => void searchGames(query), 120)
+  searchTimer = window.setTimeout(() => void searchGames(query), searchDebounceMs)
 }
 
 async function searchGames(query: string) {

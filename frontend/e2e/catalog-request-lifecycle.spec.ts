@@ -3,12 +3,11 @@ import { expect, test } from '@playwright/test'
 const firstBase = game(42, '第一页基础资料')
 const secondBase = game(43, '第二页基础资料')
 
-test('promotes the next-page prefetch, replaces the visible page, and ignores stale enrichment', async ({ page }) => {
+test('promotes the next-page prefetch and never starts a second enrichment request', async ({ page }) => {
   let releasePageOne!: () => void
   const pageOneGate = new Promise<void>(resolve => { releasePageOne = resolve })
-  let releaseFirstEnrichment!: () => void
-  const firstEnrichmentGate = new Promise<void>(resolve => { releaseFirstEnrichment = resolve })
   let pageOneBaseRequests = 0
+  let enrichmentRequests = 0
 
   await page.route('**/api/**', async route => {
     const request = route.request()
@@ -17,18 +16,15 @@ test('promotes the next-page prefetch, replaces the visible page, and ignores st
     if (url.pathname === '/api/v1/bgg/catalog') {
       const requestedPage = Number(url.searchParams.get('page'))
       const enriched = url.searchParams.get('enrich') === 'true'
-      if (requestedPage === 0 && !enriched) return route.fulfill({ json: catalogPage(0, firstBase, false) })
-      if (requestedPage === 0 && enriched) {
-        await firstEnrichmentGate
-        return route.fulfill({ json: catalogPage(0, game(42, '第一页已补齐'), true) })
+      if (enriched) {
+        enrichmentRequests += 1
+        return route.fulfill({ status: 500 })
       }
+      if (requestedPage === 0 && !enriched) return route.fulfill({ json: catalogPage(0, firstBase, false) })
       if (requestedPage === 1 && !enriched) {
         pageOneBaseRequests += 1
         await pageOneGate
         return route.fulfill({ json: catalogPage(1, secondBase, false) })
-      }
-      if (requestedPage === 1 && enriched) {
-        return route.fulfill({ json: catalogPage(1, game(43, '第二页已补齐'), true) })
       }
     }
     if (url.pathname === '/api/v1/assistant-runs/active') return route.fulfill({ json: [] })
@@ -44,12 +40,9 @@ test('promotes the next-page prefetch, replaces the visible page, and ignores st
   expect(pageOneBaseRequests).toBe(1)
 
   releasePageOne()
-  await expect(page.getByRole('heading', { name: '第二页已补齐' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '第二页基础资料' })).toBeVisible()
   expect(pageOneBaseRequests).toBe(1)
-
-  releaseFirstEnrichment()
-  await expect(page.getByRole('heading', { name: '第一页已补齐' })).toHaveCount(0)
-  await expect(page.getByRole('heading', { name: '第二页已补齐' })).toBeVisible()
+  expect(enrichmentRequests).toBe(0)
   await expect(page.getByText('第 2 / 2 页')).toBeVisible()
   await expect(page.getByText('本页 1 款')).toBeVisible()
 })

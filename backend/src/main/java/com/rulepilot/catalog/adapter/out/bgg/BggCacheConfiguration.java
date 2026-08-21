@@ -1,5 +1,6 @@
 package com.rulepilot.catalog.adapter.out.bgg;
 
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Profile;
@@ -21,6 +22,7 @@ class BggCacheConfiguration {
     }
 
     @Bean(name = "bggPopularPrewarmExecutor")
+    @ConditionalOnProperty(name = "rulepilot.runtime.worker-enabled", havingValue = "true")
     ThreadPoolTaskExecutor bggPopularPrewarmExecutor() {
         var executor = new ThreadPoolTaskExecutor();
         executor.setThreadNamePrefix("bgg-popular-prewarm-");

@@ -101,6 +101,13 @@ test('deployments and production journeys share one non-cancelling runtime lock'
   }
 })
 
+test('production JVM ergonomics use the capacity of the two-core host', () => {
+  const processorFlag = /-XX:ActiveProcessorCount=\$\{PRODUCTION_ACTIVE_PROCESSOR_COUNT:-2\}/g
+  assert.equal([...productionCompose.matchAll(processorFlag)].length, 2)
+  assert.match(productionCompose, /api:[\s\S]*?JAVA_TOOL_OPTIONS:[^\n]*-XX:\+UseG1GC/)
+  assert.match(productionCompose, /worker:[\s\S]*?JAVA_TOOL_OPTIONS:[^\n]*-XX:\+UseSerialGC/)
+})
+
 test('failed production recommendation journeys retain bounded API diagnostics without reading environment values', () => {
   assert.match(productionRecommendationWorkflow, /name: Collect bounded API diagnostics after a failed journey/)
   assert.match(productionRecommendationWorkflow, /if: failure\(\)/)
