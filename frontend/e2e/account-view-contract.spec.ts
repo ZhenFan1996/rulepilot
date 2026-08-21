@@ -38,3 +38,42 @@ test('renders an authenticated account from the backend usage record contract', 
   await expect(page.getByText('正在读取我的空间…')).toHaveCount(0)
   expect(pageErrors).toEqual([])
 })
+
+test('uses a high-resolution responsive grid and finds a game from a partial Chinese title', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 })
+  await page.route('**/api/auth/session', route => route.fulfill({ json: { username: 'alice', roles: ['USER'] } }))
+  await page.route('**/api/v1/teaching-plans', route => route.fulfill({ json: [] }))
+  await page.route('**/api/v1/model-configuration', route => route.fulfill({
+    json: { providers: [], assignments: { recommendation: 'fake', teaching: 'fake', visual: 'fake', answer: 'fake', critic: 'fake' } },
+  }))
+  await page.route('**/api/v1/model-configuration/usage', route => route.fulfill({
+    json: { platformAccessEnabled: true, monthlyTokenLimit: 100_000, platformTokensCharged: 0, platformTokensReserved: 0, personalTokensUsed: 0 },
+  }))
+  await page.route('**/api/v1/account/board-game-grid', route => route.fulfill({
+    json: [{ slot: 'FAVORITE_GAME', bggId: 13, gameName: 'Catan', chineseName: '卡坦岛', thumbnailUrl: 'https://images.example/catan-thumb.jpg', imageUrl: 'https://images.example/catan-full.jpg' }],
+  }))
+  let searchedPath = ''
+  await page.route('**/api/v1/account/board-game-grid/search?*', route => {
+    searchedPath = new URL(route.request().url()).pathname + new URL(route.request().url()).search
+    return route.fulfill({ json: [{ bggId: 174430, name: 'Gloomhaven', chineseName: '幽港迷城', publicationYear: 2017, thumbnailUrl: 'https://images.example/gloomhaven-thumb.jpg', imageUrl: 'https://images.example/gloomhaven-full.jpg' }] })
+  })
+
+  await page.goto('/account')
+
+  const filledCover = page.getByRole('img', { name: '卡坦岛' })
+  await expect(filledCover).toHaveAttribute('src', 'https://images.example/catan-full.jpg')
+  const gridCards = page.locator('button[aria-label*="："]')
+  await expect(gridCards).toHaveCount(9)
+  const first = await gridCards.nth(0).boundingBox()
+  const fourth = await gridCards.nth(3).boundingBox()
+  expect(first).not.toBeNull()
+  expect(fourth).not.toBeNull()
+  expect(Math.abs(first!.width / first!.height - 4 / 3)).toBeLessThan(0.06)
+  expect(Math.abs(first!.x - fourth!.x)).toBeLessThan(2)
+
+  await gridCards.nth(1).click()
+  await page.getByRole('searchbox', { name: '搜索桌游' }).fill('幽港')
+  await expect(page.getByRole('button', { name: /幽港迷城/ })).toBeVisible()
+  expect(searchedPath).toContain('q=%E5%B9%BD%E6%B8%AF')
+  await expect(page.getByRole('img', { name: '幽港迷城' })).toHaveAttribute('src', 'https://images.example/gloomhaven-full.jpg')
+})

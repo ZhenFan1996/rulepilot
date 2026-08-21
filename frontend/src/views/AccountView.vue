@@ -20,9 +20,8 @@ interface AccountUsage {
   personalTokensUsed: number
 }
 type GridSlot = 'FAVORITE_GAME' | 'FAVORITE_ART' | 'FAVORITE_DESIGNER' | 'FAVORITE_MECHANISM' | 'FAVORITE_THEME' | 'FAVORITE_PUBLISHER' | 'FAVORITE_EXPANSION' | 'FAVORITE_COMPONENT' | 'WISHLIST_GAME'
-interface GridSelection { slot: GridSlot; bggId: number; gameName: string; chineseName: string; thumbnailUrl: string }
-interface CatalogGame { bggId: number; name: string; originalName: string; thumbnailUrl: string; publicationYear: number | null }
-interface CatalogResponse { games: CatalogGame[] }
+interface GridSelection { slot: GridSlot; bggId: number; gameName: string; chineseName: string; thumbnailUrl: string; imageUrl?: string }
+interface CatalogGame { bggId: number; name: string; chineseName: string; thumbnailUrl: string; imageUrl: string; publicationYear: number | null }
 
 const { locale, t } = useLocale()
 const session = ref<Session | null>(null)
@@ -42,6 +41,7 @@ const gridSaving = ref(false)
 const gridError = ref('')
 let searchTimer: number | undefined
 let searchController: AbortController | null = null
+const searchCache = new Map<string, CatalogGame[]>()
 
 const slotDefinitions = computed<Array<{ slot: GridSlot; zh: string; en: string; hintZh: string; hintEn: string }>>(() => [
   { slot: 'FAVORITE_GAME', zh: '最爱的桌游', en: 'Favorite game', hintZh: '总会想再开一局', hintEn: 'The one you always return to' },
@@ -73,6 +73,14 @@ function slotHint(definition: { hintZh: string; hintEn: string }) {
 
 function displayName(selection: GridSelection) {
   return locale.value === 'zh-CN' && selection.chineseName ? selection.chineseName : selection.gameName
+}
+
+function coverImage(game: Pick<GridSelection, 'imageUrl' | 'thumbnailUrl'>) {
+  return game.imageUrl || game.thumbnailUrl
+}
+
+function catalogDisplayName(game: CatalogGame) {
+  return locale.value === 'zh-CN' && game.chineseName ? game.chineseName : game.name
 }
 
 async function load() {
@@ -121,6 +129,16 @@ function closeGridPicker() {
   activeSlot.value = null
 }
 
+function clearSearch() {
+  window.clearTimeout(searchTimer)
+  searchController?.abort()
+  searchController = null
+  searchQuery.value = ''
+  searchResults.value = []
+  searchLoading.value = false
+  gridError.value = ''
+}
+
 function scheduleSearch() {
   window.clearTimeout(searchTimer)
   searchController?.abort()
@@ -130,23 +148,36 @@ function scheduleSearch() {
     searchLoading.value = false
     return
   }
-  searchTimer = window.setTimeout(() => void searchGames(query), 250)
+  searchTimer = window.setTimeout(() => void searchGames(query), 120)
 }
 
 async function searchGames(query: string) {
-  searchController = new AbortController()
+  const cacheKey = query.toLocaleLowerCase(locale.value)
+  const cached = searchCache.get(cacheKey)
+  if (cached) {
+    searchResults.value = cached
+    searchLoading.value = false
+    return
+  }
+  const controller = new AbortController()
+  searchController = controller
   searchLoading.value = true
   gridError.value = ''
   try {
-    const params = new URLSearchParams({ q: query, locale: locale.value, size: '12', page: '0', sort: 'rank', enrich: 'true' })
-    const response = await fetch(`/api/v1/bgg/catalog?${params.toString()}`, { credentials: 'include', signal: searchController.signal })
+    const params = new URLSearchParams({ q: query, limit: '12' })
+    const response = await fetch(`/api/v1/account/board-game-grid/search?${params.toString()}`, { credentials: 'include', signal: controller.signal })
     if (!response.ok) throw new Error(locale.value === 'zh-CN' ? '暂时搜不到桌游，请稍后再试。' : 'Games could not be searched right now.')
-    searchResults.value = ((await response.json()) as CatalogResponse).games
+    const games = await response.json() as CatalogGame[]
+    searchCache.set(cacheKey, games)
+    searchResults.value = games
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') return
     gridError.value = error instanceof Error ? error.message : String(error)
   } finally {
-    searchLoading.value = false
+    if (searchController === controller) {
+      searchController = null
+      searchLoading.value = false
+    }
   }
 }
 
@@ -226,28 +257,28 @@ onBeforeUnmount(() => {
             </div>
             <span class="rounded-full bg-canvas px-3 py-1.5 text-xs font-semibold text-ink/55">{{ grid.length }} / 9</span>
           </div>
-          <div class="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-3">
+          <div class="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
             <button
               v-for="definition in slotDefinitions"
               :key="definition.slot"
               type="button"
-              class="group relative min-h-48 overflow-hidden rounded-2xl border border-ink/10 bg-canvas text-left transition hover:-translate-y-0.5 hover:border-copper/45 hover:shadow-lg focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo"
+              class="group relative aspect-[4/3] min-h-48 overflow-hidden rounded-[1.35rem] border border-ink/10 bg-canvas text-left shadow-[0_1px_0_rgba(42,42,34,0.04)] transition duration-200 hover:-translate-y-1 hover:border-copper/45 hover:shadow-xl focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo"
               :aria-label="`${slotLabel(definition)}：${selectionBySlot.get(definition.slot) ? displayName(selectionBySlot.get(definition.slot)!) : (locale === 'zh-CN' ? '未选择' : 'Not selected')}`"
               @click="openGridPicker(definition.slot)"
             >
               <template v-if="selectionBySlot.get(definition.slot)">
-                <img v-if="selectionBySlot.get(definition.slot)!.thumbnailUrl" :src="selectionBySlot.get(definition.slot)!.thumbnailUrl" :alt="displayName(selectionBySlot.get(definition.slot)!)" class="absolute inset-0 size-full object-cover" loading="lazy" referrerpolicy="no-referrer">
-                <div class="absolute inset-0 bg-gradient-to-t from-ink via-ink/20 to-transparent" />
-                <div class="absolute inset-x-0 bottom-0 p-3 text-white sm:p-4">
-                  <p class="text-[0.68rem] font-bold uppercase tracking-[0.12em] text-white/70">{{ slotLabel(definition) }}</p>
-                  <p class="mt-1 line-clamp-2 font-display text-lg font-semibold leading-tight">{{ displayName(selectionBySlot.get(definition.slot)!) }}</p>
+                <img v-if="coverImage(selectionBySlot.get(definition.slot)!)" :src="coverImage(selectionBySlot.get(definition.slot)!)" :alt="displayName(selectionBySlot.get(definition.slot)!)" class="absolute inset-0 size-full object-cover object-center transition duration-500 group-hover:scale-[1.025]" loading="lazy" decoding="async" referrerpolicy="no-referrer">
+                <div class="absolute inset-0 bg-gradient-to-t from-ink/95 via-ink/10 to-transparent" />
+                <div class="absolute inset-x-0 bottom-0 p-5 text-white">
+                  <p class="text-[0.67rem] font-bold uppercase tracking-[0.16em] text-white/75">{{ slotLabel(definition) }}</p>
+                  <p class="mt-1.5 line-clamp-2 font-display text-xl font-semibold leading-tight drop-shadow-sm">{{ displayName(selectionBySlot.get(definition.slot)!) }}</p>
                 </div>
               </template>
-              <div v-else class="flex h-full min-h-48 flex-col justify-between p-4">
-                <span class="grid size-9 place-items-center rounded-full border border-dashed border-copper/45 text-xl text-copper">＋</span>
-                <div>
-                  <p class="font-display text-lg font-semibold">{{ slotLabel(definition) }}</p>
-                  <p class="mt-1 text-xs leading-5 text-ink/45">{{ slotHint(definition) }}</p>
+              <div v-else class="flex h-full min-h-48 flex-col items-start justify-between bg-[radial-gradient(circle_at_top_right,rgba(185,82,57,0.08),transparent_50%)] p-5">
+                <span class="grid size-11 place-items-center rounded-full border border-dashed border-copper/45 bg-paper text-2xl text-copper transition group-hover:border-copper group-hover:bg-copper group-hover:text-white">＋</span>
+                <div class="max-w-[15rem]">
+                  <p class="font-display text-xl font-semibold">{{ slotLabel(definition) }}</p>
+                  <p class="mt-1.5 text-sm leading-5 text-ink/45">{{ slotHint(definition) }}</p>
                 </div>
               </div>
             </button>
@@ -277,18 +308,20 @@ onBeforeUnmount(() => {
     </section>
 
     <div v-if="gridDialogOpen" class="fixed inset-0 z-50 grid place-items-end bg-ink/60 p-0 sm:place-items-center sm:p-6" @click.self="closeGridPicker">
-      <section role="dialog" aria-modal="true" :aria-label="activeSlotDefinition ? slotLabel(activeSlotDefinition) : ''" class="max-h-[88vh] w-full overflow-y-auto rounded-t-[1.75rem] bg-paper p-5 shadow-2xl sm:max-w-3xl sm:rounded-[1.75rem] sm:p-7">
+      <section role="dialog" aria-modal="true" :aria-label="activeSlotDefinition ? slotLabel(activeSlotDefinition) : ''" class="max-h-[88vh] w-full overflow-y-auto rounded-t-[1.75rem] bg-paper p-5 shadow-2xl sm:max-w-4xl sm:rounded-[1.75rem] sm:p-7">
         <div class="flex items-start justify-between gap-4">
           <div><p class="text-xs font-bold uppercase tracking-[0.16em] text-copper">{{ activeSlotDefinition ? slotLabel(activeSlotDefinition) : '' }}</p><h2 class="mt-2 font-display text-3xl font-semibold">{{ locale === 'zh-CN' ? '选一款代表你的桌游' : 'Choose the game that represents you' }}</h2></div>
           <button type="button" class="grid size-11 place-items-center rounded-full border border-ink/10 text-xl" :aria-label="locale === 'zh-CN' ? '关闭' : 'Close'" @click="closeGridPicker">×</button>
         </div>
-        <label class="mt-6 block"><span class="sr-only">{{ locale === 'zh-CN' ? '搜索桌游' : 'Search games' }}</span><input ref="searchInput" v-model="searchQuery" type="search" class="min-h-12 w-full rounded-xl border border-ink/15 bg-canvas px-4 outline-none focus:border-indigo" :placeholder="locale === 'zh-CN' ? '输入中文名或英文名，例如：璀璨宝石' : 'Search by English or Chinese title'" @input="scheduleSearch"></label>
-        <p v-if="searchLoading" class="mt-5 text-sm text-ink/50" role="status">{{ locale === 'zh-CN' ? '正在本地桌游库里找…' : 'Searching the local game library…' }}</p>
+        <label class="relative mt-6 block"><span class="sr-only">{{ locale === 'zh-CN' ? '搜索桌游' : 'Search games' }}</span><span class="pointer-events-none absolute inset-y-0 left-4 grid place-items-center text-ink/35" aria-hidden="true">⌕</span><input ref="searchInput" v-model="searchQuery" type="search" autocomplete="off" class="min-h-14 w-full rounded-2xl border border-ink/15 bg-canvas py-3 pl-11 pr-12 text-base outline-none transition focus:border-indigo focus:bg-white focus:ring-4 focus:ring-indigo/10" :placeholder="locale === 'zh-CN' ? '输入简称、中文片段或英文名，例如：方舟、国家公园、Dune' : 'Type any part of an English or Chinese title'" @input="scheduleSearch"><button v-if="searchQuery" type="button" class="absolute inset-y-0 right-2 my-auto grid size-10 place-items-center rounded-full text-lg text-ink/45 hover:bg-ink/5" :aria-label="locale === 'zh-CN' ? '清空搜索' : 'Clear search'" @click="clearSearch">×</button></label>
+        <p class="mt-2 text-xs leading-5 text-ink/45">{{ locale === 'zh-CN' ? '不必输入全称；中文简称、任意连续片段和英文部分名称都可以。结果只查本地索引。' : 'No full title needed. Partial Chinese aliases and English fragments search the local index only.' }}</p>
+        <p v-if="searchLoading" class="mt-5 text-sm text-ink/50" role="status">{{ locale === 'zh-CN' ? '正在匹配…' : 'Matching…' }}</p>
         <p v-if="gridError" class="mt-5 rounded-xl bg-red-50 p-4 text-sm text-red-800" role="alert">{{ gridError }}</p>
-        <div v-if="searchResults.length" class="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
+        <p v-if="searchResults.length && !searchLoading" class="mt-5 text-xs font-semibold text-ink/45" aria-live="polite">{{ locale === 'zh-CN' ? `找到 ${searchResults.length} 款` : `${searchResults.length} matches` }}</p>
+        <div v-if="searchResults.length" class="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
           <button v-for="game in searchResults" :key="game.bggId" type="button" class="overflow-hidden rounded-xl border border-ink/10 bg-canvas text-left transition hover:border-copper/45 hover:shadow-md disabled:opacity-50" :disabled="gridSaving" @click="chooseGame(game)">
-            <div class="aspect-[4/5] bg-ink/5"><img v-if="game.thumbnailUrl" :src="game.thumbnailUrl" :alt="game.name" class="size-full object-cover" loading="lazy" referrerpolicy="no-referrer"><div v-else class="grid size-full place-items-center px-3 text-center text-xs text-ink/35">{{ locale === 'zh-CN' ? '暂无封面' : 'No cover' }}</div></div>
-            <div class="p-3"><p class="line-clamp-2 font-semibold leading-tight">{{ game.name }}</p><p v-if="game.originalName && game.originalName !== game.name" class="mt-1 line-clamp-1 text-xs text-ink/45">{{ game.originalName }}</p></div>
+            <div class="aspect-[4/5] bg-ink/5"><img v-if="coverImage(game)" :src="coverImage(game)" :alt="catalogDisplayName(game)" class="size-full object-contain" loading="lazy" decoding="async" referrerpolicy="no-referrer"><div v-else class="grid size-full place-items-center px-3 text-center text-xs text-ink/35">{{ locale === 'zh-CN' ? '暂无封面' : 'No cover' }}</div></div>
+            <div class="p-3"><p class="line-clamp-2 font-semibold leading-tight">{{ catalogDisplayName(game) }}</p><p v-if="game.name && game.name !== catalogDisplayName(game)" class="mt-1 line-clamp-1 text-xs text-ink/45">{{ game.name }}</p><p v-if="game.publicationYear" class="mt-1 text-[0.7rem] text-ink/35">{{ game.publicationYear }}</p></div>
           </button>
         </div>
         <p v-else-if="searchQuery.trim() && !searchLoading && !gridError" class="mt-6 rounded-xl border border-dashed border-ink/15 p-6 text-center text-sm text-ink/45">{{ locale === 'zh-CN' ? '没有找到。可以换一个中文名、英文名或简称。' : 'No match yet. Try another title or alias.' }}</p>

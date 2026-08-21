@@ -8,6 +8,7 @@ import com.rulepilot.catalog.application.BggRankedCatalog.Query;
 import com.rulepilot.catalog.application.BggRankedCatalog.RankedGame;
 import com.rulepilot.catalog.application.BggRankedCatalog.Snapshot;
 import com.rulepilot.catalog.application.BggRankedCatalog.Sort;
+import com.rulepilot.catalog.application.BggRankedCatalogRepository.SelectionCandidate;
 import com.rulepilot.catalog.application.BoardGameGeekCatalog.DiscoveryGame;
 import com.rulepilot.catalog.application.BoardGameGeekCatalog.GameDetails;
 import com.rulepilot.catalog.application.BoardGameGeekCatalog.GameMatch;
@@ -149,8 +150,28 @@ class BggRankedCatalogServiceTest {
         assertThat(bgg.searchQueries).isEmpty();
     }
 
+    @Test
+    void searchesPartialChineseAliasesFromTheLocalSelectionIndexWithoutRemoteHydration() {
+        MemoryRepository repository = new MemoryRepository();
+        FakeBgg bgg = new FakeBgg();
+        BggRankedCatalogService service = new BggRankedCatalogService(repository, bgg);
+
+        var result = service.search("白塔", 12);
+
+        assertThat(repository.selectionQuery).isEqualTo("白塔");
+        assertThat(result).singleElement().satisfies(game -> {
+            assertThat(game.bggId()).isEqualTo(20);
+            assertThat(game.name()).isEqualTo("Game 20");
+            assertThat(game.chineseName()).isEqualTo("白塔庭院");
+            assertThat(game.imageUrl()).isEqualTo("https://example.test/20-full.jpg");
+        });
+        assertThat(bgg.detailIds).isEmpty();
+        assertThat(bgg.searchQueries).isEmpty();
+    }
+
     private static final class MemoryRepository implements BggRankedCatalogRepository {
         private Query query;
+        private String selectionQuery;
 
         @Override
         public Optional<Snapshot> findSnapshot() {
@@ -186,6 +207,20 @@ class BggRankedCatalogServiceTest {
                     .filter(id -> id == 10 || id == 20 || id == 30)
                     .map(id -> id == 30 ? game(30, 30, "碁") : game(id, id))
                     .toList();
+        }
+
+        @Override
+        public List<SelectionCandidate> searchSelections(String query, int maximum) {
+            selectionQuery = query;
+            return "白塔".equals(query)
+                    ? List.of(new SelectionCandidate(
+                            20,
+                            "Game 20",
+                            "白塔庭院",
+                            2026,
+                            "https://example.test/20-thumb.jpg",
+                            "https://example.test/20-full.jpg"))
+                    : List.of();
         }
 
         private RankedGame game(int id, int rank) {

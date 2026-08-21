@@ -26,6 +26,7 @@ public interface BoardGameIdentityGrid {
             String gameName,
             String chineseName,
             String thumbnailUrl,
+            String imageUrl,
             Instant updatedAt);
 
     void clear(String username, Slot slot);
@@ -36,5 +37,6 @@ public interface BoardGameIdentityGrid {
             String gameName,
             String chineseName,
             String thumbnailUrl,
+            String imageUrl,
             Instant updatedAt) {}
 }

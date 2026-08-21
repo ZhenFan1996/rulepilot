@@ -6,6 +6,7 @@ import com.rulepilot.catalog.application.BggRankedCatalog.Query;
 import com.rulepilot.catalog.application.BggRankedCatalog.RankedGame;
 import com.rulepilot.catalog.application.BggRankedCatalog.Snapshot;
 import com.rulepilot.catalog.application.BggRankedCatalogRepository;
+import com.rulepilot.catalog.application.BggRankedCatalogRepository.SelectionCandidate;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
@@ -120,6 +121,93 @@ public class PostgresBggRankedCatalog implements BggRankedCatalogRepository {
     }
 
     @Override
+    public List<SelectionCandidate> searchSelections(String query, int maximum) {
+        String checked = query == null ? "" : query.strip().replaceAll("\\s+", " ");
+        if (checked.isBlank() || checked.length() > 120) {
+            throw new IllegalArgumentException("identity search query must contain between 1 and 120 characters");
+        }
+        if (maximum < 1 || maximum > 20) {
+            throw new IllegalArgumentException("identity search maximum must be between 1 and 20");
+        }
+        MapSqlParameterSource parameters = new MapSqlParameterSource()
+                .addValue("query", checked)
+                .addValue("search", escapedSearch(checked))
+                .addValue("prefix", escapedPrefix(checked))
+                .addValue("limit", maximum);
+        return jdbc.query(
+                """
+                SELECT g.bgg_id, g.source_name, g.publication_year,
+                       COALESCE(NULLIF(discovery.payload->>'chineseName', ''), matched_alias.alias, '') AS chinese_name,
+                       COALESCE(NULLIF(discovery.payload->>'thumbnailUrl', ''), game_cache.payload->>'thumbnailUrl', '') AS thumbnail_url,
+                       COALESCE(NULLIF(discovery.payload->>'imageUrl', ''), NULLIF(game_cache.payload->>'imageUrl', ''),
+                                NULLIF(discovery.payload->>'thumbnailUrl', ''), game_cache.payload->>'thumbnailUrl', '') AS image_url
+                FROM bgg_ranked_game g
+                LEFT JOIN bgg_metadata_cache discovery
+                  ON discovery.cache_kind = 'DISCOVERY' AND discovery.bgg_id = g.bgg_id
+                LEFT JOIN bgg_metadata_cache game_cache
+                  ON game_cache.cache_kind = 'GAME' AND game_cache.bgg_id = g.bgg_id
+                LEFT JOIN LATERAL (
+                    SELECT alias.alias
+                    FROM bgg_game_name_alias alias
+                    WHERE alias.bgg_id = g.bgg_id
+                      AND alias.locale LIKE 'zh%'
+                      AND lower(alias.alias) LIKE lower(:search) ESCAPE E'\\\\'
+                    ORDER BY CASE
+                        WHEN lower(alias.alias) = lower(:query) THEN 0
+                        WHEN lower(alias.alias) LIKE lower(:prefix) ESCAPE E'\\\\' THEN 1
+                        ELSE 2 END,
+                        length(alias.alias), alias.alias
+                    LIMIT 1
+                ) matched_alias ON TRUE
+                WHERE (lower(g.source_name) LIKE lower(:search) ESCAPE E'\\\\'
+                    OR EXISTS (
+                        SELECT 1 FROM bgg_game_name_alias alias
+                        WHERE alias.bgg_id = g.bgg_id
+                          AND lower(alias.alias) LIKE lower(:search) ESCAPE E'\\\\'))
+                ORDER BY CASE
+                    WHEN lower(g.source_name) = lower(:query) OR EXISTS (
+                        SELECT 1 FROM bgg_game_name_alias alias
+                        WHERE alias.bgg_id = g.bgg_id AND lower(alias.alias) = lower(:query)) THEN 0
+                    WHEN lower(g.source_name) LIKE lower(:prefix) ESCAPE E'\\\\' OR EXISTS (
+                        SELECT 1 FROM bgg_game_name_alias alias
+                        WHERE alias.bgg_id = g.bgg_id
+                          AND lower(alias.alias) LIKE lower(:prefix) ESCAPE E'\\\\') THEN 1
+                    ELSE 2 END,
+                    g.is_expansion ASC,
+                    g.overall_rank ASC NULLS LAST, g.users_rated DESC, g.bgg_id ASC
+                LIMIT :limit
+                """,
+                parameters,
+                this::mapSelection);
+    }
+
+    @Override
+    public List<SelectionCandidate> findSelectionsByIds(List<Integer> bggIds) {
+        if (bggIds == null || bggIds.isEmpty()) return List.of();
+        return jdbc.query(
+                """
+                SELECT g.bgg_id, g.source_name, g.publication_year,
+                       COALESCE(NULLIF(discovery.payload->>'chineseName', ''), chinese_alias.alias, '') AS chinese_name,
+                       COALESCE(NULLIF(discovery.payload->>'thumbnailUrl', ''), game_cache.payload->>'thumbnailUrl', '') AS thumbnail_url,
+                       COALESCE(NULLIF(discovery.payload->>'imageUrl', ''), NULLIF(game_cache.payload->>'imageUrl', ''),
+                                NULLIF(discovery.payload->>'thumbnailUrl', ''), game_cache.payload->>'thumbnailUrl', '') AS image_url
+                FROM bgg_ranked_game g
+                LEFT JOIN bgg_metadata_cache discovery
+                  ON discovery.cache_kind = 'DISCOVERY' AND discovery.bgg_id = g.bgg_id
+                LEFT JOIN bgg_metadata_cache game_cache
+                  ON game_cache.cache_kind = 'GAME' AND game_cache.bgg_id = g.bgg_id
+                LEFT JOIN LATERAL (
+                    SELECT alias.alias FROM bgg_game_name_alias alias
+                    WHERE alias.bgg_id = g.bgg_id AND alias.locale LIKE 'zh%'
+                    ORDER BY alias.observed_at DESC, length(alias.alias), alias.alias LIMIT 1
+                ) chinese_alias ON TRUE
+                WHERE g.bgg_id IN (:bggIds)
+                """,
+                new MapSqlParameterSource().addValue("bggIds", bggIds),
+                this::mapSelection);
+    }
+
+    @Override
     public void stage(UUID importId, List<RankedGame> games) {
         if (games.isEmpty()) return;
         String sql = "INSERT INTO bgg_ranked_game_import (import_id, " + COLUMNS + ") VALUES ("
@@ -200,6 +288,20 @@ public class PostgresBggRankedCatalog implements BggRankedCatalogRepository {
     private String escapedSearch(String search) {
         if (search == null || search.isBlank()) return "%";
         return "%" + search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%";
+    }
+
+    private String escapedPrefix(String search) {
+        return search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%";
+    }
+
+    private SelectionCandidate mapSelection(ResultSet result, int rowNumber) throws SQLException {
+        return new SelectionCandidate(
+                result.getInt("bgg_id"),
+                result.getString("source_name"),
+                result.getString("chinese_name"),
+                nullableInteger(result, "publication_year"),
+                result.getString("thumbnail_url"),
+                result.getString("image_url"));
     }
 
     private MapSqlParameterSource parameters(UUID importId, RankedGame game) {
