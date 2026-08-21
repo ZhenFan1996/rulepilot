@@ -27,12 +27,24 @@ public interface IllustratedLessonRepository {
      */
     List<LessonSummary> findLatestSummariesByPlans(Collection<UUID> teachingPlanIds);
 
+    List<ProgressSummary> findLatestProgressSummariesByPlans(Collection<UUID> teachingPlanIds);
+
     record LessonSummary(UUID teachingPlanId, IllustratedLesson.LessonStatus status, boolean publiclyReadable,
                          int sectionCount, int stepCount) {
         public LessonSummary {
             if (teachingPlanId == null || status == null || sectionCount < 0 || stepCount < 0) {
                 throw new IllegalArgumentException("lesson summary is invalid");
             }
+        }
+    }
+
+    record ProgressSummary(UUID id, UUID teachingPlanId, IllustratedLesson.LessonStatus status,
+                           List<IllustratedLesson.EvidenceStatus> evidenceStatuses) {
+        public ProgressSummary {
+            if (id == null || teachingPlanId == null || status == null || evidenceStatuses == null) {
+                throw new IllegalArgumentException("lesson progress summary is invalid");
+            }
+            evidenceStatuses = List.copyOf(evidenceStatuses);
         }
     }
 }

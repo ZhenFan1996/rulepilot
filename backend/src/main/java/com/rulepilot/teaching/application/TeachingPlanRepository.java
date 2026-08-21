@@ -15,6 +15,8 @@ public interface TeachingPlanRepository {
 
     List<TeachingPlan> findAllByCreatedBy(String createdBy);
 
+    List<TeachingPlanSummary> findSummariesByCreatedBy(String createdBy);
+
     List<TeachingPlan> findRecent(int limit);
 
     /**

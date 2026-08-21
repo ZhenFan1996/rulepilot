@@ -350,6 +350,7 @@ async function mockPublicDiscovery(
     planReads += 1
     return route.fulfill({ json: journeyImported && planPublished ? [{
       ...teachingPlan, createdAt: '2026-08-10T08:00:01Z',
+      lesson: firstLessonPublished ? lessonProgress(guideCompleted ? completeLesson : draftLesson) : null,
     }] : [] })
   })
   await page.route('**/api/v1/model-configuration', route => route.fulfill({ json: {
@@ -423,6 +424,13 @@ async function mockPublicDiscovery(
     if (lessonPoll === 1) return route.fulfill({ status: 404 })
     return route.fulfill({ json: lessonPoll >= 3 ? completeLesson : draftLesson })
   })
+  await page.route('**/api/v1/teaching-plans/plan-1/illustrated-lessons/latest/summary', route => {
+    if (!firstLessonPublished) return route.fulfill({ status: 404 })
+    if (guideCompleted) return route.fulfill({ json: lessonProgress(completeLesson) })
+    lessonPoll += 1
+    if (lessonPoll === 1) return route.fulfill({ status: 404 })
+    return route.fulfill({ json: lessonProgress(lessonPoll >= 3 ? completeLesson : draftLesson) })
+  })
   await page.route('**/api/v1/teaching-plans/plan-1/illustrated-lessons', route => route.fulfill({ status: 202, json: {
     assistantRunId: 'teaching-run-1', state: 'RUNNING', reused: true,
   } }))
@@ -454,6 +462,15 @@ async function mockPublicDiscovery(
       releaseDocumentProgress()
     },
     preparationRetryRequests: () => preparationRetryRequests,
+  }
+}
+
+function lessonProgress(lesson: typeof draftLesson | typeof completeLesson) {
+  return {
+    id: lesson.id,
+    teachingPlanId: lesson.teachingPlanId,
+    status: lesson.status,
+    sections: lesson.sections.map(section => ({ evidenceStatus: section.evidenceStatus })),
   }
 }
 
@@ -1087,8 +1104,8 @@ test('advances My Guides from plan startup to the first readable chapter without
 
   preparation.completePreparation()
   preparation.publishFirstLesson()
-  await expect(page.getByText('基础讲解可读')).toBeVisible({ timeout: 12_000 })
-  await expect(page.getByRole('link', { name: '阅读已完成章节' })).toBeVisible()
+  await expect(page.getByText('正在补充图片或核对细节')).toBeVisible({ timeout: 12_000 })
+  await expect(page.getByRole('link', { name: '立即阅读完整讲解' })).toBeVisible()
   await expect(pending).toHaveCount(0)
 })
 

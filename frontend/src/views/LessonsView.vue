@@ -40,6 +40,7 @@ interface TeachingPlan {
   premise: string
   createdAt: string
   sections: Array<{ position: number; required: boolean; topicKey: string; title: string; visualEvidenceRecommended: boolean }>
+  lesson?: LessonProgressSummary | null
 }
 
 interface PlanProgress {
@@ -480,7 +481,7 @@ async function handoffPreparationRuns(
   return [...byId.values()]
 }
 
-async function loadProgress(plan: TeachingPlan, listRequest = latestListRequest) {
+async function loadProgress(plan: TeachingPlan, listRequest = latestListRequest, refreshLesson = true) {
   const requestVersion = (requestVersions.get(plan.id) ?? 0) + 1
   requestVersions.set(plan.id, requestVersion)
   progressControllers.get(plan.id)?.abort()
@@ -495,13 +496,15 @@ async function loadProgress(plan: TeachingPlan, listRequest = latestListRequest)
       : `/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=${encodeURIComponent(plan.id)}${activityCursor}`
     const [runResponse, lessonResponse] = await Promise.all([
       checkedFetch(runPath, { signal: controller.signal }),
-      checkedFetch(`/api/v1/teaching-plans/${plan.id}/illustrated-lessons/latest`, { signal: controller.signal }),
+      refreshLesson
+        ? checkedFetch(`/api/v1/teaching-plans/${plan.id}/illustrated-lessons/latest/summary`, { signal: controller.signal })
+        : Promise.resolve<Response | null>(null),
     ])
     if (!isCurrentProgressRead(plan.id, listRequest, requestVersion, controller)) return
     if (!runResponse.ok && runResponse.status !== 404) throw new Error(t('lessons.error.runProgress'))
-    if (!lessonResponse.ok && lessonResponse.status !== 404) throw new Error(t('lessons.error.contentProgress'))
+    if (lessonResponse && !lessonResponse.ok && lessonResponse.status !== 404) throw new Error(t('lessons.error.contentProgress'))
     const incomingRun = runResponse.ok ? await runResponse.json() as TeachingRunProgress : null
-    const incomingLesson = lessonResponse.ok ? await lessonResponse.json() as LessonProgressSummary : null
+    const incomingLesson = lessonResponse?.ok ? await lessonResponse.json() as LessonProgressSummary : null
     if (!isCurrentProgressRead(plan.id, listRequest, requestVersion, controller)) return
     if (incomingRun && (incomingRun.run.subjectId !== plan.id
       || expectedRunId && incomingRun.run.id !== expectedRunId)) {
@@ -588,9 +591,9 @@ function scheduleProgressRefresh(delay = 4_000) {
   }, delay)
 }
 
-async function refreshProgress(targetPlans = plans.value, listRequest = latestListRequest) {
+async function refreshProgress(targetPlans = plans.value, listRequest = latestListRequest, refreshLessons = true) {
   if (disposed || listRequest !== latestListRequest) return
-  await Promise.allSettled(targetPlans.map(plan => loadProgress(plan, listRequest)))
+  await Promise.allSettled(targetPlans.map(plan => loadProgress(plan, listRequest, refreshLessons)))
   if (disposed || listRequest !== latestListRequest) return
   scheduleProgressRefresh()
 }
@@ -644,14 +647,19 @@ async function loadPlans(background = false) {
     const nextPlans = receivedPlans as TeachingPlan[]
     plans.value = nextPlans
     const currentPlanIds = new Set(nextPlans.map(plan => plan.id))
-    progress.value = Object.fromEntries(Object.entries(progress.value).filter(([planId]) => currentPlanIds.has(planId)))
+    progress.value = Object.fromEntries(nextPlans.map(plan => [plan.id, {
+      run: progress.value[plan.id]?.run ?? null,
+      lesson: mergeLessonProgress(progress.value[plan.id]?.lesson ?? null, plan.lesson ?? null),
+    }]))
     progressErrors.value = Object.fromEntries(Object.entries(progressErrors.value).filter(([planId]) => currentPlanIds.has(planId)))
     for (const planId of [...knownRunIds.keys()]) if (!currentPlanIds.has(planId)) knownRunIds.delete(planId)
     if (startedPlanId.value && startedRunId.value && currentPlanIds.has(startedPlanId.value)) {
       knownRunIds.set(startedPlanId.value, startedRunId.value)
     }
     if (!background) loading.value = false
-    void refreshProgress(nextPlans, request)
+    // During a rolling release an older API may not include the batched lesson field yet.
+    // Keep that compatibility read lightweight by targeting the summary endpoint only.
+    void refreshProgress(nextPlans, request, nextPlans.some(plan => plan.lesson === undefined))
     const ancillaryResult = await ancillary
     if (!isCurrentListRequest(request, controller)) return
     if ('value' in ancillaryResult) {

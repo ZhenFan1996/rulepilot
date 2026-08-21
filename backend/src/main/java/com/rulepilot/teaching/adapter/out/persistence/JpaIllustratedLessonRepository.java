@@ -144,6 +144,44 @@ public class JpaIllustratedLessonRepository implements IllustratedLessonReposito
     }
 
     @Override
+    @Transactional(readOnly = true)
+    public List<ProgressSummary> findLatestProgressSummariesByPlans(Collection<UUID> teachingPlanIds) {
+        if (teachingPlanIds == null || teachingPlanIds.isEmpty()) return List.of();
+        Map<UUID, Object[]> latestByPlan = new LinkedHashMap<>();
+        entityManager
+                .createQuery(
+                        "select l.id, l.teachingPlanId, l.status from IllustratedLessonEntity l "
+                                + "where l.teachingPlanId in :planIds and l.publicationState = 'ACTIVE' "
+                                + "order by l.teachingPlanId, l.createdAt desc, l.id desc",
+                        Object[].class)
+                .setParameter("planIds", teachingPlanIds)
+                .getResultList()
+                .forEach(row -> latestByPlan.putIfAbsent((UUID) row[1], row));
+        if (latestByPlan.isEmpty()) return List.of();
+        Map<UUID, List<IllustratedLesson.EvidenceStatus>> evidenceByLesson = entityManager
+                .createQuery(
+                        "select s.lessonId, s.evidenceStatus from IllustratedLessonSectionEntity s "
+                                + "where s.lessonId in :lessonIds order by s.lessonId, s.position",
+                        Object[].class)
+                .setParameter("lessonIds", latestByPlan.values().stream().map(row -> (UUID) row[0]).toList())
+                .getResultList()
+                .stream()
+                .collect(Collectors.groupingBy(
+                        row -> (UUID) row[0],
+                        LinkedHashMap::new,
+                        Collectors.mapping(
+                                row -> IllustratedLesson.EvidenceStatus.valueOf((String) row[1]),
+                                Collectors.toList())));
+        return latestByPlan.values().stream()
+                .map(row -> new ProgressSummary(
+                        (UUID) row[0],
+                        (UUID) row[1],
+                        IllustratedLesson.LessonStatus.valueOf((String) row[2]),
+                        evidenceByLesson.getOrDefault((UUID) row[0], List.of())))
+                .toList();
+    }
+
+    @Override
     @Transactional
     public void promoteCandidate(UUID teachingPlanId, UUID candidateLessonId) {
         int candidateCount = entityManager.createQuery(
