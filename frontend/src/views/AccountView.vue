@@ -18,7 +18,6 @@ interface AccountUsage {
   platformTokensCharged: number
   platformTokensReserved: number
   personalTokensUsed: number
-  platformTokensRemaining: number
 }
 type GridSlot = 'FAVORITE_GAME' | 'FAVORITE_ART' | 'FAVORITE_DESIGNER' | 'FAVORITE_MECHANISM' | 'FAVORITE_THEME' | 'FAVORITE_PUBLISHER' | 'FAVORITE_EXPANSION' | 'FAVORITE_COMPONENT' | 'WISHLIST_GAME'
 interface GridSelection { slot: GridSlot; bggId: number; gameName: string; chineseName: string; thumbnailUrl: string }
@@ -58,6 +57,9 @@ const slotDefinitions = computed<Array<{ slot: GridSlot; zh: string; en: string;
 
 const connectedModels = computed(() => models.value?.providers.filter((item) => item.configured).length ?? 0)
 const initial = computed(() => session.value?.username.slice(0, 1).toUpperCase() ?? '?')
+const platformTokensRemaining = computed(() => usage.value
+  ? Math.max(0, usage.value.monthlyTokenLimit - usage.value.platformTokensCharged - usage.value.platformTokensReserved)
+  : 0)
 const selectionBySlot = computed(() => new Map(grid.value.map(selection => [selection.slot, selection])))
 const activeSlotDefinition = computed(() => slotDefinitions.value.find(item => item.slot === activeSlot.value) ?? null)
 
@@ -255,7 +257,7 @@ onBeforeUnmount(() => {
         <section v-if="usage" class="mt-8 rounded-xl border border-ink/10 bg-paper p-6">
           <div class="flex items-center justify-between gap-4">
             <div><h2 class="font-display text-2xl font-semibold">{{ locale === 'zh-CN' ? '本月模型额度' : 'Monthly model allowance' }}</h2><p class="mt-1 text-sm text-ink/50">{{ usage.platformAccessEnabled ? (locale === 'zh-CN' ? '正在使用平台额度；自己的 API Key 不扣这里。' : 'Platform allowance is active; BYOK usage is tracked separately.') : (locale === 'zh-CN' ? '平台额度已暂停，可使用自己的 API Key。' : 'Platform allowance is paused; BYOK remains available.') }}</p></div>
-            <p class="font-display text-2xl font-semibold">{{ usage.platformTokensRemaining.toLocaleString() }}</p>
+            <p class="font-display text-2xl font-semibold">{{ platformTokensRemaining.toLocaleString() }}</p>
           </div>
           <div class="mt-4 h-2 overflow-hidden rounded-full bg-canvas"><div class="h-full rounded-full bg-copper" :style="{ width: `${Math.min(100, usage.monthlyTokenLimit ? (usage.platformTokensCharged + usage.platformTokensReserved) / usage.monthlyTokenLimit * 100 : 100)}%` }" /></div>
           <div class="mt-3 flex justify-between text-xs text-ink/45"><span>{{ locale === 'zh-CN' ? `已用 ${usage.platformTokensCharged.toLocaleString()}` : `${usage.platformTokensCharged.toLocaleString()} used` }}</span><span>{{ locale === 'zh-CN' ? `总额 ${usage.monthlyTokenLimit.toLocaleString()}` : `${usage.monthlyTokenLimit.toLocaleString()} total` }}</span></div>

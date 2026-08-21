@@ -1,5 +1,6 @@
 package com.rulepilot.modelconfig;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.UUID;
@@ -50,6 +51,7 @@ public interface ModelAccountQuota {
             LocalDate periodStart,
             long revision) {
 
+        @JsonProperty("platformTokensRemaining")
         public long platformTokensRemaining() {
             return Math.max(0, monthlyTokenLimit - platformTokensCharged - platformTokensReserved);
         }
