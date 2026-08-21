@@ -143,12 +143,15 @@ final class RecommendationActions {
         ObjectNode arguments = json.createObjectNode();
         arguments.put("title", title);
         arguments.put("purpose", NamedGamePurpose.TARGET_GAME.name());
-        ActionOutcome outcome = execute(
-                new ToolCall("explicit-target-fast-path", RESOLVE_TOOL, arguments.toString()),
-                state,
-                request,
-                locale,
-                progress);
+        ActionOutcome outcome;
+        try {
+            outcome = resolve(arguments, state, request, locale, progress, true);
+        } catch (RuntimeException localResolutionFailure) {
+            LOGGER.warn(
+                    "Recommendation explicit-target fast path was skipped ({})",
+                    localResolutionFailure.getClass().getSimpleName());
+            return Optional.empty();
+        }
         if (outcome.response() == null) return Optional.empty();
         ConversationResponse response = outcome.response();
         if (response.outcome() != Outcome.RECOMMENDATIONS) return Optional.of(response);
@@ -376,6 +379,16 @@ final class RecommendationActions {
             ConversationRequest request,
             String locale,
             Consumer<ProgressStage> progress) {
+        return resolve(arguments, state, request, locale, progress, false);
+    }
+
+    private ActionOutcome resolve(
+            JsonNode arguments,
+            RecommendationAgentState state,
+            ConversationRequest request,
+            String locale,
+            Consumer<ProgressStage> progress,
+            boolean localOnly) {
         requireObject(arguments, Set.of("title", "purpose"), Set.of("preferenceUpdates"));
         String title = text(arguments.path("title"), 1, 160);
         if (!playerAuthoredTitle(request, title)) {
@@ -388,7 +401,9 @@ final class RecommendationActions {
         state.referenceResolutionAttempts++;
         progress.accept(ProgressStage.READING_GAME_DETAILS);
         state.catalogCalls++;
-        ReferenceObservation result = runtime.withinDeadline(state, () -> tools.resolveReferenceTitle(groundedTitle));
+        ReferenceObservation result = runtime.withinDeadline(state, () -> localOnly
+                ? tools.resolveLocalReferenceTitle(groundedTitle)
+                : tools.resolveReferenceTitle(groundedTitle));
         state.actions.add("RESOLVE_BGG_REFERENCE");
         result.games().forEach(game -> {
             state.observeCandidate(game.ranking().bggId(), game.ranking().sourceName());

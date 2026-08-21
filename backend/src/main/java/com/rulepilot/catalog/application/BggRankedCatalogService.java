@@ -236,10 +236,7 @@ public class BggRankedCatalogService
     public List<BoardGameRecommendationCatalog.Game> resolveReferenceTitle(String title) {
         String checked = checkedSearch(title);
         List<String> aliases = explicitReferenceAliases(checked);
-        LinkedHashMap<Integer, RankedGame> localExact = new LinkedHashMap<>();
-        for (String alias : aliases) {
-            localExactMatches(alias).forEach(game -> localExact.putIfAbsent(game.bggId(), game));
-        }
+        LinkedHashMap<Integer, RankedGame> localExact = localReferenceMatches(aliases);
         if (localExact.size() > 1) return List.of();
         if (localExact.size() == 1) {
             int bggId = localExact.keySet().iterator().next();
@@ -264,6 +261,33 @@ public class BggRankedCatalogService
         return List.of(ranked
                 .map(value -> recommendationGame(value, details))
                 .orElseGet(() -> recommendationGame(details)));
+    }
+
+    @Override
+    public List<BoardGameRecommendationCatalog.Game> resolveLocalReferenceTitle(String title) {
+        String checked = checkedSearch(title);
+        LinkedHashMap<Integer, RankedGame> localExact = localReferenceMatches(explicitReferenceAliases(checked));
+        if (localExact.size() != 1) return List.of();
+        RankedGame ranked = localExact.values().iterator().next();
+        DiscoveryGame cached = storedDetails(List.of(ranked)).get(ranked.bggId());
+        if (cached != null) {
+            return List.of(recommendationGame(new BrowseGame(ranked, null, cached)));
+        }
+        Optional<BggRankedCatalogRepository.SelectionCandidate> selection = repository
+                .findSelectionsByIds(List.of(ranked.bggId()))
+                .stream()
+                .findFirst();
+        return List.of(selection
+                .map(value -> recommendationGame(ranked, value))
+                .orElseGet(() -> recommendationGame(ranked, (BggRankedCatalogRepository.SelectionCandidate) null)));
+    }
+
+    private LinkedHashMap<Integer, RankedGame> localReferenceMatches(List<String> aliases) {
+        LinkedHashMap<Integer, RankedGame> matches = new LinkedHashMap<>();
+        for (String alias : aliases) {
+            localExactMatches(alias).forEach(game -> matches.putIfAbsent(game.bggId(), game));
+        }
+        return matches;
     }
 
     private List<RankedGame> localExactMatches(String name) {
@@ -375,6 +399,42 @@ public class BggRankedCatalogService
         return new BoardGameRecommendationCatalog.Game(
                 recommendationRanking(ranked),
                 recommendationDetails(details));
+    }
+
+    private BoardGameRecommendationCatalog.Game recommendationGame(
+            RankedGame ranked,
+            BggRankedCatalogRepository.SelectionCandidate selection) {
+        String name = selection == null || selection.sourceName().isBlank()
+                ? ranked.sourceName()
+                : selection.sourceName();
+        String chineseName = selection == null ? "" : selection.chineseName();
+        String thumbnailUrl = selection == null ? "" : selection.thumbnailUrl();
+        String imageUrl = selection == null ? "" : selection.imageUrl();
+        return new BoardGameRecommendationCatalog.Game(
+                recommendationRanking(ranked),
+                new BoardGameRecommendationCatalog.Details(
+                        name,
+                        chineseName,
+                        thumbnailUrl,
+                        null,
+                        null,
+                        null,
+                        null,
+                        List.of(),
+                        List.of(),
+                        null,
+                        null,
+                        null,
+                        null,
+                        "",
+                        "",
+                        null,
+                        null,
+                        List.of(),
+                        List.of(),
+                        List.of(),
+                        "",
+                        imageUrl));
     }
 
     private BoardGameRecommendationCatalog.Game recommendationGame(GameDetails details) {

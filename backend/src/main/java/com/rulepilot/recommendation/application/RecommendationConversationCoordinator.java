@@ -197,17 +197,38 @@ public class RecommendationConversationCoordinator {
 
     private StoredConversation resolveConversation(SessionTurn turn, String owner) {
         if (turn.conversationId() != null) return requireOwned(turn.conversationId(), owner);
-        Optional<StoredConversation> existing = conversations.findLatestOwned(owner);
-        if (existing.isPresent()) return existing.get();
         if (turn.expectedRevision() != 0) {
             throw conflict(Code.REVISION_CONFLICT, "a new recommendation conversation must start at revision zero");
         }
         ConversationRequest request = Objects.requireNonNull(turn.request(), "recommendation request is required");
+        Optional<StoredConversation> latest = conversations.findLatestOwned(owner);
+        if (latest.isPresent()) {
+            StoredConversation existing = latest.orElseThrow();
+            if (belongsToTurn(existing, turn.clientTurnId()) || isUnusedConversation(existing)) {
+                return existing;
+            }
+            return conversations.createNew(
+                    UUID.randomUUID(),
+                    owner,
+                    importedState(request),
+                    clock.instant());
+        }
         return conversations.createIfAbsent(
                 UUID.randomUUID(),
                 owner,
                 importedState(request),
                 clock.instant());
+    }
+
+    private static boolean belongsToTurn(StoredConversation conversation, UUID clientTurnId) {
+        return clientTurnId.equals(conversation.activeClientTurnId())
+                || clientTurnId.equals(conversation.lastClientTurnId());
+    }
+
+    private static boolean isUnusedConversation(StoredConversation conversation) {
+        return conversation.revision() == 0
+                && conversation.activeClientTurnId() == null
+                && conversation.lastClientTurnId() == null;
     }
 
     private StoredConversation claimOrAwait(

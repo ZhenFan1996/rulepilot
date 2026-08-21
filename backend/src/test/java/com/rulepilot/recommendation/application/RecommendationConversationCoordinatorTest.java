@@ -76,6 +76,65 @@ class RecommendationConversationCoordinatorTest {
     }
 
     @Test
+    void startsANewConversationWhenANewTurnHasNoConversationIdentity() {
+        BoardGameRecommendationAgent agent = mock(BoardGameRecommendationAgent.class);
+        when(agent.conversePersisted(any(), eq("zh-CN"), eq("alice"), any(), any()))
+                .thenReturn(response("第一段对话。"), response("新的对话。"));
+        RecommendationConversationCoordinator coordinator = coordinator(agent, new InMemoryStore());
+
+        var first = coordinator.converse(
+                new SessionTurn(null, 0, UUID.randomUUID(), request("第一段")),
+                "zh-CN",
+                "alice",
+                ignored -> {});
+        var second = coordinator.converse(
+                new SessionTurn(null, 0, UUID.randomUUID(), request("新的一段")),
+                "zh-CN",
+                "alice",
+                ignored -> {});
+
+        assertThat(second.conversationId()).isNotEqualTo(first.conversationId());
+        assertThat(second.revision()).isEqualTo(1);
+        assertThat(coordinator.find(first.conversationId(), "alice")).isPresent();
+        assertThat(coordinator.find(second.conversationId(), "alice")).isPresent();
+    }
+
+    @Test
+    void replaysTheSameTurnWithoutAConversationIdentity() {
+        BoardGameRecommendationAgent agent = mock(BoardGameRecommendationAgent.class);
+        when(agent.conversePersisted(any(), eq("en"), eq("alice"), any(), any()))
+                .thenReturn(response("One answer."));
+        RecommendationConversationCoordinator coordinator = coordinator(agent, new InMemoryStore());
+        UUID clientTurnId = UUID.randomUUID();
+        SessionTurn turn = new SessionTurn(null, 0, clientTurnId, request("One request"));
+
+        var first = coordinator.converse(turn, "en", "alice", ignored -> {});
+        var replay = coordinator.converse(turn, "en", "alice", ignored -> {});
+
+        assertThat(replay.conversationId()).isEqualTo(first.conversationId());
+        assertThat(replay.replayed()).isTrue();
+        verify(agent, times(1)).conversePersisted(any(), eq("en"), eq("alice"), any(), any());
+    }
+
+    @Test
+    void usesAnExplicitlyCreatedEmptyConversationForItsFirstTurn() {
+        BoardGameRecommendationAgent agent = mock(BoardGameRecommendationAgent.class);
+        when(agent.conversePersisted(any(), eq("en"), eq("alice"), any(), any()))
+                .thenReturn(response("Started."));
+        RecommendationConversationCoordinator coordinator = coordinator(agent, new InMemoryStore());
+        var empty = coordinator.startNew("alice");
+
+        var completed = coordinator.converse(
+                new SessionTurn(null, 0, UUID.randomUUID(), request("Start here")),
+                "en",
+                "alice",
+                ignored -> {});
+
+        assertThat(completed.conversationId()).isEqualTo(empty.conversationId());
+        assertThat(completed.revision()).isEqualTo(1);
+    }
+
+    @Test
     void carriesVerifiedCandidateFactsIntoLaterTurnsWithoutTrustingTheBrowserToReplayThem() {
         BoardGameRecommendationAgent agent = mock(BoardGameRecommendationAgent.class);
         Game verified = verifiedGame();

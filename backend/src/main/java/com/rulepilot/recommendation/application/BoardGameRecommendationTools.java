@@ -107,8 +107,18 @@ public class BoardGameRecommendationTools {
     }
 
     ReferenceObservation resolveReferenceTitle(String title) {
+        return resolveReferenceTitle(title, false);
+    }
+
+    ReferenceObservation resolveLocalReferenceTitle(String title) {
+        return resolveReferenceTitle(title, true);
+    }
+
+    private ReferenceObservation resolveReferenceTitle(String title, boolean localOnly) {
         try {
-            List<Game> games = catalog.resolveReferenceTitle(title);
+            List<Game> games = localOnly
+                    ? catalog.resolveLocalReferenceTitle(title)
+                    : catalog.resolveReferenceTitle(title);
             boolean complete = games.size() == 1 && games.getFirst().details() != null;
             return new ReferenceObservation(
                     complete ? ToolStatus.SUCCESS : ToolStatus.PARTIAL,
@@ -117,7 +127,9 @@ public class BoardGameRecommendationTools {
         } catch (IllegalArgumentException exception) {
             return new ReferenceObservation(ToolStatus.ERROR, List.of(), "INVALID_ARGUMENT");
         } catch (RuntimeException exception) {
-            LOGGER.warn("Recommendation reference-title resolution failed");
+            LOGGER.warn(localOnly
+                    ? "Recommendation local reference-title resolution failed"
+                    : "Recommendation reference-title resolution failed");
             return new ReferenceObservation(ToolStatus.ERROR, List.of(), "CATALOG_UNAVAILABLE");
         }
     }

@@ -354,6 +354,8 @@ cleanup() {
 		cancel_run "$lesson_run_id"
 		cancel_run "$preparation_run_id"
 		wait_for_cancelled_run "$visual_run_id"
+		wait_for_cancelled_run "$lesson_run_id"
+		wait_for_cancelled_run "$preparation_run_id"
 		if [ -n "$document_id" ]; then
 			if curl --silent --show-error --output /dev/null \
 				--connect-timeout 5 --max-time 60 \

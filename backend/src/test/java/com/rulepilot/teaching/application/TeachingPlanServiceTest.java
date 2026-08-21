@@ -539,6 +539,22 @@ class TeachingPlanServiceTest {
     }
 
     @Test
+    void unboundPlanUsesTheSourceConfirmedGameIdentityInsteadOfTheUploadLabel() {
+        OutlineDraft inferred = TeachingPlanService.withGameTitle(
+                "Harbor Nova", outline(List.of(topic("setup", List.of("setup"), List.of(1)))));
+
+        OutlineDraft selected = TeachingPlanService.preferDocumentTitle(
+                "Harbor Nova rulebook EN v4 12pages",
+                inferred,
+                List.of(
+                        new PageInput(1, "Harbor Nova - Original Demonstration Rules"),
+                        new PageInput(2, "SETUP")));
+
+        assertThat(selected.gameTitle()).isEqualTo("Harbor Nova");
+        assertThat(selected.topics()).isEqualTo(inferred.topics());
+    }
+
+    @Test
     void visualOnlyCoverageIsStructuralWhileTextCoverageGetsOneModelRevisionOpportunity() {
         assertThat(TeachingPlanService.requiresModelSourcePageCoverageRevision(true)).isFalse();
         assertThat(TeachingPlanService.requiresModelSourcePageCoverageRevision(false)).isTrue();
