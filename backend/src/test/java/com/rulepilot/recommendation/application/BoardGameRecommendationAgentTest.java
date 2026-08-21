@@ -5652,6 +5652,14 @@ class BoardGameRecommendationAgentTest {
         }
 
         @Override
+        public List<Game> resolveLocalReferenceTitle(String title) {
+            calls++;
+            lastResolvedTitle = title;
+            Integer id = names.get(title);
+            return id == null ? List.of() : List.of(games.get(id));
+        }
+
+        @Override
         public List<Game> findGamesByIds(List<Integer> bggIds) {
             calls++;
             return bggIds.stream().map(games::get).filter(java.util.Objects::nonNull).toList();

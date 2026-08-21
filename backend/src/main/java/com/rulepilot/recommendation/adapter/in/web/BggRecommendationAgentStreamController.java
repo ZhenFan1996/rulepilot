@@ -130,10 +130,13 @@ public class BggRecommendationAgentStreamController {
                     .data(presented));
             emitter.complete();
         } catch (RuntimeException | IOException exception) {
-            LOGGER.warn("Recommendation stream did not complete: {}", exception.getClass().getSimpleName());
             String code = exception instanceof RecommendationConversationException conversationFailure
                     ? conversationFailure.code().name().toLowerCase(Locale.ROOT)
                     : "recommendation_unavailable";
+            LOGGER.warn(
+                    "Recommendation stream did not complete: type={}, code={}",
+                    exception.getClass().getSimpleName(),
+                    code);
             sendError(emitter, open, code);
         }
     }

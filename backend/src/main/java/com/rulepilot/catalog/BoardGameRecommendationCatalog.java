@@ -25,6 +25,14 @@ public interface BoardGameRecommendationCatalog {
                 .orElseGet(List::of);
     }
 
+    /**
+     * Resolves an exact player-selected title from already stored catalog evidence only.
+     * Implementations must not perform a remote metadata call on this latency-sensitive path.
+     */
+    default List<Game> resolveLocalReferenceTitle(String title) {
+        return List.of();
+    }
+
     default Optional<Game> findGameById(int bggId) {
         return findGamesByIds(List.of(bggId)).stream().findFirst();
     }

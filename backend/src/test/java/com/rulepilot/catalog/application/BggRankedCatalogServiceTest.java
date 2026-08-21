@@ -152,6 +152,23 @@ class BggRankedCatalogServiceTest {
     }
 
     @Test
+    void resolvesAnExplicitlySelectedLocalTitleWithoutCallingBgg() {
+        MemoryRepository repository = new MemoryRepository();
+        FakeBgg bgg = new FakeBgg();
+        BggRankedCatalogService service = new BggRankedCatalogService(repository, bgg);
+
+        var result = service.resolveLocalReferenceTitle("白塔庭院（Game 20）");
+
+        assertThat(result).singleElement().satisfies(game -> {
+            assertThat(game.ranking().bggId()).isEqualTo(20);
+            assertThat(game.details().officialChineseName()).isEqualTo("白塔庭院");
+            assertThat(game.details().imageUrl()).isEqualTo("https://example.test/20-full.jpg");
+        });
+        assertThat(bgg.searchQueries).isEmpty();
+        assertThat(bgg.detailIds).isEmpty();
+    }
+
+    @Test
     void resolvesOneExplicitBilingualTitlePairThroughItsLocallyRankedCanonicalAlias() {
         MemoryRepository repository = new MemoryRepository();
         FakeBgg bgg = new FakeBgg();
@@ -276,6 +293,20 @@ class BggRankedCatalogServiceTest {
                             "https://example.test/20-thumb.jpg",
                             "https://example.test/20-full.jpg"))
                     : List.of();
+        }
+
+        @Override
+        public List<SelectionCandidate> findSelectionsByIds(List<Integer> bggIds) {
+            return bggIds.stream()
+                    .filter(id -> id == 10 || id == 20 || id == 30)
+                    .map(id -> new SelectionCandidate(
+                            id,
+                            id == 30 ? "碁" : "Game " + id,
+                            id == 20 ? "白塔庭院" : "",
+                            2026,
+                            "https://example.test/" + id + "-thumb.jpg",
+                            "https://example.test/" + id + "-full.jpg"))
+                    .toList();
         }
 
         private RankedGame game(int id, int rank) {
