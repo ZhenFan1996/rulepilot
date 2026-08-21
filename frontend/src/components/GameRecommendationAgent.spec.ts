@@ -755,10 +755,19 @@ describe('GameRecommendationAgent', () => {
     expect(wrapper.text()).toContain('体验资料查证')
     expect(wrapper.text()).not.toContain('本轮 Agent 轨迹')
     expect(wrapper.findAll('[data-testid="assistant-recommendation-turn"]')).toHaveLength(2)
+
+    await wrapper.get('textarea').setValue('设计师 Reiner Knizia 还有哪些作品？')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    expect(requests[3]).toMatchObject({
+      message: '设计师 Reiner Knizia 还有哪些作品？',
+      focusedBggId: null,
+    })
+
     await wrapper.findAll('button').find(button => button.text() === '换一批')!.trigger('click')
     await flushPromises()
-    expect(requests).toHaveLength(4)
-    expect(requests[3]).toMatchObject({ message: '换一批', excludedBggIds: [266192] })
+    expect(requests).toHaveLength(5)
+    expect(requests[4]).toMatchObject({ message: '换一批', excludedBggIds: [266192] })
   })
 
   it('accepts a natural-language turn with CSRF while preserving a truthful no-match result', async () => {

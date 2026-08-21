@@ -31,7 +31,7 @@ public class BoardGameRecommendationAgent {
     static final String COMPARE_TOOL = "compare_candidates";
     static final String NO_MATCH_TOOL = "report_no_match";
     static final String RECOMMEND_TOOL = "recommend_games";
-    static final String PROMPT_VERSION = "recommendation-agent-v13-localized-partial-comparison";
+    static final String PROMPT_VERSION = "recommendation-agent-v14-persistent-memory-reference-scope";
 
     private final RecommendationReActLoop loop;
 
@@ -79,6 +79,18 @@ public class BoardGameRecommendationAgent {
         return loop.validate(input);
     }
 
+    ConversationResponse conversePersisted(
+            ConversationRequest validatedRequestWithServerMemory,
+            String requestedLocale,
+            String modelConfigurationOwner,
+            Consumer<ProgressUpdate> progressListener) {
+        return loop.converseValidated(
+                validatedRequestWithServerMemory,
+                requestedLocale,
+                modelConfigurationOwner,
+                progressListener);
+    }
+
     public record ConversationRequest(
             RecommendationProfile profile,
             String message,
@@ -86,9 +98,21 @@ public class BoardGameRecommendationAgent {
             List<DialogueMessage> transcript,
             Integer focusedBggId,
             List<KnownGame> knownGames,
-            List<Integer> shownBggIds) {
+            List<Integer> shownBggIds,
+            List<Game> priorVerifiedGames) {
         public ConversationRequest(RecommendationProfile profile, String message) {
-            this(profile, message, List.of(), List.of(), null, List.of(), List.of());
+            this(profile, message, List.of(), List.of(), null, List.of(), List.of(), List.of());
+        }
+
+        public ConversationRequest(
+                RecommendationProfile profile,
+                String message,
+                List<Integer> excludedBggIds,
+                List<DialogueMessage> transcript,
+                Integer focusedBggId,
+                List<KnownGame> knownGames,
+                List<Integer> shownBggIds) {
+            this(profile, message, excludedBggIds, transcript, focusedBggId, knownGames, shownBggIds, List.of());
         }
 
         public ConversationRequest {
@@ -96,6 +120,7 @@ public class BoardGameRecommendationAgent {
             transcript = transcript == null ? List.of() : List.copyOf(transcript);
             knownGames = knownGames == null ? List.of() : List.copyOf(knownGames);
             shownBggIds = shownBggIds == null ? List.of() : List.copyOf(shownBggIds);
+            priorVerifiedGames = priorVerifiedGames == null ? List.of() : List.copyOf(priorVerifiedGames);
         }
     }
 

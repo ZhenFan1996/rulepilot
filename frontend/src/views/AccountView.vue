@@ -80,8 +80,8 @@ function displayName(selection: GridSelection) {
   return locale.value === 'zh-CN' && selection.chineseName ? selection.chineseName : selection.gameName
 }
 
-function coverImage(game: Pick<GridSelection, 'imageUrl' | 'thumbnailUrl'>) {
-  return game.imageUrl || game.thumbnailUrl
+function coverImage(game: Pick<GridSelection, 'bggId' | 'imageUrl' | 'thumbnailUrl'>) {
+  return game.imageUrl || game.thumbnailUrl ? `/api/v1/bgg/catalog/covers/${game.bggId}/image` : ''
 }
 
 function catalogDisplayName(game: CatalogGame) {

@@ -399,6 +399,10 @@ function playerTime(game: CatalogGame) {
   return values.join(' · ')
 }
 
+function coverImageUrl(game: CatalogGame) {
+  return `/api/v1/bgg/catalog/covers/${game.bggId}/image`
+}
+
 function hideBrokenImage(game: CatalogGame) {
   games.value = games.value.map(candidate => candidate.bggId === game.bggId ? { ...candidate, thumbnailUrl: '' } : candidate)
 }
@@ -496,7 +500,7 @@ onBeforeUnmount(() => {
           <article v-for="(game, index) in games" :key="game.bggId" class="game-tile group min-w-0 p-3">
             <RouterLink :to="{ name: 'game-discovery', params: { bggId: game.bggId } }" class="block">
               <div class="relative flex aspect-[4/3] items-center justify-center overflow-hidden rounded-lg border border-ink/6 bg-canvas p-3 text-ink/25">
-                <img v-if="game.thumbnailUrl" :key="`${game.bggId}-${game.thumbnailUrl}`" :src="game.thumbnailUrl" :alt="t('coverAlt', { game: game.name })" :loading="index < 4 ? 'eager' : 'lazy'" :fetchpriority="index < 4 ? 'high' : 'auto'" decoding="async" referrerpolicy="no-referrer" class="h-full w-full object-contain" @error="hideBrokenImage(game)">
+                <img v-if="game.thumbnailUrl" :key="`${game.bggId}-${game.thumbnailUrl}`" :src="coverImageUrl(game)" :alt="t('coverAlt', { game: game.name })" :loading="index < 4 ? 'eager' : 'lazy'" :fetchpriority="index < 4 ? 'high' : 'auto'" decoding="async" class="h-full w-full object-contain" @error="hideBrokenImage(game)">
                 <TabletopGlyph v-else name="cards" :size="48" />
                 <span v-if="game.hotRank" class="absolute left-2 top-2 rounded-full bg-copper px-2.5 py-1 text-xs font-bold text-white">{{ t('hotRank', { rank: game.hotRank }) }}</span>
               </div>

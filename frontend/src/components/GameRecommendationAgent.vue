@@ -636,7 +636,10 @@ function submitMessage() {
   }
   loginGateVisible.value = false
   draft.value = ''
-  void sendTurn(message, profile.value, message, [], activeFocusedBggId.value)
+  // A card or journey selected in the UI is not a linguistic reference in a later free-form turn.
+  // The transcript still lets the Agent resolve real continuations such as “它呢？”, while an
+  // explicit new person, game, or topic is no longer structurally pinned to the old selection.
+  void sendTurn(message, profile.value, message, [], null)
 }
 
 function moreGames(turnResponse?: RecommendationAgentResponse) {

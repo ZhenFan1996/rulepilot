@@ -33,6 +33,10 @@ merely to satisfy a checklist.
   never send source code, credentials, personal data, user uploads, raw model output, or copyrighted rulebook text.
 - For repository, PR, Issue, review, or CI state, reuse the connected GitHub plugin rather than adding another GitHub
   MCP or treating stale local metadata as authoritative.
+- The installed GitHub connector is read-only for this repository: its PR-write endpoint returns GitHub integration
+  scope 403. Use it for inspection, but use the already authenticated `gh` CLI directly for PR creation, merge, and
+  workflow writes; do not probe connector writes before every publish. Push local commits over SSH because HTTPS Git
+  transport is unreliable in this workspace.
 - For actual page state, browser interaction, accessibility, or authenticated UI behavior, use the connected Browser
   or Chrome capability for inspection and keep project Playwright tests as the reproducible acceptance evidence.
 - If a relevant server is missing or unhealthy, check `codex mcp list` (or `/mcp` in the TUI), then run its focused

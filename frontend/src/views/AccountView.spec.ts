@@ -31,7 +31,7 @@ describe('AccountView board game nine', () => {
     const wrapper = mount(AccountView, { global: { plugins: [router], stubs: { AppShell: { template: '<div><slot /></div>' } } } })
     await flushPromises()
 
-    expect(wrapper.get('img[alt="卡坦岛"]').attributes('src')).toBe('https://images.example/catan-full.jpg')
+    expect(wrapper.get('img[alt="卡坦岛"]').attributes('src')).toBe('/api/v1/bgg/catalog/covers/13/image')
     expect(wrapper.text()).toContain('最爱的桌游')
     expect(wrapper.text()).not.toContain('最舒服的人数')
     await wrapper.get('button[aria-label^="最喜欢的美术"]').trigger('click')
@@ -41,7 +41,7 @@ describe('AccountView board game nine', () => {
     expect(paths.some(path => path.includes('q=%E5%B9%BD%E6%B8%AF'))).toBe(true)
     expect(paths.some(path => path.startsWith('/api/v1/bgg/catalog?'))).toBe(false)
     expect(wrapper.text()).toContain('幽港迷城')
-    expect(wrapper.get('img[alt="幽港迷城"]').attributes('src')).toBe('https://images.example/gloomhaven-full.jpg')
+    expect(wrapper.get('img[alt="幽港迷城"]').attributes('src')).toBe('/api/v1/bgg/catalog/covers/174430/image')
     vi.useRealTimers()
   })
 
@@ -119,6 +119,6 @@ describe('AccountView board game nine', () => {
     resolveCovers(Response.json([{ bggId: 342942, thumbnailUrl: 'https://example.test/ark-nova.jpg', imageUrl: '' }]))
     await flushPromises()
 
-    expect(wrapper.get('img[alt="方舟动物园"]').attributes('src')).toBe('https://example.test/ark-nova.jpg')
+    expect(wrapper.get('img[alt="方舟动物园"]').attributes('src')).toBe('/api/v1/bgg/catalog/covers/342942/image')
   })
 })

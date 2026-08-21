@@ -100,6 +100,21 @@ class CachedBoardGameGeekCatalogTest {
     }
 
     @Test
+    void persistsFetchedCoverMetadataAcrossAdapterRestarts() {
+        BggXmlApiClient live = mock(BggXmlApiClient.class);
+        MemoryCache cache = new MemoryCache();
+        when(live.gameDetails(List.of(9))).thenReturn(List.of(discovery(9, "Loaded Nine")));
+
+        assertThat(adapter(live, cache).gameDetails(List.of(9)).getFirst().thumbnailUrl())
+                .isEqualTo("https://example.test/9.jpg");
+        assertThat(adapter(live, cache).gameDetails(List.of(9)).getFirst().thumbnailUrl())
+                .isEqualTo("https://example.test/9.jpg");
+
+        verify(live, times(1)).gameDetails(List.of(9));
+        assertThat(cache.discovery).containsKey(9);
+    }
+
+    @Test
     void fallsBackToTheLiveSourceWhenThePersistentCacheCannotBeReadOrWritten() {
         BggXmlApiClient live = mock(BggXmlApiClient.class);
         BggMetadataCache unavailable = mock(BggMetadataCache.class);

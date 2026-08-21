@@ -139,7 +139,7 @@ describe('GameRecommendationsView', () => {
     resolveCovers(Response.json([{ bggId: 266192, thumbnailUrl: 'https://example.test/fresh-cover.jpg', imageUrl: '' }]))
     await flushPromises()
 
-    expect(wrapper.get('img[alt="展翅翱翔 的 BGG 封面"]').attributes('src')).toBe('https://example.test/fresh-cover.jpg')
+    expect(wrapper.get('img[alt="展翅翱翔 的 BGG 封面"]').attributes('src')).toBe('/api/v1/bgg/catalog/covers/266192/image')
   })
 
   it('sends rating and BGG type filters to the server-side catalog query', async () => {

@@ -93,10 +93,15 @@ class PostgresRecommendationConversationStoreTest {
                         startedAt.minusSeconds(60)))
                 .isTrue();
 
-        ConversationState completedState = state(List.of(
-                new DialogueMessage("user", "四个人，九十分钟"),
-                new DialogueMessage("assistant", "我记住了这组条件。")));
         ConversationResponse response = response("我记住了这组条件。");
+        ConversationState completedState = new ConversationState(
+                RecommendationProfile.empty(),
+                List.of(
+                        new DialogueMessage("user", "四个人，九十分钟"),
+                        new DialogueMessage("assistant", "我记住了这组条件。")),
+                List.of(),
+                List.of(301),
+                List.of(response.games().getFirst().game()));
         assertThat(store.completeTurn(
                         conversationId,
                         "alice",
@@ -115,6 +120,9 @@ class PostgresRecommendationConversationStoreTest {
         var restored = restarted.findOwned(conversationId, "alice").orElseThrow();
         assertThat(restored.revision()).isEqualTo(1);
         assertThat(restored.state()).isEqualTo(completedState);
+        assertThat(restored.state().verifiedGames())
+                .extracting(game -> game.ranking().bggId())
+                .containsExactly(301);
         assertThat(restored.lastClientTurnId()).isEqualTo(clientTurnId);
         assertThat(restored.lastResponse()).isEqualTo(response);
         assertThat(restored.lastResponseLocale()).isEqualTo("zh-CN");

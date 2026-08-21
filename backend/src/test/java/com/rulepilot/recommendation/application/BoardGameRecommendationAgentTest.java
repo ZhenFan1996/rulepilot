@@ -190,7 +190,9 @@ class BoardGameRecommendationAgentTest {
 
         var response = agent(model, catalog, noResearch()).converse(
                 new ConversationRequest(RecommendationProfile.empty(), "别只给三款，我现在想先看五个不同方向。"),
-                "zh-CN");
+                "zh-CN",
+                null,
+                ignored -> {});
 
         assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
         assertThat(response.games()).extracting(game -> game.game().ranking().bggId())
@@ -243,7 +245,9 @@ class BoardGameRecommendationAgentTest {
                         null,
                         List.of(),
                         List.of(60, 61)),
-                "zh-CN");
+                "zh-CN",
+                null,
+                ignored -> {});
 
         assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
         assertThat(response.games()).extracting(game -> game.game().ranking().bggId())
@@ -506,6 +510,8 @@ class BoardGameRecommendationAgentTest {
             assertThat(request.messages().getFirst().content())
                     .contains(
                             "ordinary conversation, greetings, acknowledgements, reactions, and explicit pauses use reply_to_user",
+                            "Treat an explicit entity in the current turn as the current subject",
+                            "resolve pronouns and elliptical continuations from recentConversation",
                             "Recommendation cards are an Agent decision");
             assertThat(request.toolChoice()).isEqualTo(ToolChoice.REQUIRED);
             assertThat(request.messages().get(1).content())
@@ -1734,7 +1740,7 @@ class BoardGameRecommendationAgentTest {
     @Test
     void preservesPlayerAndDurationRangesAsAtomicGroundedPreferenceUpdates() {
         assertThat(BoardGameRecommendationAgent.PROMPT_VERSION)
-                .isEqualTo("recommendation-agent-v13-localized-partial-comparison");
+                .isEqualTo("recommendation-agent-v14-persistent-memory-reference-scope");
         assertThat(BoardGameRecommendationAgent.class.getResource(
                         "/prompts/recommendation-agent-v1-system.txt"))
                 .as("the production-replayed v1 prompt remains reproducible after activating v2")
@@ -3241,6 +3247,44 @@ class BoardGameRecommendationAgentTest {
         assertThat(response.harness().catalogCalls()).isEqualTo(1);
         assertThat(response.harness().actions()).containsExactly(
                 "LOOKUP_BGG_CANDIDATES", "REPLY_TO_USER");
+    }
+
+    @Test
+    void reusesPersistedVerifiedFactsForAPronounContinuationWithoutRepeatingCatalogReads() {
+        TrackingCatalog catalog = catalog();
+        Game remembered = catalog.games.get(60);
+        ScriptedModel model = new ScriptedModel(List.of(request -> {
+            assertThat(request.messages().get(1).content())
+                    .contains("它主要是什么机制", "restoredRunMemory", "Pattern Building");
+            assertThat(request.tools()).extracting(ToolSpec::name)
+                    .doesNotContain(BoardGameRecommendationAgent.LOOKUP_TOOL);
+            return action(
+                    "reply-from-memory",
+                    BoardGameRecommendationAgent.REPLY_TOOL,
+                    "{\"message\":\"上一轮已核验的资料里，它的机制包括图案构筑。\",\"referencedBggIds\":[60]}");
+        }));
+
+        var response = agent(model, catalog, noResearch()).conversePersisted(
+                new ConversationRequest(
+                        RecommendationProfile.empty(),
+                        "它主要是什么机制？",
+                        List.of(),
+                        List.of(
+                                new DialogueMessage("assistant", "可以继续聊玻璃果园。"),
+                                new DialogueMessage("user", "它主要是什么机制？")),
+                        null,
+                        List.of(new BoardGameRecommendationAgent.KnownGame(60, "玻璃果园", "Glass Orchard")),
+                        List.of(60),
+                        List.of(remembered)),
+                "zh-CN",
+                null,
+                ignored -> {});
+
+        assertThat(response.outcome()).isEqualTo(Outcome.CONVERSATION);
+        assertThat(response.assistantMessage()).contains("图案构筑");
+        assertThat(response.harness().modelCalls()).isEqualTo(1);
+        assertThat(response.harness().catalogCalls()).isZero();
+        assertThat(catalog.calls).isZero();
     }
 
     @Test

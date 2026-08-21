@@ -73,6 +73,7 @@ final class RecommendationAgentState {
         webResearchAvailable = webResearchConfigured;
         request.knownGames().forEach(game -> observeCandidate(
                 game.bggId(), game.originalName().isBlank() ? game.name() : game.originalName()));
+        request.priorVerifiedGames().forEach(this::addVerified);
         legalIds.addAll(request.shownBggIds());
         if (request.focusedBggId() != null) legalIds.add(request.focusedBggId());
     }
