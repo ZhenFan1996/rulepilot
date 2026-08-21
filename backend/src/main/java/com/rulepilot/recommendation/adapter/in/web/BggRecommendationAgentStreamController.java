@@ -68,7 +68,19 @@ public class BggRecommendationAgentStreamController {
         emitter.onTimeout(() -> open.set(false));
         emitter.onError(ignored -> open.set(false));
         sendProgress(emitter, open, new ProgressUpdate(
-                BoardGameRecommendationAgent.ProgressStage.UNDERSTANDING_REQUEST, 0));
+                BoardGameRecommendationAgent.ProgressStage.UNDERSTANDING_REQUEST,
+                BoardGameRecommendationAgent.ProgressPhase.STARTED,
+                BoardGameRecommendationAgent.ProgressAction.UNDERSTAND_REQUEST,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0));
         if (!open.get()) return emitter;
         try {
             String modelConfigurationOwner = principal.getName();
@@ -122,7 +134,8 @@ public class BggRecommendationAgentStreamController {
     }
 
     private void sendAgentProgress(SseEmitter emitter, AtomicBoolean open, ProgressUpdate update) {
-        if (update.stage() == BoardGameRecommendationAgent.ProgressStage.UNDERSTANDING_REQUEST) return;
+        if (update.stage() == BoardGameRecommendationAgent.ProgressStage.UNDERSTANDING_REQUEST
+                && update.phase() == BoardGameRecommendationAgent.ProgressPhase.STARTED) return;
         sendProgress(emitter, open, update);
     }
 
@@ -134,7 +147,16 @@ public class BggRecommendationAgentStreamController {
                     .name("progress")
                     .data(new ProgressResponse(
                             update.stage().name().toLowerCase(Locale.ROOT),
+                            update.phase().name().toLowerCase(Locale.ROOT),
+                            update.action() == null
+                                    ? null
+                                    : update.action().name().toLowerCase(Locale.ROOT),
                             update.elapsedMs(),
+                            update.decisionCycle(),
+                            update.modelCalls(),
+                            update.actionCalls(),
+                            update.catalogCalls(),
+                            update.webResearchCalls(),
                             update.observedCandidates(),
                             update.verifiedCandidates(),
                             update.hardRejectedCandidates(),
@@ -160,7 +182,14 @@ public class BggRecommendationAgentStreamController {
 
     record ProgressResponse(
             String stage,
+            String phase,
+            String action,
             long elapsedMs,
+            int decisionCycle,
+            int modelCalls,
+            int actionCalls,
+            int catalogCalls,
+            int webResearchCalls,
             int observedCandidates,
             int verifiedCandidates,
             int hardRejectedCandidates,

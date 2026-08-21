@@ -932,6 +932,12 @@ describe('GameRecommendationAgent', () => {
     expect(recommendationTurns[0]!.text()).toContain('先给你一组有共同机制的候选')
     expect(recommendationTurns[0]!.text()).toContain('展翅翱翔')
     expect(recommendationTurns[0]!.text()).toContain('完整目录按标题找候选')
+    const audit = recommendationTurns[0]!.get('[data-testid="recommendation-execution-audit"]')
+    expect(audit.text()).toContain('查看本轮 Agent 执行记录')
+    expect(audit.text()).toContain('判断 4 轮')
+    expect(audit.text()).toContain('BGG 2 次')
+    expect(audit.text()).toContain('按候选标题搜索 BGG')
+    expect(audit.text()).toContain('不包含隐藏提示词、敏感参数或模型私有思维链')
     const conversationTurns = wrapper.findAll('[data-testid="assistant-conversation-turn"]')
     expect(conversationTurns.at(-1)?.text()).toContain('沿着刚才的方向继续聊')
     expect(conversationTurns.at(-1)?.text()).not.toContain('展翅翱翔')
@@ -1105,7 +1111,7 @@ describe('GameRecommendationAgent', () => {
     expect(restored.text()).not.toContain('上次已核对候选：Wingspan')
   })
 
-  it('keeps a structured comparison in the same conversation and carries its candidates into the next turn', async () => {
+  it('shows a natural comparison without rendering the evidence table and keeps candidates in context', async () => {
     const requests: Array<Record<string, unknown>> = []
     let turn = 0
     const secondGame = { ...game, bggId: 77, name: 'Loom City', originalName: 'Loom City', nameLocalized: false }
@@ -1116,7 +1122,7 @@ describe('GameRecommendationAgent', () => {
       if (turn === 1) {
         return Response.json({
           outcome: 'conversation', mode: 'model_assisted',
-          assistantMessage: 'I put these candidates side by side and kept the unsupported axis unknown.',
+          assistantMessage: 'For the tighter time window, I would pick Loom City: its listed range is 45–60 minutes, while Wingspan is 40–70. Actual table feel is still unknown for both, so that could reverse the choice once we have attributed play reports.',
           profile: baseProfile, clarification: null, sourceCount: 0, candidatesEvaluated: 2, games: [],
           comparison: {
             candidates: [
@@ -1153,10 +1159,10 @@ describe('GameRecommendationAgent', () => {
     await wrapper.get('form').trigger('submit')
     await flushPromises()
 
-    expect(wrapper.get('[data-testid="candidate-comparison"]').text()).toContain('Side-by-side check')
-    expect(wrapper.text()).toContain('Wingspan')
-    expect(wrapper.text()).toContain('Loom City')
-    expect(wrapper.text().match(/Unknown from the available evidence/g)).toHaveLength(2)
+    expect(wrapper.find('[data-testid="candidate-comparison"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('I would pick Loom City')
+    expect(wrapper.text()).toContain('Wingspan is 40–70')
+    expect(wrapper.text()).toContain('Actual table feel is still unknown for both')
     expect(wrapper.text()).toContain('今晚想玩什么？')
 
     await wrapper.get('textarea').setValue('Keep those two and tell me what evidence would resolve the unknown.')
@@ -1509,7 +1515,7 @@ describe('GameRecommendationAgent', () => {
     expect(document.body.querySelector('[data-testid="lesson-dialog-stub"]')?.textContent).toBe('plan-1')
   })
 
-  it('shows only progress stages actually reported by the recommendation stream', async () => {
+  it('shows the real action phases and repeated decision cycles reported by the stream', async () => {
     vi.useFakeTimers()
     const encoder = new TextEncoder()
     let streamController: ReadableStreamDefaultController<Uint8Array> | undefined
@@ -1528,23 +1534,25 @@ describe('GameRecommendationAgent', () => {
     expect(wrapper.get('[data-testid="player-work-status"]').text()).toBe('正在查找桌游')
     expect(wrapper.get('[role="status"]').text()).toContain('收到，接着聊下去')
 
-    streamController?.enqueue(encoder.encode('event: progress\ndata: {"stage":"searching_bgg_catalog","elapsedMs":120}\n\n'))
+    streamController?.enqueue(encoder.encode('event: progress\ndata: {"stage":"searching_bgg_catalog","phase":"started","action":"browse_bgg_catalog","elapsedMs":120,"decisionCycle":1,"modelCalls":1,"actionCalls":1,"catalogCalls":1}\n\n'))
     await flushPromises()
     expect(wrapper.get('[role="status"]').text()).toContain('正在桌游目录里查找')
-    expect(wrapper.get('[data-testid="recommendation-progress-steps"]').text()).toContain('正在桌游目录里查找')
+    expect(wrapper.get('[data-testid="recommendation-progress-steps"]').text()).toContain('第 1 轮 · 开始：按当前条件浏览 BGG 候选')
 
-    streamController?.enqueue(encoder.encode('event: progress\ndata: {"stage":"verifying_bgg_candidates","elapsedMs":180}\n\n'))
+    streamController?.enqueue(encoder.encode('event: progress\ndata: {"stage":"searching_bgg_catalog","phase":"completed","action":"browse_bgg_catalog","elapsedMs":170,"decisionCycle":1,"modelCalls":1,"actionCalls":1,"catalogCalls":1,"observedCandidates":8,"verifiedCandidates":5,"hardRejectedCandidates":2}\n\n'))
+    streamController?.enqueue(encoder.encode('event: progress\ndata: {"stage":"verifying_bgg_candidates","phase":"started","action":"lookup_bgg_games","elapsedMs":180,"decisionCycle":2,"modelCalls":2,"actionCalls":2,"catalogCalls":2,"observedCandidates":8,"verifiedCandidates":5,"hardRejectedCandidates":2}\n\n'))
     await flushPromises()
     const reportedSteps = wrapper.get('[data-testid="recommendation-progress-steps"]')
-    expect(reportedSteps.text()).toContain('正在桌游目录里查找')
-    expect(reportedSteps.text()).toContain('正在核对人数、时长和玩法')
-    expect(reportedSteps.findAll('li')).toHaveLength(2)
-
-    streamController?.enqueue(encoder.encode('event: progress\ndata: {"stage":"selecting_tools","elapsedMs":220}\n\n'))
-    streamController?.enqueue(encoder.encode('event: progress\ndata: {"stage":"selecting_tools","elapsedMs":230}\n\n'))
-    await flushPromises()
+    expect(reportedSteps.text()).toContain('第 1 轮 · 完成：按当前条件浏览 BGG 候选')
+    expect(reportedSteps.text()).toContain('第 2 轮 · 开始：读取候选的 BGG 人数、时长与机制详情')
+    expect(reportedSteps.text()).toContain('BGG 2 次 / 公开资料 0 次')
     expect(reportedSteps.findAll('li')).toHaveLength(3)
-    expect(reportedSteps.findAll('li').at(-1)?.text()).toContain('正在确认下一步该核对什么')
+
+    streamController?.enqueue(encoder.encode('event: progress\ndata: {"stage":"selecting_tools","phase":"started","action":"choose_next_action","elapsedMs":220,"decisionCycle":3,"modelCalls":3,"actionCalls":2,"catalogCalls":2}\n\n'))
+    streamController?.enqueue(encoder.encode('event: progress\ndata: {"stage":"selecting_tools","phase":"completed","action":"choose_next_action","elapsedMs":230,"decisionCycle":3,"modelCalls":3,"actionCalls":2,"catalogCalls":2}\n\n'))
+    await flushPromises()
+    expect(reportedSteps.findAll('li')).toHaveLength(5)
+    expect(reportedSteps.findAll('li').at(-1)?.text()).toContain('第 3 轮 · 完成：判断下一步是直接回答、查 BGG、查公开资料还是整理结果')
 
     await vi.advanceTimersByTimeAsync(8_000)
     expect(wrapper.get('[role="status"]').text()).toContain('正在确认下一步该核对什么')

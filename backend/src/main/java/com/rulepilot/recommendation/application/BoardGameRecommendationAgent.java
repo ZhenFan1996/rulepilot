@@ -139,20 +139,81 @@ public class BoardGameRecommendationAgent {
         COMPOSING_RESPONSE
     }
 
+    public enum ProgressPhase {
+        STARTED,
+        COMPLETED,
+        RETRYING,
+        FAILED
+    }
+
+    /** Player-safe execution actions. These expose capability use, never prompts, parameters, or private reasoning. */
+    public enum ProgressAction {
+        UNDERSTAND_REQUEST,
+        DIRECT_REPLY_FAST_PATH,
+        CHOOSE_NEXT_ACTION,
+        REPLY_TO_USER,
+        ASK_USER,
+        RESOLVE_BGG_GAME,
+        INSPECT_CANDIDATE_TITLES,
+        BROWSE_BGG_CATALOG,
+        DISCOVER_PUBLIC_CANDIDATES,
+        LOOKUP_BGG_GAMES,
+        RESEARCH_GAME_FIT,
+        COMPARE_CANDIDATES,
+        REPORT_NO_MATCH,
+        RECOMMEND_GAMES
+    }
+
     public record ProgressUpdate(
             ProgressStage stage,
+            ProgressPhase phase,
+            ProgressAction action,
             long elapsedMs,
+            int decisionCycle,
+            int modelCalls,
+            int actionCalls,
+            int catalogCalls,
+            int webResearchCalls,
             int observedCandidates,
             int verifiedCandidates,
             int hardRejectedCandidates,
             int sourceCount) {
         public ProgressUpdate(ProgressStage stage, long elapsedMs) {
-            this(stage, elapsedMs, 0, 0, 0, 0);
+            this(stage, ProgressPhase.STARTED, null, elapsedMs, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        }
+
+        public ProgressUpdate(
+                ProgressStage stage,
+                long elapsedMs,
+                int observedCandidates,
+                int verifiedCandidates,
+                int hardRejectedCandidates,
+                int sourceCount) {
+            this(
+                    stage,
+                    ProgressPhase.STARTED,
+                    null,
+                    elapsedMs,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    observedCandidates,
+                    verifiedCandidates,
+                    hardRejectedCandidates,
+                    sourceCount);
         }
 
         public ProgressUpdate {
             Objects.requireNonNull(stage, "progress stage is required");
+            Objects.requireNonNull(phase, "progress phase is required");
             if (elapsedMs < 0
+                    || decisionCycle < 0
+                    || modelCalls < 0
+                    || actionCalls < 0
+                    || catalogCalls < 0
+                    || webResearchCalls < 0
                     || observedCandidates < 0
                     || verifiedCandidates < 0
                     || hardRejectedCandidates < 0
@@ -477,7 +538,8 @@ public class BoardGameRecommendationAgent {
     }
 
     public enum DecisionMode {
-        MODEL_ASSISTED
+        MODEL_ASSISTED,
+        MODEL_FAST_PATH
     }
 
     public enum PreferenceField {

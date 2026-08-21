@@ -10,6 +10,8 @@ import static org.mockito.Mockito.when;
 
 import com.rulepilot.modelconfig.RuntimeModelConfiguration;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration.Role;
+import com.rulepilot.modelconfig.ModelAccountQuota;
+import com.rulepilot.modelconfig.adapter.out.QuotaAwareChatModel;
 import com.rulepilot.teaching.TeachingOutlineModel.PageImageInput;
 import com.rulepilot.teaching.TeachingOutlineModel.SourceCoverageRole;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.CatalogDraft;
@@ -29,7 +31,9 @@ import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.time.Clock;
 import java.util.List;
+import java.util.UUID;
 import javax.imageio.ImageIO;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -871,6 +875,52 @@ class SpringAiVisualRulebookPageCatalogModelTest {
         OpenAiChatOptions completeAuditOptions =
                 (OpenAiChatOptions) allPrompts.getAllValues().getLast().getOptions();
         assertThat(completeAuditOptions.getModel()).isEqualTo("qwen3.7-plus");
+    }
+
+    @Test
+    void preservesConcreteOpenAiCompatibleOptionsForANonQwenVisualProvider() throws IOException {
+        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        ChatModel providerModel = mock(ChatModel.class);
+        ModelAccountQuota quota = mock(ModelAccountQuota.class);
+        OpenAiChatOptions defaults = OpenAiChatOptions.builder()
+                .model("vision-compatible-model")
+                .build();
+        when(quota.reserve(any())).thenReturn(new ModelAccountQuota.Reservation(
+                UUID.randomUUID(), ModelAccountQuota.CredentialSource.PLATFORM, 16_000));
+        when(providerModel.getDefaultOptions()).thenReturn(defaults);
+        when(providerModel.getOptions()).thenReturn(defaults);
+        when(providerModel.call(any(Prompt.class))).thenReturn(response("""
+                {"pages":[{"pageNumber":1,"printedTerms":"SETUP","keywords":["setup"],
+                 "externalDocumentDependencies":[],"ruleGroups":[{"identifier":"SETUP",
+                 "fact":"Each player takes one card.","quantitySpans":["one card"]}],
+                 "ruleGroupInventoryComplete":true}]}
+                """));
+        ChatModel chatModel = new QuotaAwareChatModel(
+                providerModel,
+                quota,
+                "owner",
+                ModelAccountQuota.CredentialSource.PLATFORM,
+                Role.VISUAL,
+                "compatible",
+                "vision-compatible-model",
+                16_000,
+                Clock.systemUTC());
+        when(configuration.usesFake(Role.VISUAL, "owner")).thenReturn(false);
+        when(configuration.supportsVision(Role.VISUAL, "owner")).thenReturn(true);
+        when(configuration.providerFor(Role.VISUAL, "owner")).thenReturn("compatible");
+        when(configuration.modelFor(Role.VISUAL, "owner")).thenReturn(chatModel);
+        SpringAiVisualRulebookPageCatalogModel model = model(configuration);
+
+        model.summarizeForTeaching(new CatalogRequest(
+                List.of(new PageImageInput(1, "image/png", png())), "owner", "Example Game"));
+
+        ArgumentCaptor<Prompt> prompt = ArgumentCaptor.forClass(Prompt.class);
+        verify(providerModel).call(prompt.capture());
+        assertThat(prompt.getValue().getOptions())
+                .as("an OpenAI-compatible delegate must not receive generic DefaultChatOptions")
+                .isInstanceOf(OpenAiChatOptions.class);
+        assertThat(((OpenAiChatOptions) prompt.getValue().getOptions()).getModel())
+                .isEqualTo("vision-compatible-model");
     }
 
     @Test

@@ -107,7 +107,7 @@ export type RecommendationAgentResponse = {
   clientTurnId?: string | null
   replayed?: boolean
   outcome: 'conversation' | 'needs_clarification' | 'recommendations' | 'no_match' | 'unavailable'
-  mode: 'model_assisted'
+  mode: 'model_assisted' | 'model_fast_path'
   responseLocale?: 'zh-CN' | 'en'
   assistantMessage: string
   profile: RecommendationProfile
@@ -169,9 +169,32 @@ export type RecommendationProgressStage =
 
 export type RecommendationProgressUpdate = {
   stage: RecommendationProgressStage
+  phase: 'started' | 'completed' | 'retrying' | 'failed'
+  action: RecommendationProgressAction | null
   elapsedMs: number
+  decisionCycle: number
+  modelCalls: number
+  actionCalls: number
+  catalogCalls: number
+  webResearchCalls: number
   observedCandidates: number
   verifiedCandidates: number
   hardRejectedCandidates: number
   sourceCount: number
 }
+
+export type RecommendationProgressAction =
+  | 'understand_request'
+  | 'direct_reply_fast_path'
+  | 'choose_next_action'
+  | 'reply_to_user'
+  | 'ask_user'
+  | 'resolve_bgg_game'
+  | 'inspect_candidate_titles'
+  | 'browse_bgg_catalog'
+  | 'discover_public_candidates'
+  | 'lookup_bgg_games'
+  | 'research_game_fit'
+  | 'compare_candidates'
+  | 'report_no_match'
+  | 'recommend_games'

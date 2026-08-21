@@ -184,12 +184,44 @@ class TeachingPlanLauncherTest {
 
         verify(plans, never()).create(
                 documentVersionId, learningGoal, "alice", received.id());
+        verify(plans).refreshVisualEvidence(documentVersionId, "alice", received.id());
         verify(lessons).launchImmediately(existingPlan, "alice");
         verify(runs).advance(received.id(), 3, AssistantRunState.COMPLETED, "Teaching plan is ready");
         var ordered = inOrder(plans, lessons);
-        ordered.verify(plans).refreshVisualEvidence(documentVersionId, "alice", received.id());
         ordered.verify(plans).latest(documentVersionId, "alice");
+        ordered.verify(plans).refreshVisualEvidence(documentVersionId, "alice", received.id());
         ordered.verify(lessons).launchImmediately(existingPlan, "alice");
+    }
+
+    @Test
+    void doesNotCatalogVisualEvidenceTwiceWhileCreatingANewPlan() {
+        RunSnapshot received = run(AssistantRunState.RECEIVED, 1);
+        RunSnapshot ready = run(received.id(), AssistantRunState.DOCUMENT_READINESS, 2);
+        RunSnapshot planning = run(received.id(), AssistantRunState.LESSON_PLANNING, 3);
+        RunSnapshot completed = run(received.id(), AssistantRunState.COMPLETED, 4);
+        TeachingPlan plan = mock(TeachingPlan.class);
+        when(runs.findLatestOwned(AssistantRunMode.TEACHING_PREPARATION, documentVersionId, "alice"))
+                .thenReturn(Optional.empty());
+        when(runs.start(AssistantRunMode.TEACHING_PREPARATION, documentVersionId, "alice"))
+                .thenReturn(received);
+        when(runs.advance(received.id(), 1, AssistantRunState.DOCUMENT_READINESS,
+                        "Rulebook pages are ready for teaching"))
+                .thenReturn(ready);
+        when(runs.advance(received.id(), 2, AssistantRunState.LESSON_PLANNING,
+                        "Reading rulebook pages and organizing the lesson"))
+                .thenReturn(planning);
+        when(plans.latest(documentVersionId, "alice")).thenReturn(Optional.empty());
+        when(plans.create(documentVersionId, null, "alice", received.id())).thenReturn(plan);
+        when(lessons.launchImmediately(plan, "alice"))
+                .thenReturn(new LessonLaunch(UUID.randomUUID(), AssistantRunState.RECEIVED, false));
+        when(runs.advance(received.id(), 3, AssistantRunState.COMPLETED, "Teaching plan is ready"))
+                .thenReturn(completed);
+        var launcher = launcher();
+
+        launcher.launch(documentVersionId, "alice");
+
+        verify(plans, never()).refreshVisualEvidence(documentVersionId, "alice", received.id());
+        verify(plans).create(documentVersionId, null, "alice", received.id());
     }
 
     @Test
