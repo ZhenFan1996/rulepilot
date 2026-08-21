@@ -1,5 +1,6 @@
 package com.rulepilot.modelconfig.adapter.out;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
@@ -20,11 +21,28 @@ import org.springframework.ai.chat.metadata.Usage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.prompt.Prompt;
+import org.springframework.ai.openai.OpenAiChatOptions;
 import reactor.core.publisher.Flux;
 
 class QuotaAwareChatModelTest {
 
     private static final Instant NOW = Instant.parse("2026-08-21T08:00:00Z");
+
+    @Test
+    void preservesTheDelegatesConcreteProviderOptions() {
+        ChatModel delegate = mock(ChatModel.class);
+        ModelAccountQuota quota = mock(ModelAccountQuota.class);
+        OpenAiChatOptions options = OpenAiChatOptions.builder()
+                .model("vision-compatible-model")
+                .build();
+        when(delegate.getOptions()).thenReturn(options);
+        when(delegate.getDefaultOptions()).thenReturn(options);
+
+        QuotaAwareChatModel quotaAware = model(delegate, quota);
+
+        assertThat(quotaAware.getOptions()).isSameAs(options);
+        assertThat(quotaAware.getDefaultOptions()).isSameAs(options);
+    }
 
     @Test
     void reservesThenSettlesTheProvidersReportedTokenUsage() {

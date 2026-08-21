@@ -5,7 +5,6 @@ import { RouterLink } from 'vue-router'
 import ConversationResetDialog from '@/components/ConversationResetDialog.vue'
 import PlayerWorkStatusText from '@/components/PlayerWorkStatusText.vue'
 import RecommendationGameCard from '@/components/RecommendationGameCard.vue'
-import RecommendationComparisonTable from '@/components/RecommendationComparisonTable.vue'
 import RecommendationAnswerWorkspace from '@/components/RecommendationAnswerWorkspace.vue'
 import RecommendationGameDetailsDialog from '@/components/RecommendationGameDetailsDialog.vue'
 import RecommendationLessonDialog from '@/components/RecommendationLessonDialog.vue'
@@ -17,6 +16,7 @@ import type {
   RecommendationClarification,
   RecommendationGame,
   RecommendationMessage,
+  RecommendationProgressAction,
   RecommendationProgressUpdate,
   RecommendationProgressStage,
   RecommendationProfile,
@@ -61,6 +61,9 @@ const copy = {
     login: '登录并继续', register: '创建账号', checkingSession: '正在确认登录…',
     resetFailed: '服务器没有确认删除，当前对话仍然保留。请重试。',
     restoredGames: '上次已核对候选：{games}。可以直接继续比较。',
+    executionAudit: '查看本轮 Agent 执行记录', executionFast: '轻量模型直答（不进入工具流程）', executionModel: '模型参与并按证据边界执行',
+    executionCounts: '用时 {seconds}s · 判断 {model} 轮 · 动作 {actions} 次 · BGG {catalog} 次 · 公开资料 {web} 次',
+    executionBoundary: '这里记录可复盘的判断轮次、能力调用、候选变化和失败/重试；不包含隐藏提示词、敏感参数或模型私有思维链。',
   },
   en: {
     eyebrow: 'Choose together', title: 'What should we play tonight?',
@@ -83,6 +86,9 @@ const copy = {
     login: 'Sign in and continue', register: 'Create account', checkingSession: 'Checking sign-in…',
     resetFailed: 'The server did not confirm deletion, so this conversation is still intact. Try again.',
     restoredGames: 'Previously verified candidates: {games}. You can continue comparing them here.',
+    executionAudit: 'View this Agent run', executionFast: 'Lightweight model reply (no tool workflow)', executionModel: 'Model-assisted execution within the evidence boundary',
+    executionCounts: '{seconds}s · {model} decision rounds · {actions} actions · {catalog} BGG calls · {web} public-source calls',
+    executionBoundary: 'This replayable record shows decision rounds, capability calls, candidate changes, and failures or retries. It does not contain hidden prompts, sensitive parameters, or private model chain-of-thought.',
   },
 } as const
 
@@ -102,6 +108,31 @@ const loadingCopy = {
     researching_game_fit: 'Checking how it feels to play…', composing_response: 'A few good options are ready…',
   },
 } as const
+
+const progressActionCopy: Record<AppLocale, Record<RecommendationProgressAction, string>> = {
+  'zh-CN': {
+    understand_request: '读取当前消息与对话上下文',
+    direct_reply_fast_path: '用轻量模型直接组织自然回复，不进入工具流程',
+    choose_next_action: '判断下一步是直接回答、查 BGG、查公开资料还是整理结果',
+    reply_to_user: '根据当前对话直接组织回答', ask_user: '确认一个会改变结果的必要信息',
+    resolve_bgg_game: '在 BGG 核对玩家提到的完整游戏名',
+    inspect_candidate_titles: '按候选标题搜索 BGG 并读取详情', browse_bgg_catalog: '按当前条件浏览 BGG 候选',
+    discover_public_candidates: '从公开资料寻找符合描述的新候选', lookup_bgg_games: '读取候选的 BGG 人数、时长与机制详情',
+    research_game_fit: '查证有出处的实际游玩感受', compare_candidates: '梳理候选之间有证据的关键差异',
+    report_no_match: '说明当前硬条件下没有足够匹配', recommend_games: '校验候选并组织最终推荐',
+  },
+  en: {
+    understand_request: 'Read the current message and conversation context',
+    direct_reply_fast_path: 'Use a lightweight model reply without entering the tool workflow',
+    choose_next_action: 'Choose between replying, BGG lookup, public research, or composing',
+    reply_to_user: 'Compose a direct response from the conversation', ask_user: 'Ask for one necessary choice that changes the result',
+    resolve_bgg_game: 'Resolve the player-authored title in BGG',
+    inspect_candidate_titles: 'Search candidate titles and load their BGG details', browse_bgg_catalog: 'Browse BGG under the current constraints',
+    discover_public_candidates: 'Find new identities from attributed public sources', lookup_bgg_games: 'Load player count, time, and mechanism facts from BGG',
+    research_game_fit: 'Check attributed reports about play experience', compare_candidates: 'Compare candidate-scoped evidence',
+    report_no_match: 'Explain the shortfall under current hard constraints', recommend_games: 'Validate candidates and compose the recommendation',
+  },
+}
 
 type LoadingStage = 'requesting' | RecommendationProgressStage
 
@@ -192,7 +223,7 @@ const messages = ref<RecommendationMessage[]>([{ id: 1, role: 'assistant', text:
 const draft = ref(restoredDraft())
 const loading = ref(false)
 const loadingStage = ref<LoadingStage>('requesting')
-const reportedLoadingStages = ref<RecommendationProgressStage[]>([])
+const reportedLoadingStages = ref<RecommendationProgressUpdate[]>([])
 const latestRecommendationProgress = ref<RecommendationProgressUpdate | null>(null)
 const streamedRecommendationMessage = ref('')
 const loadingElapsedSeconds = ref(0)
@@ -293,10 +324,31 @@ const loadingMessage = computed(() => {
   const message = loadingCopy[activeTurnLocale.value ?? locale.value][loadingStage.value]
   return loadingElapsedSeconds.value > 0 ? `${message} ${loadingElapsedSeconds.value}s` : message
 })
-const reportedLoadingSteps = computed(() => reportedLoadingStages.value.map((stage, index, stages) => ({
-  stage,
-  label: loadingCopy[activeTurnLocale.value ?? locale.value][stage],
-  current: index === stages.length - 1,
+
+function progressStepLabel(update: RecommendationProgressUpdate) {
+  const turnLocale = activeTurnLocale.value ?? locale.value
+  const action = update.action
+    ? progressActionCopy[turnLocale][update.action]
+    : loadingCopy[turnLocale][update.stage]
+  const cycle = update.decisionCycle > 0
+    ? turnLocale === 'zh-CN' ? `第 ${update.decisionCycle} 轮 · ` : `Round ${update.decisionCycle} · `
+    : ''
+  const phase = turnLocale === 'zh-CN'
+    ? { started: '开始', completed: '完成', retrying: '未通过校验，重新选择', failed: '失败' }[update.phase]
+    : { started: 'Started', completed: 'Completed', retrying: 'Validation failed; choosing again', failed: 'Failed' }[update.phase]
+  const calls = update.catalogCalls + update.webResearchCalls > 0
+    ? turnLocale === 'zh-CN'
+      ? ` · BGG ${update.catalogCalls} 次 / 公开资料 ${update.webResearchCalls} 次`
+      : ` · ${update.catalogCalls} BGG / ${update.webResearchCalls} public-source calls`
+    : ''
+  return `${cycle}${phase}：${action}${calls}`
+}
+
+const reportedLoadingSteps = computed(() => reportedLoadingStages.value.map((update, index, events) => ({
+  update,
+  label: progressStepLabel(update),
+  current: index === events.length - 1 && update.phase === 'started',
+  icon: update.phase === 'failed' ? '!' : update.phase === 'retrying' ? '↻' : update.phase === 'completed' ? '✓' : '●',
 })))
 const recommendationEvidenceSummary = computed(() => {
   const progress = latestRecommendationProgress.value
@@ -416,6 +468,41 @@ function toolLabelsFor(turnResponse?: RecommendationAgentResponse) {
   if (actions.some(action => action === 'RESEARCH_GAME_FIT' || action === 'RESEARCH_GAME_QUESTION')) add(translated(turnLocale, 'toolResearch'))
   if (actions.includes('COMPARE_CANDIDATES')) add(translated(turnLocale, 'toolCompare'))
   return labels
+}
+
+function auditActionLabel(action: string, turnLocale: AppLocale) {
+  const exact: Record<string, string> = turnLocale === 'zh-CN' ? {
+    REPLY_TO_USER: '直接组织回答', ASK_USER: '询问一个必要信息', UPDATE_PREFERENCES: '更新本轮明确偏好',
+    RESOLVE_BGG_REFERENCE: '核对玩家提到的游戏', SEARCH_BGG_CATALOG: '浏览 BGG 目录', SEARCH_BGG_BY_NAME: '按候选标题搜索 BGG',
+    LOOKUP_BGG_CANDIDATES: '读取候选 BGG 详情', LOOKUP_BGG_GAME: '读取游戏 BGG 详情', DISCOVER_CANDIDATES: '从公开资料发现候选',
+    RESEARCH_GAME_FIT: '查证有出处的游玩体验', RESEARCH_GAME_QUESTION: '查证候选相关问题', COMPARE_CANDIDATES: '整理候选之间的关键差异',
+    REPORT_NO_MATCH: '报告硬条件下的缺口', RECOMMEND_GAMES: '校验并发布推荐卡片', RECOMMENDATION_AVAILABILITY_SHORTFALL: '记录候选数量不足',
+  } : {
+    REPLY_TO_USER: 'Compose a direct reply', ASK_USER: 'Ask for one necessary input', UPDATE_PREFERENCES: 'Update an explicit preference',
+    RESOLVE_BGG_REFERENCE: 'Resolve the player-authored game', SEARCH_BGG_CATALOG: 'Browse the BGG catalog', SEARCH_BGG_BY_NAME: 'Search candidate titles in BGG',
+    LOOKUP_BGG_CANDIDATES: 'Load candidate BGG details', LOOKUP_BGG_GAME: 'Load game BGG details', DISCOVER_CANDIDATES: 'Discover candidates from public sources',
+    RESEARCH_GAME_FIT: 'Check attributed play experience', RESEARCH_GAME_QUESTION: 'Research a candidate question', COMPARE_CANDIDATES: 'Compare candidate evidence',
+    REPORT_NO_MATCH: 'Report the hard-constraint shortfall', RECOMMEND_GAMES: 'Validate and publish recommendation cards', RECOMMENDATION_AVAILABILITY_SHORTFALL: 'Record an availability shortfall',
+  }
+  if (action.startsWith('DIRECT_REPLY_FAST_PATH:')) return turnLocale === 'zh-CN' ? '轻量模型直答：不调用 BGG 或公开资料工具' : 'Lightweight model reply: no BGG or public-source tool'
+  if (action.startsWith('REJECTED_ACTION:') || action.startsWith('REJECTED_UNAVAILABLE_ACTION') || action.startsWith('REJECTED_REPEATED_ACTION')) {
+    return turnLocale === 'zh-CN' ? '动作未通过确定性校验，重新选择下一步' : 'Action failed deterministic validation; choose again'
+  }
+  if (action.startsWith('WEB_RESEARCH_DEGRADED:')) return turnLocale === 'zh-CN' ? '公开资料能力降级，保留已核对内容' : 'Public research degraded; keep verified work'
+  if (action.startsWith('FALLBACK_VERIFIED_CARDS:')) return turnLocale === 'zh-CN' ? '保留已经核对的候选卡片' : 'Preserve already verified candidate cards'
+  if (action.startsWith('UNAVAILABLE:') || action === 'MODEL_CALL_FAILED' || action === 'RUN_DEADLINE_EXCEEDED') {
+    return turnLocale === 'zh-CN' ? '执行停止并返回可重试状态' : 'Stop safely and return a retryable state'
+  }
+  return exact[action] ?? (turnLocale === 'zh-CN' ? '记录内部边界或降级事件' : 'Record a boundary or degradation event')
+}
+
+function executionAuditSteps(turnResponse?: RecommendationAgentResponse) {
+  const turnLocale = turnResponse?.responseLocale ?? locale.value
+  return (turnResponse?.harness?.actions ?? []).map((action, index) => ({
+    key: `${index}-${action}`,
+    code: action,
+    label: auditActionLabel(action, turnLocale),
+  }))
 }
 
 async function csrfToken() {
@@ -540,8 +627,21 @@ async function submitPendingTurn(
     }, update => {
       latestRecommendationProgress.value = update
       loadingStage.value = update.stage
-      if (reportedLoadingStages.value.at(-1) !== update.stage) {
-        reportedLoadingStages.value = [...reportedLoadingStages.value, update.stage]
+      const previous = reportedLoadingStages.value.at(-1)
+      const repeated = previous
+        && previous.stage === update.stage
+        && previous.phase === update.phase
+        && previous.action === update.action
+        && previous.decisionCycle === update.decisionCycle
+        && previous.modelCalls === update.modelCalls
+        && previous.actionCalls === update.actionCalls
+        && previous.catalogCalls === update.catalogCalls
+        && previous.webResearchCalls === update.webResearchCalls
+        && previous.observedCandidates === update.observedCandidates
+        && previous.verifiedCandidates === update.verifiedCandidates
+        && previous.hardRejectedCandidates === update.hardRejectedCandidates
+      if (!repeated) {
+        reportedLoadingStages.value = [...reportedLoadingStages.value, update].slice(-16)
       }
       loadingElapsedSeconds.value = Math.max(loadingElapsedSeconds.value, Math.floor(update.elapsedMs / 1000))
     }, text => {
@@ -1308,7 +1408,26 @@ onBeforeUnmount(() => {
                     <span v-for="label in toolLabelsFor(message.response)" :key="label" class="rounded-full border border-ink/10 bg-paper px-2.5 py-1">{{ label }}</span>
                   </div>
 
-                  <RecommendationComparisonTable v-if="message.response?.comparison" :comparison="message.response.comparison" :response-locale="message.response.responseLocale" />
+                  <details v-if="message.response?.harness" data-testid="recommendation-execution-audit" class="mt-2 max-w-[94%] rounded-xl border border-ink/8 bg-paper/65 px-3 py-2 text-xs text-ink/55">
+                    <summary class="min-h-8 cursor-pointer py-1 font-semibold text-ink/65">{{ responseT(message.response, 'executionAudit') }}</summary>
+                    <p class="mt-2 font-semibold text-ink/65">{{ responseT(message.response, message.response.mode === 'model_fast_path' ? 'executionFast' : 'executionModel') }}</p>
+                    <p class="mt-1 leading-5">
+                      {{ responseT(message.response, 'executionCounts', {
+                        seconds: ((message.response.harness.totalElapsedMs ?? 0) / 1000).toFixed(1),
+                        model: message.response.harness.modelCalls,
+                        actions: message.response.harness.actions.length,
+                        catalog: message.response.harness.catalogCalls,
+                        web: message.response.harness.webResearchCalls,
+                      }) }}
+                    </p>
+                    <ol v-if="executionAuditSteps(message.response).length" class="mt-2 grid gap-1.5 border-l border-ink/10 pl-3">
+                      <li v-for="step in executionAuditSteps(message.response)" :key="step.key" class="leading-5">
+                        <span class="text-ink/65">{{ step.label }}</span>
+                        <code class="ml-1 break-all text-[0.625rem] text-ink/35">{{ step.code }}</code>
+                      </li>
+                    </ol>
+                    <p class="mt-2 border-t border-ink/8 pt-2 leading-5 text-ink/45">{{ responseT(message.response, 'executionBoundary') }}</p>
+                  </details>
 
                   <div v-if="message.response?.games.length" class="mt-3 rounded-2xl border border-ink/8 bg-canvas/45 p-3 sm:p-4">
                     <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
@@ -1349,8 +1468,8 @@ onBeforeUnmount(() => {
                   />
                   <span class="mt-0.5 block text-xs">{{ loadingMessage }}</span>
                   <ol v-if="reportedLoadingSteps.length" data-testid="recommendation-progress-steps" class="mt-3 grid gap-1.5 text-xs leading-5">
-                    <li v-for="(step, index) in reportedLoadingSteps" :key="`${step.stage}-${index}`" class="flex items-start gap-2" :class="step.current ? 'font-semibold text-ink/70' : 'text-ink/50'">
-                      <span aria-hidden="true" class="mt-px w-3 shrink-0 text-center">{{ step.current ? '●' : '✓' }}</span>
+                    <li v-for="(step, index) in reportedLoadingSteps" :key="`${step.update.stage}-${step.update.phase}-${step.update.action}-${step.update.elapsedMs}-${index}`" class="flex items-start gap-2" :class="step.current ? 'font-semibold text-ink/70' : step.update.phase === 'failed' ? 'text-red-700' : step.update.phase === 'retrying' ? 'text-amber-700' : 'text-ink/50'">
+                      <span aria-hidden="true" class="mt-px w-3 shrink-0 text-center">{{ step.icon }}</span>
                       <span>{{ step.label }}</span>
                     </li>
                   </ol>

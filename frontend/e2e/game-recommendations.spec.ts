@@ -223,11 +223,38 @@ async function mockPublicDiscovery(
         await route.fulfill({
           status: 200,
           contentType: 'text/event-stream',
-          body: `event: progress\ndata: {"stage":"selecting_tools","elapsedMs":8}\n\nevent: result\ndata: ${JSON.stringify(payload)}\n\n`,
+          body: `event: progress\ndata: {"stage":"understanding_request","phase":"completed","action":"understand_request","elapsedMs":4,"decisionCycle":0,"modelCalls":0,"actionCalls":0,"catalogCalls":0,"webResearchCalls":0,"observedCandidates":0,"verifiedCandidates":0,"hardRejectedCandidates":0,"sourceCount":0}\n\nevent: progress\ndata: {"stage":"selecting_tools","phase":"started","action":"choose_next_action","elapsedMs":8,"decisionCycle":1,"modelCalls":1,"actionCalls":0,"catalogCalls":0,"webResearchCalls":0,"observedCandidates":0,"verifiedCandidates":0,"hardRejectedCandidates":0,"sourceCount":0}\n\nevent: result\ndata: ${JSON.stringify(payload)}\n\n`,
         })
         return
       }
       await route.fulfill({ json: payload })
+    }
+    if (body.message.includes('把这两款放在一起说')) {
+      await fulfill({
+        outcome: 'conversation', mode: 'model_assisted',
+        assistantMessage: '如果今晚更在意控制时长，我会先选 Glass Orchard：它标示约 45 分钟，而《展翅翱翔》约 70 分钟。两者真实桌上互动目前都没有有出处的资料；如果互动感比时长更重要，这个选择就需要重新核对。',
+        profile: { ...body.profile, type: 'all', interaction: 'any' }, clarification: null,
+        sourceCount: 179737, candidatesEvaluated: 2,
+        harness: {
+          modelCalls: 2, catalogCalls: 1, webResearchCalls: 0, fallbackUsed: false,
+          actions: ['LOOKUP_BGG_CANDIDATES', 'COMPARE_CANDIDATES'], totalElapsedMs: 2_400,
+        },
+        games: [],
+        comparison: {
+          candidates: [
+            { game: catalog.games[0], fitClaims: [] },
+            { game: similarToMosaicField, fitClaims: [] },
+          ],
+          axes: [{
+            subject: 'durationMinutes', label: '标示时长', capability: 'structured_metadata',
+            cells: [
+              { bggId: 266192, status: 'observed', observationKind: 'structured_metadata', value: '70 分钟' },
+              { bggId: 600061, status: 'observed', observationKind: 'structured_metadata', value: '45 分钟' },
+            ],
+          }],
+        },
+      })
+      return
     }
     if (body.message.includes('马赛克花园')) {
       await fulfill({
@@ -548,6 +575,24 @@ test('acknowledges a recommendation turn immediately and exposes honest remainin
   await expect(page.getByTestId('recommendation-soft-budget')).toContainText('目前还没有足以展示的新候选')
   await expect(page.getByTestId('recommendation-soft-budget')).toContainText('还需核对目录事实与匹配取舍')
   await expect(page.getByText('想找一款有探索感、但规则不太重的游戏')).toBeVisible()
+})
+
+test('renders natural comparison prose and a replayable execution audit without a comparison table', async ({ page }) => {
+  await mockPublicDiscovery(page, true)
+  await page.goto('/discover')
+
+  await page.getByLabel('聊聊你想玩的游戏').fill('把这两款放在一起说，不要表格')
+  await page.getByRole('button', { name: '发送', exact: true }).click()
+
+  await expect(page.getByText('如果今晚更在意控制时长，我会先选 Glass Orchard')).toBeVisible()
+  await expect(page.getByTestId('candidate-comparison')).toHaveCount(0)
+  const audit = page.getByTestId('recommendation-execution-audit')
+  await expect(audit).toBeVisible()
+  await audit.getByText('查看本轮 Agent 执行记录').click()
+  await expect(audit).toContainText('判断 2 轮')
+  await expect(audit).toContainText('读取候选 BGG 详情')
+  await expect(audit).toContainText('整理候选之间的关键差异')
+  await expect(audit).toContainText('不包含隐藏提示词、敏感参数或模型私有思维链')
 })
 
 test('keeps and sends a pasted 501-character recommendation intact', async ({ page }) => {

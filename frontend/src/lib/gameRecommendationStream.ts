@@ -88,7 +88,17 @@ function parseProgress(value: unknown): RecommendationProgressUpdate | null {
     'understanding_request', 'selecting_tools', 'searching_bgg_catalog', 'reading_game_details',
     'discovering_candidates', 'verifying_bgg_candidates', 'researching_game_fit', 'composing_response',
   ])
+  const phases = new Set(['started', 'completed', 'retrying', 'failed'])
+  const actions = new Set([
+    'understand_request', 'direct_reply_fast_path', 'choose_next_action', 'reply_to_user', 'ask_user',
+    'resolve_bgg_game', 'inspect_candidate_titles', 'browse_bgg_catalog', 'discover_public_candidates',
+    'lookup_bgg_games', 'research_game_fit', 'compare_candidates', 'report_no_match', 'recommend_games',
+  ])
   if (typeof stage !== 'string' || !stages.has(stage)) return null
+  const phase = candidate.phase === undefined ? 'started' : candidate.phase
+  if (typeof phase !== 'string' || !phases.has(phase)) return null
+  const action = candidate.action === undefined || candidate.action === null ? null : candidate.action
+  if (action !== null && (typeof action !== 'string' || !actions.has(action))) return null
   if (!Number.isSafeInteger(candidate.elapsedMs) || (candidate.elapsedMs as number) < 0) return null
   const count = (key: string) => Number.isSafeInteger(candidate[key]) && (candidate[key] as number) >= 0
     ? candidate[key] as number
@@ -99,7 +109,14 @@ function parseProgress(value: unknown): RecommendationProgressUpdate | null {
   if (verifiedCandidates > observedCandidates || hardRejectedCandidates > verifiedCandidates) return null
   return {
     stage: stage as RecommendationProgressUpdate['stage'],
+    phase: phase as RecommendationProgressUpdate['phase'],
+    action: action as RecommendationProgressUpdate['action'],
     elapsedMs: candidate.elapsedMs as number,
+    decisionCycle: count('decisionCycle'),
+    modelCalls: count('modelCalls'),
+    actionCalls: count('actionCalls'),
+    catalogCalls: count('catalogCalls'),
+    webResearchCalls: count('webResearchCalls'),
     observedCandidates,
     verifiedCandidates,
     hardRejectedCandidates,

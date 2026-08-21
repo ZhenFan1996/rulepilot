@@ -129,7 +129,33 @@ class BggRecommendationAgentStreamControllerTest {
         when(agent.converse(any(), eq("zh-CN"), eq("player"), any())).thenAnswer(invocation -> {
             Consumer<ProgressUpdate> progress = invocation.getArgument(3);
             progress.accept(new ProgressUpdate(
-                    ProgressStage.SEARCHING_BGG_CATALOG, 18, 8, 6, 3, 20));
+                    ProgressStage.UNDERSTANDING_REQUEST,
+                    BoardGameRecommendationAgent.ProgressPhase.COMPLETED,
+                    BoardGameRecommendationAgent.ProgressAction.UNDERSTAND_REQUEST,
+                    4,
+                    1,
+                    1,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0));
+            progress.accept(new ProgressUpdate(
+                    ProgressStage.SEARCHING_BGG_CATALOG,
+                    BoardGameRecommendationAgent.ProgressPhase.COMPLETED,
+                    BoardGameRecommendationAgent.ProgressAction.BROWSE_BGG_CATALOG,
+                    18,
+                    2,
+                    2,
+                    1,
+                    1,
+                    0,
+                    8,
+                    6,
+                    3,
+                    20));
             return new ConversationResponse(
                     Outcome.NO_MATCH,
                     DecisionMode.MODEL_ASSISTED,
@@ -159,7 +185,15 @@ class BggRecommendationAgentStreamControllerTest {
                 .getContentAsString(StandardCharsets.UTF_8);
         assertThat(stream)
                 .contains("event:progress")
+                .contains("\"phase\":\"completed\"")
+                .contains("\"action\":\"understand_request\"")
                 .contains("searching_bgg_catalog")
+                .contains("\"action\":\"browse_bgg_catalog\"")
+                .contains("\"decisionCycle\":2")
+                .contains("\"modelCalls\":2")
+                .contains("\"actionCalls\":1")
+                .contains("\"catalogCalls\":1")
+                .contains("\"webResearchCalls\":0")
                 .contains("\"observedCandidates\":8")
                 .contains("\"verifiedCandidates\":6")
                 .contains("\"hardRejectedCandidates\":3")

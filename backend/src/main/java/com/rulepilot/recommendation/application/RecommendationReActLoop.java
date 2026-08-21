@@ -39,6 +39,8 @@ import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.Har
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.InteractionPreference;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.KnownGame;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.Outcome;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ProgressAction;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ProgressPhase;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ProgressStage;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ProgressUpdate;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendationProfile;
@@ -65,6 +67,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
+import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -73,7 +76,15 @@ final class RecommendationReActLoop {
 
     static final int MAX_MODEL_CALLS = 6;
     private static final int MAX_ACTION_CALLS = 6;
-    private static final int MAX_OUTPUT_TOKENS = 1_200;
+    private static final int ACTION_SELECTION_OUTPUT_TOKENS = 600;
+    private static final int EVIDENCE_RESPONSE_OUTPUT_TOKENS = 1_200;
+    private static final Pattern GREETING = Pattern.compile("^(?:你好|您好|嗨|哈[喽啰]|hello|hi|hey)$");
+    private static final Pattern THANKS = Pattern.compile("^(?:谢谢|感谢|多谢|谢啦|thanks|thank you)$");
+    private static final Pattern PAUSE = Pattern.compile(
+            "^(?:(?:谢谢|感谢|thanks|thank you)[,， ]*)?(?:先)?(?:不用|不要|别)(?:再)?(?:继续)?推荐(?:了)?$"
+                    + "|^(?:先)?(?:等一下|等等|暂停|停一下|hold on|pause|stop)$");
+    private static final Pattern CAPABILITY = Pattern.compile(
+            "^(?:你能做什么|你会做什么|你可以做什么|怎么用|如何使用|help|what can you do|what do you do)$");
     static final int MAX_REFERENCE_RESOLUTION_ATTEMPTS = 2;
     private static final Set<String> READ_ACTIONS = Set.of(
             RESOLVE_TOOL,
@@ -138,10 +149,33 @@ final class RecommendationReActLoop {
                 modelConfigurationOwner,
                 tools.webResearchConfigured(),
                 maximumRecommendationResults());
-        Consumer<ProgressStage> progress = stage -> emitProgress(progressListener, stage, state, startedAt);
-        progress.accept(ProgressStage.UNDERSTANDING_REQUEST);
+        ProgressTracker progress = new ProgressTracker(progressListener, state, startedAt);
+        progress.start(ProgressStage.UNDERSTANDING_REQUEST, ProgressAction.UNDERSTAND_REQUEST);
+        Optional<FastPathKind> fastPath = applicationFastPath(request);
+        progress.complete();
         if (!model.configured(state.modelConfigurationOwner)) {
+            progress.start(ProgressStage.SELECTING_TOOLS, ProgressAction.CHOOSE_NEXT_ACTION);
+            progress.fail();
             return unavailable(state, locale, "MODEL_NOT_CONFIGURED");
+        }
+        if (fastPath.isPresent()) {
+            state.modelCalls++;
+            progress.start(ProgressStage.COMPOSING_RESPONSE, ProgressAction.DIRECT_REPLY_FAST_PATH);
+            try {
+                ConversationResponse response = fastPathResponse(
+                        request, state, locale, fastPath.orElseThrow());
+                progress.complete();
+                return response;
+            } catch (RunDeadlineExceeded exception) {
+                progress.fail();
+                state.actions.add("FAST_REPLY_DEADLINE_EXCEEDED");
+                return unavailable(state, locale, "RUN_DEADLINE_EXCEEDED");
+            } catch (RuntimeException exception) {
+                progress.fail();
+                LOGGER.warn("Recommendation fast reply failed ({})", exception.getClass().getSimpleName());
+                state.actions.add("FAST_REPLY_FAILED");
+                return unavailable(state, locale, "FAST_REPLY_FAILED");
+            }
         }
         List<String> preferenceEvidenceIds = evidenceReview.preferenceEvidence(request).keySet().stream().toList();
         List<ToolSpec> actions = actions(state.maximumRecommendationResults, preferenceEvidenceIds);
@@ -154,8 +188,8 @@ final class RecommendationReActLoop {
         boolean unstructuredReplyRetried = false;
 
         while (state.modelCalls < MAX_MODEL_CALLS && state.actionCalls < MAX_ACTION_CALLS) {
-            progress.accept(ProgressStage.SELECTING_TOOLS);
             state.modelCalls++;
+            progress.start(ProgressStage.SELECTING_TOOLS, ProgressAction.CHOOSE_NEXT_ACTION);
             BoardGameRecommendationModel.Turn turn;
             List<ToolSpec> currentActions = availableActions(state, actions, preferenceEvidenceIds);
             try {
@@ -166,24 +200,28 @@ final class RecommendationReActLoop {
                                 new Request(
                                         turnMessages,
                                         currentActions,
-                                        MAX_OUTPUT_TOKENS,
+                                        outputTokenBudget(state),
                                         ToolChoice.REQUIRED),
                                 state.modelConfigurationOwner));
             } catch (RunDeadlineExceeded exception) {
+                progress.fail();
                 state.actions.add("RUN_DEADLINE_EXCEEDED");
                 return unavailable(state, locale, "RUN_DEADLINE_EXCEEDED");
             } catch (RuntimeException exception) {
+                progress.fail();
                 LOGGER.warn("Recommendation ReAct turn failed ({})", exception.getClass().getSimpleName());
                 state.actions.add("MODEL_CALL_FAILED");
                 return unavailable(state, locale, "MODEL_CALL_FAILED");
             }
             if (turn.completionStatus() == BoardGameRecommendationModel.CompletionStatus.OUTPUT_LIMIT) {
+                progress.fail();
                 state.actions.add("MODEL_OUTPUT_TRUNCATED");
                 return unavailable(state, locale, "MODEL_OUTPUT_TRUNCATED");
             }
             if (turn.toolCalls().isEmpty()) {
                 if (!turn.text().isBlank()) {
                     if (!unstructuredReplyRetried) {
+                        progress.retry();
                         unstructuredReplyRetried = true;
                         boolean externalEvidenceRead = state.catalogCalls > 0 || state.webResearchCalls > 0;
                         state.actions.add(externalEvidenceRead
@@ -209,9 +247,11 @@ final class RecommendationReActLoop {
                                         + "retrieval or card action now. Do not claim the requested external work is complete in prose."));
                         continue;
                     }
+                    progress.fail();
                     state.actions.add("REPEATED_UNSTRUCTURED_REPLY");
                     return unavailable(state, locale, "UNSTRUCTURED_REPLY");
                 }
+                progress.fail();
                 LOGGER.warn("Recommendation ReAct turn returned neither a direct reply nor an action");
                 state.actions.add("EMPTY_MODEL_TURN");
                 return unavailable(state, locale, "EMPTY_MODEL_TURN");
@@ -224,6 +264,7 @@ final class RecommendationReActLoop {
                 boolean sameReadAction = READ_ACTIONS.contains(actionName)
                         && turn.toolCalls().stream().allMatch(candidate -> actionName.equals(candidate.name()));
                 if (!sameReadAction) {
+                    progress.fail();
                     LOGGER.warn(
                             "Recommendation ReAct turn returned {} incompatible actions (textCharacters={})",
                             turn.toolCalls().size(),
@@ -237,9 +278,11 @@ final class RecommendationReActLoop {
                 call = turn.toolCalls().getFirst();
                 state.actions.add("COALESCED_PARALLEL_READ_ACTIONS:" + turn.toolCalls().size());
             }
+            progress.complete();
             state.actionCalls++;
             String fingerprint = call.name() + "\n" + call.argumentsJson();
             RecommendationActions.ActionOutcome outcome;
+            progress.start(progressStage(call.name()), progressAction(call.name()));
             if (currentActions.stream().noneMatch(action -> action.name().equals(call.name()))) {
                 state.actions.add("REJECTED_UNAVAILABLE_ACTION");
                 if (!ASK_TOOL.equals(call.name())) state.clarificationBlockedByExecutionFailure = true;
@@ -259,14 +302,163 @@ final class RecommendationReActLoop {
                     executed.add(fingerprint);
                 }
             }
-            if (outcome.response() != null) return outcome.response();
+            if (outcome.response() != null) {
+                progress.complete();
+                return outcome.response();
+            }
+            if (state.actions.getLast().startsWith("REJECTED_ACTION:")
+                    || state.actions.getLast().equals("REJECTED_UNAVAILABLE_ACTION")
+                    || state.actions.getLast().equals("REJECTED_REPEATED_ACTION")) {
+                progress.retry();
+            } else {
+                progress.complete();
+            }
             String observation = budgetedObservation(outcome.observation(), state);
             messages = new ArrayList<>(foundation);
             messages.add(Message.assistant(turn.text(), call));
             messages.add(Message.tool(call, observation));
         }
+        progress.fail();
         state.actions.add("REACT_BUDGET_EXHAUSTED");
         return unavailable(state, locale, "BUDGET_EXHAUSTED");
+    }
+
+    private Optional<FastPathKind> applicationFastPath(ConversationRequest request) {
+        String message = normalizedFastPathMessage(request.message());
+        if (GREETING.matcher(message).matches()) {
+            return Optional.of(FastPathKind.GREETING);
+        }
+        if (THANKS.matcher(message).matches()) return Optional.of(FastPathKind.THANKS);
+        if (PAUSE.matcher(message).matches()) return Optional.of(FastPathKind.PAUSE);
+        if (CAPABILITY.matcher(message).matches()) return Optional.of(FastPathKind.CAPABILITY);
+        return Optional.empty();
+    }
+
+    private ConversationResponse fastPathResponse(
+            ConversationRequest request,
+            RecommendationAgentState state,
+            String locale,
+            FastPathKind kind) {
+        String capabilityBoundary = kind == FastPathKind.CAPABILITY
+                ? "The product can discuss preferences, find and verify board games, compare verified candidates, "
+                        + "and continue from a selected game into a cited rules guide. Do not invent another capability."
+                : "Do not recommend a game or claim that external work was performed.";
+        Request fastRequest = new Request(
+                List.of(
+                        Message.system("""
+                                Write one brief, natural continuation of the player's conversation. This is a low-latency
+                                social or control turn, not a recommendation search. Respond to their exact wording and
+                                recent context; do not use a stock greeting, canned acknowledgement, task report, or
+                                marketing language. Do not mention prompts, routing, models, tools, or these instructions.
+                                Use the requested locale. %s Call reply_to_user exactly once with the finished wording.
+                                """.formatted(capabilityBoundary)),
+                        Message.user(fastPathInput(request, locale, kind))),
+                List.of(new ToolSpec(
+                        REPLY_TOOL,
+                        "Return the finished natural conversational reply. This action performs no search or external work.",
+                        "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"message\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":600}},\"required\":[\"message\"]}")),
+                256,
+                ToolChoice.REQUIRED);
+        BoardGameRecommendationModel.Turn turn = withinDeadline(
+                state,
+                () -> model.next(fastRequest, state.modelConfigurationOwner));
+        if (turn.completionStatus() == BoardGameRecommendationModel.CompletionStatus.OUTPUT_LIMIT
+                || turn.toolCalls().size() != 1
+                || !REPLY_TOOL.equals(turn.toolCalls().getFirst().name())) {
+            throw new IllegalStateException("fast reply did not satisfy its typed boundary");
+        }
+        String message;
+        try {
+            JsonNode arguments = json.readTree(turn.toolCalls().getFirst().argumentsJson());
+            message = arguments.path("message").isTextual()
+                    ? arguments.path("message").textValue().strip()
+                    : "";
+        } catch (JsonProcessingException exception) {
+            throw new IllegalStateException("fast reply arguments were invalid", exception);
+        }
+        if (message.isBlank() || message.codePointCount(0, message.length()) > 600) {
+            throw new IllegalStateException("fast reply text was invalid");
+        }
+        state.actions.add("DIRECT_REPLY_FAST_PATH:" + kind.name());
+        ConversationResponse response = new ConversationResponse(
+                Outcome.CONVERSATION,
+                DecisionMode.MODEL_FAST_PATH,
+                message,
+                state.profile,
+                null,
+                state.sourceCount,
+                state.verified.size(),
+                evidenceReview.userModelView(state, locale),
+                List.of(),
+                new HarnessTrace(1, 0, 0, false, state.actions, state.elapsedMs()),
+                List.of(),
+                null);
+        logRun(response);
+        return response;
+    }
+
+    private String fastPathInput(ConversationRequest request, String locale, FastPathKind kind) {
+        StringBuilder input = new StringBuilder()
+                .append("locale=").append(locale)
+                .append("\nturnKind=").append(kind.name())
+                .append("\nrecentConversation:\n");
+        int first = Math.max(0, request.transcript().size() - 4);
+        request.transcript().subList(first, request.transcript().size()).forEach(turn -> input
+                .append(turn.role()).append(": ")
+                .append(truncateFastContext(turn.text(), 300)).append('\n'));
+        input.append("currentUser: ").append(truncateFastContext(request.message(), 600));
+        return input.toString();
+    }
+
+    private String truncateFastContext(String value, int maximumCodePoints) {
+        String text = value == null ? "" : value.strip();
+        if (text.codePointCount(0, text.length()) <= maximumCodePoints) return text;
+        return text.substring(0, text.offsetByCodePoints(0, maximumCodePoints));
+    }
+
+    private String normalizedFastPathMessage(String value) {
+        return Normalizer.normalize(value == null ? "" : value, Normalizer.Form.NFKC)
+                .toLowerCase(Locale.ROOT)
+                .strip()
+                .replaceAll("\\s+", " ")
+                .replaceFirst("[\\p{P}\\p{S}]+$", "")
+                .strip();
+    }
+
+    private int outputTokenBudget(RecommendationAgentState state) {
+        return state.catalogCalls == 0 && state.webResearchCalls == 0
+                ? ACTION_SELECTION_OUTPUT_TOKENS
+                : EVIDENCE_RESPONSE_OUTPUT_TOKENS;
+    }
+
+    private ProgressStage progressStage(String action) {
+        return switch (action) {
+            case RESOLVE_TOOL -> ProgressStage.READING_GAME_DETAILS;
+            case SEARCH_TOOL, BROWSE_TOOL -> ProgressStage.SEARCHING_BGG_CATALOG;
+            case DISCOVER_TOOL -> ProgressStage.DISCOVERING_CANDIDATES;
+            case LOOKUP_TOOL -> ProgressStage.VERIFYING_BGG_CANDIDATES;
+            case RESEARCH_TOOL -> ProgressStage.RESEARCHING_GAME_FIT;
+            case REPLY_TOOL, ASK_TOOL, COMPARE_TOOL, NO_MATCH_TOOL, RECOMMEND_TOOL ->
+                ProgressStage.COMPOSING_RESPONSE;
+            default -> ProgressStage.SELECTING_TOOLS;
+        };
+    }
+
+    private ProgressAction progressAction(String action) {
+        return switch (action) {
+            case REPLY_TOOL -> ProgressAction.REPLY_TO_USER;
+            case ASK_TOOL -> ProgressAction.ASK_USER;
+            case RESOLVE_TOOL -> ProgressAction.RESOLVE_BGG_GAME;
+            case SEARCH_TOOL -> ProgressAction.INSPECT_CANDIDATE_TITLES;
+            case BROWSE_TOOL -> ProgressAction.BROWSE_BGG_CATALOG;
+            case DISCOVER_TOOL -> ProgressAction.DISCOVER_PUBLIC_CANDIDATES;
+            case LOOKUP_TOOL -> ProgressAction.LOOKUP_BGG_GAMES;
+            case RESEARCH_TOOL -> ProgressAction.RESEARCH_GAME_FIT;
+            case COMPARE_TOOL -> ProgressAction.COMPARE_CANDIDATES;
+            case NO_MATCH_TOOL -> ProgressAction.REPORT_NO_MATCH;
+            case RECOMMEND_TOOL -> ProgressAction.RECOMMEND_GAMES;
+            default -> ProgressAction.CHOOSE_NEXT_ACTION;
+        };
     }
 
     ConversationResponse unavailable(RecommendationAgentState state, String locale, String code) {
@@ -467,7 +659,7 @@ final class RecommendationReActLoop {
 
                 After any supplied lookup, browse, discovery, or research action, the protocol requires another supplied action rather than bare assistant text. This keeps sourced claims attached to candidate-scoped observations and visible sources. Choose only from the actions supplied on that turn. For two or more compared candidates, finish through the supplied structured comparison action; after attributed multi-candidate research, an unstructured reply is unavailable. For selectable cards, finish through the supplied card action.
 
-                Recommendation cards are an Agent decision, not the default response shape. Emit them only through the supplied card action when the current conversational goal asks for candidates or a selectable exact title. Recommend only verified, hard-eligible IDs and honor an explicit result count. Give every card a specific why and useful tradeoff, citing the same candidate's observations internally; a public-source criterion must cite that candidate's attributed R observation. Separate facts from judgment naturally, keep uncertainty local, and do not infer table feel from taxonomy alone. In comparisons, unsupported requested qualities stay unknown and taxonomy must not be converted into play-feel conclusions. Select only observed comparison axes and, when justified, one preferred candidate. Write the comparison message yourself as one concise, natural continuation of the conversation: make the useful choice first and name the tradeoff that could reverse it. Every factual clause must stay within the literal meaning of a selected observation. A mechanism or category label may be named, but it cannot serve as causal evidence for another quality; an attributed report supports only the experience it explicitly describes, not an unstated cause or consequence. Do not fill gaps about teaching effort, waiting, interaction, accessibility, strategic depth, or replayability unless a selected observation says so. Cite every observation used through internalEvidenceIds. Once that evidence contract passes, the application publishes the message byte-for-byte beside the observed cells; an invalid optional message is omitted without erasing those cells. The cells already carry the detailed comparison, so do not recite every axis or narrate that a comparison was completed. The UI displays card reasons and tradeoffs immediately below a card overview, so do not repeat those fields in a card message. Do not present an unselected candidate as part of the recommendation. Finish as soon as the evidence is sufficient.
+                Recommendation cards are an Agent decision, not the default response shape. Emit them only through the supplied card action when the current conversational goal asks for candidates or a selectable exact title. Recommend only verified, hard-eligible IDs and honor an explicit result count. Give every card a specific why and useful tradeoff, citing the same candidate's observations internally; a public-source criterion must cite that candidate's attributed R observation. Separate facts from judgment naturally, keep uncertainty local, and do not infer table feel from taxonomy alone. In comparisons, unsupported requested qualities stay unknown and taxonomy must not be converted into play-feel conclusions. Select only observed comparison axes and, when justified, one preferred candidate. The UI does not render a comparison table, so write a complete natural comparison: lead with the useful choice when justified, explain the two or three decisive candidate differences in prose, and name the tradeoff that could reverse the choice. Every factual clause must stay within the literal meaning of a selected observation. A mechanism or category label may be named, but it cannot serve as causal evidence for another quality; an attributed report supports only the experience it explicitly describes, not an unstated cause or consequence. Do not fill gaps about teaching effort, waiting, interaction, accessibility, strategic depth, or replayability unless a selected observation says so. Cite every observation used through internalEvidenceIds. Once that evidence contract passes, the application publishes the message byte-for-byte; an invalid optional message falls back to a cautious prose continuation. Never output a Markdown table or narrate that a comparison was completed. The UI displays card reasons and tradeoffs immediately below a card overview, so do not repeat those fields in a card message. Do not present an unselected candidate as part of the recommendation. Finish as soon as the evidence is sufficient.
                 """;
     }
 
@@ -746,10 +938,10 @@ final class RecommendationReActLoop {
                 COMPARE_TOOL,
                 "Compare two to five verified conversation candidates on one to three axes. Available observed attributes in this turn are "
                         + availableSubjects
-                        + ". Prefer reportedExperience when attributed research was requested. Write message as a concise, warm continuation, not a completion report: make the choice first when justified and name the tradeoff that could reverse it. The observed cells below the message already carry details, so do not recite every axis. Every factual clause must remain within the literal meaning of its selected observation: a label cannot prove another quality, and a report cannot prove an unstated cause or consequence. A message whose evidence contract passes is published exactly as written; a bad optional message is dropped without losing the verified comparison. Cite every observation used in message through internalEvidenceIds; IDs must belong to the compared candidates and selected subjects. Choose preferredBggId only when those observed cells are enough for a useful recommendation; use null when they are not. Leave unsupported qualities unknown and never turn taxonomy into play feel. Persist any explicit current-turn numeric or type correction in preferenceUpdates in this same call. Never use this to replace candidates.",
+                        + ". Prefer reportedExperience when attributed research was requested. The UI will not display a comparison table. Write message as the complete, concise player-facing comparison: make the choice first when justified, explain the two or three decisive differences in natural prose, and name the tradeoff that could reverse it. Never output a Markdown table. Every factual clause must remain within the literal meaning of its selected observation: a label cannot prove another quality, and a report cannot prove an unstated cause or consequence. A message whose evidence contract passes is published exactly as written; a bad optional message becomes a cautious prose continuation. Cite every observation used in message through internalEvidenceIds; IDs must belong to the compared candidates and selected subjects. Choose preferredBggId only when the selected observations are enough for a useful recommendation; use null when they are not. Leave unsupported qualities unknown and never turn taxonomy into play feel. Persist any explicit current-turn numeric or type correction in preferenceUpdates in this same call. Never use this to replace candidates.",
                 "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"candidateBggIds\":{\"type\":\"array\",\"minItems\":2,\"maxItems\":5,\"uniqueItems\":true,\"items\":{\"type\":\"integer\","
                         + idConstraint
-                        + "}},\"subjects\":{\"type\":\"array\",\"description\":\"One to three observation attribute names from runMemory. Unknown attributes remain visibly unknown instead of invalidating the comparison.\",\"minItems\":1,\"maxItems\":3,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"minLength\":1}},\"preferredBggId\":{\"description\":\"The one candidate you would choose from the displayed observed cells, or null when the evidence does not support choosing.\",\"anyOf\":[{\"type\":\"integer\","
+                        + "}},\"subjects\":{\"type\":\"array\",\"description\":\"One to three observation attribute names from runMemory. Unknown attributes remain visibly unknown instead of invalidating the comparison.\",\"minItems\":1,\"maxItems\":3,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"minLength\":1}},\"preferredBggId\":{\"description\":\"The one candidate you would choose from the selected observations, or null when the evidence does not support choosing.\",\"anyOf\":[{\"type\":\"integer\","
                         + idConstraint
                         + "},{\"type\":\"null\"}]},\"message\":{\"type\":\"string\",\"description\":\"A concise natural locale-matched decision and reversible tradeoff. Use only the literal meaning of selected observations; never add a cause or consequence to a taxonomy label or player report. It is shown exactly as written; keep internal evidence IDs out of this prose.\",\"minLength\":1},\"internalEvidenceIds\":{\"type\":\"array\",\"description\":\"Machine-only support for observations actually used in message. Every ID must belong to a compared candidate and one of subjects.\",\"minItems\":1,\"uniqueItems\":true,\"items\":{\"type\":\"string\","
                         + evidenceConstraint
@@ -764,10 +956,10 @@ final class RecommendationReActLoop {
                 : "\"enum\":" + jsonArray(relaxableSubjects);
         return new ToolSpec(
                 NO_MATCH_TOOL,
-                "Finish with zero cards and one application-validated hard-filter relaxation. Never relax it without player confirmation.",
+                "Finish with zero cards and one application-validated hard-filter relaxation. Write a natural, situation-specific message that explains the verified shortfall, names the one proposed relaxation, and makes clear it will not happen without player confirmation. Do not use stock no-match wording.",
                 "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"relaxSubject\":{\"type\":\"string\","
                         + subjectConstraint
-                        + "}},\"required\":[\"relaxSubject\"]}");
+                        + "},\"message\":{\"type\":\"string\",\"description\":\"A natural locale-matched explanation grounded in the current verified count and hard constraints.\",\"minLength\":1}},\"required\":[\"relaxSubject\",\"message\"]}");
     }
 
     private static String jsonArray(List<String> values) {
@@ -1144,6 +1336,8 @@ final class RecommendationReActLoop {
     private void emitProgress(
             Consumer<ProgressUpdate> listener,
             ProgressStage stage,
+            ProgressPhase phase,
+            ProgressAction action,
             RecommendationAgentState state,
             long startedAt) {
         if (listener == null) return;
@@ -1153,7 +1347,14 @@ final class RecommendationReActLoop {
                     .count();
             listener.accept(new ProgressUpdate(
                     stage,
+                    phase,
+                    action,
                     (System.nanoTime() - startedAt) / 1_000_000,
+                    state.modelCalls,
+                    state.modelCalls,
+                    state.actionCalls,
+                    state.catalogCalls,
+                    state.webResearchCalls,
                     Math.max(state.candidateNames.size(), state.verified.size()),
                     state.verified.size(),
                     state.verified.size() - hardEligible,
@@ -1161,6 +1362,66 @@ final class RecommendationReActLoop {
         } catch (RuntimeException exception) {
             LOGGER.debug("Recommendation progress listener stopped accepting updates");
         }
+    }
+
+    private final class ProgressTracker implements Consumer<ProgressStage> {
+        private final Consumer<ProgressUpdate> listener;
+        private final RecommendationAgentState state;
+        private final long startedAt;
+        private ProgressStage currentStage;
+        private ProgressAction currentAction;
+
+        private ProgressTracker(
+                Consumer<ProgressUpdate> listener,
+                RecommendationAgentState state,
+                long startedAt) {
+            this.listener = listener;
+            this.state = state;
+            this.startedAt = startedAt;
+        }
+
+        @Override
+        public void accept(ProgressStage stage) {
+            transition(stage, currentAction == null ? ProgressAction.CHOOSE_NEXT_ACTION : currentAction);
+        }
+
+        private void start(ProgressStage stage, ProgressAction action) {
+            transition(stage, action);
+        }
+
+        private void transition(ProgressStage stage, ProgressAction action) {
+            if (currentStage == stage && currentAction == action) return;
+            complete();
+            currentStage = stage;
+            currentAction = action;
+            emitProgress(listener, stage, ProgressPhase.STARTED, action, state, startedAt);
+        }
+
+        private void complete() {
+            finish(ProgressPhase.COMPLETED);
+        }
+
+        private void retry() {
+            finish(ProgressPhase.RETRYING);
+        }
+
+        private void fail() {
+            finish(ProgressPhase.FAILED);
+        }
+
+        private void finish(ProgressPhase phase) {
+            if (currentStage == null) return;
+            emitProgress(listener, currentStage, phase, currentAction, state, startedAt);
+            currentStage = null;
+            currentAction = null;
+        }
+    }
+
+    private enum FastPathKind {
+        GREETING,
+        THANKS,
+        PAUSE,
+        CAPABILITY
     }
 
     boolean chinese(String locale) {

@@ -94,17 +94,20 @@ public class TeachingPlanLauncher {
                     current.id(), current.revision(), AssistantRunState.LESSON_PLANNING,
                     "Reading rulebook pages and organizing the lesson");
             RunSnapshot planningRun = current;
-            plans.refreshVisualEvidence(documentVersionId, ownerUsername, planningRun.id());
             long planResolutionStartedAt = System.nanoTime();
-            var planResolution = recordPhase("plan-resolution", planResolutionStartedAt, () -> plans.latest(
-                            documentVersionId, ownerUsername)
-                    .filter(existingPlan -> Objects.equals(existingPlan.learningGoal(), learningGoal))
-                    .map(existingPlan -> new PlanResolution(existingPlan, true))
-                    .orElseGet(() -> new PlanResolution(plans.create(
-                            documentVersionId,
-                            learningGoal,
-                            ownerUsername,
-                            planningRun.id()), false)));
+            var planResolution = recordPhase("plan-resolution", planResolutionStartedAt, () -> {
+                var existingPlan = plans.latest(documentVersionId, ownerUsername)
+                        .filter(plan -> Objects.equals(plan.learningGoal(), learningGoal));
+                if (existingPlan.isPresent()) {
+                    plans.refreshVisualEvidence(documentVersionId, ownerUsername, planningRun.id());
+                    return new PlanResolution(existingPlan.get(), true);
+                }
+                return new PlanResolution(plans.create(
+                        documentVersionId,
+                        learningGoal,
+                        ownerUsername,
+                        planningRun.id()), false);
+            });
             long planResolutionNanos = System.nanoTime() - planResolutionStartedAt;
             TeachingPlan plan = planResolution.plan();
             // Preparation already owns the startup lane. Generate and persist the first cited section here before

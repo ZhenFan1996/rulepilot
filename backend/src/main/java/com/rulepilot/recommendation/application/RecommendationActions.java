@@ -302,9 +302,9 @@ final class RecommendationActions {
                 ? (runtime.chinese(locale) ? "《" + first + "》和《" + second + "》" : first + " and " + second)
                 : (runtime.chinese(locale) ? "这几款" : "These candidates");
         return runtime.chinese(locale)
-                ? subject + "现在还没有拉开到让我放心替你拍板的程度。能核对的差异我保留在下面；没有来源的桌感我先不替你猜。你最在意哪一项，我们就沿那一项接着聊。"
+                ? subject + "现在还没有拉开到让我放心替你拍板的程度；现有证据也不足以写出可靠的关键差异。没有来源的桌感我先不替你猜。你最在意哪一项，我们就沿那一项接着聊。"
                 : subject
-                        + " are still too close for me to make the call confidently. I kept the differences we can verify below; tell me which one matters most and we can follow that thread.";
+                        + " are still too close for me to make the call confidently, and the current evidence is not enough for a reliable account of the decisive differences. Tell me which factor matters most and we can follow that thread.";
     }
 
     private Integer preferredComparisonId(JsonNode node) {
@@ -324,7 +324,7 @@ final class RecommendationActions {
     }
 
     private ActionOutcome noMatch(JsonNode arguments, RecommendationAgentState state, String locale) {
-        requireObject(arguments, Set.of("relaxSubject"), Set.of());
+        requireObject(arguments, Set.of("relaxSubject", "message"), Set.of());
         String subject = text(arguments.path("relaxSubject"), 1, 40);
         if (!runtime.relaxableSubjects(state).contains(subject)) {
             throw new InvalidAction("NO_MATCH_RELAXATION_NOT_ACTIONABLE");
@@ -333,12 +333,7 @@ final class RecommendationActions {
         String option = runtime.chinese(locale)
                 ? "暂时取消“" + constraint + "”这条硬筛选，其他条件保持不变。"
                 : "Temporarily remove the hard filter “" + constraint + "” and keep every other constraint unchanged.";
-        String message = runtime.chinese(locale)
-                ? "我核对了 " + state.verified.size() + " 款候选，目前没有一款同时满足全部硬条件。最小的可行调整是只取消“"
-                        + constraint + "”这条硬筛选；我不会替你自动放宽。"
-                : "I checked " + state.verified.size()
-                        + " candidates, and none satisfies every hard constraint. The smallest actionable change is to remove only “"
-                        + constraint + "”; I will not relax it without your confirmation.";
+        String message = playerFacingText(arguments.path("message"));
         state.actions.add("REPORT_NO_MATCH");
         Clarification clarification = new Clarification(
                 PreferenceField.CONVERSATION,

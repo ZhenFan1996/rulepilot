@@ -35,7 +35,7 @@ describe('streamGameRecommendation', () => {
       clarification: null, sourceCount: 20, candidatesEvaluated: 6, games: [],
     }
     vi.stubGlobal('fetch', vi.fn(async () => new Response(
-      `event: progress\ndata: {"stage":"verifying_bgg_candidates","elapsedMs":120,"observedCandidates":8,"verifiedCandidates":6,"hardRejectedCandidates":3,"sourceCount":20}\n\nevent: result\ndata: ${JSON.stringify(payload)}\n\n`,
+      `event: progress\ndata: {"stage":"verifying_bgg_candidates","phase":"completed","action":"lookup_bgg_games","elapsedMs":120,"decisionCycle":2,"modelCalls":2,"actionCalls":1,"catalogCalls":1,"webResearchCalls":0,"observedCandidates":8,"verifiedCandidates":6,"hardRejectedCandidates":3,"sourceCount":20}\n\nevent: result\ndata: ${JSON.stringify(payload)}\n\n`,
       { headers: { 'Content-Type': 'text/event-stream' } },
     )))
     const progress: unknown[] = []
@@ -43,6 +43,13 @@ describe('streamGameRecommendation', () => {
     await streamGameRecommendation('/stream', { method: 'POST' }, update => progress.push(update))
 
     expect(progress).toEqual([expect.objectContaining({
+      phase: 'completed',
+      action: 'lookup_bgg_games',
+      decisionCycle: 2,
+      modelCalls: 2,
+      actionCalls: 1,
+      catalogCalls: 1,
+      webResearchCalls: 0,
       observedCandidates: 8,
       verifiedCandidates: 6,
       hardRejectedCandidates: 3,
