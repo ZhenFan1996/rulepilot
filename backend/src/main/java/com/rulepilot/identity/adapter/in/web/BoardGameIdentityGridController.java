@@ -1,5 +1,6 @@
 package com.rulepilot.identity.adapter.in.web;
 
+import com.rulepilot.catalog.CatalogGameSelectionLookup.GameSelection;
 import com.rulepilot.identity.BoardGameIdentityGrid;
 import com.rulepilot.identity.application.BoardGameIdentityGridService;
 import java.security.Principal;
@@ -11,6 +12,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -27,6 +29,11 @@ public class BoardGameIdentityGridController {
     @GetMapping
     List<BoardGameIdentityGrid.Selection> read(Principal principal) {
         return grid.read(principal.getName());
+    }
+
+    @GetMapping("/search")
+    List<GameSelection> search(@RequestParam String q, @RequestParam(defaultValue = "12") int limit) {
+        return grid.search(q, limit);
     }
 
     @PutMapping("/{slot}")

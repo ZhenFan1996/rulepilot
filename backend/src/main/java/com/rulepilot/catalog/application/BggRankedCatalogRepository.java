@@ -32,7 +32,23 @@ public interface BggRankedCatalogRepository {
         return List.of();
     }
 
+    default List<SelectionCandidate> searchSelections(String query, int maximum) {
+        return List.of();
+    }
+
+    default List<SelectionCandidate> findSelectionsByIds(List<Integer> bggIds) {
+        return List.of();
+    }
+
     void stage(UUID importId, List<RankedGame> games);
 
     void publish(UUID importId, Snapshot snapshot);
+
+    record SelectionCandidate(
+            int bggId,
+            String sourceName,
+            String chineseName,
+            Integer publicationYear,
+            String thumbnailUrl,
+            String imageUrl) {}
 }

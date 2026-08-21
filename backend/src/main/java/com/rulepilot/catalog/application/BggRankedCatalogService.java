@@ -113,14 +113,40 @@ public class BggRankedCatalogService
     @Override
     public Optional<GameSelection> find(int bggId) {
         if (bggId <= 0) throw new IllegalArgumentException("BGG id must be positive");
+        Optional<GameSelection> local = repository.findSelectionsByIds(List.of(bggId)).stream()
+                .findFirst()
+                .map(this::selectionGame);
+        if (local.isPresent()) return local;
         return browseIds(List.of(bggId)).stream().findFirst().map(game -> {
             DiscoveryGame details = game.details();
             return new GameSelection(
                     bggId,
                     game.ranked().sourceName(),
                     details == null ? "" : details.chineseName(),
-                    details == null ? "" : details.thumbnailUrl());
+                    game.ranked().publicationYear(),
+                    details == null ? "" : details.thumbnailUrl(),
+                    details == null ? "" : details.imageUrl());
         });
+    }
+
+    @Override
+    public List<GameSelection> search(String query, int maximum) {
+        String checked = checkedSearch(query);
+        if (checked.isBlank()) return List.of();
+        if (maximum < 1 || maximum > 20) {
+            throw new IllegalArgumentException("identity search maximum must be between 1 and 20");
+        }
+        return repository.searchSelections(checked, maximum).stream().map(this::selectionGame).toList();
+    }
+
+    private GameSelection selectionGame(BggRankedCatalogRepository.SelectionCandidate game) {
+        return new GameSelection(
+                game.bggId(),
+                game.sourceName(),
+                game.chineseName(),
+                game.publicationYear(),
+                game.thumbnailUrl(),
+                game.imageUrl());
     }
 
     @Override

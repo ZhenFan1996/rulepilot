@@ -22,6 +22,10 @@ public class BoardGameIdentityGridService {
         return grid.read(username);
     }
 
+    public List<CatalogGameSelectionLookup.GameSelection> search(String query, int maximum) {
+        return games.search(query, maximum);
+    }
+
     @Transactional
     public BoardGameIdentityGrid.Selection select(String username, BoardGameIdentityGrid.Slot slot, int bggId) {
         CatalogGameSelectionLookup.GameSelection game = games.find(bggId)
@@ -33,6 +37,7 @@ public class BoardGameIdentityGridService {
                 game.name(),
                 game.chineseName(),
                 game.thumbnailUrl(),
+                game.imageUrl(),
                 Instant.now());
     }
 

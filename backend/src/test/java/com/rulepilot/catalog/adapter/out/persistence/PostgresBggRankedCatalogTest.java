@@ -75,6 +75,14 @@ class PostgresBggRankedCatalogTest {
                 INSERT INTO bgg_game_name_alias (bgg_id, alias, locale, source, observed_at)
                 VALUES (10, '百变策略', 'zh', 'BGG_OFFICIAL_VERSION', TIMESTAMPTZ '2026-08-07T08:00:00Z')
                 """);
+        jdbc.getJdbcTemplate().update(
+                """
+                INSERT INTO bgg_metadata_cache
+                    (cache_kind, bgg_id, payload, payload_bytes, cached_at, fresh_until, stale_until, last_accessed_at)
+                VALUES ('DISCOVERY', 10,
+                    '{"chineseName":"百变策略","thumbnailUrl":"https://example.test/10-thumb.jpg","imageUrl":"https://example.test/10-full.jpg"}',
+                    128, NOW(), NOW(), NOW(), NOW())
+                """);
 
         assertThat(repository.findSnapshot()).contains(snapshot);
         assertThat(repository.find(new Query("", BggGameType.ALL, Sort.HOT, 0, 20, List.of(20))).games())
@@ -103,6 +111,15 @@ class PostgresBggRankedCatalogTest {
                 .isEmpty();
         assertThat(repository.find(new Query("", BggGameType.EXPANSION, Sort.RATING, 0, 20, List.of())).games())
                 .extracting(RankedGame::bggId)
+                .containsExactly(30);
+        assertThat(repository.searchSelections("百变", 12)).singleElement().satisfies(game -> {
+            assertThat(game.bggId()).isEqualTo(10);
+            assertThat(game.chineseName()).isEqualTo("百变策略");
+            assertThat(game.imageUrl()).isEqualTo("https://example.test/10-full.jpg");
+        });
+        assertThat(repository.searchSelections("pansion", 12))
+                .as("the identity grid also has an expansion slot")
+                .extracting(game -> game.bggId())
                 .containsExactly(30);
     }
 
