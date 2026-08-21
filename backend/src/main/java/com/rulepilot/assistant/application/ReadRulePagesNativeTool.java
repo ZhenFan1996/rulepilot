@@ -24,6 +24,7 @@ public class ReadRulePagesNativeTool implements NativeAgentTool {
               "properties": {
                 "pageNumbers": {
                   "type": "array",
+                  "description": "Exact active-rulebook pages selected from a prior citation or a search observation; never guessed page numbers.",
                   "items": {"type": "integer", "minimum": 1},
                   "minItems": 1,
                   "maxItems": 5,
@@ -50,7 +51,11 @@ public class ReadRulePagesNativeTool implements NativeAgentTool {
 
     @Override
     public String description() {
-        return "Read cited text evidence from up to five exact pages of the active rulebook version.";
+        return "Use after a grounded citation or search has identified exact pages. Read canonical text from up to "
+                + "five pages of the active immutable rulebook; never invent pages or use this as broad search. The "
+                + "passages are authoritative source text, but their subject, conditions, exceptions, and current "
+                + "applicability still require checking. For a prior-turn reference, read the supplied pages once. "
+                + "Stop after the useful exact pages are read.";
     }
 
     @Override

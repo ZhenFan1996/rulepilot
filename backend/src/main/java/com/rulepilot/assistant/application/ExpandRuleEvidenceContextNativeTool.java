@@ -27,12 +27,13 @@ public class ExpandRuleEvidenceContextNativeTool implements NativeAgentTool {
               "properties": {
                 "evidenceIds": {
                   "type": "array",
+                  "description": "Existing active-rulebook evidence handles whose immediately neighboring chunks may contain a governing condition, continuation, or exception.",
                   "items": {"type": "string", "format": "uuid"},
                   "minItems": 1,
                   "maxItems": 3,
                   "uniqueItems": true
                 },
-                "radius": {"type": "integer", "minimum": 1, "maximum": 2}
+                "radius": {"type": "integer", "description": "Canonical chunks on each side; use 1 unless the visible structure clearly spans farther.", "minimum": 1, "maximum": 2}
               },
               "required": ["evidenceIds", "radius"],
               "additionalProperties": false
@@ -54,9 +55,10 @@ public class ExpandRuleEvidenceContextNativeTool implements NativeAgentTool {
 
     @Override
     public String description() {
-        return "Expand up to three evidence handles with nearby canonical rulebook chunks to check adjacent "
-                + "conditions, list continuations, and exceptions. Nearby text is not automatically applicable; "
-                + "read the exact pages before deciding a ruling.";
+        return "Use after search when an excerpt may omit an adjacent condition, list continuation, or exception. "
+                + "Expand up to three handles by one or two chunks; never use it first or to roam the active immutable "
+                + "rulebook. Neighboring text is candidate context, not an automatic ruling. Read the resulting exact "
+                + "pages before deciding, and stop once the missing boundary is visible.";
     }
 
     @Override

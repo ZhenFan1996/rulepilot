@@ -334,7 +334,7 @@ class VisualRulebookCatalogerTest {
     }
 
     @Test
-    void retriesIndividualPagesWhenAnEntireStartupBatchFails() {
+    void doesNotReplayARejectedTeachingPageAfterTheVisualAdapterAlreadyOwnsOneRepair() {
         UUID documentVersionId = UUID.randomUUID();
         InMemoryFacts facts = new InMemoryFacts();
         AtomicInteger calls = new AtomicInteger();
@@ -364,11 +364,13 @@ class VisualRulebookCatalogerTest {
                 "owner",
                 null);
 
-        assertThat(calls).hasValue(4);
-        assertThat(inputs).allSatisfy(input -> assertThat(input.text()).contains("Visible rule on page"));
+        assertThat(calls).hasValue(3);
+        assertThat(inputs.getFirst().text()).contains("visual interpretation did not finish");
+        assertThat(inputs.subList(1, 3))
+                .allSatisfy(input -> assertThat(input.text()).contains("Visible rule on page"));
         assertThat(facts.find(documentVersionId, Set.of(1, 2, 3)))
                 .extracting(PageFact::pageNumber)
-                .containsExactly(1, 2, 3);
+                .containsExactly(2, 3);
     }
 
     @Test

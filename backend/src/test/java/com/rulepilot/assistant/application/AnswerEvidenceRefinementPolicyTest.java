@@ -75,6 +75,7 @@ class AnswerEvidenceRefinementPolicyTest {
         assertThat(AnswerEvidenceRefinementPolicy.requiresRefinement(question, context, completeList, ready()))
                 .isTrue();
         assertThat(AnswerEvidenceRefinementPolicy.requiresRefinement(question, context, compound, ready()))
+                .as("independent obligations still require exact-page coverage checks")
                 .isTrue();
     }
 

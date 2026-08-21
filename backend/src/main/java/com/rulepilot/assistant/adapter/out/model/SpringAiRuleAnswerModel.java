@@ -2,7 +2,9 @@ package com.rulepilot.assistant.adapter.out.model;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.rulepilot.assistant.RuleAnswerModel;
+import com.rulepilot.assistant.RuleAnswerModel.AnswerAid;
 import com.rulepilot.assistant.RuleAnswerModel.PlayerFacingField;
 import com.rulepilot.assistant.RuleAnswerModelTimeoutException;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration;
@@ -54,6 +56,8 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
             "prompts/rule-answer-player-facing-repair-v1-lean-system.txt");
     private static final String PLAYER_FACING_REPAIR_USER = readPrompt(
             "prompts/rule-answer-player-facing-repair-v1-user.txt");
+    private static final Set<String> PLAYER_FACING_REPAIR_FIELDS =
+            Set.of("shortVerdict", "explanation", "exceptions", "citationIds");
 
     private final RuntimeModelConfiguration models;
     private final FakeRuleAnswerModel fakeModel;
@@ -501,7 +505,7 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
             Set<String> expected = editableFieldNames(editableFields);
             Set<String> actual = new LinkedHashSet<>();
             root.fieldNames().forEachRemaining(actual::add);
-            if (!actual.equals(expected)) {
+            if (!actual.containsAll(expected) || !PLAYER_FACING_REPAIR_FIELDS.containsAll(actual)) {
                 throw new IllegalStateException("player-facing repair returned fields outside its edit scope");
             }
             return new PlayerFacingRepairDraft(
@@ -639,9 +643,29 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
     private Optional<QuestionInterpretationDraft> parseQuestionInterpretation(String content) {
         if (content == null || content.isBlank() || content.length() > 4_000) return Optional.empty();
         try {
-            return Optional.of(JSON.readValue(content, QuestionInterpretationDraft.class));
+            return Optional.of(JSON.treeToValue(normalizeSoftPresentationHint(JSON.readTree(content)),
+                    QuestionInterpretationDraft.class));
         } catch (IOException invalidOutput) {
             return Optional.empty();
+        }
+    }
+
+    /**
+     * answerAid controls presentation only, so an unknown value must not discard an otherwise valid retrieval plan
+     * or spend a second model call repairing non-factual UI metadata. Evidence needs and every factual boundary remain
+     * strict because they decide what the agent is allowed to retrieve and publish.
+     */
+    private JsonNode normalizeSoftPresentationHint(JsonNode root) {
+        if (!(root instanceof ObjectNode object)) return root;
+        JsonNode answerAid = object.get("answerAid");
+        if (answerAid == null || !answerAid.isTextual()) return root;
+        try {
+            AnswerAid.valueOf(answerAid.textValue());
+            return root;
+        } catch (IllegalArgumentException unknownPresentationHint) {
+            ObjectNode normalized = object.deepCopy();
+            normalized.put("answerAid", AnswerAid.NONE.name());
+            return normalized;
         }
     }
 
@@ -649,7 +673,8 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
         if (content == null || content.isBlank()) return "BLANK";
         if (content.length() > 4_000) return "TOO_LONG";
         try {
-            JSON.readValue(content, QuestionInterpretationDraft.class);
+            JSON.treeToValue(normalizeSoftPresentationHint(JSON.readTree(content)),
+                    QuestionInterpretationDraft.class);
             return "VALID";
         } catch (IOException invalidJson) {
             try {

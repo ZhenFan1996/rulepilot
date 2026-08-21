@@ -29,6 +29,10 @@ import org.springframework.stereotype.Component;
 @Profile("!test")
 class BoardGameRecommendationSelector {
 
+    /** Keeps publisher copy useful to the Agent without letting one catalog record dominate the working context. */
+    static final int MAX_PUBLISHER_DESCRIPTION_CODE_POINTS = 900;
+    static final int MAX_CARD_DESCRIPTION_CODE_POINTS = 220;
+
     private final BoardGameRecommendationProperties properties;
 
     BoardGameRecommendationSelector(BoardGameRecommendationProperties properties) {
@@ -61,7 +65,7 @@ class BoardGameRecommendationSelector {
             List<Game> references,
             boolean chinese,
             Research research) {
-        return present(selected, profile, references, chinese, research, Map.of(), Map.of());
+        return present(selected, profile, references, chinese, research, Map.of());
     }
 
     List<RecommendedGame> present(
@@ -71,17 +75,6 @@ class BoardGameRecommendationSelector {
             boolean chinese,
             Research research,
             Map<Integer, PreferenceLink> preferenceLinks) {
-        return present(selected, profile, references, chinese, research, preferenceLinks, Map.of());
-    }
-
-    List<RecommendedGame> present(
-            List<Game> selected,
-            RecommendationProfile profile,
-            List<Game> references,
-            boolean chinese,
-            Research research,
-            Map<Integer, PreferenceLink> preferenceLinks,
-            Map<Integer, CandidateNarrative> narratives) {
         return selected.stream()
                 .map(game -> present(
                         game,
@@ -89,8 +82,7 @@ class BoardGameRecommendationSelector {
                         sharedTaxonomy(game, references),
                         chinese,
                         research,
-                        preferenceLinks.get(game.ranking().bggId()),
-                        narratives.get(game.ranking().bggId())))
+                        preferenceLinks.get(game.ranking().bggId())))
                 .toList();
     }
 
@@ -120,8 +112,7 @@ class BoardGameRecommendationSelector {
             List<String> sharedTaxonomy,
             boolean chinese,
             Research research,
-            PreferenceLink preferenceLink,
-            CandidateNarrative narrative) {
+            PreferenceLink preferenceLink) {
         Details details = game.details();
         List<CandidateClaim> fitClaims = fitClaims(game, profile, chinese);
         List<String> matches = new ArrayList<>();
@@ -180,14 +171,14 @@ class BoardGameRecommendationSelector {
         List<RecommendationReason> reasons = new ArrayList<>(matches.stream()
                 .map(text -> new RecommendationReason(ReasonKind.BGG_FACT, text, List.of()))
                 .toList());
-        if (narrative != null) {
-            reasons.addFirst(new RecommendationReason(
-                    ReasonKind.PREFERENCE_INFERENCE,
-                    narrative.why(),
-                    narrative.evidence().stream()
-                            .flatMap(observation -> observation.sourceIndexes().stream())
-                            .distinct()
-                            .toList()));
+        String publisherDescription = boundedDescription(
+                details.description(), MAX_CARD_DESCRIPTION_CODE_POINTS);
+        if (!publisherDescription.isBlank()) {
+            reasons.add(new RecommendationReason(
+                    ReasonKind.BGG_FACT,
+                    (chinese ? "发行方简介（宣传资料）：" : "Publisher overview (promotional copy): ")
+                            + publisherDescription,
+                    List.of()));
         }
         if (preferenceLink != null) {
             reasons.add(new RecommendationReason(
@@ -197,9 +188,7 @@ class BoardGameRecommendationSelector {
         }
         List<RecommendationReason> researchReasons = researchReasons(research, game.ranking().bggId());
         reasons.addAll(researchReasons);
-        List<String> tradeoffs = narrative != null && !narrative.tradeoff().isBlank()
-                ? List.of(narrative.tradeoff())
-                : researchReasons.isEmpty() && !taxonomyLabels.isEmpty()
+        List<String> tradeoffs = researchReasons.isEmpty() && !taxonomyLabels.isEmpty()
                 ? List.of(chinese
                         ? "BGG 标签只能说明机制分类，不能证明实际互动感或等待时间；在意这点时请继续点名比较。"
                         : "BGG tags describe mechanisms, not actual interaction or downtime; ask for a named comparison if that matters.")
@@ -386,7 +375,24 @@ class BoardGameRecommendationSelector {
         addMetadata(values, bggId, "recommendedWith", List.of(details.recommendedWith()));
         addMetadata(values, bggId, "designers", details.designers());
         addMetadata(values, bggId, "publishers", details.publishers());
+        String publisherDescription = boundedDescription(details.description());
+        if (!publisherDescription.isBlank()) {
+            values.add(metadata(bggId, "publisherDescription", publisherDescription));
+        }
         return List.copyOf(values);
+    }
+
+    private String boundedDescription(String source) {
+        return boundedDescription(source, MAX_PUBLISHER_DESCRIPTION_CODE_POINTS);
+    }
+
+    private String boundedDescription(String source, int maximumCodePoints) {
+        if (source == null || source.isBlank()) return "";
+        String normalized = source.strip().replaceAll("\\s+", " ");
+        int codePoints = normalized.codePointCount(0, normalized.length());
+        if (codePoints <= maximumCodePoints) return normalized;
+        int end = normalized.offsetByCodePoints(0, maximumCodePoints);
+        return normalized.substring(0, end).stripTrailing() + "…";
     }
 
     private FitAssessment fitAssessment(
@@ -681,19 +687,6 @@ class BoardGameRecommendationSelector {
             if (evidenceQuote.isBlank() || taxonomyTerms.isEmpty()) {
                 throw new IllegalArgumentException("recommendation preference link is invalid");
             }
-        }
-    }
-
-    record CandidateNarrative(
-            String why,
-            String tradeoff,
-            List<CandidateObservation> evidence) {
-
-        CandidateNarrative {
-            if (why == null || why.isBlank() || tradeoff == null || evidence == null || evidence.isEmpty()) {
-                throw new IllegalArgumentException("candidate narrative is incomplete");
-            }
-            evidence = List.copyOf(evidence);
         }
     }
 

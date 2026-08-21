@@ -37,7 +37,37 @@ public interface NativeToolAgent {
             Set<String> requiredToolsBeforeCompletion,
             int maxToolCalls,
             String requiredTerminalText,
-            Map<String, Integer> finalResponseAfterToolSuccesses) {
+            Map<String, Integer> finalResponseAfterToolSuccesses,
+            boolean completeAfterRequiredTools) {
+        public RunRequest(
+                Role role,
+                ToolScope scope,
+                String systemPrompt,
+                String playerRequest,
+                String fallbackText,
+                int maxIterations,
+                int maxOutputTokens,
+                Set<String> allowedTools,
+                Set<String> requiredToolsBeforeCompletion,
+                int maxToolCalls,
+                String requiredTerminalText,
+                Map<String, Integer> finalResponseAfterToolSuccesses) {
+            this(
+                    role,
+                    scope,
+                    systemPrompt,
+                    playerRequest,
+                    fallbackText,
+                    maxIterations,
+                    maxOutputTokens,
+                    allowedTools,
+                    requiredToolsBeforeCompletion,
+                    maxToolCalls,
+                    requiredTerminalText,
+                    finalResponseAfterToolSuccesses,
+                    true);
+        }
+
         public RunRequest(
                 Role role,
                 ToolScope scope,
@@ -62,7 +92,8 @@ public interface NativeToolAgent {
                     requiredToolsBeforeCompletion,
                     maxToolCalls,
                     requiredTerminalText,
-                    Map.of());
+                    Map.of(),
+                    true);
         }
 
         public RunRequest(
@@ -110,7 +141,8 @@ public interface NativeToolAgent {
                     Set.of(),
                     Math.min(24, maxIterations * 4),
                     "",
-                    Map.of());
+                    Map.of(),
+                    true);
         }
 
         /** Compatibility constructor: an empty allow-list means every tool registered for the role. */
@@ -135,7 +167,8 @@ public interface NativeToolAgent {
                     requiredToolsBeforeCompletion,
                     Math.min(24, maxIterations * 4),
                     "",
-                    Map.of());
+                    Map.of(),
+                    true);
         }
 
         public RunRequest {
@@ -165,10 +198,6 @@ public interface NativeToolAgent {
             }
             if (!allowedTools.isEmpty() && !allowedTools.containsAll(finalResponseAfterToolSuccesses.keySet())) {
                 throw new IllegalArgumentException("final-response native tools must be included in the allow-list");
-            }
-            if (requiredToolsBeforeCompletion.stream().anyMatch(finalResponseAfterToolSuccesses::containsKey)) {
-                throw new IllegalArgumentException(
-                        "a native tool cannot both auto-complete and require a final model response");
             }
         }
     }

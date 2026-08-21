@@ -178,6 +178,260 @@ class BoundedNativeToolAgentTest {
     }
 
     @Test
+    void reservesTheLastToolCallForARequiredConfirmationInsteadOfAdvertisingMoreSearches() {
+        AtomicInteger turn = new AtomicInteger();
+        List<List<String>> advertised = new ArrayList<>();
+        NativeToolModel model = request -> {
+            advertised.add(request.tools().stream().map(NativeToolModel.ToolSpec::name).toList());
+            return switch (turn.incrementAndGet()) {
+                case 1 -> new ModelTurn("", List.of(
+                        call("call-search-1", "search_rule_evidence", "{\"query\":\"victory\"}"),
+                        call("call-search-2", "search_rule_evidence", "{\"query\":\"winning\"}")), 10, 5);
+                default -> turn(call("call-read", "read_rule_pages", "{\"pageNumbers\":[2]}"));
+            };
+        };
+        BoundedNativeToolAgent agent = agent(
+                model,
+                List.of(successTool("search_rule_evidence"), successTool("read_rule_pages")),
+                new RecordingInvocations());
+        RunRequest request = new RunRequest(
+                Role.ANSWER,
+                scope(),
+                "Search, then confirm the canonical page.",
+                "Find the complete source-backed answer.",
+                "Insufficient verified evidence.",
+                4,
+                256,
+                Set.of("search_rule_evidence", "read_rule_pages"),
+                Set.of("read_rule_pages"),
+                3);
+
+        var result = agent.run(request);
+
+        assertThat(result.status()).isEqualTo(RunStatus.COMPLETED);
+        assertThat(result.toolCalls()).isEqualTo(3);
+        assertThat(advertised).hasSize(2);
+        assertThat(advertised.get(0)).containsExactlyInAnyOrder("search_rule_evidence", "read_rule_pages");
+        assertThat(advertised.get(1)).containsExactly("read_rule_pages");
+    }
+
+    @Test
+    void preservesARequiredReadWhenOneParallelSearchTurnWouldOtherwiseConsumeTheBudget() {
+        AtomicInteger turn = new AtomicInteger();
+        NativeToolModel model = request -> switch (turn.incrementAndGet()) {
+            case 1 -> new ModelTurn("", List.of(
+                    call("call-search-1", "search_rule_evidence", "{\"query\":\"advice\"}"),
+                    call("call-search-2", "search_rule_evidence", "{\"query\":\"warning\"}")), 10, 5);
+            case 2 -> new ModelTurn("", List.of(
+                    call("call-search-3", "search_rule_evidence", "{\"query\":\"strategy\"}"),
+                    call("call-search-4", "search_rule_evidence", "{\"query\":\"tip\"}")), 10, 5);
+            case 3 -> turn(call("call-read", "read_rule_pages", "{\"pageNumbers\":[22]}"));
+            default -> finalTurn("EVIDENCE_READY");
+        };
+        RecordingInvocations audited = new RecordingInvocations();
+        BoundedNativeToolAgent agent = agent(
+                model,
+                List.of(successTool("search_rule_evidence"), successTool("read_rule_pages")),
+                audited);
+        RunRequest request = new RunRequest(
+                Role.ANSWER,
+                scope(),
+                "Search, read, then assess source-authored advice.",
+                "Find source-authored advice.",
+                "EVIDENCE_NOT_FOUND",
+                4,
+                256,
+                Set.of("search_rule_evidence", "read_rule_pages"),
+                Set.of("read_rule_pages"),
+                4,
+                "",
+                Map.of("read_rule_pages", 1));
+
+        var result = agent.run(request);
+
+        assertThat(result.status()).isEqualTo(RunStatus.COMPLETED);
+        assertThat(result.text()).isEqualTo("EVIDENCE_READY");
+        assertThat(result.toolCalls()).isEqualTo(4);
+        assertThat(result.observations()).extracting(observation -> observation.toolName())
+                .containsExactly(
+                        "search_rule_evidence",
+                        "search_rule_evidence",
+                        "search_rule_evidence",
+                        "read_rule_pages");
+        assertThat(audited.recordedOperations).contains("nativeRequiredToolBudgetReservation");
+    }
+
+    @Test
+    void givesOneBoundedCorrectionWhenRequiredOnlyModeReceivesAnotherSearchRequest() {
+        AtomicInteger turn = new AtomicInteger();
+        NativeToolModel model = request -> switch (turn.incrementAndGet()) {
+            case 1 -> new ModelTurn("", List.of(
+                    call("call-search-1", "search_rule_evidence", "{\"query\":\"victory\"}"),
+                    call("call-search-2", "search_rule_evidence", "{\"query\":\"winning\"}")), 10, 5);
+            case 2 -> turn(call("call-search-rejected", "search_rule_evidence", "{\"query\":\"score\"}"));
+            default -> turn(call("call-read", "read_rule_pages", "{\"pageNumbers\":[2]}"));
+        };
+        RecordingInvocations audited = new RecordingInvocations();
+        BoundedNativeToolAgent agent = agent(
+                model,
+                List.of(successTool("search_rule_evidence"), successTool("read_rule_pages")),
+                audited);
+        RunRequest request = new RunRequest(
+                Role.ANSWER,
+                scope(),
+                "Search, then confirm the canonical page.",
+                "Find the complete source-backed answer.",
+                "Insufficient verified evidence.",
+                4,
+                256,
+                Set.of("search_rule_evidence", "read_rule_pages"),
+                Set.of("read_rule_pages"),
+                3);
+
+        var result = agent.run(request);
+
+        assertThat(result.status()).isEqualTo(RunStatus.COMPLETED);
+        assertThat(result.toolCalls()).isEqualTo(3);
+        assertThat(result.observations()).extracting(observation -> observation.toolName())
+                .containsExactly("search_rule_evidence", "search_rule_evidence", "read_rule_pages");
+        assertThat(audited.recordedOperations).contains("nativeRequiredToolContractRepair");
+    }
+
+    @Test
+    void partialObservationDoesNotSatisfyARequiredConfirmation() {
+        QueueModel model = new QueueModel(
+                turn(call("call-read", "read_rule_pages", "{}")),
+                finalTurn("EVIDENCE_READY"));
+        NativeAgentTool partial = new TestTool("read_rule_pages", false, false) {
+            @Override
+            public ToolObservation execute(String argumentsJson, ToolScope scope) {
+                return ToolObservation.partial("PAGE_NOT_FOUND", Map.of(), 0);
+            }
+        };
+        BoundedNativeToolAgent agent = agent(model, List.of(partial), new RecordingInvocations());
+        RunRequest request = new RunRequest(
+                Role.ANSWER,
+                scope(),
+                "Confirm one canonical page.",
+                "Read the exact source page.",
+                "Insufficient verified evidence.",
+                2,
+                256,
+                Set.of("read_rule_pages"),
+                Set.of("read_rule_pages"),
+                2);
+
+        var result = agent.run(request);
+
+        assertThat(result.status()).isEqualTo(RunStatus.FALLBACK);
+        assertThat(result.reason()).isEqualTo("COMPLETION_REQUIREMENT_UNMET");
+    }
+
+    @Test
+    void canRequireAConfirmationReadAndThenASeparateBoundedAssessment() {
+        QueueModel model = new QueueModel(
+                turn(call("call-read", "read_rule_pages", "{}")),
+                finalTurn("EVIDENCE_NOT_FOUND"));
+        BoundedNativeToolAgent agent = agent(
+                model, List.of(successTool("read_rule_pages")), new RecordingInvocations());
+        RunRequest request = new RunRequest(
+                Role.ANSWER,
+                scope(),
+                "Inspect evidence and return one terminal assessment.",
+                "Determine whether the required source kind exists.",
+                "EVIDENCE_NOT_FOUND",
+                2,
+                256,
+                Set.of("read_rule_pages"),
+                Set.of("read_rule_pages"),
+                1,
+                "",
+                Map.of("read_rule_pages", 1));
+
+        var result = agent.run(request);
+
+        assertThat(result.status()).isEqualTo(RunStatus.COMPLETED);
+        assertThat(result.text()).isEqualTo("EVIDENCE_NOT_FOUND");
+        assertThat(result.iterations()).isEqualTo(2);
+        assertThat(result.toolCalls()).isEqualTo(1);
+    }
+
+    @Test
+    void allowsOneToolFreeAssessmentWhenTheRequiredReadOccursOnTheLastAcquisitionTurn() {
+        QueueModel model = new QueueModel(
+                turn(call("call-search-1", "search_rule_evidence", "{\"query\":\"advice\"}")),
+                turn(call("call-search-2", "search_rule_evidence", "{\"query\":\"caution\"}")),
+                turn(call("call-search-3", "search_rule_evidence", "{\"query\":\"tip\"}")),
+                turn(call("call-read", "read_rule_pages", "{\"pageNumbers\":[22]}")),
+                finalTurn("EVIDENCE_READY"));
+        BoundedNativeToolAgent agent = agent(
+                model,
+                List.of(successTool("search_rule_evidence"), successTool("read_rule_pages")),
+                new RecordingInvocations());
+        RunRequest request = new RunRequest(
+                Role.ANSWER,
+                scope(),
+                "Read and then assess source-authored advice.",
+                "Find source-authored guidance.",
+                "EVIDENCE_NOT_FOUND",
+                4,
+                256,
+                Set.of("search_rule_evidence", "read_rule_pages"),
+                Set.of("read_rule_pages"),
+                4,
+                "",
+                Map.of("read_rule_pages", 1));
+
+        var result = agent.run(request);
+
+        assertThat(result.status()).isEqualTo(RunStatus.COMPLETED);
+        assertThat(result.text()).isEqualTo("EVIDENCE_READY");
+        assertThat(result.iterations()).isEqualTo(5);
+        assertThat(result.toolCalls()).isEqualTo(4);
+    }
+
+    @Test
+    void canContinueSearchingAfterARequiredReadWhenCoverageNeedsExplicitCertification() {
+        QueueModel model = new QueueModel(
+                turn(call("call-search-1", "search_rule_evidence", "{\"query\":\"alternative victory\"}")),
+                turn(call("call-read-1", "read_rule_pages", "{\"pageNumbers\":[21]}")),
+                turn(call("call-search-2", "search_rule_evidence", "{\"query\":\"standard victory\"}")),
+                turn(call("call-read-2", "read_rule_pages", "{\"pageNumbers\":[2]}")),
+                finalTurn("EVIDENCE_READY"));
+        BoundedNativeToolAgent agent = agent(
+                model,
+                List.of(successTool("search_rule_evidence"), successTool("read_rule_pages")),
+                new RecordingInvocations());
+        RunRequest request = new RunRequest(
+                Role.ANSWER,
+                scope(),
+                "Certify a complete source list.",
+                "Find every source-defined route.",
+                "EVIDENCE_NOT_FOUND",
+                5,
+                256,
+                Set.of("search_rule_evidence", "read_rule_pages"),
+                Set.of("read_rule_pages"),
+                4,
+                "",
+                Map.of(),
+                false);
+
+        var result = agent.run(request);
+
+        assertThat(result.status()).isEqualTo(RunStatus.COMPLETED);
+        assertThat(result.text()).isEqualTo("EVIDENCE_READY");
+        assertThat(result.iterations()).isEqualTo(5);
+        assertThat(result.toolCalls()).isEqualTo(4);
+        assertThat(result.observations()).extracting(observation -> observation.toolName())
+                .containsExactly(
+                        "search_rule_evidence",
+                        "read_rule_pages",
+                        "search_rule_evidence",
+                        "read_rule_pages");
+    }
+
+    @Test
     void rejectsPrematureCompletionUntilTheRequiredConfirmationToolIsObserved() {
         QueueModel model = new QueueModel(
                 turn(call("call-1", "search_rule_evidence", "{\"query\":\"end condition\"}")),

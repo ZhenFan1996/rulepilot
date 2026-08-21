@@ -179,16 +179,25 @@ public class PostgresBggRankedCatalog implements BggRankedCatalogRepository {
                 .addValue("search", escapedSearch(checked))
                 .addValue("prefix", escapedPrefix(checked))
                 .addValue("limit", maximum);
-        String matchParameter = checked.codePointCount(0, checked.length()) < 3 ? "prefix" : "search";
+        int codePoints = checked.codePointCount(0, checked.length());
+        String sourceMatchParameter = codePoints < 3 ? "prefix" : "search";
+        boolean shortHanFragment = codePoints == 2 && containsHan(checked);
+        String aliasMatchParameter = shortHanFragment ? "search" : sourceMatchParameter;
         return jdbc.query(
-                selectionSearchSql(matchParameter),
+                selectionSearchSql(sourceMatchParameter, aliasMatchParameter, shortHanFragment),
                 parameters,
                 this::mapSelection);
     }
 
-    private String selectionSearchSql(String matchParameter) {
-        String sourceMatch = "lower(g.source_name) LIKE lower(:" + matchParameter + ") ESCAPE E'\\\\'";
-        String aliasMatch = "lower(alias.alias) LIKE lower(:" + matchParameter + ") ESCAPE E'\\\\'";
+    private boolean containsHan(String value) {
+        return value.codePoints().anyMatch(codePoint -> Character.UnicodeScript.of(codePoint) == Character.UnicodeScript.HAN);
+    }
+
+    private String selectionSearchSql(
+            String sourceMatchParameter, String aliasMatchParameter, boolean restrictAliasesToChinese) {
+        String sourceMatch = "lower(g.source_name) LIKE lower(:" + sourceMatchParameter + ") ESCAPE E'\\\\'";
+        String aliasMatch = "lower(alias.alias) LIKE lower(:" + aliasMatchParameter + ") ESCAPE E'\\\\'";
+        String aliasLocale = restrictAliasesToChinese ? " AND alias.locale LIKE 'zh%'" : "";
         return """
                 WITH source_matches AS MATERIALIZED (
                     SELECT g.bgg_id,
@@ -210,7 +219,7 @@ public class PostgresBggRankedCatalog implements BggRankedCatalogRepository {
                            g.is_expansion, g.overall_rank, g.users_rated
                     FROM bgg_game_name_alias alias
                     JOIN bgg_ranked_game g ON g.bgg_id = alias.bgg_id
-                    WHERE %s
+                    WHERE %s%s
                     GROUP BY alias.bgg_id, g.is_expansion, g.overall_rank, g.users_rated
                     ORDER BY relevance, g.is_expansion ASC,
                              g.overall_rank ASC NULLS LAST, g.users_rated DESC, alias.bgg_id ASC
@@ -240,7 +249,7 @@ public class PostgresBggRankedCatalog implements BggRankedCatalogRepository {
                 ORDER BY match.relevance, g.is_expansion ASC,
                          g.overall_rank ASC NULLS LAST, g.users_rated DESC, g.bgg_id ASC
                 LIMIT :limit
-                """.formatted(sourceMatch, aliasMatch);
+                """.formatted(sourceMatch, aliasMatch, aliasLocale);
     }
 
     @Override

@@ -203,6 +203,16 @@ test('production deployment reclaims only inactive releases and restores current
   assert.doesNotMatch(deploymentWorkflow, /docker volume (?:prune|rm)/)
 })
 
+test('production deployment keeps two prior hashed frontend asset generations for open tabs', () => {
+  assert.match(deploymentWorkflow, /fetch-depth: 3/)
+  assert.match(deploymentWorkflow, /for release_distance in 1 2/)
+  assert.match(deploymentWorkflow, /git -C \.\. archive "\$previous_ref" frontend/)
+  assert.match(deploymentWorkflow, /npm ci --prefer-offline --no-audit --no-fund/)
+  assert.match(deploymentWorkflow, /bash \.\.\/scripts\/retain-frontend-release-assets\.sh/)
+  assert.match(deploymentWorkflow, /"\$previous_root\/frontend\/dist\/assets"/)
+  assert.doesNotMatch(deploymentWorkflow, /cp -[A-Za-z]*f[^\n]*previous.*frontend/i)
+})
+
 test('production deployment keeps long SSH activation sessions alive', () => {
   const activationStep = deploymentWorkflow.slice(
     deploymentWorkflow.indexOf('- name: Activate release and verify production health'),

@@ -300,30 +300,16 @@ class VisualRulebookCataloger {
         List<Integer> orderedPages = pageNumbers.stream().sorted().toList();
         List<List<Integer>> batches = VisualRulebookCatalogPolicy.teachingStartupBatches(orderedPages);
         if (batches.isEmpty()) throw new IllegalArgumentException("rulebook has no pages to catalog for teaching");
-        Set<Integer> timedOutPages = new LinkedHashSet<>();
-        List<Integer> missingPages = inspectTeachingBatches(
+        // The visual adapter already performs one single-page, contract-specific repair. Retrying the same page at
+        // this orchestration layer doubled that pair and produced four identical paid calls per failed page.
+        inspectTeachingBatches(
                 documentVersionId,
                 batches,
                 owner,
                 rulebookTitle,
                 assistantRunId,
                 index -> "inspectTeachingVisualPage|" + orderedPages.get(index) + "|" + orderedPages.size(),
-                timedOutPages);
-        List<Integer> retryPages = missingPages.stream()
-                .filter(page -> !timedOutPages.contains(page))
-                .distinct()
-                .toList();
-        if (!retryPages.isEmpty()) {
-            List<List<Integer>> retryBatches = retryPages.stream().map(List::of).toList();
-            inspectTeachingBatches(
-                    documentVersionId,
-                    retryBatches,
-                    owner,
-                    rulebookTitle,
-                    assistantRunId,
-                    index -> "inspectTeachingVisualRetry|" + retryPages.get(index),
-                    new LinkedHashSet<>());
-        }
+                new LinkedHashSet<>());
         return visualFacts.find(documentVersionId, pageNumbers).stream()
                 .filter(fact -> fact.schemaVersion() == PageFact.CURRENT_SCHEMA_VERSION)
                 .toList();

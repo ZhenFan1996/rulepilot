@@ -120,6 +120,10 @@ class PostgresBggRankedCatalogTest {
             assertThat(game.chineseName()).isEqualTo("百变策略");
             assertThat(game.imageUrl()).isEqualTo("https://example.test/10-full.jpg");
         });
+        assertThat(repository.searchSelections("变策", 12))
+                .as("two-character Chinese fragments should match within an official alias")
+                .extracting(game -> game.bggId())
+                .containsExactly(10);
         assertThat(repository.searchSelections("pansion", 12))
                 .as("the identity grid also has an expansion slot")
                 .extracting(game -> game.bggId())

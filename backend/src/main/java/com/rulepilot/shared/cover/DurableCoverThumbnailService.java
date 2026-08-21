@@ -21,6 +21,7 @@ import org.springframework.stereotype.Service;
 public class DurableCoverThumbnailService {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(DurableCoverThumbnailService.class);
+    private static final String CACHE_FORMAT_VERSION = "catalog-cover-v2-hires";
 
     private final CoverThumbnailCache cache;
     private final CoverImageFetcher fetcher;
@@ -33,7 +34,7 @@ public class DurableCoverThumbnailService {
 
     public Thumbnail thumbnailFor(String sourceUrl) {
         URI source = trustedSource(sourceUrl);
-        String cacheKey = digest(source.toASCIIString());
+        String cacheKey = digest(CACHE_FORMAT_VERSION + '\n' + source.toASCIIString());
         Optional<Thumbnail> cached = cached(cacheKey);
         if (cached.isPresent()) return cached.get();
 

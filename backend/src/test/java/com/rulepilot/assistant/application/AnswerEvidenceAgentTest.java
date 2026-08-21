@@ -207,6 +207,37 @@ class AnswerEvidenceAgentTest {
     }
 
     @Test
+    void withholdsCandidateEvidenceWhenARequiredExactPageConfirmationNeverCompletes() {
+        HybridEvidenceHit initial = hit(
+                UUID.randomUUID(), "Glossary", "Victory points are tracked with a marker.");
+        ToolObservation search = ToolObservation.success(
+                "EVIDENCE_FOUND",
+                Map.of("evidence", List.of(Map.of("pageFrom", 24))),
+                1);
+        RunResult incomplete = new RunResult(
+                RunStatus.FALLBACK,
+                "EVIDENCE_REFINEMENT_UNAVAILABLE",
+                "COMPLETION_REQUIREMENT_UNMET",
+                4,
+                1,
+                List.of(new ObservationRecord(1, "search_rule_evidence", "schema", search)));
+        AnswerEvidenceAgent agent = new AnswerEvidenceAgent(
+                fixedAgent(incomplete), emptyLookup(), scopes(), limiter(mock(Permit.class)));
+
+        var result = agent.refine(
+                runId,
+                question("What are all the ways to win?"),
+                new QuestionContext(versionId),
+                "player",
+                null,
+                plan(Set.of(EvidenceNeed.DIRECT_RULE, EvidenceNeed.COMPLETE_LIST)),
+                ready(initial));
+
+        assertThat(result.state()).isEqualTo(AnswerEvidenceRetriever.State.READY);
+        assertThat(result.evidence()).isEmpty();
+    }
+
+    @Test
     void rejectsAnObservedChunkWhoseImmutableIdentityChanged() {
         UUID sharedId = UUID.randomUUID();
         HybridEvidenceHit existing = hit(sharedId, "Original heading", "Original text.");
@@ -292,7 +323,7 @@ class AnswerEvidenceAgentTest {
     }
 
     @Test
-    void completesACompleteListRefinementAsSoonAsTheExactPageAuditSucceeds() {
+    void keepsACompleteListRefinementOpenUntilTheAgentCertifiesCoverage() {
         AtomicReference<RunRequest> captured = new AtomicReference<>();
         Permit permit = mock(Permit.class);
         AnswerEvidenceAgent agent = new AnswerEvidenceAgent(
@@ -309,7 +340,44 @@ class AnswerEvidenceAgentTest {
 
         assertThat(captured.get().requiredToolsBeforeCompletion()).containsExactly("read_rule_pages");
         assertThat(captured.get().requiredTerminalText()).isEmpty();
+        assertThat(captured.get().completeAfterRequiredTools()).isFalse();
+        assertThat(captured.get().maxIterations()).isEqualTo(5);
+        assertThat(captured.get().maxToolCalls()).isEqualTo(4);
+        assertThat(captured.get().systemPrompt()).contains(
+                "one exact-page read does not by itself prove completeness",
+                "EVIDENCE_READY",
+                "EVIDENCE_NOT_FOUND");
         verify(permit).close();
+    }
+
+    @Test
+    void withholdsExactPagesWhenTheEvidenceStageCannotCertifyACompleteList() {
+        HybridEvidenceHit initial = hit(UUID.randomUUID(), "Overview", "The game has several victory routes.");
+        RuleEvidenceHit observed = source(UUID.randomUUID(), "Alternative", "One special card changes victory.");
+        RunResult incomplete = new RunResult(
+                RunStatus.COMPLETED,
+                "EVIDENCE_NOT_FOUND",
+                "MODEL_COMPLETED",
+                3,
+                2,
+                List.of(observation(observed.chunkId())));
+        AnswerEvidenceAgent agent = new AnswerEvidenceAgent(
+                fixedAgent(incomplete),
+                (documentVersionId, ids) -> List.of(observed),
+                scopes(),
+                limiter(mock(Permit.class)));
+
+        var result = agent.refine(
+                runId,
+                question("What are all ways to win?"),
+                new QuestionContext(versionId),
+                "player",
+                null,
+                plan(Set.of(EvidenceNeed.DIRECT_RULE, EvidenceNeed.COMPLETE_LIST)),
+                ready(initial));
+
+        assertThat(result.state()).isEqualTo(AnswerEvidenceRetriever.State.READY);
+        assertThat(result.evidence()).isEmpty();
     }
 
     @Test
@@ -371,9 +439,41 @@ class AnswerEvidenceAgentTest {
                 "victory",
                 "condition, scoring route, or legal action is not itself advice");
         assertThat(captured.get().requiredToolsBeforeCompletion()).containsExactly("read_rule_pages");
-        assertThat(captured.get().maxIterations()).isEqualTo(5);
-        assertThat(captured.get().maxToolCalls()).isEqualTo(5);
+        assertThat(captured.get().maxIterations()).isEqualTo(4);
+        assertThat(captured.get().maxToolCalls()).isEqualTo(4);
+        assertThat(captured.get().finalResponseAfterToolSuccesses())
+                .containsExactly(Map.entry("read_rule_pages", 1));
         verify(permit).close();
+    }
+
+    @Test
+    void withholdsAnExactPageWhenTheEvidenceStageDoesNotCertifySourceAuthoredAdvice() {
+        HybridEvidenceHit initial = hit(UUID.randomUUID(), "Objective", "Reach the end of the score track.");
+        RuleEvidenceHit observed = source(UUID.randomUUID(), "Scoring", "Gain one point for each completed row.");
+        RunResult noAdvice = new RunResult(
+                RunStatus.COMPLETED,
+                "EVIDENCE_NOT_FOUND",
+                "MODEL_COMPLETED",
+                3,
+                3,
+                List.of(observation(observed.chunkId())));
+        AnswerEvidenceAgent agent = new AnswerEvidenceAgent(
+                fixedAgent(noAdvice),
+                (documentVersionId, ids) -> List.of(observed),
+                scopes(),
+                limiter(mock(Permit.class)));
+
+        var result = agent.refine(
+                runId,
+                question("Is there source-authored strategic guidance?"),
+                new QuestionContext(versionId),
+                "player",
+                null,
+                plan(Set.of(EvidenceNeed.ADVICE)),
+                ready(initial));
+
+        assertThat(result.state()).isEqualTo(AnswerEvidenceRetriever.State.READY);
+        assertThat(result.evidence()).isEmpty();
     }
 
     @Test

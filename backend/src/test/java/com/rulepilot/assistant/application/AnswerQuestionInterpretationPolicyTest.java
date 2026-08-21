@@ -251,6 +251,87 @@ class AnswerQuestionInterpretationPolicyTest {
     }
 
     @Test
+    void restoresTheAdviceObligationWhenAPlannerMistakesExplicitGuidanceForVictoryRules() {
+        for (String question : List.of(
+                "有没有赢的策略？",
+                "Do you have any strategy tips for winning?")) {
+            QuestionInterpretationDraft draft = new QuestionInterpretationDraft(
+                    QuestionType.RULE_QUERY,
+                    ReferenceBinding.CURRENT_QUESTION,
+                    List.of(),
+                    Set.of(),
+                    null,
+                    List.of(new PlannedSubquestion(
+                            question, Set.of(EvidenceNeed.DIRECT_RULE, EvidenceNeed.COMPLETE_LIST))));
+
+            assertThat(policy.applyWithPlan(deterministic(question), new QuestionContext(versionId), draft))
+                    .hasValueSatisfying(interpretation -> assertThat(interpretation.plan().evidenceNeeds())
+                            .contains(EvidenceNeed.ADVICE));
+        }
+    }
+
+    @Test
+    void doesNotTurnANamedStrategyComponentIntoARequestForPlayerAdvice() {
+        for (String question : List.of(
+                "策略牌什么时候打出？",
+                "What does the Strategy Card do?")) {
+            QuestionInterpretationDraft draft = new QuestionInterpretationDraft(
+                    QuestionType.RULE_QUERY,
+                    ReferenceBinding.CURRENT_QUESTION,
+                    List.of(),
+                    Set.of(),
+                    null,
+                    List.of(new PlannedSubquestion(question, Set.of(EvidenceNeed.DIRECT_RULE))));
+
+            assertThat(policy.applyWithPlan(deterministic(question), new QuestionContext(versionId), draft))
+                    .hasValueSatisfying(interpretation -> assertThat(interpretation.plan().evidenceNeeds())
+                            .containsExactly(EvidenceNeed.DIRECT_RULE));
+        }
+    }
+
+    @Test
+    void restoresCompleteVictoryRoutesWhenAPlannerReturnsOnlyADirectRuleNeed() {
+        for (String question : List.of("这款游戏我怎么赢？", "How do I win?")) {
+            QuestionInterpretationDraft draft = new QuestionInterpretationDraft(
+                    QuestionType.RULE_QUERY,
+                    ReferenceBinding.CURRENT_QUESTION,
+                    List.of(),
+                    Set.of(),
+                    null,
+                    List.of(new PlannedSubquestion(question, Set.of(EvidenceNeed.DIRECT_RULE))));
+
+            assertThat(policy.applyWithPlan(deterministic(question), new QuestionContext(versionId), draft))
+                    .hasValueSatisfying(interpretation -> assertThat(interpretation.plan().evidenceNeeds())
+                            .containsExactlyInAnyOrder(EvidenceNeed.DIRECT_RULE, EvidenceNeed.COMPLETE_LIST));
+        }
+    }
+
+    @Test
+    void keepsAGroundedConditionObjectWhenCompoundTaskSpansDoNotRepeatItsNoun() {
+        String question = "At the end of a round, if the Conflict Deck is empty, when does the game end, and what tie-breakers are used in order?";
+        QuestionInterpretationDraft draft = new QuestionInterpretationDraft(
+                QuestionType.RULE_QUERY,
+                ReferenceBinding.CURRENT_QUESTION,
+                List.of("Conflict Deck", "game end", "tie-breakers"),
+                List.of("Conflict Deck"),
+                List.of(),
+                Set.of(),
+                null,
+                com.rulepilot.assistant.RuleAnswerModel.AnswerAid.TIMING,
+                List.of(
+                        new PlannedSubquestion("when does the game end", Set.of(EvidenceNeed.DIRECT_RULE, EvidenceNeed.SEQUENCE)),
+                        new PlannedSubquestion("what tie-breakers are used in order", Set.of(EvidenceNeed.DIRECT_RULE, EvidenceNeed.SEQUENCE, EvidenceNeed.COMPLETE_LIST))));
+
+        assertThat(policy.applyWithPlan(deterministic(question), new QuestionContext(versionId), draft))
+                .hasValueSatisfying(interpretation -> {
+                    assertThat(interpretation.plan().currentRuleObjectSpans()).containsExactly("Conflict Deck");
+                    assertThat(interpretation.plan().subquestions())
+                            .extracting(AnswerQuestionPlan.Subquestion::text)
+                            .containsExactly("when does the game end", "what tie-breakers are used in order");
+                });
+    }
+
+    @Test
     void keepsCurrentObjectAndPageLocatorSeparateFromTheSelectedReferenceQuestion() {
         String current = "On page 47, does the cobalt spindle resolve like that?";
         String previous = "When does the amber lattice release its stored marker?";

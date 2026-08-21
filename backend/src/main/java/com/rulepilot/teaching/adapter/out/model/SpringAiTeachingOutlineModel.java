@@ -56,6 +56,8 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
     private static final Logger log = LoggerFactory.getLogger(SpringAiTeachingOutlineModel.class);
     private static final int MAX_OUTLINE_COMPLETION_TOKENS = 10_000;
     private static final long OUTLINE_DEADLINE_SECONDS = 120;
+    static final int MAX_CANONICAL_LEDGER_EVIDENCE_CHARACTERS = 32_000;
+    private static final int MAX_CANONICAL_PAGE_EVIDENCE_CHARACTERS = 2_800;
 
     private final RuntimeModelConfiguration models;
     private final VersionedAgentPrompts prompts;
@@ -798,6 +800,8 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
                 LinkedHashMap::new,
                 java.util.stream.Collectors.toList()));
         StringBuilder ledger = new StringBuilder();
+        int remainingEvidenceCharacters = MAX_CANONICAL_LEDGER_EVIDENCE_CHARACTERS;
+        int remainingPages = request.pages().size();
         for (var page : request.pages()) {
             ledger.append("PAGE ").append(page.pageNumber()).append('\n');
             List<CanonicalSourceSlot> pageSlots = slotsByPage.getOrDefault(page.pageNumber(), List.of());
@@ -816,11 +820,70 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
                     ledger.append(" | identifier=").append(slot.sourceIdentifier()).append('\n');
                 }
             }
+            int pageEvidenceBudget = Math.min(
+                    MAX_CANONICAL_PAGE_EVIDENCE_CHARACTERS,
+                    Math.max(1, remainingEvidenceCharacters / Math.max(1, remainingPages)));
+            String pageEvidence = canonicalPageEvidence(page, pageEvidenceBudget);
+            remainingEvidenceCharacters -= pageEvidence.length();
+            remainingPages--;
             ledger.append("PAGE_EVIDENCE_BEGIN\n")
-                    .append(page.text())
+                    .append(pageEvidence)
                     .append("\nPAGE_EVIDENCE_END\n\n");
         }
         return ledger.toString().stripTrailing();
+    }
+
+    /**
+     * The immutable slot ledger already preserves every auditable source identity. Planning needs the relationship
+     * around those identities, not another full copy of every page. Source-centred excerpts keep middle and tail
+     * rules visible while bounding the model context for long rulebooks.
+     */
+    static String canonicalPageEvidence(PageInput page, int maximumCharacters) {
+        if (page == null || maximumCharacters < 1) {
+            throw new IllegalArgumentException("canonical page evidence boundary is invalid");
+        }
+        String text = page.text().strip().replaceAll("[\\t\\x0B\\f\\r ]+", " ");
+        if (text.length() <= maximumCharacters) return text;
+
+        List<String> identifiers = page.sourceRuleGroupIdentifiers();
+        if (identifiers.isEmpty()) return boundedAcrossPage(text, maximumCharacters);
+        int separatorCharacters = Math.max(0, identifiers.size() - 1) * 5;
+        int excerptBudget = Math.max(48, (maximumCharacters - separatorCharacters) / identifiers.size());
+        String searchable = text.toLowerCase(Locale.ROOT);
+        List<String> excerpts = new ArrayList<>();
+        LinkedHashSet<String> seen = new LinkedHashSet<>();
+        for (String identifier : identifiers) {
+            int index = searchable.indexOf(identifier.toLowerCase(Locale.ROOT));
+            if (index < 0) continue;
+            int usable = Math.min(excerptBudget, maximumCharacters);
+            int context = Math.max(0, usable - identifier.length());
+            int start = Math.max(0, index - context / 2);
+            int end = Math.min(text.length(), start + usable);
+            start = Math.max(0, end - usable);
+            String excerpt = text.substring(start, end).strip();
+            if (!excerpt.isBlank() && seen.add(excerpt)) excerpts.add(excerpt);
+        }
+        if (excerpts.isEmpty()) return boundedAcrossPage(text, maximumCharacters);
+        String joined = String.join("\n…\n", excerpts);
+        return joined.length() <= maximumCharacters
+                ? joined
+                : joined.substring(0, maximumCharacters).stripTrailing();
+    }
+
+    private static String boundedAcrossPage(String text, int maximumCharacters) {
+        if (text.length() <= maximumCharacters) return text;
+        String gap = "\n…\n";
+        if (maximumCharacters <= gap.length() * 2) return text.substring(0, maximumCharacters);
+        int content = maximumCharacters - gap.length() * 2;
+        int head = content / 3;
+        int middle = content / 3;
+        int tail = content - head - middle;
+        int middleStart = Math.max(head, (text.length() - middle) / 2);
+        return text.substring(0, head)
+                + gap
+                + text.substring(middleStart, middleStart + middle)
+                + gap
+                + text.substring(text.length() - tail);
     }
 
     private static List<CanonicalSourceSlot> canonicalSourceSlots(OutlineRequest request) {

@@ -26,8 +26,8 @@ public class SearchRuleRelationshipsNativeTool implements NativeAgentTool {
             {
               "type": "object",
               "properties": {
-                "topic": {"type": "string", "minLength": 1, "maxLength": 320},
-                "limit": {"type": "integer", "minimum": 1, "maximum": 6}
+                "topic": {"type": "string", "description": "One concrete relationship between the current general rule and its possible exception, replacement, precedence, or condition, using active-document terms.", "minLength": 1, "maxLength": 320},
+                "limit": {"type": "integer", "description": "Smallest useful candidate count; prefer 3 and never exceed 6.", "minimum": 1, "maximum": 6}
               },
               "required": ["topic", "limit"],
               "additionalProperties": false
@@ -49,8 +49,11 @@ public class SearchRuleRelationshipsNativeTool implements NativeAgentTool {
 
     @Override
     public String description() {
-        return "Search the active rulebook for canonical passages about one model-selected relationship topic. "
-                + "The tool does not classify exceptions, replacements, conflicts, or priority.";
+        return "Use when a plan needs the relationship between a general rule and a possible exception, replacement, "
+                + "conflict, precedence, or condition. Search one topic in the active immutable rulebook; do not use "
+                + "it for a direct-rule lookup. Passages are authoritative source text, but cue labels do not decide "
+                + "which rule wins or applies. Read exact pages and compare scope. Stop when both sides are covered or "
+                + "no independent candidate remains.";
     }
 
     @Override

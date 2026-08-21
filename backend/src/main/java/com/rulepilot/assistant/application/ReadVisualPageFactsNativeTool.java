@@ -21,8 +21,8 @@ public class ReadVisualPageFactsNativeTool implements NativeAgentTool {
             {
               "type": "object",
               "properties": {
-                "evidenceId": {"type": "string", "format": "uuid"},
-                "pageNumber": {"type": "integer", "minimum": 1}
+                "evidenceId": {"type": "string", "description": "An existing active-rulebook evidence handle that binds this visual lookup to the same document and page.", "format": "uuid"},
+                "pageNumber": {"type": "integer", "description": "The exact page carried by that evidence handle, never a guessed locator.", "minimum": 1}
               },
               "required": ["evidenceId", "pageNumber"],
               "additionalProperties": false
@@ -41,7 +41,11 @@ public class ReadVisualPageFactsNativeTool implements NativeAgentTool {
 
     @Override
     public String description() {
-        return "Read bounded page-local visual observations tied to a cited evidence handle. Facts navigate visible objects and labels but never independently prove a mechanical rule.";
+        return "Use for a visible icon, label, table, diagram, arrow, or layout after an evidence handle identifies "
+                + "the exact page in the active immutable rulebook. Page-local observations can locate printed "
+                + "objects but have no independent mechanical-rule authority; confirm a ruling with canonical text. "
+                + "Do not use it for non-visual questions or guessed identifiers. Stop when the visible reference is "
+                + "located or reported absent.";
     }
 
     @Override public String inputSchema() { return INPUT_SCHEMA; }

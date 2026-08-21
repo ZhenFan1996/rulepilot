@@ -37,6 +37,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || 'main' }}
+          fetch-depth: 3
 
       - uses: actions/setup-java@v5
         with:
@@ -80,9 +81,35 @@ jobs:
           sha256sum "$RUNNER_TEMP/$backend_image_archive"
 
       - name: Build frontend artifact
+        shell: bash
         run: |
+          set -Eeuo pipefail
           npm ci
           npm run build
+          previous_build_roots=()
+          cleanup_previous_builds() {
+            for previous_root in "${previous_build_roots[@]}"; do
+              if [[ "$previous_root" == "$RUNNER_TEMP"/rulepilot-previous-frontend.* ]]; then
+                rm -rf -- "$previous_root"
+              fi
+            done
+          }
+          trap cleanup_previous_builds EXIT
+          for release_distance in 1 2; do
+            previous_ref="HEAD~${release_distance}"
+            git -C .. rev-parse --verify "${previous_ref}^{commit}" >/dev/null
+            previous_root=$(mktemp -d "$RUNNER_TEMP/rulepilot-previous-frontend.XXXXXX")
+            previous_build_roots+=("$previous_root")
+            git -C .. archive "$previous_ref" frontend | tar -x -C "$previous_root"
+            (
+              cd "$previous_root/frontend"
+              npm ci --prefer-offline --no-audit --no-fund
+              npm run build
+            )
+            bash ../scripts/retain-frontend-release-assets.sh \
+              dist/assets \
+              "$previous_root/frontend/dist/assets"
+          done
         working-directory: frontend
 
       - name: Configure production SSH trust
@@ -226,7 +253,7 @@ jobs:
             'BGG_CACHE_PREWARM_GAME_COUNT=2000' \
             'BGG_CACHE_PREWARM_COHORT_SIZE=500' \
             'BGG_CACHE_PREWARM_TRANSLATION_COHORT_SIZE=60' \
-            'BGG_CACHE_PREWARM_RESUME_DELAY=PT2H' \
+            'BGG_CACHE_PREWARM_RESUME_DELAY=PT1H' \
             'BGG_CACHE_PREWARM_LEASE_DURATION=PT30M' \
             'BGG_RECOMMENDATION_AGENT_ENABLED=true' \
             'BGG_RECOMMENDATION_PROVIDER=spring-ai' \

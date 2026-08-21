@@ -31,7 +31,7 @@ public class BoardGameRecommendationAgent {
     static final String COMPARE_TOOL = "compare_candidates";
     static final String NO_MATCH_TOOL = "report_no_match";
     static final String RECOMMEND_TOOL = "recommend_games";
-    static final String PROMPT_VERSION = "recommendation-agent-v14-persistent-memory-reference-scope";
+    static final String PROMPT_VERSION = "recommendation-agent-v17-id-only-selection";
 
     private final RecommendationReActLoop loop;
 
@@ -568,7 +568,8 @@ public class BoardGameRecommendationAgent {
 
     public enum DecisionMode {
         MODEL_ASSISTED,
-        MODEL_FAST_PATH
+        MODEL_FAST_PATH,
+        LOCAL_FAST_PATH
     }
 
     public enum PreferenceField {

@@ -847,7 +847,7 @@ class AnswerEvidenceAgentRealRulebookEvaluationTest {
             assertThat(answer.status().publishesConclusion()).isTrue();
             assertThat(answer.citations()).singleElement().satisfies(citation -> {
                 assertThat(citation.pageFrom()).isEqualTo(3);
-                assertThat(citation.excerpt()).startsWith("Visual-transcribed rule evidence");
+                assertThat(citation.excerpt()).isEqualTo(case_.factualSummary());
             });
             assertThat(visibleText(answer).toLowerCase(Locale.ROOT)).contains(case_.expectedTerm().toLowerCase(Locale.ROOT));
 
@@ -947,7 +947,7 @@ class AnswerEvidenceAgentRealRulebookEvaluationTest {
             assertThat(visibleText(win.answer()))
                     .as(providerName + " must preserve both stated victory routes")
                     .contains("30")
-                    .containsAnyOf("card", "Card", "卡");
+                    .containsAnyOf("card", "Card", "卡", "牌");
 
             assertThat(sourcedStrategy.plan().evidenceNeeds())
                     .as(providerName + " must semantically plan an advice-evidence obligation")
@@ -960,7 +960,9 @@ class AnswerEvidenceAgentRealRulebookEvaluationTest {
                     .anyMatch(citation -> citation.pageFrom() == 22);
             assertThat(visibleText(sourcedStrategy.answer()))
                     .as(providerName + " must preserve the advice's faction or player-count scope")
-                    .containsAnyOf("Eyrie", "Marquise", "Alliance", "Vagabond");
+                    .containsAnyOf(
+                            "Eyrie", "Marquise", "Alliance", "Vagabond",
+                            "鹰巢", "侯爵", "联盟", "流浪者");
 
             assertThat(unsupportedStrategy.plan().evidenceNeeds())
                     .as(providerName + " must apply the same semantic advice obligation across rulebooks")
@@ -1176,21 +1178,32 @@ class AnswerEvidenceAgentRealRulebookEvaluationTest {
                 plan,
                 ready(corpus.hit(initialPage)));
 
-        ModelRequest request = new AnswerModelRequestFactory()
-                .create(understood, questionContext, refined.evidence(), plan);
-        AnswerDraftComposer.Result prepared = new AnswerDraftComposer(modelGateway)
-                .compose(runId, "agent-evaluation", null, request);
+        ModelRequest request = null;
+        AnswerDraftComposer.Result prepared = null;
         StructuredRuleAnswer answer;
-        if (!prepared.ready()) {
-            answer = AnswerOutcomePolicy.safeFailure(versionId, prepared.failureStatus(), prepared.failureMessage());
+        AnswerEvidenceAdmissionGate.Admission admission = new AnswerEvidenceAdmissionGate(
+                        new AnswerPublicationValidator(new PolicyEvidenceVerifier()))
+                .admit(versionId, refined);
+        if (!admission.ready()) {
+            answer = AnswerOutcomePolicy.safeFailure(
+                    versionId, admission.failureStatus(), admission.failureMessage());
         } else {
-            try {
-                answer = publishBoundaryAnswer(versionId, request, prepared.draft(), refined.evidence());
-            } catch (RuntimeException invalidDraft) {
+            request = new AnswerModelRequestFactory()
+                    .create(understood, questionContext, admission.evidence(), plan);
+            prepared = new AnswerDraftComposer(modelGateway)
+                    .compose(runId, "agent-evaluation", null, request);
+            if (!prepared.ready()) {
                 answer = AnswerOutcomePolicy.safeFailure(
-                        versionId,
-                        com.rulepilot.assistant.domain.AnswerStatus.INVALID_MODEL_OUTPUT,
-                        "The generated answer did not satisfy the publication schema.");
+                        versionId, prepared.failureStatus(), prepared.failureMessage());
+            } else {
+                try {
+                    answer = publishBoundaryAnswer(versionId, request, prepared.draft(), admission.evidence());
+                } catch (RuntimeException invalidDraft) {
+                    answer = AnswerOutcomePolicy.safeFailure(
+                            versionId,
+                            com.rulepilot.assistant.domain.AnswerStatus.INVALID_MODEL_OUTPUT,
+                            "The generated answer did not satisfy the publication schema.");
+                }
             }
         }
         long latencyMs = Duration.ofNanos(System.nanoTime() - started).toMillis();
@@ -1225,7 +1238,7 @@ class AnswerEvidenceAgentRealRulebookEvaluationTest {
                 request,
                 refined,
                 answer,
-                prepared.ready() ? prepared.draft() : null,
+                prepared != null && prepared.ready() ? prepared.draft() : null,
                 audited.lastAnswerDraft,
                 audited,
                 latencyMs);

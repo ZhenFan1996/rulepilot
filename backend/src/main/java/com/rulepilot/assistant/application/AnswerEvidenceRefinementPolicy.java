@@ -29,10 +29,17 @@ final class AnswerEvidenceRefinementPolicy {
             return false;
         }
         if (deterministic.evidence().isEmpty()) return true;
-        if (!plan.agentPlanned()) return false;
+        if (!plan.agentPlanned()
+                && plan.evidenceNeeds().stream().noneMatch(need ->
+                        need == EvidenceNeed.ADVICE || need == EvidenceNeed.COMPLETE_LIST)) {
+            return false;
+        }
         if (plan.referenceBinding() != ReferenceBinding.CURRENT_QUESTION) return true;
         if (plan.answerAid() == AnswerAid.CALCULATION) return true;
         return plan.subquestions().size() > 1
-                || plan.evidenceNeeds().stream().anyMatch(need -> need != EvidenceNeed.DIRECT_RULE);
+                || plan.evidenceNeeds().stream().anyMatch(need -> switch (need) {
+            case ADVICE, COMPLETE_LIST, RELATIONSHIP, EXCEPTION -> true;
+            default -> false;
+        });
     }
 }

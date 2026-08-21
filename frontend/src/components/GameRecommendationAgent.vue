@@ -1427,7 +1427,7 @@ onBeforeUnmount(() => {
                     <span v-for="label in toolLabelsFor(message.response)" :key="label" class="rounded-full border border-ink/10 bg-paper px-2.5 py-1">{{ label }}</span>
                   </div>
 
-                  <details v-if="message.response?.harness && message.response.mode !== 'model_fast_path'" data-testid="recommendation-execution-audit" class="mt-2 max-w-[94%] rounded-xl border border-ink/8 bg-paper/65 px-3 py-2 text-xs text-ink/55">
+                  <details v-if="message.response?.harness && message.response.mode === 'model_assisted'" data-testid="recommendation-execution-audit" class="mt-2 max-w-[94%] rounded-xl border border-ink/8 bg-paper/65 px-3 py-2 text-xs text-ink/55">
                     <summary class="min-h-8 cursor-pointer py-1 font-semibold text-ink/65">{{ responseT(message.response, 'executionAudit') }}</summary>
                     <p class="mt-2 font-semibold text-ink/65">{{ responseT(message.response, 'executionModel') }}</p>
                     <p class="mt-1 leading-5">

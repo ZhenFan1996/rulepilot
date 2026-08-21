@@ -28,6 +28,7 @@ final class RecommendationAgentState {
     final Set<Integer> legalIds = new LinkedHashSet<>();
     final Map<Integer, String> candidateNames = new LinkedHashMap<>();
     final Map<Integer, Game> verified = new LinkedHashMap<>();
+    final Set<Integer> freshVerifiedIds = new LinkedHashSet<>();
     final Map<String, ContextualPreference> contextualPreferences = new LinkedHashMap<>();
     final Set<Integer> targetGameIds = new LinkedHashSet<>();
     final Set<Integer> comparisonReferenceIds = new LinkedHashSet<>();
@@ -37,6 +38,7 @@ final class RecommendationAgentState {
     final List<String> actions = new ArrayList<>();
     boolean webResearchAvailable;
     NamedGamePurpose namedGamePurpose;
+    boolean unresolvedPlayerTitle;
     int referenceResolutionAttempts;
     boolean titleInspectionAttempted;
     boolean catalogBrowseAttempted;
@@ -73,7 +75,7 @@ final class RecommendationAgentState {
         webResearchAvailable = webResearchConfigured;
         request.knownGames().forEach(game -> observeCandidate(
                 game.bggId(), game.originalName().isBlank() ? game.name() : game.originalName()));
-        request.priorVerifiedGames().forEach(this::addVerified);
+        request.priorVerifiedGames().forEach(this::restoreVerified);
         legalIds.addAll(request.shownBggIds());
         if (request.focusedBggId() != null) legalIds.add(request.focusedBggId());
     }
@@ -81,9 +83,38 @@ final class RecommendationAgentState {
     void addVerified(Game game) {
         if (game == null || game.details() == null) return;
         observeCandidate(game.ranking().bggId(), game.ranking().sourceName());
-        if (verified.containsKey(game.ranking().bggId()) || verified.size() < MAX_VERIFIED_GAMES) {
-            verified.put(game.ranking().bggId(), game);
+        int bggId = game.ranking().bggId();
+        if (!verified.containsKey(bggId) && verified.size() >= MAX_VERIFIED_GAMES) {
+            Integer oldestRestored = null;
+            for (Integer candidateId : verified.keySet()) {
+                if (!freshVerifiedIds.contains(candidateId)) oldestRestored = candidateId;
+            }
+            if (oldestRestored == null) {
+                oldestRestored = verified.keySet().iterator().next();
+            }
+            if (oldestRestored != null) {
+                verified.remove(oldestRestored);
+                freshVerifiedIds.remove(oldestRestored);
+            }
         }
+        verified.put(bggId, game);
+        freshVerifiedIds.add(bggId);
+    }
+
+    List<Game> verifiedForAgent() {
+        return java.util.stream.Stream.concat(
+                        freshVerifiedIds.stream().map(verified::get),
+                        verified.entrySet().stream()
+                                .filter(entry -> !freshVerifiedIds.contains(entry.getKey()))
+                                .map(Map.Entry::getValue))
+                .filter(java.util.Objects::nonNull)
+                .toList();
+    }
+
+    private void restoreVerified(Game game) {
+        if (game == null || game.details() == null || verified.size() >= MAX_VERIFIED_GAMES) return;
+        observeCandidate(game.ranking().bggId(), game.ranking().sourceName());
+        verified.putIfAbsent(game.ranking().bggId(), game);
     }
 
     void assignNamedGameRole(int bggId, NamedGamePurpose purpose) {
