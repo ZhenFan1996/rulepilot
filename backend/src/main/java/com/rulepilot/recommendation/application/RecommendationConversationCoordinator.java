@@ -82,6 +82,20 @@ public class RecommendationConversationCoordinator {
             String requestedLocale,
             String ownerUsername,
             Consumer<ProgressUpdate> progressListener) {
+        return converse(
+                turn,
+                requestedLocale,
+                ownerUsername,
+                progressListener,
+                ignored -> {});
+    }
+
+    public TurnResult converse(
+            SessionTurn turn,
+            String requestedLocale,
+            String ownerUsername,
+            Consumer<ProgressUpdate> progressListener,
+            Consumer<String> answerPartListener) {
         Objects.requireNonNull(turn, "recommendation session turn is required");
         Objects.requireNonNull(turn.clientTurnId(), "clientTurnId is required for a persisted turn");
         ConversationRequest validatedRequest = agent.validatedConversationRequest(turn.request());
@@ -110,7 +124,12 @@ public class RecommendationConversationCoordinator {
         if (completedWhileClaiming.isPresent()) return completedWhileClaiming.get();
 
         try {
-            ConversationResponse response = agent.conversePersisted(effectiveRequest, locale, owner, progressListener);
+            ConversationResponse response = agent.conversePersisted(
+                    effectiveRequest,
+                    locale,
+                    owner,
+                    progressListener,
+                    answerPartListener);
             ConversationState nextState = nextState(claimed.state(), effectiveRequest, response);
             Instant completedAt = clock.instant();
             boolean completed = conversations.completeTurn(

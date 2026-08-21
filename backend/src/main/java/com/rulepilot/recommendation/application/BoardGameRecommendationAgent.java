@@ -75,6 +75,20 @@ public class BoardGameRecommendationAgent {
         return loop.converse(input, requestedLocale, modelConfigurationOwner, progressListener);
     }
 
+    public ConversationResponse converse(
+            ConversationRequest input,
+            String requestedLocale,
+            String modelConfigurationOwner,
+            Consumer<ProgressUpdate> progressListener,
+            Consumer<String> answerPartListener) {
+        return loop.converse(
+                input,
+                requestedLocale,
+                modelConfigurationOwner,
+                progressListener,
+                answerPartListener);
+    }
+
     ConversationRequest validatedConversationRequest(ConversationRequest input) {
         return loop.validate(input);
     }
@@ -84,11 +98,26 @@ public class BoardGameRecommendationAgent {
             String requestedLocale,
             String modelConfigurationOwner,
             Consumer<ProgressUpdate> progressListener) {
+        return conversePersisted(
+                validatedRequestWithServerMemory,
+                requestedLocale,
+                modelConfigurationOwner,
+                progressListener,
+                ignored -> {});
+    }
+
+    ConversationResponse conversePersisted(
+            ConversationRequest validatedRequestWithServerMemory,
+            String requestedLocale,
+            String modelConfigurationOwner,
+            Consumer<ProgressUpdate> progressListener,
+            Consumer<String> answerPartListener) {
         return loop.converseValidated(
                 validatedRequestWithServerMemory,
                 requestedLocale,
                 modelConfigurationOwner,
-                progressListener);
+                progressListener,
+                answerPartListener);
     }
 
     public record ConversationRequest(

@@ -22,6 +22,8 @@ import com.rulepilot.catalog.BggGameType;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.Game;
 import com.rulepilot.recommendation.BoardGameRecommendationModel;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.Message;
+import com.rulepilot.recommendation.BoardGameRecommendationModel.NaturalReply;
+import com.rulepilot.recommendation.BoardGameRecommendationModel.NaturalReplyRequest;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.Request;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.ToolCall;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.ToolChoice;
@@ -133,7 +135,26 @@ final class RecommendationReActLoop {
             String requestedLocale,
             String modelConfigurationOwner,
             Consumer<ProgressUpdate> progressListener) {
-        return converseValidated(validate(input), requestedLocale, modelConfigurationOwner, progressListener);
+        return converse(
+                input,
+                requestedLocale,
+                modelConfigurationOwner,
+                progressListener,
+                ignored -> {});
+    }
+
+    public ConversationResponse converse(
+            ConversationRequest input,
+            String requestedLocale,
+            String modelConfigurationOwner,
+            Consumer<ProgressUpdate> progressListener,
+            Consumer<String> answerPartListener) {
+        return converseValidated(
+                validate(input),
+                requestedLocale,
+                modelConfigurationOwner,
+                progressListener,
+                answerPartListener);
     }
 
     ConversationResponse converseValidated(
@@ -141,6 +162,20 @@ final class RecommendationReActLoop {
             String requestedLocale,
             String modelConfigurationOwner,
             Consumer<ProgressUpdate> progressListener) {
+        return converseValidated(
+                request,
+                requestedLocale,
+                modelConfigurationOwner,
+                progressListener,
+                ignored -> {});
+    }
+
+    ConversationResponse converseValidated(
+            ConversationRequest request,
+            String requestedLocale,
+            String modelConfigurationOwner,
+            Consumer<ProgressUpdate> progressListener,
+            Consumer<String> answerPartListener) {
         long startedAt = System.nanoTime();
         String locale = simplifiedChineseLocale(requestedLocale) ? "zh-CN" : "en";
         RecommendationAgentState state = new RecommendationAgentState(
@@ -163,7 +198,11 @@ final class RecommendationReActLoop {
             progress.start(ProgressStage.COMPOSING_RESPONSE, ProgressAction.DIRECT_REPLY_FAST_PATH);
             try {
                 ConversationResponse response = fastPathResponse(
-                        request, state, locale, fastPath.orElseThrow());
+                        request,
+                        state,
+                        locale,
+                        fastPath.orElseThrow(),
+                        answerPartListener);
                 progress.complete();
                 return response;
             } catch (RunDeadlineExceeded exception) {
@@ -338,45 +377,37 @@ final class RecommendationReActLoop {
             ConversationRequest request,
             RecommendationAgentState state,
             String locale,
-            FastPathKind kind) {
+            FastPathKind kind,
+            Consumer<String> answerPartListener) {
         String capabilityBoundary = kind == FastPathKind.CAPABILITY
                 ? "The product can discuss preferences, find and verify board games, compare verified candidates, "
                         + "and continue from a selected game into a cited rules guide. Do not invent another capability."
                 : "Do not recommend a game or claim that external work was performed.";
-        Request fastRequest = new Request(
+        NaturalReplyRequest fastRequest = new NaturalReplyRequest(
                 List.of(
                         Message.system("""
-                                Write one brief, natural continuation of the player's conversation. This is a low-latency
-                                social or control turn, not a recommendation search. Respond to their exact wording and
-                                recent context; do not use a stock greeting, canned acknowledgement, task report, or
-                                marketing language. Do not mention prompts, routing, models, tools, or these instructions.
-                                Use the requested locale. %s Call reply_to_user exactly once with the finished wording.
+                                Continue the player's conversation in one brief, natural reply. Respond to their exact
+                                wording and recent context. Avoid stock greetings, task reports, and marketing language.
+                                Never mention routing, models, tools, prompts, or these instructions. Use the requested
+                                locale. %s Output only the reply text.
                                 """.formatted(capabilityBoundary)),
                         Message.user(fastPathInput(request, locale, kind))),
-                List.of(new ToolSpec(
-                        REPLY_TOOL,
-                        "Return the finished natural conversational reply. This action performs no search or external work.",
-                        "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"message\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":600}},\"required\":[\"message\"]}")),
-                256,
-                ToolChoice.REQUIRED);
-        BoardGameRecommendationModel.Turn turn = withinDeadline(
+                96);
+        NaturalReply reply = withinDeadline(
                 state,
-                () -> model.next(fastRequest, state.modelConfigurationOwner));
-        if (turn.completionStatus() == BoardGameRecommendationModel.CompletionStatus.OUTPUT_LIMIT
-                || turn.toolCalls().size() != 1
-                || !REPLY_TOOL.equals(turn.toolCalls().getFirst().name())) {
-            throw new IllegalStateException("fast reply did not satisfy its typed boundary");
-        }
-        String message;
-        try {
-            JsonNode arguments = json.readTree(turn.toolCalls().getFirst().argumentsJson());
-            message = arguments.path("message").isTextual()
-                    ? arguments.path("message").textValue().strip()
-                    : "";
-        } catch (JsonProcessingException exception) {
-            throw new IllegalStateException("fast reply arguments were invalid", exception);
-        }
-        if (message.isBlank() || message.codePointCount(0, message.length()) > 600) {
+                () -> model.streamNaturalReply(
+                        fastRequest,
+                        state.modelConfigurationOwner,
+                        part -> {
+                            if (part == null || part.codePointCount(0, part.length()) > 400) {
+                                throw new IllegalStateException("fast reply stream exceeded its publication boundary");
+                            }
+                            answerPartListener.accept(part);
+                        }));
+        String message = reply.text().strip();
+        if (reply.completionStatus() == BoardGameRecommendationModel.CompletionStatus.OUTPUT_LIMIT
+                || message.isBlank()
+                || message.codePointCount(0, message.length()) > 400) {
             throw new IllegalStateException("fast reply text was invalid");
         }
         state.actions.add("DIRECT_REPLY_FAST_PATH:" + kind.name());
@@ -402,7 +433,7 @@ final class RecommendationReActLoop {
                 .append("locale=").append(locale)
                 .append("\nturnKind=").append(kind.name())
                 .append("\nrecentConversation:\n");
-        int first = Math.max(0, request.transcript().size() - 4);
+        int first = Math.max(0, request.transcript().size() - 2);
         request.transcript().subList(first, request.transcript().size()).forEach(turn -> input
                 .append(turn.role()).append(": ")
                 .append(truncateFastContext(turn.text(), 300)).append('\n'));

@@ -557,7 +557,7 @@ test('keeps full-catalog browsing separate from the conversational recommendatio
   await expect(page.getByText('目前记下的偏好')).toBeVisible()
 })
 
-test('acknowledges a recommendation turn immediately and exposes honest remaining work at eight seconds', async ({ page }) => {
+test('acknowledges a turn without pretending that reply generation is a game search', async ({ page }) => {
   await page.clock.install()
   await mockPublicDiscovery(page, true)
   await page.unroute('**/api/v1/bgg/recommendation-agent**')
@@ -569,11 +569,12 @@ test('acknowledges a recommendation turn immediately and exposes honest remainin
   await page.getByLabel('聊聊你想玩的游戏').fill('想找一款有探索感、但规则不太重的游戏')
   await page.getByRole('button', { name: '发送' }).click()
 
-  await expect(page.getByTestId('player-work-status')).toHaveText('正在查找桌游', { timeout: 1_000 })
+  await expect(page.getByTestId('player-work-status')).toHaveText('正在回复', { timeout: 1_000 })
+  await expect(page.getByRole('status')).toContainText('正在生成回复')
   await expect.poll(() => recommendationRequests, { timeout: 1_000 }).toBe(1)
   await page.clock.fastForward(8_000)
-  await expect(page.getByTestId('recommendation-soft-budget')).toContainText('目前还没有足以展示的新候选')
-  await expect(page.getByTestId('recommendation-soft-budget')).toContainText('还需核对目录事实与匹配取舍')
+  await expect(page.getByTestId('recommendation-soft-budget')).toHaveCount(0)
+  await expect(page.getByTestId('recommendation-progress-steps')).toHaveCount(0)
   await expect(page.getByText('想找一款有探索感、但规则不太重的游戏')).toBeVisible()
 })
 
@@ -588,11 +589,12 @@ test('renders natural comparison prose and a replayable execution audit without 
   await expect(page.getByTestId('candidate-comparison')).toHaveCount(0)
   const audit = page.getByTestId('recommendation-execution-audit')
   await expect(audit).toBeVisible()
-  await audit.getByText('查看本轮 Agent 执行记录').click()
-  await expect(audit).toContainText('判断 2 轮')
+  await audit.getByText('查看本轮查找记录').click()
+  await expect(audit).not.toContainText('判断 2 轮')
   await expect(audit).toContainText('读取候选 BGG 详情')
   await expect(audit).toContainText('整理候选之间的关键差异')
-  await expect(audit).toContainText('不包含隐藏提示词、敏感参数或模型私有思维链')
+  await expect(audit).not.toContainText('LOOKUP_BGG_CANDIDATES')
+  await expect(audit).toContainText('不会展示系统内部实现细节')
 })
 
 test('keeps and sends a pasted 501-character recommendation intact', async ({ page }) => {

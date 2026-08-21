@@ -1,8 +1,9 @@
 package com.rulepilot.recommendation;
 
 import java.util.List;
+import java.util.function.Consumer;
 
-/** Provider-neutral native action-call port for the conversational recommendation Agent. */
+/** Provider-neutral generation port for conversational replies and native recommendation actions. */
 public interface BoardGameRecommendationModel {
 
     boolean configured();
@@ -16,6 +17,36 @@ public interface BoardGameRecommendationModel {
 
     default Turn next(Request request, String ownerUsername) {
         return next(request);
+    }
+
+    /**
+     * Streams a low-risk conversational reply without advertising or executing external actions.
+     * The listener receives the complete text accumulated so far, never provider-specific deltas.
+     */
+    default NaturalReply streamNaturalReply(
+            NaturalReplyRequest request,
+            String ownerUsername,
+            Consumer<String> accumulatedTextListener) {
+        throw new UnsupportedOperationException("natural reply streaming is not configured");
+    }
+
+    record NaturalReplyRequest(List<Message> messages, int maxOutputTokens) {
+        public NaturalReplyRequest {
+            if (messages == null
+                    || messages.isEmpty()
+                    || maxOutputTokens < 32
+                    || maxOutputTokens > 512) {
+                throw new IllegalArgumentException("natural reply request is invalid");
+            }
+            messages = List.copyOf(messages);
+        }
+    }
+
+    record NaturalReply(String text, CompletionStatus completionStatus) {
+        public NaturalReply {
+            text = text == null ? "" : text;
+            completionStatus = completionStatus == null ? CompletionStatus.UNKNOWN : completionStatus;
+        }
     }
 
     record ToolSpec(String name, String description, String inputSchema) {

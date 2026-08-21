@@ -93,6 +93,41 @@ class BggRecommendationAgentControllerTest {
     }
 
     @Test
+    void doesNotPublishInternalExecutionTraceForAnOrdinaryConversationReply() {
+        var domain = new ConversationResponse(
+                Outcome.CONVERSATION,
+                DecisionMode.MODEL_FAST_PATH,
+                "嗨，今天想聊哪款桌游？",
+                RecommendationProfile.empty(),
+                null,
+                0,
+                0,
+                new BoardGameRecommendationAgent.UserModelView("", List.of()),
+                List.of(),
+                new BoardGameRecommendationAgent.HarnessTrace(
+                        1,
+                        0,
+                        0,
+                        false,
+                        List.of("DIRECT_REPLY_FAST_PATH:GREETING")),
+                List.of(),
+                null);
+
+        var response = BggRecommendationAgentController.RecommendationConversationResponse.from(
+                domain,
+                new LocalizedTaxonomy(Map.of(), Map.of()),
+                "zh-CN",
+                presentation,
+                null,
+                null,
+                null,
+                false);
+
+        assertThat(response.assistantMessage()).isEqualTo("嗨，今天想聊哪款桌游？");
+        assertThat(response.harness()).isNull();
+    }
+
+    @Test
     void preservesALongNaturalUnicodeRequestWithoutAControllerSpecificCharacterLimit() throws Exception {
         String accepted = "😀".repeat(1_500) + "  A\n中";
         List<String> receivedMessages = new ArrayList<>();

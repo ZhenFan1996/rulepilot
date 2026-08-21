@@ -99,6 +99,10 @@ public class BggRecommendationAgentStreamController {
             ConversationRequest command,
             String locale,
             String modelConfigurationOwner) {
+        AtomicBoolean answerPartSent = new AtomicBoolean();
+        java.util.function.Consumer<String> answerPartListener = text -> {
+            if (sendAnswerPart(emitter, open, text)) answerPartSent.set(true);
+        };
         try {
             var presented = request.clientTurnId() != null && conversations != null
                     ? BggRecommendationAgentController.present(
@@ -106,20 +110,21 @@ public class BggRecommendationAgentStreamController {
                                     request.toSessionTurn(command),
                                     locale,
                                     modelConfigurationOwner,
-                                    update -> sendAgentProgress(emitter, open, update)),
+                                    update -> sendAgentProgress(emitter, open, update),
+                                    answerPartListener),
                             presentation)
                     : BggRecommendationAgentController.present(
                             agent.converse(
                                     command,
                                     locale,
                                     modelConfigurationOwner,
-                                    update -> sendAgentProgress(emitter, open, update)),
+                                    update -> sendAgentProgress(emitter, open, update),
+                                    answerPartListener),
                             locale,
                             presentation);
             if (!open.get()) return;
-            emitter.send(SseEmitter.event()
-                    .name("answer_part")
-                    .data(new AnswerPart("message", presented.assistantMessage())));
+            if (!answerPartSent.get()) sendAnswerPart(emitter, open, presented.assistantMessage());
+            if (!open.get()) return;
             emitter.send(SseEmitter.event()
                     .name("result")
                     .data(presented));
@@ -136,7 +141,38 @@ public class BggRecommendationAgentStreamController {
     private void sendAgentProgress(SseEmitter emitter, AtomicBoolean open, ProgressUpdate update) {
         if (update.stage() == BoardGameRecommendationAgent.ProgressStage.UNDERSTANDING_REQUEST
                 && update.phase() == BoardGameRecommendationAgent.ProgressPhase.STARTED) return;
+        if (update.action() == BoardGameRecommendationAgent.ProgressAction.DIRECT_REPLY_FAST_PATH) {
+            sendProgress(emitter, open, new ProgressUpdate(
+                    update.stage(),
+                    update.phase(),
+                    null,
+                    update.elapsedMs(),
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0));
+            return;
+        }
         sendProgress(emitter, open, update);
+    }
+
+    private boolean sendAnswerPart(SseEmitter emitter, AtomicBoolean open, String text) {
+        if (!open.get() || text == null || text.isEmpty()) return false;
+        try {
+            emitter.send(SseEmitter.event()
+                    .name("answer_part")
+                    .data(new AnswerPart("message", text)));
+            return true;
+        } catch (IOException | RuntimeException exception) {
+            open.set(false);
+            LOGGER.debug("Recommendation answer stream disconnected before completion");
+            return false;
+        }
     }
 
     private void sendProgress(SseEmitter emitter, AtomicBoolean open, ProgressUpdate update) {

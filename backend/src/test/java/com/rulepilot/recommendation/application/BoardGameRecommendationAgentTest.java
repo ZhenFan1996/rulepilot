@@ -13,6 +13,8 @@ import com.rulepilot.catalog.BoardGameRecommendationCatalog.Game;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.Ranking;
 import com.rulepilot.recommendation.BoardGameRecommendationModel;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.CompletionStatus;
+import com.rulepilot.recommendation.BoardGameRecommendationModel.NaturalReply;
+import com.rulepilot.recommendation.BoardGameRecommendationModel.NaturalReplyRequest;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.Request;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.ToolCall;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.ToolChoice;
@@ -512,26 +514,23 @@ class BoardGameRecommendationAgentTest {
     @Test
     void answersAnObviousConversationTurnThroughOneTerminalActionWithoutRestoringCards() {
         TrackingCatalog catalog = catalogWithThreeShortGames();
-        ScriptedModel model = new ScriptedModel(List.of(request -> {
+        ScriptedModel model = new ScriptedModel(List.of(), List.of(request -> {
             assertThat(request.messages().getFirst().content())
                     .contains(
-                            "low-latency",
-                            "do not use a stock greeting",
+                            "one brief, natural reply",
+                            "Avoid stock greetings",
                             "recent context",
                             "Do not recommend a game or claim that external work was performed")
                     .doesNotContain("Recommendation cards are an Agent decision");
-            assertThat(request.toolChoice()).isEqualTo(ToolChoice.REQUIRED);
-            assertThat(request.tools()).extracting(ToolSpec::name)
-                    .containsExactly(BoardGameRecommendationAgent.REPLY_TOOL);
-            assertThat(request.maxOutputTokens()).isEqualTo(256);
+            assertThat(request.maxOutputTokens()).isEqualTo(96);
             assertThat(request.messages().get(1).content())
                     .contains("turnKind=PAUSE", "谢谢，先不用再推荐了")
                     .doesNotContain("runMemory", "verifiedGames");
-            return action(
-                    "pause-conversation",
-                    BoardGameRecommendationAgent.REPLY_TOOL,
-                    "{\"message\":\"不客气，先停在这里。想聊设计、体验或别的都可以，不必继续挑游戏。\"}");
+            return new NaturalReply(
+                    "不客气，先停在这里。想聊设计、体验或别的都可以，不必继续挑游戏。",
+                    CompletionStatus.COMPLETE);
         }));
+        List<String> streamed = new ArrayList<>();
 
         var response = agent(model, catalog, noResearch()).converse(
                 new ConversationRequest(
@@ -544,7 +543,10 @@ class BoardGameRecommendationAgentTest {
                                 new BoardGameRecommendationAgent.KnownGame(60, "玻璃果园", "Glass Orchard"),
                                 new BoardGameRecommendationAgent.KnownGame(61, "织机城", "Loom City")),
                         List.of(60, 61)),
-                "zh-CN");
+                "zh-CN",
+                null,
+                ignored -> {},
+                streamed::add);
 
         assertThat(response.outcome()).isEqualTo(Outcome.CONVERSATION);
         assertThat(response.games()).isEmpty();
@@ -553,12 +555,13 @@ class BoardGameRecommendationAgentTest {
         assertThat(response.harness().modelCalls()).isEqualTo(1);
         assertThat(response.harness().catalogCalls()).isZero();
         assertThat(response.harness().actions()).containsExactly("DIRECT_REPLY_FAST_PATH:PAUSE");
+        assertThat(streamed).containsExactly(response.assistantMessage());
     }
 
     @Test
     void handlesWholeMessageSocialAndControlTurnsThroughOneLightweightModelCallWithoutTools() {
         AtomicInteger turn = new AtomicInteger();
-        ScriptedModel model = new ScriptedModel(List.of(
+        ScriptedModel model = new ScriptedModel(List.of(), List.of(
                 request -> fastReply(request, "嗨，今天想从哪儿聊起？"),
                 request -> fastReply(request, "Glad that helped—where should we go next?"),
                 request -> fastReply(request, "I can help you find, verify, or compare games, then continue into a cited rules guide."),
@@ -4702,17 +4705,13 @@ class BoardGameRecommendationAgentTest {
         return new Turn("", List.of(new ToolCall(id, name, arguments)));
     }
 
-    private static Turn fastReply(Request request, String message) {
-        assertThat(request.tools()).extracting(ToolSpec::name)
-                .containsExactly(BoardGameRecommendationAgent.REPLY_TOOL);
+    private static NaturalReply fastReply(NaturalReplyRequest request, String message) {
         assertThat(request.messages()).hasSize(2);
         assertThat(request.messages().getFirst().content())
-                .contains("do not use a stock greeting", "Call reply_to_user exactly once")
+                .contains("Avoid stock greetings", "Output only the reply text")
                 .doesNotContain("Recommendation cards are an Agent decision");
-        assertThat(request.maxOutputTokens()).isEqualTo(256);
-        assertThat(request.toolChoice()).isEqualTo(ToolChoice.REQUIRED);
-        String escaped = message.replace("\\", "\\\\").replace("\"", "\\\"");
-        return action("fast-reply", BoardGameRecommendationAgent.REPLY_TOOL, "{\"message\":\"" + escaped + "\"}");
+        assertThat(request.maxOutputTokens()).isEqualTo(96);
+        return new NaturalReply(message, CompletionStatus.COMPLETE);
     }
 
     private BoardGameRecommendationWebResearch noResearch() {
@@ -4875,10 +4874,19 @@ class BoardGameRecommendationAgentTest {
 
     private static final class ScriptedModel implements BoardGameRecommendationModel {
         private final List<Function<Request, Turn>> turns;
+        private final List<Function<NaturalReplyRequest, NaturalReply>> naturalReplies;
         private final AtomicInteger calls = new AtomicInteger();
+        private final AtomicInteger naturalReplyCalls = new AtomicInteger();
 
         private ScriptedModel(List<Function<Request, Turn>> turns) {
+            this(turns, List.of());
+        }
+
+        private ScriptedModel(
+                List<Function<Request, Turn>> turns,
+                List<Function<NaturalReplyRequest, NaturalReply>> naturalReplies) {
             this.turns = List.copyOf(turns);
+            this.naturalReplies = List.copyOf(naturalReplies);
         }
 
         @Override
@@ -4891,6 +4899,18 @@ class BoardGameRecommendationAgentTest {
             int index = calls.getAndIncrement();
             if (index >= turns.size()) throw new AssertionError("unexpected model turn " + index);
             return turns.get(index).apply(request);
+        }
+
+        @Override
+        public NaturalReply streamNaturalReply(
+                NaturalReplyRequest request,
+                String ownerUsername,
+                java.util.function.Consumer<String> accumulatedTextListener) {
+            int index = naturalReplyCalls.getAndIncrement();
+            if (index >= naturalReplies.size()) throw new AssertionError("unexpected natural reply " + index);
+            NaturalReply reply = naturalReplies.get(index).apply(request);
+            accumulatedTextListener.accept(reply.text());
+            return reply;
         }
 
     }

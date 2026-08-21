@@ -1547,6 +1547,20 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                 capture.add("react", result, elapsed(started));
                 return result;
             }
+
+            @Override
+            public NaturalReply streamNaturalReply(
+                    NaturalReplyRequest request,
+                    String ownerUsername,
+                    java.util.function.Consumer<String> accumulatedTextListener) {
+                long started = System.nanoTime();
+                NaturalReply result = delegate.streamNaturalReply(request, ownerUsername, accumulatedTextListener);
+                capture.add(
+                        "natural_reply_stream",
+                        new Turn(result.text(), List.of(), result.completionStatus()),
+                        elapsed(started));
+                return result;
+            }
         };
     }
 

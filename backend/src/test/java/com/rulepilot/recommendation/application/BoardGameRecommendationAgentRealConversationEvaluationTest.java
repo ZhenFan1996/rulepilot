@@ -879,6 +879,16 @@ class BoardGameRecommendationAgentRealConversationEvaluationTest {
                 capture.record(turn);
                 return turn;
             }
+
+            @Override
+            public NaturalReply streamNaturalReply(
+                    NaturalReplyRequest request,
+                    String ownerUsername,
+                    java.util.function.Consumer<String> accumulatedTextListener) {
+                NaturalReply reply = delegate.streamNaturalReply(request, ownerUsername, accumulatedTextListener);
+                capture.record(new Turn(reply.text(), List.of(), reply.completionStatus()));
+                return reply;
+            }
         };
     }
 
