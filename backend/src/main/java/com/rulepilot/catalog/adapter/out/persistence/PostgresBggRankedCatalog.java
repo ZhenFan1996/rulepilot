@@ -206,7 +206,7 @@ public class PostgresBggRankedCatalog implements BggRankedCatalogRepository {
                                 ELSE 2 END AS relevance,
                            NULL::text AS chinese_alias
                     FROM bgg_ranked_game g
-                    WHERE %s%s
+                    WHERE %s
                     ORDER BY relevance, g.is_expansion ASC,
                              g.overall_rank ASC NULLS LAST, g.users_rated DESC, g.bgg_id ASC
                     LIMIT :limit
@@ -219,7 +219,7 @@ public class PostgresBggRankedCatalog implements BggRankedCatalogRepository {
                            g.is_expansion, g.overall_rank, g.users_rated
                     FROM bgg_game_name_alias alias
                     JOIN bgg_ranked_game g ON g.bgg_id = alias.bgg_id
-                    WHERE %s
+                    WHERE %s%s
                     GROUP BY alias.bgg_id, g.is_expansion, g.overall_rank, g.users_rated
                     ORDER BY relevance, g.is_expansion ASC,
                              g.overall_rank ASC NULLS LAST, g.users_rated DESC, alias.bgg_id ASC
