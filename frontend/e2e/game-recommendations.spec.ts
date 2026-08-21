@@ -486,7 +486,7 @@ test('keeps full-catalog browsing separate from the conversational recommendatio
   await expect(page.getByText('BGG 收录 162,686 条')).toBeVisible()
   await expect(page.locator('#game-catalog').getByRole('heading', { level: 3, name: '展翅翱翔' })).toBeVisible()
   await expect(page.locator('#game-catalog').getByText('Wingspan')).toBeVisible()
-  await expect(page.locator('#game-catalog li', { hasText: '卡牌轮抽' })).toBeVisible()
+  await expect(page.locator('#game-catalog').getByText('卡牌轮抽')).toHaveCount(0)
   expect(catalogRequests.some(url => url.includes('enrich=true'))).toBe(false)
   await expect(page.getByRole('link', { name: '数据由 BoardGameGeek 提供' }).locator('img')).toHaveAttribute('src', '/powered-by-bgg-rgb.svg')
 

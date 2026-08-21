@@ -68,4 +68,57 @@ describe('AccountView board game nine', () => {
     expect(wrapper.text()).toContain('98,750')
     expect(wrapper.find('[role="alert"]').exists()).toBe(false)
   })
+
+  it('shows the signed-in account before slower secondary requests finish', async () => {
+    const pending = new Promise<Response>(() => undefined)
+    vi.stubGlobal('fetch', vi.fn((input: string | URL | Request) => {
+      const path = String(input)
+      if (path === '/api/auth/session') return Promise.resolve(Response.json({ username: 'alice', roles: ['USER'] }))
+      if (path === '/api/v1/account/board-game-grid') return Promise.resolve(Response.json([]))
+      return pending
+    }))
+    const router = createRouter({ history: createMemoryHistory(), routes: [
+      { path: '/', component: AccountView }, { path: '/work', name: 'work-status', component: { template: '<div />' } }, { path: '/settings/models', name: 'model-settings', component: { template: '<div />' } },
+    ] })
+    await router.push('/')
+    await router.isReady()
+
+    const wrapper = mount(AccountView, { global: { plugins: [router], stubs: { AppShell: { template: '<div><slot /></div>' } } } })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('alice')
+    expect(wrapper.text()).toContain('我的桌游九宫格')
+    expect(wrapper.text()).not.toContain('正在读取我的空间')
+  })
+
+  it('fills a persisted grid selection cover without blocking the grid', async () => {
+    let resolveCovers!: (response: Response) => void
+    const coversResponse = new Promise<Response>(resolve => { resolveCovers = resolve })
+    vi.stubGlobal('fetch', vi.fn((input: string | URL | Request) => {
+      const path = String(input)
+      if (path === '/api/auth/session') return Promise.resolve(Response.json({ username: 'alice', roles: ['USER'] }))
+      if (path === '/api/v1/account/board-game-grid') return Promise.resolve(Response.json([{ slot: 'FAVORITE_GAME', bggId: 342942, gameName: 'Ark Nova', chineseName: '方舟动物园', thumbnailUrl: '', imageUrl: '' }]))
+      if (path.startsWith('/api/v1/bgg/catalog/covers?')) return coversResponse
+      if (path === '/api/v1/teaching-plans') return Promise.resolve(Response.json([]))
+      if (path === '/api/v1/model-configuration') return Promise.resolve(Response.json({ providers: [], assignments: { recommendation: 'fake', teaching: 'fake', visual: 'fake', answer: 'fake', critic: 'fake' } }))
+      if (path === '/api/v1/model-configuration/usage') return Promise.resolve(Response.json({ platformAccessEnabled: true, monthlyTokenLimit: 100000, platformTokensCharged: 0, platformTokensReserved: 0, personalTokensUsed: 0 }))
+      return Promise.resolve(new Response(null, { status: 404 }))
+    }))
+    const router = createRouter({ history: createMemoryHistory(), routes: [
+      { path: '/', component: AccountView }, { path: '/work', name: 'work-status', component: { template: '<div />' } }, { path: '/settings/models', name: 'model-settings', component: { template: '<div />' } },
+    ] })
+    await router.push('/')
+    await router.isReady()
+
+    const wrapper = mount(AccountView, { global: { plugins: [router], stubs: { AppShell: { template: '<div><slot /></div>' } } } })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('方舟动物园')
+    expect(wrapper.find('img[alt="方舟动物园"]').exists()).toBe(false)
+
+    resolveCovers(Response.json([{ bggId: 342942, thumbnailUrl: 'https://example.test/ark-nova.jpg', imageUrl: '' }]))
+    await flushPromises()
+
+    expect(wrapper.get('img[alt="方舟动物园"]').attributes('src')).toBe('https://example.test/ark-nova.jpg')
+  })
 })

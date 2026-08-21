@@ -30,6 +30,8 @@ const models = ref<ModelSnapshot | null>(null)
 const usage = ref<AccountUsage | null>(null)
 const grid = ref<GridSelection[]>([])
 const loading = ref(true)
+const gridLoading = ref(false)
+const secondaryLoading = ref(false)
 const errorMessage = ref('')
 const gridDialogOpen = ref(false)
 const activeSlot = ref<GridSlot | null>(null)
@@ -41,6 +43,8 @@ const gridSaving = ref(false)
 const gridError = ref('')
 let searchTimer: number | undefined
 let searchController: AbortController | null = null
+let coverController: AbortController | null = null
+let disposed = false
 const searchDebounceMs = 60
 const searchCache = new Map<string, CatalogGame[]>()
 
@@ -88,28 +92,93 @@ async function load() {
   loading.value = true
   errorMessage.value = ''
   try {
-    const responses = await Promise.all([
-      fetch('/api/auth/session', { credentials: 'include' }),
-      fetch('/api/v1/teaching-plans', { credentials: 'include' }),
-      fetch('/api/v1/model-configuration', { credentials: 'include' }),
-      fetch('/api/v1/model-configuration/usage', { credentials: 'include' }),
-      fetch('/api/v1/account/board-game-grid', { credentials: 'include' }),
-    ])
-    if (responses.some((response) => response.status === 401)) {
+    const response = await fetch('/api/auth/session', { credentials: 'include' })
+    if (response.status === 401) {
       notifyLoginRequired()
       errorMessage.value = t('account.loginRequired')
       return
     }
-    if (responses.some((response) => !response.ok)) throw new Error(t('account.error'))
-    session.value = await responses[0]!.json() as Session
-    plans.value = await responses[1]!.json() as TeachingPlan[]
-    models.value = await responses[2]!.json() as ModelSnapshot
-    usage.value = await responses[3]!.json() as AccountUsage
-    grid.value = await responses[4]!.json() as GridSelection[]
+    if (!response.ok) throw new Error(t('account.error'))
+    session.value = await response.json() as Session
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : t('account.error')
   } finally {
     loading.value = false
+  }
+  if (session.value && !disposed) {
+    void loadGrid()
+    void loadSecondaryAccountData()
+  }
+}
+
+async function loadGrid() {
+  gridLoading.value = true
+  gridError.value = ''
+  try {
+    const response = await fetch('/api/v1/account/board-game-grid', { credentials: 'include' })
+    if (!response.ok) throw new Error(locale.value === 'zh-CN' ? '九宫格暂时无法读取，请稍后再试。' : 'Your board game nine could not be loaded.')
+    const selections = await response.json() as GridSelection[]
+    if (disposed) return
+    grid.value = selections
+    void enrichMissingGridCovers(selections)
+  } catch (error) {
+    if (disposed) return
+    gridError.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    if (!disposed) gridLoading.value = false
+  }
+}
+
+async function enrichMissingGridCovers(selections: GridSelection[]) {
+  const missingIds = selections.filter(item => !coverImage(item)).map(item => item.bggId)
+  if (!missingIds.length) return
+  coverController?.abort()
+  const controller = new AbortController()
+  coverController = controller
+  const parameters = new URLSearchParams()
+  missingIds.forEach(id => parameters.append('bggId', String(id)))
+  try {
+    const response = await fetch(`/api/v1/bgg/catalog/covers?${parameters.toString()}`, {
+      credentials: 'include',
+      signal: controller.signal,
+    })
+    if (!response.ok) return
+    const covers = await response.json() as Array<{ bggId: number; thumbnailUrl: string; imageUrl: string }>
+    if (disposed || coverController !== controller) return
+    const byId = new Map(covers.map(cover => [cover.bggId, cover]))
+    grid.value = grid.value.map(selection => {
+      const cover = byId.get(selection.bggId)
+      return cover ? { ...selection, thumbnailUrl: cover.thumbnailUrl, imageUrl: cover.imageUrl } : selection
+    })
+  } catch (error) {
+    if (!(error instanceof Error && error.name === 'AbortError')) return
+  } finally {
+    if (coverController === controller) coverController = null
+  }
+}
+
+async function loadSecondaryAccountData() {
+  secondaryLoading.value = true
+  try {
+    const responses = await Promise.all([
+      fetch('/api/v1/teaching-plans', { credentials: 'include' }),
+      fetch('/api/v1/model-configuration', { credentials: 'include' }),
+      fetch('/api/v1/model-configuration/usage', { credentials: 'include' }),
+    ])
+    if (responses.some(response => !response.ok)) return
+    const [nextPlans, nextModels, nextUsage] = await Promise.all([
+      responses[0]!.json() as Promise<TeachingPlan[]>,
+      responses[1]!.json() as Promise<ModelSnapshot>,
+      responses[2]!.json() as Promise<AccountUsage>,
+    ])
+    if (disposed) return
+    plans.value = nextPlans
+    models.value = nextModels
+    usage.value = nextUsage
+  } catch {
+    // Secondary account data must not hold the signed-in shell or identity grid hostage.
+  } finally {
+    if (!disposed) secondaryLoading.value = false
   }
 }
 
@@ -213,8 +282,10 @@ async function chooseGame(game: CatalogGame) {
 
 onMounted(load)
 onBeforeUnmount(() => {
+  disposed = true
   window.clearTimeout(searchTimer)
   searchController?.abort()
+  coverController?.abort()
 })
 </script>
 
@@ -239,12 +310,12 @@ onBeforeUnmount(() => {
         <div class="mt-8 grid gap-5 sm:grid-cols-2">
           <RouterLink :to="{ name: 'work-status' }" class="rounded-xl border border-ink/10 bg-paper p-6 hover:border-copper/40">
             <p class="text-sm text-ink/45">{{ t('account.guides') }}</p>
-            <p class="mt-2 font-display text-3xl font-semibold">{{ t('account.guideCount', { count: plans.length }) }}</p>
+            <p class="mt-2 font-display text-3xl font-semibold">{{ secondaryLoading ? '…' : t('account.guideCount', { count: plans.length }) }}</p>
             <p class="mt-4 text-sm text-indigo">{{ t('account.guideAction') }}</p>
           </RouterLink>
           <RouterLink :to="{ name: 'model-settings' }" class="rounded-xl border border-ink/10 bg-paper p-6 hover:border-copper/40">
             <p class="text-sm text-ink/45">{{ t('account.models') }}</p>
-            <p class="mt-2 font-display text-3xl font-semibold">{{ t('account.modelCount', { count: connectedModels }) }}</p>
+            <p class="mt-2 font-display text-3xl font-semibold">{{ secondaryLoading ? '…' : t('account.modelCount', { count: connectedModels }) }}</p>
             <p class="mt-4 text-sm text-indigo">{{ t('account.modelAction') }}</p>
           </RouterLink>
         </div>
@@ -256,11 +327,14 @@ onBeforeUnmount(() => {
               <h2 class="mt-2 font-display text-3xl font-semibold">{{ locale === 'zh-CN' ? '我的桌游九宫格' : 'My board game nine' }}</h2>
               <p class="mt-2 max-w-2xl text-sm leading-6 text-ink/55">{{ locale === 'zh-CN' ? '九款游戏，九个角度。这些都是你亲自选择的桌游身份，不会从人数、难度或一次对话里替你猜。' : 'Nine games, nine facets of your taste. Every answer is chosen by you—never inferred from group size, weight, or a single chat.' }}</p>
             </div>
-            <span class="rounded-full bg-canvas px-3 py-1.5 text-xs font-semibold text-ink/55">{{ grid.length }} / 9</span>
+            <span class="rounded-full bg-canvas px-3 py-1.5 text-xs font-semibold text-ink/55">{{ gridLoading ? '… / 9' : `${grid.length} / 9` }}</span>
           </div>
-          <div class="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <div v-if="gridLoading" class="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3" role="status" :aria-label="locale === 'zh-CN' ? '正在读取桌游九宫格' : 'Loading board game nine'">
+            <div v-for="index in 9" :key="index" class="aspect-[4/3] min-h-48 animate-pulse rounded-[1.35rem] border border-ink/10 bg-canvas" />
+          </div>
+          <div v-else class="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
             <button
-              v-for="definition in slotDefinitions"
+              v-for="(definition, index) in slotDefinitions"
               :key="definition.slot"
               type="button"
               class="group relative aspect-[4/3] min-h-48 overflow-hidden rounded-[1.35rem] border border-ink/10 bg-canvas text-left shadow-[0_1px_0_rgba(42,42,34,0.04)] transition duration-200 hover:-translate-y-1 hover:border-copper/45 hover:shadow-xl focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo"
@@ -268,7 +342,7 @@ onBeforeUnmount(() => {
               @click="openGridPicker(definition.slot)"
             >
               <template v-if="selectionBySlot.get(definition.slot)">
-                <img v-if="coverImage(selectionBySlot.get(definition.slot)!)" :src="coverImage(selectionBySlot.get(definition.slot)!)" :alt="displayName(selectionBySlot.get(definition.slot)!)" class="absolute inset-0 size-full object-cover object-center transition duration-500 group-hover:scale-[1.025]" loading="lazy" decoding="async" referrerpolicy="no-referrer">
+                <img v-if="coverImage(selectionBySlot.get(definition.slot)!)" :src="coverImage(selectionBySlot.get(definition.slot)!)" :alt="displayName(selectionBySlot.get(definition.slot)!)" class="absolute inset-0 size-full object-cover object-center transition duration-500 group-hover:scale-[1.025]" :loading="index < 3 ? 'eager' : 'lazy'" :fetchpriority="index < 3 ? 'high' : 'auto'" decoding="async" referrerpolicy="no-referrer">
                 <div class="absolute inset-0 bg-gradient-to-t from-ink/95 via-ink/10 to-transparent" />
                 <div class="absolute inset-x-0 bottom-0 p-5 text-white">
                   <p class="text-[0.67rem] font-bold uppercase tracking-[0.16em] text-white/75">{{ slotLabel(definition) }}</p>
@@ -295,7 +369,7 @@ onBeforeUnmount(() => {
           <div class="mt-3 flex justify-between text-xs text-ink/45"><span>{{ locale === 'zh-CN' ? `已用 ${usage.platformTokensCharged.toLocaleString()}` : `${usage.platformTokensCharged.toLocaleString()} used` }}</span><span>{{ locale === 'zh-CN' ? `总额 ${usage.monthlyTokenLimit.toLocaleString()}` : `${usage.monthlyTokenLimit.toLocaleString()} total` }}</span></div>
         </section>
 
-        <section class="mt-8 rounded-xl border border-ink/10 bg-paper p-6">
+        <section v-if="models" class="mt-8 rounded-xl border border-ink/10 bg-paper p-6">
           <h2 class="font-display text-2xl font-semibold">{{ t('account.assignments') }}</h2>
           <dl class="mt-5 grid gap-4 text-sm sm:grid-cols-2 lg:grid-cols-5">
             <div><dt class="text-ink/45">{{ t('account.recommendation') }}</dt><dd class="mt-1 font-semibold">{{ models?.assignments.recommendation }}</dd></div>

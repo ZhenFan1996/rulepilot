@@ -39,6 +39,38 @@ test('renders an authenticated account from the backend usage record contract', 
   expect(pageErrors).toEqual([])
 })
 
+test('renders the signed-in identity grid while secondary account summaries are still pending', async ({ page }) => {
+  let releaseSecondary!: () => void
+  const secondaryGate = new Promise<void>(resolve => { releaseSecondary = resolve })
+  await page.route('**/api/auth/session', route => route.fulfill({ json: { username: 'alice', roles: ['USER'] } }))
+  await page.route('**/api/v1/account/board-game-grid', route => route.fulfill({
+    json: [{ slot: 'FAVORITE_GAME', bggId: 342942, gameName: 'Ark Nova', chineseName: '方舟动物园', thumbnailUrl: '', imageUrl: '' }],
+  }))
+  await page.route('**/api/v1/bgg/catalog/covers?*', async route => {
+    await route.fulfill({ json: [{ bggId: 342942, thumbnailUrl: 'https://images.example/ark-nova.jpg', imageUrl: '' }] })
+  })
+  await page.route('**/api/v1/teaching-plans', async route => {
+    await secondaryGate
+    await route.fulfill({ json: [] })
+  })
+  await page.route('**/api/v1/model-configuration', async route => {
+    await secondaryGate
+    await route.fulfill({ json: { providers: [], assignments: { recommendation: 'fake', teaching: 'fake', visual: 'fake', answer: 'fake', critic: 'fake' } } })
+  })
+  await page.route('**/api/v1/model-configuration/usage', async route => {
+    await secondaryGate
+    await route.fulfill({ json: { platformAccessEnabled: true, monthlyTokenLimit: 100_000, platformTokensCharged: 0, platformTokensReserved: 0, personalTokensUsed: 0 } })
+  })
+
+  await page.goto('/account')
+
+  await expect(page.getByRole('heading', { level: 1, name: 'alice' })).toBeVisible()
+  await expect(page.getByRole('button', { name: /最爱的桌游：方舟动物园/ })).toBeVisible()
+  await expect(page.getByRole('img', { name: '方舟动物园' })).toHaveAttribute('src', 'https://images.example/ark-nova.jpg')
+  await expect(page.getByText('正在读取我的空间…')).toHaveCount(0)
+  releaseSecondary()
+})
+
 test('uses a high-resolution responsive grid and finds a game from a partial Chinese title', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 })
   await page.route('**/api/auth/session', route => route.fulfill({ json: { username: 'alice', roles: ['USER'] } }))

@@ -112,4 +112,40 @@ class BggRankedCatalogControllerTest {
         assertThat(response.games().getFirst().nameLocalized()).isFalse();
         verify(localization, never()).localizeDiscoveryTaxonomy(List.of(), List.of(), "zh-CN");
     }
+
+    @Test
+    void returnsOnlyCoverFieldsForTheNonBlockingCatalogEnrichmentRequest() {
+        RankedGame ranked = new RankedGame(
+                342942,
+                "Ark Nova",
+                2021,
+                2,
+                new BigDecimal("8.35"),
+                new BigDecimal("8.54"),
+                62_307,
+                false,
+                Map.of(BggGameType.STRATEGY, 1));
+        DiscoveryGame details = new DiscoveryGame(
+                2,
+                342942,
+                "Ark Nova",
+                "方舟动物园",
+                2021,
+                "https://example.test/ark-nova-thumb.jpg",
+                1,
+                4,
+                150,
+                new BigDecimal("8.54"),
+                new BigDecimal("3.8"),
+                List.of("Animals"),
+                List.of("Hand Management"));
+        when(catalog.coverDetails(List.of(342942))).thenReturn(List.of(new BrowseGame(ranked, null, details)));
+
+        var response = controller.covers(List.of(342942));
+
+        assertThat(response).singleElement().satisfies(cover -> {
+            assertThat(cover.bggId()).isEqualTo(342942);
+            assertThat(cover.thumbnailUrl()).isEqualTo("https://example.test/ark-nova-thumb.jpg");
+        });
+    }
 }

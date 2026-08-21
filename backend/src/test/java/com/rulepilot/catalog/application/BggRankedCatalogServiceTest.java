@@ -56,6 +56,18 @@ class BggRankedCatalogServiceTest {
     }
 
     @Test
+    void hydratesMissingCoversInOneBoundedBatchAfterTheFastFirstPaint() {
+        MemoryRepository repository = new MemoryRepository();
+        FakeBgg bgg = new FakeBgg();
+        BggRankedCatalogService service = new BggRankedCatalogService(repository, bgg);
+
+        var result = service.coverDetails(List.of(10, 20, 10));
+
+        assertThat(bgg.detailIds).containsExactly(10, 20);
+        assertThat(result).extracting(game -> game.ranked().bggId()).containsExactly(10, 20);
+    }
+
+    @Test
     void returnsAlreadyStoredDetailsWithoutCallingTheRemoteBggSource() {
         MemoryRepository repository = new MemoryRepository();
         FakeBgg bgg = new FakeBgg();

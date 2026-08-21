@@ -7,6 +7,8 @@ public interface CatalogGameSelectionLookup {
 
     Optional<GameSelection> find(int bggId);
 
+    List<GameSelection> findAll(List<Integer> bggIds);
+
     List<GameSelection> search(String query, int maximum);
 
     record GameSelection(

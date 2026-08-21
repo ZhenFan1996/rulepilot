@@ -80,6 +80,11 @@ public class BggRankedCatalogController {
         return CatalogResponse.from(result, taxonomy, locale);
     }
 
+    @GetMapping("/api/v1/bgg/catalog/covers")
+    List<CatalogCoverResponse> covers(@RequestParam List<Integer> bggId) {
+        return catalog.coverDetails(bggId).stream().map(CatalogCoverResponse::from).toList();
+    }
+
     @PostMapping("/api/admin/bgg/ranked-catalog")
     @ResponseStatus(HttpStatus.CREATED)
     SnapshotResponse importCatalog(@RequestPart("file") MultipartFile file) {
@@ -195,6 +200,16 @@ public class BggRankedCatalogController {
 
         private static List<String> translated(List<String> values, Map<String, String> translations) {
             return values.stream().map(value -> translations.getOrDefault(value, value)).toList();
+        }
+    }
+
+    record CatalogCoverResponse(int bggId, String thumbnailUrl, String imageUrl) {
+        static CatalogCoverResponse from(BrowseGame game) {
+            DiscoveryGame details = game.details();
+            return new CatalogCoverResponse(
+                    game.ranked().bggId(),
+                    details == null ? "" : details.thumbnailUrl(),
+                    details == null ? "" : details.imageUrl());
         }
     }
 
