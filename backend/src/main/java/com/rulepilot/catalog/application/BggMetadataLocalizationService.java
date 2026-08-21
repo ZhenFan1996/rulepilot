@@ -164,6 +164,13 @@ public class BggMetadataLocalizationService {
         return new LocalizedDiscoveryTaxonomy(localizedCategories, localizedMechanics, anyTranslated);
     }
 
+    public LocalizedDiscoveryTaxonomy sourceDiscoveryTaxonomy(
+            List<String> categories, List<String> mechanics) {
+        List<String> sourceCategories = normalizedTaxonomy(categories);
+        List<String> sourceMechanics = normalizedTaxonomy(mechanics);
+        return new LocalizedDiscoveryTaxonomy(identity(sourceCategories), identity(sourceMechanics), false);
+    }
+
     private List<String> normalizedTaxonomy(List<String> values) {
         return values == null ? List.of() : values.stream()
                 .map(value -> value == null ? "" : value.strip())

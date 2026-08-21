@@ -36,7 +36,7 @@ describe('AccountView board game nine', () => {
     expect(wrapper.text()).not.toContain('最舒服的人数')
     await wrapper.get('button[aria-label^="最喜欢的美术"]').trigger('click')
     await wrapper.get('input[type="search"]').setValue('幽港')
-    await vi.advanceTimersByTimeAsync(120)
+    await vi.advanceTimersByTimeAsync(60)
     await flushPromises()
     expect(paths.some(path => path.includes('q=%E5%B9%BD%E6%B8%AF'))).toBe(true)
     expect(paths.some(path => path.startsWith('/api/v1/bgg/catalog?'))).toBe(false)

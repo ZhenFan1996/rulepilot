@@ -26,11 +26,22 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.core.task.SyncTaskExecutor;
 
 class BggPopularMetadataPrewarmerTest {
 
     private static final Clock CLOCK = Clock.fixed(Instant.parse("2026-08-20T08:00:00Z"), ZoneOffset.UTC);
+
+    @Test
+    void runsOnlyInTheDedicatedWorkerRuntime() {
+        ConditionalOnProperty ownership = BggPopularMetadataPrewarmer.class.getAnnotation(ConditionalOnProperty.class);
+
+        assertThat(ownership).isNotNull();
+        assertThat(ownership.name()).containsExactly("rulepilot.runtime.worker-enabled");
+        assertThat(ownership.havingValue()).isEqualTo("true");
+        assertThat(ownership.matchIfMissing()).isFalse();
+    }
 
     @Test
     void hydratesOneFiveHundredStyleCohortAndAdvancesTranslationsIndependently() {

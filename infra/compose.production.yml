@@ -27,7 +27,7 @@ services:
       # The production host has two vCPUs and 4 GiB RAM. G1 keeps request pauses bounded while one region set is
       # reclaimed concurrently; the former Serial GC accumulated more than 36 seconds of full-stop pauses in one
       # hour. The larger cgroup below leaves native/metaspace and image-buffer headroom outside this 384 MiB heap.
-      JAVA_TOOL_OPTIONS: -Xms128m -Xmx384m -Xss512k -XX:+UseG1GC -XX:MaxGCPauseMillis=200 -XX:InitiatingHeapOccupancyPercent=35 -XX:+ParallelRefProcEnabled
+      JAVA_TOOL_OPTIONS: -Xms128m -Xmx384m -Xss512k -XX:ActiveProcessorCount=${PRODUCTION_ACTIVE_PROCESSOR_COUNT:-2} -XX:+UseG1GC -XX:MaxGCPauseMillis=200 -XX:InitiatingHeapOccupancyPercent=35 -XX:+ParallelRefProcEnabled
       # Model calls are network-bound. Two bounded runs prevent one player's preparation or lesson from making a
       # second player wait minutes for the first section. One lane is reserved for outline + first cited section;
       # one continuation lane finishes chapters and review, preserving the existing two-call host ceiling.
@@ -83,7 +83,7 @@ services:
     # the same image tag causes Docker to race while exporting the image.
     build: !reset null
     environment:
-      JAVA_TOOL_OPTIONS: -Xms96m -Xmx352m -Xss512k -XX:+UseSerialGC -XX:MinHeapFreeRatio=10 -XX:MaxHeapFreeRatio=20
+      JAVA_TOOL_OPTIONS: -Xms96m -Xmx352m -Xss512k -XX:ActiveProcessorCount=${PRODUCTION_ACTIVE_PROCESSOR_COUNT:-2} -XX:+UseSerialGC -XX:MinHeapFreeRatio=10 -XX:MaxHeapFreeRatio=20
       SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: "3"
       SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE: "0"
       SPRING_RABBITMQ_LISTENER_SIMPLE_CONCURRENCY: "1"

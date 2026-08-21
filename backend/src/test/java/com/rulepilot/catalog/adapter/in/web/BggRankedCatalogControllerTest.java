@@ -3,6 +3,8 @@ package com.rulepilot.catalog.adapter.in.web;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.rulepilot.catalog.application.BggMetadataLocalizationService;
@@ -100,7 +102,7 @@ class BggRankedCatalogControllerTest {
         when(catalog.browse("", BggGameType.ALL, Sort.RANK, 0, 20, false))
                 .thenReturn(new BrowseResult(Optional.empty(), 1, 0, 20, Sort.RANK, BggGameType.ALL,
                         List.of(new BrowseGame(ranked, null, null))));
-        when(localization.localizeDiscoveryTaxonomy(List.of(), List.of(), "zh-CN"))
+        when(localization.sourceDiscoveryTaxonomy(List.of(), List.of()))
                 .thenReturn(new LocalizedDiscoveryTaxonomy(Map.of(), Map.of(), false));
 
         var response = controller.catalog("", "all", "rank", 0, 20, "zh-CN", false);
@@ -108,5 +110,6 @@ class BggRankedCatalogControllerTest {
         assertThat(response.games().getFirst().name()).isEqualTo("奇幻宝岛");
         assertThat(response.games().getFirst().originalName()).isEqualTo("奇幻寶島");
         assertThat(response.games().getFirst().nameLocalized()).isFalse();
+        verify(localization, never()).localizeDiscoveryTaxonomy(List.of(), List.of(), "zh-CN");
     }
 }

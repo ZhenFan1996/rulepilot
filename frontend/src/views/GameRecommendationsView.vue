@@ -67,7 +67,7 @@ const copy = {
     players: '{min}–{max} 人', minutes: '约 {minutes} 分钟', rating: '玩家评分 {rating}', geekRating: 'Geek 评分 {rating}', votes: '{count} 人评分', weight: '复杂度 {weight} / 5',
     rank: '总榜 #{rank}', hotRank: '热榜 #{rank}', noRank: '尚未进入总榜', detailPending: '详细资料将在打开游戏时继续读取',
     categoriesAria: '游戏类型和机制', coverAlt: '{game} 的 BGG 封面', emptyTitle: '没有匹配的桌游', emptyDescription: '试试减少搜索词或选择其他 BGG 类型榜。',
-    shown: '本页 {shown} 款', enriching: '更多封面和游戏资料正在补齐…', officialSource: '数据由 BoardGameGeek 提供', taxonomyFallback: '机制和类型暂时保留 BGG 原文',
+    shown: '本页 {shown} 款', officialSource: '数据由 BoardGameGeek 提供', taxonomyFallback: '机制和类型暂时保留 BGG 原文',
     pagination: '桌游目录分页', pageSummary: '第 {current} / {total} 页', previousPage: '上一页', nextPage: '下一页', goToPage: '前往第 {page} 页',
   },
   en: {
@@ -83,7 +83,7 @@ const copy = {
     errorTitle: 'The game catalog is unavailable', errorDescription: 'Your filters are still here. Try again later.', retry: 'Try again', pageError: 'This page could not be loaded. Your current page is still here.', retryPage: 'Retry this page',
     players: '{min}–{max} players', minutes: 'About {minutes} min', rating: 'Player rating {rating}', geekRating: 'Geek rating {rating}', votes: '{count} ratings', weight: 'Complexity {weight} / 5',
     rank: 'Overall #{rank}', hotRank: 'Hot #{rank}', noRank: 'Not yet ranked', detailPending: 'Rich details will continue loading when you open the game', categoriesAria: 'Game types and mechanisms', coverAlt: '{game} BGG cover',
-    emptyTitle: 'No games match', emptyDescription: 'Try fewer title words or another BGG ranking family.', shown: '{shown} games on this page', enriching: 'Adding covers, player fit, and localized details in the background…', officialSource: 'Data provided by BoardGameGeek', taxonomyFallback: 'Showing BGG source taxonomy',
+    emptyTitle: 'No games match', emptyDescription: 'Try fewer title words or another BGG ranking family.', shown: '{shown} games on this page', officialSource: 'Data provided by BoardGameGeek', taxonomyFallback: 'Showing BGG source taxonomy',
     pagination: 'Game catalog pages', pageSummary: 'Page {current} of {total}', previousPage: 'Previous', nextPage: 'Next', goToPage: 'Go to page {page}',
   },
 } as const
@@ -105,7 +105,6 @@ const totalPages = ref(0)
 const sourceDate = ref<string | null>(null)
 const taxonomyTranslated = ref(false)
 const loading = ref(true)
-const enriching = ref(false)
 const loadFailed = ref(false)
 const failedPage = ref<number | null>(null)
 const sort = ref<CatalogSort>('rank')
@@ -117,7 +116,6 @@ let queryGeneration = 0
 let disposed = false
 let activeQuery: CatalogQuery | null = null
 let activeBaseRequest: { generation: number; controller: AbortController } | null = null
-const enrichmentControllers = new Map<number, { generation: number; controller: AbortController }>()
 const prefetches = new Map<string, PrefetchRecord>()
 const visiblePages = new Set<number>()
 const translatedPages = new Set<number>()
@@ -208,15 +206,10 @@ function syncRoute(pageNumber: number) {
   void router.replace({ query })
 }
 
-function catalogRequest(query: CatalogQuery, pageNumber: number, enrich: boolean) {
-  const parameters = new URLSearchParams({ sort: query.sort, type: query.type, page: String(pageNumber), size: '20', locale: query.locale, enrich: String(enrich) })
+function catalogRequest(query: CatalogQuery, pageNumber: number) {
+  const parameters = new URLSearchParams({ sort: query.sort, type: query.type, page: String(pageNumber), size: '20', locale: query.locale, enrich: 'false' })
   if (query.search) parameters.set('q', query.search)
   return `/api/v1/bgg/catalog?${parameters.toString()}`
-}
-
-function mergeGames(current: CatalogGame[], incoming: CatalogGame[]) {
-  const richById = new Map(incoming.map(game => [game.bggId, game]))
-  return current.map(game => richById.get(game.bggId) ?? game)
 }
 
 function updateSummary(data: CatalogResponse) {
@@ -239,10 +232,6 @@ function isCurrentQuery(generation: number, query: CatalogQuery) {
   return !disposed && generation === queryGeneration && activeQuery === query
 }
 
-function syncEnriching() {
-  enriching.value = [...enrichmentControllers.values()].some(entry => entry.generation === queryGeneration)
-}
-
 function syncTaxonomyTranslation() {
   taxonomyTranslated.value = activeQuery?.locale !== 'zh-CN'
     || ([...visiblePages].length > 0 && [...visiblePages].every(pageNumber => translatedPages.has(pageNumber)))
@@ -251,11 +240,8 @@ function syncTaxonomyTranslation() {
 function cancelQueryWork() {
   activeBaseRequest?.controller.abort()
   activeBaseRequest = null
-  enrichmentControllers.forEach(entry => entry.controller.abort())
-  enrichmentControllers.clear()
   prefetches.forEach(entry => entry.controller.abort())
   prefetches.clear()
-  syncEnriching()
 }
 
 function beginReplacementQuery(query: CatalogQuery, targetPage: number) {
@@ -280,46 +266,17 @@ function beginReplacementQuery(query: CatalogQuery, targetPage: number) {
 function preparePageNavigation(query: CatalogQuery) {
   activeBaseRequest?.controller.abort()
   activeBaseRequest = null
-  enrichmentControllers.forEach(entry => entry.controller.abort())
-  enrichmentControllers.clear()
   visiblePages.clear()
   translatedPages.clear()
   loadFailed.value = false
   failedPage.value = null
   taxonomyTranslated.value = query.locale !== 'zh-CN'
-  syncEnriching()
-}
-
-async function enrichPage(generation: number, query: CatalogQuery, pageNumber: number) {
-  const existing = enrichmentControllers.get(pageNumber)
-  existing?.controller.abort()
-  const controller = new AbortController()
-  enrichmentControllers.set(pageNumber, { generation, controller })
-  syncEnriching()
-  try {
-    const response = await fetch(catalogRequest(query, pageNumber, true), {
-      credentials: 'include',
-      signal: controller.signal,
-    })
-    if (!response.ok) return
-    const data = await response.json() as CatalogResponse
-    if (!isCurrentQuery(generation, query) || !isExpectedPage(data, query, pageNumber)) return
-    games.value = mergeGames(games.value, data.games)
-    if (data.taxonomyTranslated) translatedPages.add(pageNumber)
-    else translatedPages.delete(pageNumber)
-    syncTaxonomyTranslation()
-  } catch (error) {
-    if (!isAbortError(error) && isCurrentQuery(generation, query)) syncTaxonomyTranslation()
-  } finally {
-    if (enrichmentControllers.get(pageNumber)?.controller === controller) enrichmentControllers.delete(pageNumber)
-    syncEnriching()
-  }
 }
 
 function prefetchNextPage(generation: number, query: CatalogQuery, data: CatalogResponse) {
   const nextPage = data.page + 1
   if (nextPage >= data.totalPages || !isCurrentQuery(generation, query)) return
-  const url = catalogRequest(query, nextPage, false)
+  const url = catalogRequest(query, nextPage)
   if (prefetches.has(url)) return
   const controller = new AbortController()
   const promise = fetch(url, { credentials: 'include', signal: controller.signal })
@@ -329,7 +286,7 @@ function prefetchNextPage(generation: number, query: CatalogQuery, data: Catalog
 }
 
 async function loadBasePage(generation: number, query: CatalogQuery, pageNumber: number) {
-  const url = catalogRequest(query, pageNumber, false)
+  const url = catalogRequest(query, pageNumber)
   const prefetched = prefetches.get(url)
   if (prefetched?.generation === generation) {
     prefetches.delete(url)
@@ -362,7 +319,6 @@ async function loadPage(generation: number, query: CatalogQuery, targetPage: num
     else translatedPages.delete(data.page)
     syncTaxonomyTranslation()
     loading.value = false
-    void enrichPage(generation, query, data.page)
     prefetchNextPage(generation, query, data)
     syncRoute(data.page)
   } catch (error) {
@@ -515,7 +471,6 @@ onBeforeUnmount(() => {
         <div v-else-if="!ready" class="mt-7 rounded-2xl border border-copper/25 bg-copper/5 p-7" role="status">
           <h3 class="font-display text-2xl font-semibold">{{ t('unavailableTitle') }}</h3><p class="mt-2 max-w-2xl text-sm leading-6 text-ink/60">{{ t('unavailableDescription') }}</p>
         </div>
-        <p v-if="enriching && games.length" class="mt-4 text-xs font-medium text-copper" role="status">{{ t('enriching') }}</p>
         <TransitionGroup v-if="games.length" tag="div" name="tile" class="mt-7 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4" :class="loading ? 'opacity-70' : ''">
           <article v-for="game in games" :key="game.bggId" class="game-tile group min-w-0 p-3">
             <RouterLink :to="{ name: 'game-discovery', params: { bggId: game.bggId } }" class="block">

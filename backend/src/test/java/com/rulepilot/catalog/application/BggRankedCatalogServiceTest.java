@@ -37,6 +37,7 @@ class BggRankedCatalogServiceTest {
         assertThat(result.total()).isEqualTo(162_686);
         assertThat(repository.query.type()).isEqualTo(BggGameType.STRATEGY);
         assertThat(repository.query.hotIds()).containsExactly(20, 10);
+        assertThat(bgg.hotGamesCalls).isEqualTo(1);
         assertThat(bgg.detailIds).containsExactly(10, 20);
         assertThat(result.games().getFirst().hotRank()).isEqualTo(2);
         assertThat(result.games().getFirst().details().chineseName()).isEqualTo("策略十号");
@@ -51,6 +52,48 @@ class BggRankedCatalogServiceTest {
         var result = service.browse("", BggGameType.STRATEGY, Sort.RANK, 0, 20, false);
 
         assertThat(result.games()).allSatisfy(game -> assertThat(game.details()).isNull());
+        assertThat(bgg.detailIds).isEmpty();
+    }
+
+    @Test
+    void returnsAlreadyStoredDetailsWithoutCallingTheRemoteBggSource() {
+        MemoryRepository repository = new MemoryRepository();
+        FakeBgg bgg = new FakeBgg();
+        BggMetadataCache cache = org.mockito.Mockito.mock(BggMetadataCache.class);
+        DiscoveryGame stored = bgg.gameDetails(List.of(10)).getFirst();
+        bgg.detailIds = List.of();
+        Instant now = Instant.now();
+        org.mockito.Mockito.when(cache.discoveryGames(org.mockito.ArgumentMatchers.anyList(), org.mockito.ArgumentMatchers.any()))
+                .thenReturn(Map.of(10, new BggMetadataCache.Cached<>(stored, now.plusSeconds(60), now.plusSeconds(120))));
+        BggRankedCatalogService service = new BggRankedCatalogService(repository, bgg, cache);
+
+        var result = service.browse("", BggGameType.STRATEGY, Sort.RANK, 0, 20, false);
+
+        assertThat(result.games().getFirst().details()).isEqualTo(stored);
+        assertThat(result.games().get(1).details()).isNull();
+        assertThat(bgg.detailIds).isEmpty();
+    }
+
+    @Test
+    void usesTheStoredHotRankingWithoutCallingTheRemoteBggSource() {
+        MemoryRepository repository = new MemoryRepository();
+        FakeBgg bgg = new FakeBgg();
+        BggMetadataCache cache = org.mockito.Mockito.mock(BggMetadataCache.class);
+        Instant now = Instant.now();
+        org.mockito.Mockito.when(cache.hotGames(org.mockito.ArgumentMatchers.any()))
+                .thenReturn(Optional.of(new BggMetadataCache.Cached<>(
+                        List.of(new HotGame(1, 20, "Game 20", 2026, "")),
+                        now.plusSeconds(60),
+                        now.plusSeconds(120))));
+        org.mockito.Mockito.when(cache.discoveryGames(
+                        org.mockito.ArgumentMatchers.anyList(), org.mockito.ArgumentMatchers.any()))
+                .thenReturn(Map.of());
+        BggRankedCatalogService service = new BggRankedCatalogService(repository, bgg, cache);
+
+        service.browse("", BggGameType.ALL, Sort.HOT, 0, 20, false);
+
+        assertThat(repository.query.hotIds()).containsExactly(20);
+        assertThat(bgg.hotGamesCalls).isZero();
         assertThat(bgg.detailIds).isEmpty();
     }
 
@@ -249,6 +292,7 @@ class BggRankedCatalogServiceTest {
 
     private static final class FakeBgg implements BoardGameGeekCatalog {
         private List<Integer> detailIds = List.of();
+        private int hotGamesCalls;
         private final java.util.ArrayList<String> searchQueries = new java.util.ArrayList<>();
 
         @Override
@@ -271,6 +315,7 @@ class BggRankedCatalogServiceTest {
 
         @Override
         public List<HotGame> hotGames() {
+            hotGamesCalls += 1;
             return List.of(new HotGame(1, 20, "Game 20", 2026, ""), new HotGame(2, 10, "Game 10", 2026, ""));
         }
 
