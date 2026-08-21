@@ -1,11 +1,9 @@
 import { expect, test } from '@playwright/test'
 
-test('shows My Guides before progress hydration and cancels only transient reads on navigation', async ({ page }) => {
+test('shows readable My Guides from the batched list before run hydration settles', async ({ page }) => {
   let sessionReads = 0
   let releaseRun!: () => void
-  let releaseLesson!: () => void
   const runGate = new Promise<void>(resolve => { releaseRun = resolve })
-  const lessonGate = new Promise<void>(resolve => { releaseLesson = resolve })
   let progressReadsStarted = 0
   let progressReadsSettled = 0
   const cancelled: string[] = []
@@ -31,6 +29,10 @@ test('shows My Guides before progress hydration and cancels only transient reads
         sections: [{
           position: 1, required: true, topicKey: 'setup', title: '设置', visualEvidenceRecommended: false,
         }],
+        lesson: {
+          id: 'lesson-progress', teachingPlanId: 'plan-progress', status: 'DRAFT_READY',
+          sections: [{ evidenceStatus: 'CITED_DRAFT' }],
+        },
       }] })
     }
     if (url.pathname === '/api/v1/assistant-runs/latest' && url.searchParams.get('subjectId') === 'plan-progress') {
@@ -47,23 +49,17 @@ test('shows My Guides before progress hydration and cancels only transient reads
       progressReadsSettled += 1
       return
     }
-    if (url.pathname === '/api/v1/teaching-plans/plan-progress/illustrated-lessons/latest') {
-      progressReadsStarted += 1
-      await lessonGate
-      await route.fulfill({ json: {
-        id: 'lesson-progress', teachingPlanId: 'plan-progress', status: 'DRAFT_READY',
-        sections: [{ evidenceStatus: 'CITED_DRAFT' }],
-      } }).catch(() => undefined)
-      progressReadsSettled += 1
-      return
+    if (url.pathname.endsWith('/illustrated-lessons/latest/summary')) {
+      throw new Error('the batched list must avoid a second lesson progress request')
     }
     if (isEmptyBackgroundPath(url)) return route.fulfill({ json: [] })
     return route.fulfill({ status: 404 })
   })
 
   await page.goto('/lessons')
-  await expect.poll(() => progressReadsStarted).toBe(2)
+  await expect.poll(() => progressReadsStarted).toBe(1)
   await expect(page.getByRole('heading', { level: 2, name: '快速可见的讲解' })).toBeVisible()
+  await expect(page.getByRole('link', { name: '阅读完整讲解' })).toBeVisible()
   await expect(page.getByText('正在读取讲解…')).toHaveCount(0)
   expect(sessionReads).toBe(1)
 
@@ -74,20 +70,18 @@ test('shows My Guides before progress hydration and cancels only transient reads
 
   await expect(page).toHaveURL('/catalog')
   await expect(page.getByRole('heading', { level: 1, name: '今晚想开哪一局？' })).toBeVisible()
-  await expect.poll(() => cancelled.length).toBe(2)
+  await expect.poll(() => cancelled.length).toBe(1)
   expect(mutations).toEqual([])
   expect(cancelled.every(url => /assistant-runs\/latest|illustrated-lessons\/latest/.test(url))).toBe(true)
 
   releaseRun()
-  releaseLesson()
-  await expect.poll(() => progressReadsSettled).toBe(2)
+  await expect.poll(() => progressReadsSettled).toBe(1)
   await expect(page.getByRole('heading', { level: 1, name: '今晚想开哪一局？' })).toBeVisible()
   expect(sessionReads).toBe(2)
 })
 
 function isProgressRead(url: URL) {
   return url.pathname === '/api/v1/assistant-runs/latest' && url.searchParams.get('subjectId') === 'plan-progress'
-    || url.pathname === '/api/v1/teaching-plans/plan-progress/illustrated-lessons/latest'
 }
 
 function isEmptyBackgroundPath(url: URL) {

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.json.JsonMapper;
 import com.rulepilot.teaching.application.TeachingPlanRepository;
+import com.rulepilot.teaching.application.TeachingPlanSummary;
 import com.rulepilot.teaching.domain.TeachingPlan;
 import com.rulepilot.teaching.domain.TeachingPlan.PlannedSection;
 import jakarta.persistence.Column;
@@ -67,6 +68,50 @@ public class JpaTeachingPlanRepository implements TeachingPlanRepository {
                 .setParameter("createdBy", createdBy)
                 .getResultList();
         return toDomains(plans);
+    }
+
+    @Override
+    public List<TeachingPlanSummary> findSummariesByCreatedBy(String createdBy) {
+        List<Object[]> planRows = entityManager
+                .createQuery(
+                        "select p.id, p.documentVersionId, p.gameTitle, p.premise, p.createdBy, p.createdAt "
+                                + "from TeachingPlanEntity p where p.createdBy = :createdBy order by p.createdAt desc",
+                        Object[].class)
+                .setParameter("createdBy", createdBy)
+                .getResultList();
+        if (planRows.isEmpty()) return List.of();
+        List<UUID> planIds = planRows.stream().map(row -> (UUID) row[0]).toList();
+        Map<UUID, List<TeachingPlanSummary.SectionSummary>> sectionsByPlan = entityManager
+                .createQuery(
+                        "select s.teachingPlanId, s.position, s.topicKey, s.title, s.required, s.visualEvidenceRecommended "
+                                + "from TeachingPlanSectionEntity s where s.teachingPlanId in :planIds "
+                                + "order by s.teachingPlanId, s.position",
+                        Object[].class)
+                .setParameter("planIds", planIds)
+                .getResultList()
+                .stream()
+                .collect(Collectors.groupingBy(
+                        row -> (UUID) row[0],
+                        java.util.LinkedHashMap::new,
+                        Collectors.mapping(
+                                row -> new TeachingPlanSummary.SectionSummary(
+                                        (Integer) row[1],
+                                        (String) row[2],
+                                        (String) row[3],
+                                        (Boolean) row[4],
+                                        (Boolean) row[5]),
+                                Collectors.toList())));
+        return planRows.stream()
+                .map(row -> new TeachingPlanSummary(
+                        (UUID) row[0],
+                        (UUID) row[1],
+                        (String) row[2],
+                        (String) row[3],
+                        sectionsByPlan.getOrDefault((UUID) row[0], List.of()),
+                        null,
+                        (String) row[4],
+                        (Instant) row[5]))
+                .toList();
     }
 
     @Override

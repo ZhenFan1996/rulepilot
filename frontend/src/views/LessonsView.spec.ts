@@ -613,11 +613,9 @@ describe('LessonsView', () => {
     wrapper.unmount()
   })
 
-  it('publishes plan cards before their independent progress reads settle', async () => {
+  it('publishes readable plan cards from the batched list before run progress settles', async () => {
     let releaseRun!: (value: Response) => void
-    let releaseLesson!: (value: Response) => void
     const runResponse = new Promise<Response>((resolve) => { releaseRun = resolve })
-    const lessonResponse = new Promise<Response>((resolve) => { releaseLesson = resolve })
     const progressSignals: AbortSignal[] = []
     let sessionReads = 0
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, options?: RequestInit) => {
@@ -626,15 +624,18 @@ describe('LessonsView', () => {
         sessionReads += 1
         return Response.json({ username: 'alice', roles: ['USER'] })
       }
-      if (path === '/api/v1/teaching-plans') return Response.json([plan('plan-early', '先展示的讲解')])
+      if (path === '/api/v1/teaching-plans') return Response.json([{
+        ...plan('plan-early', '先展示的讲解'),
+        lesson: {
+          id: 'lesson-early', teachingPlanId: 'plan-early', status: 'COMPLETE',
+          sections: [{ evidenceStatus: 'SUPPORTED' }],
+        },
+      }])
       if (path.includes('/api/v1/assistant-runs/latest')) {
         progressSignals.push(options?.signal as AbortSignal)
         return runResponse
       }
-      if (path.includes('/illustrated-lessons/latest')) {
-        progressSignals.push(options?.signal as AbortSignal)
-        return lessonResponse
-      }
+      if (path.includes('/illustrated-lessons/latest')) throw new Error('list hydration must not download a lesson again')
       if (isGuideListPath(path)) return Response.json([])
       return new Response(null, { status: 404 })
     }))
@@ -645,10 +646,10 @@ describe('LessonsView', () => {
       global: { plugins: [router], stubs: { BackgroundWorkCenter: true } },
     })
 
-    await vi.waitFor(() => expect(progressSignals).toHaveLength(2))
+    await vi.waitFor(() => expect(progressSignals).toHaveLength(1))
     expect(wrapper.text()).toContain('先展示的讲解')
     expect(wrapper.text()).not.toContain('正在加载讲解计划')
-    expect(wrapper.find('a[href="/lesson/plan-early"]').exists()).toBe(false)
+    expect(wrapper.find('a[href="/lesson/plan-early"]').exists()).toBe(true)
     expect(sessionReads).toBe(1)
 
     releaseRun(Response.json({
@@ -658,11 +659,8 @@ describe('LessonsView', () => {
       },
       budget: { usedModelCalls: 1, maxModelCalls: 144 }, activities: [],
     }))
-    releaseLesson(Response.json({
-      id: 'lesson-early', teachingPlanId: 'plan-early', status: 'COMPLETE',
-      sections: [{ evidenceStatus: 'SUPPORTED' }],
-    }))
-    await vi.waitFor(() => expect(wrapper.find('a[href="/lesson/plan-early"]').exists()).toBe(true))
+    await flushPromises()
+    expect(wrapper.find('a[href="/lesson/plan-early"]').exists()).toBe(true)
     wrapper.unmount()
   })
 

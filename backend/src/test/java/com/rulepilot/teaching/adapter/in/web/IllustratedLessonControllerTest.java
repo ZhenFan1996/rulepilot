@@ -4,6 +4,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -11,12 +12,14 @@ import com.rulepilot.assistant.AssistantRunState;
 import com.rulepilot.teaching.application.IllustratedLessonLauncher;
 import com.rulepilot.teaching.application.IllustratedLessonLauncher.LessonLaunch;
 import com.rulepilot.teaching.application.IllustratedLessonService;
+import com.rulepilot.teaching.application.TeachingPlanSummary;
 import com.rulepilot.teaching.application.LessonLocalizationService;
 import com.rulepilot.teaching.application.RulebookIconGlossaryService;
 import com.rulepilot.teaching.application.VisualLessonEnrichmentService.VisualEnrichmentLaunch;
 import com.rulepilot.teaching.domain.IllustratedLesson;
 import java.security.Principal;
 import java.util.Optional;
+import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -55,6 +58,32 @@ class IllustratedLessonControllerTest {
 
         verify(owners).requireOwned(planId, "alice");
         verify(launcher).launch(planId, "alice");
+    }
+
+    @Test
+    void returnsOnlyTheProgressFieldsNeededByTheWorkStatusScreen() throws Exception {
+        UUID planId = UUID.randomUUID();
+        UUID lessonId = UUID.randomUUID();
+        when(lessons.latestProgress(planId)).thenReturn(Optional.of(
+                new TeachingPlanSummary.LessonProgress(
+                        lessonId,
+                        planId,
+                        IllustratedLesson.LessonStatus.DRAFT_READY,
+                        List.of(new TeachingPlanSummary.SectionProgress(
+                                IllustratedLesson.EvidenceStatus.CITED_DRAFT)))));
+
+        mockMvc.perform(get(
+                                "/api/v1/teaching-plans/{planId}/illustrated-lessons/latest/summary",
+                                planId)
+                        .principal(alice))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(lessonId.toString()))
+                .andExpect(jsonPath("$.teachingPlanId").value(planId.toString()))
+                .andExpect(jsonPath("$.status").value("DRAFT_READY"))
+                .andExpect(jsonPath("$.sections[0].evidenceStatus").value("CITED_DRAFT"))
+                .andExpect(jsonPath("$.generatorVersion").doesNotExist());
+
+        verify(owners).requireOwned(planId, "alice");
     }
 
     @Test

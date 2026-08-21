@@ -111,6 +111,41 @@ class JpaTeachingPlanRepositoryPostgresTest {
         assertThat(restored.sections()).isEqualTo(original.sections());
     }
 
+    @Test
+    void ownedListUsesTheSmallProjectionNeededByTheWorkStatusScreen() {
+        UUID versionId = createDocumentVersion();
+        TeachingPlan original = new TeachingPlan(
+                UUID.randomUUID(),
+                versionId,
+                "只验证列表字段",
+                        "Large-context game",
+                        "列表只需要一句前提。",
+                new TeachingPlan.WholeGameContext(
+                        "不应为列表反序列化的完整上下文。",
+                        List.of(new TeachingPlan.GlobalConcept(
+                                "large-context", "大上下文", "仅详情需要。",
+                                List.of("很多证据"), List.of(9), List.of("setup"), List.of())),
+                        List.of(),
+                        true),
+                List.of(new TeachingPlan.PlannedSection(
+                        1, "setup", "设置", "摆好组件。", true, true,
+                        List.of("不应返回给列表的检索词"), List.of("internal-tag"), List.of(9))),
+                "persistence-player",
+                Instant.parse("2026-08-16T10:00:00Z"));
+
+        inTransaction(repository -> {
+            repository.save(original);
+            return null;
+        });
+        var summaries = inTransaction(repository -> repository.findSummariesByCreatedBy("persistence-player"));
+
+        var summary = summaries.stream().filter(item -> item.id().equals(original.id())).findFirst().orElseThrow();
+        assertThat(summary.gameTitle()).isEqualTo("Large-context game");
+        assertThat(summary.sections()).containsExactly(
+                new com.rulepilot.teaching.application.TeachingPlanSummary.SectionSummary(
+                        1, "setup", "设置", true, true));
+    }
+
     private static UUID createDocumentVersion() {
         UUID gameId = UUID.randomUUID();
         UUID editionId = UUID.randomUUID();

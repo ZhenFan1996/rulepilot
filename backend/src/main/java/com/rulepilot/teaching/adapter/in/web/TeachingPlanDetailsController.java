@@ -2,6 +2,8 @@ package com.rulepilot.teaching.adapter.in.web;
 
 import com.rulepilot.teaching.application.TeachingPlanService;
 import com.rulepilot.teaching.application.TeachingPlanRemovalService;
+import com.rulepilot.teaching.application.TeachingPlanSummary;
+import com.rulepilot.teaching.application.OwnedTeachingPlanCatalog;
 import com.rulepilot.teaching.domain.TeachingPlan;
 import java.security.Principal;
 import java.util.List;
@@ -21,16 +23,21 @@ import org.springframework.web.server.ResponseStatusException;
 public class TeachingPlanDetailsController {
 
     private final TeachingPlanService plans;
+    private final OwnedTeachingPlanCatalog catalog;
     private final TeachingPlanRemovalService removals;
 
-    public TeachingPlanDetailsController(TeachingPlanService plans, TeachingPlanRemovalService removals) {
+    public TeachingPlanDetailsController(
+            TeachingPlanService plans,
+            TeachingPlanRemovalService removals,
+            OwnedTeachingPlanCatalog catalog) {
         this.plans = plans;
         this.removals = removals;
+        this.catalog = catalog;
     }
 
     @GetMapping
-    List<TeachingPlan> list(Principal principal) {
-        return plans.listOwned(principal.getName());
+    List<TeachingPlanSummary> list(Principal principal) {
+        return catalog.list(principal.getName());
     }
 
     @GetMapping("/{planId}")

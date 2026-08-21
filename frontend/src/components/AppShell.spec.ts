@@ -691,6 +691,26 @@ describe('AppShell', () => {
     expect(fetchMock.mock.calls.filter(([input]) => String(input).includes('/api/auth/session'))).toHaveLength(1)
     wrapper.unmount()
   })
+
+  it('does not mount the duplicate background reader on either work-status route', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      if (String(input).includes('/api/auth/session')) return response({ username: 'player', roles: ['USER'] })
+      return new Response(null, { status: 404 })
+    }))
+    const router = createAppShellRouter()
+    for (const path of ['/lessons', '/work']) {
+      await router.push(path)
+      await router.isReady()
+      const wrapper = mount(AppShell, {
+        slots: { default: '<p>讲解与任务页面</p>' },
+        global: { plugins: [router], stubs: { BackgroundWorkCenter: true } },
+      })
+      await flushPromises()
+
+      expect(wrapper.find('background-work-center-stub').exists()).toBe(false)
+      wrapper.unmount()
+    }
+  })
 })
 
 function response(body: unknown) {
@@ -710,6 +730,7 @@ function createAppShellRouter() {
       { path: '/catalog', name: 'catalog', component: { template: '<div />' } },
       { path: '/teach', name: 'teach', component: { template: '<div />' } },
       { path: '/lessons', name: 'lessons', component: { template: '<div />' } },
+      { path: '/work', name: 'work-status', component: { template: '<div />' } },
       { path: '/account', name: 'account', component: { template: '<div />' } },
       { path: '/login', name: 'login', component: { template: '<div />' } },
     ],

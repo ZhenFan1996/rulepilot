@@ -12,6 +12,7 @@ import com.rulepilot.teaching.domain.TeachingPlan;
 import io.micrometer.observation.Observation;
 import io.micrometer.observation.ObservationRegistry;
 import java.util.Optional;
+import java.util.List;
 import java.util.UUID;
 import java.nio.charset.StandardCharsets;
 import org.slf4j.Logger;
@@ -238,6 +239,13 @@ public class IllustratedLessonService {
     @Transactional(readOnly = true)
     public Optional<IllustratedLesson> latest(UUID teachingPlanId) {
         return repository.findLatestByPlan(teachingPlanId);
+    }
+
+    @Transactional(readOnly = true)
+    public Optional<TeachingPlanSummary.LessonProgress> latestProgress(UUID teachingPlanId) {
+        return repository.findLatestProgressSummariesByPlans(List.of(teachingPlanId)).stream()
+                .findFirst()
+                .map(TeachingPlanSummary.LessonProgress::from);
     }
 
     static UUID candidateSubjectId(UUID teachingPlanId) {

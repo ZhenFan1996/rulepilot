@@ -1,6 +1,7 @@
 package com.rulepilot.teaching.adapter.in.web;
 
 import com.rulepilot.teaching.application.IllustratedLessonService;
+import com.rulepilot.teaching.application.TeachingPlanSummary;
 import com.rulepilot.teaching.application.IllustratedLessonLauncher;
 import com.rulepilot.teaching.application.IllustratedLessonLauncher.LessonLaunch;
 import com.rulepilot.teaching.application.LessonLocalizationService;
@@ -94,6 +95,13 @@ public class IllustratedLessonController {
     IllustratedLesson latest(@PathVariable UUID planId, Principal principal) {
         owners.requireOwned(planId, principal.getName());
         return lessons.latest(planId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "lesson does not exist"));
+    }
+
+    @GetMapping("/latest/summary")
+    TeachingPlanSummary.LessonProgress latestSummary(@PathVariable UUID planId, Principal principal) {
+        owners.requireOwned(planId, principal.getName());
+        return lessons.latestProgress(planId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "lesson does not exist"));
     }
 

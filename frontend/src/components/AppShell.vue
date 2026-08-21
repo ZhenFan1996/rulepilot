@@ -123,7 +123,7 @@ function updateBackgroundWorkStatus(
   backgroundFinishedTitle.value = finishedTitle
 }
 
-const onWorkStatusPage = computed(() => route.name === 'work-status')
+const onWorkStatusPage = computed(() => route.name === 'work-status' || route.name === 'lessons')
 
 function openBackgroundWork(event: MouseEvent) {
   backgroundWorkCenter.value?.openCenter(event.currentTarget as HTMLElement)
