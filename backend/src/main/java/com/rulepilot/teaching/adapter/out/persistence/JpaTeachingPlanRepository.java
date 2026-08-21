@@ -15,6 +15,7 @@ import jakarta.persistence.Table;
 import org.hibernate.annotations.ColumnTransformer;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -59,27 +60,23 @@ public class JpaTeachingPlanRepository implements TeachingPlanRepository {
 
     @Override
     public List<TeachingPlan> findAllByCreatedBy(String createdBy) {
-        return entityManager
+        List<TeachingPlanEntity> plans = entityManager
                 .createQuery(
                         "select p from TeachingPlanEntity p where p.createdBy = :createdBy order by p.createdAt desc",
                         TeachingPlanEntity.class)
                 .setParameter("createdBy", createdBy)
-                .getResultList()
-                .stream()
-                .map(plan -> plan.toDomain(findSections(plan.id)))
-                .toList();
+                .getResultList();
+        return toDomains(plans);
     }
 
     @Override
     public List<TeachingPlan> findRecent(int limit) {
         if (limit < 1 || limit > 200) throw new IllegalArgumentException("recent plan limit is invalid");
-        return entityManager
+        List<TeachingPlanEntity> plans = entityManager
                 .createQuery("select p from TeachingPlanEntity p order by p.createdAt desc", TeachingPlanEntity.class)
                 .setMaxResults(limit)
-                .getResultList()
-                .stream()
-                .map(plan -> plan.toDomain(findSections(plan.id)))
-                .toList();
+                .getResultList();
+        return toDomains(plans);
     }
 
     @Override
@@ -126,6 +123,26 @@ public class JpaTeachingPlanRepository implements TeachingPlanRepository {
                 .getResultList()
                 .stream()
                 .map(TeachingPlanSectionEntity::toDomain)
+                .toList();
+    }
+
+    private List<TeachingPlan> toDomains(List<TeachingPlanEntity> plans) {
+        if (plans.isEmpty()) return List.of();
+        Map<UUID, List<PlannedSection>> sectionsByPlan = entityManager
+                .createQuery(
+                        "select s from TeachingPlanSectionEntity s where s.teachingPlanId in :planIds "
+                                + "order by s.teachingPlanId, s.position",
+                        TeachingPlanSectionEntity.class)
+                .setParameter("planIds", plans.stream().map(plan -> plan.id).toList())
+                .getResultList()
+                .stream()
+                .collect(java.util.stream.Collectors.groupingBy(
+                        section -> section.teachingPlanId,
+                        java.util.LinkedHashMap::new,
+                        java.util.stream.Collectors.mapping(
+                                TeachingPlanSectionEntity::toDomain, java.util.stream.Collectors.toList())));
+        return plans.stream()
+                .map(plan -> plan.toDomain(sectionsByPlan.getOrDefault(plan.id, List.of())))
                 .toList();
     }
 }

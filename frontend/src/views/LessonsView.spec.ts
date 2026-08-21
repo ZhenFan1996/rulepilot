@@ -652,6 +652,40 @@ describe('LessonsView', () => {
     wrapper.unmount()
   })
 
+  it('publishes plan cards before optional journey snapshots settle', async () => {
+    let releaseAncillary!: () => void
+    const ancillaryGate = new Promise<void>((resolve) => { releaseAncillary = resolve })
+    let ancillaryReads = 0
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const path = String(input)
+      if (path === '/api/auth/session') return Response.json({ username: 'alice', roles: ['USER'] })
+      if (path === '/api/v1/teaching-plans') return Response.json([plan('plan-fast', '无需等待的讲解')])
+      if (isGuideListPath(path)) {
+        ancillaryReads += 1
+        await ancillaryGate
+        return Response.json([])
+      }
+      if (path.includes('/api/v1/assistant-runs/latest') || path.includes('/illustrated-lessons/latest')) {
+        return new Response(null, { status: 404 })
+      }
+      return new Response(null, { status: 404 })
+    }))
+    const router = createMemoryRouter()
+    await router.push('/lessons')
+    await router.isReady()
+    const wrapper = mount(LessonsView, {
+      global: { plugins: [router], stubs: { BackgroundWorkCenter: true } },
+    })
+
+    await vi.waitFor(() => expect(ancillaryReads).toBe(5))
+    await vi.waitFor(() => expect(wrapper.text()).toContain('无需等待的讲解'))
+    expect(wrapper.text()).not.toContain('正在加载讲解计划')
+
+    releaseAncillary()
+    await flushPromises()
+    wrapper.unmount()
+  })
+
   it('aborts all six list reads on unmount without cancelling durable background work', async () => {
     let releaseLists!: () => void
     const listGate = new Promise<void>((resolve) => { releaseLists = resolve })

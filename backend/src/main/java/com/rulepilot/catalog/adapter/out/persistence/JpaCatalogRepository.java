@@ -157,6 +157,23 @@ public class JpaCatalogRepository implements CatalogRepository {
     }
 
     @Override
+    public Map<UUID, List<GameEdition>> findEditionsByGames(Collection<UUID> gameIds) {
+        if (gameIds == null || gameIds.isEmpty()) return Map.of();
+        return entityManager
+                .createQuery(
+                        "select edition from CatalogGameEditionEntity edition where edition.gameId in :gameIds "
+                                + "order by edition.gameId, edition.name",
+                        GameEditionEntity.class)
+                .setParameter("gameIds", gameIds)
+                .getResultList()
+                .stream()
+                .collect(java.util.stream.Collectors.groupingBy(
+                        edition -> edition.gameId,
+                        LinkedHashMap::new,
+                        java.util.stream.Collectors.mapping(GameEditionEntity::toDomain, java.util.stream.Collectors.toList())));
+    }
+
+    @Override
     public List<Expansion> findExpansions(UUID gameId) {
         List<ExpansionEntity> expansions = entityManager.createQuery(
                         "select expansion from CatalogExpansionEntity expansion where expansion.gameId = :gameId order by expansion.name",
@@ -166,6 +183,56 @@ public class JpaCatalogRepository implements CatalogRepository {
         return expansions.stream()
                 .map(entity -> entity.toDomain(findCompatibleEditionIds(entity.id)))
                 .toList();
+    }
+
+    @Override
+    public Map<UUID, List<Expansion>> findExpansionsByGames(Collection<UUID> gameIds) {
+        if (gameIds == null || gameIds.isEmpty()) return Map.of();
+        List<ExpansionEntity> expansions = entityManager
+                .createQuery(
+                        "select expansion from CatalogExpansionEntity expansion where expansion.gameId in :gameIds "
+                                + "order by expansion.gameId, expansion.name",
+                        ExpansionEntity.class)
+                .setParameter("gameIds", gameIds)
+                .getResultList();
+        if (expansions.isEmpty()) return Map.of();
+        Map<UUID, Set<UUID>> editionsByExpansion = entityManager
+                .createQuery(
+                        "select compatibility from CatalogEditionExpansionEntity compatibility "
+                                + "where compatibility.id.expansionId in :expansionIds",
+                        EditionExpansionEntity.class)
+                .setParameter("expansionIds", expansions.stream().map(expansion -> expansion.id).toList())
+                .getResultList()
+                .stream()
+                .collect(java.util.stream.Collectors.groupingBy(
+                        compatibility -> compatibility.id.expansionId,
+                        LinkedHashMap::new,
+                        java.util.stream.Collectors.mapping(
+                                compatibility -> compatibility.id.editionId,
+                                java.util.stream.Collectors.toCollection(LinkedHashSet::new))));
+        return expansions.stream().collect(java.util.stream.Collectors.groupingBy(
+                expansion -> expansion.gameId,
+                LinkedHashMap::new,
+                java.util.stream.Collectors.mapping(
+                        expansion -> expansion.toDomain(editionsByExpansion.getOrDefault(expansion.id, Set.of())),
+                        java.util.stream.Collectors.toList())));
+    }
+
+    @Override
+    public Map<UUID, BggGameMetadata> findBggMetadataByGames(Collection<UUID> gameIds) {
+        if (gameIds == null || gameIds.isEmpty()) return Map.of();
+        return entityManager
+                .createQuery(
+                        "select metadata from CatalogBggGameMetadataEntity metadata where metadata.gameId in :gameIds",
+                        BggGameMetadataEntity.class)
+                .setParameter("gameIds", gameIds)
+                .getResultList()
+                .stream()
+                .collect(java.util.stream.Collectors.toMap(
+                        metadata -> metadata.gameId,
+                        BggGameMetadataEntity::toDomain,
+                        (first, ignored) -> first,
+                        LinkedHashMap::new));
     }
 
     @Override

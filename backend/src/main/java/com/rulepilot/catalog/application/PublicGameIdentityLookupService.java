@@ -3,10 +3,12 @@ package com.rulepilot.catalog.application;
 import com.rulepilot.catalog.BggGameType;
 import com.rulepilot.catalog.PublicGameIdentityLookup;
 import com.rulepilot.catalog.application.BggRankedCatalog.Query;
+import com.rulepilot.catalog.application.BggRankedCatalog.RankedGame;
 import com.rulepilot.catalog.application.BggRankedCatalog.Sort;
 import java.text.Normalizer;
 import java.util.Collection;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
@@ -37,23 +39,32 @@ class PublicGameIdentityLookupService implements PublicGameIdentityLookup {
     @Override
     public Map<String, Identity> findByTitles(Collection<String> titles) {
         if (titles == null || titles.isEmpty()) return Map.of();
-        var result = new LinkedHashMap<String, Identity>();
-        titles.stream()
+        List<String> requested = titles.stream()
                 .filter(java.util.Objects::nonNull)
                 .map(String::strip)
                 .filter(title -> !title.isBlank())
                 .distinct()
                 .limit(60)
-                .forEach(title -> safeFindByTitle(title).ifPresent(identity -> result.put(title, identity)));
-        return Map.copyOf(result);
-    }
-
-    private Optional<Identity> safeFindByTitle(String title) {
+                .toList();
+        if (requested.isEmpty()) return Map.of();
+        Map<String, String> originalByNormalized = requested.stream().collect(java.util.stream.Collectors.toMap(
+                this::normalized,
+                title -> title,
+                (first, ignored) -> first,
+                LinkedHashMap::new));
+        var result = new LinkedHashMap<String, Identity>();
         try {
-            return findByTitle(title);
+            rankedGames.findExactNames(originalByNormalized.keySet()).forEach(match -> {
+                String requestedTitle = originalByNormalized.get(normalized(match.matchedName()));
+                if (requestedTitle == null) return;
+                RankedGame game = match.game();
+                result.putIfAbsent(requestedTitle, new Identity(
+                        game.bggId(), game.sourceName(), "https://boardgamegeek.com/boardgame/" + game.bggId()));
+            });
         } catch (RuntimeException unavailableOptionalMetadata) {
-            return Optional.empty();
+            return Map.of();
         }
+        return Map.copyOf(result);
     }
 
     private String checkedTitle(String title) {

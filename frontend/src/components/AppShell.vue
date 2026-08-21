@@ -50,7 +50,6 @@ const navigation = [
   { name: 'home', path: '/', labelKey: 'nav.home', icon: 'compass' },
   { name: 'game-recommendations', path: '/discover', labelKey: 'nav.discover', icon: 'meeple' },
   { name: 'public-library', path: '/library', labelKey: 'nav.library', icon: 'library' },
-  { name: 'rulebooks', path: '/rulebooks', labelKey: 'nav.rulebook', icon: 'rulebook' },
   { name: 'work-status', path: '/work', labelKey: 'nav.lessons', icon: 'cards' },
   { name: 'catalog', path: '/catalog', labelKey: 'nav.games', icon: 'meeple' },
   { name: 'account', path: '/account', labelKey: 'nav.account', icon: 'players' },
@@ -59,7 +58,7 @@ const mobileNavigation = navigation.filter((item) => item.name !== 'account' && 
 
 const currentNavigationName = computed(() => {
   if (route.name === 'catalog-manage') return 'catalog'
-  if (route.name === 'teach' || route.name === 'rulebook-reader') return 'rulebooks'
+  if (route.name === 'teach' || route.name === 'rulebook-reader' || route.name === 'game-workspace') return 'catalog'
   if (route.name === 'public-lesson' || route.name === 'public-lesson-questions') return 'public-library'
   if (route.name === 'lessons' || route.name === 'lesson' || route.name === 'lesson-questions') return 'work-status'
   if (route.name === 'game-discovery' || route.name === 'game-catalog-browse') return 'game-recommendations'

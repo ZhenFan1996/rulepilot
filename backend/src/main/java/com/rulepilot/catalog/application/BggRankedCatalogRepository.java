@@ -4,6 +4,7 @@ import com.rulepilot.catalog.application.BggRankedCatalog.Page;
 import com.rulepilot.catalog.application.BggRankedCatalog.Query;
 import com.rulepilot.catalog.application.BggRankedCatalog.RankedGame;
 import com.rulepilot.catalog.application.BggRankedCatalog.Snapshot;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -16,6 +17,17 @@ public interface BggRankedCatalogRepository {
 
     default List<RankedGame> findExactName(String name) {
         return List.of();
+    }
+
+    default List<ExactNameMatch> findExactNames(Collection<String> names) {
+        if (names == null || names.isEmpty()) return List.of();
+        return names.stream()
+                .filter(java.util.Objects::nonNull)
+                .map(String::strip)
+                .filter(name -> !name.isBlank())
+                .distinct()
+                .flatMap(name -> findExactName(name).stream().map(game -> new ExactNameMatch(name, game)))
+                .toList();
     }
 
     default List<RankedGame> findRankedRange(int offset, int limit) {
@@ -51,4 +63,12 @@ public interface BggRankedCatalogRepository {
             Integer publicationYear,
             String thumbnailUrl,
             String imageUrl) {}
+
+    record ExactNameMatch(String matchedName, RankedGame game) {
+        public ExactNameMatch {
+            if (matchedName == null || matchedName.isBlank() || game == null) {
+                throw new IllegalArgumentException("exact BGG name match is invalid");
+            }
+        }
+    }
 }

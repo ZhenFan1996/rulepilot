@@ -13,7 +13,6 @@ const messages = {
     'nav.home': '首页',
     'nav.discover': '找桌游',
     'nav.library': '公开讲解',
-    'nav.rulebook': '我的规则书',
     'nav.lessons': '讲解与任务',
     'nav.games': '我的游戏',
     'nav.account': '我的',
