@@ -51,6 +51,7 @@ test('renders an authenticated account from the backend usage record contract', 
 
 test('renders the signed-in identity grid while secondary account summaries are still pending', async ({ page }) => {
   await mockCoverImages(page)
+  let coverMetadataRequests = 0
   let releaseSecondary!: () => void
   const secondaryGate = new Promise<void>(resolve => { releaseSecondary = resolve })
   await page.route('**/api/auth/session', route => route.fulfill({ json: { username: 'alice', roles: ['USER'] } }))
@@ -58,7 +59,8 @@ test('renders the signed-in identity grid while secondary account summaries are 
     json: [{ slot: 'FAVORITE_GAME', bggId: 342942, gameName: 'Ark Nova', chineseName: '方舟动物园', thumbnailUrl: '', imageUrl: '' }],
   }))
   await page.route('**/api/v1/bgg/catalog/covers?*', async route => {
-    await route.fulfill({ json: [{ bggId: 342942, thumbnailUrl: 'https://images.example/ark-nova.jpg', imageUrl: '' }] })
+    coverMetadataRequests += 1
+    await route.fulfill({ json: [] })
   })
   await page.route('**/api/v1/teaching-plans', async route => {
     await secondaryGate
@@ -78,6 +80,7 @@ test('renders the signed-in identity grid while secondary account summaries are 
   await expect(page.getByRole('heading', { level: 1, name: 'alice' })).toBeVisible()
   await expect(page.getByRole('button', { name: /最爱的桌游：方舟动物园/ })).toBeVisible()
   await expect(page.getByRole('img', { name: '方舟动物园' })).toHaveAttribute('src', '/api/v1/bgg/catalog/covers/342942/image')
+  expect(coverMetadataRequests).toBe(0)
   await expect(page.getByText('正在读取我的空间…')).toHaveCount(0)
   releaseSecondary()
 })

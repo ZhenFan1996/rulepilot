@@ -43,7 +43,6 @@ const gridSaving = ref(false)
 const gridError = ref('')
 let searchTimer: number | undefined
 let searchController: AbortController | null = null
-let coverController: AbortController | null = null
 let disposed = false
 const searchDebounceMs = 60
 const searchCache = new Map<string, CatalogGame[]>()
@@ -81,7 +80,7 @@ function displayName(selection: GridSelection) {
 }
 
 function coverImage(game: Pick<GridSelection, 'bggId' | 'imageUrl' | 'thumbnailUrl'>) {
-  return game.imageUrl || game.thumbnailUrl ? `/api/v1/bgg/catalog/covers/${game.bggId}/image` : ''
+  return `/api/v1/bgg/catalog/covers/${game.bggId}/image`
 }
 
 function catalogDisplayName(game: CatalogGame) {
@@ -120,40 +119,11 @@ async function loadGrid() {
     const selections = await response.json() as GridSelection[]
     if (disposed) return
     grid.value = selections
-    void enrichMissingGridCovers(selections)
   } catch (error) {
     if (disposed) return
     gridError.value = error instanceof Error ? error.message : String(error)
   } finally {
     if (!disposed) gridLoading.value = false
-  }
-}
-
-async function enrichMissingGridCovers(selections: GridSelection[]) {
-  const missingIds = selections.filter(item => !coverImage(item)).map(item => item.bggId)
-  if (!missingIds.length) return
-  coverController?.abort()
-  const controller = new AbortController()
-  coverController = controller
-  const parameters = new URLSearchParams()
-  missingIds.forEach(id => parameters.append('bggId', String(id)))
-  try {
-    const response = await fetch(`/api/v1/bgg/catalog/covers?${parameters.toString()}`, {
-      credentials: 'include',
-      signal: controller.signal,
-    })
-    if (!response.ok) return
-    const covers = await response.json() as Array<{ bggId: number; thumbnailUrl: string; imageUrl: string }>
-    if (disposed || coverController !== controller) return
-    const byId = new Map(covers.map(cover => [cover.bggId, cover]))
-    grid.value = grid.value.map(selection => {
-      const cover = byId.get(selection.bggId)
-      return cover ? { ...selection, thumbnailUrl: cover.thumbnailUrl, imageUrl: cover.imageUrl } : selection
-    })
-  } catch (error) {
-    if (!(error instanceof Error && error.name === 'AbortError')) return
-  } finally {
-    if (coverController === controller) coverController = null
   }
 }
 
@@ -285,7 +255,6 @@ onBeforeUnmount(() => {
   disposed = true
   window.clearTimeout(searchTimer)
   searchController?.abort()
-  coverController?.abort()
 })
 </script>
 
