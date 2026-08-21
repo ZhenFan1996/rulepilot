@@ -7,7 +7,6 @@ const englishMessages = {
     'nav.home': 'Home',
     'nav.discover': 'Discover',
     'nav.library': 'Public guides',
-    'nav.rulebook': 'My rulebooks',
     'nav.lessons': 'Guides & work',
     'nav.games': 'My games',
     'nav.account': 'Account',

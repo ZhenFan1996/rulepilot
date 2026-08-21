@@ -53,7 +53,7 @@ describe('RulebookReaderView', () => {
     const router = createRouter({
       history: createMemoryHistory(),
       routes: [
-        { path: '/teach', name: 'teach', component: { template: '<div />' } },
+        { path: '/catalog', name: 'catalog', component: { template: '<div />' } },
         { path: '/rulebooks/:versionId', name: 'rulebook-reader', component: RulebookReaderView },
       ],
     })
@@ -112,7 +112,7 @@ describe('RulebookReaderView', () => {
     const router = createRouter({
       history: createMemoryHistory(),
       routes: [
-        { path: '/teach', name: 'teach', component: { template: '<div />' } },
+        { path: '/catalog', name: 'catalog', component: { template: '<div />' } },
         { path: '/rulebooks/:versionId', name: 'rulebook-reader', component: RulebookReaderView },
       ],
     })
@@ -168,7 +168,7 @@ describe('RulebookReaderView', () => {
     const router = createRouter({
       history: createMemoryHistory(),
       routes: [
-        { path: '/teach', name: 'teach', component: { template: '<div />' } },
+        { path: '/catalog', name: 'catalog', component: { template: '<div />' } },
         { path: '/rulebooks/:versionId', name: 'rulebook-reader', component: RulebookReaderView },
       ],
     })

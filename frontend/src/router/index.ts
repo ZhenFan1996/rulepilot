@@ -71,12 +71,6 @@ const router = createRouter({
       meta: routeMeta('route.title.addRulebook'),
     },
     {
-      path: '/rulebooks',
-      name: 'rulebooks',
-      component: () => import('@/views/RulebookLibraryView.vue'),
-      meta: routeMeta('route.title.rulebook'),
-    },
-    {
       path: '/lessons',
       name: 'lessons',
       component: () => import('@/views/LessonsView.vue'),

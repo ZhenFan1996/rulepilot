@@ -3,11 +3,13 @@ package com.rulepilot.catalog.application;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.rulepilot.catalog.BggGameType;
 import com.rulepilot.catalog.application.BggRankedCatalog.Page;
 import com.rulepilot.catalog.application.BggRankedCatalog.RankedGame;
+import com.rulepilot.catalog.application.BggRankedCatalogRepository.ExactNameMatch;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
@@ -50,9 +52,21 @@ class PublicGameIdentityLookupServiceTest {
 
     @Test
     void batchLookupSkipsInvalidOrUnavailableOptionalMetadata() {
-        when(rankedGames.find(any())).thenThrow(new IllegalStateException("snapshot unavailable"));
+        when(rankedGames.findExactNames(any())).thenThrow(new IllegalStateException("snapshot unavailable"));
 
         assertThat(lookup.findByTitles(List.of("Orbit", "x"))).isEmpty();
+    }
+
+    @Test
+    void batchLookupResolvesEveryPublicCardInOneRepositoryCall() {
+        when(rankedGames.findExactNames(any())).thenReturn(List.of(
+                new ExactNameMatch("orbit", game(42, "Orbit")),
+                new ExactNameMatch("轨道", game(42, "Orbit"))));
+
+        assertThat(lookup.findByTitles(List.of("Orbit", "轨道")))
+                .containsOnlyKeys("Orbit", "轨道")
+                .allSatisfy((title, identity) -> assertThat(identity.bggId()).isEqualTo(42));
+        verify(rankedGames).findExactNames(any());
     }
 
     private RankedGame game(int bggId, String name) {

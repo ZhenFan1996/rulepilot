@@ -413,23 +413,27 @@ public class JpaRuleDocumentRepository implements RuleDocumentRepository {
     }
 
     private List<DocumentSummary> summaries(List<RuleDocumentEntity> documents) {
+        if (documents.isEmpty()) return List.of();
+        Map<UUID, DocumentVersionEntity> latestVersions = new LinkedHashMap<>();
+        entityManager
+                .createQuery(
+                        "select v from DocumentVersionEntity v where v.documentId in :documentIds "
+                                + "order by v.documentId, v.versionNumber desc",
+                        DocumentVersionEntity.class)
+                .setParameter("documentIds", documents.stream().map(document -> document.id).toList())
+                .getResultList()
+                .forEach(version -> latestVersions.putIfAbsent(version.documentId, version));
         return documents.stream()
-                .map(document -> new DocumentSummary(document.toDomain(), latestVersion(document.id).toDomain()))
+                .map(document -> new DocumentSummary(
+                        document.toDomain(), requireLatestVersion(latestVersions, document.id).toDomain()))
                 .toList();
     }
 
-    private DocumentVersionEntity latestVersion(UUID documentId) {
-        return entityManager
-                .createQuery(
-                        """
-                        select v from DocumentVersionEntity v
-                        where v.documentId = :documentId
-                        order by v.versionNumber desc
-                        """,
-                        DocumentVersionEntity.class)
-                .setParameter("documentId", documentId)
-                .setMaxResults(1)
-                .getSingleResult();
+    private DocumentVersionEntity requireLatestVersion(
+            Map<UUID, DocumentVersionEntity> latestVersions, UUID documentId) {
+        DocumentVersionEntity version = latestVersions.get(documentId);
+        if (version == null) throw new IllegalStateException("rule document has no version");
+        return version;
     }
 }
 

@@ -50,12 +50,17 @@ public class GameCatalogService {
 
     @Transactional(readOnly = true)
     public List<GameCatalogView> listCatalog() {
-        return repository.findGames().stream()
+        List<Game> games = repository.findGames();
+        List<UUID> gameIds = games.stream().map(Game::id).toList();
+        var editionsByGame = repository.findEditionsByGames(gameIds);
+        var expansionsByGame = repository.findExpansionsByGames(gameIds);
+        var metadataByGame = repository.findBggMetadataByGames(gameIds);
+        return games.stream()
                 .map(game -> new GameCatalogView(
                         game,
-                        repository.findEditions(game.id()),
-                        repository.findExpansions(game.id()),
-                        repository.findBggMetadata(game.id())))
+                        editionsByGame.getOrDefault(game.id(), List.of()),
+                        expansionsByGame.getOrDefault(game.id(), List.of()),
+                        java.util.Optional.ofNullable(metadataByGame.get(game.id()))))
                 .toList();
     }
 

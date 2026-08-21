@@ -629,27 +629,20 @@ async function loadPlans(background = false) {
     errorMessage.value = ''
   }
   try {
-    const [response, imports, uploads, activePreparation, documents, catalog] = await Promise.all([
-      checkedFetch('/api/v1/teaching-plans', { signal: controller.signal }),
+    const ancillary = Promise.all([
       optionalList<PendingGuideImport>('/api/v1/documents/official-imports', controller.signal),
       optionalList<PendingGuideUploadHandoff>('/api/v1/documents/upload-teaching-handoffs', controller.signal),
       optionalList<PendingGuidePreparationRun>('/api/v1/assistant-runs/active?mode=TEACHING_PREPARATION', controller.signal),
       optionalList<PendingGuideDocument>('/api/v1/documents', controller.signal),
       optionalList<PendingGuideCatalogGame>('/api/v1/games', controller.signal),
-    ])
+    ]).then(value => ({ value }), error => ({ error }))
+    const response = await checkedFetch('/api/v1/teaching-plans', { signal: controller.signal })
     if (!isCurrentListRequest(request, controller)) return
     if (!response.ok) throw new Error(t('lessons.error.load'))
     const receivedPlans = await response.json() as unknown
     if (!Array.isArray(receivedPlans)) throw new Error(t('lessons.error.load'))
-    const receivedPreparationRuns = await handoffPreparationRuns(imports, uploads, activePreparation, controller.signal)
-    if (!isCurrentListRequest(request, controller)) return
     const nextPlans = receivedPlans as TeachingPlan[]
     plans.value = nextPlans
-    guideImports.value = imports
-    guideUploadHandoffs.value = uploads
-    preparationRuns.value = receivedPreparationRuns
-    guideDocuments.value = documents
-    guideCatalog.value = catalog
     const currentPlanIds = new Set(nextPlans.map(plan => plan.id))
     progress.value = Object.fromEntries(Object.entries(progress.value).filter(([planId]) => currentPlanIds.has(planId)))
     progressErrors.value = Object.fromEntries(Object.entries(progressErrors.value).filter(([planId]) => currentPlanIds.has(planId)))
@@ -658,8 +651,22 @@ async function loadPlans(background = false) {
       knownRunIds.set(startedPlanId.value, startedRunId.value)
     }
     if (!background) loading.value = false
-    scheduleJourneyRefresh()
     void refreshProgress(nextPlans, request)
+    const ancillaryResult = await ancillary
+    if (!isCurrentListRequest(request, controller)) return
+    if ('value' in ancillaryResult) {
+      const [imports, uploads, activePreparation, documents, catalog] = ancillaryResult.value
+      const receivedPreparationRuns = await handoffPreparationRuns(
+        imports, uploads, activePreparation, controller.signal,
+      )
+      if (!isCurrentListRequest(request, controller)) return
+      guideImports.value = imports
+      guideUploadHandoffs.value = uploads
+      preparationRuns.value = receivedPreparationRuns
+      guideDocuments.value = documents
+      guideCatalog.value = catalog
+    }
+    scheduleJourneyRefresh()
   } catch (error) {
     if (!isCurrentListRequest(request, controller) || controller.signal.aborted) return
     if (!background) errorMessage.value = error instanceof Error ? error.message : t('lessons.error.loadShort')

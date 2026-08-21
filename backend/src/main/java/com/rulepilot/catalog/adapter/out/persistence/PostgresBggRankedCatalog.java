@@ -41,6 +41,12 @@ public class PostgresBggRankedCatalog implements BggRankedCatalogRepository {
             familygames_rank, partygames_rank, strategygames_rank, thematic_rank,
             wargames_rank
             """;
+    private static final String QUALIFIED_COLUMNS = """
+            g.bgg_id, g.source_name, g.publication_year, g.overall_rank, g.bayes_average, g.average_rating,
+            g.users_rated, g.is_expansion, g.abstracts_rank, g.cgs_rank, g.childrensgames_rank,
+            g.familygames_rank, g.partygames_rank, g.strategygames_rank, g.thematic_rank,
+            g.wargames_rank
+            """;
 
     private final NamedParameterJdbcTemplate jdbc;
 
@@ -92,6 +98,45 @@ public class PostgresBggRankedCatalog implements BggRankedCatalogRepository {
                         + "ORDER BY g.overall_rank ASC NULLS LAST, g.users_rated DESC, g.bgg_id ASC LIMIT 3",
                 new MapSqlParameterSource().addValue("name", checked),
                 this::mapGame);
+    }
+
+    @Override
+    public List<ExactNameMatch> findExactNames(java.util.Collection<String> names) {
+        if (names == null || names.isEmpty()) return List.of();
+        List<String> checked = names.stream()
+                .filter(java.util.Objects::nonNull)
+                .map(name -> name.strip().replaceAll("\\s+", " "))
+                .filter(name -> !name.isBlank())
+                .peek(name -> {
+                    if (name.length() > 120) {
+                        throw new IllegalArgumentException("BGG exact name must contain at most 120 characters");
+                    }
+                })
+                .map(name -> name.toLowerCase(java.util.Locale.ROOT))
+                .distinct()
+                .limit(60)
+                .toList();
+        if (checked.isEmpty()) return List.of();
+        String sql = """
+                SELECT matched_name, %s
+                FROM (
+                    SELECT lower(g.source_name) AS matched_name, %s
+                    FROM bgg_ranked_game g
+                    WHERE lower(g.source_name) IN (:names)
+                    UNION ALL
+                    SELECT lower(alias.alias) AS matched_name, %s
+                    FROM bgg_game_name_alias alias
+                    JOIN bgg_ranked_game g ON g.bgg_id = alias.bgg_id
+                    WHERE lower(alias.alias) IN (:names)
+                ) matches
+                ORDER BY matched_name, is_expansion ASC,
+                         overall_rank ASC NULLS LAST, users_rated DESC, bgg_id ASC
+                """.formatted(COLUMNS, QUALIFIED_COLUMNS, QUALIFIED_COLUMNS);
+        return jdbc.query(
+                sql,
+                new MapSqlParameterSource().addValue("names", checked),
+                (resultSet, rowNumber) -> new ExactNameMatch(
+                        resultSet.getString("matched_name"), mapGame(resultSet, rowNumber)));
     }
 
     @Override

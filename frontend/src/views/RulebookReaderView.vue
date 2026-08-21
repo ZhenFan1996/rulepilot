@@ -53,11 +53,11 @@ useModalFocus({
 })
 
 const copy = computed(() => locale.value === 'zh-CN' ? {
-  back: '返回规则书', eyebrow: '原规则书', pages: `${pages.value.length} 页`,
+  back: '返回我的游戏', eyebrow: '原规则书', pages: `${pages.value.length} 页`,
   loading: '正在打开规则书…', error: '暂时无法打开这本规则书。', retry: '重试',
   answer: '基于这本规则书答疑', close: '关闭答疑', hint: '讲解不是必经步骤；你可以边读边问。',
 } : {
-  back: 'Back to rulebooks', eyebrow: 'Original rulebook', pages: `${pages.value.length} pages`,
+  back: 'Back to my games', eyebrow: 'Original rulebook', pages: `${pages.value.length} pages`,
   loading: 'Opening the rulebook…', error: 'This rulebook cannot be opened right now.', retry: 'Retry',
   answer: 'Ask from this rulebook', close: 'Close questions', hint: 'A generated lesson is optional. Read and ask as you go.',
 })
@@ -238,7 +238,7 @@ onUnmounted(() => {
       <header class="app-sticky-top sticky z-30 border-b border-ink/10 bg-paper/95 backdrop-blur">
         <div class="mx-auto flex max-w-[100rem] items-center justify-between gap-4 px-4 py-3 sm:px-6">
           <div class="min-w-0">
-            <RouterLink :to="{ name: 'teach' }" class="text-xs font-semibold text-indigo">← {{ copy.back }}</RouterLink>
+            <RouterLink :to="{ name: 'catalog' }" class="text-xs font-semibold text-indigo">← {{ copy.back }}</RouterLink>
             <div class="mt-1 flex min-w-0 items-baseline gap-3">
               <h1 class="truncate font-display text-xl font-semibold sm:text-2xl">{{ title || filename }}</h1>
               <span v-if="pages.length" class="shrink-0 text-xs text-ink/45">{{ copy.pages }}</span>
