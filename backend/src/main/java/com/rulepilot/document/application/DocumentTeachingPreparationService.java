@@ -24,7 +24,7 @@ class DocumentTeachingPreparationService implements DocumentTeachingPreparation 
 
     @Override
     @Transactional
-    public VersionScope prepare(UUID documentVersionId, String ownerUsername, String suggestedGameName) {
+    public VersionScope prepare(UUID documentVersionId, String ownerUsername, String sourceConfirmedGameName) {
         var version = documents.findVersion(documentVersionId)
                 .orElseThrow(() -> new IllegalArgumentException("rule document does not exist"));
         RuleDocument document = documents.findDocument(version.documentId())
@@ -33,14 +33,15 @@ class DocumentTeachingPreparationService implements DocumentTeachingPreparation 
         if (!"READY".equals(version.status().name())) {
             throw new IllegalArgumentException("rule document is not ready for teaching");
         }
-        if (RulebookTitleInferencePolicy.shouldReplaceUploadedTitle(document.title(), suggestedGameName)) {
-            document = document.withTitle(suggestedGameName);
+        if (RulebookTitleInferencePolicy.shouldReplaceWithSourceConfirmedTitle(
+                document.title(), sourceConfirmedGameName)) {
+            document = document.withTitle(sourceConfirmedGameName.strip());
             documents.update(document);
         }
         if (document.gameEditionId() == null) {
-            String gameName = suggestedGameName == null || suggestedGameName.isBlank()
+            String gameName = sourceConfirmedGameName == null || sourceConfirmedGameName.isBlank()
                     ? document.title()
-                    : suggestedGameName;
+                    : sourceConfirmedGameName;
             UUID editionId = catalog.provisionDefaultEdition(gameName);
             boolean assignmentWouldDuplicate = documents.findDocument(
                             editionId, ownerUsername, document.title(), document.sourceType())

@@ -25,23 +25,36 @@ public final class RulebookTitleInferencePolicy {
                 : uploaded;
     }
 
-    public static boolean shouldReplaceUploadedTitle(String uploadedTitle, String inferredTitle) {
-        return (uploadedTitle == null || uploadedTitle.isBlank())
-                && inferredTitle != null
-                && !inferredTitle.isBlank();
+    /**
+     * Applies a title that the teaching boundary has already confirmed against the active source pages.
+     *
+     * <p>The publication boundary does not receive rulebook text, so it must not repeat model inference. It may only
+     * persist a confirmed title when the upload label is empty or contains that title as a bounded, shorter identity.
+     */
+    public static boolean shouldReplaceWithSourceConfirmedTitle(
+            String uploadedTitle, String sourceConfirmedTitle) {
+        String uploaded = clean(uploadedTitle);
+        String confirmed = clean(sourceConfirmedTitle);
+        if (confirmed == null) return false;
+        if (uploaded == null) return true;
+        return isContainedIdentity(uploaded, confirmed);
     }
 
     private static boolean isSourceConfirmedContainedIdentity(
             String uploadedTitle,
             String inferredTitle,
             List<String> activeDocumentText) {
+        if (!isContainedIdentity(uploadedTitle, inferredTitle)) return false;
+        return occursAsIdentity(openingText(activeDocumentText), normalize(inferredTitle));
+    }
+
+    private static boolean isContainedIdentity(String uploadedTitle, String inferredTitle) {
         String uploaded = normalize(uploadedTitle);
         String inferred = normalize(inferredTitle);
         if (inferred.codePointCount(0, inferred.length()) < 2 || inferred.length() >= uploaded.length()) {
             return false;
         }
-        if (!occursAsIdentity(uploaded, inferred)) return false;
-        return occursAsIdentity(openingText(activeDocumentText), inferred);
+        return occursAsIdentity(uploaded, inferred);
     }
 
     private static String openingText(List<String> pages) {

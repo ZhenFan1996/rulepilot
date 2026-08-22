@@ -291,12 +291,7 @@ public class BggRankedCatalogService
     }
 
     private List<RankedGame> localExactMatches(String name) {
-        List<RankedGame> exact = repository.findExactName(name);
-        if (!exact.isEmpty()) return exact;
-        String normalizedName = normalizedTitle(name);
-        return repository.find(new Query(name, BggGameType.ALL, Sort.RANK, 0, 5, List.of())).games().stream()
-                .filter(game -> normalizedTitle(game.sourceName()).equals(normalizedName))
-                .toList();
+        return repository.findExactName(name);
     }
 
     /**
