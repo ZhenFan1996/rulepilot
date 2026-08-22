@@ -842,12 +842,23 @@ test('recommendation becomes one readable, taught, and answerable production jou
     await retainReport(reportFile, report)
     report.stage = 'recommendation'
     await page.goto('/discover')
+    const targetDetailsButton = page.getByRole('button', { name: new RegExp(`查看完整资料：(?:${TARGET_NAME.source})`, 'i') })
+    const newConversation = page.getByRole('button', { name: '建立新聊天', exact: true })
+    await expect(newConversation).toBeEnabled({ timeout: 60_000 })
+    const newConversationResponse = page.waitForResponse(response => {
+      const url = new URL(response.url())
+      return url.pathname === '/api/v1/bgg/recommendation-agent/sessions'
+        && response.request().method() === 'POST'
+    }, { timeout: 60_000 })
+    await newConversation.click()
+    expect((await newConversationResponse).ok(), 'Production could not establish a fresh recommendation session')
+      .toBe(true)
+    await expect(targetDetailsButton).toHaveCount(0)
     const recommendationStartedAt = performance.now()
     const composer = page.getByLabel('聊聊你想玩的游戏')
     await composer.fill(RECOMMENDATION_PROMPT)
     await page.getByRole('button', { name: '发送', exact: true }).click()
 
-    const targetDetailsButton = page.getByRole('button', { name: new RegExp(`查看完整资料：(?:${TARGET_NAME.source})`, 'i') })
     await expect(targetDetailsButton).toBeVisible({ timeout: MAX_EXPLICIT_TARGET_RECOMMENDATION_MS })
     report.recommendationMs = elapsed(recommendationStartedAt)
     expect(

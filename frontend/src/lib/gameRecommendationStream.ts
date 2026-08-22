@@ -68,6 +68,10 @@ export async function streamGameRecommendation(
       buffer = buffer.slice(boundary + 2)
       const event = parseEvent(raw)
       if (event) consume(event)
+      if (result !== null) {
+        void reader.cancel()
+        return result as RecommendationAgentResponse
+      }
       boundary = buffer.indexOf('\n\n')
     }
     if (chunk.done) break

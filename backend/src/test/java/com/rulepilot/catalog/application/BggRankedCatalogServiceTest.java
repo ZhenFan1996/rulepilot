@@ -17,6 +17,7 @@ import com.rulepilot.catalog.application.BoardGameGeekCatalog.SearchResult;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -169,6 +170,9 @@ class BggRankedCatalogServiceTest {
         assertThat(repository.query)
                 .as("exact local identity resolution must not run the ranked fuzzy-search query")
                 .isNull();
+        assertThat(repository.exactBatchQueries)
+                .as("all player-authored aliases should use one indexed exact-name query")
+                .isEqualTo(1);
     }
 
     @Test
@@ -247,6 +251,7 @@ class BggRankedCatalogServiceTest {
     private static final class MemoryRepository implements BggRankedCatalogRepository {
         private Query query;
         private String selectionQuery;
+        private int exactBatchQueries;
 
         @Override
         public Optional<Snapshot> findSnapshot() {
@@ -277,6 +282,12 @@ class BggRankedCatalogServiceTest {
                 case "碁" -> List.of(game(30, 30, "碁"));
                 default -> List.of();
             };
+        }
+
+        @Override
+        public List<ExactNameMatch> findExactNames(Collection<String> names) {
+            exactBatchQueries++;
+            return BggRankedCatalogRepository.super.findExactNames(names);
         }
 
         @Override

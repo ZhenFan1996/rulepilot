@@ -28,6 +28,28 @@ describe('streamGameRecommendation', () => {
     expect(result).toMatchObject(payload)
   })
 
+  it('publishes the terminal result without waiting for the proxy to close the SSE connection', async () => {
+    const encoder = new TextEncoder()
+    const payload = {
+      outcome: 'recommendations', mode: 'model_fast_path', assistantMessage: '已找到《花砖物语》。',
+      profile: { players: null, maxMinutes: null, maxWeight: null, type: 'all', interaction: 'any' },
+      clarification: null, sourceCount: 0, candidatesEvaluated: 1, games: [],
+    }
+    let transportCancelled = false
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode(`event: result\ndata: ${JSON.stringify(payload)}\n\n`))
+      },
+      cancel() {
+        transportCancelled = true
+      },
+    }), { headers: { 'Content-Type': 'text/event-stream' } })))
+
+    await expect(streamGameRecommendation('/stream', { method: 'POST' }, () => undefined))
+      .resolves.toMatchObject(payload)
+    expect(transportCancelled).toBe(true)
+  })
+
   it('preserves measured candidate and hard-constraint counts from progress events', async () => {
     const payload = {
       outcome: 'no_match', mode: 'model_assisted', assistantMessage: '没有匹配。',
