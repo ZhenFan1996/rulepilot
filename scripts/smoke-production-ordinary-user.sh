@@ -675,7 +675,7 @@ answer_response=$(curl --fail-with-body --silent --show-error \
 	--header "$csrf_header: $csrf_token" \
 	--data "$answer_payload" \
 	"$base_url/api/v1/document-versions/$version_id/answers")
-answer_run_id=$(jq -er '.assistantRunId' <<<"$answer_response")
+answer_run_id=$(jq -r '.assistantRunId // "not-exposed"' <<<"$answer_response")
 answer_status=$(jq -er '.answer.status' <<<"$answer_response")
 answer_citation_count=$(jq -er '.answer.citations | length' <<<"$answer_response")
 if ! jq -e --arg version_id "$version_id" '
@@ -734,9 +734,10 @@ if [ -n "$result_file" ]; then
 		--argjson lessonRun "$lesson_result" \
 		--argjson visualRun "$visual_result" \
 		--argjson lesson "$lesson" \
+		--argjson answer "$answer_response" \
 		'{generatedAt: $generatedAt, stage: "lesson", username: $username, sourceUrl: $sourceUrl,
 		  summary: $summary, preparationRun: $preparationRun, plan: $plan,
-		  lessonRun: $lessonRun, visualRun: $visualRun, lesson: $lesson}' > "$result_file"
+		  lessonRun: $lessonRun, visualRun: $visualRun, lesson: $lesson, answer: $answer}' > "$result_file"
 	chmod 600 "$result_file"
 fi
 
