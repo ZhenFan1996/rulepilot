@@ -20,6 +20,7 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
   let visualRunEnabled = false
   let visualRunReads = 0
   let answerHasCitations = true
+  let answerReferencesAlign = true
   let expectedQuestion = 'How many victory points is each lit dock worth during final scoring?'
   const server = createServer(async (request, response) => {
     const body = await readBody(request)
@@ -205,17 +206,23 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
       return json(response, 200, {
         assistantRunId: '77777777-7777-4777-8777-777777777777',
         answer: {
-          documentVersionId: '22222222-2222-2222-2222-222222222222',
+          language: 'en',
           status: 'ANSWERED',
           shortVerdict: 'Each lit dock is worth three victory points.',
           explanation: 'Final scoring awards three points for every dock you lit.',
           citations: answerHasCitations ? [{
-            chunkId: '88888888-8888-4888-8888-888888888888',
-            documentVersionId: '22222222-2222-2222-2222-222222222222',
+            heading: 'GAME END AND SCORING',
             pageFrom: 4,
             pageTo: 4,
             excerpt: 'Score three victory points for each dock you lit.',
           }] : [],
+        },
+        rulingReference: {
+          citationIds: answerHasCitations && answerReferencesAlign
+            ? ['88888888-8888-4888-8888-888888888888']
+            : [],
+          confirmedRulingId: null,
+          confirmedRulingVersion: null,
         },
       })
     }
@@ -314,9 +321,25 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
       { ...process.env, RULEPILOT_SMOKE_PASSWORD: 'smoke-password' },
     )
     assert.notEqual(ungroundedAnswer.code, 0)
-    assert.match(ungroundedAnswer.stderr, /Rule answer did not publish a conclusion with same-version page evidence/)
+    assert.match(ungroundedAnswer.stderr, /Rule answer did not publish a conclusion with page evidence and aligned source references/)
     assert.equal(deleted, true)
     answerHasCitations = true
+
+    answerReferencesAlign = false
+    deleted = false
+    planStarted = false
+    const unboundAnswer = await spawnResult(
+      'bash',
+      [resolve('scripts/smoke-production-ordinary-user.sh'),
+        '--base-url', `http://127.0.0.1:${address.port}`,
+        '--pdf', pdf,
+        '--timeout-seconds', '10'],
+      { ...process.env, RULEPILOT_SMOKE_PASSWORD: 'smoke-password' },
+    )
+    assert.notEqual(unboundAnswer.code, 0)
+    assert.match(unboundAnswer.stderr, /Rule answer did not publish a conclusion with page evidence and aligned source references/)
+    assert.equal(deleted, true)
+    answerReferencesAlign = true
 
     deleted = false
     planStarted = false

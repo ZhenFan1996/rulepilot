@@ -86,6 +86,10 @@ export async function streamStructuredAnswer(
       buffer = buffer.slice(boundary + 2)
       const event = parseEvent(raw)
       if (event) consume(event)
+      if (completed) {
+        void reader.cancel()
+        return result
+      }
       boundary = buffer.indexOf('\n\n')
     }
     if (chunk.done) break

@@ -73,6 +73,25 @@ describe('streamStructuredAnswer', () => {
       .resolves.toEqual({ answer: { status: 'ANSWERED' } })
   })
 
+  it('publishes the validated answer without waiting for the proxy to close the SSE connection', async () => {
+    const encoder = new TextEncoder()
+    let transportCancelled = false
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode(
+          'event: result\ndata: {"answer":{"status":"ANSWERED","shortVerdict":"可以。"}}\n\n',
+        ))
+      },
+      cancel() {
+        transportCancelled = true
+      },
+    }), { headers: { 'Content-Type': 'text/event-stream' } })))
+
+    await expect(streamStructuredAnswer('/answers', { method: 'POST' }, () => undefined))
+      .resolves.toEqual({ answer: { status: 'ANSWERED', shortVerdict: '可以。' } })
+    expect(transportCancelled).toBe(true)
+  })
+
   it('does not turn a terminal stream error into a partial answer', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(
       'event: run\ndata: {"runId":"run-2"}\n\nevent: error\ndata: {"code":"answer_unavailable"}\n\n',
