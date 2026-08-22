@@ -62,6 +62,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.function.Consumer;
 import org.slf4j.Logger;
@@ -135,6 +136,77 @@ final class RecommendationActions {
             if (!ASK_TOOL.equals(call.name())) state.clarificationBlockedByExecutionFailure = true;
             return rejected(state, "ACTION_UNAVAILABLE", "The action failed. Choose another useful action or respond transparently.");
         }
+    }
+
+    Optional<ConversationResponse> publishLocalExplicitTarget(
+            String title,
+            RecommendationAgentState state,
+            String locale) {
+        state.catalogCalls++;
+        state.actionCalls++;
+        state.referenceResolutionAttempts++;
+        state.actions.add("RESOLVE_EXPLICIT_TARGET_LOCALLY");
+        ReferenceObservation result;
+        try {
+            result = tools.resolveLocalReferenceTitle(title);
+        } catch (RuntimeException failure) {
+            LOGGER.warn(
+                    "Recommendation local explicit-target lookup was skipped ({})",
+                    failure.getClass().getSimpleName());
+            return Optional.empty();
+        }
+        if (!result.resolved()) return Optional.empty();
+
+        Game selected = result.games().getFirst();
+        state.observeCandidate(selected.ranking().bggId(), selected.ranking().sourceName());
+        state.addVerified(selected);
+        state.namedGamePurpose = NamedGamePurpose.TARGET_GAME;
+        state.assignNamedGameRole(selected.ranking().bggId(), NamedGamePurpose.TARGET_GAME);
+        state.actions.add("RECOMMEND_GAMES");
+
+        List<RecommendedGame> games = selector.present(
+                List.of(selected),
+                state.profile,
+                List.of(),
+                runtime.chinese(locale),
+                state.research);
+        String name = visibleName(selected, runtime.chinese(locale));
+        String playerReply = runtime.chinese(locale)
+                ? "已找到《" + name + "》。可以直接继续查看规则书、生成讲解或进入答疑。"
+                : "I found “" + name + "”. You can continue directly to its rulebook, guide, or questions.";
+        ConversationResponse response = response(
+                Outcome.RECOMMENDATIONS,
+                playerReply,
+                state,
+                locale,
+                null,
+                games);
+        return Optional.of(new ConversationResponse(
+                response.outcome(),
+                DecisionMode.MODEL_FAST_PATH,
+                response.assistantMessage(),
+                response.profile(),
+                response.clarification(),
+                response.sourceCount(),
+                response.candidatesEvaluated(),
+                response.userModel(),
+                response.researchSources(),
+                response.harness(),
+                response.games(),
+                response.comparison(),
+                response.shortfall(),
+                response.recommendationLead()));
+    }
+
+    private String visibleName(Game game, boolean chinese) {
+        if (game.details() != null) {
+            String localized = chinese ? game.details().officialChineseName() : game.details().name();
+            if (localized != null && !localized.isBlank()) return localized.strip();
+            if (game.details().name() != null && !game.details().name().isBlank()) {
+                return game.details().name().strip();
+            }
+        }
+        return game.ranking().sourceName();
     }
 
     private ActionOutcome reply(

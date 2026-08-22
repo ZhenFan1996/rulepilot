@@ -239,7 +239,7 @@ jobs:
           fi
           printf '%s\n' \
             'TEACHING_PROVIDER=spring-ai' \
-            'TEACHING_MODEL_PROVIDER=qwen' \
+            'TEACHING_MODEL_PROVIDER=deepseek' \
             'VISUAL_PROVIDER=spring-ai' \
             'VISUAL_MODEL_PROVIDER=qwen' \
             'ANSWER_PROVIDER=spring-ai' \
