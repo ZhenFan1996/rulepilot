@@ -124,6 +124,16 @@ function updateBackgroundWorkStatus(
 }
 
 const onWorkStatusPage = computed(() => route.name === 'work-status' || route.name === 'lessons')
+const backgroundShortcutTitle = computed(() => {
+  if (backgroundActiveCount.value) {
+    return backgroundActiveCount.value === 1 && backgroundActiveTitle.value
+      ? t('shell.lesson.oneActive', { title: backgroundActiveTitle.value })
+      : t('shell.lesson.manyActive', { count: backgroundActiveCount.value })
+  }
+  return backgroundFinishedCount.value === 1 && backgroundFinishedTitle.value
+    ? t('shell.lesson.oneFinished', { title: backgroundFinishedTitle.value })
+    : t('shell.lesson.manyFinished', { count: backgroundFinishedCount.value })
+})
 
 function openBackgroundWork(event: MouseEvent) {
   backgroundWorkCenter.value?.openCenter(event.currentTarget as HTMLElement)
@@ -271,6 +281,26 @@ onBeforeUnmount(() => {
       :username="username"
       @status="updateBackgroundWorkStatus"
     />
+
+    <button
+      v-if="username && !immersive && !onWorkStatusPage && (backgroundActiveCount || backgroundFinishedCount)"
+      type="button"
+      data-testid="background-work-persistent-shortcut"
+      class="background-work-shortcut"
+      aria-haspopup="dialog"
+      @click="openBackgroundWork"
+    >
+      <span class="work-status-icon" aria-hidden="true">
+        <TabletopGlyph name="cards" :size="18" />
+      </span>
+      <span class="work-status-copy">
+        <span class="work-status-label">{{ t('shell.guideStatus') }}</span>
+        <span class="work-status-title">{{ backgroundShortcutTitle }}</span>
+      </span>
+      <span class="work-status-action">
+        {{ t(backgroundActiveCount ? 'shell.lesson.viewProgress' : 'shell.lesson.viewResult') }}
+      </span>
+    </button>
 
     <nav v-if="!immersive" class="fixed inset-x-0 bottom-0 z-40 grid grid-cols-5 border-t border-ink/10 bg-paper/97 px-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-2 mobile-navigation backdrop-blur lg:hidden" :aria-label="t('shell.primaryNav')">
       <RouterLink
