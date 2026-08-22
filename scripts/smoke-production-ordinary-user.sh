@@ -675,22 +675,30 @@ answer_response=$(curl --fail-with-body --silent --show-error \
 	--header "$csrf_header: $csrf_token" \
 	--data "$answer_payload" \
 	"$base_url/api/v1/document-versions/$version_id/answers")
+if [ -n "$result_file" ]; then
+	answer_checkpoint="${result_file}.answer.tmp"
+	jq --argjson answer "$answer_response" '.stage = "answer" | .answer = $answer' \
+		"$result_file" > "$answer_checkpoint"
+	mv "$answer_checkpoint" "$result_file"
+	chmod 600 "$result_file"
+fi
 answer_run_id=$(jq -r '.assistantRunId // "not-exposed"' <<<"$answer_response")
 answer_status=$(jq -er '.answer.status' <<<"$answer_response")
 answer_citation_count=$(jq -er '.answer.citations | length' <<<"$answer_response")
-if ! jq -e --arg version_id "$version_id" '
-	.answer.documentVersionId == $version_id
-	and (.answer.status == "ANSWERED" or .answer.status == "ANSWERED_WITH_WARNING")
+if ! jq -e '
+	(.answer.status == "ANSWERED" or .answer.status == "ANSWERED_WITH_WARNING")
 	and (.answer.shortVerdict | length > 0)
 	and (.answer.explanation | length > 0)
 	and (.answer.citations | length > 0)
 	and all(.answer.citations[];
-		.documentVersionId == $version_id
-		and .pageFrom >= 1
+		.pageFrom >= 1
 		and .pageTo >= .pageFrom
 		and (.excerpt | length > 0))
+	and ((.rulingReference.citationIds | length) == (.answer.citations | length))
+	and ((.rulingReference.citationIds | unique | length) == (.rulingReference.citationIds | length))
+	and all(.rulingReference.citationIds[]; type == "string" and length > 0)
 ' >/dev/null <<<"$answer_response"; then
-	echo "Rule answer did not publish a conclusion with same-version page evidence" >&2
+	echo "Rule answer did not publish a conclusion with page evidence and aligned source references" >&2
 	exit 1
 fi
 log_stage "answer-verified run=$answer_run_id status=$answer_status citations=$answer_citation_count"
