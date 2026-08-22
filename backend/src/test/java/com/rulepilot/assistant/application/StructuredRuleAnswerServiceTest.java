@@ -170,6 +170,40 @@ class StructuredRuleAnswerServiceTest {
     }
 
     @Test
+    void standaloneQuestionsDoNotSpendASeparateInterpretationCall() {
+        RuleEvidenceHit source = source("After taking tiles, move every remaining tile to the center.");
+        AtomicInteger interpretations = new AtomicInteger();
+        AtomicInteger compositions = new AtomicInteger();
+        RuleAnswerModel model = new RuleAnswerModel() {
+            @Override
+            public ModelDraft compose(ModelRequest request) {
+                compositions.incrementAndGet();
+                return draft(source, "Move them to the center.", "The remaining tiles go to the center.");
+            }
+
+            @Override
+            public boolean supportsQuestionInterpretation() {
+                return true;
+            }
+
+            @Override
+            public Optional<QuestionInterpretationDraft> interpretQuestion(QuestionInterpretationRequest request) {
+                interpretations.incrementAndGet();
+                throw new AssertionError("a standalone current-turn question must not be interpreted twice");
+            }
+        };
+
+        StructuredRuleAnswer answer = service(search(source), model).answer(
+                "I took one color from a display. Where do the remaining tiles go?",
+                new QuestionContext(versionId, null, null, PlayerLocale.EN));
+
+        assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
+        assertThat(answer.citations()).extracting(RuleCitation::chunkId).containsExactly(source.chunkId());
+        assertThat(interpretations).hasValue(0);
+        assertThat(compositions).hasValue(1);
+    }
+
+    @Test
     void preservesACompleteSupportedAnswerAndLocalizesOnlyTheMissingSubquestion() {
         RuleEvidenceHit source = source("The game ends immediately when a player reaches twenty points.");
         String explanation = "Reach twenty points to end the game immediately. "
@@ -281,7 +315,8 @@ class StructuredRuleAnswerServiceTest {
                 });
 
         StructuredRuleAnswer answer = service(search(source), model).answer(
-                "I have 8 resources. How many points do I score?", new QuestionContext(versionId));
+                "I have 8 resources. How many points do I score?",
+                new QuestionContext(versionId, "How are complete resource sets scored?", null, PlayerLocale.EN));
 
         assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
         assertThat(answer.answerBasis().name()).isEqualTo("GROUNDED_APPLICATION");
@@ -315,7 +350,8 @@ class StructuredRuleAnswerServiceTest {
                                         "Resolve the effect.", "This follows payment.", "RULE_ORDER", List.of(source.chunkId())))));
 
         StructuredRuleAnswer answer = service(search(source), model).answer(
-                "How do I pay the cost before resolving the effect?", new QuestionContext(versionId));
+                "How do I pay the cost before resolving the effect?",
+                new QuestionContext(versionId, "What happens after I choose this effect?", null, PlayerLocale.EN));
 
         assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
         assertThat(answer.walkthroughSteps()).extracting(step -> step.instruction())
@@ -338,7 +374,8 @@ class StructuredRuleAnswerServiceTest {
                 });
 
         StructuredRuleAnswer answer = service(search(source), model).answer(
-                "How do I pay the cost before resolving the effect?", new QuestionContext(versionId));
+                "How do I pay the cost before resolving the effect?",
+                new QuestionContext(versionId, "What happens after I choose this effect?", null, PlayerLocale.EN));
 
         assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
         assertThat(answer.shortVerdict()).isEqualTo("Pay first.");
@@ -416,7 +453,8 @@ class StructuredRuleAnswerServiceTest {
                 });
 
         StructuredRuleAnswer answer = service(search(source), model).answer(
-                "How do I pay the cost before resolving the effect?", new QuestionContext(versionId));
+                "How do I pay the cost before resolving the effect?",
+                new QuestionContext(versionId, "What happens after I choose this effect?", null, PlayerLocale.EN));
 
         assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
         assertThat(answer.shortVerdict()).isEqualTo(verdict);
@@ -533,7 +571,7 @@ class StructuredRuleAnswerServiceTest {
 
         StructuredRuleAnswer answer = service.answer(
                 "When does this trigger?",
-                new QuestionContext(versionId, null, null, PlayerLocale.EN));
+                new QuestionContext(versionId, "What happens after movement?", null, PlayerLocale.EN));
 
         assertThat(answer.status()).isEqualTo(AnswerStatus.CLARIFICATION_REQUIRED);
         assertThat(answer.clarification()).contains("What exactly");
@@ -565,7 +603,9 @@ class StructuredRuleAnswerServiceTest {
         StructuredRuleAnswer answer = service((version, query, options) -> {
             retrievalCalled.set(true);
             return List.of();
-        }, model).answer("When does this resolve?", new QuestionContext(versionId, null, null, PlayerLocale.EN));
+        }, model).answer(
+                "When does this resolve?",
+                new QuestionContext(versionId, "What happens after movement?", null, PlayerLocale.EN));
 
         assertThat(answer.status()).isEqualTo(AnswerStatus.INVALID_MODEL_OUTPUT);
         assertThat(answer.shortVerdict()).contains("required structure");
@@ -595,7 +635,9 @@ class StructuredRuleAnswerServiceTest {
         StructuredRuleAnswer answer = service((version, query, options) -> {
             retrievalCalled.set(true);
             return List.of();
-        }, model).answer("When does this resolve?", new QuestionContext(versionId, null, null, PlayerLocale.EN));
+        }, model).answer(
+                "When does this resolve?",
+                new QuestionContext(versionId, "What happens after movement?", null, PlayerLocale.EN));
 
         assertThat(answer.status()).isEqualTo(AnswerStatus.MODEL_TIMEOUT);
         assertThat(answer.shortVerdict()).contains("in time");

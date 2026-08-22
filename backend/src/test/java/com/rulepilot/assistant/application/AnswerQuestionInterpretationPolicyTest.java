@@ -27,6 +27,36 @@ class AnswerQuestionInterpretationPolicyTest {
     private final UUID versionId = UUID.randomUUID();
 
     @Test
+    void keepsAStandaloneCurrentTurnOnTheSingleAnswerModelPath() {
+        assertThat(policy.requiresModelInterpretation(new QuestionContext(versionId))).isFalse();
+        assertThat(policy.requiresModelInterpretation(
+                        new QuestionContext(versionId, null, null, PlayerLocale.EN)))
+                .isFalse();
+    }
+
+    @Test
+    void interpretsOnlyWhenEarlierContextOrAnExplicitLearningMoveNeedsResolution() {
+        QuestionContext priorQuestion = new QuestionContext(
+                versionId, "What happens after sailing?", null, PlayerLocale.EN);
+        QuestionContext learningMove = new QuestionContext(
+                versionId, null, LearningIntent.EXAMPLE, PlayerLocale.EN);
+        QuestionContext groundedTurn = new QuestionContext(
+                versionId,
+                null,
+                null,
+                PlayerLocale.EN,
+                new PriorTurnReference(
+                        versionId,
+                        "When does sailing end?",
+                        "Sailing ends after movement.",
+                        List.of(new PriorCitationReference(UUID.randomUUID(), versionId, 2, 2))));
+
+        assertThat(policy.requiresModelInterpretation(priorQuestion)).isTrue();
+        assertThat(policy.requiresModelInterpretation(learningMove)).isTrue();
+        assertThat(policy.requiresModelInterpretation(groundedTurn)).isTrue();
+    }
+
+    @Test
     void resolvesAVagueFollowUpThroughTheBoundedPriorGroundedTurn() {
         UnderstoodQuestion deterministic = deterministic("这个也是在行动结束后触发吗？");
         QuestionContext context = new QuestionContext(
