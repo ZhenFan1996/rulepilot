@@ -14,7 +14,10 @@ import {
   type PlayerRuleCitation,
 } from '@/lib/playerAnswerContract'
 import { playerWorkStatus } from '@/lib/playerWorkStatus'
-import { streamStructuredAnswer } from '@/lib/structuredAnswerStream'
+import {
+  streamStructuredAnswer,
+  type AnswerStreamActivity,
+} from '@/lib/structuredAnswerStream'
 
 interface TeachingPlan {
   id: string
@@ -56,14 +59,20 @@ const feedbackSubmitting = ref(false)
 const errorMessage = ref('')
 const elapsedSeconds = ref(0)
 const answerRunStarted = ref(false)
+const answerActivities = ref<AnswerStreamActivity[]>([])
+const streamedVerdict = ref('')
+const streamedExplanation = ref('')
 let elapsedTimer: number | undefined
 
 const latestTurn = computed(() => turns.value[turns.value.length - 1] ?? null)
 const earlierTurns = computed(() => turns.value.slice(0, -1).reverse())
 const displayPlanTitle = computed(() => plan.value ? playerFacingTitle(plan.value.gameTitle) : '')
-const stageMessage = computed(() => answerRunStarted.value
-  ? '答疑任务已经开始，正在核对规则原文与引用…'
-  : '正在提交问题并建立答疑任务…')
+const currentAnswerActivity = computed(() => answerActivities.value.at(-1) ?? null)
+const recentAnswerActivities = computed(() => answerActivities.value.slice(-3))
+const stageMessage = computed(() => currentAnswerActivity.value?.message
+  ?? (answerRunStarted.value
+    ? '答疑任务已经开始，正在核对规则原文与引用…'
+    : '正在提交问题并建立答疑任务…'))
 const answerWorkStatus = computed(() => playerWorkStatus('CHECKING_ANSWER', {
   capability: turns.value.length > 0 ? 'answer' : 'rulebook',
   readiness: turns.value.length > 0 ? 'usable' : 'unavailable',
@@ -158,6 +167,9 @@ async function ask() {
   asking.value = true
   elapsedSeconds.value = 0
   answerRunStarted.value = false
+  answerActivities.value = []
+  streamedVerdict.value = ''
+  streamedExplanation.value = ''
   errorMessage.value = ''
   elapsedTimer = window.setInterval(() => (elapsedSeconds.value += 1), 1_000)
   try {
@@ -167,7 +179,18 @@ async function ask() {
       credentials: 'include',
       headers: { 'Content-Type': 'application/json', [csrf.headerName]: csrf.token },
       body: JSON.stringify({ question: text, gameSessionId: session.value.id }),
-    }, () => { answerRunStarted.value = true })
+    }, () => { answerRunStarted.value = true }, {
+      onActivity: (activity) => {
+        const existing = answerActivities.value.findIndex(item => item.sequence === activity.sequence)
+        if (existing >= 0) answerActivities.value.splice(existing, 1, activity)
+        else answerActivities.value.push(activity)
+        answerActivities.value.sort((left, right) => left.sequence - right.sequence)
+      },
+      onAnswerPart: (part) => {
+        if (part.field === 'verdict') streamedVerdict.value = part.text
+        else streamedExplanation.value = part.text
+      },
+    })
     if (!isRecord(creation) || typeof creation.conversationTurnId !== 'string') {
       throw new Error('这次裁定返回了无法显示的内容，请重试。')
     }
@@ -381,6 +404,23 @@ onUnmounted(() => {
             class="text-sm font-semibold text-amber-200"
           />
           <p class="mt-0.5 text-xs text-panel-text/60">{{ stageMessage }}</p>
+          <ol v-if="recentAnswerActivities.length" class="mt-2 stack-y-xs" aria-label="答疑实时步骤">
+            <li
+              v-for="activity in recentAnswerActivities"
+              :key="activity.sequence"
+              class="flex items-start gap-2 text-xs leading-5 text-panel-text/65"
+            >
+              <span
+                class="mt-1.5 size-1.5 shrink-0 rounded-full"
+                :class="activity.status === 'running' ? 'animate-pulse bg-amber-200' : activity.status === 'succeeded' ? 'bg-emerald-300' : 'bg-red-300'"
+              />
+              <span>{{ activity.message }}</span>
+            </li>
+          </ol>
+          <div v-if="streamedVerdict" class="mt-2 rounded-xl border border-amber-200/25 bg-white/5 px-3 py-2" aria-live="polite">
+            <p class="text-sm font-semibold text-amber-100">{{ streamedVerdict }}</p>
+            <p v-if="streamedExplanation" class="mt-1 text-xs leading-5 text-panel-text/65">{{ streamedExplanation }}</p>
+          </div>
         </div>
       </div>
     </div>

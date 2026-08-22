@@ -16,9 +16,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.annotation.Profile;
-import org.springframework.context.event.EventListener;
 import org.springframework.core.task.TaskExecutor;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -107,12 +105,9 @@ class BggPopularMetadataPrewarmer {
         this.leaseDuration = leaseDuration;
     }
 
-    @EventListener(ApplicationReadyEvent.class)
-    void start() {
-        schedule();
-    }
-
-    @Scheduled(fixedDelayString = "${rulepilot.bgg.cache.prewarm.resume-delay:PT1H}")
+    @Scheduled(
+            initialDelayString = "${rulepilot.bgg.cache.prewarm.initial-delay:PT5M}",
+            fixedDelayString = "${rulepilot.bgg.cache.prewarm.resume-delay:PT1H}")
     void resume() {
         schedule();
     }

@@ -555,13 +555,13 @@ class TeachingPlanServiceTest {
     }
 
     @Test
-    void visualOnlyCoverageIsStructuralWhileTextCoverageGetsOneModelRevisionOpportunity() {
+    void pageLengthNeverTriggersASecondOutlineModelCall() {
         assertThat(TeachingPlanService.requiresModelSourcePageCoverageRevision(true)).isFalse();
-        assertThat(TeachingPlanService.requiresModelSourcePageCoverageRevision(false)).isTrue();
+        assertThat(TeachingPlanService.requiresModelSourcePageCoverageRevision(false)).isFalse();
     }
 
     @Test
-    void retainsAValidTextOutlineWhenTheCoverageRewriteDropsRequiredLearningObligations() {
+    void keepsAValidSourceBoundOutlineWithoutAPageLengthDrivenRewrite() {
         UUID documentVersionId = UUID.randomUUID();
         DocumentProcessing documents = mock(DocumentProcessing.class);
         DocumentVersionScopeLookup scopes = mock(DocumentVersionScopeLookup.class);
@@ -614,7 +614,7 @@ class TeachingPlanServiceTest {
             assertThat(section.topicKey()).isEqualTo("complete");
             assertThat(section.coverageTags()).contains("setup", "core_loop", "end", "scoring");
         });
-        verify(outlines).refineChapterOwnership(any(), any(), any());
+        verify(outlines, never()).refineChapterOwnership(any(), any(), any());
     }
 
     @Test

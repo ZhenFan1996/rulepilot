@@ -5,8 +5,17 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.lang.reflect.Method;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
 class BggCacheConfigurationTest {
+
+    @Test
+    void reservesWorkerDatabaseCapacityFromBackgroundCacheRefreshes() {
+        ThreadPoolTaskExecutor executor = new BggCacheConfiguration().bggCacheRefreshExecutor();
+
+        assertThat(executor.getCorePoolSize()).isEqualTo(1);
+        assertThat(executor.getMaxPoolSize()).isEqualTo(1);
+    }
 
     @Test
     void createsThePopularCatalogPrewarmExecutorOnlyInTheWorkerRuntime() throws Exception {

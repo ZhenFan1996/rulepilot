@@ -515,6 +515,26 @@ class StructuredRuleAnswerServiceTest {
     }
 
     @Test
+    void skipsSemanticInterpretationOnlyForSelfContainedQuantityQuestions() {
+        assertThat(StructuredRuleAnswerService.requiresSemanticQuestionInterpretation(
+                        "How many cards does each player draw?",
+                        new QuestionContext(versionId, null, null, PlayerLocale.EN)))
+                .isFalse();
+        assertThat(StructuredRuleAnswerService.requiresSemanticQuestionInterpretation(
+                        "每名玩家抓几张牌？",
+                        new QuestionContext(versionId, null, null, PlayerLocale.ZH_CN)))
+                .isFalse();
+        assertThat(StructuredRuleAnswerService.requiresSemanticQuestionInterpretation(
+                        "How many points is this worth?",
+                        new QuestionContext(versionId, null, null, PlayerLocale.EN)))
+                .isTrue();
+        assertThat(StructuredRuleAnswerService.requiresSemanticQuestionInterpretation(
+                        "How many cards does each player draw?",
+                        new QuestionContext(versionId, "What happens during setup?", null, PlayerLocale.EN)))
+                .isTrue();
+    }
+
+    @Test
     void appliesOneCriticCorrectionWithoutRepeatingTheCritic() {
         RuleEvidenceHit source = source("The active player may move one space.");
         AtomicInteger revisions = new AtomicInteger();

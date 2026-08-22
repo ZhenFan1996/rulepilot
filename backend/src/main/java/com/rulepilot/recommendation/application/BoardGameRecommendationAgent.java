@@ -31,7 +31,7 @@ public class BoardGameRecommendationAgent {
     static final String COMPARE_TOOL = "compare_candidates";
     static final String NO_MATCH_TOOL = "report_no_match";
     static final String RECOMMEND_TOOL = "recommend_games";
-    static final String PROMPT_VERSION = "recommendation-agent-v17-id-only-selection";
+    static final String PROMPT_VERSION = "recommendation-agent-v22-streamed-final-expression";
 
     private final RecommendationReActLoop loop;
 
@@ -178,7 +178,7 @@ public class BoardGameRecommendationAgent {
     /** Player-safe execution actions. These expose capability use, never prompts, parameters, or private reasoning. */
     public enum ProgressAction {
         UNDERSTAND_REQUEST,
-        DIRECT_REPLY_FAST_PATH,
+        STREAM_NATURAL_REPLY,
         CHOOSE_NEXT_ACTION,
         REPLY_TO_USER,
         ASK_USER,
@@ -568,8 +568,7 @@ public class BoardGameRecommendationAgent {
 
     public enum DecisionMode {
         MODEL_ASSISTED,
-        MODEL_FAST_PATH,
-        LOCAL_FAST_PATH
+        MODEL_FAST_PATH
     }
 
     public enum PreferenceField {

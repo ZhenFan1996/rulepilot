@@ -235,10 +235,7 @@ async function mockPublicDiscovery(
         assistantMessage: '如果今晚更在意控制时长，我会先选 Glass Orchard：它标示约 45 分钟，而《展翅翱翔》约 70 分钟。两者真实桌上互动目前都没有有出处的资料；如果互动感比时长更重要，这个选择就需要重新核对。',
         profile: { ...body.profile, type: 'all', interaction: 'any' }, clarification: null,
         sourceCount: 179737, candidatesEvaluated: 2,
-        harness: {
-          modelCalls: 2, catalogCalls: 1, webResearchCalls: 0, fallbackUsed: false,
-          actions: ['LOOKUP_BGG_CANDIDATES', 'COMPARE_CANDIDATES'], totalElapsedMs: 2_400,
-        },
+        completedWork: ['lookup_bgg_games', 'compare_candidates'],
         games: [],
         comparison: {
           candidates: [
@@ -264,7 +261,7 @@ async function mockPublicDiscovery(
         clarification: { field: 'conversation', prompt: '它的原文名是什么？', options: [] },
         sourceCount: 179737, candidatesEvaluated: 0,
         userModel: { summary: '想找与“马赛克花园”机制相近的游戏。', hypotheses: [] },
-        harness: { modelCalls: 2, catalogCalls: 1, webResearchCalls: 0, fallbackUsed: false, actions: ['RESOLVE_BGG_REFERENCE', 'ASK_USER'] },
+        completedWork: ['resolve_bgg_game'],
         games: [],
       })
       return
@@ -277,7 +274,7 @@ async function mockPublicDiscovery(
         profile: { ...body.profile, type: 'all', interaction: 'any' }, clarification: null,
         sourceCount: 179737, candidatesEvaluated: 6,
         userModel: { summary: '以 Mosaic Field 为参照，寻找机制相近的游戏。', hypotheses: [] },
-        harness: { modelCalls: 4, catalogCalls: 3, webResearchCalls: 0, fallbackUsed: false, actions: ['RESOLVE_BGG_REFERENCE', 'SEARCH_BGG_BY_NAME', 'LOOKUP_BGG_CANDIDATES', 'RECOMMEND_GAMES'] },
+        completedWork: ['resolve_bgg_game', 'inspect_candidate_titles', 'lookup_bgg_games', 'recommend_games'],
         games: [{ game: similarToMosaicField, matches: ['同样包含轮抽与图案构筑'], tradeoffs: ['候选使用骰子，随机性更高'] }],
       })
       return
@@ -289,7 +286,7 @@ async function mockPublicDiscovery(
         sourceCount: 179737, candidatesEvaluated: 1,
         userModel: { summary: '朋友聚会，可能重视参与感', hypotheses: [{ text: '可能不喜欢等待太久', confidence: 'medium', basedOn: '想热闹一点' }] },
         researchSources: [{ index: 1, title: 'Publisher guide', url: 'https://publisher.example/wingspan', domain: 'publisher.example' }],
-        harness: { modelCalls: 3, catalogCalls: 1, webResearchCalls: 1, fallbackUsed: false, actions: ['LOOKUP_BGG_CANDIDATES', 'RESEARCH_GAME_FIT', 'RECOMMEND_GAMES'] },
+        completedWork: ['lookup_bgg_games', 'research_game_fit', 'recommend_games'],
         games: [{ game: catalog.games[0], matches: ['BGG 总榜第 34 名'], tradeoffs: [], reasons: [
           { kind: 'bgg_fact', text: 'BGG 总榜第 34 名', sourceIndexes: [] },
           { kind: 'preference_inference', text: '可能适合希望全桌持续参与的场景', sourceIndexes: [] },
@@ -302,7 +299,7 @@ async function mockPublicDiscovery(
       outcome: 'recommendations', mode: 'model_assisted', assistantMessage: '明白：4 个人、90 分钟内，想要中等策略和有参与感的聚会气氛。我先按这些条件核对一批；哪一点不对，直接告诉我就行。',
       profile: { players: 4, maxMinutes: 90, maxWeight: 3.2, type: 'all', interaction: 'any' }, clarification: null,
       sourceCount: 179737, candidatesEvaluated: 20,
-      harness: { modelCalls: 4, catalogCalls: 2, webResearchCalls: 0, fallbackUsed: false, actions: ['UPDATE_PREFERENCES', 'SEARCH_BGG_CATALOG', 'LOOKUP_BGG_CANDIDATES', 'RECOMMEND_GAMES'] },
+      completedWork: ['browse_bgg_catalog', 'lookup_bgg_games', 'recommend_games'],
       games: [{ game: catalog.games[0], matches: ['支持 4 人游玩', '70 分钟，不超过你的时长上限'], tradeoffs: [] }],
     })
   })
@@ -578,7 +575,7 @@ test('acknowledges a turn without pretending that reply generation is a game sea
   await expect(page.getByText('想找一款有探索感、但规则不太重的游戏')).toBeVisible()
 })
 
-test('renders natural comparison prose and a replayable execution audit without a comparison table', async ({ page }) => {
+test('renders natural comparison prose with only player-safe completed work and no comparison table', async ({ page }) => {
   await mockPublicDiscovery(page, true)
   await page.goto('/discover')
 
@@ -587,14 +584,14 @@ test('renders natural comparison prose and a replayable execution audit without 
 
   await expect(page.getByText('如果今晚更在意控制时长，我会先选 Glass Orchard')).toBeVisible()
   await expect(page.getByTestId('candidate-comparison')).toHaveCount(0)
-  const audit = page.getByTestId('recommendation-execution-audit')
-  await expect(audit).toBeVisible()
-  await audit.getByText('查看本轮查找记录').click()
-  await expect(audit).not.toContainText('判断 2 轮')
-  await expect(audit).toContainText('读取候选 BGG 详情')
-  await expect(audit).toContainText('整理候选之间的关键差异')
-  await expect(audit).not.toContainText('LOOKUP_BGG_CANDIDATES')
-  await expect(audit).toContainText('不会展示系统内部实现细节')
+  const completedWork = page.getByLabel('本轮查找与核对')
+  await expect(completedWork).toBeVisible()
+  await expect(completedWork).toContainText('BGG 详情核对')
+  await expect(completedWork).toContainText('按候选事实并排核对')
+  await expect(page.getByTestId('recommendation-execution-audit')).toHaveCount(0)
+  await expect(completedWork).not.toContainText('判断')
+  await expect(completedWork).not.toContainText('模型')
+  await expect(completedWork).not.toContainText('LOOKUP_BGG_CANDIDATES')
 })
 
 test('keeps and sends a pasted 501-character recommendation intact', async ({ page }) => {

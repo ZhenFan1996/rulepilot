@@ -480,7 +480,7 @@ public class ResponsesApiBoardGameRecommendationWebResearch implements BoardGame
                     "locale", request.locale(),
                     "question", request.question()));
             String scope = request.question().isBlank()
-                    ? "Investigate table feel, teach friction, downtime, interaction, accessibility, and common caveats."
+                    ? "Investigate only the player-experience dimensions requested in the question, plus directly reported common caveats."
                     : "Answer only the supplied question or missing-information gap for the focused game. Do not replace it with a generic review.";
             return "Search current publisher pages, official rules or support pages when available, reputable reviews, and substantial "
                     + "player-experience discussions for the supplied board games. " + scope + " "

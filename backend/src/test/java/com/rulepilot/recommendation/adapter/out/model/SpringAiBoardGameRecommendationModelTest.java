@@ -50,7 +50,8 @@ class SpringAiBoardGameRecommendationModelTest {
         var reply = adapter.streamNaturalReply(
                 new NaturalReplyRequest(
                         List.of(Message.system("Reply briefly."), Message.user("你好")),
-                        96),
+                        96,
+                        List.of("⟦END⟧")),
                 null,
                 parts::add);
 
@@ -61,6 +62,7 @@ class SpringAiBoardGameRecommendationModelTest {
         verify(chatModel).stream(prompt.capture());
         OpenAiChatOptions options = (OpenAiChatOptions) prompt.getValue().getOptions();
         assertThat(options.getMaxTokens()).isEqualTo(96);
+        assertThat(options.getStop()).containsExactly("⟦END⟧");
         assertThat(options.getToolCallbacks()).isNull();
         assertThat(options.getExtraBody())
                 .containsExactlyInAnyOrderEntriesOf(java.util.Map.of("enable_thinking", false));

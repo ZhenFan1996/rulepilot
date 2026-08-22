@@ -46,8 +46,13 @@ final class RecommendationEvidenceReview {
     private static final List<String> REJECTED_PREFERENCE_SUFFIXES = List.of(
             "玩腻", "腻了", "不考虑", "排除", "避开", "除外", "不要",
             "tired of", "exclude", "avoid", "not wanted");
+    private static final String PLAYER_NUMBER = "(?:\\d{1,2}|[零〇一二两三四五六七八九十]{1,3})";
     private static final Pattern EXPLICIT_PLAYER_COUNT = Pattern.compile(
-            "(?iu)(?<![\\d\\-–—~至到])(\\d{1,2})\\s*(?:个\\s*)?(?:人|players?|people)");
+            "(?iu)(?<![\\d\\-–—~至到一二两三四五六七八九十])(" + PLAYER_NUMBER
+                    + ")\\s*(?:个\\s*)?(?:人|players?|people)");
+    private static final Pattern EXPLICIT_PLAYER_RANGE = Pattern.compile(
+            "(?iu)(" + PLAYER_NUMBER + ")\\s*(?:-|\\u2013|\\u2014|~|至|到|to)\\s*(" + PLAYER_NUMBER
+                    + ")\\s*(?:个\\s*)?(?:人|players?|people)");
     private static final Pattern EXPLICIT_DURATION_CEILING = Pattern.compile(
             "(?iu)(?:最多|至多|不超过|上限(?:为|是)?|at\\s+most|up\\s+to|no\\s+more\\s+than|max(?:imum)?(?:\\s+of)?)"
                     + "\\s*(\\d{1,4})\\s*(?:分钟|分|minutes?|mins?)");
@@ -238,10 +243,74 @@ final class RecommendationEvidenceReview {
                     || nearbyPrefix.endsWith("—")
                     || nearbyPrefix.endsWith("至")
                     || nearbyPrefix.endsWith("到")) continue;
-            int value = Integer.parseInt(matcher.group(1));
-            if (value >= 1 && value <= 20) return java.util.Optional.of(value);
+            java.util.Optional<Integer> parsed = semanticInteger(matcher.group(1));
+            if (parsed.isPresent() && parsed.get() >= 1 && parsed.get() <= 20) return parsed;
         }
         return java.util.Optional.empty();
+    }
+
+    private boolean explicitlyStatesPlayerConstraint(JsonNode value, String evidence) {
+        if (value.isIntegralNumber() && value.canConvertToInt()) {
+            return explicitPlayerCount(evidence).filter(number -> number == value.intValue()).isPresent();
+        }
+        if (!value.isObject()) return false;
+        JsonNode minimum = value.path("minimum");
+        JsonNode maximum = value.path("maximum");
+        if (minimum.canConvertToInt() && maximum.canConvertToInt()) {
+            if (minimum.intValue() == maximum.intValue()) {
+                return explicitPlayerCount(evidence)
+                        .filter(number -> number == minimum.intValue())
+                        .isPresent();
+            }
+            Matcher range = EXPLICIT_PLAYER_RANGE.matcher(normalizedSemanticText(evidence));
+            while (range.find()) {
+                java.util.Optional<Integer> lower = semanticInteger(range.group(1));
+                java.util.Optional<Integer> upper = semanticInteger(range.group(2));
+                if (lower.isPresent()
+                        && upper.isPresent()
+                        && lower.get() == minimum.intValue()
+                        && upper.get() == maximum.intValue()) return true;
+            }
+        }
+        return false;
+    }
+
+    private java.util.Optional<Integer> semanticInteger(String token) {
+        if (token == null || token.isBlank()) return java.util.Optional.empty();
+        if (token.chars().allMatch(Character::isDigit)) {
+            try {
+                return java.util.Optional.of(Integer.parseInt(token));
+            } catch (NumberFormatException ignored) {
+                return java.util.Optional.empty();
+            }
+        }
+        String normalized = token.replace('两', '二').replace('〇', '零');
+        int tens = normalized.indexOf('十');
+        if (tens >= 0) {
+            int leading = tens == 0 ? 1 : chineseDigit(normalized.charAt(tens - 1));
+            int trailing = tens == normalized.length() - 1 ? 0 : chineseDigit(normalized.charAt(tens + 1));
+            if (leading < 0 || trailing < 0 || normalized.length() > 3) return java.util.Optional.empty();
+            return java.util.Optional.of(leading * 10 + trailing);
+        }
+        if (normalized.length() != 1) return java.util.Optional.empty();
+        int value = chineseDigit(normalized.charAt(0));
+        return value < 0 ? java.util.Optional.empty() : java.util.Optional.of(value);
+    }
+
+    private int chineseDigit(char value) {
+        return switch (value) {
+            case '零' -> 0;
+            case '一' -> 1;
+            case '二' -> 2;
+            case '三' -> 3;
+            case '四' -> 4;
+            case '五' -> 5;
+            case '六' -> 6;
+            case '七' -> 7;
+            case '八' -> 8;
+            case '九' -> 9;
+            default -> -1;
+        };
     }
 
     private java.util.Optional<Integer> explicitDurationCeiling(String text) {
@@ -392,11 +461,9 @@ final class RecommendationEvidenceReview {
         String field = update.path("field").asText();
         JsonNode value = update.path("value");
         return switch (field) {
-            case "players", "maxMinutes" -> value.canConvertToInt()
-                    && containsInteger(numbers, value.intValue());
-            case "playerCount" -> value.isIntegralNumber()
-                    ? containsInteger(numbers, value.intValue())
-                    : value.isObject() && containsIntegerBounds(numbers, value);
+            case "players" -> explicitlyStatesPlayerConstraint(value, evidence);
+            case "maxMinutes" -> value.canConvertToInt() && containsInteger(numbers, value.intValue());
+            case "playerCount" -> explicitlyStatesPlayerConstraint(value, evidence);
             case "durationMinutes" -> value.isObject()
                     && (containsIntegerBounds(numbers, value)
                             || isOpenDurationLowerBoundSentinel(value, numbers));

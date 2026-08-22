@@ -90,7 +90,7 @@ function parseProgress(value: unknown): RecommendationProgressUpdate | null {
   ])
   const phases = new Set(['started', 'completed', 'retrying', 'failed'])
   const actions = new Set([
-    'understand_request', 'direct_reply_fast_path', 'choose_next_action', 'reply_to_user', 'ask_user',
+    'understand_request', 'choose_next_action', 'reply_to_user', 'ask_user',
     'resolve_bgg_game', 'inspect_candidate_titles', 'browse_bgg_catalog', 'discover_public_candidates',
     'lookup_bgg_games', 'research_game_fit', 'compare_candidates', 'report_no_match', 'recommend_games',
   ])
@@ -112,11 +112,6 @@ function parseProgress(value: unknown): RecommendationProgressUpdate | null {
     phase: phase as RecommendationProgressUpdate['phase'],
     action: action as RecommendationProgressUpdate['action'],
     elapsedMs: candidate.elapsedMs as number,
-    decisionCycle: count('decisionCycle'),
-    modelCalls: count('modelCalls'),
-    actionCalls: count('actionCalls'),
-    catalogCalls: count('catalogCalls'),
-    webResearchCalls: count('webResearchCalls'),
     observedCandidates,
     verifiedCandidates,
     hardRejectedCandidates,

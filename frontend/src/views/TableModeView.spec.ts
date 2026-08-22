@@ -81,4 +81,68 @@ describe('TableModeView answer status', () => {
     expect(wrapper.text()).not.toContain('模型')
     wrapper.unmount()
   })
+
+  it('renders the real rulebook activities and validated answer fields as the stream advances', async () => {
+    let streamController: ReadableStreamDefaultController<Uint8Array> | undefined
+    const encoder = new TextEncoder()
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const path = String(input)
+      if (path === '/api/v1/teaching-plans/plan-1') return Response.json({
+        id: 'plan-1', documentVersionId: 'version-1', gameTitle: 'Opaque Game',
+      })
+      if (path === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      if (path === '/api/v1/game-sessions' && init?.method === 'POST') return Response.json({ id: 'session-1' })
+      if (path.includes('/answers/conversation?')) return Response.json([])
+      if (path.includes('/answers/stream') && init?.method === 'POST') {
+        return new Response(new ReadableStream<Uint8Array>({
+          start(controller) { streamController = controller },
+        }), { headers: { 'Content-Type': 'text/event-stream' } })
+      }
+      return new Response(null, { status: 404 })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: '/table/:planId', name: 'table-mode', component: TableModeView },
+        { path: '/lesson/:planId', name: 'lesson', component: { template: '<div />' } },
+      ],
+    })
+    await router.push('/table/plan-1')
+    await router.isReady()
+    const wrapper = mount(TableModeView, {
+      global: { plugins: [router], stubs: { AppShell: { template: '<div><slot /></div>' } } },
+    })
+    await flushPromises()
+
+    await wrapper.get('#table-question').setValue('这个效果什么时候结算？')
+    await wrapper.get('form').trigger('submit')
+    await vi.waitFor(() => expect(streamController).toBeDefined())
+    streamController!.enqueue(encoder.encode([
+      'event: run\ndata: {"runId":"run-1"}\n\n',
+      'event: activity\ndata: {"sequence":1,"actor":"rulebook_search","stage":"searching_evidence","message":"正在规则书索引中查找直接依据","status":"running","nextAction":"下一步：阅读命中规则","latencyMs":0}\n\n',
+    ].join('')))
+
+    await vi.waitFor(() => expect(wrapper.text()).toContain('正在规则书索引中查找直接依据'))
+    expect(wrapper.get('ol[aria-label="答疑实时步骤"]').text()).toContain('查找直接依据')
+
+    streamController!.enqueue(encoder.encode(
+      'event: answer_part\ndata: {"field":"verdict","text":"先结算这个效果。"}\n\n',
+    ))
+    await vi.waitFor(() => expect(wrapper.text()).toContain('先结算这个效果。'))
+
+    const answer = {
+      status: 'ANSWERED', shortVerdict: '先结算这个效果。', explanation: '引用的条目要求先结算。',
+      citations: [{ heading: '结算顺序', excerpt: '先结算当前效果。', pageFrom: 8, pageTo: 8 }],
+      exceptions: [], confidence: 'HIGH', answerBasis: 'DIRECT_RULE', language: 'zh-CN', source: 'UPLOADED',
+      clarification: null, recovery: null, warnings: [],
+    }
+    streamController!.enqueue(encoder.encode(
+      `event: result\ndata: ${JSON.stringify({ conversationTurnId: 'turn-1', answer })}\n\n`,
+    ))
+    streamController!.close()
+    await vi.waitFor(() => expect(wrapper.text()).toContain('已核对，可以继续游戏'))
+    expect(wrapper.text()).not.toContain('轻量模型')
+    wrapper.unmount()
+  })
 })

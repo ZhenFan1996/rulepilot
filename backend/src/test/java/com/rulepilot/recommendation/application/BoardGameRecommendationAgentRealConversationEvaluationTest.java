@@ -408,7 +408,7 @@ class BoardGameRecommendationAgentRealConversationEvaluationTest {
     }
 
     private InstantReplyEvaluation runInstantReply(BoardGameRecommendationAgent agent) {
-        activeRawModelCapture.scenario("instant-local-reply");
+        activeRawModelCapture.scenario("single-call-streamed-reply");
         AtomicLong firstPartAt = new AtomicLong();
         AtomicReference<String> firstPart = new AtomicReference<>("");
         AtomicReference<String> latestPart = new AtomicReference<>("");
@@ -425,15 +425,15 @@ class BoardGameRecommendationAgentRealConversationEvaluationTest {
                 });
         long completedAt = System.nanoTime();
         assertThat(response.outcome()).isEqualTo(Outcome.CONVERSATION);
-        assertThat(response.harness().actions()).contains("DIRECT_REPLY_FAST_PATH:PAUSE");
-        assertThat(response.harness().modelCalls()).isZero();
+        assertThat(response.harness().actions()).contains("STREAMED_NATURAL_REPLY:PAUSE");
+        assertThat(response.harness().modelCalls()).isEqualTo(1);
         assertThat(firstPartAt.get()).isPositive();
         assertThat(latestPart.get()).isEqualTo(response.assistantMessage());
         return new InstantReplyEvaluation(
                 response.outcome().name(),
                 Duration.ofNanos(firstPartAt.get() - startedAt).toMillis(),
                 Duration.ofNanos(completedAt - startedAt).toMillis(),
-                !firstPart.get().isBlank() && firstPart.get().equals(response.assistantMessage()),
+                !firstPart.get().isBlank(),
                 response.harness().modelCalls());
     }
 

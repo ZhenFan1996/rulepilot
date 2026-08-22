@@ -20,6 +20,22 @@ import org.mockito.Mockito;
 class VisualLessonEnrichmentServiceTest {
 
     @Test
+    void skipsEveryVisualModelCallWhenTheOutlineRequestsNoVisualEvidence() {
+        TeachingPlanRepository plans = Mockito.mock(TeachingPlanRepository.class);
+        IllustratedLessonRepository lessons = Mockito.mock(IllustratedLessonRepository.class);
+        VisualLessonEnricher enricher = Mockito.mock(VisualLessonEnricher.class);
+        IllustratedLessonProgressPublisher publisher = Mockito.mock(IllustratedLessonProgressPublisher.class);
+        RulebookUnderstandingRebuilder rebuilder = Mockito.mock(RulebookUnderstandingRebuilder.class);
+        UUID planId = UUID.randomUUID();
+        UUID documentVersionId = UUID.randomUUID();
+        when(plans.findById(planId)).thenReturn(Optional.of(plan(planId, documentVersionId, false)));
+
+        new VisualLessonEnrichmentService(plans, lessons, enricher, publisher, rebuilder).enrichLatest(planId);
+
+        Mockito.verifyNoInteractions(lessons, enricher, publisher, rebuilder);
+    }
+
+    @Test
     void rebuilds_missing_layout_evidence_once_before_retrying_visual_enrichment() {
         TeachingPlanRepository plans = Mockito.mock(TeachingPlanRepository.class);
         IllustratedLessonRepository lessons = Mockito.mock(IllustratedLessonRepository.class);
@@ -276,7 +292,28 @@ class VisualLessonEnrichmentServiceTest {
     }
 
     private TeachingPlan plan(UUID planId, UUID documentVersionId) {
-        return new TeachingPlan(planId, documentVersionId, "测试游戏", "测试前提", List.of(), "owner", Instant.now());
+        return plan(planId, documentVersionId, true);
+    }
+
+    private TeachingPlan plan(UUID planId, UUID documentVersionId, boolean visualEvidenceRecommended) {
+        var section = new TeachingPlan.PlannedSection(
+                1,
+                "setup",
+                "开局设置",
+                "讲清楚开始游戏前的准备。",
+                true,
+                visualEvidenceRecommended,
+                List.of("SETUP"),
+                List.of("setup"),
+                List.of(1));
+        return new TeachingPlan(
+                planId,
+                documentVersionId,
+                "测试游戏",
+                "测试前提",
+                List.of(section),
+                "owner",
+                Instant.now());
     }
 
     private IllustratedLesson lesson(UUID planId) {

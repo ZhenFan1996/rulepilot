@@ -679,7 +679,7 @@ describe('GameRecommendationAgent', () => {
         sourceCount: 179737, candidatesEvaluated: 1,
         userModel: { summary: '家庭局，重视参与感', hypotheses: [{ text: '可能不喜欢长时间等待', confidence: 'medium', basedOn: '希望大家都有参与感' }] },
         researchSources: [{ index: 1, title: 'Publisher guide', url: 'https://publisher.example/wingspan', domain: 'publisher.example' }],
-        harness: { modelCalls: 3, catalogCalls: 1, webResearchCalls: 1, fallbackUsed: false, actions: ['LOOKUP_BGG_CANDIDATES', 'RESEARCH_GAME_FIT', 'RECOMMEND_GAMES'] },
+        completedWork: ['lookup_bgg_games', 'research_game_fit', 'recommend_games'],
         games: [{
           game, matches: ['BGG 总榜第 34 名'], tradeoffs: ['需要留意卡牌文字量'],
           reasons: [
@@ -698,13 +698,13 @@ describe('GameRecommendationAgent', () => {
         assistantMessage: '听起来你更在意全桌参与感。这次大概几个人、能留多少时间？想到多少说多少就行。',
         profile: baseProfile, sourceCount: 179737, candidatesEvaluated: 0, games: [],
         clarification: { field: 'conversation', prompt: '这次大概几个人、能留多少时间？', options: [] },
-        harness: { modelCalls: 1, catalogCalls: 0, webResearchCalls: 0, fallbackUsed: false, actions: ['ASK_USER'] },
+        completedWork: [],
       })
       return Response.json({
         outcome: 'recommendations', mode: 'model_assisted', assistantMessage: '明白，我按这组条件核对了一批。',
         profile: { ...baseProfile, players: 4, maxMinutes: 90, maxWeight: 3.2 }, clarification: null,
         sourceCount: 179737, candidatesEvaluated: 20,
-        harness: { modelCalls: 4, catalogCalls: 2, webResearchCalls: 0, fallbackUsed: false, actions: ['UPDATE_PREFERENCES', 'SEARCH_BGG_CATALOG', 'LOOKUP_BGG_CANDIDATES', 'RECOMMEND_GAMES'] },
+        completedWork: ['browse_bgg_catalog', 'lookup_bgg_games', 'recommend_games'],
         games: [{ game, matches: ['支持 4 人游玩', '70 分钟，不超过你的时长上限'], tradeoffs: [] }],
       })
     }))
@@ -824,7 +824,7 @@ describe('GameRecommendationAgent', () => {
         assistantMessage: '我先核对参考游戏，再给出有具体共同机制的候选。',
         profile: baseProfile, clarification: null, sourceCount: 179737, candidatesEvaluated: 1,
         games: [{ game, matches: ['共享已核对的机制'], tradeoffs: [] }],
-        harness: { modelCalls: 1, catalogCalls: 1, webResearchCalls: 0, fallbackUsed: false, actions: ['RESOLVE_BGG_REFERENCE'] },
+        completedWork: ['resolve_bgg_game'],
       })
     }))
     const wrapper = await mountAgent()
@@ -861,12 +861,9 @@ describe('GameRecommendationAgent', () => {
         outcome: 'recommendations', mode: 'model_assisted',
         assistantMessage: focused ? '这是刚才那款游戏的详细介绍。' : '先看这款是否接近你的想法。',
         profile: baseProfile, clarification: null, sourceCount: 179737, candidatesEvaluated: 1,
-        harness: {
-          modelCalls: 2, catalogCalls: 1, webResearchCalls: 0, fallbackUsed: false,
-          actions: focused
-            ? ['LOOKUP_BGG_CANDIDATES', 'RECOMMEND_GAMES']
-            : ['SEARCH_BGG_CATALOG', 'RECOMMEND_GAMES'],
-        },
+        completedWork: focused
+          ? ['lookup_bgg_games', 'recommend_games']
+          : ['browse_bgg_catalog', 'recommend_games'],
         games: [{ game, matches: [], tradeoffs: [] }],
       })
     }))
@@ -910,12 +907,12 @@ describe('GameRecommendationAgent', () => {
         outcome: 'recommendations', mode: 'model_assisted', assistantMessage: '先给你一组有共同机制的候选。',
         profile: baseProfile, clarification: null, sourceCount: 179737, candidatesEvaluated: 3,
         games: [{ game, matches: ['共享已核对的机制'], tradeoffs: [] }],
-        harness: { modelCalls: 4, catalogCalls: 2, webResearchCalls: 0, fallbackUsed: false, actions: ['SEARCH_BGG_BY_NAME', 'LOOKUP_BGG_CANDIDATES', 'RECOMMEND_GAMES'] },
+        completedWork: ['inspect_candidate_titles', 'lookup_bgg_games', 'recommend_games'],
       })
       return Response.json({
         outcome: 'conversation', mode: 'model_assisted', assistantMessage: '明白，我们可以沿着刚才的方向继续聊。',
         profile: baseProfile, clarification: null, sourceCount: 179737, candidatesEvaluated: 0, games: [],
-        harness: { modelCalls: 1, catalogCalls: 0, webResearchCalls: 0, fallbackUsed: false, actions: ['REPLY_TO_USER'] },
+        completedWork: [],
       })
     }))
     const wrapper = await mountAgent()
@@ -931,14 +928,12 @@ describe('GameRecommendationAgent', () => {
     expect(recommendationTurns).toHaveLength(1)
     expect(recommendationTurns[0]!.text()).toContain('先给你一组有共同机制的候选')
     expect(recommendationTurns[0]!.text()).toContain('展翅翱翔')
+    expect(recommendationTurns[0]!.text()).toContain('我的选择与取舍')
+    expect(recommendationTurns[0]!.text()).toContain('可核对的 BGG 资料')
     expect(recommendationTurns[0]!.text()).toContain('完整目录按标题找候选')
-    const audit = recommendationTurns[0]!.get('[data-testid="recommendation-execution-audit"]')
-    expect(audit.text()).toContain('查看本轮查找记录')
-    expect(audit.text()).not.toContain('判断 4 轮')
-    expect(audit.text()).toContain('BGG 核对 2 次')
-    expect(audit.text()).toContain('按候选标题搜索 BGG')
-    expect(audit.text()).not.toContain('SEARCH_BGG_BY_NAME')
-    expect(audit.text()).toContain('不会展示系统内部实现细节')
+    expect(recommendationTurns[0]!.find('[data-testid="recommendation-execution-audit"]').exists()).toBe(false)
+    expect(recommendationTurns[0]!.text()).not.toContain('模型')
+    expect(recommendationTurns[0]!.text()).not.toContain('判断 4 轮')
     const conversationTurns = wrapper.findAll('[data-testid="assistant-conversation-turn"]')
     expect(conversationTurns.at(-1)?.text()).toContain('沿着刚才的方向继续聊')
     expect(conversationTurns.at(-1)?.text()).not.toContain('展翅翱翔')
@@ -1026,10 +1021,7 @@ describe('GameRecommendationAgent', () => {
         responseLocale: 'zh-CN', outcome: 'recommendations', mode: 'model_assisted',
         assistantMessage: '这轮按你当前的中文问题回答。', profile: baseProfile,
         clarification: null, sourceCount: 179737, candidatesEvaluated: 1,
-        harness: {
-          modelCalls: 2, catalogCalls: 2, webResearchCalls: 0, fallbackUsed: false,
-          actions: ['SEARCH_BGG_BY_NAME', 'LOOKUP_BGG_CANDIDATES', 'RECOMMEND_GAMES'],
-        },
+        completedWork: ['inspect_candidate_titles', 'lookup_bgg_games', 'recommend_games'],
         games: [{
           game,
           matches: [],
@@ -1535,14 +1527,14 @@ describe('GameRecommendationAgent', () => {
     expect(wrapper.get('[data-testid="player-work-status"]').text()).toBe('正在回复')
     expect(wrapper.get('[role="status"]').text()).toContain('正在生成回复')
 
-    streamController?.enqueue(encoder.encode('event: progress\ndata: {"stage":"searching_bgg_catalog","phase":"started","action":"browse_bgg_catalog","elapsedMs":120,"decisionCycle":1,"modelCalls":1,"actionCalls":1,"catalogCalls":1}\n\n'))
+    streamController?.enqueue(encoder.encode('event: progress\ndata: {"stage":"searching_bgg_catalog","phase":"started","action":"browse_bgg_catalog","elapsedMs":120}\n\n'))
     await flushPromises()
     expect(wrapper.get('[data-testid="player-work-status"]').text()).toBe('正在查找桌游')
     expect(wrapper.get('[role="status"]').text()).toContain('正在桌游目录里查找')
     expect(wrapper.get('[data-testid="recommendation-progress-steps"]').text()).toContain('开始：按当前条件浏览 BGG 候选')
 
-    streamController?.enqueue(encoder.encode('event: progress\ndata: {"stage":"searching_bgg_catalog","phase":"completed","action":"browse_bgg_catalog","elapsedMs":170,"decisionCycle":1,"modelCalls":1,"actionCalls":1,"catalogCalls":1,"observedCandidates":8,"verifiedCandidates":5,"hardRejectedCandidates":2}\n\n'))
-    streamController?.enqueue(encoder.encode('event: progress\ndata: {"stage":"verifying_bgg_candidates","phase":"started","action":"lookup_bgg_games","elapsedMs":180,"decisionCycle":2,"modelCalls":2,"actionCalls":2,"catalogCalls":2,"observedCandidates":8,"verifiedCandidates":5,"hardRejectedCandidates":2}\n\n'))
+    streamController?.enqueue(encoder.encode('event: progress\ndata: {"stage":"searching_bgg_catalog","phase":"completed","action":"browse_bgg_catalog","elapsedMs":170,"observedCandidates":8,"verifiedCandidates":5,"hardRejectedCandidates":2}\n\n'))
+    streamController?.enqueue(encoder.encode('event: progress\ndata: {"stage":"verifying_bgg_candidates","phase":"started","action":"lookup_bgg_games","elapsedMs":180,"observedCandidates":8,"verifiedCandidates":5,"hardRejectedCandidates":2}\n\n'))
     await flushPromises()
     const reportedSteps = wrapper.get('[data-testid="recommendation-progress-steps"]')
     expect(reportedSteps.text()).toContain('完成：按当前条件浏览 BGG 候选')
@@ -1551,14 +1543,16 @@ describe('GameRecommendationAgent', () => {
     expect(reportedSteps.text()).not.toContain('BGG 2 次 / 公开资料 0 次')
     expect(reportedSteps.findAll('li')).toHaveLength(3)
 
-    streamController?.enqueue(encoder.encode('event: progress\ndata: {"stage":"selecting_tools","phase":"started","action":"choose_next_action","elapsedMs":220,"decisionCycle":3,"modelCalls":3,"actionCalls":2,"catalogCalls":2}\n\n'))
-    streamController?.enqueue(encoder.encode('event: progress\ndata: {"stage":"selecting_tools","phase":"completed","action":"choose_next_action","elapsedMs":230,"decisionCycle":3,"modelCalls":3,"actionCalls":2,"catalogCalls":2}\n\n'))
+    streamController?.enqueue(encoder.encode('event: progress\ndata: {"stage":"selecting_tools","phase":"started","action":"choose_next_action","elapsedMs":220}\n\n'))
+    streamController?.enqueue(encoder.encode('event: progress\ndata: {"stage":"selecting_tools","phase":"completed","action":"choose_next_action","elapsedMs":230}\n\n'))
     await flushPromises()
     expect(reportedSteps.findAll('li')).toHaveLength(3)
     expect(reportedSteps.text()).not.toContain('判断下一步')
+    expect(wrapper.get('[data-testid="player-work-status"]').text()).toBe('正在整理推荐')
+    expect(wrapper.get('[role="status"]').text()).toContain('正在整理已经核对的结果')
 
     await vi.advanceTimersByTimeAsync(8_000)
-    expect(wrapper.get('[role="status"]').text()).toContain('正在确认下一步该核对什么')
+    expect(wrapper.get('[role="status"]').text()).not.toContain('正在确认下一步该核对什么')
     expect(wrapper.get('[data-testid="recommendation-soft-budget"]').text())
       .toContain('目前还没有足以展示的新候选')
     expect(wrapper.get('[data-testid="recommendation-soft-budget"]').text())
@@ -1589,8 +1583,8 @@ describe('GameRecommendationAgent', () => {
     await wrapper.get('textarea').setValue('你好')
     await wrapper.get('form').trigger('submit')
     await flushPromises()
-    streamController?.enqueue(encoder.encode('event: progress\ndata: {"stage":"understanding_request","phase":"completed","action":"understand_request","elapsedMs":2,"decisionCycle":0,"modelCalls":0,"actionCalls":0,"catalogCalls":0}\n\n'))
-    streamController?.enqueue(encoder.encode('event: progress\ndata: {"stage":"composing_response","phase":"started","action":null,"elapsedMs":3,"decisionCycle":0,"modelCalls":0,"actionCalls":0,"catalogCalls":0}\n\n'))
+    streamController?.enqueue(encoder.encode('event: progress\ndata: {"stage":"understanding_request","phase":"completed","action":"understand_request","elapsedMs":2}\n\n'))
+    streamController?.enqueue(encoder.encode('event: progress\ndata: {"stage":"composing_response","phase":"started","action":null,"elapsedMs":3}\n\n'))
     streamController?.enqueue(encoder.encode('event: answer_part\ndata: {"field":"message","text":"嗨，"}\n\n'))
     await flushPromises()
 
@@ -1605,14 +1599,14 @@ describe('GameRecommendationAgent', () => {
     streamController?.enqueue(encoder.encode(`event: result\ndata: ${JSON.stringify({
       outcome: 'conversation', mode: 'model_fast_path', assistantMessage: '嗨，今天想聊哪款桌游？',
       profile: baseProfile, clarification: null, sourceCount: 0, candidatesEvaluated: 0, games: [],
-      harness: { modelCalls: 1, catalogCalls: 0, webResearchCalls: 0, fallbackUsed: false, actions: ['DIRECT_REPLY_FAST_PATH:GREETING'], totalElapsedMs: 6400 },
+      completedWork: [],
     })}\n\n`))
     streamController?.close()
     await flushPromises()
 
     expect(wrapper.text()).toContain('嗨，今天想聊哪款桌游？')
     expect(wrapper.find('[data-testid="recommendation-execution-audit"]').exists()).toBe(false)
-    expect(wrapper.text()).not.toContain('DIRECT_REPLY_FAST_PATH')
+    expect(wrapper.text()).not.toContain('STREAM_NATURAL_REPLY')
     expect(wrapper.text()).not.toContain('轻量模型')
   })
 })

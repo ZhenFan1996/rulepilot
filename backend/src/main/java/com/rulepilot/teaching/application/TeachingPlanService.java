@@ -118,9 +118,9 @@ public class TeachingPlanService {
             invocations.record(
                     assistantRunId,
                     ActivityType.VALIDATION,
-                    "skipVisualOutlineCoverageRevision",
+                    "skipPageLengthOutlineCoverageRevision",
                     ActivityOutcome.SUCCEEDED,
-                    "Visual catalog pages use deterministic whole-rulebook coverage validation; skipped a redundant model revision");
+                    "The source-bound concept and coverage contracts remain authoritative; page text length alone did not trigger a second outline model call");
         }
         outline = refineChapterOwnership(
                 outlineRequest, outline, assistantRunId, documentPages, playerGameTitle);
@@ -308,7 +308,7 @@ public class TeachingPlanService {
     }
 
     static boolean requiresModelSourcePageCoverageRevision(boolean visualOnly) {
-        return !visualOnly;
+        return false;
     }
 
     private TeachingOutlineModel.OutlineDraft refineSourcePageCoverage(

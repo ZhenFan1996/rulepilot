@@ -15,7 +15,11 @@ class BggCacheConfiguration {
         var executor = new ThreadPoolTaskExecutor();
         executor.setThreadNamePrefix("bgg-cache-refresh-");
         executor.setCorePoolSize(1);
-        executor.setMaxPoolSize(2);
+        // This executor also exists in the document worker. One stale-cache refresh plus the
+        // single popular-prewarm lane may use at most two JDBC connections there, reserving the
+        // third connection for the user-owned document job instead of allowing background work
+        // to exhaust the complete pool.
+        executor.setMaxPoolSize(1);
         executor.setQueueCapacity(100);
         executor.setWaitForTasksToCompleteOnShutdown(false);
         return executor;

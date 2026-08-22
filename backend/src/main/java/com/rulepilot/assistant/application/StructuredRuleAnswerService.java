@@ -50,6 +50,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.Consumer;
+import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -61,6 +62,12 @@ import org.springframework.stereotype.Service;
 public class StructuredRuleAnswerService implements RuleAnswering {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(StructuredRuleAnswerService.class);
+    private static final Pattern DIRECT_QUANTITY_QUESTION = Pattern.compile(
+            "^(?:how\\s+(?:many|much)\\b)|(?:多少|几(?:个|张|枚|块|点|分|次|轮|人|份|步|格))",
+            Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+    private static final Pattern UNBOUND_REFERENCE = Pattern.compile(
+            "\\b(?:this|that|it|these|those)\\b|(?:这个|那个|这些|那些|它|该(?:牌|效果|能力|行动|规则|阶段|标记))",
+            Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
     // Context-resolved questions use a new semantic identity, so earlier answer-cache entries are stale.
     private static final String ANSWER_POLICY_VERSION = "answer-v114-intent-owned-retrieval";
     private final QuestionUnderstanding understanding;
@@ -421,7 +428,8 @@ public class StructuredRuleAnswerService implements RuleAnswering {
         AnswerQuestionPlan questionPlan = AnswerQuestionPlan.fallback(deterministic);
         QuestionContext suppliedContext = context;
         LearningIntent plannedLearningIntent = context.learningIntent();
-        if (modelGateway.supportsQuestionInterpretation(username)) {
+        if (modelGateway.supportsQuestionInterpretation(username)
+                && requiresSemanticQuestionInterpretation(question, suppliedContext)) {
             try {
                 Optional<AnswerQuestionInterpretationPolicy.Interpretation> interpreted = modelGateway
                         .interpretQuestion(
@@ -1031,6 +1039,14 @@ public class StructuredRuleAnswerService implements RuleAnswering {
     }
 
     public record AnswerCreation(UUID assistantRunId, StructuredRuleAnswer answer) {}
+
+    static boolean requiresSemanticQuestionInterpretation(String question, QuestionContext context) {
+        if (context.previousQuestion() != null || context.priorTurnReference() != null) return true;
+        String normalized = question == null ? "" : question.strip();
+        if (normalized.isEmpty()) return true;
+        return !DIRECT_QUANTITY_QUESTION.matcher(normalized).find()
+                || UNBOUND_REFERENCE.matcher(normalized).find();
+    }
 
     private StructuredRuleAnswer safe(UUID versionId, AnswerStatus status, String message) {
         return AnswerOutcomePolicy.safeFailure(versionId, status, message);

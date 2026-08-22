@@ -328,7 +328,6 @@ public class BggRecommendationAgentController {
             boolean replayed,
             String responseLocale,
             String outcome,
-            String mode,
             String assistantMessage,
             RecommendationProfileResponse profile,
             ClarificationResponse clarification,
@@ -337,7 +336,7 @@ public class BggRecommendationAgentController {
             int candidatesEvaluated,
             UserModelResponse userModel,
             List<ResearchSourceResponse> researchSources,
-            HarnessResponse harness,
+            List<String> completedWork,
             CandidateComparisonResponse comparison,
             List<RecommendedGameResponse> games) {
         static RecommendationConversationResponse from(
@@ -356,7 +355,6 @@ public class BggRecommendationAgentController {
                     replayed,
                     locale,
                     response.outcome().name().toLowerCase(Locale.ROOT),
-                    response.mode().name().toLowerCase(Locale.ROOT),
                     response.assistantMessage(),
                     RecommendationProfileResponse.from(response.profile()),
                     response.clarification() == null ? null : ClarificationResponse.from(response.clarification()),
@@ -365,15 +363,32 @@ public class BggRecommendationAgentController {
                     response.candidatesEvaluated(),
                     UserModelResponse.from(response.userModel()),
                     response.researchSources().stream().map(ResearchSourceResponse::from).toList(),
-                    response.mode() != BoardGameRecommendationAgent.DecisionMode.MODEL_ASSISTED
-                            ? null
-                            : HarnessResponse.from(response.harness()),
+                    publicCompletedWork(response.harness().actions()),
                     response.comparison() == null
                             ? null
                             : CandidateComparisonResponse.from(response.comparison(), taxonomy, locale, presentation),
                     response.games().stream()
                             .map(game -> RecommendedGameResponse.from(game, taxonomy, locale, presentation))
                             .toList());
+        }
+
+        private static List<String> publicCompletedWork(List<String> actions) {
+            return actions.stream()
+                    .map(action -> switch (action) {
+                        case "RESOLVE_BGG_REFERENCE" -> "resolve_bgg_game";
+                        case "SEARCH_BGG_CATALOG" -> "browse_bgg_catalog";
+                        case "SEARCH_BGG_BY_NAME" -> "inspect_candidate_titles";
+                        case "LOOKUP_BGG_CANDIDATES", "LOOKUP_BGG_GAME" -> "lookup_bgg_games";
+                        case "DISCOVER_CANDIDATES" -> "discover_public_candidates";
+                        case "RESEARCH_GAME_FIT", "RESEARCH_GAME_QUESTION" -> "research_game_fit";
+                        case "COMPARE_CANDIDATES" -> "compare_candidates";
+                        case "REPORT_NO_MATCH" -> "report_no_match";
+                        case "RECOMMEND_GAMES" -> "recommend_games";
+                        default -> null;
+                    })
+                    .filter(java.util.Objects::nonNull)
+                    .distinct()
+                    .toList();
         }
     }
 
@@ -507,24 +522,6 @@ public class BggRecommendationAgentController {
     record ResearchSourceResponse(int index, String title, String url, String domain) {
         static ResearchSourceResponse from(BoardGameRecommendationAgent.ResearchSource source) {
             return new ResearchSourceResponse(source.index(), source.title(), source.url(), source.domain());
-        }
-    }
-
-    record HarnessResponse(
-            int modelCalls,
-            int catalogCalls,
-            int webResearchCalls,
-            boolean fallbackUsed,
-            List<String> actions,
-            long totalElapsedMs) {
-        static HarnessResponse from(BoardGameRecommendationAgent.HarnessTrace trace) {
-            return new HarnessResponse(
-                    trace.modelCalls(),
-                    trace.catalogCalls(),
-                    trace.webResearchCalls(),
-                    trace.fallbackUsed(),
-                    trace.actions(),
-                    trace.totalElapsedMs());
         }
     }
 
