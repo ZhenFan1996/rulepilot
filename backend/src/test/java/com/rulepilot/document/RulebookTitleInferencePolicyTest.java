@@ -48,6 +48,27 @@ class RulebookTitleInferencePolicyTest {
     }
 
     @Test
+    void triangulatesAStandaloneSourceTitleWhenTheModelReturnsAHeadingOrRepeatsTheNoisyLabel() {
+        List<String> opening = List.of("""
+                Lantern Relay - Original RulePilot Demonstration Rules
+                License: CC0 1.0
+                LANTERN RELAY
+                OBJECTIVE AND HOW TO WIN
+                """);
+
+        assertThat(RulebookTitleInferencePolicy.selectPlayerTitle(
+                        "Lantern Relay rulebook EN v4 12pages",
+                        "Lantern Relay - Original RulePilot Demonstration Rules",
+                        opening))
+                .isEqualTo("Lantern Relay");
+        assertThat(RulebookTitleInferencePolicy.selectPlayerTitle(
+                        "Lantern Relay rulebook EN v4 12pages",
+                        "Lantern Relay rulebook EN v4 12pages",
+                        opening))
+                .isEqualTo("Lantern Relay");
+    }
+
+    @Test
     void doesNotTrustAnUnrelatedOrEmbeddedTitle() {
         assertThat(RulebookTitleInferencePolicy.selectPlayerTitle(
                         "A home-made prototype",
@@ -62,6 +83,12 @@ class RulebookTitleInferencePolicyTest {
         assertThat(RulebookTitleInferencePolicy.shouldReplaceWithSourceConfirmedTitle(
                         "Cart release notes", "Art"))
                 .isFalse();
+        assertThat(RulebookTitleInferencePolicy.selectPlayerTitle(
+                        "Cart release notes",
+                        "Cart art catalog",
+                        List.of("CART\nCart art catalog")))
+                .as("one shared Latin word is too weak to replace a player-authored identity")
+                .isEqualTo("Cart release notes");
     }
 
     @Test

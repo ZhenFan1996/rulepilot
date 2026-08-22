@@ -12,6 +12,7 @@ import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.sql.Types;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -90,14 +91,10 @@ public class PostgresBggRankedCatalog implements BggRankedCatalogRepository {
         if (checked.length() > 120) {
             throw new IllegalArgumentException("BGG exact name must contain at most 120 characters");
         }
-        return jdbc.query(
-                "SELECT " + COLUMNS + " FROM bgg_ranked_game g WHERE "
-                        + "lower(g.source_name) = lower(:name) OR EXISTS ("
-                        + "SELECT 1 FROM bgg_game_name_alias alias "
-                        + "WHERE alias.bgg_id = g.bgg_id AND lower(alias.alias) = lower(:name)) "
-                        + "ORDER BY g.overall_rank ASC NULLS LAST, g.users_rated DESC, g.bgg_id ASC LIMIT 3",
-                new MapSqlParameterSource().addValue("name", checked),
-                this::mapGame);
+        LinkedHashMap<Integer, RankedGame> matches = new LinkedHashMap<>();
+        findExactNames(List.of(checked)).forEach(match ->
+                matches.putIfAbsent(match.game().bggId(), match.game()));
+        return matches.values().stream().limit(3).toList();
     }
 
     @Override

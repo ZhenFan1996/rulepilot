@@ -34,6 +34,7 @@ class RecommendationExplicitTargetFastPathTest {
         BoardGameRecommendationTools tools = mock(BoardGameRecommendationTools.class);
         BoardGameRecommendationSelector selector = mock(BoardGameRecommendationSelector.class);
         Game game = game(42001, "Harbor Nova", "星港");
+        Game remembered = game(42000, "Old Harbor", "旧港");
         RecommendedGame card = new RecommendedGame(game, List.of(), List.of());
         when(tools.webResearchConfigured()).thenReturn(false);
         when(tools.resolveLocalReferenceTitle("星港"))
@@ -48,7 +49,9 @@ class RecommendationExplicitTargetFastPathTest {
         RecommendationReActLoop loop = loop(model, tools, selector);
 
         var response = loop.converse(
-                request("我们今晚第一次玩星港，规则书还没看。能帮我把这款找出来，然后带我们读规则吗？"),
+                request(
+                        "我们今晚第一次玩星港，规则书还没看。能帮我把这款找出来，然后带我们读规则吗？",
+                        List.of(remembered)),
                 "zh-CN",
                 null,
                 ignored -> {});
@@ -59,6 +62,9 @@ class RecommendationExplicitTargetFastPathTest {
         assertThat(response.assistantMessage()).contains("星港", "规则书", "讲解");
         assertThat(response.harness().modelCalls()).isZero();
         assertThat(response.harness().catalogCalls()).isEqualTo(1);
+        assertThat(response.candidatesEvaluated())
+                .as("the current-turn count must not include remembered candidates from older turns")
+                .isEqualTo(1);
         assertThat(response.harness().actions())
                 .containsExactly("RESOLVE_EXPLICIT_TARGET_LOCALLY", "RECOMMEND_GAMES");
         verify(model, never()).configured(any());
@@ -97,6 +103,10 @@ class RecommendationExplicitTargetFastPathTest {
     }
 
     private ConversationRequest request(String message) {
+        return request(message, List.of());
+    }
+
+    private ConversationRequest request(String message, List<Game> priorVerifiedGames) {
         return new ConversationRequest(
                 RecommendationProfile.empty(),
                 message,
@@ -104,7 +114,8 @@ class RecommendationExplicitTargetFastPathTest {
                 List.of(),
                 null,
                 List.of(),
-                List.of());
+                List.of(),
+                priorVerifiedGames);
     }
 
     private Game game(int bggId, String sourceName, String chineseName) {

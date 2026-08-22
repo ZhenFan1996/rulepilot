@@ -284,9 +284,8 @@ public class BggRankedCatalogService
 
     private LinkedHashMap<Integer, RankedGame> localReferenceMatches(List<String> aliases) {
         LinkedHashMap<Integer, RankedGame> matches = new LinkedHashMap<>();
-        for (String alias : aliases) {
-            localExactMatches(alias).forEach(game -> matches.putIfAbsent(game.bggId(), game));
-        }
+        repository.findExactNames(aliases).forEach(match ->
+                matches.putIfAbsent(match.game().bggId(), match.game()));
         return matches;
     }
 

@@ -552,6 +552,19 @@ class TeachingPlanServiceTest {
 
         assertThat(selected.gameTitle()).isEqualTo("Harbor Nova");
         assertThat(selected.topics()).isEqualTo(inferred.topics());
+
+        OutlineDraft headingShapedInference = TeachingPlanService.withGameTitle(
+                "Harbor Nova - Original Demonstration Rules",
+                outline(List.of(topic("setup", List.of("setup"), List.of(1)))));
+        OutlineDraft triangulated = TeachingPlanService.preferDocumentTitle(
+                "Harbor Nova rulebook EN v4 12pages",
+                headingShapedInference,
+                List.of(new PageInput(
+                        1,
+                        "Harbor Nova - Original Demonstration Rules\nHARBOR NOVA\nOBJECTIVE")));
+
+        assertThat(triangulated.gameTitle()).isEqualTo("Harbor Nova");
+        assertThat(triangulated.topics()).isEqualTo(headingShapedInference.topics());
     }
 
     @Test

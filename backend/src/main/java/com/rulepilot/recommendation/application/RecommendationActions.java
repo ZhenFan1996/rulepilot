@@ -188,7 +188,7 @@ final class RecommendationActions {
                 response.profile(),
                 response.clarification(),
                 response.sourceCount(),
-                response.candidatesEvaluated(),
+                1,
                 response.userModel(),
                 response.researchSources(),
                 response.harness(),
