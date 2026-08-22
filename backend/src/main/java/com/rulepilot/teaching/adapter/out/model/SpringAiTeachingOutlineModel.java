@@ -64,6 +64,8 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
             .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
     private static final int MAX_OUTLINE_COMPLETION_TOKENS = 16_000;
     private static final long OUTLINE_DEADLINE_SECONDS = 120;
+    private static final long OUTLINE_ATTEMPT_DEADLINE_SECONDS = 60;
+    private static final int MAX_TRANSIENT_OUTLINE_ATTEMPTS = 2;
     static final int MAX_CANONICAL_LEDGER_EVIDENCE_CHARACTERS = 32_000;
     private static final int MAX_CANONICAL_PAGE_EVIDENCE_CHARACTERS = 2_800;
 
@@ -159,27 +161,64 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
                     "teaching outline model is not configured",
                     new IllegalStateException("a real teaching model is required to organize a rulebook"));
         }
-        var call = outlineCalls.submit(() -> organizeWithRepair(request, role, owner));
-        try {
-            return call.get(OUTLINE_DEADLINE_SECONDS, TimeUnit.SECONDS);
-        } catch (TimeoutException timeout) {
-            call.cancel(true);
-            log.warn(
-                    "Teaching-outline model exceeded {} seconds; reporting the bounded generation failure",
-                    OUTLINE_DEADLINE_SECONDS);
-            throw new OutlineGenerationException(
-                    "teaching outline generation did not complete",
-                    planningTimeout(timeout));
-        } catch (InterruptedException interrupted) {
-            call.cancel(true);
-            Thread.currentThread().interrupt();
-            throw new IllegalStateException("teaching outline interrupted", interrupted);
-        } catch (ExecutionException failed) {
-            if (failed.getCause() instanceof AgentExecutionStoppedException stopped) throw stopped;
-            throw new OutlineGenerationException(
-                    "teaching outline generation returned no valid outline",
-                    failed.getCause());
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(OUTLINE_DEADLINE_SECONDS);
+        Throwable firstTransientFailure = null;
+        for (int attempt = 1; attempt <= MAX_TRANSIENT_OUTLINE_ATTEMPTS; attempt++) {
+            long remainingNanos = deadline - System.nanoTime();
+            if (remainingNanos <= 0) {
+                throw outlineTimeout(new TimeoutException("teaching outline total deadline elapsed"), firstTransientFailure);
+            }
+            long attemptNanos = Math.min(
+                    remainingNanos,
+                    TimeUnit.SECONDS.toNanos(OUTLINE_ATTEMPT_DEADLINE_SECONDS));
+            var call = outlineCalls.submit(() -> organizeWithRepair(request, role, owner));
+            try {
+                return call.get(attemptNanos, TimeUnit.NANOSECONDS);
+            } catch (TimeoutException timeout) {
+                call.cancel(true);
+                if (attempt < MAX_TRANSIENT_OUTLINE_ATTEMPTS && deadline - System.nanoTime() > 0) {
+                    firstTransientFailure = planningTimeout(timeout);
+                    log.warn(
+                            "Teaching-outline model attempt {} exceeded {} seconds; retrying once inside the {}-second total budget",
+                            attempt,
+                            OUTLINE_ATTEMPT_DEADLINE_SECONDS,
+                            OUTLINE_DEADLINE_SECONDS);
+                    continue;
+                }
+                throw outlineTimeout(timeout, firstTransientFailure);
+            } catch (InterruptedException interrupted) {
+                call.cancel(true);
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("teaching outline interrupted", interrupted);
+            } catch (ExecutionException failed) {
+                if (failed.getCause() instanceof AgentExecutionStoppedException stopped) throw stopped;
+                if (attempt < MAX_TRANSIENT_OUTLINE_ATTEMPTS && isTimeout(failed.getCause())) {
+                    firstTransientFailure = failed.getCause();
+                    log.warn(
+                            "Teaching-outline provider attempt {} timed out; retrying once inside the {}-second total budget",
+                            attempt,
+                            OUTLINE_DEADLINE_SECONDS);
+                    continue;
+                }
+                OutlineGenerationException generationFailure = new OutlineGenerationException(
+                        "teaching outline generation returned no valid outline",
+                        failed.getCause());
+                if (firstTransientFailure != null) generationFailure.addSuppressed(firstTransientFailure);
+                throw generationFailure;
+            }
         }
+        throw new IllegalStateException("teaching outline retry budget ended without a result");
+    }
+
+    private OutlineGenerationException outlineTimeout(TimeoutException timeout, Throwable firstTransientFailure) {
+        log.warn(
+                "Teaching-outline model exceeded the {}-second total budget; reporting the bounded generation failure",
+                OUTLINE_DEADLINE_SECONDS);
+        OutlineGenerationException failure = new OutlineGenerationException(
+                "teaching outline generation did not complete",
+                planningTimeout(timeout));
+        if (firstTransientFailure != null) failure.addSuppressed(firstTransientFailure);
+        return failure;
     }
 
     static IllegalStateException planningTimeout(TimeoutException timeout) {

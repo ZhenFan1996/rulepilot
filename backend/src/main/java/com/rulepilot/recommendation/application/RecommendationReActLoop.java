@@ -177,7 +177,23 @@ final class RecommendationReActLoop {
                 maximumRecommendationResults());
         ProgressTracker progress = new ProgressTracker(progressListener, state, startedAt);
         progress.start(ProgressStage.UNDERSTANDING_REQUEST, ProgressAction.UNDERSTAND_REQUEST);
+        Optional<String> explicitTarget = ExplicitTargetRequest.title(request.message());
         progress.complete();
+        if (explicitTarget.isPresent()) {
+            progress.start(ProgressStage.READING_GAME_DETAILS, ProgressAction.RESOLVE_BGG_GAME);
+            Optional<ConversationResponse> exactTarget = actionExecutor.publishLocalExplicitTarget(
+                    explicitTarget.orElseThrow(),
+                    state,
+                    locale);
+            progress.complete();
+            if (exactTarget.isPresent()) {
+                return publishValidatedResponse(
+                        state,
+                        progress,
+                        exactTarget.orElseThrow(),
+                        answerPartListener);
+            }
+        }
         if (!model.configured(state.modelConfigurationOwner)) {
             progress.start(ProgressStage.SELECTING_TOOLS, ProgressAction.CHOOSE_NEXT_ACTION);
             progress.fail();

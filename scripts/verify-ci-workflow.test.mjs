@@ -68,6 +68,15 @@ test('production recommendation journey tests the deployed main release without 
   assert.match(productionRecommendationSpec, /report\.importReused = launchedJob\.reused/)
   assert.match(productionRecommendationSpec, /report\.pdfDownloadToTeachingStartMs = Math\.max/)
   assert.match(productionRecommendationSpec, /report\.pdfDownloadToFirstCitedLessonMs = Math\.max/)
+  assert.match(productionRecommendationSpec, /MAX_EXPLICIT_TARGET_RECOMMENDATION_MS = 5_000/)
+  assert.match(
+    productionRecommendationSpec,
+    /targetDetailsButton\)\.toBeVisible\(\{ timeout: MAX_EXPLICIT_TARGET_RECOMMENDATION_MS \}\)/,
+  )
+  assert.match(
+    productionRecommendationSpec,
+    /report\.recommendationMs[\s\S]*?toBeLessThanOrEqual\(MAX_EXPLICIT_TARGET_RECOMMENDATION_MS\)/,
+  )
   assert.match(productionRecommendationSpec, /section\.evidenceStatus === 'SUPPORTED' \|\| section\.evidenceStatus === 'CITED_DRAFT'/)
   assert.match(
     productionRecommendationSpec,
@@ -121,6 +130,16 @@ test('failed production recommendation journeys retain bounded API diagnostics w
   assert.doesNotMatch(productionRecommendationWorkflow, /(?:cat|sed|grep|rg) [^\n]*\.env/)
 })
 
+test('failed ordinary-user production journeys retain bounded API and worker diagnostics', () => {
+  assert.match(productionOrdinaryUserWorkflow, /name: Collect bounded service diagnostics after a failed journey/)
+  assert.match(productionOrdinaryUserWorkflow, /if: failure\(\)/)
+  assert.match(productionOrdinaryUserWorkflow, /service-diagnostics\.log/)
+  assert.match(productionOrdinaryUserWorkflow, /logs --since 35m --tail 500 --no-color api/)
+  assert.match(productionOrdinaryUserWorkflow, /logs --since 35m --tail 500 --no-color worker/)
+  assert.match(productionOrdinaryUserWorkflow, /Refusing to inspect an active release outside/)
+  assert.doesNotMatch(productionOrdinaryUserWorkflow, /(?:cat|sed|grep|rg) [^\n]*\.env/)
+})
+
 test('production deployment synchronizes the protected BGG credential without packaging or logging it', () => {
   assert.match(deploymentWorkflow, /name: Synchronize protected BGG credential/)
   assert.match(deploymentWorkflow, /BGG_API_TOKEN: \$\{\{ secrets\.BGG_API_TOKEN \}\}/)
@@ -134,7 +153,7 @@ test('production deployment synchronizes the protected BGG credential without pa
 
 test('production deployment assigns every player-facing Agent role to a configured vision-capable runtime', () => {
   assert.match(deploymentWorkflow, /'TEACHING_PROVIDER=spring-ai'/)
-  assert.match(deploymentWorkflow, /'TEACHING_MODEL_PROVIDER=qwen'/)
+  assert.match(deploymentWorkflow, /'TEACHING_MODEL_PROVIDER=deepseek'/)
   assert.match(deploymentWorkflow, /'VISUAL_PROVIDER=spring-ai'/)
   assert.match(deploymentWorkflow, /'VISUAL_MODEL_PROVIDER=qwen'/)
   assert.match(deploymentWorkflow, /'ANSWER_PROVIDER=spring-ai'/)
