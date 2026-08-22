@@ -166,6 +166,9 @@ class BggRankedCatalogServiceTest {
         });
         assertThat(bgg.searchQueries).isEmpty();
         assertThat(bgg.detailIds).isEmpty();
+        assertThat(repository.query)
+                .as("exact local identity resolution must not run the ranked fuzzy-search query")
+                .isNull();
     }
 
     @Test
@@ -269,6 +272,9 @@ class BggRankedCatalogServiceTest {
             return switch (name) {
                 case "白塔庭院" -> List.of(game(20, 20));
                 case "同名桌游" -> List.of(game(10, 10), game(20, 20));
+                case "Game 10" -> List.of(game(10, 10));
+                case "Game 20" -> List.of(game(20, 20));
+                case "碁" -> List.of(game(30, 30, "碁"));
                 default -> List.of();
             };
         }

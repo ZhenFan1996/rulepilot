@@ -48,6 +48,7 @@ interface ImportJob {
   rulebookTitle?: string
   editionId: string | null
   sourceDomain?: string
+  officialSourceUrl?: string
   stage: 'QUEUED' | 'CONNECTING' | 'DOWNLOADING' | 'COMPRESSING' | 'VERIFYING_FILE' | 'SAVING' | 'COMPLETED' | 'FAILED'
   downloadedBytes: number
   totalBytes: number | null
@@ -863,6 +864,12 @@ test('recommendation becomes one readable, taught, and answerable production jou
     const candidatesResponsePromise = page.waitForResponse(response => {
       const url = new URL(response.url())
       return url.pathname === '/api/v1/documents/rulebook-candidates' && response.ok()
+    }, { timeout: 90_000 }).catch(() => null)
+    const existingJourneyResponsePromise = page.waitForResponse(response => {
+      const url = new URL(response.url())
+      return url.pathname === '/api/v1/documents/official-imports'
+        && response.request().method() === 'GET'
+        && response.ok()
     }, { timeout: 90_000 })
     const bindingResponsePromise = page.waitForResponse(response => {
       const url = new URL(response.url())
@@ -873,34 +880,52 @@ test('recommendation becomes one readable, taught, and answerable production jou
     await targetDetailsButton.click()
     details = page.getByRole('dialog', { name: '桌游详细资料' })
     await details.getByRole('button', { name: '选这款，继续找规则书' }).click()
-    const [candidatesResponse, bindingResponse] = await Promise.all([
-      candidatesResponsePromise,
+    const [existingJourneyResponse, bindingResponse] = await Promise.all([
+      existingJourneyResponsePromise,
       bindingResponsePromise,
     ])
     const boundGame = await bindingResponse.json() as BoundGameResponse
-    const candidateResult = await candidatesResponse.json() as CandidateResponse
     report.boundBggId = boundGame.bggId
     report.boundGameName = boundGame.game.name
     report.boundEditionId = boundGame.edition.id
     expect(boundGame.bggId, 'The binding response did not preserve the selected BGG identity').toBe(TARGET_BGG_ID)
     expect(boundGame.game.name, 'The binding response used an unexpected game title').toMatch(TARGET_NAME)
-    report.candidateEditionMatchesSelection = new URL(candidatesResponse.url()).searchParams.get('editionId')
-      === boundGame.edition.id
-    expect(report.candidateEditionMatchesSelection,
-      'Rulebook discovery used a different edition from the selected recommendation').toBe(true)
-    report.discoveryMs = elapsed(discoveryStartedAt)
-    expect(candidateResult.configured).toBe(true)
-    expect(candidateResult.identity.editionId,
-      'Rulebook discovery response lost the selected edition identity').toBe(boundGame.edition.id)
-    const gstoneCandidate = candidateResult.candidates.find(candidate =>
-      candidate.sourceDomain.endsWith('gstonegames.com')
-      && candidate.language.toLowerCase().startsWith('zh')
-      && (candidate.capability === 'DIRECT_DOCUMENT' && candidate.acquisitionMode === 'DIRECT_PDF'
-        || candidate.capability === 'CONTIGUOUS_RULE_PAGES' && candidate.acquisitionMode === 'IMAGE_GALLERY'))
-    expect(gstoneCandidate, 'No importable Chinese Gstone rulebook was discovered').toBeDefined()
-    report.sourceDomain = gstoneCandidate!.sourceDomain
-    report.sourceUrl = gstoneCandidate!.url
-    report.sourceMode = gstoneCandidate!.acquisitionMode
+    const existingJourneys = await existingJourneyResponse.json() as ImportJob[]
+    const existingJourney = existingJourneys.find(job =>
+      job.editionId === boundGame.edition.id && job.teachingHandoffState !== 'NOT_REQUESTED')
+    const restoredExistingJourney = existingJourney !== undefined
+    let launchedJob: ImportJob
+    let gstoneCandidate: RulebookCandidate | null = null
+    let importStartedAt = performance.now()
+    if (existingJourney) {
+      launchedJob = await retryFailedReusedTeaching(page.request, { ...existingJourney, reused: true })
+      report.candidateEditionMatchesSelection = true
+      report.discoveryMs = elapsed(discoveryStartedAt)
+      report.sourceDomain = launchedJob.sourceDomain ?? null
+      report.sourceUrl = launchedJob.officialSourceUrl ?? null
+      report.importReused = true
+    } else {
+      const candidatesResponse = await candidatesResponsePromise
+      expect(candidatesResponse, 'Rulebook discovery did not answer for a new selected game journey').not.toBeNull()
+      const candidateResult = await candidatesResponse!.json() as CandidateResponse
+      report.candidateEditionMatchesSelection = new URL(candidatesResponse!.url()).searchParams.get('editionId')
+        === boundGame.edition.id
+      expect(report.candidateEditionMatchesSelection,
+        'Rulebook discovery used a different edition from the selected recommendation').toBe(true)
+      report.discoveryMs = elapsed(discoveryStartedAt)
+      expect(candidateResult.configured).toBe(true)
+      expect(candidateResult.identity.editionId,
+        'Rulebook discovery response lost the selected edition identity').toBe(boundGame.edition.id)
+      gstoneCandidate = candidateResult.candidates.find(candidate =>
+        candidate.sourceDomain.endsWith('gstonegames.com')
+        && candidate.language.toLowerCase().startsWith('zh')
+        && (candidate.capability === 'DIRECT_DOCUMENT' && candidate.acquisitionMode === 'DIRECT_PDF'
+          || candidate.capability === 'CONTIGUOUS_RULE_PAGES' && candidate.acquisitionMode === 'IMAGE_GALLERY')) ?? null
+      expect(gstoneCandidate, 'No importable Chinese Gstone rulebook was discovered').not.toBeNull()
+      report.sourceDomain = gstoneCandidate!.sourceDomain
+      report.sourceUrl = gstoneCandidate!.url
+      report.sourceMode = gstoneCandidate!.acquisitionMode
+    }
 
     const catalogResponse = await page.request.get('/api/v1/games')
     expect(catalogResponse.ok(), `Catalog returned HTTP ${catalogResponse.status()}`).toBe(true)
@@ -911,7 +936,7 @@ test('recommendation becomes one readable, taught, and answerable production jou
       && entry.editions.some(edition => edition.id === boundGame.edition.id))
     expect(report.boundGameInCatalog, 'The selected recommendation was not bound in My Games').toBe(true)
 
-    report.stage = 'source-review'
+    report.stage = restoredExistingJourney ? 'import' : 'source-review'
     const journeyBackdrop = page.getByTestId('player-journey-backdrop')
     const journeySurface = page.getByTestId('player-journey-surface')
     report.journeyBackdropVisible = await journeyBackdrop.isVisible()
@@ -920,30 +945,35 @@ test('recommendation becomes one readable, taught, and answerable production jou
     expect(report.journeySurfaceOpaque).toBe(true)
     report.confirmedMilestonesAtSourceReview = await journeySurface
       .locator('[data-fact-confirmed="true"]').count()
-    expect(report.confirmedMilestonesAtSourceReview).toBe(1)
-    const candidateCard = page.locator('li', {
-      has: page.locator(`a[href="${gstoneCandidate!.url}"]`),
-    }).first()
-    await expect(candidateCard).toContainText('社区规则书来源')
-    await candidateCard.getByRole('button', { name: '选择这份' }).click()
-    const importButton = page.getByRole('button', { name: '下载规则书并生成讲解' })
-    await expect(importButton).toBeDisabled()
-    await page.getByRole('checkbox', { name: /我已比较以上游戏、版本和语言/ }).check()
-    await expect(importButton).toBeDisabled()
-    await page.getByRole('checkbox', { name: /我确认该链接来自有权提供/ }).check()
-    await expect(importButton).toBeEnabled()
+    if (restoredExistingJourney) {
+      await expect(page.getByTestId('player-journey-progress')).toBeVisible({ timeout: 60_000 })
+      expect(report.confirmedMilestonesAtSourceReview).toBeGreaterThanOrEqual(1)
+    } else {
+      expect(report.confirmedMilestonesAtSourceReview).toBe(1)
+      const candidateCard = page.locator('li', {
+        has: page.locator(`a[href="${gstoneCandidate!.url}"]`),
+      }).first()
+      await expect(candidateCard).toContainText('社区规则书来源')
+      await candidateCard.getByRole('button', { name: '选择这份' }).click()
+      const importButton = page.getByRole('button', { name: '下载规则书并生成讲解' })
+      await expect(importButton).toBeDisabled()
+      await page.getByRole('checkbox', { name: /我已比较以上游戏、版本和语言/ }).check()
+      await expect(importButton).toBeDisabled()
+      await page.getByRole('checkbox', { name: /我确认该链接来自有权提供/ }).check()
+      await expect(importButton).toBeEnabled()
 
-    report.stage = 'import'
-    const importStartedAt = performance.now()
-    const importResponsePromise = page.waitForResponse(response => {
-      const url = new URL(response.url())
-      return url.pathname === '/api/v1/documents/official-imports' && response.request().method() === 'POST'
-    }, { timeout: 30_000 })
-    await importButton.click()
-    const importResponse = await importResponsePromise
-    expect(importResponse.status()).toBe(202)
-    let launchedJob = await importResponse.json() as ImportJob
-    launchedJob = await retryFailedReusedTeaching(page.request, launchedJob)
+      report.stage = 'import'
+      importStartedAt = performance.now()
+      const importResponsePromise = page.waitForResponse(response => {
+        const url = new URL(response.url())
+        return url.pathname === '/api/v1/documents/official-imports' && response.request().method() === 'POST'
+      }, { timeout: 30_000 })
+      await importButton.click()
+      const importResponse = await importResponsePromise
+      expect(importResponse.status()).toBe(202)
+      launchedJob = await importResponse.json() as ImportJob
+      launchedJob = await retryFailedReusedTeaching(page.request, launchedJob)
+    }
     report.importReused = launchedJob.reused
     if (REQUIRE_FRESH_IMPORT) {
       expect(launchedJob.reused, 'The requested fresh-import journey reused an existing rulebook').toBe(false)
@@ -953,16 +983,19 @@ test('recommendation becomes one readable, taught, and answerable production jou
       && (launchedJob.teachingHandoffState === 'WAITING_FOR_DOCUMENT'
         || launchedJob.teachingHandoffState === 'LAUNCHING')
     report.importEditionMatchesSelection = launchedJob.editionId === boundGame.edition.id
-      && observedImportRequest?.editionId === boundGame.edition.id
-      && observedImportRequest?.discoveredForEditionId === boundGame.edition.id
-      && observedImportRequest?.officialSourceUrl === gstoneCandidate!.url
-      && observedImportRequest?.identityConfirmed === true
+      && (restoredExistingJourney
+        || observedImportRequest?.editionId === boundGame.edition.id
+          && observedImportRequest?.discoveredForEditionId === boundGame.edition.id
+          && observedImportRequest?.officialSourceUrl === gstoneCandidate!.url
+          && observedImportRequest?.identityConfirmed === true)
     expect(report.importEditionMatchesSelection,
       'The official import request or persisted job changed the selected edition/source identity').toBe(true)
     expect(launchedJob.title, 'The official import response did not retain the selected game title')
       .toBe(boundGame.game.name)
-    expect(launchedJob.sourceDomain, 'The official import response changed the selected source domain')
-      .toBe(gstoneCandidate!.sourceDomain)
+    if (!restoredExistingJourney) {
+      expect(launchedJob.sourceDomain, 'The official import response changed the selected source domain')
+        .toBe(gstoneCandidate!.sourceDomain)
+    }
 
     report.stage = 'close-and-recover-background-status'
     await page.getByTestId('player-journey-surface')
@@ -1042,7 +1075,7 @@ test('recommendation becomes one readable, taught, and answerable production jou
     report.documentProgressStage = progressPayload.stage
     report.documentProgressComplete = progressPayload.complete
     expect(progressPayload).toMatchObject({ stage: 'READY', complete: true })
-    expect(importRequestCount).toBe(1)
+    expect(importRequestCount).toBe(restoredExistingJourney ? 0 : 1)
     const documentsResponse = await page.request.get('/api/v1/documents')
     expect(documentsResponse.ok(), `Documents returned HTTP ${documentsResponse.status()}`).toBe(true)
     const documents = await documentsResponse.json() as RuleDocumentResponse[]

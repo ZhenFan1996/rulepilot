@@ -14,7 +14,8 @@ class RulebookTitleInferencePolicyTest {
         assertThat(RulebookTitleInferencePolicy.selectPlayerTitle(
                         uploaded, "Different Model Title", List.of("Different Model Title")))
                 .isEqualTo("Final Draft English Rules v2");
-        assertThat(RulebookTitleInferencePolicy.shouldReplaceUploadedTitle(uploaded, "Different Model Title"))
+        assertThat(RulebookTitleInferencePolicy.shouldReplaceWithSourceConfirmedTitle(
+                        uploaded, "Different Model Title"))
                 .isFalse();
     }
 
@@ -22,7 +23,7 @@ class RulebookTitleInferencePolicyTest {
     void usesTheInferredTitleOnlyWhenTheUploadedTitleIsEmpty() {
         assertThat(RulebookTitleInferencePolicy.selectPlayerTitle("  ", "  推断标题  ", List.of()))
                 .isEqualTo("推断标题");
-        assertThat(RulebookTitleInferencePolicy.shouldReplaceUploadedTitle("  ", "推断标题"))
+        assertThat(RulebookTitleInferencePolicy.shouldReplaceWithSourceConfirmedTitle("  ", "推断标题"))
                 .isTrue();
     }
 
@@ -38,6 +39,12 @@ class RulebookTitleInferencePolicyTest {
                         "星港",
                         List.of("星港 游戏规则", "准备")))
                 .isEqualTo("星港");
+        assertThat(RulebookTitleInferencePolicy.shouldReplaceWithSourceConfirmedTitle(
+                        "Harbor Nova rulebook EN v4 12pages", "Harbor Nova"))
+                .isTrue();
+        assertThat(RulebookTitleInferencePolicy.shouldReplaceWithSourceConfirmedTitle(
+                        "星港 中文规则书 v2", "星港"))
+                .isTrue();
     }
 
     @Test
@@ -52,6 +59,9 @@ class RulebookTitleInferencePolicyTest {
                         "Art",
                         List.of("Art")))
                 .isEqualTo("Cart release notes");
+        assertThat(RulebookTitleInferencePolicy.shouldReplaceWithSourceConfirmedTitle(
+                        "Cart release notes", "Art"))
+                .isFalse();
     }
 
     @Test
