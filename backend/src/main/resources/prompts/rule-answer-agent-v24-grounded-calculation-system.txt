@@ -1,6 +1,23 @@
 Grounded-calculation revision v24:
 - `calculations` is an application-controlled arithmetic request, not a place to report model-computed facts. Return an empty list unless the player asks for a concrete numeric result using a quantity stated in the current question.
-- Each calculation item contains only `expression`. Include each expression needed by the question and use only `+`, `-`, `*`, `/`, parentheses, `floor`, `ceil`, `min`, or `max`.
-- Every numeric operand must appear literally in the current question or in evidence cited by this answer. At least one operand must come from the current question. Never invent a quantity, implicit default, conversion constant, or missing table value.
-- Put the intended computed result in the player-facing verdict or explanation. The application independently evaluates the expression and rejects a result or any other output number that is not grounded in the current question, cited evidence, or the verified calculation result.
+- Each item must provide `expression`, numeric `expectedResult`, `resultUnit`, and one `operands` entry for every numeric literal occurrence in the expression. Use only `+`, `-`, `*`, `/`, parentheses, `floor`, `ceil`, `min`, or `max`.
+- Each operand has `name`, numeric `value`, `source`, exact `sourceSpan`, and `citationId`. `source` is exactly `QUESTION` or `EVIDENCE`. For `QUESTION`, copy a short exact span from the current question and set `citationId` to null. For `EVIDENCE`, copy a short exact span from that evidence excerpt and use its exact citation UUID. Never point to earlier conversation text.
+- The operand values, including repeated occurrences, must exactly match the expression's numeric literals. At least one operand must come from the current question. Never invent a quantity, implicit default, conversion constant, or missing table value.
+- State the same intended result naturally in `shortVerdict` or `explanation`, but do not turn the prose into a machine protocol. The application validates only the typed fields, independently evaluates the expression, and requires its result to equal `expectedResult` before publishing the separately rendered calculation.
 - Rule evidence establishes what the operands and formula mean; the calculation is a derived application and never becomes rule evidence. Set `answerBasis` to `GROUNDED_APPLICATION` when calculations is non-empty.
+
+Valid shape example (field names and provenance pattern only; do not reuse the facts):
+```json
+{
+  "expression": "floor(8 / 3) * 5",
+  "expectedResult": 10,
+  "resultUnit": "resources",
+  "operands": [
+    {"name":"available pieces","value":8,"source":"QUESTION","sourceSpan":"I have 8 pieces","citationId":null},
+    {"name":"pieces per set","value":3,"source":"EVIDENCE","sourceSpan":"groups of 3 pieces","citationId":"11111111-1111-1111-1111-111111111111"},
+    {"name":"resources per set","value":5,"source":"EVIDENCE","sourceSpan":"gain 5 resources for each group","citationId":"22222222-2222-2222-2222-222222222222"}
+  ]
+}
+```
+
+Invalid patterns: an expression literal without an operand entry; a paraphrased `sourceSpan`; an evidence operand with a null or unrelated citation; a question operand copied from prior context; an `expectedResult` guessed without evaluating the expression.

@@ -24,6 +24,11 @@ interface TestSection {
     heading: string
     kind: string
     text: string
+    ruleFacts?: Array<{
+      position: number
+      role: 'PREREQUISITE' | 'CHOICE' | 'ACTION' | 'COST_OR_GAIN' | 'TIMING' | 'LIMIT' | 'RESULT' | 'EXCEPTION' | 'TABLE_STATE' | 'EXAMPLE_STATE'
+      text: string
+    }>
     sourcePages: number[]
     visualFocus: TestVisualFocus | null
   }>
@@ -151,5 +156,25 @@ describe('LessonChapterList', () => {
     expect(wrapper.get('[data-testid="lesson-visual-detail"] img').attributes('src')).toBe('/crop/2')
     expect(wrapper.text()).toContain('把主板放在桌面中央。')
     expect(wrapper.text()).toContain('规则含义以上方有引用的步骤为准')
+  })
+
+  it('renders model-authored rule fact roles without parsing the natural step text', () => {
+    const wrapper = mountDirectory([{
+      ...sections[0]!,
+      steps: [{
+        ...sections[0]!.steps[0]!,
+        text: '现在完成这个行动。',
+        ruleFacts: [
+          { position: 1, role: 'COST_OR_GAIN', text: '支付 2 枚标记。' },
+          { position: 2, role: 'RESULT', text: '把棋子放到所选区域。' },
+        ],
+      }],
+    }])
+
+    expect(wrapper.get('[data-testid="lesson-rule-facts"]')).toBeTruthy()
+    expect(wrapper.text()).toContain('支付 / 获得')
+    expect(wrapper.text()).toContain('支付 2 枚标记。')
+    expect(wrapper.text()).toContain('结果')
+    expect(wrapper.text()).toContain('把棋子放到所选区域。')
   })
 })

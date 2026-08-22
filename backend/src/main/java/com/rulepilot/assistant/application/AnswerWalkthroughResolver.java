@@ -5,7 +5,6 @@ import com.rulepilot.assistant.RuleAnswerModel.ModelDraft;
 import com.rulepilot.assistant.RuleAnswerModel.ModelRequest;
 import com.rulepilot.assistant.RuleAnswerModel.WalkthroughStepRequest;
 import com.rulepilot.assistant.domain.RuleWalkthroughStep;
-import com.rulepilot.assistant.domain.WalkthroughOrderBasis;
 import java.util.LinkedHashSet;
 import java.util.List;
 
@@ -40,8 +39,7 @@ final class AnswerWalkthroughResolver {
         return new RuleWalkthroughStep(
                 AnswerStructuredAidPolicy.requiredText(item.instruction(), "walkthrough instruction"),
                 AnswerStructuredAidPolicy.requiredText(item.explanation(), "walkthrough explanation"),
-                AnswerStructuredAidPolicy.enumValue(
-                        item.orderBasis(), WalkthroughOrderBasis.class, "walkthrough order basis"),
+                item.orderBasis(),
                 AnswerStructuredAidPolicy.citations(
                         modelRequest, draft, item.citationIds(), "walkthrough step"));
     }

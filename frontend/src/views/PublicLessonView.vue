@@ -27,7 +27,7 @@ interface VisualFocus {
 interface LessonStep {
   position: number
   heading: string
-  kind: 'UNDERSTAND' | 'DO' | 'EXAMPLE' | 'WATCH' | 'CHECK' | 'VISUAL' | 'FLOW' | 'LEDGER'
+  kind: 'UNDERSTAND' | 'DO' | 'EXAMPLE' | 'WATCH' | 'CHECK' | 'VISUAL' | 'FLOW' | 'LEDGER' | 'REFERENCE_CARD' | 'LIMIT'
   text: string
   sourcePages: number[]
   visualFocus: VisualFocus | null
@@ -322,6 +322,15 @@ function parsePublicAnswer(value: unknown): PublicAnswer | null {
     })) as unknown
     if (!isRecord(projected) || !isRecord(projected.answer)) return null
     const answer = projected.answer
+    if (!requiredArrayOf(answer.citations, isCitation)
+      || !requiredArrayOf(answer.exceptions, item => typeof item === 'string')
+      || !requiredArrayOf(answer.warnings, isAnswerWarning)
+      || !requiredArrayOf(projected.visualAids, isVisualAid)
+      || !requiredArrayOf(projected.examples, isExample)
+      || !(answer.answerBasis === undefined || answer.answerBasis === null
+        || answer.answerBasis === 'DIRECT_RULE' || answer.answerBasis === 'GROUNDED_APPLICATION')
+      || !(typeof answer.clarification === 'string' || answer.clarification === null)
+      || !hasValidOptionalPublicEnrichment(answer)) return null
     const answerBasis = answer.answerBasis === 'DIRECT_RULE' || answer.answerBasis === 'GROUNDED_APPLICATION'
       || answer.answerBasis === null
       ? answer.answerBasis
@@ -331,16 +340,16 @@ function parsePublicAnswer(value: unknown): PublicAnswer | null {
         status: answer.status,
         shortVerdict: answer.shortVerdict,
         explanation: answer.explanation,
-        citations: validItems(answer.citations, isCitation),
-        exceptions: validItems(answer.exceptions, item => typeof item === 'string'),
+        citations: answer.citations,
+        exceptions: answer.exceptions,
         confidence: answer.confidence,
         answerBasis,
         ...projectOptionalPublicEnrichment(answer),
-        clarification: typeof answer.clarification === 'string' || answer.clarification === null ? answer.clarification : null,
-        warnings: validItems(answer.warnings, isAnswerWarning),
+        clarification: answer.clarification,
+        warnings: answer.warnings,
       },
-      visualAids: validItems(projected.visualAids, isVisualAid),
-      examples: validItems(projected.examples, isExample),
+      visualAids: projected.visualAids,
+      examples: projected.examples,
     }
     return isPublicAnswer(candidate) ? candidate : null
   } catch {
@@ -380,9 +389,7 @@ function hasValidPublicOutcomeShape(answer: PublicAnswer['answer']) {
 
 const PUBLIC_OPTIONAL_ENRICHMENT_VALIDATORS: Record<string, (item: unknown) => boolean> = {
   calculations: item => hasTextFields(item, ['expression', 'result']),
-  situationChecks: item => hasTextFields(item, ['requirement'])
-    && hasStringFields(item, ['playerFact'])
-    && isRecord(item) && ['CONFIRMED', 'CONTRADICTED', 'NOT_PROVIDED'].includes(String(item.status)),
+  situationChecks: item => isSituationCheck(item),
   walkthroughSteps: item => hasTextFields(item, ['instruction', 'explanation'])
     && isRecord(item) && ['RULE_ORDER', 'EXPLANATION_ORDER'].includes(String(item.orderBasis)),
   decisionBranches: item => hasTextFields(item, ['condition', 'outcome'])
@@ -416,19 +423,15 @@ function hasValidOptionalPublicEnrichment(answer: Record<string, unknown>) {
 
 function projectOptionalPublicEnrichment(answer: Record<string, unknown>) {
   return Object.fromEntries(Object.entries(PUBLIC_OPTIONAL_ENRICHMENT_VALIDATORS)
-    .map(([field, validator]) => [field, optionalValidItems(answer[field], validator)]))
+    .map(([field]) => [field, answer[field]]))
 }
 
 function optionalArrayOf(value: unknown, validator: (item: unknown) => boolean) {
   return value === undefined || Array.isArray(value) && value.every(validator)
 }
 
-function validItems<T>(value: unknown, validator: (item: unknown) => boolean): T[] {
-  return Array.isArray(value) ? value.filter(validator) as T[] : []
-}
-
-function optionalValidItems<T>(value: unknown, validator: (item: unknown) => boolean): T[] | undefined {
-  return Array.isArray(value) ? value.filter(validator) as T[] : undefined
+function requiredArrayOf(value: unknown, validator: (item: unknown) => boolean) {
+  return Array.isArray(value) && value.every(validator)
 }
 
 function hasText(value: unknown): value is string {
@@ -444,7 +447,15 @@ function hasStringFields(value: unknown, fields: string[]) {
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function isSituationCheck(value: unknown) {
+  if (!hasTextFields(value, ['requirement'])
+    || !isRecord(value)
+    || typeof value.playerFact !== 'string'
+    || !['CONFIRMED', 'CONTRADICTED', 'NOT_PROVIDED'].includes(String(value.status))) return false
+  return value.status === 'NOT_PROVIDED' ? value.playerFact.length === 0 : hasText(value.playerFact)
 }
 
 function isAnswerStatus(value: unknown): value is PublicAnswer['answer']['status'] {
@@ -465,25 +476,32 @@ function isConfidence(value: unknown): value is PublicAnswer['answer']['confiden
 }
 
 function isCitation(value: unknown): value is RuleCitation {
-  return isRecord(value) && typeof value.heading === 'string' && Number.isInteger(value.pageFrom) && Number.isInteger(value.pageTo)
+  return isRecord(value) && hasText(value.heading)
+    && Number.isSafeInteger(value.pageFrom) && Number(value.pageFrom) >= 1
+    && Number.isSafeInteger(value.pageTo) && Number(value.pageTo) >= Number(value.pageFrom)
 }
 
 function isVisualAid(value: unknown): value is PublicAnswer['visualAids'][number] {
-  return isRecord(value) && typeof value.relatedStep === 'string' && isVisualFocus(value.visualFocus)
+  return isRecord(value) && hasText(value.relatedStep) && isVisualFocus(value.visualFocus)
 }
 
 function isVisualFocus(value: unknown): value is VisualFocus {
   return isRecord(value)
-    && typeof value.label === 'string'
-    && [value.pageNumber, value.x, value.y, value.width, value.height].every(Number.isFinite)
+    && hasText(value.label)
+    && Number.isSafeInteger(value.pageNumber) && Number(value.pageNumber) >= 1
+    && [value.x, value.y, value.width, value.height].every(Number.isFinite)
+    && Number(value.x) >= 0 && Number(value.y) >= 0
+    && Number(value.width) > 0 && Number(value.height) > 0
 }
 
 function isExample(value: unknown): value is PublicAnswer['examples'][number] {
   return isRecord(value)
-    && typeof value.heading === 'string'
-    && typeof value.text === 'string'
+    && hasText(value.heading)
+    && hasText(value.text)
     && Array.isArray(value.sourcePages)
-    && value.sourcePages.every(Number.isInteger)
+    && value.sourcePages.length > 0
+    && value.sourcePages.every(page => Number.isSafeInteger(page) && page >= 1)
+    && new Set(value.sourcePages).size === value.sourcePages.length
 }
 
 function sourcePageUrl(pageNumber: number) {

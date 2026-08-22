@@ -31,8 +31,10 @@ public record CandidateObservation(
 
     public boolean supports(CandidateClaim.Type claimType) {
         return switch (kind) {
-            case STRUCTURED_METADATA -> claimType == CandidateClaim.Type.CONSTRAINT_FIT
-                    || claimType == CandidateClaim.Type.STRUCTURED_FACT;
+            case STRUCTURED_METADATA -> "publisherDescription".equals(attribute)
+                    ? claimType == CandidateClaim.Type.PUBLISHER_DESCRIPTION
+                    : claimType == CandidateClaim.Type.CONSTRAINT_FIT
+                            || claimType == CandidateClaim.Type.STRUCTURED_FACT;
             case TAXONOMY -> claimType == CandidateClaim.Type.CONSTRAINT_FIT
                     || claimType == CandidateClaim.Type.TAXONOMY_CLASSIFICATION
                     || claimType == CandidateClaim.Type.PREFERENCE_INFERENCE;

@@ -1,0 +1,3 @@
+For every retained issue, repeat the exact listed claimAspect and require at least one evidenceIds reference owned by
+that candidate claim. Omit a candidate when the listed type and claimAspect are not both confirmed. Do not substitute
+a different possible concern discovered while reading the claim.

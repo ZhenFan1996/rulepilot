@@ -64,11 +64,18 @@ class TeachingSourcePageEvidenceRefinerTest {
                 "[rule-group:prepare-board] Put the board in the middle, then give every player one marker.",
                 2,
                 2,
-                List.of(new RulePageImage(2, "image/png", new byte[] {1, 2, 3}, 100, 80)));
-        RuleEvidence canonicalPlaceholder = evidence(
+                List.of(new RulePageImage(2, "image/png", new byte[] {1, 2, 3}, 100, 80)),
+                RuleEvidence.ContentKind.VISUAL_TRANSCRIPTION);
+        RuleEvidence canonicalPlaceholder = new RuleEvidence(
                 sourceId,
+                versionId,
+                "SETUP",
+                "Setup",
+                "Image-only page",
                 2,
-                TeachingVisualEvidenceSelector.VISUAL_PAGE_PLACEHOLDER);
+                2,
+                List.of(),
+                RuleEvidence.ContentKind.VISUAL_PLACEHOLDER);
         TeachingPlan plan = plan(List.of(2));
 
         var result = refiner(scopes(), tools(List.of(canonicalPlaceholder)), new RecordingInvocations())

@@ -53,18 +53,24 @@ class AnswerEvidenceRetrieverTest {
                 UUID.randomUUID(), question, context(), "alice", visualPlan(question));
 
         assertThat(result.state()).isEqualTo(AnswerEvidenceRetriever.State.READY);
-        assertThat(result.evidence()).anySatisfy(hit ->
-                assertThat(hit.evidence().excerpt()).contains("执行该行动后获得一分", "Visible facts", "marker"));
+        assertThat(result.evidence()).anySatisfy(hit -> {
+            assertThat(hit.evidence().excerpt()).isEqualTo("执行该行动后获得一分。");
+            assertThat(hit.evidence().visualFacts())
+                    .isEqualTo("The marker advances one space after this action.");
+            assertThat(hit.evidence().contentKind())
+                    .isEqualTo(RuleEvidenceHit.ContentKind.CANONICAL_TEXT_WITH_VISUAL_FACTS);
+        });
     }
 
     @Test
-    void performsAnExactBoundedVisualLookupForPrintedIdentifiersBeforeIntentExpansion() {
+    void searchesTypedRuleObjectsWithoutParsingOrNormalizingThePlayerQuestion() {
         HybridEvidenceHit generic = evidence("Actions may provide several different benefits.", 0.9);
         List<String> visualQueries = new ArrayList<>();
+        List<Integer> visualLimits = new ArrayList<>();
         VisualRulebookPageFactSearch facts = (documentVersionId, query, limit) -> {
             visualQueries.add(query);
-            if (!query.equals("A-01 B#02")) return List.of();
-            assertThat(limit).isEqualTo(4);
+            visualLimits.add(limit);
+            if (!Set.of("A - 01", "B#02").contains(query)) return List.of();
             return List.of(new VisualRulebookPageFactSearch.PageFactMatch(
                     7, "A-01 B#02", "A-01 grants movement; B#02 grants energy.", List.of("A-01", "B#02"), 1.0));
         };
@@ -82,11 +88,24 @@ class AnswerEvidenceRetrieverTest {
         };
         AnswerEvidenceRetriever retriever = retriever(
                 (documentVersionId, query, options) -> List.of(generic), facts, lookup);
+        AnswerRetrievalQuestion question = question("比较 A - 01 和 B#02 的功能。");
+        AnswerRetrievalPlan plan = new AnswerRetrievalPlan(
+                List.of(new AnswerRetrievalPlan.Subquestion(
+                        "比较两个规则对象的功能。",
+                        Set.of(EvidenceNeed.RELATIONSHIP),
+                        AnswerRetrievalPlan.QuestionOwner.CURRENT_QUESTION)),
+                false,
+                AnswerRetrievalPlan.ReferenceBinding.CURRENT_QUESTION,
+                null,
+                List.of("A - 01", "B#02"),
+                List.of());
 
         AnswerEvidenceRetriever.Result result = retriever.retrieve(
-                UUID.randomUUID(), question("比较 A-01 和 B#02 的功能。"), context(), "alice");
+                UUID.randomUUID(), question, context(), "alice", plan);
 
-        assertThat(visualQueries).first().isEqualTo("A-01 B#02");
+        assertThat(visualQueries).startsWith("A - 01", "B#02");
+        assertThat(visualLimits).startsWith(4, 4);
+        assertThat(visualQueries).doesNotContain("A-01 B#02");
         assertThat(result.evidence()).anySatisfy(hit ->
                 assertThat(hit.evidence().excerpt()).contains("A-01 grants movement", "B#02 grants energy"));
     }
@@ -150,7 +169,7 @@ class AnswerEvidenceRetrieverTest {
     void fallsBackToPageScopedVisualTranscriptionForDifferentImageOnlyRulebooks(
             String playerQuestion,
             String factualSummary) {
-        HybridEvidenceHit placeholder = hit("VISUAL", "Rendered rulebook page", VISUAL_PLACEHOLDER, 3, 0.2);
+        HybridEvidenceHit placeholder = visualPlaceholderHit("Rendered rulebook page", 3, 0.2);
         List<String> visualQueries = new ArrayList<>();
         VisualRulebookPageFactSearch facts = (documentVersionId, query, limit) -> {
             visualQueries.add(query);
@@ -176,15 +195,16 @@ class AnswerEvidenceRetrieverTest {
 
         assertThat(visualQueries).isNotEmpty();
         assertThat(result.state()).isEqualTo(AnswerEvidenceRetriever.State.READY);
-        assertThat(result.evidence()).anySatisfy(hit -> assertThat(hit.evidence().excerpt())
-                .startsWith("Visual-transcribed rule evidence")
-                .contains(factualSummary)
-                .doesNotContain(VISUAL_PLACEHOLDER));
+        assertThat(result.evidence()).anySatisfy(hit -> {
+            assertThat(hit.evidence().contentKind())
+                    .isEqualTo(RuleEvidenceHit.ContentKind.VISUAL_TRANSCRIPTION);
+            assertThat(hit.evidence().playerExcerpt()).isEqualTo(factualSummary);
+        });
     }
 
     @Test
     void keepsAnImageOnlyPageUnassertiveWhenNoMatchingVisualFactExists() {
-        HybridEvidenceHit placeholder = hit("VISUAL", "Rendered rulebook page", VISUAL_PLACEHOLDER, 8, 0.2);
+        HybridEvidenceHit placeholder = visualPlaceholderHit("Rendered rulebook page", 8, 0.2);
         AnswerEvidenceRetriever retriever = retriever(
                 (documentVersionId, query, options) -> List.of(placeholder),
                 VisualRulebookPageFactSearch.empty(),
@@ -255,34 +275,6 @@ class AnswerEvidenceRetrieverTest {
     }
 
     @Test
-    void keepsBroadSupplementaryRecallBehindThePrimaryDirectAnchor() {
-        HybridEvidenceHit direct = hit(
-                "ROUND_STRUCTURE",
-                "Collision",
-                "When players choose the same number, resolve the collision in the printed order.",
-                10,
-                0.6);
-        HybridEvidenceHit broadSupplement = hit(
-                "ROUND_STRUCTURE",
-                "Round cleanup",
-                "After the round, every player retrieves their numbered card and draws a replacement.",
-                11,
-                0.9);
-        AnswerEvidenceRetriever retriever = retriever(
-                (documentVersionId, query, options) -> query.contains("rule condition consequence")
-                        ? List.of(broadSupplement)
-                        : List.of(direct),
-                VisualRulebookPageFactSearch.empty(),
-                (documentVersionId, chunkIds) -> List.of());
-
-        AnswerEvidenceRetriever.Result result = retriever.retrieve(
-                UUID.randomUUID(), question("What happens when players choose the same number?"), context(), "alice");
-
-        assertThat(result.evidence()).extracting(hit -> hit.evidence().chunkId())
-                .containsExactly(direct.evidence().chunkId(), broadSupplement.evidence().chunkId());
-    }
-
-    @Test
     void keepsEveryDirectObligationAnchoredWhenTheFiveIntentBudgetIsFull() {
         java.util.concurrent.atomic.AtomicInteger searchIndex = new java.util.concurrent.atomic.AtomicInteger();
         List<String> directHeadings = new ArrayList<>();
@@ -317,9 +309,8 @@ class AnswerEvidenceRetrieverTest {
     }
 
     @Test
-    void acceptsCrossLanguageRewritesThroughTheCallerPortWithoutOwningAModelContract() {
+    void usesCrossLanguageQueriesAlreadyDeclaredByTheStructuredQuestionPlan() {
         List<String> searchedQueries = new ArrayList<>();
-        List<String> rewriteInputs = new ArrayList<>();
         HybridEvidenceHit source = evidence("Setup happens before the first turn.", 0.8);
         AnswerEvidenceRetriever retriever = retriever(
                 (documentVersionId, query, options) -> {
@@ -327,28 +318,28 @@ class AnswerEvidenceRetrieverTest {
                     return List.of(source);
                 },
                 VisualRulebookPageFactSearch.empty(),
-                (documentVersionId, chunkIds) -> List.of(),
-                (runId, username, question, previousQuestion) -> {
-                    rewriteInputs.add(username);
-                    rewriteInputs.add(question);
-                    rewriteInputs.add(previousQuestion);
-                    return List.of("setup before first turn");
-                });
+                (documentVersionId, chunkIds) -> List.of());
+        AnswerRetrievalPlan plan = new AnswerRetrievalPlan(
+                List.of(new AnswerRetrievalPlan.Subquestion(
+                        "游戏开始前如何设置？",
+                        Set.of(EvidenceNeed.DIRECT_RULE),
+                        AnswerRetrievalPlan.QuestionOwner.CURRENT_QUESTION,
+                        List.of("setup before first turn"))),
+                false);
 
         retriever.retrieve(
                 UUID.randomUUID(),
                 question("游戏开始前如何设置？"),
                 new AnswerRetrievalContext(versionId, "上一轮问了回合顺序。", null),
-                "alice");
+                "alice",
+                plan);
 
-        assertThat(rewriteInputs).containsExactly("alice", "游戏开始前如何设置？", null);
         assertThat(searchedQueries).contains("setup before first turn");
     }
 
     @Test
     void treatsAnExplicitPageAsALocatorAndRanksItsCurrentRuleFactsAboveDescriptiveMetadata() {
-        RuleEvidenceHit hintedPage = hit(
-                        "GENERAL", "Rendered page", VISUAL_PLACEHOLDER, 47, 0.1)
+        RuleEvidenceHit hintedPage = visualPlaceholderHit("Rendered page", 47, 0.1)
                 .evidence();
         HybridEvidenceHit descriptive = hit(
                 "GENERAL",
@@ -414,9 +405,10 @@ class AnswerEvidenceRetrieverTest {
 
         assertThat(result.evidence()).singleElement().satisfies(hit -> {
             assertThat(hit.evidence().pageFrom()).isEqualTo(47);
-            assertThat(hit.evidence().excerpt())
-                    .startsWith("Visual-transcribed rule evidence")
-                    .contains("returns after the current interval");
+            assertThat(hit.evidence().contentKind())
+                    .isEqualTo(RuleEvidenceHit.ContentKind.VISUAL_TRANSCRIPTION);
+            assertThat(hit.evidence().playerExcerpt())
+                    .isEqualTo("The cobalt spindle returns after the current interval.");
         });
     }
 
@@ -476,8 +468,7 @@ class AnswerEvidenceRetrieverTest {
                 (documentVersionId, query, options) -> List.of(),
                 VisualRulebookPageFactSearch.empty(),
                 (documentVersionId, chunkIds) -> List.of(),
-                stoppedInvocations,
-                (runId, username, question, previousQuestion) -> List.of());
+                stoppedInvocations);
 
         assertThatThrownBy(() -> retriever.retrieve(
                         UUID.randomUUID(), question("How does this action work?"), context(), "alice"))
@@ -488,25 +479,12 @@ class AnswerEvidenceRetrieverTest {
             HybridRuleSearch retrieval,
             VisualRulebookPageFactSearch visualFacts,
             RuleEvidenceLookup evidenceLookup) {
-        return retriever(
-                retrieval,
-                visualFacts,
-                evidenceLookup,
-                (runId, username, question, previousQuestion) -> List.of());
-    }
-
-    private AnswerEvidenceRetriever retriever(
-            HybridRuleSearch retrieval,
-            VisualRulebookPageFactSearch visualFacts,
-            RuleEvidenceLookup evidenceLookup,
-            AnswerRetrievalQueryRewriter queryRewriter) {
         ImmediateAnswerRetrievalInvocations invocations = new ImmediateAnswerRetrievalInvocations();
         return new AnswerEvidenceRetriever(
                 retrieval,
                 visualFacts,
                 evidenceLookup,
-                invocations,
-                queryRewriter);
+                invocations);
     }
 
     private AnswerRetrievalQuestion question(String text) {
@@ -537,6 +515,25 @@ class AnswerEvidenceRetrieverTest {
     private HybridEvidenceHit hit(String sectionType, String heading, String excerpt, int page, double score) {
         return new HybridEvidenceHit(
                 new RuleEvidenceHit(UUID.randomUUID(), versionId, sectionType, heading, excerpt, page, page, score),
+                score,
+                1,
+                null,
+                false);
+    }
+
+    private HybridEvidenceHit visualPlaceholderHit(String heading, int page, double score) {
+        return new HybridEvidenceHit(
+                new RuleEvidenceHit(
+                        UUID.randomUUID(),
+                        versionId,
+                        "VISUAL",
+                        heading,
+                        VISUAL_PLACEHOLDER,
+                        page,
+                        page,
+                        score,
+                        RuleEvidenceHit.ContentKind.VISUAL_PLACEHOLDER,
+                        VISUAL_PLACEHOLDER),
                 score,
                 1,
                 null,

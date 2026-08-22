@@ -1,0 +1,15 @@
+Return exactly one JSON object with this shape:
+{"issues":[{"defectConfirmed":true,"type":"CONTRADICTION","claimAspect":"QUANTITY","claimPosition":7,"evidenceIds":["E2"],"summary":"Exact material mismatch under 160 characters."}]}
+
+The root object has exactly one field, issues. Use {"issues":[]} when there is no concrete defect. Every retained issue
+has exactly these six fields and no others:
+- defectConfirmed is the JSON boolean true;
+- type is one of UNSUPPORTED_CLAIM, CONTRADICTION, MISSING_EXCEPTION, MISSING_CRITICAL_RULE, OVERREACH, or
+  CHAPTER_SCOPE_DUPLICATION;
+- claimAspect is one of GENERAL, QUANTITY, MULTIPLIER, TIMING, SUBJECT, or NEGATION;
+- claimPosition is the positive integer position from the supplied claims;
+- evidenceIds is a non-empty JSON array of unique supplied E-references owned by that claim;
+- summary is one concise string under 160 characters.
+
+Do not use position, issue, claim, evidence, explanation, type labels outside the allowed enums, or any field not shown
+above. Do not repeat a supported source/claim pair as an issue. Output JSON only, without a code fence.

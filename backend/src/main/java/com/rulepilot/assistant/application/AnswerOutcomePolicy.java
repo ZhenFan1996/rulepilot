@@ -157,7 +157,7 @@ final class AnswerOutcomePolicy {
                         source.documentVersionId(),
                         source.sectionType(),
                         source.heading(),
-                        AnswerCitationPresentationPolicy.excerpt(source.excerpt()),
+                        source.playerExcerpt(),
                         source.pageFrom(),
                         source.pageTo()))
                 .distinct()

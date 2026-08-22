@@ -70,7 +70,7 @@ class BoardGameRecommendationAgentPaidCanaryTest {
     private final ObjectMapper json = JsonMapper.builder().findAndAddModules().build();
 
     @Test
-    void streamsTheValidatedRecommendationVoiceAndPublishesOnlyVerifiedCards() throws Exception {
+    void publishesOneClaimScopedRecommendationAfterValidation() throws Exception {
         assumeTrue("true".equalsIgnoreCase(System.getenv("RULEPILOT_RECOMMENDATION_PAID_CANARY")));
         String provider = environment("RULEPILOT_RECOMMENDATION_CANARY_PROVIDER", "qwen")
                 .toLowerCase(Locale.ROOT);
@@ -129,9 +129,9 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                 assertThat(entry.game().details().maximumPlayTimeMinutes()).isLessThanOrEqualTo(60);
             });
             assertThat(response.profile().players()).isEqualTo(3);
-            assertThat(chunks).hasSizeGreaterThan(1);
+            assertThat(chunks).hasSize(1);
             assertThat(chunks.getLast()).isEqualTo(response.assistantMessage());
-            assertThat(firstChunkMs.get()).isNotNull().isLessThan(totalMs);
+            assertThat(firstChunkMs.get()).isNotNull().isLessThanOrEqualTo(totalMs);
             assertThat(response.harness().modelCalls()).isBetween(2, RecommendationReActLoop.MAX_MODEL_CALLS);
             assertThat(response.harness().fallbackUsed()).isFalse();
             assertThat(response.harness().actions())
@@ -150,12 +150,24 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                             "元数据",
                             "竞争")
                     .containsAnyOf("River Market", "河流", "Signal Grove", "树林", "林");
-            assertThat(capture.lastAssistantText()).isEqualTo(response.assistantMessage());
             ToolCall structuralDecision = capture.lastToolCall();
             assertThat(structuralDecision.name()).isEqualTo(BoardGameRecommendationAgent.RECOMMEND_TOOL);
             JsonNode arguments = json.readTree(structuralDecision.argumentsJson());
             assertThat(arguments.path("selections")).hasSize(2);
-            assertThat(arguments.path("internalEvidenceIds")).isNotEmpty();
+            assertThat(arguments.path("reply").path("sections")).hasSize(2);
+            assertThat(arguments.path("reply").path("sections")).allSatisfy(section -> {
+                assertThat(section.path("claims")).isNotEmpty();
+                assertThat(section.path("claims")).allSatisfy(claim -> {
+                    assertThat(claim.path("evidenceId").asText()).isNotBlank();
+                    assertThat(claim.path("subject").asText()).isNotBlank();
+                    assertThat(claim.path("claimType").asText()).isNotBlank();
+                });
+            });
+            assertThat(response.games()).allSatisfy(game -> {
+                assertThat(game.replyParts()).isNotEmpty();
+                assertThat(game.replyParts()).allSatisfy(part ->
+                        assertThat(part.claim().evidence()).hasSize(1));
+            });
             writeArtifact(capture, visibleTurns, null);
         } catch (Throwable failure) {
             writeArtifact(capture, visibleTurns, failure.getClass().getSimpleName());
@@ -166,7 +178,7 @@ class BoardGameRecommendationAgentPaidCanaryTest {
     }
 
     @Test
-    void routesAnObviousConversationTurnWithoutRecommendationWork() throws Exception {
+    void streamsAnObviousConversationTurnWithoutRecommendationWork() throws Exception {
         assumeTrue("true".equalsIgnoreCase(System.getenv("RULEPILOT_RECOMMENDATION_PAID_CANARY")));
         String provider = environment("RULEPILOT_RECOMMENDATION_CANARY_PROVIDER", "qwen")
                 .toLowerCase(Locale.ROOT);
@@ -191,6 +203,9 @@ class BoardGameRecommendationAgentPaidCanaryTest {
 
         try {
             int conversationRawStart = capture.callCount();
+            List<Map<String, Object>> progress = new ArrayList<>();
+            List<String> chunks = new ArrayList<>();
+            AtomicReference<Long> firstChunkMs = new AtomicReference<>();
             long started = System.nanoTime();
             var response = agent.converse(
                     new ConversationRequest(
@@ -205,48 +220,38 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                                     new KnownGame(101, "River Market", "River Market"),
                                     new KnownGame(102, "Signal Grove", "Signal Grove")),
                             List.of(101, 102)),
-                    "zh-CN");
-            visibleTurns.add(visible(
+                    "zh-CN",
+                    null,
+                    update -> progress.add(progress(update, started)),
+                    text -> {
+                        firstChunkMs.compareAndSet(null, elapsed(started));
+                        chunks.add(text);
+                    });
+            long totalMs = elapsed(started);
+            Map<String, Object> visible = new LinkedHashMap<>(visible(
                     "obvious-conversation",
                     response,
-                    elapsed(started),
-                    List.of(),
+                    totalMs,
+                    progress,
                     conversationRawStart,
                     capture.callCount()));
+            visible.put("assistantResultTtfbMs", firstChunkMs.get());
+            visible.put("answerChunkCount", chunks.size());
+            visibleTurns.add(Map.copyOf(visible));
 
             assertThat(response.outcome()).isEqualTo(Outcome.CONVERSATION);
+            assertThat(response.mode()).isEqualTo(BoardGameRecommendationAgent.DecisionMode.MODEL_FAST_PATH);
             assertThat(response.games()).isEmpty();
             assertThat(response.harness().modelCalls()).isEqualTo(1);
             assertThat(response.harness().catalogCalls()).isZero();
             assertThat(response.harness().webResearchCalls()).isZero();
             assertThat(response.harness().fallbackUsed()).isFalse();
-            assertThat(response.harness().actions()).containsExactly("REPLY_TO_USER");
-            ToolCall conversationRaw = capture.lastToolCall();
-            assertThat(conversationRaw.name()).isEqualTo(BoardGameRecommendationAgent.REPLY_TOOL);
-            assertThat(json.readTree(conversationRaw.argumentsJson()).path("message").asText())
-                    .isEqualTo(response.assistantMessage());
-
-            String recommendationRequest = "现在请按 3 人、60 分钟内，明确推荐两款并说明各自取舍。";
-            int recommendationRawStart = capture.callCount();
-            long recommendationStarted = System.nanoTime();
-            var recommendation = agent.converse(
-                    new ConversationRequest(RecommendationProfile.empty(), recommendationRequest),
-                    "zh-CN");
-            visibleTurns.add(visible(
-                    "explicit-recommendation",
-                    recommendation,
-                    elapsed(recommendationStarted),
-                    List.of(),
-                    recommendationRawStart,
-                    capture.callCount()));
-
-            assertThat(recommendation.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
-            assertThat(recommendation.games()).hasSize(2);
-            assertThat(recommendation.harness().catalogCalls()).isPositive();
-            assertThat(recommendation.harness().fallbackUsed()).isFalse();
-            assertThat(recommendation.harness().actions()).contains("RECOMMEND_GAMES");
-            assertTerminalProsePreserved(capture.lastToolCall(), recommendation);
-            assertRecommendationNarrativesPreserved(capture.lastToolCall(), recommendation);
+            assertThat(response.harness().actions()).containsExactly("STREAMED_DIRECT_AGENT_REPLY");
+            assertThat(chunks).hasSizeGreaterThan(1);
+            assertThat(chunks.getLast()).isEqualTo(response.assistantMessage());
+            assertThat(firstChunkMs.get()).isNotNull().isLessThan(totalMs);
+            assertThat(capture.lastTurnHadToolCalls()).isFalse();
+            assertThat(capture.lastAssistantText()).isEqualTo(response.assistantMessage());
             writeArtifact(capture, visibleTurns, null);
         } catch (Throwable failure) {
             writeArtifact(capture, visibleTurns, failure.getClass().getSimpleName());
@@ -1619,6 +1624,17 @@ class BoardGameRecommendationAgentPaidCanaryTest {
             }
 
             @Override
+            public Turn streamNext(
+                    Request request,
+                    String ownerUsername,
+                    java.util.function.Consumer<String> accumulatedTextListener) {
+                long started = System.nanoTime();
+                Turn result = delegate.streamNext(request, ownerUsername, accumulatedTextListener);
+                capture.add("react_stream", result, elapsed(started));
+                return result;
+            }
+
+            @Override
             public NaturalReply streamNaturalReply(
                     NaturalReplyRequest request,
                     String ownerUsername,
@@ -1975,6 +1991,12 @@ class BoardGameRecommendationAgentPaidCanaryTest {
         private synchronized ToolCall lastToolCall() {
             if (toolCalls.isEmpty()) throw new AssertionError("missing captured tool call");
             return toolCalls.getLast();
+        }
+
+        private synchronized boolean lastTurnHadToolCalls() {
+            if (calls.isEmpty()) throw new AssertionError("missing captured model call");
+            Object captured = calls.getLast().get("toolCalls");
+            return captured instanceof List<?> values && !values.isEmpty();
         }
 
         private synchronized String lastAssistantText() {

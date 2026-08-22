@@ -119,10 +119,7 @@ export function isPlayerFacingRuleAnswer(value: unknown): boolean {
   return parsePlayerFacingRuleAnswer(value) !== null
 }
 
-/**
- * Validates the publishable core and projects untrusted payloads. Malformed optional enrichment is
- * localized to that item so it cannot erase an otherwise cited, useful answer.
- */
+/** Validates the complete player-facing envelope before projecting operational fields away. */
 export function parsePlayerFacingRuleAnswer(value: unknown): PlayerFacingRuleAnswer | null {
   if (!isRecord(value)
     || !isAnswerStatus(value.status)
@@ -130,7 +127,27 @@ export function parsePlayerFacingRuleAnswer(value: unknown): PlayerFacingRuleAns
     || !isString(value.explanation)
     || !isConfidence(value.confidence)
     || !(value.language === 'zh-CN' || value.language === 'en')
-    || !(value.source === 'CONFIRMED' || value.source === 'OFFICIAL' || value.source === 'UPLOADED')) return null
+    || !(value.source === 'CONFIRMED' || value.source === 'OFFICIAL' || value.source === 'UPLOADED')
+    || !requiredArrayOf(value.citations, isCitation)
+    || !requiredArrayOf(value.exceptions, isString)
+    || !requiredArrayOf(value.warnings, isWarning)
+    || !(value.answerBasis === undefined || value.answerBasis === null
+      || value.answerBasis === 'DIRECT_RULE' || value.answerBasis === 'GROUNDED_APPLICATION')
+    || !(isString(value.clarification) || value.clarification === null)
+    || !(value.recovery === null || isRecovery(value.recovery))
+    || !optionalArrayOf(value.calculations, isCalculation)
+    || !optionalArrayOf(value.situationChecks, isSituationCheck)
+    || !optionalArrayOf(value.walkthroughSteps, isWalkthroughStep)
+    || !optionalArrayOf(value.decisionBranches, isDecisionBranch)
+    || !optionalArrayOf(value.exceptionClauses, isExceptionClause)
+    || !optionalArrayOf(value.termDefinitions, isTermDefinition)
+    || !optionalArrayOf(value.workedExamples, isWorkedExample)
+    || !optionalArrayOf(value.priorityResolutions, isPriorityResolution)
+    || !optionalArrayOf(value.timingResolutions, isTimingResolution)
+    || !optionalArrayOf(value.tieResolutions, isTieResolution)
+    || !optionalArrayOf(value.scopeResolutions, isScopeResolution)
+    || !optionalArrayOf(value.conceptComparisons, isConceptComparison)
+    || !optionalArrayOf(value.ruleOptions, isRuleOption)) return null
 
   const answerBasis = value.answerBasis === 'DIRECT_RULE' || value.answerBasis === 'GROUNDED_APPLICATION'
     || value.answerBasis === null
@@ -139,24 +156,24 @@ export function parsePlayerFacingRuleAnswer(value: unknown): PlayerFacingRuleAns
   const answer = {
     ...value,
     answerBasis,
-    clarification: isString(value.clarification) || value.clarification === null ? value.clarification : null,
-    recovery: value.recovery === null || isRecovery(value.recovery) ? value.recovery : null,
-    citations: validItems(value.citations, isCitation),
-    exceptions: validItems(value.exceptions, isString),
-    warnings: validItems(value.warnings, isWarning),
-    calculations: optionalValidItems(value.calculations, isCalculation),
-    situationChecks: optionalValidItems(value.situationChecks, isSituationCheck),
-    walkthroughSteps: optionalValidItems(value.walkthroughSteps, isWalkthroughStep),
-    decisionBranches: optionalValidItems(value.decisionBranches, isDecisionBranch),
-    exceptionClauses: optionalValidItems(value.exceptionClauses, isExceptionClause),
-    termDefinitions: optionalValidItems(value.termDefinitions, isTermDefinition),
-    workedExamples: optionalValidItems(value.workedExamples, isWorkedExample),
-    priorityResolutions: optionalValidItems(value.priorityResolutions, isPriorityResolution),
-    timingResolutions: optionalValidItems(value.timingResolutions, isTimingResolution),
-    tieResolutions: optionalValidItems(value.tieResolutions, isTieResolution),
-    scopeResolutions: optionalValidItems(value.scopeResolutions, isScopeResolution),
-    conceptComparisons: optionalValidItems(value.conceptComparisons, isConceptComparison),
-    ruleOptions: optionalValidItems(value.ruleOptions, isRuleOption),
+    clarification: value.clarification,
+    recovery: value.recovery,
+    citations: value.citations,
+    exceptions: value.exceptions,
+    warnings: value.warnings,
+    calculations: optionalItems(value.calculations),
+    situationChecks: optionalItems(value.situationChecks),
+    walkthroughSteps: optionalItems(value.walkthroughSteps),
+    decisionBranches: optionalItems(value.decisionBranches),
+    exceptionClauses: optionalItems(value.exceptionClauses),
+    termDefinitions: optionalItems(value.termDefinitions),
+    workedExamples: optionalItems(value.workedExamples),
+    priorityResolutions: optionalItems(value.priorityResolutions),
+    timingResolutions: optionalItems(value.timingResolutions),
+    tieResolutions: optionalItems(value.tieResolutions),
+    scopeResolutions: optionalItems(value.scopeResolutions),
+    conceptComparisons: optionalItems(value.conceptComparisons),
+    ruleOptions: optionalItems(value.ruleOptions),
   } as unknown as PlayerFacingRuleAnswer
   if (!hasValidOutcomeShape(answer)) return null
 
@@ -437,12 +454,16 @@ function isConfidence(value: unknown) {
   return value === 'HIGH' || value === 'MEDIUM' || value === 'LOW'
 }
 
-function validItems<T>(value: unknown, validator: (item: unknown) => boolean): T[] {
-  return Array.isArray(value) ? value.filter(validator) as T[] : []
+function requiredArrayOf(value: unknown, validator: (item: unknown) => boolean): value is unknown[] {
+  return Array.isArray(value) && value.every(validator)
 }
 
-function optionalValidItems<T>(value: unknown, validator: (item: unknown) => boolean): T[] | undefined {
-  return Array.isArray(value) ? value.filter(validator) as T[] : undefined
+function optionalArrayOf(value: unknown, validator: (item: unknown) => boolean) {
+  return value === undefined || requiredArrayOf(value, validator)
+}
+
+function optionalItems<T>(value: unknown): T[] | undefined {
+  return value === undefined ? undefined : value as T[]
 }
 
 function hasText(value: unknown): value is string {

@@ -1,5 +1,7 @@
 package com.rulepilot.recommendation.adapter.out.research;
 
+import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch;
@@ -54,6 +56,7 @@ public class ResponsesApiBoardGameRecommendationWebResearch implements BoardGame
 
     private final Call.Factory calls;
     private final ObjectMapper json;
+    private final ObjectMapper strictModelJson;
     private final StringRedisTemplate redis;
     private final boolean enabled;
     private final String apiKey;
@@ -109,6 +112,9 @@ public class ResponsesApiBoardGameRecommendationWebResearch implements BoardGame
             Clock clock) {
         this.calls = calls;
         this.json = json;
+        this.strictModelJson = json.copy()
+                .enable(JsonParser.Feature.STRICT_DUPLICATE_DETECTION)
+                .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
         this.redis = redis;
         this.enabled = enabled;
         this.apiKey = apiKey == null ? "" : apiKey.strip();
@@ -188,7 +194,7 @@ public class ResponsesApiBoardGameRecommendationWebResearch implements BoardGame
                     openProviderBackoff();
                     throw new WebResearchUnavailableException("PROVIDER_RESPONSE_TOO_LARGE");
                 }
-                JsonNode result = json.readTree(bytes);
+                JsonNode result = strictModelJson.readTree(bytes);
                 retryAfterEpochMillis.set(0);
                 JsonNode usage = result.path("usage");
                 LOGGER.info(
@@ -269,7 +275,7 @@ public class ResponsesApiBoardGameRecommendationWebResearch implements BoardGame
             java.util.Set<Integer> sourceIndexes = sources.stream()
                     .map(Source::index)
                     .collect(java.util.stream.Collectors.toUnmodifiableSet());
-            JsonNode payload = json.readTree(jsonPayload(outputText(output)));
+            JsonNode payload = strictModelJson.readTree(outputText(output).strip());
             if (!payload.isObject() || payload.size() != 1 || !payload.path("candidates").isArray()) {
                 return invalidDiscovery("payload-shape");
             }
@@ -285,9 +291,10 @@ public class ResponsesApiBoardGameRecommendationWebResearch implements BoardGame
                 if (!sourceIndexes.containsAll(indexes)) {
                     return invalidDiscovery("candidate-evidence");
                 }
-                if (leads.stream().noneMatch(existing -> existing.name().equalsIgnoreCase(name))) {
-                    leads.add(new CandidateLead(name, fitObservation, indexes));
+                if (leads.stream().anyMatch(existing -> existing.name().equalsIgnoreCase(name))) {
+                    return invalidDiscovery("candidate-duplicate");
                 }
+                leads.add(new CandidateLead(name, fitObservation, indexes));
             }
             return compactDiscovery(leads, sources);
         } catch (ValidationFailure failure) {
@@ -332,7 +339,7 @@ public class ResponsesApiBoardGameRecommendationWebResearch implements BoardGame
             if (!output.isArray()) return invalid("output-shape");
             List<Source> sources = sources(output);
             String content = outputText(output);
-            JsonNode payload = json.readTree(jsonPayload(content));
+            JsonNode payload = strictModelJson.readTree(content.strip());
             if (!payload.isObject() || payload.size() != 1 || !payload.path("games").isArray()) {
                 return invalid("payload-shape");
             }
@@ -343,13 +350,14 @@ public class ResponsesApiBoardGameRecommendationWebResearch implements BoardGame
                     .map(Source::index)
                     .collect(java.util.stream.Collectors.toUnmodifiableSet());
             List<GameResearch> games = new ArrayList<>();
+            LinkedHashSet<Integer> gameIds = new LinkedHashSet<>();
             for (JsonNode game : payload.path("games")) {
                 if (games.size() == 5 || !exactFields(game, "bggId", "observations")
                         || !game.path("bggId").isIntegralNumber() || !game.path("observations").isArray()) {
                     return invalid("game-shape");
                 }
                 int id = game.path("bggId").intValue();
-                if (!allowed.contains(id)) return invalid("game-id");
+                if (!allowed.contains(id) || !gameIds.add(id)) return invalid("game-id");
                 List<Observation> observations = new ArrayList<>();
                 for (JsonNode observation : game.path("observations")) {
                     if (observations.size() == 4 || !exactFields(observation, "text", "sourceIndexes")) {
@@ -446,7 +454,7 @@ public class ResponsesApiBoardGameRecommendationWebResearch implements BoardGame
             String domain = IDN.toASCII(uri.getHost()).toLowerCase(Locale.ROOT);
             String title = source.path("title").asText(domain).strip().replaceAll("\\s+", " ");
             if (title.isBlank()) title = domain;
-            if (title.length() > 200) title = title.substring(0, 200);
+            if (title.length() > 200) return null;
             return new Source(index, title, uri.toASCIIString(), domain);
         } catch (RuntimeException exception) {
             return null;
@@ -461,16 +469,6 @@ public class ResponsesApiBoardGameRecommendationWebResearch implements BoardGame
             }
         }
         return "";
-    }
-
-    private String jsonPayload(String content) {
-        String value = content == null ? "" : content.strip();
-        if (!value.startsWith("```") || !value.endsWith("```")) return value;
-        int newline = value.indexOf('\n');
-        if (newline < 0) return value;
-        String opening = value.substring(0, newline).strip().toLowerCase(Locale.ROOT);
-        if (!("```".equals(opening) || "```json".equals(opening))) return value;
-        return value.substring(newline + 1, value.length() - 3).strip();
     }
 
     private String prompt(BoardGameRecommendationWebResearch.Request request) {
@@ -584,7 +582,10 @@ public class ResponsesApiBoardGameRecommendationWebResearch implements BoardGame
             if (!value.isIntegralNumber()) throw new ValidationFailure("source-index-type");
             result.add(value.intValue());
         }
-        return result.stream().distinct().toList();
+        if (new LinkedHashSet<>(result).size() != result.size()) {
+            throw new ValidationFailure("source-index-duplicate");
+        }
+        return List.copyOf(result);
     }
 
     private enum SearchPurpose {

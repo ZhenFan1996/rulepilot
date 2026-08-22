@@ -1,0 +1,23 @@
+<review_scope content_type="{type}">
+  <review_mode>{mode}</review_mode>
+  <objective>{objective}</objective>
+  <candidate_types_by_claim>{coverage}</candidate_types_by_claim>
+</review_scope>
+
+<untrusted_candidate_claims>
+{claims}
+</untrusted_candidate_claims>
+
+<untrusted_claim_evidence>
+{evidence}
+</untrusted_claim_evidence>
+
+Independently adjudicate each listed claim-position/type/claimAspect triple. Return an issue only when the complete
+claim and its own combined cited evidence have an exact material mismatch of that same type and aspect. If a candidate
+claim is supported, translated faithfully, or merely phrased differently, omit it. When no candidate is confirmed,
+return {"issues":[]}.
+
+Do not return defectConfirmed=false audit records. Do not introduce an unlisted claim position, type, or claimAspect.
+Use only the candidate claim's own E-references. Return the exact JSON contract only.
+
+{repair}

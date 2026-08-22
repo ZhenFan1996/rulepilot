@@ -49,7 +49,8 @@ class AnswerEvidenceSelectionPolicyTest {
                 "Rendered page",
                 "This rulebook page is visual evidence. Text extraction was unavailable; inspect the rendered page image.",
                 19,
-                1.0);
+                1.0,
+                RuleEvidenceHit.ContentKind.VISUAL_PLACEHOLDER);
         HybridEvidenceHit direct = hit(
                 versionId,
                 "RULE",
@@ -161,8 +162,19 @@ class AnswerEvidenceSelectionPolicyTest {
 
     private HybridEvidenceHit hit(
             UUID versionId, String sectionType, String heading, String excerpt, int page, double score) {
+        return hit(versionId, sectionType, heading, excerpt, page, score, RuleEvidenceHit.ContentKind.CANONICAL_TEXT);
+    }
+
+    private HybridEvidenceHit hit(
+            UUID versionId,
+            String sectionType,
+            String heading,
+            String excerpt,
+            int page,
+            double score,
+            RuleEvidenceHit.ContentKind contentKind) {
         RuleEvidenceHit source = new RuleEvidenceHit(
-                UUID.randomUUID(), versionId, sectionType, heading, excerpt, page, page, score);
+                UUID.randomUUID(), versionId, sectionType, heading, excerpt, page, page, score, contentKind, excerpt);
         return new HybridEvidenceHit(source, score, 1, null, false);
     }
 }

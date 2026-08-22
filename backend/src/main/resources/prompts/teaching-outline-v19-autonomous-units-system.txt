@@ -12,6 +12,9 @@ Planning autonomy:
 - Preserve every material rule supported by the supplied pages. Do not invent from outside knowledge, familiar game
   patterns, component names, or page order. Decorative, credits, and purely repeated summary material need no topic.
 - Respect the optional player learning goal as a preference about emphasis or order, never as rule evidence.
+- Keep the plan operationally compact: return at most nine topics. Combine an official example and strategy advice with
+  the chapter whose decisions they demonstrate when they do not require an independent prerequisite or procedure.
+  This is an output reliability boundary, not a preset chapter template.
 
 Whole-game understanding before chapter fan-out:
 - Before choosing final chapter boundaries, form one shared wholeGameUnderstanding from the complete active page set
@@ -31,14 +34,17 @@ Whole-game understanding before chapter fan-out:
   topic order. Return an empty list when no cross-chapter dependency is useful; never invent a chain for symmetry.
 - This global model is source-bound orientation for every later concurrent chapter. It does not authorize a chapter to
   make claims without that chapter's own direct evidence.
-- Keep the global orientation compact enough to finish reliably: use no more than twelve concepts, one concise
+- Keep the global orientation compact enough to finish reliably: use no more than ten concepts, one concise
   sentence per concept explanation, and the smallest representative set of one to four direct sourceIdentifiers that
   grounds each concept. Connect all genuinely related topics through relatedTopicKeys instead of duplicating one
   concept per chapter. This is an output budget, not a preset list of what the game must contain.
 
 Source and unit contract:
-- Return sourceCoverageInventoryComplete=true only after auditing every supplied substantive page. Return one
-  sourceCoverageSlot for each independently auditable source rule anchor that later prose must not silently omit.
+- Return sourceCoverageInventoryComplete=true only after auditing every supplied substantive page. Return the smallest
+  complete set of sourceCoverageSlots that later prose must not silently omit, at most 36 for this request. A slot is
+  a coherent source section or independently teachable relation, not one slot per sentence, setup bullet, component,
+  role example, or list item. One exact heading or rule opening may anchor the tightly coupled facts taught together in
+  one unit; split only when a different owner, availability boundary, decision, procedure, or exception requires it.
 - A slot has exactly slotId, role, sourceIdentifier, sourcePageNumbers, ownerTopicKey, teachingUnitId, and availability.
   slotId and teachingUnitId are short ASCII kebab-case values. Copy sourceIdentifier as one concise exact contiguous
   source-language heading, action label, named procedure step, rule opening, or external-source title (maximum 160
@@ -80,5 +86,8 @@ every slot has one owner, every unit stays in one owner, every owner retains its
 claimed page directly supports its objective, and chapter order follows the dependencies you inferred. Return
 structured data only.
 
-Serialize the final object as compact JSON without Markdown, comments, indentation, or decorative whitespace. Keep
-objectives concise and operational; do not repeat source excerpts inside player-facing fields.
+Serialize one flat object as compact JSON without Markdown, comments, indentation, or decorative whitespace. The root
+has exactly these six fields and no wrapper objects:
+{"gameTitle":"...","premise":"...","topics":[{"key":"...","title":"...","objective":"...","required":true,"visualEvidenceRecommended":false,"retrievalQueries":[],"coverageTags":[],"sourcePageNumbers":[]}],"sourceCoverageSlots":[{"slotId":"...","role":"CORE_LOOP","sourceIdentifier":"...","sourcePageNumbers":[],"ownerTopicKey":"...","teachingUnitId":"...","availability":"SOURCED"}],"sourceCoverageInventoryComplete":true,"wholeGameUnderstanding":{"summary":"...","concepts":[{"conceptId":"...","label":"...","explanation":"...","sourceIdentifiers":[],"sourcePageNumbers":[],"relatedTopicKeys":[],"prerequisiteConceptIds":[]}],"topicDependencies":[{"prerequisiteTopicKey":"...","dependentTopicKey":"...","reason":"..."}]}}
+Do not return `outline` or `sourceCoverageInventory` root fields. Keep objectives concise and operational; do not
+repeat source excerpts inside player-facing fields.

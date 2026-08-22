@@ -156,11 +156,7 @@ public class AgenticVisualRegionLocator implements VisualRegionLocator {
 
     private Optional<LocatedRegion> accepted(
             ModelRegion region, VisualLocationRequest request, List<ObservedCrop> observedCrops) {
-        if (region == null
-                || !VisualLocatorResponsePolicy.containsChinese(region.label())
-                || !VisualLocatorResponsePolicy.containsChinese(region.visibleDescription())) {
-            return Optional.empty();
-        }
+        if (region == null) return Optional.empty();
         List<CropBinding> bindings = observedCrops.stream()
                 .filter(crop -> crop.pageNumber() == region.pageNumber())
                 .map(crop -> new CropBinding(crop, supportedClaims(region, request, crop)))
@@ -169,7 +165,7 @@ public class AgenticVisualRegionLocator implements VisualRegionLocator {
         CropBinding binding = bindings.stream()
                 .filter(candidate -> candidate.crop().sameRectangle(region))
                 .findFirst()
-                .orElseGet(() -> bindings.size() == 1 ? bindings.getFirst() : null);
+                .orElse(null);
         if (binding == null) return Optional.empty();
         ObservedCrop crop = binding.crop();
         List<VisualRegionLocator.Claim> claims = binding.claims();
@@ -202,12 +198,7 @@ public class AgenticVisualRegionLocator implements VisualRegionLocator {
                 .filter(claim -> claim.sourcePages().contains(crop.pageNumber()))
                 .distinct()
                 .toList();
-        if (!claims.isEmpty() || !region.supportedClaimRefs().isEmpty()) return claims;
-        List<VisualRegionLocator.Claim> canonicalClaims = request.claims().stream()
-                .filter(claim -> claim.evidenceId().equals(crop.evidenceId()))
-                .filter(claim -> claim.sourcePages().contains(crop.pageNumber()))
-                .toList();
-        return canonicalClaims.size() == 1 ? canonicalClaims : List.of();
+        return claims;
     }
 
     private VisualRegionLocator.Claim claim(String reference, VisualLocationRequest request) {

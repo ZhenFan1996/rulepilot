@@ -34,7 +34,7 @@ final class VisualRulebookCatalogPolicy {
     static boolean hasReusableCompleteRuleLedger(PageFact fact) {
         return fact.schemaVersion() == PageFact.CURRENT_SCHEMA_VERSION
                 && fact.ruleGroupInventoryComplete()
-                && hasRuleGroupFactBindings(fact.ruleGroupIdentifiers(), fact.factualSummary());
+                && hasRuleGroupFactBindings(fact.ruleGroupIdentifiers(), fact.ruleGroupFacts());
     }
 
     static Set<Integer> anchorlessPages(List<PageFact> cached) {
@@ -80,7 +80,8 @@ final class VisualRulebookCatalogPolicy {
                                 refreshed.schemaVersion(),
                                 refreshed.sourceDependencies(),
                                 refreshed.ruleGroupIdentifiers(),
-                                true);
+                                true,
+                                refreshed.ruleGroupFacts());
                     }
                     if (refreshed.visualAnchors().isEmpty()
                             && refreshed.iconOccurrences().isEmpty()
@@ -100,7 +101,8 @@ final class VisualRulebookCatalogPolicy {
                             existing.schemaVersion(),
                             existing.sourceDependencies(),
                             existing.ruleGroupIdentifiers(),
-                            existing.ruleGroupInventoryComplete());
+                            existing.ruleGroupInventoryComplete(),
+                            existing.ruleGroupFacts());
                 })
                 .toList();
         return Stream.concat(retained.stream(), freshByPage.values().stream())
@@ -127,7 +129,8 @@ final class VisualRulebookCatalogPolicy {
                 PageFact.CURRENT_SCHEMA_VERSION,
                 summary.sourceDependencies(),
                 summary.ruleGroupIdentifiers(),
-                summary.ruleGroupInventoryComplete());
+                summary.ruleGroupInventoryComplete(),
+                summary.ruleGroupFacts());
     }
 
     static List<PageInput> pageInputs(List<DocumentProcessing.PageView> documentPages, List<PageFact> facts) {
@@ -156,7 +159,8 @@ final class VisualRulebookCatalogPolicy {
                                     .distinct()
                                     .toList(),
                             fact.ruleGroupIdentifiers(),
-                            fact.ruleGroupInventoryComplete());
+                            fact.ruleGroupInventoryComplete(),
+                            fact.ruleGroupFacts());
                 })
                 .toList();
     }
@@ -184,7 +188,7 @@ final class VisualRulebookCatalogPolicy {
     static com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary teachingStartupFact(
             com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary summary) {
         if (summary.ruleGroupInventoryComplete()) {
-            validateRuleGroupFactBindings(summary.ruleGroupIdentifiers(), summary.factualSummary());
+            validateRuleGroupFactBindings(summary.ruleGroupIdentifiers(), summary.ruleGroupFacts());
         }
         return new com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary(
                 summary.pageNumber(),
@@ -197,7 +201,8 @@ final class VisualRulebookCatalogPolicy {
                 summary.sourceDependencies(),
                 summary.ruleGroupIdentifiers(),
                 summary.ruleGroupInventoryComplete(),
-                summary.quantityObservations());
+                summary.quantityObservations(),
+                summary.ruleGroupFacts());
     }
 
     /**
@@ -207,13 +212,6 @@ final class VisualRulebookCatalogPolicy {
      */
     static boolean needsIconTileFallback(
             com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary summary) {
-        long visibleLabels = summary.printedTerms().lines()
-                .flatMap(line -> java.util.Arrays.stream(line.split(";")))
-                .map(String::strip)
-                .filter(value -> !value.isBlank())
-                .distinct()
-                .count();
-        if (visibleLabels >= 8 || summary.iconOccurrences().size() >= 8) return true;
         return summary.iconOccurrences().isEmpty() && !summary.visualAnchors().isEmpty();
     }
 
@@ -234,19 +232,14 @@ final class VisualRulebookCatalogPolicy {
         List<String> ruleGroups = fullPage.ruleGroupIdentifiers();
         boolean ruleGroupsComplete = fullPage.ruleGroupInventoryComplete();
         boolean fullPageOwnsCompleteFacts = ruleGroupsComplete
-                && hasRuleGroupFactBindings(ruleGroups, fullPage.factualSummary());
-        boolean laterObservationRepairsCompleteFacts = ruleGroupsComplete
-                && !fullPageOwnsCompleteFacts
-                && hasRuleGroupFactBindings(ruleGroups, tileAudit.factualSummary());
-        String mergedFacts = fullPageOwnsCompleteFacts || (ruleGroupsComplete && !laterObservationRepairsCompleteFacts)
-                ? mergeLines(fullPage.factualSummary(), tileAudit.factualSummary(), "\n")
-                : mergeLines(tileAudit.factualSummary(), fullPage.factualSummary(), "\n");
+                && hasRuleGroupFactBindings(ruleGroups, fullPage.ruleGroupFacts());
+        String mergedFacts = mergeTextBlocks(fullPage.factualSummary(), tileAudit.factualSummary(), "\n");
         if (ruleGroupsComplete) {
-            validateRuleGroupFactBindings(ruleGroups, mergedFacts);
+            validateRuleGroupFactBindings(ruleGroups, fullPage.ruleGroupFacts());
         }
         return new com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary(
                 fullPage.pageNumber(),
-                mergeLines(fullPage.printedTerms(), tileAudit.printedTerms(), "; "),
+                fullPage.printedTerms(),
                 mergedFacts,
                 Stream.concat(fullPage.keywords().stream(), tileAudit.keywords().stream())
                         .distinct()
@@ -258,8 +251,9 @@ final class VisualRulebookCatalogPolicy {
                         .distinct()
                         .toList(),
                 ruleGroups,
-                ruleGroupsComplete,
-                compatibleQuantityObservations(ruleGroups, fullPage, tileAudit));
+                ruleGroupsComplete && fullPageOwnsCompleteFacts,
+                compatibleQuantityObservations(ruleGroups, fullPage, tileAudit),
+                fullPage.ruleGroupFacts());
     }
 
     /**
@@ -276,7 +270,7 @@ final class VisualRulebookCatalogPolicy {
         if (existing.pageNumber() != observation.pageNumber()) {
             throw new IllegalArgumentException("persisted visual page observation does not match its existing page");
         }
-        validateRuleGroupFactBindings(observation.ruleGroupIdentifiers(), observation.factualSummary());
+        validateRuleGroupFactBindings(observation.ruleGroupIdentifiers(), observation.ruleGroupFacts());
         Map<String, IconOccurrence> icons = mergedIcons(observation, existing);
         return new com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary(
                 observation.pageNumber(),
@@ -291,7 +285,8 @@ final class VisualRulebookCatalogPolicy {
                 observation.sourceDependencies(),
                 observation.ruleGroupIdentifiers(),
                 true,
-                observation.quantityObservations());
+                observation.quantityObservations(),
+                observation.ruleGroupFacts());
     }
 
     static PageFact mergePersistedPageFact(PageFact existing, PageFact observation) {
@@ -316,19 +311,18 @@ final class VisualRulebookCatalogPolicy {
                 fact.iconInventoryComplete(),
                 fact.sourceDependencies(),
                 fact.ruleGroupIdentifiers(),
-                fact.ruleGroupInventoryComplete());
+                fact.ruleGroupInventoryComplete(),
+                List.of(),
+                fact.ruleGroupFacts());
     }
 
     private static List<VisualQuantityObservation> compatibleQuantityObservations(
             List<String> ruleGroups,
             com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary first,
             com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary second) {
-        Set<String> identities = ruleGroups.stream()
-                .map(VisualSourceRuleGroupLedger::identity)
-                .collect(Collectors.toSet());
+        Set<String> identities = Set.copyOf(ruleGroups);
         return Stream.concat(first.quantityObservations().stream(), second.quantityObservations().stream())
-                .filter(observation -> identities.contains(
-                        VisualSourceRuleGroupLedger.identity(observation.ruleGroupIdentifier())))
+                .filter(observation -> identities.contains(observation.ruleGroupIdentifier()))
                 .distinct()
                 .toList();
     }
@@ -339,14 +333,16 @@ final class VisualRulebookCatalogPolicy {
         Map<String, IconOccurrence> icons = new LinkedHashMap<>();
         Stream.concat(first.iconOccurrences().stream(), second.iconOccurrences().stream())
                 .forEach(icon -> icons.merge(
-                        normalizedIdentity(icon.groupKey()), icon, VisualRulebookCatalogPolicy::preferIconEvidence));
+                        icon.groupKey(), icon, VisualRulebookCatalogPolicy::preferIconEvidence));
         return icons;
     }
 
-    static void validateRuleGroupFactBindings(List<String> identifiers, String factualSummary) {
-        if (hasRuleGroupFactBindings(identifiers, factualSummary)) return;
+    static void validateRuleGroupFactBindings(
+            List<String> identifiers,
+            List<com.rulepilot.teaching.VisualRulebookPageCatalogModel.RuleGroupFact> facts) {
+        if (hasRuleGroupFactBindings(identifiers, facts)) return;
         for (String identifier : identifiers) {
-            if (!VisualSourceRuleGroupLedger.hasExactFactBinding(identifier, factualSummary)) {
+            if (!VisualSourceRuleGroupLedger.hasExactFactBinding(identifier, facts)) {
                 throw new IllegalArgumentException(
                         "complete visual page lost a rule-group fact while merging supplemental evidence: "
                                 + identifier);
@@ -354,20 +350,18 @@ final class VisualRulebookCatalogPolicy {
         }
     }
 
-    private static boolean hasRuleGroupFactBindings(List<String> identifiers, String factualSummary) {
-        return VisualSourceRuleGroupLedger.hasExactFactBindings(identifiers, factualSummary);
+    private static boolean hasRuleGroupFactBindings(
+            List<String> identifiers,
+            List<com.rulepilot.teaching.VisualRulebookPageCatalogModel.RuleGroupFact> facts) {
+        return VisualSourceRuleGroupLedger.hasExactFactBindings(identifiers, facts);
     }
 
-    private static String mergeLines(String first, String second, String separator) {
-        Stream<String> values = Stream.of(first, second)
-                .filter(java.util.Objects::nonNull)
-                .flatMap(value -> separator.equals("; ")
-                        ? java.util.Arrays.stream(value.split(";"))
-                        : Stream.of(value))
-                .map(String::strip)
-                .filter(value -> !value.isBlank())
-                .distinct();
-        return values.collect(java.util.stream.Collectors.joining(separator));
+    private static String mergeTextBlocks(String first, String second, String separator) {
+        String left = first == null ? "" : first.strip();
+        String right = second == null ? "" : second.strip();
+        if (left.isBlank()) return right;
+        if (right.isBlank() || left.equals(right)) return left;
+        return left + separator + right;
     }
 
     /**
@@ -404,14 +398,6 @@ final class VisualRulebookCatalogPolicy {
         };
     }
 
-    private static String normalizedIdentity(String value) {
-        return value.strip()
-                .toLowerCase(java.util.Locale.ROOT)
-                .replaceAll("[\\p{Punct}\\p{Zs}]+", " ")
-                .replaceAll("\\s+", " ")
-                .strip();
-    }
-
     private static PageInput pageInput(int pageNumber, PageFact fact) {
         if (fact == null) {
             return new PageInput(
@@ -435,6 +421,7 @@ final class VisualRulebookCatalogPolicy {
                         + String.join(", ", fact.keywords()),
                 fact.sourceDependencies(),
                 fact.ruleGroupIdentifiers(),
-                fact.ruleGroupInventoryComplete());
+                fact.ruleGroupInventoryComplete(),
+                fact.ruleGroupFacts());
     }
 }

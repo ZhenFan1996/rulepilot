@@ -4,7 +4,6 @@ import com.rulepilot.assistant.RuleAnswerModel.AnswerAid;
 import com.rulepilot.assistant.RuleAnswerModel.ModelDraft;
 import com.rulepilot.assistant.RuleAnswerModel.ModelRequest;
 import com.rulepilot.assistant.RuleAnswerModel.RulePriorityRequest;
-import com.rulepilot.assistant.domain.RulePriorityBasis;
 import com.rulepilot.assistant.domain.RulePriorityResolution;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -39,7 +38,7 @@ final class AnswerRulePriorityResolver {
                 AnswerStructuredAidPolicy.requiredText(item.baseRule(), "base rule"),
                 AnswerStructuredAidPolicy.requiredText(item.competingRule(), "competing rule"),
                 AnswerStructuredAidPolicy.requiredText(item.resolution(), "priority resolution"),
-                AnswerStructuredAidPolicy.enumValue(item.basis(), RulePriorityBasis.class, "rule priority basis"),
+                item.basis(),
                 AnswerStructuredAidPolicy.citations(
                         modelRequest, draft, item.citationIds(), "rule priority resolution"));
     }

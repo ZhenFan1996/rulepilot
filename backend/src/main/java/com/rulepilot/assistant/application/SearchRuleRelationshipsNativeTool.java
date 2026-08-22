@@ -105,9 +105,9 @@ public class SearchRuleRelationshipsNativeTool implements NativeAgentTool {
     private Map<String, Object> observation(RuleEvidence evidence) {
         Map<String, Object> value = new LinkedHashMap<>();
         value.put("evidenceId", evidence.chunkId().toString());
-        value.put("sectionType", bounded(evidence.sectionType(), 80));
-        value.put("heading", bounded(evidence.heading(), 240));
-        value.put("excerpt", bounded(evidence.excerpt(), 1600));
+        value.put("sectionType", complete(evidence.sectionType()));
+        value.put("heading", complete(evidence.heading()));
+        value.put("excerpt", complete(evidence.excerpt()));
         value.put("pageFrom", evidence.pageFrom());
         value.put("pageTo", evidence.pageTo());
         value.put("classificationAuthority", false);
@@ -125,9 +125,8 @@ public class SearchRuleRelationshipsNativeTool implements NativeAgentTool {
         }
     }
 
-    private String bounded(String value, int maximum) {
-        String normalized = value == null ? "" : value.strip();
-        return normalized.length() <= maximum ? normalized : normalized.substring(0, maximum);
+    private String complete(String value) {
+        return value == null ? "" : value.strip();
     }
 
     private record Arguments(String topic, Integer limit) {}

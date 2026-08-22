@@ -39,8 +39,7 @@ final class AnswerTieResolver {
         List<String> steps = item.resolutionSteps().stream()
                 .map(step -> AnswerStructuredAidPolicy.requiredText(step, "tie step"))
                 .toList();
-        TieResolutionBasis basis = AnswerStructuredAidPolicy.enumValue(
-                item.basis(), TieResolutionBasis.class, "tie basis");
+        TieResolutionBasis basis = item.basis();
         if (basis == TieResolutionBasis.ORDERED_TIEBREAKERS && steps.size() < 2) {
             throw new IllegalArgumentException("ordered tie-breakers require at least two steps");
         }

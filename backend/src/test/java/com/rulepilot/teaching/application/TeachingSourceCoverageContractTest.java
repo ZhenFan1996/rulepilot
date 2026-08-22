@@ -1,8 +1,8 @@
 package com.rulepilot.teaching.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatNoException;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static com.rulepilot.teaching.VisualRuleGroupTestFacts.facts;
 
 import com.rulepilot.teaching.TeachingOutlineModel.OutlineDraft;
 import com.rulepilot.teaching.TeachingOutlineModel.OutlineRequest;
@@ -27,30 +27,6 @@ import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
 class TeachingSourceCoverageContractTest {
-
-    @Test
-    void omittedAvailabilityDefaultsToSourcedAndLegacyPagesUseTheirStructuredPageBinding() {
-        SourceCoverageSlotDraft omittedStatus = new SourceCoverageSlotDraft(
-                "source-relation",
-                SourceCoverageRole.CORE_LOOP,
-                "R-kappa",
-                List.of(1),
-                "flow",
-                "source-relation",
-                null);
-        OutlineDraft outline = new OutlineDraft(
-                "Opaque game",
-                "Opaque premise",
-                List.of(topic("flow", List.of(), List.of("source_coverage", "core_loop"), List.of(1))),
-                List.of(omittedStatus),
-                true);
-
-        assertThat(omittedStatus.availability()).isEqualTo(SourceCoverageAvailability.SOURCED);
-        TeachingSourceCoverageContract.validateAgainstSources(
-                new OutlineRequest(List.of(new PageInput(1, "R-kappa advances play."))), outline);
-        assertThatNoException().isThrownBy(() -> TeachingSourceCoverageContract.validateAgainstSources(
-                new OutlineRequest(List.of(new PageInput(1, "A different relation advances play."))), outline));
-    }
 
     @Test
     void completeOpaqueTextContractKeepsEveryActionAndNecessaryExceptionAsARequiredSourcedSlot() {
@@ -90,7 +66,8 @@ class TeachingSourceCoverageContractTest {
                         + "F-0: fact.\nP-0: fact.\nE-0: fact.",
                 List.of(),
                 List.of("S-0", "T-0", "A-1", "A-2", "F-0", "P-0", "E-0"),
-                true);
+                true,
+                facts("S-0", "T-0", "A-1", "A-2", "F-0", "P-0", "E-0"));
         TopicDraft everything = topic(
                 "all-in-one",
                 List.of("S-0", "T-0", "A-1", "F-0", "P-0", "E-0"),
@@ -392,6 +369,34 @@ class TeachingSourceCoverageContractTest {
                     assertThat(check.status()).isEqualTo(CheckStatus.PASS);
                     assertThat(check.summary()).contains("6 / 6");
                 });
+    }
+
+    @Test
+    void citedDraftOwnersCompleteStructuralCoverageWhileWaitingForSemanticReview() {
+        OutlineDraft outline = completeOutline();
+        TeachingPlan plan = new TeachingPlanFactory().create(UUID.randomUUID(), "player", outline);
+        List<LessonSection> citedDrafts = supportedSections(plan).stream()
+                .map(section -> new LessonSection(
+                        section.position(),
+                        section.topicKey(),
+                        section.coverageTags(),
+                        section.title(),
+                        section.required(),
+                        EvidenceStatus.CITED_DRAFT,
+                        section.visualKind(),
+                        section.visualCaption(),
+                        section.visualSourcePages(),
+                        section.visualSourceChunkIds(),
+                        section.steps()))
+                .toList();
+
+        TeachingSourceCoverageContract.Assessment assessment =
+                TeachingSourceCoverageContract.assess(plan, citedDrafts);
+
+        assertThat(assessment.applicable()).isTrue();
+        assertThat(assessment.complete()).isTrue();
+        assertThat(new TeachingLessonAssemblyPolicy().status(plan, citedDrafts))
+                .isEqualTo(LessonStatus.DRAFT_READY);
     }
 
     private OutlineDraft completeOutline() {

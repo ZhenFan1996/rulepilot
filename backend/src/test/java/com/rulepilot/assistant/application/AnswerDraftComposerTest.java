@@ -13,6 +13,7 @@ import com.rulepilot.assistant.RuleAnswerModel.ModelDraft;
 import com.rulepilot.assistant.RuleAnswerModel.ModelRequest;
 import com.rulepilot.assistant.RuleAnswerModel.PlannedSubquestion;
 import com.rulepilot.assistant.domain.QuestionType;
+import com.rulepilot.assistant.domain.AnswerConfidence;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
@@ -24,7 +25,7 @@ class AnswerDraftComposerTest {
     @Test
     void retainsAReadyCitedDraftAfterTheBoundedModelWorkflow() {
         UUID chunkId = UUID.randomUUID();
-        ModelDraft expected = new ModelDraft(
+        ModelDraft expected = answerableDraft(
                 "行动完成后获得1分。",
                 "规则说明：完成行动后获得1分。",
                 List.of(chunkId),
@@ -47,7 +48,7 @@ class AnswerDraftComposerTest {
     void preservesSupportedScopedRulebookWordingWithoutAKeywordTriggeredRepair() {
         UUID chunkId = UUID.randomUUID();
         AtomicInteger revisions = new AtomicInteger();
-        ModelDraft supported = new ModelDraft(
+        ModelDraft supported = answerableDraft(
                 "The bonus does not apply after the final round.",
                 "The rulebook does not apply this bonus after the final round; the cited timing clause is explicit.",
                 List.of(chunkId),
@@ -80,7 +81,7 @@ class AnswerDraftComposerTest {
     }
 
     @Test
-    void repairsOnlyCitationIdsWhenPlayerProseQuotesAnUnattributedSuppliedSource() {
+    void doesNotParseQuotedProseOrAddAModelRepairCall() {
         UUID overviewId = UUID.randomUUID();
         UUID victoryId = UUID.randomUUID();
         String clause = "A player wins immediately after reaching thirty points.";
@@ -96,7 +97,7 @@ class AnswerDraftComposerTest {
         RuleAnswerModel model = new RuleAnswerModel() {
             @Override
             public ModelDraft compose(ModelRequest ignored) {
-                return new ModelDraft(
+                return answerableDraft(
                         "Reach thirty points.",
                         explanation,
                         List.of(overviewId),
@@ -109,7 +110,7 @@ class AnswerDraftComposerTest {
                 revisions.incrementAndGet();
                 assertThat(feedback).singleElement().asString()
                         .contains("CITATION_OWNERSHIP", victoryId.toString());
-                return new ModelDraft(
+                return answerableDraft(
                         "Do not replace this locked verdict.",
                         "Do not replace this locked explanation.",
                         List.of(overviewId, victoryId),
@@ -127,10 +128,10 @@ class AnswerDraftComposerTest {
         assertThat(result.draft().shortVerdict()).isEqualTo("Reach thirty points.");
         assertThat(result.draft().explanation()).isEqualTo(explanation);
         assertThat(result.draft().exceptions()).isEmpty();
-        assertThat(result.draft().citationIds()).containsExactly(overviewId, victoryId);
-        assertThat(result.draft().confidence()).isEqualTo("HIGH");
-        assertThat(result.modelRepairs()).isEqualTo(1);
-        assertThat(revisions).hasValue(1);
+        assertThat(result.draft().citationIds()).containsExactly(overviewId);
+        assertThat(result.draft().confidence()).isEqualTo(AnswerConfidence.HIGH);
+        assertThat(result.modelRepairs()).isZero();
+        assertThat(revisions).hasValue(0);
     }
 
     private ModelRequest request(UUID chunkId) {
@@ -145,6 +146,23 @@ class AnswerDraftComposerTest {
                         "完成行动后获得1分。",
                         5,
                         5)));
+    }
+
+    private static ModelDraft answerableDraft(
+            String shortVerdict,
+            String explanation,
+            List<UUID> citationIds,
+            List<String> exceptions,
+            String confidence) {
+        return new ModelDraft(
+                true,
+                null,
+                shortVerdict,
+                explanation,
+                citationIds,
+                exceptions,
+                confidence,
+                "DIRECT_RULE");
     }
 
     private ModelRequest adviceRequest(UUID chunkId) {

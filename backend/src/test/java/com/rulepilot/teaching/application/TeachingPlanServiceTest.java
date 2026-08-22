@@ -35,9 +35,9 @@ import com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.SourceDependency;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.ProgressiveTeachingStartDraft;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.RuleGroupCoverage;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.RuleGroupFact;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.TeachingPageRole;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.TeachingPageSketch;
-import com.rulepilot.teaching.adapter.out.model.FakeTeachingOutlineModel;
 import com.rulepilot.teaching.domain.TeachingPlan;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -421,7 +421,7 @@ class TeachingPlanServiceTest {
                                 + "\nKeywords: opaque",
                         List.of(),
                         List.of("OPAQUE GROUP"),
-                        true)));
+                        false)));
         when(outlines.organize(any())).thenThrow(new OutlineGenerationException(
                 "teaching outline generation returned no valid outline",
                 new IllegalArgumentException("teaching outline topic is invalid")));
@@ -955,7 +955,8 @@ class TeachingPlanServiceTest {
                         + "\nKeywords: opaque",
                 dependencies,
                 List.of(identifier),
-                true);
+                true,
+                List.of(new RuleGroupFact(identifier, identifier, fact)));
     }
 
     private PageView page(int number, String text) {

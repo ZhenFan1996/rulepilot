@@ -111,23 +111,6 @@ final class VisualCropAcceptancePolicy {
                 + "no compact player-facing crop is available, return an empty regions array.";
     }
 
-    static VisualLocatorResponsePolicy.ModelRegion normalizedGeometry(
-            VisualLocatorResponsePolicy.ModelRegion region) {
-        int x = Math.max(0, Math.min(980, region.x()));
-        int y = Math.max(0, Math.min(980, region.y()));
-        int width = Math.max(20, Math.min(region.width(), 1_000 - x));
-        int height = Math.max(20, Math.min(region.height(), 1_000 - y));
-        return new VisualLocatorResponsePolicy.ModelRegion(
-                region.pageNumber(),
-                region.label(),
-                region.visibleDescription(),
-                x,
-                y,
-                width,
-                height,
-                region.supportedClaimRefs());
-    }
-
     static List<VisualRegionLocator.Claim> pageScopedClaims(
             int pageNumber,
             List<VisualRegionLocator.Claim> referencedClaims,

@@ -5,8 +5,6 @@ import com.rulepilot.assistant.RuleAnswerModel.ModelDraft;
 import com.rulepilot.assistant.RuleAnswerModel.ModelRequest;
 import com.rulepilot.assistant.RuleAnswerModel.RuleScopeRequest;
 import com.rulepilot.assistant.domain.RuleScopeResolution;
-import com.rulepilot.assistant.domain.ScopeBasis;
-import com.rulepilot.assistant.domain.ScopeMatchStatus;
 import java.util.LinkedHashSet;
 import java.util.List;
 
@@ -39,10 +37,9 @@ final class AnswerScopeResolver {
                 AnswerStructuredAidPolicy.requiredText(item.ruleContext(), "scope rule context"),
                 AnswerStructuredAidPolicy.requiredText(item.governingCondition(), "scope condition"),
                 AnswerStructuredAidPolicy.requiredText(item.currentSituation(), "current situation"),
-                AnswerStructuredAidPolicy.enumValue(
-                        item.matchStatus(), ScopeMatchStatus.class, "scope match status"),
+                item.matchStatus(),
                 AnswerStructuredAidPolicy.requiredText(item.effect(), "scope effect"),
-                AnswerStructuredAidPolicy.enumValue(item.basis(), ScopeBasis.class, "scope basis"),
+                item.basis(),
                 AnswerStructuredAidPolicy.citations(
                         modelRequest, draft, item.citationIds(), "scope resolution"));
     }

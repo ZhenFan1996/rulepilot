@@ -1,25 +1,16 @@
 package com.rulepilot.teaching.application;
 
 import com.rulepilot.ingestion.layout.RulebookUnderstanding;
-import com.rulepilot.ingestion.layout.RulebookUnderstanding.PageBlock;
 import com.rulepilot.ingestion.layout.RulebookUnderstanding.Rectangle;
 import com.rulepilot.teaching.VisualRulebookPageFacts.PageFact;
 import com.rulepilot.teaching.VisualRulebookPageFacts.VisualAnchor;
-import java.util.Comparator;
-import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Locale;
 import java.util.Set;
-import java.util.stream.Stream;
 import org.springframework.stereotype.Component;
 
-/** Chooses compact, document-derived regions before a vision model is asked to locate a final crop. */
+/** Selects only plan-bound source pages; semantic crop choice belongs to the visual model's typed response. */
 @Component
 public final class VisualRegionCandidateSelector {
-
-    private static final int MAX_CANDIDATES = 4;
-    private static final Set<String> CJK_SINGLE_CHARACTER_FILLER = Set.of(
-            "的", "了", "在", "是", "和", "与", "及", "或", "将", "把", "从", "到", "每", "一", "个");
 
     public List<Candidate> select(
             RulebookUnderstanding understanding,
@@ -28,221 +19,36 @@ public final class VisualRegionCandidateSelector {
         return select(understanding, citedPages, sectionTerms, List.of());
     }
 
-    /**
-     * Uses durable observations from the rendered page as a retrieval hint when a rule's text and its visual example
-     * use different words or languages. The hint can only rank already cited pages; the vision model must still verify
-     * every selected object in the attached page image before it reaches a player.
-     */
     public List<Candidate> select(
             RulebookUnderstanding understanding,
             Set<Integer> citedPages,
             List<String> sectionTerms,
             List<PageFact> visualPageFacts) {
-        if (understanding == null || citedPages == null || sectionTerms == null) {
+        if (understanding == null || citedPages == null || sectionTerms == null || visualPageFacts == null) {
             throw new IllegalArgumentException("visual region selection input is required");
         }
-        if (visualPageFacts == null) {
-            throw new IllegalArgumentException("visual page facts are required");
+        if (citedPages.stream().anyMatch(page -> page == null || page < 1)) {
+            throw new IllegalArgumentException("visual region cited pages are invalid");
         }
-        Set<String> terms = normalizedTerms(sectionTerms);
-        Set<String> cjkCharacters = cjkCharacters(sectionTerms);
         if (citedPages.isEmpty()) return List.of();
-        var factsByPage = visualPageFacts.stream()
-                .filter(fact -> citedPages.contains(fact.pageNumber()))
-                .collect(java.util.stream.Collectors.toMap(
-                        PageFact::pageNumber,
-                        java.util.function.Function.identity(),
-                        (first, ignored) -> first));
-        List<ScoredBlock> citedBlocks = understanding.pageBlocks().stream()
-                .filter(block -> block.role() != RulebookUnderstanding.BlockRole.FOOTER)
-                .filter(block -> citedPages.contains(block.pageNumber()))
-                .map(block -> new ScoredBlock(block, score(block, terms)))
-                .toList();
-        List<ScoredBlock> lexicalMatches = citedBlocks.stream()
-                .filter(candidate -> candidate.score() > 0)
-                .sorted(Comparator.comparingInt(ScoredBlock::score).reversed()
-                        .thenComparing(candidate -> candidate.block().pageNumber())
-                        .thenComparing(candidate -> candidate.block().readingOrder()))
-                .toList();
-        List<ScoredPage> visualMatches = factsByPage.values().stream()
-                .map(fact -> new ScoredPage(fact.pageNumber(), score(fact, terms, cjkCharacters)))
-                .filter(candidate -> candidate.score() > 0)
-                .toList();
-        List<ScoredAnchor> anchorMatches = factsByPage.values().stream()
-                .flatMap(fact -> fact.visualAnchors().stream()
-                        .map(anchor -> new ScoredAnchor(fact.pageNumber(), anchor, score(anchor, terms, cjkCharacters))))
-                .filter(candidate -> candidate.score() > 0)
-                .sorted(Comparator.comparingInt(ScoredAnchor::score).reversed()
-                        .thenComparing(ScoredAnchor::pageNumber)
-                        .thenComparing(candidate -> candidate.anchor().y())
-                        .thenComparing(candidate -> candidate.anchor().x()))
-                .toList();
-        if (lexicalMatches.isEmpty() && visualMatches.isEmpty() && anchorMatches.isEmpty()) {
-            return citedPageCandidates(citedPages);
-        }
-        List<Integer> visualPages = rankedPages(citedPages, lexicalMatches, visualMatches);
-        List<Candidate> selected = anchorMatches.stream()
-                // An anchor comes from a distinct image-reading pass. It narrows the next visual query without
-                // becoming a player-facing claim, because the locator still inspects pixels before accepting it.
-                .limit(2)
-                .map(Candidate::from)
-                .collect(java.util.stream.Collectors.toCollection(java.util.ArrayList::new));
-        Set<Integer> anchoredPages = selected.stream()
-                .map(Candidate::pageNumber)
-                .collect(java.util.stream.Collectors.toSet());
-        visualPages.stream()
-                // A matching compact visual anchor is a better boundary than the entire same page. Keeping the full
-                // page out of that request prevents a locator from drifting to a neighbouring icon or score row.
-                .filter(page -> !anchoredPages.contains(page))
-                // A full cited page is a search boundary, not a crop that will be shown to the player. It lets the
-                // visual walkthrough find a legend, icon group, or worked state that the neighbouring text names.
-                .map(page -> citedPageCandidate(page, factsByPage.get(page)))
-                .limit(MAX_CANDIDATES - selected.size())
-                .forEach(selected::add);
-        lexicalMatches.stream()
-                .filter(candidate -> visualPages.contains(candidate.block().pageNumber()))
-                .filter(candidate -> !anchoredPages.contains(candidate.block().pageNumber()))
-                .limit(MAX_CANDIDATES - selected.size())
-                .map(candidate -> Candidate.from(candidate.block()))
-                .forEach(selected::add);
-        return List.copyOf(selected);
-    }
 
-    private List<Integer> rankedPages(
-            Set<Integer> citedPages, List<ScoredBlock> lexicalMatches, List<ScoredPage> visualMatches) {
-        return citedPages.stream()
-                .sorted(Comparator
-                        .comparingInt((Integer page) -> pageScore(page, lexicalMatches, visualMatches))
-                        .reversed()
-                        .thenComparingInt(Integer::intValue))
-                .limit(2)
-                .toList();
-    }
-
-    private List<Candidate> citedPageCandidates(Set<Integer> citedPages) {
-        List<Integer> pages = citedPages.stream().sorted().toList();
-        List<Integer> coveredPages = pages.size() <= 2
-                ? pages
-                : List.of(pages.getFirst(), pages.getLast());
-        return coveredPages.stream()
-                .map(this::citedPageCandidate)
-                .toList();
+        List<Integer> ordered = citedPages.stream().sorted().toList();
+        List<Integer> selected = ordered.size() <= 2
+                ? ordered
+                : List.of(ordered.getFirst(), ordered.getLast());
+        return selected.stream().map(this::citedPageCandidate).toList();
     }
 
     private Candidate citedPageCandidate(int pageNumber) {
-        return citedPageCandidate(pageNumber, null);
-    }
-
-    private Candidate citedPageCandidate(int pageNumber, PageFact pageFact) {
-        // A translated lesson has no reliable text-level anchor in an English (or other-language)
-        // source. Keep the page citation boundary, but let vision locate the visible teaching aid.
         return new Candidate(
                 pageNumber,
-                new RulebookUnderstanding.Rectangle(0, 0, 1_000, 1_000),
-                pageFact == null
-                        ? "Cited page " + pageNumber + " visual context"
-                        : "Cited page " + pageNumber + " visual context. Visual retrieval hint (verify against the attached image): "
-                                + compactFactHint(pageFact));
-    }
-
-    private int pageScore(int pageNumber, List<ScoredBlock> lexicalMatches, List<ScoredPage> visualMatches) {
-        int textScore = lexicalMatches.stream()
-                .filter(match -> match.block().pageNumber() == pageNumber)
-                .mapToInt(ScoredBlock::score)
-                .sum();
-        int visualScore = visualMatches.stream()
-                .filter(match -> match.pageNumber() == pageNumber)
-                .mapToInt(ScoredPage::score)
-                .sum();
-        // A page image catalog captures icon names, layout relationships, and examples that extraction often drops.
-        // It informs retrieval but does not outrank a strong text match by itself.
-        return textScore + visualScore * 8;
-    }
-
-    private int score(PageBlock block, Set<String> terms) {
-        Set<String> words = normalizedTerms(List.of(block.text()));
-        int overlap = (int) terms.stream().filter(words::contains).count();
-        if (overlap == 0) return 0;
-        int headingBonus = block.role() == RulebookUnderstanding.BlockRole.HEADING ? 3 : 0;
-        int compactBonus = block.rectangle().width() * block.rectangle().height() <= 350_000 ? 1 : 0;
-        return overlap * 10 + headingBonus + compactBonus;
-    }
-
-    private int score(PageFact pageFact, Set<String> terms, Set<String> cjkCharacters) {
-        Set<String> factTerms = normalizedTerms(List.of(
-                pageFact.printedTerms(), pageFact.factualSummary(), String.join(" ", pageFact.keywords())));
-        int overlap = (int) terms.stream().filter(factTerms::contains).count();
-        int keywordOverlap = (int) terms.stream()
-                .filter(normalizedTerms(pageFact.keywords())::contains)
-                .count();
-        int anchorOverlap = pageFact.visualAnchors().stream()
-                .mapToInt(anchor -> score(anchor, terms, cjkCharacters))
-                .max()
-                .orElse(0);
-        return overlap * 10 + keywordOverlap * 4 + anchorOverlap;
-    }
-
-    private int score(VisualAnchor anchor, Set<String> terms, Set<String> cjkCharacters) {
-        Set<String> anchorTerms = normalizedTerms(List.of(anchor.retrievalText()));
-        Set<String> anchorCharacters = cjkCharacters(List.of(anchor.retrievalText()));
-        int overlap = (int) terms.stream().filter(anchorTerms::contains).count();
-        int characterOverlap = (int) cjkCharacters.stream()
-                .filter(anchorCharacters::contains)
-                .count();
-        // Two-character fragments retain the main retrieval signal. A small single-character bonus distinguishes
-        // compact Chinese labels such as 熊/鹿/狐 that would otherwise tie on a shared "计分示例" description.
-        return overlap * 14 + characterOverlap * 2;
-    }
-
-    private String compactFactHint(PageFact pageFact) {
-        String keywords = String.join(", ", pageFact.keywords());
-        String summary = pageFact.factualSummary();
-        String hint = keywords.isBlank() ? summary : keywords + "; " + summary;
-        return hint.length() <= 360 ? hint : hint.substring(0, 359) + "…";
-    }
-
-    private Set<String> normalizedTerms(List<String> values) {
-        return values.stream()
-                .filter(value -> value != null)
-                .flatMap(this::terms)
-                .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
-    }
-
-    private Set<String> cjkCharacters(List<String> values) {
-        return values.stream()
-                .filter(value -> value != null)
-                .flatMapToInt(String::codePoints)
-                .filter(codePoint -> Character.UnicodeScript.of(codePoint) == Character.UnicodeScript.HAN)
-                .mapToObj(codePoint -> new String(Character.toChars(codePoint)))
-                .filter(character -> !CJK_SINGLE_CHARACTER_FILLER.contains(character))
-                .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
-    }
-
-    private Stream<String> terms(String value) {
-        String normalized = value.toLowerCase(Locale.ROOT);
-        Set<String> terms = new LinkedHashSet<>();
-        java.util.regex.Matcher matcher = java.util.regex.Pattern
-                .compile("[\\p{IsHan}]+|[\\p{L}\\p{N}]+")
-                .matcher(normalized);
-        while (matcher.find()) {
-            String token = matcher.group();
-            if (token.codePoints().allMatch(codePoint -> Character.UnicodeScript.of(codePoint) == Character.UnicodeScript.HAN)) {
-                if (token.length() >= 2) {
-                    for (int offset = 0; offset < token.length() - 1; offset++) {
-                        terms.add(token.substring(offset, offset + 2));
-                    }
-                }
-            } else if (token.length() >= 2) {
-                terms.add(token);
-            }
-        }
-        return terms.stream();
+                new Rectangle(0, 0, 1_000, 1_000),
+                "Cited page " + pageNumber + " visual context");
     }
 
     /**
-     * A cataloged anchor is an image-reading observation, never a rule claim. Keeping it distinct from ordinary
-     * layout candidates lets a later exact-step crop review reuse that observation after the primary locator has
-     * abstained, instead of losing a real icon or worked-state signal to OCR-only retrieval.
+     * A cataloged anchor remains readable for stored/legacy requests, but new selection never guesses one from lesson
+     * prose. The visual model receives the full cited page and returns its own page/claim/geometry binding.
      */
     public record Candidate(int pageNumber, Rectangle rectangle, String sourceText, VisualAnchor catalogedAnchor) {
         public Candidate {
@@ -256,24 +62,17 @@ public final class VisualRegionCandidateSelector {
             this(pageNumber, rectangle, sourceText, null);
         }
 
-        private static Candidate from(PageBlock block) {
-            return new Candidate(block.pageNumber(), block.rectangle(), block.text());
-        }
-
-        static Candidate from(ScoredAnchor match) {
-            VisualAnchor anchor = match.anchor();
-            return new Candidate(
-                    match.pageNumber(),
-                    new Rectangle(anchor.x(), anchor.y(), anchor.width(), anchor.height()),
-                    "Cataloged visual anchor (verify against the attached image): "
-                            + anchor.kind() + " — " + anchor.label() + ". " + anchor.visibleDescription(),
-                    anchor);
+        /**
+         * The candidate contract is structural. Adapters must never infer its origin from the human-readable
+         * sourceText because that text is diagnostic context, not a protocol discriminator.
+         */
+        public CandidateKind kind() {
+            return catalogedAnchor == null ? CandidateKind.CITED_PAGE_CONTEXT : CandidateKind.CATALOGED_VISUAL_ANCHOR;
         }
     }
 
-    private record ScoredBlock(PageBlock block, int score) {}
-
-    private record ScoredPage(int pageNumber, int score) {}
-
-    private record ScoredAnchor(int pageNumber, VisualAnchor anchor, int score) {}
+    public enum CandidateKind {
+        CITED_PAGE_CONTEXT,
+        CATALOGED_VISUAL_ANCHOR
+    }
 }

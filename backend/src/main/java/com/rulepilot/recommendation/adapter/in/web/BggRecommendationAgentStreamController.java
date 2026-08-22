@@ -9,6 +9,7 @@ import com.rulepilot.recommendation.application.RecommendationConversationExcept
 import java.io.IOException;
 import java.security.Principal;
 import java.util.Locale;
+import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -87,6 +88,12 @@ public class BggRecommendationAgentStreamController {
             executor.execute(() -> runConversation(
                     emitter, open, request, command, locale, modelConfigurationOwner));
         } catch (RuntimeException exception) {
+            String incidentId = UUID.randomUUID().toString();
+            LOGGER.warn(
+                    "Recommendation stream could not be scheduled: incidentId={}, type={}",
+                    incidentId,
+                    exception.getClass().getSimpleName(),
+                    exception);
             sendError(emitter, open, "recommendation_unavailable");
         }
         return emitter;
@@ -133,10 +140,13 @@ public class BggRecommendationAgentStreamController {
             String code = exception instanceof RecommendationConversationException conversationFailure
                     ? conversationFailure.code().name().toLowerCase(Locale.ROOT)
                     : "recommendation_unavailable";
+            String incidentId = UUID.randomUUID().toString();
             LOGGER.warn(
-                    "Recommendation stream did not complete: type={}, code={}",
+                    "Recommendation stream did not complete: incidentId={}, type={}, code={}",
+                    incidentId,
                     exception.getClass().getSimpleName(),
-                    code);
+                    code,
+                    exception);
             sendError(emitter, open, code);
         }
     }

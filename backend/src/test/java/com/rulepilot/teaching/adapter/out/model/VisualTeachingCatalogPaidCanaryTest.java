@@ -365,7 +365,7 @@ class VisualTeachingCatalogPaidCanaryTest {
         VersionedAgentPrompts prompts = mock(VersionedAgentPrompts.class);
         when(prompts.structuredOutputRepair()).thenReturn("Return one complete compact JSON object matching the schema.");
         SpringAiTeachingOutlineModel outlineModel = new SpringAiTeachingOutlineModel(
-                outlineConfiguration, prompts, new FakeTeachingOutlineModel());
+                outlineConfiguration, prompts);
         OutlineRequest outlineRequest = new OutlineRequest(
                 List.copyOf(pageInputs),
                 List.of(),
@@ -533,8 +533,6 @@ class VisualTeachingCatalogPaidCanaryTest {
                 new ClassPathResource("prompts/visual-page-progressive-teaching-start-v4-source-contract-system.txt"),
                 new ClassPathResource("prompts/visual-icon-localization-v2-system.txt"),
                 new ClassPathResource("prompts/visual-icon-crop-review-v4-system.txt"),
-                new ClassPathResource("prompts/visual-identifier-cell-v1-system.txt"),
-                new ClassPathResource("prompts/visual-identifier-reference-match-v1-system.txt"),
                 "qwen3.5-ocr",
                 4_800);
     }

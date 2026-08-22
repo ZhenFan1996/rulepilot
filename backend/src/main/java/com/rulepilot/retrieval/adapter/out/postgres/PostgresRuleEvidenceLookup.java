@@ -2,6 +2,7 @@ package com.rulepilot.retrieval.adapter.out.postgres;
 
 import com.rulepilot.retrieval.application.RuleEvidenceLookupRepository;
 import com.rulepilot.retrieval.evidence.RuleEvidenceHit;
+import com.rulepilot.retrieval.evidence.RuleEvidenceHit.ContentKind;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 import java.util.List;
@@ -21,7 +22,7 @@ class PostgresRuleEvidenceLookup implements RuleEvidenceLookupRepository {
     @SuppressWarnings("unchecked")
     public List<RuleEvidenceHit> findByChunkIds(UUID documentVersionId, Set<UUID> chunkIds) {
         String sql = """
-                SELECT id, document_version_id, section_type, heading, content, page_from, page_to
+                SELECT id, document_version_id, section_type, heading, content, page_from, page_to, content_kind
                 FROM rule_chunk
                 WHERE document_version_id = :versionId
                   AND id IN (:chunkIds)
@@ -33,7 +34,8 @@ class PostgresRuleEvidenceLookup implements RuleEvidenceLookupRepository {
         return rows.stream()
                 .map(row -> new RuleEvidenceHit(
                         (UUID) row[0], (UUID) row[1], (String) row[2], (String) row[3], (String) row[4],
-                        ((Number) row[5]).intValue(), ((Number) row[6]).intValue(), 1.0))
+                        ((Number) row[5]).intValue(), ((Number) row[6]).intValue(), 1.0,
+                        ContentKind.valueOf((String) row[7]), (String) row[4]))
                 .toList();
     }
 
@@ -41,7 +43,7 @@ class PostgresRuleEvidenceLookup implements RuleEvidenceLookupRepository {
     @SuppressWarnings("unchecked")
     public List<RuleEvidenceHit> findByPageNumbers(UUID documentVersionId, Set<Integer> pageNumbers) {
         String sql = """
-                SELECT id, document_version_id, section_type, heading, content, page_from, page_to
+                SELECT id, document_version_id, section_type, heading, content, page_from, page_to, content_kind
                 FROM rule_chunk
                 WHERE document_version_id = :versionId
                   AND page_from = page_to
@@ -55,7 +57,8 @@ class PostgresRuleEvidenceLookup implements RuleEvidenceLookupRepository {
         return rows.stream()
                 .map(row -> new RuleEvidenceHit(
                         (UUID) row[0], (UUID) row[1], (String) row[2], (String) row[3], (String) row[4],
-                        ((Number) row[5]).intValue(), ((Number) row[6]).intValue(), 1.0))
+                        ((Number) row[5]).intValue(), ((Number) row[6]).intValue(), 1.0,
+                        ContentKind.valueOf((String) row[7]), (String) row[4]))
                 .toList();
     }
 
@@ -72,7 +75,7 @@ class PostgresRuleEvidenceLookup implements RuleEvidenceLookupRepository {
                       AND id IN (:anchorIds)
                 )
                 SELECT DISTINCT c.id, c.document_version_id, c.section_type, c.heading,
-                       c.content, c.page_from, c.page_to, c.chunk_index
+                       c.content, c.page_from, c.page_to, c.chunk_index, c.content_kind
                 FROM rule_chunk c
                 JOIN anchors a ON c.chunk_index BETWEEN a.chunk_index - :radius AND a.chunk_index + :radius
                 WHERE c.document_version_id = :versionId
@@ -89,7 +92,8 @@ class PostgresRuleEvidenceLookup implements RuleEvidenceLookupRepository {
         return rows.stream()
                 .map(row -> new RuleEvidenceHit(
                         (UUID) row[0], (UUID) row[1], (String) row[2], (String) row[3], (String) row[4],
-                        ((Number) row[5]).intValue(), ((Number) row[6]).intValue(), 1.0))
+                        ((Number) row[5]).intValue(), ((Number) row[6]).intValue(), 1.0,
+                        ContentKind.valueOf((String) row[8]), (String) row[4]))
                 .toList();
     }
 }

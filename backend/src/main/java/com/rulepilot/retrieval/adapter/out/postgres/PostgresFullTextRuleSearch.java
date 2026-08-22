@@ -2,6 +2,7 @@ package com.rulepilot.retrieval.adapter.out.postgres;
 
 import com.rulepilot.retrieval.application.FullTextRuleSearchRepository;
 import com.rulepilot.retrieval.evidence.RuleEvidenceHit;
+import com.rulepilot.retrieval.evidence.RuleEvidenceHit.ContentKind;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 import java.util.List;
@@ -29,10 +30,10 @@ public class PostgresFullTextRuleSearch implements FullTextRuleSearchRepository 
                     SELECT websearch_to_tsquery('simple', :query) AS value
                 )
                 SELECT c.id, c.document_version_id, c.section_type, c.heading,
-                       ts_headline('simple', c.content, q.value,
-                           'MaxWords=35, MinWords=12, StartSel=[, StopSel=]') AS excerpt,
+                       c.content AS excerpt,
                        c.page_from, c.page_to,
-                       ts_rank_cd(c.content_tsv, q.value, 32) AS score
+                       ts_rank_cd(c.content_tsv, q.value, 32) AS score,
+                       c.content_kind
                 FROM rule_chunk c
                 CROSS JOIN search_query q
                 WHERE c.document_version_id = :versionId
@@ -57,6 +58,8 @@ public class PostgresFullTextRuleSearch implements FullTextRuleSearchRepository 
                 (String) row[4],
                 ((Number) row[5]).intValue(),
                 ((Number) row[6]).intValue(),
-                ((Number) row[7]).doubleValue());
+                ((Number) row[7]).doubleValue(),
+                ContentKind.valueOf((String) row[8]),
+                (String) row[4]);
     }
 }

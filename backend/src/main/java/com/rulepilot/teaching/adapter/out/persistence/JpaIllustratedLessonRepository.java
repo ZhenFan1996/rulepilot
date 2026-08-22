@@ -1,11 +1,15 @@
 package com.rulepilot.teaching.adapter.out.persistence;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.json.JsonMapper;
 import com.rulepilot.teaching.application.IllustratedLessonRepository;
 import com.rulepilot.teaching.domain.IllustratedLesson;
 import com.rulepilot.teaching.domain.IllustratedLesson.EvidenceStatus;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonSection;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonStatus;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonStep;
+import com.rulepilot.teaching.domain.IllustratedLesson.RuleFact;
 import com.rulepilot.teaching.domain.IllustratedLesson.TeachingMove;
 import com.rulepilot.teaching.domain.IllustratedLesson.VisualKind;
 import com.rulepilot.teaching.domain.IllustratedLesson.VisualFocus;
@@ -386,6 +390,8 @@ class IllustratedLessonSectionEntity {
 @Entity(name = "IllustratedLessonStepEntity")
 @Table(name = "illustrated_lesson_step")
 class IllustratedLessonStepEntity {
+    private static final ObjectMapper JSON = JsonMapper.builder().findAndAddModules().build();
+
     @Id UUID id;
     @Column(name = "lesson_section_id", nullable = false) UUID lessonSectionId;
     @Column(nullable = false) int position;
@@ -394,6 +400,7 @@ class IllustratedLessonStepEntity {
     @Column(name = "step_text", nullable = false, columnDefinition = "text") String stepText;
     @Column(name = "source_pages", nullable = false, columnDefinition = "text") String sourcePages;
     @Column(name = "source_chunk_ids", nullable = false, columnDefinition = "text") String sourceChunkIds;
+    @Column(name = "rule_facts_json", nullable = false, columnDefinition = "text") String ruleFactsJson = "[]";
     @Column(name = "visual_page") Integer visualPage;
     @Column(name = "visual_label", columnDefinition = "text") String visualLabel;
     @Column(name = "visual_description", nullable = false, columnDefinition = "text") String visualDescription = "";
@@ -413,6 +420,7 @@ class IllustratedLessonStepEntity {
         stepText = step.text();
         sourcePages = step.sourcePages().stream().map(String::valueOf).collect(Collectors.joining(","));
         sourceChunkIds = step.sourceChunkIds().stream().map(UUID::toString).collect(Collectors.joining(","));
+        ruleFactsJson = writeRuleFacts(step.ruleFacts());
         if (step.visualFocus() != null) {
             visualPage = step.visualFocus().pageNumber();
             visualLabel = step.visualFocus().label();
@@ -438,6 +446,7 @@ class IllustratedLessonStepEntity {
                 stepText,
                 pages,
                 chunkIds,
+                readRuleFacts(ruleFactsJson),
                 visualPage == null
                         ? null
                         : new VisualFocus(
@@ -448,5 +457,22 @@ class IllustratedLessonStepEntity {
                                 visualY,
                                 visualWidth,
                                 visualHeight));
+    }
+
+    private static String writeRuleFacts(List<RuleFact> facts) {
+        try {
+            return JSON.writeValueAsString(facts == null ? List.of() : facts);
+        } catch (Exception invalidFacts) {
+            throw new IllegalStateException("lesson rule facts could not be stored", invalidFacts);
+        }
+    }
+
+    private static List<RuleFact> readRuleFacts(String value) {
+        if (value == null || value.isBlank()) return List.of();
+        try {
+            return JSON.readValue(value, new TypeReference<List<RuleFact>>() {});
+        } catch (Exception invalidFacts) {
+            throw new IllegalStateException("stored lesson rule facts are invalid", invalidFacts);
+        }
     }
 }

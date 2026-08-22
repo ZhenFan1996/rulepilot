@@ -9,6 +9,7 @@ import static org.mockito.Mockito.when;
 
 import com.rulepilot.teaching.VisualRulebookPageFacts.PageFact;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.SourceDependency;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.RuleGroupFact;
 import com.rulepilot.teaching.VisualRulebookPageFacts.IconMeaningStatus;
 import com.rulepilot.teaching.VisualRulebookPageFacts.IconOccurrence;
 import com.rulepilot.teaching.VisualRulebookPageFacts.VisualAnchor;
@@ -61,7 +62,9 @@ class JpaVisualRulebookPageFactsTest {
                 PageFact.CURRENT_SCHEMA_VERSION,
                 List.of(),
                 List.of("Cobalt spindle"),
-                true);
+                true,
+                List.of(new RuleGroupFact(
+                        "Cobalt spindle", "Cobalt spindle", "The cobalt spindle returns after the final pulse.")));
         var noRuleContent = new PageFact(
                 8,
                 "Panel",
@@ -73,7 +76,8 @@ class JpaVisualRulebookPageFactsTest {
                 PageFact.CURRENT_SCHEMA_VERSION,
                 List.of(),
                 List.of(),
-                true);
+                true,
+                List.of());
         var incomplete = new PageFact(
                 9,
                 "Pending",
@@ -220,11 +224,41 @@ class JpaVisualRulebookPageFactsTest {
                 PageFact.CURRENT_SCHEMA_VERSION,
                 List.of(),
                 List.of("MOVE", "BUILD"),
-                true);
+                true,
+                List.of(
+                        new RuleGroupFact("MOVE", "MOVE", "移动有一条完整的可见规则。"),
+                        new RuleGroupFact("BUILD", "BUILD", "建造有一条完整的可见规则。")));
 
         var restored = new VisualRulebookPageFactEntity(UUID.randomUUID(), original).toDomain();
 
         assertThat(restored.ruleGroupIdentifiers()).containsExactly("MOVE", "BUILD");
+        assertThat(restored.ruleGroupFacts()).extracting(RuleGroupFact::identifier)
+                .containsExactly("MOVE", "BUILD");
         assertThat(restored.ruleGroupInventoryComplete()).isTrue();
+    }
+
+    @Test
+    void deserializesAHistoricalCompleteRowSoTheCatalogerCanRebuildIt() {
+        UUID documentVersionId = UUID.randomUUID();
+        var historical = new PageFact(
+                3,
+                "MOVE",
+                "MOVE: Historical prose ledger.",
+                List.of("MOVE"),
+                List.of(),
+                List.of(),
+                false,
+                PageFact.CURRENT_SCHEMA_VERSION - 1,
+                List.of(),
+                List.of("MOVE"),
+                true,
+                List.of());
+
+        PageFact restored = new VisualRulebookPageFactEntity(documentVersionId, historical).toDomain();
+
+        assertThat(restored.schemaVersion()).isEqualTo(PageFact.CURRENT_SCHEMA_VERSION - 1);
+        assertThat(restored.ruleGroupInventoryComplete()).isTrue();
+        assertThat(restored.ruleGroupIdentifiers()).containsExactly("MOVE");
+        assertThat(restored.ruleGroupFacts()).isEmpty();
     }
 }

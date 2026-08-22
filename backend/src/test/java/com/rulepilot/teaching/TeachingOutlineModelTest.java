@@ -1,6 +1,7 @@
 package com.rulepilot.teaching;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static com.rulepilot.teaching.VisualRuleGroupTestFacts.facts;
 
 import com.rulepilot.teaching.TeachingOutlineModel.OutlineRequest;
 import com.rulepilot.teaching.TeachingOutlineModel.OutlineDraft;
@@ -81,9 +82,16 @@ class TeachingOutlineModelTest {
                 .mapToObj(index -> "Source-owned rule group " + index + " " + "detail ".repeat(index))
                 .toList();
 
-        var page = new PageInput(41, "  page transcription stays exact  ", List.of(), identifiers, true);
+        var page = new PageInput(
+                41,
+                "  page transcription stays exact  ",
+                List.of(),
+                identifiers,
+                true,
+                facts(identifiers));
 
         assertThat(page.text()).isEqualTo("  page transcription stays exact  ");
-        assertThat(page.sourceRuleGroupIdentifiers()).containsExactlyElementsOf(identifiers);
+        assertThat(page.sourceRuleGroupIdentifiers())
+                .containsExactlyElementsOf(identifiers.stream().map(String::strip).toList());
     }
 }

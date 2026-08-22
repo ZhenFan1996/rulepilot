@@ -16,7 +16,7 @@ services:
       - maintenance_work_mem=32MB
       - -c
       - max_connections=30
-    mem_limit: 192m
+    mem_limit: 256m
 
   api:
     image: ${RULEPILOT_BACKEND_IMAGE:-rulepilot-backend:local}
@@ -26,8 +26,9 @@ services:
     environment:
       # The production host has two vCPUs and 4 GiB RAM. G1 keeps request pauses bounded while one region set is
       # reclaimed concurrently; the former Serial GC accumulated more than 36 seconds of full-stop pauses in one
-      # hour. The larger cgroup below leaves native/metaspace and image-buffer headroom outside this 384 MiB heap.
-      JAVA_TOOL_OPTIONS: -Xms128m -Xmx384m -Xss512k -XX:ActiveProcessorCount=${PRODUCTION_ACTIVE_PROCESSOR_COUNT:-2} -XX:+UseG1GC -XX:MaxGCPauseMillis=200 -XX:InitiatingHeapOccupancyPercent=35 -XX:+ParallelRefProcEnabled
+      # hour. Production sampling on 2026-08-22 showed a healthy 45% post-GC heap but only ~44 MiB of cgroup
+      # headroom, so the heap and cgroup now leave room for normal allocation bursts and native image buffers.
+      JAVA_TOOL_OPTIONS: -Xms128m -Xmx512m -Xss512k -XX:ActiveProcessorCount=${PRODUCTION_ACTIVE_PROCESSOR_COUNT:-2} -XX:+UseG1GC -XX:MaxGCPauseMillis=200 -XX:InitiatingHeapOccupancyPercent=35 -XX:+ParallelRefProcEnabled
       # Model calls are network-bound. Two bounded runs prevent one player's preparation or lesson from making a
       # second player wait minutes for the first section. One lane is reserved for outline + first cited section;
       # one continuation lane finishes chapters and review, preserving the existing two-call host ceiling.
@@ -63,19 +64,19 @@ services:
       ANSWER_RATE_PROVIDER_CONCURRENCY: ${PRODUCTION_ANSWER_PROVIDER_CONCURRENCY:-2}
       SERVER_TOMCAT_THREADS_MAX: ${PRODUCTION_TOMCAT_MAX_THREADS:-16}
       SERVER_TOMCAT_THREADS_MIN_SPARE: "4"
-      # A guide page reads several independent persisted snapshots. Six connections cover one page fan-out plus
-      # background bookkeeping without exceeding PostgreSQL's 30-connection host budget.
-      SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: "6"
+      # A guide page reads several independent persisted snapshots. Ten connections absorb a short reader/auth
+      # overlap while staying well inside PostgreSQL's 30-connection host budget with the worker's three.
+      SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: "10"
       SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE: "2"
       # The web application calls its model adapters directly. The optional MCP endpoint is
       # useful for local integrations, but costs a small host a full server/tool graph without
       # serving reader traffic.
       SPRING_AI_MCP_SERVER_ENABLED: "false"
       MANAGEMENT_TRACING_SAMPLING_PROBABILITY: "0.0"
-    # Measured production RSS repeatedly reached the former 640 MiB hard limit and forced reclaim/swap. 896 MiB
-    # keeps the 384 MiB heap, ~190 MiB metaspace, thread stacks and bounded image buffers inside the cgroup while
-    # leaving more than 1 GiB host headroom with the current worker, database, gateway and observability services.
-    mem_limit: 896m
+    # Measured production RSS reached ~852 MiB under a 896 MiB limit while post-GC heap remained healthy. 1.2 GiB
+    # keeps the 512 MiB heap, ~190 MiB metaspace, thread stacks and bounded image buffers inside the cgroup; limits
+    # are ceilings rather than reservations, and measured host availability leaves the required operating margin.
+    mem_limit: 1200m
 
   worker:
     image: ${RULEPILOT_BACKEND_IMAGE:-rulepilot-backend:local}

@@ -5,7 +5,6 @@ import com.rulepilot.assistant.RuleAnswerModel.ModelDraft;
 import com.rulepilot.assistant.RuleAnswerModel.ModelRequest;
 import com.rulepilot.assistant.RuleAnswerModel.WorkedExampleRequest;
 import com.rulepilot.assistant.domain.RuleWorkedExample;
-import com.rulepilot.assistant.domain.WorkedExampleBasis;
 import java.util.LinkedHashSet;
 import java.util.List;
 
@@ -39,7 +38,7 @@ final class AnswerWorkedExampleResolver {
                 AnswerStructuredAidPolicy.requiredText(item.setup(), "worked example setup"),
                 AnswerStructuredAidPolicy.requiredText(item.action(), "worked example action"),
                 AnswerStructuredAidPolicy.requiredText(item.outcome(), "worked example outcome"),
-                AnswerStructuredAidPolicy.enumValue(item.basis(), WorkedExampleBasis.class, "worked example basis"),
+                item.basis(),
                 AnswerStructuredAidPolicy.citations(
                         modelRequest, draft, item.citationIds(), "worked example"));
     }

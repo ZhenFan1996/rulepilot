@@ -2,7 +2,6 @@ import { createRouter, createWebHistory } from 'vue-router'
 
 import type { TranslationKey } from '@/lib/locale'
 import { appScrollBehavior } from '@/lib/routeExperience'
-import HomeView from '@/views/HomeView.vue'
 
 const routeMeta = (titleKey: TranslationKey) => ({ titleKey })
 
@@ -13,7 +12,7 @@ const router = createRouter({
     {
       path: '/',
       name: 'home',
-      component: HomeView,
+      component: () => import('@/views/HomeView.vue'),
       meta: routeMeta('route.title.home'),
     },
     {

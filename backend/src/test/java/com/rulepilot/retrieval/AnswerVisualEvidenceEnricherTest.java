@@ -34,17 +34,17 @@ class AnswerVisualEvidenceEnricherTest {
                 Set.of(4));
 
         assertThat(enriched).containsExactly(source.chunkId());
-        String enrichedExcerpt = evidence.get(source.chunkId()).evidence().excerpt();
-        assertThat(enrichedExcerpt).contains("Gain one point", "The score marker advances one space.");
-        assertThat(enrichedExcerpt).startsWith("Visual page facts (literal observations only")
-                .doesNotContain("Visual-transcribed rule evidence");
-        assertThat(enrichedExcerpt.indexOf("The score marker advances one space."))
-                .isLessThan(enrichedExcerpt.indexOf("Gain one point after the action."));
+        assertThat(evidence.get(source.chunkId()).evidence()).satisfies(enrichedSource -> {
+            assertThat(enrichedSource.contentKind())
+                    .isEqualTo(RuleEvidenceHit.ContentKind.CANONICAL_TEXT_WITH_VISUAL_FACTS);
+            assertThat(enrichedSource.excerpt()).isEqualTo("Gain one point after the action.");
+            assertThat(enrichedSource.visualFacts()).isEqualTo("The score marker advances one space.");
+        });
     }
 
     @Test
     void turnsTheVisualLedgerIntoBoundedRuleTranscriptionOnlyWhenCanonicalTextIsUnavailable() {
-        RuleEvidenceHit placeholder = source(UUID.randomUUID(), 3, VISUAL_PLACEHOLDER);
+        RuleEvidenceHit placeholder = placeholder(UUID.randomUUID(), 3);
         Map<UUID, HybridEvidenceHit> evidence = new LinkedHashMap<>();
         evidence.put(placeholder.chunkId(), new HybridEvidenceHit(placeholder, 0.2, 1, null, false));
 
@@ -55,15 +55,17 @@ class AnswerVisualEvidenceEnricherTest {
                 Map.of(3, fact(3, "Unused pieces move to the common area after the player takes one type.")),
                 Set.of(3));
 
-        assertThat(evidence.get(placeholder.chunkId()).evidence().excerpt())
-                .startsWith("Visual-transcribed rule evidence")
-                .contains("Unused pieces move to the common area")
-                .doesNotContain(VISUAL_PLACEHOLDER, "Printed terms:");
+        assertThat(evidence.get(placeholder.chunkId()).evidence()).satisfies(transcription -> {
+            assertThat(transcription.contentKind()).isEqualTo(RuleEvidenceHit.ContentKind.VISUAL_TRANSCRIPTION);
+            assertThat(transcription.playerExcerpt())
+                    .isEqualTo("Unused pieces move to the common area after the player takes one type.");
+            assertThat(transcription.excerpt()).contains("Unused pieces move to the common area");
+        });
     }
 
     @Test
     void keepsACompleteDenseVisualPageAvailableToTheAnswerInsteadOfFailingTheTurn() {
-        RuleEvidenceHit placeholder = source(UUID.randomUUID(), 3, VISUAL_PLACEHOLDER);
+        RuleEvidenceHit placeholder = placeholder(UUID.randomUUID(), 3);
         Map<UUID, HybridEvidenceHit> evidence = new LinkedHashMap<>();
         evidence.put(placeholder.chunkId(), new HybridEvidenceHit(placeholder, 0.2, 1, null, false));
         String completePageFacts = "一条完整的可见规则事实。".repeat(400);
@@ -81,7 +83,7 @@ class AnswerVisualEvidenceEnricherTest {
 
     @Test
     void removesAPlaceholderWhenTheTypedPageInventorySaysThereIsNoRuleContent() {
-        RuleEvidenceHit placeholder = source(UUID.randomUUID(), 11, VISUAL_PLACEHOLDER);
+        RuleEvidenceHit placeholder = placeholder(UUID.randomUUID(), 11);
         Map<UUID, HybridEvidenceHit> evidence = new LinkedHashMap<>();
         evidence.put(placeholder.chunkId(), new HybridEvidenceHit(placeholder, 0.8, 1, null, false));
         PageFactMatch noRuleContent = new PageFactMatch(
@@ -153,5 +155,19 @@ class AnswerVisualEvidenceEnricherTest {
     private RuleEvidenceHit source(UUID chunkId, int page, String excerpt) {
         return new RuleEvidenceHit(
                 chunkId, documentVersionId, "ACTIONS", "Action", excerpt, page, page, 0.6);
+    }
+
+    private RuleEvidenceHit placeholder(UUID chunkId, int page) {
+        return new RuleEvidenceHit(
+                chunkId,
+                documentVersionId,
+                "ACTIONS",
+                "Action",
+                VISUAL_PLACEHOLDER,
+                page,
+                page,
+                0.6,
+                RuleEvidenceHit.ContentKind.VISUAL_PLACEHOLDER,
+                VISUAL_PLACEHOLDER);
     }
 }

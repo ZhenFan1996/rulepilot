@@ -137,12 +137,7 @@ describe('lessonAnswerThread', () => {
       ...checked,
       answer: { ...checked.answer, situationChecks: [{ requirement: '窗口开放', status: 'NOT_PROVIDED', playerFact: '我猜它开放' }] },
     }]))
-    expect(readLessonAnswerThread(sessionStorage, scope)).toEqual([
-      expect.objectContaining({
-        question: checked.question,
-        answer: expect.objectContaining({ situationChecks: [] }),
-      }),
-    ])
+    expect(readLessonAnswerThread(sessionStorage, scope)).toEqual([])
   })
 
   it('round-trips bounded walkthrough steps with explicit ordering provenance', () => {

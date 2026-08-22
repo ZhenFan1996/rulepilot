@@ -106,22 +106,27 @@ public class PublicLessonController {
 
     @GetMapping("/{planId}/cover")
     ResponseEntity<byte[]> cover(@PathVariable UUID planId) {
-        var lesson = require(planId);
+        var cached = catalog.cachedCover(planId);
+        var lesson = cached.isEmpty() ? require(planId) : null;
+        var gameCover = cached.map(PublicLessonCatalog.CachedCover::gameCover)
+                .orElseGet(() -> lesson == null ? null : lesson.gameCover());
+        UUID documentVersionId = cached.map(PublicLessonCatalog.CachedCover::documentVersionId)
+                .orElseGet(() -> lesson == null ? null : lesson.documentVersionId());
         try {
-            var thumbnail = lesson.gameCover() == null
-                    ? rulebookCover(lesson)
-                    : coverThumbnails.thumbnailFor(lesson.gameCover().imageUrl());
+            var thumbnail = gameCover == null
+                    ? rulebookCover(documentVersionId)
+                    : coverThumbnails.thumbnailFor(gameCover.imageUrl());
             return ResponseEntity.ok()
                     .contentType(MediaType.IMAGE_JPEG)
                     .cacheControl(CacheControl.maxAge(Duration.ofDays(30)).cachePublic())
                     .body(thumbnail.content());
         } catch (RuntimeException unavailable) {
-            if (lesson.gameCover() != null) {
+            if (gameCover != null) {
                 try {
                     return ResponseEntity.ok()
                             .contentType(MediaType.IMAGE_JPEG)
                             .cacheControl(CacheControl.maxAge(Duration.ofDays(30)).cachePublic())
-                            .body(rulebookCover(lesson).content());
+                            .body(rulebookCover(documentVersionId).content());
                 } catch (RuntimeException fallbackUnavailable) {
                     // Continue with the same client-facing availability response below.
                 }
@@ -169,13 +174,12 @@ public class PublicLessonController {
                 .orElseThrow(this::notFound);
     }
 
-    private com.rulepilot.teaching.PublicCoverThumbnailCache.Thumbnail rulebookCover(
-            PublicLessonReader.PublicLesson lesson) {
-        var firstPage = pageImages.read(lesson.documentVersionId(), Set.of(1)).stream()
+    private com.rulepilot.teaching.PublicCoverThumbnailCache.Thumbnail rulebookCover(UUID documentVersionId) {
+        var firstPage = pageImages.read(documentVersionId, Set.of(1)).stream()
                 .filter(image -> image.pageNumber() == 1)
                 .findFirst()
                 .orElseThrow(this::notFound);
-        return coverThumbnails.thumbnailForRulebookCover(lesson.documentVersionId(), firstPage);
+        return coverThumbnails.thumbnailForRulebookCover(documentVersionId, firstPage);
     }
 
     private PublicLessonReader.PublicLesson require(UUID planId) {

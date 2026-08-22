@@ -3,6 +3,7 @@ package com.rulepilot.retrieval;
 import com.rulepilot.retrieval.VisualRulebookPageFactSearch.PageFactMatch;
 import com.rulepilot.retrieval.evidence.HybridEvidenceHit;
 import com.rulepilot.retrieval.evidence.RuleEvidenceHit;
+import com.rulepilot.retrieval.evidence.RuleEvidenceHit.ContentKind;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -129,12 +130,15 @@ final class AnswerVisualEvidenceEnricher {
                 textSource.documentVersionId(),
                 textSource.sectionType(),
                 textSource.heading(),
-                AnswerVisualFactPresentationPolicy.evidenceText(fact)
-                        + "\n\nExtracted page text (may omit inline visual symbols):\n"
-                        + textSource.excerpt(),
+                textSource.excerpt(),
                 textSource.pageFrom(),
                 textSource.pageTo(),
-                Math.max(textSource.score(), fact.score()));
+                Math.max(textSource.score(), fact.score()),
+                ContentKind.CANONICAL_TEXT_WITH_VISUAL_FACTS,
+                AnswerVisualFactPresentationPolicy.mechanicalSummary(fact.factualSummary())
+                        + "\n\n"
+                        + textSource.playerExcerpt(),
+                AnswerVisualFactPresentationPolicy.mechanicalSummary(fact.factualSummary()));
         return new HybridEvidenceHit(
                 enrichedSource,
                 Math.max(existing.score(), fact.score()),
@@ -149,10 +153,13 @@ final class AnswerVisualEvidenceEnricher {
                 source.documentVersionId(),
                 source.sectionType(),
                 source.heading(),
-                AnswerVisualFactPresentationPolicy.transcribedRuleEvidenceText(fact),
+                AnswerVisualFactPresentationPolicy.mechanicalSummary(fact.factualSummary()),
                 source.pageFrom(),
                 source.pageTo(),
-                Math.max(0.01, fact.score()));
+                Math.max(0.01, fact.score()),
+                ContentKind.VISUAL_TRANSCRIPTION,
+                AnswerVisualFactPresentationPolicy.mechanicalSummary(fact.factualSummary()),
+                null);
         return new HybridEvidenceHit(visualSource, Math.max(0.01, fact.score()), pageRank, null, false);
     }
 }

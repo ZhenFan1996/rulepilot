@@ -51,12 +51,12 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
             decorative illustration merely because it shares a cited page with a timing, tie-break, or other text-only
             claim. A crop may still be useful when it gives the player a recognition handle for the cited text: a card
             anatomy, named component, icon group, board area, or worked state. It need not depict the full procedure
-            or print the rule effect itself. Return an empty JSON object only when the cited page has no such concrete
-            player-facing visual handle.
-            Candidate rectangles are allowed boundaries, not compulsory text targets. A candidate named "Cited page N
-            visual context" lets you select a diagram, board layout, table, icon group, component, or worked example
+            or print the rule effect itself. Return {"regions":[]} only when the cited page has no such concrete
+            player-facing visual handle; never return null or an empty object.
+            Candidate rectangles are allowed boundaries, not compulsory text targets. A candidateKind of
+            CITED_PAGE_CONTEXT lets you select a diagram, board layout, table, icon group, component, or worked example
             anywhere on that cited page. A section heading, page title, or paragraph-only crop is never a useful visual
-            aid. A candidate named "Cataloged visual anchor" is a compact boundary proposed by a previous image pass:
+            aid. A candidateKind of CATALOGED_VISUAL_ANCHOR includes a compact boundary proposed by a previous image pass:
             inspect it yourself and prefer it when it visibly fits this exact step; do not expand into adjacent score
             rows, cards, or diagrams. A candidate can include a visual retrieval hint from a previous image pass. It is
             only a search hint: inspect the supplied page yourself, and never report an object because the hint says it
@@ -253,12 +253,11 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
      */
     private LocateGuideResult confirmedExactStepCrops(
             VisualLocationRequest request, List<LocatedRegion> regions, String owner) {
-        if ("qwen".equals(models.providerFor(Role.VISUAL, owner))
-                && !VisualExactCropReviewPolicy.qwenNeedsExactCropReview(
-                        VisualCropAcceptancePolicy.claimsForExactCrop(request, regions.getFirst()))) {
-            // The first pass already tied this routine recognition aid to its exact page, evidence, and step. Qwen's
-            // second visual pass is deliberately reserved for rules where a neighbouring card, faction, score, or
-            // outcome image would materially mislead a player.
+        if ("qwen".equals(models.providerFor(Role.VISUAL, owner))) {
+            // Qwen's first response already carries typed page, claim, step and geometry bindings. Re-reading natural
+            // lesson prose to decide whether a second provider call is needed made latency vocabulary-dependent and
+            // duplicated the same visual responsibility. The application-owned crop boundary below remains the
+            // publication gate for the single structured location result.
             return LocateGuideResult.found(List.of(regions.getFirst()));
         }
         Map<String, CropImage> crops = croppedImages(request, regions);
@@ -453,15 +452,14 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
                 continue;
             }
             try {
-                ModelRegion normalizedResponse = VisualCropAcceptancePolicy.normalizedGeometry(response);
                 LocatedRegion region = new LocatedRegion(
-                        normalizedResponse.pageNumber(),
-                        normalizedResponse.label(),
-                        normalizedResponse.visibleDescription(),
-                        normalizedResponse.x(),
-                        normalizedResponse.y(),
-                        normalizedResponse.width(),
-                        normalizedResponse.height(),
+                        response.pageNumber(),
+                        response.label(),
+                        response.visibleDescription(),
+                        response.x(),
+                        response.y(),
+                        response.width(),
+                        response.height(),
                         supported,
                         supportedStepPositions);
                 if (accepted.stream().noneMatch(existing -> sameRegion(existing, region))) accepted.add(region);

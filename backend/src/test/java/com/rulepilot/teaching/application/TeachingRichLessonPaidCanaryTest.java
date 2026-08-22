@@ -20,7 +20,6 @@ import com.rulepilot.assistant.GeneratedContentCritic.ReviewRisk;
 import com.rulepilot.assistant.NativeAgentTool.ToolScope;
 import com.rulepilot.assistant.NativeToolScopes;
 import com.rulepilot.assistant.PlayerLocale;
-import com.rulepilot.assistant.adapter.out.model.FakeContentCriticModel;
 import com.rulepilot.assistant.adapter.out.model.SpringAiContentCriticModel;
 import com.rulepilot.assistant.application.ConditionalGeneratedContentCritic;
 import com.rulepilot.assistant.application.PolicyEvidenceVerifier;
@@ -36,8 +35,6 @@ import com.rulepilot.teaching.TeachingOutlineModel.PageInput;
 import com.rulepilot.teaching.TeachingOutlineModel.SourceCoverageRole;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel;
 import com.rulepilot.teaching.VisualRulebookPageFacts;
-import com.rulepilot.teaching.adapter.out.model.FakeTeachingLessonModel;
-import com.rulepilot.teaching.adapter.out.model.FakeTeachingOutlineModel;
 import com.rulepilot.teaching.adapter.out.model.SpringAiTeachingLessonModel;
 import com.rulepilot.teaching.adapter.out.model.SpringAiTeachingOutlineModel;
 import com.rulepilot.teaching.adapter.out.persistence.TeachingPlanPersistenceRoundTrip;
@@ -150,7 +147,7 @@ class TeachingRichLessonPaidCanaryTest {
             RuntimeModelConfiguration outlineConfiguration = configuration(
                     provider, recordingChatModel(provider, rawOutlineResponses));
             SpringAiTeachingOutlineModel outlineModel = new SpringAiTeachingOutlineModel(
-                    outlineConfiguration, prompts, new FakeTeachingOutlineModel());
+                    outlineConfiguration, prompts);
             try {
                 outline = outlineModel.organize(outlineRequest);
             } catch (RuntimeException failure) {
@@ -183,16 +180,21 @@ class TeachingRichLessonPaidCanaryTest {
         assertThat(plan.sections()).isEqualTo(generatedPlan.sections());
 
         List<String> rawSectionResponses = Collections.synchronizedList(new ArrayList<>());
+        List<String> rawCriticResponses = Collections.synchronizedList(new ArrayList<>());
         RuntimeModelConfiguration sectionConfiguration = configuration(
-                provider, recordingChatModel(provider, rawSectionResponses));
+                provider,
+                recordingChatModel(provider, rawSectionResponses),
+                recordingChatModel(provider, rawCriticResponses));
         double teachingTemperature = java.util.Optional.ofNullable(
                         System.getenv("RULEPILOT_TEACHING_CANARY_TEMPERATURE"))
                 .filter(value -> !value.isBlank())
                 .map(Double::parseDouble)
                 .orElse(0.2d);
         RecordingTeachingModel sections = new RecordingTeachingModel(new SpringAiTeachingLessonModel(
-                sectionConfiguration, new FakeTeachingLessonModel(), prompts, teachingTemperature));
+                sectionConfiguration, prompts, teachingTemperature));
         CanaryInvocations audit = new CanaryInvocations();
+        GeneratedContentCritic publicationCritic = new ConditionalGeneratedContentCritic(
+                new SpringAiContentCriticModel(sectionConfiguration, prompts), audit, false);
         NativeToolScopes scopes = mock(NativeToolScopes.class);
         when(scopes.create(eq(OWNER), eq(versionId), eq(runId))).thenReturn(java.util.Optional.of(
                 new ToolScope(OWNER, versionId, runId, Instant.now().plusSeconds(300))));
@@ -202,7 +204,7 @@ class TeachingRichLessonPaidCanaryTest {
                 corpus,
                 sections,
                 new PolicyEvidenceVerifier(),
-                mock(GeneratedContentCritic.class),
+                publicationCritic,
                 audit,
                 VisualRulebookPageFacts.empty(),
                 VisualRulebookPageCatalogModel.unavailable(),
@@ -225,6 +227,7 @@ class TeachingRichLessonPaidCanaryTest {
                 sections,
                 rawOutlineResponses,
                 rawSectionResponses,
+                rawCriticResponses,
                 audit,
                 outlineReplayed,
                 teachingTemperature,
@@ -265,11 +268,7 @@ class TeachingRichLessonPaidCanaryTest {
                 .containsEntry("sectionRequestsRetainOwnUnitsAndEvidence", true)
                 .containsEntry("wholeGameCompletedBeforeSectionFanOut", true)
                 .containsEntry("withinLatencyBudget", true);
-        if (criticProbeEnabled()) {
-            assertThat(audit.criticCalls.get()).isPositive();
-        } else {
-            assertThat(audit.criticCalls.get()).isZero();
-        }
+        assertThat(audit.criticCalls.get()).isPositive();
         assertThat(audit.modelCalls.get()).isBetween(plan.sections().size(), plan.sections().size() * 2);
         assertThat(rawOutlineResponses).isNotEmpty().hasSizeLessThanOrEqualTo(2);
         assertThat(rawSectionResponses).isNotEmpty();
@@ -300,12 +299,17 @@ class TeachingRichLessonPaidCanaryTest {
         CatalogEvidence corpus = new CatalogEvidence(versionId, visualPageEvidence(preparation));
 
         List<String> rawSectionResponses = Collections.synchronizedList(new ArrayList<>());
+        List<String> rawCriticResponses = Collections.synchronizedList(new ArrayList<>());
         VersionedAgentPrompts prompts = prompts();
         RuntimeModelConfiguration configuration = configuration(
-                provider, recordingChatModel(provider, rawSectionResponses));
+                provider,
+                recordingChatModel(provider, rawSectionResponses),
+                recordingChatModel(provider, rawCriticResponses));
         RecordingTeachingModel sections = new RecordingTeachingModel(new SpringAiTeachingLessonModel(
-                configuration, new FakeTeachingLessonModel(), prompts, 0.2d));
+                configuration, prompts, 0.2d));
         CanaryInvocations audit = new CanaryInvocations();
+        GeneratedContentCritic publicationCritic = new ConditionalGeneratedContentCritic(
+                new SpringAiContentCriticModel(configuration, prompts), audit, false);
         UUID runId = UUID.randomUUID();
         NativeToolScopes scopes = mock(NativeToolScopes.class);
         when(scopes.create(eq(OWNER), eq(versionId), eq(runId))).thenReturn(java.util.Optional.of(
@@ -316,7 +320,7 @@ class TeachingRichLessonPaidCanaryTest {
                 corpus,
                 sections,
                 new PolicyEvidenceVerifier(),
-                mock(GeneratedContentCritic.class),
+                publicationCritic,
                 audit,
                 VisualRulebookPageFacts.empty(),
                 VisualRulebookPageCatalogModel.unavailable(),
@@ -361,6 +365,7 @@ class TeachingRichLessonPaidCanaryTest {
         result.put("publishedLesson", visibleLesson(lesson));
         result.put("rawStructuredDrafts", sections.visibleDrafts());
         result.put("rawSectionProviderResponses", List.copyOf(rawSectionResponses));
+        result.put("rawCriticProviderResponses", List.copyOf(rawCriticResponses));
         result.put("fieldPreservation", fieldDiffs);
         result.put("allPlayerFacingFieldsPreserved", fieldDiffs.stream()
                 .allMatch(diff -> Boolean.TRUE.equals(diff.get("playerFacingFieldsExact"))));
@@ -387,7 +392,7 @@ class TeachingRichLessonPaidCanaryTest {
                 .containsEntry("playerFacingFieldsExact", true)
                 .containsEntry("publishedFieldsAreExactRawSubset", true)
                 .containsEntry("plannedUnitsCovered", true));
-        assertThat(audit.criticCalls).hasValue(0);
+        assertThat(audit.criticCalls.get()).isPositive();
         assertThat(audit.modelCalls.get()).isBetween(plan.sections().size(), plan.sections().size() * 2);
         assertThat(rawSectionResponses).isNotEmpty();
         assertThat(lessonLatencyMs).isLessThan(180_000L);
@@ -419,8 +424,7 @@ class TeachingRichLessonPaidCanaryTest {
         List<String> rawResponses = Collections.synchronizedList(new ArrayList<>());
         SpringAiTeachingOutlineModel outlineModel = new SpringAiTeachingOutlineModel(
                 configuration(provider, recordingChatModel(provider, rawResponses)),
-                prompts(),
-                new FakeTeachingOutlineModel());
+                prompts());
         long startedAt = System.nanoTime();
         OutlineDraft outline;
         try {
@@ -540,7 +544,7 @@ class TeachingRichLessonPaidCanaryTest {
             }
         };
         SpringAiTeachingOutlineModel outlineModel = new SpringAiTeachingOutlineModel(
-                configuration(provider, stagedModel), prompts(), new FakeTeachingOutlineModel());
+                configuration(provider, stagedModel), prompts());
         long startedAt = System.nanoTime();
         OutlineDraft outline;
         try {
@@ -619,6 +623,7 @@ class TeachingRichLessonPaidCanaryTest {
             RecordingTeachingModel model,
             List<String> rawOutlineResponses,
             List<String> rawSectionResponses,
+            List<String> rawCriticResponses,
             CanaryInvocations audit,
             boolean outlineReplayed,
             double teachingTemperature,
@@ -649,7 +654,7 @@ class TeachingRichLessonPaidCanaryTest {
         result.put("capturedOutlineResponsesUsed", outlineReplayed ? rawOutlineResponses.size() : 0);
         result.put("outlineModelCalls", currentOutlineModelCalls);
         result.put("sectionModelCalls", audit.modelCalls.get());
-        result.put("totalModelCalls", currentOutlineModelCalls + audit.modelCalls.get());
+        result.put("totalModelCalls", currentOutlineModelCalls + audit.modelCalls.get() + audit.criticCalls.get());
         result.put("toolCalls", audit.toolCalls.get());
         result.put("toolOperations", List.copyOf(audit.toolOperations));
         result.put("criticCalls", audit.criticCalls.get());
@@ -678,6 +683,7 @@ class TeachingRichLessonPaidCanaryTest {
         result.put("modelRequests", model.visibleRequests());
         result.put("rawOutlineProviderResponses", List.copyOf(rawOutlineResponses));
         result.put("rawSectionProviderResponses", List.copyOf(rawSectionResponses));
+        result.put("rawCriticProviderResponses", List.copyOf(rawCriticResponses));
         result.put("fieldPreservation", fieldDiffs);
         result.put("allPlayerFacingFieldsPreserved", fieldDiffs.stream()
                 .allMatch(diff -> Boolean.TRUE.equals(diff.get("playerFacingFieldsExact"))));
@@ -737,7 +743,7 @@ class TeachingRichLessonPaidCanaryTest {
         when(configuration.usesDeepSeekNonThinkingGeneration(RuntimeModelConfiguration.Role.CRITIC, OWNER))
                 .thenReturn("deepseek".equals(provider.provider()));
         var critic = new ConditionalGeneratedContentCritic(
-                new SpringAiContentCriticModel(configuration, new FakeContentCriticModel(), prompts), audit, true);
+                new SpringAiContentCriticModel(configuration, prompts), audit, true);
         var batch = LessonReviewPlanner.plan(plan, sections.reviewCandidates(plan, lesson), runId);
         long started = System.nanoTime();
         var review = critic.review(batch.request(), ReviewRisk.HIGH_IMPACT, OWNER);
@@ -963,16 +969,31 @@ class TeachingRichLessonPaidCanaryTest {
     }
 
     private RuntimeModelConfiguration configuration(Provider provider, ChatModel model) {
+        return configuration(provider, model, model);
+    }
+
+    private RuntimeModelConfiguration configuration(
+            Provider provider,
+            ChatModel teachingModel,
+            ChatModel criticModel) {
         RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
         when(configuration.providerFor(RuntimeModelConfiguration.Role.TEACHING)).thenReturn(provider.provider());
         when(configuration.providerFor(RuntimeModelConfiguration.Role.TEACHING, OWNER)).thenReturn(provider.provider());
+        when(configuration.providerFor(RuntimeModelConfiguration.Role.CRITIC)).thenReturn(provider.provider());
+        when(configuration.providerFor(RuntimeModelConfiguration.Role.CRITIC, OWNER)).thenReturn(provider.provider());
         when(configuration.providerFor(RuntimeModelConfiguration.Role.VISUAL)).thenReturn("fake");
         when(configuration.providerFor(RuntimeModelConfiguration.Role.VISUAL, OWNER)).thenReturn("fake");
-        when(configuration.modelFor(RuntimeModelConfiguration.Role.TEACHING, OWNER)).thenReturn(model);
+        when(configuration.modelFor(RuntimeModelConfiguration.Role.TEACHING, OWNER)).thenReturn(teachingModel);
+        when(configuration.modelFor(RuntimeModelConfiguration.Role.CRITIC, OWNER)).thenReturn(criticModel);
         when(configuration.modelNameFor(RuntimeModelConfiguration.Role.TEACHING, OWNER)).thenReturn(provider.model());
+        when(configuration.modelNameFor(RuntimeModelConfiguration.Role.CRITIC, OWNER)).thenReturn(provider.model());
         when(configuration.usesFake(RuntimeModelConfiguration.Role.TEACHING, OWNER)).thenReturn(false);
+        when(configuration.usesFake(RuntimeModelConfiguration.Role.CRITIC, OWNER)).thenReturn(false);
         when(configuration.usesDeepSeekNonThinkingGeneration(
                         RuntimeModelConfiguration.Role.TEACHING, OWNER))
+                .thenReturn("deepseek".equals(provider.provider()) && !deepSeekThinking());
+        when(configuration.usesDeepSeekNonThinkingGeneration(
+                        RuntimeModelConfiguration.Role.CRITIC, OWNER))
                 .thenReturn("deepseek".equals(provider.provider()) && !deepSeekThinking());
         return configuration;
     }

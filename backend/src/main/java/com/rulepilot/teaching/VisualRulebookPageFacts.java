@@ -1,7 +1,7 @@
 package com.rulepilot.teaching;
 
-import com.rulepilot.retrieval.VisualTranscribedRuleEvidence;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.SourceDependency;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.RuleGroupFact;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
@@ -52,7 +52,8 @@ public interface VisualRulebookPageFacts {
             int schemaVersion,
             List<SourceDependency> sourceDependencies,
             List<String> ruleGroupIdentifiers,
-            boolean ruleGroupInventoryComplete) {
+            boolean ruleGroupInventoryComplete,
+            List<RuleGroupFact> ruleGroupFacts) {
 
         // Schema 23 records the crop-review rectangle after it has been projected back to source-page coordinates.
         // Schema 22 facts were cataloged before the application published that refined rectangle and must be rebuilt.
@@ -72,7 +73,9 @@ public interface VisualRulebookPageFacts {
         // preserving their original short source spans and refusing unsafe arithmetic.
         // Schema 35 gives every visual rule group a page-local structural identity. Visible headings remain labels,
         // so one heading can legitimately own several distinct list items without invalidating the whole page.
-        public static final int CURRENT_SCHEMA_VERSION = 35;
+        // Schema 36 persists the model's typed ruleGroups objects. Coverage no longer reconstructs identifiers and
+        // facts by splitting the natural-language factual summary.
+        public static final int CURRENT_SCHEMA_VERSION = 36;
 
         public PageFact(int pageNumber, String printedTerms, String factualSummary, List<String> keywords) {
             this(
@@ -86,7 +89,8 @@ public interface VisualRulebookPageFacts {
                     CURRENT_SCHEMA_VERSION,
                     List.of(),
                     List.of(),
-                    false);
+                    false,
+                    List.of());
         }
 
         public PageFact(
@@ -106,7 +110,8 @@ public interface VisualRulebookPageFacts {
                     CURRENT_SCHEMA_VERSION,
                     List.of(),
                     List.of(),
-                    false);
+                    false,
+                    List.of());
         }
 
         public PageFact(
@@ -127,7 +132,8 @@ public interface VisualRulebookPageFacts {
                     schemaVersion,
                     List.of(),
                     List.of(),
-                    false);
+                    false,
+                    List.of());
         }
 
         public PageFact(
@@ -150,7 +156,8 @@ public interface VisualRulebookPageFacts {
                     schemaVersion,
                     List.of(),
                     List.of(),
-                    false);
+                    false,
+                    List.of());
         }
 
         public PageFact(
@@ -174,7 +181,35 @@ public interface VisualRulebookPageFacts {
                     schemaVersion,
                     sourceDependencies,
                     List.of(),
-                    false);
+                    false,
+                    List.of());
+        }
+
+        public PageFact(
+                int pageNumber,
+                String printedTerms,
+                String factualSummary,
+                List<String> keywords,
+                List<VisualAnchor> visualAnchors,
+                List<IconOccurrence> iconOccurrences,
+                boolean iconInventoryComplete,
+                int schemaVersion,
+                List<SourceDependency> sourceDependencies,
+                List<String> ruleGroupIdentifiers,
+                boolean ruleGroupInventoryComplete) {
+            this(
+                    pageNumber,
+                    printedTerms,
+                    factualSummary,
+                    keywords,
+                    visualAnchors,
+                    iconOccurrences,
+                    iconInventoryComplete,
+                    schemaVersion,
+                    sourceDependencies,
+                    ruleGroupIdentifiers,
+                    ruleGroupInventoryComplete,
+                    List.of());
         }
 
         public PageFact {
@@ -189,7 +224,9 @@ public interface VisualRulebookPageFacts {
                     || sourceDependencies.stream().anyMatch(java.util.Objects::isNull)
                     || ruleGroupIdentifiers == null
                     || ruleGroupIdentifiers.stream()
-                            .anyMatch(identifier -> identifier == null || identifier.isBlank())) {
+                            .anyMatch(identifier -> identifier == null || identifier.isBlank())
+                    || ruleGroupFacts == null
+                    || ruleGroupFacts.stream().anyMatch(java.util.Objects::isNull)) {
                 throw new IllegalArgumentException("visual page fact is too large");
             }
             if (schemaVersion < 1 || schemaVersion > CURRENT_SCHEMA_VERSION) {
@@ -202,8 +239,13 @@ public interface VisualRulebookPageFacts {
             iconOccurrences = iconOccurrences.stream().distinct().toList();
             sourceDependencies = sourceDependencies.stream().distinct().toList();
             ruleGroupIdentifiers = ruleGroupIdentifiers.stream().map(String::strip).distinct().toList();
-            if (ruleGroupInventoryComplete
-                    && !VisualSourceRuleGroupLedger.hasExactFactBindings(ruleGroupIdentifiers, factualSummary)) {
+            ruleGroupFacts = ruleGroupFacts.stream().distinct().toList();
+            // Historical rows must remain deserializable so the cataloger can identify and rebuild them. Schema 36
+            // is the first schema that persisted typed rule-group facts; an older completeness flag described the
+            // old prose ledger and must never be promoted to current completeness by this constructor.
+            if (schemaVersion == CURRENT_SCHEMA_VERSION
+                    && ruleGroupInventoryComplete
+                    && !VisualSourceRuleGroupLedger.hasExactFactBindings(ruleGroupIdentifiers, ruleGroupFacts)) {
                 throw new IllegalArgumentException(
                         "complete rule-group inventory requires one exact non-empty fact per identifier");
             }
@@ -244,38 +286,6 @@ public interface VisualRulebookPageFacts {
                     + (visualAnchors.isEmpty()
                             ? "\nCataloged visual anchors: none"
                             : "\nCataloged visual anchors (0-1000 page coordinates):" + anchors);
-        }
-
-        /**
-         * Image-only PDFs have no ordinary extracted prose to ground a lesson. In that case the bounded page-level
-         * vision pass becomes a transcription adapter: its factual ledger is usable, but only at the granularity it
-         * actually recorded. Printed-term bags are intentionally excluded because detached numbers and labels can be
-         * associated with the wrong subject.
-         */
-        public String transcribedRuleEvidenceText() {
-            String anchors = visualAnchors.stream()
-                    .map(anchor -> anchor.kind() + " | " + anchor.label()
-                            + " | " + anchor.visibleDescription()
-                            + " | rect=" + anchor.x() + "," + anchor.y() + ","
-                            + anchor.width() + "," + anchor.height())
-                    .collect(java.util.stream.Collectors.joining("\n- ", "\n- ", ""));
-            return transcribedRuleEvidenceText(factualSummary)
-                    + (visualAnchors.isEmpty()
-                            ? "\nCataloged visual anchors: none"
-                            : "\nCataloged visual anchors (presentation only; 0-1000 page coordinates):" + anchors);
-        }
-
-        /**
-         * Projects a persisted factual ledger into the same bounded transcription contract when the caller does not
-         * need visual anchors. Answer retrieval uses this overload after it has proved that the canonical page has no
-         * extracted prose; ordinary text-backed pages continue to treat the same ledger as presentation data only.
-         */
-        public static String transcribedRuleEvidenceText(String factualSummary) {
-            return VisualTranscribedRuleEvidence.render(factualSummary);
-        }
-
-        public static boolean isTranscribedRuleEvidence(String value) {
-            return VisualTranscribedRuleEvidence.contains(value);
         }
 
     }

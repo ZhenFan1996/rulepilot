@@ -129,11 +129,7 @@ final class VisualLessonStepLocator {
     }
 
     private String claimText(LessonStep step) {
-        String prefix = "步骤 " + step.position() + "（" + step.heading() + "）：";
-        int remaining = 600 - prefix.length();
-        if (remaining <= 0) return prefix.substring(0, 600);
-        String body = step.text();
-        return body.length() <= remaining ? prefix + body : prefix + body.substring(0, remaining);
+        return "步骤 " + step.position() + "（" + step.heading() + "）：" + step.text();
     }
 
     private boolean supportsExactStep(VisualRegionLocator.LocatedRegion region, LessonStep step) {
@@ -163,7 +159,6 @@ final class VisualLessonStepLocator {
             case MALFORMED_RESPONSE -> VisualLessonEnricher.Outcome.MODEL_MALFORMED_RESPONSE;
             case UNSUPPORTED_SCOPE -> VisualLessonEnricher.Outcome.MODEL_UNSUPPORTED_SCOPE;
             case INVALID_GEOMETRY -> VisualLessonEnricher.Outcome.MODEL_INVALID_GEOMETRY;
-            case NON_CHINESE_OBSERVATION -> VisualLessonEnricher.Outcome.MODEL_NON_CHINESE_OBSERVATION;
             case TIMEOUT -> VisualLessonEnricher.Outcome.MODEL_TIMEOUT;
             case INTERRUPTED -> VisualLessonEnricher.Outcome.MODEL_INTERRUPTED;
             case EXECUTOR_BUSY -> VisualLessonEnricher.Outcome.MODEL_BUSY;

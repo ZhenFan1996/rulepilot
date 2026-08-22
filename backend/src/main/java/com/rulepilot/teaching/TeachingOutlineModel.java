@@ -75,27 +75,51 @@ public interface TeachingOutlineModel {
             String text,
             List<VisualRulebookPageCatalogModel.SourceDependency> sourceDependencies,
             List<String> sourceRuleGroupIdentifiers,
-            boolean sourceRuleGroupInventoryComplete) {
+            boolean sourceRuleGroupInventoryComplete,
+            List<VisualRulebookPageCatalogModel.RuleGroupFact> sourceRuleGroupFacts) {
         public PageInput {
             if (pageNumber < 1 || text == null || text.isBlank() || sourceDependencies == null
                     || sourceRuleGroupIdentifiers == null
                     || sourceRuleGroupIdentifiers.stream()
-                            .anyMatch(identifier -> identifier == null || identifier.isBlank())) {
+                            .anyMatch(identifier -> identifier == null || identifier.isBlank())
+                    || sourceRuleGroupFacts == null
+                    || sourceRuleGroupFacts.stream().anyMatch(java.util.Objects::isNull)) {
                 throw new IllegalArgumentException("rulebook page input is invalid");
             }
             sourceDependencies = sourceDependencies.stream().distinct().toList();
-            sourceRuleGroupIdentifiers = sourceRuleGroupIdentifiers.stream().distinct().toList();
+            sourceRuleGroupIdentifiers = sourceRuleGroupIdentifiers.stream().map(String::strip).distinct().toList();
+            sourceRuleGroupFacts = sourceRuleGroupFacts.stream().distinct().toList();
+            if (sourceRuleGroupInventoryComplete
+                    && !VisualSourceRuleGroupLedger.hasExactFactBindings(
+                            sourceRuleGroupIdentifiers, sourceRuleGroupFacts)) {
+                throw new IllegalArgumentException("complete page input requires typed rule-group facts");
+            }
+        }
+
+        public PageInput(
+                int pageNumber,
+                String text,
+                List<VisualRulebookPageCatalogModel.SourceDependency> sourceDependencies,
+                List<String> sourceRuleGroupIdentifiers,
+                boolean sourceRuleGroupInventoryComplete) {
+            this(
+                    pageNumber,
+                    text,
+                    sourceDependencies,
+                    sourceRuleGroupIdentifiers,
+                    sourceRuleGroupInventoryComplete,
+                    List.of());
         }
 
         public PageInput(
                 int pageNumber,
                 String text,
                 List<VisualRulebookPageCatalogModel.SourceDependency> sourceDependencies) {
-            this(pageNumber, text, sourceDependencies, List.of(), false);
+            this(pageNumber, text, sourceDependencies, List.of(), false, List.of());
         }
 
         public PageInput(int pageNumber, String text) {
-            this(pageNumber, text, List.of(), List.of(), false);
+            this(pageNumber, text, List.of(), List.of(), false, List.of());
         }
     }
 
@@ -235,10 +259,8 @@ public interface TeachingOutlineModel {
                 throw new IllegalArgumentException("teaching source slot owner is invalid");
             if (teachingUnitId == null || teachingUnitId.isBlank())
                 throw new IllegalArgumentException("teaching source slot teachingUnitId is invalid");
-            // A slot with an omitted status still claims a direct page anchor. Treat that structural omission as the
-            // least-privileged usable state and let the source contract prove the exact identifier on the bound page.
-            // Explicit external or unresolved gaps remain model-owned values and are never promoted here.
-            availability = availability == null ? SourceCoverageAvailability.SOURCED : availability;
+            if (availability == null)
+                throw new IllegalArgumentException("teaching source slot availability is missing");
             sourcePageNumbers = sourcePageNumbers.stream().distinct().toList();
             if (availability != SourceCoverageAvailability.UNRESOLVED && sourcePageNumbers.isEmpty()) {
                 throw new IllegalArgumentException("sourced teaching coverage slots require a source page");
@@ -287,7 +309,9 @@ public interface TeachingOutlineModel {
             List<String> coverageTags,
             List<Integer> sourcePageNumbers) {
         public TopicDraft {
-            if (title == null || title.isBlank()
+            if (key == null || key.isBlank()
+                    || !key.matches("[a-z0-9]+(?:-[a-z0-9]+)*")
+                    || title == null || title.isBlank()
                     || objective == null || objective.isBlank()
                     || (retrievalQueries != null && retrievalQueries.stream()
                             .anyMatch(query -> query == null || query.isBlank()))
@@ -295,7 +319,6 @@ public interface TeachingOutlineModel {
                             .anyMatch(pageNumber -> pageNumber == null || pageNumber < 1))) {
                 throw new IllegalArgumentException("teaching outline topic is invalid");
             }
-            key = key == null ? "" : key;
             retrievalQueries = retrievalQueries == null ? List.of() : List.copyOf(retrievalQueries);
             coverageTags = coverageTags == null ? List.of() : List.copyOf(coverageTags);
             sourcePageNumbers = sourcePageNumbers == null ? List.of() : sourcePageNumbers.stream().distinct().toList();

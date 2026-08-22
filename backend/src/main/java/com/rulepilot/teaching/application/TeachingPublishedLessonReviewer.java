@@ -113,6 +113,16 @@ final class TeachingPublishedLessonReviewer {
             }
             return true;
         }
+        if (!review.performed()) {
+            resolveInitialReviewFailure(
+                    candidates,
+                    sections,
+                    assistantRunId,
+                    progressPublisher,
+                    "POST_PUBLICATION_REVIEW_SKIPPED_RETAINING_CITED_DRAFT",
+                    "POST_PUBLICATION_REVIEW_SKIPPED_WITHHELD_QUANTITATIVE_DRAFT");
+            return true;
+        }
 
         Map<Integer, List<GeneratedContentCritic.Issue>> issuesBySection = review.issues().stream()
                 .collect(Collectors.groupingBy(issue -> batch.claimOwners()
@@ -313,7 +323,7 @@ final class TeachingPublishedLessonReviewer {
             }
             SectionDraft invalidDraft = corrected;
             List<String> structuralRepair = reviewCorrectionPolicy.structuralRepairFeedback(
-                    feedback, TeachingDraftRejectionCategory.from(invalidCorrection));
+                    feedback, "DRAFT_VALIDATION_REJECTED");
             corrected = sectionDraftComposer.reviseModelDraft(
                     assistantRunId,
                     candidate.planned(),

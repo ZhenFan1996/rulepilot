@@ -39,7 +39,7 @@ watch(() => props.imageUrl, () => {
       :class="imageLoaded ? 'opacity-100' : 'opacity-0'"
       class="absolute inset-0 size-full bg-paper p-1.5 object-contain transition-opacity duration-200"
       decoding="async"
-      loading="eager"
+      :loading="index < 4 ? 'eager' : 'lazy'"
       referrerpolicy="no-referrer"
       @error="imageUnavailable = true"
       @load="imageLoaded = true"

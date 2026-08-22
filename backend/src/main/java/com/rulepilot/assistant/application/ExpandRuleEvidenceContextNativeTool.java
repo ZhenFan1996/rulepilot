@@ -132,18 +132,16 @@ public class ExpandRuleEvidenceContextNativeTool implements NativeAgentTool {
     private Map<String, Object> observation(RuleEvidence evidence) {
         Map<String, Object> value = new LinkedHashMap<>();
         value.put("evidenceId", evidence.chunkId().toString());
-        value.put("sectionType", bounded(evidence.sectionType(), 80));
-        value.put("heading", bounded(evidence.heading(), 240));
-        value.put("excerpt", bounded(evidence.excerpt(), 1200));
+        value.put("sectionType", complete(evidence.sectionType()));
+        value.put("heading", complete(evidence.heading()));
+        value.put("excerpt", complete(evidence.excerpt()));
         value.put("pageFrom", evidence.pageFrom());
         value.put("pageTo", evidence.pageTo());
         return Map.copyOf(value);
     }
 
-    private String bounded(String value, int maximum) {
-        if (value == null) return "";
-        String stripped = value.strip();
-        return stripped.length() <= maximum ? stripped : stripped.substring(0, maximum);
+    private String complete(String value) {
+        return value == null ? "" : value.strip();
     }
 
     private record Arguments(List<String> evidenceIds, Integer radius) {}

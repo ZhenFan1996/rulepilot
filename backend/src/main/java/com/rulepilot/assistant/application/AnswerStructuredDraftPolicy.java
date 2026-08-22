@@ -13,8 +13,7 @@ final class AnswerStructuredDraftPolicy {
     static Selection retainSelected(ModelRequest request, ModelDraft draft) {
         if (request == null || draft == null) throw new IllegalArgumentException("structured draft input is invalid");
         AnswerAid selected = request.answerAid();
-        boolean omitted = !draft.situationChecks().isEmpty()
-                || selected != AnswerAid.CALCULATION && !draft.calculations().isEmpty()
+        boolean omitted = selected != AnswerAid.CALCULATION && !draft.calculations().isEmpty()
                 || selected != AnswerAid.WALKTHROUGH && !draft.walkthroughSteps().isEmpty()
                 || selected != AnswerAid.DECISION_TABLE && !draft.decisionBranches().isEmpty()
                 || selected != AnswerAid.EXCEPTIONS && !draft.exceptionClauses().isEmpty()
@@ -37,7 +36,6 @@ final class AnswerStructuredDraftPolicy {
                 draft.confidence(),
                 draft.answerBasis(),
                 selected == AnswerAid.CALCULATION ? draft.calculations() : List.of(),
-                List.of(),
                 selected == AnswerAid.WALKTHROUGH ? draft.walkthroughSteps() : List.of(),
                 selected == AnswerAid.DECISION_TABLE ? draft.decisionBranches() : List.of(),
                 selected == AnswerAid.EXCEPTIONS ? draft.exceptionClauses() : List.of(),

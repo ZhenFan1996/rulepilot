@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test, type Page } from '@playwright/test'
 
 const catalog = {
   ready: true,
@@ -35,6 +35,12 @@ const catalog = {
     mechanics: ['卡牌轮抽'],
     bggUrl: 'https://boardgamegeek.com/boardgame/266192',
   }],
+}
+
+async function expectWingspanRecommendationReady(page: Page) {
+  const turn = page.getByTestId('assistant-recommendation-turn').last()
+  await expect(turn.getByRole('heading', { level: 3, name: '展翅翱翔', exact: true })).toBeVisible()
+  await expect(turn.getByRole('button', { name: '选这款，找规则书' })).toBeVisible()
 }
 
 const similarToMosaicField = {
@@ -541,7 +547,7 @@ test('keeps full-catalog browsing separate from the conversational recommendatio
   await page.getByRole('button', { name: '发送', exact: true }).click()
   await firstAgentRequest
   await expect(page.getByText('从完整 BGG 目录中核对了 20 款候选。')).toBeVisible()
-  await expect(page.getByText('支持 4 人游玩')).toBeVisible()
+  await expectWingspanRecommendationReady(page)
 
   const focusedRequest = page.waitForRequest(request => {
     if (!request.url().includes('/api/v1/bgg/recommendation-agent')) return false
@@ -549,8 +555,8 @@ test('keeps full-catalog browsing separate from the conversational recommendatio
   })
   await page.getByRole('button', { name: '介绍一下' }).click()
   await focusedRequest
-  await expect(page.getByText('发行商资料提供了分步教学流程')).toBeVisible()
-  await expect(page.getByRole('link', { name: /publisher\.example/ })).toHaveAttribute('rel', /noopener/)
+  await expect(page.getByText('我补查了教学和实际桌上节奏。')).toBeVisible()
+  await expect(page.getByRole('link', { name: /Publisher guide/ })).toHaveAttribute('rel', /noopener/)
   await expect(page.getByText('目前记下的偏好')).toBeVisible()
 })
 
@@ -691,7 +697,7 @@ test('restores the server conversation and unsent draft after sign-in and browse
   await composer.fill('想找 3–4 人、120–180 分钟的策略游戏')
   await page.getByRole('button', { name: '发送', exact: true }).click()
   await expect(page.getByText('服务端保存了完整对话和候选。')).toBeVisible()
-  await expect(page.getByText('支持 3–4 人')).toBeVisible()
+  await expectWingspanRecommendationReady(page)
   await composer.fill('这句草稿尚未发送')
   await page.getByRole('link', { name: /打开完整桌游目录/ }).click()
   await expect(page).toHaveURL('/discover/catalog')
@@ -705,7 +711,7 @@ test('restores the server conversation and unsent draft after sign-in and browse
   await expect(page).toHaveURL('/discover')
   await expect(page.getByText('想找 3–4 人、120–180 分钟的策略游戏')).toHaveCount(1)
   await expect(page.getByText('服务端保存了完整对话和候选。')).toHaveCount(1)
-  await expect(page.getByText('支持 3–4 人')).toBeVisible()
+  await expectWingspanRecommendationReady(page)
   await expect(page.getByText('3–4 人', { exact: true })).toBeVisible()
   await expect(page.getByText('120–180 分钟', { exact: true })).toBeVisible()
   await expect(page.getByLabel('聊聊你想玩的游戏')).toHaveValue('这句草稿尚未发送')
@@ -796,7 +802,7 @@ test('stops closed reader transport while the durable guide remains reopenable',
 
   await page.getByLabel('聊聊你想玩的游戏').fill('4 个人，90 分钟内，想要中等策略')
   await page.getByRole('button', { name: '发送', exact: true }).click()
-  await expect(page.getByText('支持 4 人游玩')).toBeVisible()
+  await expectWingspanRecommendationReady(page)
   await page.getByRole('button', { name: '选这款，找规则书' }).click()
 
   const journey = page.getByTestId('player-journey-surface')
@@ -944,7 +950,7 @@ test('keeps recommendation, rulebook reading, progressive teaching, and grounded
   const recommendationComposer = page.getByLabel('聊聊你想玩的游戏')
   await recommendationComposer.fill('4 个人，90 分钟内，想要中等策略；朋友聚会，希望热闹但不要尴尬')
   await page.getByRole('button', { name: '发送', exact: true }).click()
-  await expect(page.getByText('支持 4 人游玩')).toBeVisible()
+  await expectWingspanRecommendationReady(page)
   await recommendationComposer.fill('稍后还想继续找一款合作游戏')
 
   await page.getByRole('button', { name: '查看完整资料：展翅翱翔' }).click()
@@ -1032,7 +1038,7 @@ test('keeps recommendation, rulebook reading, progressive teaching, and grounded
   await page.getByTestId('agent-role-switcher').getByRole('button', { name: '继续推荐' }).click()
   await expect(recommendationComposer).toBeVisible()
   await expect(recommendationComposer).toHaveValue('稍后还想继续找一款合作游戏')
-  await expect(page.getByText('支持 4 人游玩')).toBeVisible()
+  await expectWingspanRecommendationReady(page)
   await expect(page).toHaveURL(/\/discover$/)
 
   await page.goto('/lessons')
@@ -1052,7 +1058,7 @@ test('hands persisted recommendation work to global guides before the preparatio
 
   await page.getByLabel('聊聊你想玩的游戏').fill('4 个人，90 分钟内，想要中等策略')
   await page.getByRole('button', { name: '发送', exact: true }).click()
-  await expect(page.getByText('支持 4 人游玩')).toBeVisible()
+  await expectWingspanRecommendationReady(page)
   await page.getByRole('button', { name: '选这款，找规则书' }).click()
   const journey = page.getByTestId('player-journey-surface')
   await journey.getByRole('button', { name: '选择这份' }).click()
@@ -1089,7 +1095,7 @@ test('recovers persisted recommendation work after a full refresh without journe
 
   await page.getByLabel('聊聊你想玩的游戏').fill('4 个人，90 分钟内，想要中等策略')
   await page.getByRole('button', { name: '发送', exact: true }).click()
-  await expect(page.getByText('支持 4 人游玩')).toBeVisible()
+  await expectWingspanRecommendationReady(page)
   await page.getByRole('button', { name: '选这款，找规则书' }).click()
   const journey = page.getByTestId('player-journey-surface')
   await journey.getByRole('button', { name: '选择这份' }).click()
@@ -1123,7 +1129,7 @@ test('advances My Guides from plan startup to the first readable chapter without
 
   await page.getByLabel('聊聊你想玩的游戏').fill('4 个人，90 分钟内，想要中等策略')
   await page.getByRole('button', { name: '发送', exact: true }).click()
-  await expect(page.getByText('支持 4 人游玩')).toBeVisible()
+  await expectWingspanRecommendationReady(page)
   await page.getByRole('button', { name: '选这款，找规则书' }).click()
   const journey = page.getByTestId('player-journey-surface')
   await journey.getByRole('button', { name: '选择这份' }).click()
@@ -1159,7 +1165,7 @@ test('keeps one global task while completed preparation hands off to a Teaching 
 
   await page.getByLabel('聊聊你想玩的游戏').fill('4 个人，90 分钟内，想要中等策略')
   await page.getByRole('button', { name: '发送', exact: true }).click()
-  await expect(page.getByText('支持 4 人游玩')).toBeVisible()
+  await expectWingspanRecommendationReady(page)
   await page.getByRole('button', { name: '选这款，找规则书' }).click()
   const journey = page.getByTestId('player-journey-surface')
   await journey.getByRole('button', { name: '选择这份' }).click()
@@ -1190,7 +1196,7 @@ test('recovers the preparation-to-Teaching bridge after a storage-free browser r
 
   await page.getByLabel('聊聊你想玩的游戏').fill('4 个人，90 分钟内，想要中等策略')
   await page.getByRole('button', { name: '发送', exact: true }).click()
-  await expect(page.getByText('支持 4 人游玩')).toBeVisible()
+  await expectWingspanRecommendationReady(page)
   await page.getByRole('button', { name: '选这款，找规则书' }).click()
   const journey = page.getByTestId('player-journey-surface')
   await journey.getByRole('button', { name: '选择这份' }).click()
@@ -1225,7 +1231,7 @@ test('retries failed preparation through the original import without downloading
 
   await page.getByLabel('聊聊你想玩的游戏').fill('4 个人，90 分钟内，想要中等策略')
   await page.getByRole('button', { name: '发送', exact: true }).click()
-  await expect(page.getByText('支持 4 人游玩')).toBeVisible()
+  await expectWingspanRecommendationReady(page)
   await page.getByRole('button', { name: '选这款，找规则书' }).click()
   const journey = page.getByTestId('player-journey-surface')
   await journey.getByRole('button', { name: '选择这份' }).click()
@@ -1255,7 +1261,7 @@ test('keeps the readable-guide continuation legible and focus-safe at 320 and 39
 
   await page.getByLabel('聊聊你想玩的游戏').fill('4 个人，90 分钟内，想要中等策略')
   await page.getByRole('button', { name: '发送', exact: true }).click()
-  await expect(page.getByText('支持 4 人游玩')).toBeVisible()
+  await expectWingspanRecommendationReady(page)
   await page.getByRole('button', { name: '选这款，找规则书' }).click()
   const journey = page.getByTestId('player-journey-surface')
   await journey.getByRole('button', { name: '选择这份' }).click()

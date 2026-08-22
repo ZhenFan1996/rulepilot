@@ -142,12 +142,12 @@ class TeachingPublishedLessonReviewerTest {
         evidence.addAll(lowerPriorityNeighbors);
         evidence.add(aggregation);
         evidence.add(workedTotal);
-        SectionDraft citedDraft = draft(unitRuleId, "这一类一共得到9分。");
+        SectionDraft citedDraft = quantitativeDraft(unitRuleId, "这一类一共得到9分。");
         TeachingLessonModel model = request -> citedDraft;
         var invocations = new ImmediateAuditedAgentInvocations();
         TeachingSectionDraftComposer composer = new TeachingSectionDraftComposer(
                 model, new PolicyEvidenceVerifier(), invocations, VisualRulebookPageFacts.empty());
-        TeachingPlan plan = plan(versionId);
+        TeachingPlan plan = quantitativePlan(versionId);
         UUID runId = UUID.randomUUID();
         TeachingSectionDraftCandidate candidate = composer.compose(
                 plan, plan.sections().getFirst(), List.of(), evidence, runId, 0, false);
@@ -231,12 +231,12 @@ class TeachingPublishedLessonReviewerTest {
                 "Each matching card scores nine points.",
                 7,
                 7);
-        SectionDraft citedDraft = draft(evidenceId, "每张同类卡得到九分。");
+        SectionDraft citedDraft = quantitativeDraft(evidenceId, "每张同类卡得到九分。");
         TeachingLessonModel model = request -> citedDraft;
         var invocations = new ImmediateAuditedAgentInvocations();
         TeachingSectionDraftComposer composer = new TeachingSectionDraftComposer(
                 model, new PolicyEvidenceVerifier(), invocations, VisualRulebookPageFacts.empty());
-        TeachingPlan plan = plan(versionId);
+        TeachingPlan plan = quantitativePlan(versionId);
         UUID runId = UUID.randomUUID();
         TeachingSectionDraftCandidate candidate = composer.compose(
                 plan, plan.sections().getFirst(), List.of(), List.of(evidence), runId, 0, false);
@@ -247,6 +247,38 @@ class TeachingPublishedLessonReviewerTest {
 
         new TeachingPublishedLessonReviewer(
                         unavailableCritic, invocations, composer, new TeachingReviewCorrectionPolicy())
+                .review(plan, List.of(candidate), published, runId, () -> {});
+
+        assertThat(published).singleElement().satisfies(section ->
+                assertThat(section.evidenceStatus()).isEqualTo(EvidenceStatus.INSUFFICIENT_EVIDENCE));
+    }
+
+    @Test
+    void withholdsAnInitialQuantitativeDraftWhenTheCriticReportsThatItSkippedReview() {
+        UUID versionId = UUID.randomUUID();
+        UUID evidenceId = UUID.randomUUID();
+        RuleEvidence evidence = new RuleEvidence(
+                evidenceId,
+                versionId,
+                "SCORING",
+                "Per-card scoring",
+                "Each matching card scores nine points.",
+                7,
+                7);
+        SectionDraft citedDraft = quantitativeDraft(evidenceId, "每张同类卡得到九分。");
+        TeachingLessonModel model = request -> citedDraft;
+        var invocations = new ImmediateAuditedAgentInvocations();
+        TeachingSectionDraftComposer composer = new TeachingSectionDraftComposer(
+                model, new PolicyEvidenceVerifier(), invocations, VisualRulebookPageFacts.empty());
+        TeachingPlan plan = quantitativePlan(versionId);
+        UUID runId = UUID.randomUUID();
+        TeachingSectionDraftCandidate candidate = composer.compose(
+                plan, plan.sections().getFirst(), List.of(), List.of(evidence), runId, 0, false);
+        GeneratedContentCritic skippedCritic = (request, risk) -> new Review(false, List.of());
+        List<LessonSection> published = new ArrayList<>(List.of(candidate.section()));
+
+        new TeachingPublishedLessonReviewer(
+                        skippedCritic, invocations, composer, new TeachingReviewCorrectionPolicy())
                 .review(plan, List.of(candidate), published, runId, () -> {});
 
         assertThat(published).singleElement().satisfies(section ->
@@ -716,6 +748,25 @@ class TeachingPublishedLessonReviewerTest {
                 Instant.now());
     }
 
+    private TeachingPlan quantitativePlan(UUID versionId) {
+        return new TeachingPlan(
+                UUID.randomUUID(),
+                versionId,
+                "Game",
+                "Premise",
+                List.of(new TeachingPlan.PlannedSection(
+                        1,
+                        "scoring-ledger",
+                        "计分账本",
+                        "Teach the complete source-bound scoring calculation.",
+                        true,
+                        false,
+                        List.of("source-bound scoring calculation"),
+                        List.of(TeachingSourceCoverageContract.roleTag(SourceCoverageRole.SCORING)))),
+                "player",
+                Instant.now());
+    }
+
     private SectionDraft draft(UUID evidenceId, String text) {
         return new SectionDraft(
                 "结束流程",
@@ -723,6 +774,15 @@ class TeachingPublishedLessonReviewerTest {
                 "检查结束条件，再选择唯一适用的分支。",
                 List.of(evidenceId),
                 List.of(new StepDraft("准备下一轮", TeachingMove.FLOW, text, List.of(evidenceId))));
+    }
+
+    private SectionDraft quantitativeDraft(UUID evidenceId, String text) {
+        return new SectionDraft(
+                "计分账本",
+                VisualKind.SCOREBOARD,
+                "逐项核对规则书中的计分关系。",
+                List.of(evidenceId),
+                List.of(new StepDraft("核算结果", TeachingMove.LEDGER, text, List.of(evidenceId))));
     }
 
     private RuleEvidence opaqueEvidence(UUID versionId, String heading, String excerpt) {

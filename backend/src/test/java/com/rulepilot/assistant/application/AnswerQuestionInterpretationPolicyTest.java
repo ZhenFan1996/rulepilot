@@ -11,6 +11,7 @@ import com.rulepilot.assistant.RuleAnswerModel.EvidenceNeed;
 import com.rulepilot.assistant.RuleAnswerModel.PlannedSubquestion;
 import com.rulepilot.assistant.RuleAnswerModel.PlannedPageHint;
 import com.rulepilot.assistant.RuleAnswerModel.ReferenceBinding;
+import com.rulepilot.assistant.RuleAnswerModel.SubquestionOwner;
 import com.rulepilot.assistant.domain.MissingQuestionContext;
 import com.rulepilot.assistant.domain.LearningIntent;
 import com.rulepilot.assistant.domain.QuestionType;
@@ -44,7 +45,10 @@ class AnswerQuestionInterpretationPolicyTest {
                 List.of("红色标记", "行动结束后"),
                 Set.of(),
                 List.of(
-                        new PlannedSubquestion("红色标记在什么时候触发？", Set.of(EvidenceNeed.PRIOR_TURN)),
+                        new PlannedSubquestion(
+                                "红色标记在什么时候触发？",
+                                Set.of(EvidenceNeed.PRIOR_TURN),
+                                SubquestionOwner.BOUND_REFERENCE),
                         new PlannedSubquestion("这个也是在行动结束后触发吗？", Set.of(EvidenceNeed.DIRECT_RULE))));
 
         assertThat(policy.apply(deterministic, context, draft)).hasValueSatisfying(understood -> {
@@ -72,7 +76,7 @@ class AnswerQuestionInterpretationPolicyTest {
     }
 
     @Test
-    void rejectsTermsInventedByTheModelInsteadOfCopyingPlayerWording() {
+    void acceptsTypedRetrievalTermsWithoutSearchingThePlayersProse() {
         QuestionInterpretationDraft draft = new QuestionInterpretationDraft(
                 QuestionType.RULE_QUERY,
                 ReferenceBinding.CURRENT_QUESTION,
@@ -84,11 +88,34 @@ class AnswerQuestionInterpretationPolicyTest {
                         deterministic("这个阶段能做什么？"),
                         new QuestionContext(versionId),
                         draft))
-                .isEmpty();
+                .hasValueSatisfying(understood ->
+                        assertThat(understood.terms()).containsExactly("模型猜出的组件"));
     }
 
     @Test
-    void rejectsAQuestionPlanThatInventsAnEvidenceObligationOutsidePlayerContext() {
+    void preservesStructuredRetrievalQueriesOnTheirOwningSubquestion() {
+        QuestionInterpretationDraft draft = new QuestionInterpretationDraft(
+                QuestionType.RULE_QUERY,
+                ReferenceBinding.CURRENT_QUESTION,
+                List.of("设置"),
+                Set.of(),
+                List.of(new PlannedSubquestion(
+                        "游戏开始前如何设置？",
+                        Set.of(EvidenceNeed.DIRECT_RULE),
+                        SubquestionOwner.CURRENT_QUESTION,
+                        List.of("setup before first turn"))));
+
+        assertThat(policy.applyWithPlan(
+                        deterministic("游戏开始前如何设置？"),
+                        new QuestionContext(versionId),
+                        draft))
+                .hasValueSatisfying(interpretation -> assertThat(
+                                interpretation.plan().subquestions().getFirst().retrievalQueries())
+                        .containsExactly("setup before first turn"));
+    }
+
+    @Test
+    void acceptsTheTypedSubquestionWithoutSubstringGroundingItAgainstPlayerProse() {
         QuestionInterpretationDraft draft = new QuestionInterpretationDraft(
                 QuestionType.RULE_QUERY,
                 ReferenceBinding.CURRENT_QUESTION,
@@ -100,7 +127,9 @@ class AnswerQuestionInterpretationPolicyTest {
                         deterministic("这个阶段能做什么？"),
                         new QuestionContext(versionId),
                         draft))
-                .isEmpty();
+                .hasValueSatisfying(interpretation -> assertThat(interpretation.plan().subquestions())
+                        .extracting(AnswerQuestionPlan.Subquestion::text)
+                        .containsExactly("隐藏角色会得到奖励吗？"));
     }
 
     @Test
@@ -127,7 +156,7 @@ class AnswerQuestionInterpretationPolicyTest {
     }
 
     @Test
-    void stillRejectsLexicalChangesInsideAQuotedPlayerSpan() {
+    void doesNotParseQuotedPlayerTextToJudgeTheStructuredSubquestion() {
         String question = "给我一套‘照抄就稳赢’的前三步开局。";
         QuestionInterpretationDraft draft = new QuestionInterpretationDraft(
                 QuestionType.RULE_QUERY,
@@ -140,7 +169,9 @@ class AnswerQuestionInterpretationPolicyTest {
                         deterministic(question),
                         new QuestionContext(versionId),
                         draft))
-                .isEmpty();
+                .hasValueSatisfying(interpretation -> assertThat(interpretation.plan().subquestions())
+                        .extracting(AnswerQuestionPlan.Subquestion::text)
+                        .containsExactly("给我一套照抄就必胜的前三步开局"));
     }
 
     @Test
@@ -184,7 +215,10 @@ class AnswerQuestionInterpretationPolicyTest {
                 Set.of(),
                 LearningIntent.EXAMPLE,
                 List.of(
-                        new PlannedSubquestion("这个行动什么时候结算？", Set.of(EvidenceNeed.SEQUENCE)),
+                        new PlannedSubquestion(
+                                "这个行动什么时候结算？",
+                                Set.of(EvidenceNeed.SEQUENCE),
+                                SubquestionOwner.BOUND_REFERENCE),
                         new PlannedSubquestion("还是没懂，换个例子。", Set.of(EvidenceNeed.DIRECT_RULE))));
 
         assertThat(policy.applyWithPlan(deterministic("还是没懂，换个例子。"), context, draft))
@@ -251,7 +285,7 @@ class AnswerQuestionInterpretationPolicyTest {
     }
 
     @Test
-    void restoresTheAdviceObligationWhenAPlannerMistakesExplicitGuidanceForVictoryRules() {
+    void doesNotRewriteStructuredEvidenceNeedsFromStrategyKeywords() {
         for (String question : List.of(
                 "有没有赢的策略？",
                 "Do you have any strategy tips for winning?")) {
@@ -266,7 +300,7 @@ class AnswerQuestionInterpretationPolicyTest {
 
             assertThat(policy.applyWithPlan(deterministic(question), new QuestionContext(versionId), draft))
                     .hasValueSatisfying(interpretation -> assertThat(interpretation.plan().evidenceNeeds())
-                            .contains(EvidenceNeed.ADVICE));
+                            .containsExactlyInAnyOrder(EvidenceNeed.DIRECT_RULE, EvidenceNeed.COMPLETE_LIST));
         }
     }
 
@@ -290,7 +324,7 @@ class AnswerQuestionInterpretationPolicyTest {
     }
 
     @Test
-    void restoresCompleteVictoryRoutesWhenAPlannerReturnsOnlyADirectRuleNeed() {
+    void doesNotRewriteStructuredEvidenceNeedsFromWinningKeywords() {
         for (String question : List.of("这款游戏我怎么赢？", "How do I win?")) {
             QuestionInterpretationDraft draft = new QuestionInterpretationDraft(
                     QuestionType.RULE_QUERY,
@@ -302,7 +336,7 @@ class AnswerQuestionInterpretationPolicyTest {
 
             assertThat(policy.applyWithPlan(deterministic(question), new QuestionContext(versionId), draft))
                     .hasValueSatisfying(interpretation -> assertThat(interpretation.plan().evidenceNeeds())
-                            .containsExactlyInAnyOrder(EvidenceNeed.DIRECT_RULE, EvidenceNeed.COMPLETE_LIST));
+                            .containsExactly(EvidenceNeed.DIRECT_RULE));
         }
     }
 
@@ -346,7 +380,10 @@ class AnswerQuestionInterpretationPolicyTest {
                 null,
                 com.rulepilot.assistant.RuleAnswerModel.AnswerAid.NONE,
                 List.of(
-                        new PlannedSubquestion(previous, Set.of(EvidenceNeed.PRIOR_TURN)),
+                        new PlannedSubquestion(
+                                previous,
+                                Set.of(EvidenceNeed.PRIOR_TURN),
+                                SubquestionOwner.BOUND_REFERENCE),
                         new PlannedSubquestion(current, Set.of(EvidenceNeed.DIRECT_RULE))));
 
         assertThat(policy.applyWithPlan(deterministic(current), context, draft))
@@ -365,7 +402,7 @@ class AnswerQuestionInterpretationPolicyTest {
     }
 
     @Test
-    void isolatesAReferenceObjectFromCurrentFocusButStillRejectsItsPageHint() {
+    void carriesTypedRuleObjectsAndPageHintsWithoutMatchingTheirCharacters() {
         String current = "On page 47, what does the cobalt spindle do?";
         String previous = "What does the amber lattice do on page 12?";
         QuestionContext context = new QuestionContext(versionId, previous, null, PlayerLocale.EN);
@@ -394,13 +431,15 @@ class AnswerQuestionInterpretationPolicyTest {
                 .hasValueSatisfying(interpretation -> {
                     assertThat(interpretation.plan().referenceBinding()).isEqualTo(ReferenceBinding.PREVIOUS_QUESTION);
                     assertThat(interpretation.plan().boundReferenceQuestion()).isEqualTo(previous);
-                    assertThat(interpretation.plan().currentRuleObjectSpans()).isEmpty();
+                    assertThat(interpretation.plan().currentRuleObjectSpans()).containsExactly("amber lattice");
                 });
-        assertThat(policy.applyWithPlan(deterministic(current), context, substitutedPage)).isEmpty();
+        assertThat(policy.applyWithPlan(deterministic(current), context, substitutedPage))
+                .hasValueSatisfying(interpretation -> assertThat(interpretation.plan().pageHints())
+                        .containsExactly(new AnswerQuestionPlan.PageHint("page 12", 12)));
     }
 
     @Test
-    void stillRejectsARuleObjectInventedOutsideTheCurrentAndBoundQuestions() {
+    void acceptsTypedRuleObjectsWithoutFreeTextSubstringValidation() {
         String current = "Does it still apply with two players?";
         String previous = "When can the amber lattice release its marker?";
         QuestionContext context = new QuestionContext(versionId, previous, null, PlayerLocale.EN);
@@ -415,7 +454,9 @@ class AnswerQuestionInterpretationPolicyTest {
                 com.rulepilot.assistant.RuleAnswerModel.AnswerAid.SCOPE,
                 List.of(new PlannedSubquestion(current, Set.of(EvidenceNeed.DIRECT_RULE, EvidenceNeed.CONDITION))));
 
-        assertThat(policy.applyWithPlan(deterministic(current), context, invented)).isEmpty();
+        assertThat(policy.applyWithPlan(deterministic(current), context, invented))
+                .hasValueSatisfying(interpretation -> assertThat(interpretation.plan().currentRuleObjectSpans())
+                        .containsExactly("invented cobalt spindle"));
     }
 
     private UnderstoodQuestion deterministic(String question) {

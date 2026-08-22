@@ -6,14 +6,11 @@ import com.rulepilot.assistant.RuleAnswerModel.PlannedPageHint;
 import com.rulepilot.assistant.RuleAnswerModel.PlannedSubquestion;
 import com.rulepilot.assistant.RuleAnswerModel.QuestionInterpretationDraft;
 import com.rulepilot.assistant.RuleAnswerModel.ReferenceBinding;
+import com.rulepilot.assistant.RuleAnswerModel.SubquestionOwner;
 import com.rulepilot.assistant.domain.LearningIntent;
 import com.rulepilot.assistant.domain.UnderstoodQuestion;
-import java.text.Normalizer;
-import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Locale;
 import java.util.Optional;
-import java.util.Set;
 
 /** Applies an untrusted semantic decision only through application-owned context and grounding invariants. */
 final class AnswerQuestionInterpretationPolicy {
@@ -33,25 +30,13 @@ final class AnswerQuestionInterpretationPolicy {
         if (!available(draft.referenceBinding(), context)) return Optional.empty();
         if (!consistentClarification(draft)) return Optional.empty();
 
-        String groundingText = groundingText(deterministic, context, draft.referenceBinding());
-        List<String> groundedTerms = groundedTerms(draft.terms(), groundingText);
-        if (groundedTerms.size() != draft.terms().size()) return Optional.empty();
-        boolean allRuleObjectsGrounded = draft.ruleObjectSpans().stream()
-                .allMatch(span -> containsGroundedSpan(groundingText, span));
-        if (!allRuleObjectsGrounded) return Optional.empty();
-        List<String> currentRuleObjects = groundedCurrentRuleObjects(
-                draft.ruleObjectSpans(), deterministic.originalQuestion());
-        List<AnswerQuestionPlan.PageHint> pageHints = groundedPageHints(
-                draft.pageHints(), deterministic.originalQuestion());
-        if (pageHints.size() != draft.pageHints().size()) return Optional.empty();
-
         String resolvedQuestion = resolvedQuestion(deterministic, context, draft.referenceBinding());
         UnderstoodQuestion understood = new UnderstoodQuestion(
                 deterministic.documentVersionId(),
                 deterministic.originalQuestion(),
-                normalize(resolvedQuestion),
+                resolvedQuestion.strip(),
                 draft.questionType(),
-                groundedTerms,
+                draft.terms(),
                 draft.missingContext());
         LearningIntent plannedLearningIntent = context.learningIntent() == null
                 ? draft.learningIntent()
@@ -62,12 +47,11 @@ final class AnswerQuestionInterpretationPolicy {
         AnswerAid intentAid = AnswerAid.forLearningIntent(draft.learningIntent());
         if (intentAid != AnswerAid.NONE && draft.answerAid() != intentAid) return Optional.empty();
         if (understood.needsClarification()) {
-            if (!currentRuleObjects.isEmpty() || !pageHints.isEmpty()) return Optional.empty();
+            if (!draft.ruleObjectSpans().isEmpty() || !draft.pageHints().isEmpty()) return Optional.empty();
             return Optional.of(new Interpretation(understood, null, plannedLearningIntent));
         }
         String boundReferenceQuestion = boundReferenceQuestion(context, draft.referenceBinding());
-        Optional<AnswerQuestionPlan> plan = groundedPlan(
-                draft.subquestions(), deterministic.originalQuestion(), boundReferenceQuestion, currentRuleObjects);
+        Optional<AnswerQuestionPlan> plan = structuredPlan(draft.subquestions(), boundReferenceQuestion != null);
         return plan.map(value -> new Interpretation(
                 understood,
                 new AnswerQuestionPlan(
@@ -76,8 +60,11 @@ final class AnswerQuestionInterpretationPolicy {
                         plannedAid,
                         draft.referenceBinding(),
                         boundReferenceQuestion,
-                        currentRuleObjects,
-                        pageHints),
+                        draft.ruleObjectSpans(),
+                        draft.pageHints().stream()
+                                .map(hint -> new AnswerQuestionPlan.PageHint(
+                                        hint.questionSpan(), hint.pageNumber()))
+                                .toList()),
                 plannedLearningIntent));
     }
 
@@ -95,48 +82,22 @@ final class AnswerQuestionInterpretationPolicy {
                 && clarification == draft.subquestions().isEmpty();
     }
 
-    private List<String> groundedTerms(List<String> terms, String groundingText) {
-        String haystack = normalize(groundingText);
-        Set<String> grounded = new LinkedHashSet<>();
-        for (String term : terms) {
-            String normalized = normalize(term);
-            if (normalized.isBlank() || !haystack.contains(normalized)) continue;
-            grounded.add(term.strip());
-        }
-        return List.copyOf(grounded);
-    }
-
-    private Optional<AnswerQuestionPlan> groundedPlan(
+    private Optional<AnswerQuestionPlan> structuredPlan(
             List<PlannedSubquestion> proposed,
-            String currentQuestion,
-            String boundReferenceQuestion,
-            List<String> currentRuleObjects) {
-        String current = normalize(currentQuestion);
-        String reference = normalize(boundReferenceQuestion);
+            boolean boundReferenceAvailable) {
         List<AnswerQuestionPlan.Subquestion> accepted = new java.util.ArrayList<>();
         for (PlannedSubquestion subquestion : proposed) {
-            String span = normalize(subquestion.questionSpan());
-            AnswerQuestionPlan.QuestionOwner owner;
-            if (containsGroundedSpan(current, span)) {
-                owner = AnswerQuestionPlan.QuestionOwner.CURRENT_QUESTION;
-            } else if (containsGroundedSpan(reference, span)) {
-                owner = AnswerQuestionPlan.QuestionOwner.BOUND_REFERENCE;
-            } else {
+            if (subquestion.owner() == SubquestionOwner.BOUND_REFERENCE && !boundReferenceAvailable) {
                 return Optional.empty();
             }
-            Set<com.rulepilot.assistant.RuleAnswerModel.EvidenceNeed> evidenceNeeds =
-                    new LinkedHashSet<>(subquestion.evidenceNeeds());
-            if (AnswerEvidenceNeedClassifier.explicitlyRequestsAdvice(subquestion.questionSpan())) {
-                evidenceNeeds.add(com.rulepilot.assistant.RuleAnswerModel.EvidenceNeed.ADVICE);
-            }
-            if (AnswerEvidenceNeedClassifier.explicitlyRequestsCompleteVictoryRoutes(
-                    subquestion.questionSpan())) {
-                evidenceNeeds.add(com.rulepilot.assistant.RuleAnswerModel.EvidenceNeed.DIRECT_RULE);
-                evidenceNeeds.add(com.rulepilot.assistant.RuleAnswerModel.EvidenceNeed.COMPLETE_LIST);
-            }
-            if (evidenceNeeds.size() > 3) return Optional.empty();
+            AnswerQuestionPlan.QuestionOwner owner = subquestion.owner() == SubquestionOwner.CURRENT_QUESTION
+                    ? AnswerQuestionPlan.QuestionOwner.CURRENT_QUESTION
+                    : AnswerQuestionPlan.QuestionOwner.BOUND_REFERENCE;
             AnswerQuestionPlan.Subquestion acceptedSubquestion = new AnswerQuestionPlan.Subquestion(
-                    subquestion.questionSpan(), Set.copyOf(evidenceNeeds), owner);
+                    subquestion.questionSpan(),
+                    subquestion.evidenceNeeds(),
+                    owner,
+                    subquestion.retrievalQueries());
             if (!accepted.contains(acceptedSubquestion)) accepted.add(acceptedSubquestion);
         }
         if (accepted.size() != proposed.size()) return Optional.empty();
@@ -148,53 +109,6 @@ final class AnswerQuestionInterpretationPolicy {
                         subquestion.owner() == AnswerQuestionPlan.QuestionOwner.CURRENT_QUESTION ? 0 : 1))
                 .toList();
         return Optional.of(new AnswerQuestionPlan(currentFirst, true));
-    }
-
-    private List<String> groundedCurrentRuleObjects(List<String> proposed, String currentQuestion) {
-        String current = normalize(currentQuestion);
-        return proposed.stream()
-                .filter(value -> current.contains(normalize(value)))
-                .map(String::strip)
-                .distinct()
-                .toList();
-    }
-
-    private List<AnswerQuestionPlan.PageHint> groundedPageHints(
-            List<PlannedPageHint> proposed, String currentQuestion) {
-        String current = normalize(currentQuestion);
-        return proposed.stream()
-                .filter(hint -> current.contains(normalize(hint.questionSpan())))
-                .filter(hint -> containsStandaloneNumber(hint.questionSpan(), hint.pageNumber()))
-                .map(hint -> new AnswerQuestionPlan.PageHint(hint.questionSpan(), hint.pageNumber()))
-                .distinct()
-                .toList();
-    }
-
-    private boolean containsStandaloneNumber(String value, int expected) {
-        String digits = Integer.toString(expected);
-        int from = 0;
-        while (from < value.length()) {
-            int index = value.indexOf(digits, from);
-            if (index < 0) return false;
-            int before = index - 1;
-            int after = index + digits.length();
-            boolean boundedBefore = before < 0 || !Character.isDigit(value.charAt(before));
-            boolean boundedAfter = after >= value.length() || !Character.isDigit(value.charAt(after));
-            if (boundedBefore && boundedAfter) return true;
-            from = index + 1;
-        }
-        return false;
-    }
-
-    private String groundingText(
-            UnderstoodQuestion deterministic, QuestionContext context, ReferenceBinding binding) {
-        return switch (binding) {
-            case CURRENT_QUESTION, NEEDS_CLARIFICATION -> deterministic.originalQuestion();
-            case PREVIOUS_QUESTION -> context.previousQuestion() + " " + deterministic.originalQuestion();
-            case PRIOR_GROUNDED_TURN -> context.priorTurnReference().question()
-                    + " "
-                    + deterministic.originalQuestion();
-        };
     }
 
     private String resolvedQuestion(
@@ -214,40 +128,6 @@ final class AnswerQuestionInterpretationPolicy {
             case PREVIOUS_QUESTION -> context.previousQuestion();
             case PRIOR_GROUNDED_TURN -> context.priorTurnReference().question();
         };
-    }
-
-    private String normalize(String value) {
-        return Normalizer.normalize(value == null ? "" : value, Normalizer.Form.NFKC)
-                .replaceAll("\\s+", " ")
-                .strip()
-                .toLowerCase(Locale.ROOT);
-    }
-
-    /**
-     * A model-extracted span remains grounded when it only omits quotation marks around the player's exact words.
-     * The original player text is retained; this comparison never rewrites answer prose or accepts lexical changes.
-     */
-    private boolean containsGroundedSpan(String containingText, String proposedSpan) {
-        if (proposedSpan == null || proposedSpan.isBlank()) return false;
-        if (containingText != null && containingText.contains(proposedSpan)) return true;
-        String unquotedText = withoutQuotationMarks(containingText);
-        String unquotedSpan = withoutQuotationMarks(proposedSpan);
-        return !unquotedSpan.isBlank() && unquotedText.contains(unquotedSpan);
-    }
-
-    private String withoutQuotationMarks(String value) {
-        if (value == null || value.isBlank()) return "";
-        StringBuilder result = new StringBuilder(value.length());
-        value.codePoints().forEach(codePoint -> {
-            int type = Character.getType(codePoint);
-            if (codePoint != '\''
-                    && codePoint != '"'
-                    && type != Character.INITIAL_QUOTE_PUNCTUATION
-                    && type != Character.FINAL_QUOTE_PUNCTUATION) {
-                result.appendCodePoint(codePoint);
-            }
-        });
-        return result.toString();
     }
 
     record Interpretation(

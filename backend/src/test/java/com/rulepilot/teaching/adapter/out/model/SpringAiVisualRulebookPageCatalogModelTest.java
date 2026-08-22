@@ -17,10 +17,6 @@ import com.rulepilot.teaching.TeachingOutlineModel.SourceCoverageRole;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.CatalogDraft;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.CatalogRequest;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IconCropDecision;
-import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IconLocation;
-import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IdentifierCellInput;
-import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IdentifierCellVerificationRequest;
-import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IdentifierReferencePage;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageTranscript;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.SourceDependency;
@@ -153,7 +149,7 @@ class SpringAiVisualRulebookPageCatalogModelTest {
                 {"pages":[{"pageNumber":4,"printedTerms":["MOVE"],"factualSummary":[],
                 "keywords":["MOVE"],"sourceDependencies":[],
                 "ruleGroups":[{"identifier":"MOVE","fact":"移动一个棋子。"},
-                              {"identifier":" move ","fact":" 移动一个棋子。 "}],
+                              {"identifier":" MOVE ","fact":" 移动一个棋子。 "}],
                 "ruleGroupInventoryComplete":true,"quantityObservations":[]}]}
                 """))
                 .isInstanceOf(IllegalArgumentException.class)
@@ -296,7 +292,7 @@ class SpringAiVisualRulebookPageCatalogModelTest {
     @Test
     void literalQuantitySpansPreserveRangesAndTableThresholdsWithoutModelArithmetic() {
         var accepted = SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalogV6("""
-                {"pages":[{"pageNumber":12,"printedTerms":["PLAYERS","RESULT"],"factualSummary":[],
+                {"pages":[{"pageNumber":12,"printedTerms":["PLAYERS","RESULT"],
                 "keywords":["PLAYERS","RESULT"],"externalDocumentDependencies":[],
                 "ruleGroups":[
                   {"identifier":"PLAYERS","fact":"该模式支持1至4名玩家，时长80分钟。",
@@ -317,8 +313,8 @@ class SpringAiVisualRulebookPageCatalogModelTest {
                 });
 
         var partialEvidence = SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalogV6("""
-                {"pages":[{"pageNumber":12,"printedTerms":["PLAYERS"],"factualSummary":[],
-                "keywords":["PLAYERS"],"sourceDependencies":[],
+                {"pages":[{"pageNumber":12,"printedTerms":["PLAYERS"],
+                "keywords":["PLAYERS","PLAYER COUNT"],"externalDocumentDependencies":[],
                 "ruleGroups":[{"identifier":"PLAYERS","fact":"该模式支持1至4名玩家，时长80分钟。",
                  "quantitySpans":["1-4 PLAYERS"]}],
                 "ruleGroupInventoryComplete":true}]}
@@ -329,49 +325,32 @@ class SpringAiVisualRulebookPageCatalogModelTest {
     }
 
     @Test
-    void literalQuantitySpansCollapseExactDuplicatesWithoutDroppingDistinctEvidence() {
-        var accepted = SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalogV6("""
-                {"pages":[{"pageNumber":9,"printedTerms":["ROUND END"],"factualSummary":[],
-                "keywords":["ROUND END"],"externalDocumentDependencies":[],
+    void literalQuantitySpansRejectDuplicateEvidenceInsteadOfSilentlyRewritingIt() {
+        assertThatThrownBy(() -> SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalogV6("""
+                {"pages":[{"pageNumber":9,"printedTerms":["ROUND END"],
+                "keywords":["ROUND END","BONUS"],"externalDocumentDependencies":[],
                 "ruleGroups":[{"identifier":"ROUND END",
                   "fact":"结算两次奖励，然后把标记移到第三格。",
                   "quantitySpans":["Score both bonuses","Score both bonuses","Move to space 3"]}],
                 "ruleGroupInventoryComplete":true}]}
-                """);
-
-        assertThat(accepted.pages().getFirst().quantityObservations())
-                .extracting(observation -> observation.originalSpan())
-                .containsExactly("Score both bonuses", "Move to space 3");
+                """))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("must not contain duplicate text");
     }
 
     @Test
-    void literalQuantitySpansAcceptOnlyAnExactRedundantGroupIndexWithoutPolicingTheirMeaning() {
-        var accepted = SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalogV6("""
-                {"pages":[{"pageNumber":1,"printedTerms":["SETUP"],"factualSummary":[],
-                "keywords":["SETUP"],"sourceDependencies":[],
-                "ruleGroups":[
-                  {"identifier":"SETUP","fact":"每轮招募一名专家。","ruleGroupIndex":0},
-                  {"identifier":"GOAL","fact":"满足目标即可得分。","ruleGroupIndex":1}],
-                "ruleGroupInventoryComplete":true,
-                "quantityObservations":[
-                  {"pageNumber":1,"ruleGroupIndex":0,"originalSpan":"每轮招募一名专家"},
-                  {"pageNumber":1,"ruleGroupIndex":1,"originalSpan":"1-4 PLAYERS"}]}]}
-                """);
-
-        assertThat(accepted.pages().getFirst().quantityObservations())
-                .extracting(observation -> observation.ruleGroupIdentifier())
-                .containsExactly("page-1-group-1", "page-1-group-2");
-
+    void literalQuantitySpansRejectLegacyParallelArraysAndRedundantIndexes() {
         assertThatThrownBy(() -> SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalogV6("""
-                {"pages":[{"pageNumber":1,"printedTerms":["SETUP"],"factualSummary":[],
-                "keywords":["SETUP"],"sourceDependencies":[],
-                "ruleGroups":[{"identifier":"SETUP","fact":"每轮招募一名专家。","ruleGroupIndex":1}],
+                {"pages":[{"pageNumber":1,"printedTerms":["SETUP"],
+                "keywords":["SETUP","RECRUIT"],"externalDocumentDependencies":[],
+                "ruleGroups":[{"identifier":"SETUP","fact":"每轮招募一名专家。","ruleGroupIndex":0,
+                 "quantitySpans":["一名专家"]}],
                 "ruleGroupInventoryComplete":true,
                 "quantityObservations":[
                   {"pageNumber":1,"ruleGroupIndex":0,"originalSpan":"每轮招募一名专家"}]}]}
                 """))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("redundant ruleGroupIndex");
+                .hasMessageContaining("page must contain exactly");
     }
 
     @Test
@@ -382,8 +361,6 @@ class SpringAiVisualRulebookPageCatalogModelTest {
                 .replaceAll("\\s+", " ");
 
         assertThat(prompt).contains(
-                "must fit within 4,000 Unicode characters",
-                "never rely on text beyond that limit",
                 "title as one non-empty string",
                 "never return an array or a shortened title",
                 "must always be an explicit array with no duplicates",
@@ -566,11 +543,11 @@ class SpringAiVisualRulebookPageCatalogModelTest {
                      {"identifier":"E-0","role":"NECESSARY_EXCEPTION"}]}],
                  "selectedPageFacts":{"pageNumber":12,
                   "printedTerms":["T-0","A-1","A-2","E-0"],
-                  "factualSummary":[
-                    "T-0: The visible cycle advances.",
-                    "A-1: The current actor may take the first visible branch.",
-                    "A-2: The current actor may take the second visible branch.",
-                    "E-0: The visible condition changes the second branch."],
+                  "ruleGroups":[
+                    {"identifier":"T-0","fact":"The visible cycle advances."},
+                    {"identifier":"A-1","fact":"The current actor may take the first visible branch."},
+                    {"identifier":"A-2","fact":"The current actor may take the second visible branch."},
+                    {"identifier":"E-0","fact":"The visible condition changes the second branch."}],
                   "keywords":["T-0","A-1"],"quantityObservations":[]}}
                 """);
 
@@ -586,22 +563,21 @@ class SpringAiVisualRulebookPageCatalogModelTest {
     }
 
     @Test
-    void progressiveV4PreservesPartialRoleClassificationWithoutRejectingThePage() {
-        var draft = SpringAiVisualRulebookPageCatalogModel.parseProgressiveTeachingStartV4("""
+    void progressiveV4RejectsPartialRoleClassificationInsteadOfPublishingAnUnownedRuleGroup() {
+        assertThatThrownBy(() -> SpringAiVisualRulebookPageCatalogModel.parseProgressiveTeachingStartV4("""
                 {"pageSketches":[
                   {"pageNumber":12,"role":"GAMEPLAY_RULES","visibleHeading":"T-0",
                    "visibleTerms":["T-0","A-1"],"coverageTags":["core_loop"],
                    "ruleGroupInventoryComplete":true,"sourceDependencies":[],
                    "ruleGroupCoverage":[{"identifier":"T-0","role":"CORE_LOOP"}]}],
                  "selectedPageFacts":{"pageNumber":12,"printedTerms":["T-0","A-1"],
-                  "factualSummary":["T-0: The visible cycle advances.","A-1: A visible branch is available."],
+                  "ruleGroups":[
+                    {"identifier":"T-0","fact":"The visible cycle advances."},
+                    {"identifier":"A-1","fact":"A visible branch is available."}],
                   "keywords":["T-0","A-1"],"quantityObservations":[]}}
-                """);
-
-        assertThat(draft.pages().getFirst().visibleTerms()).containsExactly("T-0", "A-1");
-        assertThat(draft.pages().getFirst().ruleGroupCoverage())
-                .extracting(com.rulepilot.teaching.VisualRulebookPageCatalogModel.RuleGroupCoverage::identifier)
-                .containsExactly("T-0");
+                """))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("classify every visibleTerms identifier");
     }
 
     @Test
@@ -612,99 +588,11 @@ class SpringAiVisualRulebookPageCatalogModelTest {
                    "visibleTerms":["T-0"],"coverageTags":["core_loop"],
                    "ruleGroupInventoryComplete":true,"sourceDependencies":[]}],
                  "selectedPageFacts":{"pageNumber":12,"printedTerms":["T-0"],
-                  "factualSummary":["T-0: The visible cycle advances."],
+                  "ruleGroups":[{"identifier":"T-0","fact":"The visible cycle advances."}],
                   "keywords":["T-0","cycle"],"quantityObservations":[]}}
                 """))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("ruleGroupCoverage for every page");
-    }
-
-    @Test
-    void identifierCellPromptRequiresExactCrossPageArtworkAndPreservesRewardTiming() throws IOException {
-        String prompt = new ClassPathResource("prompts/visual-identifier-cell-v1-system.txt")
-                .getContentAsString(StandardCharsets.UTF_8);
-
-        assertThat(prompt).contains(
-                "Require the same distinctive shape",
-                "rectangular card or sheet pictogram",
-                "lower-space reward",
-                "do not change it to a tile-acquisition reward");
-    }
-
-    @Test
-    void referenceMatcherSeparatesLowerRewardFromAnUpperScoreMedallion() throws IOException {
-        String prompt = new ClassPathResource("prompts/visual-identifier-reference-match-v1-system.txt")
-                .getContentAsString(StandardCharsets.UTF_8)
-                .replaceAll("\\s+", " ");
-
-        assertThat(prompt).contains(
-                "When the draft distinguishes upper and lower spaces",
-                "match only the compact lower-space reward",
-                "never report the upper-space medallion as the matched resource");
-    }
-
-    @Test
-    void acceptsOnlySuppliedIdentifierBindingsAndPreservesAtomicCellFacts() {
-        var locations = SpringAiVisualRulebookPageCatalogModel.parseIdentifierLocations("""
-                {"items":[
-                  {"identifier":"A-01","x":10,"y":20,"width":30,"height":10},
-                  {"identifier":"B#02","x":500,"y":20,"width":35,"height":10}
-                ]}
-                """);
-        assertThat(locations.locations()).extracting(location -> location.identifier())
-                .containsExactly("A-01", "B#02");
-
-        var facts = SpringAiVisualRulebookPageCatalogModel.parseIdentifierCellFacts("""
-                {"items":[
-                  {"identifier":"A-01","factualSummary":"A-01：支付一个蓝色方块后移动。"},
-                  {"identifier":"B#02","factualSummary":"B#02：上格得2分，下格抽一张牌。"},
-                  {"identifier":"X-99","factualSummary":"不得进入结果。"}
-                ]}
-                """, List.of("A-01", "B#02"));
-        assertThat(facts.facts()).extracting(fact -> fact.identifier())
-                .containsExactly("A-01", "B#02");
-        assertThat(facts.facts()).extracting(fact -> fact.factualSummary())
-                .containsExactly("A-01：支付一个蓝色方块后移动。", "B#02：上格得2分，下格抽一张牌。");
-    }
-
-    @Test
-    void referenceVerificationCannotPublishALabelOutsideTheDocumentEvidence() {
-        var image = new PageImageInput(3, "image/png", new byte[] {1});
-        var request = new IdentifierCellVerificationRequest(
-                new IdentifierCellInput("B#02", image),
-                new IdentifierReferencePage(image, "2 amber, 3 teal, and 1 card"),
-                List.of("amber", "teal", "card"),
-                "B#02: lower reward is unclear.",
-                "owner");
-
-        var accepted = SpringAiVisualRulebookPageCatalogModel.parseIdentifierCellVerification("""
-                {"identifier":"B#02","matchedLabel":"card","quantity":1,
-                 "factualSummary":"B#02: the lower-space reward is 1 card."}
-                """, request);
-        assertThat(accepted.matchedLabel()).isEqualTo("card");
-
-        org.assertj.core.api.Assertions.assertThatThrownBy(() ->
-                        SpringAiVisualRulebookPageCatalogModel.parseIdentifierCellVerification("""
-                                {"identifier":"B#02","matchedLabel":"card token","quantity":1,
-                                 "factualSummary":"Target identifier B#02: the lower-space reward is 1 card."}
-                                """, request))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("outside the evidence set");
-
-        org.assertj.core.api.Assertions.assertThatThrownBy(() ->
-                        SpringAiVisualRulebookPageCatalogModel.parseIdentifierCellVerification("""
-                                {"identifier":"B#02","matchedLabel":"amber","quantity":4}
-                                """, request))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("quantity from reference evidence");
-
-        org.assertj.core.api.Assertions.assertThatThrownBy(() ->
-                        SpringAiVisualRulebookPageCatalogModel.parseIdentifierCellVerification("""
-                                {"identifier":"B#02","matchedLabel":"coins","quantity":1,
-                                 "factualSummary":"B#02: reward is coins."}
-                                """, request))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("outside the evidence set");
+                .hasMessageContaining("pageSketches item must contain exactly");
     }
 
     @Test
@@ -783,7 +671,7 @@ class SpringAiVisualRulebookPageCatalogModelTest {
         when(chatModel.getDefaultOptions()).thenReturn(defaults);
         when(chatModel.getOptions()).thenReturn(defaults);
         when(chatModel.call(any(Prompt.class))).thenReturn(response("""
-                {"pages":[{"pageNumber":16,"printedTerms":"最终计分","keywords":["计分"],
+                {"pages":[{"pageNumber":16,"printedTerms":["最终计分"],"keywords":["计分","门槛"],
                  "externalDocumentDependencies":[],"ruleGroups":[{"identifier":"合作模式范例",
                  "fact":"玩家分数为9、13、16，门槛为33。","quantitySpans":["9、13、16","33"]}],
                  "ruleGroupInventoryComplete":true}]}
@@ -822,8 +710,8 @@ class SpringAiVisualRulebookPageCatalogModelTest {
         when(chatModel.getOptions()).thenReturn(defaults);
         when(chatModel.call(any(Prompt.class))).thenReturn(new ChatResponse(List.of(new Generation(
                 new AssistantMessage("""
-                        {"pages":[{"pageNumber":1,"printedTerms":"SETUP",
-                         "keywords":["setup"],
+                        {"pages":[{"pageNumber":1,"printedTerms":["SETUP"],
+                         "keywords":["setup","card"],
                          "externalDocumentDependencies":[],"ruleGroups":[{"identifier":"SETUP",
                          "fact":"Each player takes a card.","quantitySpans":[]}],
                          "ruleGroupInventoryComplete":true}]}
@@ -890,7 +778,7 @@ class SpringAiVisualRulebookPageCatalogModelTest {
         when(providerModel.getDefaultOptions()).thenReturn(defaults);
         when(providerModel.getOptions()).thenReturn(defaults);
         when(providerModel.call(any(Prompt.class))).thenReturn(response("""
-                {"pages":[{"pageNumber":1,"printedTerms":"SETUP","keywords":["setup"],
+                {"pages":[{"pageNumber":1,"printedTerms":["SETUP"],"keywords":["setup","card"],
                  "externalDocumentDependencies":[],"ruleGroups":[{"identifier":"SETUP",
                  "fact":"Each player takes one card.","quantitySpans":["one card"]}],
                  "ruleGroupInventoryComplete":true}]}
@@ -938,14 +826,14 @@ class SpringAiVisualRulebookPageCatalogModelTest {
         when(chatModel.call(any(Prompt.class))).thenReturn(
                 response("""
                         {"pages":[{"pageNumber":1,"printedTerms":["MOVE"],
-                         "factualSummary":[],"keywords":["move"],"sourceDependencies":[],
+                         "keywords":["move","pawn"],"externalDocumentDependencies":[],
                          "ruleGroups":[{"identifier":"MOVE","fact":"Move one pawn.",
                          "quantitySpans":[{"total":1,"originalSpan":"one pawn"}]}],
                          "ruleGroupInventoryComplete":true}]}
                         """),
                 response("""
                         {"pages":[{"pageNumber":1,"printedTerms":["MOVE"],
-                         "factualSummary":[],"keywords":["move"],"sourceDependencies":[],
+                         "keywords":["move","pawn"],"externalDocumentDependencies":[],
                          "ruleGroups":[{"identifier":"MOVE","fact":"Move one pawn.",
                          "quantitySpans":["one pawn"]}],
                          "ruleGroupInventoryComplete":true}]}
@@ -984,7 +872,7 @@ class SpringAiVisualRulebookPageCatalogModelTest {
                         "must bind every such value through one or more strings in its own quantitySpans",
                         "Never calculate a replacement total",
                         "Detected deterministic issue:",
-                        "quantitySpans must contain text"));
+                        "quantitySpans must contain non-blank text"));
     }
 
     @Test
@@ -1002,13 +890,13 @@ class SpringAiVisualRulebookPageCatalogModelTest {
         when(chatModel.call(any(Prompt.class))).thenReturn(response("""
                 {"pages":[
                  {"pageNumber":1,"printedTerms":["MOVE"],
-                  "factualSummary":[],"keywords":["move"],"sourceDependencies":[],
-                  "ruleGroups":[{"identifier":"MOVE"}],
-                  "ruleGroupInventoryComplete":true,"quantityObservations":[]},
+                  "keywords":["move","pawn"],"externalDocumentDependencies":[],
+                  "ruleGroups":[{"identifier":"MOVE","quantitySpans":[]}],
+                  "ruleGroupInventoryComplete":true},
                  {"pageNumber":2,"printedTerms":["DRAW"],
-                  "factualSummary":[],"keywords":["draw"],"sourceDependencies":[],
-                  "ruleGroups":[{"identifier":"DRAW","fact":"Draw one card."}],
-                  "ruleGroupInventoryComplete":true,"quantityObservations":[]}]}
+                  "keywords":["draw","card"],"externalDocumentDependencies":[],
+                  "ruleGroups":[{"identifier":"DRAW","fact":"Draw one card.","quantitySpans":[]}],
+                  "ruleGroupInventoryComplete":true}]}
                 """));
         SpringAiVisualRulebookPageCatalogModel model = model(configuration);
         CatalogRequest request = new CatalogRequest(
@@ -1020,7 +908,7 @@ class SpringAiVisualRulebookPageCatalogModelTest {
 
         assertThatThrownBy(() -> model.summarizeForTeaching(request))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("exactly identifier and fact");
+                .hasMessageContaining("must contain exactly");
 
         ArgumentCaptor<Prompt> prompt = ArgumentCaptor.forClass(Prompt.class);
         verify(chatModel).call(prompt.capture());
@@ -1074,9 +962,9 @@ class SpringAiVisualRulebookPageCatalogModelTest {
                              {"identifier":"score line","role":"SCORING"}]}],
                          "selectedPageFacts":{"pageNumber":2,
                            "printedTerms":["market","veggie cards"],
-                           "factualSummary":[
-                             "market：按可见关系摆放市场。",
-                             "veggie cards：按可见关系准备牌。"],
+                           "ruleGroups":[
+                             {"identifier":"market","fact":"按可见关系摆放市场。"},
+                             {"identifier":"veggie cards","fact":"按可见关系准备牌。"}],
                            "keywords":["market","veggie cards"],"quantityObservations":[]}}
                         """)))));
         SpringAiVisualRulebookPageCatalogModel model = model(configuration);
@@ -1192,32 +1080,36 @@ class SpringAiVisualRulebookPageCatalogModelTest {
 
     @Test
     void progressiveTeachingStartCannotClaimSelectedCompletenessWithoutEveryBoundFact() {
-        assertThatThrownBy(() -> SpringAiVisualRulebookPageCatalogModel.parseProgressiveTeachingStart("""
+        assertThatThrownBy(() -> SpringAiVisualRulebookPageCatalogModel.parseProgressiveTeachingStartV4("""
                 {"pageSketches":[
                   {"pageNumber":4,"role":"GAMEPLAY_RULES","visibleHeading":"Available actions",
                    "visibleTerms":["MOVE","BUILD"],"coverageTags":["core_loop","end","scoring"],
-                   "ruleGroupInventoryComplete":true,"sourceDependencies":[]}],
+                   "ruleGroupInventoryComplete":true,"sourceDependencies":[],
+                   "ruleGroupCoverage":[
+                     {"identifier":"MOVE","role":"LEGAL_ACTION"},
+                     {"identifier":"BUILD","role":"LEGAL_ACTION"}]}],
                  "selectedPageFacts":{"pageNumber":4,"printedTerms":["MOVE","BUILD"],
-                  "factualSummary":["MOVE: Move one pawn."],"keywords":["MOVE","BUILD"]}}
+                  "ruleGroups":[{"identifier":"MOVE","fact":"Move one pawn."}],
+                  "keywords":["MOVE","BUILD"],"quantityObservations":[]}}
                 """))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("BUILD")
-                .hasMessageContaining("same-page fact");
+                .hasMessageContaining("must match visibleTerms exactly");
     }
 
     @Test
     void progressiveTeachingStartRequiresAnExactSelectedFactIdentifierBoundary() {
-        assertThatThrownBy(() -> SpringAiVisualRulebookPageCatalogModel.parseProgressiveTeachingStart("""
+        assertThatThrownBy(() -> SpringAiVisualRulebookPageCatalogModel.parseProgressiveTeachingStartV4("""
                 {"pageSketches":[
                   {"pageNumber":4,"role":"GAMEPLAY_RULES","visibleHeading":"Available action",
                    "visibleTerms":["MOVE"],"coverageTags":["core_loop","end","scoring"],
-                   "ruleGroupInventoryComplete":true,"sourceDependencies":[]}],
+                   "ruleGroupInventoryComplete":true,"sourceDependencies":[],
+                   "ruleGroupCoverage":[{"identifier":"MOVE","role":"LEGAL_ACTION"}]}],
                  "selectedPageFacts":{"pageNumber":4,"printedTerms":["MOVE"],
-                  "factualSummary":["MOVEMENT: Move one pawn."],"keywords":["MOVE"]}}
+                  "ruleGroups":[{"identifier":"MOVEMENT","fact":"Move one pawn."}],
+                  "keywords":["MOVE"],"quantityObservations":[]}}
                 """))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("MOVE")
-                .hasMessageContaining("same-page fact");
+                .hasMessageContaining("must match visibleTerms exactly");
     }
 
     @Test
@@ -1357,18 +1249,15 @@ class SpringAiVisualRulebookPageCatalogModelTest {
     }
 
     @Test
-    void parsesQwenJsonContentWithoutDependingOnNativeStructuredOutput() {
-        var draft = SpringAiVisualRulebookPageCatalogModel.parseCatalog("""
+    void rejectsMarkdownWrappedJsonInsteadOfSearchingInsideModelProse() {
+        assertThatThrownBy(() -> SpringAiVisualRulebookPageCatalogModel.parseCatalog("""
                 ```json
                 {"pages":[{"pageNumber":14,"printedTerms":"KODORA",
                 "factualSummary":"红色图标与图例中的胜利点相同。","keywords":["KODORA","victory point"]}]}
                 ```
-                """);
-
-        assertThat(draft.pages()).singleElement().satisfies(page -> {
-            assertThat(page.pageNumber()).isEqualTo(14);
-            assertThat(page.factualSummary()).contains("胜利点");
-        });
+                """))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("invalid JSON");
     }
 
     @Test
@@ -1446,203 +1335,86 @@ class SpringAiVisualRulebookPageCatalogModelTest {
     }
 
     @Test
-    void completeTeachingCatalogRequiresAnExplicitDependencyInventory() {
-        assertThatThrownBy(() -> SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalog("""
-                {"pages":[{"pageNumber":4,"printedTerms":["PLAY"],
-                "factualSummary":["PLAY：当前玩家执行行动。"],"keywords":["PLAY"],
-                "ruleGroupIdentifiers":["PLAY"],"ruleGroupInventoryComplete":true}]}
-                """))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("sourceDependencies");
-
-        assertThatThrownBy(() -> SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalog("""
-                {"pages":[{"pageNumber":4,"printedTerms":["PLAY"],
-                "factualSummary":["PLAY：当前玩家执行行动。"],"keywords":["PLAY"],
-                "sourceDependencies":null,"ruleGroupIdentifiers":["PLAY"],
-                "ruleGroupInventoryComplete":true}]}
-                """))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("sourceDependencies");
-
-        assertThat(SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalog("""
-                {"pages":[{"pageNumber":4,"printedTerms":["PLAY"],
-                "factualSummary":["PLAY：当前玩家执行行动。"],"keywords":["PLAY"],
-                "sourceDependencies":[],"ruleGroupIdentifiers":["PLAY"],
-                "ruleGroupInventoryComplete":true}]}
-                """).pages())
-                .singleElement()
-                .satisfies(page -> {
-                    assertThat(page.sourceDependencies()).isEmpty();
-                    assertThat(page.ruleGroupIdentifiers()).containsExactly("PLAY");
-                    assertThat(page.ruleGroupInventoryComplete()).isTrue();
-                });
-    }
-
-    @Test
-    void completeTeachingCatalogRequiresAnExplicitRuleGroupInventoryForEveryPage() {
-        assertThatThrownBy(() -> SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalog("""
-                {"pages":[{"pageNumber":4,"printedTerms":["PLAY"],
-                "factualSummary":["当前玩家执行行动。"],"keywords":["PLAY"],
-                "sourceDependencies":[]}]}
-                """))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("ruleGroupIdentifiers");
-
-        assertThatThrownBy(() -> SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalog("""
-                {"pages":[{"pageNumber":4,"printedTerms":["PLAY"],
-                "factualSummary":["当前玩家执行行动。"],"keywords":["PLAY"],
-                "sourceDependencies":[],"ruleGroupIdentifiers":null,
-                "ruleGroupInventoryComplete":true}]}
-                """))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("ruleGroupIdentifiers");
-
-        assertThatThrownBy(() -> SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalog("""
-                {"pages":[{"pageNumber":4,"printedTerms":["PLAY"],
-                "factualSummary":["当前玩家执行行动。"],"keywords":["PLAY"],
-                "sourceDependencies":[],"ruleGroupIdentifiers":["PLAY"]}]}
-                """))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("ruleGroupInventoryComplete");
-    }
-
-    @Test
-    void completeTeachingCatalogCanConfirmAFullyCheckedNonGameplayPageWithAnEmptyRuleGroupInventory() {
+    void historicalProseCatalogRemainsReadableButCannotPromoteACompleteRuleLedger() {
         var draft = SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalog("""
-                {"pages":[{"pageNumber":1,"printedTerms":["Publisher mark"],
-                "factualSummary":["该页是出版信息页，没有可见的玩法规则。"],"keywords":["publisher","credits"],
-                "sourceDependencies":[],"ruleGroupIdentifiers":[],
+                {"pages":[{"pageNumber":4,"printedTerms":["MOVE","BUILD"],
+                "factualSummary":["MOVE: Move one pawn.","BUILD：Place one building."],
+                "keywords":["MOVE","BUILD"],"sourceDependencies":[],
+                "ruleGroupIdentifiers":["MOVE","BUILD"],"ruleGroupInventoryComplete":true}]}
+                """);
+
+        assertThat(draft.pages()).singleElement().satisfies(page -> {
+            assertThat(page.factualSummary()).contains("MOVE: Move one pawn.", "BUILD：Place one building.");
+            assertThat(page.ruleGroupIdentifiers()).containsExactly("MOVE", "BUILD");
+            assertThat(page.ruleGroupFacts()).isEmpty();
+            assertThat(page.ruleGroupInventoryComplete()).isFalse();
+        });
+    }
+
+    @Test
+    void productionCatalogCompletenessComesOnlyFromStructuredRuleGroups() {
+        var draft = SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalogV6("""
+                {"pages":[{"pageNumber":4,"printedTerms":["MOVE","BUILD"],"keywords":["MOVE","BUILD"],
+                "externalDocumentDependencies":[],"ruleGroups":[
+                  {"identifier":"MOVE","fact":"当前玩家移动一个棋子。","quantitySpans":[]},
+                  {"identifier":"BUILD","fact":"当前玩家放置一座建筑。","quantitySpans":[]}],
                 "ruleGroupInventoryComplete":true}]}
                 """);
 
         assertThat(draft.pages()).singleElement().satisfies(page -> {
-            assertThat(page.ruleGroupIdentifiers()).isEmpty();
+            assertThat(page.ruleGroupIdentifiers()).containsExactly("page-4-group-1", "page-4-group-2");
+            assertThat(page.ruleGroupFacts())
+                    .extracting(fact -> fact.label(), fact -> fact.fact())
+                    .containsExactly(
+                            org.assertj.core.groups.Tuple.tuple("MOVE", "当前玩家移动一个棋子。"),
+                            org.assertj.core.groups.Tuple.tuple("BUILD", "当前玩家放置一座建筑。"));
             assertThat(page.ruleGroupInventoryComplete()).isTrue();
         });
-    }
 
-    @Test
-    void completeTeachingCatalogCannotClaimCompletenessWhenAListedRuleGroupHasNoBoundFact() {
-        assertThatThrownBy(() -> SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalog("""
-                {"pages":[{"pageNumber":4,"printedTerms":["MOVE","BUILD"],
-                "factualSummary":["MOVE：当前玩家移动一个棋子。"],"keywords":["MOVE","BUILD"],
-                "sourceDependencies":[],"ruleGroupIdentifiers":["MOVE","BUILD"],
+        assertThatThrownBy(() -> SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalogV6("""
+                {"pages":[{"pageNumber":4,"printedTerms":["MOVE"],"keywords":["MOVE","PAWN"],
+                "externalDocumentDependencies":[],"ruleGroups":[{"identifier":"MOVE","quantitySpans":[]}],
                 "ruleGroupInventoryComplete":true}]}
                 """))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("BUILD")
-                .hasMessageContaining("same-page fact");
+                .hasMessageContaining("must contain exactly");
     }
 
     @Test
-    void completeTeachingCatalogRequiresAnExactIdentifierBoundaryBeforeTheFact() {
-        assertThatThrownBy(() -> SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalog("""
-                {"pages":[{"pageNumber":4,"printedTerms":["MOVE"],
-                "factualSummary":["MOVEMENT: Move one pawn."],"keywords":["MOVE"],
-                "sourceDependencies":[],"ruleGroupIdentifiers":["MOVE"],
+    void productionTeachingCatalogRejectsUnknownMissingDuplicateAndLegacyFieldsAtTheJsonBoundary() {
+        String exact = """
+                {"pages":[{"pageNumber":4,"printedTerms":["MOVE"],"keywords":["MOVE","PAWN"],
+                "externalDocumentDependencies":[],"ruleGroups":[
+                  {"identifier":"MOVE","fact":"当前玩家移动一个棋子。","quantitySpans":[]}],
                 "ruleGroupInventoryComplete":true}]}
-                """))
+                """;
+
+        assertThat(SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalogV6(exact).pages())
+                .singleElement();
+        assertThatThrownBy(() -> SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalogV6(
+                        exact.replace("}]}", "}],\"statusLine\":\"done\"}")))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("MOVE")
-                .hasMessageContaining("same-page fact");
-    }
-
-    @Test
-    void completeTeachingCatalogPreservesARequiredFactInsteadOfRejectingOrTruncatingIt() {
-        String oversizedFact = "CONTEXT: " + "x".repeat(4_050);
-        String response = """
-                {"pages":[{"pageNumber":4,"printedTerms":["LATE"],
-                "factualSummary":["%s","LATE: Apply the visible late rule."],"keywords":["LATE"],
-                "sourceDependencies":[],"ruleGroupIdentifiers":["LATE"],
-                "ruleGroupInventoryComplete":true}]}
-                """.formatted(oversizedFact);
-
-        var draft = SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalog(response);
-
-        assertThat(draft.pages()).singleElement().satisfies(page -> {
-            assertThat(page.factualSummary()).contains(oversizedFact, "LATE: Apply the visible late rule.");
-            assertThat(page.factualSummary()).hasSizeGreaterThan(4_000);
-            assertThat(page.ruleGroupInventoryComplete()).isTrue();
-        });
-    }
-
-    @Test
-    void completeTeachingCatalogPreservesACompleteBoundLedgerNearTheStorageLimit() {
-        String nearLimitContext = "CONTEXT: " + "x".repeat(3_900);
-        String response = """
-                {"pages":[{"pageNumber":4,"printedTerms":["MOVE"],
-                "factualSummary":["MOVE: Move one pawn.","%s"],"keywords":["MOVE"],
-                "sourceDependencies":[],"ruleGroupIdentifiers":["MOVE"],
-                "ruleGroupInventoryComplete":true}]}
-                """.formatted(nearLimitContext);
-
-        var draft = SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalog(response);
-
-        assertThat(draft.pages()).singleElement().satisfies(page -> {
-            assertThat(page.factualSummary()).contains("MOVE: Move one pawn.", nearLimitContext);
-            assertThat(page.factualSummary().length()).isBetween(3_900, 4_000);
-            assertThat(page.ruleGroupInventoryComplete()).isTrue();
-        });
-    }
-
-    @Test
-    void completeTeachingCatalogRejectsAnIdentifierWithNoRuleStatement() {
-        assertThatThrownBy(() -> SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalog("""
-                {"pages":[{"pageNumber":4,"printedTerms":["MOVE"],
-                "factualSummary":["MOVE:"],"keywords":["MOVE"],
-                "sourceDependencies":[],"ruleGroupIdentifiers":["MOVE"],
-                "ruleGroupInventoryComplete":true}]}
-                """))
+                .hasMessageContaining("root must contain exactly");
+        assertThatThrownBy(() -> SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalogV6(
+                        exact.replace("\"keywords\":[\"MOVE\",\"PAWN\"],", "")))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("MOVE")
-                .hasMessageContaining("same-page fact");
-    }
-
-    @Test
-    void completeTeachingCatalogPreservesEveryValidDensePageRuleGroup() {
-        String identifiers = java.util.stream.IntStream.rangeClosed(1, 33)
-                .mapToObj(index -> "\"GROUP_" + index + "\"")
-                .collect(java.util.stream.Collectors.joining(","));
-        String facts = java.util.stream.IntStream.rangeClosed(1, 33)
-                .mapToObj(index -> "\"GROUP_" + index + ": visible fact " + index + ".\"")
-                .collect(java.util.stream.Collectors.joining(","));
-        String response = """
-                {"pages":[{"pageNumber":4,"printedTerms":["GROUPS"],
-                "factualSummary":[%s],"keywords":["GROUPS"],
-                "sourceDependencies":[],"ruleGroupIdentifiers":[%s],
-                "ruleGroupInventoryComplete":true}]}
-                """.formatted(facts, identifiers);
-
-        var draft = SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalog(response);
-
-        assertThat(draft.pages()).singleElement().satisfies(page -> {
-            assertThat(page.ruleGroupIdentifiers()).hasSize(33);
-            assertThat(page.ruleGroupIdentifiers()).contains("GROUP_1", "GROUP_33");
-            assertThat(page.factualSummary()).contains(
-                    "GROUP_1: visible fact 1.", "GROUP_33: visible fact 33.");
-            assertThat(page.ruleGroupInventoryComplete()).isTrue();
-        });
-    }
-
-    @Test
-    void completeTeachingCatalogRejectsNonTextAndNormalizedDuplicateIdentifiers() {
-        assertThatThrownBy(() -> SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalog("""
-                {"pages":[{"pageNumber":4,"printedTerms":["MOVE"],
-                "factualSummary":["MOVE: Move one pawn."],"keywords":["MOVE"],
-                "sourceDependencies":[],"ruleGroupIdentifiers":[3],
-                "ruleGroupInventoryComplete":true}]}
-                """))
+                .hasMessageContaining("page must contain exactly");
+        assertThatThrownBy(() -> SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalogV6(
+                        exact.replace(
+                                "\"printedTerms\":[\"MOVE\"],",
+                                "\"printedTerms\":\"MOVE\",\"factualSummary\":[],")))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("must be text");
-
-        assertThatThrownBy(() -> SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalog("""
-                {"pages":[{"pageNumber":4,"printedTerms":["MOVE"],
-                "factualSummary":["MOVE: Move one pawn."],"keywords":["MOVE"],
-                "sourceDependencies":[],"ruleGroupIdentifiers":["MOVE"," move "],
-                "ruleGroupInventoryComplete":true}]}
-                """))
+                .hasMessageContaining("page must contain exactly");
+        assertThatThrownBy(() -> SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalogV6(
+                        exact.replace(
+                                "\"pageNumber\":4,",
+                                "\"pageNumber\":4,\"pageNumber\":5,")))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("duplicated");
+                .hasMessageContaining("invalid JSON");
+        assertThatThrownBy(() -> SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalogV6(
+                        "```json\n" + exact + "\n```"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("invalid JSON");
     }
 
     private SpringAiVisualRulebookPageCatalogModel model(RuntimeModelConfiguration configuration) throws IOException {
@@ -1654,8 +1426,6 @@ class SpringAiVisualRulebookPageCatalogModelTest {
                 new ClassPathResource("prompts/visual-page-progressive-teaching-start-v4-source-contract-system.txt"),
                 new ClassPathResource("prompts/visual-icon-localization-v2-system.txt"),
                 new ClassPathResource("prompts/visual-icon-crop-review-v4-system.txt"),
-                new ClassPathResource("prompts/visual-identifier-cell-v1-system.txt"),
-                new ClassPathResource("prompts/visual-identifier-reference-match-v1-system.txt"),
                 "qwen3.5-ocr",
                 4_800);
     }
@@ -1734,7 +1504,7 @@ class SpringAiVisualRulebookPageCatalogModelTest {
                   {"groupKey":"bad","name":"Bad","visualDescription":"越界图标。",
                    "meaningStatus":"UNEXPLAINED","explanation":"","evidenceText":"",
                    "x":990,"y":990,"width":80,"height":80}
-                ],"iconInventoryComplete":false}]}
+                ],"iconInventoryComplete":true}]}
                 """);
 
         assertThat(draft.pages()).singleElement().satisfies(page -> {
@@ -1775,38 +1545,35 @@ class SpringAiVisualRulebookPageCatalogModelTest {
     }
 
     @Test
-    void parsesDedicatedIconLocationsFromQwenArrayOrObjectShape() {
-        var array = SpringAiVisualRulebookPageCatalogModel.parseIconLocalization("""
-                [
-                  {"candidateIndex":0,"present":true,"x":120,"y":300,"width":24,"height":20,"observedLabel":"WOOD"},
-                  {"candidateIndex":1,"present":false}
-                ]
-                """, 2);
+    void parsesDedicatedIconLocationsFromTheDeclaredObjectShapeOnly() {
         var object = SpringAiVisualRulebookPageCatalogModel.parseIconLocalization("""
                 {"items":[
                   {"candidateIndex":0,"present":true,"x":120,"y":300,"width":24,"height":20,"observedLabel":"WOOD"},
-                  {"candidateIndex":1,"present":false}
+                  {"candidateIndex":1,"present":false,"observedLabel":""}
                 ]}
                 """, 2);
 
-        assertThat(array).isEqualTo(object);
-        assertThat(array.locations()).hasSize(2);
-        assertThat(array.locations().getFirst().present()).isTrue();
-        assertThat(array.locations().getFirst().observedLabel()).isEqualTo("WOOD");
-        assertThat(array.locations().getLast().present()).isFalse();
+        assertThat(object.locations()).hasSize(2);
+        assertThat(object.locations().getFirst().present()).isTrue();
+        assertThat(object.locations().getFirst().observedLabel()).isEqualTo("WOOD");
+        assertThat(object.locations().getLast().present()).isFalse();
+        assertThatThrownBy(() -> SpringAiVisualRulebookPageCatalogModel.parseIconLocalization("""
+                [{"candidateIndex":0,"present":false,"observedLabel":""}]
+                """, 1))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("root must be an object");
     }
 
     @Test
-    void rejectsOnlyTheMalformedRectangleInsteadOfDiscardingVerifiedCandidates() {
-        var result = SpringAiVisualRulebookPageCatalogModel.parseIconLocalization("""
+    void rejectsAMalformedRectangleInsteadOfRewritingTheCandidateAsAbsent() {
+        assertThatThrownBy(() -> SpringAiVisualRulebookPageCatalogModel.parseIconLocalization("""
                 {"items":[
-                  {"candidateIndex":0,"present":true,"x":120,"y":300,"width":24,"height":20},
-                  {"candidateIndex":1,"present":true,"x":995,"y":995,"width":30,"height":30}
+                  {"candidateIndex":0,"present":true,"x":120,"y":300,"width":24,"height":20,"observedLabel":"WOOD"},
+                  {"candidateIndex":1,"present":true,"x":995,"y":995,"width":30,"height":30,"observedLabel":"STONE"}
                 ]}
-                """, 2);
-
-        assertThat(result.locations().getFirst().present()).isTrue();
-        assertThat(result.locations().getLast()).isEqualTo(IconLocation.absent(1));
+                """, 2))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("rectangle is invalid");
     }
 
     @Test
@@ -1815,8 +1582,7 @@ class SpringAiVisualRulebookPageCatalogModelTest {
                 {"items":[
                   {"candidateIndex":3,"matchesAppearance":true,"fullyContained":true,"standalonePictogram":true,
                    "x":120,"y":160,"width":300,"height":280},
-                  {"candidateIndex":7,"matchesAppearance":false,"fullyContained":false,"standalonePictogram":false,
-                   "rejectionCode":"NO_MATCHING_PICTOGRAM"}
+                  {"candidateIndex":7,"matchesAppearance":false,"fullyContained":false,"standalonePictogram":false}
                 ]}
                 """, List.of(3, 7));
 
@@ -1832,9 +1598,8 @@ class SpringAiVisualRulebookPageCatalogModelTest {
         var result = SpringAiVisualRulebookPageCatalogModel.parseIconCropReview("""
                 {"items":[
                   {"candidateIndex":2,"matchesAppearance":false,"fullyContained":false,"standalonePictogram":false,
-                   "rejectionCode":"CLIPPED_OR_PARTIAL"},
-                  {"candidateIndex":5,"matchesAppearance":true,"fullyContained":true,"standalonePictogram":false,
-                   "rejectionCode":"MULTIPLE_SYMBOLS"}
+                   "x":0,"y":0,"width":0,"height":0},
+                  {"candidateIndex":5,"matchesAppearance":true,"fullyContained":true,"standalonePictogram":false}
                 ]}
                 """, List.of(2, 5));
 
@@ -1844,18 +1609,16 @@ class SpringAiVisualRulebookPageCatalogModelTest {
     }
 
     @Test
-    void rejectsOnlyTheCandidateWhosePublicationVerdictIsMissing() {
-        var result = SpringAiVisualRulebookPageCatalogModel.parseIconCropReview("""
+    void rejectsTheResponseWhenAnAcceptedCropOmitsItsTypedRectangle() {
+        assertThatThrownBy(() -> SpringAiVisualRulebookPageCatalogModel.parseIconCropReview("""
                 {"items":[
                   {"candidateIndex":3,"matchesAppearance":true,"fullyContained":true,"standalonePictogram":true,
                    "x":100,"y":100,"width":200,"height":200},
-                  {"candidateIndex":7,"matchesAppearance":true,"fullyContained":true,"standalonePictogram":true,
-                   "rejectionCode":"ACCEPTED"}
+                  {"candidateIndex":7,"matchesAppearance":true,"fullyContained":true,"standalonePictogram":true}
                 ]}
-                """, List.of(3, 7));
-
-        assertThat(result.decisions().getFirst().matchesAppearance()).isTrue();
-        assertThat(result.decisions().getLast()).isEqualTo(IconCropDecision.rejected(7));
+                """, List.of(3, 7)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("fields do not match its verdict");
     }
 
     @Test
@@ -1932,62 +1695,6 @@ class SpringAiVisualRulebookPageCatalogModelTest {
     }
 
     @Test
-    void keepsOnlyExactUniqueBindingsFromAPartialMultiPageTeachingResponse() {
-        CatalogRequest request = new CatalogRequest(
-                List.of(
-                        new PageImageInput(2, "image/jpeg", new byte[] {1}),
-                        new PageImageInput(5, "image/jpeg", new byte[] {2}),
-                        new PageImageInput(9, "image/jpeg", new byte[] {3})),
-                "owner");
-        CatalogDraft draft = new CatalogDraft(List.of(
-                new PageSummary(
-                        2,
-                        "SETUP",
-                        "SETUP: Visible setup rule.",
-                        List.of("setup"),
-                        List.of(new com.rulepilot.teaching.VisualRulebookPageFacts.VisualAnchor(
-                                "diagram", "setup", "Setup diagram.", 10, 10, 100, 100)),
-                        List.of(new com.rulepilot.teaching.VisualRulebookPageFacts.IconOccurrence(
-                                "token",
-                                "标记",
-                                "A compact circle.",
-                                "",
-                                "",
-                                com.rulepilot.teaching.VisualRulebookPageFacts.IconMeaningStatus.UNEXPLAINED,
-                                10,
-                                10,
-                                20,
-                                20)),
-                        true,
-                        List.of(),
-                        List.of("SETUP"),
-                        true),
-                new PageSummary(
-                        9,
-                        "SCORING",
-                        "SCORING: Visible scoring rule.",
-                        List.of("scoring"),
-                        List.of(),
-                        List.of(),
-                        false,
-                        List.of(),
-                        List.of("SCORING"),
-                        true)));
-
-        CatalogDraft normalized =
-                SpringAiVisualRulebookPageCatalogModel.normalizeTeachingPageBindings(request, draft);
-
-        assertThat(normalized.pages()).extracting(PageSummary::pageNumber).containsExactly(2, 9);
-        assertThat(normalized.pages()).allSatisfy(page -> {
-            assertThat(page.visualAnchors()).isEmpty();
-            assertThat(page.iconOccurrences()).isEmpty();
-            assertThat(page.iconInventoryComplete()).isFalse();
-            assertThat(page.ruleGroupIdentifiers()).isNotEmpty();
-            assertThat(page.ruleGroupInventoryComplete()).isTrue();
-        });
-    }
-
-    @Test
     void neverGuessesUnknownOrDuplicateBindingsAcrossTeachingPageImages() {
         CatalogRequest request = new CatalogRequest(
                 List.of(
@@ -2004,47 +1711,6 @@ class SpringAiVisualRulebookPageCatalogModelTest {
                         SpringAiVisualRulebookPageCatalogModel.normalizeTeachingPageBindings(request, draft))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("no safely bound supplied page");
-    }
-
-    @Test
-    void repairsTheOnlyBindingDuringASinglePageTeachingRetry() {
-        CatalogRequest request = new CatalogRequest(
-                List.of(new PageImageInput(11, "image/jpeg", new byte[] {1})), "owner");
-        CatalogDraft draft = new CatalogDraft(List.of(
-                new PageSummary(
-                        111,
-                        "TURN",
-                        "TURN: Place one marker for each of two visible bands.",
-                        List.of("turn", "bands"),
-                        List.of(),
-                        List.of(),
-                        false,
-                        List.of(),
-                        List.of("TURN"),
-                        true,
-                        List.of(new com.rulepilot.teaching.VisualQuantityObservation(
-                                111,
-                                "TURN",
-                                QuantifierScope.PER_VARIANT,
-                                "bands",
-                                2,
-                                1,
-                                2,
-                                "2 bands × 1 marker each",
-                                QuantityResolution.EXACT)))));
-
-        CatalogDraft normalized =
-                SpringAiVisualRulebookPageCatalogModel.normalizeTeachingPageBindings(request, draft);
-
-        assertThat(normalized.pages()).singleElement().satisfies(page -> {
-            assertThat(page.pageNumber()).isEqualTo(11);
-            assertThat(page.ruleGroupIdentifiers()).containsExactly("TURN");
-            assertThat(page.ruleGroupInventoryComplete()).isTrue();
-            assertThat(page.quantityObservations()).singleElement().satisfies(observation -> {
-                assertThat(observation.pageNumber()).isEqualTo(11);
-                assertThat(observation.originalSpan()).isEqualTo("2 bands × 1 marker each");
-            });
-        });
     }
 
     @Test

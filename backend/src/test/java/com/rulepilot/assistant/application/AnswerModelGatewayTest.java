@@ -12,7 +12,6 @@ import com.rulepilot.assistant.RuleAnswerModel.EvidenceInput;
 import com.rulepilot.assistant.RuleAnswerModel.ModelDraft;
 import com.rulepilot.assistant.RuleAnswerModel.ModelRequest;
 import com.rulepilot.assistant.RuleAnswerModel.PlayerFacingField;
-import com.rulepilot.assistant.RuleAnswerModel.RetrievalQueryRequest;
 import com.rulepilot.assistant.domain.QuestionType;
 import java.util.ArrayList;
 import java.util.List;
@@ -33,7 +32,7 @@ class AnswerModelGatewayTest {
         ModelDraft expected = draft("完成回答。");
         RecordingRateLimiter limiter = new RecordingRateLimiter();
         RecordingInvocations invocations = new RecordingInvocations();
-        AnswerModelGateway gateway = new AnswerModelGateway(model(expected, expected, List.of()), limiter, invocations);
+        AnswerModelGateway gateway = new AnswerModelGateway(model(expected, expected), limiter, invocations);
 
         ModelDraft result = gateway.compose(runId, "alice", sessionId, request());
 
@@ -84,27 +83,6 @@ class AnswerModelGatewayTest {
     }
 
     @Test
-    void rewritesRetrievalPhrasesWithoutBorrowingALiveGameSessionPermit() {
-        RecordingRateLimiter limiter = new RecordingRateLimiter();
-        RecordingInvocations invocations = new RecordingInvocations();
-        AnswerModelGateway gateway = new AnswerModelGateway(
-                model(draft("unused"), draft("unused"), List.of("setup actions", "end scoring")), limiter, invocations);
-
-        List<String> phrases = gateway.rewriteRetrievalQueries(
-                runId, "alice", new RetrievalQueryRequest("如何设置？", null));
-
-        assertThat(phrases).containsExactly("setup actions", "end scoring");
-        assertThat(limiter.requests).containsExactly(new PermitRequest("alice", null, "test-provider"));
-        assertThat(limiter.releases).isEqualTo(1);
-        assertThat(invocations.calls).containsExactly(new Invocation(
-                runId,
-                ActivityType.MODEL,
-                "rewriteAnswerRetrievalQueries",
-                "Cross-language retrieval phrases prepared",
-                true));
-    }
-
-    @Test
     void resolvesTheProviderAndAnswerCallFromTheExplicitOwnerOutsideRequestThreadState() {
         AtomicReference<String> providerOwner = new AtomicReference<>();
         AtomicReference<String> compositionOwner = new AtomicReference<>();
@@ -145,16 +123,16 @@ class AnswerModelGatewayTest {
     @Test
     void locksEveryFieldThatWasNotExplicitlyRejectedForPlayerFacingRepair() {
         UUID retainedCitation = UUID.randomUUID();
-        ModelDraft previous = new ModelDraft(
+        ModelDraft previous = draft(
                 "原裁定。", "原解释。", List.of(retainedCitation), List.of("原例外。"), "HIGH");
-        ModelDraft providerRepair = new ModelDraft(
+        ModelDraft providerRepair = draft(
                 "不应改动的裁定。",
                 "修复后的解释。",
                 List.of(UUID.randomUUID()),
                 List.of("不应改动的例外。"),
                 "LOW");
         AnswerModelGateway gateway = new AnswerModelGateway(
-                model(draft("unused"), providerRepair, List.of()),
+                model(draft("unused"), providerRepair),
                 new RecordingRateLimiter(),
                 new RecordingInvocations());
 
@@ -176,7 +154,7 @@ class AnswerModelGatewayTest {
         assertThat(repaired.confidence()).isEqualTo(previous.confidence());
     }
 
-    private RuleAnswerModel model(ModelDraft composition, ModelDraft revision, List<String> rewrittenQueries) {
+    private RuleAnswerModel model(ModelDraft composition, ModelDraft revision) {
         return new RuleAnswerModel() {
             @Override
             public String providerId() {
@@ -192,11 +170,6 @@ class AnswerModelGatewayTest {
             public ModelDraft revise(ModelRequest request, ModelDraft previousDraft, List<String> feedback) {
                 return revision;
             }
-
-            @Override
-            public List<String> rewriteRetrievalQueries(RetrievalQueryRequest request) {
-                return rewrittenQueries;
-            }
         };
     }
 
@@ -209,7 +182,25 @@ class AnswerModelGatewayTest {
     }
 
     private ModelDraft draft(String verdict) {
-        return new ModelDraft(verdict, "依据规则执行。", List.of(UUID.randomUUID()), List.of(), "HIGH");
+        return draft(verdict, "依据规则执行。", List.of(UUID.randomUUID()), List.of(), "HIGH");
+    }
+
+    private ModelDraft draft(
+            String verdict,
+            String explanation,
+            List<UUID> citationIds,
+            List<String> exceptions,
+            String confidence) {
+        return new ModelDraft(
+                true,
+                null,
+                verdict,
+                explanation,
+                citationIds,
+                exceptions,
+                confidence,
+                "DIRECT_RULE",
+                List.of());
     }
 
     private static final class RecordingRateLimiter implements RuleAnswerRateLimiter {

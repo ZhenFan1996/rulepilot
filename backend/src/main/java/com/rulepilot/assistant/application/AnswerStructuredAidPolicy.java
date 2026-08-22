@@ -62,14 +62,6 @@ final class AnswerStructuredAidPolicy {
         return value == null ? "" : value;
     }
 
-    static <T extends Enum<T>> T enumValue(String value, Class<T> type, String label) {
-        try {
-            return T.valueOf(type, requiredText(value, label).strip().toUpperCase(Locale.ROOT));
-        } catch (IllegalArgumentException invalid) {
-            throw new IllegalArgumentException(label + " is invalid", invalid);
-        }
-    }
-
     static String identityKey(String value) {
         return Normalizer.normalize(value == null ? "" : value, Normalizer.Form.NFKC)
                 .strip()

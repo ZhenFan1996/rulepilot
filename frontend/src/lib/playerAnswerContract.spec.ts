@@ -101,8 +101,8 @@ describe('playerAnswerContract', () => {
     expect(parsePlayerFacingRuleAnswer(naturalPublishedAnswer)).toEqual(naturalPublishedAnswer)
   })
 
-  it('drops only malformed optional enrichment while preserving the cited answer core', () => {
-    const parsed = parsePlayerFacingRuleAnswer({
+  it('rejects malformed required and optional fields instead of silently deleting JSON members', () => {
+    expect(parsePlayerFacingRuleAnswer({
       ...answered,
       citations: [
         ...answered.citations,
@@ -114,18 +114,18 @@ describe('playerAnswerContract', () => {
       ],
       walkthroughSteps: { unexpected: 'object instead of a list' },
       warnings: [{ type: 'LOW_CONFIDENCE' }, { type: 'OLD_BROWSER_ONLY_WARNING' }],
-    })
-
-    expect(parsed).toMatchObject({
-      shortVerdict: answered.shortVerdict,
-      citations: answered.citations,
-      calculations: [{ expression: '3 × 4', result: '12' }],
-      warnings: [{ type: 'LOW_CONFIDENCE' }],
-    })
-    expect(parsed?.walkthroughSteps).toBeUndefined()
+    })).toBeNull()
     expect(parsePlayerFacingRuleAnswer({
       ...answered,
       citations: [{ heading: 'Broken', excerpt: '', pageFrom: 0, pageTo: 0 }],
+    })).toBeNull()
+    expect(parsePlayerFacingRuleAnswer({
+      ...answered,
+      clarification: { guessed: 'no' },
+    })).toBeNull()
+    expect(parsePlayerFacingRuleAnswer({
+      ...answered,
+      recovery: { message: 'missing required fields' },
     })).toBeNull()
   })
 })

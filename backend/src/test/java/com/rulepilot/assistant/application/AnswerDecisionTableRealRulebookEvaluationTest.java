@@ -15,7 +15,6 @@ import com.rulepilot.assistant.RuleAnswerModel.EvidenceInput;
 import com.rulepilot.assistant.RuleAnswerModel.ExceptionClauseRequest;
 import com.rulepilot.assistant.RuleAnswerModel.ModelDraft;
 import com.rulepilot.assistant.RuleAnswerModel.ModelRequest;
-import com.rulepilot.assistant.adapter.out.model.FakeRuleAnswerModel;
 import com.rulepilot.assistant.adapter.out.model.SpringAiRuleAnswerModel;
 import com.rulepilot.assistant.domain.DecisionBranchBasis;
 import com.rulepilot.assistant.domain.QuestionType;
@@ -432,7 +431,7 @@ class AnswerDecisionTableRealRulebookEvaluationTest {
             context.register(VersionedAgentPrompts.class);
             context.refresh();
             return new SpringAiRuleAnswerModel(
-                    configuration, new FakeRuleAnswerModel(), context.getBean(VersionedAgentPrompts.class));
+                    configuration, context.getBean(VersionedAgentPrompts.class));
         }
     }
 

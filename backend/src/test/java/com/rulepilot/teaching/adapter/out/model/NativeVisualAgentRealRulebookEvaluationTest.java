@@ -181,9 +181,8 @@ class NativeVisualAgentRealRulebookEvaluationTest {
                 "regions", parsed.get().regions().stream()
                         .map(region -> Map.<String, Object>of(
                                 "pageNumber", region.pageNumber(),
-                                "labelIsChinese", VisualLocatorResponsePolicy.containsChinese(region.label()),
-                                "descriptionIsChinese",
-                                        VisualLocatorResponsePolicy.containsChinese(region.visibleDescription()),
+                                "label", region.label(),
+                                "visibleDescription", region.visibleDescription(),
                                 "supportedClaimRefs", region.supportedClaimRefs(),
                                 "rectangle", List.of(
                                         region.x(), region.y(), region.width(), region.height())))

@@ -20,7 +20,7 @@ class PlayerFacingAnswerPresenterTest {
     private final ObjectMapper json = new ObjectMapper();
 
     @Test
-    void removesInternalAnswerIdentitiesAndVisualInstructionsWithoutLosingReadableEvidence() throws Exception {
+    void removesInternalAnswerIdentitiesAndPublishesTheAlreadySafeCitationExcerpt() throws Exception {
         UUID versionId = UUID.randomUUID();
         UUID chunkId = UUID.randomUUID();
         UUID rulingId = UUID.randomUUID();
@@ -34,9 +34,7 @@ class PlayerFacingAnswerPresenterTest {
                         versionId,
                         "TIMING",
                         "Amber gate",
-                        "Visual-transcribed rule evidence. Only the statements under Visible rule facts are rule evidence. "
-                                + "Do not derive a timing rule from layout alone.\nVisible rule facts: "
-                                + "Move the cobalt spindle after the amber gate closes.",
+                        "Move the cobalt spindle after the amber gate closes.",
                         7,
                         7)),
                 List.of(),
@@ -69,41 +67,7 @@ class PlayerFacingAnswerPresenterTest {
                 assertThat(step.instruction()).isEqualTo("Move the cobalt spindle."));
         assertThat(serialized)
                 .doesNotContain(versionId.toString(), chunkId.toString(), rulingId.toString())
-                .doesNotContain("documentVersionId", "chunkId", "confirmedRulingId")
-                .doesNotContain("Visual-transcribed rule evidence", "Do not derive");
-    }
-
-    @Test
-    void failsClosedWhenALegacyVisualEnvelopeHasNoReadableFactBoundary() throws Exception {
-        UUID versionId = UUID.randomUUID();
-        UUID chunkId = UUID.randomUUID();
-        StructuredRuleAnswer answer = new StructuredRuleAnswer(
-                versionId,
-                AnswerStatus.ANSWERED,
-                "Use the printed order.",
-                "The cited rule lists the order.",
-                List.of(new RuleCitation(
-                        chunkId,
-                        versionId,
-                        "ORDER",
-                        "Printed order",
-                        "Visual-transcribed rule evidence. Do not expose this internal instruction.",
-                        3,
-                        3)),
-                List.of(),
-                AnswerConfidence.HIGH,
-                AnswerBasis.DIRECT_RULE,
-                false,
-                null,
-                null,
-                null);
-
-        var presented = PlayerFacingAnswerPresenter.present(answer, "What is the printed order?", PlayerLocale.EN);
-
-        assertThat(presented.citations()).singleElement().satisfies(citation ->
-                assertThat(citation.excerpt()).isEmpty());
-        assertThat(json.writeValueAsString(presented))
-                .doesNotContain("Visual-transcribed", "internal instruction", chunkId.toString());
+                .doesNotContain("documentVersionId", "chunkId", "confirmedRulingId");
     }
 
     @Test

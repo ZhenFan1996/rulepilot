@@ -98,8 +98,7 @@ final class TeachingSectionDraftComposer {
         } catch (AgentExecutionStoppedException stopped) {
             throw stopped;
         } catch (RuntimeException visualCompositionFailure) {
-            if (draftRecoveryPolicy.canFallbackToCitedText(
-                    !modelRequest.pageImages().isEmpty(), hasOnlyVisualPageEvidence(evidence))) {
+            if (canFallbackToCitedText(modelRequest, evidence)) {
                 log.warn(
                         "Visual teaching composition for topic {} is unavailable; continuing with cited text: {}",
                         planned.topicKey(),
@@ -112,7 +111,6 @@ final class TeachingSectionDraftComposer {
         }
         draft = normalizeDraft(draft, modelRequest, evidence);
         boolean hasPageImages = !modelRequest.pageImages().isEmpty();
-        boolean hasOnlyVisualPageEvidence = hasOnlyVisualPageEvidence(evidence);
         int maxRepairAttempts = allowValidationRevision
                 ? draftRecoveryPolicy.maxRepairAttempts(hasPageImages)
                 : 0;
@@ -134,18 +132,7 @@ final class TeachingSectionDraftComposer {
                         planned,
                         repair,
                         ActivityOutcome.REJECTED,
-                        TeachingDraftRejectionCategory.from(rejectedDraft));
-                if (draftRecoveryPolicy.shouldFallbackToCitedText(
-                        hasPageImages, hasOnlyVisualPageEvidence, repair)) {
-                    return fallbackToTextDraft(
-                            plan,
-                            planned,
-                            evidence,
-                            modelRequest,
-                            assistantRunId,
-                            sectionIndex,
-                            repair + 1);
-                }
+                        "DRAFT_VALIDATION_REJECTED");
                 if (repair == maxRepairAttempts) {
                     throw rejectedDraft;
                 }
@@ -153,7 +140,7 @@ final class TeachingSectionDraftComposer {
                         ? "The previous draft failed lesson validation."
                         : candidateValidator.repairDiagnostic(rejectedDraft, draft, evidence);
                 List<String> feedback = draftRecoveryPolicy.repairFeedback(
-                        diagnostic, hasPageImages, isVisualLocalizationFailure(rejectedDraft));
+                        diagnostic, hasPageImages, false);
                 log.info(
                         "Teaching topic {} structural repair {}/{}: {}",
                         planned.topicKey(),
@@ -174,7 +161,7 @@ final class TeachingSectionDraftComposer {
                 } catch (AgentExecutionStoppedException stopped) {
                     throw stopped;
                 } catch (RuntimeException visualRepairFailure) {
-                    if (draftRecoveryPolicy.canFallbackToCitedText(hasPageImages, hasOnlyVisualPageEvidence)) {
+                    if (canFallbackToCitedText(modelRequest, evidence)) {
                         log.warn(
                                 "Visual teaching repair for topic {} is unavailable; continuing with cited text: {}",
                                 planned.topicKey(),
@@ -204,7 +191,7 @@ final class TeachingSectionDraftComposer {
             UUID assistantRunId,
             int sectionIndex,
             int validationAttempt) {
-        TeachingLessonModel.SectionRequest textOnlyRequest = draftRecoveryPolicy.withoutPageImages(visualRequest);
+        TeachingLessonModel.SectionRequest textOnlyRequest = withoutPageImages(visualRequest);
         SectionDraft textOnlyDraft = composeModelDraft(
                 assistantRunId,
                 planned,
@@ -231,21 +218,20 @@ final class TeachingSectionDraftComposer {
                         planned,
                         validationAttempt + repair,
                         ActivityOutcome.REJECTED,
-                        "TEXT_FALLBACK_" + TeachingDraftRejectionCategory.from(rejectedFallback));
+                        "TEXT_FALLBACK_REJECTED");
                 if (repair == draftRecoveryPolicy.maxRepairAttempts(false)) {
                     throw rejectedFallback;
                 }
-                List<String> repairFeedback = draftRecoveryPolicy.textFallbackFeedback(
-                        rejectedFallback.getMessage() == null
-                                ? "The previous fallback failed lesson validation."
-                                : candidateValidator.repairDiagnostic(rejectedFallback, textOnlyDraft, evidence));
-                SectionDraft draftToRevise = textOnlyDraft;
+                String diagnostic = rejectedFallback.getMessage() == null
+                        ? "The previous text fallback failed lesson validation."
+                        : candidateValidator.repairDiagnostic(rejectedFallback, textOnlyDraft, evidence);
+                SectionDraft previousDraft = textOnlyDraft;
                 textOnlyDraft = reviseModelDraft(
                         assistantRunId,
                         planned,
                         textOnlyRequest,
-                        draftToRevise,
-                        repairFeedback,
+                        previousDraft,
+                        List.of(diagnostic),
                         "reviseTextTeachingSection",
                         "repairTextTeachingSectionRevisionContract",
                         "Text fallback revised from validation feedback");
@@ -254,10 +240,33 @@ final class TeachingSectionDraftComposer {
                         planned,
                         evidence,
                         textOnlyRequest,
-                        draftToRevise,
+                        previousDraft,
                         normalizeDraft(textOnlyDraft, textOnlyRequest, evidence));
             }
         }
+    }
+
+    private boolean canFallbackToCitedText(
+            TeachingLessonModel.SectionRequest request, List<RuleEvidence> evidence) {
+        return !request.pageImages().isEmpty()
+                && evidence.stream().anyMatch(source -> source.contentKind() == RuleEvidence.ContentKind.CANONICAL_TEXT
+                        || source.contentKind() == RuleEvidence.ContentKind.CANONICAL_TEXT_WITH_VISUAL_FACTS);
+    }
+
+    private TeachingLessonModel.SectionRequest withoutPageImages(TeachingLessonModel.SectionRequest request) {
+        return new TeachingLessonModel.SectionRequest(
+                request.topicKey(),
+                request.title(),
+                request.objective(),
+                request.coverageTags(),
+                request.priorSections(),
+                request.evidence(),
+                List.of(),
+                request.requiredRuleIntents(),
+                request.teachingUnits(),
+                request.modelConfigurationOwner(),
+                request.chapterScope(),
+                request.wholeGameContext());
     }
 
     private SectionDraft composeModelDraft(
@@ -353,15 +362,6 @@ final class TeachingSectionDraftComposer {
                 throw repairFailure;
             }
         }
-    }
-
-    private boolean isVisualLocalizationFailure(IllegalArgumentException rejection) {
-        return TeachingDraftRejectionCategory.from(rejection).startsWith("VISUAL_");
-    }
-
-    private boolean hasOnlyVisualPageEvidence(List<RuleEvidence> evidence) {
-        return !evidence.isEmpty()
-                && evidence.stream().allMatch(TeachingVisualEvidenceSelector::isVisualPageEvidence);
     }
 
     SectionDraft normalizeDraft(SectionDraft draft, TeachingLessonModel.SectionRequest request) {

@@ -51,10 +51,11 @@ class TeachingVisualEvidenceSelectorTest {
                 UUID.randomUUID(),
                 "SETUP",
                 "Visual setup page",
-                TeachingVisualEvidenceSelector.VISUAL_PAGE_PLACEHOLDER,
+                "Image-only page",
                 4,
                 4,
-                List.of(new RulePageImage(4, "image/jpeg", new byte[] {4}, 800, 1200)));
+                List.of(new RulePageImage(4, "image/jpeg", new byte[] {4}, 800, 1200)),
+                RuleEvidence.ContentKind.VISUAL_PLACEHOLDER);
 
         assertThat(TeachingVisualEvidenceSelector.select(planned, List.of(imageOnly), true))
                 .extracting(PageImageInput::pageNumber)

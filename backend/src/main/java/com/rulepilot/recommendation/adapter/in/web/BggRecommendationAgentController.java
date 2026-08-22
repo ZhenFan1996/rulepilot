@@ -329,6 +329,7 @@ public class BggRecommendationAgentController {
             String responseLocale,
             String outcome,
             String assistantMessage,
+            String recommendationLead,
             RecommendationProfileResponse profile,
             ClarificationResponse clarification,
             RecommendationShortfallResponse shortfall,
@@ -356,6 +357,7 @@ public class BggRecommendationAgentController {
                     locale,
                     response.outcome().name().toLowerCase(Locale.ROOT),
                     response.assistantMessage(),
+                    response.recommendationLead(),
                     RecommendationProfileResponse.from(response.profile()),
                     response.clarification() == null ? null : ClarificationResponse.from(response.clarification()),
                     response.shortfall() == null ? null : RecommendationShortfallResponse.from(response.shortfall()),
@@ -530,7 +532,8 @@ public class BggRecommendationAgentController {
             List<String> matches,
             List<String> tradeoffs,
             List<RecommendationReasonResponse> reasons,
-            List<CandidateFitClaimResponse> fitClaims) {
+            List<CandidateFitClaimResponse> fitClaims,
+            List<RecommendationReplyPartResponse> replyParts) {
         static RecommendedGameResponse from(
                 RecommendedGame game,
                 LocalizedTaxonomy taxonomy,
@@ -546,7 +549,27 @@ public class BggRecommendationAgentController {
                     game.claims().stream()
                             .filter(claim -> claim.type() == CandidateClaim.Type.CONSTRAINT_FIT)
                             .map(CandidateFitClaimResponse::from)
+                            .toList(),
+                    game.replyParts().stream()
+                            .map(RecommendationReplyPartResponse::from)
                             .toList());
+        }
+    }
+
+    record RecommendationReplyPartResponse(
+            String role,
+            String claimType,
+            String subject,
+            String text,
+            List<Integer> sourceIndexes) {
+        static RecommendationReplyPartResponse from(
+                BoardGameRecommendationAgent.RecommendationReplyPart part) {
+            return new RecommendationReplyPartResponse(
+                    part.role().name().toLowerCase(Locale.ROOT),
+                    part.claim().type().name().toLowerCase(Locale.ROOT),
+                    part.claim().subject(),
+                    part.claim().text(),
+                    part.claim().sourceIndexes());
         }
     }
 

@@ -85,7 +85,7 @@ final class TeachingOutlineRevisionPolicy {
                 .toList();
         if (missing.isEmpty()) return Optional.empty();
         String pageCatalog = missing.stream()
-                .map(page -> "Page " + page.pageNumber() + ": " + boundedPageText(page.text()))
+                .map(page -> "Page " + page.pageNumber() + ": " + page.text().strip())
                 .collect(Collectors.joining("\n"));
         return Optional.of("""
                 Rebuild the complete lesson outline so every listed source page with substantive extracted content has
@@ -102,8 +102,4 @@ final class TeachingOutlineRevisionPolicy {
                 >= MIN_SOURCE_CHARACTERS;
     }
 
-    private static String boundedPageText(String text) {
-        String value = text == null ? "" : text.strip();
-        return value.length() <= 420 ? value : value.substring(0, 419) + "…";
-    }
 }

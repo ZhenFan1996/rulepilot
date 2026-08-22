@@ -54,7 +54,7 @@ class SpringAiContentCriticModelTest {
         when(chatModel.call(any(Prompt.class))).thenReturn(new ChatResponse(
                 List.of(new Generation(new AssistantMessage("{\"issues\":[]}")))));
         SpringAiContentCriticModel model = new SpringAiContentCriticModel(
-                configuration, new FakeContentCriticModel(), prompts, 0.35);
+                configuration, prompts, 0.35);
 
         UUID evidenceId = UUID.randomUUID();
         var result = model.critique(new ReviewRequest(
@@ -98,10 +98,10 @@ class SpringAiContentCriticModelTest {
         when(prompts.structuredOutputRepair()).thenReturn("Return valid JSON.");
         when(chatModel.call(any(Prompt.class))).thenReturn(new ChatResponse(List.of(new Generation(new AssistantMessage(
                 "{\"issues\":[{\"defectConfirmed\":false,\"type\":\"MISSING_EXCEPTION\","
-                        + "\"claimPosition\":1,\"evidenceIds\":[\"E1\"],"
+                        + "\"claimAspect\":\"GENERAL\",\"claimPosition\":1,\"evidenceIds\":[\"E1\"],"
                         + "\"summary\":\"The complete meanings align.\"}]}")))));
         SpringAiContentCriticModel model = new SpringAiContentCriticModel(
-                configuration, new FakeContentCriticModel(), prompts, 0.0);
+                configuration, prompts, 0.0);
         UUID evidenceId = UUID.randomUUID();
 
         var result = model.critique(new ReviewRequest(
@@ -121,12 +121,13 @@ class SpringAiContentCriticModelTest {
         OpenAiChatOptions options = (OpenAiChatOptions) prompt.getValue().getOptions();
         assertThat(options.getModel()).isEqualTo("deepseek-chat");
         assertThat(options.getTemperature()).isEqualTo(0.0);
+        assertThat(options.getResponseFormat().getType()).isEqualTo(Type.JSON_OBJECT);
         assertThat(options.getExtraBody())
                 .containsExactlyEntriesOf(java.util.Map.of("thinking", java.util.Map.of("type", "disabled")));
     }
 
     @Test
-    void discardsANegativeVerdictEvenWhenTheProviderOmitsUnusedIssueFields() {
+    void representsANegativeVerdictWithTheExactEmptyIssuesEnvelope() {
         RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
         ChatModel chatModel = mock(ChatModel.class);
         VersionedAgentPrompts prompts = mock(VersionedAgentPrompts.class);
@@ -146,10 +147,9 @@ class SpringAiContentCriticModelTest {
         when(prompts.atomicCriticUser()).thenReturn("Claims: {claims}\nEvidence: {evidence}\nRepair: {repair}");
         when(prompts.structuredOutputRepair()).thenReturn("Return every required issue field or an empty issues list.");
         when(chatModel.call(any(Prompt.class))).thenReturn(new ChatResponse(List.of(new Generation(
-                new AssistantMessage("{\"issues\":[{\"defectConfirmed\":false,\"claimPosition\":1,"
-                        + "\"evidenceIds\":[\"E1\"],\"summary\":\"The meanings align.\"}]}")))));
+                new AssistantMessage("{\"issues\":[]}")))));
         SpringAiContentCriticModel model = new SpringAiContentCriticModel(
-                configuration, new FakeContentCriticModel(), prompts);
+                configuration, prompts);
         UUID evidenceId = UUID.randomUUID();
 
         var result = model.critique(new ReviewRequest(
@@ -188,7 +188,7 @@ class SpringAiContentCriticModelTest {
                 .thenReturn(new ChatResponse(List.of(
                         new Generation(new AssistantMessage("{\"issues\":[]}")))));
         SpringAiContentCriticModel model = new SpringAiContentCriticModel(
-                configuration, new FakeContentCriticModel(), prompts);
+                configuration, prompts);
         UUID evidenceId = UUID.randomUUID();
 
         var result = model.critique(new ReviewRequest(
@@ -227,7 +227,7 @@ class SpringAiContentCriticModelTest {
                 .thenReturn(new ChatResponse(List.of(
                         new Generation(new AssistantMessage("{\"issues\":[]}")))));
         SpringAiContentCriticModel model = new SpringAiContentCriticModel(
-                configuration, new FakeContentCriticModel(), prompts);
+                configuration, prompts);
         UUID evidenceId = UUID.randomUUID();
 
         var result = model.critique(new ReviewRequest(
@@ -271,7 +271,7 @@ class SpringAiContentCriticModelTest {
                 .thenReturn(new ChatResponse(List.of(
                         new Generation(new AssistantMessage("{\"issues\":[]}")))));
         SpringAiContentCriticModel model = new SpringAiContentCriticModel(
-                configuration, new FakeContentCriticModel(), prompts);
+                configuration, prompts);
         UUID evidenceId = UUID.randomUUID();
 
         var result = model.critique(new ReviewRequest(
@@ -321,7 +321,7 @@ class SpringAiContentCriticModelTest {
                                 + "\"claimAspect\":\"TIMING\",\"claimPosition\":1,"
                                 + "\"evidenceIds\":[\"E1\"],\"summary\":\"The interval changed.\"}]}")))));
         SpringAiContentCriticModel model = new SpringAiContentCriticModel(
-                configuration, new FakeContentCriticModel(), prompts);
+                configuration, prompts);
         UUID evidenceId = UUID.randomUUID();
 
         var result = model.critique(new ReviewRequest(
@@ -365,7 +365,7 @@ class SpringAiContentCriticModelTest {
                                 + "\"summary\":\"The acting keeper changed.\"}]}")))))
                 .thenReturn(new ChatResponse(List.of(new Generation(new AssistantMessage("{\"issues\":[]}")))));
         SpringAiContentCriticModel model = new SpringAiContentCriticModel(
-                configuration, new FakeContentCriticModel(), prompts);
+                configuration, prompts);
         UUID evidenceId = UUID.randomUUID();
 
         var result = model.critique(new ReviewRequest(
@@ -384,7 +384,6 @@ class SpringAiContentCriticModelTest {
     void rejectsInvalidCriticTemperature() {
         assertThatThrownBy(() -> new SpringAiContentCriticModel(
                         mock(RuntimeModelConfiguration.class),
-                        new FakeContentCriticModel(),
                         mock(VersionedAgentPrompts.class),
                         -0.01))
                 .hasMessageContaining("critic model temperature");

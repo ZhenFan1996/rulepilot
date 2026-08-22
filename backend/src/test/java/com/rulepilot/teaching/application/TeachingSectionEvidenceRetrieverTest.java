@@ -76,7 +76,7 @@ class TeachingSectionEvidenceRetrieverTest {
 
         assertThat(result.state()).isEqualTo(TeachingSectionEvidenceRetriever.State.INVALID);
         assertThat(result.evidence()).isEmpty();
-        assertThat(result.toolCalls()).isEqualTo(3);
+        assertThat(result.toolCalls()).isEqualTo(2);
     }
 
     @Test
@@ -141,10 +141,11 @@ class TeachingSectionEvidenceRetrieverTest {
                         documentVersionId,
                         "GENERAL",
                         "Visual rulebook page 4",
-                        TeachingVisualEvidenceSelector.VISUAL_PAGE_PLACEHOLDER,
+                        "Image-only page",
                         4,
                         4,
-                        List.of(new RulePageImage(4, "image/png", new byte[] {4}, 100, 120))));
+                        List.of(new RulePageImage(4, "image/png", new byte[] {4}, 100, 120)),
+                        RuleEvidence.ContentKind.VISUAL_PLACEHOLDER));
             }
         };
         VisualRulebookPageCatalogModel catalog = new VisualRulebookPageCatalogModel() {
@@ -167,7 +168,13 @@ class TeachingSectionEvidenceRetrieverTest {
                         false,
                         List.of(new SourceDependency("First Session Booklet", List.of("setup"))),
                         List.of("GAME END", "SCORE"),
-                        true)));
+                        true,
+                        List.of(),
+                        List.of(
+                                new VisualRulebookPageCatalogModel.RuleGroupFact(
+                                        "GAME END", "GAME END", "牌库耗尽且市场无法补满时游戏结束。"),
+                                new VisualRulebookPageCatalogModel.RuleGroupFact(
+                                        "SCORE", "SCORE", "玩家随后按照可见条件结算分数。")))));
             }
 
             @Override
@@ -209,7 +216,9 @@ class TeachingSectionEvidenceRetrieverTest {
         assertThat(result.state()).isEqualTo(TeachingSectionEvidenceRetriever.State.VERIFIED);
         assertThat(result.evidence()).singleElement().satisfies(evidence -> {
             assertThat(evidence.chunkId()).isEqualTo(chunkId);
-            assertThat(evidence.excerpt()).contains("Visual-transcribed rule evidence", "无法补满时游戏结束");
+            assertThat(evidence.contentKind()).isEqualTo(RuleEvidence.ContentKind.VISUAL_TRANSCRIPTION);
+            assertThat(evidence.excerpt()).contains("无法补满时游戏结束");
+            assertThat(evidence.excerpt()).doesNotContain("Visual-transcribed rule evidence");
             assertThat(evidence.pageImages()).singleElement().satisfies(image -> assertThat(image.pageNumber())
                     .isEqualTo(4));
         });

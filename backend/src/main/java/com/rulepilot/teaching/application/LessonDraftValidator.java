@@ -4,8 +4,10 @@ import com.rulepilot.assistant.AssistantReadTools.RuleEvidence;
 import com.rulepilot.assistant.GeneratedContentCritic.Claim;
 import com.rulepilot.teaching.TeachingLessonModel;
 import com.rulepilot.teaching.TeachingLessonModel.SectionDraft;
+import com.rulepilot.teaching.TeachingLessonModel.RuleFactDraft;
 import com.rulepilot.teaching.TeachingLessonModel.StepDraft;
 import com.rulepilot.teaching.TeachingLessonModel.VisualFocusDraft;
+import com.rulepilot.teaching.domain.IllustratedLesson.RuleFact;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonStep;
 import com.rulepilot.teaching.domain.IllustratedLesson.TeachingMove;
 import com.rulepilot.teaching.domain.IllustratedLesson.VisualFocus;
@@ -38,13 +40,13 @@ final class LessonDraftValidator {
         if (!captionDuplicatesVisualStep) {
             claims.add(new Claim(1, draft.visualCaption(), visualCitationIds));
         }
-        int firstStepPosition = claims.size() + 1;
-        IntStream.range(0, draft.steps().size())
-                .mapToObj(index -> new Claim(
-                        firstStepPosition + index,
-                        draft.steps().get(index).heading() + "：" + draft.steps().get(index).text(),
-                        draft.steps().get(index).citationIds()))
-                .forEach(claims::add);
+        int claimPosition = claims.size() + 1;
+        for (StepDraft step : draft.steps()) {
+            claims.add(new Claim(claimPosition++, step.heading() + "：" + step.text(), step.citationIds()));
+            for (RuleFactDraft fact : step.ruleFacts()) {
+                claims.add(new Claim(claimPosition++, fact.text(), fact.citationIds()));
+            }
+        }
         return List.copyOf(claims);
     }
 
@@ -87,7 +89,35 @@ final class LessonDraftValidator {
                 draft.text(),
                 pages,
                 List.copyOf(citationIds),
+                validatedRuleFacts(draft.ruleFacts(), allowedEvidence),
                 validatedVisualFocus(draft, attachedPages, allowedEvidence));
+    }
+
+    private static List<RuleFact> validatedRuleFacts(
+            List<RuleFactDraft> drafts,
+            Map<UUID, RuleEvidence> allowedEvidence) {
+        List<RuleFactDraft> values = drafts == null ? List.of() : drafts;
+        return IntStream.range(0, values.size())
+                .mapToObj(index -> {
+                    RuleFactDraft draft = values.get(index);
+                    if (draft == null || draft.role() == null || draft.text() == null || draft.text().isBlank()
+                            || draft.citationIds() == null || draft.citationIds().isEmpty()) {
+                        throw new IllegalArgumentException("teaching rule fact is invalid");
+                    }
+                    LinkedHashSet<UUID> ids = new LinkedHashSet<>(draft.citationIds());
+                    if (ids.contains(null) || !allowedEvidence.keySet().containsAll(ids)) {
+                        throw new IllegalArgumentException("teaching rule fact cites evidence outside retrieval scope");
+                    }
+                    List<Integer> sourcePages = ids.stream()
+                            .map(allowedEvidence::get)
+                            .flatMapToInt(source -> IntStream.rangeClosed(source.pageFrom(), source.pageTo()))
+                            .distinct()
+                            .sorted()
+                            .boxed()
+                            .toList();
+                    return new RuleFact(index + 1, draft.role(), draft.text(), sourcePages, List.copyOf(ids));
+                })
+                .toList();
     }
 
     private static VisualFocus validatedVisualFocus(

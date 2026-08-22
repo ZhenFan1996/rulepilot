@@ -383,9 +383,9 @@ describe('GameRecommendationAgent', () => {
         const clientTurnId = String(submitted.clientTurnId)
         const latestResponse = {
           conversationId, revision: 1, clientTurnId, replayed: true, responseLocale: 'zh-CN',
-          outcome: 'recommendations', mode: 'model_assisted', assistantMessage: '服务器已经完成并保存了这一轮。',
+          outcome: 'recommendations', mode: 'model_assisted', assistantMessage: '服务器已经完成并保存了这一轮：候选的标注范围覆盖 3–4 人，这次仍按 120–180 分钟来选。',
           profile: completedProfile, clarification: null, sourceCount: 179737, candidatesEvaluated: 1,
-          games: [{ game, matches: ['支持 3–4 人'], tradeoffs: [] }],
+          games: [{ game, matches: [], tradeoffs: [] }],
         }
         return Response.json({
           conversationId,
@@ -420,23 +420,22 @@ describe('GameRecommendationAgent', () => {
     await flushPromises()
 
     expect(sessionReads).toBe(2)
-    expect(wrapper.text()).toContain('服务器已经完成并保存了这一轮。')
-    expect(wrapper.text()).toContain('支持 3–4 人')
+    expect(wrapper.text()).toContain('服务器已经完成并保存了这一轮')
     expect(wrapper.text()).toContain('3–4 人')
     expect(wrapper.text()).toContain('120–180 分钟')
     expect(wrapper.find('[role="alert"]').exists()).toBe(false)
     expect(wrapper.get('textarea').element).toHaveProperty('value', '这一句还没有发送')
     const turns = wrapper.findAll('[data-conversation-message]').map(turn => turn.text())
     expect(turns.filter(turn => turn.includes('想找 3–4 人、120–180 分钟的策略游戏'))).toHaveLength(1)
-    expect(turns.filter(turn => turn.includes('服务器已经完成并保存了这一轮。'))).toHaveLength(1)
+    expect(turns.filter(turn => turn.includes('服务器已经完成并保存了这一轮'))).toHaveLength(1)
 
     wrapper.unmount()
     sessionStorage.removeItem('rulepilot:recommendation-conversation:v1:alice')
     const refreshed = await mountAgent({}, { sessionIdentity: 'alice' })
     await flushPromises()
     expect(sessionReads).toBe(3)
-    expect(refreshed.text()).toContain('服务器已经完成并保存了这一轮。')
-    expect(refreshed.text()).toContain('支持 3–4 人')
+    expect(refreshed.text()).toContain('服务器已经完成并保存了这一轮')
+    expect(refreshed.text()).toContain('候选的标注范围覆盖 3–4 人')
     expect(refreshed.get('textarea').element).toHaveProperty('value', '这一句还没有发送')
   })
 
@@ -503,6 +502,71 @@ describe('GameRecommendationAgent', () => {
     expect(requestBodies).toHaveLength(2)
     expect(requestBodies[1]).toEqual(requestBodies[0])
     expect(wrapper.text()).toContain('重试只执行了原来的玩家回合。')
+  })
+
+  it('recovers one revision conflict with the authoritative revision and the same client turn', async () => {
+    const conversationId = '57d274df-43eb-47bd-a30d-55823fc63350'
+    const previousClientTurnId = 'e714fd20-ab50-45d5-9506-17d1db2c1ee9'
+    const previousResponse = {
+      conversationId, revision: 2, clientTurnId: previousClientTurnId, replayed: true, responseLocale: 'zh-CN',
+      outcome: 'conversation', mode: 'model_assisted', assistantMessage: '上一轮已经保存。',
+      profile: baseProfile, clarification: null, sourceCount: 179737, candidatesEvaluated: 0, games: [],
+    }
+    const requestBodies: Array<Record<string, unknown>> = []
+    let sessionReads = 0
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const path = String(input)
+      if (path === '/api/v1/bgg/recommendation-agent/session') {
+        sessionReads += 1
+        const revision = sessionReads === 1 ? 2 : 3
+        return Response.json({
+          conversationId,
+          revision,
+          profile: baseProfile,
+          transcript: [
+            { role: 'user', text: '先保存这段对话' },
+            { role: 'assistant', text: previousResponse.assistantMessage },
+          ],
+          knownGames: [],
+          shownBggIds: [],
+          processing: false,
+          processingSince: null,
+          latestResponse: { ...previousResponse, revision },
+        })
+      }
+      if (path === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>
+      requestBodies.push(body)
+      if (requestBodies.length === 1) {
+        return new Response('event: error\ndata: {"code":"revision_conflict"}\n\n', {
+          headers: { 'Content-Type': 'text/event-stream' },
+        })
+      }
+      return Response.json({
+        ...previousResponse,
+        revision: 4,
+        clientTurnId: body.clientTurnId,
+        replayed: false,
+        assistantMessage: '已接上最新会话，继续回答这一轮。',
+      })
+    }))
+    const wrapper = await mountAgent({}, { sessionIdentity: 'alice' })
+    await flushPromises()
+
+    await wrapper.get('textarea').setValue('沿用上一轮，再回答这个新问题')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    expect(sessionReads).toBe(2)
+    expect(requestBodies).toHaveLength(2)
+    expect(requestBodies[0]).toMatchObject({ conversationId, revision: 2 })
+    expect(requestBodies[1]).toMatchObject({ conversationId, revision: 3 })
+    expect(requestBodies[1]?.clientTurnId).toBe(requestBodies[0]?.clientTurnId)
+    expect(requestBodies[1]?.message).toBe(requestBodies[0]?.message)
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('已接上最新会话，继续回答这一轮。')
+    const turns = wrapper.findAll('[data-conversation-message]').map(turn => turn.text())
+    expect(turns.filter(turn => turn.includes('沿用上一轮，再回答这个新问题'))).toHaveLength(1)
   })
 
   it('stops server recovery polling when browser navigation unmounts the conversation', async () => {
@@ -674,7 +738,7 @@ describe('GameRecommendationAgent', () => {
       }
       requests.push(body as unknown as Record<string, unknown>)
       if (body.focusedBggId === 266192) return Response.json({
-        outcome: 'recommendations', mode: 'model_assisted', assistantMessage: '我补查了教学和桌上节奏。',
+        outcome: 'recommendations', mode: 'model_assisted', assistantMessage: '发行商资料展示了分步教学流程；但现有资料还不能证明实际互动感或节奏。',
         profile: { ...baseProfile, players: 4, maxMinutes: 90, maxWeight: 3.2 }, clarification: null,
         sourceCount: 179737, candidatesEvaluated: 1,
         userModel: { summary: '家庭局，重视参与感', hypotheses: [{ text: '可能不喜欢长时间等待', confidence: 'medium', basedOn: '希望大家都有参与感' }] },
@@ -701,11 +765,11 @@ describe('GameRecommendationAgent', () => {
         completedWork: [],
       })
       return Response.json({
-        outcome: 'recommendations', mode: 'model_assisted', assistantMessage: '明白，我按这组条件核对了一批。',
+        outcome: 'recommendations', mode: 'model_assisted', assistantMessage: '4 人、90 分钟内，我会先看《展翅翱翔》：BGG 标注的 1–5 人和约 70 分钟都落在这局范围里。',
         profile: { ...baseProfile, players: 4, maxMinutes: 90, maxWeight: 3.2 }, clarification: null,
         sourceCount: 179737, candidatesEvaluated: 20,
         completedWork: ['browse_bgg_catalog', 'lookup_bgg_games', 'recommend_games'],
-        games: [{ game, matches: ['支持 4 人游玩', '70 分钟，不超过你的时长上限'], tradeoffs: [] }],
+        games: [{ game, matches: [], tradeoffs: [] }],
       })
     }))
     const wrapper = await mountAgent()
@@ -729,25 +793,24 @@ describe('GameRecommendationAgent', () => {
     })
     expect(wrapper.text()).toContain('展翅翱翔')
     expect(wrapper.text()).toContain('Wingspan')
-    expect(wrapper.text()).toContain('支持 4 人游玩')
-    expect(wrapper.text()).toContain('已核对信息')
+    expect(wrapper.text()).toContain('1–5 人 · 约 70 分钟 · 复杂度 2.5')
+    expect(wrapper.text()).not.toContain('支持 4 人游玩')
+    expect(wrapper.text()).not.toContain('条件核对')
     expect(wrapper.text()).not.toContain('为什么适合')
     expect(wrapper.text()).toContain('完整 BGG 目录')
     expect(wrapper.get('button[aria-label="查看完整资料：展翅翱翔"]').attributes('aria-label'))
       .toBe('查看完整资料：展翅翱翔')
     const firstRecommendationTurn = wrapper.get('[data-testid="assistant-recommendation-turn"]')
-    expect(firstRecommendationTurn.text()).toContain('明白，我按这组条件核对了一批')
+    expect(firstRecommendationTurn.text()).toContain('4 人、90 分钟内，我会先看《展翅翱翔》')
     expect(firstRecommendationTurn.text()).toContain('展翅翱翔')
 
     await wrapper.findAll('button').find(button => button.text() === '介绍一下')!.trigger('click')
     await flushPromises()
     expect(requests[2]).toMatchObject({ focusedBggId: 266192, message: '介绍一下《展翅翱翔》' })
-    expect(wrapper.text()).toContain('进一步了解')
     expect(wrapper.text()).toContain('发行商资料展示了分步教学流程')
-    expect(wrapper.text()).toContain('结合你刚才说的')
-    expect(wrapper.text()).toContain('你说“朋友聚会，想热闹但不要尴尬”')
-    expect(wrapper.text()).toContain('BGG 标签中有 Pattern Building')
     expect(wrapper.text()).toContain('不能证明实际互动感或节奏')
+    expect(wrapper.text()).not.toContain('BGG 标签中有 Pattern Building')
+    expect(wrapper.text()).not.toContain('需要留意卡牌文字量')
     expect(wrapper.get('a[href="https://publisher.example/wingspan"]').attributes('rel')).toContain('noopener')
     expect(wrapper.text()).toContain('目前记下的偏好')
     expect(wrapper.text()).toContain('本轮查找与核对')
@@ -1050,7 +1113,8 @@ describe('GameRecommendationAgent', () => {
     expect(currentTurn.text()).toContain('完整目录按标题找候选')
     expect(currentTurn.text()).toContain('从完整 BGG 目录中核对了 1 款候选。')
     expect(currentTurn.text()).toContain('换一批')
-    expect(currentTurn.text()).toContain('条件核对')
+    expect(currentTurn.text()).toContain('1–5 人 · 约 70 分钟 · 复杂度 2.5')
+    expect(currentTurn.text()).not.toContain('条件核对')
     expect(currentTurn.text()).not.toContain('Agent trajectory this turn')
     expect(currentTurn.text()).not.toContain('Find titles in the full catalog')
     expect(currentTurn.text()).not.toContain('Checked 1 candidates')

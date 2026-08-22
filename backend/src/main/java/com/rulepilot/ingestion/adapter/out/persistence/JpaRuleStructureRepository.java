@@ -79,6 +79,7 @@ public class JpaRuleStructureRepository implements RuleStructureRepository {
                     chunk.sectionType(),
                     chunk.heading(),
                     chunk.content(),
+                    chunk.contentKind().name(),
                     chunk.pageNumber(),
                     chunk.pageNumber(),
                     index,
@@ -414,6 +415,9 @@ class RuleChunkEntity {
     @Column(nullable = false, columnDefinition = "text")
     String content;
 
+    @Column(name = "content_kind", nullable = false)
+    String contentKind;
+
     @Column(name = "page_from", nullable = false)
     int pageFrom;
 
@@ -434,6 +438,7 @@ class RuleChunkEntity {
             String sectionType,
             String heading,
             String content,
+            String contentKind,
             int pageFrom,
             int pageTo,
             int chunkIndex,
@@ -443,6 +448,7 @@ class RuleChunkEntity {
         this.sectionType = sectionType;
         this.heading = heading;
         this.content = content;
+        this.contentKind = contentKind;
         this.pageFrom = pageFrom;
         this.pageTo = pageTo;
         this.chunkIndex = chunkIndex;

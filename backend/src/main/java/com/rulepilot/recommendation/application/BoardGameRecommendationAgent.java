@@ -31,7 +31,7 @@ public class BoardGameRecommendationAgent {
     static final String COMPARE_TOOL = "compare_candidates";
     static final String NO_MATCH_TOOL = "report_no_match";
     static final String RECOMMEND_TOOL = "recommend_games";
-    static final String PROMPT_VERSION = "recommendation-agent-v22-streamed-final-expression";
+    static final String PROMPT_VERSION = "recommendation-agent-v24-claim-scoped-reply";
 
     private final RecommendationReActLoop loop;
 
@@ -336,7 +336,8 @@ public class BoardGameRecommendationAgent {
             HarnessTrace harness,
             List<RecommendedGame> games,
             CandidateComparison comparison,
-            RecommendationShortfall shortfall) {
+            RecommendationShortfall shortfall,
+            String recommendationLead) {
         public ConversationResponse(
                 Outcome outcome,
                 DecisionMode mode,
@@ -358,6 +359,7 @@ public class BoardGameRecommendationAgent {
                     List.of(),
                     new HarnessTrace(0, 0, 0, false, List.of(), 0),
                     games,
+                    null,
                     null,
                     null);
         }
@@ -386,6 +388,7 @@ public class BoardGameRecommendationAgent {
                     researchSources,
                     harness,
                     games,
+                    null,
                     null,
                     null);
         }
@@ -416,6 +419,38 @@ public class BoardGameRecommendationAgent {
                     harness,
                     games,
                     comparison,
+                    null,
+                    null);
+        }
+
+        public ConversationResponse(
+                Outcome outcome,
+                DecisionMode mode,
+                String assistantMessage,
+                RecommendationProfile profile,
+                Clarification clarification,
+                int sourceCount,
+                int candidatesEvaluated,
+                UserModelView userModel,
+                List<ResearchSource> researchSources,
+                HarnessTrace harness,
+                List<RecommendedGame> games,
+                CandidateComparison comparison,
+                RecommendationShortfall shortfall) {
+            this(
+                    outcome,
+                    mode,
+                    assistantMessage,
+                    profile,
+                    clarification,
+                    sourceCount,
+                    candidatesEvaluated,
+                    userModel,
+                    researchSources,
+                    harness,
+                    games,
+                    comparison,
+                    shortfall,
                     null);
         }
 
@@ -483,9 +518,10 @@ public class BoardGameRecommendationAgent {
             List<String> matches,
             List<String> tradeoffs,
             List<RecommendationReason> reasons,
-            List<CandidateClaim> claims) {
+            List<CandidateClaim> claims,
+            List<RecommendationReplyPart> replyParts) {
         public RecommendedGame(Game game, List<String> matches, List<String> tradeoffs) {
-            this(game, matches, tradeoffs, List.of(), List.of());
+            this(game, matches, tradeoffs, List.of(), List.of(), List.of());
         }
 
         public RecommendedGame(
@@ -493,7 +529,16 @@ public class BoardGameRecommendationAgent {
                 List<String> matches,
                 List<String> tradeoffs,
                 List<RecommendationReason> reasons) {
-            this(game, matches, tradeoffs, reasons, List.of());
+            this(game, matches, tradeoffs, reasons, List.of(), List.of());
+        }
+
+        public RecommendedGame(
+                Game game,
+                List<String> matches,
+                List<String> tradeoffs,
+                List<RecommendationReason> reasons,
+                List<CandidateClaim> claims) {
+            this(game, matches, tradeoffs, reasons, claims, List.of());
         }
 
         public RecommendedGame {
@@ -501,7 +546,20 @@ public class BoardGameRecommendationAgent {
             tradeoffs = List.copyOf(tradeoffs);
             reasons = List.copyOf(reasons);
             claims = List.copyOf(claims);
+            replyParts = replyParts == null ? List.of() : List.copyOf(replyParts);
         }
+    }
+
+    public record RecommendationReplyPart(ReplyPartRole role, CandidateClaim claim) {
+        public RecommendationReplyPart {
+            Objects.requireNonNull(role, "recommendation reply role is required");
+            Objects.requireNonNull(claim, "recommendation reply claim is required");
+        }
+    }
+
+    public enum ReplyPartRole {
+        WHY_FIT,
+        TRADEOFF
     }
 
     public record CandidateComparison(

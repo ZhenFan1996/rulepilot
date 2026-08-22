@@ -46,8 +46,9 @@ const copy = {
     reset: '清空这次对话', newChat: '建立新聊天', chatHistory: '聊天记录', chatUntitled: '新的桌游聊天', error: '刚才没有接上。你写下的条件还在，可以直接重试。', retry: '重试', profile: '这次想找',
     players: '{value} 人', duration: '{value} 分钟内', durationAny: '时长不限', weight: '复杂度 ≤ {value}', weightAny: '复杂度不限',
     source: '可核对的 BGG 资料 · 从完整 BGG 目录中核对了 {count} 款候选。', more: '换一批',
+    researchSources: '资料来源',
     recommendationJudgment: '我的选择与取舍',
-    shortfall: '当前硬条件 · {available} / {requested} 款',
+    shortfall: '当前明确条件 · {available} / {requested} 款',
     understanding: '目前记下的偏好', basedOn: '你提到：“{value}”', low: '可能', medium: '大概', high: '明确',
     toolTrail: '本轮查找与核对', toolUnderstand: '理解你的条件', toolCatalog: '浏览 BGG 目录候选',
     toolReference: '在 BGG 核对参考游戏',
@@ -70,8 +71,9 @@ const copy = {
     reset: 'Clear this conversation', newChat: 'New chat', chatHistory: 'Chat history', chatUntitled: 'New board-game chat', error: 'That reply did not come through. Your preferences are still here.', retry: 'Retry', profile: 'Looking for',
     players: '{value} players', duration: 'Up to {value} min', durationAny: 'Any duration', weight: 'Complexity ≤ {value}', weightAny: 'Any complexity',
     source: 'Verifiable BGG details · Checked {count} candidates against the complete BGG catalog.', more: 'Try another batch',
+    researchSources: 'Sources',
     recommendationJudgment: 'My choice and tradeoffs',
-    shortfall: 'Current hard constraints · {available} / {requested}',
+    shortfall: 'Current stated constraints · {available} / {requested}',
     understanding: 'Preferences so far', basedOn: 'You said: “{value}”', low: 'Maybe', medium: 'Likely', high: 'Clear',
     toolTrail: 'Search and checks this turn', toolUnderstand: 'Understand your preferences', toolCatalog: 'Browse BGG catalog candidates',
     toolReference: 'Resolve the reference game in BGG',
@@ -115,7 +117,7 @@ const progressActionCopy: Record<AppLocale, Record<RecommendationProgressAction,
     inspect_candidate_titles: '按候选标题搜索 BGG 并读取详情', browse_bgg_catalog: '按当前条件浏览 BGG 候选',
     discover_public_candidates: '从公开资料寻找符合描述的新候选', lookup_bgg_games: '读取候选的 BGG 人数、时长与机制详情',
     research_game_fit: '查证有出处的实际游玩感受', compare_candidates: '梳理候选之间有证据的关键差异',
-    report_no_match: '说明当前硬条件下没有足够匹配', recommend_games: '校验候选并组织最终推荐',
+    report_no_match: '说明当前条件下没有足够匹配', recommend_games: '校验候选并组织最终推荐',
   },
   en: {
     understand_request: 'Read the current message and conversation context',
@@ -126,7 +128,7 @@ const progressActionCopy: Record<AppLocale, Record<RecommendationProgressAction,
     inspect_candidate_titles: 'Search candidate titles and load their BGG details', browse_bgg_catalog: 'Browse BGG under the current constraints',
     discover_public_candidates: 'Find new identities from attributed public sources', lookup_bgg_games: 'Load player count, time, and mechanism facts from BGG',
     research_game_fit: 'Check attributed reports about play experience', compare_candidates: 'Compare candidate-scoped evidence',
-    report_no_match: 'Explain the shortfall under current hard constraints', recommend_games: 'Validate candidates and compose the recommendation',
+    report_no_match: 'Explain the shortfall under the current constraints', recommend_games: 'Validate candidates and compose the recommendation',
   },
 }
 
@@ -159,6 +161,12 @@ function responseT(
   parameters: Record<string, string | number> = {},
 ) {
   return translated(turnResponse?.responseLocale ?? locale.value, key, parameters)
+}
+
+function visibleAssistantMessage(message: RecommendationMessage) {
+  return message.response?.games.length && message.response.recommendationLead
+    ? message.response.recommendationLead
+    : message.text
 }
 
 function emptyProfile(): RecommendationProfile {
@@ -388,12 +396,12 @@ const recommendationEvidenceSummary = computed(() => {
     const source = stage === 'researching_game_fit'
       ? 'Sources: BGG facts and attributed public play reports.'
       : 'Source: BGG catalog and game-detail facts.'
-    return `${source} ${progress.observedCandidates} candidates seen · ${progress.verifiedCandidates} facts checked · ${progress.hardRejectedCandidates} removed by your hard constraints. Next: ${loadingCopy.en[stage]}`
+    return `${source} ${progress.observedCandidates} candidates seen · ${progress.verifiedCandidates} facts checked · ${progress.hardRejectedCandidates} did not meet your stated constraints. Next: ${loadingCopy.en[stage]}`
   }
   const source = stage === 'researching_game_fit'
     ? '来源：BGG 事实与有出处的公开游玩资料。'
     : '来源：BGG 目录与游戏详情事实。'
-  return `${source}目录候选 ${progress.observedCandidates} 款 · 已核对 ${progress.verifiedCandidates} 款 · 按你的硬条件排除 ${progress.hardRejectedCandidates} 款。下一步：${loadingCopy['zh-CN'][stage]}`
+  return `${source}目录候选 ${progress.observedCandidates} 款 · 已核对 ${progress.verifiedCandidates} 款 · 有 ${progress.hardRejectedCandidates} 款不满足你明确说出的条件。下一步：${loadingCopy['zh-CN'][stage]}`
 })
 const recommendationSoftBudgetReached = computed(() => loading.value && externalWorkActive.value && loadingElapsedSeconds.value >= 8)
 const hasVerifiedCandidates = computed(() => messages.value.some(message =>
@@ -590,6 +598,7 @@ function pendingUserText(pending: PendingRequest) {
 async function submitPendingTurn(
   pendingValue: PendingRequest,
   optimisticUserMessageId: number | null = null,
+  revisionRetry = 0,
 ) {
   if (!serverSessionReady.value || disposed) return
   const cancellationGeneration = turnCancellationGeneration
@@ -685,6 +694,24 @@ async function submitPendingTurn(
       draft.value = pendingUserText(pending)
       loginGateVisible.value = true
       notifyLoginRequired({ showReminder: false })
+    } else if (error instanceof RecommendationStreamError
+      && error.code === 'revision_conflict'
+      && revisionRetry === 0
+      && restoredConversationOwner) {
+      serverSessionReady.value = false
+      serverRestoreGeneration += 1
+      const generation = serverRestoreGeneration
+      await restoreServerRecommendationConversation(restoredConversationOwner, generation)
+      if (!disposed
+        && cancellationGeneration === turnCancellationGeneration
+        && serverSessionReady.value) {
+        if (response.value?.clientTurnId === pending.clientTurnId) {
+          lastRequest.value = null
+          return
+        }
+        return await submitPendingTurn(pending, optimisticUserMessageId, revisionRetry + 1)
+      }
+      failed.value = true
     } else {
       failed.value = true
       if (!disposed
@@ -1388,7 +1415,12 @@ onBeforeUnmount(() => {
                 <p v-if="message.role === 'user'" class="max-w-[88%] rounded-2xl rounded-br-sm bg-felt px-4 py-3 text-sm leading-6 text-white">{{ message.text }}</p>
                 <article v-else class="min-w-0 w-full" :data-testid="message.response?.games.length ? 'assistant-recommendation-turn' : 'assistant-conversation-turn'">
                   <span v-if="message.response?.games.length" class="mb-1.5 block pl-1 text-[0.6875rem] font-bold uppercase tracking-[0.12em] text-copper">{{ responseT(message.response, 'recommendationJudgment') }}</span>
-                  <SafeMarkdown :source="message.text" class="max-w-[88%] rounded-2xl rounded-bl-sm border border-ink/8 bg-canvas px-4 py-3 text-sm leading-6 text-ink/72" />
+                  <SafeMarkdown :source="visibleAssistantMessage(message)" class="max-w-[88%] rounded-2xl rounded-bl-sm border border-ink/8 bg-canvas px-4 py-3 text-sm leading-6 text-ink/72" />
+
+                  <div v-if="message.response?.researchSources?.length" data-testid="recommendation-research-sources" class="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 pl-1 text-[0.6875rem] text-ink/50">
+                    <span class="font-semibold">{{ responseT(message.response, 'researchSources') }}</span>
+                    <a v-for="source in message.response.researchSources" :key="`${source.index}-${source.url}`" :href="source.url" target="_blank" rel="noopener noreferrer" class="font-medium text-indigo underline decoration-indigo/25 underline-offset-2">{{ source.title }} ↗</a>
+                  </div>
 
                   <div v-if="toolLabelsFor(message.response).length" class="mt-2 flex flex-wrap items-center gap-2 pl-1 text-[0.6875rem] text-ink/45" :aria-label="responseT(message.response, 'toolTrail')">
                     <span class="recommendation-tool-label font-semibold">{{ responseT(message.response, 'toolTrail') }}</span>

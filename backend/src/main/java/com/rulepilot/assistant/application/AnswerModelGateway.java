@@ -8,7 +8,6 @@ import com.rulepilot.assistant.RuleAnswerModel.ModelRequest;
 import com.rulepilot.assistant.RuleAnswerModel.PlayerFacingField;
 import com.rulepilot.assistant.RuleAnswerModel.QuestionInterpretationDraft;
 import com.rulepilot.assistant.RuleAnswerModel.QuestionInterpretationRequest;
-import com.rulepilot.assistant.RuleAnswerModel.RetrievalQueryRequest;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -129,7 +128,6 @@ final class AnswerModelGateway {
                 previous.confidence(),
                 previous.answerBasis(),
                 previous.calculations(),
-                previous.situationChecks(),
                 previous.walkthroughSteps(),
                 previous.decisionBranches(),
                 previous.exceptionClauses(),
@@ -141,23 +139,6 @@ final class AnswerModelGateway {
                 previous.scopeResolutions(),
                 previous.conceptComparisons(),
                 previous.ruleOptions());
-    }
-
-    List<String> rewriteRetrievalQueries(
-            UUID runId, String username, RetrievalQueryRequest request) {
-        RuleAnswerRateLimiter.Permit permit = acquire(username, null);
-        try {
-            return invocations.invoke(
-                    runId,
-                    ActivityType.MODEL,
-                    "rewriteAnswerRetrievalQueries",
-                    estimateTokens(request.question()),
-                    "Cross-language retrieval phrases prepared",
-                    () -> deadline.invoke(runId, () -> model.rewriteRetrievalQueries(request, username)),
-                    result -> estimateTokens(result.toString()));
-        } finally {
-            permit.close();
-        }
     }
 
     boolean supportsQuestionInterpretation(String username) {

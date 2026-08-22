@@ -57,7 +57,7 @@ class AgenticVisualRegionLocatorTest {
     }
 
     @Test
-    void derivesTheOnlyCanonicalClaimWhenTheModelOmitsTheRedundantClaimReference() {
+    void rejectsAMissingClaimReferenceInsteadOfDerivingItFromNearbyContext() {
         UUID evidenceId = UUID.randomUUID();
         StubAgent agent = new StubAgent(completed(
                 """
@@ -68,9 +68,8 @@ class AgenticVisualRegionLocatorTest {
         LocateGuideResult result = locator(agent, new RecordingFallback())
                 .locateGuideWithResult(request(evidenceId, true));
 
-        assertThat(result.diagnostic()).isEqualTo(Diagnostic.FOUND);
-        assertThat(result.regions()).singleElement().satisfies(region ->
-                assertThat(region.supportedEvidenceIds()).containsExactly(evidenceId));
+        assertThat(result.diagnostic()).isEqualTo(Diagnostic.MALFORMED_RESPONSE);
+        assertThat(result.regions()).isEmpty();
     }
 
     @Test
@@ -89,7 +88,7 @@ class AgenticVisualRegionLocatorTest {
     }
 
     @Test
-    void usesTheOnlyAuthorizedCropWhenTheModelEchoesPreNormalizationGeometry() {
+    void rejectsModelGeometryThatDoesNotExactlyMatchTheAuthorizedCrop() {
         UUID evidenceId = UUID.randomUUID();
         StubAgent agent = new StubAgent(completed(
                 """
@@ -100,11 +99,8 @@ class AgenticVisualRegionLocatorTest {
 
         LocateGuideResult result = locator(agent, fallback).locateGuideWithResult(request(evidenceId, true));
 
-        assertThat(result.diagnostic()).isEqualTo(Diagnostic.FOUND);
-        assertThat(result.regions()).singleElement().satisfies(region -> {
-            assertThat(region.x()).isEqualTo(900);
-            assertThat(region.width()).isEqualTo(100);
-        });
+        assertThat(result.diagnostic()).isEqualTo(Diagnostic.MALFORMED_RESPONSE);
+        assertThat(result.regions()).isEmpty();
         assertThat(fallback.calls).isZero();
     }
 

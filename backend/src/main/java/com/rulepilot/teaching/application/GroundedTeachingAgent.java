@@ -205,8 +205,9 @@ public class GroundedTeachingAgent {
 
     /**
      * Completes the compatibility review workflow in one call. The production launcher uses
-     * {@link #createBase(TeachingPlan, UUID, IllustratedLesson, Consumer)} so a player receives
-     * deterministically validated chapters without waiting for an optional model review.
+     * {@link #createBase(TeachingPlan, UUID, IllustratedLesson, Consumer)} so a player receives cited chapters
+     * incrementally while quantitative and legality-changing chapters remain visibly provisional until one bounded
+     * whole-lesson review completes.
      */
     public IllustratedLesson create(TeachingPlan plan, UUID assistantRunId) {
         return create(plan, assistantRunId, null);
@@ -269,6 +270,7 @@ public class GroundedTeachingAgent {
         List<LessonSection> sections = new ArrayList<>();
         Set<Integer> invalidDraftPositions = new LinkedHashSet<>();
         Set<Integer> missingEvidencePositions = new LinkedHashSet<>();
+        List<TeachingSectionDraftCandidate> reviewCandidates = new ArrayList<>();
         int retrievalToolCalls = 0;
         for (TeachingPlan.PlannedSection planned : plan.sections()) {
             SectionOutcome outcome = baseSection(
@@ -280,6 +282,10 @@ public class GroundedTeachingAgent {
                     queriesPerTopic);
             retrievalToolCalls += outcome.retrievalToolCalls();
             trackFailure(outcome, invalidDraftPositions, missingEvidencePositions);
+            if (outcome.reviewCandidate() != null
+                    && outcome.section().evidenceStatus() == EvidenceStatus.CITED_DRAFT) {
+                reviewCandidates.add(outcome.reviewCandidate());
+            }
             sections.add(outcome.section());
             publishProgress(progressPublisher, lessonId, plan, sections, createdAt);
             recordPublication(
@@ -300,6 +306,7 @@ public class GroundedTeachingAgent {
                 sections,
                 invalidDraftPositions,
                 missingEvidencePositions,
+                reviewCandidates,
                 retrievalToolCalls);
     }
 
@@ -357,7 +364,16 @@ public class GroundedTeachingAgent {
         IllustratedLesson firstPass = lesson(lessonId, plan, sections, createdAt);
         if (firstPass.status() == LessonStatus.INCOMPLETE
                 && continuation.canRetryInvalidDrafts(maxToolCalls)) {
-            return retryInvalidDraftSections(continuation, progressPublisher);
+            firstPass = retryInvalidDraftSections(continuation, progressPublisher);
+        }
+        if (firstPass.status() == LessonStatus.DRAFT_READY && !continuation.reviewCandidates.isEmpty()) {
+            publishedLessonReviewer.review(
+                    plan,
+                    List.copyOf(continuation.reviewCandidates),
+                    sections,
+                    assistantRunId,
+                    () -> progressPublisher.accept(lesson(lessonId, plan, sections, createdAt)));
+            return lesson(lessonId, plan, sections, createdAt);
         }
         return firstPass;
     }
@@ -425,6 +441,7 @@ public class GroundedTeachingAgent {
         private final List<LessonSection> sections;
         private final Set<Integer> invalidDraftPositions;
         private final Set<Integer> missingEvidencePositions;
+        private final List<TeachingSectionDraftCandidate> reviewCandidates;
         private int retrievalToolCalls;
 
         private BaseLessonContinuation(
@@ -437,6 +454,7 @@ public class GroundedTeachingAgent {
                 List<LessonSection> sections,
                 Set<Integer> invalidDraftPositions,
                 Set<Integer> missingEvidencePositions,
+                List<TeachingSectionDraftCandidate> reviewCandidates,
                 int retrievalToolCalls) {
             this.plan = plan;
             this.assistantRunId = assistantRunId;
@@ -447,6 +465,7 @@ public class GroundedTeachingAgent {
             this.sections = sections;
             this.invalidDraftPositions = invalidDraftPositions;
             this.missingEvidencePositions = missingEvidencePositions;
+            this.reviewCandidates = reviewCandidates;
             this.retrievalToolCalls = retrievalToolCalls;
         }
 
@@ -457,6 +476,10 @@ public class GroundedTeachingAgent {
         private void track(SectionOutcome outcome) {
             retrievalToolCalls += outcome.retrievalToolCalls();
             trackFailure(outcome, invalidDraftPositions, missingEvidencePositions);
+            if (outcome.reviewCandidate() != null
+                    && outcome.section().evidenceStatus() == EvidenceStatus.CITED_DRAFT) {
+                reviewCandidates.add(outcome.reviewCandidate());
+            }
         }
 
         private void replace(SectionOutcome outcome) {
@@ -464,6 +487,7 @@ public class GroundedTeachingAgent {
             sections.set(position - 1, outcome.section());
             invalidDraftPositions.remove(position);
             missingEvidencePositions.remove(position);
+            reviewCandidates.removeIf(candidate -> candidate.planned().position() == position);
             track(outcome);
         }
 

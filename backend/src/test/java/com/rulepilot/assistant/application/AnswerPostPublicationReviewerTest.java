@@ -72,7 +72,7 @@ class AnswerPostPublicationReviewerTest {
                             public ModelDraft revise(
                                     ModelRequest request, ModelDraft previousDraft, List<String> feedback) {
                                 revisions.incrementAndGet();
-                                return new ModelDraft(
+                                return answerableDraft(
                                         "You may end only with two complete rows and no disabled locations.",
                                         "After the trigger, finish the current round so every player has the same number of turns.",
                                         List.of(source.chunkId()),
@@ -97,7 +97,7 @@ class AnswerPostPublicationReviewerTest {
                 "player",
                 null,
                 request(source),
-                new ModelDraft(
+                answerableDraft(
                         answer.shortVerdict(),
                         answer.explanation(),
                         List.of(source.chunkId()),
@@ -145,7 +145,7 @@ class AnswerPostPublicationReviewerTest {
                 "player",
                 null,
                 request,
-                new ModelDraft(
+                answerableDraft(
                         answer.shortVerdict(),
                         answer.explanation(),
                         List.of(source.chunkId()),
@@ -192,7 +192,7 @@ class AnswerPostPublicationReviewerTest {
                 "player",
                 null,
                 request(source),
-                new ModelDraft(
+                answerableDraft(
                         answer.shortVerdict(),
                         answer.explanation(),
                         List.of(source.chunkId()),
@@ -232,7 +232,7 @@ class AnswerPostPublicationReviewerTest {
                 "player",
                 null,
                 request(source),
-                new ModelDraft(
+                answerableDraft(
                         answer.shortVerdict(),
                         answer.explanation(),
                         List.of(source.chunkId()),
@@ -285,7 +285,7 @@ class AnswerPostPublicationReviewerTest {
                             @Override
                             public ModelDraft revise(
                                     ModelRequest request, ModelDraft previousDraft, List<String> feedback) {
-                                return new ModelDraft(
+                                return answerableDraft(
                                         "Two cards score eighteen points.",
                                         "Each of the two cards scores the nine matching spaces.",
                                         List.of(source.chunkId()),
@@ -304,7 +304,7 @@ class AnswerPostPublicationReviewerTest {
                 "player",
                 null,
                 request(source),
-                new ModelDraft(
+                answerableDraft(
                         answer.shortVerdict(),
                         answer.explanation(),
                         List.of(source.chunkId()),
@@ -347,7 +347,7 @@ class AnswerPostPublicationReviewerTest {
                 "player",
                 null,
                 request(source),
-                new ModelDraft(
+                answerableDraft(
                         answer.shortVerdict(),
                         answer.explanation(),
                         List.of(source.chunkId()),
@@ -398,7 +398,7 @@ class AnswerPostPublicationReviewerTest {
                                     String ownerUsername) {
                                 revisions.incrementAndGet();
                                 editable.set(editableFields);
-                                return new ModelDraft(
+                                return answerableDraft(
                                         "Pay before resolving.",
                                         "The cited rule gives that order explicitly.",
                                         List.of(source.chunkId()),
@@ -417,7 +417,7 @@ class AnswerPostPublicationReviewerTest {
                 "player",
                 null,
                 request(source),
-                new ModelDraft(
+                answerableDraft(
                         answer.shortVerdict(),
                         answer.explanation(),
                         List.of(source.chunkId()),
@@ -455,6 +455,23 @@ class AnswerPostPublicationReviewerTest {
                 null,
                 null,
                 null);
+    }
+
+    private static ModelDraft answerableDraft(
+            String shortVerdict,
+            String explanation,
+            List<UUID> citationIds,
+            List<String> exceptions,
+            String confidence) {
+        return new ModelDraft(
+                true,
+                null,
+                shortVerdict,
+                explanation,
+                citationIds,
+                exceptions,
+                confidence,
+                "DIRECT_RULE");
     }
 
     private static StructuredRuleAnswer withWalkthrough(StructuredRuleAnswer source, UUID citationId) {

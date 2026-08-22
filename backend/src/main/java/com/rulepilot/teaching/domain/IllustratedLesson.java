@@ -58,7 +58,28 @@ public record IllustratedLesson(
         CHECK,
         VISUAL,
         FLOW,
-        LEDGER
+        LEDGER,
+        REFERENCE_CARD,
+        LIMIT
+    }
+
+    /**
+     * Presentation role for one independently cited rule fact inside a natural teaching step.
+     *
+     * <p>The role is model-authored structured output. Readers use it to lay out a condition, action, cost, timing,
+     * result, or exception without trying to recover that meaning from the step's free prose.</p>
+     */
+    public enum RuleFactRole {
+        PREREQUISITE,
+        CHOICE,
+        ACTION,
+        COST_OR_GAIN,
+        TIMING,
+        LIMIT,
+        RESULT,
+        EXCEPTION,
+        TABLE_STATE,
+        EXAMPLE_STATE
     }
 
     public record LessonSection(
@@ -115,6 +136,7 @@ public record IllustratedLesson(
             String text,
             List<Integer> sourcePages,
             List<UUID> sourceChunkIds,
+            List<RuleFact> ruleFacts,
             VisualFocus visualFocus) {
         public LessonStep {
             if (position < 1 || heading == null || heading.isBlank() || kind == null
@@ -123,10 +145,11 @@ public record IllustratedLesson(
             }
             sourcePages = List.copyOf(sourcePages);
             sourceChunkIds = List.copyOf(sourceChunkIds);
+            ruleFacts = ruleFacts == null ? List.of() : List.copyOf(ruleFacts);
         }
 
         public LessonStep(int position, String text, List<Integer> sourcePages, List<UUID> sourceChunkIds) {
-            this(position, "照着做", TeachingMove.DO, text, sourcePages, sourceChunkIds, null);
+            this(position, "照着做", TeachingMove.DO, text, sourcePages, sourceChunkIds, List.of(), null);
         }
 
         public LessonStep(
@@ -136,7 +159,35 @@ public record IllustratedLesson(
                 String text,
                 List<Integer> sourcePages,
                 List<UUID> sourceChunkIds) {
-            this(position, heading, kind, text, sourcePages, sourceChunkIds, null);
+            this(position, heading, kind, text, sourcePages, sourceChunkIds, List.of(), null);
+        }
+
+        public LessonStep(
+                int position,
+                String heading,
+                TeachingMove kind,
+                String text,
+                List<Integer> sourcePages,
+                List<UUID> sourceChunkIds,
+                VisualFocus visualFocus) {
+            this(position, heading, kind, text, sourcePages, sourceChunkIds, List.of(), visualFocus);
+        }
+    }
+
+    public record RuleFact(
+            int position,
+            RuleFactRole role,
+            String text,
+            List<Integer> sourcePages,
+            List<UUID> sourceChunkIds) {
+        public RuleFact {
+            if (position < 1 || role == null || text == null || text.isBlank()
+                    || sourcePages == null || sourceChunkIds == null || sourceChunkIds.isEmpty()) {
+                throw new IllegalArgumentException("lesson rule fact is invalid");
+            }
+            text = text.strip();
+            sourcePages = List.copyOf(sourcePages);
+            sourceChunkIds = List.copyOf(sourceChunkIds);
         }
     }
 

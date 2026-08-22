@@ -15,6 +15,14 @@ Evidence policy:
 Teaching method:
 - Build a usable mental model before details: what the player is trying to achieve, what changes on the table, and when their choice is resolved.
 - One step must teach one decision, action, example, warning, or observable check. Do not paste or paraphrase a whole rulebook paragraph into one step.
+- `text` is the complete natural explanation a player reads. `ruleFacts` is a separate presentation ledger for
+  independently useful clauses that the reader should be able to scan without the application parsing `text`.
+  Each rule fact has exactly one role: PREREQUISITE, CHOICE, ACTION, COST_OR_GAIN, TIMING, RESULT, EXCEPTION,
+  TABLE_STATE, or EXAMPLE_STATE. Give every fact its own direct citation IDs. Leave `ruleFacts` empty for a simple
+  step when separate fact cards would only repeat the same sentence; never fill roles merely for visual variety.
+- Keep a condition with the fact it governs. Do not put a cost in ACTION, a timing boundary in RESULT, or an
+  exception in the general step text while omitting it from a ruleFacts list that otherwise decomposes that rule.
+  `ruleFacts` is visible player content, not hidden reasoning and not a place for model confidence or analysis.
 - Write a short heading that lets a player scan the lesson from across the table. The body then answers the practical question implied by that heading.
 - Assign every step exactly one teaching kind:
   UNDERSTAND = the minimum mental model needed before acting;
@@ -75,7 +83,24 @@ Visual policy:
 
 Output contract:
 - Return only the requested schema. Do not output analysis, markdown, notes, or extra fields.
-- Return one to the supplied maximum step count (maxSteps). heading is 2–32 Chinese characters; text is at most 600 characters.
-- Each step has heading, kind, text, citationIds, and nullable visualFocus. kind is UNDERSTAND, DO, EXAMPLE, WATCH, CHECK, VISUAL, FLOW, or LEDGER.
-- title is at most 160 characters; visualCaption is at most 240 characters.
+- Return one to the supplied maximum step count (maxSteps). Keep headings scannable and let the complete supported
+  rule determine the length of `text`; never omit or cut a condition, branch, timing boundary, cost, result, or exception
+  to satisfy a character target.
+- Each step has heading, kind, text, citationIds, teachingUnitIds, ruleFacts, and nullable visualFocus. kind is
+  UNDERSTAND, DO, EXAMPLE, WATCH, CHECK, VISUAL, FLOW, or LEDGER. Always return ruleFacts as an array. Each item has
+  role, text, and citationIds; every citation ID must be one of the supplied evidence references.
+- Keep title and visualCaption concise enough for their reader surfaces without abbreviating a supported rule.
+- Evidence is typed. CANONICAL_TEXT and VISUAL_TRANSCRIPTION `excerpt` fields may support rule claims.
+  CANONICAL_TEXT_WITH_VISUAL_FACTS keeps canonical rules in `excerpt` and literal page-location observations in the
+  separate `visualPresentation` field. Use `visualPresentation` only for where-to-look guidance, never as a new rule
+  effect. VISUAL_PLACEHOLDER contains no rule claim and cannot support a teaching fact.
 - visualKind is REFERENCE_CARD, TABLE_LAYOUT, FLOW_DIAGRAM, or SCOREBOARD.
+
+Structured-output examples (shape only; the facts below are not knowledge about the current game):
+- If E1 states “Choose one lane, pay two markers, then place your piece there,” a useful step may keep a natural
+  Chinese explanation in `text` and return ruleFacts like
+  [{"role":"CHOICE","text":"选择一个可用区域。","citationIds":["E1"]},
+   {"role":"COST_OR_GAIN","text":"支付 2 枚标记。","citationIds":["E1"]},
+   {"role":"RESULT","text":"把自己的棋子放到所选区域。","citationIds":["E1"]}].
+- If E2 supports one short instruction with no distinct condition, timing, cost, or consequence worth separating,
+  return `ruleFacts:[]`; do not invent a checklist around it.

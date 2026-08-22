@@ -10,9 +10,6 @@ final class AnswerSituationCheckResolver {
 
     List<RuleSituationCheck> resolve(ModelRequest request, ModelDraft draft) {
         if (request == null || draft == null) throw new IllegalArgumentException("situation check input is invalid");
-        if (!draft.situationChecks().isEmpty()) {
-            throw new IllegalArgumentException("model-generated situation checks are not accepted");
-        }
         return List.of();
     }
 }

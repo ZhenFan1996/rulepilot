@@ -1,5 +1,11 @@
 package com.rulepilot.teaching.adapter.out.model;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.databind.DeserializationFeature;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.JsonMappingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rulepilot.assistant.AgentExecutionStoppedException;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration.Role;
@@ -15,7 +21,6 @@ import com.rulepilot.teaching.TeachingOutlineModel.TopicDraft;
 import com.rulepilot.teaching.TeachingOutlineModel.WholeGameUnderstandingDraft;
 import com.rulepilot.teaching.VisualSourceRuleGroupLedger;
 import com.rulepilot.teaching.application.SourceLanguageRetrievalPolicy;
-import com.rulepilot.teaching.application.TeachingConceptSourceOwnership;
 import com.rulepilot.teaching.application.TeachingSourceCoverageContract;
 import jakarta.annotation.PreDestroy;
 import java.io.IOException;
@@ -34,8 +39,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.prompt.ChatOptions;
-import org.springframework.ai.converter.BeanOutputConverter;
-import org.springframework.ai.converter.StructuredOutputConverter;
 import org.springframework.ai.openai.OpenAiChatModel.ResponseFormat;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -54,14 +57,18 @@ import org.slf4j.LoggerFactory;
 public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
 
     private static final Logger log = LoggerFactory.getLogger(SpringAiTeachingOutlineModel.class);
-    private static final int MAX_OUTLINE_COMPLETION_TOKENS = 10_000;
+    private static final ObjectMapper JSON = new ObjectMapper()
+            .enable(JsonParser.Feature.STRICT_DUPLICATE_DETECTION)
+            .enable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
+            .enable(DeserializationFeature.FAIL_ON_MISSING_CREATOR_PROPERTIES)
+            .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
+    private static final int MAX_OUTLINE_COMPLETION_TOKENS = 16_000;
     private static final long OUTLINE_DEADLINE_SECONDS = 120;
     static final int MAX_CANONICAL_LEDGER_EVIDENCE_CHARACTERS = 32_000;
     private static final int MAX_CANONICAL_PAGE_EVIDENCE_CHARACTERS = 2_800;
 
     private final RuntimeModelConfiguration models;
     private final VersionedAgentPrompts prompts;
-    private final FakeTeachingOutlineModel fake;
     private final String outlineSystemPrompt;
     private final String outlineUserPrompt;
     private final String canonicalLedgerSystemPrompt;
@@ -70,20 +77,17 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
     private final ExecutorService outlineCalls = Executors.newVirtualThreadPerTaskExecutor();
     private final double temperature;
 
-    public SpringAiTeachingOutlineModel(
-            RuntimeModelConfiguration models, VersionedAgentPrompts prompts, FakeTeachingOutlineModel fake) {
-        this(models, prompts, fake, 0.1);
+    public SpringAiTeachingOutlineModel(RuntimeModelConfiguration models, VersionedAgentPrompts prompts) {
+        this(models, prompts, 0.1);
     }
 
     public SpringAiTeachingOutlineModel(
             RuntimeModelConfiguration models,
             VersionedAgentPrompts prompts,
-            FakeTeachingOutlineModel fake,
             double temperature) {
         this(
                 models,
                 prompts,
-                fake,
                 temperature,
                 read(new ClassPathResource("prompts/teaching-outline-v19-autonomous-units-system.txt")),
                 read(new ClassPathResource("prompts/teaching-outline-v19-user.txt")),
@@ -95,7 +99,6 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
     public SpringAiTeachingOutlineModel(
             RuntimeModelConfiguration models,
             VersionedAgentPrompts prompts,
-            FakeTeachingOutlineModel fake,
             @Value("${rulepilot.teaching.outline-temperature:0.1}") double temperature,
             @Value("classpath:prompts/teaching-outline-v19-autonomous-units-system.txt") Resource outlineSystemPrompt,
             @Value("classpath:prompts/teaching-outline-v19-user.txt") Resource outlineUserPrompt,
@@ -104,7 +107,6 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
         this(
                 models,
                 prompts,
-                fake,
                 temperature,
                 read(outlineSystemPrompt),
                 read(outlineUserPrompt),
@@ -115,14 +117,12 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
     SpringAiTeachingOutlineModel(
             RuntimeModelConfiguration models,
             VersionedAgentPrompts prompts,
-            FakeTeachingOutlineModel fake,
             double temperature,
             String outlineSystemPrompt,
             String outlineUserPrompt) {
         this(
                 models,
                 prompts,
-                fake,
                 temperature,
                 outlineSystemPrompt,
                 outlineUserPrompt,
@@ -133,7 +133,6 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
     SpringAiTeachingOutlineModel(
             RuntimeModelConfiguration models,
             VersionedAgentPrompts prompts,
-            FakeTeachingOutlineModel fake,
             double temperature,
             String outlineSystemPrompt,
             String outlineUserPrompt,
@@ -144,7 +143,6 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
         }
         this.models = models;
         this.prompts = prompts;
-        this.fake = fake;
         this.temperature = temperature;
         this.outlineSystemPrompt = outlineSystemPrompt;
         this.outlineUserPrompt = outlineUserPrompt;
@@ -156,7 +154,11 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
     public OutlineDraft organize(OutlineRequest request) {
         Role role = roleFor(request);
         String owner = request.modelConfigurationOwner();
-        if (usesFake(role, owner)) return fake.organize(request);
+        if (usesFake(role, owner)) {
+            throw new OutlineGenerationException(
+                    "teaching outline model is not configured",
+                    new IllegalStateException("a real teaching model is required to organize a rulebook"));
+        }
         var call = outlineCalls.submit(() -> organizeWithRepair(request, role, owner));
         try {
             return call.get(OUTLINE_DEADLINE_SECONDS, TimeUnit.SECONDS);
@@ -217,10 +219,7 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
         String currentTopics = java.util.stream.IntStream.range(0, current.topics().size())
                 .mapToObj(index -> {
                     var topic = current.topics().get(index);
-                    String objective = topic.objective().length() <= 360
-                            ? topic.objective()
-                            : topic.objective().substring(0, 359) + "…";
-                    return (index + 1) + ". " + topic.key() + " | " + topic.title() + " | " + objective
+                    return (index + 1) + ". " + topic.key() + " | " + topic.title() + " | " + topic.objective()
                             + " | queries=" + topic.retrievalQueries()
                             + " | tags=" + topic.coverageTags()
                             + " | pages=" + topic.sourcePageNumbers();
@@ -252,18 +251,6 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
         } catch (InvalidSourceCoverage invalidSource) {
             return repairSourceIdentifiers(request, role, owner, invalidSource);
         } catch (InvalidWholeGameUnderstanding invalidContext) {
-            OutlineDraft repaired = TeachingConceptSourceOwnership.repairMissingOwners(request, invalidContext.outline);
-            if (repaired != invalidContext.outline) {
-                try {
-                    TeachingSourceCoverageContract.requireCompleteModelContract(request, repaired);
-                    log.info("Assigned omitted exact concept sources without regenerating the teaching outline");
-                    return repaired;
-                } catch (IllegalArgumentException remainingInvalidity) {
-                    log.warn(
-                            "Deterministic concept-source ownership repair left another whole-game contract gap: {}",
-                            remainingInvalidity.getMessage());
-                }
-            }
             return repairWholeGameUnderstanding(request, role, owner, invalidContext);
         } catch (RuntimeException failure) {
             if (isTimeout(failure)) throw failure;
@@ -334,8 +321,10 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
         } else {
             prompt = prompt.options(ChatOptions.builder().temperature(temperature));
         }
-        MissingSlotOwnershipPatch patch = prompt
-                .system("""
+        ChatClient.ChatClientRequestSpec configuredPrompt = prompt;
+        MissingSlotOwnershipPatch patch = requireExactJson(
+                "missing source-slot ownership repair",
+                () -> parseMissingSlotOwnershipPatch(configuredPrompt.system("""
                         You assign only source slots omitted from an otherwise frozen teaching plan. Return one JSON
                         object with exactly assignments. Each assignment has exactly sourceSlotId and teachingUnitId.
                         Return every supplied missing sourceSlotId exactly once and no other slot. Select one existing
@@ -352,8 +341,8 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
                         Evidence for the missing slots:
                         %s
                         """.formatted(frozenUnits, missingSlots, pageEvidence))
-                .call()
-                .entity(MissingSlotOwnershipPatch.class);
+                        .call()
+                        .content()));
         CompactOutlineDraft repaired = applyMissingSlotOwnershipPatch(current, units, failure.missingSlotIds, patch);
         OutlineDraft outline = expandCanonicalOutline(request, repaired);
         TeachingSourceCoverageContract.requireCompleteModelContract(request, outline);
@@ -437,8 +426,10 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
         } else {
             prompt = prompt.options(ChatOptions.builder().temperature(temperature));
         }
-        WholeGameContextPatch patch = prompt
-                .system("""
+        ChatClient.ChatClientRequestSpec configuredPrompt = prompt;
+        WholeGameContextPatch patch = requireExactJson(
+                "whole-game context repair",
+                () -> parseWholeGameContextPatch(configuredPrompt.system("""
                         You repair only the shared source-bound mental model of an otherwise valid teaching outline.
                         Return one JSON object with exactly concepts and topicDependencies. Return the complete
                         replacement concept list, not a delta. Each concept has exactly conceptId, label, explanation,
@@ -473,8 +464,8 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
                         existingConcepts,
                         topicContracts,
                         sourceSlots))
-                .call()
-                .entity(WholeGameContextPatch.class);
+                        .call()
+                        .content()));
         if (patch == null || patch.concepts().isEmpty()) {
             throw new IllegalArgumentException("whole-game context repair returned no concepts", failure);
         }
@@ -523,8 +514,10 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
         } else {
             prompt = prompt.options(ChatOptions.builder().temperature(temperature));
         }
-        SourceIdentifierPatches patch = prompt
-                .system("""
+        ChatClient.ChatClientRequestSpec configuredPrompt = prompt;
+        SourceIdentifierPatches patch = requireExactJson(
+                "source-identifier repair",
+                () -> parseSourceIdentifierPatches(configuredPrompt.system("""
                         You repair only invalid internal source anchors in an otherwise valid teaching outline.
                         Return one JSON object with exactly replacements. Each replacement has exactly slotId and
                         sourceIdentifier. Return exactly one replacement for every supplied invalid slotId and no
@@ -540,8 +533,8 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
                         Exact active rulebook page text:
                         %s
                         """.formatted(slots, pages))
-                .call()
-                .entity(SourceIdentifierPatches.class);
+                        .call()
+                        .content()));
         OutlineDraft repaired = applySourceIdentifierPatches(current, invalidSlots, patch);
         TeachingSourceCoverageContract.requireCompleteModelContract(request, repaired);
         SourceLanguageRetrievalPolicy.validate(request, repaired);
@@ -678,14 +671,16 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
         } else {
             prompt = prompt.options(ChatOptions.builder().temperature(temperature));
         }
-        CompactOutlineDraft compact = prompt
-                .system(canonicalLedgerSystemPrompt)
+        ChatClient.ChatClientRequestSpec configuredPrompt = prompt;
+        CompactOutlineDraft compact = requireExactJson(
+                "canonical-ledger teaching outline",
+                () -> parseCompactOutlineDraft(configuredPrompt.system(canonicalLedgerSystemPrompt)
                 .user(user -> user.text(canonicalLedgerUserPrompt)
                         .param("learningGoal", request.learningGoalForPrompt())
                         .param("sourceLedger", canonicalSourceLedger(request))
                         .param("repair", repair))
-                .call()
-                .entity(compactOutlineConverter());
+                        .call()
+                        .content()));
         OutlineDraft outline = expandCanonicalOutline(request, compact);
         TeachingSourceCoverageContract.requireCompleteModelContract(request, outline);
         return outline;
@@ -702,8 +697,10 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
             prompt = prompt.options(ChatOptions.builder()
                     .temperature(temperature));
         }
-        OutlineDraft outline = prompt
-                .system(outlineSystemPrompt)
+        ChatClient.ChatClientRequestSpec configuredPrompt = prompt;
+        OutlineDraft outline = requireExactJson(
+                "teaching outline",
+                () -> parseOutlineDraft(configuredPrompt.system(outlineSystemPrompt)
                 .user(user -> {
                     user.text(outlineUserPrompt)
                             .param("learningGoal", request.learningGoalForPrompt())
@@ -716,10 +713,11 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
                         request.pageImages().stream().map(images::prepare).forEach(image -> user.media(
                                 MimeTypeUtils.parseMimeType(image.mediaType()), new ByteArrayResource(image.content())));
                     }
-        })
-                .call()
-                .entity(outlineConverter());
+                })
+                        .call()
+                        .content()));
         if (outline == null) throw new IllegalArgumentException("teaching outline model returned no draft");
+        outline = bindLegacySourceOwnership(outline);
         try {
             TeachingSourceCoverageContract.requireCompleteSourceContract(request, outline);
         } catch (TeachingSourceCoverageContract.MissingExactSourceIdentifierException invalidSource) {
@@ -736,6 +734,61 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
         }
         SourceLanguageRetrievalPolicy.validate(request, outline);
         return outline;
+    }
+
+    /**
+     * Legacy text planning used to ask the model to repeat page bindings on source slots, topics, and global concepts.
+     * Source slots are the auditable identity; derive the two projections from them so one omitted duplicate page does
+     * not trigger an expensive full-outline rewrite or leave a broader unsupported chapter scope.
+     */
+    static OutlineDraft bindLegacySourceOwnership(OutlineDraft outline) {
+        if (outline == null) return null;
+        Map<String, LinkedHashSet<Integer>> pagesByTopic = new LinkedHashMap<>();
+        Map<String, LinkedHashSet<Integer>> pagesByIdentifier = new LinkedHashMap<>();
+        for (SourceCoverageSlotDraft slot : outline.sourceCoverageSlots()) {
+            pagesByTopic.computeIfAbsent(slot.ownerTopicKey(), ignored -> new LinkedHashSet<>())
+                    .addAll(slot.sourcePageNumbers());
+            pagesByIdentifier.computeIfAbsent(slot.sourceIdentifier(), ignored -> new LinkedHashSet<>())
+                    .addAll(slot.sourcePageNumbers());
+        }
+        List<TopicDraft> topics = outline.topics().stream()
+                .map(topic -> new TopicDraft(
+                        topic.key(),
+                        topic.title(),
+                        topic.objective(),
+                        topic.required(),
+                        topic.visualEvidenceRecommended(),
+                        topic.retrievalQueries(),
+                        topic.coverageTags(),
+                        pagesByTopic.containsKey(topic.key())
+                                ? List.copyOf(pagesByTopic.get(topic.key()))
+                                : topic.sourcePageNumbers()))
+                .toList();
+        WholeGameUnderstandingDraft understanding = outline.wholeGameUnderstanding();
+        List<GlobalConceptDraft> concepts = understanding.concepts().stream()
+                .map(concept -> {
+                    LinkedHashSet<Integer> sourcePages = concept.sourceIdentifiers().stream()
+                            .flatMap(identifier -> pagesByIdentifier
+                                    .getOrDefault(identifier, new LinkedHashSet<>())
+                                    .stream())
+                            .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+                    return new GlobalConceptDraft(
+                            concept.conceptId(),
+                            concept.label(),
+                            concept.explanation(),
+                            concept.sourceIdentifiers(),
+                            sourcePages.isEmpty() ? concept.sourcePageNumbers() : List.copyOf(sourcePages),
+                            concept.relatedTopicKeys(),
+                            concept.prerequisiteConceptIds());
+                })
+                .toList();
+        return new OutlineDraft(
+                outline.gameTitle(),
+                outline.premise(),
+                topics,
+                outline.sourceCoverageSlots(),
+                outline.sourceCoverageInventoryComplete(),
+                new WholeGameUnderstandingDraft(understanding.summary(), concepts, understanding.topicDependencies()));
     }
 
     private boolean hasCanonicalVisualLedger(OutlineRequest request) {
@@ -1065,93 +1118,125 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
         return coverage == null ? null : "missing_" + coverage + "_source";
     }
 
-    private StructuredOutputConverter<OutlineDraft> outlineConverter() {
-        BeanOutputConverter<OutlineDraft> delegate = new BeanOutputConverter<>(OutlineDraft.class);
-        return new StructuredOutputConverter<>() {
-            @Override
-            public String getFormat() {
-                return delegate.getFormat();
-            }
-
-            @Override
-            public OutlineDraft convert(String source) {
-                try {
-                    return delegate.convert(source);
-                } catch (RuntimeException originalFailure) {
-                    String closed = closeTruncatedRootObject(source);
-                    if (closed.equals(source)) throw originalFailure;
-                    try {
-                        OutlineDraft repaired = delegate.convert(closed);
-                        log.info("Accepted teaching outline after closing its single truncated root JSON object");
-                        return repaired;
-                    } catch (RuntimeException stillInvalid) {
-                        stillInvalid.addSuppressed(originalFailure);
-                        throw stillInvalid;
-                    }
-                }
-            }
-        };
+    static CompactOutlineDraft parseCompactOutlineDraft(String content) throws JsonProcessingException {
+        JsonNode root = JSON.readTree(content);
+        JsonNode topics = requireArray(root, "topics", "compact outline");
+        for (JsonNode topic : topics) {
+            JsonNode units = requireArray(topic, "teachingUnits", "compact outline topic");
+            for (JsonNode unit : units) requireArray(unit, "sourceSlotIds", "compact teaching unit");
+        }
+        JsonNode understanding = requireObject(root, "wholeGameUnderstanding", "compact outline");
+        JsonNode concepts = requireArray(understanding, "concepts", "compact whole-game understanding");
+        requireArray(understanding, "topicDependencies", "compact whole-game understanding");
+        for (JsonNode concept : concepts) requireConceptArrays(concept, "compact whole-game concept");
+        rejectDuplicateArrayItems(root, "compact outline");
+        return JSON.readValue(content, CompactOutlineDraft.class);
     }
 
-    private StructuredOutputConverter<CompactOutlineDraft> compactOutlineConverter() {
-        BeanOutputConverter<CompactOutlineDraft> delegate = new BeanOutputConverter<>(CompactOutlineDraft.class);
-        return new StructuredOutputConverter<>() {
-            @Override
-            public String getFormat() {
-                return delegate.getFormat();
-            }
-
-            @Override
-            public CompactOutlineDraft convert(String source) {
-                try {
-                    return delegate.convert(source);
-                } catch (RuntimeException originalFailure) {
-                    String closed = closeTruncatedRootObject(source);
-                    if (closed.equals(source)) throw originalFailure;
-                    try {
-                        CompactOutlineDraft repaired = delegate.convert(closed);
-                        log.info("Accepted compact teaching outline after closing its single truncated root JSON object");
-                        return repaired;
-                    } catch (RuntimeException stillInvalid) {
-                        stillInvalid.addSuppressed(originalFailure);
-                        throw stillInvalid;
-                    }
-                }
-            }
-        };
+    static OutlineDraft parseOutlineDraft(String content) throws JsonProcessingException {
+        JsonNode root = JSON.readTree(content);
+        JsonNode topics = requireArray(root, "topics", "teaching outline");
+        for (JsonNode topic : topics) {
+            requireArray(topic, "retrievalQueries", "teaching outline topic");
+            requireArray(topic, "coverageTags", "teaching outline topic");
+            requireArray(topic, "sourcePageNumbers", "teaching outline topic");
+        }
+        JsonNode sourceSlots = requireArray(root, "sourceCoverageSlots", "teaching outline");
+        for (JsonNode sourceSlot : sourceSlots) {
+            requireArray(sourceSlot, "sourcePageNumbers", "teaching source coverage slot");
+        }
+        JsonNode understanding = requireObject(root, "wholeGameUnderstanding", "teaching outline");
+        JsonNode concepts = requireArray(understanding, "concepts", "whole-game understanding");
+        requireArray(understanding, "topicDependencies", "whole-game understanding");
+        for (JsonNode concept : concepts) {
+            requireArray(concept, "sourceIdentifiers", "whole-game concept");
+            requireArray(concept, "sourcePageNumbers", "whole-game concept");
+            requireArray(concept, "relatedTopicKeys", "whole-game concept");
+            requireArray(concept, "prerequisiteConceptIds", "whole-game concept");
+        }
+        rejectDuplicateArrayItems(root, "teaching outline");
+        return JSON.readValue(content, OutlineDraft.class);
     }
 
-    static String closeTruncatedRootObject(String source) {
-        if (source == null) return "";
-        String candidate = source.stripTrailing();
-        if (candidate.isEmpty() || candidate.charAt(0) != '{') return source;
-        java.util.ArrayDeque<Character> expectedClosers = new java.util.ArrayDeque<>();
-        boolean inString = false;
-        boolean escaped = false;
-        for (int index = 0; index < candidate.length(); index++) {
-            char character = candidate.charAt(index);
-            if (inString) {
-                if (escaped) {
-                    escaped = false;
-                } else if (character == '\\') {
-                    escaped = true;
-                } else if (character == '"') {
-                    inString = false;
+    static MissingSlotOwnershipPatch parseMissingSlotOwnershipPatch(String content) throws JsonProcessingException {
+        JsonNode root = JSON.readTree(content);
+        requireArray(root, "assignments", "missing-slot ownership patch");
+        rejectDuplicateArrayItems(root, "missing-slot ownership patch");
+        return JSON.readValue(content, MissingSlotOwnershipPatch.class);
+    }
+
+    static WholeGameContextPatch parseWholeGameContextPatch(String content) throws JsonProcessingException {
+        JsonNode root = JSON.readTree(content);
+        JsonNode concepts = requireArray(root, "concepts", "whole-game context patch");
+        requireArray(root, "topicDependencies", "whole-game context patch");
+        for (JsonNode concept : concepts) requireConceptArrays(concept, "whole-game context concept patch");
+        rejectDuplicateArrayItems(root, "whole-game context patch");
+        return JSON.readValue(content, WholeGameContextPatch.class);
+    }
+
+    static SourceIdentifierPatches parseSourceIdentifierPatches(String content) throws JsonProcessingException {
+        JsonNode root = JSON.readTree(content);
+        requireArray(root, "replacements", "source-identifier patch");
+        rejectDuplicateArrayItems(root, "source-identifier patch");
+        return JSON.readValue(content, SourceIdentifierPatches.class);
+    }
+
+    private static <T> T requireExactJson(String contract, ExactJsonModelOutput<T> output) {
+        try {
+            return output.parse();
+        } catch (JsonProcessingException invalid) {
+            throw new IllegalArgumentException(contract + " returned invalid structured output", invalid);
+        }
+    }
+
+    @FunctionalInterface
+    private interface ExactJsonModelOutput<T> {
+        T parse() throws JsonProcessingException;
+    }
+
+    private static void requireConceptArrays(JsonNode concept, String contract) throws JsonMappingException {
+        requireArray(concept, "sourceSlotIds", contract);
+        requireArray(concept, "relatedTopicKeys", contract);
+        requireArray(concept, "prerequisiteConceptIds", contract);
+    }
+
+    private static JsonNode requireObject(JsonNode owner, String field, String contract) throws JsonMappingException {
+        if (owner == null || !owner.isObject() || !owner.has(field) || !owner.get(field).isObject()) {
+            throw JsonMappingException.from(
+                    (JsonParser) null, contract + " field " + field + " must be an object");
+        }
+        return owner.get(field);
+    }
+
+    private static JsonNode requireArray(JsonNode owner, String field, String contract) throws JsonMappingException {
+        if (owner == null || !owner.isObject() || !owner.has(field) || !owner.get(field).isArray()) {
+            throw JsonMappingException.from(
+                    (JsonParser) null, contract + " field " + field + " must be an array");
+        }
+        return owner.get(field);
+    }
+
+    private static void rejectDuplicateArrayItems(JsonNode node, String path) throws JsonMappingException {
+        if (node.isArray()) {
+            LinkedHashSet<JsonNode> unique = new LinkedHashSet<>();
+            int index = 0;
+            for (JsonNode item : node) {
+                if (!unique.add(item)) {
+                    throw JsonMappingException.from(
+                            (JsonParser) null, path + " contains a duplicate array item at index " + index);
                 }
-                continue;
+                rejectDuplicateArrayItems(item, path + "[" + index + "]");
+                index++;
             }
-            if (character == '"') {
-                inString = true;
-            } else if (character == '{') {
-                expectedClosers.push('}');
-            } else if (character == '[') {
-                expectedClosers.push(']');
-            } else if (character == '}' || character == ']') {
-                if (expectedClosers.isEmpty() || expectedClosers.pop() != character) return source;
+            return;
+        }
+        if (node.isObject()) {
+            var fields = node.fields();
+            while (fields.hasNext()) {
+                var field = fields.next();
+                rejectDuplicateArrayItems(field.getValue(), path + "." + field.getKey());
             }
         }
-        if (inString || escaped || expectedClosers.size() != 1 || expectedClosers.peek() != '}') return source;
-        return candidate + '}';
     }
 
     private record CanonicalSourceSlot(
@@ -1161,34 +1246,34 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
             SourceCoverageAvailability availability,
             SourceCoverageRole fixedRole) {}
 
-    private record CompactOutlineDraft(
+    record CompactOutlineDraft(
             String gameTitle,
             String premise,
             List<CompactTopicDraft> topics,
             CompactWholeGameUnderstandingDraft wholeGameUnderstanding) {}
 
-    private record CompactTopicDraft(
+    record CompactTopicDraft(
             String key,
             String objective,
             boolean required,
             boolean visualEvidenceRecommended,
             List<CompactTeachingUnitDraft> teachingUnits) {}
 
-    private record CompactTeachingUnitDraft(
+    record CompactTeachingUnitDraft(
             String teachingUnitId,
             SourceCoverageRole role,
             List<String> sourceSlotIds) {}
 
-    private record CompactWholeGameUnderstandingDraft(
+    record CompactWholeGameUnderstandingDraft(
             String summary,
             List<CompactGlobalConceptDraft> concepts,
             List<TopicDependencyDraft> topicDependencies) {}
 
-    private record MissingSlotOwnershipPatch(List<MissingSlotOwnershipAssignment> assignments) {}
+    record MissingSlotOwnershipPatch(List<MissingSlotOwnershipAssignment> assignments) {}
 
-    private record MissingSlotOwnershipAssignment(String sourceSlotId, String teachingUnitId) {}
+    record MissingSlotOwnershipAssignment(String sourceSlotId, String teachingUnitId) {}
 
-    private record CompactGlobalConceptDraft(
+    record CompactGlobalConceptDraft(
             String conceptId,
             String label,
             String explanation,
@@ -1196,10 +1281,10 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
             List<String> relatedTopicKeys,
             List<String> prerequisiteConceptIds) {}
 
-    private record WholeGameContextPatch(
+    record WholeGameContextPatch(
             List<WholeGameConceptPatchDraft> concepts,
             List<TopicDependencyDraft> topicDependencies) {
-        private WholeGameContextPatch {
+        WholeGameContextPatch {
             if (concepts == null || concepts.isEmpty()
                     || concepts.stream().anyMatch(java.util.Objects::isNull)) {
                 throw new IllegalArgumentException("whole-game context concept patch is invalid");
@@ -1212,14 +1297,14 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
         }
     }
 
-    private record WholeGameConceptPatchDraft(
+    record WholeGameConceptPatchDraft(
             String conceptId,
             String label,
             String explanation,
             List<String> sourceSlotIds,
             List<String> relatedTopicKeys,
             List<String> prerequisiteConceptIds) {
-        private WholeGameConceptPatchDraft {
+        WholeGameConceptPatchDraft {
             if (conceptId == null || conceptId.isBlank() || conceptId.length() > 80
                     || !conceptId.matches("[a-z0-9]+(?:-[a-z0-9]+)*")
                     || label == null || label.isBlank() || label.length() > 160
@@ -1269,8 +1354,8 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
         }
     }
 
-    private record SourceIdentifierPatches(List<SourceIdentifierPatch> replacements) {
-        private SourceIdentifierPatches {
+    record SourceIdentifierPatches(List<SourceIdentifierPatch> replacements) {
+        SourceIdentifierPatches {
             if (replacements == null || replacements.isEmpty()
                     || replacements.stream().anyMatch(java.util.Objects::isNull)) {
                 throw new IllegalArgumentException("source identifier repair patch is invalid");
@@ -1279,8 +1364,8 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
         }
     }
 
-    private record SourceIdentifierPatch(String slotId, String sourceIdentifier) {
-        private SourceIdentifierPatch {
+    record SourceIdentifierPatch(String slotId, String sourceIdentifier) {
+        SourceIdentifierPatch {
             if (slotId == null || slotId.isBlank() || slotId.length() > 80
                     || sourceIdentifier == null || sourceIdentifier.isBlank() || sourceIdentifier.length() > 160) {
                 throw new IllegalArgumentException("source identifier repair entry is invalid");
@@ -1295,6 +1380,7 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
             return OpenAiChatOptions.builder()
                     .temperature(temperature)
                     .maxTokens(MAX_OUTLINE_COMPLETION_TOKENS)
+                    .responseFormat(ResponseFormat.builder().type(ResponseFormat.Type.JSON_OBJECT).build())
                     .extraBody(java.util.Map.of("thinking", java.util.Map.of("type", "disabled")));
         }
         if (usesQwen(role, owner)) {

@@ -73,7 +73,8 @@ class AnswerEvidenceRefinementPolicyTest {
         assertThat(AnswerEvidenceRefinementPolicy.requiresRefinement(question, context, priorTurn, ready()))
                 .isTrue();
         assertThat(AnswerEvidenceRefinementPolicy.requiresRefinement(question, context, completeList, ready()))
-                .isTrue();
+                .as("one current complete-list obligation can use already-ready direct evidence")
+                .isFalse();
         assertThat(AnswerEvidenceRefinementPolicy.requiresRefinement(question, context, compound, ready()))
                 .as("independent obligations still require exact-page coverage checks")
                 .isTrue();

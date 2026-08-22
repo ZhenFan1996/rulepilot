@@ -3,6 +3,7 @@ package com.rulepilot.teaching.domain;
 import com.rulepilot.assistant.PlayerLocale;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonSection;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonStep;
+import com.rulepilot.teaching.domain.IllustratedLesson.RuleFact;
 import com.rulepilot.teaching.domain.IllustratedLesson.VisualFocus;
 import java.time.Instant;
 import java.util.List;
@@ -104,14 +105,35 @@ public record LessonLocalization(
 
     private LessonStep apply(LessonStep source, StepTranslation translated) {
         if (translated == null) throw new IllegalArgumentException("source step has no translation");
+        Map<Integer, RuleFactTranslation> translatedFacts = translated.ruleFacts().stream()
+                .collect(Collectors.toMap(RuleFactTranslation::position, Function.identity()));
+        if (translatedFacts.size() != source.ruleFacts().size()) {
+            throw new IllegalArgumentException("localized rule facts do not match the source step");
+        }
+        List<RuleFact> ruleFacts = source.ruleFacts().stream()
+                .map(fact -> {
+                    RuleFactTranslation translatedFact = translatedFacts.get(fact.position());
+                    if (translatedFact == null) {
+                        throw new IllegalArgumentException("source rule fact has no translation");
+                    }
+                    return new RuleFact(
+                            fact.position(),
+                            fact.role(),
+                            translatedFact.text(),
+                            fact.sourcePages(),
+                            fact.sourceChunkIds());
+                })
+                .toList();
+        if (source.visualFocus() != null
+                && (translated.visualLabel().isBlank() || translated.visualDescription().isBlank())) {
+            throw new IllegalArgumentException("localized visual focus is incomplete");
+        }
         VisualFocus focus = source.visualFocus() == null
                 ? null
                 : new VisualFocus(
                         source.visualFocus().pageNumber(),
-                        translated.visualLabel().isBlank() ? source.visualFocus().label() : translated.visualLabel(),
-                        translated.visualDescription().isBlank()
-                                ? source.visualFocus().visibleDescription()
-                                : translated.visualDescription(),
+                        translated.visualLabel(),
+                        translated.visualDescription(),
                         source.visualFocus().x(),
                         source.visualFocus().y(),
                         source.visualFocus().width(),
@@ -123,6 +145,7 @@ public record LessonLocalization(
                 translated.text(),
                 source.sourcePages(),
                 source.sourceChunkIds(),
+                ruleFacts,
                 focus);
     }
 
@@ -149,20 +172,39 @@ public record LessonLocalization(
             String heading,
             String text,
             String visualLabel,
-            String visualDescription) {
+            String visualDescription,
+            List<RuleFactTranslation> ruleFacts) {
         public StepTranslation(int position, String heading, String text, String visualLabel) {
-            this(position, heading, text, visualLabel, "");
+            this(position, heading, text, visualLabel, "", List.of());
+        }
+
+        public StepTranslation(
+                int position,
+                String heading,
+                String text,
+                String visualLabel,
+                String visualDescription) {
+            this(position, heading, text, visualLabel, visualDescription, List.of());
         }
 
         public StepTranslation {
-            if (position < 1 || blank(heading) || blank(text) || visualLabel == null || visualDescription == null
-                    || visualDescription.length() > 240) {
+            ruleFacts = ruleFacts == null ? List.of() : List.copyOf(ruleFacts);
+            if (position < 1 || blank(heading) || blank(text) || visualLabel == null || visualDescription == null) {
                 throw new IllegalArgumentException("localized lesson step is invalid");
             }
             heading = heading.strip();
             text = text.strip();
             visualLabel = visualLabel.strip();
             visualDescription = visualDescription.strip();
+        }
+    }
+
+    public record RuleFactTranslation(int position, String text) {
+        public RuleFactTranslation {
+            if (position < 1 || blank(text)) {
+                throw new IllegalArgumentException("localized rule fact is invalid");
+            }
+            text = text.strip();
         }
     }
 

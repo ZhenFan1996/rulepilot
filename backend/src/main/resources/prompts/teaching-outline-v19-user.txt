@@ -12,6 +12,6 @@ Rendered page numbers available to later visual work:
 
 <repair_instruction>{repair}</repair_instruction>
 
-Return one complete structured whole-game understanding, outline, and source inventory. Finish the shared source-bound
-mental model before finalizing chapter dependencies and teaching units. Use the same teachingUnitId to group source
-anchors only when you deliberately want one coherent teaching unit to own them; otherwise keep the units independent.
+Return the one flat six-field JSON object defined by the system contract. Finish the shared source-bound mental model
+before finalizing chapter dependencies and teaching units. Use the same teachingUnitId to group source anchors only
+when you deliberately want one coherent teaching unit to own them; otherwise keep the units independent.

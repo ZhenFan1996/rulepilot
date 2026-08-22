@@ -148,13 +148,16 @@ class TeachingSectionModelRequestFactoryTest {
 
         assertThat(request.pageImages()).extracting(image -> image.pageNumber()).containsExactly(4);
         assertThat(request.modelConfigurationOwner()).isEqualTo("player");
-        assertThat(request.evidence()).singleElement().satisfies(source ->
-                assertThat(source.excerpt())
+        assertThat(request.evidence()).singleElement().satisfies(source -> {
+            assertThat(source.excerpt())
+                    .isEqualTo("Place the central board in the middle of the table before the first turn.")
+                    .doesNotContain("The central board shows the shared setup area");
+            assertThat(source.visualPresentation())
                         .contains("Visual presentation data only")
                         .contains("Cataloged visual anchors")
                         .contains("中央设置区")
-                        .contains("rect=120,180,620,480")
-                        .doesNotContain("The central board shows the shared setup area"));
+                        .contains("rect=120,180,620,480");
+        });
         assertThat(request.chapterScope()).contains("【当前章节】第1章《开局准备》");
     }
 

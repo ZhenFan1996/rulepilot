@@ -134,11 +134,12 @@ class NativeReadToolsTest {
     }
 
     @Test
-    void searchUsesHiddenDocumentScopeAndReturnsBoundedEvidenceHandles() {
+    void searchUsesHiddenDocumentScopeAndReturnsCompleteCanonicalEvidenceHandles() {
         AssistantReadTools readTools = mock(AssistantReadTools.class);
         UUID documentVersionId = UUID.randomUUID();
+        String completeExcerpt = "A complete canonical rule sentence. ".repeat(70) + "END_OF_CANONICAL_CHUNK";
         when(readTools.searchRuleEvidence(any())).thenReturn(List.of(new RuleEvidence(
-                UUID.randomUUID(), documentVersionId, "SETUP", "Setup", "Place the bounded components.", 2, 2)));
+                UUID.randomUUID(), documentVersionId, "SETUP", "Setup", completeExcerpt, 2, 2)));
         SearchRuleEvidenceNativeTool tool = new SearchRuleEvidenceNativeTool(readTools, JsonMapper.builder().build());
         ToolScope scope = new ToolScope("player", documentVersionId, UUID.randomUUID(), Instant.now().plusSeconds(30));
 
@@ -151,7 +152,9 @@ class NativeReadToolsTest {
         verify(readTools).searchRuleEvidence(request.capture());
         assertThat(request.getValue().documentVersionId()).isEqualTo(documentVersionId);
         assertThat(result.evidenceCount()).isEqualTo(1);
-        assertThat(result.data().toString()).contains("evidenceId", "pageFrom").doesNotContain(documentVersionId.toString());
+        assertThat(result.data().toString())
+                .contains("evidenceId", "pageFrom", "END_OF_CANONICAL_CHUNK")
+                .doesNotContain(documentVersionId.toString());
     }
 
     @Test

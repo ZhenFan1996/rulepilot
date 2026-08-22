@@ -303,7 +303,7 @@ public class VisualLessonEnrichmentService {
                         ActivityType.VALIDATION,
                         visualStepOperation(target),
                         ActivityOutcome.RUNNING,
-                        brief("正在查看“" + target.sectionTitle() + "”中的“" + target.stepHeading() + "”规则图示"));
+                        "正在查看“" + target.sectionTitle() + "”中的“" + target.stepHeading() + "”规则图示");
             }
 
             @Override
@@ -312,7 +312,7 @@ public class VisualLessonEnrichmentService {
                         runId,
                         visualStepOperation(target),
                         activityOutcome(outcome),
-                        brief("“" + target.sectionTitle() + "”中的“" + target.stepHeading() + "”：" + outcomeSummary(outcome)));
+                        "“" + target.sectionTitle() + "”中的“" + target.stepHeading() + "”：" + outcomeSummary(outcome));
             }
 
             @Override
@@ -322,7 +322,7 @@ public class VisualLessonEnrichmentService {
                         ActivityType.VALIDATION,
                         "visualSection|" + section.sectionPosition(),
                         activityOutcome(section.outcome().outcome()),
-                        brief("正在查看“" + section.sectionTitle() + "”：" + section.outcome().summary()));
+                        "正在查看“" + section.sectionTitle() + "”：" + section.outcome().summary());
             }
 
             @Override
@@ -352,7 +352,6 @@ public class VisualLessonEnrichmentService {
             case MODEL_MALFORMED_RESPONSE -> "视觉模型没有返回可用截图坐标，已保留文字讲解";
             case MODEL_UNSUPPORTED_SCOPE -> "视觉模型返回的图片与当前规则页不一致，未采用";
             case MODEL_INVALID_GEOMETRY -> "视觉模型返回的截图范围无效，未采用";
-            case MODEL_NON_CHINESE_OBSERVATION -> "视觉模型没有给出可读的图中说明，未采用";
             case MODEL_BUSY -> "视觉模型正在处理其他图片；此步可稍后重试";
             case MODEL_TIMEOUT -> "查看图片超时；此步可稍后重试";
             case MODEL_UNAVAILABLE -> "当前没有可用的视觉模型";
@@ -365,10 +364,6 @@ public class VisualLessonEnrichmentService {
             case REJECTED_STEP_MISMATCH -> "截图与当前规则步骤不一致，未采用";
             case REJECTED_CLAIM_CONFLICT -> "截图与已验证正文冲突，未采用；正文保持不变";
         };
-    }
-
-    private String brief(String value) {
-        return value.length() <= 240 ? value : value.substring(0, 239) + "…";
     }
 
     private boolean runIsActive(UUID runId, String ownerUsername) {

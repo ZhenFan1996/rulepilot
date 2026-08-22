@@ -38,7 +38,7 @@ final class AnswerEvidenceRefinementPolicy {
         if (plan.answerAid() == AnswerAid.CALCULATION) return true;
         return plan.subquestions().size() > 1
                 || plan.evidenceNeeds().stream().anyMatch(need -> switch (need) {
-            case ADVICE, COMPLETE_LIST, RELATIONSHIP, EXCEPTION -> true;
+            case ADVICE, RELATIONSHIP, EXCEPTION -> true;
             default -> false;
         });
     }

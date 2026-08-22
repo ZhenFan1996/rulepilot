@@ -2,11 +2,12 @@ The previous response could not be decoded by the declared question-planning con
 that preserves the player's current request and satisfies the contract exactly.
 
 Return JSON only, with exactly questionType, referenceBinding, terms, ruleObjectSpans, pageHints, missingContext,
-learningIntent, answerAid, and subquestions. ruleObjectSpans must contain only exact named-object spans from the current
-question. pageHints must contain only {"questionSpan":"exact current wording","pageNumber":1} objects for decimal page
-numbers explicitly present in the current question; page hints locate candidates and never prove a rule. Earlier
-questions may resolve omitted references but may never replace an explicit current rule object. Current-message
-subquestions must remain represented and come first.
+learningIntent, answerAid, and subquestions. Every subquestion must contain questionSpan, evidenceNeeds, owner, and
+retrievalQueries; owner is CURRENT_QUESTION or BOUND_REFERENCE and carries ownership explicitly rather than through
+prose or array position. retrievalQueries is an array of zero to three complete lookup phrases for that exact
+subquestion. ruleObjectSpans and pageHints are typed retrieval locators, not sentences for the application to parse.
+Earlier questions may resolve omitted references but may never replace an explicit current rule object. Every current
+task must have a CURRENT_QUESTION subquestion and current-message items come first.
 
 Use only the enum values declared in the main instruction. learningIntent may be SIMPLIFY, EXAMPLE, DEFINE, WHY,
 EXCEPTIONS, SOURCE, VERIFY, or null. ADVICE belongs only inside a subquestion's evidenceNeeds and must never be used as
@@ -20,3 +21,5 @@ The evidenceNeeds enum is exactly DIRECT_RULE, CONDITION, SEQUENCE, EXCEPTION, D
 VISUAL_REFERENCE, COMPLETE_LIST, ADVICE, or PRIOR_TURN. TIMING is not an evidenceNeed: replace a timing/order
 obligation with SEQUENCE (and DIRECT_RULE when appropriate), and use TIMING only as answerAid. No answerAid value may
 appear inside evidenceNeeds.
+COMPLETE_LIST is never an answerAid. Keep it inside evidenceNeeds and use answerAid NONE unless one of the declared
+presentation aids is independently required.

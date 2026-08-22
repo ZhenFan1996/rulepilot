@@ -25,6 +25,8 @@ import com.rulepilot.assistant.PlayerLocale;
 import com.rulepilot.assistant.QuestionUnderstanding.QuestionContext;
 import com.rulepilot.assistant.RuleAnswerModel;
 import com.rulepilot.assistant.RuleAnswerModel.AnswerAid;
+import com.rulepilot.assistant.RuleAnswerModel.CalculationOperandRequest;
+import com.rulepilot.assistant.RuleAnswerModel.CalculationOperandSource;
 import com.rulepilot.assistant.RuleAnswerModel.CalculationRequest;
 import com.rulepilot.assistant.RuleAnswerModel.EvidenceNeed;
 import com.rulepilot.assistant.RuleAnswerModel.ModelDraft;
@@ -53,6 +55,7 @@ import com.rulepilot.retrieval.evidence.RuleEvidenceHit;
 import com.rulepilot.ruling.ConfirmedRulingLookup;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.micrometer.observation.ObservationRegistry;
+import java.math.BigDecimal;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -218,7 +221,7 @@ class StructuredRuleAnswerServiceTest {
     }
 
     @Test
-    void preservesRetrievedSourcesWhenTheModelAbstainsAfterOneReconsideration() {
+    void preservesRetrievedSourcesWhenTheModelAbstainsWithoutRegeneratingItsDecision() {
         RuleEvidenceHit source = source("Each coin scores one point.");
         AtomicInteger modelCalls = new AtomicInteger();
         RuleAnswerModel model = request -> {
@@ -232,7 +235,7 @@ class StructuredRuleAnswerServiceTest {
         assertThat(answer.status()).isEqualTo(AnswerStatus.INSUFFICIENT_EVIDENCE);
         assertThat(answer.citations()).extracting(citation -> citation.chunkId())
                 .containsExactly(source.chunkId());
-        assertThat(modelCalls).hasValue(2);
+        assertThat(modelCalls).hasValue(1);
     }
 
     @Test
@@ -251,8 +254,30 @@ class StructuredRuleAnswerServiceTest {
                             List.of(source.chunkId()),
                             List.of(),
                             "HIGH",
-                            "DIRECT_RULE",
-                            List.of(new CalculationRequest("floor(8 / 3) * 5")));
+                            "GROUNDED_APPLICATION",
+                            List.of(new CalculationRequest(
+                                    "floor(8 / 3) * 5",
+                                    new BigDecimal("10"),
+                                    "points",
+                                    List.of(
+                                            new CalculationOperandRequest(
+                                                    "available resources",
+                                                    new BigDecimal("8"),
+                                                    CalculationOperandSource.QUESTION,
+                                                    "8 resources",
+                                                    null),
+                                            new CalculationOperandRequest(
+                                                    "resources per set",
+                                                    new BigDecimal("3"),
+                                                    CalculationOperandSource.EVIDENCE,
+                                                    "set of 3 resources",
+                                                    source.chunkId()),
+                                            new CalculationOperandRequest(
+                                                    "points per set",
+                                                    new BigDecimal("5"),
+                                                    CalculationOperandSource.EVIDENCE,
+                                                    "5 points",
+                                                    source.chunkId())))));
                 });
 
         StructuredRuleAnswer answer = service(search(source), model).answer(
@@ -323,7 +348,7 @@ class StructuredRuleAnswerServiceTest {
     }
 
     @Test
-    void isolatesAMalformedSelectedPresentationAidWithoutChangingTheCitedCore() {
+    void rejectsAMalformedSelectedPresentationAidInsteadOfPublishingOnlyItsProse() {
         RuleEvidenceHit source = source("Pay the cost before resolving the effect.");
         AtomicInteger revisions = new AtomicInteger();
         String verdict = "Pay first, then resolve.";
@@ -352,9 +377,10 @@ class StructuredRuleAnswerServiceTest {
         StructuredRuleAnswer answer = service(search(source), model).answer(
                 "How do I pay the cost before resolving the effect?", new QuestionContext(versionId));
 
-        assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
-        assertThat(answer.shortVerdict()).isEqualTo(verdict);
-        assertThat(answer.explanation()).isEqualTo(explanation);
+        assertThat(answer.status()).isEqualTo(AnswerStatus.INVALID_MODEL_OUTPUT);
+        assertThat(answer.shortVerdict()).contains("结构");
+        assertThat(answer.shortVerdict()).doesNotContain(verdict);
+        assertThat(answer.explanation()).contains("结构").doesNotContain(explanation);
         assertThat(answer.walkthroughSteps()).isEmpty();
         assertThat(revisions).hasValue(0);
     }
@@ -403,7 +429,7 @@ class StructuredRuleAnswerServiceTest {
     }
 
     @Test
-    void preservesTheValidatedCoreAndDropsAnUnselectedMalformedAidWithoutRevision() {
+    void rejectsAnUnselectedMalformedAidInsteadOfSilentlyDeletingIt() {
         RuleEvidenceHit source = source("The active player may move one space.");
         AtomicInteger revisions = new AtomicInteger();
         String explanation = "The cited rule grants one move and states the limit directly.";
@@ -441,9 +467,10 @@ class StructuredRuleAnswerServiceTest {
         StructuredRuleAnswer answer = service(search(source), model).answer(
                 "How far may the active player move?", new QuestionContext(versionId));
 
-        assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
-        assertThat(answer.shortVerdict()).isEqualTo("You may move one space.");
-        assertThat(answer.explanation()).isEqualTo(explanation);
+        assertThat(answer.status()).isEqualTo(AnswerStatus.INVALID_MODEL_OUTPUT);
+        assertThat(answer.shortVerdict()).contains("结构");
+        assertThat(answer.shortVerdict()).doesNotContain("You may move one space.");
+        assertThat(answer.explanation()).contains("结构").doesNotContain(explanation);
         assertThat(answer.walkthroughSteps()).isEmpty();
         assertThat(revisions).hasValue(0);
     }
@@ -515,23 +542,64 @@ class StructuredRuleAnswerServiceTest {
     }
 
     @Test
-    void skipsSemanticInterpretationOnlyForSelfContainedQuantityQuestions() {
-        assertThat(StructuredRuleAnswerService.requiresSemanticQuestionInterpretation(
-                        "How many cards does each player draw?",
-                        new QuestionContext(versionId, null, null, PlayerLocale.EN)))
-                .isFalse();
-        assertThat(StructuredRuleAnswerService.requiresSemanticQuestionInterpretation(
-                        "每名玩家抓几张牌？",
-                        new QuestionContext(versionId, null, null, PlayerLocale.ZH_CN)))
-                .isFalse();
-        assertThat(StructuredRuleAnswerService.requiresSemanticQuestionInterpretation(
-                        "How many points is this worth?",
-                        new QuestionContext(versionId, null, null, PlayerLocale.EN)))
-                .isTrue();
-        assertThat(StructuredRuleAnswerService.requiresSemanticQuestionInterpretation(
-                        "How many cards does each player draw?",
-                        new QuestionContext(versionId, "What happens during setup?", null, PlayerLocale.EN)))
-                .isTrue();
+    void rejectsAnInvalidStructuredQuestionInterpretationInsteadOfGuessingRetrievalFields() {
+        AtomicBoolean retrievalCalled = new AtomicBoolean();
+        AtomicInteger composeCalls = new AtomicInteger();
+        RuleAnswerModel model = new RuleAnswerModel() {
+            @Override
+            public ModelDraft compose(ModelRequest request) {
+                composeCalls.incrementAndGet();
+                return null;
+            }
+
+            @Override
+            public boolean supportsQuestionInterpretation() {
+                return true;
+            }
+
+            @Override
+            public Optional<QuestionInterpretationDraft> interpretQuestion(QuestionInterpretationRequest request) {
+                return Optional.empty();
+            }
+        };
+        StructuredRuleAnswer answer = service((version, query, options) -> {
+            retrievalCalled.set(true);
+            return List.of();
+        }, model).answer("When does this resolve?", new QuestionContext(versionId, null, null, PlayerLocale.EN));
+
+        assertThat(answer.status()).isEqualTo(AnswerStatus.INVALID_MODEL_OUTPUT);
+        assertThat(answer.shortVerdict()).contains("required structure");
+        assertThat(retrievalCalled).isFalse();
+        assertThat(composeCalls).hasValue(0);
+    }
+
+    @Test
+    void reportsQuestionInterpretationTimeoutWithoutContinuingWithGuessedFields() {
+        AtomicBoolean retrievalCalled = new AtomicBoolean();
+        RuleAnswerModel model = new RuleAnswerModel() {
+            @Override
+            public ModelDraft compose(ModelRequest request) {
+                throw new AssertionError("composition must not run after interpretation timeout");
+            }
+
+            @Override
+            public boolean supportsQuestionInterpretation() {
+                return true;
+            }
+
+            @Override
+            public Optional<QuestionInterpretationDraft> interpretQuestion(QuestionInterpretationRequest request) {
+                throw new RuleAnswerModelTimeoutException("timed out", new java.util.concurrent.TimeoutException());
+            }
+        };
+        StructuredRuleAnswer answer = service((version, query, options) -> {
+            retrievalCalled.set(true);
+            return List.of();
+        }, model).answer("When does this resolve?", new QuestionContext(versionId, null, null, PlayerLocale.EN));
+
+        assertThat(answer.status()).isEqualTo(AnswerStatus.MODEL_TIMEOUT);
+        assertThat(answer.shortVerdict()).contains("in time");
+        assertThat(retrievalCalled).isFalse();
     }
 
     @Test
@@ -609,7 +677,8 @@ class StructuredRuleAnswerServiceTest {
                 "The cited panel does not state the claimed return rule.")));
 
         StructuredRuleAnswer answer = service(search(source), model, critic).answer(
-                "Does the cobalt spindle return now?", new QuestionContext(versionId));
+                "Does the cobalt spindle return now?",
+                new QuestionContext(versionId, null, null, PlayerLocale.EN));
 
         assertThat(answer.status()).isEqualTo(AnswerStatus.INSUFFICIENT_EVIDENCE);
         assertThat(answer.shortVerdict()).contains("generated conclusion could not be verified by its own citations");
@@ -649,7 +718,7 @@ class StructuredRuleAnswerServiceTest {
         assertThat(second).isEqualTo(first);
         assertThat(modelCalls).hasValue(1);
         assertThat(criticCalls).hasValue(1);
-        assertThat(retrievalCalls).hasValue(2);
+        assertThat(retrievalCalls).hasValue(1);
     }
 
     @Test
@@ -826,7 +895,15 @@ class StructuredRuleAnswerServiceTest {
     }
 
     private ModelDraft draft(RuleEvidenceHit source, String verdict, String explanation) {
-        return new ModelDraft(verdict, explanation, List.of(source.chunkId()), List.of(), "HIGH");
+        return new ModelDraft(
+                true,
+                null,
+                verdict,
+                explanation,
+                List.of(source.chunkId()),
+                List.of(),
+                "HIGH",
+                "DIRECT_RULE");
     }
 
     private HybridRuleSearch search(RuleEvidenceHit source) {

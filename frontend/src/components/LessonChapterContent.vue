@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { useLocale } from '@/lib/locale'
+import LessonRuleFacts, { type LessonRuleFact } from '@/components/LessonRuleFacts.vue'
 
 interface VisualFocus {
   pageNumber: number
@@ -14,8 +15,9 @@ interface VisualFocus {
 interface ReaderStep {
   position: number
   heading: string
-  kind: 'UNDERSTAND' | 'DO' | 'EXAMPLE' | 'WATCH' | 'CHECK' | 'VISUAL' | 'FLOW' | 'LEDGER'
+  kind: 'UNDERSTAND' | 'DO' | 'EXAMPLE' | 'WATCH' | 'CHECK' | 'VISUAL' | 'FLOW' | 'LEDGER' | 'REFERENCE_CARD' | 'LIMIT'
   text: string
+  ruleFacts?: LessonRuleFact[]
   sourcePages: number[]
   visualFocus: VisualFocus | null
 }
@@ -69,6 +71,8 @@ function moveLabel(kind: ReaderStep['kind'] | undefined) {
     case 'VISUAL': return t('lesson.chapter.move.visual')
     case 'FLOW': return t('lesson.chapter.move.flow')
     case 'LEDGER': return t('lesson.chapter.move.ledger')
+    case 'REFERENCE_CARD': return t('lesson.chapter.move.referenceCard')
+    case 'LIMIT': return t('lesson.chapter.move.limit')
   }
 }
 
@@ -88,6 +92,7 @@ function pageList(pages: number[]) {
         <p class="text-xs font-semibold uppercase tracking-[0.16em] text-copper">{{ t('lesson.chapter.core') }}</p>
         <h3 id="chapter-core-title" class="mt-2 font-display text-xl font-semibold leading-7 sm:text-2xl sm:leading-8">{{ leadStep.heading || section.title }}</h3>
         <p class="mt-3 text-sm leading-6 text-panel-text/80 sm:text-base sm:leading-8">{{ leadStep.text }}</p>
+        <LessonRuleFacts v-if="leadStep.ruleFacts?.length" :facts="leadStep.ruleFacts" />
         <figure v-if="leadStep.visualFocus" class="mt-5 overflow-hidden rounded-xl border border-panel-text/15 bg-canvas text-ink sm:max-w-2xl">
           <figcaption class="border-b border-ink/10 bg-indigo/[0.045] px-3 py-2">
             <p class="text-xs font-bold uppercase tracking-[0.12em] text-indigo">{{ t('lesson.chapter.visual.observationEyebrow') }}</p>
@@ -128,6 +133,7 @@ function pageList(pages: number[]) {
               <div v-if="step.kind === 'VISUAL' && step.visualFocus" class="mt-4 min-w-0" data-testid="lesson-visual-step">
                 <div>
                   <p class="max-w-3xl text-[0.95rem] leading-7 text-ink/72">{{ step.text }}</p>
+                  <LessonRuleFacts v-if="step.ruleFacts?.length" :facts="step.ruleFacts" />
                   <a :href="pageImageUrl(step.visualFocus.pageNumber)" target="_blank" rel="noopener" class="mt-2 inline-flex text-xs font-semibold text-indigo hover:underline">{{ t('lesson.chapter.visual.openContext', { page: step.visualFocus.pageNumber }) }} ↗</a>
                 </div>
                 <figure class="mt-4 max-w-3xl overflow-hidden rounded-xl border border-indigo/15 bg-canvas">
@@ -150,6 +156,7 @@ function pageList(pages: number[]) {
               </div>
               <template v-else>
                 <p class="mt-2 text-[0.95rem] leading-7 text-ink/72">{{ step.text }}</p>
+                <LessonRuleFacts v-if="step.ruleFacts?.length" :facts="step.ruleFacts" />
                 <a v-if="stepSourceLabel(step)" :href="pageImageUrl(step.sourcePages[0]!)" target="_blank" rel="noopener" class="mt-2 inline-flex text-xs font-semibold text-indigo hover:underline">{{ stepSourceLabel(step) }} ↗</a>
               </template>
             </div>
@@ -165,6 +172,7 @@ function pageList(pages: number[]) {
             <p class="text-xs font-bold" :class="step.kind === 'WATCH' ? 'text-amber-900' : 'text-emerald-800'">{{ moveLabel(step.kind) }}</p>
             <h4 class="mt-1 font-display text-lg font-semibold leading-6">{{ step.heading }}</h4>
             <p class="mt-2 text-sm leading-6 text-ink/70">{{ step.text }}</p>
+            <LessonRuleFacts v-if="step.ruleFacts?.length" :facts="step.ruleFacts" />
             <a v-if="stepSourceLabel(step)" :href="pageImageUrl(step.sourcePages[0]!)" target="_blank" rel="noopener" class="mt-2 inline-flex text-xs font-semibold text-indigo">{{ stepSourceLabel(step) }} ↗</a>
           </article>
         </div>
@@ -176,6 +184,7 @@ function pageList(pages: number[]) {
         <article v-for="step in checkSteps" :key="step.position" class="mt-4 border-t border-copper/15 pt-4 first:mt-3">
           <h4 class="font-semibold">{{ step.heading }}</h4>
           <p class="mt-2 text-sm leading-7 text-ink/70">{{ step.text }}</p>
+          <LessonRuleFacts v-if="step.ruleFacts?.length" :facts="step.ruleFacts" />
           <a v-if="stepSourceLabel(step)" :href="pageImageUrl(step.sourcePages[0]!)" target="_blank" rel="noopener" class="mt-2 inline-flex text-xs font-semibold text-indigo">{{ t('lesson.chapter.checkSource', { pages: pageList(step.sourcePages) }) }} ↗</a>
         </article>
       </section>

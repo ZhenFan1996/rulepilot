@@ -3,6 +3,7 @@ package com.rulepilot.teaching.adapter.out.persistence;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.SourceDependency;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.RuleGroupFact;
 import com.rulepilot.teaching.VisualRulebookPageFacts.PageFact;
 import com.rulepilot.retrieval.VisualRulebookPageFactSearch.RuleFactStatus;
 import jakarta.persistence.EntityManager;
@@ -78,7 +79,9 @@ class JpaVisualRulebookPageFactsPostgresTest {
                 PageFact.CURRENT_SCHEMA_VERSION,
                 List.of(dependency),
                 List.of("PLAY A CARD"),
-                true);
+                true,
+                List.of(new RuleGroupFact(
+                        "PLAY A CARD", "PLAY A CARD", "当前页明确指向另一份开局资料。")));
 
         inTransaction(repository -> {
             repository.replace(documentVersionId, List.of(fact));
@@ -115,7 +118,9 @@ class JpaVisualRulebookPageFactsPostgresTest {
                 PageFact.CURRENT_SCHEMA_VERSION,
                 List.of(),
                 List.of("TURN"),
-                true);
+                true,
+                List.of(new RuleGroupFact(
+                        "TURN", "TURN", "This current observation may be used to locate source evidence.")));
 
         inTransaction(repository -> {
             repository.replace(documentVersionId, List.of(stale, current));

@@ -1,72 +1,53 @@
 package com.rulepilot.teaching.adapter.out.model;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rulepilot.teaching.VisualRegionLocator.Diagnostic;
 import com.rulepilot.teaching.application.VisualRegionCandidateSelector.Candidate;
 import java.util.LinkedHashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
-/** Deterministic parsing and recovery rules for untrusted visual-locator model responses. */
+/** Strict schema admission for untrusted visual-locator model responses. */
 final class VisualLocatorResponsePolicy {
 
-    private static final ObjectMapper JSON = new ObjectMapper();
+    private static final ObjectMapper JSON = new ObjectMapper()
+            .enable(JsonParser.Feature.STRICT_DUPLICATE_DETECTION)
+            .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
 
     private VisualLocatorResponsePolicy() {}
 
     static boolean isExplicitNoRegion(String content) {
-        return content != null && (content.strip().equals("null") || content.strip().equals("{}"));
+        return parseModelGuide(content).map(guide -> guide.regions().isEmpty()).orElse(false);
     }
 
     static String retryInstruction(Rejection rejection) {
         return switch (rejection) {
             case EXPLICIT_NO_REGION -> "";
-            case MALFORMED_JSON -> "The previous response was not a readable JSON object. Return one JSON object only, or an empty JSON object when no crop is useful.";
+            case MALFORMED_JSON -> "The previous response did not match the exact JSON contract. Return one object with a regions array; use {\"regions\":[]} when no crop is useful.";
             case UNSUPPORTED_SCOPE -> "The previous response used an unavailable page or claim reference. Use only the supplied page numbers and C1, C2, etc. claim references; the crop page must be a sourcePage for the cited claim.";
             case INVALID_GEOMETRY -> "The previous rectangle was outside the page. Return a new JSON candidate only after verifying x + width <= 1000 and y + height <= 1000.";
-            case NON_CHINESE_OBSERVATION -> "The previous label or visibleDescription was not natural Simplified Chinese. Reinspect the page and return Chinese names for literal visible objects only. Verify that the crop itself visibly contains the object or relationship needed for the claim; otherwise return an empty JSON object.";
             case NONE -> "";
         };
-    }
-
-    static boolean containsChinese(String value) {
-        return value != null && value.codePoints().anyMatch(codePoint ->
-                Character.UnicodeScript.of(codePoint) == Character.UnicodeScript.HAN);
-    }
-
-    static Optional<ModelRegion> parseModelRegion(String content) {
-        return parseModelGuide(content).flatMap(guide -> guide.regions().stream().findFirst());
     }
 
     static Optional<ModelGuide> parseModelGuide(String content) {
         if (content == null || content.isBlank()) return Optional.empty();
         String json = content.strip();
-        if (json.startsWith("```")) {
-            int firstLineEnd = json.indexOf('\n');
-            int closingFence = json.lastIndexOf("```");
-            if (firstLineEnd < 0 || closingFence <= firstLineEnd) return Optional.empty();
-            json = json.substring(firstLineEnd + 1, closingFence).strip();
-        }
-        if (json.equals("null")) return Optional.empty();
-        int objectStart = json.indexOf('{');
-        int objectEnd = json.lastIndexOf('}');
-        if (objectStart < 0 || objectEnd <= objectStart) return Optional.empty();
-        json = json.substring(objectStart, objectEnd + 1);
         try {
             JsonNode root = JSON.readTree(json);
-            if (!root.isObject()) return Optional.empty();
+            if (!root.isObject() || root.size() != 1 || !root.has("regions")) return Optional.empty();
             JsonNode regions = root.get("regions");
-            if (regions == null) {
-                return Optional.ofNullable(JSON.treeToValue(root, ModelRegion.class))
-                        .map(region -> new ModelGuide(List.of(region)));
-            }
-            if (!regions.isArray()) return Optional.empty();
+            if (!regions.isArray() || regions.size() > 2) return Optional.empty();
             List<ModelRegion> parsed = new java.util.ArrayList<>();
             for (JsonNode region : regions) {
+                if (!hasExactRegionShape(region)) return Optional.empty();
                 ModelRegion parsedRegion = JSON.treeToValue(region, ModelRegion.class);
                 if (parsedRegion != null) parsed.add(parsedRegion);
             }
@@ -76,24 +57,67 @@ final class VisualLocatorResponsePolicy {
         }
     }
 
+    private static boolean hasExactRegionShape(JsonNode region) {
+        if (region == null || !region.isObject() || region.size() != 8) return false;
+        if (!(integral(region, "pageNumber")
+                && nonBlankText(region, "label")
+                && nonBlankText(region, "visibleDescription")
+                && integral(region, "x")
+                && integral(region, "y")
+                && integral(region, "width")
+                && integral(region, "height")
+                && textArray(region, "supportedClaimRefs"))) return false;
+        int pageNumber = region.get("pageNumber").intValue();
+        int x = region.get("x").intValue();
+        int y = region.get("y").intValue();
+        int width = region.get("width").intValue();
+        int height = region.get("height").intValue();
+        return pageNumber >= 1
+                && region.get("label").textValue().strip().length() <= 80
+                && region.get("visibleDescription").textValue().strip().length() <= 240
+                && x >= 0
+                && y >= 0
+                && width >= 20
+                && height >= 20
+                && x + width <= 1_000
+                && y + height <= 1_000;
+    }
+
+    private static boolean integral(JsonNode object, String field) {
+        return object.has(field) && object.get(field).isIntegralNumber();
+    }
+
+    private static boolean nonBlankText(JsonNode object, String field) {
+        return object.has(field) && object.get(field).isTextual() && !object.get(field).asText().isBlank();
+    }
+
+    private static boolean textArray(JsonNode object, String field) {
+        if (!object.has(field) || !object.get(field).isArray()) return false;
+        Set<String> unique = new LinkedHashSet<>();
+        for (JsonNode value : object.get(field)) {
+            if (!value.isTextual() || value.asText().isBlank() || !unique.add(value.asText())) return false;
+        }
+        return !unique.isEmpty();
+    }
+
     static Optional<CropReview> cropReview(String content, Set<String> offeredReferences) {
         if (content == null || content.isBlank() || offeredReferences == null || offeredReferences.isEmpty()) {
             return Optional.empty();
         }
         String json = content.strip();
-        int objectStart = json.indexOf('{');
-        int objectEnd = json.lastIndexOf('}');
-        if (objectStart < 0 || objectEnd <= objectStart) return Optional.empty();
         try {
-            JsonNode root = JSON.readTree(json.substring(objectStart, objectEnd + 1));
-            JsonNode accepted = root.path("acceptedCropRefs");
+            JsonNode root = JSON.readTree(json);
+            if (root == null
+                    || !root.isObject()
+                    || root.size() != 2
+                    || !root.has("acceptedCropRefs")
+                    || !root.has("contradictedCropRefs")) return Optional.empty();
+            JsonNode accepted = root.get("acceptedCropRefs");
             if (!accepted.isArray()) return Optional.empty();
-            JsonNode contradicted = root.path("contradictedCropRefs");
-            if (!contradicted.isMissingNode() && !contradicted.isArray()) return Optional.empty();
+            JsonNode contradicted = root.get("contradictedCropRefs");
+            if (!contradicted.isArray()) return Optional.empty();
             Set<String> acceptedReferences = offeredReferences(accepted, offeredReferences);
-            Set<String> contradictedReferences = contradicted.isMissingNode()
-                    ? Set.of()
-                    : offeredReferences(contradicted, offeredReferences);
+            Set<String> contradictedReferences = offeredReferences(contradicted, offeredReferences);
             if (acceptedReferences == null
                     || contradictedReferences == null
                     || acceptedReferences.stream().anyMatch(contradictedReferences::contains)) {
@@ -112,8 +136,9 @@ final class VisualLocatorResponsePolicy {
     private static Set<String> offeredReferences(JsonNode values, Set<String> offeredReferences) {
         Set<String> references = new LinkedHashSet<>();
         for (JsonNode reference : values) {
-            if (!reference.isTextual() || !offeredReferences.contains(reference.asText())) return null;
-            references.add(reference.asText());
+            if (!reference.isTextual()
+                    || !offeredReferences.contains(reference.asText())
+                    || !references.add(reference.asText())) return null;
         }
         return Set.copyOf(references);
     }
@@ -127,17 +152,26 @@ final class VisualLocatorResponsePolicy {
 
     /** Avoid feeding Qwen extracted prose or a full-page rectangle it may mechanically repeat as its crop. */
     static List<Map<String, Object>> candidatePromptPayload(List<Candidate> candidates, boolean compactForQwen) {
-        if (!compactForQwen) {
-            return candidates.stream().map(candidate -> Map.<String, Object>of(
-                            "pageNumber", candidate.pageNumber(),
-                            "rectangle", candidate.rectangle(),
-                            "sourceText", candidate.sourceText()))
-                    .toList();
+        return candidates.stream().map(candidate -> candidatePromptPayload(candidate, compactForQwen)).toList();
+    }
+
+    private static Map<String, Object> candidatePromptPayload(Candidate candidate, boolean compactForQwen) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("pageNumber", candidate.pageNumber());
+        payload.put("candidateKind", candidate.kind().name());
+        if (!compactForQwen) payload.put("allowedRectangle", candidate.rectangle());
+        if (candidate.catalogedAnchor() != null) {
+            payload.put("catalogedAnchor", Map.of(
+                    "anchorKind", candidate.catalogedAnchor().kind(),
+                    "label", candidate.catalogedAnchor().label(),
+                    "visibleDescription", candidate.catalogedAnchor().visibleDescription(),
+                    "rectangle", Map.of(
+                            "x", candidate.catalogedAnchor().x(),
+                            "y", candidate.catalogedAnchor().y(),
+                            "width", candidate.catalogedAnchor().width(),
+                            "height", candidate.catalogedAnchor().height())));
         }
-        return candidates.stream().map(candidate -> Map.<String, Object>of(
-                        "pageNumber", candidate.pageNumber(),
-                        "hint", visualHint(candidate.sourceText())))
-                .toList();
+        return Map.copyOf(payload);
     }
 
     static Diagnostic diagnosticFor(Rejection rejection) {
@@ -147,13 +181,7 @@ final class VisualLocatorResponsePolicy {
             case MALFORMED_JSON -> Diagnostic.MALFORMED_RESPONSE;
             case UNSUPPORTED_SCOPE -> Diagnostic.UNSUPPORTED_SCOPE;
             case INVALID_GEOMETRY -> Diagnostic.INVALID_GEOMETRY;
-            case NON_CHINESE_OBSERVATION -> Diagnostic.NON_CHINESE_OBSERVATION;
         };
-    }
-
-    private static String visualHint(String sourceText) {
-        String normalized = sourceText == null ? "" : sourceText.strip();
-        return normalized.startsWith("Cataloged visual anchor") ? "cataloged visual anchor" : "page visual context";
     }
 
     record ModelRegion(
@@ -166,14 +194,16 @@ final class VisualLocatorResponsePolicy {
             int height,
             List<String> supportedClaimRefs) {
         ModelRegion {
-            visibleDescription = visibleDescription == null ? "" : visibleDescription;
-            supportedClaimRefs = supportedClaimRefs == null ? List.of() : List.copyOf(supportedClaimRefs);
+            supportedClaimRefs = List.copyOf(supportedClaimRefs);
         }
     }
 
     record ModelGuide(List<ModelRegion> regions) {
         ModelGuide {
-            regions = regions == null ? List.of() : List.copyOf(regions.stream().limit(2).toList());
+            if (regions == null || regions.size() > 2) {
+                throw new IllegalArgumentException("visual guide must contain at most two structured regions");
+            }
+            regions = List.copyOf(regions);
         }
     }
 
@@ -182,7 +212,6 @@ final class VisualLocatorResponsePolicy {
         EXPLICIT_NO_REGION,
         MALFORMED_JSON,
         UNSUPPORTED_SCOPE,
-        INVALID_GEOMETRY,
-        NON_CHINESE_OBSERVATION
+        INVALID_GEOMETRY
     }
 }

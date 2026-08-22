@@ -191,7 +191,7 @@ class VisualRulebookCataloger {
                 .collect(Collectors.toCollection(LinkedHashSet::new));
         if (!pagesToInspect.isEmpty()) {
             List<PageFact> inspected =
-                    catalogPageFacts(documentVersionId, pagesToInspect, rulebookTitle, owner, assistantRunId, true, cached);
+                    catalogPageFacts(documentVersionId, pagesToInspect, rulebookTitle, owner, assistantRunId, true);
             if (!inspected.isEmpty()) visualFacts.merge(documentVersionId, inspected);
         }
         return visualFacts.find(documentVersionId, requestedPages).stream()
@@ -446,18 +446,6 @@ class VisualRulebookCataloger {
             String owner,
             UUID assistantRunId,
             boolean allowTileFallback) {
-        return catalogPageFacts(
-                documentVersionId, pageNumbers, rulebookTitle, owner, assistantRunId, allowTileFallback, List.of());
-    }
-
-    private List<PageFact> catalogPageFacts(
-            UUID documentVersionId,
-            Set<Integer> pageNumbers,
-            String rulebookTitle,
-            String owner,
-            UUID assistantRunId,
-            boolean allowTileFallback,
-            List<PageFact> referenceFacts) {
         List<Integer> orderedPages = pageNumbers.stream().sorted().toList();
         // A legend must not be bundled with a gameplay page. Vision providers occasionally return a valid summary
         // for only one of two supplied images; treating that partial response as an all-or-nothing pair discarded
@@ -512,211 +500,10 @@ class VisualRulebookCataloger {
                 .values().stream()
                 .filter(summary -> pageNumbers.contains(summary.pageNumber()))
                 .toList();
-        consolidated = enrichPrintedIdentifierCells(
-                documentVersionId, consolidated, owner, assistantRunId, referenceFacts);
         persistCompletedFacts(documentVersionId, consolidated);
         return visualFacts.find(documentVersionId, pageNumbers).stream()
                 .filter(fact -> fact.schemaVersion() == PageFact.CURRENT_SCHEMA_VERSION)
                 .toList();
-    }
-
-    private List<VisualRulebookPageCatalogModel.PageSummary> enrichPrintedIdentifierCells(
-            UUID documentVersionId,
-            List<VisualRulebookPageCatalogModel.PageSummary> summaries,
-            String owner,
-            UUID assistantRunId,
-            List<PageFact> referenceFacts) {
-        List<VisualRulebookPageCatalogModel.PageSummary> enriched = new ArrayList<>();
-        for (var summary : summaries) {
-            List<String> identifiers = PrintedIdentifierCellPolicy.identifiers(
-                    summary.printedTerms() + "\n" + summary.factualSummary());
-            if (identifiers.isEmpty()) {
-                enriched.add(summary);
-                continue;
-            }
-            Optional<PageImage> source = pageImages.read(documentVersionId, Set.of(summary.pageNumber())).stream()
-                    .filter(page -> page.pageNumber() == summary.pageNumber())
-                    .findFirst();
-            if (source.isEmpty()) {
-                enriched.add(summary);
-                continue;
-            }
-            try {
-                var pageInput = new PageImageInput(
-                        source.get().pageNumber(), source.get().mediaType(), source.get().content());
-                var localizationRequest = new VisualRulebookPageCatalogModel.IdentifierLocalizationRequest(
-                        pageInput, identifiers, owner);
-                var localized = invokeModel(
-                        assistantRunId,
-                        "locateRulebookPrintedIdentifiers|" + summary.pageNumber(),
-                        900,
-                        "Printed catalog identifiers localized",
-                        () -> visualCatalog.locateIdentifiers(localizationRequest),
-                        result -> Math.max(1, result.locations().size() * 8));
-                var verified = PrintedIdentifierCellPolicy.verifiedLocations(identifiers, localized.locations());
-                var cells = PrintedIdentifierCellPolicy.cells(source.get(), verified);
-                if (cells.size() < 4) {
-                    enriched.add(summary);
-                    continue;
-                }
-                List<VisualRulebookPageCatalogModel.IdentifierCellFact> facts = new ArrayList<>();
-                List<VisualRulebookPageCatalogModel.IdentifierReferencePage> referencePages = identifierReferencePages(
-                        documentVersionId, summary, referenceFacts);
-                List<String> allowedReferenceLabels = referencePages.isEmpty()
-                        ? List.of()
-                        : referenceFacts.stream()
-                                .filter(fact -> fact.pageNumber() == referencePages.getFirst().image().pageNumber())
-                                .flatMap(fact -> fact.iconOccurrences().stream())
-                                .filter(icon -> icon.meaningStatus()
-                                        != com.rulepilot.teaching.VisualRulebookPageFacts.IconMeaningStatus.UNEXPLAINED)
-                                .map(icon -> icon.verifiedVisualLabel().isBlank()
-                                        ? icon.name()
-                                        : icon.verifiedVisualLabel())
-                                .filter(label -> label != null && !label.isBlank())
-                                .distinct()
-                                .toList();
-                int cellBatchSize = referencePages.isEmpty() ? 4 : 1;
-                for (int start = 0; start < cells.size(); start += cellBatchSize) {
-                    List<VisualRulebookPageCatalogModel.IdentifierCellInput> batch =
-                            cells.subList(start, Math.min(start + cellBatchSize, cells.size()));
-                    var request = new VisualRulebookPageCatalogModel.IdentifierCellRequest(
-                            batch, referencePages, owner);
-                    int batchNumber = start / cellBatchSize + 1;
-                    var draft = invokeModel(
-                            assistantRunId,
-                            "readRulebookIdentifierCells|" + summary.pageNumber() + "|" + batchNumber,
-                            batch.size() * 350,
-                            "Printed catalog cells interpreted",
-                            () -> visualCatalog.summarizeIdentifierCells(request),
-                            result -> Math.max(1, result.facts().stream()
-                                    .mapToInt(fact -> fact.factualSummary().length()).sum() / 4));
-                    for (var fact : draft.facts()) {
-                        if (referencePages.isEmpty() || allowedReferenceLabels.size() < 2 || batch.size() != 1) {
-                            facts.add(fact);
-                            continue;
-                        }
-                        var verificationRequest = new VisualRulebookPageCatalogModel.IdentifierCellVerificationRequest(
-                                batch.getFirst(),
-                                referencePages.getFirst(),
-                                allowedReferenceLabels,
-                                fact.factualSummary(),
-                                owner);
-                        try {
-                            var verifiedFact = invokeModel(
-                                    assistantRunId,
-                                    "verifyRulebookIdentifierCell|" + summary.pageNumber() + "|" + batchNumber,
-                                    420,
-                                    "Printed catalog cell pictogram checked against reference page "
-                                            + referencePages.getFirst().image().pageNumber()
-                                            + " labels " + allowedReferenceLabels,
-                                    () -> visualCatalog.verifyIdentifierCell(verificationRequest),
-                                    result -> Math.max(1, result.factualSummary().length() / 4));
-                            String verifiedSummary = "NONE".equals(verifiedFact.matchedLabel())
-                                    ? fact.factualSummary()
-                                    : verifiedFact.factualSummary();
-                            facts.add(new VisualRulebookPageCatalogModel.IdentifierCellFact(
-                                    fact.identifier(), verifiedSummary));
-                        } catch (RuntimeException rejectedVerification) {
-                            try {
-                                var retried = invokeModel(
-                                        assistantRunId,
-                                        "verifyRulebookIdentifierCell|" + summary.pageNumber() + "|" + batchNumber + "|retry",
-                                        420,
-                                        "Printed catalog cell pictogram reference check retried",
-                                        () -> visualCatalog.verifyIdentifierCell(verificationRequest),
-                                        result -> Math.max(1, result.factualSummary().length() / 4));
-                                String retriedSummary = "NONE".equals(retried.matchedLabel())
-                                        ? fact.factualSummary()
-                                        : retried.factualSummary();
-                                facts.add(new VisualRulebookPageCatalogModel.IdentifierCellFact(
-                                        fact.identifier(), retriedSummary));
-                            } catch (RuntimeException retryRejected) {
-                                retryRejected.addSuppressed(rejectedVerification);
-                                log.warn(
-                                        "Reference pictogram verification rejected twice for page {} identifier {}; retaining cell transcript",
-                                        summary.pageNumber(),
-                                        fact.identifier(),
-                                        retryRejected);
-                                facts.add(fact);
-                            }
-                        }
-                    }
-                }
-                if (facts.size() < 4) {
-                    enriched.add(summary);
-                    continue;
-                }
-                String cellFacts = facts.stream()
-                        .map(VisualRulebookPageCatalogModel.IdentifierCellFact::factualSummary)
-                        .distinct()
-                        .collect(Collectors.joining("\n"));
-                String combined = mergeIdentifierFactsWithSharedRules(
-                        cellFacts, summary.factualSummary(), summary.ruleGroupInventoryComplete());
-                if (summary.ruleGroupInventoryComplete()) {
-                    VisualRulebookCatalogPolicy.validateRuleGroupFactBindings(
-                            summary.ruleGroupIdentifiers(), combined);
-                }
-                enriched.add(new VisualRulebookPageCatalogModel.PageSummary(
-                        summary.pageNumber(),
-                        summary.printedTerms(),
-                        combined,
-                        summary.keywords(),
-                        summary.visualAnchors(),
-                        summary.iconOccurrences(),
-                        summary.iconInventoryComplete(),
-                        summary.sourceDependencies(),
-                        summary.ruleGroupIdentifiers(),
-                        summary.ruleGroupInventoryComplete(),
-                        summary.quantityObservations()));
-            } catch (RuntimeException failure) {
-                log.warn("Printed identifier cell enrichment skipped for page {}", summary.pageNumber(), failure);
-                enriched.add(summary);
-            }
-        }
-        return List.copyOf(enriched);
-    }
-
-    private List<VisualRulebookPageCatalogModel.IdentifierReferencePage> identifierReferencePages(
-            UUID documentVersionId,
-            VisualRulebookPageCatalogModel.PageSummary subject,
-            List<PageFact> candidates) {
-        if (candidates == null || candidates.isEmpty()) return List.of();
-        PageFact reference = candidates.stream()
-                .filter(candidate -> candidate.pageNumber() != subject.pageNumber())
-                .filter(PageFact::iconInventoryComplete)
-                .filter(candidate -> candidate.iconOccurrences().stream().filter(icon -> icon.meaningStatus()
-                                != com.rulepilot.teaching.VisualRulebookPageFacts.IconMeaningStatus.UNEXPLAINED)
-                        .count() >= 2)
-                .max(java.util.Comparator.comparingInt(candidate -> candidate.iconOccurrences().size()))
-                .orElse(null);
-        if (reference == null) return List.of();
-        List<Integer> selectedPages = List.of(reference.pageNumber());
-        Map<Integer, PageFact> factsByPage = candidates.stream().collect(Collectors.toMap(
-                PageFact::pageNumber, java.util.function.Function.identity(), (first, ignored) -> first));
-        return pageImages.read(documentVersionId, new LinkedHashSet<>(selectedPages)).stream()
-                .sorted(java.util.Comparator.comparingInt(page -> selectedPages.indexOf(page.pageNumber())))
-                .map(page -> {
-                    PageFact fact = factsByPage.get(page.pageNumber());
-                    String evidence = fact == null
-                            ? "The complete rendered page is the only reference evidence."
-                            : fact.printedTerms() + "\n" + fact.factualSummary();
-                    return new VisualRulebookPageCatalogModel.IdentifierReferencePage(
-                            new PageImageInput(page.pageNumber(), page.mediaType(), page.content()), evidence);
-                })
-                .toList();
-    }
-
-    static String mergeIdentifierFactsWithSharedRules(
-            String identifierFacts, String pageSummary, boolean preserveCompletePageFacts) {
-        LinkedHashSet<String> blocks = new LinkedHashSet<>();
-        if (preserveCompletePageFacts && pageSummary != null && !pageSummary.isBlank()) {
-            blocks.add(pageSummary.strip());
-        }
-        if (identifierFacts != null && !identifierFacts.isBlank()) blocks.add(identifierFacts.strip());
-        if (!preserveCompletePageFacts && pageSummary != null && !pageSummary.isBlank()) {
-            blocks.add(pageSummary.strip());
-        }
-        return String.join("\n", blocks);
     }
 
     /**
@@ -758,7 +545,9 @@ class VisualRulebookCataloger {
                 fact.iconInventoryComplete(),
                 fact.sourceDependencies(),
                 fact.ruleGroupIdentifiers(),
-                fact.ruleGroupInventoryComplete());
+                fact.ruleGroupInventoryComplete(),
+                List.of(),
+                fact.ruleGroupFacts());
     }
 
     /**

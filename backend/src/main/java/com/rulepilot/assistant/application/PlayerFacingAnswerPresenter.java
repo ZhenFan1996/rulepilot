@@ -8,9 +8,7 @@ import com.rulepilot.assistant.application.PlayerFacingRuleAnswer.SourceKind;
 import com.rulepilot.assistant.domain.AnswerConfidence;
 import com.rulepilot.assistant.domain.AnswerStatus;
 import com.rulepilot.assistant.domain.StructuredRuleAnswer;
-import java.util.ArrayList;
 import java.util.List;
-import java.util.Objects;
 
 /** Converts an audited domain answer into the smaller contract a player is allowed to receive. */
 public final class PlayerFacingAnswerPresenter {
@@ -25,13 +23,10 @@ public final class PlayerFacingAnswerPresenter {
         List<Citation> citations = answer.citations().stream()
                 .map(citation -> new Citation(
                         citation.heading(),
-                        AnswerCitationPresentationPolicy.excerpt(citation.excerpt()),
+                        citation.excerpt(),
                         citation.pageFrom(),
                         citation.pageTo()))
                 .toList();
-        if (containsInternalCoreProtocol(answer, citations)) {
-            return safeFailure(AnswerStatus.INVALID_MODEL_OUTPUT, language, question, List.of(), source(answer));
-        }
         if (!answer.status().publishesConclusion()) {
             List<Citation> safeSources = answer.status() == AnswerStatus.INSUFFICIENT_EVIDENCE
                     ? citations
@@ -52,92 +47,54 @@ public final class PlayerFacingAnswerPresenter {
                 null,
                 answer.warnings(),
                 answer.calculations().stream()
-                        .filter(value -> isPlayerSafe(answer, value.expression(), value.result()))
                         .map(value -> new RuleAnswering.Calculation(value.expression(), value.result()))
                         .toList(),
                 answer.situationChecks().stream()
-                        .filter(value -> isPlayerSafe(answer, value.requirement(), value.playerFact()))
                         .map(value -> new RuleAnswering.SituationCheck(
                                 value.requirement(), value.status().name(), value.playerFact()))
                         .toList(),
                 answer.walkthroughSteps().stream()
-                        .filter(value -> isPlayerSafe(answer, value.instruction(), value.explanation()))
                         .map(value -> new RuleAnswering.WalkthroughStep(
                                 value.instruction(), value.explanation(), value.orderBasis().name()))
                         .toList(),
                 answer.decisionBranches().stream()
-                        .filter(value -> isPlayerSafe(answer, value.condition(), value.outcome()))
                         .map(value -> new RuleAnswering.DecisionBranch(
                                 value.condition(), value.outcome(), value.basis().name()))
                         .toList(),
                 answer.exceptionClauses().stream()
-                        .filter(value -> isPlayerSafe(answer, value.condition(), value.effect()))
                         .map(value -> new RuleAnswering.ExceptionClause(value.condition(), value.effect()))
                         .toList(),
                 answer.termDefinitions().stream()
-                        .filter(value -> isPlayerSafe(answer, value.term(), value.definition(), value.boundary()))
                         .map(value -> new RuleAnswering.TermDefinition(
                                 value.term(), value.definition(), value.boundary()))
                         .toList(),
                 answer.workedExamples().stream()
-                        .filter(value -> isPlayerSafe(answer, value.setup(), value.action(), value.outcome()))
                         .map(value -> new RuleAnswering.WorkedExample(
                                 value.setup(), value.action(), value.outcome(), value.basis().name()))
                         .toList(),
                 answer.priorityResolutions().stream()
-                        .filter(value -> isPlayerSafe(
-                                answer, value.baseRule(), value.competingRule(), value.resolution()))
                         .map(value -> new RuleAnswering.RulePriorityResolution(
                                 value.baseRule(), value.competingRule(), value.resolution(), value.basis().name()))
                         .toList(),
                 answer.timingResolutions().stream()
-                        .filter(value -> isPlayerSafe(
-                                answer, value.timingContext(), value.resolutionOrder(), value.orderSource()))
                         .map(value -> new RuleAnswering.RuleTimingResolution(
                                 value.timingContext(), value.resolutionOrder(), value.orderSource(), value.basis().name()))
                         .toList(),
                 answer.tieResolutions().stream()
-                        .filter(value -> isPlayerSafe(
-                                answer,
-                                value.tieContext(),
-                                String.join("\n", value.resolutionSteps()),
-                                value.finalOutcome()))
                         .map(value -> new RuleAnswering.RuleTieResolution(
                                 value.tieContext(), value.resolutionSteps(), value.finalOutcome(), value.basis().name()))
                         .toList(),
                 answer.scopeResolutions().stream()
-                        .filter(value -> isPlayerSafe(
-                                answer,
-                                value.ruleContext(),
-                                value.governingCondition(),
-                                value.currentSituation(),
-                                value.effect()))
                         .map(value -> new RuleAnswering.RuleScopeResolution(
                                 value.ruleContext(), value.governingCondition(), value.currentSituation(),
                                 value.matchStatus().name(), value.effect(), value.basis().name()))
                         .toList(),
                 answer.conceptComparisons().stream()
-                        .filter(value -> isPlayerSafe(
-                                answer,
-                                value.leftConcept(),
-                                value.leftDefinition(),
-                                value.rightConcept(),
-                                value.rightDefinition(),
-                                value.commonGround(),
-                                value.keyDifference(),
-                                value.practicalBoundary()))
                         .map(value -> new RuleAnswering.RuleConceptComparison(
                                 value.leftConcept(), value.leftDefinition(), value.rightConcept(), value.rightDefinition(),
                                 value.commonGround(), value.keyDifference(), value.practicalBoundary(), value.basis().name()))
                         .toList(),
                 answer.ruleOptions().stream()
-                        .filter(value -> isPlayerSafe(
-                                answer,
-                                value.decisionContext(),
-                                value.selectionRule(),
-                                value.optionName(),
-                                value.availabilityCondition(),
-                                value.result()))
                         .map(value -> new RuleAnswering.RuleOption(
                                 value.decisionContext(), value.selectionRule(), value.optionName(),
                                 value.availabilityCondition(), value.result(), value.basis().name()))
@@ -269,27 +226,6 @@ public final class PlayerFacingAnswerPresenter {
         return value != null
                 && !value.isBlank()
                 && PlayerLocale.forQuestion(value, expectedLanguage) == expectedLanguage;
-    }
-
-    private static boolean containsInternalCoreProtocol(StructuredRuleAnswer answer, List<Citation> citations) {
-        List<String> text = new ArrayList<>();
-        text.add(answer.shortVerdict());
-        text.add(answer.explanation());
-        text.add(answer.clarification());
-        text.addAll(answer.exceptions());
-        citations.forEach(citation -> {
-            text.add(citation.heading());
-            text.add(citation.excerpt());
-        });
-        return !isPlayerSafe(answer, text.toArray(String[]::new));
-    }
-
-    private static boolean isPlayerSafe(StructuredRuleAnswer answer, String... values) {
-        String combined = java.util.Arrays.stream(values)
-                .filter(Objects::nonNull)
-                .collect(java.util.stream.Collectors.joining("\n"));
-        return !AnswerDraftSafetyPolicy.containsKnownEvidenceReference(
-                        combined, answer.citations().stream().map(citation -> citation.chunkId()).toList());
     }
 
     private static SourceKind source(StructuredRuleAnswer answer) {

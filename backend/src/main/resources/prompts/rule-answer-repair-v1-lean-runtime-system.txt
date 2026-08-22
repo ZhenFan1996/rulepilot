@@ -19,7 +19,7 @@ Repair contract:
 
 Schema contract:
 - Return these top-level fields and no others: answerable, insufficiencyReason, shortVerdict, explanation, citationIds,
-  exceptions, confidence, answerBasis, calculations, situationChecks, walkthroughSteps, decisionBranches,
+  exceptions, confidence, answerBasis, calculations, walkthroughSteps, decisionBranches,
   exceptionClauses, termDefinitions, workedExamples, priorityResolutions, timingResolutions, tieResolutions,
   scopeResolutions, conceptComparisons, ruleOptions.
 - Use at most the one selected structured aid and leave unrelated arrays empty. Keep the supported detail needed to

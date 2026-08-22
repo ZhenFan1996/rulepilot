@@ -34,7 +34,6 @@ import com.rulepilot.assistant.domain.StructuredRuleAnswer;
 import com.rulepilot.assistant.domain.UnderstoodQuestion;
 import com.rulepilot.document.RuleDataVersion;
 import com.rulepilot.retrieval.AnswerEvidenceRetriever;
-import com.rulepilot.retrieval.AnswerRetrievalQueryRewriter;
 import com.rulepilot.retrieval.HybridRuleSearch;
 import com.rulepilot.retrieval.RuleEvidenceLookup;
 import com.rulepilot.retrieval.VisualRulebookPageFactSearch;
@@ -50,7 +49,6 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.Consumer;
-import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -62,12 +60,6 @@ import org.springframework.stereotype.Service;
 public class StructuredRuleAnswerService implements RuleAnswering {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(StructuredRuleAnswerService.class);
-    private static final Pattern DIRECT_QUANTITY_QUESTION = Pattern.compile(
-            "^(?:how\\s+(?:many|much)\\b)|(?:多少|几(?:个|张|枚|块|点|分|次|轮|人|份|步|格))",
-            Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
-    private static final Pattern UNBOUND_REFERENCE = Pattern.compile(
-            "\\b(?:this|that|it|these|those)\\b|(?:这个|那个|这些|那些|它|该(?:牌|效果|能力|行动|规则|阶段|标记))",
-            Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
     // Context-resolved questions use a new semantic identity, so earlier answer-cache entries are stale.
     private static final String ANSWER_POLICY_VERSION = "answer-v114-intent-owned-retrieval";
     private final QuestionUnderstanding understanding;
@@ -108,7 +100,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
     private final Counter cacheWriteErrors;
     private final Counter confirmedRulingHits;
     private final Counter acceptedQuestionInterpretations;
-    private final Counter fallbackQuestionInterpretations;
+    private final Counter rejectedQuestionInterpretations;
 
     @Autowired
     public StructuredRuleAnswerService(
@@ -136,8 +128,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                 retrieval,
                 visualFacts,
                 evidenceLookup,
-                new AuditedAnswerRetrievalInvocations(invocations),
-                AnswerRetrievalQueryRewriter.none());
+                new AuditedAnswerRetrievalInvocations(invocations));
         this.evidenceRefiner = evidenceRefiner;
         this.modelRequestFactory = new AnswerModelRequestFactory();
         this.cache = cache;
@@ -174,8 +165,8 @@ public class StructuredRuleAnswerService implements RuleAnswering {
         this.confirmedRulingHits = metrics.counter("rulepilot.answer.requests", "source", "confirmed-ruling");
         this.acceptedQuestionInterpretations = metrics.counter(
                 "rulepilot.answer.question.interpretations", "result", "accepted");
-        this.fallbackQuestionInterpretations = metrics.counter(
-                "rulepilot.answer.question.interpretations", "result", "fallback");
+        this.rejectedQuestionInterpretations = metrics.counter(
+                "rulepilot.answer.question.interpretations", "result", "rejected");
     }
 
     public StructuredRuleAnswerService(
@@ -428,8 +419,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
         AnswerQuestionPlan questionPlan = AnswerQuestionPlan.fallback(deterministic);
         QuestionContext suppliedContext = context;
         LearningIntent plannedLearningIntent = context.learningIntent();
-        if (modelGateway.supportsQuestionInterpretation(username)
-                && requiresSemanticQuestionInterpretation(question, suppliedContext)) {
+        if (modelGateway.supportsQuestionInterpretation(username)) {
             try {
                 Optional<AnswerQuestionInterpretationPolicy.Interpretation> interpreted = modelGateway
                         .interpretQuestion(
@@ -445,14 +435,26 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                     plannedLearningIntent = accepted.learningIntent();
                     acceptedQuestionInterpretations.increment();
                 } else {
-                    fallbackQuestionInterpretations.increment();
+                    rejectedQuestionInterpretations.increment();
+                    return safe(
+                            context.documentVersionId(),
+                            AnswerStatus.INVALID_MODEL_OUTPUT,
+                            questionInterpretationFailure(context.outputLanguage(), false));
                 }
             } catch (RuleAnswerModelTimeoutException timeout) {
-                fallbackQuestionInterpretations.increment();
-                LOGGER.warn("Answer question interpretation timed out; preserving deterministic understanding");
+                rejectedQuestionInterpretations.increment();
+                LOGGER.warn("Answer question interpretation timed out; refusing to infer missing structured fields");
+                return safe(
+                        context.documentVersionId(),
+                        AnswerStatus.MODEL_TIMEOUT,
+                        questionInterpretationFailure(context.outputLanguage(), true));
             } catch (RuntimeException failure) {
-                fallbackQuestionInterpretations.increment();
-                LOGGER.warn("Answer question interpretation failed validation; preserving deterministic understanding");
+                rejectedQuestionInterpretations.increment();
+                LOGGER.warn("Answer question interpretation failed validation; refusing to infer missing structured fields");
+                return safe(
+                        context.documentVersionId(),
+                        AnswerStatus.INVALID_MODEL_OUTPUT,
+                        questionInterpretationFailure(context.outputLanguage(), false));
             }
         }
         QuestionContext resolvedContext = suppliedContext.withLearningIntent(plannedLearningIntent);
@@ -617,17 +619,6 @@ public class StructuredRuleAnswerService implements RuleAnswering {
     /** Resolves the complete structured envelope once; unselected aids were already removed from the draft. */
     private StructuredDetails resolveStructuredDetails(
             UUID assistantRunId, ModelRequest modelRequest, ModelDraft draft) {
-        List<UUID> evidenceIds = modelRequest.evidence().stream()
-                .map(com.rulepilot.assistant.RuleAnswerModel.EvidenceInput::chunkId)
-                .toList();
-        if (modelRequest.answerAid() != AnswerAid.CALCULATION
-                && !AnswerDraftSafetyPolicy.containsInternalCoreReference(draft, evidenceIds)
-                && AnswerDraftSafetyPolicy.containsInternalEvidenceReference(draft, evidenceIds)) {
-            LOGGER.warn(
-                    "Ignoring optional {} presentation containing an internal reference while preserving the validated answer core",
-                    modelRequest.answerAid());
-            return StructuredDetails.empty();
-        }
         try {
             return new StructuredDetails(
                     resolveCalculations(assistantRunId, modelRequest, draft),
@@ -738,6 +729,17 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                 deterministic.missingContext(),
                 context.learningIntent(),
                 context.outputLanguage());
+    }
+
+    private String questionInterpretationFailure(PlayerLocale language, boolean timedOut) {
+        if (language == PlayerLocale.EN) {
+            return timedOut
+                    ? "I could not finish structuring this question in time. Your question is unchanged; please retry."
+                    : "The question interpretation did not match the required structure. Your question is unchanged; please retry.";
+        }
+        return timedOut
+                ? "本次未能在时限内完成问题结构化。你的问题没有被改写，可以直接重试。"
+                : "本次问题解释未通过结构校验。你的问题没有被改写，可以直接重试。";
     }
 
     private Optional<StructuredRuleAnswer> findCached(AnswerCacheKey key) {
@@ -1039,14 +1041,6 @@ public class StructuredRuleAnswerService implements RuleAnswering {
     }
 
     public record AnswerCreation(UUID assistantRunId, StructuredRuleAnswer answer) {}
-
-    static boolean requiresSemanticQuestionInterpretation(String question, QuestionContext context) {
-        if (context.previousQuestion() != null || context.priorTurnReference() != null) return true;
-        String normalized = question == null ? "" : question.strip();
-        if (normalized.isEmpty()) return true;
-        return !DIRECT_QUANTITY_QUESTION.matcher(normalized).find()
-                || UNBOUND_REFERENCE.matcher(normalized).find();
-    }
 
     private StructuredRuleAnswer safe(UUID versionId, AnswerStatus status, String message) {
         return AnswerOutcomePolicy.safeFailure(versionId, status, message);
