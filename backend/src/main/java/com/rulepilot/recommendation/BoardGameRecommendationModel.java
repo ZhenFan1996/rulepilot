@@ -20,7 +20,7 @@ public interface BoardGameRecommendationModel {
     }
 
     /**
-     * Streams a low-risk conversational reply without advertising or executing external actions.
+     * Streams player-facing prose after either a direct low-risk turn or a validated structural decision.
      * The listener receives the complete text accumulated so far, never provider-specific deltas.
      */
     default NaturalReply streamNaturalReply(
@@ -30,15 +30,23 @@ public interface BoardGameRecommendationModel {
         throw new UnsupportedOperationException("natural reply streaming is not configured");
     }
 
-    record NaturalReplyRequest(List<Message> messages, int maxOutputTokens) {
+    record NaturalReplyRequest(List<Message> messages, int maxOutputTokens, List<String> stopSequences) {
+        public NaturalReplyRequest(List<Message> messages, int maxOutputTokens) {
+            this(messages, maxOutputTokens, List.of());
+        }
+
         public NaturalReplyRequest {
             if (messages == null
                     || messages.isEmpty()
                     || maxOutputTokens < 32
-                    || maxOutputTokens > 512) {
+                    || maxOutputTokens > 2_048
+                    || stopSequences == null
+                    || stopSequences.size() > 4
+                    || stopSequences.stream().anyMatch(value -> value == null || value.isBlank() || value.length() > 32)) {
                 throw new IllegalArgumentException("natural reply request is invalid");
             }
             messages = List.copyOf(messages);
+            stopSequences = List.copyOf(stopSequences);
         }
     }
 

@@ -29,6 +29,7 @@ import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.core.task.SyncTaskExecutor;
+import org.springframework.scheduling.annotation.Scheduled;
 
 class BggPopularMetadataPrewarmerTest {
 
@@ -42,6 +43,19 @@ class BggPopularMetadataPrewarmerTest {
         assertThat(ownership.name()).containsExactly("rulepilot.runtime.worker-enabled");
         assertThat(ownership.havingValue()).isEqualTo("true");
         assertThat(ownership.matchIfMissing()).isFalse();
+    }
+
+    @Test
+    void defersLowPriorityPrewarmUntilTheWorkerStartupLaneIsClear() throws Exception {
+        Scheduled schedule = BggPopularMetadataPrewarmer.class
+                .getDeclaredMethod("resume")
+                .getAnnotation(Scheduled.class);
+
+        assertThat(schedule).isNotNull();
+        assertThat(schedule.initialDelayString())
+                .isEqualTo("${rulepilot.bgg.cache.prewarm.initial-delay:PT5M}");
+        assertThat(schedule.fixedDelayString())
+                .isEqualTo("${rulepilot.bgg.cache.prewarm.resume-delay:PT1H}");
     }
 
     @Test

@@ -87,6 +87,7 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
         Prompt prompt = new Prompt(
                 request.messages().stream().map(this::message).toList(),
                 options.temperature(temperature)
+                        .stopSequences(request.stopSequences())
                         .maxTokens(request.maxOutputTokens())
                         .build());
         long startedAt = System.nanoTime();

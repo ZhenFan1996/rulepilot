@@ -71,7 +71,12 @@ class BggRecommendationAgentControllerTest {
                 2,
                 new BoardGameRecommendationAgent.UserModelView("", List.of()),
                 List.of(),
-                new BoardGameRecommendationAgent.HarnessTrace(2, 1, 0, false, List.of()),
+                new BoardGameRecommendationAgent.HarnessTrace(
+                        2,
+                        1,
+                        0,
+                        false,
+                        List.of("SEARCH_BGG_CATALOG", "REJECTED_ACTION:bad", "RECOMMEND_GAMES")),
                 List.of(),
                 null,
                 shortfall);
@@ -90,6 +95,7 @@ class BggRecommendationAgentControllerTest {
         assertThat(response.shortfall()).isNotNull();
         assertThat(response.shortfall().requestedCount()).isEqualTo(3);
         assertThat(response.shortfall().availableCount()).isEqualTo(2);
+        assertThat(response.completedWork()).containsExactly("browse_bgg_catalog", "recommend_games");
     }
 
     @Test
@@ -109,7 +115,7 @@ class BggRecommendationAgentControllerTest {
                         0,
                         0,
                         false,
-                        List.of("DIRECT_REPLY_FAST_PATH:GREETING")),
+                        List.of("STREAMED_NATURAL_REPLY:GREETING")),
                 List.of(),
                 null);
 
@@ -124,7 +130,7 @@ class BggRecommendationAgentControllerTest {
                 false);
 
         assertThat(response.assistantMessage()).isEqualTo("嗨，今天想聊哪款桌游？");
-        assertThat(response.harness()).isNull();
+        assertThat(response.completedWork()).isEmpty();
     }
 
     @Test
@@ -318,7 +324,6 @@ class BggRecommendationAgentControllerTest {
             assertThat(range.minimum()).isEqualTo(60);
             assertThat(range.maximum()).isEqualTo(90);
         });
-        assertThat(response.mode()).isEqualTo("model_assisted");
         assertThat(response.clarification().field()).isEqualTo("conversation");
         assertThat(response.clarification().options()).isEmpty();
     }
@@ -432,7 +437,6 @@ class BggRecommendationAgentControllerTest {
                 "zh-CN",
                 principal);
 
-        assertThat(response.mode()).isEqualTo("model_assisted");
         assertThat(response.sourceCount()).isEqualTo(179_737);
         assertThat(response.games()).singleElement().satisfies(game -> {
             assertThat(game.game().name()).isEqualTo("展翅翱翔");

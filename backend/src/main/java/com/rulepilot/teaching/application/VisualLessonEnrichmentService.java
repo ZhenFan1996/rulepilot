@@ -94,6 +94,10 @@ public class VisualLessonEnrichmentService {
         try {
             var plan = plans.findById(teachingPlanId)
                     .orElseThrow(() -> new IllegalArgumentException("teaching plan does not exist"));
+            if (!hasVisualTargets(plan)) {
+                log.info("Skipped visual enrichment for plan {} because its outline requested no visual evidence", teachingPlanId);
+                return;
+            }
             var lesson = lessons.findLatestByPlan(teachingPlanId).orElse(null);
             if (lesson == null) return;
             publisher.publish(enrich(plan.documentVersionId(), lesson, plan.createdBy()));
@@ -122,6 +126,16 @@ public class VisualLessonEnrichmentService {
                     "Looking for compact, player-useful rulebook regions");
             var plan = plans.findById(teachingPlanId)
                     .orElseThrow(() -> new IllegalArgumentException("teaching plan does not exist"));
+            if (!hasVisualTargets(plan)) {
+                current = runs.advance(
+                        current.id(), current.revision(), AssistantRunState.VERIFYING_EVIDENCE,
+                        "讲解大纲没有需要图片才能说明的章节，跳过额外视觉模型调用");
+                current = runs.advance(
+                        current.id(), current.revision(), AssistantRunState.MEDIA_PACKAGING,
+                        "保留已经发布的文字讲解");
+                runs.advance(current.id(), current.revision(), AssistantRunState.COMPLETED, "视觉检查无需执行");
+                return;
+            }
             var lesson = lessons.findLatestByPlan(teachingPlanId).orElse(null);
             if (lesson == null) {
                 current = runs.advance(
@@ -361,6 +375,11 @@ public class VisualLessonEnrichmentService {
         return runs.findOwned(runId, ownerUsername)
                 .map(details -> !details.run().state().terminal())
                 .orElse(false);
+    }
+
+    private boolean hasVisualTargets(com.rulepilot.teaching.domain.TeachingPlan plan) {
+        return plan.sections().stream()
+                .anyMatch(com.rulepilot.teaching.domain.TeachingPlan.PlannedSection::visualEvidenceRecommended);
     }
 
     private static final class VisualEnrichmentCancelled extends RuntimeException {}

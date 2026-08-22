@@ -33,6 +33,9 @@ final class RecommendationAgentState {
     final Set<Integer> targetGameIds = new LinkedHashSet<>();
     final Set<Integer> comparisonReferenceIds = new LinkedHashSet<>();
     final Set<Integer> comparisonSubjectIds = new LinkedHashSet<>();
+    final Set<Integer> finalResponseGameIds = new LinkedHashSet<>();
+    final Set<String> finalResponseEvidenceIds = new LinkedHashSet<>();
+    final Map<String, Object> finalResponseDecisionFacts = new LinkedHashMap<>();
     Research research = Research.empty();
     CandidateComparison comparison;
     final List<String> actions = new ArrayList<>();

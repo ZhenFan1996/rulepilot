@@ -189,14 +189,10 @@ class BggRecommendationAgentStreamControllerTest {
                 .contains("\"action\":\"understand_request\"")
                 .contains("searching_bgg_catalog")
                 .contains("\"action\":\"browse_bgg_catalog\"")
-                .contains("\"decisionCycle\":2")
-                .contains("\"modelCalls\":2")
-                .contains("\"actionCalls\":1")
-                .contains("\"catalogCalls\":1")
-                .contains("\"webResearchCalls\":0")
                 .contains("\"observedCandidates\":8")
                 .contains("\"verifiedCandidates\":6")
                 .contains("\"hardRejectedCandidates\":3")
+                .doesNotContain("decisionCycle", "modelCalls", "actionCalls", "catalogCalls", "webResearchCalls")
                 .contains("event:answer_part")
                 .contains("event:result")
                 .contains("没有未经验证的推荐")
@@ -216,7 +212,7 @@ class BggRecommendationAgentStreamControllerTest {
             progress.accept(new ProgressUpdate(
                     ProgressStage.COMPOSING_RESPONSE,
                     BoardGameRecommendationAgent.ProgressPhase.STARTED,
-                    BoardGameRecommendationAgent.ProgressAction.DIRECT_REPLY_FAST_PATH,
+                    BoardGameRecommendationAgent.ProgressAction.STREAM_NATURAL_REPLY,
                     2,
                     1,
                     1,
@@ -260,7 +256,7 @@ class BggRecommendationAgentStreamControllerTest {
                 .contains("event:answer_part", "嗨，", "嗨，今天想聊哪款桌游？", "event:result")
                 .contains("\"stage\":\"composing_response\"")
                 .contains("\"action\":null")
-                .doesNotContain("direct_reply_fast_path", "\"decisionCycle\":1", "\"modelCalls\":1")
+                .doesNotContain("stream_natural_reply", "\"decisionCycle\":1", "\"modelCalls\":1")
                 .containsSubsequence("嗨，", "嗨，今天想聊哪款桌游？", "event:result");
     }
 }

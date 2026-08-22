@@ -107,7 +107,6 @@ export type RecommendationAgentResponse = {
   clientTurnId?: string | null
   replayed?: boolean
   outcome: 'conversation' | 'needs_clarification' | 'recommendations' | 'no_match' | 'unavailable'
-  mode: 'model_assisted' | 'model_fast_path' | 'local_fast_path'
   responseLocale?: 'zh-CN' | 'en'
   assistantMessage: string
   profile: RecommendationProfile
@@ -127,14 +126,7 @@ export type RecommendationAgentResponse = {
   }
   researchSources?: ResearchSource[]
   comparison?: CandidateComparison | null
-  harness?: {
-    modelCalls: number
-    catalogCalls: number
-    webResearchCalls: number
-    fallbackUsed: boolean
-    actions: string[]
-    totalElapsedMs?: number
-  } | null
+  completedWork?: RecommendationProgressAction[]
   games: RecommendedGame[]
 }
 
@@ -172,11 +164,6 @@ export type RecommendationProgressUpdate = {
   phase: 'started' | 'completed' | 'retrying' | 'failed'
   action: RecommendationProgressAction | null
   elapsedMs: number
-  decisionCycle: number
-  modelCalls: number
-  actionCalls: number
-  catalogCalls: number
-  webResearchCalls: number
   observedCandidates: number
   verifiedCandidates: number
   hardRejectedCandidates: number

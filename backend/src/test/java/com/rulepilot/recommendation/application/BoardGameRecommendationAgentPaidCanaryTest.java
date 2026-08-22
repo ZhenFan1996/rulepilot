@@ -70,6 +70,102 @@ class BoardGameRecommendationAgentPaidCanaryTest {
     private final ObjectMapper json = JsonMapper.builder().findAndAddModules().build();
 
     @Test
+    void streamsTheValidatedRecommendationVoiceAndPublishesOnlyVerifiedCards() throws Exception {
+        assumeTrue("true".equalsIgnoreCase(System.getenv("RULEPILOT_RECOMMENDATION_PAID_CANARY")));
+        String provider = environment("RULEPILOT_RECOMMENDATION_CANARY_PROVIDER", "qwen")
+                .toLowerCase(Locale.ROOT);
+        String prefix = provider.toUpperCase(Locale.ROOT);
+        Capture capture = new Capture(provider, environment(prefix + "_MODEL", null));
+        BoardGameRecommendationModel model = model(
+                provider,
+                environment(prefix + "_API_KEY", null),
+                environment(prefix + "_BASE_URL", null),
+                environment(prefix + "_MODEL", null),
+                capture);
+        var properties = new BoardGameRecommendationProperties(
+                8, 3, new BigDecimal("0.66"), Duration.ofSeconds(30));
+        var agent = new BoardGameRecommendationAgent(
+                model,
+                new BoardGameRecommendationTools(
+                        new CanaryCatalog(List.of(101, 102, 103, 104, 105, 106, 107, 109)),
+                        noResearch()),
+                new BoardGameRecommendationSelector(properties),
+                properties,
+                json);
+        String message = "我们三个人，最多 60 分钟。想看两款：一款围绕河流市场交易，一款偏合作修复树林；只说现有 BGG 资料能支持的内容和真实取舍。";
+        List<Map<String, Object>> progress = new ArrayList<>();
+        List<String> chunks = new ArrayList<>();
+        AtomicReference<Long> firstChunkMs = new AtomicReference<>();
+        long started = System.nanoTime();
+        List<Map<String, Object>> visibleTurns = new ArrayList<>();
+
+        try {
+            var response = agent.converse(
+                    new ConversationRequest(RecommendationProfile.empty(), message),
+                    "zh-CN",
+                    null,
+                    update -> progress.add(progress(update, started)),
+                    text -> {
+                        firstChunkMs.compareAndSet(null, elapsed(started));
+                        chunks.add(text);
+                    });
+            long totalMs = elapsed(started);
+            Map<String, Object> visible = new LinkedHashMap<>(visible(
+                    "streamed-validated-final-recommendation",
+                    response,
+                    totalMs,
+                    progress,
+                    0,
+                    capture.callCount()));
+            visible.put("assistantResultTtfbMs", firstChunkMs.get());
+            visible.put("answerChunkCount", chunks.size());
+            visibleTurns.add(Map.copyOf(visible));
+
+            assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
+            assertThat(response.games()).hasSize(2).allSatisfy(entry -> {
+                assertThat(entry.game().details().description()).isNotBlank();
+                assertThat(entry.game().details().minPlayers()).isLessThanOrEqualTo(3);
+                assertThat(entry.game().details().maxPlayers()).isGreaterThanOrEqualTo(3);
+                assertThat(entry.game().details().maximumPlayTimeMinutes()).isLessThanOrEqualTo(60);
+            });
+            assertThat(response.profile().players()).isEqualTo(3);
+            assertThat(chunks).hasSizeGreaterThan(1);
+            assertThat(chunks.getLast()).isEqualTo(response.assistantMessage());
+            assertThat(firstChunkMs.get()).isNotNull().isLessThan(totalMs);
+            assertThat(response.harness().modelCalls()).isBetween(2, RecommendationReActLoop.MAX_MODEL_CALLS);
+            assertThat(response.harness().fallbackUsed()).isFalse();
+            assertThat(response.harness().actions())
+                    .contains("RECOMMEND_GAMES")
+                    .allMatch(action -> !action.startsWith("FALLBACK_")
+                            && !action.startsWith("UNAVAILABLE:")
+                            && !action.equals("RUN_DEADLINE_EXCEEDED"));
+            assertThat(response.assistantMessage())
+                    .doesNotContain(
+                            "桌感",
+                            "工具",
+                            "模型调用",
+                            "验证流程",
+                            "内部证据",
+                            "硬性约束",
+                            "元数据",
+                            "竞争")
+                    .containsAnyOf("River Market", "河流", "Signal Grove", "树林", "林");
+            assertThat(capture.lastAssistantText()).isEqualTo(response.assistantMessage());
+            ToolCall structuralDecision = capture.lastToolCall();
+            assertThat(structuralDecision.name()).isEqualTo(BoardGameRecommendationAgent.RECOMMEND_TOOL);
+            JsonNode arguments = json.readTree(structuralDecision.argumentsJson());
+            assertThat(arguments.path("selections")).hasSize(2);
+            assertThat(arguments.path("internalEvidenceIds")).isNotEmpty();
+            writeArtifact(capture, visibleTurns, null);
+        } catch (Throwable failure) {
+            writeArtifact(capture, visibleTurns, failure.getClass().getSimpleName());
+            throw failure;
+        } finally {
+            agent.stopBoundedCalls();
+        }
+    }
+
+    @Test
     void routesAnObviousConversationTurnWithoutRecommendationWork() throws Exception {
         assumeTrue("true".equalsIgnoreCase(System.getenv("RULEPILOT_RECOMMENDATION_PAID_CANARY")));
         String provider = environment("RULEPILOT_RECOMMENDATION_CANARY_PROVIDER", "qwen")
@@ -1171,73 +1267,38 @@ class BoardGameRecommendationAgentPaidCanaryTest {
 
         List<Map<String, Object>> visibleTurns = new ArrayList<>();
         try {
-            String metaphor = "今晚想找一种像暴雨天围着壁炉讲秘密的感觉。别把这个比喻硬翻成人数、时长、难度、类型或交互模式；目录事实不能证明桌感时，可以诚实限定，也可以问一个答案真会改变候选集的问题。给我两个值得看的方向，并具体分清已知与未知。";
+            String metaphor = "今晚想找一种像暴雨天围着壁炉讲秘密的感觉。别把这个比喻硬翻成人数、时长、难度、类型或交互模式；如果现有资料不足以确认这种氛围，就只说清楚真正会影响选择的那一点。直接给我两个值得看的方向。";
             long metaphorStarted = System.nanoTime();
             var metaphorResponse = agent.converse(
                     new ConversationRequest(RecommendationProfile.empty(), metaphor),
                     "zh-CN");
             visibleTurns.add(visible("metaphor-implicit-preference", metaphorResponse, elapsed(metaphorStarted)));
 
-            assertThat(metaphorResponse.outcome()).isEqualTo(Outcome.NEEDS_CLARIFICATION);
+            assertThat(metaphorResponse.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
             assertEmptyTypedProfile(metaphorResponse.profile());
+            assertThat(metaphorResponse.games()).hasSize(2).allSatisfy(entry -> {
+                assertThat(entry.game().details().description()).isNotBlank();
+                assertThat(entry.reasons()).isNotEmpty();
+                assertThat(entry.tradeoffs()).isNotEmpty();
+            });
             assertThat(metaphorResponse.assistantMessage().codePointCount(
                             0, metaphorResponse.assistantMessage().length()))
                     .isGreaterThanOrEqualTo(20);
+            assertThat(metaphorResponse.assistantMessage())
+                    .doesNotContain("桌感", "证据策略", "验证流程", "工具", "模型");
             assertThat(metaphorResponse.harness().fallbackUsed()).isFalse();
             assertThat(metaphorResponse.harness().modelCalls()).isLessThanOrEqualTo(2);
             assertThat(metaphorResponse.harness().actions())
                     .doesNotContain("REJECTED_REPEATED_ACTION");
-            ToolCall rawClarification = capture.lastToolCall();
-            assertClarificationPreserved(rawClarification, metaphorResponse);
+            assertTerminalProsePreserved(capture.lastToolCall(), metaphorResponse);
+            assertRecommendationNarrativesPreserved(capture.lastToolCall(), metaphorResponse);
+            assertNoPreferenceLinks(capture.lastToolCall());
             assertThat(metaphorResponse.harness().actions())
-                    .as("a genuine clarification must not mask a rejected action or retrieval failure")
+                    .as("an actionable qualitative request must finish without a masked execution failure")
                     .allMatch(action -> !action.startsWith("REJECTED_")
                             && !action.startsWith("WEB_RESEARCH_DEGRADED:"));
 
-            String selectedDirection = metaphorResponse.clarification().options().getFirst().value();
-            String clarificationAnswer = selectedDirection
-                    + "。我们 3 个人、最多 45 分钟；这个选项只是在帮你分方向，不是合作/对抗、类型或复杂度硬条件。现在请给我两款，不能证明的桌感仍保留为未知。";
-            List<DialogueMessage> clarificationTranscript = List.of(
-                    new DialogueMessage("user", metaphor),
-                    new DialogueMessage("assistant", metaphorResponse.assistantMessage()),
-                    new DialogueMessage("user", clarificationAnswer));
-            long clarificationAnswerStarted = System.nanoTime();
-            var afterClarification = agent.converse(
-                    new ConversationRequest(
-                            metaphorResponse.profile(),
-                            clarificationAnswer,
-                            List.of(),
-                            clarificationTranscript,
-                            null,
-                            List.of(),
-                            List.of()),
-                    "zh-CN");
-            visibleTurns.add(visible(
-                    "answer-to-high-information-clarification",
-                    afterClarification,
-                    elapsed(clarificationAnswerStarted)));
-
-            assertThat(afterClarification.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
-            assertThat(afterClarification.profile().playerCount().minimum()).isEqualTo(3);
-            assertThat(afterClarification.profile().playerCount().maximum()).isEqualTo(3);
-            assertThat(afterClarification.profile().durationMinutes().minimum()).isNull();
-            assertThat(afterClarification.profile().durationMinutes().maximum()).isEqualTo(45);
-            assertThat(afterClarification.profile().complexity()).isNull();
-            assertThat(afterClarification.profile().type()).isEqualTo(BggGameType.ALL);
-            assertThat(afterClarification.profile().interaction())
-                    .isEqualTo(BoardGameRecommendationAgent.InteractionPreference.ANY);
-            assertThat(afterClarification.games()).hasSize(2).allSatisfy(entry -> {
-                assertThat(entry.game().details().minPlayers()).isLessThanOrEqualTo(3);
-                assertThat(entry.game().details().maxPlayers()).isGreaterThanOrEqualTo(3);
-                assertThat(entry.game().details().maximumPlayTimeMinutes()).isLessThanOrEqualTo(45);
-            });
-            assertThat(afterClarification.harness().fallbackUsed()).isFalse();
-            assertThat(afterClarification.harness().modelCalls()).isLessThanOrEqualTo(3);
-            assertTerminalProsePreserved(capture.lastToolCall(), afterClarification);
-            assertRecommendationNarrativesPreserved(capture.lastToolCall(), afterClarification);
-            assertNoPreferenceLinks(capture.lastToolCall());
-
-            String mixedOpening = "我们原本 4 个人，最多 75 分钟。想要前半段各自埋线、最后全桌突然倒吸一口气的感觉，但这只是愿望，不是合作/对抗、类型或复杂度硬条件。先给两个方向；不能从目录事实证明的桌感就保留为未知或明确是推测。";
+            String mixedOpening = "我们原本 4 个人，最多 75 分钟。想要前半段各自埋线、最后全桌突然倒吸一口气的感觉，但这只是愿望，不是合作/对抗、类型或复杂度硬条件。直接给两个方向；现有资料不能确认的体验不要替我编。";
             long mixedOpeningStarted = System.nanoTime();
             var mixedFirst = agent.converse(
                     new ConversationRequest(RecommendationProfile.empty(), mixedOpening),
@@ -1266,7 +1327,7 @@ class BoardGameRecommendationAgentPaidCanaryTest {
             assertRecommendationNarrativesPreserved(capture.lastToolCall(), mixedFirst);
             assertNoPreferenceLinks(capture.lastToolCall());
 
-            String correction = "等等，临时有人先走：改成 3 个人、45 分钟以内。刚才那种戏剧性仍只是愿望，不要把它存成合作/对抗、类型或复杂度硬条件。重新给我两款；无法证明的桌感请继续局部标成未知或有边界的推测。";
+            String correction = "等等，临时有人先走：改成 3 个人、45 分钟以内。刚才那种戏剧性仍只是愿望，不要把它存成合作/对抗、类型或复杂度硬条件。重新给我两款；现有资料不能确认的体验不要替我编。";
             List<DialogueMessage> correctionTranscript = List.of(
                     new DialogueMessage("user", mixedOpening),
                     new DialogueMessage("assistant", mixedFirst.assistantMessage()),
@@ -1414,9 +1475,23 @@ class BoardGameRecommendationAgentPaidCanaryTest {
             ToolCall call,
             BoardGameRecommendationAgent.ConversationResponse response) throws Exception {
         JsonNode arguments = json.readTree(call.argumentsJson());
-        if (BoardGameRecommendationAgent.RECOMMEND_TOOL.equals(call.name())
-                || (BoardGameRecommendationAgent.RESOLVE_TOOL.equals(call.name())
-                        && "TARGET_GAME".equals(arguments.path("purpose").asText()))) {
+        if (BoardGameRecommendationAgent.RECOMMEND_TOOL.equals(call.name())) {
+            assertThat(arguments.path("message").asText()).isNotBlank();
+            Set<Integer> selectedIds = new LinkedHashSet<>();
+            arguments.path("selections").forEach(selection -> selectedIds.add(selection.path("bggId").asInt()));
+            List<String> evidenceIds = new ArrayList<>();
+            arguments.path("internalEvidenceIds").forEach(value -> evidenceIds.add(value.asText()));
+            assertThat(evidenceIds).isNotEmpty().doesNotHaveDuplicates();
+            assertThat(selectedIds).allMatch(selectedId -> evidenceIds.stream()
+                    .anyMatch(evidenceId -> evidenceId.startsWith("B" + selectedId + ":")
+                            || evidenceId.startsWith("R" + selectedId + ":")));
+            assertThat(response.assistantMessage())
+                    .as("an evidence-linked Agent recommendation must remain byte-for-byte visible")
+                    .endsWith(arguments.path("message").asText());
+            return;
+        }
+        if (BoardGameRecommendationAgent.RESOLVE_TOOL.equals(call.name())
+                && "TARGET_GAME".equals(arguments.path("purpose").asText())) {
             assertThat(arguments.has("message")).isFalse();
             assertThat(response.assistantMessage()).isNotBlank();
             return;
@@ -1489,7 +1564,8 @@ class BoardGameRecommendationAgentPaidCanaryTest {
             BoardGameRecommendationAgent.ConversationResponse response) throws Exception {
         assertThat(call.name()).isEqualTo(BoardGameRecommendationAgent.RECOMMEND_TOOL);
         JsonNode arguments = json.readTree(call.argumentsJson());
-        assertThat(arguments.has("message")).isFalse();
+        assertThat(arguments.path("message").asText()).isNotBlank();
+        assertThat(response.assistantMessage()).endsWith(arguments.path("message").asText());
         JsonNode selections = arguments.path("selections");
         assertThat(selections.isArray()).isTrue();
         assertThat(selections.size()).isEqualTo(response.games().size());
@@ -1768,7 +1844,23 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                 weight,
                 categories,
                 mechanics,
-                designers);
+                designers,
+                canaryDescription(id));
+    }
+
+    private static String canaryDescription(int id) {
+        return switch (id) {
+            case 101 -> "Players trade produce along a changing river market and collect matching stalls before boats depart.";
+            case 102 -> "Players cooperate through limited signals to restore paths between groves before the last lantern fades.";
+            case 103 -> "Players place workers to fulfill exhibition contracts and assemble clockwork displays in a shared gallery.";
+            case 104 -> "Players press their luck while extending lantern routes between villages and banking completed connections.";
+            case 105 -> "Players choose songs simultaneously and vote on the chorus that best matches each harbor festival.";
+            case 106 -> "Players build compact decks and manage foundry orders while developing their own production line.";
+            case 107 -> "Players negotiate cedar contracts and bid for shipments whose values change across the round.";
+            case 184267 -> "Players establish a colony on Mars by coordinating orbital travel, surface construction, and research.";
+            case 161533 -> "Players rebuild Lisbon through political influence, commerce, and carefully managed hands of cards.";
+            default -> "";
+        };
     }
 
     private static Game game(
@@ -1783,6 +1875,34 @@ class BoardGameRecommendationAgentPaidCanaryTest {
             List<String> categories,
             List<String> mechanics,
             List<String> designers) {
+        return game(
+                id,
+                name,
+                publicationYear,
+                minPlayers,
+                maxPlayers,
+                minMinutes,
+                maxMinutes,
+                weight,
+                categories,
+                mechanics,
+                designers,
+                "");
+    }
+
+    private static Game game(
+            int id,
+            String name,
+            int publicationYear,
+            int minPlayers,
+            int maxPlayers,
+            int minMinutes,
+            int maxMinutes,
+            String weight,
+            List<String> categories,
+            List<String> mechanics,
+            List<String> designers,
+            String description) {
         Ranking ranking = new Ranking(
                 id,
                 name,
@@ -1812,7 +1932,9 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                 500,
                 List.of(),
                 designers,
-                List.of("Canary Publisher"));
+                List.of("Canary Publisher"),
+                description,
+                "");
         return new Game(ranking, details);
     }
 
@@ -1883,9 +2005,9 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                     game(105, "Harbor Chorus", 3, 6, 30, 45, "2.4", List.of("Party Game"), List.of("Simultaneous Action Selection", "Voting")),
                     game(106, "Quiet Foundry", 1, 4, 40, 45, "2.7", List.of("Strategy"), List.of("Deck Building", "Hand Management")),
                     game(107, "Cedar Pact", 3, 5, 35, 70, "2.6", List.of("Strategy"), List.of("Negotiation", "Auction/Bidding")),
-                    game(108, "Old Harbor", 1995, 2, 5, 45, 75, "2.5", List.of("Family"), List.of("Auction/Bidding", "Set Collection"), List.of("Archive Designer")),
-                    game(109, "Clocktower Commons", 1998, 2, 4, 35, 60, "2.1", List.of("Family"), List.of("Tile Placement", "Area Majority / Influence"), List.of("Archive Designer")),
-                    game(110, "Paper Kingdom", 1999, 3, 5, 60, 90, "3.1", List.of("Strategy"), List.of("Hand Management", "Variable Player Powers"), List.of("Archive Designer")),
+                    game(108, "Old Harbor", 1995, 2, 5, 45, 75, "2.5", List.of("Family"), List.of("Auction/Bidding", "Set Collection"), List.of("Archive Designer"), "Players bid for harbor contracts, then complete sets of cargo before the tide marker closes the round."),
+                    game(109, "Clocktower Commons", 1998, 2, 4, 35, 60, "2.1", List.of("Family"), List.of("Tile Placement", "Area Majority / Influence"), List.of("Archive Designer"), "Players rebuild a shared town square with tiles while competing for influence around the clocktower."),
+                    game(110, "Paper Kingdom", 1999, 3, 5, 60, 90, "3.1", List.of("Strategy"), List.of("Hand Management", "Variable Player Powers"), List.of("Archive Designer"), "Each player leads an asymmetric paper court and manages a hand of decrees across a longer political contest."),
                     game(184267, "On Mars", 1, 4, 90, 150, "4.7", List.of("Strategy"), List.of("Worker Placement", "Hand Management"), List.of("Vital Lacerda")),
                     game(161533, "Lisboa", 1, 4, 60, 120, "4.6", List.of("Strategy"), List.of("Area Majority / Influence", "Hand Management"), List.of("Vital Lacerda")));
             games = values.stream().collect(java.util.stream.Collectors.toUnmodifiableMap(

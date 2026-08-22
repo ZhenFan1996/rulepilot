@@ -144,7 +144,7 @@ public class BggRecommendationAgentStreamController {
     private void sendAgentProgress(SseEmitter emitter, AtomicBoolean open, ProgressUpdate update) {
         if (update.stage() == BoardGameRecommendationAgent.ProgressStage.UNDERSTANDING_REQUEST
                 && update.phase() == BoardGameRecommendationAgent.ProgressPhase.STARTED) return;
-        if (update.action() == BoardGameRecommendationAgent.ProgressAction.DIRECT_REPLY_FAST_PATH) {
+        if (update.action() == BoardGameRecommendationAgent.ProgressAction.STREAM_NATURAL_REPLY) {
             sendProgress(emitter, open, new ProgressUpdate(
                     update.stage(),
                     update.phase(),
@@ -191,11 +191,6 @@ public class BggRecommendationAgentStreamController {
                                     ? null
                                     : update.action().name().toLowerCase(Locale.ROOT),
                             update.elapsedMs(),
-                            update.decisionCycle(),
-                            update.modelCalls(),
-                            update.actionCalls(),
-                            update.catalogCalls(),
-                            update.webResearchCalls(),
                             update.observedCandidates(),
                             update.verifiedCandidates(),
                             update.hardRejectedCandidates(),
@@ -224,11 +219,6 @@ public class BggRecommendationAgentStreamController {
             String phase,
             String action,
             long elapsedMs,
-            int decisionCycle,
-            int modelCalls,
-            int actionCalls,
-            int catalogCalls,
-            int webResearchCalls,
             int observedCandidates,
             int verifiedCandidates,
             int hardRejectedCandidates,
