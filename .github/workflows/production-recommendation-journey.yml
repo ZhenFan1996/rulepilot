@@ -28,6 +28,11 @@ on:
         required: true
         type: boolean
         default: false
+      diagnostics_only:
+        description: Collect bounded production answer diagnostics without replaying the browser journey
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -88,6 +93,7 @@ jobs:
           chmod 644 "$HOME/.ssh/known_hosts"
 
       - name: Exercise the complete public recommendation journey
+        if: ${{ !inputs.diagnostics_only }}
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -148,7 +154,7 @@ jobs:
           chmod -R go-rwx "$artifact_dir"
 
       - name: Collect bounded API diagnostics after a failed journey
-        if: failure()
+        if: ${{ failure() || inputs.diagnostics_only }}
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -182,6 +188,58 @@ jobs:
           "${compose[@]}" logs --since 35m --tail 500 --no-color api
           echo "Worker logs from the last 35 minutes (bounded to 500 lines):"
           "${compose[@]}" logs --since 35m --tail 500 --no-color worker
+          owner_username=$(sed -n 's/^RULEPILOT_USER_USERNAME=//p' .env | head -n 1)
+          owner_username=${owner_username#\"}
+          owner_username=${owner_username%\"}
+          owner_username=${owner_username#\'}
+          owner_username=${owner_username%\'}
+          if [[ -n "$owner_username" ]]; then
+            echo "Recent answer Run outcomes and bounded activity timings:"
+            "${compose[@]}" exec -T postgres sh -c '
+              psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -v owner="$1" -P pager=off <<'"'"'SQL'"'"'
+              WITH recent AS (
+                SELECT id, state, last_error_code, created_at, updated_at, completed_at
+                FROM assistant_run
+                WHERE mode = '"'"'QUESTION_ANSWER'"'"'
+                  AND owner_username = :'"'"'owner'"'"'
+                  AND created_at >= now() - interval '"'"'20 minutes'"'"'
+                ORDER BY created_at DESC
+                LIMIT 3
+              )
+              SELECT id, state, last_error_code,
+                     round(extract(epoch FROM (coalesce(completed_at, updated_at) - created_at))::numeric, 3)
+                       AS wall_seconds
+              FROM recent
+              ORDER BY created_at DESC;
+
+              WITH recent AS (
+                SELECT id
+                FROM assistant_run
+                WHERE mode = '"'"'QUESTION_ANSWER'"'"'
+                  AND owner_username = :'"'"'owner'"'"'
+                  AND created_at >= now() - interval '"'"'20 minutes'"'"'
+                ORDER BY created_at DESC
+                LIMIT 3
+              )
+              SELECT activity.assistant_run_id, activity.sequence_number, activity.activity_type,
+                     activity.operation_name, activity.outcome, activity.latency_ms
+              FROM assistant_run_activity activity
+              JOIN recent ON recent.id = activity.assistant_run_id
+              ORDER BY activity.occurred_at;
+
+              SELECT turn.id, turn.answer_status, count(citation.position) AS citation_count,
+                     length(turn.short_verdict) AS verdict_chars,
+                     length(turn.explanation) AS explanation_chars
+              FROM game_session_conversation_turn turn
+              LEFT JOIN game_session_turn_citation citation ON citation.turn_id = turn.id
+              WHERE turn.created_by = :'"'"'owner'"'"'
+                AND turn.created_at >= now() - interval '"'"'20 minutes'"'"'
+              GROUP BY turn.id, turn.answer_status, turn.short_verdict, turn.explanation, turn.created_at
+              ORDER BY turn.created_at DESC
+              LIMIT 3;
+              SQL
+            ' sh "$owner_username"
+          fi
           REMOTE
           chmod 600 "$diagnostic_file"
 
