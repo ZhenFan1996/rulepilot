@@ -3,6 +3,7 @@ package com.rulepilot.retrieval.adapter.out.postgres;
 import com.rulepilot.ingestion.EmbeddingProvider.EmbeddingVector;
 import com.rulepilot.retrieval.application.VectorRuleSearchRepository;
 import com.rulepilot.retrieval.evidence.RuleEvidenceHit;
+import com.rulepilot.retrieval.evidence.RuleEvidenceHit.ContentKind;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 import java.util.List;
@@ -23,7 +24,8 @@ public class PostgresVectorRuleSearch implements VectorRuleSearchRepository {
         List<Object[]> rows = entityManager.createNativeQuery("""
                         SELECT id, document_version_id, section_type, heading, content,
                                page_from, page_to,
-                               (2 - (embedding <=> cast(:embedding AS vector))) / 2 AS score
+                               (2 - (embedding <=> cast(:embedding AS vector))) / 2 AS score,
+                               content_kind
                         FROM rule_chunk
                         WHERE document_version_id = :versionId
                           AND embedding IS NOT NULL
@@ -45,14 +47,12 @@ public class PostgresVectorRuleSearch implements VectorRuleSearchRepository {
                 (UUID) row[1],
                 (String) row[2],
                 (String) row[3],
-                excerpt((String) row[4]),
+                (String) row[4],
                 ((Number) row[5]).intValue(),
                 ((Number) row[6]).intValue(),
-                Math.max(0, ((Number) row[7]).doubleValue()));
-    }
-
-    private String excerpt(String content) {
-        return content.length() <= 240 ? content : content.substring(0, 240) + "…";
+                Math.max(0, ((Number) row[7]).doubleValue()),
+                ContentKind.valueOf((String) row[8]),
+                (String) row[4]);
     }
 
     private String vectorLiteral(EmbeddingVector embedding) {

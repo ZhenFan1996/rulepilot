@@ -85,6 +85,13 @@ observability, and repository commands cannot meet the need.
 - Refactor duplication only after the shared concept is stable.
 
 ## AI rules
+- Never infer intent, entities, preferences, quantities, tool choice, evidence, or workflow state by matching,
+  splitting, truncating, or otherwise parsing a model's free-form prose or the user's natural-language message.
+  When application behavior needs one of those values, require the Agent to return it through a typed JSON tool
+  argument with a documented schema, then validate only the schema, value range, evidence ID, entity identity, and
+  ownership boundary. Free-form model text is player-facing output only and must never be an input to business
+  routing. Protocol parsing such as JSON decoding, SSE framing, enum dispatch, and bounded display truncation is not
+  semantic interpretation and remains allowed.
 - Let the model write useful, natural prose. Guardrails validate schema, evidence identity, hard numerical facts, tool
   parameters, and publication boundaries; they do not regex-rewrite or template away a good answer.
 - LLM output is untrusted until schema and citation validation pass. No answer may claim a rule without evidence.

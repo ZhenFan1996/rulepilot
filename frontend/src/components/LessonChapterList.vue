@@ -2,6 +2,7 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 
 import LessonVisualEvidence from '@/components/LessonVisualEvidence.vue'
+import LessonRuleFacts, { type LessonRuleFact } from '@/components/LessonRuleFacts.vue'
 import type { VisualFocus } from '@/composables/lessonSupportingContent'
 import { useLocale } from '@/lib/locale'
 
@@ -10,6 +11,7 @@ interface LessonReaderStep {
   heading: string
   kind: string
   text: string
+  ruleFacts?: LessonRuleFact[]
   sourcePages: number[]
   visualFocus: VisualFocus | null
 }
@@ -116,7 +118,7 @@ function sourceLabel(pages: number[]) {
 }
 
 function stepTone(kind: string) {
-  if (kind === 'WATCH') return 'border-amber-300/70 bg-amber-50/60'
+  if (kind === 'WATCH' || kind === 'LIMIT') return 'border-amber-300/70 bg-amber-50/60'
   if (kind === 'CHECK') return 'border-emerald-200 bg-emerald-50/55'
   if (kind === 'EXAMPLE') return 'border-copper/20 bg-copper/[0.045]'
   return 'border-ink/10 bg-paper'
@@ -132,6 +134,8 @@ function stepKindLabel(kind: string) {
     case 'VISUAL': return t('lesson.chapter.move.visual')
     case 'FLOW': return t('lesson.chapter.move.flow')
     case 'LEDGER': return t('lesson.chapter.move.ledger')
+    case 'REFERENCE_CARD': return t('lesson.chapter.move.referenceCard')
+    case 'LIMIT': return t('lesson.chapter.move.limit')
     default: return kind
   }
 }
@@ -210,6 +214,7 @@ function stepKindLabel(kind: string) {
                     <span class="rounded-full border border-ink/10 bg-canvas/70 px-2.5 py-1 text-[11px] font-bold tracking-[0.08em] text-ink/45">{{ stepKindLabel(step.kind) }}</span>
                   </div>
                   <p class="mt-3 text-[0.98rem] leading-7 text-ink/75">{{ step.text }}</p>
+                  <LessonRuleFacts v-if="step.ruleFacts?.length" :facts="step.ruleFacts" />
 
                   <LessonVisualEvidence
                     v-if="step.visualFocus"

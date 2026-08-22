@@ -1,5 +1,10 @@
 package com.rulepilot.assistant.adapter.out.model;
 
+import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.databind.DeserializationFeature;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.JsonMappingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rulepilot.assistant.ContentCriticModel;
 import com.rulepilot.assistant.GeneratedContentCritic.ClaimAspect;
 import com.rulepilot.assistant.GeneratedContentCritic.ContentType;
@@ -10,6 +15,7 @@ import com.rulepilot.assistant.GeneratedContentCritic.ReviewRequest;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration.Role;
 import com.rulepilot.modelconfig.VersionedAgentPrompts;
+import java.io.IOException;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -31,27 +37,28 @@ import org.springframework.stereotype.Component;
 @Primary
 public class SpringAiContentCriticModel implements ContentCriticModel {
 
+    private static final ObjectMapper STRICT_CRITIC_OUTPUT = new ObjectMapper()
+            .enable(JsonParser.Feature.STRICT_DUPLICATE_DETECTION)
+            .enable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
+            .enable(DeserializationFeature.FAIL_ON_MISSING_CREATOR_PROPERTIES)
+            .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
     private final RuntimeModelConfiguration models;
-    private final FakeContentCriticModel fakeModel;
     private final VersionedAgentPrompts prompts;
     private final double temperature;
 
-    public SpringAiContentCriticModel(
-            RuntimeModelConfiguration models, FakeContentCriticModel fakeModel, VersionedAgentPrompts prompts) {
-        this(models, fakeModel, prompts, 0.0);
+    public SpringAiContentCriticModel(RuntimeModelConfiguration models, VersionedAgentPrompts prompts) {
+        this(models, prompts, 0.0);
     }
 
     @Autowired
     public SpringAiContentCriticModel(
             RuntimeModelConfiguration models,
-            FakeContentCriticModel fakeModel,
             VersionedAgentPrompts prompts,
             @Value("${rulepilot.critic.temperature:0.0}") double temperature) {
         if (!Double.isFinite(temperature) || temperature < 0.0 || temperature > 2.0) {
             throw new IllegalArgumentException("critic model temperature must be between 0 and 2");
         }
         this.models = models;
-        this.fakeModel = fakeModel;
         this.prompts = prompts;
         this.temperature = temperature;
     }
@@ -74,7 +81,7 @@ public class SpringAiContentCriticModel implements ContentCriticModel {
     @Override
     public CritiqueDraft critique(ReviewRequest request, String ownerUsername) {
         if (usesFake(ownerUsername)) {
-            return fakeModel.critique(request);
+            throw new IllegalStateException("a real critic model is required when model review is enabled");
         }
         RuntimeException firstFailure;
         try {
@@ -102,10 +109,10 @@ public class SpringAiContentCriticModel implements ContentCriticModel {
             OpenAiChatOptions.Builder options = OpenAiChatOptions.builder();
             options.model(modelNameFor(ownerUsername));
             options.temperature(temperature);
+            options.responseFormat(ResponseFormat.builder().type(ResponseFormat.Type.JSON_OBJECT).build());
             if (deepSeekNonThinking) {
                 options.extraBody(Map.of("thinking", Map.of("type", "disabled")));
             } else {
-                options.responseFormat(ResponseFormat.builder().type(ResponseFormat.Type.JSON_OBJECT).build());
                 options.extraBody(Map.of("enable_thinking", false));
             }
             prompt = prompt.options(options);
@@ -113,7 +120,7 @@ public class SpringAiContentCriticModel implements ContentCriticModel {
             prompt = prompt.options(ChatOptions.builder()
                     .temperature(temperature));
         }
-        ModelCritiqueDraft draft = prompt
+        String content = prompt
                 .system(systemPrompt(request.reviewMode()))
                 .user(user -> user.text(userPrompt(request.reviewMode()))
                         .param("type", request.contentType())
@@ -124,12 +131,59 @@ public class SpringAiContentCriticModel implements ContentCriticModel {
                         .param("evidence", modelEvidence(request))
                         .param("repair", repair))
                 .call()
-                .entity(ModelCritiqueDraft.class);
+                .content();
+        ModelCritiqueDraft draft = parseStructuredDraft(content);
         if (draft == null) throw new IllegalArgumentException("critic returned no draft");
         return new CritiqueDraft(draft.issues().stream()
                 .filter(issue -> Boolean.TRUE.equals(issue.defectConfirmed()))
                 .map(issue -> confirmedIssue(request, issue, evidenceIds))
                 .toList());
+    }
+
+    static ModelCritiqueDraft parseStructuredDraft(String content) {
+        if (content == null || content.isBlank()) {
+            throw new IllegalArgumentException("critic returned no structured output");
+        }
+        try {
+            JsonNode root = STRICT_CRITIC_OUTPUT.readTree(content);
+            JsonNode issues = requireArray(root, "issues", "critic output");
+            for (JsonNode issue : issues) requireArray(issue, "evidenceIds", "critic issue");
+            rejectDuplicateArrayItems(root, "critic output");
+            return STRICT_CRITIC_OUTPUT.readValue(content, ModelCritiqueDraft.class);
+        } catch (IOException invalidOutput) {
+            throw new IllegalArgumentException("critic returned an invalid structured output contract", invalidOutput);
+        }
+    }
+
+    private static JsonNode requireArray(JsonNode owner, String field, String contract) throws JsonMappingException {
+        if (owner == null || !owner.isObject() || !owner.has(field) || !owner.get(field).isArray()) {
+            throw JsonMappingException.from(
+                    (JsonParser) null, contract + " field " + field + " must be an array");
+        }
+        return owner.get(field);
+    }
+
+    private static void rejectDuplicateArrayItems(JsonNode node, String path) throws JsonMappingException {
+        if (node.isArray()) {
+            java.util.LinkedHashSet<JsonNode> unique = new java.util.LinkedHashSet<>();
+            int index = 0;
+            for (JsonNode item : node) {
+                if (!unique.add(item)) {
+                    throw JsonMappingException.from(
+                            (JsonParser) null, path + " contains a duplicate array item at index " + index);
+                }
+                rejectDuplicateArrayItems(item, path + "[" + index + "]");
+                index++;
+            }
+            return;
+        }
+        if (node.isObject()) {
+            var fields = node.fields();
+            while (fields.hasNext()) {
+                var field = fields.next();
+                rejectDuplicateArrayItems(field.getValue(), path + "." + field.getKey());
+            }
+        }
     }
 
     private Issue confirmedIssue(ReviewRequest request, ModelIssue issue, Map<String, UUID> evidenceIds) {
@@ -238,15 +292,21 @@ public class SpringAiContentCriticModel implements ContentCriticModel {
     }
 
     private List<UUID> resolveReferences(List<String> references, Map<String, UUID> evidenceIds) {
-        if (references == null) return List.of();
-        return references.stream()
+        if (references == null) {
+            throw new IllegalArgumentException("critic must return an explicit evidenceIds array");
+        }
+        List<String> normalized = references.stream()
                 .map(reference -> reference == null ? "" : reference.strip().toUpperCase())
+                .toList();
+        if (new java.util.LinkedHashSet<>(normalized).size() != normalized.size()) {
+            throw new IllegalArgumentException("critic returned duplicate evidence references");
+        }
+        return normalized.stream()
                 .map(reference -> {
                     UUID id = evidenceIds.get(reference);
                     if (id == null) throw new IllegalArgumentException("critic cited an unknown evidence reference");
                     return id;
                 })
-                .distinct()
                 .toList();
     }
 
@@ -254,20 +314,20 @@ public class SpringAiContentCriticModel implements ContentCriticModel {
 
     private record ModelEvidence(String evidenceRef, String excerpt) {}
 
-    private record ModelCritiqueDraft(List<ModelIssue> issues) {
-        private ModelCritiqueDraft {
+    record ModelCritiqueDraft(List<ModelIssue> issues) {
+        ModelCritiqueDraft {
             issues = issues == null ? List.of() : List.copyOf(issues);
         }
     }
 
-    private record ModelIssue(
+    record ModelIssue(
             Boolean defectConfirmed,
             IssueType type,
             ClaimAspect claimAspect,
             int claimPosition,
             List<String> evidenceIds,
             String summary) {
-        private ModelIssue {
+        ModelIssue {
             if (defectConfirmed == null) {
                 throw new IllegalArgumentException("critic issue verdict is missing");
             }

@@ -68,6 +68,7 @@ public record CandidateClaim(
         TAXONOMY_CLASSIFICATION,
         ATTRIBUTED_EXPERIENCE,
         RULE_PROCEDURE,
+        PUBLISHER_DESCRIPTION,
         PREFERENCE_INFERENCE
     }
 

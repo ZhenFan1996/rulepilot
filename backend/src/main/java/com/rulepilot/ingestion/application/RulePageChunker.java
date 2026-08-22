@@ -42,7 +42,8 @@ public class RulePageChunker {
                         "GENERAL",
                         "Visual rulebook page " + page.pageNumber(),
                         VISUAL_PAGE_PLACEHOLDER,
-                        page.pageNumber()));
+                        page.pageNumber(),
+                        DetectedRuleChunk.ContentKind.VISUAL_PLACEHOLDER));
                 continue;
             }
             List<PageBlock> pageBlocks = understanding == null

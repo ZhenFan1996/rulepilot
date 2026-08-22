@@ -1,6 +1,7 @@
 package com.rulepilot.teaching.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.rulepilot.teaching.TeachingOutlineModel.OutlineDraft;
 import com.rulepilot.teaching.TeachingOutlineModel.TopicDraft;
@@ -47,12 +48,11 @@ class TeachingPlanFactoryTest {
     }
 
     @Test
-    void accepts_omitted_optional_audit_labels_so_the_plan_factory_can_apply_its_existing_contract() {
-        var topic = new TopicDraft(
-                null, "开局", "完成开局设置。", true, true, List.of("Starting Set-up"), null);
-
-        assertThat(topic.key()).isBlank();
-        assertThat(topic.coverageTags()).isEmpty();
+    void rejectsAMissingStableTopicIdentityAtTheStructuredOutputBoundary() {
+        assertThatThrownBy(() -> new TopicDraft(
+                        null, "开局", "完成开局设置。", true, true, List.of("Starting Set-up"), null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("topic is invalid");
     }
 
     @Test

@@ -20,7 +20,6 @@ final class RecommendationAgentState {
 
     final long startedAtNanos;
     final String modelConfigurationOwner;
-    final Integer explicitRecommendationCount;
     final int maximumRecommendationResults;
     RecommendationProfile profile;
     final Set<Integer> excludedIds;
@@ -66,10 +65,7 @@ final class RecommendationAgentState {
         this.modelConfigurationOwner = modelConfigurationOwner == null || modelConfigurationOwner.isBlank()
                 ? null
                 : modelConfigurationOwner.strip();
-        var explicitCount = ExplicitRecommendationQuantity.from(
-                request.message(), maximumRecommendationResults);
-        explicitRecommendationCount = explicitCount.isPresent() ? explicitCount.getAsInt() : null;
-        this.maximumRecommendationResults = explicitCount.orElse(maximumRecommendationResults);
+        this.maximumRecommendationResults = maximumRecommendationResults;
         profile = request.profile();
         excludedIds = new LinkedHashSet<>(request.excludedBggIds());
         previouslyShownIds.addAll(request.shownBggIds());

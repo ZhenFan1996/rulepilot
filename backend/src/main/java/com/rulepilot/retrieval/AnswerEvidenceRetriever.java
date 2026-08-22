@@ -22,20 +22,17 @@ public final class AnswerEvidenceRetriever {
     private final VisualRulebookPageFactSearch visualFacts;
     private final RuleEvidenceLookup evidenceLookup;
     private final AnswerRetrievalInvocations invocations;
-    private final AnswerRetrievalQueryRewriter queryRewriter;
     private final AnswerVisualEvidenceEnricher visualEvidenceEnricher;
 
     public AnswerEvidenceRetriever(
             HybridRuleSearch retrieval,
             VisualRulebookPageFactSearch visualFacts,
             RuleEvidenceLookup evidenceLookup,
-            AnswerRetrievalInvocations invocations,
-            AnswerRetrievalQueryRewriter queryRewriter) {
+            AnswerRetrievalInvocations invocations) {
         this.retrieval = retrieval;
         this.visualFacts = visualFacts;
         this.evidenceLookup = evidenceLookup;
         this.invocations = invocations;
-        this.queryRewriter = queryRewriter;
         this.visualEvidenceEnricher = new AnswerVisualEvidenceEnricher(evidenceLookup, invocations);
     }
 
@@ -73,16 +70,14 @@ public final class AnswerEvidenceRetriever {
                 evidenceById,
                 visualFactsByPage,
                 directQuestionVisualFactPages);
-        retrieveIdentifierBoundVisualFacts(
+        retrieveRuleObjectBoundVisualFacts(
                 assistantRunId,
                 context.documentVersionId(),
-                question.currentQuestion(),
+                questionPlan.currentRuleObjectSpans(),
                 visualFactsByPage,
                 directQuestionVisualFactPages);
-        List<String> rewrittenQueries = rewriteCrossLanguageQueries(
-                assistantRunId, question, username, questionPlan);
         List<RetrievalIntent> intents = AnswerRetrievalPlanner.plan(
-                question, context, rewrittenQueries, questionPlan);
+                question, context, questionPlan);
         for (RetrievalIntent intent : intents) {
             List<HybridEvidenceHit> retrieved;
             try {
@@ -156,29 +151,6 @@ public final class AnswerEvidenceRetriever {
                 break;
             }
         }
-        if (!conflicting && visualRequested) {
-            try {
-                List<PageFactMatch> legendMatches = invocations.invoke(
-                        assistantRunId,
-                        "searchVisualRulebookIconLegend",
-                        12,
-                        "Cross-page icon legend evidence retrieved",
-                        () -> visualFacts.search(
-                                context.documentVersionId(),
-                                "component legend setup contents token marker piece card tile resource icon symbol "
-                                        + "starting components player reference 组件 图例 配件 设置 令牌 标记 棋子 卡牌 板块 资源 图标",
-                                2),
-                        matches -> matches.size() * 80);
-                legendMatches.forEach(match -> visualFactsByPage.merge(
-                        match.pageNumber(), match, (first, candidate) -> candidate.score() > first.score() ? candidate : first));
-            } catch (RuntimeException lookupFailure) {
-                if (invocations.executionStopped(lookupFailure)) throw lookupFailure;
-                LOGGER.warn(
-                        "Optional icon-legend lookup failed for document version {}: {}",
-                        context.documentVersionId(),
-                        lookupFailure.getClass().getSimpleName());
-            }
-        }
         if (conflicting) {
             return new Result(List.of(), State.CONFLICTING);
         }
@@ -243,36 +215,35 @@ public final class AnswerEvidenceRetriever {
         }
     }
 
-    private void retrieveIdentifierBoundVisualFacts(
+    private void retrieveRuleObjectBoundVisualFacts(
             UUID assistantRunId,
             UUID documentVersionId,
-            String currentQuestion,
+            List<String> currentRuleObjectSpans,
             Map<Integer, PageFactMatch> visualFactsByPage,
             Set<Integer> directQuestionVisualFactPages) {
-        List<String> identifiers = AnswerEvidencePolicy.printedIdentifiers(currentQuestion);
-        if (identifiers.isEmpty()) return;
-        String query = String.join(" ", identifiers);
-        try {
-            List<PageFactMatch> matches = invocations.invoke(
-                    assistantRunId,
-                    "searchIdentifierBoundVisualFacts",
-                    estimateTokens(query),
-                    "Page facts retrieved by printed identifier",
-                    () -> visualFacts.search(documentVersionId, query, Math.min(5, Math.max(4, identifiers.size()))),
-                    result -> result.size() * 80);
-            matches.forEach(match -> {
-                visualFactsByPage.merge(
-                        match.pageNumber(),
-                        match,
-                        (first, candidate) -> candidate.score() > first.score() ? candidate : first);
-                directQuestionVisualFactPages.add(match.pageNumber());
-            });
-        } catch (RuntimeException lookupFailure) {
-            if (invocations.executionStopped(lookupFailure)) throw lookupFailure;
-            LOGGER.warn(
-                    "Optional identifier-bound visual fact lookup failed for document version {}: {}",
-                    documentVersionId,
-                    lookupFailure.getClass().getSimpleName());
+        for (String ruleObjectSpan : currentRuleObjectSpans) {
+            try {
+                List<PageFactMatch> matches = invocations.invoke(
+                        assistantRunId,
+                        "searchRuleObjectBoundVisualFacts",
+                        estimateTokens(ruleObjectSpan),
+                        "Page facts retrieved for an Agent-selected current-question rule object",
+                        () -> visualFacts.search(documentVersionId, ruleObjectSpan, 4),
+                        result -> result.size() * 80);
+                matches.forEach(match -> {
+                    visualFactsByPage.merge(
+                            match.pageNumber(),
+                            match,
+                            (first, candidate) -> candidate.score() > first.score() ? candidate : first);
+                    directQuestionVisualFactPages.add(match.pageNumber());
+                });
+            } catch (RuntimeException lookupFailure) {
+                if (invocations.executionStopped(lookupFailure)) throw lookupFailure;
+                LOGGER.warn(
+                        "Optional rule-object-bound visual fact lookup failed for document version {}: {}",
+                        documentVersionId,
+                        lookupFailure.getClass().getSimpleName());
+            }
         }
     }
 
@@ -286,32 +257,6 @@ public final class AnswerEvidenceRetriever {
                 .findFirst()
                 .orElse(retrieved.getFirst());
         intentAnchors.putIfAbsent(anchor.evidence().chunkId(), anchor);
-    }
-
-    private List<String> rewriteCrossLanguageQueries(
-            UUID assistantRunId,
-            AnswerRetrievalQuestion question,
-            String username,
-            AnswerRetrievalPlan plan) {
-        if (!AnswerEvidencePolicy.requiresCrossLanguageExpansion(question.currentQuestion())) {
-            return List.of();
-        }
-        try {
-            return queryRewriter.rewrite(
-                    assistantRunId,
-                    username,
-                    question.currentQuestion(),
-                    plan.referenceBinding() == AnswerRetrievalPlan.ReferenceBinding.CURRENT_QUESTION
-                            ? null
-                            : plan.boundReferenceQuestion());
-        } catch (RuntimeException exception) {
-            if (queryRewriter.timedOut(exception)) {
-                LOGGER.info("Cross-language retrieval rewrite timed out; continuing with the original question");
-            } else {
-                LOGGER.info("Cross-language retrieval rewrite unavailable; continuing with the original question");
-            }
-            return List.of();
-        }
     }
 
     private int evidenceTokens(List<HybridEvidenceHit> evidence) {

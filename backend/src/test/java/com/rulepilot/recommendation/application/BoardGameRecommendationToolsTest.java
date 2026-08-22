@@ -62,7 +62,9 @@ class BoardGameRecommendationToolsTest {
             @Override
             public List<Ranking> searchByNames(List<String> names) {
                 calls.add("names:" + names);
-                return List.of(game(20).ranking(), game(21).ranking());
+                return names.getFirst().endsWith("One")
+                        ? List.of(game(21).ranking())
+                        : List.of(game(20).ranking());
             }
 
             @Override
@@ -81,11 +83,15 @@ class BoardGameRecommendationToolsTest {
         var observation = tools.inspectTitles(List.of("Synthetic Twenty", "Synthetic Twenty One"));
 
         assertThat(calls).containsExactly(
-                "names:[Synthetic Twenty, Synthetic Twenty One]",
+                "names:[Synthetic Twenty]",
+                "names:[Synthetic Twenty One]",
                 "ids:[20, 21]");
         assertThat(observation.status()).isEqualTo(ToolStatus.SUCCESS);
         assertThat(observation.tool()).isEqualTo(ToolName.INSPECT_BGG_TITLES);
         assertThat(observation.games()).extracting(value -> value.ranking().bggId()).containsExactly(20, 21);
+        assertThat(observation.titleResolutions())
+                .extracting(value -> value.correlationId() + ":" + value.bggId())
+                .containsExactly("title-1:20", "title-2:21");
     }
 
     @Test

@@ -568,7 +568,7 @@ onBeforeUnmount(() => {
   }
   .home-intro__title { max-width: none; font-size: 2.32rem; line-height: 1.06; }
   .home-intro__lede { margin-top: 1rem; font-size: 0.91rem; line-height: 1.72; }
-  .home-intro__actions { flex-direction: column; margin-top: 1.1rem; }
+  .home-intro__actions { flex-direction: column; margin-top: 1rem; }
   .home-intro__art {
     grid-area: art;
     min-height: clamp(11.5rem, 48vw, 12.25rem);

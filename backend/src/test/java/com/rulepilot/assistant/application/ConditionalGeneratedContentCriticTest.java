@@ -21,7 +21,6 @@ import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.ArrayList;
-import java.util.stream.IntStream;
 import org.junit.jupiter.api.Test;
 
 class ConditionalGeneratedContentCriticTest {
@@ -59,6 +58,21 @@ class ConditionalGeneratedContentCriticTest {
         assertThat(review.performed()).isFalse();
         assertThat(review.accepted()).isTrue();
         assertThat(calls).hasValue(0);
+    }
+
+    @Test
+    void performsTheBoundedTeachingPublicationReviewOutsideEvaluationMode() {
+        AtomicInteger calls = new AtomicInteger();
+        var critic = critic(false, request -> {
+            calls.incrementAndGet();
+            return new CritiqueDraft(List.of());
+        });
+
+        var review = critic.review(opaqueLessonRequest(), ReviewRisk.HIGH_IMPACT);
+
+        assertThat(review.performed()).isTrue();
+        assertThat(review.accepted()).isTrue();
+        assertThat(calls).hasValue(1);
     }
 
     @Test
@@ -296,7 +310,7 @@ class ConditionalGeneratedContentCriticTest {
     }
 
     @Test
-    void batchesCandidateClaimsWithSiblingContextAndRestrictsIssuesToCandidateTypes() {
+    void batchesOnlyCandidateClaimsAndTheirEvidenceAndRestrictsIssuesToCandidateTypes() {
         UUID secondChunk = UUID.randomUUID();
         UUID unrelatedChunk = UUID.randomUUID();
         List<ReviewRequest> observed = new ArrayList<>();
@@ -330,11 +344,11 @@ class ConditionalGeneratedContentCriticTest {
         assertThat(observed).hasSize(2);
         ReviewRequest confirmation = observed.getLast();
         assertThat(confirmation.reviewMode()).isEqualTo(ReviewMode.ATOMIC_CONFIRMATION);
-        assertThat(confirmation.claims()).extracting(Claim::position).containsExactly(1, 2, 3);
+        assertThat(confirmation.claims()).extracting(Claim::position).containsExactly(1, 2);
         assertThat(confirmation.evidence()).extracting(Evidence::chunkId)
-                .containsExactly(chunkId, secondChunk, unrelatedChunk);
+                .containsExactly(chunkId, secondChunk);
         assertThat(confirmation.taskContext().requiredCoverage())
-                .contains("Positions not listed are context only", "sibling claims");
+                .contains("only candidate claims", "own cited evidence IDs");
         assertThat(review.issues()).containsExactly(new Issue(
                 IssueType.UNSUPPORTED_CLAIM, 1, List.of(chunkId), "First confirmed."));
     }
@@ -355,26 +369,18 @@ class ConditionalGeneratedContentCriticTest {
     }
 
     @Test
-    void normalizesOnlyProtocolScopeAndBudgetsWithoutRejudgingIssueMeaning() {
+    void rejectsCriticOutputThatEscapesTheRequestedProtocolScope() {
         UUID outside = UUID.randomUUID();
         String longSummary = "x".repeat(300);
-        List<Issue> issues = IntStream.rangeClosed(1, 14)
-                .mapToObj(index -> new Issue(
-                        IssueType.OVERREACH,
-                        99,
-                        List.of(outside, chunkId, chunkId),
-                        index == 1 ? longSummary : "Issue " + index))
-                .toList();
-        var critic = critic(true, request -> new CritiqueDraft(issues));
+        var critic = critic(true, request -> new CritiqueDraft(List.of(new Issue(
+                IssueType.OVERREACH,
+                99,
+                List.of(outside, chunkId),
+                longSummary))));
 
-        var review = critic.review(request(ReviewMode.OBJECTIVE_COVERAGE), ReviewRisk.STANDARD);
-
-        assertThat(review.issues()).hasSize(12);
-        assertThat(review.issues()).allSatisfy(issue -> {
-            assertThat(issue.claimPosition()).isEqualTo(1);
-            assertThat(issue.evidenceIds()).containsExactly(chunkId);
-        });
-        assertThat(review.issues().getFirst().summary()).hasSize(240);
+        assertThatThrownBy(() -> critic.review(request(ReviewMode.OBJECTIVE_COVERAGE), ReviewRisk.STANDARD))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("critic issue");
     }
 
     @Test

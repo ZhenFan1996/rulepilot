@@ -20,6 +20,19 @@ public interface BoardGameRecommendationModel {
     }
 
     /**
+     * Streams a model-owned first turn while preserving native action calls. The listener receives accumulated
+     * player-facing text only when the model chooses text instead of an action; action arguments are never emitted.
+     */
+    default Turn streamNext(
+            Request request,
+            String ownerUsername,
+            Consumer<String> accumulatedTextListener) {
+        Turn turn = next(request, ownerUsername);
+        if (turn.toolCalls().isEmpty() && !turn.text().isEmpty()) accumulatedTextListener.accept(turn.text());
+        return turn;
+    }
+
+    /**
      * Streams player-facing prose after either a direct low-risk turn or a validated structural decision.
      * The listener receives the complete text accumulated so far, never provider-specific deltas.
      */

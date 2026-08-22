@@ -11,7 +11,6 @@ import static org.mockito.Mockito.when;
 import com.rulepilot.assistant.PlayerLocale;
 import com.rulepilot.assistant.RuleAnswerModel.AnswerAid;
 import com.rulepilot.assistant.RuleAnswerModel.AnswerContext;
-import com.rulepilot.assistant.RuleAnswerModel.CalculationRequest;
 import com.rulepilot.assistant.RuleAnswerModel.EvidenceInput;
 import com.rulepilot.assistant.RuleAnswerModel.ModelDraft;
 import com.rulepilot.assistant.RuleAnswerModel.ModelRequest;
@@ -47,7 +46,7 @@ class SpringAiRuleAnswerModelTest {
         when(configuration.providerFor(Role.ANSWER)).thenReturn("deepseek");
 
         SpringAiRuleAnswerModel model =
-                new SpringAiRuleAnswerModel(configuration, new FakeRuleAnswerModel(), mock(VersionedAgentPrompts.class));
+                new SpringAiRuleAnswerModel(configuration, mock(VersionedAgentPrompts.class));
 
         assertThat(model.providerId()).isEqualTo("deepseek");
     }
@@ -59,8 +58,8 @@ class SpringAiRuleAnswerModelTest {
                  "terms":["红色标记","这样"],"ruleObjectSpans":[],"pageHints":[],"missingContext":[],
                  "learningIntent":"EXAMPLE","answerAid":"EXAMPLE",
                  "subquestions":[
-                   {"questionSpan":"红色标记什么时候触发？","evidenceNeeds":["PRIOR_TURN"]},
-                   {"questionSpan":"它也是这样吗？","evidenceNeeds":["DIRECT_RULE"]}
+                   {"questionSpan":"红色标记什么时候触发？","evidenceNeeds":["PRIOR_TURN"],"owner":"BOUND_REFERENCE","retrievalQueries":["red marker trigger timing"]},
+                   {"questionSpan":"它也是这样吗？","evidenceNeeds":["DIRECT_RULE"],"owner":"CURRENT_QUESTION","retrievalQueries":[]}
                  ]}
                 """);
 
@@ -72,6 +71,8 @@ class SpringAiRuleAnswerModelTest {
             assertThat(draft.missingContext()).isEmpty();
             assertThat(draft.learningIntent()).isEqualTo(LearningIntent.EXAMPLE);
             assertThat(draft.subquestions()).hasSize(2);
+            assertThat(draft.subquestions().getFirst().retrievalQueries())
+                    .containsExactly("red marker trigger timing");
         });
         ArgumentCaptor<Prompt> prompt = ArgumentCaptor.forClass(Prompt.class);
         verify(fixture.chatModel).call(prompt.capture());
@@ -81,22 +82,21 @@ class SpringAiRuleAnswerModelTest {
                     assertThat(text.length()).isLessThan(6_000);
                     assertThat(text).contains(
                             "NEEDS_CLARIFICATION",
-                            "same-version grounded turn",
-                            "never current rule evidence",
+                            "same-version grounded conversation turn",
+                            "typed retrieval and presentation plan",
                             "subquestions",
                             "evidenceNeeds",
-                            "exact verbatim",
-                            "Teaching intent",
+                            "retrievalQueries",
+                            "owner: CURRENT_QUESTION or BOUND_REFERENCE",
+                            "authoritative application data",
                             "learningIntent",
                             "GENERAL_QUESTION",
-                            "deterministic fallback",
-                            "MUST contain one to four",
+                            "Protocol demonstrations",
+                            "Example B",
                             "Use CALCULATION",
-                            "which of two proposed totals",
-                            "current player message is authoritative",
                             "ruleObjectSpans",
                             "pageHints",
-                            "locator, never evidence");
+                            "Do not place pageNumber or owner");
                 });
     }
 
@@ -108,7 +108,7 @@ class SpringAiRuleAnswerModelTest {
                  "ruleObjectSpans":["cobalt spindle"],
                  "pageHints":[{"questionSpan":"page 47","pageNumber":47}],
                  "missingContext":[],"learningIntent":"SOURCE","answerAid":"SOURCE",
-                 "subquestions":[{"questionSpan":"What does the cobalt spindle do on page 47?","evidenceNeeds":["DIRECT_RULE"]}]}
+                 "subquestions":[{"questionSpan":"What does the cobalt spindle do on page 47?","evidenceNeeds":["DIRECT_RULE"],"owner":"CURRENT_QUESTION","retrievalQueries":[]}]}
                 """);
 
         var result = fixture.model.interpretQuestion(new QuestionInterpretationRequest(
@@ -134,7 +134,7 @@ class SpringAiRuleAnswerModelTest {
         Fixture fixture = fixture("""
                 {"questionType":"RULE_QUERY","referenceBinding":"CURRENT_QUESTION","terms":["策略"],
                  "ruleObjectSpans":[],"pageHints":[],"missingContext":[],"learningIntent":null,"answerAid":"NONE",
-                 "subquestions":[{"questionSpan":"有没有赢的策略？","evidenceNeeds":["ADVICE"]}]}
+                 "subquestions":[{"questionSpan":"有没有赢的策略？","evidenceNeeds":["ADVICE"],"owner":"CURRENT_QUESTION","retrievalQueries":["recommended winning strategy"]}]}
                 """);
 
         var result = fixture.model.interpretQuestion(new QuestionInterpretationRequest(
@@ -154,14 +154,9 @@ class SpringAiRuleAnswerModelTest {
                 .extracting(message -> message.getText())
                 .anySatisfy(text -> assertThat(text)
                         .contains(
-                                "ADVICE",
-                                "actually express guidance",
-                                "objective, scoring rule, or legal action",
-                                "never a learningIntent",
-                                "application-scoped game or rulebook",
-                                "score or threshold needed to win",
-                                "without COMPLETE_LIST",
-                                "Winning alone never creates ADVICE"));
+                                "ADVICE requires source-authored strategy",
+                                "victory condition",
+                                "ADVICE is never a learning intent"));
     }
 
     @Test
@@ -170,12 +165,12 @@ class SpringAiRuleAnswerModelTest {
                 """
                 {"questionType":"RULE_QUERY","referenceBinding":"CURRENT_QUESTION","terms":["策略"],
                  "ruleObjectSpans":[],"pageHints":[],"missingContext":[],"learningIntent":"ADVICE","answerAid":"NONE",
-                 "subquestions":[{"questionSpan":"有没有赢的策略？","evidenceNeeds":["ADVICE"]}]}
+                 "subquestions":[{"questionSpan":"有没有赢的策略？","evidenceNeeds":["ADVICE"],"owner":"CURRENT_QUESTION","retrievalQueries":[]}]}
                 """,
                 """
                 {"questionType":"RULE_QUERY","referenceBinding":"CURRENT_QUESTION","terms":["策略"],
                  "ruleObjectSpans":[],"pageHints":[],"missingContext":[],"learningIntent":null,"answerAid":"NONE",
-                 "subquestions":[{"questionSpan":"有没有赢的策略？","evidenceNeeds":["ADVICE"]}]}
+                 "subquestions":[{"questionSpan":"有没有赢的策略？","evidenceNeeds":["ADVICE"],"owner":"CURRENT_QUESTION","retrievalQueries":["recommended winning strategy"]}]}
                 """);
 
         var result = fixture.model.interpretQuestion(new QuestionInterpretationRequest(
@@ -205,12 +200,12 @@ class SpringAiRuleAnswerModelTest {
                 """
                 {"questionType":"RULE_QUERY","referenceBinding":"CURRENT_QUESTION","terms":["when"],
                  "ruleObjectSpans":[],"pageHints":[],"missingContext":[],"learningIntent":null,"answerAid":"TIMING",
-                 "subquestions":[{"questionSpan":"when does Daylight end","evidenceNeeds":["TIMING"]}]}
+                 "subquestions":[{"questionSpan":"when does Daylight end","evidenceNeeds":["TIMING"],"owner":"CURRENT_QUESTION","retrievalQueries":[]}]}
                 """,
                 """
                 {"questionType":"RULE_QUERY","referenceBinding":"CURRENT_QUESTION","terms":["when"],
                  "ruleObjectSpans":[],"pageHints":[],"missingContext":[],"learningIntent":null,"answerAid":"TIMING",
-                 "subquestions":[{"questionSpan":"when does Daylight end","evidenceNeeds":["SEQUENCE"]}]}
+                 "subquestions":[{"questionSpan":"when does Daylight end","evidenceNeeds":["SEQUENCE"],"owner":"CURRENT_QUESTION","retrievalQueries":[]}]}
                 """);
 
         var result = fixture.model.interpretQuestion(new QuestionInterpretationRequest(
@@ -241,36 +236,22 @@ class SpringAiRuleAnswerModelTest {
     }
 
     @Test
-    void keepsValidRetrievalPlanWithoutARepairCallWhenOnlyPresentationHintIsUnknown() {
-        Fixture fixture = fixture("""
-                {"questionType":"RULE_QUERY","referenceBinding":"CURRENT_QUESTION","terms":["when"],
-                 "ruleObjectSpans":[],"pageHints":[],"missingContext":[],"learningIntent":null,"answerAid":"SEQUENCE",
-                 "subquestions":[{"questionSpan":"when does Daylight end","evidenceNeeds":["SEQUENCE"]}]}
-                """);
-
-        var result = fixture.model.interpretQuestion(new QuestionInterpretationRequest(
-                "when does Daylight end",
-                "",
-                "",
-                "",
-                QuestionType.RULE_QUERY,
-                Set.of(),
-                PlayerLocale.EN));
-
-        assertThat(result).hasValueSatisfying(draft -> {
-            assertThat(draft.answerAid()).isEqualTo(AnswerAid.NONE);
-            assertThat(draft.subquestions().getFirst().evidenceNeeds())
-                    .containsExactly(EvidenceNeed.SEQUENCE);
-        });
-        verify(fixture.chatModel).call(any(Prompt.class));
-    }
-
-    @Test
     void rejectsQuestionInterpretationWithFieldsOutsideTheVersionedContract() {
         Fixture fixture = fixture("""
                 {"questionType":"RULE_QUERY","referenceBinding":"CURRENT_QUESTION","terms":[],
-                 "ruleObjectSpans":[],"pageHints":[],"missingContext":[],"answerAid":"NONE","subquestions":[{"questionSpan":"它也是这样吗？","evidenceNeeds":["DIRECT_RULE"]}],
+                 "ruleObjectSpans":[],"pageHints":[],"missingContext":[],"answerAid":"NONE","subquestions":[{"questionSpan":"它也是这样吗？","evidenceNeeds":["DIRECT_RULE"],"owner":"CURRENT_QUESTION","retrievalQueries":[]}],
                  "answer":"invented rule fact"}
+                """);
+
+        assertThat(fixture.model.interpretQuestion(request())).isEmpty();
+    }
+
+    @Test
+    void rejectsASubquestionThatOmitsItsStructuredRetrievalQueriesField() {
+        Fixture fixture = fixture("""
+                {"questionType":"RULE_QUERY","referenceBinding":"CURRENT_QUESTION","terms":[],
+                 "ruleObjectSpans":[],"pageHints":[],"missingContext":[],"learningIntent":null,"answerAid":"NONE",
+                 "subquestions":[{"questionSpan":"它也是这样吗？","evidenceNeeds":["DIRECT_RULE"],"owner":"CURRENT_QUESTION"}]}
                 """);
 
         assertThat(fixture.model.interpretQuestion(request())).isEmpty();
@@ -281,7 +262,7 @@ class SpringAiRuleAnswerModelTest {
         Fixture fixture = fixture("""
                 {"questionType":"RULE_QUERY","referenceBinding":"PREVIOUS_QUESTION","terms":[],
                  "ruleObjectSpans":[],"pageHints":[],"missingContext":[],"learningIntent":"SOURCE","answerAid":"SOURCE",
-                 "subquestions":[{"questionSpan":"这条规则在规则书哪里？","evidenceNeeds":["DIRECT_RULE"]}]}
+                 "subquestions":[{"questionSpan":"这条规则在规则书哪里？","evidenceNeeds":["DIRECT_RULE"],"owner":"CURRENT_QUESTION","retrievalQueries":["original rule source"]}]}
                 """, true);
 
         assertThat(fixture.model.interpretQuestion(request())).isPresent();
@@ -318,12 +299,15 @@ class SpringAiRuleAnswerModelTest {
         when(prompts.answerUser()).thenReturn("{question}\n{evidence}\n{repair}");
         when(chatModel.call(any(Prompt.class))).thenReturn(new ChatResponse(List.of(new Generation(
                 new AssistantMessage("""
-                        {"answerable":true,"shortVerdict":"Yes.","explanation":"Direct rule.",
+                        {"answerable":true,"insufficiencyReason":null,
+                         "shortVerdict":"Yes.","explanation":"Direct rule.",
                          "citationIds":["%s"],"exceptions":[],"confidence":"HIGH",
-                         "answerBasis":"DIRECT_RULE"}
+                         "answerBasis":"DIRECT_RULE","calculations":[],"walkthroughSteps":[],
+                         "decisionBranches":[],"exceptionClauses":[],"termDefinitions":[],
+                         "workedExamples":[],"priorityResolutions":[],"timingResolutions":[],
+                         "tieResolutions":[],"scopeResolutions":[],"conceptComparisons":[],"ruleOptions":[]}
                         """.formatted(citation))))));
-        SpringAiRuleAnswerModel model = new SpringAiRuleAnswerModel(
-                configuration, new FakeRuleAnswerModel(), prompts, 0.42, 0.07);
+        SpringAiRuleAnswerModel model = new SpringAiRuleAnswerModel(configuration, prompts, 0.42, 0.07);
 
         model.compose(new ModelRequest(
                 "Arbitrary question",
@@ -353,8 +337,7 @@ class SpringAiRuleAnswerModelTest {
                 {"explanation":"The current excerpts cannot confirm a guaranteed opening."}
                 """))));
         when(chatModel.call(any(Prompt.class))).thenReturn(repairResponse);
-        SpringAiRuleAnswerModel model = new SpringAiRuleAnswerModel(
-                configuration, new FakeRuleAnswerModel(), prompts, 0.42, 0.0);
+        SpringAiRuleAnswerModel model = new SpringAiRuleAnswerModel(configuration, prompts, 0.42, 0.0);
         ModelRequest request = new ModelRequest(
                 "How do I score, and is there a guaranteed opening?",
                 QuestionType.RULE_QUERY,
@@ -369,7 +352,7 @@ class SpringAiRuleAnswerModelTest {
                 List.of(),
                 "HIGH",
                 "DIRECT_RULE",
-                List.of(new CalculationRequest("1 + 1")));
+                List.of());
 
         ModelDraft repaired = model.revisePlayerFacing(
                 request,
@@ -381,7 +364,7 @@ class SpringAiRuleAnswerModelTest {
         assertThat(repaired.shortVerdict()).isEqualTo("Supported score.");
         assertThat(repaired.explanation()).isEqualTo("The current excerpts cannot confirm a guaranteed opening.");
         assertThat(repaired.citationIds()).containsExactly(citation);
-        assertThat(repaired.calculations()).containsExactly(new CalculationRequest("1 + 1"));
+        assertThat(repaired.calculations()).isEmpty();
         ArgumentCaptor<Prompt> captured = ArgumentCaptor.forClass(Prompt.class);
         verify(chatModel, times(1)).call(captured.capture());
         assertThat(captured.getValue().getContents())
@@ -398,7 +381,7 @@ class SpringAiRuleAnswerModelTest {
     }
 
     @Test
-    void ignoresARepeatedKnownLockedFieldWithoutLettingItMutateThePreviousDraft() {
+    void rejectsARepeatedKnownLockedFieldInsteadOfSilentlyIgnoringIt() {
         RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
         ChatModel chatModel = mock(ChatModel.class);
         VersionedAgentPrompts prompts = mock(VersionedAgentPrompts.class);
@@ -413,29 +396,29 @@ class SpringAiRuleAnswerModelTest {
                         {"explanation":"The evidence confirms the complete winning sequence.",
                          "citationIds":["%s"]}
                         """.formatted(repeatedUntrustedCitation))))));
-        SpringAiRuleAnswerModel model = new SpringAiRuleAnswerModel(
-                configuration, new FakeRuleAnswerModel(), prompts, 0.42, 0.0);
+        SpringAiRuleAnswerModel model = new SpringAiRuleAnswerModel(configuration, prompts, 0.42, 0.0);
         ModelRequest request = new ModelRequest(
                 "How do I win?",
                 QuestionType.RULE_QUERY,
                 new AnswerContext(null, null, PlayerLocale.EN),
                 List.of(new EvidenceInput(trustedCitation, "RULE", "Victory", "Complete victory rule.", 2, 2)));
         ModelDraft previous = new ModelDraft(
+                true,
+                null,
                 "Win by completing the sequence.",
                 "Internal citation marker " + trustedCitation,
                 List.of(trustedCitation),
                 List.of(),
-                "HIGH");
+                "HIGH",
+                "DIRECT_RULE");
 
-        ModelDraft repaired = model.revisePlayerFacing(
-                request,
-                previous,
-                List.of("Remove internal evidence identifiers from player prose."),
-                Set.of(PlayerFacingField.EXPLANATION),
-                null);
-
-        assertThat(repaired.explanation()).isEqualTo("The evidence confirms the complete winning sequence.");
-        assertThat(repaired.citationIds()).containsExactly(trustedCitation);
+        assertThatThrownBy(() -> model.revisePlayerFacing(
+                        request,
+                        previous,
+                        List.of("Remove internal evidence identifiers from player prose."),
+                        Set.of(PlayerFacingField.EXPLANATION),
+                        null))
+                .hasMessageContaining("outside its edit scope");
         verify(chatModel, times(1)).call(any(Prompt.class));
     }
 
@@ -453,15 +436,21 @@ class SpringAiRuleAnswerModelTest {
                 new AssistantMessage("""
                         {"explanation":"Player-safe prose.","privateReasoning":"must not be accepted"}
                         """)))));
-        SpringAiRuleAnswerModel model = new SpringAiRuleAnswerModel(
-                configuration, new FakeRuleAnswerModel(), prompts, 0.42, 0.0);
+        SpringAiRuleAnswerModel model = new SpringAiRuleAnswerModel(configuration, prompts, 0.42, 0.0);
         ModelRequest request = new ModelRequest(
                 "How do I win?",
                 QuestionType.RULE_QUERY,
                 new AnswerContext(null, null, PlayerLocale.EN),
                 List.of(new EvidenceInput(citation, "RULE", "Victory", "Complete victory rule.", 2, 2)));
         ModelDraft previous = new ModelDraft(
-                "Verdict.", "Unsafe internal marker.", List.of(citation), List.of(), "HIGH");
+                true,
+                null,
+                "Verdict.",
+                "Unsafe internal marker.",
+                List.of(citation),
+                List.of(),
+                "HIGH",
+                "DIRECT_RULE");
 
         assertThatThrownBy(() -> model.revisePlayerFacing(
                         request,
@@ -486,8 +475,7 @@ class SpringAiRuleAnswerModelTest {
         ChatResponse repairResponse = new ChatResponse(List.of(new Generation(new AssistantMessage(
                 "{\"citationIds\":[\"" + existingCitation + "\",\"" + quotedCitation + "\"]}"))));
         when(chatModel.call(any(Prompt.class))).thenReturn(repairResponse);
-        SpringAiRuleAnswerModel model = new SpringAiRuleAnswerModel(
-                configuration, new FakeRuleAnswerModel(), prompts, 0.42, 0.0);
+        SpringAiRuleAnswerModel model = new SpringAiRuleAnswerModel(configuration, prompts, 0.42, 0.0);
         String explanation = "The rule states: \u201cA player wins immediately at thirty points.\u201d";
         ModelRequest request = new ModelRequest(
                 "How does a player win?",
@@ -504,7 +492,14 @@ class SpringAiRuleAnswerModelTest {
                                 2,
                                 2)));
         ModelDraft previous = new ModelDraft(
-                "Reach thirty points.", explanation, List.of(existingCitation), List.of(), "HIGH");
+                true,
+                null,
+                "Reach thirty points.",
+                explanation,
+                List.of(existingCitation),
+                List.of(),
+                "HIGH",
+                "DIRECT_RULE");
 
         ModelDraft repaired = model.revisePlayerFacing(
                 request,
@@ -528,11 +523,9 @@ class SpringAiRuleAnswerModelTest {
         RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
         VersionedAgentPrompts prompts = mock(VersionedAgentPrompts.class);
 
-        assertThatThrownBy(() -> new SpringAiRuleAnswerModel(
-                        configuration, new FakeRuleAnswerModel(), prompts, Double.NaN, 0.0))
+        assertThatThrownBy(() -> new SpringAiRuleAnswerModel(configuration, prompts, Double.NaN, 0.0))
                 .hasMessageContaining("answer model temperature");
-        assertThatThrownBy(() -> new SpringAiRuleAnswerModel(
-                        configuration, new FakeRuleAnswerModel(), prompts, 0.1, 2.1))
+        assertThatThrownBy(() -> new SpringAiRuleAnswerModel(configuration, prompts, 0.1, 2.1))
                 .hasMessageContaining("answer interpretation");
     }
 
@@ -586,8 +579,7 @@ class SpringAiRuleAnswerModelTest {
                 chatResponses[0],
                 java.util.Arrays.copyOfRange(chatResponses, 1, chatResponses.length));
         return new Fixture(
-                new SpringAiRuleAnswerModel(
-                        configuration, new FakeRuleAnswerModel(), mock(VersionedAgentPrompts.class)),
+                new SpringAiRuleAnswerModel(configuration, mock(VersionedAgentPrompts.class)),
                 chatModel);
     }
 

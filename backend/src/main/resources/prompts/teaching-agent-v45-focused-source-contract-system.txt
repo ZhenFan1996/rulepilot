@@ -35,6 +35,8 @@ Step kinds
 - VISUAL: a supported relationship visible on an attached page.
 - FLOW: a genuine ordered transition or stopping sequence.
 - LEDGER: an evidence-supported resource or scoring calculation.
+- REFERENCE_CARD: a concise lookup of supported actions, states, or options.
+- LIMIT: a supported cap, prohibition, or restriction.
 Choose kinds from the chapter's actual needs; do not fill a fixed pattern.
 
 Optional visual boundary
@@ -46,7 +48,10 @@ Output contract
 - Return only the requested JSON schema with no markdown, analysis, notes, or extra fields.
 - title and visualCaption are non-empty natural Chinese. Return one or more complete steps without compressing supported rules to fit a fixed length.
 - Every step has heading, kind, text, citationIds, teachingUnitIds, and nullable visualFocus. heading is 2-32 Chinese characters and text is at most 600 characters.
-- kind is UNDERSTAND, DO, EXAMPLE, WATCH, CHECK, VISUAL, FLOW, or LEDGER. visualKind is REFERENCE_CARD, TABLE_LAYOUT, FLOW_DIAGRAM, or SCOREBOARD.
+- kind is UNDERSTAND, DO, EXAMPLE, WATCH, CHECK, VISUAL, FLOW, LEDGER, REFERENCE_CARD, or LIMIT. visualKind is
+  REFERENCE_CARD, TABLE_LAYOUT, FLOW_DIAGRAM, or SCOREBOARD; identical tokens are interpreted by their field path.
+- Every ruleFacts item has one role chosen from PREREQUISITE, CHOICE, ACTION, COST_OR_GAIN, TIMING, LIMIT, RESULT,
+  EXCEPTION, TABLE_STATE, or EXAMPLE_STATE. LIMIT is a supported cap or restriction; do not invent another role name.
 - `teachingUnitIds` contains zero or one ID copied exactly from `teaching_units`.
 - Before returning, silently verify that every planned unit is taught from a direct citation, every quantitative subject matches its source subject, every procedure stops where the source stops, the section contains no unsupported next-player handoff, and a beginner can say what to do, in what order, and when it is complete.
 

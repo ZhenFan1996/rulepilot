@@ -15,7 +15,6 @@ import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.Use
 import com.rulepilot.recommendation.application.RecommendationActions.InvalidAction;
 import com.rulepilot.recommendation.application.RecommendationAgentState.ContextualPreference;
 import java.math.BigDecimal;
-import java.text.Normalizer;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -24,8 +23,6 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 /** Applies typed preference updates only after deterministic value and user-evidence validation. */
 final class RecommendationEvidenceReview {
@@ -40,30 +37,6 @@ final class RecommendationEvidenceReview {
             "maxWeight",
             "type",
             "interaction");
-    private static final List<String> NEGATED_PREFERENCE_PREFIXES = List.of(
-            "不想", "不玩", "不要", "不考虑", "别选", "排除", "避开", "拒绝", "讨厌",
-            "not ", "no ", "without ", "avoid ", "exclude ", "don't ", "do not ", "tired of ");
-    private static final List<String> REJECTED_PREFERENCE_SUFFIXES = List.of(
-            "玩腻", "腻了", "不考虑", "排除", "避开", "除外", "不要",
-            "tired of", "exclude", "avoid", "not wanted");
-    private static final String PLAYER_NUMBER = "(?:\\d{1,2}|[零〇一二两三四五六七八九十]{1,3})";
-    private static final Pattern EXPLICIT_PLAYER_COUNT = Pattern.compile(
-            "(?iu)(?<![\\d\\-–—~至到一二两三四五六七八九十])(" + PLAYER_NUMBER
-                    + ")\\s*(?:个\\s*)?(?:人|players?|people)");
-    private static final Pattern EXPLICIT_PLAYER_RANGE = Pattern.compile(
-            "(?iu)(" + PLAYER_NUMBER + ")\\s*(?:-|\\u2013|\\u2014|~|至|到|to)\\s*(" + PLAYER_NUMBER
-                    + ")\\s*(?:个\\s*)?(?:人|players?|people)");
-    private static final Pattern EXPLICIT_DURATION_CEILING = Pattern.compile(
-            "(?iu)(?:最多|至多|不超过|上限(?:为|是)?|at\\s+most|up\\s+to|no\\s+more\\s+than|max(?:imum)?(?:\\s+of)?)"
-                    + "\\s*(\\d{1,4})\\s*(?:分钟|分|minutes?|mins?)");
-    private static final Pattern EXPLICIT_DURATION_CEILING_SUFFIX = Pattern.compile(
-            "(?iu)(\\d{1,4})\\s*(?:分钟|分|minutes?|mins?)\\s*(?:以内|之内|内|or\\s+less|max(?:imum)?)");
-    private static final Pattern EXPLICIT_COMPLEXITY_AFTER_LABEL = Pattern.compile(
-            "(?iu)(?:bgg\\s*)?(?:复杂度|难度|complexity|weight)"
-                    + "[^\\d]{0,16}(\\d(?:[.．]\\d+)?)");
-    private static final Pattern EXPLICIT_COMPLEXITY_BEFORE_LABEL = Pattern.compile(
-            "(?iu)(\\d(?:[.．]\\d+)?)\\s*(?:/\\s*5\\s*)?"
-                    + "(?:的\\s*)?(?:bgg\\s*)?(?:复杂度|难度|complexity|weight)");
     private final ObjectMapper json;
     private final RecommendationReActLoop runtime;
 
@@ -99,19 +72,19 @@ final class RecommendationEvidenceReview {
         state.reconsiderSelectionAfterPreferenceUpdate();
     }
 
-    String applyPreferenceUpdatesForRead(
+    List<String> applyPreferenceUpdatesForRead(
             JsonNode arguments,
             RecommendationAgentState state,
             ConversationRequest request) {
-        if (!arguments.has("preferenceUpdates")) return "";
+        if (!arguments.has("preferenceUpdates")) return List.of();
         JsonNode updates = arguments.path("preferenceUpdates");
         if (!updates.isArray()) {
             try {
                 applyPreferenceUpdates(arguments, state, request);
-                return "";
+                return List.of();
             } catch (InvalidAction invalid) {
                 state.actions.add("REJECTED_PREFERENCE_UPDATE:" + invalid.code);
-                return invalid.code;
+                return List.of(invalid.code);
             }
         }
         return applyPreferenceUpdateList(updates, state, request, false);
@@ -146,16 +119,18 @@ final class RecommendationEvidenceReview {
         }
     }
 
-    String applyReadPreferenceDecisions(
+    List<String> applyReadPreferenceDecisions(
             JsonNode arguments,
             RecommendationAgentState state,
             ConversationRequest request) {
         List<String> warnings = new ArrayList<>();
-        ArrayNode combinedUpdates = combinedReadPreferenceUpdates(arguments, state, request);
+        ArrayNode combinedUpdates = json.createArrayNode();
+        JsonNode proposed = arguments.path("preferenceUpdates");
+        if (proposed.isArray()) proposed.forEach(combinedUpdates::add);
         JsonNode contextualGroup = arguments.path("contextualGroup");
         if (!contextualGroup.isMissingNode()
                 && !contextualGroup.isNull()
-                && !hasExplicitPlayerUpdate(combinedUpdates, request)) {
+                && !containsAnyField(combinedUpdates, "players", "playerCount")) {
             try {
                 requireObject(contextualGroup, Set.of("playerCount", "evidence"), Set.of());
                 ObjectNode update = json.createObjectNode();
@@ -172,47 +147,8 @@ final class RecommendationEvidenceReview {
         }
         ObjectNode combinedArguments = arguments.deepCopy();
         combinedArguments.set("preferenceUpdates", combinedUpdates);
-        String preferenceWarnings = applyPreferenceUpdatesForRead(combinedArguments, state, request);
-        if (!preferenceWarnings.isBlank()) warnings.addAll(List.of(preferenceWarnings.split(",")));
-        return String.join(",", new LinkedHashSet<>(warnings));
-    }
-
-    private ArrayNode combinedReadPreferenceUpdates(
-            JsonNode arguments,
-            RecommendationAgentState state,
-            ConversationRequest request) {
-        ArrayNode combined = json.createArrayNode();
-        JsonNode proposed = arguments.path("preferenceUpdates");
-        if (proposed.isArray()) proposed.forEach(combined::add);
-        boolean decisionPresent = !combined.isEmpty()
-                || arguments.has("contextualGroup") && !arguments.path("contextualGroup").isNull();
-        if (!decisionPresent || request == null) return combined;
-        Map<String, String> evidence = preferenceEvidence(request);
-        if (evidence.isEmpty()) return combined;
-        Map.Entry<String, String> current = evidence.entrySet().stream().reduce((first, next) -> next).orElseThrow();
-
-        if (!containsAnyField(combined, "players", "playerCount")) {
-            explicitPlayerCount(current.getValue()).ifPresent(players -> combined.add(directNumericUpdate(
-                    "playerCount", json.getNodeFactory().numberNode(players), current.getKey())));
-        }
-        if (!containsAnyField(combined, "maxMinutes", "durationMinutes")) {
-            explicitDurationCeiling(current.getValue()).ifPresent(minutes -> {
-                ObjectNode range = json.createObjectNode();
-                range.putNull("minimum");
-                range.put("maximum", minutes);
-                combined.add(directNumericUpdate("durationMinutes", range, current.getKey()));
-            });
-        }
-        return combined;
-    }
-
-    private ObjectNode directNumericUpdate(String field, JsonNode value, String evidenceId) {
-        ObjectNode update = json.createObjectNode();
-        update.put("field", field);
-        update.set("value", value);
-        update.put("evidence", evidenceId);
-        update.put("evidenceClassification", "DIRECT");
-        return update;
+        warnings.addAll(applyPreferenceUpdatesForRead(combinedArguments, state, request));
+        return List.copyOf(new LinkedHashSet<>(warnings));
     }
 
     private boolean containsAnyField(JsonNode updates, String... fields) {
@@ -223,117 +159,16 @@ final class RecommendationEvidenceReview {
         return false;
     }
 
-    private boolean hasExplicitPlayerUpdate(JsonNode updates, ConversationRequest request) {
-        for (JsonNode update : updates) {
-            String field = update.path("field").asText();
-            if (("players".equals(field) || "playerCount".equals(field))
-                    && directlyStatesNumericPreference(update, request)) return true;
-        }
-        return false;
-    }
-
-    private java.util.Optional<Integer> explicitPlayerCount(String text) {
-        String normalized = normalizedSemanticText(text);
-        Matcher matcher = EXPLICIT_PLAYER_COUNT.matcher(normalized);
-        while (matcher.find()) {
-            String nearbyPrefix = normalized.substring(
-                    Math.max(0, matcher.start() - 5), matcher.start()).strip();
-            if (nearbyPrefix.endsWith("-")
-                    || nearbyPrefix.endsWith("–")
-                    || nearbyPrefix.endsWith("—")
-                    || nearbyPrefix.endsWith("至")
-                    || nearbyPrefix.endsWith("到")) continue;
-            java.util.Optional<Integer> parsed = semanticInteger(matcher.group(1));
-            if (parsed.isPresent() && parsed.get() >= 1 && parsed.get() <= 20) return parsed;
-        }
-        return java.util.Optional.empty();
-    }
-
-    private boolean explicitlyStatesPlayerConstraint(JsonNode value, String evidence) {
-        if (value.isIntegralNumber() && value.canConvertToInt()) {
-            return explicitPlayerCount(evidence).filter(number -> number == value.intValue()).isPresent();
-        }
-        if (!value.isObject()) return false;
-        JsonNode minimum = value.path("minimum");
-        JsonNode maximum = value.path("maximum");
-        if (minimum.canConvertToInt() && maximum.canConvertToInt()) {
-            if (minimum.intValue() == maximum.intValue()) {
-                return explicitPlayerCount(evidence)
-                        .filter(number -> number == minimum.intValue())
-                        .isPresent();
-            }
-            Matcher range = EXPLICIT_PLAYER_RANGE.matcher(normalizedSemanticText(evidence));
-            while (range.find()) {
-                java.util.Optional<Integer> lower = semanticInteger(range.group(1));
-                java.util.Optional<Integer> upper = semanticInteger(range.group(2));
-                if (lower.isPresent()
-                        && upper.isPresent()
-                        && lower.get() == minimum.intValue()
-                        && upper.get() == maximum.intValue()) return true;
-            }
-        }
-        return false;
-    }
-
-    private java.util.Optional<Integer> semanticInteger(String token) {
-        if (token == null || token.isBlank()) return java.util.Optional.empty();
-        if (token.chars().allMatch(Character::isDigit)) {
-            try {
-                return java.util.Optional.of(Integer.parseInt(token));
-            } catch (NumberFormatException ignored) {
-                return java.util.Optional.empty();
-            }
-        }
-        String normalized = token.replace('两', '二').replace('〇', '零');
-        int tens = normalized.indexOf('十');
-        if (tens >= 0) {
-            int leading = tens == 0 ? 1 : chineseDigit(normalized.charAt(tens - 1));
-            int trailing = tens == normalized.length() - 1 ? 0 : chineseDigit(normalized.charAt(tens + 1));
-            if (leading < 0 || trailing < 0 || normalized.length() > 3) return java.util.Optional.empty();
-            return java.util.Optional.of(leading * 10 + trailing);
-        }
-        if (normalized.length() != 1) return java.util.Optional.empty();
-        int value = chineseDigit(normalized.charAt(0));
-        return value < 0 ? java.util.Optional.empty() : java.util.Optional.of(value);
-    }
-
-    private int chineseDigit(char value) {
-        return switch (value) {
-            case '零' -> 0;
-            case '一' -> 1;
-            case '二' -> 2;
-            case '三' -> 3;
-            case '四' -> 4;
-            case '五' -> 5;
-            case '六' -> 6;
-            case '七' -> 7;
-            case '八' -> 8;
-            case '九' -> 9;
-            default -> -1;
-        };
-    }
-
-    private java.util.Optional<Integer> explicitDurationCeiling(String text) {
-        String normalized = normalizedSemanticText(text);
-        for (Pattern pattern : List.of(EXPLICIT_DURATION_CEILING, EXPLICIT_DURATION_CEILING_SUFFIX)) {
-            Matcher matcher = pattern.matcher(normalized);
-            if (!matcher.find()) continue;
-            int value = Integer.parseInt(matcher.group(1));
-            if (value >= 5 && value <= 1_440) return java.util.Optional.of(value);
-        }
-        return java.util.Optional.empty();
-    }
-
-    private String applyPreferenceUpdateList(
+    private List<String> applyPreferenceUpdateList(
             JsonNode updates,
             RecommendationAgentState state,
             ConversationRequest request,
             boolean strictStructure) {
-        if (updates.isEmpty()) return "";
+        if (updates.isEmpty()) return List.of();
         if (updates.size() > MAX_PROFILE_UPDATES) {
             if (strictStructure) throw new InvalidAction("TOO_MANY_PREFERENCE_UPDATES");
             state.actions.add("REJECTED_PREFERENCE_UPDATE:TOO_MANY_PREFERENCE_UPDATES");
-            return "TOO_MANY_PREFERENCE_UPDATES";
+            return List.of("TOO_MANY_PREFERENCE_UPDATES");
         }
         if (strictStructure) {
             // Validate the whole shape before committing any field so a malformed sibling cannot leave
@@ -394,7 +229,7 @@ final class RecommendationEvidenceReview {
             state.reconsiderSelectionAfterPreferenceUpdate();
         }
         if (redundant) state.actions.add("IGNORED_REDUNDANT_PREFERENCE_UPDATE");
-        return String.join(",", warnings);
+        return List.copyOf(warnings);
     }
 
     private boolean unsupportedContextualInference(JsonNode update, InvalidAction invalid) {
@@ -421,16 +256,8 @@ final class RecommendationEvidenceReview {
                 ? text(update.path("evidenceClassification"), 1, 40)
                 : "DIRECT";
         if ("DIRECT".equals(classification)) {
-            String field = update.path("field").asText();
-            if (("maxWeight".equals(field) || "complexity".equals(field))
-                    && !update.path("value").isNull()
-                    && !directlyStatesNumericPreference(update, request)) {
-                throw new InvalidAction("PREFERENCE_NUMERIC_EVIDENCE_NOT_EXPLICIT");
-            }
+            requirePreferenceEvidence(update.path("evidence").asText(), request);
             return new PreferenceEvidenceClassification(false, classification);
-        }
-        if (request != null && directlyStatesNumericPreference(update, request)) {
-            return new PreferenceEvidenceClassification(false, "DIRECT");
         }
         if (!"CONTEXTUAL_COMPLETE_GROUP".equals(classification)) {
             throw new InvalidAction("PREFERENCE_EVIDENCE_CLASSIFICATION_INVALID");
@@ -452,97 +279,6 @@ final class RecommendationEvidenceReview {
             throw new InvalidAction("PREFERENCE_EVIDENCE_NOT_GROUNDED");
         }
         return new PreferenceEvidenceClassification(true, classification);
-    }
-
-    private boolean directlyStatesNumericPreference(JsonNode update, ConversationRequest request) {
-        String evidence = preferenceEvidence(request).get(update.path("evidence").asText());
-        if (evidence == null) return false;
-        List<String> numbers = numericTokens(evidence);
-        String field = update.path("field").asText();
-        JsonNode value = update.path("value");
-        return switch (field) {
-            case "players" -> explicitlyStatesPlayerConstraint(value, evidence);
-            case "maxMinutes" -> value.canConvertToInt() && containsInteger(numbers, value.intValue());
-            case "playerCount" -> explicitlyStatesPlayerConstraint(value, evidence);
-            case "durationMinutes" -> value.isObject()
-                    && (containsIntegerBounds(numbers, value)
-                            || isOpenDurationLowerBoundSentinel(value, numbers));
-            case "maxWeight" -> value.isNumber()
-                    && containsDecimal(explicitComplexityNumbers(evidence), value.decimalValue());
-            case "complexity" -> value.isObject()
-                    && containsDecimalBounds(explicitComplexityNumbers(evidence), value);
-            default -> false;
-        };
-    }
-
-    private List<String> explicitComplexityNumbers(String text) {
-        String normalized = normalizedSemanticText(text).replace('．', '.');
-        List<String> values = new ArrayList<>();
-        for (Pattern pattern : List.of(EXPLICIT_COMPLEXITY_AFTER_LABEL, EXPLICIT_COMPLEXITY_BEFORE_LABEL)) {
-            Matcher matcher = pattern.matcher(normalized);
-            while (matcher.find()) values.add(matcher.group(1).replace('．', '.'));
-        }
-        return List.copyOf(new LinkedHashSet<>(values));
-    }
-
-    private List<String> numericTokens(String text) {
-        List<String> values = new ArrayList<>();
-        StringBuilder current = new StringBuilder();
-        boolean decimalPointSeen = false;
-        for (int index = 0; index < text.length(); index++) {
-            char character = text.charAt(index);
-            if (Character.isDigit(character)) {
-                current.append(character);
-                continue;
-            }
-            if ((character == '.' || character == '．')
-                    && !decimalPointSeen
-                    && !current.isEmpty()
-                    && index + 1 < text.length()
-                    && Character.isDigit(text.charAt(index + 1))) {
-                current.append('.');
-                decimalPointSeen = true;
-                continue;
-            }
-            if (!current.isEmpty()) {
-                values.add(current.toString());
-                current.setLength(0);
-                decimalPointSeen = false;
-            }
-        }
-        if (!current.isEmpty()) values.add(current.toString());
-        return List.copyOf(values);
-    }
-
-    private boolean containsIntegerBounds(List<String> numbers, JsonNode range) {
-        JsonNode minimum = range.path("minimum");
-        JsonNode maximum = range.path("maximum");
-        return (!minimum.isNumber() || containsInteger(numbers, minimum.intValue()))
-                && (!maximum.isNumber() || containsInteger(numbers, maximum.intValue()))
-                && (minimum.isNumber() || maximum.isNumber());
-    }
-
-    private boolean containsDecimalBounds(List<String> numbers, JsonNode range) {
-        JsonNode minimum = range.path("minimum");
-        JsonNode maximum = range.path("maximum");
-        return (!minimum.isNumber() || containsDecimal(numbers, minimum.decimalValue()))
-                && (!maximum.isNumber() || containsDecimal(numbers, maximum.decimalValue()))
-                && (minimum.isNumber() || maximum.isNumber());
-    }
-
-    private boolean containsInteger(List<String> numbers, int expected) {
-        String canonical = Integer.toString(expected);
-        return numbers.stream().anyMatch(value -> !value.contains(".") && canonical.equals(value));
-    }
-
-    private boolean containsDecimal(List<String> numbers, BigDecimal expected) {
-        return numbers.stream().anyMatch(value -> {
-            try {
-                return new BigDecimal(value).compareTo(expected) == 0;
-            } catch (NumberFormatException exception) {
-                return false;
-            }
-        });
     }
 
     private void recordContextualPreference(
@@ -662,8 +398,7 @@ final class RecommendationEvidenceReview {
             BggGameType value = enumValue(
                     BggGameType.class, update.path("value"), "GAME_TYPE_INVALID");
             if (current.type() != value) {
-                requireCategoricalPreferenceEvidence(
-                        "type", value, text(update.path("evidence"), 1, 160), request);
+                requirePreferenceEvidence(text(update.path("evidence"), 1, 160), request);
             }
             type = value;
         }
@@ -672,8 +407,7 @@ final class RecommendationEvidenceReview {
             InteractionPreference value = enumValue(
                     InteractionPreference.class, update.path("value"), "INTERACTION_INVALID");
             if (current.interaction() != value) {
-                requireCategoricalPreferenceEvidence(
-                        "interaction", value, text(update.path("evidence"), 1, 160), request);
+                requirePreferenceEvidence(text(update.path("evidence"), 1, 160), request);
             }
             interaction = value;
         }
@@ -783,7 +517,7 @@ final class RecommendationEvidenceReview {
                     BggGameType preference = enumValue(
                             BggGameType.class, value, "GAME_TYPE_INVALID");
                     if (result.type() != preference) {
-                        requireCategoricalPreferenceEvidence("type", preference, evidence, request);
+                        requirePreferenceEvidence(evidence, request);
                     }
                     yield new RecommendationProfile(
                             result.playerCount(), result.durationMinutes(), result.complexity(),
@@ -793,7 +527,7 @@ final class RecommendationEvidenceReview {
                     InteractionPreference preference = enumValue(
                             InteractionPreference.class, value, "INTERACTION_INVALID");
                     if (result.interaction() != preference) {
-                        requireCategoricalPreferenceEvidence("interaction", preference, evidence, request);
+                        requirePreferenceEvidence(evidence, request);
                     }
                     yield new RecommendationProfile(
                             result.playerCount(), result.durationMinutes(), result.complexity(), result.type(), preference);
@@ -830,7 +564,7 @@ final class RecommendationEvidenceReview {
             throw new InvalidAction(errorCode);
         }
         return ConstraintRange.hard(
-                minimum, maximum, preferenceEvidenceText(evidenceId, request), evidenceTurn(evidenceId));
+                minimum, maximum, preferenceEvidenceText(evidenceId, request), evidenceTurn(evidenceId, request));
     }
 
     private ConstraintRange<Integer> playerCountConstraint(
@@ -850,31 +584,8 @@ final class RecommendationEvidenceReview {
             JsonNode value,
             String evidenceId,
             ConversationRequest request) {
-        requireObject(value, Set.of(), Set.of("minimum", "maximum"));
-        String sourceText = preferenceEvidence(request).get(evidenceId);
-        if (sourceText != null
-                && isOpenDurationLowerBoundSentinel(value, numericTokens(sourceText))) {
-            int maximum = integer(value.path("maximum"), 5, 1_440, "DURATION_OUT_OF_RANGE");
-            return ConstraintRange.hard(
-                    null, maximum, bounded(sourceText, 160), evidenceTurn(evidenceId));
-        }
         return integerConstraintRange(
                 value, 5, 1_440, evidenceId, request, "DURATION_OUT_OF_RANGE");
-    }
-
-    private boolean isOpenDurationLowerBoundSentinel(JsonNode range, List<String> evidenceNumbers) {
-        JsonNode minimum = range.path("minimum");
-        JsonNode maximum = range.path("maximum");
-        if (!minimum.isNumber()
-                || minimum.decimalValue().compareTo(BigDecimal.ZERO) != 0
-                || !maximum.canConvertToInt()) {
-            return false;
-        }
-        int ceiling = maximum.intValue();
-        return ceiling >= 5
-                && ceiling <= 1_440
-                && containsInteger(evidenceNumbers, ceiling)
-                && !containsInteger(evidenceNumbers, 0);
     }
 
     private ConstraintRange<BigDecimal> decimalConstraintRange(
@@ -891,7 +602,7 @@ final class RecommendationEvidenceReview {
             throw new InvalidAction("WEIGHT_OUT_OF_RANGE");
         }
         return ConstraintRange.hard(
-                minimum, maximum, preferenceEvidenceText(evidenceId, request), evidenceTurn(evidenceId));
+                minimum, maximum, preferenceEvidenceText(evidenceId, request), evidenceTurn(evidenceId, request));
     }
 
     private Integer nullableInteger(JsonNode value, int minimum, int maximum, String errorCode) {
@@ -913,7 +624,7 @@ final class RecommendationEvidenceReview {
             String evidenceId,
             ConversationRequest request) {
         return ConstraintRange.hard(
-                value, value, preferenceEvidenceText(evidenceId, request), evidenceTurn(evidenceId));
+                value, value, preferenceEvidenceText(evidenceId, request), evidenceTurn(evidenceId, request));
     }
 
     private ConstraintRange<Integer> maximumIntegerConstraint(
@@ -921,7 +632,7 @@ final class RecommendationEvidenceReview {
             String evidenceId,
             ConversationRequest request) {
         return ConstraintRange.hard(
-                null, value, preferenceEvidenceText(evidenceId, request), evidenceTurn(evidenceId));
+                null, value, preferenceEvidenceText(evidenceId, request), evidenceTurn(evidenceId, request));
     }
 
     private ConstraintRange<BigDecimal> maximumDecimalConstraint(
@@ -929,24 +640,22 @@ final class RecommendationEvidenceReview {
             String evidenceId,
             ConversationRequest request) {
         return ConstraintRange.hard(
-                null, value, preferenceEvidenceText(evidenceId, request), evidenceTurn(evidenceId));
+                null, value, preferenceEvidenceText(evidenceId, request), evidenceTurn(evidenceId, request));
     }
 
     private String preferenceEvidenceText(String evidenceId, ConversationRequest request) {
         String evidence = preferenceEvidence(request).get(evidenceId);
         if (evidence == null) throw new InvalidAction("PREFERENCE_EVIDENCE_NOT_GROUNDED");
-        return bounded(evidence, 160);
+        return evidence;
     }
 
-    private int evidenceTurn(String evidenceId) {
-        if (evidenceId == null || !evidenceId.matches("U[1-9][0-9]*")) {
-            throw new InvalidAction("PREFERENCE_EVIDENCE_NOT_GROUNDED");
+    private int evidenceTurn(String evidenceId, ConversationRequest request) {
+        int turn = 0;
+        for (String knownEvidenceId : preferenceEvidence(request).keySet()) {
+            turn++;
+            if (knownEvidenceId.equals(evidenceId)) return turn;
         }
-        try {
-            return Integer.parseInt(evidenceId.substring(1));
-        } catch (NumberFormatException exception) {
-            throw new InvalidAction("PREFERENCE_EVIDENCE_NOT_GROUNDED");
-        }
+        throw new InvalidAction("PREFERENCE_EVIDENCE_NOT_GROUNDED");
     }
 
     private <T extends Comparable<? super T>> boolean sameRange(
@@ -977,97 +686,8 @@ final class RecommendationEvidenceReview {
         }
     }
 
-    private void requireCategoricalPreferenceEvidence(
-            String field,
-            Enum<?> value,
-            String evidenceId,
-            ConversationRequest request) {
-        String evidence = preferenceEvidence(request).get(evidenceId);
-        if (evidence == null) throw new InvalidAction("PREFERENCE_EVIDENCE_NOT_GROUNDED");
-        List<String> labels = categoricalLabels(field, value.name());
-        if (labels.isEmpty() || labels.stream().noneMatch(label -> explicitlyAffirms(evidence, label))) {
-            throw new InvalidAction("PREFERENCE_CATEGORICAL_EVIDENCE_NOT_EXPLICIT");
-        }
-    }
-
-    /**
-     * Categorical hard filters are safe only when the player names that category, rather than when
-     * the model infers it from a related life situation or desired mood. These are user-facing names
-     * of the product's own enums, not recommendation vocabulary or game-specific shortcuts.
-     */
-    private List<String> categoricalLabels(String field, String value) {
-        if ("type".equals(field)) {
-            return switch (value) {
-                case "ABSTRACT" -> List.of("抽象游戏", "抽象桌游", "抽象策略", "abstract game", "abstract strategy");
-                case "CUSTOMIZABLE" -> List.of("可定制游戏", "可定制桌游", "customizable game");
-                case "CHILDREN" -> List.of("儿童游戏", "儿童桌游", "children's game", "childrens game", "kids game");
-                case "FAMILY" -> List.of("家庭游戏", "家庭桌游", "全家游戏", "family game", "family board game");
-                case "PARTY" -> List.of("派对游戏", "派对桌游", "聚会游戏", "聚会桌游", "party game");
-                case "STRATEGY" -> List.of(
-                        "策略游戏", "策略桌游", "重策", "德式游戏", "strategy game", "strategy board game", "eurogame", "heavy euro");
-                case "THEMATIC" -> List.of("主题游戏", "主题桌游", "美式游戏", "thematic game", "ameritrash");
-                case "WAR" -> List.of("战争游戏", "战争桌游", "战棋", "war game", "wargame");
-                case "EXPANSION" -> List.of("游戏扩展", "桌游扩展", "扩充包", "game expansion", "board game expansion");
-                default -> List.of();
-            };
-        }
-        if ("interaction".equals(field)) {
-            return switch (value) {
-                case "COMPETITIVE" -> List.of("竞争", "竞赛", "对抗", "竞技", "competitive", "versus");
-                case "COOPERATIVE" -> List.of("合作", "协作", "cooperative", "co-op", "coop");
-                case "TEAM" -> List.of("组队", "团队", "team game", "team-based");
-                default -> List.of();
-            };
-        }
-        return List.of();
-    }
-
-    private boolean explicitlyAffirms(String evidence, String label) {
-        String normalizedEvidence = normalizedSemanticText(evidence);
-        String normalizedLabel = normalizedSemanticText(label);
-        int from = 0;
-        while (from < normalizedEvidence.length()) {
-            int index = normalizedEvidence.indexOf(normalizedLabel, from);
-            if (index < 0) return false;
-            int clauseStart = lastClauseBoundary(normalizedEvidence, index) + 1;
-            int clauseEnd = nextClauseBoundary(normalizedEvidence, index + normalizedLabel.length());
-            String before = normalizedEvidence.substring(Math.max(clauseStart, index - 24), index);
-            String after = normalizedEvidence.substring(
-                    index + normalizedLabel.length(),
-                    Math.min(clauseEnd, index + normalizedLabel.length() + 24));
-            boolean negated = NEGATED_PREFERENCE_PREFIXES.stream().anyMatch(before::contains)
-                    || REJECTED_PREFERENCE_SUFFIXES.stream().anyMatch(after::contains);
-            if (!negated) return true;
-            from = index + normalizedLabel.length();
-        }
-        return false;
-    }
-
-    private String normalizedSemanticText(String value) {
-        return Normalizer.normalize(value == null ? "" : value, Normalizer.Form.NFKC)
-                .toLowerCase(Locale.ROOT)
-                .replace('’', '\'')
-                .replaceAll("\\s+", " ");
-    }
-
-    private int lastClauseBoundary(String value, int before) {
-        for (int index = before - 1; index >= 0; index--) {
-            if (isClauseBoundary(value.charAt(index))) return index;
-        }
-        return -1;
-    }
-
-    private int nextClauseBoundary(String value, int after) {
-        for (int index = after; index < value.length(); index++) {
-            if (isClauseBoundary(value.charAt(index))) return index;
-        }
-        return value.length();
-    }
-
-    private boolean isClauseBoundary(char value) {
-        return value == '，' || value == ',' || value == '。' || value == '.'
-                || value == '；' || value == ';' || value == '！' || value == '!'
-                || value == '？' || value == '?' || value == '\n';
+    void requireUserEvidence(String evidenceId, ConversationRequest request) {
+        requirePreferenceEvidence(evidenceId, request);
     }
 
     Map<String, String> preferenceEvidence(ConversationRequest request) {
@@ -1179,7 +799,7 @@ final class RecommendationEvidenceReview {
                         value.value(),
                         contextualPreferenceLabel(value, locale),
                         "medium",
-                        bounded(value.evidenceText(), 160)))
+                        value.evidenceText()))
                 .toList();
         String confirmed = profileSummary(state.profile, locale);
         if (hypotheses.isEmpty()) return new UserModelView(confirmed, List.of());
@@ -1194,12 +814,12 @@ final class RecommendationEvidenceReview {
     private String contextualPreferenceLabel(ContextualPreference value, String locale) {
         if ("players".equals(value.field()) || "playerCount".equals(value.field())) {
             return runtime.chinese(locale)
-                    ? "暂按 " + value.value() + " 人理解（尚未确认为硬条件）"
-                    : "Working with " + value.value() + " players for now (not a confirmed hard constraint)";
+                    ? "暂按 " + value.value() + " 人理解（你可以随时更正）"
+                    : "Working with " + value.value() + " players for now; you can correct this at any time";
         }
         return runtime.chinese(locale)
-                ? "暂按“" + value.value() + "”理解（尚未确认为硬条件）"
-                : "Working assumption: " + value.value() + " (not a confirmed hard constraint)";
+                ? "暂按“" + value.value() + "”理解（你可以随时更正）"
+                : "Working assumption: " + value.value() + "; you can correct this at any time";
     }
 
     private void requireObject(JsonNode node, Set<String> required, Set<String> optional) {
@@ -1215,7 +835,7 @@ final class RecommendationEvidenceReview {
 
     private String text(JsonNode node, int minimum, int maximum) {
         if (!node.isTextual()) throw new InvalidAction("TEXT_ARGUMENT_REQUIRED");
-        String value = node.asText().strip().replaceAll("\\s+", " ");
+        String value = node.asText().strip();
         if (value.length() < minimum || value.length() > maximum) throw new InvalidAction("TEXT_LENGTH_INVALID");
         return value;
     }
@@ -1230,20 +850,10 @@ final class RecommendationEvidenceReview {
     private <E extends Enum<E>> E enumValue(Class<E> type, JsonNode node, String code) {
         if (!node.isTextual()) throw new InvalidAction(code);
         try {
-            String token = Normalizer.normalize(node.asText(), Normalizer.Form.NFKC)
-                    .strip()
-                    .replaceAll("([a-z0-9])([A-Z])", "$1_$2")
-                    .replaceAll("[-\\s]+", "_")
-                    .toUpperCase(Locale.ROOT);
-            return Enum.valueOf(type, token);
+            return Enum.valueOf(type, node.asText());
         } catch (IllegalArgumentException exception) {
             throw new InvalidAction(code);
         }
-    }
-
-    private String bounded(String value, int maximum) {
-        String checked = value == null ? "" : value.strip().replaceAll("\\s+", " ");
-        return checked.length() <= maximum ? checked : checked.substring(0, maximum);
     }
 
     private record PreferenceEvidenceClassification(boolean contextual, String reason) {}

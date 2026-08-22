@@ -4,7 +4,6 @@ import com.rulepilot.assistant.RuleAnswerModel.AnswerAid;
 import com.rulepilot.assistant.RuleAnswerModel.DecisionBranchRequest;
 import com.rulepilot.assistant.RuleAnswerModel.ModelDraft;
 import com.rulepilot.assistant.RuleAnswerModel.ModelRequest;
-import com.rulepilot.assistant.domain.DecisionBranchBasis;
 import com.rulepilot.assistant.domain.RuleDecisionBranch;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -38,7 +37,7 @@ final class AnswerDecisionTableResolver {
         return new RuleDecisionBranch(
                 AnswerStructuredAidPolicy.requiredText(item.condition(), "decision branch condition"),
                 AnswerStructuredAidPolicy.requiredText(item.outcome(), "decision branch outcome"),
-                AnswerStructuredAidPolicy.enumValue(item.basis(), DecisionBranchBasis.class, "decision branch basis"),
+                item.basis(),
                 AnswerStructuredAidPolicy.citations(
                         modelRequest, draft, item.citationIds(), "decision branch"));
     }

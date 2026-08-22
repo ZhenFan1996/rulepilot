@@ -69,6 +69,82 @@ class SpringAiBoardGameRecommendationModelTest {
     }
 
     @Test
+    void streamsTheSameAutonomousTurnWhenTheModelChoosesDirectConversation() {
+        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        ChatModel chatModel = mock(ChatModel.class);
+        when(configuration.modelFor(RuntimeModelConfiguration.Role.RECOMMENDATION)).thenReturn(chatModel);
+        when(configuration.providerFor(RuntimeModelConfiguration.Role.RECOMMENDATION)).thenReturn("qwen");
+        when(configuration.modelNameFor(RuntimeModelConfiguration.Role.RECOMMENDATION)).thenReturn("qwen3.7-plus");
+        when(chatModel.getDefaultOptions()).thenReturn(OpenAiChatOptions.builder()
+                .apiKey("test-key")
+                .baseUrl("https://provider.example/v1")
+                .model("qwen3.7-plus")
+                .build());
+        when(chatModel.stream(any(Prompt.class))).thenReturn(Flux.just(
+                new ChatResponse(List.of(new Generation(AssistantMessage.builder().content("你好，").build()))),
+                new ChatResponse(List.of(new Generation(
+                        AssistantMessage.builder().content("今天想找什么样的游戏？").build(),
+                        ChatGenerationMetadata.builder().finishReason("stop").build())))));
+        var adapter = new SpringAiBoardGameRecommendationModel(configuration);
+        java.util.ArrayList<String> parts = new java.util.ArrayList<>();
+
+        var turn = adapter.streamNext(
+                new Request(
+                        List.of(Message.system("Choose text or one action."), Message.user("你好")),
+                        List.of(new ToolSpec("search", "Search only when needed", "{\"type\":\"object\"}")),
+                        384,
+                        ToolChoice.AUTO),
+                null,
+                parts::add);
+
+        assertThat(parts).containsExactly("你好，", "你好，今天想找什么样的游戏？");
+        assertThat(turn.text()).isEqualTo("你好，今天想找什么样的游戏？");
+        assertThat(turn.toolCalls()).isEmpty();
+        ArgumentCaptor<Prompt> prompt = ArgumentCaptor.forClass(Prompt.class);
+        verify(chatModel).stream(prompt.capture());
+        assertThat(((OpenAiChatOptions) prompt.getValue().getOptions()).getToolChoice()).isEqualTo("auto");
+    }
+
+    @Test
+    void aggregatesAnAutonomousActionWithoutPublishingItsArgumentsAsPlayerText() {
+        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        ChatModel chatModel = mock(ChatModel.class);
+        when(configuration.modelFor(RuntimeModelConfiguration.Role.RECOMMENDATION)).thenReturn(chatModel);
+        when(configuration.providerFor(RuntimeModelConfiguration.Role.RECOMMENDATION)).thenReturn("qwen");
+        when(configuration.modelNameFor(RuntimeModelConfiguration.Role.RECOMMENDATION)).thenReturn("qwen3.7-plus");
+        when(chatModel.getDefaultOptions()).thenReturn(OpenAiChatOptions.builder()
+                .apiKey("test-key")
+                .baseUrl("https://provider.example/v1")
+                .model("qwen3.7-plus")
+                .build());
+        AssistantMessage action = AssistantMessage.builder()
+                .content("")
+                .toolCalls(List.of(new AssistantMessage.ToolCall(
+                        "call-1", "function", "search", "{\"query\":\"Mosaic Field\"}")))
+                .build();
+        when(chatModel.stream(any(Prompt.class))).thenReturn(Flux.just(new ChatResponse(List.of(new Generation(
+                action,
+                ChatGenerationMetadata.builder().finishReason("tool_calls").build())))));
+        var adapter = new SpringAiBoardGameRecommendationModel(configuration);
+        java.util.ArrayList<String> parts = new java.util.ArrayList<>();
+
+        var turn = adapter.streamNext(
+                new Request(
+                        List.of(Message.system("Choose text or one action."), Message.user("找 Mosaic Field")),
+                        List.of(new ToolSpec("search", "Search a player-provided title", "{\"type\":\"object\"}")),
+                        384,
+                        ToolChoice.AUTO),
+                null,
+                parts::add);
+
+        assertThat(parts).isEmpty();
+        assertThat(turn.toolCalls()).singleElement().satisfies(call -> {
+            assertThat(call.name()).isEqualTo("search");
+            assertThat(call.argumentsJson()).contains("Mosaic Field");
+        });
+    }
+
+    @Test
     void letsDeepSeekChooseDirectTextOrAnActionWithoutEnablingThinking() {
         RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
         ChatModel chatModel = mock(ChatModel.class);

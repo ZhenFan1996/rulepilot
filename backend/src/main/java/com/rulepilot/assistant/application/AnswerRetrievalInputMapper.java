@@ -41,7 +41,8 @@ final class AnswerRetrievalInputMapper {
                                 subquestion.evidenceNeeds().stream()
                                         .map(AnswerRetrievalInputMapper::evidenceNeed)
                                         .collect(java.util.stream.Collectors.toUnmodifiableSet()),
-                                questionOwner(subquestion.owner())))
+                                questionOwner(subquestion.owner()),
+                                subquestion.retrievalQueries()))
                         .toList(),
                 source.answerAid() == AnswerAid.CALCULATION,
                 referenceBinding(source.referenceBinding()),

@@ -2,6 +2,7 @@ package com.rulepilot.teaching;
 
 import com.rulepilot.teaching.domain.IllustratedLesson.VisualKind;
 import com.rulepilot.teaching.domain.IllustratedLesson.TeachingMove;
+import com.rulepilot.teaching.domain.IllustratedLesson.RuleFactRole;
 import java.util.List;
 import java.util.UUID;
 
@@ -405,8 +406,47 @@ public interface TeachingLessonModel {
             String sectionType,
             String heading,
             String excerpt,
+            String visualPresentation,
+            EvidenceContentKind contentKind,
             int pageFrom,
-            int pageTo) {}
+            int pageTo) {
+
+        public EvidenceInput(
+                UUID chunkId,
+                String sectionType,
+                String heading,
+                String excerpt,
+                int pageFrom,
+                int pageTo) {
+            this(
+                    chunkId,
+                    sectionType,
+                    heading,
+                    excerpt,
+                    null,
+                    EvidenceContentKind.CANONICAL_TEXT,
+                    pageFrom,
+                    pageTo);
+        }
+
+        public EvidenceInput {
+            if (chunkId == null || sectionType == null || sectionType.isBlank()
+                    || heading == null || heading.isBlank() || excerpt == null || excerpt.isBlank()
+                    || contentKind == null || pageFrom < 1 || pageTo < pageFrom) {
+                throw new IllegalArgumentException("teaching evidence input is invalid");
+            }
+            visualPresentation = visualPresentation == null || visualPresentation.isBlank()
+                    ? null
+                    : visualPresentation.strip();
+        }
+    }
+
+    enum EvidenceContentKind {
+        CANONICAL_TEXT,
+        VISUAL_PLACEHOLDER,
+        CANONICAL_TEXT_WITH_VISUAL_FACTS,
+        VISUAL_TRANSCRIPTION
+    }
 
     record PageImageInput(int pageNumber, String mediaType, byte[] content, int width, int height) {
         public PageImageInput {
@@ -441,6 +481,7 @@ public interface TeachingLessonModel {
             String text,
             List<UUID> citationIds,
             List<String> teachingUnitIds,
+            List<RuleFactDraft> ruleFacts,
             VisualFocusDraft visualFocus) {
         public StepDraft {
             citationIds = citationIds == null ? List.of() : List.copyOf(citationIds);
@@ -449,6 +490,7 @@ public interface TeachingLessonModel {
                 throw new IllegalArgumentException("teaching step unit references are invalid");
             }
             teachingUnitIds = teachingUnitIds == null ? List.of() : List.copyOf(teachingUnitIds);
+            ruleFacts = ruleFacts == null ? List.of() : List.copyOf(ruleFacts);
         }
 
         public StepDraft(
@@ -457,15 +499,36 @@ public interface TeachingLessonModel {
                 String text,
                 List<UUID> citationIds,
                 VisualFocusDraft visualFocus) {
-            this(heading, kind, text, citationIds, List.of(), visualFocus);
+            this(heading, kind, text, citationIds, List.of(), List.of(), visualFocus);
+        }
+
+        public StepDraft(
+                String heading,
+                TeachingMove kind,
+                String text,
+                List<UUID> citationIds,
+                List<String> teachingUnitIds,
+                VisualFocusDraft visualFocus) {
+            this(heading, kind, text, citationIds, teachingUnitIds, List.of(), visualFocus);
         }
 
         public StepDraft(String heading, TeachingMove kind, String text, List<UUID> citationIds) {
-            this(heading, kind, text, citationIds, List.of(), null);
+            this(heading, kind, text, citationIds, List.of(), List.of(), null);
         }
 
         public StepDraft(String text, List<UUID> citationIds) {
-            this("照着做", TeachingMove.DO, text, citationIds, List.of(), null);
+            this("照着做", TeachingMove.DO, text, citationIds, List.of(), List.of(), null);
+        }
+    }
+
+    /** One atomic, independently cited fact used for reader layout; it never replaces the natural step text. */
+    record RuleFactDraft(RuleFactRole role, String text, List<UUID> citationIds) {
+        public RuleFactDraft {
+            if (role == null || text == null || text.isBlank() || citationIds == null || citationIds.isEmpty()) {
+                throw new IllegalArgumentException("teaching rule fact draft is invalid");
+            }
+            text = text.strip();
+            citationIds = List.copyOf(citationIds);
         }
     }
 

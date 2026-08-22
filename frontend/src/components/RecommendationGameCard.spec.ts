@@ -29,7 +29,7 @@ const game = {
 describe('RecommendationGameCard', () => {
   afterEach(() => setLocale('zh-CN'))
 
-  it('shows candidate-scoped checks and keeps its follow-up action in the response language', async () => {
+  it('shows only compact source facts and keeps its follow-up actions in the response language', async () => {
     const wrapper = mount(RecommendationGameCard, {
       props: {
         entry: {
@@ -48,18 +48,18 @@ describe('RecommendationGameCard', () => {
       },
     })
 
-    const checks = wrapper.get('[data-testid="candidate-fit-claims"]').text()
-    expect(checks).toContain('Constraint check')
-    expect(checks).toContain('Hard · Satisfied')
-    expect(checks).toContain('Preference · Conflict')
-    expect(checks).toContain('Hard · Unknown')
-    expect(checks).not.toContain('条件核对')
+    expect(wrapper.text()).toContain('2–5 players · 45–75 min · Weight 2.2')
+    expect(wrapper.find('[data-testid="candidate-fit-claims"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('Constraint check')
+    expect(wrapper.text()).not.toContain('Candidate player range is inside the request.')
 
-    await wrapper.get('button:nth-of-type(2)').trigger('click')
+    await wrapper.findAll('button').find(button => button.text() === 'Tell me more')!.trigger('click')
     expect(wrapper.emitted('introduce')).toEqual([[game.bggId, game.name, 'en']])
+    await wrapper.findAll('button').find(button => button.text() === 'Choose and find rulebook')!.trigger('click')
+    expect(wrapper.emitted('select')).toEqual([[game]])
   })
 
-  it('renders grounded reasons and tradeoffs as safe readable markdown', () => {
+  it('does not turn legacy reasons, tradeoffs, or links into a tag wall', () => {
     const wrapper = mount(RecommendationGameCard, {
       props: {
         entry: {
@@ -77,10 +77,49 @@ describe('RecommendationGameCard', () => {
       },
     })
 
-    expect(wrapper.get('strong').text()).toBe('2–5 players')
-    expect(wrapper.get('em').text()).toBe('short setup')
-    expect(wrapper.get('a').attributes('href')).toBe('https://example.test/language')
-    expect(wrapper.find('a[href^="javascript:"]').exists()).toBe(false)
-    expect(wrapper.text()).not.toContain('**2–5 players**')
+    expect(wrapper.text()).toContain('2–5 players · 45–75 min · Weight 2.2')
+    expect(wrapper.text()).not.toContain('2–5 players are listed.')
+    expect(wrapper.text()).not.toContain('short setup')
+    expect(wrapper.text()).not.toContain('language note')
+    expect(wrapper.find('a').exists()).toBe(false)
+    expect(wrapper.find('strong').exists()).toBe(false)
+    expect(wrapper.find('em').exists()).toBe(false)
+  })
+
+  it('lays out claim-scoped reasons and tradeoffs without exposing evidence identifiers', () => {
+    const wrapper = mount(RecommendationGameCard, {
+      props: {
+        entry: {
+          game,
+          matches: [],
+          tradeoffs: [],
+          replyParts: [
+            {
+              role: 'why_fit',
+              claimType: 'constraint_fit',
+              subject: 'durationMinutes',
+              text: '候选时长 45–75 分钟与当前时长条件相符。',
+              sourceIndexes: [],
+            },
+            {
+              role: 'tradeoff',
+              claimType: 'structured_fact',
+              subject: 'complexity',
+              text: 'BGG 标注复杂度：2.2 / 5。',
+              sourceIndexes: [],
+            },
+          ],
+        },
+        sources: [],
+        loading: false,
+        responseLocale: 'zh-CN',
+      },
+    })
+
+    expect(wrapper.text()).toContain('为什么选它')
+    expect(wrapper.text()).toContain('候选时长 45–75 分钟')
+    expect(wrapper.text()).toContain('需要留意')
+    expect(wrapper.text()).toContain('BGG 标注复杂度：2.2 / 5')
+    expect(wrapper.text()).not.toContain('evidenceId')
   })
 })

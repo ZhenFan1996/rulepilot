@@ -6,7 +6,6 @@ import com.rulepilot.assistant.RuleAnswerModelTimeoutException;
 import com.rulepilot.assistant.domain.AnswerStatus;
 import com.rulepilot.assistant.domain.AnswerWarning;
 import java.util.List;
-import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -47,50 +46,9 @@ final class AnswerDraftComposer {
         }
         draft = AnswerStructuredDraftPolicy.retainSelected(modelRequest, draft).draft();
         if (!draft.answerable()) {
-            draft = reconsiderEvidenceBackedAbstention(
-                    assistantRunId, username, gameSessionId, modelRequest, draft);
-            modelRepairs++;
-            if (draft != null) {
-                draft = AnswerStructuredDraftPolicy.retainSelected(modelRequest, draft).draft();
-            }
-        }
-        if (draft == null || !draft.answerable()) {
             return Result.failure(
                     AnswerStatus.INSUFFICIENT_EVIDENCE,
                     "现有证据未能直接回答这个问题。");
-        }
-        AnswerPlayerFacingRepairPolicy.RepairPlan playerFacingRepair =
-                AnswerPlayerFacingRepairPolicy.planFor(modelRequest, draft);
-        if (playerFacingRepair.required()) {
-            if (modelRepairs > 0) {
-                return Result.failure(
-                        AnswerStatus.INVALID_MODEL_OUTPUT,
-                        "回答在一次有针对性的修订后仍包含内部标记。");
-            }
-            try {
-                draft = revisePlayerFacingDraft(
-                        assistantRunId, username, gameSessionId, modelRequest, draft, playerFacingRepair);
-                modelRepairs++;
-            } catch (RuleAnswerModelTimeoutException exception) {
-                return Result.failure(
-                        AnswerStatus.MODEL_TIMEOUT,
-                        "视觉规则消歧超时，可以稍后重试或直接查看规则引用。");
-            } catch (RuntimeException exception) {
-                return Result.failure(
-                        AnswerStatus.INVALID_MODEL_OUTPUT,
-                        "回答修订结果未通过结构校验。");
-            }
-            if (draft == null || !draft.answerable()) {
-                return Result.failure(
-                        AnswerStatus.INSUFFICIENT_EVIDENCE,
-                        "回答修订后仍无法通过发布校验。");
-            }
-            draft = AnswerStructuredDraftPolicy.retainSelected(modelRequest, draft).draft();
-            Optional<AnswerRepairOutcomePolicy.PublicationFailure> failure =
-                    AnswerRepairOutcomePolicy.publicationFailure(modelRequest, draft);
-            if (failure.isPresent()) {
-                return Result.failure(failure.get().status(), failure.get().message());
-            }
         }
         AnswerDraftPublicationPolicy.Preparation preparation = AnswerDraftPublicationPolicy.prepare(modelRequest, draft);
         if (!preparation.ready()) {
@@ -182,42 +140,6 @@ final class AnswerDraftComposer {
                 : Result.failure(preparation.failureStatus(), preparation.failureMessage());
     }
 
-
-    private ModelDraft reconsiderEvidenceBackedAbstention(
-            UUID assistantRunId,
-            String username,
-            UUID gameSessionId,
-            ModelRequest modelRequest,
-            ModelDraft previousDraft) {
-        return modelGateway.revise(
-                assistantRunId,
-                username,
-                gameSessionId,
-                modelRequest,
-                previousDraft,
-                AnswerEvidenceReconsiderationPolicy.feedbackFor(modelRequest),
-                "reconsiderEvidenceBackedAbstention",
-                "Evidence-backed table abstention reconsidered");
-    }
-
-    private ModelDraft revisePlayerFacingDraft(
-            UUID assistantRunId,
-            String username,
-            UUID gameSessionId,
-            ModelRequest modelRequest,
-            ModelDraft previousDraft,
-            AnswerPlayerFacingRepairPolicy.RepairPlan repairPlan) {
-        return modelGateway.revisePlayerFacing(
-                assistantRunId,
-                username,
-                gameSessionId,
-                modelRequest,
-                previousDraft,
-                repairPlan.feedback(),
-                repairPlan.editableFields(),
-                "repairPlayerFacingRuleAnswer",
-                "Ambiguous visual identity or internal evidence language repaired");
-    }
 
     record Result(
             ModelDraft draft,

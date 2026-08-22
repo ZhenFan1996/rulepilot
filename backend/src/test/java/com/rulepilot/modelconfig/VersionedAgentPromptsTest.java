@@ -132,11 +132,11 @@ class VersionedAgentPromptsTest {
         assertThat(prompts.criticUser()).contains("{mode}", "{objective}", "{claims}", "{evidence}");
         assertThat(prompts.atomicCriticUser())
                 .contains(
-                        "defectConfirmed=false",
-                        "defectConfirmed=true",
+                        "Do not return defectConfirmed=false",
+                        "Return an issue only",
                         "claim-position/type/claimAspect",
-                        "complete claim",
-                        "current-turn/later-turn distinction",
+                        "own combined cited evidence",
+                        "merely phrased differently",
                         "{claims}",
                         "{evidence}");
         assertThat(prompts.atomicCriticSystem())
@@ -145,7 +145,9 @@ class VersionedAgentPromptsTest {
                         "page hint only locates candidates",
                         "descriptive visual",
                         "metadata",
-                        "does not directly entail the mechanical conclusion");
+                        "does not directly entail the mechanical conclusion",
+                        "exactly one JSON object",
+                        "claimPosition");
         assertThat(prompts.objectiveCoverageCriticSystem())
                 .contains("claimAspect", "MISSING_CRITICAL_RULE", "evidenceIds");
         assertThat(prompts.structuredOutputRepair()).contains("schema-valid object only");
@@ -175,11 +177,6 @@ class VersionedAgentPromptsTest {
 
     @Test
     void supportingPromptContractsKeepUntrustedInputAndLocalizationBoundaries() {
-        assertThat(prompts.answerRetrievalRewriteSystem())
-                .contains("retrieval", "untrusted data", "Return JSON only");
-        assertThat(prompts.answerRetrievalRewriteUser())
-                .contains("{question}", "{previousQuestion}")
-                .doesNotContain("{lessonSection}");
         assertThat(prompts.lessonLocalizationSystem())
                 .contains("constrained translation", "Do not add rules");
         assertThat(prompts.lessonLocalizationUser()).contains("{targetLanguage}", "{section}");

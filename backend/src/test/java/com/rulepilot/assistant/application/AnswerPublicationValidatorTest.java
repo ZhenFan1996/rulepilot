@@ -12,7 +12,6 @@ import com.rulepilot.assistant.domain.AnswerConfidence;
 import com.rulepilot.assistant.domain.RuleWalkthroughStep;
 import com.rulepilot.assistant.domain.RuleExceptionClause;
 import com.rulepilot.assistant.domain.WalkthroughOrderBasis;
-import com.rulepilot.retrieval.VisualTranscribedRuleEvidence;
 import com.rulepilot.retrieval.evidence.HybridEvidenceHit;
 import com.rulepilot.retrieval.evidence.RuleEvidenceHit;
 import java.util.List;
@@ -57,31 +56,30 @@ class AnswerPublicationValidatorTest {
     }
 
     @Test
-    void rejectsAnUnknownModelAnswerBasisRatherThanPublishingIt() {
-        AnswerPublicationValidator validator = new AnswerPublicationValidator(verified());
-        ModelDraft unknownBasis = new ModelDraft(
-                true,
-                null,
-                "可以执行这个行动。",
-                "规则满足列出的条件后允许执行该行动。",
-                List.of(chunkId),
-                List.of(),
-                "MEDIUM",
-                "MODEL_MEMORY");
-
-        assertThatThrownBy(() -> validator.publish(versionId, unknownBasis, List.of(evidence(versionId))))
-                .isInstanceOf(IllegalArgumentException.class);
+    void rejectsAnUnknownModelAnswerBasisAtTheStructuredResponseBoundary() {
+        assertThatThrownBy(() -> new ModelDraft(
+                        true,
+                        null,
+                        "可以执行这个行动。",
+                        "规则满足列出的条件后允许执行该行动。",
+                        List.of(chunkId),
+                        List.of(),
+                        "MEDIUM",
+                        "MODEL_MEMORY"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("MODEL_MEMORY");
     }
 
     @Test
-    void rejectsDraftsThatLeakInternalEvidenceReferencesToPlayers() {
+    void doesNotParsePlayerProseForEvidenceIdentifiers() {
         AnswerPublicationValidator validator = new AnswerPublicationValidator(verified());
         ModelDraft leaking = new ModelDraft(
-                "按规则执行。", "请参阅 chunk " + chunkId + "。", List.of(chunkId), List.of(), "HIGH");
+                true, null, "按规则执行。", "请参阅 chunk " + chunkId + "。",
+                List.of(chunkId), List.of(), "HIGH", "DIRECT_RULE");
 
-        assertThatThrownBy(() -> validator.publish(versionId, leaking, List.of(evidence(versionId))))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("internal evidence");
+        var answer = validator.publish(versionId, leaking, List.of(evidence(versionId)));
+
+        assertThat(answer.explanation()).isEqualTo(leaking.explanation());
     }
 
     @Test
@@ -89,7 +87,8 @@ class AnswerPublicationValidatorTest {
         AnswerPublicationValidator validator = new AnswerPublicationValidator(verified());
         String shortHandle = chunkId.toString().substring(0, 8);
         ModelDraft leaking = new ModelDraft(
-                "按规则执行。", "来源 " + shortHandle + " 说明应这样处理。", List.of(chunkId), List.of(), "HIGH");
+                true, null, "按规则执行。", "来源 " + shortHandle + " 说明应这样处理。",
+                List.of(chunkId), List.of(), "HIGH", "DIRECT_RULE");
 
         var answer = validator.publish(versionId, leaking, List.of(evidence(versionId)));
 
@@ -102,7 +101,8 @@ class AnswerPublicationValidatorTest {
         String publicScenarioId = UUID.randomUUID().toString();
         String explanation = "Use public scenario " + publicScenarioId + "; it is printed on the setup card.";
         ModelDraft natural = new ModelDraft(
-                "Use the printed scenario.", explanation, List.of(chunkId), List.of(), "HIGH");
+                true, null, "Use the printed scenario.", explanation,
+                List.of(chunkId), List.of(), "HIGH", "DIRECT_RULE");
 
         var answer = validator.publish(versionId, natural, List.of(evidence(versionId)));
 
@@ -110,7 +110,7 @@ class AnswerPublicationValidatorTest {
     }
 
     @Test
-    void rejectsTheActiveEvidenceIdentityInsideStructuredPlayerFacingDetails() {
+    void validatesStructuredDetailCitationsWithoutParsingTheirNaturalText() {
         AnswerPublicationValidator validator = new AnswerPublicationValidator(verified());
         RuleWalkthroughStep leakingStep = new RuleWalkthroughStep(
                 "Move the cobalt spindle.",
@@ -118,23 +118,31 @@ class AnswerPublicationValidatorTest {
                 WalkthroughOrderBasis.RULE_ORDER,
                 List.of(chunkId));
 
-        assertThatThrownBy(() -> validator.publish(
+        var answer = validator.publish(
                         versionId,
                         draft(List.of(chunkId), "HIGH"),
                         List.of(evidence(versionId)),
                         List.of(),
                         List.of(),
-                        List.of(leakingStep)))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("internal evidence");
+                        List.of(leakingStep));
+
+        assertThat(answer.walkthroughSteps()).containsExactly(leakingStep);
     }
 
     @Test
     void publishesOnlyTheReadableRuleFactsFromAVisualEvidenceEnvelope() {
         AnswerPublicationValidator validator = new AnswerPublicationValidator(verified());
-        HybridEvidenceHit visualEvidence = evidence(
+        HybridEvidenceHit visualEvidence = new HybridEvidenceHit(new RuleEvidenceHit(
+                chunkId,
                 versionId,
-                VisualTranscribedRuleEvidence.render("每张已完成的目标卡得 2 分。"));
+                "RULES",
+                "计分",
+                "每张已完成的目标卡得 2 分。",
+                4,
+                4,
+                0.9,
+                RuleEvidenceHit.ContentKind.VISUAL_TRANSCRIPTION,
+                "每张已完成的目标卡得 2 分。"), 0.9, 1, null, false);
 
         var answer = validator.publish(versionId, draft(List.of(chunkId), "HIGH"), List.of(visualEvidence));
 
@@ -148,11 +156,14 @@ class AnswerPublicationValidatorTest {
     void preservesLegacyAndStructuredExceptionDetailsInsteadOfForcingAWholeDraftRewrite() {
         AnswerPublicationValidator validator = new AnswerPublicationValidator(verified());
         ModelDraft draft = new ModelDraft(
+                true,
+                null,
                 "按规则执行。",
                 "满足列出的条件后执行该规则。",
                 List.of(chunkId),
                 List.of("扩展内容可能另有例外。"),
-                "HIGH");
+                "HIGH",
+                "DIRECT_RULE");
         RuleExceptionClause structured = new RuleExceptionClause(
                 "效果处于激活状态时",
                 "不能再创建同名效果。",
@@ -202,7 +213,14 @@ class AnswerPublicationValidatorTest {
 
     private ModelDraft draft(List<UUID> citations, String confidence) {
         return new ModelDraft(
-                "按规则执行。", "满足列出的条件后执行该规则。", citations, List.of("扩展规则可能另有说明。"), confidence);
+                true,
+                null,
+                "按规则执行。",
+                "满足列出的条件后执行该规则。",
+                citations,
+                List.of("扩展规则可能另有说明。"),
+                confidence,
+                "DIRECT_RULE");
     }
 
     private HybridEvidenceHit evidence(UUID sourceVersionId) {

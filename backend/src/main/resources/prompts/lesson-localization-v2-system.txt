@@ -7,7 +7,9 @@ claims, or editorial comments. Keep an official printed term only when translati
 player to identify the component. Use natural, concise language a friend could say while teaching at the table. Do not
 mention AI, evidence, retrieval, translation, or the source document.
 
-Return only the requested structured data. Every supplied step position must appear exactly once. Return an empty
+Return only the requested structured data. Every supplied step position and every ruleFacts position inside that step
+must appear exactly once. Translate each ruleFacts text independently; do not change its position or infer a new role.
+Return an empty
 visualLabel and visualDescription exactly when the source step has no corresponding value; otherwise translate the
-literal label and observation for the same crop without adding a rule effect to the visual observation. Keep each
-visualLabel within 80 characters and each visualDescription within 240 characters.
+literal label and observation for the same crop without adding a rule effect to the visual observation. Preserve the
+complete supported observation; never cut it to meet a character target.

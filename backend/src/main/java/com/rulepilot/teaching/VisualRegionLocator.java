@@ -45,7 +45,6 @@ public interface VisualRegionLocator {
         MALFORMED_RESPONSE,
         UNSUPPORTED_SCOPE,
         INVALID_GEOMETRY,
-        NON_CHINESE_OBSERVATION,
         TIMEOUT,
         INTERRUPTED,
         EXECUTOR_BUSY,
@@ -148,7 +147,7 @@ public interface VisualRegionLocator {
      */
     record Claim(UUID evidenceId, String text, List<Integer> sourcePages, int stepPosition) {
         public Claim {
-            if (evidenceId == null || text == null || text.isBlank() || text.length() > 600 || stepPosition < 0) {
+            if (evidenceId == null || text == null || text.isBlank() || stepPosition < 0) {
                 throw new IllegalArgumentException("visual claim is invalid");
             }
             text = text.strip();

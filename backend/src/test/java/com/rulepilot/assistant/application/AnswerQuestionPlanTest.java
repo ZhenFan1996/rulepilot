@@ -13,12 +13,12 @@ import org.junit.jupiter.api.Test;
 class AnswerQuestionPlanTest {
 
     @Test
-    void fallbackPreservesExplicitAdviceNeedsAcrossSupportedLocales() {
+    void fallbackDoesNotClassifyNaturalLanguageKeywords() {
         for (String question : List.of(
                 "有没有赢的策略？",
                 "Do you have any strategy tips for winning?")) {
             assertThat(AnswerQuestionPlan.fallback(question(question)).evidenceNeeds())
-                    .containsExactly(EvidenceNeed.ADVICE);
+                    .containsExactly(EvidenceNeed.DIRECT_RULE);
         }
     }
 
@@ -33,12 +33,12 @@ class AnswerQuestionPlanTest {
     }
 
     @Test
-    void fallbackPreservesCompleteVictoryRoutesWithoutTurningThemIntoAdvice() {
+    void fallbackLeavesCompleteListClassificationToTheStructuredAgentPlan() {
         for (String question : List.of(
                 "这款游戏我怎么赢？",
                 "How do I win?")) {
             assertThat(AnswerQuestionPlan.fallback(question(question)).evidenceNeeds())
-                    .containsExactlyInAnyOrder(EvidenceNeed.DIRECT_RULE, EvidenceNeed.COMPLETE_LIST);
+                    .containsExactly(EvidenceNeed.DIRECT_RULE);
         }
     }
 

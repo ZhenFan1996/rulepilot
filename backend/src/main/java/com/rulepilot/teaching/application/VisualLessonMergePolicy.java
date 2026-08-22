@@ -37,7 +37,9 @@ final class VisualLessonMergePolicy {
                             TeachingMove.DO,
                             step.text(),
                             step.sourcePages(),
-                            step.sourceChunkIds()));
+                            step.sourceChunkIds(),
+                            step.ruleFacts(),
+                            null));
                     changed = true;
                 } else {
                     steps.add(step);
@@ -159,11 +161,6 @@ final class VisualLessonMergePolicy {
                     .findFirst();
             if (supportedStepIndex.isEmpty()) continue;
             LessonStep supportedStep = steps.get(supportedStepIndex.get());
-            if (!containsHan(region.label())
-                    || region.visibleDescription().isBlank()
-                    || !containsHan(region.visibleDescription())) {
-                continue;
-            }
             steps.set(supportedStepIndex.get(), new LessonStep(
                     supportedStep.position(),
                     supportedStep.heading(),
@@ -171,6 +168,7 @@ final class VisualLessonMergePolicy {
                     supportedStep.text(),
                     distinct(supportedStep.sourcePages(), region.pageNumber()),
                     distinct(supportedStep.sourceChunkIds(), region.supportedEvidenceIds()),
+                    supportedStep.ruleFacts(),
                     new VisualFocus(
                             region.pageNumber(),
                             region.label(),
@@ -197,11 +195,6 @@ final class VisualLessonMergePolicy {
                 sourceChunkIds,
                 steps);
         return new MergedVisualSection(enriched, added, claimConflicts);
-    }
-
-    private boolean containsHan(String text) {
-        return text != null && text.codePoints().anyMatch(codePoint -> Character.UnicodeScript.of(codePoint)
-                == Character.UnicodeScript.HAN);
     }
 
     private <T> List<T> distinct(List<T> existing, T addition) {

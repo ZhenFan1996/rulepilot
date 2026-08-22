@@ -214,49 +214,53 @@ class ResponsesApiOfficialRulebookCandidateFinderTest {
             return null;
         }).when(values).set(anyString(), anyString(), any(java.time.Duration.class));
 
+        ObjectMapper json = new ObjectMapper();
+        String content = json.writeValueAsString(Map.of("candidates", List.of(Map.of(
+                "title", "Official rules",
+                "url", "https://publisher.example/rules.pdf",
+                "publisher", "Publisher",
+                "language", "en",
+                "edition", "Base",
+                "sourceIndexes", List.of(1)))));
+        byte[] responseBytes = json.writeValueAsBytes(Map.of("output", List.of(
+                Map.of(
+                        "type", "web_search_call",
+                        "action", Map.of("sources", List.of(Map.of(
+                                "url", "https://publisher.example/rules.pdf")))),
+                Map.of("type", "message", "content", List.of(Map.of("type", "output_text", "text", content))))));
         java.util.concurrent.atomic.AtomicInteger requests = new java.util.concurrent.atomic.AtomicInteger();
-        HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);
-        server.createContext("/responses", exchange -> {
+        okhttp3.Call.Factory calls = mock(okhttp3.Call.Factory.class);
+        when(calls.newCall(any(okhttp3.Request.class))).thenAnswer(invocation -> {
             requests.incrementAndGet();
-            ObjectMapper json = new ObjectMapper();
-            String content = json.writeValueAsString(Map.of("candidates", List.of(Map.of(
-                    "title", "Official rules",
-                    "url", "https://publisher.example/rules.pdf",
-                    "publisher", "Publisher",
-                    "language", "en",
-                    "edition", "Base",
-                    "sourceIndexes", List.of(1)))));
-            byte[] response = json.writeValueAsBytes(Map.of("output", List.of(
-                    Map.of(
-                            "type", "web_search_call",
-                            "action", Map.of("sources", List.of(Map.of(
-                                    "url", "https://publisher.example/rules.pdf")))),
-                    Map.of("type", "message", "content", List.of(Map.of("type", "output_text", "text", content))))));
-            exchange.sendResponseHeaders(200, response.length);
-            exchange.getResponseBody().write(response);
-            exchange.close();
+            okhttp3.Call call = mock(okhttp3.Call.class);
+            okhttp3.Request httpRequest = invocation.getArgument(0);
+            okhttp3.Response response = new okhttp3.Response.Builder()
+                    .request(httpRequest)
+                    .protocol(okhttp3.Protocol.HTTP_1_1)
+                    .code(200)
+                    .message("OK")
+                    .header("Content-Type", "application/json")
+                    .body(okhttp3.ResponseBody.create(responseBytes, okhttp3.MediaType.get("application/json")))
+                    .build();
+            when(call.execute()).thenReturn(response);
+            return call;
         });
-        server.start();
-        try {
-            var finder = new ResponsesApiOfficialRulebookCandidateFinder(
-                    new OkHttpClient(),
-                    new ObjectMapper(),
-                    redis,
-                    true,
-                    "secret-key",
-                    "http://127.0.0.1:" + server.getAddress().getPort(),
-                    "search-model",
-                    java.time.Duration.ofDays(30));
-            var request = new OfficialRulebookCandidateFinder.Request(42, "Catalog Game", "Base", 2024, "en");
+        var finder = new ResponsesApiOfficialRulebookCandidateFinder(
+                calls,
+                json,
+                redis,
+                true,
+                "secret-key",
+                "https://provider.example/v1",
+                "search-model",
+                java.time.Duration.ofDays(30));
+        var request = new OfficialRulebookCandidateFinder.Request(42, "Catalog Game", "Base", 2024, "en");
 
-            assertThat(finder.find(request)).hasSize(1);
-            assertThat(finder.find(request)).hasSize(1);
+        assertThat(finder.find(request)).hasSize(1);
+        assertThat(finder.find(request)).hasSize(1);
 
-            assertThat(requests).hasValue(1);
-            assertThat(cached).hasValueSatisfying(value -> assertThat(value).contains("rules.pdf"));
-        } finally {
-            server.stop(0);
-        }
+        assertThat(requests).hasValue(1);
+        assertThat(cached).hasValueSatisfying(value -> assertThat(value).contains("rules.pdf"));
     }
 
     @Test

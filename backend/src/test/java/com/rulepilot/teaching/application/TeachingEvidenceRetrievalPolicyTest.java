@@ -20,7 +20,7 @@ class TeachingEvidenceRetrievalPolicyTest {
     }
 
     @Test
-    void keepsDeclaredQueriesFirstBeforeUsingTheChapterObjective() {
+    void searchesOnlyTheOutlineAgentsStructuredSourceIdentifiers() {
         PlannedSection planned = new PlannedSection(
                 1,
                 "setup",
@@ -34,7 +34,7 @@ class TeachingEvidenceRetrievalPolicyTest {
         assertThat(TeachingEvidenceRetrievalPolicy.queries(planned, 2))
                 .containsExactly("setup", "starting cards");
         assertThat(TeachingEvidenceRetrievalPolicy.queries(planned, 3))
-                .containsExactly("setup", "starting cards", "Set up the board and hand out starting cards.");
+                .containsExactly("setup", "starting cards");
     }
 
     @Test

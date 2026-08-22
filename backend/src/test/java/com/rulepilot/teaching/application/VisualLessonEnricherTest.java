@@ -740,38 +740,6 @@ class VisualLessonEnricherTest {
     }
 
     @Test
-    void skips_a_vision_crop_with_an_untranslated_label_without_rewriting_the_cited_step() {
-        UUID version = UUID.randomUUID();
-        UUID chunk = UUID.randomUUID();
-        RulebookUnderstanding EnglishSource = new RulebookUnderstanding(
-                List.of(new RulebookUnderstanding.PageBlock(
-                        2, 0, 0, RulebookUnderstanding.BlockRole.BODY, "Place the probe on its orbit track",
-                        new RulebookUnderstanding.Rectangle(100, 200, 300, 30), null)),
-                List.of(), List.of(), List.of());
-        DocumentPageImages images = (ignored, pages) -> List.of(
-                new DocumentPageImages.PageImage(2, "image/png", new byte[] {1}, 1_000, 1_000));
-        VisualRegionLocator locator = request -> {
-            assertThat(request.candidates()).singleElement().satisfies(candidate -> {
-                assertThat(candidate.rectangle()).isEqualTo(new RulebookUnderstanding.Rectangle(0, 0, 1_000, 1_000));
-                assertThat(candidate.sourceText()).isEqualTo("Cited page 2 visual context");
-            });
-            return java.util.Optional.of(new VisualRegionLocator.LocatedRegion(
-                    2, "Orbit track", "一枚探测器标记位于弧形轨道上", 640, 700, 180, 120, List.of(chunk)));
-        };
-
-        IllustratedLesson enriched = new VisualLessonEnricher(
-                        ignored -> EnglishSource, images, new VisualRegionCandidateSelector(), locator)
-                .enrich(version, lesson(chunk));
-
-        assertThat(enriched.sections().getFirst().steps()).singleElement().satisfies(step -> {
-            assertThat(step.kind()).isEqualTo(IllustratedLesson.TeachingMove.DO);
-            assertThat(step.visualFocus()).isNull();
-            assertThat(step.heading()).isEqualTo("放置探测器");
-            assertThat(step.text()).isEqualTo("把探测器放到轨道上。");
-        });
-    }
-
-    @Test
     void rejects_a_whole_page_response_even_when_the_page_is_the_search_boundary() {
         UUID chunk = UUID.randomUUID();
         IllustratedLesson source = lesson(chunk);
@@ -893,83 +861,6 @@ class VisualLessonEnricherTest {
         assertThat(step.visualFocus())
                 .isEqualTo(new IllustratedLesson.VisualFocus(
                         2, "鲑鱼计分卡示例", 45, 460, 260, 540));
-    }
-
-    @Test
-    void sends_the_most_relevant_candidate_pages_before_lower_numbered_pages() {
-        UUID version = UUID.randomUUID();
-        UUID chunk = UUID.randomUUID();
-        RulebookUnderstanding understanding = new RulebookUnderstanding(
-                List.of(
-                        block(2, "Probe", 100, 200),
-                        block(3, "Launch a probe", 100, 200)),
-                List.of(), List.of(), List.of());
-        DocumentPageImages images = (ignored, pages) -> List.of(
-                new DocumentPageImages.PageImage(2, "image/png", new byte[] {2}, 1_000, 1_000),
-                new DocumentPageImages.PageImage(3, "image/png", new byte[] {3}, 1_000, 1_000));
-        VisualRegionLocator locator = request -> {
-            assertThat(request.pages()).extracting(VisualRegionLocator.PageImage::pageNumber).containsExactly(3, 2);
-            assertThat(request.candidates()).extracting(VisualRegionCandidateSelector.Candidate::pageNumber)
-                    .containsExactly(3, 2, 3, 2);
-            assertThat(request.candidates().getFirst().sourceText()).isEqualTo("Cited page 3 visual context");
-            return java.util.Optional.of(new VisualRegionLocator.LocatedRegion(
-                    3, "发射探测器", "发射台旁有一枚探测器和指向轨道的箭头", 100, 200, 300, 160, List.of(chunk)));
-        };
-
-        var enriched = new VisualLessonEnricher(
-                        ignored -> understanding, images, new VisualRegionCandidateSelector(), locator)
-                .enrich(version, twoPageLesson(chunk));
-
-        assertThat(enriched.sections().getFirst().steps()).hasSize(1);
-        assertThat(enriched.sections().getFirst().steps().getFirst().visualFocus()).isNotNull();
-    }
-
-    @Test
-    void uses_the_rendered_page_catalog_to_prioritize_a_cited_visual_example_when_text_is_translated() {
-        UUID version = UUID.randomUUID();
-        UUID chunk = UUID.randomUUID();
-        RulebookUnderstanding EnglishSource = new RulebookUnderstanding(
-                List.of(
-                        block(2, "Set up the board", 100, 200),
-                        block(3, "Place animal tokens", 100, 200),
-                        block(4, "End scoring", 100, 200)),
-                List.of(), List.of(), List.of());
-        VisualRulebookPageFacts facts = new VisualRulebookPageFacts() {
-            @Override
-            public void replace(UUID ignored, List<PageFact> pages) {}
-
-            @Override
-            public List<PageFact> find(UUID ignored, Set<Integer> pages) {
-                return List.of(new PageFact(
-                        3,
-                        "Animal tokens",
-                        "六边形地块上的动物标记与相邻图标",
-                        List.of("动物标记", "六边形", "图标")));
-            }
-        };
-        DocumentPageImages images = (ignored, pages) -> pages.stream()
-                .map(page -> new DocumentPageImages.PageImage(page, "image/png", new byte[] {(byte) page.intValue()}, 1_000, 1_000))
-                .toList();
-        VisualRegionLocator locator = request -> {
-            assertThat(request.pages()).extracting(VisualRegionLocator.PageImage::pageNumber).containsExactly(3, 2);
-            assertThat(request.candidates().getFirst().sourceText()).contains("Visual retrieval hint").contains("动物标记");
-            return java.util.Optional.of(new VisualRegionLocator.LocatedRegion(
-                    3, "动物标记与六边形地块", "一枚动物标记放在六边形地块旁的图标区域", 200, 280, 280, 180, List.of(chunk)));
-        };
-
-        IllustratedLesson enriched = new VisualLessonEnricher(
-                        ignored -> EnglishSource, images, facts, new VisualRegionCandidateSelector(), locator)
-                .enrich(version, threePageTranslatedLesson(chunk));
-
-        assertThat(enriched.sections().getFirst().steps().getFirst().visualFocus())
-                .isEqualTo(new IllustratedLesson.VisualFocus(
-                        3,
-                        "动物标记与六边形地块",
-                        "一枚动物标记放在六边形地块旁的图标区域",
-                        200,
-                        280,
-                        280,
-                        180));
     }
 
     private RulebookUnderstanding understanding() {

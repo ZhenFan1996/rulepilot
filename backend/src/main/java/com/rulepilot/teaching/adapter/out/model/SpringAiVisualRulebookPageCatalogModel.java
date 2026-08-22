@@ -1,6 +1,8 @@
 package com.rulepilot.teaching.adapter.out.model;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -10,16 +12,6 @@ import com.rulepilot.modelconfig.RuntimeModelConfiguration.Role;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IconLocalizationDraft;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IconLocalizationRequest;
-import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IdentifierCellDraft;
-import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IdentifierCellFact;
-import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IdentifierCellInput;
-import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IdentifierCellRequest;
-import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IdentifierCellVerificationDraft;
-import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IdentifierCellVerificationRequest;
-import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IdentifierLocalizationDraft;
-import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IdentifierLocalizationRequest;
-import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IdentifierLocation;
-import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IdentifierReferencePage;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IconLocation;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IconCropDecision;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IconCropReviewDraft;
@@ -27,6 +19,7 @@ import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IconCropReviewReque
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.ModelExecutionIdentity;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageTranscript;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.ProgressiveTeachingStartDraft;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.RuleGroupFact;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.RuleGroupCoverage;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.SourceDependency;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.TeachingPageRole;
@@ -70,7 +63,9 @@ import org.springframework.util.MimeTypeUtils;
 @Primary
 public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPageCatalogModel {
 
-    private static final ObjectMapper JSON = new ObjectMapper();
+    private static final ObjectMapper JSON = new ObjectMapper()
+            .enable(JsonParser.Feature.STRICT_DUPLICATE_DETECTION)
+            .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
     private static final String QWEN_BALANCED_VISUAL_MODEL = "qwen3.7-plus";
     private static final String TEACHING_CONTRACT_REPAIR = """
             The previous ledger failed deterministic contract validation. Reinspect the attached pages and return one
@@ -128,6 +123,52 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
             "kind", "pageNumber", "ruleGroupIndex", "variantAxis", "originalSpan");
     private static final Set<String> LITERAL_QUANTITY_SPAN_FIELDS = Set.of(
             "pageNumber", "ruleGroupIndex", "originalSpan");
+    private static final Set<String> TEACHING_V6_ROOT_FIELDS = Set.of("pages");
+    private static final Set<String> TEACHING_V6_PAGE_FIELDS = Set.of(
+            "pageNumber",
+            "printedTerms",
+            "keywords",
+            "externalDocumentDependencies",
+            "ruleGroups",
+            "ruleGroupInventoryComplete");
+    private static final Set<String> TEACHING_V6_RULE_GROUP_FIELDS =
+            Set.of("identifier", "fact", "quantitySpans");
+    private static final Set<String> EXTERNAL_DOCUMENT_DEPENDENCY_FIELDS =
+            Set.of("documentTitle", "missingCoverageTags");
+    private static final Set<String> EXTERNAL_DOCUMENT_COVERAGE_TAGS =
+            Set.of("setup", "core_loop", "end", "scoring");
+    private static final Set<String> PROGRESSIVE_V4_ROOT_FIELDS =
+            Set.of("pageSketches", "selectedPageFacts");
+    private static final Set<String> PROGRESSIVE_V4_PAGE_FIELDS = Set.of(
+            "pageNumber",
+            "role",
+            "visibleHeading",
+            "visibleTerms",
+            "coverageTags",
+            "ruleGroupInventoryComplete",
+            "sourceDependencies",
+            "ruleGroupCoverage");
+    private static final Set<String> PROGRESSIVE_V4_SELECTED_FIELDS =
+            Set.of("pageNumber", "printedTerms", "ruleGroups", "keywords", "quantityObservations");
+    private static final Set<String> SOURCE_DEPENDENCY_FIELDS = Set.of("title", "missingCoverageTags");
+    private static final Set<String> PROGRESSIVE_COVERAGE_TAGS =
+            Set.of("setup", "core_loop", "end", "scoring", "source_coverage");
+    private static final Set<String> ITEMS_ROOT_FIELDS = Set.of("items");
+    private static final Set<String> ICON_LOCALIZATION_PRESENT_FIELDS =
+            Set.of("candidateIndex", "present", "x", "y", "width", "height", "observedLabel");
+    private static final Set<String> ICON_LOCALIZATION_ABSENT_FIELDS =
+            Set.of("candidateIndex", "present", "observedLabel");
+    private static final Set<String> ICON_CROP_VERDICT_FIELDS =
+            Set.of("candidateIndex", "matchesAppearance", "fullyContained", "standalonePictogram");
+    private static final Set<String> ICON_CROP_ACCEPTED_FIELDS = Set.of(
+            "candidateIndex",
+            "matchesAppearance",
+            "fullyContained",
+            "standalonePictogram",
+            "x",
+            "y",
+            "width",
+            "height");
     private static final Set<String> RULE_GROUP_COVERAGE_FIELDS = Set.of("identifier", "role");
     private final RuntimeModelConfiguration models;
     private final FakeVisualRulebookPageCatalogModel fake;
@@ -137,8 +178,6 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
     private final String progressiveTeachingStartPrompt;
     private final String iconLocalizationPrompt;
     private final String iconCropReviewPrompt;
-    private final String identifierCellPrompt;
-    private final String identifierReferenceMatchPrompt;
     private final String ocrModelName;
     private final int maxCompletionTokens;
 
@@ -152,8 +191,6 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
                     Resource progressiveTeachingStartPrompt,
             @Value("classpath:prompts/visual-icon-localization-v2-system.txt") Resource iconLocalizationPrompt,
             @Value("classpath:prompts/visual-icon-crop-review-v4-system.txt") Resource iconCropReviewPrompt,
-            @Value("classpath:prompts/visual-identifier-cell-v1-system.txt") Resource identifierCellPrompt,
-            @Value("classpath:prompts/visual-identifier-reference-match-v1-system.txt") Resource identifierReferenceMatchPrompt,
             @Value("${rulepilot.visual.ocr-model:qwen3.5-ocr}") String ocrModelName,
             @Value("${rulepilot.visual.catalog-max-output-tokens:4800}") int maxCompletionTokens)
             throws IOException {
@@ -165,12 +202,9 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
                 progressiveTeachingStartPrompt.getContentAsString(StandardCharsets.UTF_8).strip();
         this.iconLocalizationPrompt = iconLocalizationPrompt.getContentAsString(StandardCharsets.UTF_8).strip();
         this.iconCropReviewPrompt = iconCropReviewPrompt.getContentAsString(StandardCharsets.UTF_8).strip();
-        this.identifierCellPrompt = identifierCellPrompt.getContentAsString(StandardCharsets.UTF_8).strip();
-        this.identifierReferenceMatchPrompt = identifierReferenceMatchPrompt.getContentAsString(StandardCharsets.UTF_8).strip();
         if (this.systemPrompt.isBlank() || this.teachingStartupPrompt.isBlank()
                 || this.progressiveTeachingStartPrompt.isBlank()
-                || this.iconLocalizationPrompt.isBlank() || this.iconCropReviewPrompt.isBlank()
-                || this.identifierCellPrompt.isBlank() || this.identifierReferenceMatchPrompt.isBlank()) {
+                || this.iconLocalizationPrompt.isBlank() || this.iconCropReviewPrompt.isBlank()) {
             throw new IllegalArgumentException("visual page catalog prompts must not be blank");
         }
         if (maxCompletionTokens < 800 || maxCompletionTokens > 8_000) {
@@ -219,112 +253,6 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
     public Optional<ModelExecutionIdentity> teachingPageTranscriptionExecutionIdentity(String owner) {
         if (!supportsTeachingPageTranscription(owner)) return Optional.empty();
         return Optional.of(new ModelExecutionIdentity("qwen", ocrModelName));
-    }
-
-    @Override
-    public IdentifierLocalizationDraft locateIdentifiers(IdentifierLocalizationRequest request) {
-        String owner = request.modelConfigurationOwner();
-        if (models.usesFake(Role.VISUAL, owner) || !models.supportsVision(Role.VISUAL, owner)) {
-            return VisualRulebookPageCatalogModel.super.locateIdentifiers(request);
-        }
-        ChatClient.ChatClientRequestSpec prompt = ChatClient.create(models.modelFor(Role.VISUAL, owner)).prompt();
-        if ("qwen".equals(models.providerFor(Role.VISUAL, owner))) {
-            prompt = prompt.options(qwenJsonOptions(models.modelNameFor(Role.VISUAL, owner), 2_000));
-        }
-        String content = prompt.system(identifierCellPrompt)
-                .user(user -> {
-                    user.text("""
-                            Task: locate-identifiers
-                            PDF page number: {pageNumber}
-                            Required identifiers: {identifiers}
-                            Return one location for every required identifier that is literally visible. Coordinates
-                            use a top-left 0-1000 grid on the complete attached page.
-                            """)
-                            .param("pageNumber", request.page().pageNumber())
-                            .param("identifiers", request.identifiers());
-                    // Identifier labels are often deliberately small, light-gray catalog furniture. Preserve the
-                    // immutable rendered page resolution for this spatial pass; the ordinary overview catalog may
-                    // still use its bounded 1024px preparation.
-                    PageImageInput page = request.page();
-                    user.media(MimeTypeUtils.parseMimeType(page.mediaType()), new ByteArrayResource(page.content()));
-                })
-                .call().content();
-        return parseIdentifierLocations(content);
-    }
-
-    @Override
-    public IdentifierCellDraft summarizeIdentifierCells(IdentifierCellRequest request) {
-        String owner = request.modelConfigurationOwner();
-        if (models.usesFake(Role.VISUAL, owner) || !models.supportsVision(Role.VISUAL, owner)) {
-            return VisualRulebookPageCatalogModel.super.summarizeIdentifierCells(request);
-        }
-        ChatClient.ChatClientRequestSpec prompt = ChatClient.create(models.modelFor(Role.VISUAL, owner)).prompt();
-        if ("qwen".equals(models.providerFor(Role.VISUAL, owner))) {
-            prompt = prompt.options(qwenJsonOptions(models.modelNameFor(Role.VISUAL, owner), 2_400));
-        }
-        String content = prompt.system(identifierCellPrompt)
-                .user(user -> {
-                    user.text("""
-                            Task: read-identifier-cells
-                            Attachment mapping:
-                            {mapping}
-                            Reference page mapping:
-                            {references}
-                            Return exactly one fact for each attachment and use its supplied identifier verbatim.
-                            """).param("mapping", java.util.stream.IntStream.range(0, request.cells().size())
-                            .mapToObj(index -> "image " + (index + 1) + " = " + request.cells().get(index).identifier())
-                            .collect(Collectors.joining("\n")))
-                            .param("references", request.referencePages().isEmpty()
-                                    ? "none"
-                                    : java.util.stream.IntStream.range(0, request.referencePages().size())
-                                            .mapToObj(index -> "image " + (request.cells().size() + index + 1)
-                                                    + " = complete PDF page "
-                                                    + request.referencePages().get(index).image().pageNumber()
-                                                    + "; extracted page evidence: "
-                                                    + request.referencePages().get(index).evidenceText())
-                                            .collect(Collectors.joining("\n")));
-                    request.cells().stream().map(IdentifierCellInput::image).map(images::prepare).forEach(image ->
-                            user.media(MimeTypeUtils.parseMimeType(image.mediaType()), new ByteArrayResource(image.content())));
-                    request.referencePages().stream().map(IdentifierReferencePage::image).map(images::prepare).forEach(image ->
-                            user.media(MimeTypeUtils.parseMimeType(image.mediaType()), new ByteArrayResource(image.content())));
-                })
-                .call().content();
-        return parseIdentifierCellFacts(content, request.cells().stream().map(IdentifierCellInput::identifier).toList());
-    }
-
-    @Override
-    public IdentifierCellVerificationDraft verifyIdentifierCell(IdentifierCellVerificationRequest request) {
-        String owner = request.modelConfigurationOwner();
-        if (models.usesFake(Role.VISUAL, owner) || !models.supportsVision(Role.VISUAL, owner)) {
-            return VisualRulebookPageCatalogModel.super.verifyIdentifierCell(request);
-        }
-        ChatClient.ChatClientRequestSpec prompt = ChatClient.create(models.modelFor(Role.VISUAL, owner)).prompt();
-        if ("qwen".equals(models.providerFor(Role.VISUAL, owner))) {
-            prompt = prompt.options(qwenJsonOptions(models.modelNameFor(Role.VISUAL, owner), 900));
-        }
-        String content = prompt.system(identifierReferenceMatchPrompt)
-                .user(user -> {
-                    user.text("""
-                            Task: verify-reference-match
-                            Target identifier: {identifier}
-                            Draft fact: {draft}
-                            Allowed reference labels: {labels}
-                            Reference evidence: {evidence}
-                            image 1 is the target cell; image 2 is the labeled reference crop.
-                            Return identifier, matchedLabel, and quantity only. matchedLabel must be exactly one allowed
-                            label or NONE. Do not rewrite or summarize the draft.
-                            """)
-                            .param("identifier", request.cell().identifier())
-                            .param("draft", request.draftSummary())
-                            .param("labels", request.allowedLabels())
-                            .param("evidence", request.referencePage().evidenceText());
-                    for (PageImageInput input : List.of(request.cell().image(), request.referencePage().image())) {
-                        PageImageInput image = images.prepare(input);
-                        user.media(MimeTypeUtils.parseMimeType(image.mediaType()), new ByteArrayResource(image.content()));
-                    }
-                })
-                .call().content();
-        return parseIdentifierCellVerification(content, request);
     }
 
     @Override
@@ -666,42 +594,51 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
             throw new IllegalArgumentException("visual icon localization model returned no content");
         }
         String json = content.strip();
-        if (json.startsWith("```")) {
-            int firstLineEnd = json.indexOf('\n');
-            int closingFence = json.lastIndexOf("```");
-            if (firstLineEnd < 0 || closingFence <= firstLineEnd) {
-                throw new IllegalArgumentException("visual icon localization returned malformed JSON fencing");
-            }
-            json = json.substring(firstLineEnd + 1, closingFence).strip();
-        }
         try {
             JsonNode root = JSON.readTree(json);
-            JsonNode items = root.isArray() ? root : root.path("items");
+            requireExactObjectFields(root, ITEMS_ROOT_FIELDS, "visual icon localization root");
+            JsonNode items = root.get("items");
             if (!items.isArray() || items.size() != expectedCandidates) {
                 throw new IllegalArgumentException("visual icon localization did not cover every candidate");
             }
             Map<Integer, IconLocation> byCandidate = new java.util.LinkedHashMap<>();
             items.forEach(item -> {
-                int index = item.path("candidateIndex").asInt(Integer.MIN_VALUE);
+                boolean present = requiredBoolean(item.get("present"), "present");
+                Set<String> fields = new LinkedHashSet<>();
+                item.fieldNames().forEachRemaining(fields::add);
+                if (!fields.equals(present ? ICON_LOCALIZATION_PRESENT_FIELDS : ICON_LOCALIZATION_ABSENT_FIELDS)
+                        && !(fields.equals(ICON_LOCALIZATION_PRESENT_FIELDS) && !present)) {
+                    throw new IllegalArgumentException(
+                            "visual icon localization item fields do not match its present verdict");
+                }
+                int index = requiredInteger(item.get("candidateIndex"), "candidateIndex");
                 if (index < 0 || index >= expectedCandidates) {
                     throw new IllegalArgumentException("visual icon localization returned an unknown candidate");
                 }
-                boolean present = item.path("present").asBoolean(false);
-                IconLocation location;
-                try {
-                    location = present
-                            ? new IconLocation(
-                                    index,
-                                    true,
-                                    item.path("x").asInt(Integer.MIN_VALUE),
-                                    item.path("y").asInt(Integer.MIN_VALUE),
-                                    item.path("width").asInt(Integer.MIN_VALUE),
-                                    item.path("height").asInt(Integer.MIN_VALUE),
-                                    joinedText(item.get("observedLabel"), " "))
-                            : IconLocation.absent(index);
-                } catch (IllegalArgumentException invalidRectangle) {
-                    // A single malformed rectangle must not discard other independently verified candidates.
-                    location = IconLocation.absent(index);
+                String observedLabel = requiredText(item.get("observedLabel"), "observedLabel", true);
+                IconLocation location = present
+                        ? new IconLocation(
+                                index,
+                                true,
+                                requiredInteger(item.get("x"), "x"),
+                                requiredInteger(item.get("y"), "y"),
+                                requiredInteger(item.get("width"), "width"),
+                                requiredInteger(item.get("height"), "height"),
+                                observedLabel)
+                        : IconLocation.absent(index);
+                if (!present) {
+                    if (!observedLabel.isEmpty()) {
+                        throw new IllegalArgumentException(
+                                "absent visual icon localization must have an empty observedLabel");
+                    }
+                    if (fields.equals(ICON_LOCALIZATION_PRESENT_FIELDS)
+                            && (requiredInteger(item.get("x"), "x") != 0
+                                    || requiredInteger(item.get("y"), "y") != 0
+                                    || requiredInteger(item.get("width"), "width") != 0
+                                    || requiredInteger(item.get("height"), "height") != 0)) {
+                        throw new IllegalArgumentException(
+                                "absent visual icon localization coordinates must be zero or omitted");
+                    }
                 }
                 if (byCandidate.putIfAbsent(index, location) != null) {
                     throw new IllegalArgumentException("visual icon localization repeated a candidate");
@@ -725,32 +662,44 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
         }
         try {
             JsonNode root = JSON.readTree(content.strip());
-            JsonNode items = root.isArray() ? root : root.path("items");
+            requireExactObjectFields(root, ITEMS_ROOT_FIELDS, "visual icon crop review root");
+            JsonNode items = root.get("items");
             if (!items.isArray() || items.size() != expectedCandidates.size()) {
                 throw new IllegalArgumentException("visual icon crop review did not cover every candidate");
             }
             Map<Integer, IconCropDecision> byCandidate = new java.util.LinkedHashMap<>();
             items.forEach(item -> {
-                int index = item.path("candidateIndex").asInt(Integer.MIN_VALUE);
+                boolean matchesAppearance = requiredBoolean(item.get("matchesAppearance"), "matchesAppearance");
+                boolean fullyContained = requiredBoolean(item.get("fullyContained"), "fullyContained");
+                boolean standalonePictogram = requiredBoolean(item.get("standalonePictogram"), "standalonePictogram");
+                boolean accepted = matchesAppearance && fullyContained && standalonePictogram;
+                Set<String> fields = new LinkedHashSet<>();
+                item.fieldNames().forEachRemaining(fields::add);
+                if (!fields.equals(accepted ? ICON_CROP_ACCEPTED_FIELDS : ICON_CROP_VERDICT_FIELDS)
+                        && !(fields.equals(ICON_CROP_ACCEPTED_FIELDS) && !accepted)) {
+                    throw new IllegalArgumentException(
+                            "visual icon crop review item fields do not match its verdict");
+                }
+                int index = requiredInteger(item.get("candidateIndex"), "candidateIndex");
                 if (!expectedCandidates.contains(index) || byCandidate.containsKey(index)) {
                     throw new IllegalArgumentException("visual icon crop review returned an unknown candidate");
                 }
-                boolean matchesAppearance = item.path("matchesAppearance").asBoolean(false);
-                boolean fullyContained = item.path("fullyContained").asBoolean(false);
-                boolean standalonePictogram = item.path("standalonePictogram").asBoolean(false);
-                IconCropDecision decision;
-                try {
-                    decision = matchesAppearance && fullyContained && standalonePictogram
-                            ? new IconCropDecision(
-                                    index,
-                                    true,
-                                    item.path("x").asInt(Integer.MIN_VALUE),
-                                    item.path("y").asInt(Integer.MIN_VALUE),
-                                    item.path("width").asInt(Integer.MIN_VALUE),
-                                    item.path("height").asInt(Integer.MIN_VALUE))
-                            : IconCropDecision.rejected(index);
-                } catch (IllegalArgumentException invalidRectangle) {
-                    decision = IconCropDecision.rejected(index);
+                IconCropDecision decision = accepted
+                        ? new IconCropDecision(
+                                index,
+                                true,
+                                requiredInteger(item.get("x"), "x"),
+                                requiredInteger(item.get("y"), "y"),
+                                requiredInteger(item.get("width"), "width"),
+                                requiredInteger(item.get("height"), "height"))
+                        : IconCropDecision.rejected(index);
+                if (!accepted && fields.equals(ICON_CROP_ACCEPTED_FIELDS)
+                        && (requiredInteger(item.get("x"), "x") != 0
+                                || requiredInteger(item.get("y"), "y") != 0
+                                || requiredInteger(item.get("width"), "width") != 0
+                                || requiredInteger(item.get("height"), "height") != 0)) {
+                    throw new IllegalArgumentException(
+                            "rejected visual icon crop coordinates must be zero or omitted");
                 }
                 byCandidate.put(index, decision);
             });
@@ -897,45 +846,52 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
             throw new IllegalArgumentException("visual page catalog model returned no content");
         }
         String json = content.strip();
-        if (json.startsWith("```")) {
-            int firstLineEnd = json.indexOf('\n');
-            int closingFence = json.lastIndexOf("```");
-            if (firstLineEnd < 0 || closingFence <= firstLineEnd) {
-                throw new IllegalArgumentException("visual page catalog model returned malformed JSON fencing");
-            }
-            json = json.substring(firstLineEnd + 1, closingFence).strip();
-        }
         try {
             JsonNode root = JSON.readTree(json);
-            JsonNode pages = root.path("pages");
-            if (!pages.isArray()) {
-                throw new IllegalArgumentException("visual page catalog JSON has no pages array");
+            requireExactObjectFields(root, TEACHING_V6_ROOT_FIELDS, "visual teaching catalog root");
+            JsonNode pages = root.get("pages");
+            if (!pages.isArray() || pages.isEmpty()) {
+                throw new IllegalArgumentException("visual teaching catalog must return a non-empty pages array");
             }
             for (JsonNode page : pages) {
                 if (!(page instanceof ObjectNode objectPage)) {
                     throw new IllegalArgumentException("visual teaching catalog page must be an object");
                 }
-                if (!objectPage.has("factualSummary")) {
-                    objectPage.putArray("factualSummary");
+                requireExactObjectFields(page, TEACHING_V6_PAGE_FIELDS, "visual teaching catalog page");
+                int pageNumber = requiredInteger(page.get("pageNumber"), "pageNumber");
+                if (pageNumber < 1) {
+                    throw new IllegalArgumentException("visual teaching catalog pageNumber must be positive");
+                }
+                strictTextArray(page.get("printedTerms"), "printedTerms", 0, 12);
+                strictTextArray(page.get("keywords"), "keywords", 2, 8);
+                strictExternalDocumentDependencies(page.get("externalDocumentDependencies"));
+                if (!page.get("ruleGroupInventoryComplete").isBoolean()) {
+                    throw new IllegalArgumentException(
+                            "visual teaching catalog ruleGroupInventoryComplete must be boolean");
                 }
                 JsonNode groups = page.get("ruleGroups");
-                if (groups == null || !groups.isArray()) continue;
-                int inlineGroups = 0;
+                if (groups == null || !groups.isArray() || groups.size() > 32) {
+                    throw new IllegalArgumentException("visual teaching catalog ruleGroups must be an array of at most 32 items");
+                }
                 for (JsonNode group : groups) {
-                    if (group.has("quantitySpans")) inlineGroups++;
-                }
-                boolean hasLegacyObservations = page.has("quantityObservations");
-                if (inlineGroups == 0 && hasLegacyObservations) continue;
-                if (inlineGroups > 0 && hasLegacyObservations) {
-                    throw new IllegalArgumentException(
-                            "visual teaching catalog must not mix quantitySpans with quantityObservations");
-                }
-                if (inlineGroups != groups.size()) {
-                    throw new IllegalArgumentException(
-                            "visual teaching catalog must return quantitySpans for every ruleGroups item");
+                    requireExactObjectFields(
+                            group, TEACHING_V6_RULE_GROUP_FIELDS, "visual teaching catalog ruleGroups item");
+                    requiredText(group.get("identifier"), "identifier", false);
+                    String fact = requiredText(group.get("fact"), "fact", false);
+                    if (fact.indexOf('\n') >= 0 || fact.indexOf('\r') >= 0) {
+                        throw new IllegalArgumentException(
+                                "visual teaching catalog ruleGroups fact must be a single line");
+                    }
+                    List<String> quantitySpans = strictTextArray(
+                            group.get("quantitySpans"), "quantitySpans", 0, Integer.MAX_VALUE);
+                    if (quantitySpans.stream().anyMatch(span -> span.length() > 240
+                            || span.indexOf('\n') >= 0
+                            || span.indexOf('\r') >= 0)) {
+                        throw new IllegalArgumentException(
+                                "visual teaching catalog quantitySpans must be single-line text of at most 240 characters");
+                    }
                 }
                 ArrayNode observations = JSON.createArrayNode();
-                int pageNumber = requiredInteger(page.get("pageNumber"), "pageNumber");
                 for (int index = 0; index < groups.size(); index++) {
                     JsonNode group = groups.get(index);
                     if (!(group instanceof ObjectNode objectGroup)) {
@@ -958,11 +914,91 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
                         observations.add(observation);
                     }
                 }
+                objectPage.putArray("factualSummary");
                 objectPage.set("quantityObservations", observations);
             }
             return JSON.writeValueAsString(root);
         } catch (JsonProcessingException invalidJson) {
             throw new IllegalArgumentException("visual page catalog model returned invalid JSON", invalidJson);
+        }
+    }
+
+    private static void strictExternalDocumentDependencies(JsonNode value) {
+        if (value == null || !value.isArray() || value.size() > 4) {
+            throw new IllegalArgumentException(
+                    "visual teaching catalog externalDocumentDependencies must be an array of at most four items");
+        }
+        LinkedHashSet<String> titles = new LinkedHashSet<>();
+        for (JsonNode dependency : value) {
+            requireExactObjectFields(
+                    dependency,
+                    EXTERNAL_DOCUMENT_DEPENDENCY_FIELDS,
+                    "visual teaching catalog externalDocumentDependencies item");
+            String title = requiredText(dependency.get("documentTitle"), "documentTitle", false).strip();
+            if (title.length() > 160 || !titles.add(title)) {
+                throw new IllegalArgumentException(
+                        "visual teaching catalog external document title is invalid or duplicated");
+            }
+            List<String> coverage = strictTextArray(
+                    dependency.get("missingCoverageTags"), "missingCoverageTags", 0, 4);
+            if (!EXTERNAL_DOCUMENT_COVERAGE_TAGS.containsAll(coverage)) {
+                throw new IllegalArgumentException(
+                        "visual teaching catalog external document coverage tag is unknown");
+            }
+        }
+    }
+
+    private static void strictSourceDependencies(JsonNode value, String titleField) {
+        if (value == null || !value.isArray() || value.size() > 4) {
+            throw new IllegalArgumentException(
+                    "progressive visual teaching sourceDependencies must be an array of at most four items");
+        }
+        LinkedHashSet<String> titles = new LinkedHashSet<>();
+        for (JsonNode dependency : value) {
+            requireExactObjectFields(
+                    dependency, SOURCE_DEPENDENCY_FIELDS, "progressive visual teaching sourceDependencies item");
+            String title = requiredText(dependency.get(titleField), titleField, false).strip();
+            if (title.length() > 160 || !titles.add(title)) {
+                throw new IllegalArgumentException(
+                        "progressive visual teaching source dependency title is invalid or duplicated");
+            }
+            List<String> coverage = strictTextArray(
+                    dependency.get("missingCoverageTags"), "missingCoverageTags", 0, 4);
+            if (!EXTERNAL_DOCUMENT_COVERAGE_TAGS.containsAll(coverage)) {
+                throw new IllegalArgumentException(
+                        "progressive visual teaching source dependency coverage tag is unknown");
+            }
+        }
+    }
+
+    private static List<String> strictTextArray(
+            JsonNode value, String field, int minimumSize, int maximumSize) {
+        if (value == null || !value.isArray() || value.size() < minimumSize || value.size() > maximumSize) {
+            throw new IllegalArgumentException(field + " must be an array with the declared size");
+        }
+        List<String> values = new java.util.ArrayList<>();
+        LinkedHashSet<String> distinct = new LinkedHashSet<>();
+        for (JsonNode item : value) {
+            if (!item.isTextual() || item.textValue().isBlank()) {
+                throw new IllegalArgumentException(field + " must contain non-blank text");
+            }
+            String text = item.textValue().strip();
+            if (!distinct.add(text)) {
+                throw new IllegalArgumentException(field + " must not contain duplicate text");
+            }
+            values.add(text);
+        }
+        return List.copyOf(values);
+    }
+
+    private static void requireExactObjectFields(JsonNode value, Set<String> expected, String contract) {
+        if (value == null || !value.isObject()) {
+            throw new IllegalArgumentException(contract + " must be an object");
+        }
+        LinkedHashSet<String> actual = new LinkedHashSet<>();
+        value.fieldNames().forEachRemaining(actual::add);
+        if (!actual.equals(expected)) {
+            throw new IllegalArgumentException(contract + " must contain exactly " + expected);
         }
     }
 
@@ -1011,14 +1047,6 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
             throw new IllegalArgumentException("visual page catalog model returned no content");
         }
         String json = content.strip();
-        if (json.startsWith("```")) {
-            int firstLineEnd = json.indexOf('\n');
-            int closingFence = json.lastIndexOf("```");
-            if (firstLineEnd < 0 || closingFence <= firstLineEnd) {
-                throw new IllegalArgumentException("visual page catalog model returned malformed JSON fencing");
-            }
-            json = json.substring(firstLineEnd + 1, closingFence).strip();
-        }
         try {
             JsonNode pages = JSON.readTree(json).path("pages");
             if (!pages.isArray()) {
@@ -1027,7 +1055,7 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
             java.util.List<PageSummary> summaries = new java.util.ArrayList<>();
             for (JsonNode page : pages) {
                 JsonNode sourceDependencyInventory = requireLiteralQuantitySpans
-                        ? firstPresent(page, "externalDocumentDependencies", "sourceDependencies")
+                        ? page.get("externalDocumentDependencies")
                         : page.get("sourceDependencies");
                 if (requireSourceDependencies
                         && (sourceDependencyInventory == null || !sourceDependencyInventory.isArray())) {
@@ -1041,7 +1069,7 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
                         sourceDependencyInventory, externalDocumentShape ? "documentTitle" : "title");
                 JsonNode ruleGroupInventory = page.get("ruleGroupIdentifiers");
                 int pageNumber = page.path("pageNumber").asInt();
-                List<ModelRuleGroup> boundRuleGroups = requireBoundRuleGroups
+                List<RuleGroupFact> boundRuleGroups = requireBoundRuleGroups
                         ? strictBoundRuleGroups(pageNumber, page.get("ruleGroups"))
                         : List.of();
                 JsonNode ruleGroupCompleteness = page.get("ruleGroupInventoryComplete");
@@ -1056,7 +1084,7 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
                             "visual teaching catalog must return ruleGroupInventoryComplete for every page");
                 }
                 List<String> ruleGroupIdentifiers = requireBoundRuleGroups
-                        ? boundRuleGroups.stream().map(ModelRuleGroup::identifier).toList()
+                        ? boundRuleGroups.stream().map(RuleGroupFact::identifier).toList()
                         : requireSourceDependencies
                                 ? strictRuleGroupIdentifiers(ruleGroupInventory)
                         : ruleGroupInventory != null && ruleGroupInventory.isArray()
@@ -1099,21 +1127,29 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
                             ? dependencyFacts
                             : dependencyFacts + "\n" + factualSummary;
                 }
-                if (ruleGroupInventoryComplete) {
-                    validateRuleGroupFactBindings(ruleGroupIdentifiers, factualSummary, "visual teaching");
+                if (ruleGroupInventoryComplete && requireBoundRuleGroups) {
+                    validateRuleGroupFactBindings(ruleGroupIdentifiers, boundRuleGroups, "visual teaching");
                 }
+                // Historical V2/V3 fixtures supplied an identifier array plus prose. They remain readable as partial
+                // observations, but cannot claim a complete schema-36 ledger because the application no longer
+                // reconstructs JSON relationships from that prose.
+                ruleGroupInventoryComplete = ruleGroupInventoryComplete && requireBoundRuleGroups;
+                ParsedIconInventory parsedIcons = iconOccurrences(page.get("iconOccurrences"));
                 summaries.add(new PageSummary(
                         pageNumber,
                         printedTerms,
                         factualSummary,
                         normalizedStrings(page.get("keywords")),
                         visualAnchors(page.get("visualAnchors")),
-                        iconOccurrences(page.get("iconOccurrences")),
-                        page.path("iconInventoryComplete").asBoolean(false),
+                        parsedIcons.occurrences(),
+                        page.path("iconInventoryComplete").isBoolean()
+                                && page.path("iconInventoryComplete").booleanValue()
+                                && parsedIcons.contractValid(),
                         dependencies,
                         ruleGroupIdentifiers,
                         ruleGroupInventoryComplete,
-                        quantityObservations));
+                        quantityObservations,
+                        boundRuleGroups));
             }
             return new CatalogDraft(summaries);
         } catch (JsonProcessingException invalidJson) {
@@ -1125,14 +1161,14 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
         return strictIdentifiers(value, "visual teaching catalog");
     }
 
-    private static List<ModelRuleGroup> strictBoundRuleGroups(int pageNumber, JsonNode value) {
+    private static List<RuleGroupFact> strictBoundRuleGroups(int pageNumber, JsonNode value) {
         if (pageNumber <= 0) {
             throw new IllegalArgumentException("visual teaching catalog pageNumber must be positive");
         }
         if (value == null || !value.isArray()) {
             throw new IllegalArgumentException("visual teaching catalog must return ruleGroups for every page");
         }
-        List<ModelRuleGroup> groups = new java.util.ArrayList<>();
+        List<RuleGroupFact> groups = new java.util.ArrayList<>();
         java.util.LinkedHashSet<String> exactGroups = new java.util.LinkedHashSet<>();
         for (JsonNode item : value) {
             if (!item.isObject()) {
@@ -1162,7 +1198,7 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
             if (fact.indexOf('\n') >= 0 || fact.indexOf('\r') >= 0) {
                 throw new IllegalArgumentException("visual teaching catalog rule-group fact must be a single line");
             }
-            groups.add(new ModelRuleGroup(
+            groups.add(new RuleGroupFact(
                     "page-" + pageNumber + "-group-" + (groups.size() + 1), label, fact));
         }
         return List.copyOf(groups);
@@ -1206,23 +1242,26 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
             throw new IllegalArgumentException("progressive visual teaching model returned no content");
         }
         String json = content.strip();
-        if (json.startsWith("```")) {
-            int firstLineEnd = json.indexOf('\n');
-            int closingFence = json.lastIndexOf("```");
-            if (firstLineEnd < 0 || closingFence <= firstLineEnd) {
-                throw new IllegalArgumentException("progressive visual teaching returned malformed JSON fencing");
-            }
-            json = json.substring(firstLineEnd + 1, closingFence).strip();
-        }
         try {
             JsonNode root = JSON.readTree(json);
+            if (requireRuleGroupCoverage) {
+                requireExactObjectFields(root, PROGRESSIVE_V4_ROOT_FIELDS, "progressive visual teaching root");
+            }
             JsonNode pageSketches = root.path("pageSketches");
             JsonNode selected = root.path("selectedPageFacts");
             if (!pageSketches.isArray() || pageSketches.isEmpty() || !selected.isObject()) {
                 throw new IllegalArgumentException("progressive visual teaching JSON is incomplete");
             }
+            if (requireRuleGroupCoverage) {
+                requireExactObjectFields(
+                        selected, PROGRESSIVE_V4_SELECTED_FIELDS, "progressive visual teaching selectedPageFacts");
+            }
             List<TeachingPageSketch> sketches = new java.util.ArrayList<>();
             for (JsonNode page : pageSketches) {
+                if (requireRuleGroupCoverage) {
+                    requireExactObjectFields(
+                            page, PROGRESSIVE_V4_PAGE_FIELDS, "progressive visual teaching pageSketches item");
+                }
                 JsonNode sourceDependencyInventory = page.get("sourceDependencies");
                 if (sourceDependencyInventory == null || !sourceDependencyInventory.isArray()) {
                     throw new IllegalArgumentException(
@@ -1230,35 +1269,103 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
                 }
                 TeachingPageRole role;
                 try {
-                    role = TeachingPageRole.valueOf(page.path("role").asText());
+                    role = TeachingPageRole.valueOf(requiredText(page.get("role"), "role", false));
                 } catch (IllegalArgumentException invalidRole) {
                     throw new IllegalArgumentException("progressive visual teaching returned an unknown page role");
                 }
-                boolean ruleGroupInventoryComplete = page.path("ruleGroupInventoryComplete").asBoolean(false);
-                List<String> visibleTerms = ruleGroupInventoryComplete
-                        ? strictIdentifiers(page.get("visibleTerms"), "progressive visual teaching")
-                        : normalizedStrings(page.get("visibleTerms"));
+                if (requireRuleGroupCoverage) {
+                    int pageNumber = requiredInteger(page.get("pageNumber"), "pageNumber");
+                    if (pageNumber < 1) {
+                        throw new IllegalArgumentException("progressive visual teaching pageNumber must be positive");
+                    }
+                    requiredText(page.get("visibleHeading"), "visibleHeading", true);
+                    strictSourceDependencies(sourceDependencyInventory, "title");
+                }
+                JsonNode inventoryCompleteNode = page.get("ruleGroupInventoryComplete");
+                if (requireRuleGroupCoverage && (inventoryCompleteNode == null || !inventoryCompleteNode.isBoolean())) {
+                    throw new IllegalArgumentException(
+                            "progressive visual teaching ruleGroupInventoryComplete must be boolean");
+                }
+                boolean ruleGroupInventoryComplete = inventoryCompleteNode != null
+                        && inventoryCompleteNode.isBoolean()
+                        && inventoryCompleteNode.booleanValue();
+                List<String> visibleTerms = requireRuleGroupCoverage
+                        ? strictTextArray(page.get("visibleTerms"), "visibleTerms", 0, 8)
+                        : ruleGroupInventoryComplete
+                                ? strictIdentifiers(page.get("visibleTerms"), "progressive visual teaching")
+                                : normalizedStrings(page.get("visibleTerms"));
+                List<String> coverageTags = requireRuleGroupCoverage
+                        ? strictTextArray(page.get("coverageTags"), "coverageTags", 0, 5)
+                        : normalizedStrings(page.get("coverageTags"));
+                if (requireRuleGroupCoverage && !PROGRESSIVE_COVERAGE_TAGS.containsAll(coverageTags)) {
+                    throw new IllegalArgumentException("progressive visual teaching coverageTags contain an unknown value");
+                }
                 List<RuleGroupCoverage> ruleGroupCoverage = ruleGroupCoverage(
                         page.get("ruleGroupCoverage"), requireRuleGroupCoverage);
+                if (requireRuleGroupCoverage) {
+                    List<String> classifiedTerms = ruleGroupCoverage.stream()
+                            .map(RuleGroupCoverage::identifier)
+                            .toList();
+                    if (role == TeachingPageRole.GAMEPLAY_RULES) {
+                        if (!classifiedTerms.equals(visibleTerms)) {
+                            throw new IllegalArgumentException(
+                                    "progressive visual teaching must classify every visibleTerms identifier in order");
+                        }
+                    } else if (!visibleTerms.isEmpty() || !coverageTags.isEmpty() || !ruleGroupCoverage.isEmpty()
+                            || ruleGroupInventoryComplete) {
+                        throw new IllegalArgumentException(
+                                "progressive visual teaching non-gameplay page must not claim rule coverage");
+                    }
+                }
                 sketches.add(new TeachingPageSketch(
-                        page.path("pageNumber").asInt(),
+                        requireRuleGroupCoverage
+                                ? requiredInteger(page.get("pageNumber"), "pageNumber")
+                                : page.path("pageNumber").asInt(),
                         role,
-                        joinedText(page.get("visibleHeading"), " "),
+                        requireRuleGroupCoverage
+                                ? requiredText(page.get("visibleHeading"), "visibleHeading", true)
+                                : joinedText(page.get("visibleHeading"), " "),
                         visibleTerms,
-                        normalizedStrings(page.get("coverageTags")),
+                        coverageTags,
                         ruleGroupInventoryComplete,
                         sourceDependencies(sourceDependencyInventory),
                         ruleGroupCoverage));
             }
-            int selectedPageNumber = selected.path("pageNumber").asInt();
+            int selectedPageNumber = requireRuleGroupCoverage
+                    ? requiredInteger(selected.get("pageNumber"), "pageNumber")
+                    : selected.path("pageNumber").asInt();
             TeachingPageSketch selectedSketch = sketches.stream()
                     .filter(page -> page.pageNumber() == selectedPageNumber)
                     .findFirst()
                     .orElseThrow(() -> new IllegalArgumentException(
                             "progressive visual teaching selected an unknown source page"));
+            if (requireRuleGroupCoverage && selectedSketch.role() != TeachingPageRole.GAMEPLAY_RULES) {
+                throw new IllegalArgumentException(
+                        "progressive visual teaching must select a GAMEPLAY_RULES page");
+            }
             List<SourceDependency> selectedDependencies = selectedSketch.sourceDependencies();
-            String printedTerms = joinedText(selected.get("printedTerms"), "; ");
-            String factualSummary = joinedText(selected.get("factualSummary"), "\n");
+            String printedTerms = requireRuleGroupCoverage
+                    ? String.join("; ", strictTextArray(selected.get("printedTerms"), "printedTerms", 0, 8))
+                    : joinedText(selected.get("printedTerms"), "; ");
+            List<RuleGroupFact> selectedRuleGroups = requireRuleGroupCoverage
+                    ? strictProgressiveRuleGroups(selected.get("ruleGroups"))
+                    : List.of();
+            if (requireRuleGroupCoverage && selectedRuleGroups.isEmpty()) {
+                throw new IllegalArgumentException(
+                        "progressive visual teaching selected page must contain a readable rule group");
+            }
+            List<String> selectedRuleGroupIdentifiers = requireRuleGroupCoverage
+                    ? selectedRuleGroups.stream().map(RuleGroupFact::identifier).toList()
+                    : selectedSketch.visibleTerms();
+            if (requireRuleGroupCoverage && !selectedRuleGroupIdentifiers.equals(selectedSketch.visibleTerms())) {
+                throw new IllegalArgumentException(
+                        "progressive visual teaching selected ruleGroups must match visibleTerms exactly");
+            }
+            String factualSummary = requireRuleGroupCoverage
+                    ? selectedRuleGroups.stream()
+                            .map(group -> group.identifier() + ": " + group.fact())
+                            .collect(java.util.stream.Collectors.joining("\n"))
+                    : joinedText(selected.get("factualSummary"), "\n");
             if (!selectedDependencies.isEmpty()) {
                 String dependencyTitles = selectedDependencies.stream()
                         .map(SourceDependency::title)
@@ -1270,26 +1377,45 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
                 factualSummary = factualSummary.isBlank() ? dependencyFacts : factualSummary + "\n" + dependencyFacts;
             }
             factualSummary = factualSummary == null ? "" : factualSummary.strip();
-            if (selectedSketch.ruleGroupInventoryComplete()) {
+            boolean selectedInventoryComplete = selectedSketch.ruleGroupInventoryComplete() && requireRuleGroupCoverage;
+            if (selectedInventoryComplete) {
                 validateRuleGroupFactBindings(
-                        selectedSketch.visibleTerms(), factualSummary, "progressive visual teaching");
+                        selectedRuleGroupIdentifiers, selectedRuleGroups, "progressive visual teaching");
+                if (!selectedRuleGroupIdentifiers.equals(selectedSketch.visibleTerms())) {
+                    throw new IllegalArgumentException(
+                            "progressive visual teaching selected ruleGroups must match visibleTerms exactly");
+                }
             }
             List<VisualQuantityObservation> quantityObservations = quantityObservations(
                     selected.get("quantityObservations"), requireQuantityObservations);
+            List<String> selectedKeywords = requireRuleGroupCoverage
+                    ? strictTextArray(selected.get("keywords"), "keywords", 2, 6)
+                    : normalizedStrings(selected.get("keywords"));
+            if (requireRuleGroupCoverage && quantityObservations.size() > 8) {
+                throw new IllegalArgumentException(
+                        "progressive visual teaching quantityObservations must have at most eight items");
+            }
+            if (requireRuleGroupCoverage && quantityObservations.stream().anyMatch(observation ->
+                    observation.pageNumber() != selectedPageNumber
+                            || !selectedRuleGroupIdentifiers.contains(observation.ruleGroupIdentifier()))) {
+                throw new IllegalArgumentException(
+                        "progressive visual teaching quantity observation is not bound to the selected rule group");
+            }
             return new ProgressiveTeachingStartDraft(
                     sketches,
                     new PageSummary(
                             selectedPageNumber,
                             printedTerms,
                             factualSummary,
-                            normalizedStrings(selected.get("keywords")),
+                            selectedKeywords,
                             List.of(),
                             List.of(),
                             false,
                             selectedDependencies,
-                            selectedSketch.visibleTerms(),
-                            selectedSketch.ruleGroupInventoryComplete(),
-                            quantityObservations));
+                            selectedRuleGroupIdentifiers,
+                            selectedInventoryComplete,
+                            quantityObservations,
+                            selectedRuleGroups));
         } catch (JsonProcessingException invalidJson) {
             throw new IllegalArgumentException("progressive visual teaching returned invalid JSON", invalidJson);
         }
@@ -1307,6 +1433,7 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
             throw new IllegalArgumentException("progressive visual teaching ruleGroupCoverage is invalid");
         }
         List<RuleGroupCoverage> coverage = new java.util.ArrayList<>();
+        LinkedHashSet<String> classifiedIdentifiers = new LinkedHashSet<>();
         for (JsonNode item : value) {
             if (!item.isObject()) {
                 throw new IllegalArgumentException(
@@ -1319,8 +1446,12 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
                         "progressive visual teaching ruleGroupCoverage item must contain the exact fields");
             }
             try {
+                String identifier = requiredText(item.get("identifier"), "identifier", false);
+                if (!classifiedIdentifiers.add(identifier)) {
+                    throw new IllegalArgumentException("identifier is duplicated");
+                }
                 coverage.add(new RuleGroupCoverage(
-                        requiredText(item.get("identifier"), "identifier", false),
+                        identifier,
                         SourceCoverageRole.valueOf(requiredText(item.get("role"), "role", false))));
             } catch (IllegalArgumentException invalidCoverage) {
                 throw new IllegalArgumentException(
@@ -1332,11 +1463,39 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
         return List.copyOf(coverage);
     }
 
+    private static List<RuleGroupFact> strictProgressiveRuleGroups(JsonNode value) {
+        if (value == null || !value.isArray()) {
+            throw new IllegalArgumentException("progressive visual teaching must return selected ruleGroups");
+        }
+        List<RuleGroupFact> facts = new java.util.ArrayList<>();
+        Set<String> identifiers = new java.util.LinkedHashSet<>();
+        for (JsonNode item : value) {
+            if (!item.isObject()) {
+                throw new IllegalArgumentException("progressive visual teaching ruleGroups item must be an object");
+            }
+            Set<String> fields = new java.util.LinkedHashSet<>();
+            item.fieldNames().forEachRemaining(fields::add);
+            if (!fields.equals(RULE_GROUP_FIELDS)) {
+                throw new IllegalArgumentException(
+                        "progressive visual teaching ruleGroups item must contain exactly identifier and fact");
+            }
+            String identifier = requiredText(item.get("identifier"), "identifier", false);
+            if (!identifiers.add(identifier)) {
+                throw new IllegalArgumentException("progressive visual teaching duplicated a ruleGroups identifier");
+            }
+            facts.add(new RuleGroupFact(
+                    identifier,
+                    identifier,
+                    requiredText(item.get("fact"), "fact", false)));
+        }
+        return List.copyOf(facts);
+    }
+
     private static void validateRuleGroupFactBindings(
-            List<String> identifiers, String factualSummary, String contract) {
-        if (VisualSourceRuleGroupLedger.hasExactFactBindings(identifiers, factualSummary)) return;
+            List<String> identifiers, List<RuleGroupFact> facts, String contract) {
+        if (VisualSourceRuleGroupLedger.hasExactFactBindings(identifiers, facts)) return;
         for (String identifier : identifiers) {
-            if (!VisualSourceRuleGroupLedger.hasExactFactBinding(identifier, factualSummary)) {
+            if (!VisualSourceRuleGroupLedger.hasExactFactBinding(identifier, facts)) {
                 throw new IllegalArgumentException(
                         contract + " rule group has no same-page fact: " + identifier);
             }
@@ -1425,7 +1584,7 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
     }
 
     private static List<VisualQuantityObservation> boundQuantityObservations(
-            JsonNode value, boolean required, List<ModelRuleGroup> ruleGroups) {
+            JsonNode value, boolean required, List<RuleGroupFact> ruleGroups) {
         if (value == null || value.isMissingNode()) {
             if (required) {
                 throw new IllegalArgumentException(
@@ -1463,7 +1622,7 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
     }
 
     private static List<VisualQuantityObservation> discriminatedBoundQuantityObservations(
-            JsonNode value, boolean required, List<ModelRuleGroup> ruleGroups) {
+            JsonNode value, boolean required, List<RuleGroupFact> ruleGroups) {
         if (value == null || value.isMissingNode()) {
             if (required) {
                 throw new IllegalArgumentException(
@@ -1533,7 +1692,7 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
     }
 
     private static List<VisualQuantityObservation> literalBoundQuantitySpans(
-            JsonNode value, boolean required, List<ModelRuleGroup> ruleGroups) {
+            JsonNode value, boolean required, List<RuleGroupFact> ruleGroups) {
         if (value == null || value.isMissingNode()) {
             if (required) {
                 throw new IllegalArgumentException(
@@ -1624,6 +1783,13 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
         return value.intValue();
     }
 
+    private static boolean requiredBoolean(JsonNode value, String field) {
+        if (value == null || !value.isBoolean()) {
+            throw new IllegalArgumentException(field + " must be boolean");
+        }
+        return value.booleanValue();
+    }
+
     private static Integer nullableInteger(JsonNode value, String field) {
         if (value == null || value.isNull()) return null;
         return requiredInteger(value, field);
@@ -1673,132 +1839,6 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
                 .toList();
         return new ProgressiveTeachingStartDraft(
                 ordered, withoutVisualEnrichment(draft.selectedPageFacts()));
-    }
-
-    static IdentifierLocalizationDraft parseIdentifierLocations(String content) {
-        JsonNode items = structuredItems(content, "visual identifier localization");
-        java.util.List<IdentifierLocation> locations = new java.util.ArrayList<>();
-        items.forEach(item -> {
-            if (!item.isObject()) return;
-            try {
-                locations.add(new IdentifierLocation(
-                        item.path("identifier").asText(),
-                        item.path("x").asInt(Integer.MIN_VALUE),
-                        item.path("y").asInt(Integer.MIN_VALUE),
-                        item.path("width").asInt(Integer.MIN_VALUE),
-                        item.path("height").asInt(Integer.MIN_VALUE)));
-            } catch (IllegalArgumentException ignored) {
-                // A malformed optional location does not discard other independently verified labels.
-            }
-        });
-        return new IdentifierLocalizationDraft(locations);
-    }
-
-    static IdentifierCellDraft parseIdentifierCellFacts(String content, List<String> expectedIdentifiers) {
-        JsonNode items = structuredItems(content, "visual identifier cells");
-        Map<String, String> expected = expectedIdentifiers.stream().collect(Collectors.toMap(
-                SpringAiVisualRulebookPageCatalogModel::normalizedIdentifier,
-                java.util.function.Function.identity(),
-                (first, ignored) -> first,
-                java.util.LinkedHashMap::new));
-        Map<String, IdentifierCellFact> facts = new java.util.LinkedHashMap<>();
-        items.forEach(item -> {
-            if (!item.isObject()) return;
-            String supplied = expected.get(normalizedIdentifier(item.path("identifier").asText()));
-            if (supplied == null || facts.containsKey(normalizedIdentifier(supplied))) return;
-            try {
-                facts.put(normalizedIdentifier(supplied), new IdentifierCellFact(
-                        supplied, joinedText(item.get("factualSummary"), " ")));
-            } catch (IllegalArgumentException ignored) {
-                // Keep other cells; an unreadable crop remains absent rather than being guessed.
-            }
-        });
-        return new IdentifierCellDraft(List.copyOf(facts.values()));
-    }
-
-    static IdentifierCellVerificationDraft parseIdentifierCellVerification(
-            String content, IdentifierCellVerificationRequest request) {
-        if (content == null || content.isBlank()) {
-            throw new IllegalArgumentException("identifier cell verification returned no content");
-        }
-        try {
-            JsonNode root = JSON.readTree(content.strip().replaceFirst("(?s)^```(?:json)?\\s*", "")
-                    .replaceFirst("(?s)\\s*```$", ""));
-            String identifier = root.path("identifier").asText();
-            if (!normalizedIdentifier(identifier).equals(normalizedIdentifier(request.cell().identifier()))) {
-                throw new IllegalArgumentException("identifier cell verification changed the identifier");
-            }
-            String returnedLabel = root.path("matchedLabel").asText();
-            String matchedLabel;
-            if ("NONE".equalsIgnoreCase(returnedLabel)) {
-                matchedLabel = "NONE";
-            } else {
-                String normalizedReturned = normalizedEvidenceLabel(returnedLabel);
-                List<String> matched = request.allowedLabels().stream()
-                        .filter(label -> normalizedEvidenceLabel(label).equals(normalizedReturned))
-                        .toList();
-                if (matched.size() != 1) {
-                    throw new IllegalArgumentException(
-                            "identifier cell verification returned a label outside the evidence set");
-                }
-                matchedLabel = matched.getFirst();
-            }
-            int quantity = "NONE".equals(matchedLabel) ? 0 : root.path("quantity").asInt(0);
-            if (!"NONE".equals(matchedLabel) && quantity < 1) {
-                throw new IllegalArgumentException("identifier cell verification omitted the matched quantity");
-            }
-            if (quantity > 1 && !java.util.regex.Pattern.compile("(?<!\\d)" + quantity + "(?!\\d)")
-                    .matcher(request.draftSummary())
-                    .find()) {
-                throw new IllegalArgumentException("identifier cell verification copied a quantity from reference evidence");
-            }
-            return new IdentifierCellVerificationDraft(
-                    request.cell().identifier(),
-                    matchedLabel,
-                    quantity,
-                    identifierBoundSummary(request.cell().identifier(), request.draftSummary()));
-        } catch (JsonProcessingException invalidJson) {
-            throw new IllegalArgumentException("identifier cell verification returned invalid JSON", invalidJson);
-        }
-    }
-
-    private static JsonNode structuredItems(String content, String operation) {
-        if (content == null || content.isBlank()) throw new IllegalArgumentException(operation + " returned no content");
-        String json = content.strip();
-        if (json.startsWith("```")) {
-            int firstLineEnd = json.indexOf('\n');
-            int closingFence = json.lastIndexOf("```");
-            if (firstLineEnd < 0 || closingFence <= firstLineEnd) {
-                throw new IllegalArgumentException(operation + " returned malformed JSON fencing");
-            }
-            json = json.substring(firstLineEnd + 1, closingFence).strip();
-        }
-        try {
-            JsonNode items = JSON.readTree(json).path("items");
-            if (!items.isArray()) throw new IllegalArgumentException(operation + " JSON has no items array");
-            return items;
-        } catch (JsonProcessingException invalidJson) {
-            throw new IllegalArgumentException(operation + " returned invalid JSON", invalidJson);
-        }
-    }
-
-    private static String normalizedIdentifier(String value) {
-        return value == null ? "" : value.replaceAll("\\s+", "").toUpperCase(java.util.Locale.ROOT);
-    }
-
-    private static String normalizedEvidenceLabel(String value) {
-        return java.text.Normalizer.normalize(
-                        value == null ? "" : value, java.text.Normalizer.Form.NFKC)
-                .strip()
-                .toLowerCase(java.util.Locale.ROOT)
-                .replaceAll("\\s+", " ")
-                .strip();
-    }
-
-    private static String identifierBoundSummary(String identifier, String summary) {
-        String normalized = summary.replaceFirst("(?iu)^Target\\s+identifier\\s+", "").strip();
-        if (normalizedIdentifier(normalized).startsWith(normalizedIdentifier(identifier))) return normalized;
-        return identifier + ": " + normalized;
     }
 
     private static String joinedText(JsonNode value, String separator) {
@@ -1857,39 +1897,40 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
         return anchors;
     }
 
-    /** One malformed optional icon must not discard the rest of a page inventory. */
-    private static java.util.List<IconOccurrence> iconOccurrences(JsonNode value) {
-        if (value == null || value.isNull() || !value.isArray()) return java.util.List.of();
+    /** One malformed optional icon keeps valid page facts, but permanently prevents a false completeness claim. */
+    private static ParsedIconInventory iconOccurrences(JsonNode value) {
+        if (value == null || value.isNull() || !value.isArray()) {
+            return new ParsedIconInventory(java.util.List.of(), false);
+        }
         java.util.List<IconOccurrence> icons = new java.util.ArrayList<>();
-        value.forEach(icon -> {
-            if (!icon.isObject()) return;
-            try {
-                String rawStatus = joinedText(icon.get("meaningStatus"), " ");
-                IconMeaningStatus status = IconMeaningStatus.valueOf(
-                        rawStatus == null ? "UNEXPLAINED" : rawStatus.strip().toUpperCase(java.util.Locale.ROOT));
-                icons.add(new IconOccurrence(
-                        defaultText(joinedText(icon.get("groupKey"), " "), joinedText(icon.get("name"), " ")),
-                        defaultText(joinedText(icon.get("name"), " "), "未命名图标"),
-                        defaultText(joinedText(icon.get("visualDescription"), " "), "规则书中的一个图标。"),
-                        defaultText(joinedText(icon.get("explanation"), " "), ""),
-                        defaultText(joinedText(icon.get("evidenceText"), " "), ""),
-                        status,
-                        icon.path("x").asInt(Integer.MIN_VALUE),
-                        icon.path("y").asInt(Integer.MIN_VALUE),
-                        icon.path("width").asInt(Integer.MIN_VALUE),
-                        icon.path("height").asInt(Integer.MIN_VALUE)));
-            } catch (IllegalArgumentException invalidIcon) {
-                // Keep every other valid occurrence and let the incomplete flag expose model uncertainty.
+        boolean contractValid = true;
+        for (JsonNode icon : value) {
+            if (!icon.isObject() || icon.size() != 10) {
+                contractValid = false;
+                continue;
             }
-        });
-        return icons;
+            try {
+                IconMeaningStatus status = IconMeaningStatus.valueOf(
+                        requiredText(icon.get("meaningStatus"), "meaningStatus", false));
+                icons.add(new IconOccurrence(
+                        requiredText(icon.get("groupKey"), "groupKey", false),
+                        requiredText(icon.get("name"), "name", false),
+                        requiredText(icon.get("visualDescription"), "visualDescription", false),
+                        requiredText(icon.get("explanation"), "explanation", true),
+                        requiredText(icon.get("evidenceText"), "evidenceText", true),
+                        status,
+                        requiredInteger(icon.get("x"), "x"),
+                        requiredInteger(icon.get("y"), "y"),
+                        requiredInteger(icon.get("width"), "width"),
+                        requiredInteger(icon.get("height"), "height")));
+            } catch (IllegalArgumentException invalidIcon) {
+                contractValid = false;
+            }
+        }
+        return new ParsedIconInventory(java.util.List.copyOf(icons), contractValid);
     }
 
-    private static String defaultText(String value, String fallback) {
-        return value == null || value.isBlank() ? fallback : value;
-    }
-
-    private record ModelRuleGroup(String identifier, String label, String fact) {}
+    private record ParsedIconInventory(List<IconOccurrence> occurrences, boolean contractValid) {}
 
     static CatalogDraft normalizePageBindings(CatalogRequest request, CatalogDraft draft) {
         if (draft == null) throw new IllegalArgumentException("visual page catalog model returned no draft");
@@ -1966,7 +2007,8 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
                 summary.sourceDependencies(),
                 summary.ruleGroupIdentifiers(),
                 summary.ruleGroupInventoryComplete(),
-                summary.quantityObservations());
+                summary.quantityObservations(),
+                summary.ruleGroupFacts());
     }
 
     private static PageSummary rebound(PageSummary summary, int pageNumber) {
@@ -1992,6 +2034,7 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
                                 observation.derivedTotal(),
                                 observation.originalSpan(),
                                 observation.resolution()))
-                        .toList());
+                        .toList(),
+                summary.ruleGroupFacts());
     }
 }

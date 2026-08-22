@@ -16,16 +16,11 @@ import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IconCropReviewReque
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IconLocalizationDraft;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IconLocalizationRequest;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IconLocation;
-import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IdentifierCellDraft;
-import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IdentifierCellFact;
-import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IdentifierCellRequest;
-import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IdentifierLocalizationDraft;
-import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IdentifierLocalizationRequest;
-import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IdentifierLocation;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.ModelExecutionIdentity;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageTranscript;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.ProgressiveTeachingStartDraft;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.RuleGroupFact;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.SourceDependency;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.TeachingPageRole;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.TeachingPageSketch;
@@ -453,7 +448,11 @@ class VisualRulebookCatalogerTest {
                             false,
                             List.of(new SourceDependency("First Session Guide", List.of("setup"))),
                             List.of("MOVE", "BUILD"),
-                            true)));
+                            true,
+                            List.of(),
+                            List.of(
+                                    new RuleGroupFact("MOVE", "MOVE", "Move one pawn."),
+                                    new RuleGroupFact("BUILD", "BUILD", "Place one building.")))));
                 },
                 facts);
 
@@ -1409,39 +1408,6 @@ class VisualRulebookCatalogerTest {
     }
 
     @Test
-    void preservesBothExactCatalogBlocksWithoutSemanticTokenRewriting() {
-        String merged = VisualRulebookCataloger.mergeIdentifierFactsWithSharedRules(
-                "A-01: Move one space.\nA-02: Draw one card.",
-                "Move one space. Draw one card. Items may occupy any slot. Fill upper slots from left to right.",
-                true);
-
-        assertThat(merged)
-                .contains("A-01: Move one space.", "A-02: Draw one card.", "Items may occupy any slot.",
-                        "Fill upper slots from left to right.", "Move one space. Draw one card.");
-        assertThat(VisualRulebookCataloger.mergeIdentifierFactsWithSharedRules("same block", "same block", true))
-                .isEqualTo("same block");
-        assertThat(VisualRulebookCataloger.mergeIdentifierFactsWithSharedRules(
-                        "A-01: Cell-specific fact.", "Shared page fact.", false))
-                .startsWith("A-01: Cell-specific fact.")
-                .endsWith("Shared page fact.");
-    }
-
-    @Test
-    void denseIdentifierCellsCannotEvictCompleteSharedRuleBindings() {
-        String cellFacts = IntStream.rangeClosed(1, 4)
-                .mapToObj(index -> "CELL-" + index + ": " + "C".repeat(790))
-                .collect(java.util.stream.Collectors.joining("\n"));
-        String completePageFacts = "P".repeat(900)
-                + "\nMOVE: Move one pawn."
-                + "\nBUILD: Place one building.";
-
-        String merged = VisualRulebookCataloger.mergeIdentifierFactsWithSharedRules(cellFacts, completePageFacts, true);
-
-        assertThat(merged).contains("MOVE: Move one pawn.", "BUILD: Place one building.");
-        assertThat(merged).isEqualTo(completePageFacts + "\n" + cellFacts);
-    }
-
-    @Test
     void reusesAnchorlessFactsBecauseAnchorsAreOptionalCropHints() {
         UUID documentVersionId = UUID.randomUUID();
         InMemoryFacts facts = new InMemoryFacts();
@@ -1456,7 +1422,8 @@ class VisualRulebookCatalogerTest {
                 PageFact.CURRENT_SCHEMA_VERSION,
                 List.of(),
                 List.of("SETUP"),
-                true)));
+                true,
+                List.of(new RuleGroupFact("SETUP", "SETUP", "Visible setup instruction.")))));
         AtomicInteger modelCalls = new AtomicInteger();
         VisualRulebookCataloger cataloger = cataloger(
                 (id, pages) -> {
@@ -1473,55 +1440,6 @@ class VisualRulebookCatalogerTest {
 
         assertThat(inputs.getFirst().text()).contains("Visible setup instruction");
         assertThat(modelCalls).hasValue(0);
-    }
-
-    @Test
-    void defersDenseIdentifierCellRereadsUntilTheCompleteVisualCatalog() throws IOException {
-        UUID documentVersionId = UUID.randomUUID();
-        byte[] pageContent = renderedPage();
-        VisualRulebookPageCatalogModel model = new VisualRulebookPageCatalogModel() {
-            @Override
-            public CatalogDraft summarize(CatalogRequest request) {
-                return new CatalogDraft(List.of(teachingSummary(
-                        1,
-                        "A-01; A-02; B#03; B#04",
-                        "A dense reference catalog is visible.",
-                        List.of("reference"))));
-            }
-
-            @Override
-            public IdentifierLocalizationDraft locateIdentifiers(IdentifierLocalizationRequest request) {
-                return new IdentifierLocalizationDraft(List.of(
-                        new IdentifierLocation("A-01", 80, 300, 40, 12),
-                        new IdentifierLocation("A-02", 520, 300, 40, 12),
-                        new IdentifierLocation("B#03", 80, 650, 40, 12),
-                        new IdentifierLocation("B#04", 520, 650, 40, 12)));
-            }
-
-            @Override
-            public IdentifierCellDraft summarizeIdentifierCells(IdentifierCellRequest request) {
-                return new IdentifierCellDraft(request.cells().stream()
-                        .map(cell -> new IdentifierCellFact(
-                                cell.identifier(), cell.identifier() + "：可见效果。"))
-                        .toList());
-            }
-        };
-        VisualRulebookCataloger cataloger = cataloger(
-                (id, pages) -> List.of(new DocumentPageImages.PageImage(
-                        1, "image/png", pageContent, 1_000, 1_000)),
-                model,
-                new InMemoryFacts());
-
-        List<PageInput> startup = cataloger.catalogVisualPages(
-                documentVersionId, List.of(page(1)), "Fictional reference", "owner", null);
-        List<PageFact> result = cataloger.catalogAllIconPages(
-                documentVersionId, List.of(page(1)), "Fictional reference", "owner", null);
-
-        assertThat(startup).singleElement().satisfies(input -> assertThat(input.text())
-                .contains("A dense reference catalog is visible.")
-                .doesNotContain("A-01：可见效果。"));
-        assertThat(result).singleElement().satisfies(fact -> assertThat(fact.factualSummary())
-                .contains("A-01：可见效果。", "A-02：可见效果。", "B#03：可见效果。", "B#04：可见效果。"));
     }
 
     private static VisualRulebookCataloger cataloger(
@@ -1625,30 +1543,29 @@ class VisualRulebookCatalogerTest {
                 PageFact.CURRENT_SCHEMA_VERSION,
                 List.of(),
                 List.of(term),
-                true);
+                true,
+                List.of(new RuleGroupFact(term, term, "Visible " + term + " rule.")));
     }
 
     private static PageSummary teachingSummary(
             int pageNumber, String printedTerms, String factualSummary, List<String> keywords) {
-        List<String> ruleGroups = java.util.Arrays.stream(printedTerms.split(";"))
-                .map(String::strip)
-                .filter(value -> !value.isBlank())
-                .limit(16)
+        List<String> ruleGroups = keywords.stream().limit(16).toList();
+        List<RuleGroupFact> ruleGroupFacts = ruleGroups.stream()
+                .map(identifier -> new RuleGroupFact(identifier, identifier, factualSummary))
                 .toList();
-        String boundFacts = ruleGroups.stream()
-                .map(identifier -> identifier + ": " + factualSummary)
-                .collect(java.util.stream.Collectors.joining("\n"));
         return new PageSummary(
                 pageNumber,
                 printedTerms,
-                boundFacts,
+                factualSummary,
                 keywords,
                 List.of(),
                 List.of(),
                 false,
                 List.of(),
                 ruleGroups,
-                true);
+                true,
+                List.of(),
+                ruleGroupFacts);
     }
 
     private static PageSummary progressiveSelectedSummary(
@@ -1667,7 +1584,9 @@ class VisualRulebookCatalogerTest {
                 false,
                 List.of(),
                 List.of(ruleGroupIdentifier),
-                true);
+                true,
+                List.of(),
+                List.of(new RuleGroupFact(ruleGroupIdentifier, ruleGroupIdentifier, factualSummary)));
     }
 
     private static final class InMemoryFacts implements VisualRulebookPageFacts {

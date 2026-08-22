@@ -4,7 +4,6 @@ import com.rulepilot.assistant.RuleAnswerModel.AnswerAid;
 import com.rulepilot.assistant.RuleAnswerModel.ModelDraft;
 import com.rulepilot.assistant.RuleAnswerModel.ModelRequest;
 import com.rulepilot.assistant.RuleAnswerModel.RuleConceptComparisonRequest;
-import com.rulepilot.assistant.domain.ConceptComparisonBasis;
 import com.rulepilot.assistant.domain.RuleConceptComparison;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -56,8 +55,7 @@ final class AnswerConceptComparisonResolver {
                 AnswerStructuredAidPolicy.requiredText(item.commonGround(), "common ground"),
                 AnswerStructuredAidPolicy.requiredText(item.keyDifference(), "key difference"),
                 AnswerStructuredAidPolicy.requiredText(item.practicalBoundary(), "practical boundary"),
-                AnswerStructuredAidPolicy.enumValue(
-                        item.basis(), ConceptComparisonBasis.class, "concept comparison basis"),
+                item.basis(),
                 AnswerStructuredAidPolicy.citations(
                         modelRequest, draft, item.citationIds(), "concept comparison"));
     }

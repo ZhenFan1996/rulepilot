@@ -54,14 +54,13 @@ component-only inventory, or an unreadable/uncertain page. It has:
 - pageNumber: the exact supplied page number;
 - printedTerms: up to eight visible original-language headings, action names, component names, phase names, labels,
   or quantities from that page;
-- factualSummary: up to eight atomic Simplified-Chinese rule statements visibly supported on that page. When
-  ruleGroupInventoryComplete is true for the selected page, include a complete supported relation for every
-  visibleTerms rule group rather than summarizing only the first few groups. Each such statement must begin with the
-  exact visibleTerms identifier followed by a colon. If the selected page has a sourceDependencies item, also state
-  only the visible referral and that the referenced procedure is not present on this page; never summarize the absent
-  procedure. The complete factualSummary, including those dependency statements and the deterministic
-  quantity-observation projection, must fit within 4,000 Unicode characters; never rely on text beyond that limit to
-  complete a rule-group inventory;
+- ruleGroups: an array with one object for every selected-page visibleTerms item, in exactly the same order. Each
+  object has exactly identifier and fact. identifier must exactly equal its visibleTerms item; fact is one atomic,
+  natural Simplified-Chinese statement visibly supported on that page. Keep subject, action, condition, quantity,
+  timing, order, optional/mandatory wording, and exception together. The application reads identifier and fact as
+  JSON fields; never combine them into a colon-delimited string or return a factualSummary field. If the selected page
+  refers to another document, keep that referral in pageSketches.sourceDependencies and do not invent the absent
+  procedure inside ruleGroups;
 - keywords: 2-6 visible original-language terms useful for retrieval;
 - quantityObservations: an explicit array, empty when the selected page has no safely transcribable quantitative
   relation and otherwise containing at most eight objects. Every object has exactly pageNumber,

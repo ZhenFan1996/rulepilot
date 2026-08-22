@@ -169,7 +169,6 @@ describe('PublicLessonView', () => {
             citations: [{ heading: '设置', pageFrom: 2, pageTo: 2 }], exceptions: [], confidence: 'HIGH', answerBasis: 'GROUNDED_APPLICATION', clarification: null,
             calculations: [
               { expression: 'floor(8 / 3) * 5', result: '10' },
-              { expression: '这条可选计算缺少结果，不应抹掉整份答案。' },
             ],
             situationChecks: [
               { requirement: '玩家板必须尚未放置', status: 'NOT_PROVIDED', playerFact: '' },
@@ -193,7 +192,6 @@ describe('PublicLessonView', () => {
           },
           visualAids: [
             { visualFocus: lesson.lesson.sections[0]!.steps[0]!.visualFocus, relatedStep: '放置玩家板' },
-            { relatedStep: '这条可选图例缺少坐标，不应抹掉整份答案。' },
           ],
           examples: [{ heading: '开局示例', text: '每位玩家从自己的玩家板开始。', sourcePages: [2] }],
         })
@@ -232,8 +230,6 @@ describe('PublicLessonView', () => {
     expect(wrapper.text()).toContain('按规则回答当前问题')
     expect(wrapper.text()).toContain('这条答案如何得出')
     expect(wrapper.text()).toContain('floor(8 / 3) * 5 = 10')
-    expect(wrapper.text()).not.toContain('这条可选计算缺少结果')
-    expect(wrapper.text()).not.toContain('这条可选图例缺少坐标')
     expect(wrapper.text()).toContain('下方计算过程便于直接复核结果')
     expect(wrapper.text()).toContain('当前局面条件')
     expect(wrapper.text()).toContain('尚未提供')
@@ -275,6 +271,45 @@ describe('PublicLessonView', () => {
     expect(restored.text()).toContain('玩家板先放哪里？')
     expect(restored.text()).toContain('先把玩家板放到自己面前。')
     expect(restored.text()).toContain('支持这段答案的规则图例')
+  })
+
+  it('rejects a malformed structured public answer instead of silently deleting bad members', async () => {
+    const lesson = publicLessonPayload('plan-1', 'Wingspan Rules')
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const path = String(input)
+      if (path.includes('/api/auth/session')) return new Response(null, { status: 401 })
+      if (path.endsWith('/icon-glossary')) return new Response(null, { status: 404 })
+      if (path.endsWith('/answers') && init?.method === 'POST') {
+        return Response.json({
+          answer: {
+            status: 'ANSWERED', shortVerdict: '这条不完整结论不能发布。', explanation: '缺失字段不能由浏览器猜测。',
+            citations: [{ heading: '设置', pageFrom: 2, pageTo: 2 }], exceptions: [], confidence: 'HIGH',
+            answerBasis: 'DIRECT_RULE', clarification: null, warnings: [],
+            calculations: [{ expression: '3 × 4' }],
+          },
+          visualAids: [], examples: [],
+        })
+      }
+      return Response.json(lesson)
+    }))
+    const router = createPublicLessonRouter()
+    await router.push('/read/plan-1/questions')
+    await router.isReady()
+    const wrapper = mount(PublicLessonView, { global: { plugins: [router] } })
+    await flushPromises()
+
+    await wrapper.get('#public-question').setValue('三名玩家每人获得四枚时总数是多少？')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('这次答复没有通过完整性核对')
+    expect(wrapper.text()).not.toContain('这条不完整结论不能发布')
+    expect((wrapper.get('#public-question').element as HTMLTextAreaElement).value)
+      .toBe('三名玩家每人获得四枚时总数是多少？')
+    const storedThread = Array.from({ length: sessionStorage.length }, (_, index) =>
+      sessionStorage.getItem(sessionStorage.key(index) ?? '') ?? '').join('\n')
+    expect(storedThread).not.toContain('这条不完整结论不能发布')
+    wrapper.unmount()
   })
 
   it('shows only truthful public-answer waiting state and lets the reader stop without losing the question', async () => {

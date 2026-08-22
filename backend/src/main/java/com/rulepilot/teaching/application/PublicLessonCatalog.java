@@ -7,6 +7,7 @@ import com.rulepilot.teaching.domain.IllustratedLesson.LessonStatus;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -55,6 +56,21 @@ public class PublicLessonCatalog {
             cachedEntries.put(limit, new CachedEntries(entries, System.nanoTime() + CACHE_TTL_NANOS));
             return entries;
         }
+    }
+
+    /**
+     * Reuses the already-authorized catalog projection for the cover requests that a catalog page immediately
+     * fans out. This path performs no repository work and, unlike {@link PublicLessonReader#find(UUID)}, never
+     * materializes the complete illustrated lesson merely to locate one thumbnail.
+     */
+    public Optional<CachedCover> cachedCover(UUID teachingPlanId) {
+        if (teachingPlanId == null) return Optional.empty();
+        return cachedEntries.values().stream()
+                .filter(CachedEntries::isFresh)
+                .flatMap(cached -> cached.entries().stream())
+                .filter(entry -> teachingPlanId.equals(entry.teachingPlanId()))
+                .findFirst()
+                .map(entry -> new CachedCover(entry.documentVersionId(), entry.gameCover()));
     }
 
     private List<Entry> loadLatest(int limit) {
@@ -127,6 +143,7 @@ public class PublicLessonCatalog {
 
     public record Entry(
             UUID teachingPlanId,
+            UUID documentVersionId,
             String rulebookTitle,
             String officialSourceUrl,
             PublicLessonReader.PublicCover gameCover,
@@ -144,6 +161,7 @@ public class PublicLessonCatalog {
                             catalogCover.bggId(), catalogCover.gameName(), catalogCover.bggUrl());
             return new Entry(
                     candidate.plan().teachingPlanId(),
+                    candidate.plan().documentVersionId(),
                     reference.title(),
                     reference.officialSourceUrl(),
                     cover(reference, catalogCover),
@@ -168,6 +186,12 @@ public class PublicLessonCatalog {
                             reference.officialCoverUrl(),
                             reference.officialSourceUrl(),
                             "出版方官方封面");
+        }
+    }
+
+    public record CachedCover(UUID documentVersionId, PublicLessonReader.PublicCover gameCover) {
+        public CachedCover {
+            if (documentVersionId == null) throw new IllegalArgumentException("public cover reference is invalid");
         }
     }
 }

@@ -15,6 +15,7 @@ import com.rulepilot.document.DocumentVersionScopeLookup.VersionScope;
 import com.rulepilot.document.RulebookTeachingEvidenceFreshness.ReuseAssessment;
 import com.rulepilot.teaching.VisualRulebookPageFacts;
 import com.rulepilot.teaching.VisualRulebookPageFacts.PageFact;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.RuleGroupFact;
 import com.rulepilot.teaching.domain.IllustratedLesson;
 import com.rulepilot.teaching.domain.IllustratedLesson.EvidenceStatus;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonSection;
@@ -255,7 +256,8 @@ class VisualRulebookTeachingEvidenceFreshnessTest {
                 schemaVersion,
                 List.of(),
                 List.of(identifier),
-                true);
+                true,
+                List.of(new RuleGroupFact(identifier, identifier, "A directly visible page rule.")));
     }
 
     private AssistantRuns.RunDetails details(UUID runId, AssistantRunState state) {

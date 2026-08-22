@@ -1,11 +1,7 @@
 package com.rulepilot.retrieval;
 
-import com.rulepilot.retrieval.AnswerRetrievalContext.LearningIntent;
-import com.rulepilot.retrieval.AnswerRetrievalPlan.EvidenceNeed;
 import com.rulepilot.retrieval.AnswerRetrievalPlan.Subquestion;
-import com.rulepilot.retrieval.AnswerRetrievalQuestion.QuestionType;
 import java.util.ArrayList;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 
@@ -19,20 +15,12 @@ public final class AnswerRetrievalPlanner {
     private AnswerRetrievalPlanner() {}
 
     static List<RetrievalIntent> plan(AnswerRetrievalQuestion question, AnswerRetrievalContext context) {
-        return plan(question, context, List.of(), AnswerRetrievalPlan.fallback(question));
+        return plan(question, context, AnswerRetrievalPlan.fallback(question));
     }
 
     static List<RetrievalIntent> plan(
             AnswerRetrievalQuestion question,
             AnswerRetrievalContext context,
-            List<String> rewrittenQueries) {
-        return plan(question, context, rewrittenQueries, AnswerRetrievalPlan.fallback(question));
-    }
-
-    static List<RetrievalIntent> plan(
-            AnswerRetrievalQuestion question,
-            AnswerRetrievalContext context,
-            List<String> rewrittenQueries,
             AnswerRetrievalPlan questionPlan) {
         if (question == null || context == null) {
             throw new IllegalArgumentException("answer retrieval planning input is required");
@@ -43,134 +31,38 @@ public final class AnswerRetrievalPlanner {
                 currentFocusQuery(question, acceptedPlan), Set.of(), null, true, RetrievalPurpose.GENERAL));
         for (Subquestion subquestion : acceptedPlan.subquestions()) {
             addDistinct(intents, new RetrievalIntent(
-                    plannedQuery(subquestion, acceptedPlan), Set.of(), null, true, RetrievalPurpose.GENERAL));
+                    subquestion.text(), Set.of(), null, true, RetrievalPurpose.GENERAL));
+            if (intents.size() == MAX_INTENTS) return List.copyOf(intents);
+            for (String retrievalQuery : subquestion.retrievalQueries()) {
+                addDistinct(intents, new RetrievalIntent(
+                        retrievalQuery, Set.of(), null, false, RetrievalPurpose.GENERAL));
+                if (intents.size() == MAX_INTENTS) return List.copyOf(intents);
+            }
+        }
+        for (String ruleObjectSpan : acceptedPlan.currentRuleObjectSpans()) {
+            addDistinct(intents, new RetrievalIntent(
+                    ruleObjectSpan, Set.of(), null, true, RetrievalPurpose.GENERAL));
             if (intents.size() == MAX_INTENTS) return List.copyOf(intents);
         }
-        if (rewrittenQueries != null) {
-            for (String rewritten : rewrittenQueries) {
-                String query = bounded(rewritten);
-                if (!query.isBlank()) {
-                    addDistinct(intents, new RetrievalIntent(query, Set.of(), null, false, RetrievalPurpose.GENERAL));
-                }
-                if (intents.size() == MAX_INTENTS) return List.copyOf(intents);
-            }
-        }
-        if (acceptedPlan.evidenceNeeds().contains(EvidenceNeed.ADVICE)) {
-            for (String cue : adviceSourceCueQueries()) {
-                addDistinct(intents, new RetrievalIntent(
-                        bounded(question.currentQuestion() + " " + cue),
-                        Set.of(),
-                        null,
-                        false,
-                        RetrievalPurpose.GENERAL));
-                if (intents.size() == MAX_INTENTS) return List.copyOf(intents);
-            }
-        }
-        String supplementary = supplementaryQuery(question, context, acceptedPlan);
-        addDistinct(intents, new RetrievalIntent(
-                supplementary, Set.of(), null, false, RetrievalPurpose.GENERAL));
         return intents.stream().limit(MAX_INTENTS).toList();
     }
 
     private static void addDistinct(List<RetrievalIntent> intents, RetrievalIntent candidate) {
-        if (intents.stream().noneMatch(existing -> existing.query().equalsIgnoreCase(candidate.query()))) {
+        if (intents.stream().noneMatch(existing -> existing.query().equals(candidate.query()))) {
             intents.add(candidate);
         }
     }
 
     private static String currentFocusQuery(AnswerRetrievalQuestion question, AnswerRetrievalPlan plan) {
-        StringBuilder query = new StringBuilder(question.currentQuestion());
-        plan.currentRuleObjectSpans().forEach(object -> append(query, object));
-        plan.subquestions().stream()
+        if (question.currentQuestion().length() <= MAX_QUERY_LENGTH) {
+            return question.currentQuestion();
+        }
+        return plan.subquestions().stream()
                 .filter(subquestion -> subquestion.owner() == AnswerRetrievalPlan.QuestionOwner.CURRENT_QUESTION)
-                .flatMap(subquestion -> subquestion.evidenceNeeds().stream())
-                .distinct()
-                .map(AnswerRetrievalPlanner::evidenceNeedFacets)
-                .forEach(facet -> append(query, facet));
-        return bounded(query.toString());
-    }
-
-    private static String plannedQuery(Subquestion subquestion, AnswerRetrievalPlan plan) {
-        StringBuilder query = new StringBuilder(subquestion.text());
-        if (subquestion.owner() == AnswerRetrievalPlan.QuestionOwner.CURRENT_QUESTION) {
-            plan.currentRuleObjectSpans().forEach(object -> append(query, object));
-        }
-        subquestion.evidenceNeeds().stream()
-                .map(AnswerRetrievalPlanner::evidenceNeedFacets)
-                .forEach(facet -> append(query, facet));
-        return bounded(query.toString());
-    }
-
-    private static String evidenceNeedFacets(EvidenceNeed need) {
-        return switch (need) {
-            case DIRECT_RULE -> "direct rule clause";
-            case CONDITION -> "condition prerequisite applicability";
-            case SEQUENCE -> "order timing procedure";
-            case EXCEPTION -> "exception restriction";
-            case DEFINITION -> "definition glossary terminology";
-            case RELATIONSHIP -> "rule relationship conflict precedence replacement";
-            case VISUAL_REFERENCE -> "icon diagram label printed reference";
-            case COMPLETE_LIST -> "complete enumerated list";
-            case ADVICE -> "source-authored recommendation caution preferred choice";
-            case PRIOR_TURN -> "follow-up dependency";
-        };
-    }
-
-    public static List<String> adviceSourceCueQueries() {
-        return List.of(
-                "source-authored recommendation preferred choice ideal should recommendation advice",
-                "source-authored caution avoid warning watch out");
-    }
-
-    private static String supplementaryQuery(
-            AnswerRetrievalQuestion question, AnswerRetrievalContext context, AnswerRetrievalPlan plan) {
-        StringBuilder query = new StringBuilder(question.currentQuestion());
-        plan.currentRuleObjectSpans().forEach(object -> append(query, object));
-        if (plan.referenceBinding() != AnswerRetrievalPlan.ReferenceBinding.CURRENT_QUESTION) {
-            append(query, plan.boundReferenceQuestion());
-        }
-        if (!question.terms().isEmpty()) append(query, String.join(" ", question.terms()));
-        append(query, questionTypeFacets(question.type()));
-        append(query, learningFacets(context.learningIntent()));
-        plan.evidenceNeeds().stream()
-                .map(AnswerRetrievalPlanner::evidenceNeedFacets)
-                .forEach(facet -> append(query, facet));
-        return bounded(query.toString());
-    }
-
-    private static String learningFacets(LearningIntent intent) {
-        if (intent == null) return null;
-        return switch (intent) {
-            case SIMPLIFY -> "core rule";
-            case EXAMPLE -> "worked example setup action outcome";
-            case DEFINE -> "definition terminology";
-            case WHY -> "prerequisite consequence dependency";
-            case EXCEPTIONS -> "restriction exception";
-            case SOURCE -> "direct source clause";
-            case VERIFY -> "direct rule condition exception";
-        };
-    }
-
-    private static String questionTypeFacets(QuestionType type) {
-        return switch (type) {
-            case LESSON_STEP_FOLLOW_UP -> "step prerequisite consequence";
-            case RULE_QUERY -> "rule condition consequence";
-            case SITUATION_QUERY -> "applicability prerequisite consequence";
-        };
-    }
-
-    private static void append(StringBuilder target, String value) {
-        if (value != null && !value.isBlank() && target.indexOf(value) < 0) {
-            target.append(' ').append(value.strip());
-        }
-    }
-
-    static String bounded(String value) {
-        if (value == null) return "";
-        String normalized = value.replaceAll("\\s+", " ").strip();
-        return normalized.length() <= MAX_QUERY_LENGTH
-                ? normalized
-                : normalized.substring(0, MAX_QUERY_LENGTH).strip();
+                .map(Subquestion::text)
+                .findFirst()
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "a long question requires a structured current-question retrieval span"));
     }
 
     /** Historical purpose values remain readable in stored diagnostics; new plans use GENERAL. */

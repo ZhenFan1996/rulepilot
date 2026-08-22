@@ -6,7 +6,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import java.util.stream.Stream;
 
 /**
  * Pure query and evidence-selection rules for one teaching section.
@@ -17,7 +16,6 @@ import java.util.stream.Stream;
 final class TeachingEvidenceRetrievalPolicy {
 
     private static final int MAX_EVIDENCE_PER_SECTION = 10;
-    private static final int MAX_OBJECTIVE_QUERY_LENGTH = 480;
     private TeachingEvidenceRetrievalPolicy() {}
 
     static String focusedQuery(String query) {
@@ -25,10 +23,12 @@ final class TeachingEvidenceRetrievalPolicy {
     }
 
     static List<String> queries(TeachingPlan.PlannedSection topic, int limit) {
-        Stream<String> queries = Stream.concat(
-                TeachingUnitContract.sourceIdentifiers(topic.retrievalQueries()).stream(),
-                objectiveQueries(topic.objective()).stream());
-        return queries.map(String::strip).filter(query -> !query.isBlank()).distinct().limit(limit).toList();
+        return TeachingUnitContract.sourceIdentifiers(topic.retrievalQueries()).stream()
+                .map(String::strip)
+                .filter(query -> !query.isBlank())
+                .distinct()
+                .limit(limit)
+                .toList();
     }
 
     static List<RuleEvidence> balancedEvidence(List<List<RuleEvidence>> evidenceByIntent) {
@@ -51,16 +51,5 @@ final class TeachingEvidenceRetrievalPolicy {
             }
         }
         return List.copyOf(merged.values());
-    }
-
-    private static List<String> objectiveQueries(String objective) {
-        if (objective.length() <= MAX_OBJECTIVE_QUERY_LENGTH) return List.of(objective);
-        String head = objective.substring(0, MAX_OBJECTIVE_QUERY_LENGTH);
-        int lastSpace = head.lastIndexOf(' ');
-        if (lastSpace > 0) head = head.substring(0, lastSpace);
-        String tail = objective.substring(Math.max(0, objective.length() - MAX_OBJECTIVE_QUERY_LENGTH));
-        int firstSpace = tail.indexOf(' ');
-        if (firstSpace >= 0) tail = tail.substring(firstSpace + 1);
-        return List.of(head, tail);
     }
 }

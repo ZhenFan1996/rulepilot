@@ -59,7 +59,36 @@ public interface AssistantReadTools {
             String excerpt,
             int pageFrom,
             int pageTo,
-            List<RulePageImage> pageImages) {
+            List<RulePageImage> pageImages,
+            ContentKind contentKind) {
+
+        public enum ContentKind {
+            CANONICAL_TEXT,
+            VISUAL_PLACEHOLDER,
+            CANONICAL_TEXT_WITH_VISUAL_FACTS,
+            VISUAL_TRANSCRIPTION
+        }
+
+        public RuleEvidence(
+                UUID chunkId,
+                UUID documentVersionId,
+                String sectionType,
+                String heading,
+                String excerpt,
+                int pageFrom,
+                int pageTo,
+                List<RulePageImage> pageImages) {
+            this(
+                    chunkId,
+                    documentVersionId,
+                    sectionType,
+                    heading,
+                    excerpt,
+                    pageFrom,
+                    pageTo,
+                    pageImages,
+                    ContentKind.CANONICAL_TEXT);
+        }
 
         public RuleEvidence(
                 UUID chunkId,
@@ -69,11 +98,21 @@ public interface AssistantReadTools {
                 String excerpt,
                 int pageFrom,
                 int pageTo) {
-            this(chunkId, documentVersionId, sectionType, heading, excerpt, pageFrom, pageTo, List.of());
+            this(
+                    chunkId,
+                    documentVersionId,
+                    sectionType,
+                    heading,
+                    excerpt,
+                    pageFrom,
+                    pageTo,
+                    List.of(),
+                    ContentKind.CANONICAL_TEXT);
         }
 
         public RuleEvidence {
             pageImages = pageImages == null ? List.of() : List.copyOf(pageImages);
+            if (contentKind == null) throw new IllegalArgumentException("rule evidence content kind is required");
         }
     }
 

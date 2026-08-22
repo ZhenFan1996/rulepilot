@@ -18,8 +18,6 @@ import java.util.stream.IntStream;
  */
 final class TeachingVisualEvidenceSelector {
 
-    static final String VISUAL_PAGE_PLACEHOLDER =
-            "This rulebook page is visual evidence. Text extraction was unavailable; inspect the rendered page image.";
     private static final int MAX_PAGE_IMAGES = 2;
 
     private TeachingVisualEvidenceSelector() {}
@@ -29,7 +27,7 @@ final class TeachingVisualEvidenceSelector {
     }
 
     static boolean isVisualPageEvidence(RuleEvidence evidence) {
-        return VISUAL_PAGE_PLACEHOLDER.equals(evidence.excerpt());
+        return evidence.contentKind() == RuleEvidence.ContentKind.VISUAL_PLACEHOLDER;
     }
 
     static List<PageImageInput> select(

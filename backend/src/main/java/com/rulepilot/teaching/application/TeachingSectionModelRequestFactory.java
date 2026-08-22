@@ -94,14 +94,18 @@ final class TeachingSectionModelRequestFactory {
 
     private EvidenceInput toModelEvidence(RuleEvidence evidence, Map<Integer, String> factsByPage) {
         String visualFact = evidence.pageFrom() == evidence.pageTo() ? factsByPage.get(evidence.pageFrom()) : null;
-        String excerpt = visualFact == null || VisualRulebookPageFacts.PageFact.isTranscribedRuleEvidence(evidence.excerpt())
-                ? evidence.excerpt()
-                : evidence.excerpt() + "\n\n" + visualFact;
         return new EvidenceInput(
                 evidence.chunkId(),
                 evidence.sectionType(),
                 evidence.heading(),
-                excerpt,
+                evidence.excerpt(),
+                evidence.contentKind() == RuleEvidence.ContentKind.VISUAL_TRANSCRIPTION ? null : visualFact,
+                switch (evidence.contentKind()) {
+                    case CANONICAL_TEXT -> TeachingLessonModel.EvidenceContentKind.CANONICAL_TEXT;
+                    case VISUAL_PLACEHOLDER -> TeachingLessonModel.EvidenceContentKind.VISUAL_PLACEHOLDER;
+                    case CANONICAL_TEXT_WITH_VISUAL_FACTS -> TeachingLessonModel.EvidenceContentKind.CANONICAL_TEXT_WITH_VISUAL_FACTS;
+                    case VISUAL_TRANSCRIPTION -> TeachingLessonModel.EvidenceContentKind.VISUAL_TRANSCRIPTION;
+                },
                 evidence.pageFrom(),
                 evidence.pageTo());
     }

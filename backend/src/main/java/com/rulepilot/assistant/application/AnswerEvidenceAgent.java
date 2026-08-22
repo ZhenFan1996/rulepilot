@@ -2,6 +2,8 @@ package com.rulepilot.assistant.application;
 
 import com.rulepilot.assistant.NativeAgentTool.Role;
 import com.rulepilot.assistant.NativeToolAgent;
+import com.rulepilot.assistant.NativeToolAgent.TerminalContract;
+import com.rulepilot.assistant.NativeToolAgent.TerminalStatus;
 import com.rulepilot.assistant.NativeToolEvidenceHandles;
 import com.rulepilot.assistant.NativeToolScopes;
 import com.rulepilot.assistant.NativeToolAgent.RunRequest;
@@ -12,7 +14,6 @@ import com.rulepilot.assistant.domain.UnderstoodQuestion;
 import com.rulepilot.retrieval.AnswerEvidencePolicy;
 import com.rulepilot.retrieval.AnswerEvidenceRetriever;
 import com.rulepilot.retrieval.AnswerEvidenceSelectionPolicy;
-import com.rulepilot.retrieval.AnswerRetrievalPlanner;
 import com.rulepilot.retrieval.RuleEvidenceLookup;
 import com.rulepilot.retrieval.evidence.HybridEvidenceHit;
 import com.rulepilot.retrieval.evidence.RuleEvidenceHit;
@@ -35,11 +36,6 @@ public class AnswerEvidenceAgent implements AnswerEvidenceRefiner {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(AnswerEvidenceAgent.class);
     private static final int MAX_OBSERVED_EVIDENCE = 24;
-    private static final Set<String> RECOVERABLE_PARTIAL_RUN_REASONS = Set.of(
-            "EMPTY_MODEL_RESULT",
-            "COMPLETION_PROTOCOL_REJECTED",
-            "ITERATION_LIMIT",
-            "TOOL_CALL_LIMIT");
     private static final String SYSTEM_PROMPT = """
             You are the evidence-refinement stage of a board-game rules assistant. Never answer the player and never
             rely on rule knowledge outside the supplied evidence and tool observations. The application has already
@@ -60,13 +56,12 @@ public class AnswerEvidenceAgent implements AnswerEvidenceRefiner {
             missing need. For an ADVICE evidence need, locate source-authored recommendations, cautions, priorities,
             or tips and preserve their stated faction, player-count, matchup, phase, and situation scope. A victory
             condition, scoring route, or legal action is not itself advice. Do not declare advice covered merely
-            because the rules explain how points are earned. Do not spend the search budget repeatedly paraphrasing
-            "strategy" or "advice": search independent recommendation and caution/imperative cue families in the
-            rulebook's source language, combined with scope terms derived from the active document. A sentence that
-            merely says another resource contains tips is not the advice itself. Once a candidate actually expresses
-            guidance, read its exact page. When the player asks for an example, search for the player's topic together with neutral
-            source cues such as worked example, for example, 示例, or 例如. A cue is only a retrieval hint: acquire the
-            complete cited setup, action, and outcome, and do not turn that example into a general rule. For a compound question,
+            because the rules explain how points are earned. Choose retrieval queries from the accepted structured
+            subquestion and the active document observations; do not use an application-supplied vocabulary list or
+            repeatedly paraphrase the player. A sentence that merely points to another resource does not supply the
+            requested guidance. Once a candidate actually expresses guidance, read its exact page. When the structured
+            plan requests an example, acquire the complete cited setup, action, and outcome, and do not turn that example
+            into a general rule. For a compound question,
             check every requested condition, sequence, exception, and complete-list obligation separately. A result
             requested as a concrete calculation requires an exact-page check of the governing numerical clause. Keep
             the counted object, aggregation unit, per-item or per-category scope, repetition count, multiplier, cap,
@@ -77,15 +72,15 @@ public class AnswerEvidenceAgent implements AnswerEvidenceRefiner {
             the player's distinctive wording before reading the best candidate page. Stop requesting tools after the
             useful exact pages have been read. Any terminal prose is ignored by the application; only canonical page
             observations can become answer evidence. Do not invent identifiers or scope.
-            For an ADVICE-only request, after reading the exact candidate page return exactly EVIDENCE_READY only when
-            that page itself contains source-authored guidance in the requested scope. Otherwise return exactly
-            EVIDENCE_NOT_FOUND. A scoring rule, victory condition, legal action, or statement that another resource has
-            tips must return EVIDENCE_NOT_FOUND.
+            For an ADVICE-only request, after reading the exact candidate page return exactly
+            {"status":"EVIDENCE_READY"} only when that page itself contains source-authored guidance in the requested
+            scope. Otherwise return exactly {"status":"EVIDENCE_NOT_FOUND"}. A scoring rule, victory condition, legal
+            action, or statement that another resource has tips must use EVIDENCE_NOT_FOUND.
             For a COMPLETE_LIST obligation, one exact-page read does not by itself prove completeness. After reading a
             candidate page, verify that the canonical pages explicitly enumerate the requested list or jointly cover
-            every requested item. Continue searching for the missing list-level rule when they do not. Return exactly
-            EVIDENCE_READY only after that coverage check; if the bounded evidence cannot establish completeness,
-            return exactly EVIDENCE_NOT_FOUND.
+            every requested item. Continue searching for the missing list-level rule when they do not. Use the same
+            one-field JSON terminal object with EVIDENCE_READY only after that coverage check; if the bounded evidence
+            cannot establish completeness, use EVIDENCE_NOT_FOUND. Never wrap the JSON in prose or markdown.
             The current player question is authoritative. Selected reference context may resolve an omitted subject,
             but it may not replace an object explicitly named in the current question. A player-supplied page number
             is only a scoped locator to inspect, never evidence that the page entails the requested rule.
@@ -166,7 +161,9 @@ public class AnswerEvidenceAgent implements AnswerEvidenceRefiner {
                     toolPortfolio(question, context, questionPlan),
                     requiredEvidenceTools,
                     refinementToolBudget(questionPlan, context),
-                    "",
+                    requiresTerminalCertification(questionPlan)
+                            ? TerminalContract.evidenceReview()
+                            : TerminalContract.none(),
                     requiresSourceAuthoredAdvice(questionPlan)
                             ? Map.of("read_rule_pages", 1)
                             : Map.of(),
@@ -194,13 +191,15 @@ public class AnswerEvidenceAgent implements AnswerEvidenceRefiner {
             return new AnswerEvidenceRetriever.Result(List.of(), AnswerEvidenceRetriever.State.READY);
         }
         if (requiresSourceAuthoredAdvice(questionPlan)
-                && (result.status() != RunStatus.COMPLETED || !"EVIDENCE_READY".equals(result.text()))) {
+                && (result.status() != RunStatus.COMPLETED
+                        || result.terminalStatus() != TerminalStatus.EVIDENCE_READY)) {
             LOGGER.info(
                     "Answer evidence refinement did not certify source-authored advice; withholding candidate evidence");
             return new AnswerEvidenceRetriever.Result(List.of(), AnswerEvidenceRetriever.State.READY);
         }
         if (requiresCompleteListCertification(questionPlan)
-                && (result.status() != RunStatus.COMPLETED || !certifiesEvidenceReady(result.text()))) {
+                && (result.status() != RunStatus.COMPLETED
+                        || result.terminalStatus() != TerminalStatus.EVIDENCE_READY)) {
             LOGGER.info(
                     "Answer evidence refinement did not certify complete-list coverage; withholding candidate evidence");
             return new AnswerEvidenceRetriever.Result(List.of(), AnswerEvidenceRetriever.State.READY);
@@ -208,20 +207,7 @@ public class AnswerEvidenceAgent implements AnswerEvidenceRefiner {
         boolean completedWithCanonicalPages = result.status() == RunStatus.COMPLETED
                 && result.toolCalls() > 0
                 && !exactPageGroups.isEmpty();
-        boolean recoverablePartialRun = result.status() == RunStatus.FALLBACK
-                && RECOVERABLE_PARTIAL_RUN_REASONS.contains(result.reason())
-                && result.toolCalls() > 0
-                && !exactPageGroups.isEmpty();
-        if (!completedWithCanonicalPages && !recoverablePartialRun) return deterministic;
-        if (recoverablePartialRun) {
-            // The model already chose and completed exact-page reads; a later empty turn or
-            // budget edge must not erase canonical evidence. This does not accept model prose
-            // or declare coverage complete—the normal evidence selector and publication gates
-            // still decide whether the observed source can support the player's answer.
-            LOGGER.info(
-                    "Preserving validated exact-page observations from a partial Answer Agent run ({})",
-                    result.reason());
-        }
+        if (!completedWithCanonicalPages) return deterministic;
         Set<UUID> observedIds = exactPageGroups.stream()
                 .flatMap(Set::stream)
                 .limit(MAX_OBSERVED_EVIDENCE)
@@ -288,10 +274,8 @@ public class AnswerEvidenceAgent implements AnswerEvidenceRefiner {
                 com.rulepilot.assistant.RuleAnswerModel.EvidenceNeed.COMPLETE_LIST);
     }
 
-    private boolean certifiesEvidenceReady(String text) {
-        if (text == null || text.isBlank()) return false;
-        String[] lines = text.strip().split("\\R");
-        return "EVIDENCE_READY".equals(lines[lines.length - 1].strip());
+    private boolean requiresTerminalCertification(AnswerQuestionPlan questionPlan) {
+        return requiresSourceAuthoredAdvice(questionPlan) || requiresCompleteListCertification(questionPlan);
     }
 
     private boolean requiresNumericalScopeAudit(AnswerQuestionPlan questionPlan) {
@@ -392,15 +376,15 @@ public class AnswerEvidenceAgent implements AnswerEvidenceRefiner {
             AnswerQuestionPlan questionPlan,
             List<HybridEvidenceHit> evidence) {
         StringBuilder request = new StringBuilder("Current player question (authoritative): ")
-                .append(bounded(question.originalQuestion(), 800));
+                .append(complete(question.originalQuestion()));
         if (questionPlan.boundReferenceQuestion() != null) {
             request.append("\nSelected reference question (reference resolution only): ")
-                    .append(bounded(questionPlan.boundReferenceQuestion(), 500));
+                    .append(complete(questionPlan.boundReferenceQuestion()));
         }
         if (questionPlan.referenceBinding() == ReferenceBinding.PRIOR_GROUNDED_TURN
                 && context.priorTurnReference() != null) {
             request.append("\nPrior grounded reference hint (not current evidence): ")
-                    .append(bounded(context.priorTurnReference().groundedVerdict(), 500));
+                    .append(complete(context.priorTurnReference().groundedVerdict()));
             for (var citation : context.priorTurnReference().citations()) {
                 request.append("\n- prior citation handle ")
                         .append(citation.chunkId())
@@ -423,18 +407,18 @@ public class AnswerEvidenceAgent implements AnswerEvidenceRefiner {
             request.append("\n- ")
                     .append(hit.evidence().chunkId())
                     .append(" | ")
-                    .append(bounded(hit.evidence().heading(), 160))
+                    .append(complete(hit.evidence().heading()))
                     .append(" | pages ")
                     .append(hit.evidence().pageFrom())
                     .append('-')
                     .append(hit.evidence().pageTo())
                     .append(" | ")
-                    .append(bounded(hit.evidence().excerpt(), 600));
+                    .append(complete(hit.evidence().excerpt()));
         }
         request.append("\nAgent-validated question plan:");
         for (AnswerQuestionPlan.Subquestion subquestion : questionPlan.subquestions()) {
             request.append("\n- exact span: ")
-                    .append(bounded(subquestion.text(), 300))
+                    .append(complete(subquestion.text()))
                     .append(" | owner: ")
                     .append(subquestion.owner())
                     .append(" | evidence needs: ")
@@ -450,23 +434,13 @@ public class AnswerEvidenceAgent implements AnswerEvidenceRefiner {
                             .map(AnswerQuestionPlan.PageHint::pageNumber)
                             .toList());
         }
-        if (questionPlan.evidenceNeeds().contains(
-                com.rulepilot.assistant.RuleAnswerModel.EvidenceNeed.ADVICE)) {
-            request.append("\nIndependent application-owned advice source-cue searches (combine each with terms "
-                    + "derived from active-document headings or observations; do not merely rephrase the player):");
-            for (String cueQuery : AnswerRetrievalPlanner.adviceSourceCueQueries()) {
-                request.append("\n- ").append(cueQuery);
-            }
-        }
         request.append("\nUse observations to cover every listed span. Stop after the useful exact pages have been read; "
                 + "the application ignores terminal prose and admits only canonical page observations.");
         return request.toString();
     }
 
-    private String bounded(String value, int maximum) {
-        if (value == null) return "";
-        String normalized = value.replaceAll("\\s+", " ").strip();
-        return normalized.length() <= maximum ? normalized : normalized.substring(0, maximum);
+    private String complete(String value) {
+        return value == null ? "" : value.strip();
     }
 
     private boolean usesPriorPages(AnswerQuestionPlan questionPlan, QuestionContext context) {

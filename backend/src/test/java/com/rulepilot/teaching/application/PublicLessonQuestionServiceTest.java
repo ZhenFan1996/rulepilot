@@ -152,7 +152,7 @@ class PublicLessonQuestionServiceTest {
     }
 
     @Test
-    void requestsAnEnglishAnswerFromTheCurrentTurnEvenWhenTheUiLanguageIsChinese() {
+    void requestsAnEnglishAnswerOnlyWhenTheRequestLanguageIsEnglish() {
         UUID planId = UUID.randomUUID();
         UUID versionId = UUID.randomUUID();
         UUID citedChunk = UUID.randomUUID();
@@ -166,7 +166,7 @@ class PublicLessonQuestionServiceTest {
 
         var result = service.answer(
                 planId,
-                new PublicLessonQuestionService.QuestionRequest("Where does the marker go?", null, "zh-CN"));
+                new PublicLessonQuestionService.QuestionRequest("Where does the marker go?", null, "en"));
 
         assertThat(result).hasValueSatisfying(value -> {
             assertThat(value.answer().shortVerdict()).isEqualTo("Place the marker first.");

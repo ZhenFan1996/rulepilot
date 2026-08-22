@@ -74,7 +74,10 @@ test('production recommendation journey tests the deployed main release without 
     /if \(REQUIRE_FRESH_IMPORT\) \{\s*expect\(launchedJob\.reused[^\n]*\)\.toBe\(false\)/,
   )
   assert.doesNotMatch(productionRecommendationSpec, /const REQUIRE_FRESH_IMPORT\s*=\s*true/)
-  assert.match(productionRecommendationSpec, /expect\(importRequestCount\)\.toBe\(1\)/)
+  assert.match(
+    productionRecommendationSpec,
+    /expect\(importRequestCount\)\.toBe\(restoredExistingJourney \? 0 : 1\)/,
+  )
   assert.match(productionRecommendationSpec, /expect\(completedJob\.documentVersionId\)\.not\.toBeNull\(\)/)
   assert.match(productionRecommendationSpec, /expect\(progressPayload\)\.toMatchObject\(\{ stage: 'READY', complete: true \}\)/)
   assert.match(productionRecommendationSpec, /const openRulebook = page\.getByRole\('button', \{ name: '先阅读原规则书' \}\)/)

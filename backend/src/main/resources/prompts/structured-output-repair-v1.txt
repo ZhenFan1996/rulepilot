@@ -1,1 +1,4 @@
-The previous response did not satisfy the required schema. Regenerate from the same task and evidence. Return one complete schema-valid object only; do not discuss or quote the previous response.
+The previous response did not satisfy the required schema. Regenerate from the same task and evidence. Return one
+complete schema-valid object only; do not discuss or quote the previous response. Return a data instance populated
+with the requested task data, never the schema definition itself: do not output schema metadata such as `$schema`,
+`type`, `properties`, `items`, or `required` in place of the requested fields.

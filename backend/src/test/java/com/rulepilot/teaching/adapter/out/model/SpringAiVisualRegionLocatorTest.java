@@ -40,43 +40,26 @@ class SpringAiVisualRegionLocatorTest {
     }
 
     @Test
-    void accepts_json_wrapped_in_a_model_code_fence() {
-        var parsed = VisualLocatorResponsePolicy.parseModelRegion("""
-                ```json
-                {"pageNumber":1,"label":"QR code","x":780,"y":472,"width":126,"height":89,"supportedClaimRefs":["C1"]}
-                ```
-                """);
-
-        assertThat(parsed).isPresent();
-        assertThat(parsed.orElseThrow())
-                .extracting(
-                        VisualLocatorResponsePolicy.ModelRegion::pageNumber,
-                        VisualLocatorResponsePolicy.ModelRegion::label,
-                        VisualLocatorResponsePolicy.ModelRegion::x,
-                        VisualLocatorResponsePolicy.ModelRegion::y)
-                .containsExactly(1, "QR code", 780, 472);
-    }
-
-    @Test
     void rejects_prose_or_a_null_response() {
-        assertThat(VisualLocatorResponsePolicy.parseModelRegion("I cannot find a useful image.")).isEmpty();
-        assertThat(VisualLocatorResponsePolicy.parseModelRegion("null")).isEmpty();
+        assertThat(VisualLocatorResponsePolicy.parseModelGuide("I cannot find a useful image.")).isEmpty();
+        assertThat(VisualLocatorResponsePolicy.parseModelGuide("null")).isEmpty();
     }
 
     @Test
-    void accepts_plain_json_without_a_code_fence() {
-        assertThat(VisualLocatorResponsePolicy.parseModelRegion(
-                        "{\"pageNumber\":1,\"label\":\"board\",\"visibleDescription\":\"中央有一块地图和相邻的标记区。\",\"x\":100,\"y\":100,\"width\":200,\"height\":200,\"supportedClaimRefs\":[\"C1\"]}"))
+    void accepts_the_exact_guide_json_contract_without_a_code_fence() {
+        assertThat(VisualLocatorResponsePolicy.parseModelGuide(
+                        "{\"regions\":[{\"pageNumber\":1,\"label\":\"board\",\"visibleDescription\":\"中央有一块地图和相邻的标记区。\",\"x\":100,\"y\":100,\"width\":200,\"height\":200,\"supportedClaimRefs\":[\"C1\"]}]}"))
                 .isPresent();
     }
 
     @Test
     void retains_a_literal_visual_observation_with_the_crop() {
-        var parsed = VisualLocatorResponsePolicy.parseModelRegion(
-                "{\"pageNumber\":2,\"label\":\"matching icons\",\"visibleDescription\":\"两张卡牌之间以箭头连接，花色图标相同。\",\"x\":100,\"y\":100,\"width\":200,\"height\":200,\"supportedClaimRefs\":[\"C1\"]}");
+        var parsed = VisualLocatorResponsePolicy.parseModelGuide(
+                "{\"regions\":[{\"pageNumber\":2,\"label\":\"matching icons\",\"visibleDescription\":\"两张卡牌之间以箭头连接，花色图标相同。\",\"x\":100,\"y\":100,\"width\":200,\"height\":200,\"supportedClaimRefs\":[\"C1\"]}]}");
 
         assertThat(parsed).isPresent();
-        assertThat(parsed.orElseThrow().visibleDescription()).isEqualTo("两张卡牌之间以箭头连接，花色图标相同。");
+        assertThat(parsed.orElseThrow().regions().getFirst().visibleDescription())
+                .isEqualTo("两张卡牌之间以箭头连接，花色图标相同。");
     }
 
     @Test
@@ -91,15 +74,6 @@ class SpringAiVisualRegionLocatorTest {
         assertThat(guide).isPresent();
         assertThat(guide.orElseThrow().regions()).extracting(VisualLocatorResponsePolicy.ModelRegion::label)
                 .containsExactly("行动图标", "示例状态");
-    }
-
-    @Test
-    void accepts_a_single_json_object_after_brief_model_prose() {
-        assertThat(VisualLocatorResponsePolicy.parseModelRegion("""
-                I found a matching rule reference.
-                {"pageNumber":1,"label":"board","x":100,"y":100,"width":200,"height":200,"supportedClaimRefs":["C1"]}
-                """))
-                .isPresent();
     }
 
     @Test
@@ -127,13 +101,14 @@ class SpringAiVisualRegionLocatorTest {
                 .contains("recognise that claim", "need not independently show every procedural word", "different");
         assertThat(candidates).containsExactly(Map.of(
                 "pageNumber", 4,
-                "hint", "page visual context"));
+                "candidateKind", "CITED_PAGE_CONTEXT"));
     }
 
     @Test
-    void treats_an_explicit_null_as_a_terminal_no_region_response() {
-        assertThat(VisualLocatorResponsePolicy.isExplicitNoRegion(" null ")).isTrue();
-        assertThat(VisualLocatorResponsePolicy.isExplicitNoRegion(" {} ")).isTrue();
+    void accepts_only_the_typed_empty_regions_envelope_as_a_terminal_no_region_response() {
+        assertThat(VisualLocatorResponsePolicy.isExplicitNoRegion(" {\"regions\":[]} ")).isTrue();
+        assertThat(VisualLocatorResponsePolicy.isExplicitNoRegion(" null ")).isFalse();
+        assertThat(VisualLocatorResponsePolicy.isExplicitNoRegion(" {} ")).isFalse();
         assertThat(VisualLocatorResponsePolicy.isExplicitNoRegion("not valid JSON")).isFalse();
     }
 
@@ -145,9 +120,6 @@ class SpringAiVisualRegionLocatorTest {
         assertThat(VisualLocatorResponsePolicy.diagnosticFor(
                         VisualLocatorResponsePolicy.Rejection.EXPLICIT_NO_REGION))
                 .isEqualTo(com.rulepilot.teaching.VisualRegionLocator.Diagnostic.EXPLICIT_NO_REGION);
-        assertThat(VisualLocatorResponsePolicy.diagnosticFor(
-                        VisualLocatorResponsePolicy.Rejection.NON_CHINESE_OBSERVATION))
-                .isEqualTo(com.rulepilot.teaching.VisualRegionLocator.Diagnostic.NON_CHINESE_OBSERVATION);
     }
 
     @Test
@@ -158,30 +130,31 @@ class SpringAiVisualRegionLocatorTest {
                 .contains("x + width", "y + height");
         assertThat(VisualLocatorResponsePolicy.retryInstruction(VisualLocatorResponsePolicy.Rejection.MALFORMED_JSON))
                 .contains("JSON");
-        assertThat(VisualLocatorResponsePolicy.retryInstruction(
-                        VisualLocatorResponsePolicy.Rejection.NON_CHINESE_OBSERVATION))
-                .contains("Simplified Chinese", "crop itself visibly contains");
     }
 
     @Test
-    void recognizesWhetherAVisionObservationUsesChinese() {
-        assertThat(VisualLocatorResponsePolicy.containsChinese("骰子行动区")).isTrue();
-        assertThat(VisualLocatorResponsePolicy.containsChinese("Dice Actions")).isFalse();
-    }
-
-    @Test
-    void clampsARegionThatSlightlyOverrunsTheModelsNormalizedPageBoundary() {
-        var normalized = VisualCropAcceptancePolicy.normalizedGeometry(
-                new VisualLocatorResponsePolicy.ModelRegion(
-                        1, "card detail", "可见卡牌图标", 960, 970, 100, 100, java.util.List.of("C1")));
-
-        assertThat(normalized)
-                .extracting(
-                        VisualLocatorResponsePolicy.ModelRegion::x,
-                        VisualLocatorResponsePolicy.ModelRegion::y,
-                        VisualLocatorResponsePolicy.ModelRegion::width,
-                        VisualLocatorResponsePolicy.ModelRegion::height)
-                .containsExactly(960, 970, 40, 30);
+    void rejects_missing_extra_or_overflowing_structured_regions_without_repairing_them() {
+        assertThat(VisualLocatorResponsePolicy.parseModelGuide(
+                        "{\"regions\":[{\"pageNumber\":1,\"label\":\"board\",\"x\":1,\"y\":1,\"width\":20,\"height\":20,\"supportedClaimRefs\":[]}]}"))
+                .isEmpty();
+        assertThat(VisualLocatorResponsePolicy.parseModelGuide(
+                        "{\"regions\":[{\"pageNumber\":1,\"label\":\"board\",\"visibleDescription\":\"棋盘\",\"x\":1,\"y\":1,\"width\":20,\"height\":20,\"supportedClaimRefs\":[],\"unexpected\":true}]}"))
+                .isEmpty();
+        assertThat(VisualLocatorResponsePolicy.parseModelGuide(
+                        "{\"regions\":["
+                                + "{\"pageNumber\":1,\"label\":\"a\",\"visibleDescription\":\"a\",\"x\":1,\"y\":1,\"width\":20,\"height\":20,\"supportedClaimRefs\":[]},"
+                                + "{\"pageNumber\":1,\"label\":\"b\",\"visibleDescription\":\"b\",\"x\":1,\"y\":1,\"width\":20,\"height\":20,\"supportedClaimRefs\":[]},"
+                                + "{\"pageNumber\":1,\"label\":\"c\",\"visibleDescription\":\"c\",\"x\":1,\"y\":1,\"width\":20,\"height\":20,\"supportedClaimRefs\":[]}]}"))
+                .isEmpty();
+        assertThat(VisualLocatorResponsePolicy.parseModelGuide(
+                        "{\"regions\":[],\"regions\":[]}"))
+                .isEmpty();
+        assertThat(VisualLocatorResponsePolicy.parseModelGuide(
+                        "{\"regions\":[]} trailing"))
+                .isEmpty();
+        assertThat(VisualLocatorResponsePolicy.parseModelGuide(
+                        "{\"regions\":[{\"pageNumber\":1,\"label\":\"board\",\"visibleDescription\":\"board\",\"x\":1,\"y\":1,\"width\":20,\"height\":20,\"supportedClaimRefs\":[\"C1\",\"C1\"]}]}"))
+                .isEmpty();
     }
 
     @Test
@@ -341,10 +314,18 @@ class SpringAiVisualRegionLocatorTest {
     @Test
     void parses_only_offered_exact_crop_references_from_the_second_visual_check() {
         assertThat(VisualLocatorResponsePolicy.acceptedCropReferences(
-                        "{\"acceptedCropRefs\":[\"R1\"]}", Set.of("R1", "R2")))
+                        "{\"acceptedCropRefs\":[\"R1\"],\"contradictedCropRefs\":[]}", Set.of("R1", "R2")))
                 .contains(Set.of("R1"));
         assertThat(VisualLocatorResponsePolicy.acceptedCropReferences(
-                        "{\"acceptedCropRefs\":[\"R3\"]}", Set.of("R1", "R2")))
+                        "{\"acceptedCropRefs\":[\"R3\"],\"contradictedCropRefs\":[]}", Set.of("R1", "R2")))
+                .isEmpty();
+        assertThat(VisualLocatorResponsePolicy.acceptedCropReferences(
+                        "{\"acceptedCropRefs\":[\"R1\"],\"contradictedCropRefs\":[],\"reason\":\"looks right\"}",
+                        Set.of("R1", "R2")))
+                .isEmpty();
+        assertThat(VisualLocatorResponsePolicy.acceptedCropReferences(
+                        "{\"acceptedCropRefs\":[\"R1\",\"R1\"],\"contradictedCropRefs\":[]}",
+                        Set.of("R1", "R2")))
                 .isEmpty();
     }
 
@@ -377,21 +358,6 @@ class SpringAiVisualRegionLocatorTest {
 
         assertThat(VisualCropAcceptancePolicy.claimsForExactCrop(request, region))
                 .containsExactly(namedCard);
-    }
-
-    @Test
-    void reserves_qwen_crop_review_for_rules_where_a_neighbouring_visual_would_change_the_meaning() {
-        Claim supply = new Claim(
-                UUID.randomUUID(),
-                "步骤 4（建立物品供应）：摆放物品标记。请注意，完成设置后通过得分决定胜负。",
-                List.of(4),
-                4);
-        Claim dominance = new Claim(UUID.randomUUID(), "步骤 1（打出统治卡）：打出统治卡。", List.of(21), 1);
-        Claim scoring = new Claim(UUID.randomUUID(), "步骤 2（计分）：比较分数。", List.of(11), 2);
-
-        assertThat(VisualExactCropReviewPolicy.qwenNeedsExactCropReview(List.of(supply))).isFalse();
-        assertThat(VisualExactCropReviewPolicy.qwenNeedsExactCropReview(List.of(dominance))).isTrue();
-        assertThat(VisualExactCropReviewPolicy.qwenNeedsExactCropReview(List.of(scoring))).isTrue();
     }
 
     @Test

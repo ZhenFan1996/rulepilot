@@ -66,10 +66,13 @@ class TeachingSectionDraftComposerTest {
 
         assertThat(requests).singleElement().satisfies(request -> {
             assertThat(request.pageImages()).extracting(TeachingLessonModel.PageImageInput::pageNumber).containsExactly(4);
-            assertThat(request.evidence()).singleElement().satisfies(source ->
-                    assertThat(source.excerpt())
+            assertThat(request.evidence()).singleElement().satisfies(source -> {
+                assertThat(source.visualPresentation())
                             .contains("Visual presentation data only", "Cataloged visual anchors")
-                            .doesNotContain("The central board shows the shared setup area"));
+                            .doesNotContain("The central board shows the shared setup area");
+                assertThat(source.excerpt())
+                        .isEqualTo("Place the central board in the middle of the table before the first turn.");
+            });
         });
         assertThat(candidate.section().evidenceStatus()).isEqualTo(EvidenceStatus.CITED_DRAFT);
         assertThat(candidate.section().visualSourcePages()).containsExactly(4);

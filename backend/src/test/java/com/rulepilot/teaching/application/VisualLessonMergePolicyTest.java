@@ -77,27 +77,6 @@ class VisualLessonMergePolicyTest {
     }
 
     @Test
-    void skipsAnInvalidVisualLabelInsteadOfReplacingItWithLessonProse() {
-        UUID evidence = UUID.randomUUID();
-        LessonSection source = section(List.of(ruleStep(evidence)), List.of(), List.of());
-        LocatedRegion region = new LocatedRegion(
-                2,
-                "Probe track",
-                "圆形探测器标记位于弧形刻度旁。",
-                120,
-                220,
-                180,
-                120,
-                List.of(evidence),
-                List.of(1));
-
-        VisualLessonMergePolicy.MergedVisualSection merged = policy.mergeVisualIntoSupportedSteps(source, List.of(region));
-
-        assertThat(merged.addedCount()).isZero();
-        assertThat(merged.section()).isEqualTo(source);
-    }
-
-    @Test
     void rejectsOnlyAContradictingCropAndKeepsTheValidatedSectionUntouched() {
         UUID evidence = UUID.randomUUID();
         LessonSection supported = new LessonSection(

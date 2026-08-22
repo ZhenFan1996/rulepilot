@@ -239,7 +239,6 @@ public class VisualLessonEnricher {
             case MODEL_MALFORMED_RESPONSE -> "第 " + sectionPosition + " 节的视觉模型没有返回可用坐标";
             case MODEL_UNSUPPORTED_SCOPE -> "第 " + sectionPosition + " 节的视觉模型引用了未提供的页面或依据";
             case MODEL_INVALID_GEOMETRY -> "第 " + sectionPosition + " 节的视觉模型返回了无效截图坐标";
-            case MODEL_NON_CHINESE_OBSERVATION -> "第 " + sectionPosition + " 节的视觉模型没有给出可读的中文图中说明，已跳过";
             case MODEL_TIMEOUT -> "第 " + sectionPosition + " 节的视觉模型响应超时";
             case MODEL_INTERRUPTED -> "第 " + sectionPosition + " 节的视觉模型工作被安全中断";
             case MODEL_BUSY -> "第 " + sectionPosition + " 节的视觉模型正在处理其他任务";
@@ -317,7 +316,6 @@ public class VisualLessonEnricher {
         MODEL_MALFORMED_RESPONSE,
         MODEL_UNSUPPORTED_SCOPE,
         MODEL_INVALID_GEOMETRY,
-        MODEL_NON_CHINESE_OBSERVATION,
         MODEL_TIMEOUT,
         MODEL_INTERRUPTED,
         MODEL_BUSY,

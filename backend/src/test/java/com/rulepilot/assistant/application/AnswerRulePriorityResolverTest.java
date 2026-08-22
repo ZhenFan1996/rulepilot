@@ -55,10 +55,10 @@ class AnswerRulePriorityResolverTest {
                                 priority("general", "card", "Use card")))))
                 .hasMessageContaining("duplicate");
 
-        RulePriorityRequest invalidBasis = new RulePriorityRequest(
-                "General", "Card", "Use card", "MORE_SPECIFIC", List.of(citation));
         assertThatThrownBy(() -> resolver.resolve(
-                        request(AnswerAid.RULE_PRIORITY), draft(List.of(invalidBasis))))
+                        request(AnswerAid.RULE_PRIORITY),
+                        draft(List.of(new RulePriorityRequest(
+                                "General", "Card", "Use card", "MORE_SPECIFIC", List.of(citation))))))
                 .hasMessageContaining("basis");
 
         RulePriorityRequest outside = new RulePriorityRequest(

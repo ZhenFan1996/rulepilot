@@ -175,23 +175,9 @@ final class VisualLessonSectionEnricher {
                 .filter(step -> !hasExplicitVisualIntent
                         || explicitVisualStepPositions.contains(step.position())
                         || step.kind() == TeachingMove.VISUAL)
-                .sorted(java.util.Comparator.comparingInt(this::visualAffinity).reversed()
-                        .thenComparingInt(LessonStep::position))
+                .sorted(java.util.Comparator.comparingInt(LessonStep::position))
                 .limit(limit)
                 .toList();
-    }
-
-    private int visualAffinity(LessonStep step) {
-        String target = (step.heading() + " " + step.text()).toLowerCase(java.util.Locale.ROOT);
-        int score = 0;
-        for (String cue : List.of(
-                "图标", "符号", "卡牌", "卡片", "玩家板", "棋盘", "网格", "地图", "轨道", "骰子", "资源",
-                "令牌", "标记", "方块", "建筑", "放置", "建造", "布局", "计分", "分数", "示例", "组件",
-                "icon", "symbol", "card", "board", "grid", "map", "track", "dice", "resource", "token",
-                "marker", "building", "score", "example", "component")) {
-            if (target.contains(cue)) score++;
-        }
-        return score;
     }
 
     record Result(LessonSection section, VisualLessonEnricher.Outcome outcome, int addedCount) {

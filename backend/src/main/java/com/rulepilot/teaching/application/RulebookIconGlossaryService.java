@@ -162,7 +162,8 @@ public class RulebookIconGlossaryService {
                 fact.schemaVersion(),
                 fact.sourceDependencies(),
                 fact.ruleGroupIdentifiers(),
-                fact.ruleGroupInventoryComplete());
+                fact.ruleGroupInventoryComplete(),
+                fact.ruleGroupFacts());
     }
 
     private IconCrop crop(TeachingPlan plan, UUID occurrenceId) {

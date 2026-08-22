@@ -5,7 +5,6 @@ import com.rulepilot.assistant.RuleAnswerModel.ModelDraft;
 import com.rulepilot.assistant.RuleAnswerModel.ModelRequest;
 import com.rulepilot.assistant.RuleAnswerModel.RuleTimingRequest;
 import com.rulepilot.assistant.domain.RuleTimingResolution;
-import com.rulepilot.assistant.domain.TimingOrderBasis;
 import java.util.LinkedHashSet;
 import java.util.List;
 
@@ -39,7 +38,7 @@ final class AnswerTimingResolver {
                 AnswerStructuredAidPolicy.requiredText(item.timingContext(), "timing context"),
                 AnswerStructuredAidPolicy.requiredText(item.resolutionOrder(), "resolution order"),
                 AnswerStructuredAidPolicy.requiredText(item.orderSource(), "order source"),
-                AnswerStructuredAidPolicy.enumValue(item.basis(), TimingOrderBasis.class, "timing basis"),
+                item.basis(),
                 AnswerStructuredAidPolicy.citations(
                         modelRequest, draft, item.citationIds(), "timing resolution"));
     }

@@ -8,6 +8,7 @@ import com.rulepilot.teaching.VisualRulebookPageFacts.IconOccurrence;
 import com.rulepilot.teaching.VisualRulebookPageFacts.PageFact;
 import com.rulepilot.teaching.VisualRulebookPageFacts.VisualAnchor;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.SourceDependency;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.RuleGroupFact;
 import com.rulepilot.retrieval.VisualRulebookPageFactSearch;
 import com.rulepilot.retrieval.VisualRulebookPageFactSearch.PageFactMatch;
 import com.rulepilot.retrieval.VisualRulebookPageFactSearch.RuleFactStatus;
@@ -293,6 +294,7 @@ class VisualRulebookPageFactEntity {
     private static final TypeReference<List<IconOccurrence>> ICON_OCCURRENCES = new TypeReference<>() {};
     private static final TypeReference<List<SourceDependency>> SOURCE_DEPENDENCIES = new TypeReference<>() {};
     private static final TypeReference<List<String>> RULE_GROUP_IDENTIFIERS = new TypeReference<>() {};
+    private static final TypeReference<List<RuleGroupFact>> RULE_GROUP_FACTS = new TypeReference<>() {};
 
     @Id
     UUID id;
@@ -333,6 +335,9 @@ class VisualRulebookPageFactEntity {
     @Column(name = "rule_group_inventory_complete", nullable = false)
     boolean ruleGroupInventoryComplete;
 
+    @Column(name = "rule_group_facts", nullable = false, columnDefinition = "text")
+    String ruleGroupFacts;
+
     protected VisualRulebookPageFactEntity() {}
 
     VisualRulebookPageFactEntity(UUID documentVersionId, PageFact page) {
@@ -349,6 +354,7 @@ class VisualRulebookPageFactEntity {
         this.sourceDependencies = serialize(page.sourceDependencies());
         this.ruleGroupIdentifiers = serialize(page.ruleGroupIdentifiers());
         this.ruleGroupInventoryComplete = page.ruleGroupInventoryComplete();
+        this.ruleGroupFacts = serialize(page.ruleGroupFacts());
     }
 
     PageFact toDomain() {
@@ -363,7 +369,8 @@ class VisualRulebookPageFactEntity {
                 schemaVersion,
                 deserializeSourceDependencies(sourceDependencies),
                 deserializeRuleGroupIdentifiers(ruleGroupIdentifiers),
-                ruleGroupInventoryComplete);
+                ruleGroupInventoryComplete,
+                deserializeRuleGroupFacts(ruleGroupFacts));
     }
 
     private static String serialize(List<?> values) {
@@ -407,6 +414,15 @@ class VisualRulebookPageFactEntity {
             return JSON.readValue(serialized, RULE_GROUP_IDENTIFIERS);
         } catch (JsonProcessingException invalidStoredData) {
             throw new IllegalStateException("stored visual rule-group identifiers are invalid", invalidStoredData);
+        }
+    }
+
+    private static List<RuleGroupFact> deserializeRuleGroupFacts(String serialized) {
+        if (serialized == null || serialized.isBlank()) return List.of();
+        try {
+            return JSON.readValue(serialized, RULE_GROUP_FACTS);
+        } catch (JsonProcessingException invalidStoredData) {
+            throw new IllegalStateException("stored visual rule-group facts are invalid", invalidStoredData);
         }
     }
 }

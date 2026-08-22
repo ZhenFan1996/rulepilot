@@ -254,8 +254,8 @@ public final class TeachingSourceCoverageContract {
                 gaps.add("chapter projection conflicts with its source owner: " + planned.topicKey());
                 continue;
             }
-            if (actual.evidenceStatus() != EvidenceStatus.SUPPORTED) {
-                gaps.add("source owner has not passed evidence review: " + planned.topicKey());
+            if (actual.evidenceStatus() == EvidenceStatus.INSUFFICIENT_EVIDENCE) {
+                gaps.add("source owner has no admissible evidence: " + planned.topicKey());
                 continue;
             }
             if (planned.sourcePageNumbers().isEmpty()) {

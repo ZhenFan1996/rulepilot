@@ -72,6 +72,15 @@ export type RecommendedGame = {
   tradeoffs: string[]
   reasons?: RecommendationReason[]
   fitClaims?: CandidateFitClaim[]
+  replyParts?: RecommendationReplyPart[]
+}
+
+export type RecommendationReplyPart = {
+  role: 'why_fit' | 'tradeoff'
+  claimType: 'constraint_fit' | 'structured_fact' | 'taxonomy_classification' | 'attributed_experience' | 'rule_procedure' | 'publisher_description'
+  subject: string
+  text: string
+  sourceIndexes: number[]
 }
 
 export type CandidateFitClaim = {
@@ -109,6 +118,7 @@ export type RecommendationAgentResponse = {
   outcome: 'conversation' | 'needs_clarification' | 'recommendations' | 'no_match' | 'unavailable'
   responseLocale?: 'zh-CN' | 'en'
   assistantMessage: string
+  recommendationLead?: string | null
   profile: RecommendationProfile
   clarification: RecommendationClarification | null
   shortfall?: RecommendationShortfall | null

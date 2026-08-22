@@ -72,14 +72,10 @@ public class ReadVisualPageFactsNativeTool implements NativeAgentTool {
 
     private Map<String, Object> fact(VisualPageFact fact) {
         return Map.of(
-                "printedTerms", bounded(fact.printedTerms(), 1_200),
-                "literalSummary", bounded(fact.literalSummary(), 1_600),
+                "printedTerms", fact.printedTerms(),
+                "literalSummary", fact.literalSummary(),
                 "anchors", fact.anchors(),
                 "icons", fact.icons());
-    }
-
-    private String bounded(String value, int maximum) {
-        return value.length() <= maximum ? value : value.substring(0, maximum);
     }
 
     private Arguments parse(String json) {

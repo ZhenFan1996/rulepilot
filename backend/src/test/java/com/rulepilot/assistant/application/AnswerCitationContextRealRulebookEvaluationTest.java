@@ -29,7 +29,6 @@ import com.rulepilot.assistant.RuleAnswerModel.EvidenceInput;
 import com.rulepilot.assistant.RuleAnswerModel.EvidenceNeed;
 import com.rulepilot.assistant.RuleAnswerModel.ModelDraft;
 import com.rulepilot.assistant.RuleAnswerModel.ModelRequest;
-import com.rulepilot.assistant.adapter.out.model.FakeRuleAnswerModel;
 import com.rulepilot.assistant.adapter.out.model.SpringAiNativeToolModel;
 import com.rulepilot.assistant.adapter.out.model.SpringAiRuleAnswerModel;
 import com.rulepilot.assistant.domain.LearningIntent;
@@ -526,7 +525,7 @@ class AnswerCitationContextRealRulebookEvaluationTest {
             context.register(VersionedAgentPrompts.class);
             context.refresh();
             return new SpringAiRuleAnswerModel(
-                    runtime, new FakeRuleAnswerModel(), context.getBean(VersionedAgentPrompts.class));
+                    runtime, context.getBean(VersionedAgentPrompts.class));
         }
     }
 

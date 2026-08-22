@@ -76,21 +76,6 @@ public interface VisualRulebookPageCatalogModel {
         return Optional.empty();
     }
 
-    /** Locates document-derived short item identifiers before their surrounding cells are read separately. */
-    default IdentifierLocalizationDraft locateIdentifiers(IdentifierLocalizationRequest request) {
-        return new IdentifierLocalizationDraft(List.of());
-    }
-
-    /** Reads bounded cells whose identifiers were independently supplied and spatially verified. */
-    default IdentifierCellDraft summarizeIdentifierCells(IdentifierCellRequest request) {
-        return new IdentifierCellDraft(List.of());
-    }
-
-    default IdentifierCellVerificationDraft verifyIdentifierCell(IdentifierCellVerificationRequest request) {
-        return new IdentifierCellVerificationDraft(
-                request.cell().identifier(), "NONE", 0, request.draftSummary());
-    }
-
     /**
      * Rechecks model-proposed icon rectangles in a dedicated spatial-grounding pass. Implementations that cannot
      * perform a second visual pass preserve the proposed locations; the application still treats those pages as
@@ -400,132 +385,6 @@ public interface VisualRulebookPageCatalogModel {
         }
     }
 
-    record IdentifierLocalizationRequest(
-            PageImageInput page,
-            List<String> identifiers,
-            String modelConfigurationOwner) {
-        public IdentifierLocalizationRequest {
-            if (page == null || identifiers == null || identifiers.size() < 4 || identifiers.size() > 24) {
-                throw new IllegalArgumentException("visual identifier localization request is invalid");
-            }
-            identifiers = identifiers.stream().map(String::strip).distinct().toList();
-            if (identifiers.size() < 4 || identifiers.stream().anyMatch(String::isBlank)) {
-                throw new IllegalArgumentException("visual identifiers are invalid");
-            }
-            modelConfigurationOwner = modelConfigurationOwner == null || modelConfigurationOwner.isBlank()
-                    ? null : modelConfigurationOwner.strip();
-        }
-    }
-
-    record IdentifierLocalizationDraft(List<IdentifierLocation> locations) {
-        public IdentifierLocalizationDraft {
-            locations = locations == null ? List.of() : List.copyOf(locations);
-            if (locations.size() > 24) throw new IllegalArgumentException("too many visual identifier locations");
-        }
-    }
-
-    record IdentifierLocation(String identifier, int x, int y, int width, int height) {
-        public IdentifierLocation {
-            if (identifier == null || identifier.isBlank()
-                    || x < 0 || y < 0 || width < 4 || height < 4
-                    || x + width > 1_000 || y + height > 1_000) {
-                throw new IllegalArgumentException("visual identifier location is invalid");
-            }
-            identifier = identifier.strip();
-        }
-    }
-
-    record IdentifierCellInput(String identifier, PageImageInput image) {
-        public IdentifierCellInput {
-            if (identifier == null || identifier.isBlank() || image == null) {
-                throw new IllegalArgumentException("visual identifier cell is invalid");
-            }
-            identifier = identifier.strip();
-        }
-    }
-
-    record IdentifierCellRequest(
-            List<IdentifierCellInput> cells,
-            List<IdentifierReferencePage> referencePages,
-            String modelConfigurationOwner) {
-        public IdentifierCellRequest(List<IdentifierCellInput> cells, String modelConfigurationOwner) {
-            this(cells, List.of(), modelConfigurationOwner);
-        }
-
-        public IdentifierCellRequest {
-            if (cells == null || cells.isEmpty() || cells.size() > 4) {
-                throw new IllegalArgumentException("visual identifier cell request is invalid");
-            }
-            cells = List.copyOf(cells);
-            referencePages = referencePages == null ? List.of() : List.copyOf(referencePages);
-            if (referencePages.size() > 3) throw new IllegalArgumentException("too many identifier reference pages");
-            modelConfigurationOwner = modelConfigurationOwner == null || modelConfigurationOwner.isBlank()
-                    ? null : modelConfigurationOwner.strip();
-        }
-    }
-
-    record IdentifierReferencePage(PageImageInput image, String evidenceText) {
-        public IdentifierReferencePage {
-            if (image == null || evidenceText == null || evidenceText.isBlank()) {
-                throw new IllegalArgumentException("visual identifier reference page is invalid");
-            }
-            evidenceText = evidenceText.strip();
-        }
-    }
-
-    record IdentifierCellVerificationRequest(
-            IdentifierCellInput cell,
-            IdentifierReferencePage referencePage,
-            List<String> allowedLabels,
-            String draftSummary,
-            String modelConfigurationOwner) {
-        public IdentifierCellVerificationRequest {
-            if (cell == null || referencePage == null || allowedLabels == null || allowedLabels.size() < 2
-                    || draftSummary == null || draftSummary.isBlank()) {
-                throw new IllegalArgumentException("identifier cell verification request is invalid");
-            }
-            allowedLabels = allowedLabels.stream().map(String::strip).filter(value -> !value.isBlank()).distinct().toList();
-            if (allowedLabels.size() < 2) {
-                throw new IllegalArgumentException("identifier cell verification labels are invalid");
-            }
-            draftSummary = draftSummary.strip();
-            modelConfigurationOwner = modelConfigurationOwner == null || modelConfigurationOwner.isBlank()
-                    ? null : modelConfigurationOwner.strip();
-        }
-    }
-
-    record IdentifierCellVerificationDraft(String identifier, String matchedLabel, int quantity, String factualSummary) {
-        public IdentifierCellVerificationDraft {
-            if (identifier == null || identifier.isBlank()
-                    || matchedLabel == null || matchedLabel.isBlank()
-                    || quantity < 0
-                    || factualSummary == null || factualSummary.isBlank()) {
-                throw new IllegalArgumentException("identifier cell verification draft is invalid");
-            }
-            identifier = identifier.strip();
-            matchedLabel = matchedLabel.strip();
-            factualSummary = factualSummary.strip();
-        }
-    }
-
-    record IdentifierCellDraft(List<IdentifierCellFact> facts) {
-        public IdentifierCellDraft {
-            facts = facts == null ? List.of() : List.copyOf(facts);
-            if (facts.size() > 4) throw new IllegalArgumentException("too many visual identifier cell facts");
-        }
-    }
-
-    record IdentifierCellFact(String identifier, String factualSummary) {
-        public IdentifierCellFact {
-            if (identifier == null || identifier.isBlank()
-                    || factualSummary == null || factualSummary.isBlank()) {
-                throw new IllegalArgumentException("visual identifier cell fact is invalid");
-            }
-            identifier = identifier.strip();
-            factualSummary = factualSummary.strip();
-        }
-    }
-
     record IconLocalizationRequest(
             PageImageInput page,
             List<IconOccurrence> candidates,
@@ -642,6 +501,20 @@ public interface VisualRulebookPageCatalogModel {
         }
     }
 
+    /** One page-owned rule relation returned as JSON. Player-facing prose is never parsed to rebuild this binding. */
+    record RuleGroupFact(String identifier, String label, String fact) {
+        public RuleGroupFact {
+            if (identifier == null || identifier.isBlank()
+                    || label == null || label.isBlank()
+                    || fact == null || fact.isBlank()) {
+                throw new IllegalArgumentException("visual rule-group fact is invalid");
+            }
+            identifier = identifier.strip();
+            label = label.strip();
+            fact = fact.strip();
+        }
+    }
+
     record PageSummary(
             int pageNumber,
             String printedTerms,
@@ -653,7 +526,8 @@ public interface VisualRulebookPageCatalogModel {
             List<SourceDependency> sourceDependencies,
             List<String> ruleGroupIdentifiers,
             boolean ruleGroupInventoryComplete,
-            List<VisualQuantityObservation> quantityObservations) {
+            List<VisualQuantityObservation> quantityObservations,
+            List<RuleGroupFact> ruleGroupFacts) {
 
         public PageSummary(int pageNumber, String printedTerms, String factualSummary, List<String> keywords) {
             this(
@@ -667,6 +541,7 @@ public interface VisualRulebookPageCatalogModel {
                     List.of(),
                     List.of(),
                     false,
+                    List.of(),
                     List.of());
         }
 
@@ -687,6 +562,7 @@ public interface VisualRulebookPageCatalogModel {
                     List.of(),
                     List.of(),
                     false,
+                    List.of(),
                     List.of());
         }
 
@@ -709,6 +585,7 @@ public interface VisualRulebookPageCatalogModel {
                     List.of(),
                     List.of(),
                     false,
+                    List.of(),
                     List.of());
         }
 
@@ -732,6 +609,7 @@ public interface VisualRulebookPageCatalogModel {
                     sourceDependencies,
                     List.of(),
                     false,
+                    List.of(),
                     List.of());
         }
 
@@ -757,6 +635,34 @@ public interface VisualRulebookPageCatalogModel {
                     sourceDependencies,
                     ruleGroupIdentifiers,
                     ruleGroupInventoryComplete,
+                    List.of(),
+                    List.of());
+        }
+
+        public PageSummary(
+                int pageNumber,
+                String printedTerms,
+                String factualSummary,
+                List<String> keywords,
+                List<VisualAnchor> visualAnchors,
+                List<IconOccurrence> iconOccurrences,
+                boolean iconInventoryComplete,
+                List<SourceDependency> sourceDependencies,
+                List<String> ruleGroupIdentifiers,
+                boolean ruleGroupInventoryComplete,
+                List<VisualQuantityObservation> quantityObservations) {
+            this(
+                    pageNumber,
+                    printedTerms,
+                    factualSummary,
+                    keywords,
+                    visualAnchors,
+                    iconOccurrences,
+                    iconInventoryComplete,
+                    sourceDependencies,
+                    ruleGroupIdentifiers,
+                    ruleGroupInventoryComplete,
+                    quantityObservations,
                     List.of());
         }
 
@@ -772,7 +678,9 @@ public interface VisualRulebookPageCatalogModel {
                     || ruleGroupIdentifiers.stream()
                             .anyMatch(identifier -> identifier == null || identifier.isBlank())
                     || quantityObservations == null
-                    || quantityObservations.stream().anyMatch(java.util.Objects::isNull)) {
+                    || quantityObservations.stream().anyMatch(java.util.Objects::isNull)
+                    || ruleGroupFacts == null
+                    || ruleGroupFacts.stream().anyMatch(java.util.Objects::isNull)) {
                 throw new IllegalArgumentException("visual page summary is invalid");
             }
             printedTerms = printedTerms == null || printedTerms.isBlank()
@@ -789,12 +697,16 @@ public interface VisualRulebookPageCatalogModel {
             sourceDependencies = sourceDependencies.stream().distinct().toList();
             ruleGroupIdentifiers = ruleGroupIdentifiers.stream().map(String::strip).distinct().toList();
             quantityObservations = List.copyOf(new java.util.LinkedHashSet<>(quantityObservations));
-            Set<String> ruleGroupIdentities = ruleGroupIdentifiers.stream()
-                    .map(VisualSourceRuleGroupLedger::identity)
+            ruleGroupFacts = ruleGroupFacts.stream().distinct().toList();
+            Set<String> ruleGroupIdentities = Set.copyOf(ruleGroupIdentifiers);
+            Set<String> factIdentities = ruleGroupFacts.stream()
+                    .map(RuleGroupFact::identifier)
                     .collect(java.util.stream.Collectors.toSet());
+            if (ruleGroupInventoryComplete && !factIdentities.equals(ruleGroupIdentities)) {
+                throw new IllegalArgumentException("visual rule-group facts must exactly match their JSON identifiers");
+            }
             if (quantityObservations.stream().anyMatch(observation -> observation.pageNumber() != pageNumber
-                    || !ruleGroupIdentities.contains(
-                            VisualSourceRuleGroupLedger.identity(observation.ruleGroupIdentifier())))) {
+                    || !ruleGroupIdentities.contains(observation.ruleGroupIdentifier()))) {
                 throw new IllegalArgumentException(
                         "visual quantity observation must match its page and rule group");
             }

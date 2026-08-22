@@ -44,6 +44,13 @@ final class AnswerModelRequestFactory {
                                 hit.sectionType(),
                                 hit.heading(),
                                 hit.excerpt(),
+                                hit.visualFacts(),
+                                switch (hit.contentKind()) {
+                                    case CANONICAL_TEXT -> com.rulepilot.assistant.RuleAnswerModel.EvidenceContentKind.CANONICAL_TEXT;
+                                    case VISUAL_PLACEHOLDER -> com.rulepilot.assistant.RuleAnswerModel.EvidenceContentKind.VISUAL_PLACEHOLDER;
+                                    case CANONICAL_TEXT_WITH_VISUAL_FACTS -> com.rulepilot.assistant.RuleAnswerModel.EvidenceContentKind.CANONICAL_TEXT_WITH_VISUAL_FACTS;
+                                    case VISUAL_TRANSCRIPTION -> com.rulepilot.assistant.RuleAnswerModel.EvidenceContentKind.VISUAL_TRANSCRIPTION;
+                                },
                                 hit.pageFrom(),
                                 hit.pageTo()))
                         .toList(),

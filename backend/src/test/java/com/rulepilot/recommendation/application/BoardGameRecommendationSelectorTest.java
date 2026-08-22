@@ -11,12 +11,10 @@ import com.rulepilot.recommendation.ConstraintRange;
 import com.rulepilot.recommendation.CandidateClaim;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Research;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.InteractionPreference;
-import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ReasonKind;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendationProfile;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
 
@@ -38,7 +36,7 @@ class BoardGameRecommendationSelectorTest {
     }
 
     @Test
-    void preservesAgentSelectionOrderAndDerivesSharedTaxonomyFromVerifiedGames() {
+    void preservesAgentSelectionOrderWithoutGeneratingApplicationRecommendationProse() {
         Game second = game(2, 50, new BigDecimal("2.2"), List.of("Open Drafting"));
         Game first = game(1, 45, new BigDecimal("2.0"), List.of("Pattern Building"));
         Game reference = game(3, 55, new BigDecimal("2.1"), List.of("Open Drafting", "Tile Placement"));
@@ -51,15 +49,15 @@ class BoardGameRecommendationSelectorTest {
                 Research.empty());
 
         assertThat(result).extracting(value -> value.game().ranking().bggId()).containsExactly(2, 1);
-        assertThat(result.getFirst().matches()).singleElement().asString()
-                .contains("与参考游戏共有的 BGG 机制/类型", "Open Drafting", "Abstract Strategy");
-        assertThat(result.get(1).matches()).singleElement().asString()
-                .contains("Abstract Strategy")
-                .doesNotContain("Pattern Building");
+        assertThat(result).allSatisfy(game -> {
+            assertThat(game.matches()).isEmpty();
+            assertThat(game.tradeoffs()).isEmpty();
+            assertThat(game.reasons()).isEmpty();
+        });
     }
 
     @Test
-    void showsVerifiedTaxonomyAndAnHonestBoundaryWhenNoExperienceResearchExists() {
+    void retainsVerifiedTaxonomyAsRawCandidateObservationsWithoutInventingExperienceProse() {
         Game candidate = game(
                 1,
                 100,
@@ -68,24 +66,25 @@ class BoardGameRecommendationSelectorTest {
         RecommendationProfile profile = new RecommendationProfile(
                 4, 120, null, BggGameType.ALL, InteractionPreference.ANY);
 
-        var result = selector.present(
-                List.of(candidate),
-                profile,
-                List.of(),
-                true,
-                Research.empty()).getFirst();
+        var observations = selector.observations(candidate);
 
-        assertThat(result.reasons())
-                .filteredOn(reason -> reason.kind() == ReasonKind.BGG_FACT)
-                .extracting(reason -> reason.text())
-                .anySatisfy(text -> assertThat(text)
-                        .contains("BGG 机制/类型标签", "Hand Management", "Network and Route Building"));
-        assertThat(result.tradeoffs()).singleElement().asString()
-                .contains("BGG 标签", "不能证明", "互动感", "等待时间");
+        assertThat(observations)
+                .filteredOn(observation -> observation.attribute().equals("mechanics"))
+                .singleElement()
+                .satisfies(observation -> {
+                    assertThat(observation.kind())
+                            .isEqualTo(com.rulepilot.recommendation.CandidateObservation.Kind.TAXONOMY);
+                    assertThat(observation.value()).isEqualTo("Hand Management, Network and Route Building");
+                });
+        assertThat(selector.present(List.of(candidate), profile, List.of(), true, Research.empty()).getFirst())
+                .satisfies(result -> {
+                    assertThat(result.reasons()).isEmpty();
+                    assertThat(result.tradeoffs()).isEmpty();
+                });
     }
 
     @Test
-    void exposesABoundedPublisherDescriptionAsCandidateScopedMetadata() {
+    void exposesTheCompletePublisherDescriptionAsCandidateScopedMetadata() {
         String description = "Build a floating archive where players preserve memories.   "
                 + "Each round introduces a new island. ".repeat(80);
 
@@ -98,12 +97,7 @@ class BoardGameRecommendationSelectorTest {
                     assertThat(observation.id()).isEqualTo("B41:publisherDescription");
                     assertThat(observation.kind())
                             .isEqualTo(com.rulepilot.recommendation.CandidateObservation.Kind.STRUCTURED_METADATA);
-                    assertThat(observation.value())
-                            .startsWith("Build a floating archive")
-                            .endsWith("…")
-                            .doesNotContain("  ");
-                    assertThat(observation.value().codePointCount(0, observation.value().length()))
-                            .isEqualTo(BoardGameRecommendationSelector.MAX_PUBLISHER_DESCRIPTION_CODE_POINTS + 1);
+                    assertThat(observation.value()).isEqualTo(description.strip());
                 });
     }
 
@@ -114,42 +108,7 @@ class BoardGameRecommendationSelectorTest {
     }
 
     @Test
-    void keepsEachPreferenceInferenceAttachedToItsOwnQuoteAndCandidateTaxonomy() {
-        Game pattern = game(1, 50, new BigDecimal("2.2"), List.of("Pattern Building"));
-        Game drafting = game(2, 55, new BigDecimal("2.4"), List.of("Open Drafting"));
-
-        var result = selector.present(
-                List.of(pattern, drafting),
-                RecommendationProfile.empty(),
-                List.of(),
-                true,
-                Research.empty(),
-                Map.of(
-                        1,
-                        new BoardGameRecommendationSelector.PreferenceLink(
-                                "想拼出自己的版图", List.of("Pattern Building")),
-                        2,
-                        new BoardGameRecommendationSelector.PreferenceLink(
-                                "喜欢公开选牌的拉扯", List.of("Open Drafting"))));
-
-        assertThat(result.get(0).reasons())
-                .filteredOn(reason -> reason.kind() == ReasonKind.PREFERENCE_INFERENCE)
-                .singleElement()
-                .extracting(reason -> reason.text())
-                .asString()
-                .contains("想拼出自己的版图", "Pattern Building")
-                .doesNotContain("公开选牌", "Open Drafting");
-        assertThat(result.get(1).reasons())
-                .filteredOn(reason -> reason.kind() == ReasonKind.PREFERENCE_INFERENCE)
-                .singleElement()
-                .extracting(reason -> reason.text())
-                .asString()
-                .contains("喜欢公开选牌的拉扯", "Open Drafting")
-                .doesNotContain("自己的版图", "Pattern Building");
-    }
-
-    @Test
-    void appliesPlayerDurationWeightAndInteractionAsApplicationOwnedHardGates() {
+    void appliesOnlyStructuredNumericFactsAsHardGatesWithoutParsingTaxonomyLabels() {
         RecommendationProfile profile = new RecommendationProfile(
                 4,
                 60,
@@ -172,7 +131,7 @@ class BoardGameRecommendationSelectorTest {
         assertThat(selector.eligible(
                         game(4, 60, new BigDecimal("2.0"), List.of("Cooperative Game")),
                         profile))
-                .isFalse();
+                .isTrue();
     }
 
     @Test
@@ -200,10 +159,8 @@ class BoardGameRecommendationSelectorTest {
 
         var presented = selector.present(
                 List.of(exactFit), profile, List.of(), true, Research.empty()).getFirst();
-        assertThat(presented.matches()).anySatisfy(text -> assertThat(text).contains("3–4 人"));
-        assertThat(presented.matches()).anySatisfy(text -> assertThat(text).contains("120–180 分钟"));
-        assertThat(presented.matches()).anySatisfy(text -> assertThat(text).contains("2.0–3.0"));
-        assertThat(presented.matches()).noneSatisfy(text -> assertThat(text).contains("上限内"));
+        assertThat(presented.matches()).isEmpty();
+        assertThat(presented.reasons()).isEmpty();
         assertThat(presented.claims())
                 .filteredOn(claim -> claim.type() == CandidateClaim.Type.CONSTRAINT_FIT)
                 .extracting(CandidateClaim::relation)
@@ -236,7 +193,7 @@ class BoardGameRecommendationSelectorTest {
         var presented = selector.present(
                         List.of(shortCandidate), profile, List.of(), false, Research.empty())
                 .getFirst();
-        assertThat(presented.matches()).noneSatisfy(text -> assertThat(text).contains("fully within"));
+        assertThat(presented.matches()).isEmpty();
         assertThat(presented.claims()).singleElement().satisfies(claim -> {
             assertThat(claim.subject()).isEqualTo("durationMinutes");
             assertThat(claim.strength()).isEqualTo(ConstraintRange.Strength.SOFT);

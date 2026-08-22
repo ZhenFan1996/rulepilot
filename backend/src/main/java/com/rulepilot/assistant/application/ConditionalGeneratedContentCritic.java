@@ -70,10 +70,14 @@ public class ConditionalGeneratedContentCritic implements GeneratedContentCritic
 
     @Override
     public Review review(ReviewRequest request, ReviewRisk risk, String ownerUsername) {
-        // Real-model review is an opt-in evaluation tool. The deterministic publication boundary has already
-        // validated schema, evidence identity, source ownership, and citations before this optional semantic pass;
-        // no measured production case has justified adding one or two serial model calls to the player response.
-        if (!evaluationMode) {
+        // Answers and ordinary evaluation probes keep the zero-latency runtime path. Teaching calls this mode only
+        // after a chapter with a quantitative or legality-changing relationship has remained CITED_DRAFT; measured
+        // rulebook canaries have shown that identity-valid citations alone do not catch swapped counts or a dropped
+        // multiplier, so that one bounded whole-lesson review is a publication boundary rather than optional polish.
+        boolean requiredTeachingPublicationReview = request != null
+                && request.contentType() == ContentType.LESSON
+                && request.reviewMode() == ReviewMode.POST_PUBLICATION;
+        if (!evaluationMode && !requiredTeachingPublicationReview) {
             return new Review(false, List.of());
         }
         validateRequest(request);
@@ -138,7 +142,9 @@ public class ConditionalGeneratedContentCritic implements GeneratedContentCritic
                         Collectors.mapping(
                                 issue -> new CandidateDefect(issue.type(), issue.claimAspect()),
                                 Collectors.toUnmodifiableSet())));
+        Set<Integer> candidatePositions = Set.copyOf(candidateDefectsByPosition.keySet());
         List<GeneratedContentCritic.Claim> contextualClaims = request.claims().stream()
+                .filter(claim -> candidatePositions.contains(claim.position()))
                 .sorted(Comparator.comparingInt(GeneratedContentCritic.Claim::position))
                 .toList();
         Set<UUID> contextualCitationIds = contextualClaims.stream()
@@ -192,9 +198,9 @@ public class ConditionalGeneratedContentCritic implements GeneratedContentCritic
                         .collect(Collectors.joining(", ")) + "]")
                 .collect(Collectors.joining("; "));
         return "Confirm only these candidate issue type/aspect pairs by claim position: " + candidates
-                + ". Positions not listed are context only and cannot produce issues. Judge every claim only against "
-                + "its own cited evidence IDs, while using sibling claims to recognize coverage already supplied "
-                + "elsewhere in the content; return no issue for a supported claim.";
+                + ". The confirmation request contains only candidate claims and their own cited evidence. Judge "
+                + "each complete claim relation only against its own cited evidence IDs; return no issue for a "
+                + "supported claim.";
     }
 
     private Issue scopeEvidenceToClaim(Issue issue, Map<Integer, Set<UUID>> claimEvidenceByPosition) {
@@ -238,24 +244,21 @@ public class ConditionalGeneratedContentCritic implements GeneratedContentCritic
 
     private Issue normalizeIssue(Issue issue, Set<Integer> claimPositions, Set<UUID> allowedEvidence) {
         if (issue == null || issue.type() == null || issue.claimAspect() == null
-                || issue.summary() == null || issue.summary().isBlank()) {
+                || issue.summary() == null || issue.summary().isBlank()
+                || issue.summary().length() > 240
+                || !claimPositions.contains(issue.claimPosition())) {
             throw new IllegalArgumentException("critic issue is invalid");
         }
-        int claimPosition = claimPositions.contains(issue.claimPosition())
-                ? issue.claimPosition()
-                : claimPositions.stream().min(Integer::compareTo).orElseThrow();
-        List<UUID> evidenceIds = issue.evidenceIds().stream()
-                .filter(id -> id != null && allowedEvidence.contains(id))
-                .distinct()
-                .toList();
-        if (evidenceIds.isEmpty()) {
-            throw new IllegalArgumentException("critic issue must cite supplied evidence");
+        if (issue.evidenceIds().isEmpty()
+                || issue.evidenceIds().stream().anyMatch(id -> id == null || !allowedEvidence.contains(id))) {
+            throw new IllegalArgumentException("critic issue must cite its own cited evidence");
         }
-        String summary = issue.summary().strip();
-        if (summary.length() > 240) {
-            summary = summary.substring(0, 240).stripTrailing();
-        }
-        return new Issue(issue.type(), issue.claimAspect(), claimPosition, evidenceIds, summary);
+        return new Issue(
+                issue.type(),
+                issue.claimAspect(),
+                issue.claimPosition(),
+                issue.evidenceIds().stream().distinct().toList(),
+                issue.summary().strip());
     }
 
     private int estimateTokens(String value) {

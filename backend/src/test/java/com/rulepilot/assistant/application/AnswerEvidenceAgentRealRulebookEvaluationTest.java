@@ -26,7 +26,6 @@ import com.rulepilot.assistant.QuestionUnderstanding.PriorCitationReference;
 import com.rulepilot.assistant.QuestionUnderstanding.PriorTurnReference;
 import com.rulepilot.assistant.RuleAnswerModel.ModelDraft;
 import com.rulepilot.assistant.RuleAnswerModel.ModelRequest;
-import com.rulepilot.assistant.RuleAnswerModel.PlayerFacingField;
 import com.rulepilot.assistant.RuleAnswerModel.EvidenceInput;
 import com.rulepilot.assistant.RuleAnswerModel.EvidenceNeed;
 import com.rulepilot.assistant.RuleAnswerModel.AnswerContext;
@@ -34,8 +33,6 @@ import com.rulepilot.assistant.RuleAnswerModel.QuestionInterpretationRequest;
 import com.rulepilot.assistant.RuleAnswerModel.QuestionInterpretationDraft;
 import com.rulepilot.assistant.RuleAnswerModel.ReferenceBinding;
 import com.rulepilot.assistant.PlayerLocale;
-import com.rulepilot.assistant.adapter.out.model.FakeRuleAnswerModel;
-import com.rulepilot.assistant.adapter.out.model.FakeContentCriticModel;
 import com.rulepilot.assistant.adapter.out.model.SpringAiContentCriticModel;
 import com.rulepilot.assistant.adapter.out.model.SpringAiNativeToolModel;
 import com.rulepilot.assistant.adapter.out.model.SpringAiRuleAnswerModel;
@@ -163,143 +160,6 @@ class AnswerEvidenceAgentRealRulebookEvaluationTest {
             assertThat(wholeRulebookNegative).isFalse();
             assertThat(summary).containsEntry("prosePreserved", true);
         }
-    }
-
-    @Test
-    void recordsOnePaidFieldLocalRepairWithRawDomainAndPlayerVisibleEvidence() throws Exception {
-        assumeTrue("true".equalsIgnoreCase(System.getenv("RULEPILOT_REAL_ANSWER_REPAIR_CANARY")));
-        String phase = requiredEnvironment("RULEPILOT_ANSWER_CANARY_PHASE");
-        assumeTrue(phase.matches("[a-z0-9-]{2,32}"), "canary phase must be a safe bounded label");
-        Path root = Path.of(System.getProperty("user.dir")).getParent();
-        JsonNode inventory = mapper.readTree(root.resolve(".local/public-corpus/source-preflight.json").toFile());
-        Path rulebook = rulebookForTitle(root, inventory, "Root: Learning to Play");
-        ProviderConfiguration configured = provider("deepseek");
-        Path rawOutput = root.resolve(
-                ".local/agent-evaluation/answer-player-repair-canary-" + phase + "-raw.json");
-        Path summaryOutput = root.resolve(
-                ".local/agent-evaluation/answer-player-repair-canary-" + phase + ".json");
-        assumeTrue(!Files.exists(rawOutput) && !Files.exists(summaryOutput),
-                "repair canary evidence already exists; choose a new phase label instead of overwriting it");
-
-        UUID versionId = UUID.nameUUIDFromBytes(
-                ("answer-player-repair:" + phase).getBytes(StandardCharsets.UTF_8));
-        PdfRulebookEvidence corpus = new PdfRulebookEvidence(rulebook, versionId);
-        HybridEvidenceHit evidence = corpus.hit(2);
-        String question = "达到多少胜利点会赢？规则书有没有保证获胜的最佳开局？";
-        ModelRequest request = modelRequest(
-                question,
-                List.of(evidence),
-                PlayerLocale.ZH_CN,
-                Set.of(EvidenceNeed.DIRECT_RULE, EvidenceNeed.ADVICE));
-        ModelDraft previous = new ModelDraft(
-                "达到30点胜利点即可获胜。",
-                "当前规则页说明，达到30点胜利点即可获胜。规则书未提供保证获胜的最佳开局。",
-                List.of(evidence.evidence().chunkId()),
-                List.of(),
-                "HIGH");
-        AnswerPlayerFacingRepairPolicy.RepairPlan repairPlan =
-                AnswerPlayerFacingRepairPolicy.planFor(request, previous);
-        assertThat(repairPlan.editableFields()).containsExactly(PlayerFacingField.EXPLANATION);
-
-        DirectAuditedInvocations audited = new DirectAuditedInvocations();
-        RuleAnswerRateLimiter limiter = mock(RuleAnswerRateLimiter.class);
-        when(limiter.acquireModel(any(String.class), any(), any(String.class))).thenReturn(() -> {});
-        AnswerModelGateway gateway = new AnswerModelGateway(answerModel(configured, audited), limiter, audited);
-        long started = System.nanoTime();
-        ModelDraft repaired = gateway.revisePlayerFacing(
-                UUID.randomUUID(),
-                "agent-evaluation",
-                null,
-                request,
-                previous,
-                repairPlan.feedback(),
-                repairPlan.editableFields(),
-                "repairPlayerFacingRuleAnswer",
-                "Player-facing source scope repaired");
-        long latencyMs = Duration.ofNanos(System.nanoTime() - started).toMillis();
-
-        AnswerDraftPublicationPolicy.Preparation preparation =
-                AnswerDraftPublicationPolicy.prepare(request, repaired);
-        assertThat(preparation.ready())
-                .as("repair must pass the deterministic publication boundary; failure=%s, draft=%s",
-                        preparation.failureMessage(), repaired)
-                .isTrue();
-        StructuredRuleAnswer published = publishBoundaryAnswer(
-                versionId, request, preparation.draft(), List.of(evidence));
-        PlayerFacingRuleAnswer player = PlayerFacingAnswerPresenter.present(
-                published, question, PlayerLocale.ZH_CN);
-        String providerText = (String) audited.rawAnswerProviderResponses.getLast().get("text");
-        JsonNode providerPatch = mapper.readTree(providerText);
-        String providerExplanation = providerPatch.path("explanation").asText();
-        Set<String> providerFields = new LinkedHashSet<>();
-        providerPatch.fieldNames().forEachRemaining(providerFields::add);
-
-        Map<String, Object> raw = new LinkedHashMap<>();
-        raw.put("provider", configured.provider());
-        raw.put("model", configured.model());
-        raw.put("question", question);
-        raw.put("evidencePage", evidence.evidence().pageFrom());
-        raw.put("previousDraft", previous);
-        raw.put("editableFields", repairPlan.editableFields());
-        raw.put("repairFeedback", repairPlan.feedback());
-        raw.put("providerResponses", List.copyOf(audited.rawAnswerProviderResponses));
-        raw.put("promptSizes", List.copyOf(audited.answerPromptSizes));
-        raw.put("mergedDomainDrafts", List.copyOf(audited.rawAnswerDrafts));
-        raw.put("publishedAnswer", visibleAnswer(published));
-        raw.put("playerVisibleAnswer", player);
-        Files.writeString(
-                rawOutput,
-                mapper.writerWithDefaultPrettyPrinter().writeValueAsString(raw) + "\n",
-                StandardCharsets.UTF_8,
-                StandardOpenOption.CREATE_NEW);
-
-        boolean localBoundary = containsLocalizedEvidenceBoundary(repaired.explanation());
-        boolean wholeRulebookNegative = containsWholeRulebookNegative(repaired.explanation());
-        Map<String, Object> summary = new LinkedHashMap<>();
-        summary.put("schemaVersion", 1);
-        summary.put("generatedAt", Instant.now().toString());
-        summary.put("phase", phase);
-        summary.put("question", question);
-        summary.put("editableFields", repairPlan.editableFields());
-        summary.put("modelCalls", audited.modelCalls);
-        summary.put("providerModelCalls", audited.answerPromptSizes.size());
-        summary.put("toolCalls", audited.toolCalls);
-        summary.put("latencyMs", latencyMs);
-        summary.put("sameAgentRepair", true);
-        summary.put("providerReturnedOnlyEditableField", providerFields.equals(Set.of("explanation")));
-        summary.put("providerRawPatchToDomainExplanationExact",
-                providerExplanation.equals(repaired.explanation()));
-        summary.put("lockedVerdictPreserved", previous.shortVerdict().equals(repaired.shortVerdict()));
-        summary.put("lockedCitationsPreserved", previous.citationIds().equals(repaired.citationIds()));
-        summary.put("lockedMetadataPreserved", previous.confidence().equals(repaired.confidence())
-                && previous.answerBasis().equals(repaired.answerBasis()));
-        summary.put("domainToPublishedCoreExact", repaired.shortVerdict().equals(published.shortVerdict())
-                && repaired.explanation().equals(published.explanation()));
-        summary.put("publishedToPlayerCoreExact", published.shortVerdict().equals(player.shortVerdict())
-                && published.explanation().equals(player.explanation()));
-        summary.put("localizedEvidenceBoundary", localBoundary);
-        summary.put("wholeRulebookNegative", wholeRulebookNegative);
-        summary.put("publishedAnswer", visibleAnswer(published));
-        summary.put("playerVisibleAnswer", player);
-        Files.writeString(
-                summaryOutput,
-                mapper.writerWithDefaultPrettyPrinter().writeValueAsString(summary) + "\n",
-                StandardCharsets.UTF_8,
-                StandardOpenOption.CREATE_NEW);
-
-        assertThat(published.status().publishesConclusion()).isTrue();
-        assertThat(repaired.shortVerdict()).isEqualTo(previous.shortVerdict());
-        assertThat(repaired.citationIds()).isEqualTo(previous.citationIds());
-        assertThat(providerExplanation).isEqualTo(repaired.explanation());
-        assertThat(repaired.explanation()).contains("30");
-        assertThat(localBoundary).isTrue();
-        assertThat(wholeRulebookNegative).isFalse();
-        assertThat(audited.modelCalls).isEqualTo(1);
-        assertThat(audited.toolCalls).isZero();
-        assertThat(audited.answerPromptSizes).singleElement().satisfies(prompt ->
-                assertThat((Integer) prompt.get("systemChars")).isLessThan(2_500));
-        assertThat(published.shortVerdict()).isEqualTo(player.shortVerdict());
-        assertThat(published.explanation()).isEqualTo(player.explanation());
     }
 
     @Test
@@ -827,10 +687,12 @@ class AnswerEvidenceAgentRealRulebookEvaluationTest {
                     versionId,
                     "VISUAL_TRANSCRIPTION",
                     "Rendered rulebook page",
-                    PageFact.transcribedRuleEvidenceText(case_.factualSummary()),
+                    case_.factualSummary(),
                     3,
                     3,
-                    1.0);
+                    1.0,
+                    RuleEvidenceHit.ContentKind.VISUAL_TRANSCRIPTION,
+                    case_.factualSummary());
             HybridEvidenceHit evidence = new HybridEvidenceHit(source, 1.0, 1, null, false);
             ModelRequest request = modelRequest(
                     case_.question(), List.of(evidence), case_.locale(), Set.of(EvidenceNeed.DIRECT_RULE));
@@ -1319,7 +1181,6 @@ class AnswerEvidenceAgentRealRulebookEvaluationTest {
 
     private int structuredItems(ModelDraft draft) {
         return draft.calculations().size()
-                + draft.situationChecks().size()
                 + draft.walkthroughSteps().size()
                 + draft.decisionBranches().size()
                 + draft.exceptionClauses().size()
@@ -2015,7 +1876,7 @@ class AnswerEvidenceAgentRealRulebookEvaluationTest {
             context.register(VersionedAgentPrompts.class);
             context.refresh();
             return new SpringAiRuleAnswerModel(
-                    configuration, new FakeRuleAnswerModel(), context.getBean(VersionedAgentPrompts.class));
+                    configuration, context.getBean(VersionedAgentPrompts.class));
         }
     }
 
@@ -2070,7 +1931,7 @@ class AnswerEvidenceAgentRealRulebookEvaluationTest {
             prompts = context.getBean(VersionedAgentPrompts.class);
         }
         return new ConditionalGeneratedContentCritic(
-                new SpringAiContentCriticModel(configuration, new FakeContentCriticModel(), prompts),
+                new SpringAiContentCriticModel(configuration, prompts),
                 audited,
                 false);
     }

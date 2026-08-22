@@ -67,19 +67,30 @@ public record AnswerRetrievalPlan(
                 || evidenceNeeds().contains(EvidenceNeed.COMPLETE_LIST);
     }
 
-    public record Subquestion(String text, Set<EvidenceNeed> evidenceNeeds, QuestionOwner owner) {
+    public record Subquestion(
+            String text,
+            Set<EvidenceNeed> evidenceNeeds,
+            QuestionOwner owner,
+            List<String> retrievalQueries) {
         public Subquestion {
             if (text == null || text.isBlank() || text.length() > 300
                     || evidenceNeeds == null || evidenceNeeds.isEmpty() || evidenceNeeds.size() > 3
-                    || owner == null) {
+                    || owner == null || retrievalQueries == null || retrievalQueries.size() > 3
+                    || retrievalQueries.stream()
+                            .anyMatch(query -> query == null || query.isBlank() || query.length() > 200)) {
                 throw new IllegalArgumentException("answer retrieval subquestion is invalid");
             }
             text = text.strip();
             evidenceNeeds = Set.copyOf(evidenceNeeds);
+            retrievalQueries = retrievalQueries.stream().map(String::strip).distinct().toList();
+        }
+
+        public Subquestion(String text, Set<EvidenceNeed> evidenceNeeds, QuestionOwner owner) {
+            this(text, evidenceNeeds, owner, List.of());
         }
 
         public Subquestion(String text, Set<EvidenceNeed> evidenceNeeds) {
-            this(text, evidenceNeeds, QuestionOwner.CURRENT_QUESTION);
+            this(text, evidenceNeeds, QuestionOwner.CURRENT_QUESTION, List.of());
         }
     }
 

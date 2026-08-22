@@ -1,8 +1,21 @@
 package com.rulepilot.assistant;
 
+import com.rulepilot.assistant.domain.AnswerBasis;
+import com.rulepilot.assistant.domain.AnswerConfidence;
+import com.rulepilot.assistant.domain.ConceptComparisonBasis;
+import com.rulepilot.assistant.domain.DecisionBranchBasis;
 import com.rulepilot.assistant.domain.LearningIntent;
 import com.rulepilot.assistant.domain.MissingQuestionContext;
 import com.rulepilot.assistant.domain.QuestionType;
+import com.rulepilot.assistant.domain.RuleOptionBasis;
+import com.rulepilot.assistant.domain.RulePriorityBasis;
+import com.rulepilot.assistant.domain.ScopeBasis;
+import com.rulepilot.assistant.domain.ScopeMatchStatus;
+import com.rulepilot.assistant.domain.TieResolutionBasis;
+import com.rulepilot.assistant.domain.TimingOrderBasis;
+import com.rulepilot.assistant.domain.WalkthroughOrderBasis;
+import com.rulepilot.assistant.domain.WorkedExampleBasis;
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -60,19 +73,6 @@ public interface RuleAnswerModel {
             Set<PlayerFacingField> editableFields,
             String ownerUsername) {
         return revise(request, previousDraft, feedback, ownerUsername);
-    }
-
-    /**
-     * Produces bounded search phrases only. The phrases are untrusted retrieval input, never rule evidence or an
-     * answer, and may be ignored when the configured model cannot safely provide them.
-     */
-    default List<String> rewriteRetrievalQueries(RetrievalQueryRequest request) {
-        return List.of();
-    }
-
-    default List<String> rewriteRetrievalQueries(
-            RetrievalQueryRequest request, String ownerUsername) {
-        return rewriteRetrievalQueries(request);
     }
 
     /**
@@ -206,14 +206,45 @@ public interface RuleAnswerModel {
         }
     }
 
-    record PlannedSubquestion(String questionSpan, Set<EvidenceNeed> evidenceNeeds) {
+    enum SubquestionOwner {
+        CURRENT_QUESTION,
+        BOUND_REFERENCE
+    }
+
+    record PlannedSubquestion(
+            String questionSpan,
+            Set<EvidenceNeed> evidenceNeeds,
+            SubquestionOwner owner,
+            List<String> retrievalQueries) {
         public PlannedSubquestion {
             if (questionSpan == null || questionSpan.isBlank() || questionSpan.length() > 300
-                    || evidenceNeeds == null || evidenceNeeds.isEmpty() || evidenceNeeds.size() > 3) {
+                    || evidenceNeeds == null || evidenceNeeds.isEmpty() || evidenceNeeds.size() > 3
+                    || owner == null || retrievalQueries == null || retrievalQueries.size() > 3
+                    || retrievalQueries.stream()
+                            .anyMatch(query -> query == null || query.isBlank() || query.length() > 200)) {
                 throw new IllegalArgumentException("planned answer subquestion is invalid");
             }
             questionSpan = questionSpan.strip();
             evidenceNeeds = Set.copyOf(evidenceNeeds);
+            List<String> normalizedRetrievalQueries = retrievalQueries.stream()
+                    .map(String::strip)
+                    .distinct()
+                    .toList();
+            if (normalizedRetrievalQueries.size() != retrievalQueries.size()) {
+                throw new IllegalArgumentException("planned answer retrieval queries must be unique");
+            }
+            retrievalQueries = normalizedRetrievalQueries;
+        }
+
+        public PlannedSubquestion(
+                String questionSpan,
+                Set<EvidenceNeed> evidenceNeeds,
+                SubquestionOwner owner) {
+            this(questionSpan, evidenceNeeds, owner, List.of());
+        }
+
+        public PlannedSubquestion(String questionSpan, Set<EvidenceNeed> evidenceNeeds) {
+            this(questionSpan, evidenceNeeds, SubquestionOwner.CURRENT_QUESTION, List.of());
         }
     }
 
@@ -253,15 +284,23 @@ public interface RuleAnswerModel {
                     .anyMatch(value -> value == null || value.isBlank() || value.length() > 120)) {
                 throw new IllegalArgumentException("question interpretation rule object is invalid");
             }
-            terms = terms.stream()
+            List<String> normalizedTerms = terms.stream()
                     .map(String::strip)
                     .distinct()
                     .toList();
-            ruleObjectSpans = ruleObjectSpans.stream()
+            List<String> normalizedRuleObjects = ruleObjectSpans.stream()
                     .map(String::strip)
                     .distinct()
                     .toList();
-            pageHints = pageHints.stream().distinct().toList();
+            List<PlannedPageHint> distinctPageHints = pageHints.stream().distinct().toList();
+            if (normalizedTerms.size() != terms.size()
+                    || normalizedRuleObjects.size() != ruleObjectSpans.size()
+                    || distinctPageHints.size() != pageHints.size()) {
+                throw new IllegalArgumentException("question interpretation arrays must not contain duplicates");
+            }
+            terms = normalizedTerms;
+            ruleObjectSpans = normalizedRuleObjects;
+            pageHints = distinctPageHints;
             missingContext = Set.copyOf(missingContext);
             subquestions = List.copyOf(subquestions);
         }
@@ -385,19 +424,6 @@ public interface RuleAnswerModel {
         }
     }
 
-    record RetrievalQueryRequest(String question, String previousQuestion) {
-        public RetrievalQueryRequest {
-            if (question == null || question.isBlank()) {
-                throw new IllegalArgumentException("retrieval query request is invalid");
-            }
-            previousQuestion = optional(previousQuestion);
-        }
-
-        private static String optional(String value) {
-            return value == null || value.isBlank() ? "not provided" : value;
-        }
-    }
-
     record AnswerContext(
             String previousQuestion,
             LearningIntent learningIntent,
@@ -449,10 +475,102 @@ public interface RuleAnswerModel {
         }
     }
 
-    record EvidenceInput(UUID chunkId, String sectionType, String heading, String excerpt, int pageFrom, int pageTo) {}
+    record EvidenceInput(
+            UUID chunkId,
+            String sectionType,
+            String heading,
+            String excerpt,
+            String visualFacts,
+            EvidenceContentKind contentKind,
+            int pageFrom,
+            int pageTo) {
 
-    /** Untrusted request for application-controlled arithmetic; the application recomputes every result. */
-    record CalculationRequest(String expression) {}
+        public EvidenceInput(
+                UUID chunkId,
+                String sectionType,
+                String heading,
+                String excerpt,
+                int pageFrom,
+                int pageTo) {
+            this(
+                    chunkId,
+                    sectionType,
+                    heading,
+                    excerpt,
+                    null,
+                    EvidenceContentKind.CANONICAL_TEXT,
+                    pageFrom,
+                    pageTo);
+        }
+
+        public EvidenceInput {
+            if (chunkId == null || sectionType == null || sectionType.isBlank()
+                    || heading == null || heading.isBlank() || excerpt == null || excerpt.isBlank()
+                    || contentKind == null || pageFrom < 1 || pageTo < pageFrom) {
+                throw new IllegalArgumentException("answer evidence input is invalid");
+            }
+            visualFacts = visualFacts == null || visualFacts.isBlank() ? null : visualFacts.strip();
+        }
+    }
+
+    enum EvidenceContentKind {
+        CANONICAL_TEXT,
+        VISUAL_PLACEHOLDER,
+        CANONICAL_TEXT_WITH_VISUAL_FACTS,
+        VISUAL_TRANSCRIPTION
+    }
+
+    /**
+     * Untrusted request for application-controlled arithmetic. The model must bind every expression literal to a
+     * typed source declaration and state the expected result; the application verifies both before publishing its
+     * independently computed result. Player-facing prose remains free text and is never parsed as a numeric protocol.
+     */
+    record CalculationRequest(
+            String expression,
+            BigDecimal expectedResult,
+            String resultUnit,
+            List<CalculationOperandRequest> operands) {
+
+        public CalculationRequest {
+            if (expression == null || expression.isBlank() || expression.length() > 160
+                    || expectedResult == null
+                    || resultUnit == null || resultUnit.length() > 80
+                    || operands == null || operands.isEmpty() || operands.size() > 16
+                    || operands.stream().anyMatch(java.util.Objects::isNull)) {
+                throw new IllegalArgumentException("calculation request is invalid");
+            }
+            expression = expression.strip();
+            resultUnit = resultUnit.strip();
+            operands = List.copyOf(operands);
+        }
+    }
+
+    /** A typed provenance assertion for one occurrence of a numeric literal in a calculation expression. */
+    record CalculationOperandRequest(
+            String name,
+            BigDecimal value,
+            CalculationOperandSource source,
+            String sourceSpan,
+            UUID citationId) {
+
+        public CalculationOperandRequest {
+            if (name == null || name.isBlank() || name.length() > 80
+                    || value == null
+                    || source == null
+                    || sourceSpan == null || sourceSpan.isBlank() || sourceSpan.length() > 240
+                    || (source == CalculationOperandSource.QUESTION && citationId != null)
+                    || (source == CalculationOperandSource.EVIDENCE && citationId == null)) {
+                throw new IllegalArgumentException("calculation operand request is invalid");
+            }
+            name = name.strip();
+            sourceSpan = sourceSpan.strip();
+        }
+    }
+
+    enum CalculationOperandSource {
+        QUESTION,
+        EVIDENCE
+    }
 
     /** Untrusted comparison between one cited requirement and one fact explicitly stated in the current question. */
     record SituationCheckRequest(
@@ -465,15 +583,33 @@ public interface RuleAnswerModel {
     record WalkthroughStepRequest(
             String instruction,
             String explanation,
-            String orderBasis,
-            List<UUID> citationIds) {}
+            WalkthroughOrderBasis orderBasis,
+            List<UUID> citationIds) {
+
+        public WalkthroughStepRequest(
+                String instruction,
+                String explanation,
+                String orderBasis,
+                List<UUID> citationIds) {
+            this(instruction, explanation, strictEnum(WalkthroughOrderBasis.class, orderBasis), citationIds);
+        }
+    }
 
     /** Untrusted proposed condition/outcome branch tied to explicit rulebook evidence. */
     record DecisionBranchRequest(
             String condition,
             String outcome,
-            String basis,
-            List<UUID> citationIds) {}
+            DecisionBranchBasis basis,
+            List<UUID> citationIds) {
+
+        public DecisionBranchRequest(
+                String condition,
+                String outcome,
+                String basis,
+                List<UUID> citationIds) {
+            this(condition, outcome, strictEnum(DecisionBranchBasis.class, basis), citationIds);
+        }
+    }
 
     /** Untrusted proposed exception or restriction with its own directly supporting evidence. */
     record ExceptionClauseRequest(
@@ -493,42 +629,101 @@ public interface RuleAnswerModel {
             String setup,
             String action,
             String outcome,
-            String basis,
-            List<UUID> citationIds) {}
+            WorkedExampleBasis basis,
+            List<UUID> citationIds) {
+
+        public WorkedExampleRequest(
+                String setup,
+                String action,
+                String outcome,
+                String basis,
+                List<UUID> citationIds) {
+            this(setup, action, outcome, strictEnum(WorkedExampleBasis.class, basis), citationIds);
+        }
+    }
 
     /** Untrusted comparison of two rules whose priority must be explicitly supported by cited evidence. */
     record RulePriorityRequest(
             String baseRule,
             String competingRule,
             String resolution,
-            String basis,
-            List<UUID> citationIds) {}
+            RulePriorityBasis basis,
+            List<UUID> citationIds) {
+
+        public RulePriorityRequest(
+                String baseRule,
+                String competingRule,
+                String resolution,
+                String basis,
+                List<UUID> citationIds) {
+            this(baseRule, competingRule, resolution, strictEnum(RulePriorityBasis.class, basis), citationIds);
+        }
+    }
 
     /** Untrusted simultaneous-effect ordering whose source must be explicit in cited evidence. */
     record RuleTimingRequest(
             String timingContext,
             String resolutionOrder,
             String orderSource,
-            String basis,
-            List<UUID> citationIds) {}
+            TimingOrderBasis basis,
+            List<UUID> citationIds) {
+
+        public RuleTimingRequest(
+                String timingContext,
+                String resolutionOrder,
+                String orderSource,
+                String basis,
+                List<UUID> citationIds) {
+            this(timingContext, resolutionOrder, orderSource, strictEnum(TimingOrderBasis.class, basis), citationIds);
+        }
+    }
 
     /** Untrusted ordered tie ruling whose steps and terminal outcome must all be explicit in cited evidence. */
     record RuleTieRequest(
             String tieContext,
             List<String> resolutionSteps,
             String finalOutcome,
-            String basis,
-            List<UUID> citationIds) {}
+            TieResolutionBasis basis,
+            List<UUID> citationIds) {
+
+        public RuleTieRequest(
+                String tieContext,
+                List<String> resolutionSteps,
+                String finalOutcome,
+                String basis,
+                List<UUID> citationIds) {
+            this(tieContext, resolutionSteps, finalOutcome, strictEnum(TieResolutionBasis.class, basis), citationIds);
+        }
+    }
 
     /** Untrusted applicability ruling matched against scope facts stated in the current question. */
     record RuleScopeRequest(
             String ruleContext,
             String governingCondition,
             String currentSituation,
-            String matchStatus,
+            ScopeMatchStatus matchStatus,
             String effect,
-            String basis,
-            List<UUID> citationIds) {}
+            ScopeBasis basis,
+            List<UUID> citationIds) {
+
+        public RuleScopeRequest(
+                String ruleContext,
+                String governingCondition,
+                String currentSituation,
+                String matchStatus,
+                String effect,
+                String basis,
+                List<UUID> citationIds) {
+            this(
+                    ruleContext,
+                    governingCondition,
+                    currentSituation,
+                    strictEnum(ScopeMatchStatus.class, matchStatus),
+                    effect,
+                    strictEnum(ScopeBasis.class, basis),
+                    citationIds);
+        }
+    }
 
     /** Untrusted side-by-side distinction between two rulebook concepts named by the player. */
     record RuleConceptComparisonRequest(
@@ -539,8 +734,31 @@ public interface RuleAnswerModel {
             String commonGround,
             String keyDifference,
             String practicalBoundary,
-            String basis,
-            List<UUID> citationIds) {}
+            ConceptComparisonBasis basis,
+            List<UUID> citationIds) {
+
+        public RuleConceptComparisonRequest(
+                String leftConcept,
+                String leftDefinition,
+                String rightConcept,
+                String rightDefinition,
+                String commonGround,
+                String keyDifference,
+                String practicalBoundary,
+                String basis,
+                List<UUID> citationIds) {
+            this(
+                    leftConcept,
+                    leftDefinition,
+                    rightConcept,
+                    rightDefinition,
+                    commonGround,
+                    keyDifference,
+                    practicalBoundary,
+                    strictEnum(ConceptComparisonBasis.class, basis),
+                    citationIds);
+        }
+    }
 
     /** Untrusted member of a claimed complete, cited option set requested by the player. */
     record RuleOptionRequest(
@@ -549,8 +767,27 @@ public interface RuleAnswerModel {
             String optionName,
             String availabilityCondition,
             String result,
-            String basis,
-            List<UUID> citationIds) {}
+            RuleOptionBasis basis,
+            List<UUID> citationIds) {
+
+        public RuleOptionRequest(
+                String decisionContext,
+                String selectionRule,
+                String optionName,
+                String availabilityCondition,
+                String result,
+                String basis,
+                List<UUID> citationIds) {
+            this(
+                    decisionContext,
+                    selectionRule,
+                    optionName,
+                    availabilityCondition,
+                    result,
+                    strictEnum(RuleOptionBasis.class, basis),
+                    citationIds);
+        }
+    }
 
     record ModelDraft(
             boolean answerable,
@@ -559,10 +796,9 @@ public interface RuleAnswerModel {
             String explanation,
             List<UUID> citationIds,
             List<String> exceptions,
-            String confidence,
-            String answerBasis,
+            AnswerConfidence confidence,
+            AnswerBasis answerBasis,
             List<CalculationRequest> calculations,
-            List<SituationCheckRequest> situationChecks,
             List<WalkthroughStepRequest> walkthroughSteps,
             List<DecisionBranchRequest> decisionBranches,
             List<ExceptionClauseRequest> exceptionClauses,
@@ -579,7 +815,6 @@ public interface RuleAnswerModel {
             citationIds = citationIds == null ? List.of() : List.copyOf(citationIds);
             exceptions = exceptions == null ? List.of() : List.copyOf(exceptions);
             calculations = calculations == null ? List.of() : List.copyOf(calculations);
-            situationChecks = situationChecks == null ? List.of() : List.copyOf(situationChecks);
             walkthroughSteps = walkthroughSteps == null ? List.of() : List.copyOf(walkthroughSteps);
             decisionBranches = decisionBranches == null ? List.of() : List.copyOf(decisionBranches);
             exceptionClauses = exceptionClauses == null ? List.of() : List.copyOf(exceptionClauses);
@@ -591,9 +826,57 @@ public interface RuleAnswerModel {
             scopeResolutions = scopeResolutions == null ? List.of() : List.copyOf(scopeResolutions);
             conceptComparisons = conceptComparisons == null ? List.of() : List.copyOf(conceptComparisons);
             ruleOptions = ruleOptions == null ? List.of() : List.copyOf(ruleOptions);
-            answerBasis = answerable && (answerBasis == null || answerBasis.isBlank())
-                    ? "DIRECT_RULE"
-                    : answerBasis;
+            if (answerable && (confidence == null || answerBasis == null)) {
+                throw new IllegalArgumentException("answerable model draft requires typed confidence and answer basis");
+            }
+        }
+
+        public ModelDraft(
+                boolean answerable,
+                String insufficiencyReason,
+                String shortVerdict,
+                String explanation,
+                List<UUID> citationIds,
+                List<String> exceptions,
+                String confidence,
+                String answerBasis,
+                List<CalculationRequest> calculations,
+                List<SituationCheckRequest> situationChecks,
+                List<WalkthroughStepRequest> walkthroughSteps,
+                List<DecisionBranchRequest> decisionBranches,
+                List<ExceptionClauseRequest> exceptionClauses,
+                List<TermDefinitionRequest> termDefinitions,
+                List<WorkedExampleRequest> workedExamples,
+                List<RulePriorityRequest> priorityResolutions,
+                List<RuleTimingRequest> timingResolutions,
+                List<RuleTieRequest> tieResolutions,
+                List<RuleScopeRequest> scopeResolutions,
+                List<RuleConceptComparisonRequest> conceptComparisons,
+                List<RuleOptionRequest> ruleOptions) {
+            this(
+                    answerable,
+                    insufficiencyReason,
+                    shortVerdict,
+                    explanation,
+                    citationIds,
+                    exceptions,
+                    strictEnum(AnswerConfidence.class, confidence),
+                    strictEnum(AnswerBasis.class, answerBasis),
+                    calculations,
+                    walkthroughSteps,
+                    decisionBranches,
+                    exceptionClauses,
+                    termDefinitions,
+                    workedExamples,
+                    priorityResolutions,
+                    timingResolutions,
+                    tieResolutions,
+                    scopeResolutions,
+                    conceptComparisons,
+                    ruleOptions);
+            if (situationChecks != null && !situationChecks.isEmpty()) {
+                throw new IllegalArgumentException("model-generated situation checks are not accepted");
+            }
         }
 
         public ModelDraft(
@@ -916,6 +1199,18 @@ public interface RuleAnswerModel {
             this(answerable, insufficiencyReason, shortVerdict, explanation, citationIds, exceptions, confidence,
                     answerBasis, calculations, situationChecks, walkthroughSteps, decisionBranches, exceptionClauses,
                     List.of());
+        }
+    }
+
+    private static <T extends Enum<T>> T strictEnum(Class<T> type, String value) {
+        if (value == null || value.isBlank()) return null;
+        try {
+            return Enum.valueOf(type, value);
+        } catch (IllegalArgumentException invalidValue) {
+            String field = type.getSimpleName().endsWith("Basis") ? "basis"
+                    : type == ScopeMatchStatus.class ? "status"
+                    : type.getSimpleName();
+            throw new IllegalArgumentException(field + " is invalid: " + value, invalidValue);
         }
     }
 }

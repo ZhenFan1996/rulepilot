@@ -217,7 +217,7 @@ final class TeachingVisualEvidenceResolver {
                             if (progressive) return VisualRulebookCatalogPolicy.teachingStartupFact(summary);
                             if (summary.ruleGroupInventoryComplete()) {
                                 VisualRulebookCatalogPolicy.validateRuleGroupFactBindings(
-                                        summary.ruleGroupIdentifiers(), summary.factualSummary());
+                                        summary.ruleGroupIdentifiers(), summary.ruleGroupFacts());
                             }
                             return summary;
                         })
@@ -256,7 +256,7 @@ final class TeachingVisualEvidenceResolver {
                 .filter(VisualRulebookCatalogPolicy::hasReusableCompleteRuleLedger)
                 .collect(Collectors.toUnmodifiableMap(
                         VisualRulebookPageFacts.PageFact::pageNumber,
-                        VisualRulebookPageFacts.PageFact::transcribedRuleEvidenceText,
+                        VisualRulebookPageFacts.PageFact::factualSummary,
                         (existing, supplied) -> supplied));
         if (factsByPage.isEmpty()) return evidence;
         return evidence.stream()
@@ -271,7 +271,8 @@ final class TeachingVisualEvidenceResolver {
                             facts,
                             source.pageFrom(),
                             source.pageTo(),
-                            source.pageImages());
+                            source.pageImages(),
+                            RuleEvidence.ContentKind.VISUAL_TRANSCRIPTION);
                 })
                 .toList();
     }

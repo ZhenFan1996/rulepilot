@@ -102,6 +102,38 @@ class CandidateClaimTest {
     }
 
     @Test
+    void keepsPublisherCopySeparateFromVerifiedStructuredMetadata() {
+        CandidateObservation publisherCopy = new CandidateObservation(
+                "bgg-72-description",
+                72,
+                CandidateObservation.Kind.STRUCTURED_METADATA,
+                "publisherDescription",
+                "Players restore paths before the last lantern goes dark.",
+                List.of());
+
+        CandidateClaim premise = new CandidateClaim(
+                72,
+                "publisherDescription",
+                CandidateClaim.Type.PUBLISHER_DESCRIPTION,
+                null,
+                CandidateClaim.Relation.OBSERVED,
+                "The publisher describes restoring paths before the last lantern goes dark.",
+                List.of(publisherCopy));
+
+        assertThat(premise.evidence()).containsExactly(publisherCopy);
+        assertThatThrownBy(() -> new CandidateClaim(
+                        72,
+                        "publisherDescription",
+                        CandidateClaim.Type.STRUCTURED_FACT,
+                        null,
+                        CandidateClaim.Relation.OBSERVED,
+                        "The game is proven to create a tense cooperative experience.",
+                        List.of(publisherCopy)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("cannot support");
+    }
+
+    @Test
     void preservesLongClaimAndObservationTextWithAllCandidateScopedEvidenceAndSources() {
         String observationText = "  observation " + "e".repeat(900) + "  ";
         List<Integer> sourceIndexes = List.of(1, 2, 3, 4, 5, 6, 7);

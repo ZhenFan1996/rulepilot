@@ -1,6 +1,7 @@
 package com.rulepilot.assistant.application;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rulepilot.assistant.AgentExecutionControl;
 import com.rulepilot.assistant.AgentExecutionControl.ActivityOutcome;
@@ -72,6 +73,7 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
         int toolCalls = 0;
         boolean finalResponseOnly = false;
         boolean requiredOnlyInstructionAdded = false;
+        boolean terminalProtocolRepairAttempted = false;
 
         for (int iteration = 1; iteration <= request.maxIterations() + 1; iteration++) {
             // A tool read on the last acquisition turn still needs one tool-free protocol decision. This extra turn
@@ -161,8 +163,9 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
                     continue;
                 }
                 boolean emptyCompletion = turn.text().isBlank();
-                boolean terminalProtocolRejected = !request.requiredTerminalText().isBlank()
-                        && !request.requiredTerminalText().equals(turn.text().strip());
+                java.util.Optional<NativeToolAgent.TerminalStatus> terminalStatus = terminalStatus(request, turn.text());
+                boolean terminalProtocolRejected = request.terminalContract().required()
+                        && terminalStatus.isEmpty();
                 if (emptyCompletion || terminalProtocolRejected) {
                     boolean recorded = recordDiagnostic(
                             request.scope().runId(),
@@ -173,7 +176,7 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
                                     ? "native model returned neither a tool call nor a terminal status"
                                     : "native model returned a nonconforming terminal status");
                     if (!recorded) return fallback(request, "AUDIT_FAILED", iteration, toolCalls, observations);
-                    if (iteration >= request.maxIterations()) {
+                    if (terminalProtocolRepairAttempted || iteration >= request.maxIterations()) {
                         return fallback(
                                 request,
                                 emptyCompletion ? "EMPTY_MODEL_RESULT" : "COMPLETION_PROTOCOL_REJECTED",
@@ -181,13 +184,9 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
                                 toolCalls,
                                 observations);
                     }
+                    terminalProtocolRepairAttempted = true;
                     conversation.appendAssistant(turn.text(), List.of(), advertisedTools);
-                    conversation.appendApplicationInstruction(
-                            "The application rejected this terminal turn. Review the unresolved request and prior observations, then choose one advertised read-only tool or return exactly: "
-                                    + (request.requiredTerminalText().isBlank()
-                                            ? "the terminal status required by the system instructions"
-                                            : request.requiredTerminalText())
-                                    + ". Do not answer from memory.");
+                    conversation.appendApplicationInstruction(terminalRepairInstruction(request));
                     continue;
                 }
                 return new RunResult(
@@ -196,7 +195,8 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
                         "MODEL_COMPLETED",
                         iteration,
                         toolCalls,
-                        observations);
+                        observations,
+                        terminalStatus.orElse(null));
             }
 
             if (finalResponseOnly) {
@@ -236,7 +236,8 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
                     continue;
                 }
                 if (toolCalls >= request.maxToolCalls()) {
-                    if (completionRequirementsSatisfied(request, observations)) {
+                    if (!request.terminalContract().required()
+                            && completionRequirementsSatisfied(request, observations)) {
                         return completedAtToolLimit(request, iteration, toolCalls, observations);
                     }
                     return fallback(request, "TOOL_CALL_LIMIT", iteration, toolCalls, observations);
@@ -376,7 +377,7 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
             List<ObservationRecord> observations) {
         return new RunResult(
                 RunStatus.COMPLETED,
-                terminalText(request),
+                "REQUIRED_EVIDENCE_COLLECTED",
                 "REQUIRED_EVIDENCE_COLLECTED_AT_TOOL_LIMIT",
                 iteration,
                 toolCalls,
@@ -390,15 +391,44 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
             List<ObservationRecord> observations) {
         return new RunResult(
                 RunStatus.COMPLETED,
-                terminalText(request),
+                "REQUIRED_EVIDENCE_COLLECTED",
                 "REQUIRED_EVIDENCE_COLLECTED",
                 iteration,
                 toolCalls,
                 observations);
     }
 
-    private String terminalText(RunRequest request) {
-        return request.requiredTerminalText().isBlank() ? "EVIDENCE_READY" : request.requiredTerminalText();
+    private java.util.Optional<NativeToolAgent.TerminalStatus> terminalStatus(RunRequest request, String text) {
+        if (!request.terminalContract().required()) return java.util.Optional.empty();
+        try {
+            JsonNode root = objectMapper.readTree(text);
+            if (root == null
+                    || !root.isObject()
+                    || root.size() != 1
+                    || !root.has("status")
+                    || !root.get("status").isTextual()) {
+                return java.util.Optional.empty();
+            }
+            NativeToolAgent.TerminalStatus status = NativeToolAgent.TerminalStatus.valueOf(
+                    root.get("status").textValue());
+            return request.terminalContract().allowedStatuses().contains(status)
+                    ? java.util.Optional.of(status)
+                    : java.util.Optional.empty();
+        } catch (JsonProcessingException | IllegalArgumentException exception) {
+            return java.util.Optional.empty();
+        }
+    }
+
+    private String terminalRepairInstruction(RunRequest request) {
+        if (!request.terminalContract().required()) {
+            return "The application rejected an empty terminal turn. Choose one advertised read-only tool or return the non-empty response required by the system instructions. Do not answer from memory.";
+        }
+        return "The terminal response failed its JSON schema. Return one JSON object with exactly one string field named status and no prose or markdown. Allowed status values: "
+                + request.terminalContract().allowedStatuses().stream()
+                        .map(Enum::name)
+                        .sorted()
+                        .collect(java.util.stream.Collectors.joining(", "))
+                + ". You may instead choose one advertised read-only tool if evidence is still missing. Do not answer from memory.";
     }
 
     @Override

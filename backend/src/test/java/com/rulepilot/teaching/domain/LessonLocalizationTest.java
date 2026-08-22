@@ -93,7 +93,7 @@ class LessonLocalizationTest {
     }
 
     @Test
-    void keepsTheSourceVisualLabelWhenLaterVisualEnrichmentAddsOrChangesTheFocus() {
+    void rejectsAMissingVisualTranslationInsteadOfSilentlyRestoringTheSourceText() {
         UUID lessonId = UUID.randomUUID();
         IllustratedLesson source = new IllustratedLesson(
                 lessonId,
@@ -126,10 +126,9 @@ class LessonLocalizationTest {
                                 1, "Set up", "", List.of(new StepTranslation(1, "Check components", "Check the components.", "")))),
                         Instant.now());
 
-        assertThat(localization.applyTo(source).sections().getFirst().steps().getFirst().visualFocus().label())
-                .isEqualTo("计分标记");
-        assertThat(localization.applyTo(source).sections().getFirst().steps().getFirst().visualFocus().visibleDescription())
-                .isEqualTo("圆形计分标记位于分数轨道旁");
+        assertThatThrownBy(() -> localization.applyTo(source))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("localized visual focus");
     }
 
     private IllustratedLesson lessonWithTwoSteps(UUID lessonId) {

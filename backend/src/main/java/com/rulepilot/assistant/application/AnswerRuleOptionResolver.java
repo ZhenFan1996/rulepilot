@@ -5,7 +5,6 @@ import com.rulepilot.assistant.RuleAnswerModel.ModelDraft;
 import com.rulepilot.assistant.RuleAnswerModel.ModelRequest;
 import com.rulepilot.assistant.RuleAnswerModel.RuleOptionRequest;
 import com.rulepilot.assistant.domain.RuleOption;
-import com.rulepilot.assistant.domain.RuleOptionBasis;
 import java.util.LinkedHashSet;
 import java.util.List;
 
@@ -36,7 +35,7 @@ final class AnswerRuleOptionResolver {
                 AnswerStructuredAidPolicy.requiredText(item.optionName(), "option name"),
                 AnswerStructuredAidPolicy.requiredText(item.availabilityCondition(), "option availability"),
                 AnswerStructuredAidPolicy.requiredText(item.result(), "option result"),
-                AnswerStructuredAidPolicy.enumValue(item.basis(), RuleOptionBasis.class, "rule option basis"),
+                item.basis(),
                 AnswerStructuredAidPolicy.citations(
                         modelRequest, draft, item.citationIds(), "rule option"));
     }

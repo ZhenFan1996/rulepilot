@@ -11,6 +11,7 @@ import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Research;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.WebResearchUnavailableException;
 import java.util.List;
 import java.util.Optional;
+import java.util.stream.IntStream;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Profile;
@@ -41,7 +42,12 @@ public class BoardGameRecommendationTools {
             BoardGameRecommendationCatalog.CandidateSet result =
                     catalog.findCandidates(requiredType, suggestedTypes, maximum);
             return new CatalogObservation(
-                    ToolStatus.SUCCESS, ToolName.SEARCH_BGG_CATALOG, result.sourceCount(), result.games(), "");
+                    ToolStatus.SUCCESS,
+                    ToolName.SEARCH_BGG_CATALOG,
+                    result.sourceCount(),
+                    result.games(),
+                    List.of(),
+                    "");
         } catch (RuntimeException exception) {
             LOGGER.warn("Recommendation catalog search tool failed");
             return CatalogObservation.error(ToolName.SEARCH_BGG_CATALOG, "CATALOG_UNAVAILABLE");
@@ -55,6 +61,7 @@ public class BoardGameRecommendationTools {
                     ToolName.LOOKUP_BGG_GAME,
                     catalog.gameCount(),
                     catalog.findGameById(bggId).map(List::of).orElseGet(List::of),
+                    List.of(),
                     "");
         } catch (RuntimeException exception) {
             LOGGER.warn("Recommendation BGG-ID detail tool failed");
@@ -72,9 +79,23 @@ public class BoardGameRecommendationTools {
      * model decision between them.
      */
     CatalogObservation inspectTitles(List<String> names) {
+        List<TitleHypothesis> hypotheses = IntStream.range(0, names.size())
+                .mapToObj(index -> new TitleHypothesis("title-" + (index + 1), names.get(index)))
+                .toList();
+        return inspectTitleHypotheses(hypotheses);
+    }
+
+    CatalogObservation inspectTitleHypotheses(List<TitleHypothesis> hypotheses) {
         try {
-            List<Integer> ids = catalog.searchByNames(names).stream()
-                    .map(BoardGameRecommendationCatalog.Ranking::bggId)
+            List<TitleResolution> resolutions = hypotheses.stream()
+                    .map(hypothesis -> catalog.searchByNames(List.of(hypothesis.title())).stream()
+                            .findFirst()
+                            .map(match -> new TitleResolution(hypothesis.correlationId(), match.bggId()))
+                            .orElse(null))
+                    .filter(java.util.Objects::nonNull)
+                    .toList();
+            List<Integer> ids = resolutions.stream()
+                    .map(TitleResolution::bggId)
                     .distinct()
                     .toList();
             List<Game> games = ids.isEmpty() ? List.of() : catalog.findGamesByIds(ids);
@@ -83,6 +104,7 @@ public class BoardGameRecommendationTools {
                     ToolName.INSPECT_BGG_TITLES,
                     catalog.gameCount(),
                     games,
+                    resolutions,
                     "");
         } catch (IllegalArgumentException exception) {
             return CatalogObservation.error(ToolName.INSPECT_BGG_TITLES, "INVALID_ARGUMENT");
@@ -141,6 +163,7 @@ public class BoardGameRecommendationTools {
                     tool,
                     catalog.gameCount(),
                     catalog.findGamesByIds(bggIds),
+                    List.of(),
                     "");
         } catch (RuntimeException exception) {
             LOGGER.warn("Recommendation BGG-ID lookup tool failed");
@@ -210,17 +233,35 @@ public class BoardGameRecommendationTools {
             ToolName tool,
             int sourceCount,
             List<Game> games,
+            List<TitleResolution> titleResolutions,
             String code) {
         CatalogObservation {
             games = List.copyOf(games);
+            titleResolutions = List.copyOf(titleResolutions);
         }
 
         static CatalogObservation error(ToolName tool, String code) {
-            return new CatalogObservation(ToolStatus.ERROR, tool, 0, List.of(), code);
+            return new CatalogObservation(ToolStatus.ERROR, tool, 0, List.of(), List.of(), code);
         }
 
         boolean succeeded() {
             return status == ToolStatus.SUCCESS;
+        }
+    }
+
+    record TitleHypothesis(String correlationId, String title) {
+        TitleHypothesis {
+            if (correlationId == null || correlationId.isBlank() || title == null || title.isBlank()) {
+                throw new IllegalArgumentException("title hypothesis is invalid");
+            }
+        }
+    }
+
+    record TitleResolution(String correlationId, int bggId) {
+        TitleResolution {
+            if (correlationId == null || correlationId.isBlank() || bggId < 1) {
+                throw new IllegalArgumentException("title resolution is invalid");
+            }
         }
     }
 

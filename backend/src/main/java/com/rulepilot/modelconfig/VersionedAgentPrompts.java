@@ -19,8 +19,6 @@ public class VersionedAgentPrompts {
     private final String focusedAnswerCoreSystem;
     private final Map<String, String> focusedAnswerModules;
     private final String answerUser;
-    private final String answerRetrievalRewriteSystem;
-    private final String answerRetrievalRewriteUser;
     private final String criticSystem;
     private final String lessonStructureCriticSystem;
     private final String atomicCriticSystem;
@@ -129,8 +127,6 @@ public class VersionedAgentPrompts {
             @Value("classpath:prompts/rule-answer-agent-v59-local-evidence-gaps-system.txt") Resource answerLocalEvidenceGaps,
             @Value("classpath:prompts/rule-answer-agent-v60-lean-runtime-core.txt") Resource answerLeanRuntimeCore,
             @Value("classpath:prompts/rule-answer-agent-v6-user.txt") Resource answerUser,
-            @Value("classpath:prompts/rule-answer-retrieval-rewrite-v1-system.txt") Resource answerRetrievalRewriteSystem,
-            @Value("classpath:prompts/rule-answer-retrieval-rewrite-v1-user.txt") Resource answerRetrievalRewriteUser,
             @Value("classpath:prompts/content-critic-v7-system.txt") Resource criticSystem,
             @Value("classpath:prompts/content-critic-v8-fidelity-system.txt") Resource criticFidelity,
             @Value("classpath:prompts/content-critic-v9-answer-scope-system.txt") Resource criticAnswerScope,
@@ -154,13 +150,14 @@ public class VersionedAgentPrompts {
             @Value("classpath:prompts/content-critic-v35-quantitative-aggregation-system.txt") Resource criticQuantitativeAggregation,
             @Value("classpath:prompts/content-critic-v36-claim-aspect-contract-system.txt") Resource criticClaimAspectContract,
             @Value("classpath:prompts/content-critic-v37-answer-source-authority-system.txt") Resource criticAnswerSourceAuthority,
+            @Value("classpath:prompts/content-critic-v38-exact-output-contract-system.txt") Resource criticExactOutputContract,
             @Value("classpath:prompts/atomic-content-critic-v3-system.txt") Resource atomicCriticSystem,
             @Value("classpath:prompts/atomic-content-critic-v5-claim-aspect-system.txt") Resource atomicClaimAspectSystem,
             @Value("classpath:prompts/atomic-content-critic-v6-answer-source-authority-system.txt") Resource atomicAnswerSourceAuthority,
             @Value("classpath:prompts/objective-coverage-critic-v3-system.txt") Resource objectiveCoverageCriticSystem,
             @Value("classpath:prompts/content-critic-v4-user.txt") Resource criticUser,
-            @Value("classpath:prompts/atomic-content-critic-v4-user.txt") Resource atomicCriticUser,
-            @Value("classpath:prompts/atomic-content-critic-v5-claim-aspect-user.txt") Resource atomicClaimAspectUser,
+            @Value("classpath:prompts/atomic-content-critic-v7-confirmed-only-user.txt") Resource atomicCriticUser,
+            @Value("classpath:prompts/atomic-content-critic-v8-claim-aspect-confirmed-only-user.txt") Resource atomicClaimAspectUser,
             @Value("classpath:prompts/structured-output-repair-v1.txt") Resource structuredOutputRepair,
             @Value("classpath:prompts/content-critic-output-repair-v1.txt") Resource criticOutputRepair,
             @Value("classpath:prompts/content-critic-output-repair-v2-claim-aspect.txt") Resource criticClaimAspectRepair,
@@ -294,18 +291,26 @@ public class VersionedAgentPrompts {
                 Map.entry("SOURCE", read(answerDirectSourceEvidence)),
                 Map.entry("PERMISSION", read(answerPermissionRuling)));
         this.answerUser = read(answerUser);
-        this.answerRetrievalRewriteSystem = read(answerRetrievalRewriteSystem);
-        this.answerRetrievalRewriteUser = read(answerRetrievalRewriteUser);
         this.criticSystem = combined(
                 focusedCriticSystem,
                 criticQuantitativeAggregation,
                 criticClaimAspectContract,
-                criticAnswerSourceAuthority);
+                criticAnswerSourceAuthority,
+                criticExactOutputContract);
         this.lessonStructureCriticSystem = combined(
-                focusedCriticSystem, criticQuantitativeAggregation, criticClaimAspectContract);
+                focusedCriticSystem,
+                criticQuantitativeAggregation,
+                criticClaimAspectContract,
+                criticExactOutputContract);
         this.atomicCriticSystem = combined(
-                atomicCriticSystem, atomicClaimAspectSystem, atomicAnswerSourceAuthority);
-        this.objectiveCoverageCriticSystem = combined(objectiveCoverageCriticSystem, criticClaimAspectContract);
+                atomicCriticSystem,
+                atomicClaimAspectSystem,
+                atomicAnswerSourceAuthority,
+                criticExactOutputContract);
+        this.objectiveCoverageCriticSystem = combined(
+                objectiveCoverageCriticSystem,
+                criticClaimAspectContract,
+                criticExactOutputContract);
         this.criticUser = read(criticUser);
         this.atomicCriticUser = combined(atomicCriticUser, atomicClaimAspectUser);
         this.structuredOutputRepair = read(structuredOutputRepair);
@@ -352,14 +357,6 @@ public class VersionedAgentPrompts {
 
     public String answerUser() {
         return answerUser;
-    }
-
-    public String answerRetrievalRewriteSystem() {
-        return answerRetrievalRewriteSystem;
-    }
-
-    public String answerRetrievalRewriteUser() {
-        return answerRetrievalRewriteUser;
     }
 
     public String criticSystem() {

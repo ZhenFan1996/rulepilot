@@ -1,22 +1,25 @@
 package com.rulepilot.assistant.application;
 
 import com.rulepilot.assistant.RuleAnswerModel.AnswerAid;
+import com.rulepilot.assistant.RuleAnswerModel.CalculationOperandRequest;
+import com.rulepilot.assistant.RuleAnswerModel.CalculationOperandSource;
 import com.rulepilot.assistant.RuleAnswerModel.CalculationRequest;
+import com.rulepilot.assistant.RuleAnswerModel.EvidenceInput;
 import com.rulepilot.assistant.RuleAnswerModel.ModelDraft;
 import com.rulepilot.assistant.RuleAnswerModel.ModelRequest;
 import com.rulepilot.assistant.domain.RuleCalculation;
 import java.math.BigDecimal;
-import java.util.LinkedHashSet;
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
-import java.util.Set;
+import java.util.Map;
 import java.util.UUID;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 /** Admits only arithmetic whose operands are grounded in the current question or cited evidence. */
 final class AnswerCalculationResolver {
 
-    private static final Pattern NUMBER = Pattern.compile("(?<![\\p{L}\\p{N}.])\\d+(?:\\.\\d+)?");
     private final BoundedRuleCalculator calculator = new BoundedRuleCalculator();
 
     List<RuleCalculation> resolve(ModelRequest request, ModelDraft draft) {
@@ -27,32 +30,23 @@ final class AnswerCalculationResolver {
         if (requested.isEmpty()) return List.of();
         if (draft.citationIds().isEmpty()) throw invalid();
 
-        Set<BigDecimal> questionValues = values(request.question());
-        if (questionValues.isEmpty()) throw invalid();
-        Set<UUID> cited = Set.copyOf(draft.citationIds());
-        LinkedHashSet<BigDecimal> allowed = new LinkedHashSet<>(questionValues);
-        request.evidence().stream()
-                .filter(source -> cited.contains(source.chunkId()))
-                .forEach(source -> allowed.addAll(values(source.excerpt())));
+        Map<UUID, EvidenceInput> evidenceById = request.evidence().stream()
+                .collect(Collectors.toUnmodifiableMap(EvidenceInput::chunkId, Function.identity()));
 
         List<RuleCalculation> resolved = requested.stream().map(calculation -> {
-            if (calculation == null || calculation.expression() == null) throw invalid();
+            if (calculation == null) throw invalid();
             BoundedRuleCalculator.Evaluation evaluated = calculator.evaluate(calculation.expression());
             if (evaluated.literals().isEmpty()
-                    || evaluated.literals().stream().anyMatch(value -> !allowed.contains(value.stripTrailingZeros()))
-                    || evaluated.literals().stream().noneMatch(questionValues::contains)) {
+                    || !sameNumericOccurrences(evaluated.literals(), calculation.operands())
+                    || calculation.operands().stream()
+                            .noneMatch(operand -> operand.source() == CalculationOperandSource.QUESTION)
+                    || calculation.operands().stream()
+                            .anyMatch(operand -> !grounded(request, draft, evidenceById, operand))
+                    || new BigDecimal(evaluated.result()).compareTo(calculation.expectedResult()) != 0) {
                 throw invalid();
             }
             return new RuleCalculation(evaluated.expression(), evaluated.result());
         }).toList();
-        Set<BigDecimal> results = new LinkedHashSet<>();
-        resolved.forEach(calculation -> results.add(new BigDecimal(calculation.result()).stripTrailingZeros()));
-        Set<BigDecimal> playerFacingValues = values(
-                draft.shortVerdict() + "\n" + draft.explanation() + "\n" + String.join("\n", draft.exceptions()));
-        if (!playerFacingValues.containsAll(results)) throw invalid();
-        LinkedHashSet<BigDecimal> permittedOutputValues = new LinkedHashSet<>(allowed);
-        permittedOutputValues.addAll(results);
-        if (playerFacingValues.stream().anyMatch(value -> !permittedOutputValues.contains(value))) throw invalid();
         return resolved;
     }
 
@@ -60,18 +54,37 @@ final class AnswerCalculationResolver {
         return AnswerStructuredAidPolicy.required(request, AnswerAid.CALCULATION);
     }
 
-    private Set<BigDecimal> values(String source) {
-        LinkedHashSet<BigDecimal> values = new LinkedHashSet<>();
-        if (source == null) return values;
-        Matcher matcher = NUMBER.matcher(source);
-        while (matcher.find() && values.size() < 32) {
-            try {
-                values.add(new BigDecimal(matcher.group()).stripTrailingZeros());
-            } catch (NumberFormatException ignored) {
-                // Untrusted source text may contain a token too large for a useful arithmetic operand.
-            }
+    private boolean sameNumericOccurrences(
+            List<BigDecimal> expressionLiterals,
+            List<CalculationOperandRequest> operands) {
+        if (expressionLiterals.size() != operands.size()) return false;
+        Comparator<BigDecimal> numericOrder = BigDecimal::compareTo;
+        List<BigDecimal> expressionValues = new ArrayList<>(expressionLiterals);
+        List<BigDecimal> declaredValues = operands.stream().map(CalculationOperandRequest::value).toList();
+        expressionValues.sort(numericOrder);
+        declaredValues = new ArrayList<>(declaredValues);
+        declaredValues.sort(numericOrder);
+        for (int index = 0; index < expressionValues.size(); index++) {
+            if (expressionValues.get(index).compareTo(declaredValues.get(index)) != 0) return false;
         }
-        return values;
+        return true;
+    }
+
+    private boolean grounded(
+            ModelRequest request,
+            ModelDraft draft,
+            Map<UUID, EvidenceInput> evidenceById,
+            CalculationOperandRequest operand) {
+        if (operand.source() == CalculationOperandSource.QUESTION) {
+            return operand.citationId() == null && request.question().contains(operand.sourceSpan());
+        }
+        if (operand.source() != CalculationOperandSource.EVIDENCE
+                || operand.citationId() == null
+                || !draft.citationIds().contains(operand.citationId())) {
+            return false;
+        }
+        EvidenceInput evidence = evidenceById.get(operand.citationId());
+        return evidence != null && evidence.excerpt().contains(operand.sourceSpan());
     }
 
     private IllegalArgumentException invalid() {

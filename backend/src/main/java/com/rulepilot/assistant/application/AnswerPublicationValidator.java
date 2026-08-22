@@ -24,7 +24,6 @@ import com.rulepilot.assistant.domain.RuleOption;
 import com.rulepilot.assistant.domain.StructuredRuleAnswer;
 import com.rulepilot.retrieval.evidence.HybridEvidenceHit;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 import java.util.function.Function;
@@ -299,10 +298,6 @@ final class AnswerPublicationValidator {
                                 + option.optionName() + "\n" + option.availabilityCondition() + "\n"
                                 + option.result())
                         .collect(java.util.stream.Collectors.joining("\n"));
-        List<UUID> evidenceIds = evidence.stream().map(hit -> hit.evidence().chunkId()).toList();
-        if (AnswerDraftSafetyPolicy.containsKnownEvidenceReference(completeAnswer, evidenceIds)) {
-            throw new IllegalArgumentException("player-facing answer contains internal evidence references");
-        }
         List<EvidenceClaim> claims = new java.util.ArrayList<>();
         claims.add(new EvidenceClaim(completeAnswer, draft.citationIds()));
         situationChecks.forEach(check -> claims.add(new EvidenceClaim(check.requirement(), check.citationIds())));
@@ -359,10 +354,10 @@ final class AnswerPublicationValidator {
             var source = hit.evidence();
             return new RuleCitation(
                     source.chunkId(), source.documentVersionId(), source.sectionType(), source.heading(),
-                    AnswerCitationPresentationPolicy.excerpt(source.excerpt()), source.pageFrom(), source.pageTo());
+                    source.playerExcerpt(), source.pageFrom(), source.pageTo());
         }).toList();
-        AnswerConfidence confidence = AnswerConfidence.valueOf(draft.confidence().toUpperCase(Locale.ROOT));
-        AnswerBasis answerBasis = AnswerBasis.fromModelValue(draft.answerBasis());
+        AnswerConfidence confidence = draft.confidence();
+        AnswerBasis answerBasis = draft.answerBasis();
         return new StructuredRuleAnswer(
                 versionId, AnswerStatus.ANSWERED, shortVerdict, explanation, citations,
                 draft.exceptions(), confidence, answerBasis, false, null, null, null, List.of(), calculations,

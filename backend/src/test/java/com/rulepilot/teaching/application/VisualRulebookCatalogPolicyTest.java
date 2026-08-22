@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.rulepilot.document.DocumentProcessing.PageView;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.RuleGroupFact;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.SourceDependency;
 import com.rulepilot.teaching.VisualRulebookPageFacts.PageFact;
 import com.rulepilot.teaching.VisualRulebookPageFacts.IconMeaningStatus;
@@ -40,7 +41,9 @@ class VisualRulebookCatalogPolicyTest {
                         1,
                         4,
                         "4 glyph families × 1 prism each",
-                        QuantityResolution.EXACT)));
+                        QuantityResolution.EXACT)),
+                List.of(new RuleGroupFact(
+                        "R-Δ", "R-Δ", "Place one prism for each of the four visibly listed glyph families.")));
 
         PageFact fact = VisualRulebookCatalogPolicy.toPageFact(summary);
 
@@ -89,12 +92,63 @@ class VisualRulebookCatalogPolicyTest {
         assertThat(VisualRulebookCatalogPolicy.hasReusableCompleteRuleLedger(valid)).isTrue();
         assertThat(VisualRulebookCatalogPolicy.hasReusableCompleteRuleLedger(incomplete)).isFalse();
         assertThat(VisualRulebookCatalogPolicy.hasReusableCompleteRuleLedger(stale)).isFalse();
-        org.assertj.core.api.Assertions.assertThatThrownBy(() -> pageFact(
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> new PageFact(
+                        1,
+                        "TURN",
+                        "Natural prose is not parsed into a rule-group binding.",
+                        List.of("turn"),
+                        List.of(),
+                        List.of(),
+                        false,
                         PageFact.CURRENT_SCHEMA_VERSION,
-                        "A turn rule was observed without an exact ledger key.",
-                        true))
+                        List.of(),
+                        List.of("TURN"),
+                        true,
+                        List.of()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("complete rule-group inventory");
+    }
+
+    @Test
+    void readsButNeverReusesAHistoricalCompleteFlagThatPredatesTypedRuleGroupFacts() {
+        PageFact historical = new PageFact(
+                1,
+                "TURN",
+                "TURN: Historical prose ledger.",
+                List.of("turn"),
+                List.of(),
+                List.of(),
+                false,
+                PageFact.CURRENT_SCHEMA_VERSION - 1,
+                List.of(),
+                List.of("TURN"),
+                true,
+                List.of());
+
+        assertThat(historical.ruleGroupInventoryComplete()).isTrue();
+        assertThat(historical.ruleGroupFacts()).isEmpty();
+        assertThat(VisualRulebookCatalogPolicy.hasReusableCompleteRuleLedger(historical)).isFalse();
+        assertThat(VisualRulebookCatalogPolicy.missingPages(java.util.Set.of(1), List.of(historical)))
+                .containsExactly(1);
+    }
+
+    @Test
+    void rejectsACurrentCompletePageSummaryWithoutTypedFactBindings() {
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> new PageSummary(
+                        1,
+                        "TURN",
+                        "Natural prose is not a typed rule-group binding.",
+                        List.of("turn"),
+                        List.of(),
+                        List.of(),
+                        false,
+                        List.of(),
+                        List.of("TURN"),
+                        true,
+                        List.of(),
+                        List.of()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("exactly match");
     }
 
     @Test
@@ -109,7 +163,9 @@ class VisualRulebookCatalogPolicyTest {
                 true,
                 List.of(),
                 List.of("TURN"),
-                true);
+                true,
+                List.of(),
+                List.of(new RuleGroupFact("TURN", "TURN", "A visible turn rule.")));
 
         PageSummary bounded = VisualRulebookCatalogPolicy.teachingStartupFact(overreachingModelOutput);
 
@@ -134,7 +190,10 @@ class VisualRulebookCatalogPolicyTest {
                 false,
                 List.of(dependency),
                 List.of("PLAY A CARD"),
-                true);
+                true,
+                List.of(),
+                List.of(new RuleGroupFact(
+                        "PLAY A CARD", "PLAY A CARD", "当前页要求另查开局资料。")));
 
         PageFact fact = VisualRulebookCatalogPolicy.toPageFact(summary);
         var inputs = VisualRulebookCatalogPolicy.pageInputs(
@@ -170,8 +229,8 @@ class VisualRulebookCatalogPolicyTest {
     }
 
     @Test
-    void rejectsATeachingStartupCompleteMarkerWithoutEveryBoundRuleFact() {
-        PageSummary unbound = new PageSummary(
+    void teachingStartupUsesTypedRuleGroupsInsteadOfParsingTheNaturalSummary() {
+        PageSummary structured = new PageSummary(
                 4,
                 "MOVE; BUILD",
                 "MOVE: Move one pawn.",
@@ -181,13 +240,14 @@ class VisualRulebookCatalogPolicyTest {
                 false,
                 List.of(),
                 List.of("MOVE", "BUILD"),
-                true);
+                true,
+                List.of(),
+                ruleFacts());
 
-        org.assertj.core.api.Assertions.assertThatThrownBy(() ->
-                        VisualRulebookCatalogPolicy.teachingStartupFact(unbound))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("lost a rule-group fact")
-                .hasMessageContaining("BUILD");
+        PageSummary retained = VisualRulebookCatalogPolicy.teachingStartupFact(structured);
+
+        assertThat(retained.ruleGroupFacts()).containsExactlyElementsOf(ruleFacts());
+        assertThat(retained.ruleGroupInventoryComplete()).isTrue();
     }
 
     @Test
@@ -247,11 +307,11 @@ class VisualRulebookCatalogPolicyTest {
         assertThat(VisualRulebookCatalogPolicy.needsIconTileFallback(labeledIconGroup)).isTrue();
         assertThat(VisualRulebookCatalogPolicy.needsIconTileFallback(denseVisualPageWithNoProposedIcons))
                 .isTrue();
-        assertThat(VisualRulebookCatalogPolicy.needsIconTileFallback(densePartialInventory)).isTrue();
+        assertThat(VisualRulebookCatalogPolicy.needsIconTileFallback(densePartialInventory)).isFalse();
         assertThat(VisualRulebookCatalogPolicy.needsIconTileFallback(cover)).isTrue();
         assertThat(VisualRulebookCatalogPolicy.needsIconTileFallback(setupProse)).isTrue();
         assertThat(VisualRulebookCatalogPolicy.needsIconTileFallback(denseProseWithNoVisualAnchor))
-                .isTrue();
+                .isFalse();
         assertThat(VisualRulebookCatalogPolicy.needsIconTileFallback(denseCreditsPage)).isTrue();
         assertThat(VisualRulebookCatalogPolicy.needsIconTileFallback(simpleInventory)).isFalse();
     }
@@ -280,7 +340,9 @@ class VisualRulebookCatalogPolicyTest {
                 true,
                 List.of(),
                 List.of("MOVE", "BUILD"),
-                true);
+                true,
+                List.of(),
+                ruleFacts());
         PageSummary tileAudit = new PageSummary(
                 3,
                 "SUN; WATER",
@@ -321,7 +383,9 @@ class VisualRulebookCatalogPolicyTest {
                 false,
                 List.of(),
                 List.of("MOVE", "BUILD"),
-                true);
+                true,
+                List.of(),
+                ruleFacts());
         PageSummary denseTileAudit = new PageSummary(
                 3,
                 "VISIBLE ICONS",
@@ -343,34 +407,21 @@ class VisualRulebookCatalogPolicyTest {
 
     @Test
     void rejectsACompleteMarkerWhenAnInheritedRuleGroupHasNoBoundFact() {
-        PageSummary invalidFullPage = new PageSummary(
-                3,
-                "MOVE; BUILD",
-                "MOVE: Move one pawn.",
-                List.of("turn"),
-                List.of(),
-                List.of(),
-                false,
-                List.of(),
-                List.of("MOVE", "BUILD"),
-                true);
-        PageSummary tileAudit = new PageSummary(
-                3,
-                "VISIBLE ICONS",
-                "Tile facts.",
-                List.of("icons"),
-                List.of(),
-                List.of(icon("pawn", "棋子")),
-                true,
-                List.of(),
-                List.of(),
-                false);
-
-        org.assertj.core.api.Assertions.assertThatThrownBy(() ->
-                        VisualRulebookCatalogPolicy.mergeIconTileAudit(invalidFullPage, tileAudit))
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> new PageSummary(
+                        3,
+                        "MOVE; BUILD",
+                        "Natural prose is irrelevant to structured ownership.",
+                        List.of("turn"),
+                        List.of(),
+                        List.of(),
+                        false,
+                        List.of(),
+                        List.of("MOVE", "BUILD"),
+                        true,
+                        List.of(),
+                        List.of(new RuleGroupFact("MOVE", "MOVE", "Move one pawn."))))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("lost a rule-group fact")
-                .hasMessageContaining("BUILD");
+                .hasMessageContaining("exactly match");
     }
 
     @Test
@@ -396,7 +447,9 @@ class VisualRulebookCatalogPolicyTest {
                 true,
                 List.of(),
                 List.of("MOVE"),
-                true);
+                true,
+                List.of(),
+                List.of(new RuleGroupFact("MOVE", "MOVE", "Move one pawn.")));
 
         PageSummary merged = VisualRulebookCatalogPolicy.mergeIconTileAudit(
                 incompleteFullPage, overreachingIconTile);
@@ -431,7 +484,9 @@ class VisualRulebookCatalogPolicyTest {
                 false,
                 List.of(new SourceDependency("First Session Guide", List.of("setup"))),
                 List.of("MOVE", "BUILD"),
-                true);
+                true,
+                List.of(),
+                ruleFacts());
 
         PageSummary merged = VisualRulebookCatalogPolicy.mergePersistedPageObservation(
                 incompleteExisting, completeObservation);
@@ -534,7 +589,16 @@ class VisualRulebookCatalogPolicyTest {
                 schemaVersion,
                 List.of(),
                 List.of("TURN"),
-                complete);
+                complete,
+                complete
+                        ? List.of(new RuleGroupFact("TURN", "TURN", factualSummary))
+                        : List.of());
+    }
+
+    private static List<RuleGroupFact> ruleFacts() {
+        return List.of(
+                new RuleGroupFact("MOVE", "MOVE", "Move one pawn."),
+                new RuleGroupFact("BUILD", "BUILD", "Place one building."));
     }
 
     private static IconOccurrence icon(String groupKey, String name) {

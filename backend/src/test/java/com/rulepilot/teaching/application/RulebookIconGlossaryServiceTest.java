@@ -3,6 +3,7 @@ package com.rulepilot.teaching.application;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.rulepilot.teaching.VisualRulebookPageFacts.PageFact;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.RuleGroupFact;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 
@@ -41,7 +42,8 @@ class RulebookIconGlossaryServiceTest {
                 PageFact.CURRENT_SCHEMA_VERSION,
                 List.of(),
                 List.of("MOVE"),
-                true);
+                true,
+                List.of(new RuleGroupFact("MOVE", "MOVE", "Move one pawn.")));
 
         PageFact grounded = RulebookIconGlossaryService.withGroundedIconEvidence(fact, "MOVE: Move one pawn.");
 

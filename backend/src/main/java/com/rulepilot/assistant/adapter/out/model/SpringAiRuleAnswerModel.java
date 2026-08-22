@@ -1,8 +1,10 @@
 package com.rulepilot.assistant.adapter.out.model;
 
+import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.fasterxml.jackson.databind.DeserializationFeature;
+import com.fasterxml.jackson.databind.JsonMappingException;
 import com.rulepilot.assistant.RuleAnswerModel;
 import com.rulepilot.assistant.RuleAnswerModel.AnswerAid;
 import com.rulepilot.assistant.RuleAnswerModel.PlayerFacingField;
@@ -26,6 +28,7 @@ import java.util.stream.Collectors;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.prompt.ChatOptions;
+import org.springframework.ai.converter.BeanOutputConverter;
 import org.springframework.ai.openai.OpenAiChatModel.ResponseFormat;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -40,10 +43,35 @@ import org.springframework.stereotype.Component;
 @Primary
 public class SpringAiRuleAnswerModel implements RuleAnswerModel {
 
-    private static final ObjectMapper JSON = new ObjectMapper();
+    private static final ObjectMapper JSON = new ObjectMapper()
+            .enable(JsonParser.Feature.STRICT_DUPLICATE_DETECTION)
+            .enable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
+            .enable(DeserializationFeature.FAIL_ON_MISSING_CREATOR_PROPERTIES)
+            .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
     private static final Logger LOGGER = LoggerFactory.getLogger(SpringAiRuleAnswerModel.class);
+    private static final String QUESTION_INTERPRETATION_SCHEMA =
+            new BeanOutputConverter<>(QuestionInterpretationDraft.class).getJsonSchema();
+    private static final String MODEL_DRAFT_SCHEMA =
+            new BeanOutputConverter<>(ModelDraft.class).getJsonSchema();
+    private static final Set<String> ANSWER_ARRAY_FIELDS = Set.of(
+            "citationIds",
+            "exceptions",
+            "calculations",
+            "walkthroughSteps",
+            "decisionBranches",
+            "exceptionClauses",
+            "termDefinitions",
+            "workedExamples",
+            "priorityResolutions",
+            "timingResolutions",
+            "tieResolutions",
+            "scopeResolutions",
+            "conceptComparisons",
+            "ruleOptions");
+    private static final Set<String> QUESTION_INTERPRETATION_ARRAY_FIELDS = Set.of(
+            "terms", "ruleObjectSpans", "pageHints", "missingContext", "subquestions");
     private static final String QUESTION_INTERPRETATION_SYSTEM = readPrompt(
-            "prompts/rule-answer-question-interpretation-v8-lean-runtime-system.txt");
+            "prompts/rule-answer-question-interpretation-v9-structured-owner-few-shot-system.txt");
     private static final String QUESTION_INTERPRETATION_USER = readPrompt(
             "prompts/rule-answer-question-interpretation-v3-user.txt");
     private static final String QUESTION_INTERPRETATION_REPAIR = readPrompt(
@@ -56,31 +84,24 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
             "prompts/rule-answer-player-facing-repair-v1-lean-system.txt");
     private static final String PLAYER_FACING_REPAIR_USER = readPrompt(
             "prompts/rule-answer-player-facing-repair-v1-user.txt");
-    private static final Set<String> PLAYER_FACING_REPAIR_FIELDS =
-            Set.of("shortVerdict", "explanation", "exceptions", "citationIds");
-
     private final RuntimeModelConfiguration models;
-    private final FakeRuleAnswerModel fakeModel;
     private final VersionedAgentPrompts prompts;
     private final double answerTemperature;
     private final double interpretationTemperature;
 
-    public SpringAiRuleAnswerModel(
-            RuntimeModelConfiguration models, FakeRuleAnswerModel fakeModel, VersionedAgentPrompts prompts) {
-        this(models, fakeModel, prompts, 0.15, 0.0);
+    public SpringAiRuleAnswerModel(RuntimeModelConfiguration models, VersionedAgentPrompts prompts) {
+        this(models, prompts, 0.15, 0.0);
     }
 
     @Autowired
     public SpringAiRuleAnswerModel(
             RuntimeModelConfiguration models,
-            FakeRuleAnswerModel fakeModel,
             VersionedAgentPrompts prompts,
             @Value("${rulepilot.answer.temperature:0.15}") double answerTemperature,
             @Value("${rulepilot.answer.interpretation-temperature:0.0}") double interpretationTemperature) {
         requireValidTemperature("answer", answerTemperature);
         requireValidTemperature("answer interpretation", interpretationTemperature);
         this.models = models;
-        this.fakeModel = fakeModel;
         this.prompts = prompts;
         this.answerTemperature = answerTemperature;
         this.interpretationTemperature = interpretationTemperature;
@@ -103,9 +124,7 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
 
     @Override
     public ModelDraft compose(ModelRequest request, String ownerUsername) {
-        if (usesFake(ownerUsername)) {
-            return fakeModel.compose(request);
-        }
+        requireConfigured(ownerUsername);
         RuntimeException firstFailure;
         try {
             return composeOnce(request, "", ownerUsername);
@@ -137,9 +156,7 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
             ModelDraft previousDraft,
             java.util.List<String> feedback,
             String ownerUsername) {
-        if (usesFake(ownerUsername)) {
-            return fakeModel.revise(request, previousDraft, feedback);
-        }
+        requireConfigured(ownerUsername);
         try {
             return repairOnce(request, previousDraft, feedback, ownerUsername);
         } catch (RuntimeException exception) {
@@ -157,9 +174,7 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
             List<String> feedback,
             Set<PlayerFacingField> editableFields,
             String ownerUsername) {
-        if (usesFake(ownerUsername)) {
-            return fakeModel.revise(request, previousDraft, feedback);
-        }
+        requireConfigured(ownerUsername);
         try {
             PlayerFacingRepairDraft repaired = repairPlayerFacingOnce(
                     request, previousDraft, feedback, editableFields, ownerUsername);
@@ -172,58 +187,6 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
                 throw new RuleAnswerModelTimeoutException("answer model timed out", exception);
             }
             throw exception;
-        }
-    }
-
-    @Override
-    public List<String> rewriteRetrievalQueries(RetrievalQueryRequest request) {
-        return rewriteRetrievalQueries(request, null);
-    }
-
-    @Override
-    public List<String> rewriteRetrievalQueries(
-            RetrievalQueryRequest request, String ownerUsername) {
-        if (usesFake(ownerUsername)) {
-            return List.of();
-        }
-        try {
-            ChatClient.ChatClientRequestSpec prompt = ChatClient.create(modelFor(ownerUsername)).prompt();
-            if (usesDeepSeekNonThinkingGeneration(ownerUsername) || usesQwen(ownerUsername)) {
-                OpenAiChatOptions.Builder options = OpenAiChatOptions.builder();
-                options.model(modelNameFor(ownerUsername));
-                options.temperature(interpretationTemperature);
-                if (usesDeepSeekNonThinkingGeneration(ownerUsername)) {
-                    options.extraBody(Map.of("thinking", Map.of("type", "disabled")));
-                } else {
-                    options.extraBody(Map.of("enable_thinking", false));
-                }
-                options.responseFormat(ResponseFormat.builder().type(ResponseFormat.Type.JSON_OBJECT).build());
-                prompt = prompt.options(options);
-            } else {
-                prompt = prompt.options(ChatOptions.builder()
-                        .temperature(interpretationTemperature));
-            }
-            RetrievalQueryDraft draft = prompt
-                    .system(prompts.answerRetrievalRewriteSystem())
-                    .user(user -> user.text(prompts.answerRetrievalRewriteUser())
-                            .param("question", request.question())
-                            .param("previousQuestion", request.previousQuestion()))
-                    .call()
-                    .entity(RetrievalQueryDraft.class);
-            if (draft == null || draft.queries() == null) {
-                return List.of();
-            }
-            return draft.queries().stream()
-                    .filter(query -> query != null && !query.isBlank())
-                    .map(String::strip)
-                    .distinct()
-                    .limit(2)
-                    .collect(Collectors.toUnmodifiableList());
-        } catch (RuntimeException exception) {
-            if (isTimeout(exception)) {
-                throw new RuleAnswerModelTimeoutException("answer retrieval rewrite timed out", exception);
-            }
-            return List.of();
         }
     }
 
@@ -245,7 +208,7 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
     @Override
     public Optional<QuestionInterpretationDraft> interpretQuestion(
             QuestionInterpretationRequest request, String ownerUsername) {
-        if (usesFake(ownerUsername)) return Optional.empty();
+        requireConfigured(ownerUsername);
         try {
             String content = interpretQuestionOnce(request, "", ownerUsername);
             Optional<QuestionInterpretationDraft> interpretation = parseQuestionInterpretation(content);
@@ -292,7 +255,7 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
             } else {
                 options.extraBody(Map.of("enable_thinking", false));
             }
-            options.responseFormat(ResponseFormat.builder().type(ResponseFormat.Type.JSON_OBJECT).build());
+            options.responseFormat(responseFormat(QUESTION_INTERPRETATION_SCHEMA, ownerUsername));
             prompt = prompt.options(options);
         } else {
             prompt = prompt.options(ChatOptions.builder()
@@ -329,13 +292,13 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
             } else {
                 options.extraBody(Map.of("enable_thinking", false));
             }
-            options.responseFormat(ResponseFormat.builder().type(ResponseFormat.Type.JSON_OBJECT).build());
+            options.responseFormat(responseFormat(MODEL_DRAFT_SCHEMA, ownerUsername));
             prompt = prompt.options(options);
         } else {
             prompt = prompt.options(ChatOptions.builder()
                     .temperature(answerTemperature));
         }
-        return prompt
+        String content = prompt
                 .system(prompts.answerSystem(request.answerAid().name()))
                 .user(user -> user.text(prompts.answerUser())
                         .param("question", request.question())
@@ -352,7 +315,8 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
                         .param("evidence", request.evidence())
                         .param("repair", repairInstruction))
                 .call()
-                .entity(ModelDraft.class);
+                .content();
+        return parseModelDraft(content);
     }
 
     private ModelDraft repairOnce(
@@ -370,13 +334,13 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
             } else {
                 options.extraBody(Map.of("enable_thinking", false));
             }
-            options.responseFormat(ResponseFormat.builder().type(ResponseFormat.Type.JSON_OBJECT).build());
+            options.responseFormat(responseFormat(MODEL_DRAFT_SCHEMA, ownerUsername));
             prompt = prompt.options(options);
         } else {
             prompt = prompt.options(ChatOptions.builder()
                     .temperature(interpretationTemperature));
         }
-        return prompt
+        String content = prompt
                 .system(ANSWER_REPAIR_SYSTEM)
                 .user(user -> user.text(ANSWER_REPAIR_USER)
                         .param("question", request.question())
@@ -391,7 +355,21 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
                         .param("previousDraft", previousDraft)
                         .param("feedback", feedback))
                 .call()
-                .entity(ModelDraft.class);
+                .content();
+        return parseModelDraft(content);
+    }
+
+    /** Exact admission for the combined natural-answer and machine-decision JSON envelope. */
+    static ModelDraft parseModelDraft(String content) {
+        if (content == null || content.isBlank()) {
+            throw new IllegalStateException("answer model returned no structured output");
+        }
+        try {
+            validateStructuredArrays(content, ANSWER_ARRAY_FIELDS, "answer model output");
+            return JSON.readValue(content, ModelDraft.class);
+        } catch (IOException invalidOutput) {
+            throw new IllegalStateException("answer model returned an invalid structured output contract", invalidOutput);
+        }
     }
 
     private PlayerFacingRepairDraft repairPlayerFacingOnce(
@@ -438,6 +416,24 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
         return "qwen".equals(providerFor(ownerUsername));
     }
 
+    private ResponseFormat responseFormat(String schema, String ownerUsername) {
+        if (usesQwen(ownerUsername)) {
+            return ResponseFormat.builder()
+                    .type(ResponseFormat.Type.JSON_SCHEMA)
+                    .jsonSchema(schema)
+                    .build();
+        }
+        return ResponseFormat.builder().type(ResponseFormat.Type.JSON_OBJECT).build();
+    }
+
+    static String questionInterpretationSchema() {
+        return QUESTION_INTERPRETATION_SCHEMA;
+    }
+
+    static String modelDraftSchema() {
+        return MODEL_DRAFT_SCHEMA;
+    }
+
     private ChatModel modelFor(String ownerUsername) {
         return ownerUsername == null || ownerUsername.isBlank()
                 ? models.modelFor(Role.ANSWER)
@@ -462,13 +458,17 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
                 : models.usesFake(Role.ANSWER, ownerUsername);
     }
 
+    private void requireConfigured(String ownerUsername) {
+        if (usesFake(ownerUsername)) {
+            throw new IllegalStateException("a real answer model is required for rule Q&A");
+        }
+    }
+
     private boolean usesDeepSeekNonThinkingGeneration(String ownerUsername) {
         return ownerUsername == null || ownerUsername.isBlank()
                 ? models.usesDeepSeekNonThinkingGeneration(Role.ANSWER)
                 : models.usesDeepSeekNonThinkingGeneration(Role.ANSWER, ownerUsername);
     }
-
-    private record RetrievalQueryDraft(List<String> queries) {}
 
     private Map<String, Object> rejectedFields(ModelDraft previousDraft, Set<PlayerFacingField> editableFields) {
         Map<String, Object> rejected = new LinkedHashMap<>();
@@ -505,7 +505,7 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
             Set<String> expected = editableFieldNames(editableFields);
             Set<String> actual = new LinkedHashSet<>();
             root.fieldNames().forEachRemaining(actual::add);
-            if (!actual.containsAll(expected) || !PLAYER_FACING_REPAIR_FIELDS.containsAll(actual)) {
+            if (!actual.equals(expected)) {
                 throw new IllegalStateException("player-facing repair returned fields outside its edit scope");
             }
             return new PlayerFacingRepairDraft(
@@ -541,11 +541,12 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
             throw new IllegalStateException("player-facing repair omitted " + field);
         }
         List<String> values = new java.util.ArrayList<>();
+        LinkedHashSet<String> distinct = new LinkedHashSet<>();
         value.forEach(item -> {
-            if (!item.isTextual()) {
-                throw new IllegalStateException("player-facing repair returned a non-text exception");
+            if (!item.isTextual() || item.textValue().isBlank() || !distinct.add(item.textValue().strip())) {
+                throw new IllegalStateException("player-facing repair returned an invalid or duplicated exception");
             }
-            values.add(item.textValue());
+            values.add(item.textValue().strip());
         });
         return List.copyOf(values);
     }
@@ -566,7 +567,10 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
                 throw new IllegalStateException("player-facing repair returned an invalid citation ID", invalidId);
             }
         });
-        return List.copyOf(new LinkedHashSet<>(values));
+        if (new LinkedHashSet<>(values).size() != values.size()) {
+            throw new IllegalStateException("player-facing repair returned duplicated citation IDs");
+        }
+        return List.copyOf(values);
     }
 
     private record PlayerFacingRepairDraft(
@@ -589,7 +593,6 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
                     previous.confidence(),
                     previous.answerBasis(),
                     previous.calculations(),
-                    previous.situationChecks(),
                     previous.walkthroughSteps(),
                     previous.decisionBranches(),
                     previous.exceptionClauses(),
@@ -643,29 +646,54 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
     private Optional<QuestionInterpretationDraft> parseQuestionInterpretation(String content) {
         if (content == null || content.isBlank() || content.length() > 4_000) return Optional.empty();
         try {
-            return Optional.of(JSON.treeToValue(normalizeSoftPresentationHint(JSON.readTree(content)),
-                    QuestionInterpretationDraft.class));
+            return Optional.of(parseQuestionInterpretationDraft(content));
         } catch (IOException invalidOutput) {
             return Optional.empty();
         }
     }
 
-    /**
-     * answerAid controls presentation only, so an unknown value must not discard an otherwise valid retrieval plan
-     * or spend a second model call repairing non-factual UI metadata. Evidence needs and every factual boundary remain
-     * strict because they decide what the agent is allowed to retrieve and publish.
-     */
-    private JsonNode normalizeSoftPresentationHint(JsonNode root) {
-        if (!(root instanceof ObjectNode object)) return root;
-        JsonNode answerAid = object.get("answerAid");
-        if (answerAid == null || !answerAid.isTextual()) return root;
-        try {
-            AnswerAid.valueOf(answerAid.textValue());
-            return root;
-        } catch (IllegalArgumentException unknownPresentationHint) {
-            ObjectNode normalized = object.deepCopy();
-            normalized.put("answerAid", AnswerAid.NONE.name());
-            return normalized;
+    static QuestionInterpretationDraft parseQuestionInterpretationDraft(String content) throws IOException {
+        validateStructuredArrays(
+                content, QUESTION_INTERPRETATION_ARRAY_FIELDS, "question interpretation output");
+        return JSON.readValue(content, QuestionInterpretationDraft.class);
+    }
+
+    private static void validateStructuredArrays(
+            String content, Set<String> requiredTopLevelArrays, String contract) throws IOException {
+        JsonNode root = JSON.readTree(content);
+        if (root == null || !root.isObject()) {
+            throw JsonMappingException.from((JsonParser) null, contract + " must be a JSON object");
+        }
+        for (String field : requiredTopLevelArrays) {
+            JsonNode value = root.get(field);
+            if (value == null || !value.isArray()) {
+                throw JsonMappingException.from(
+                        (JsonParser) null, contract + " field " + field + " must be an array");
+            }
+        }
+        rejectDuplicateArrayItems(root, contract);
+    }
+
+    private static void rejectDuplicateArrayItems(JsonNode node, String path) throws JsonMappingException {
+        if (node.isArray()) {
+            LinkedHashSet<JsonNode> unique = new LinkedHashSet<>();
+            int index = 0;
+            for (JsonNode item : node) {
+                if (!unique.add(item)) {
+                    throw JsonMappingException.from(
+                            (JsonParser) null, path + " contains a duplicate array item at index " + index);
+                }
+                rejectDuplicateArrayItems(item, path + "[" + index + "]");
+                index++;
+            }
+            return;
+        }
+        if (node.isObject()) {
+            var fields = node.fields();
+            while (fields.hasNext()) {
+                var field = fields.next();
+                rejectDuplicateArrayItems(field.getValue(), path + "." + field.getKey());
+            }
         }
     }
 
@@ -673,8 +701,7 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
         if (content == null || content.isBlank()) return "BLANK";
         if (content.length() > 4_000) return "TOO_LONG";
         try {
-            JSON.treeToValue(normalizeSoftPresentationHint(JSON.readTree(content)),
-                    QuestionInterpretationDraft.class);
+            parseQuestionInterpretationDraft(content);
             return "VALID";
         } catch (IOException invalidJson) {
             try {

@@ -89,7 +89,8 @@ public class ValidatedAssistantReadTools implements AssistantReadTools {
                     visuals.values().stream()
                             .filter(image -> image.pageNumber() >= source.pageFrom()
                                     && image.pageNumber() <= source.pageTo())
-                            .toList());
+                            .toList(),
+                    contentKind(source));
         }).toList();
     }
 
@@ -131,7 +132,8 @@ public class ValidatedAssistantReadTools implements AssistantReadTools {
                         visuals.values().stream()
                                 .filter(image -> image.pageNumber() >= source.pageFrom()
                                         && image.pageNumber() <= source.pageTo())
-                                .toList()))
+                                .toList(),
+                        contentKind(source)))
                 .toList();
     }
 
@@ -150,7 +152,9 @@ public class ValidatedAssistantReadTools implements AssistantReadTools {
                         source.heading(),
                         source.excerpt(),
                         source.pageFrom(),
-                        source.pageTo()))
+                        source.pageTo(),
+                        List.of(),
+                        contentKind(source)))
                 .toList();
     }
 
@@ -198,7 +202,18 @@ public class ValidatedAssistantReadTools implements AssistantReadTools {
                 source.heading(),
                 source.excerpt(),
                 source.pageFrom(),
-                source.pageTo());
+                source.pageTo(),
+                List.of(),
+                contentKind(source));
+    }
+
+    private RuleEvidence.ContentKind contentKind(RuleEvidenceHit source) {
+        return switch (source.contentKind()) {
+            case CANONICAL_TEXT -> RuleEvidence.ContentKind.CANONICAL_TEXT;
+            case VISUAL_PLACEHOLDER -> RuleEvidence.ContentKind.VISUAL_PLACEHOLDER;
+            case CANONICAL_TEXT_WITH_VISUAL_FACTS -> RuleEvidence.ContentKind.CANONICAL_TEXT_WITH_VISUAL_FACTS;
+            case VISUAL_TRANSCRIPTION -> RuleEvidence.ContentKind.VISUAL_TRANSCRIPTION;
+        };
     }
 
     private Map<Integer, RulePageImage> pageVisuals(
