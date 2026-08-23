@@ -8,7 +8,6 @@ import static org.mockito.Mockito.when;
 
 import com.rulepilot.modelconfig.RuntimeModelConfiguration;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.Message;
-import com.rulepilot.recommendation.BoardGameRecommendationModel.NaturalReplyRequest;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.CompletionStatus;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.Request;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.ToolChoice;
@@ -26,47 +25,6 @@ import org.springframework.ai.openai.OpenAiChatOptions;
 import reactor.core.publisher.Flux;
 
 class SpringAiBoardGameRecommendationModelTest {
-
-    @Test
-    void streamsAccumulatedNaturalReplyTextWithoutAdvertisingActions() {
-        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
-        ChatModel chatModel = mock(ChatModel.class);
-        when(configuration.modelFor(RuntimeModelConfiguration.Role.RECOMMENDATION)).thenReturn(chatModel);
-        when(configuration.providerFor(RuntimeModelConfiguration.Role.RECOMMENDATION)).thenReturn("qwen");
-        when(configuration.modelNameFor(RuntimeModelConfiguration.Role.RECOMMENDATION)).thenReturn("qwen3.7-plus");
-        when(chatModel.getDefaultOptions()).thenReturn(OpenAiChatOptions.builder()
-                .apiKey("test-key")
-                .baseUrl("https://provider.example/v1")
-                .model("qwen3.7-plus")
-                .build());
-        when(chatModel.stream(any(Prompt.class))).thenReturn(Flux.just(
-                new ChatResponse(List.of(new Generation(AssistantMessage.builder().content("嗨，").build()))),
-                new ChatResponse(List.of(new Generation(
-                        AssistantMessage.builder().content("今天想聊什么？").build(),
-                        ChatGenerationMetadata.builder().finishReason("stop").build())))));
-        var adapter = new SpringAiBoardGameRecommendationModel(configuration);
-        java.util.ArrayList<String> parts = new java.util.ArrayList<>();
-
-        var reply = adapter.streamNaturalReply(
-                new NaturalReplyRequest(
-                        List.of(Message.system("Reply briefly."), Message.user("你好")),
-                        96,
-                        List.of("⟦END⟧")),
-                null,
-                parts::add);
-
-        assertThat(parts).containsExactly("嗨，", "嗨，今天想聊什么？");
-        assertThat(reply.text()).isEqualTo("嗨，今天想聊什么？");
-        assertThat(reply.completionStatus()).isEqualTo(CompletionStatus.COMPLETE);
-        ArgumentCaptor<Prompt> prompt = ArgumentCaptor.forClass(Prompt.class);
-        verify(chatModel).stream(prompt.capture());
-        OpenAiChatOptions options = (OpenAiChatOptions) prompt.getValue().getOptions();
-        assertThat(options.getMaxTokens()).isEqualTo(96);
-        assertThat(options.getStop()).containsExactly("⟦END⟧");
-        assertThat(options.getToolCallbacks()).isNull();
-        assertThat(options.getExtraBody())
-                .containsExactlyInAnyOrderEntriesOf(java.util.Map.of("enable_thinking", false));
-    }
 
     @Test
     void streamsTheSameAutonomousTurnWhenTheModelChoosesDirectConversation() {

@@ -115,6 +115,37 @@ describe('BackgroundWorkCenter request lifecycle', () => {
     wrapper.unmount()
   })
 
+  it('publishes a validated import immediately while the durable refresh is still pending', async () => {
+    let initialRefresh = true
+    vi.stubGlobal('fetch', vi.fn((input: string | URL | Request) => {
+      const path = String(input)
+      if (initialRefresh && (path.includes('/api/v1/assistant-runs/active') || isBackgroundBaseList(path))) {
+        return Promise.resolve(response([]))
+      }
+      return new Promise<Response>(() => {})
+    }))
+    const wrapper = await mountCenter('player')
+    await flushPromises()
+    await openCenter(wrapper)
+    expect(wrapper.text()).toContain('当前没有后台任务')
+
+    initialRefresh = false
+    notifyBackgroundWorkChanged({
+      importJob: {
+        id: 'import-optimistic', title: '刚开始的里斯本讲解', sourceDomain: 'publisher.example', stage: 'QUEUED',
+        downloadedBytes: 0, totalBytes: null, documentVersionId: null, errorCode: null,
+        teachingHandoffState: 'WAITING_FOR_DOCUMENT', teachingPreparationRunId: null,
+        teachingErrorCode: null, downloadCompletedAt: null, importCompletedAt: null,
+        teachingHandoffUpdatedAt: null, updatedAt: '2026-08-23T06:00:00Z',
+      },
+    })
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.text()).toContain('刚开始的里斯本讲解')
+    expect(wrapper.text()).toContain('等待下载')
+    wrapper.unmount()
+  })
+
   it('keeps the missing-result reason and bounded recovery visible after the launch dialog is closed', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
       const path = String(input)

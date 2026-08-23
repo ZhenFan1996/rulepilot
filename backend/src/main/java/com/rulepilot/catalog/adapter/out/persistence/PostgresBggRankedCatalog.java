@@ -1,6 +1,8 @@
 package com.rulepilot.catalog.adapter.out.persistence;
 
 import com.rulepilot.catalog.BggGameType;
+import com.rulepilot.catalog.BoardGameRecommendationCatalog.CatalogFilters;
+import com.rulepilot.catalog.BoardGameRecommendationCatalog.CatalogSort;
 import com.rulepilot.catalog.application.BggRankedCatalog.Page;
 import com.rulepilot.catalog.application.BggRankedCatalog.Query;
 import com.rulepilot.catalog.application.BggRankedCatalog.RankedGame;
@@ -48,6 +50,19 @@ public class PostgresBggRankedCatalog implements BggRankedCatalogRepository {
             g.familygames_rank, g.partygames_rank, g.strategygames_rank, g.thematic_rank,
             g.wargames_rank
             """;
+    private static final String TEXT_SEARCH_VECTOR = """
+            to_tsvector('english'::regconfig,
+                coalesce(cache.payload->>'name', '') || ' ' ||
+                coalesce(cache.payload->>'chineseName', '') || ' ' ||
+                coalesce(cache.payload->>'description', '') || ' ' ||
+                coalesce(cache.payload->>'categories', '') || ' ' ||
+                coalesce(cache.payload->>'mechanics', '') || ' ' ||
+                coalesce(cache.payload->>'families', '') || ' ' ||
+                coalesce(cache.payload->>'designers', '') || ' ' ||
+                coalesce(cache.payload->>'publishers', ''))
+            """;
+    private static final String TEXT_SEARCH_QUERY =
+            "websearch_to_tsquery('english'::regconfig, regexp_replace(:textQuery, '\\s+', ' OR ', 'g'))";
 
     private final NamedParameterJdbcTemplate jdbc;
 
@@ -169,19 +184,86 @@ public class PostgresBggRankedCatalog implements BggRankedCatalogRepository {
             List<String> mechanics,
             List<String> designers,
             int maximum) {
-        if (maximum < 1 || maximum > 20) {
-            throw new IllegalArgumentException("BGG filtered search maximum must be between 1 and 20");
-        }
-        MapSqlParameterSource parameters = new MapSqlParameterSource().addValue("limit", maximum);
+        return findByMetadataFilters(types, categories, mechanics, designers, maximum, 0);
+    }
+
+    @Override
+    public List<RankedGame> findByMetadataFilters(
+            List<BggGameType> types,
+            List<String> categories,
+            List<String> mechanics,
+            List<String> designers,
+            int maximum,
+            int offset) {
+        return findByMetadataFilters(new CatalogFilters(types, categories, mechanics, designers, maximum, offset));
+    }
+
+    @Override
+    public List<RankedGame> findByMetadataFilters(CatalogFilters filters) {
+        MapSqlParameterSource parameters = new MapSqlParameterSource()
+                .addValue("limit", filters.maximum())
+                .addValue("offset", filters.offset());
         List<String> clauses = new ArrayList<>();
-        clauses.add(typeFilter(types));
-        addMetadataFilters(clauses, parameters, "categories", "category", categories);
-        addMetadataFilters(clauses, parameters, "mechanics", "mechanic", mechanics);
-        addMetadataFilters(clauses, parameters, "designers", "designer", designers);
-        String sql = "SELECT " + COLUMNS + " FROM bgg_ranked_game g WHERE "
+        clauses.add(typeFilter(filters.types()));
+        addMetadataFilters(clauses, parameters, "categories", "category", filters.categories());
+        addMetadataFilters(clauses, parameters, "mechanics", "mechanic", filters.mechanics());
+        addMetadataFilters(clauses, parameters, "designers", "designer", filters.designers());
+        addMetadataFilters(clauses, parameters, "publishers", "publisher", filters.publishers());
+        addMetadataFilters(clauses, parameters, "families", "family", filters.families());
+        if (filters.minimumPublicationYear() != null) {
+            clauses.add("g.publication_year >= :minimumPublicationYear");
+            parameters.addValue("minimumPublicationYear", filters.minimumPublicationYear());
+        }
+        if (filters.maximumPublicationYear() != null) {
+            clauses.add("g.publication_year <= :maximumPublicationYear");
+            parameters.addValue("maximumPublicationYear", filters.maximumPublicationYear());
+        }
+        if (filters.minimumAverageRating() != null) {
+            clauses.add("g.average_rating >= :minimumAverageRating");
+            parameters.addValue("minimumAverageRating", filters.minimumAverageRating());
+        }
+        if (filters.minimumRatingsCount() != null) {
+            clauses.add("g.users_rated >= :minimumRatingsCount");
+            parameters.addValue("minimumRatingsCount", filters.minimumRatingsCount());
+        }
+        String textMatches = "";
+        String textJoin = "";
+        if (filters.textQuery() != null) {
+            parameters.addValue("textQuery", filters.textQuery());
+            textMatches = """
+                    WITH text_matches AS MATERIALIZED (
+                        SELECT cache.bgg_id,
+                               max(ts_rank_cd(%s, %s)) AS relevance
+                        FROM bgg_metadata_cache cache
+                        WHERE cache.cache_kind IN ('DISCOVERY', 'GAME')
+                          AND cache.stale_until > NOW()
+                          AND %s @@ %s
+                        GROUP BY cache.bgg_id
+                    )
+                    """.formatted(
+                    TEXT_SEARCH_VECTOR,
+                    TEXT_SEARCH_QUERY,
+                    TEXT_SEARCH_VECTOR,
+                    TEXT_SEARCH_QUERY);
+            textJoin = " LEFT JOIN text_matches text_match ON text_match.bgg_id = g.bgg_id ";
+        }
+        String relevanceOrder = filters.textQuery() == null
+                ? ""
+                : "text_match.relevance DESC NULLS LAST, ";
+        String sql = textMatches + "SELECT " + QUALIFIED_COLUMNS + " FROM bgg_ranked_game g " + textJoin + " WHERE "
                 + String.join(" AND ", clauses)
-                + " ORDER BY g.overall_rank ASC NULLS LAST, g.users_rated DESC, g.bgg_id ASC LIMIT :limit";
+                + " ORDER BY " + relevanceOrder + metadataOrder(filters.sort()) + " LIMIT :limit OFFSET :offset";
         return jdbc.query(sql, parameters, this::mapGame);
+    }
+
+    private String metadataOrder(CatalogSort sort) {
+        return switch (sort) {
+            case RANK -> "g.overall_rank ASC NULLS LAST, g.users_rated DESC, g.bgg_id ASC";
+            case RATING -> "g.bayes_average DESC NULLS LAST, g.users_rated DESC, g.bgg_id ASC";
+            case POPULARITY -> "g.users_rated DESC, g.overall_rank ASC NULLS LAST, g.bgg_id ASC";
+            case NEWEST -> "g.publication_year DESC NULLS LAST, g.overall_rank ASC NULLS LAST, g.bgg_id ASC";
+            case RELEVANCE -> "g.overall_rank ASC NULLS LAST, g.users_rated DESC, g.bgg_id ASC";
+        };
     }
 
     private String typeFilter(List<BggGameType> types) {

@@ -161,9 +161,7 @@ class BggMetadataLocalizationServiceTest {
     }
 
     @Test
-    void exposesOnlyTheBoundedPresentationPortToTheRecommendationModule() {
-        when(translations.translate(any())).thenReturn(Optional.of(new Translation(
-                "", List.of("动物"), List.of("卡牌轮抽"))));
+    void recommendationPresentationNeverWaitsForOptionalTaxonomyTranslation() {
         var presentation = new BggRecommendationPresentationService(service);
 
         var taxonomy = presentation.localizeTaxonomy(
@@ -171,8 +169,9 @@ class BggMetadataLocalizationServiceTest {
 
         assertThat(presentation.usesSimplifiedChinese("zh-Hans")).isTrue();
         assertThat(presentation.normalizeSourceName("遊戲說明")).isEqualTo("游戏说明");
-        assertThat(taxonomy.categories()).containsEntry("Animals", "动物");
-        assertThat(taxonomy.mechanics()).containsEntry("Card Drafting", "卡牌轮抽");
+        assertThat(taxonomy.categories()).containsEntry("Animals", "Animals");
+        assertThat(taxonomy.mechanics()).containsEntry("Card Drafting", "Card Drafting");
+        verify(translations, never()).translate(any());
     }
 
     @Test

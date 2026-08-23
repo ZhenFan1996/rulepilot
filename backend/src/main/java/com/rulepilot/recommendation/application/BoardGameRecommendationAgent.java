@@ -21,17 +21,18 @@ import org.springframework.stereotype.Service;
 public class BoardGameRecommendationAgent {
 
     static final String REPLY_TOOL = "reply_to_user";
-    static final String ASK_TOOL = "ask_user";
+    static final String IDENTITY_REPLY_TOOL = "finish_identity_check";
+    static final String ASK_TOOL = "ask_only_if_no_useful_answer";
     static final String RESOLVE_TOOL = "resolve_bgg_game";
     static final String SEARCH_TOOL = "inspect_candidate_titles";
     static final String BROWSE_TOOL = "browse_bgg_catalog";
-    static final String DISCOVER_TOOL = "discover_public_candidates";
+    static final String DISCOVER_TOOL = "discover_public_relationship";
     static final String LOOKUP_TOOL = "lookup_bgg_games";
     static final String RESEARCH_TOOL = "research_game_fit";
     static final String COMPARE_TOOL = "compare_candidates";
     static final String NO_MATCH_TOOL = "report_no_match";
     static final String RECOMMEND_TOOL = "recommend_games";
-    static final String PROMPT_VERSION = "recommendation-agent-v28-single-agent-tool-planning";
+    static final String PROMPT_VERSION = "recommendation-agent-v64-general-react-memory";
 
     private final RecommendationReActLoop loop;
 

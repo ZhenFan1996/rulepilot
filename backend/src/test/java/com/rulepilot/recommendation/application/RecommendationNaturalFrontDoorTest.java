@@ -28,6 +28,7 @@ import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Research;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.ResolvedRelationship;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Source;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ConversationRequest;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.DialogueMessage;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.DecisionMode;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.Outcome;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendationProfile;
@@ -37,7 +38,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.Consumer;
 import java.util.stream.Collectors;
 import org.junit.jupiter.api.Test;
 
@@ -55,12 +55,14 @@ class RecommendationNaturalFrontDoorTest {
         when(model.configured("player")).thenReturn(true);
         when(model.streamNext(any(), eq("player"), any())).thenAnswer(invocation -> {
             Request request = invocation.getArgument(0);
-            @SuppressWarnings("unchecked")
-            Consumer<String> listener = invocation.getArgument(2);
             captured.set(request);
-            listener.accept(answer.substring(0, 12));
-            listener.accept(answer);
-            return new Turn(answer, List.of(), CompletionStatus.COMPLETE);
+            return new Turn(
+                    "",
+                    List.of(new ToolCall(
+                            "call-reply",
+                            BoardGameRecommendationAgent.REPLY_TOOL,
+                            "{\"playerReply\":\"" + answer + "\"}")),
+                    CompletionStatus.COMPLETE);
         });
         RecommendationReActLoop loop = new RecommendationReActLoop(
                 model,
@@ -78,34 +80,53 @@ class RecommendationNaturalFrontDoorTest {
                 streamed::add);
 
         assertThat(response.outcome()).isEqualTo(Outcome.CONVERSATION);
-        assertThat(response.mode()).isEqualTo(DecisionMode.MODEL_FAST_PATH);
+        assertThat(response.mode()).isEqualTo(DecisionMode.MODEL_ASSISTED);
         assertThat(response.assistantMessage()).isEqualTo(answer);
-        assertThat(streamed).containsExactly(answer.substring(0, 12), answer);
+        assertThat(streamed).containsExactly(answer);
         assertThat(response.harness().modelCalls()).isEqualTo(1);
         assertThat(response.harness().catalogCalls()).isZero();
         assertThat(response.harness().webResearchCalls()).isZero();
-        assertThat(response.harness().actions()).containsExactly("STREAMED_DIRECT_AGENT_REPLY");
+        assertThat(response.harness().actions()).containsExactly("REPLY_TO_USER");
 
         Request first = captured.get();
         assertThat(first).isNotNull();
+        assertThat(first.maxOutputTokens())
+                .as("an open conversational turn must have enough room to finish naturally")
+                .isGreaterThanOrEqualTo(512);
+        assertThat(first.toolChoice()).isEqualTo(BoardGameRecommendationModel.ToolChoice.REQUIRED);
         assertThat(first.tools())
                 .extracting(BoardGameRecommendationModel.ToolSpec::name)
                 .contains(
                         BoardGameRecommendationAgent.REPLY_TOOL,
-                        BoardGameRecommendationAgent.ASK_TOOL,
                         BoardGameRecommendationAgent.RESOLVE_TOOL,
                         BoardGameRecommendationAgent.SEARCH_TOOL,
                         BoardGameRecommendationAgent.BROWSE_TOOL,
-                        BoardGameRecommendationAgent.DISCOVER_TOOL);
+                        BoardGameRecommendationAgent.DISCOVER_TOOL)
+                .doesNotContain(BoardGameRecommendationAgent.ASK_TOOL);
         var toolSchemas = first.tools().stream().collect(Collectors.toMap(
                 BoardGameRecommendationModel.ToolSpec::name,
                 BoardGameRecommendationModel.ToolSpec::inputSchema));
         assertThat(toolSchemas.get(BoardGameRecommendationAgent.SEARCH_TOOL))
-                .doesNotContain("preferenceUpdates");
+                .contains("preferenceUpdates");
         assertThat(toolSchemas.get(BoardGameRecommendationAgent.DISCOVER_TOOL))
+                .contains("subject", "afterIdentity", "RECOMMEND_WITH_CARDS")
+                .doesNotContain("goalPlan", "workAfterIdentity")
                 .doesNotContain("preferenceUpdates");
         assertThat(toolSchemas.get(BoardGameRecommendationAgent.BROWSE_TOOL))
-                .contains("purpose", "categories", "mechanics", "designers");
+                .contains(
+                        "purpose",
+                        "categories",
+                        "mechanics",
+                        "designers",
+                        "publishers",
+                        "families",
+                        "minimumPublicationYear",
+                        "minimumAverageRating",
+                        "minimumRatingsCount",
+                        "textQuery",
+                        "RELEVANCE",
+                        "offset",
+                        "preferenceUpdates");
         assertThat(first.tools().stream()
                         .filter(tool -> BoardGameRecommendationAgent.BROWSE_TOOL.equals(tool.name()))
                         .findFirst()
@@ -115,16 +136,134 @@ class RecommendationNaturalFrontDoorTest {
         String system = first.messages().getFirst().content();
         assertThat(system)
                 .contains(
-                        "Decide the route yourself",
-                        "long-lived local verified-relationship cache first",
-                        "Plan across several reads",
-                        "reuse the exact observed designer")
-                .doesNotContain("Direct prose is for conversation that needs no external information")
-                .hasSizeLessThan(3_500);
+                        "one knowledgeable and natural board-game companion",
+                        "Run the ReAct loop yourself",
+                        "actions all belong to you, not to separate models or roles",
+                        "Prefer the local BGG catalog",
+                        "Write the complete player-facing reply freely and naturally")
+                .doesNotContain(
+                        "Direct prose is for conversation that needs no external information",
+                        "shared long-lived cache precedes any cold network search",
+                        "reuse the canonical designer")
+                .hasSizeLessThan(2_500);
         String userInput = first.messages().getLast().content();
         assertThat(userInput)
                 .contains("recentConversation", "齿轮先生")
                 .doesNotContain("executionBudget", "availableCapabilities", "\"goal\"");
+
+        loop.stopBoundedCalls();
+    }
+
+    @Test
+    void usesAgentChosenCatalogPagesToReturnANewSlateWithoutRepeatingCards() {
+        BoardGameRecommendationModel model = mock(BoardGameRecommendationModel.class);
+        BoardGameRecommendationWebResearch research = mock(BoardGameRecommendationWebResearch.class);
+        List<Integer> observedOffsets = new ArrayList<>();
+        List<Game> catalogGames = List.of(
+                game(901, "First Horizon", "Range Designer"),
+                game(902, "Second Horizon", "Range Designer"),
+                game(903, "Third Horizon", "Range Designer"),
+                game(904, "Fourth Horizon", "Range Designer"));
+        BoardGameRecommendationCatalog catalog = new BoardGameRecommendationCatalog() {
+            @Override
+            public CandidateSet findCandidates(BggGameType requiredType, List<BggGameType> suggestedTypes, int maximum) {
+                return new CandidateSet(catalogGames.size(), catalogGames.stream().limit(maximum).toList());
+            }
+
+            @Override
+            public List<Game> findGamesByIds(List<Integer> bggIds) {
+                return catalogGames.stream()
+                        .filter(game -> bggIds.contains(game.ranking().bggId()))
+                        .toList();
+            }
+
+            @Override
+            public CandidateSet searchGames(CatalogFilters filters) {
+                observedOffsets.add(filters.offset());
+                return new CandidateSet(
+                        catalogGames.size(),
+                        catalogGames.stream()
+                                .skip(filters.offset())
+                                .limit(filters.maximum())
+                                .toList());
+            }
+
+            @Override
+            public int gameCount() {
+                return catalogGames.size();
+            }
+        };
+        when(research.configured()).thenReturn(false);
+        when(model.configured("player")).thenReturn(true);
+        when(model.streamNext(any(), eq("player"), any())).thenReturn(
+                new Turn(
+                        "",
+                        List.of(new ToolCall(
+                                "browse-first-page",
+                                BoardGameRecommendationAgent.BROWSE_TOOL,
+                                "{\"purpose\":\"SELECTABLE_CARDS\",\"limit\":2,\"offset\":0}")),
+                        CompletionStatus.COMPLETE),
+                new Turn(
+                        "",
+                        List.of(new ToolCall(
+                                "browse-second-page",
+                                BoardGameRecommendationAgent.BROWSE_TOOL,
+                                "{\"purpose\":\"SELECTABLE_CARDS\",\"limit\":2,\"offset\":2}")),
+                        CompletionStatus.COMPLETE));
+        when(model.next(any(), eq("player"))).thenReturn(
+                new Turn(
+                        "",
+                        List.of(new ToolCall(
+                                "recommend-first-page",
+                                BoardGameRecommendationAgent.RECOMMEND_TOOL,
+                                "{\"selections\":[{\"bggId\":901,\"reason\":\"它把探索节奏放在第一位。\"},{\"bggId\":902,\"reason\":\"它提供了另一种推进方向。\"}],\"requestedCount\":2,\"playerReply\":\"先看这两款。\"}")),
+                        CompletionStatus.COMPLETE),
+                new Turn(
+                        "",
+                        List.of(new ToolCall(
+                                "recommend-second-page",
+                                BoardGameRecommendationAgent.RECOMMEND_TOOL,
+                                "{\"selections\":[{\"bggId\":903,\"reason\":\"它延续条件但换了决策重心。\"},{\"bggId\":904,\"reason\":\"它是同一方向的另一种取舍。\"}],\"requestedCount\":2,\"playerReply\":\"这次换一批，不重复前两款。\"}")),
+                        CompletionStatus.COMPLETE));
+        var properties = new BoardGameRecommendationProperties(
+                8, 3, new BigDecimal("0.65"), Duration.ofSeconds(30));
+        RecommendationReActLoop loop = new RecommendationReActLoop(
+                model,
+                new BoardGameRecommendationTools(catalog, research),
+                new BoardGameRecommendationSelector(properties),
+                properties,
+                new ObjectMapper());
+
+        var first = loop.converse(
+                new ConversationRequest(RecommendationProfile.empty(), "给我两款有远方感的桌游。"),
+                "zh-CN",
+                "player",
+                ignored -> {});
+        List<Integer> firstIds = first.games().stream()
+                .map(entry -> entry.game().ranking().bggId())
+                .toList();
+        var second = loop.converse(
+                new ConversationRequest(
+                        first.profile(),
+                        "这两款都不要，同样方向再来两款。",
+                        List.of(),
+                        List.of(),
+                        null,
+                        List.of(),
+                        firstIds),
+                "zh-CN",
+                "player",
+                ignored -> {});
+        List<Integer> secondIds = second.games().stream()
+                .map(entry -> entry.game().ranking().bggId())
+                .toList();
+
+        assertThat(observedOffsets).containsExactly(0, 2);
+        assertThat(firstIds).containsExactly(901, 902);
+        assertThat(secondIds).containsExactly(903, 904).doesNotContainAnyElementsOf(firstIds);
+        assertThat(first.harness().modelCalls()).isEqualTo(2);
+        assertThat(second.harness().modelCalls()).isEqualTo(2);
+        assertThat(second.harness().actions()).containsExactly("SEARCH_BGG_CATALOG", "RECOMMEND_GAMES");
 
         loop.stopBoundedCalls();
     }
@@ -217,7 +356,7 @@ class RecommendationNaturalFrontDoorTest {
                         List.of(new ToolCall(
                                 "call-discover",
                                 BoardGameRecommendationAgent.DISCOVER_TOOL,
-                                "{\"evidence\":\"U1\",\"purpose\":\"IDENTITY_ONLY\"}")),
+                                "{\"evidence\":\"U1\",\"subject\":\"Studio Architect alias\",\"afterIdentity\":\"RECOMMEND_WITH_CARDS\"}")),
                         CompletionStatus.COMPLETE),
                 new Turn(
                         "",
@@ -243,7 +382,10 @@ class RecommendationNaturalFrontDoorTest {
                 new ObjectMapper());
 
         var response = loop.converse(
-                new ConversationRequest(RecommendationProfile.empty(), "我想玩那位‘齿轮先生’设计的桌游，给我两款。"),
+                new ConversationRequest(
+                        RecommendationProfile.empty(),
+                        "你知道桌游圈里的‘齿轮先生’吗？请先说出他是谁，再推荐两款他的游戏。"
+                                + "我要从其中选择《Anchor Workshop》继续读规则书、听讲解并答疑。"),
                 "zh-CN",
                 "player",
                 ignored -> {});
@@ -258,16 +400,110 @@ class RecommendationNaturalFrontDoorTest {
                 .contains(
                         "SEARCH_BGG_CATALOG",
                         "DISCOVER_CANDIDATES",
-                        "SEARCH_BGG_BY_NAME",
-                        "LOOKUP_BGG_CANDIDATES",
-                        "SEARCH_BGG_CATALOG",
+                        "DISCOVERY_RELATIONSHIP_VERIFIED",
                         "RECOMMEND_GAMES");
 
         loop.stopBoundedCalls();
     }
 
     @Test
-    void identityAnswerCannotReplaceTheVerifiedDesignerWithTheEvidenceCarrierGame() {
+    void appliesExplicitHardPreferencesOnTheCandidateReadBeforeSelectingCards() {
+        BoardGameRecommendationModel model = mock(BoardGameRecommendationModel.class);
+        BoardGameRecommendationWebResearch research = mock(BoardGameRecommendationWebResearch.class);
+        AtomicReference<Request> recommendationRequest = new AtomicReference<>();
+        Game eligible = game(801, "Clockwork Supper", "Studio Architect", 75);
+        Game tooLong = game(802, "Long Workshop", "Studio Architect", 90);
+        BoardGameRecommendationCatalog catalog = new BoardGameRecommendationCatalog() {
+            @Override
+            public CandidateSet findCandidates(BggGameType requiredType, List<BggGameType> suggestedTypes, int maximum) {
+                return new CandidateSet(2, List.of(eligible, tooLong));
+            }
+
+            @Override
+            public List<Game> findGamesByIds(List<Integer> bggIds) {
+                return List.of(eligible, tooLong).stream()
+                        .filter(game -> bggIds.contains(game.ranking().bggId()))
+                        .toList();
+            }
+
+            @Override
+            public List<Ranking> searchByNames(List<String> names) {
+                return List.of();
+            }
+
+            @Override
+            public CandidateSet searchGames(CatalogFilters filters) {
+                return new CandidateSet(2, List.of(eligible, tooLong));
+            }
+
+            @Override
+            public int gameCount() {
+                return 2;
+            }
+        };
+        when(research.configured()).thenReturn(false);
+        when(model.configured("player")).thenReturn(true);
+        when(model.streamNext(any(), eq("player"), any())).thenReturn(new Turn(
+                "",
+                List.of(new ToolCall(
+                        "call-browse",
+                        BoardGameRecommendationAgent.BROWSE_TOOL,
+                        """
+                        {"purpose":"SELECTABLE_CARDS","limit":8,"preferenceUpdates":[
+                          {"field":"playerCount","value":4,"evidence":"U1","evidenceClassification":"DIRECT"},
+                          {"field":"durationMinutes","value":{"minimum":null,"maximum":75},"evidence":"U1","evidenceClassification":"DIRECT"}
+                        ]}
+                        """)),
+                CompletionStatus.COMPLETE));
+        when(model.next(any(), eq("player"))).thenAnswer(invocation -> {
+            recommendationRequest.set(invocation.getArgument(0));
+            return new Turn(
+                    "",
+                    List.of(new ToolCall(
+                            "call-recommend",
+                            BoardGameRecommendationAgent.RECOMMEND_TOOL,
+                            """
+                            {"selections":[{"bggId":801,"reason":"能在今晚的时间上限内完整收尾。"}],"requestedCount":1,"playerReply":"先看这一款。"}
+                            """)),
+                    CompletionStatus.COMPLETE);
+        });
+        var properties = new BoardGameRecommendationProperties(
+                8, 3, new BigDecimal("0.65"), Duration.ofSeconds(30));
+        RecommendationReActLoop loop = new RecommendationReActLoop(
+                model,
+                new BoardGameRecommendationTools(catalog, research),
+                new BoardGameRecommendationSelector(properties),
+                properties,
+                new ObjectMapper());
+        var response = loop.converse(
+                new ConversationRequest(RecommendationProfile.empty(), "我们 4 个人，最多 75 分钟，推荐一款。"),
+                "zh-CN",
+                "player",
+                ignored -> {});
+
+        assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
+        assertThat(response.games())
+                .extracting(entry -> entry.game().ranking().bggId())
+                .containsExactly(801);
+        assertThat(response.profile().playerCount().minimum()).isEqualTo(4);
+        assertThat(response.profile().playerCount().maximum()).isEqualTo(4);
+        assertThat(response.profile().durationMinutes().maximum()).isEqualTo(75);
+        assertThat(response.harness().modelCalls()).isEqualTo(2);
+        assertThat(response.harness().actions())
+                .containsSubsequence("UPDATE_PREFERENCES", "SEARCH_BGG_CATALOG", "RECOMMEND_GAMES")
+                .doesNotContain("RECONSIDER_SELECTION_AFTER_PREFERENCE_UPDATE");
+        String recommendationSchema = recommendationRequest.get().tools().stream()
+                .filter(tool -> BoardGameRecommendationAgent.RECOMMEND_TOOL.equals(tool.name()))
+                .findFirst()
+                .orElseThrow()
+                .inputSchema();
+        assertThat(recommendationSchema).doesNotContain("preferenceUpdates");
+
+        loop.stopBoundedCalls();
+    }
+
+    @Test
+    void verifiedIdentityFinishesBeforeAnotherModelTurnCanReplaceItWithTheEvidenceCarrierGame() {
         BoardGameRecommendationModel model = mock(BoardGameRecommendationModel.class);
         Game evidenceCarrier = game(701, "Anchor Workshop", "Studio Architect");
         BoardGameRecommendationCatalog catalog = new BoardGameRecommendationCatalog() {
@@ -320,28 +556,150 @@ class RecommendationNaturalFrontDoorTest {
                                 List.of(1))));
             }
         };
+        AtomicReference<Request> followupRequest = new AtomicReference<>();
+        when(model.configured("player")).thenReturn(true);
+        when(model.streamNext(any(), eq("player"), any())).thenReturn(new Turn(
+                "UNTRUSTED WRONG DRAFT",
+                List.of(new ToolCall(
+                        "call-discover",
+                        BoardGameRecommendationAgent.DISCOVER_TOOL,
+                        "{\"evidence\":\"U2\",\"subject\":\"Studio Architect alias\",\"afterIdentity\":\"REPLY_WITH_IDENTITY\"}")),
+                CompletionStatus.COMPLETE));
+        String naturalReply = "知道，你说的是 Studio Architect。这个圈内叫法还挺形象的；如果你愿意，我们可以接着聊聊他的作品有什么共同气质。";
+        when(model.next(any(), eq("player"))).thenAnswer(invocation -> {
+            followupRequest.set(invocation.getArgument(0));
+            return new Turn(
+                    "",
+                    List.of(new ToolCall(
+                            "call-finish-identity",
+                            BoardGameRecommendationAgent.IDENTITY_REPLY_TOOL,
+                            "{\"status\":\"VERIFIED\",\"entityKind\":\"DESIGNER\",\"entityNames\":[\"Studio Architect\"],\"playerReply\":\""
+                                    + naturalReply
+                                    + "\"}")),
+                    CompletionStatus.COMPLETE);
+        });
+        var properties = new BoardGameRecommendationProperties(
+                8, 3, new BigDecimal("0.65"), Duration.ofSeconds(30));
+        RecommendationReActLoop loop = new RecommendationReActLoop(
+                model,
+                new BoardGameRecommendationTools(catalog, research),
+                new BoardGameRecommendationSelector(properties),
+                properties,
+                new ObjectMapper());
+
+        List<String> publishedAnswerParts = new ArrayList<>();
+        var response = loop.converse(
+                new ConversationRequest(
+                        RecommendationProfile.empty(),
+                        "你知道桌游圈里的‘齿轮先生’吗？",
+                        List.of(),
+                        List.of(
+                                new DialogueMessage("user", "上次我们聊到重度欧式。"),
+                                new DialogueMessage("assistant", "记得，你更在意机制之间的联动。")),
+                        null,
+                        List.of(),
+                        List.of(),
+                        List.of()),
+                "zh-CN",
+                "player",
+                ignored -> {},
+                publishedAnswerParts::add);
+
+        assertThat(response.outcome()).isEqualTo(Outcome.CONVERSATION);
+        assertThat(response.assistantMessage()).isEqualTo(naturalReply);
+        assertThat(publishedAnswerParts)
+                .as("only the validated terminal reply may reach the player stream")
+                .containsExactly(naturalReply);
+        assertThat(response.assistantMessage()).doesNotContain("Anchor Workshop");
+        assertThat(response.harness().actions())
+                .contains("REPLY_TO_USER")
+                .noneMatch(action -> action.startsWith("REJECTED_"));
+        assertThat(response.harness().modelCalls()).isEqualTo(2);
+        Request observedFollowup = followupRequest.get();
+        assertThat(observedFollowup.messages().get(1).content())
+                .contains("上次我们聊到重度欧式", "记得，你更在意机制之间的联动", "齿轮先生");
+        assertThat(observedFollowup.messages().get(2).content()).isEmpty();
+        assertThat(observedFollowup.messages().get(3).content())
+                .contains("discoveredRelationship", "Studio Architect", "verifiedGames")
+                .doesNotContain("UNTRUSTED WRONG DRAFT");
+
+        loop.stopBoundedCalls();
+    }
+
+    @Test
+    void stopsAfterAPlayerNamedGameBoundsAnUnresolvedCreatorAlias() {
+        BoardGameRecommendationModel model = mock(BoardGameRecommendationModel.class);
+        Game contextGame = game(
+                703,
+                "Galactic Voyage",
+                "银河漫游",
+                List.of("Avery Stone", "Blake North", "Casey Rivers"));
+        BoardGameRecommendationCatalog catalog = new BoardGameRecommendationCatalog() {
+            @Override
+            public CandidateSet findCandidates(BggGameType requiredType, List<BggGameType> suggestedTypes, int maximum) {
+                return new CandidateSet(1, List.of(contextGame));
+            }
+
+            @Override
+            public List<Game> findGamesByIds(List<Integer> bggIds) {
+                return bggIds.contains(703) ? List.of(contextGame) : List.of();
+            }
+
+            @Override
+            public List<Ranking> searchByNames(List<String> names) {
+                return names.stream()
+                        .filter(name -> name.equals("银河漫游") || name.equals("Galactic Voyage"))
+                        .map(ignored -> contextGame.ranking())
+                        .toList();
+            }
+
+            @Override
+            public int gameCount() {
+                return 1;
+            }
+        };
+        BoardGameRecommendationWebResearch research = new BoardGameRecommendationWebResearch() {
+            @Override
+            public boolean configured() {
+                return true;
+            }
+
+            @Override
+            public Optional<Research> research(Request request) {
+                throw new AssertionError("an identity boundary must not start fit research");
+            }
+
+            @Override
+            public Optional<CandidateDiscovery> discover(DiscoveryRequest request) {
+                return Optional.empty();
+            }
+        };
         when(model.configured("player")).thenReturn(true);
         when(model.streamNext(any(), eq("player"), any())).thenReturn(new Turn(
                 "",
                 List.of(new ToolCall(
                         "call-discover",
                         BoardGameRecommendationAgent.DISCOVER_TOOL,
-                        "{\"evidence\":\"U1\",\"purpose\":\"IDENTITY_ONLY\"}")),
+                        "{\"evidence\":\"U1\",\"subject\":\"the creator alias\",\"afterIdentity\":\"REPLY_WITH_IDENTITY\"}")),
                 CompletionStatus.COMPLETE));
+        String unresolvedReply = "这个叫法我还不能可靠地缩小到某一位，所以不想随便猜。"
+                + "《银河漫游》的 BGG 署名是 Avery Stone、Blake North 和 Casey Rivers；目前更稳妥的说法，是线索只指向这组设计团队。";
         when(model.next(any(), eq("player"))).thenReturn(
                 new Turn(
                         "",
                         List.of(new ToolCall(
-                                "call-wrong-identity",
-                                BoardGameRecommendationAgent.REPLY_TOOL,
-                                "{\"entityKind\":\"GAME\",\"entityName\":\"Anchor Workshop\"}")),
+                                "call-resolve-context",
+                                BoardGameRecommendationAgent.RESOLVE_TOOL,
+                                "{\"title\":\"银河漫游\",\"purpose\":\"COMPARISON_REFERENCE\",\"evidence\":\"U1\"}")),
                         CompletionStatus.COMPLETE),
                 new Turn(
                         "",
                         List.of(new ToolCall(
-                                "call-correct-identity",
-                                BoardGameRecommendationAgent.REPLY_TOOL,
-                                "{\"entityKind\":\"DESIGNER\",\"entityName\":\"Studio Architect\"}")),
+                                "call-finish-unresolved",
+                                BoardGameRecommendationAgent.IDENTITY_REPLY_TOOL,
+                                "{\"status\":\"UNRESOLVED\",\"contextBggIds\":[703],\"playerReply\":\""
+                                        + unresolvedReply
+                                        + "\"}")),
                         CompletionStatus.COMPLETE));
         var properties = new BoardGameRecommendationProperties(
                 8, 3, new BigDecimal("0.65"), Duration.ofSeconds(30));
@@ -353,22 +711,136 @@ class RecommendationNaturalFrontDoorTest {
                 new ObjectMapper());
 
         var response = loop.converse(
-                new ConversationRequest(RecommendationProfile.empty(), "你知道桌游圈里的‘齿轮先生’吗？"),
+                new ConversationRequest(
+                        RecommendationProfile.empty(),
+                        "不要推荐，我只想确认这个圈内称呼是谁。我记得他参与设计了《银河漫游》。"),
                 "zh-CN",
                 "player",
                 ignored -> {});
 
         assertThat(response.outcome()).isEqualTo(Outcome.CONVERSATION);
-        assertThat(response.assistantMessage()).isEqualTo("这个称呼通常指桌游设计师 Studio Architect。");
-        assertThat(response.assistantMessage()).doesNotContain("Anchor Workshop");
-        assertThat(response.harness().actions())
-                .contains("REJECTED_ACTION:IDENTITY_NOT_VERIFIED", "REPLY_TO_USER");
+        assertThat(response.assistantMessage()).isEqualTo(unresolvedReply);
         assertThat(response.harness().modelCalls()).isEqualTo(3);
+        assertThat(response.harness().webResearchCalls()).isEqualTo(1);
+        assertThat(response.harness().actions())
+                .containsSubsequence(
+                        "DISCOVER_CANDIDATES",
+                        "RESOLVE_BGG_REFERENCE",
+                        "REPLY_TO_USER:IDENTITY_UNRESOLVED")
+                .doesNotContain("RESEARCH_GAME_FIT");
+
+        loop.stopBoundedCalls();
+    }
+
+    @Test
+    void publishesAGroupAliasOnlyWhenOneBggGameVerifiesEveryDesigner() {
+        BoardGameRecommendationModel model = mock(BoardGameRecommendationModel.class);
+        List<String> designers = List.of("Avery Stone", "Blake North", "Casey Rivers");
+        Game evidenceCarrier = game(704, "Shared Orbit", "共同轨道", designers);
+        BoardGameRecommendationCatalog catalog = new BoardGameRecommendationCatalog() {
+            @Override
+            public CandidateSet findCandidates(BggGameType requiredType, List<BggGameType> suggestedTypes, int maximum) {
+                return new CandidateSet(1, List.of(evidenceCarrier));
+            }
+
+            @Override
+            public List<Game> findGamesByIds(List<Integer> bggIds) {
+                return bggIds.contains(704) ? List.of(evidenceCarrier) : List.of();
+            }
+
+            @Override
+            public List<Ranking> searchByNames(List<String> names) {
+                return names.contains("Shared Orbit") ? List.of(evidenceCarrier.ranking()) : List.of();
+            }
+
+            @Override
+            public int gameCount() {
+                return 1;
+            }
+        };
+        BoardGameRecommendationWebResearch research = new BoardGameRecommendationWebResearch() {
+            @Override
+            public boolean configured() {
+                return true;
+            }
+
+            @Override
+            public Optional<Research> research(Request request) {
+                return Optional.empty();
+            }
+
+            @Override
+            public Optional<CandidateDiscovery> discover(DiscoveryRequest request) {
+                return Optional.of(new CandidateDiscovery(
+                        List.of(new CandidateLead(
+                                "Shared Orbit",
+                                "A source applies the community name to the full design team.",
+                                List.of(1))),
+                        List.of(new Source(
+                                1,
+                                "Design team profile",
+                                "https://tabletop.example.test/shared-orbit",
+                                "tabletop.example.test")),
+                        new ResolvedRelationship(RelationshipKind.DESIGNER_GROUP, designers, List.of(1))));
+            }
+        };
+        when(model.configured("player")).thenReturn(true);
+        when(model.streamNext(any(), eq("player"), any())).thenReturn(new Turn(
+                "",
+                List.of(new ToolCall(
+                        "call-discover-group",
+                        BoardGameRecommendationAgent.DISCOVER_TOOL,
+                        "{\"evidence\":\"U1\",\"subject\":\"the team alias\",\"afterIdentity\":\"REPLY_WITH_IDENTITY\"}")),
+                CompletionStatus.COMPLETE));
+        when(model.next(any(), eq("player"))).thenReturn(new Turn(
+                "",
+                List.of(new ToolCall(
+                        "call-finish-group",
+                        BoardGameRecommendationAgent.IDENTITY_REPLY_TOOL,
+                        "{\"status\":\"VERIFIED\",\"entityKind\":\"DESIGNER_GROUP\",\"entityNames\":[\"Avery Stone\",\"Blake North\",\"Casey Rivers\"],\"playerReply\":\"知道，这个称呼说的不是某一位，而是 Avery Stone、Blake North 和 Casey Rivers 这组设计搭档。你要是感兴趣，我们还可以继续聊他们共同作品里的设计取向。\"}")),
+                CompletionStatus.COMPLETE));
+        var properties = new BoardGameRecommendationProperties(
+                8, 3, new BigDecimal("0.65"), Duration.ofSeconds(30));
+        RecommendationReActLoop loop = new RecommendationReActLoop(
+                model,
+                new BoardGameRecommendationTools(catalog, research),
+                new BoardGameRecommendationSelector(properties),
+                properties,
+                new ObjectMapper());
+
+        var response = loop.converse(
+                new ConversationRequest(RecommendationProfile.empty(), "你知道桌游圈里这个团队称呼吗？"),
+                "zh-CN",
+                "player",
+                ignored -> {});
+
+        assertThat(response.outcome()).isEqualTo(Outcome.CONVERSATION);
+        assertThat(response.assistantMessage())
+                .isEqualTo("知道，这个称呼说的不是某一位，而是 Avery Stone、Blake North 和 Casey Rivers 这组设计搭档。你要是感兴趣，我们还可以继续聊他们共同作品里的设计取向。");
+        assertThat(response.harness().modelCalls()).isEqualTo(2);
+        assertThat(response.harness().actions()).contains("REPLY_TO_USER");
 
         loop.stopBoundedCalls();
     }
 
     private Game game(int id, String name, String designer) {
+        return game(id, name, designer, 90);
+    }
+
+    private Game game(int id, String name, String designer, int maximumMinutes) {
+        return game(id, name, "", List.of(designer), maximumMinutes);
+    }
+
+    private Game game(int id, String name, String officialChineseName, List<String> designers) {
+        return game(id, name, officialChineseName, designers, 90);
+    }
+
+    private Game game(
+            int id,
+            String name,
+            String officialChineseName,
+            List<String> designers,
+            int maximumMinutes) {
         return new Game(
                 new Ranking(
                         id,
@@ -381,16 +853,16 @@ class RecommendationNaturalFrontDoorTest {
                         List.of(BggGameType.STRATEGY)),
                 new Details(
                         name,
-                        "",
+                        officialChineseName,
                         "",
                         1,
                         4,
-                        90,
+                        maximumMinutes,
                         new BigDecimal("3.6"),
                         List.of("Strategy"),
                         List.of("Hand Management"),
                         60,
-                        90,
+                        maximumMinutes,
                         12,
                         12,
                         "3",
@@ -398,7 +870,7 @@ class RecommendationNaturalFrontDoorTest {
                         2,
                         100,
                         List.of(),
-                        List.of(designer),
+                        designers,
                         List.of("Studio Publisher"),
                         "A strategy game with interlocking actions.",
                         ""));

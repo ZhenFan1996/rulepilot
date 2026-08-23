@@ -207,12 +207,22 @@ public class BggRankedCatalogService
     @Override
     public CandidateSet searchGames(BoardGameRecommendationCatalog.CatalogFilters filters) {
         if (filters == null) throw new IllegalArgumentException("BGG catalog filters are required");
-        List<RankedGame> ranked = repository.findByMetadataFilters(
+        var checkedFilters = new BoardGameRecommendationCatalog.CatalogFilters(
                 filters.types(),
                 checkedMetadataFilters(filters.categories(), "category"),
                 checkedMetadataFilters(filters.mechanics(), "mechanic"),
                 checkedMetadataFilters(filters.designers(), "designer"),
-                filters.maximum());
+                checkedMetadataFilters(filters.publishers(), "publisher"),
+                checkedMetadataFilters(filters.families(), "family"),
+                filters.minimumPublicationYear(),
+                filters.maximumPublicationYear(),
+                filters.minimumAverageRating(),
+                filters.minimumRatingsCount(),
+                checkedTextQuery(filters.textQuery()),
+                filters.sort(),
+                filters.maximum(),
+                filters.offset());
+        List<RankedGame> ranked = repository.findByMetadataFilters(checkedFilters);
         if (ranked.isEmpty()) return new CandidateSet(gameCount(), List.of());
 
         Map<Integer, DiscoveryGame> available = new LinkedHashMap<>(storedDetails(ranked));
@@ -225,6 +235,16 @@ public class BggRankedCatalogService
                 .map(this::recommendationGame)
                 .toList();
         return new CandidateSet(gameCount(), games);
+    }
+
+    private String checkedTextQuery(String value) {
+        if (value == null) return null;
+        String checked = value.strip().replaceAll("\\s+", " ");
+        if (checked.isBlank()) return null;
+        if (checked.length() > 240) {
+            throw new IllegalArgumentException("BGG text query is invalid");
+        }
+        return checked;
     }
 
     private List<String> checkedMetadataFilters(List<String> values, String label) {

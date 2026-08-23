@@ -55,7 +55,7 @@ class BggPopularMetadataPrewarmer {
             CatalogCoverImages coverImages,
             @Qualifier("bggCoverPrewarmExecutor") TaskExecutor coverExecutor,
             @Value("${rulepilot.bgg.cache.prewarm.enabled:true}") boolean enabled,
-            @Value("${rulepilot.bgg.cache.prewarm.game-count:2000}") int targetGameCount,
+            @Value("${rulepilot.bgg.cache.prewarm.game-count:10000}") int targetGameCount,
             @Value("${rulepilot.bgg.cache.prewarm.cohort-size:500}") int metadataCohortSize,
             @Value("${rulepilot.bgg.cache.prewarm.translation-cohort-size:60}") int translationCohortSize,
             @Value("${rulepilot.bgg.cache.prewarm.lease-duration:PT30M}") Duration leaseDuration) {
@@ -245,8 +245,8 @@ class BggPopularMetadataPrewarmer {
             int metadataCohortSize,
             int translationCohortSize,
             Duration leaseDuration) {
-        if (targetGameCount < 0 || targetGameCount > 5_000) {
-            throw new IllegalArgumentException("BGG prewarm game count must be between 0 and 5000");
+        if (targetGameCount < 0 || targetGameCount > 10_000) {
+            throw new IllegalArgumentException("BGG prewarm game count must be between 0 and 10000");
         }
         if (metadataCohortSize < 1 || metadataCohortSize > 500) {
             throw new IllegalArgumentException("BGG metadata prewarm cohort must be between 1 and 500 games");

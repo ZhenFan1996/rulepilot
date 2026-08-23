@@ -53,6 +53,31 @@ public interface BggRankedCatalogRepository {
         return List.of();
     }
 
+    default List<RankedGame> findByMetadataFilters(
+            List<com.rulepilot.catalog.BggGameType> types,
+            List<String> categories,
+            List<String> mechanics,
+            List<String> designers,
+            int maximum,
+            int offset) {
+        if (offset == 0) return findByMetadataFilters(types, categories, mechanics, designers, maximum);
+        return findByMetadataFilters(types, categories, mechanics, designers, maximum + offset).stream()
+                .skip(offset)
+                .limit(maximum)
+                .toList();
+    }
+
+    default List<RankedGame> findByMetadataFilters(
+            com.rulepilot.catalog.BoardGameRecommendationCatalog.CatalogFilters filters) {
+        return findByMetadataFilters(
+                filters.types(),
+                filters.categories(),
+                filters.mechanics(),
+                filters.designers(),
+                filters.maximum(),
+                filters.offset());
+    }
+
     default List<SelectionCandidate> searchSelections(String query, int maximum) {
         return List.of();
     }
@@ -80,4 +105,5 @@ public interface BggRankedCatalogRepository {
             }
         }
     }
+
 }

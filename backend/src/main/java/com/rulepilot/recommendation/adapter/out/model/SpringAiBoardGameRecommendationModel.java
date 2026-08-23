@@ -3,8 +3,6 @@ package com.rulepilot.recommendation.adapter.out.model;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration;
 import com.rulepilot.recommendation.BoardGameRecommendationModel;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.Message;
-import com.rulepilot.recommendation.BoardGameRecommendationModel.NaturalReply;
-import com.rulepilot.recommendation.BoardGameRecommendationModel.NaturalReplyRequest;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.Request;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.ToolSpec;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.Turn;
@@ -24,7 +22,6 @@ import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
-import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.model.tool.ToolCallingChatOptions;
 import org.springframework.ai.openai.OpenAiChatOptions;
@@ -84,9 +81,8 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
             Request request,
             String ownerUsername,
             Consumer<String> accumulatedTextListener) {
-        // Qwen's compatible endpoint streams continuation tool-call chunks with blank identifiers. Spring AI 2.0.0
-        // cannot merge that valid provider shape (spring-ai#6591), so one buffered call avoids a failed paid request
-        // and preserves the same single-turn text-or-action decision.
+        // Qwen emits valid continuation chunks that Spring AI 2.0 cannot aggregate when actions are advertised.
+        // Keep the same autonomous action turn, but execute it once through the buffered client.
         if ("qwen".equals(providerFor(ownerUsername))) {
             Turn turn = invoke(request, temperature, "react_buffered", ownerUsername);
             if (turn.toolCalls().isEmpty() && !turn.text().isBlank()) {
@@ -171,69 +167,6 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
             throw new IllegalStateException("recommendation model returned no streamed turn");
         }
         return new Turn(accumulatedText.toString(), actions, completion.get());
-    }
-
-    @Override
-    public NaturalReply streamNaturalReply(
-            NaturalReplyRequest request,
-            String ownerUsername,
-            Consumer<String> accumulatedTextListener) {
-        ChatModel model = modelFor(ownerUsername);
-        ChatOptions.Builder<?> options = naturalReplyOptions(model, ownerUsername);
-        Prompt prompt = new Prompt(
-                request.messages().stream().map(this::message).toList(),
-                options.temperature(temperature)
-                        .stopSequences(request.stopSequences())
-                        .maxTokens(request.maxOutputTokens())
-                        .build());
-        long startedAt = System.nanoTime();
-        AtomicLong firstChunkAt = new AtomicLong();
-        AtomicReference<ChatResponse> lastResponse = new AtomicReference<>();
-        AtomicReference<BoardGameRecommendationModel.CompletionStatus> completion =
-                new AtomicReference<>(BoardGameRecommendationModel.CompletionStatus.UNKNOWN);
-        StringBuilder accumulated = new StringBuilder();
-        model.stream(prompt).doOnNext(response -> {
-            lastResponse.set(response);
-            if (response == null || response.getResult() == null || response.getResult().getOutput() == null) return;
-            String chunk = response.getResult().getOutput().getText();
-            if (chunk != null && !chunk.isEmpty()) {
-                firstChunkAt.compareAndSet(0, System.nanoTime());
-                mergeStreamedText(accumulated, chunk);
-                accumulatedTextListener.accept(accumulated.toString());
-            }
-            String finishReason = response.getResult().getMetadata() == null
-                    ? null
-                    : response.getResult().getMetadata().getFinishReason();
-            BoardGameRecommendationModel.CompletionStatus observed = completionStatus(finishReason);
-            if (observed != BoardGameRecommendationModel.CompletionStatus.UNKNOWN) completion.set(observed);
-        }).blockLast();
-        ChatResponse response = lastResponse.get();
-        if (response == null || accumulated.isEmpty()) {
-            throw new IllegalStateException("recommendation model returned no natural reply");
-        }
-        logNaturalReplyUsage(
-                request,
-                response,
-                (System.nanoTime() - startedAt) / 1_000_000,
-                firstChunkAt.get() == 0 ? -1 : (firstChunkAt.get() - startedAt) / 1_000_000,
-                ownerUsername);
-        return new NaturalReply(accumulated.toString(), completion.get());
-    }
-
-    private ChatOptions.Builder<?> naturalReplyOptions(ChatModel model, String ownerUsername) {
-        if (model.getDefaultOptions() instanceof OpenAiChatOptions defaults) {
-            OpenAiChatOptions.Builder builder = defaults.mutate();
-            if (usesDeepSeekNonThinkingGeneration(ownerUsername)) {
-                builder.extraBody(Map.of("thinking", Map.of("type", "disabled")));
-            } else if ("qwen".equals(providerFor(ownerUsername))) {
-                builder.extraBody(Map.of("enable_thinking", false));
-            }
-            builder.parallelToolCalls(false);
-            return builder;
-        }
-        return model.getDefaultOptions() == null
-                ? ChatOptions.builder()
-                : model.getDefaultOptions().mutate();
     }
 
     private void mergeStreamedText(StringBuilder accumulated, String chunk) {
@@ -410,31 +343,6 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
                 providerFor(ownerUsername),
                 modelNameFor(ownerUsername),
                 requestTemperature,
-                firstChunkMs,
-                elapsedMs,
-                inputCharacters,
-                request.maxOutputTokens(),
-                usage == null || usage.getPromptTokens() == null ? 0 : usage.getPromptTokens(),
-                usage == null || usage.getCompletionTokens() == null ? 0 : usage.getCompletionTokens());
-    }
-
-    private void logNaturalReplyUsage(
-            NaturalReplyRequest request,
-            ChatResponse response,
-            long elapsedMs,
-            long firstChunkMs,
-            String ownerUsername) {
-        int inputCharacters = request.messages().stream()
-                .mapToInt(message -> message.content().length())
-                .sum();
-        org.springframework.ai.chat.metadata.Usage usage = response.getMetadata() == null
-                ? null
-                : response.getMetadata().getUsage();
-        LOGGER.info(
-                "Recommendation model usage: operation=natural_reply_stream, provider={}, model={}, temperature={}, firstChunkMs={}, elapsedMs={}, inputCharacters={}, maxOutputTokens={}, promptTokens={}, completionTokens={}",
-                providerFor(ownerUsername),
-                modelNameFor(ownerUsername),
-                temperature,
                 firstChunkMs,
                 elapsedMs,
                 inputCharacters,

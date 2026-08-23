@@ -28,8 +28,10 @@ class BggRecommendationPresentationService implements BggRecommendationPresentat
     @Override
     public LocalizedTaxonomy localizeTaxonomy(
             List<String> categories, List<String> mechanics, String locale) {
+        // Recommendation presentation is synchronous and player-facing. Optional model translation is enrichment,
+        // so a cache miss must never hold an already validated recommendation card off screen.
         BggMetadataLocalizationService.LocalizedDiscoveryTaxonomy taxonomy =
-                localization.localizeDiscoveryTaxonomy(categories, mechanics, locale);
+                localization.sourceDiscoveryTaxonomy(categories, mechanics);
         return new LocalizedTaxonomy(taxonomy.categories(), taxonomy.mechanics());
     }
 }

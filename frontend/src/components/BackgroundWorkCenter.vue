@@ -1145,6 +1145,7 @@ function handleBackgroundWorkChanged(event: Event) {
   invalidateRefresh()
   if (event instanceof CustomEvent && event.detail && typeof event.detail === 'object') {
     const detail = event.detail as Record<string, unknown>
+    acceptOptimisticImport(detail.importJob)
     dismissedImportIds.value = withDismissedIds(
       dismissedImportIds.value,
       detail.dismissedImportIds,
@@ -1163,6 +1164,27 @@ function handleBackgroundWorkChanged(event: Event) {
     safelyStoreDismissed(keys.dismissedUploadHandoffs, [...dismissedUploadedHandoffIds.value])
   }
   void refresh()
+}
+
+function acceptOptimisticImport(candidate: unknown) {
+  if (candidate === undefined) return
+  try {
+    const [incoming] = parseRulebookImports([candidate])
+    if (!incoming) return
+    const byId = new Map(imports.value.map(job => [job.id, job]))
+    byId.set(incoming.id, incoming)
+    imports.value = [...byId.values()]
+    if (!officialImportFinished(incoming) && dismissedImportIds.value.has(incoming.id)) {
+      dismissedImportIds.value = new Set([...dismissedImportIds.value]
+        .filter(id => id !== incoming.id))
+      safelyStoreDismissed(
+        backgroundWorkStorageKeys(account).dismissedImports,
+        [...dismissedImportIds.value],
+      )
+    }
+  } catch {
+    // The durable snapshot remains the authority when an internal event carries an invalid or stale payload.
+  }
 }
 
 function withDismissedIds(current: Set<string>, candidate: unknown) {

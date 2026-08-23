@@ -112,6 +112,13 @@ observability, and repository commands cannot meet the need.
 - Do not call paid or real external models in normal CI.
 
 ## No patch-style fixes
+- Do not respond to a failing replay by accumulating prompt clauses, alias dictionaries, sample-specific schemas,
+  special routes, validators, or fallback branches. A fix is acceptable only when it repairs the earliest owning
+  abstraction with a game-independent invariant and keeps the ordinary path the same size or makes it simpler.
+- Treat growing implementation or prompt complexity as a failed approach, not as progress. Before adding a new field,
+  stage, condition, or recovery path, identify what existing responsibility it replaces; if it replaces nothing,
+  stop and redesign by removing or collapsing responsibilities. A single provider replay is evidence for diagnosis,
+  never permission to encode that replay into production behavior.
 - Do not add a special case merely to make one observed failure or test pass. Trace the behavior to its earliest general root cause and repair the owning abstraction or failure boundary.
 - A production rule must express a domain invariant that remains valid across inputs, locales, providers, and examples. If it cannot be explained without naming the failing sample, it does not belong in production logic.
 - Prefer removing obsolete stages, duplicated responsibilities, and accidental constraints over wrapping them in another condition, fallback, validator, or compatibility layer.

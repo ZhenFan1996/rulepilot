@@ -1,6 +1,7 @@
 package com.rulepilot.catalog.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 
 import com.rulepilot.catalog.BggMetadataTranslation;
 import com.rulepilot.catalog.BggGameType;
@@ -56,6 +57,25 @@ class BggPopularMetadataPrewarmerTest {
                 .isEqualTo("${rulepilot.bgg.cache.prewarm.initial-delay:PT5M}");
         assertThat(schedule.fixedDelayString())
                 .isEqualTo("${rulepilot.bgg.cache.prewarm.resume-delay:PT1H}");
+    }
+
+    @Test
+    void acceptsTheTenThousandGamePrewarmTargetUsedByProduction() {
+        assertThatCode(() -> new BggPopularMetadataPrewarmer(
+                        new MemoryRankedCatalog(0),
+                        new RecordingBgg(),
+                        new BggMetadataLocalizationService(new RecordingTranslation(-1)),
+                        new RecordingProgress(null),
+                        new SyncTaskExecutor(),
+                        new RecordingCoverImages(),
+                        new SyncTaskExecutor(),
+                        CLOCK,
+                        false,
+                        10_000,
+                        500,
+                        60,
+                        Duration.ofMinutes(30)))
+                .doesNotThrowAnyException();
     }
 
     @Test

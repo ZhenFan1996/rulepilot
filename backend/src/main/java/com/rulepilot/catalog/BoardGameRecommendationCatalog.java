@@ -56,16 +56,97 @@ public interface BoardGameRecommendationCatalog {
             List<String> categories,
             List<String> mechanics,
             List<String> designers,
-            int maximum) {
+            List<String> publishers,
+            List<String> families,
+            Integer minimumPublicationYear,
+            Integer maximumPublicationYear,
+            BigDecimal minimumAverageRating,
+            Integer minimumRatingsCount,
+            String textQuery,
+            CatalogSort sort,
+            int maximum,
+            int offset) {
+        public CatalogFilters(
+                List<BggGameType> types,
+                List<String> categories,
+                List<String> mechanics,
+                List<String> designers,
+                int maximum) {
+            this(types, categories, mechanics, designers, maximum, 0);
+        }
+
+        public CatalogFilters(
+                List<BggGameType> types,
+                List<String> categories,
+                List<String> mechanics,
+                List<String> designers,
+                int maximum,
+                int offset) {
+            this(
+                    types,
+                    categories,
+                    mechanics,
+                    designers,
+                    List.of(),
+                    List.of(),
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    CatalogSort.RANK,
+                    maximum,
+                    offset);
+        }
+
         public CatalogFilters {
             types = types == null ? List.of() : List.copyOf(types);
             categories = categories == null ? List.of() : List.copyOf(categories);
             mechanics = mechanics == null ? List.of() : List.copyOf(mechanics);
             designers = designers == null ? List.of() : List.copyOf(designers);
+            publishers = publishers == null ? List.of() : List.copyOf(publishers);
+            families = families == null ? List.of() : List.copyOf(families);
+            textQuery = textQuery == null ? null : textQuery.strip().replaceAll("\\s+", " ");
+            if (textQuery != null && textQuery.isBlank()) textQuery = null;
+            sort = sort == null ? CatalogSort.RANK : sort;
             if (maximum < 1 || maximum > 20) {
                 throw new IllegalArgumentException("BGG catalog filter maximum must be between 1 and 20");
             }
+            if (offset < 0 || offset > 200) {
+                throw new IllegalArgumentException("BGG catalog filter offset must be between 0 and 200");
+            }
+            if (minimumPublicationYear != null
+                    && (minimumPublicationYear < 1 || minimumPublicationYear > 2100)
+                    || maximumPublicationYear != null
+                            && (maximumPublicationYear < 1 || maximumPublicationYear > 2100)
+                    || minimumPublicationYear != null
+                            && maximumPublicationYear != null
+                            && minimumPublicationYear > maximumPublicationYear) {
+                throw new IllegalArgumentException("BGG catalog publication-year filters are invalid");
+            }
+            if (minimumAverageRating != null
+                    && (minimumAverageRating.compareTo(BigDecimal.ZERO) < 0
+                            || minimumAverageRating.compareTo(BigDecimal.TEN) > 0)) {
+                throw new IllegalArgumentException("BGG catalog rating filter is invalid");
+            }
+            if (minimumRatingsCount != null && (minimumRatingsCount < 0 || minimumRatingsCount > 100_000_000)) {
+                throw new IllegalArgumentException("BGG catalog ratings-count filter is invalid");
+            }
+            if (textQuery != null && textQuery.length() > 240) {
+                throw new IllegalArgumentException("BGG catalog text query is invalid");
+            }
+            if (sort == CatalogSort.RELEVANCE && textQuery == null) {
+                throw new IllegalArgumentException("BGG catalog relevance sort requires a text query");
+            }
         }
+    }
+
+    enum CatalogSort {
+        RANK,
+        RATING,
+        POPULARITY,
+        NEWEST,
+        RELEVANCE
     }
 
     record Game(Ranking ranking, Details details) {}
