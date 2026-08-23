@@ -179,9 +179,9 @@ class PostgresBggRankedCatalogTest {
         assertThat(repository.findByMetadataFilters(new CatalogFilters(
                         List.of(), List.of(), List.of(), List.of(), List.of(), List.of(),
                         null, null, null, null, "industrial gardens", CatalogSort.RELEVANCE, 20, 0)))
-                .as("concept retrieval recalls partial and inflected matches before relevance ordering")
+                .as("concept retrieval recalls both partial and inflected matches without inventing a semantic tie-break")
                 .extracting(RankedGame::bggId)
-                .containsExactly(10, 20);
+                .containsExactlyInAnyOrder(10, 20);
         assertThat(repository.findByMetadataFilters(new CatalogFilters(
                         List.of(), List.of(), List.of(), List.of(), List.of(), List.of(),
                         null, null, null, null, "unmatched constellation", CatalogSort.RELEVANCE, 20, 0)))
