@@ -186,9 +186,16 @@ public class AnswerEvidenceAgent implements AnswerEvidenceRefiner {
                 exactPageGroups.size(),
                 exactPageGroups.stream().mapToInt(Set::size).sum());
         if (!requiredEvidenceTools.isEmpty() && exactPageGroups.isEmpty()) {
+            boolean certificationRequired = usesPriorPages(questionPlan, context)
+                    || requiresSourceAuthoredAdvice(questionPlan)
+                    || requiresCompleteListCertification(questionPlan)
+                    || requiresNumericalScopeAudit(questionPlan);
             LOGGER.info(
-                    "Answer evidence refinement did not complete its required exact-page confirmation; withholding candidate evidence");
-            return new AnswerEvidenceRetriever.Result(List.of(), AnswerEvidenceRetriever.State.READY);
+                    "Answer evidence refinement did not complete its required exact-page confirmation; {} deterministic evidence",
+                    certificationRequired ? "withholding" : "preserving");
+            return certificationRequired
+                    ? new AnswerEvidenceRetriever.Result(List.of(), AnswerEvidenceRetriever.State.READY)
+                    : deterministic;
         }
         if (requiresSourceAuthoredAdvice(questionPlan)
                 && (result.status() != RunStatus.COMPLETED
@@ -204,10 +211,12 @@ public class AnswerEvidenceAgent implements AnswerEvidenceRefiner {
                     "Answer evidence refinement did not certify complete-list coverage; withholding candidate evidence");
             return new AnswerEvidenceRetriever.Result(List.of(), AnswerEvidenceRetriever.State.READY);
         }
-        boolean completedWithCanonicalPages = result.status() == RunStatus.COMPLETED
-                && result.toolCalls() > 0
-                && !exactPageGroups.isEmpty();
-        if (!completedWithCanonicalPages) return deterministic;
+        // An exact-page observation is canonical application evidence even if a non-certifying Agent spends its
+        // remaining turn on an unnecessary search and reaches its loop budget. Advice and complete-list plans have
+        // already been held to their explicit terminal certification above; ordinary rule questions must not lose a
+        // successfully read page merely because the optional acquisition loop failed to stop cleanly afterwards.
+        boolean acquiredCanonicalPages = result.toolCalls() > 0 && !exactPageGroups.isEmpty();
+        if (!acquiredCanonicalPages) return deterministic;
         Set<UUID> observedIds = exactPageGroups.stream()
                 .flatMap(Set::stream)
                 .limit(MAX_OBSERVED_EVIDENCE)
@@ -239,7 +248,8 @@ public class AnswerEvidenceAgent implements AnswerEvidenceRefiner {
         // model after the first read so it can check the remaining independently planned obligations; otherwise a
         // page that answers only the first subquestion would prematurely end the entire evidence run.
         if (questionPlan.subquestions().size() == 1
-                && (requiresSourceAuthoredAdvice(questionPlan)
+                && (!questionPlan.agentPlanned()
+                        || requiresSourceAuthoredAdvice(questionPlan)
                         || requiresNumericalScopeAudit(questionPlan)
                         || questionPlan.evidenceNeeds().contains(
                                 com.rulepilot.assistant.RuleAnswerModel.EvidenceNeed.COMPLETE_LIST))) {
