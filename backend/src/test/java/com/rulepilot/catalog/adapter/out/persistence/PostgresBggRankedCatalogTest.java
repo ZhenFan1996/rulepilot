@@ -173,9 +173,9 @@ class PostgresBggRankedCatalogTest {
         assertThat(repository.findByMetadataFilters(new CatalogFilters(
                         List.of(), List.of(), List.of(), List.of(), List.of(), List.of(),
                         null, null, null, null, "industrial rail", CatalogSort.RELEVANCE, 20, 0)))
-                .as("cached BGG descriptions and tags support local retrieval-augmented candidate search")
+                .as("cached BGG descriptions and tags rank the relevant game first without hard-filtering the slate")
                 .extracting(RankedGame::bggId)
-                .containsExactly(10);
+                .containsExactly(10, 20);
         assertThat(repository.findByMetadataFilters(new CatalogFilters(
                         List.of(), List.of(), List.of(), List.of(), List.of(), List.of(),
                         null, null, null, null, "industrial gardens", CatalogSort.RELEVANCE, 20, 0)))
