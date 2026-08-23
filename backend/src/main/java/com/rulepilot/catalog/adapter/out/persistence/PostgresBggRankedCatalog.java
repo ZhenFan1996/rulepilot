@@ -163,6 +163,70 @@ public class PostgresBggRankedCatalog implements BggRankedCatalogRepository {
     }
 
     @Override
+    public List<RankedGame> findByMetadataFilters(
+            List<BggGameType> types,
+            List<String> categories,
+            List<String> mechanics,
+            List<String> designers,
+            int maximum) {
+        if (maximum < 1 || maximum > 20) {
+            throw new IllegalArgumentException("BGG filtered search maximum must be between 1 and 20");
+        }
+        MapSqlParameterSource parameters = new MapSqlParameterSource().addValue("limit", maximum);
+        List<String> clauses = new ArrayList<>();
+        clauses.add(typeFilter(types));
+        addMetadataFilters(clauses, parameters, "categories", "category", categories);
+        addMetadataFilters(clauses, parameters, "mechanics", "mechanic", mechanics);
+        addMetadataFilters(clauses, parameters, "designers", "designer", designers);
+        String sql = "SELECT " + COLUMNS + " FROM bgg_ranked_game g WHERE "
+                + String.join(" AND ", clauses)
+                + " ORDER BY g.overall_rank ASC NULLS LAST, g.users_rated DESC, g.bgg_id ASC LIMIT :limit";
+        return jdbc.query(sql, parameters, this::mapGame);
+    }
+
+    private String typeFilter(List<BggGameType> types) {
+        if (types == null || types.isEmpty() || types.contains(BggGameType.ALL)) return "NOT g.is_expansion";
+        List<String> clauses = types.stream()
+                .filter(java.util.Objects::nonNull)
+                .distinct()
+                .map(type -> type == BggGameType.EXPANSION
+                        ? "g.is_expansion"
+                        : "(NOT g.is_expansion AND " + TYPE_COLUMNS.get(type) + " IS NOT NULL)")
+                .toList();
+        return clauses.isEmpty() ? "NOT g.is_expansion" : "(" + String.join(" OR ", clauses) + ")";
+    }
+
+    private void addMetadataFilters(
+            List<String> clauses,
+            MapSqlParameterSource parameters,
+            String jsonField,
+            String parameterPrefix,
+            List<String> values) {
+        if (values == null) return;
+        int index = 0;
+        for (String value : values) {
+            if (value == null || value.isBlank() || value.length() > 120 || index == 5) {
+                throw new IllegalArgumentException("BGG metadata filters are invalid");
+            }
+            String parameter = parameterPrefix + index++;
+            parameters.addValue(parameter, value.strip());
+            clauses.add("""
+                    g.bgg_id IN (
+                        SELECT cache.bgg_id
+                        FROM bgg_metadata_cache cache
+                        CROSS JOIN LATERAL jsonb_array_elements_text(
+                            CASE WHEN jsonb_typeof(cache.payload->'%s') = 'array'
+                                 THEN cache.payload->'%s' ELSE '[]'::jsonb END
+                        ) metadata_value
+                        WHERE cache.cache_kind IN ('DISCOVERY', 'GAME')
+                          AND cache.stale_until > NOW()
+                          AND lower(metadata_value) = lower(:%s)
+                    )
+                    """.formatted(jsonField, jsonField, parameter).strip());
+        }
+    }
+
+    @Override
     public List<SelectionCandidate> searchSelections(String query, int maximum) {
         String checked = query == null ? "" : query.strip().replaceAll("\\s+", " ");
         if (checked.isBlank() || checked.length() > 120) {

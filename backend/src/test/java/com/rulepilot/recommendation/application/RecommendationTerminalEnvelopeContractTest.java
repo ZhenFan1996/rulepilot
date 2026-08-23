@@ -68,7 +68,7 @@ class RecommendationTerminalEnvelopeContractTest {
     }
 
     @Test
-    void publishesRecommendationFactsFromTypedClaimsInsteadOfModelAuthoredMetadataProse() {
+    void publishesOneNaturalReasonPerCardWhileCardFactsRemainCatalogOwned() {
         RecommendationProfile profile = new RecommendationProfile(
                 3, 60, null, BggGameType.ALL, InteractionPreference.ANY);
         ConversationRequest request = new ConversationRequest(profile, "三个人，六十分钟以内");
@@ -95,19 +95,13 @@ class RecommendationTerminalEnvelopeContractTest {
                         BoardGameRecommendationAgent.RECOMMEND_TOOL,
                         """
                         {
-                          "selections":[{"bggId":101}],
+                          "selections":[{
+                            "bggId":101,
+                            "reason":"它把合作目标放在很直观的路径修复上，三个人讨论起来会有共同焦点。",
+                            "tradeoff":"如果你们今晚只想轻松闲聊，它仍可能需要持续协商。"
+                          }],
                           "requestedCount":1,
-                          "reply":{
-                            "lead":"这款先放在前面。",
-                            "sections":[{
-                              "bggId":101,
-                              "claims":[
-                                {"role":"WHY_FIT","claimType":"CONSTRAINT_FIT","subject":"playerCount","evidenceId":"B101:playerCount"},
-                                {"role":"WHY_FIT","claimType":"PUBLISHER_DESCRIPTION","subject":"publisherDescription","evidenceId":"B101:publisherDescription","text":"出版商描述玩家会修复林间路径。"},
-                                {"role":"TRADEOFF","claimType":"STRUCTURED_FACT","subject":"complexity","evidenceId":"B101:complexity"}
-                              ]
-                            }]
-                          }
+                          "playerReply":"这款最值得先看。"
                         }
                         """),
                 state,
@@ -116,21 +110,24 @@ class RecommendationTerminalEnvelopeContractTest {
                 ignored -> {});
 
         assertThat(outcome.rejected()).isFalse();
-        assertThat(outcome.response().recommendationLead()).isEqualTo("这款先放在前面。");
+        assertThat(outcome.response().recommendationLead()).isEqualTo("这款最值得先看。");
         assertThat(outcome.response().assistantMessage())
-                .contains("候选人数 2–4 人与硬条件 3 人：满足。")
-                .contains("出版商描述玩家会修复林间路径。")
-                .contains("BGG 标注复杂度：2.8 / 5。")
-                .doesNotContain("更有策略", "更需要沟通");
+                .contains("它把合作目标放在很直观的路径修复上")
+                .contains("如果你们今晚只想轻松闲聊");
         assertThat(outcome.response().games()).singleElement().satisfies(recommended -> {
-            assertThat(recommended.replyParts()).hasSize(3);
-            assertThat(recommended.replyParts()).allSatisfy(part ->
-                    assertThat(part.claim().evidence()).hasSize(1));
+            assertThat(recommended.game().details().minPlayers()).isEqualTo(2);
+            assertThat(recommended.game().details().maxPlayers()).isEqualTo(4);
+            assertThat(recommended.game().details().maximumPlayTimeMinutes()).isEqualTo(60);
+            assertThat(recommended.replyParts()).hasSize(2).allSatisfy(part -> {
+                assertThat(part.claim().type())
+                        .isEqualTo(com.rulepilot.recommendation.CandidateClaim.Type.PREFERENCE_INFERENCE);
+                assertThat(part.claim().evidence()).isEmpty();
+            });
         });
     }
 
     @Test
-    void rejectsFreeModelProseForStructuredMetadataClaims() {
+    void rejectsAReasonAttachedToAnUnverifiedCardIdentity() {
         RecommendationProfile profile = new RecommendationProfile(
                 3, 60, null, BggGameType.ALL, InteractionPreference.ANY);
         ConversationRequest request = new ConversationRequest(profile, "三个人，六十分钟以内");
@@ -153,7 +150,7 @@ class RecommendationTerminalEnvelopeContractTest {
                         "call-4",
                         BoardGameRecommendationAgent.RECOMMEND_TOOL,
                         """
-                        {"selections":[{"bggId":101}],"requestedCount":1,"reply":{"lead":"先看这款。","sections":[{"bggId":101,"claims":[{"role":"WHY_FIT","claimType":"STRUCTURED_FACT","subject":"complexity","evidenceId":"B101:complexity","text":"复杂度证明它需要更多沟通策略。"}]}]}}
+                        {"selections":[{"bggId":999,"reason":"这款很适合你们。"}],"requestedCount":1,"playerReply":"先看这款。"}
                         """),
                 state,
                 request,
@@ -162,7 +159,7 @@ class RecommendationTerminalEnvelopeContractTest {
 
         assertThat(outcome.rejected()).isTrue();
         assertThat(outcome.response()).isNull();
-        assertThat(state.actions).contains("REJECTED_ACTION:RECOMMENDATION_REPLY_CLAIM_TYPE_INVALID");
+        assertThat(state.actions).contains("REJECTED_ACTION:FINAL_ID_NOT_VERIFIED");
     }
 
     private ConversationRequest request() {

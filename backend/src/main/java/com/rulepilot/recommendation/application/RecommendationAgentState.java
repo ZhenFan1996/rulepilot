@@ -2,6 +2,7 @@ package com.rulepilot.recommendation.application;
 
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.Game;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Research;
+import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.RelationshipKind;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.CandidateComparison;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ConversationRequest;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendationProfile;
@@ -46,6 +47,9 @@ final class RecommendationAgentState {
     boolean catalogBrowseAttempted;
     boolean discoveryAttempted;
     boolean discoveryProducedVerifiedGames;
+    DiscoveryPurpose discoveryPurpose;
+    RelationshipKind discoveredRelationshipKind;
+    String discoveredRelationshipName = "";
     boolean researchAttempted;
     boolean clarificationBlockedByExecutionFailure;
     String webResearchFailureCode = "";
@@ -154,6 +158,9 @@ final class RecommendationAgentState {
         catalogBrowseAttempted = false;
         discoveryAttempted = false;
         discoveryProducedVerifiedGames = false;
+        discoveryPurpose = null;
+        discoveredRelationshipKind = null;
+        discoveredRelationshipName = "";
         researchAttempted = false;
         research = Research.empty();
         if (selectionWorkObserved) {
@@ -163,6 +170,10 @@ final class RecommendationAgentState {
 
     long elapsedMs() {
         return Math.max(0, (System.nanoTime() - startedAtNanos) / 1_000_000);
+    }
+
+    boolean hasVerifiedIdentity() {
+        return discoveredRelationshipKind != null && !discoveredRelationshipName.isBlank();
     }
 
     record ContextualPreference(
@@ -177,5 +188,10 @@ final class RecommendationAgentState {
         COMPARISON_REFERENCE,
         DISCUSSION_SUBJECT,
         IDENTITY_ONLY
+    }
+
+    enum DiscoveryPurpose {
+        IDENTITY_ONLY,
+        SELECTABLE_CARDS
     }
 }

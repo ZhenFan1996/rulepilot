@@ -25,7 +25,9 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.AtomicInteger;
 import okhttp3.OkHttpClient;
 import org.junit.jupiter.api.Test;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -189,7 +191,7 @@ class ResponsesApiBoardGameRecommendationWebResearchTest {
                         {"type":"web_search_call","action":{"sources":[
                           {"title":"BGG item","url":"https://boardgamegeek.com/boardgame/60/example"}
                         ]}},
-                        {"type":"message","content":[{"type":"output_text","text":"{\\\"candidates\\\":[{\\\"name\\\":\\\"Example Game\\\",\\\"fitObservation\\\":\\\"The search result describes the requested table experience.\\\",\\\"sourceIndexes\\\":[1]}]}"}]}
+                        {"type":"message","content":[{"type":"output_text","text":"{\\\"relationship\\\":{\\\"kind\\\":\\\"OTHER\\\",\\\"entityName\\\":\\\"shared investigation\\\",\\\"sourceIndexes\\\":[1]},\\\"candidates\\\":[{\\\"name\\\":\\\"Example Game\\\",\\\"fitObservation\\\":\\\"The search result describes the requested table experience.\\\",\\\"sourceIndexes\\\":[1]}]}"}]}
                       ]
                     }
                     """);
@@ -221,6 +223,11 @@ class ResponsesApiBoardGameRecommendationWebResearchTest {
                     assertThat(candidate.sourceIndexes()).containsExactly(1);
                 });
                 assertThat(discovery.sources()).hasSize(1);
+                assertThat(discovery.relationship()).satisfies(relationship -> {
+                    assertThat(relationship.kind().name()).isEqualTo("OTHER");
+                    assertThat(relationship.entityName()).isEqualTo("shared investigation");
+                    assertThat(relationship.sourceIndexes()).containsExactly(1);
+                });
             });
             JsonNode sent = json.readTree(body.get());
             assertThat(sent.path("tool_choice").asText()).isEqualTo("required");
@@ -231,12 +238,84 @@ class ResponsesApiBoardGameRecommendationWebResearchTest {
                             "Run exactly one broad web search",
                             "one to six credible",
                             "unique external relationship",
+                            "search the supplied wording verbatim",
+                            "never replace it with an identity recalled from memory",
+                            "candidate title is only an evidence carrier",
                             "do not pad",
                             "requested locale",
                             "Science Fiction",
                             "THEMATIC")
                     .doesNotContain("\"bggId\"");
             assertThat(body.get()).doesNotContain("科幻主题", "secret-test-key");
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void acceptsOneJsonFenceWhileStillApplyingTheExactDiscoverySchema() throws Exception {
+        AtomicInteger providerCalls = new AtomicInteger();
+        HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);
+        server.createContext("/v1/responses", exchange -> {
+            providerCalls.incrementAndGet();
+            respond(exchange, """
+                {
+                  "output": [
+                    {"type":"web_search_call","action":{"sources":[
+                      {"title":"Tabletop designer profile","url":"https://tabletop.example/designers/profile"}
+                    ]}},
+                    {"type":"message","content":[{"type":"output_text","text":"The search supports one identity.\\n\\n```json\\n{\\\"relationship\\\":{\\\"kind\\\":\\\"DESIGNER\\\",\\\"entityName\\\":\\\"Ada Vale\\\",\\\"sourceIndexes\\\":[1]},\\\"candidates\\\":[{\\\"name\\\":\\\"Clockwork Harbor\\\",\\\"fitObservation\\\":\\\"The profile explicitly connects the community alias to this game's designer.\\\",\\\"sourceIndexes\\\":[1]}]}\\n```"}]}
+                  ]
+                }
+                """);
+        });
+        server.start();
+        try {
+            ObjectMapper json = new ObjectMapper();
+            StringRedisTemplate redis = mock(StringRedisTemplate.class);
+            @SuppressWarnings("unchecked")
+            ValueOperations<String, String> values = mock(ValueOperations.class);
+            Map<String, String> stored = new java.util.concurrent.ConcurrentHashMap<>();
+            when(redis.opsForValue()).thenReturn(values);
+            when(values.get(anyString())).thenAnswer(invocation -> stored.get(invocation.getArgument(0)));
+            when(values.increment(anyString())).thenReturn(1L);
+            org.mockito.Mockito.doAnswer(invocation -> {
+                        stored.put(invocation.getArgument(0), invocation.getArgument(1));
+                        return null;
+                    })
+                    .when(values)
+                    .set(anyString(), anyString(), any(Duration.class));
+            var adapter = new ResponsesApiBoardGameRecommendationWebResearch(
+                    new OkHttpClient(), json, redis, true, "secret-test-key",
+                    "http://127.0.0.1:" + server.getAddress().getPort() + "/v1",
+                    "research-model", Duration.ofDays(7), 20, 2,
+                    Clock.fixed(Instant.parse("2026-08-08T10:00:00Z"), ZoneOffset.UTC));
+
+            DiscoveryRequest request = new DiscoveryRequest(
+                    "games by a creator known by a community alias",
+                    List.of(),
+                    "en",
+                    com.rulepilot.recommendation.BoardGameRecommendationWebResearch.DiscoveryGoal.IDENTITY_ONLY);
+            var result = adapter.discover(request);
+
+            assertThat(result).hasValueSatisfying(discovery -> {
+                assertThat(discovery.relationship().entityName()).isEqualTo("Ada Vale");
+                assertThat(discovery.candidates()).singleElement().satisfies(candidate -> {
+                        assertThat(candidate.name()).isEqualTo("Clockwork Harbor");
+                        assertThat(candidate.sourceIndexes()).containsExactly(1);
+                });
+            });
+            adapter.rememberVerifiedIdentity(request, result.orElseThrow());
+            org.mockito.Mockito.verify(values).set(
+                    org.mockito.ArgumentMatchers.argThat(key -> key.startsWith(
+                            "rulepilot:bgg:verified-external-identity:v1:")),
+                    org.mockito.ArgumentMatchers.anyString(),
+                    org.mockito.ArgumentMatchers.eq(Duration.ofDays(180)));
+            long cachedStarted = System.nanoTime();
+            assertThat(adapter.discover(request)).isEqualTo(result);
+            long cachedElapsedMs = (System.nanoTime() - cachedStarted) / 1_000_000;
+            assertThat(providerCalls).hasValue(1);
+            assertThat(cachedElapsedMs).isLessThan(100);
         } finally {
             server.stop(0);
         }

@@ -137,6 +137,41 @@ class BggRankedCatalogServiceTest {
     }
 
     @Test
+    void expandsAnAlreadyVerifiedBggDesignerWithoutGuessingMoreTitles() {
+        MemoryRepository repository = new MemoryRepository();
+        FakeBgg bgg = new FakeBgg();
+        BggMetadataCache cache = org.mockito.Mockito.mock(BggMetadataCache.class);
+        List<DiscoveryGame> stored = bgg.gameDetails(List.of(10, 20));
+        bgg.detailIds = List.of();
+        Instant now = Instant.now();
+        org.mockito.Mockito.when(cache.discoveryGames(
+                        org.mockito.ArgumentMatchers.anyList(), org.mockito.ArgumentMatchers.any()))
+                .thenReturn(Map.of(
+                        10,
+                        new BggMetadataCache.Cached<>(stored.getFirst(), now.plusSeconds(60), now.plusSeconds(120)),
+                        20,
+                        new BggMetadataCache.Cached<>(stored.get(1), now.plusSeconds(60), now.plusSeconds(120))));
+        BggRankedCatalogService service = new BggRankedCatalogService(repository, bgg, cache);
+
+        var result = service.searchGames(new com.rulepilot.catalog.BoardGameRecommendationCatalog.CatalogFilters(
+                List.of(BggGameType.STRATEGY),
+                List.of("Strategy"),
+                List.of("Deck Building"),
+                List.of("Designer"),
+                8));
+
+        assertThat(repository.designerQuery).containsExactly("Designer");
+        assertThat(repository.categoryQuery).containsExactly("Strategy");
+        assertThat(repository.mechanicQuery).containsExactly("Deck Building");
+        assertThat(result.games()).extracting(game -> game.ranking().bggId()).containsExactly(10, 20);
+        assertThat(result.games()).allSatisfy(game -> assertThat(game.details().designers()).containsExactly("Designer"));
+        assertThat(bgg.detailIds)
+                .as("structured Agent browsing stays on the local PostgreSQL/cache path")
+                .isEmpty();
+        assertThat(bgg.searchQueries).isEmpty();
+    }
+
+    @Test
     void resolvesAnExactOfficialChineseAliasLocallyAndHydratesItsCanonicalDetails() {
         MemoryRepository repository = new MemoryRepository();
         FakeBgg bgg = new FakeBgg();
@@ -251,6 +286,9 @@ class BggRankedCatalogServiceTest {
     private static final class MemoryRepository implements BggRankedCatalogRepository {
         private Query query;
         private String selectionQuery;
+        private List<String> designerQuery = List.of();
+        private List<String> categoryQuery = List.of();
+        private List<String> mechanicQuery = List.of();
         private int exactBatchQueries;
 
         @Override
@@ -296,6 +334,19 @@ class BggRankedCatalogServiceTest {
                     .filter(id -> id == 10 || id == 20 || id == 30)
                     .map(id -> id == 30 ? game(30, 30, "碁") : game(id, id))
                     .toList();
+        }
+
+        @Override
+        public List<RankedGame> findByMetadataFilters(
+                List<BggGameType> types,
+                List<String> categories,
+                List<String> mechanics,
+                List<String> designers,
+                int maximum) {
+            designerQuery = designers;
+            categoryQuery = categories;
+            mechanicQuery = mechanics;
+            return List.of(game(10, 10), game(20, 20)).stream().limit(maximum).toList();
         }
 
         @Override
@@ -401,7 +452,18 @@ class BggRankedCatalogServiceTest {
                             new BigDecimal("8.1"),
                             new BigDecimal("2.5"),
                             List.of("Strategy"),
-                            List.of("Deck Building")))
+                            List.of("Deck Building"),
+                            60,
+                            60,
+                            10,
+                            10,
+                            "",
+                            "",
+                            null,
+                            null,
+                            List.of(),
+                            List.of("Designer"),
+                            List.of("Publisher")))
                     .toList();
         }
 

@@ -80,11 +80,9 @@ class SpringAiBoardGameRecommendationModelTest {
                 .baseUrl("https://provider.example/v1")
                 .model("qwen3.7-plus")
                 .build());
-        when(chatModel.stream(any(Prompt.class))).thenReturn(Flux.just(
-                new ChatResponse(List.of(new Generation(AssistantMessage.builder().content("你好，").build()))),
-                new ChatResponse(List.of(new Generation(
-                        AssistantMessage.builder().content("今天想找什么样的游戏？").build(),
-                        ChatGenerationMetadata.builder().finishReason("stop").build())))));
+        when(chatModel.call(any(Prompt.class))).thenReturn(new ChatResponse(List.of(new Generation(
+                AssistantMessage.builder().content("你好，今天想找什么样的游戏？").build(),
+                ChatGenerationMetadata.builder().finishReason("stop").build()))));
         var adapter = new SpringAiBoardGameRecommendationModel(configuration);
         java.util.ArrayList<String> parts = new java.util.ArrayList<>();
 
@@ -97,11 +95,11 @@ class SpringAiBoardGameRecommendationModelTest {
                 null,
                 parts::add);
 
-        assertThat(parts).containsExactly("你好，", "你好，今天想找什么样的游戏？");
+        assertThat(parts).containsExactly("你好，今天想找什么样的游戏？");
         assertThat(turn.text()).isEqualTo("你好，今天想找什么样的游戏？");
         assertThat(turn.toolCalls()).isEmpty();
         ArgumentCaptor<Prompt> prompt = ArgumentCaptor.forClass(Prompt.class);
-        verify(chatModel).stream(prompt.capture());
+        verify(chatModel).call(prompt.capture());
         assertThat(((OpenAiChatOptions) prompt.getValue().getOptions()).getToolChoice()).isEqualTo("auto");
     }
 
@@ -110,21 +108,28 @@ class SpringAiBoardGameRecommendationModelTest {
         RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
         ChatModel chatModel = mock(ChatModel.class);
         when(configuration.modelFor(RuntimeModelConfiguration.Role.RECOMMENDATION)).thenReturn(chatModel);
-        when(configuration.providerFor(RuntimeModelConfiguration.Role.RECOMMENDATION)).thenReturn("qwen");
-        when(configuration.modelNameFor(RuntimeModelConfiguration.Role.RECOMMENDATION)).thenReturn("qwen3.7-plus");
+        when(configuration.providerFor(RuntimeModelConfiguration.Role.RECOMMENDATION)).thenReturn("openai");
+        when(configuration.modelNameFor(RuntimeModelConfiguration.Role.RECOMMENDATION)).thenReturn("gpt-5-mini");
         when(chatModel.getDefaultOptions()).thenReturn(OpenAiChatOptions.builder()
                 .apiKey("test-key")
                 .baseUrl("https://provider.example/v1")
-                .model("qwen3.7-plus")
+                .model("gpt-5-mini")
                 .build());
-        AssistantMessage action = AssistantMessage.builder()
+        AssistantMessage actionStart = AssistantMessage.builder()
                 .content("")
                 .toolCalls(List.of(new AssistantMessage.ToolCall(
-                        "call-1", "function", "search", "{\"query\":\"Mosaic Field\"}")))
+                        "call-1", "function", "search", "{\"query\":")))
                 .build();
-        when(chatModel.stream(any(Prompt.class))).thenReturn(Flux.just(new ChatResponse(List.of(new Generation(
-                action,
-                ChatGenerationMetadata.builder().finishReason("tool_calls").build())))));
+        AssistantMessage actionEnd = AssistantMessage.builder()
+                .content("")
+                .toolCalls(List.of(new AssistantMessage.ToolCall(
+                        "", "function", "", "\"Mosaic Field\"}")))
+                .build();
+        when(chatModel.stream(any(Prompt.class))).thenReturn(Flux.just(
+                new ChatResponse(List.of(new Generation(actionStart))),
+                new ChatResponse(List.of(new Generation(
+                        actionEnd,
+                        ChatGenerationMetadata.builder().finishReason("tool_calls").build())))));
         var adapter = new SpringAiBoardGameRecommendationModel(configuration);
         java.util.ArrayList<String> parts = new java.util.ArrayList<>();
 
@@ -142,6 +147,49 @@ class SpringAiBoardGameRecommendationModelTest {
             assertThat(call.name()).isEqualTo("search");
             assertThat(call.argumentsJson()).contains("Mosaic Field");
         });
+    }
+
+    @Test
+    void retriesTheSameAutonomousTurnWithoutStreamingWhenACompatibleProviderBreaksActionChunks() {
+        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        ChatModel chatModel = mock(ChatModel.class);
+        when(configuration.modelFor(RuntimeModelConfiguration.Role.RECOMMENDATION)).thenReturn(chatModel);
+        when(configuration.providerFor(RuntimeModelConfiguration.Role.RECOMMENDATION)).thenReturn("compatible");
+        when(configuration.modelNameFor(RuntimeModelConfiguration.Role.RECOMMENDATION)).thenReturn("compatible-model");
+        when(chatModel.getDefaultOptions()).thenReturn(OpenAiChatOptions.builder()
+                .apiKey("test-key")
+                .baseUrl("https://provider.example/v1")
+                .model("compatible-model")
+                .build());
+        when(chatModel.stream(any(Prompt.class)))
+                .thenReturn(Flux.error(new java.util.NoSuchElementException("fragmented action")));
+        AssistantMessage action = AssistantMessage.builder()
+                .content("")
+                .toolCalls(List.of(new AssistantMessage.ToolCall(
+                        "call-1", "function", "discover", "{\"query\":\"creator alias\"}")))
+                .build();
+        when(chatModel.call(any(Prompt.class))).thenReturn(new ChatResponse(List.of(new Generation(
+                action,
+                ChatGenerationMetadata.builder().finishReason("tool_calls").build()))));
+        var adapter = new SpringAiBoardGameRecommendationModel(configuration);
+        java.util.ArrayList<String> parts = new java.util.ArrayList<>();
+
+        var turn = adapter.streamNext(
+                new Request(
+                        List.of(Message.system("Choose text or one action."), Message.user("Who is this alias?")),
+                        List.of(new ToolSpec("discover", "Discover a public identity", "{\"type\":\"object\"}")),
+                        384,
+                        ToolChoice.AUTO),
+                null,
+                parts::add);
+
+        assertThat(parts).isEmpty();
+        assertThat(turn.toolCalls()).singleElement().satisfies(call -> {
+            assertThat(call.name()).isEqualTo("discover");
+            assertThat(call.argumentsJson()).contains("creator alias");
+        });
+        verify(chatModel).stream(any(Prompt.class));
+        verify(chatModel).call(any(Prompt.class));
     }
 
     @Test

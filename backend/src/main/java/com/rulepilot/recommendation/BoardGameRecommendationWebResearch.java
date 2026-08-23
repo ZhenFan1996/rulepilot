@@ -16,6 +16,8 @@ public interface BoardGameRecommendationWebResearch {
         return Optional.empty();
     }
 
+    default void rememberVerifiedIdentity(DiscoveryRequest request, CandidateDiscovery discovery) {}
+
     /** Signals that the configured public-research capability cannot serve this run. */
     final class WebResearchUnavailableException extends RuntimeException {
         private final String code;
@@ -77,17 +79,55 @@ public interface BoardGameRecommendationWebResearch {
         }
     }
 
-    record DiscoveryRequest(String query, List<BggGameType> candidateTypes, String locale) {
+    enum DiscoveryGoal {
+        IDENTITY_ONLY,
+        SELECTABLE_CARDS
+    }
+
+    enum RelationshipKind {
+        DESIGNER,
+        GAME,
+        OTHER
+    }
+
+    record DiscoveryRequest(
+            String query,
+            List<BggGameType> candidateTypes,
+            String locale,
+            DiscoveryGoal goal) {
+        public DiscoveryRequest(String query, List<BggGameType> candidateTypes, String locale) {
+            this(query, candidateTypes, locale, DiscoveryGoal.SELECTABLE_CARDS);
+        }
+
         public DiscoveryRequest {
             query = query == null ? "" : query.strip();
             candidateTypes = candidateTypes == null ? List.of() : List.copyOf(candidateTypes);
+            goal = goal == null ? DiscoveryGoal.SELECTABLE_CARDS : goal;
         }
     }
 
-    record CandidateDiscovery(List<CandidateLead> candidates, List<Source> sources) {
+    record CandidateDiscovery(
+            List<CandidateLead> candidates,
+            List<Source> sources,
+            ResolvedRelationship relationship) {
+        public CandidateDiscovery(List<CandidateLead> candidates, List<Source> sources) {
+            this(candidates, sources, null);
+        }
+
         public CandidateDiscovery {
             candidates = candidates == null ? List.of() : List.copyOf(candidates);
             sources = sources == null ? List.of() : List.copyOf(sources);
+        }
+    }
+
+    /** Source-backed external relationship; BGG metadata must still canonicalize its entity. */
+    record ResolvedRelationship(
+            RelationshipKind kind,
+            String entityName,
+            List<Integer> sourceIndexes) {
+        public ResolvedRelationship {
+            entityName = entityName == null ? "" : entityName.strip();
+            sourceIndexes = sourceIndexes == null ? List.of() : List.copyOf(sourceIndexes);
         }
     }
 

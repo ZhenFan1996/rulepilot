@@ -205,6 +205,45 @@ public class BggRankedCatalogService
     }
 
     @Override
+    public CandidateSet searchGames(BoardGameRecommendationCatalog.CatalogFilters filters) {
+        if (filters == null) throw new IllegalArgumentException("BGG catalog filters are required");
+        List<RankedGame> ranked = repository.findByMetadataFilters(
+                filters.types(),
+                checkedMetadataFilters(filters.categories(), "category"),
+                checkedMetadataFilters(filters.mechanics(), "mechanic"),
+                checkedMetadataFilters(filters.designers(), "designer"),
+                filters.maximum());
+        if (ranked.isEmpty()) return new CandidateSet(gameCount(), List.of());
+
+        Map<Integer, DiscoveryGame> available = new LinkedHashMap<>(storedDetails(ranked));
+        // Filtered browsing is the low-latency Agent tool. Production always has the
+        // persistent metadata cache; never turn this local query into an N+1 remote BGG wait.
+        if (metadataCache == null) available.putAll(details(ranked));
+        List<BoardGameRecommendationCatalog.Game> games = ranked.stream()
+                .map(game -> new BrowseGame(game, null, available.get(game.bggId())))
+                .filter(game -> game.details() != null)
+                .map(this::recommendationGame)
+                .toList();
+        return new CandidateSet(gameCount(), games);
+    }
+
+    private List<String> checkedMetadataFilters(List<String> values, String label) {
+        if (values == null) return List.of();
+        List<String> checked = values.stream()
+                .filter(java.util.Objects::nonNull)
+                .map(value -> value.strip().replaceAll("\\s+", " "))
+                .filter(value -> !value.isBlank())
+                .distinct()
+                .toList();
+        if (checked.size() != values.size()
+                || checked.size() > 5
+                || checked.stream().anyMatch(value -> value.length() > 120)) {
+            throw new IllegalArgumentException("BGG " + label + " filters are invalid");
+        }
+        return checked;
+    }
+
+    @Override
     public List<BoardGameRecommendationCatalog.Ranking> searchByNames(List<String> names) {
         List<String> checked = names == null
                 ? List.of()

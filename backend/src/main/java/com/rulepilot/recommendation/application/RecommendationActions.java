@@ -25,9 +25,12 @@ import com.rulepilot.catalog.BoardGameRecommendationCatalog.Game;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.ToolCall;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.CandidateDiscovery;
+import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.DiscoveryGoal;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.GameResearch;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Observation;
+import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.RelationshipKind;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Research;
+import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.ResolvedRelationship;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Source;
 import com.rulepilot.recommendation.CandidateClaim;
 import com.rulepilot.recommendation.CandidateObservation;
@@ -55,6 +58,7 @@ import com.rulepilot.recommendation.application.BoardGameRecommendationTools.Res
 import com.rulepilot.recommendation.application.BoardGameRecommendationTools.TitleHypothesis;
 import com.rulepilot.recommendation.application.BoardGameRecommendationTools.ToolStatus;
 import com.rulepilot.recommendation.application.RecommendationAgentState.NamedGamePurpose;
+import com.rulepilot.recommendation.application.RecommendationAgentState.DiscoveryPurpose;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -214,6 +218,12 @@ final class RecommendationActions {
             RecommendationAgentState state,
             ConversationRequest request,
             String locale) {
+        if (state.discoveryPurpose == DiscoveryPurpose.IDENTITY_ONLY
+                && (state.discoveryAttempted || state.catalogBrowseAttempted)) {
+            return state.hasVerifiedIdentity()
+                    ? identityReply(arguments, state, locale)
+                    : unresolvedIdentityReply(arguments, state, locale);
+        }
         requireObject(arguments, Set.of("playerReply"), Set.of("referencedBggIds", "preferenceUpdates"));
         String playerReply = playerReply(arguments);
         evidenceReview.rejectInvalidHardPreferencesBeforeTerminalReply(arguments, state, request);
@@ -230,6 +240,56 @@ final class RecommendationActions {
         }
         state.finalResponseGameIds.addAll(referencedIds);
         state.actions.add("REPLY_TO_USER");
+        return ActionOutcome.terminal(response(
+                Outcome.CONVERSATION,
+                playerReply,
+                state,
+                locale,
+                null,
+                List.of()));
+    }
+
+    private ActionOutcome identityReply(
+            JsonNode arguments,
+            RecommendationAgentState state,
+            String locale) {
+        requireObject(arguments, Set.of("entityKind", "entityName"), Set.of());
+        IdentityKind kind = enumValue(
+                IdentityKind.class,
+                arguments.path("entityKind"),
+                "IDENTITY_KIND_INVALID");
+        String name = text(arguments.path("entityName"), 1, 160).strip();
+        if (!state.hasVerifiedIdentity()
+                || !kind.name().equals(state.discoveredRelationshipKind.name())
+                || !name.equals(state.discoveredRelationshipName)) {
+            throw new InvalidAction("IDENTITY_NOT_VERIFIED");
+        }
+        String playerReply = runtime.chinese(locale)
+                ? kind == IdentityKind.DESIGNER
+                        ? "这个称呼通常指桌游设计师 " + name + "。"
+                        : "这个称呼通常指桌游《" + name + "》。"
+                : kind == IdentityKind.DESIGNER
+                        ? "This name usually refers to board-game designer " + name + "."
+                        : "This name usually refers to the board game “" + name + ".”";
+        state.actions.add("REPLY_TO_USER");
+        return ActionOutcome.terminal(response(
+                Outcome.CONVERSATION,
+                playerReply,
+                state,
+                locale,
+                null,
+                List.of()));
+    }
+
+    private ActionOutcome unresolvedIdentityReply(
+            JsonNode arguments,
+            RecommendationAgentState state,
+            String locale) {
+        requireObject(arguments, Set.of(), Set.of());
+        String playerReply = runtime.chinese(locale)
+                ? "我暂时无法用可靠来源确认这个称呼具体指谁。"
+                : "I couldn't confirm who this name refers to from reliable sources.";
+        state.actions.add("REPLY_TO_USER:IDENTITY_UNRESOLVED");
         return ActionOutcome.terminal(response(
                 Outcome.CONVERSATION,
                 playerReply,
@@ -419,13 +479,12 @@ final class RecommendationActions {
             String locale,
             Consumer<ProgressStage> progress,
             boolean localOnly) {
-        requireObject(arguments, Set.of("title", "purpose", "evidence"), Set.of("preferenceUpdates"));
+        requireObject(arguments, Set.of("title", "purpose", "evidence"), Set.of());
         String title = text(arguments.path("title"), 1, 160);
         String evidenceId = text(arguments.path("evidence"), 1, 16);
         evidenceReview.requireUserEvidence(evidenceId, request);
         NamedGamePurpose purpose = enumValue(
                 NamedGamePurpose.class, arguments.path("purpose"), "NAMED_GAME_PURPOSE_INVALID");
-        List<String> preferenceWarnings = evidenceReview.applyPreferenceUpdatesForRead(arguments, state, request);
         state.referenceResolutionAttempts++;
         progress.accept(ProgressStage.READING_GAME_DETAILS);
         state.catalogCalls++;
@@ -450,7 +509,6 @@ final class RecommendationActions {
                 "status", result.resolved() ? "SUCCESS" : result.status().name(),
                 "code", result.code(),
                 "purpose", purpose.name(),
-                "preferenceUpdateWarnings", preferenceWarnings,
                 "guidance", result.resolved()
                         ? switch (purpose) {
                             case COMPARISON_REFERENCE ->
@@ -471,10 +529,8 @@ final class RecommendationActions {
             RecommendationAgentState state,
             ConversationRequest request,
             Consumer<ProgressStage> progress) {
-        requireObject(arguments, Set.of("titles"), Set.of("preferenceUpdates", "contextualGroup"));
-        requireReadPreferenceDecision(arguments, state);
+        requireObject(arguments, Set.of("titles"), Set.of());
         List<String> titles = strings(arguments.path("titles"), 1, 8, 2, 120);
-        List<String> preferenceWarnings = evidenceReview.applyReadPreferenceDecisions(arguments, state, request);
         state.titleInspectionAttempted = true;
         progress.accept(ProgressStage.SEARCHING_BGG_CATALOG);
         state.catalogCalls += 2;
@@ -486,7 +542,6 @@ final class RecommendationActions {
         return ActionOutcome.observation(runtime.observation(Map.of(
                 "status", result.succeeded() ? "SUCCESS" : "ERROR",
                 "code", result.code(),
-                "preferenceUpdateWarnings", preferenceWarnings,
                 "guidance", result.games().isEmpty()
                         ? "The one bounded title-inspection attempt returned no match and is now complete. Use public discovery when available, make one broad catalog browse, ask only if needed, or respond transparently; do not inspect titles again in this run."
                         : "Title identity and bounded BGG details are already verified. Do not look them up again; compare runMemory and finish when the slate is useful.",
@@ -498,11 +553,28 @@ final class RecommendationActions {
             RecommendationAgentState state,
             ConversationRequest request,
             Consumer<ProgressStage> progress) {
-        requireObject(arguments, Set.of(), Set.of("types", "limit", "preferenceUpdates", "contextualGroup"));
-        requireReadPreferenceDecision(arguments, state);
-        List<String> preferenceWarnings = evidenceReview.applyReadPreferenceDecisions(arguments, state, request);
+        requireObject(
+                arguments,
+                Set.of(),
+                Set.of("purpose", "types", "categories", "mechanics", "designers", "limit"));
         state.catalogBrowseAttempted = true;
-        List<BggGameType> types = optionalGameTypeHints(arguments, state);
+        DiscoveryPurpose purpose = arguments.has("purpose")
+                ? enumValue(DiscoveryPurpose.class, arguments.path("purpose"), "CATALOG_PURPOSE_INVALID")
+                : DiscoveryPurpose.SELECTABLE_CARDS;
+        state.discoveryPurpose = purpose;
+        List<BggGameType> requestedTypes = optionalGameTypeHints(arguments, state);
+        List<BggGameType> types = state.profile.type() == BggGameType.ALL
+                ? requestedTypes
+                : List.of(state.profile.type());
+        List<String> categories = optionalStrings(arguments, "categories", 5, 120);
+        List<String> mechanics = optionalStrings(arguments, "mechanics", 5, 120);
+        List<String> designers = optionalStrings(arguments, "designers", 3, 120);
+        if (purpose == DiscoveryPurpose.IDENTITY_ONLY
+                && (designers.size() != 1 || !categories.isEmpty() || !mechanics.isEmpty())) {
+            throw new InvalidAction(
+                    "IDENTITY_CATALOG_QUERY_INVALID",
+                    "For a creator identity check, supply exactly one designer and no category or mechanic filters.");
+        }
         int limit = arguments.has("limit")
                 ? integer(arguments.path("limit"), 1, MAX_VERIFIED_GAMES, "LIMIT_OUT_OF_RANGE")
                 : Math.min(properties.modelCandidateLimit(), MAX_VERIFIED_GAMES);
@@ -520,20 +592,38 @@ final class RecommendationActions {
         state.catalogCalls++;
         CatalogObservation result = runtime.withinDeadline(
                 state,
-                () -> tools.searchCatalog(state.profile.type(), types, catalogLimit));
+                () -> tools.searchCatalog(types, categories, mechanics, designers, catalogLimit));
         state.actions.add("SEARCH_BGG_CATALOG");
         state.sourceCount = Math.max(state.sourceCount, result.sourceCount());
         List<Game> eligible = result.succeeded()
                 ? selector.eligible(result.games(), state.profile, unavailableCandidateIds, eligibilityLimit)
                 : List.of();
         eligible.forEach(state::addVerified);
+        if (purpose == DiscoveryPurpose.IDENTITY_ONLY && !designers.isEmpty()) {
+            result.games().stream()
+                    .filter(game -> game.details() != null)
+                    .flatMap(game -> game.details().designers().stream())
+                    .filter(name -> name.equalsIgnoreCase(designers.getFirst()))
+                    .findFirst()
+                    .ifPresent(name -> {
+                        state.discoveredRelationshipKind = RelationshipKind.DESIGNER;
+                        state.discoveredRelationshipName = name;
+                        state.actions.add("CATALOG_IDENTITY_VERIFIED");
+                    });
+        }
         return ActionOutcome.observation(runtime.observation(Map.of(
                 "status", result.succeeded() ? "SUCCESS" : "ERROR",
                 "code", result.code(),
-                "preferenceUpdateWarnings", preferenceWarnings,
                 "guidance", eligible.isEmpty()
-                        ? "The one bounded catalog browse produced no hard-gate-eligible game and is now complete. Use a different available capability or finish transparently; do not browse again in this run."
-                        : "These are broad catalog candidates and prove only their listed BGG observations. If any player-requested selection criterion is absent from those observations, public discovery remains available and must supply that evidence before recommendation. Otherwise compare the facts and finish; do not browse again.",
+                        ? purpose == DiscoveryPurpose.IDENTITY_ONLY && state.webResearchAvailable
+                                ? "The local BGG catalog did not verify that creator identity. Treat the guessed name as disproved for this alias and use public discovery with the original user evidence; do not retry or publish the guess."
+                                : "This exact BGG filter query produced no hard-gate-eligible game. Use materially different structured filters, another capability, or finish transparently; never repeat the same query or guess titles."
+                        : "These games match the supplied BGG filters and their listed observations are verified. Finish when the slate is useful, or make one materially different structured query only when the open request still needs it.",
+                "appliedFilters", Map.of(
+                        "types", types,
+                        "categories", categories,
+                        "mechanics", mechanics,
+                        "designers", designers),
                 "verifiedBggIds", eligible.stream().map(game -> game.ranking().bggId()).toList())));
     }
 
@@ -543,18 +633,27 @@ final class RecommendationActions {
             ConversationRequest request,
             String locale,
             Consumer<ProgressStage> progress) {
-        requireObject(arguments, Set.of("query"), Set.of("types", "preferenceUpdates", "contextualGroup"));
-        requireReadPreferenceDecision(arguments, state);
-        List<String> preferenceWarnings = evidenceReview.applyReadPreferenceDecisions(arguments, state, request);
+        requireObject(arguments, Set.of("evidence", "purpose"), Set.of("types"));
         state.discoveryAttempted = true;
-        String query = text(arguments.path("query"), 3, 300);
+        state.discoveryPurpose = enumValue(
+                DiscoveryPurpose.class,
+                arguments.path("purpose"),
+                "DISCOVERY_PURPOSE_INVALID");
+        String evidenceId = text(arguments.path("evidence"), 1, 16);
+        evidenceReview.requireUserEvidence(evidenceId, request);
+        String query = evidenceReview.preferenceEvidence(request).get(evidenceId);
         List<BggGameType> types = optionalGameTypeHints(arguments, state);
         progress.accept(ProgressStage.DISCOVERING_CANDIDATES);
         state.webResearchCalls++;
+        BoardGameRecommendationWebResearch.DiscoveryRequest discoveryRequest =
+                new BoardGameRecommendationWebResearch.DiscoveryRequest(
+                        query,
+                        types,
+                        locale,
+                        DiscoveryGoal.valueOf(state.discoveryPurpose.name()));
         DiscoveryObservation result = runtime.withinDeadline(
                 state,
-                () -> tools.discoverCandidates(
-                        new BoardGameRecommendationWebResearch.DiscoveryRequest(query, types, locale)));
+                () -> tools.discoverCandidates(discoveryRequest));
         state.actions.add("DISCOVER_CANDIDATES");
         CandidateDiscovery discovery = result.result().orElse(null);
         if (discovery == null) {
@@ -564,7 +663,6 @@ final class RecommendationActions {
             return ActionOutcome.observation(runtime.observation(Map.of(
                     "status", result.status().name(),
                     "code", result.code(),
-                    "preferenceUpdateWarnings", preferenceWarnings,
                     "guidance", state.webResearchAvailable
                             ? "Public discovery returned no attributed candidates. Choose another retrieval action or respond transparently."
                             : "Public web research is unavailable for the rest of this run. Use the BGG title, lookup, or catalog actions, or finish transparently; do not retry web research.")));
@@ -584,6 +682,12 @@ final class RecommendationActions {
         state.actions.add("LOOKUP_BGG_CANDIDATES");
         state.sourceCount = Math.max(state.sourceCount, inspection.sourceCount());
         inspection.games().forEach(state::addVerified);
+        ResolvedRelationship verifiedRelationship = verifiedRelationship(discovery, inspection, state);
+        if (verifiedRelationship != null) {
+            state.discoveredRelationshipKind = verifiedRelationship.kind();
+            state.discoveredRelationshipName = verifiedRelationship.entityName();
+            tools.rememberVerifiedIdentity(discoveryRequest, discovery);
+        }
         if (!inspection.games().isEmpty()) {
             state.discoveryProducedVerifiedGames = true;
             state.unresolvedPlayerTitle = false;
@@ -591,11 +695,53 @@ final class RecommendationActions {
         state.research = mergeResearch(state.research, discoveryEvidence(discovery, inspection));
         return ActionOutcome.observation(runtime.observation(Map.of(
                 "status", inspection.succeeded() && !inspection.games().isEmpty() ? "SUCCESS" : "PARTIAL",
-                "preferenceUpdateWarnings", preferenceWarnings,
                 "guidance", inspection.games().isEmpty()
                         ? "Public search found source-backed title hypotheses, but none produced complete BGG details. Choose another retrieval action or respond transparently."
-                        : "Public search supplied title hypotheses and the application already resolved and hydrated the matching BGG games. Do not search or look them up again; use the verified facts in runMemory.",
+                        : "The external relationship and representative BGG facts are now verified. Re-read the player's complete current-turn goal: if naming the identity fully answers it, finish with reply_to_user; if selectable cards remain, continue through the local BGG catalog with the exact observed designer instead of guessing titles, then recommend. Do not repeat discovery.",
                 "verifiedBggIds", inspection.games().stream().map(game -> game.ranking().bggId()).toList())));
+    }
+
+    private ResolvedRelationship verifiedRelationship(
+            CandidateDiscovery discovery,
+            CatalogObservation inspection,
+            RecommendationAgentState state) {
+        ResolvedRelationship relationship = discovery.relationship();
+        if (relationship == null || relationship.kind() == RelationshipKind.OTHER) {
+            state.actions.add("DISCOVERY_RELATIONSHIP_REJECTED:MISSING_OR_OTHER");
+            return null;
+        }
+        Set<Integer> sourceIndexes = discovery.sources().stream()
+                .map(Source::index)
+                .collect(java.util.stream.Collectors.toUnmodifiableSet());
+        if (!sourceIndexes.containsAll(relationship.sourceIndexes())) {
+            state.actions.add("DISCOVERY_RELATIONSHIP_REJECTED:SOURCE");
+            return null;
+        }
+        String canonicalName = switch (relationship.kind()) {
+            case DESIGNER -> inspection.games().stream()
+                    .filter(game -> game.details() != null)
+                    .flatMap(game -> game.details().designers().stream())
+                    .filter(name -> name.equalsIgnoreCase(relationship.entityName()))
+                    .findFirst()
+                    .orElse(null);
+            case GAME -> inspection.games().stream()
+                    .flatMap(game -> java.util.stream.Stream.of(
+                            game.ranking().sourceName(),
+                            game.details() == null ? null : game.details().name(),
+                            game.details() == null ? null : game.details().officialChineseName()))
+                    .filter(Objects::nonNull)
+                    .filter(name -> name.equalsIgnoreCase(relationship.entityName()))
+                    .findFirst()
+                    .orElse(null);
+            case OTHER -> null;
+        };
+        if (canonicalName == null) {
+            state.actions.add("DISCOVERY_RELATIONSHIP_REJECTED:BGG_ENTITY");
+            return null;
+        }
+        state.actions.add("DISCOVERY_RELATIONSHIP_VERIFIED");
+        return new ResolvedRelationship(
+                relationship.kind(), canonicalName, relationship.sourceIndexes());
     }
 
     private ActionOutcome lookup(JsonNode arguments, RecommendationAgentState state, Consumer<ProgressStage> progress) {
@@ -615,16 +761,6 @@ final class RecommendationActions {
                         ? "No complete BGG details were returned. Try different observed candidates or respond transparently."
                         : "These bounded BGG facts are verified and may support comparison or final selection.",
                 "verifiedBggIds", result.games().stream().map(game -> game.ranking().bggId()).toList())));
-    }
-
-    private void requireReadPreferenceDecision(JsonNode arguments, RecommendationAgentState state) {
-        if (arguments.has("preferenceUpdates")) return;
-        boolean alreadyCaptured = state.actions.stream().anyMatch(action -> Set.of(
-                        "UPDATE_PREFERENCES",
-                        "RECORD_CONTEXTUAL_PREFERENCE",
-                        "IGNORED_REDUNDANT_PREFERENCE_UPDATE")
-                .contains(action));
-        if (!alreadyCaptured) throw new InvalidAction("REQUIRED_ARGUMENT_MISSING");
     }
 
     private ActionOutcome research(
@@ -673,7 +809,7 @@ final class RecommendationActions {
             Consumer<ProgressStage> progress) {
         requireObject(
                 arguments,
-                Set.of("selections", "requestedCount", "reply"),
+                Set.of("selections", "requestedCount", "playerReply"),
                 Set.of("referenceBggIds", "preferenceUpdates"));
         evidenceReview.applyPreferenceUpdates(arguments, state, request);
         List<Integer> rawReferenceIds = arguments.has("referenceBggIds")
@@ -699,12 +835,13 @@ final class RecommendationActions {
             throw new InvalidAction("SELECTION_COUNT_INVALID");
         }
         List<Game> selected = new ArrayList<>();
+        List<RecommendationReplyPart> replyParts = new ArrayList<>();
         Set<Integer> seen = new LinkedHashSet<>();
         for (JsonNode selection : selections) {
             requireObject(
                     selection,
-                    Set.of("bggId"),
-                    Set.of());
+                    Set.of("bggId", "reason"),
+                    Set.of("tradeoff"));
             int id = integer(selection.path("bggId"), 1, Integer.MAX_VALUE, "BGG_ID_INVALID");
             if (!seen.add(id)) throw new InvalidAction("DUPLICATE_SELECTION");
             Game game = state.verified.get(id);
@@ -720,29 +857,30 @@ final class RecommendationActions {
                 throw new InvalidAction("FINAL_ID_FAILS_HARD_GATES");
             }
             selected.add(game);
+            replyParts.add(modelRecommendationPart(
+                    id,
+                    ReplyPartRole.WHY_FIT,
+                    text(selection.path("reason"), 1, 280)));
+            if (selection.has("tradeoff")) {
+                replyParts.add(modelRecommendationPart(
+                        id,
+                        ReplyPartRole.TRADEOFF,
+                        text(selection.path("tradeoff"), 1, 220)));
+            }
         }
         Set<Integer> selectedIds = selected.stream()
                 .map(game -> game.ranking().bggId())
                 .collect(java.util.stream.Collectors.toUnmodifiableSet());
-        Map<String, CandidateObservation> availableMessageEvidence = selected.stream()
-                .flatMap(game -> narrativeObservations(game, state.research).entrySet().stream())
-                .collect(java.util.stream.Collectors.toMap(
-                        Map.Entry::getKey,
-                        Map.Entry::getValue,
-                        (first, ignored) -> first,
-                        LinkedHashMap::new));
-        RecommendationReply reply = recommendationReply(
-                arguments.path("reply"),
-                selected,
-                availableMessageEvidence,
-                state,
-                runtime.chinese(locale));
+        String lead = playerFacingText(arguments.path("playerReply")).strip();
+        if (lead.codePointCount(0, lead.length()) > 500) {
+            throw new InvalidAction("RECOMMENDATION_REPLY_LEAD_INVALID");
+        }
+        String completeMessage = java.util.stream.Stream.concat(
+                        java.util.stream.Stream.of(lead),
+                        replyParts.stream().map(part -> part.claim().text()))
+                .collect(java.util.stream.Collectors.joining("\n\n"));
+        RecommendationReply reply = new RecommendationReply(lead, List.copyOf(replyParts), completeMessage);
         state.finalResponseGameIds.addAll(selectedIds);
-        reply.parts().stream()
-                .map(RecommendationReplyPart::claim)
-                .flatMap(claim -> claim.evidence().stream())
-                .map(CandidateObservation::id)
-                .forEach(state.finalResponseEvidenceIds::add);
         List<Integer> referenceIds = java.util.stream.Stream.concat(
                         state.comparisonReferenceIds.stream(), rawReferenceIds.stream())
                 .distinct()
@@ -783,176 +921,20 @@ final class RecommendationActions {
                 reply.lead()));
     }
 
-    private RecommendationReply recommendationReply(
-            JsonNode node,
-            List<Game> selected,
-            Map<String, CandidateObservation> availableEvidence,
-            RecommendationAgentState state,
-            boolean chinese) {
-        requireObject(node, Set.of("lead", "sections"), Set.of());
-        String lead = playerFacingText(node.path("lead")).strip();
-        if (lead.length() > 240) throw new InvalidAction("RECOMMENDATION_REPLY_LEAD_INVALID");
-        JsonNode sections = node.path("sections");
-        if (!sections.isArray() || sections.size() != selected.size()) {
-            throw new InvalidAction("RECOMMENDATION_REPLY_SECTIONS_INVALID");
-        }
-        List<RecommendationReplyPart> parts = new ArrayList<>();
-        Set<Integer> seenGames = new LinkedHashSet<>();
-        for (int sectionIndex = 0; sectionIndex < sections.size(); sectionIndex++) {
-            JsonNode section = sections.get(sectionIndex);
-            requireObject(section, Set.of("bggId", "claims"), Set.of());
-            int bggId = integer(section.path("bggId"), 1, Integer.MAX_VALUE, "BGG_ID_INVALID");
-            int expectedBggId = selected.get(sectionIndex).ranking().bggId();
-            if (bggId != expectedBggId || !seenGames.add(bggId)) {
-                throw new InvalidAction("RECOMMENDATION_REPLY_SECTIONS_INVALID");
-            }
-            JsonNode claims = section.path("claims");
-            if (!claims.isArray() || claims.isEmpty() || claims.size() > 4) {
-                throw new InvalidAction("RECOMMENDATION_REPLY_CLAIMS_INVALID");
-            }
-            Set<String> claimKeys = new LinkedHashSet<>();
-            boolean whyFitPresent = false;
-            for (JsonNode claimNode : claims) {
-                RecommendationReplyPart part = recommendationReplyPart(
-                        claimNode,
-                        bggId,
-                        selected.get(sectionIndex),
-                        availableEvidence,
-                        state,
-                        chinese);
-                String evidenceId = part.claim().evidence().getFirst().id();
-                if (!claimKeys.add(part.role() + "\n" + evidenceId)) {
-                    throw new InvalidAction("RECOMMENDATION_REPLY_CLAIMS_INVALID");
-                }
-                if (part.role() == ReplyPartRole.WHY_FIT) whyFitPresent = true;
-                parts.add(part);
-            }
-            if (!whyFitPresent) throw new InvalidAction("RECOMMENDATION_REPLY_WHY_FIT_REQUIRED");
-        }
-        String completeMessage = java.util.stream.Stream.concat(
-                        java.util.stream.Stream.of(lead),
-                        parts.stream().map(part -> part.claim().text()))
-                .collect(java.util.stream.Collectors.joining("\n\n"));
-        if (completeMessage.length() > 1_200) throw new InvalidAction("PLAYER_REPLY_TOO_LONG");
-        return new RecommendationReply(lead, List.copyOf(parts), completeMessage);
-    }
-
-    private RecommendationReplyPart recommendationReplyPart(
-            JsonNode node,
+    private RecommendationReplyPart modelRecommendationPart(
             int bggId,
-            Game game,
-            Map<String, CandidateObservation> availableEvidence,
-            RecommendationAgentState state,
-            boolean chinese) {
-        requireObject(node, Set.of("role", "claimType", "subject", "evidenceId"), Set.of("text"));
-        ReplyPartRole role = enumValue(
-                ReplyPartRole.class,
-                node.path("role"),
-                "RECOMMENDATION_REPLY_ROLE_INVALID");
-        CandidateClaim.Type type = enumValue(
-                CandidateClaim.Type.class,
-                node.path("claimType"),
-                "RECOMMENDATION_REPLY_CLAIM_TYPE_INVALID");
-        if (!Set.of(
-                        CandidateClaim.Type.CONSTRAINT_FIT,
-                        CandidateClaim.Type.STRUCTURED_FACT,
-                        CandidateClaim.Type.TAXONOMY_CLASSIFICATION,
-                        CandidateClaim.Type.ATTRIBUTED_EXPERIENCE,
-                        CandidateClaim.Type.RULE_PROCEDURE,
-                        CandidateClaim.Type.PUBLISHER_DESCRIPTION)
-                .contains(type)) {
-            throw new InvalidAction("RECOMMENDATION_REPLY_CLAIM_TYPE_INVALID");
-        }
-        String subject = text(node.path("subject"), 1, 80);
-        String evidenceId = text(node.path("evidenceId"), 3, 80);
-        CandidateObservation observation = availableEvidence.get(evidenceId);
-        if (observation == null || observation.bggId() != bggId || !observation.attribute().equals(subject)) {
-            throw new InvalidAction("RECOMMENDATION_MESSAGE_EVIDENCE_NOT_GROUNDED");
-        }
-        CandidateClaim claim;
-        if (type == CandidateClaim.Type.CONSTRAINT_FIT) {
-            if (node.has("text")) throw new InvalidAction("RECOMMENDATION_REPLY_CLAIM_TYPE_INVALID");
-            CandidateClaim fit = selector.fitClaims(game, state.profile, chinese).stream()
-                    .filter(candidate -> candidate.subject().equals(subject))
-                    .filter(candidate -> candidate.evidence().stream()
-                            .anyMatch(evidence -> evidence.id().equals(evidenceId)))
-                    .findFirst()
-                    .orElseThrow(() -> new InvalidAction("RECOMMENDATION_REPLY_CLAIM_TYPE_INVALID"));
-            if (role == ReplyPartRole.WHY_FIT && fit.relation() != CandidateClaim.Relation.SATISFIED
-                    || role == ReplyPartRole.TRADEOFF && fit.relation() != CandidateClaim.Relation.CONFLICT) {
-                throw new InvalidAction("RECOMMENDATION_REPLY_ROLE_INVALID");
-            }
-            claim = new CandidateClaim(
-                    bggId,
-                    subject,
-                    type,
-                    fit.strength(),
-                    fit.relation(),
-                    fit.text(),
-                    List.of(observation));
-        } else {
-            if (!observation.supports(type)) {
-                throw new InvalidAction("RECOMMENDATION_REPLY_CLAIM_TYPE_INVALID");
-            }
-            boolean modelTextAllowed = type == CandidateClaim.Type.PUBLISHER_DESCRIPTION
-                    || type == CandidateClaim.Type.ATTRIBUTED_EXPERIENCE
-                    || type == CandidateClaim.Type.RULE_PROCEDURE;
-            if (modelTextAllowed != node.has("text")) {
-                throw new InvalidAction("RECOMMENDATION_REPLY_CLAIM_TYPE_INVALID");
-            }
-            String claimText = modelTextAllowed
-                    ? text(node.path("text"), 1, 280)
-                    : structuredObservationText(observation, chinese);
-            claim = new CandidateClaim(
-                    bggId,
-                    subject,
-                    type,
-                    null,
-                    CandidateClaim.Relation.OBSERVED,
-                    claimText,
-                    List.of(observation));
-        }
-        return new RecommendationReplyPart(role, claim);
-    }
-
-    private String structuredObservationText(CandidateObservation observation, boolean chinese) {
-        String value = observation.value();
-        return switch (observation.attribute()) {
-            case "playerCount" -> localizedRange(
-                    value,
-                    chinese ? "BGG 标注人数：" : "BGG player count: ",
-                    chinese ? " 人。" : " players.");
-            case "durationMinutes" -> localizedRange(
-                    value,
-                    chinese ? "BGG 标注时长：" : "BGG duration: ",
-                    chinese ? " 分钟。" : " minutes.");
-            case "complexity" -> chinese
-                    ? "BGG 标注复杂度：" + value + " / 5。"
-                    : "BGG complexity: " + value + " / 5.";
-            case "minimumAge" -> chinese
-                    ? "BGG 标注年龄：" + value + " 岁以上。"
-                    : "BGG minimum age: " + value + "+.";
-            case "bestWith" -> chinese
-                    ? "BGG 社区最佳人数标注：" + value + " 人。"
-                    : "BGG community best-with listing: " + value + " players.";
-            case "recommendedWith" -> chinese
-                    ? "BGG 社区推荐人数标注：" + value + " 人。"
-                    : "BGG community recommended-with listing: " + value + " players.";
-            case "designers" -> chinese ? "设计者：" + value + "。" : "Designed by: " + value + ".";
-            case "publishers" -> chinese ? "出版方：" + value + "。" : "Published by: " + value + ".";
-            case "categories", "mechanics", "families", "bggType" -> chinese
-                    ? "BGG 分类记录：" + value + "。"
-                    : "BGG classification: " + value + ".";
-            default -> chinese ? "BGG 记录：" + value + "。" : "BGG records: " + value + ".";
-        };
-    }
-
-    private String localizedRange(String value, String prefix, String suffix) {
-        int separator = value.indexOf("..");
-        if (separator <= 0 || separator + 2 >= value.length()) return prefix + value + suffix;
-        String minimum = value.substring(0, separator);
-        String maximum = value.substring(separator + 2);
-        return prefix + (minimum.equals(maximum) ? minimum : minimum + "–" + maximum) + suffix;
+            ReplyPartRole role,
+            String text) {
+        return new RecommendationReplyPart(
+                role,
+                new CandidateClaim(
+                        bggId,
+                        "recommendationJudgment",
+                        CandidateClaim.Type.PREFERENCE_INFERENCE,
+                        null,
+                        CandidateClaim.Relation.UNKNOWN,
+                        text,
+                        List.of()));
     }
 
     Map<String, CandidateObservation> narrativeObservations(Game game, Research research) {
@@ -1106,7 +1088,15 @@ final class RecommendationActions {
         if (game.details() == null) return value;
         var details = game.details();
         putIfText(value, "officialChineseName", details.officialChineseName());
-        Map<String, List<String>> observations = selector.observations(game).stream()
+        List<CandidateObservation> gameObservations = selector.observations(game);
+        Map<String, String> facts = gameObservations.stream()
+                .collect(java.util.stream.Collectors.toMap(
+                        CandidateObservation::attribute,
+                        CandidateObservation::value,
+                        (first, ignored) -> first,
+                        LinkedHashMap::new));
+        value.put("facts", facts);
+        Map<String, List<String>> observations = gameObservations.stream()
                 .collect(java.util.stream.Collectors.toMap(
                         CandidateObservation::id,
                         observation -> List.of(observationKindCode(observation), observation.value()),
@@ -1206,9 +1196,7 @@ final class RecommendationActions {
         if (discovery == null || discovery.sources().isEmpty() || inspection.games().isEmpty()) {
             return Research.empty();
         }
-        List<Source> sources = discovery.sources().stream()
-                .filter(this::credibleDiscoverySource)
-                .toList();
+        List<Source> sources = discovery.sources();
         if (sources.isEmpty()) return Research.empty();
         Set<Integer> sourceIndexes = sources.stream()
                 .map(Source::index)
@@ -1245,20 +1233,6 @@ final class RecommendationActions {
                                 && !observation.sourceIndexes().isEmpty()))
                 .toList();
         return games.isEmpty() ? Research.empty() : new Research(games, sources);
-    }
-
-    private boolean credibleDiscoverySource(Source source) {
-        String domain = source == null || source.domain() == null
-                ? ""
-                : source.domain().toLowerCase(Locale.ROOT).replaceFirst("^www\\.", "");
-        return !Set.of(
-                        "amazon.com",
-                        "facebook.com",
-                        "instagram.com",
-                        "pinterest.com",
-                        "tiktok.com",
-                        "x.com")
-                .contains(domain);
     }
 
     private void requireObject(JsonNode node, Set<String> required, Set<String> optional) {
@@ -1363,6 +1337,16 @@ final class RecommendationActions {
         return values;
     }
 
+    private List<String> optionalStrings(
+            JsonNode arguments,
+            String field,
+            int maximumItems,
+            int maximumLength) {
+        return arguments.has(field)
+                ? strings(arguments.path(field), 0, maximumItems, 1, maximumLength)
+                : List.of();
+    }
+
     record ActionOutcome(ConversationResponse response, String observation, boolean rejected) {
         static ActionOutcome terminal(ConversationResponse response) {
             return new ActionOutcome(response, "", false);
@@ -1381,6 +1365,11 @@ final class RecommendationActions {
             String lead,
             List<RecommendationReplyPart> parts,
             String completeMessage) {}
+
+    private enum IdentityKind {
+        DESIGNER,
+        GAME
+    }
 
     static final class InvalidAction extends RuntimeException {
         final String code;
