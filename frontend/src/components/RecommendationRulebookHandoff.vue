@@ -624,10 +624,31 @@ async function restoreServerJourney(request: number) {
   if (!response.ok) return false
   const jobs = await response.json() as OfficialImportJob[]
   if (request !== sequence || !Array.isArray(jobs)) return false
-  const matching = jobs
+  let matching = jobs
     .map(normalizeImportJob)
     .find(job => job.editionId === imported.value?.edition.id && job.teachingHandoffState !== 'NOT_REQUESTED')
   if (!matching) return false
+  if (matching.stage === 'COMPLETED'
+    && matching.documentVersionId
+    && matching.teachingHandoffState === 'LAUNCHED'
+    && matching.teachingPreparationRunId) {
+    const token = await csrfToken()
+    const ensured = await fetch(
+      `/api/v1/documents/official-imports/${encodeURIComponent(matching.id)}/teaching-ensure-current`, {
+        method: 'POST', credentials: 'include',
+        headers: { 'Content-Type': 'application/json', [token.headerName]: token.token },
+        body: JSON.stringify({ expectedPreparationRunId: matching.teachingPreparationRunId }),
+      })
+    if (request !== sequence) return false
+    if (ensured.status === 401 || ensured.status === 403) {
+      requireLogin()
+      return true
+    }
+    if (!ensured.ok) throw new Error('teaching evidence freshness check failed')
+    const current = normalizeImportJob(await ensured.json() as OfficialImportJob)
+    if (current.id !== matching.id) throw new Error('teaching evidence freshness identity changed')
+    matching = current
+  }
   importJob.value = matching
   preparationRunId.value = matching.teachingPreparationRunId
   consent.value = true

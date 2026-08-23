@@ -535,6 +535,59 @@ class OfficialRulebookImportJobServiceTest {
     }
 
     @Test
+    void refreshesStaleTeachingEvidenceWhenAPlayerResumesACompletedImport() {
+        FakeJobs jobs = new FakeJobs();
+        UUID editionId = automaticTeachingCommand().editionId();
+        UUID documentVersionId = UUID.randomUUID();
+        UUID preparationRunId = UUID.randomUUID();
+        var completed = launchedJob(jobs, editionId, documentVersionId, preparationRunId, SOURCE);
+        RulebookTeachingEvidenceFreshness freshness = mock(RulebookTeachingEvidenceFreshness.class);
+        when(freshness.assess(documentVersionId, preparationRunId, "alice"))
+                .thenReturn(ReuseAssessment.REFRESH_REQUIRED);
+        var service = new OfficialRulebookImportJobService(
+                jobs,
+                mock(RuleDocumentRepository.class),
+                mock(OfficialRulebookImportService.class),
+                mock(TaskExecutor.class),
+                (edition, language) -> false,
+                catalog(editionId, GAME_ID, "Opaque Edition", "en"),
+                freshness,
+                Clock.fixed(NOW, ZoneOffset.UTC));
+
+        var refreshed = service.ensureTeachingCurrent(completed.id(), preparationRunId, "alice");
+
+        assertThat(refreshed.teachingHandoff().state()).isEqualTo(TeachingHandoffState.WAITING_FOR_DOCUMENT);
+        assertThat(refreshed.teachingHandoff().preparationRunId()).isNull();
+        verify(freshness).assess(documentVersionId, preparationRunId, "alice");
+    }
+
+    @Test
+    void resumeFreshnessCheckCannotReplaceANewerPreparationRun() {
+        FakeJobs jobs = new FakeJobs();
+        UUID editionId = automaticTeachingCommand().editionId();
+        UUID documentVersionId = UUID.randomUUID();
+        UUID currentRunId = UUID.randomUUID();
+        UUID staleBrowserRunId = UUID.randomUUID();
+        var completed = launchedJob(jobs, editionId, documentVersionId, currentRunId, SOURCE);
+        RulebookTeachingEvidenceFreshness freshness = mock(RulebookTeachingEvidenceFreshness.class);
+        var service = new OfficialRulebookImportJobService(
+                jobs,
+                mock(RuleDocumentRepository.class),
+                mock(OfficialRulebookImportService.class),
+                mock(TaskExecutor.class),
+                (edition, language) -> false,
+                catalog(editionId, GAME_ID, "Opaque Edition", "en"),
+                freshness,
+                Clock.fixed(NOW, ZoneOffset.UTC));
+
+        var unchanged = service.ensureTeachingCurrent(completed.id(), staleBrowserRunId, "alice");
+
+        assertThat(unchanged.teachingHandoff().state()).isEqualTo(TeachingHandoffState.LAUNCHED);
+        assertThat(unchanged.teachingHandoff().preparationRunId()).isEqualTo(currentRunId);
+        verifyNoInteractions(freshness);
+    }
+
+    @Test
     void reconcilesCompletedHandoffsByRestartingOnlyMissingTeachingResults() {
         FakeJobs jobs = new FakeJobs();
         UUID editionId = automaticTeachingCommand().editionId();

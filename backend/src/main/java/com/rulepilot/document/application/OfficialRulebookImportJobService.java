@@ -274,6 +274,27 @@ public class OfficialRulebookImportJobService implements RulebookTeachingHandoff
         throw new IllegalStateException("official rulebook teaching handoff could not be retried");
     }
 
+    public OfficialRulebookImportJob ensureTeachingCurrent(
+            UUID jobId, UUID expectedPreparationRunId, String ownerUsername) {
+        var job = requireOwned(jobId, ownerUsername);
+        var handoff = job.teachingHandoff();
+        if (job.stage() != OfficialRulebookImportJob.Stage.COMPLETED
+                || job.documentVersionId() == null
+                || handoff.state() != TeachingHandoffState.LAUNCHED
+                || handoff.preparationRunId() == null
+                || !Objects.equals(handoff.preparationRunId(), expectedPreparationRunId)) {
+            return job;
+        }
+        ReuseAssessment assessment = teachingEvidenceFreshness.assess(
+                job.documentVersionId(), handoff.preparationRunId(), job.ownerUsername());
+        if (assessment != ReuseAssessment.REFRESH_REQUIRED
+                && assessment != ReuseAssessment.RETRYABLE_FAILURE) {
+            return job;
+        }
+        jobs.retryTeaching(job.id(), handoff.preparationRunId(), Instant.now(clock));
+        return requireOwned(job.id(), job.ownerUsername());
+    }
+
     public int failInterrupted() {
         return jobs.failInterrupted(Instant.now(clock));
     }

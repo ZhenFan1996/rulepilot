@@ -1,15 +1,15 @@
-<review_scope content_type="{type}">
-  <review_mode>{mode}</review_mode>
-  <objective>{objective}</objective>
-  <required_coverage>{coverage}</required_coverage>
+<review_scope content_type="⟦type⟧">
+  <review_mode>⟦mode⟧</review_mode>
+  <objective>⟦objective⟧</objective>
+  <required_coverage>⟦coverage⟧</required_coverage>
 </review_scope>
 
 <untrusted_claims>
-{claims}
+⟦claims⟧
 </untrusted_claims>
 
 <untrusted_evidence_data>
-{evidence}
+⟦evidence⟧
 </untrusted_evidence_data>
 
 First check objective coverage, then verify each claim only against its cited evidence IDs.
@@ -18,4 +18,4 @@ For every item in issues, set defectConfirmed=true only when the item identifies
 supported claim, audit note, uncertainty, or no-defect conclusion as an issue. If no concrete defect exists, return an
 empty issues array. The application ignores entries whose defectConfirmed is false.
 
-{repair}
+⟦repair⟧

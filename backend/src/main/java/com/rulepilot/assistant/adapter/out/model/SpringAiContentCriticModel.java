@@ -28,6 +28,7 @@ import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.openai.OpenAiChatModel.ResponseFormat;
 import org.springframework.ai.openai.OpenAiChatOptions;
+import org.springframework.ai.template.st.StTemplateRenderer;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Primary;
@@ -37,6 +38,10 @@ import org.springframework.stereotype.Component;
 @Primary
 public class SpringAiContentCriticModel implements ContentCriticModel {
 
+    private static final StTemplateRenderer CRITIC_TEMPLATE_RENDERER = StTemplateRenderer.builder()
+            .startDelimiterToken('⟦')
+            .endDelimiterToken('⟧')
+            .build();
     private static final ObjectMapper STRICT_CRITIC_OUTPUT = new ObjectMapper()
             .enable(JsonParser.Feature.STRICT_DUPLICATE_DETECTION)
             .enable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
@@ -121,6 +126,7 @@ public class SpringAiContentCriticModel implements ContentCriticModel {
                     .temperature(temperature));
         }
         String content = prompt
+                .templateRenderer(CRITIC_TEMPLATE_RENDERER)
                 .system(systemPrompt(request.reviewMode()))
                 .user(user -> user.text(userPrompt(request.reviewMode()))
                         .param("type", request.contentType())

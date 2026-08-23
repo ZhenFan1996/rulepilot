@@ -129,7 +129,7 @@ class VersionedAgentPromptsTest {
                         "Return only the requested JSON schema")
                 .doesNotContain("revision v", "keyword checklist", "ATOMIC_CONFIRMATION");
 
-        assertThat(prompts.criticUser()).contains("{mode}", "{objective}", "{claims}", "{evidence}");
+        assertThat(prompts.criticUser()).contains("⟦mode⟧", "⟦objective⟧", "⟦claims⟧", "⟦evidence⟧");
         assertThat(prompts.atomicCriticUser())
                 .contains(
                         "Do not return defectConfirmed=false",
@@ -137,8 +137,8 @@ class VersionedAgentPromptsTest {
                         "claim-position/type/claimAspect",
                         "own combined cited evidence",
                         "merely phrased differently",
-                        "{claims}",
-                        "{evidence}");
+                        "⟦claims⟧",
+                        "⟦evidence⟧");
         assertThat(prompts.atomicCriticSystem())
                 .contains(
                         "authoritative target",

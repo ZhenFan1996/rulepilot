@@ -49,7 +49,8 @@ class SpringAiContentCriticModelTest {
         when(chatModel.getDefaultOptions()).thenReturn(providerOptions);
         when(chatModel.getOptions()).thenReturn(providerOptions);
         when(prompts.criticSystem()).thenReturn("Check every claim against the evidence.");
-        when(prompts.criticUser()).thenReturn("Claims: {claims}\nEvidence: {evidence}\nRepair: {repair}");
+        when(prompts.criticUser()).thenReturn(
+                "Claims: ⟦claims⟧\nEvidence: ⟦evidence⟧\nReturn {\"issues\":[]}.\nRepair: ⟦repair⟧");
         when(prompts.structuredOutputRepair()).thenReturn("Return valid JSON.");
         when(chatModel.call(any(Prompt.class))).thenReturn(new ChatResponse(
                 List.of(new Generation(new AssistantMessage("{\"issues\":[]}")))));
@@ -73,6 +74,11 @@ class SpringAiContentCriticModelTest {
         assertThat(options.getTemperature()).isEqualTo(0.35);
         assertThat(options.getResponseFormat().getType()).isEqualTo(Type.JSON_OBJECT);
         assertThat(options.getExtraBody()).containsExactlyEntriesOf(java.util.Map.of("enable_thinking", false));
+        assertThat(prompt.getValue().getInstructions())
+                .extracting(message -> message.getText())
+                .anyMatch(text -> text.contains("The game ends after the last round.")
+                        && text.contains("Return {\"issues\":[]}.")
+                        && !text.contains("⟦claims⟧"));
     }
 
     @Test
@@ -94,7 +100,7 @@ class SpringAiContentCriticModelTest {
         when(chatModel.getOptions()).thenReturn(providerOptions);
         when(prompts.atomicCriticSystem()).thenReturn("Confirm only candidate defects.");
         when(prompts.atomicCriticUser())
-                .thenReturn("SUPPORTED_VERDICT Claims: {claims}\nEvidence: {evidence}\nRepair: {repair}");
+                .thenReturn("SUPPORTED_VERDICT Claims: ⟦claims⟧\nEvidence: ⟦evidence⟧\nRepair: ⟦repair⟧");
         when(prompts.structuredOutputRepair()).thenReturn("Return valid JSON.");
         when(chatModel.call(any(Prompt.class))).thenReturn(new ChatResponse(List.of(new Generation(new AssistantMessage(
                 "{\"issues\":[{\"defectConfirmed\":false,\"type\":\"MISSING_EXCEPTION\","
@@ -144,7 +150,7 @@ class SpringAiContentCriticModelTest {
         when(chatModel.getDefaultOptions()).thenReturn(providerOptions);
         when(chatModel.getOptions()).thenReturn(providerOptions);
         when(prompts.atomicCriticSystem()).thenReturn("Confirm only candidate defects.");
-        when(prompts.atomicCriticUser()).thenReturn("Claims: {claims}\nEvidence: {evidence}\nRepair: {repair}");
+        when(prompts.atomicCriticUser()).thenReturn("Claims: ⟦claims⟧\nEvidence: ⟦evidence⟧\nRepair: ⟦repair⟧");
         when(prompts.structuredOutputRepair()).thenReturn("Return every required issue field or an empty issues list.");
         when(chatModel.call(any(Prompt.class))).thenReturn(new ChatResponse(List.of(new Generation(
                 new AssistantMessage("{\"issues\":[]}")))));
@@ -181,7 +187,7 @@ class SpringAiContentCriticModelTest {
         when(chatModel.getDefaultOptions()).thenReturn(providerOptions);
         when(chatModel.getOptions()).thenReturn(providerOptions);
         when(prompts.criticSystem()).thenReturn("Check every claim against the evidence.");
-        when(prompts.criticUser()).thenReturn("Claims: {claims}\nEvidence: {evidence}\nRepair: {repair}");
+        when(prompts.criticUser()).thenReturn("Claims: ⟦claims⟧\nEvidence: ⟦evidence⟧\nRepair: ⟦repair⟧");
         when(prompts.structuredOutputRepair()).thenReturn("Return valid JSON.");
         when(chatModel.call(any(Prompt.class)))
                 .thenThrow(new IllegalArgumentException("No content to map due to end-of-input"))
@@ -220,7 +226,7 @@ class SpringAiContentCriticModelTest {
         when(chatModel.getDefaultOptions()).thenReturn(providerOptions);
         when(chatModel.getOptions()).thenReturn(providerOptions);
         when(prompts.criticSystem()).thenReturn("Check every claim against the evidence.");
-        when(prompts.criticUser()).thenReturn("Claims: {claims}\nEvidence: {evidence}\nRepair: {repair}");
+        when(prompts.criticUser()).thenReturn("Claims: ⟦claims⟧\nEvidence: ⟦evidence⟧\nRepair: ⟦repair⟧");
         when(prompts.structuredOutputRepair()).thenReturn("Return valid JSON.");
         when(chatModel.call(any(Prompt.class)))
                 .thenThrow(new IllegalStateException("Error reading response"))
@@ -260,7 +266,7 @@ class SpringAiContentCriticModelTest {
         when(chatModel.getDefaultOptions()).thenReturn(providerOptions);
         when(chatModel.getOptions()).thenReturn(providerOptions);
         when(prompts.atomicCriticSystem()).thenReturn("Confirm only candidate defects.");
-        when(prompts.atomicCriticUser()).thenReturn("Claims: {claims}\nEvidence: {evidence}\nRepair: {repair}");
+        when(prompts.atomicCriticUser()).thenReturn("Claims: ⟦claims⟧\nEvidence: ⟦evidence⟧\nRepair: ⟦repair⟧");
         when(prompts.structuredOutputRepair()).thenReturn("Return every required issue field or an empty issues list.");
         when(prompts.criticOutputRepair()).thenReturn(
                 "Return an empty issues array for no defect; every retained issue requires a type.");
@@ -309,7 +315,7 @@ class SpringAiContentCriticModelTest {
         when(chatModel.getDefaultOptions()).thenReturn(providerOptions);
         when(chatModel.getOptions()).thenReturn(providerOptions);
         when(prompts.atomicCriticSystem()).thenReturn("Confirm the exact candidate claim aspect.");
-        when(prompts.atomicCriticUser()).thenReturn("Claims: {claims}\nEvidence: {evidence}\nRepair: {repair}");
+        when(prompts.atomicCriticUser()).thenReturn("Claims: ⟦claims⟧\nEvidence: ⟦evidence⟧\nRepair: ⟦repair⟧");
         when(prompts.criticOutputRepair()).thenReturn("Every confirmed lesson issue requires claimAspect.");
         when(chatModel.call(any(Prompt.class)))
                 .thenReturn(new ChatResponse(List.of(new Generation(new AssistantMessage(
@@ -356,7 +362,7 @@ class SpringAiContentCriticModelTest {
         when(chatModel.getDefaultOptions()).thenReturn(providerOptions);
         when(chatModel.getOptions()).thenReturn(providerOptions);
         when(prompts.criticSystem()).thenReturn("Review the exact claim aspect and evidence binding.");
-        when(prompts.criticUser()).thenReturn("Claims: {claims}\nEvidence: {evidence}\nRepair: {repair}");
+        when(prompts.criticUser()).thenReturn("Claims: ⟦claims⟧\nEvidence: ⟦evidence⟧\nRepair: ⟦repair⟧");
         when(prompts.criticOutputRepair()).thenReturn("Every confirmed lesson issue requires relevant evidenceIds.");
         when(chatModel.call(any(Prompt.class)))
                 .thenReturn(new ChatResponse(List.of(new Generation(new AssistantMessage(
