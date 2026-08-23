@@ -144,15 +144,14 @@ class AnswerEvidenceAgentTest {
     }
 
     @Test
-    void doesNotPromoteExactPageEvidenceFromAFailedAgentRun() {
-        HybridEvidenceHit initial = hit(UUID.randomUUID(), "Movement", "Move one space.");
-        RuleEvidenceHit observed = source(UUID.randomUUID(), "Payment", "Pay after movement.");
+    void preservesCanonicalPageEvidenceWhenANonCertifyingAgentExhaustsItsLoopAfterTheRead() {
+        RuleEvidenceHit observed = source(UUID.randomUUID(), "Factory displays", "Move the remaining tiles to the center.");
         RunResult partial = new RunResult(
                 RunStatus.FALLBACK,
                 "EVIDENCE_REFINEMENT_UNAVAILABLE",
-                "EMPTY_MODEL_RESULT",
+                "ITERATION_LIMIT",
                 3,
-                1,
+                3,
                 List.of(observation(observed.chunkId())));
         Permit permit = mock(Permit.class);
         AnswerEvidenceAgent agent = new AnswerEvidenceAgent(
@@ -162,11 +161,20 @@ class AnswerEvidenceAgentTest {
                 limiter(permit));
 
         var result = agent.refine(
-                runId, question("What is the exception?"), new QuestionContext(versionId),
-                "player", null, plan(Set.of(EvidenceNeed.EXCEPTION)), ready(initial));
+                runId,
+                question("我拿走同色砖以后，剩下的砖放到哪里？"),
+                new QuestionContext(versionId),
+                "player",
+                null,
+                new AnswerQuestionPlan(
+                        List.of(new AnswerQuestionPlan.Subquestion(
+                                "我拿走同色砖以后，剩下的砖放到哪里？",
+                                Set.of(EvidenceNeed.DIRECT_RULE))),
+                        false),
+                new AnswerEvidenceRetriever.Result(List.of(), AnswerEvidenceRetriever.State.READY));
 
         assertThat(result.evidence()).extracting(hit -> hit.evidence().chunkId())
-                .containsExactly(initial.evidence().chunkId());
+                .containsExactly(observed.chunkId());
         verify(permit).close();
     }
 
@@ -317,6 +325,33 @@ class AnswerEvidenceAgentTest {
                 "multiplier",
                 "worked example",
                 "consistency check");
+        verify(permit).close();
+    }
+
+    @Test
+    void completesOneMissingDirectRuleObligationAsSoonAsItsExactPageIsRead() {
+        AtomicReference<RunRequest> captured = new AtomicReference<>();
+        Permit permit = mock(Permit.class);
+        AnswerEvidenceAgent agent = new AnswerEvidenceAgent(
+                capturingFallbackAgent(captured), emptyLookup(), scopes(), limiter(permit));
+        AnswerQuestionPlan directFallback = new AnswerQuestionPlan(
+                List.of(new AnswerQuestionPlan.Subquestion(
+                        "Where do the remaining pieces go?",
+                        Set.of(EvidenceNeed.DIRECT_RULE))),
+                false);
+
+        agent.refine(
+                runId,
+                question("Where do the remaining pieces go?"),
+                new QuestionContext(versionId),
+                "player",
+                null,
+                directFallback,
+                new AnswerEvidenceRetriever.Result(List.of(), AnswerEvidenceRetriever.State.READY));
+
+        assertThat(captured.get().requiredToolsBeforeCompletion()).containsExactly("read_rule_pages");
+        assertThat(captured.get().completeAfterRequiredTools()).isTrue();
+        assertThat(captured.get().terminalContract().required()).isFalse();
         verify(permit).close();
     }
 
