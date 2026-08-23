@@ -82,9 +82,9 @@ class PostgresBggRankedCatalogTest {
                 VALUES
                     ('DISCOVERY', 10,
                      '{"chineseName":"百变策略","thumbnailUrl":"https://example.test/10-thumb.jpg","imageUrl":"https://example.test/10-full.jpg","categories":["Economic"],"mechanics":["Deck Building"],"designers":["Table Weaver"]}',
-                     160, NOW(), NOW(), NOW(), NOW()),
-                    ('DISCOVERY', 20, '{"categories":["Economic"],"mechanics":["Deck Building"],"designers":["Table Weaver"]}', 112, NOW(), NOW(), NOW(), NOW()),
-                    ('DISCOVERY', 30, '{"categories":["Economic"],"mechanics":["Deck Building"],"designers":["Table Weaver"]}', 112, NOW(), NOW(), NOW(), NOW())
+                     160, NOW(), NOW() + INTERVAL '1 day', NOW() + INTERVAL '7 days', NOW()),
+                    ('DISCOVERY', 20, '{"categories":["Economic"],"mechanics":["Deck Building"],"designers":["Table Weaver"]}', 112, NOW(), NOW() + INTERVAL '1 day', NOW() + INTERVAL '7 days', NOW()),
+                    ('DISCOVERY', 30, '{"categories":["Economic"],"mechanics":["Deck Building"],"designers":["Table Weaver"]}', 112, NOW(), NOW() + INTERVAL '1 day', NOW() + INTERVAL '7 days', NOW())
                 """);
 
         assertThat(repository.findSnapshot()).contains(snapshot);
