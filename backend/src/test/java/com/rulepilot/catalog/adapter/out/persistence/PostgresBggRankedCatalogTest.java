@@ -79,9 +79,12 @@ class PostgresBggRankedCatalogTest {
                 """
                 INSERT INTO bgg_metadata_cache
                     (cache_kind, bgg_id, payload, payload_bytes, cached_at, fresh_until, stale_until, last_accessed_at)
-                VALUES ('DISCOVERY', 10,
-                    '{"chineseName":"百变策略","thumbnailUrl":"https://example.test/10-thumb.jpg","imageUrl":"https://example.test/10-full.jpg"}',
-                    128, NOW(), NOW(), NOW(), NOW())
+                VALUES
+                    ('DISCOVERY', 10,
+                     '{"chineseName":"百变策略","thumbnailUrl":"https://example.test/10-thumb.jpg","imageUrl":"https://example.test/10-full.jpg","categories":["Economic"],"mechanics":["Deck Building"],"designers":["Table Weaver"]}',
+                     160, NOW(), NOW() + INTERVAL '1 day', NOW() + INTERVAL '7 days', NOW()),
+                    ('DISCOVERY', 20, '{"categories":["Economic"],"mechanics":["Deck Building"],"designers":["Table Weaver"]}', 112, NOW(), NOW() + INTERVAL '1 day', NOW() + INTERVAL '7 days', NOW()),
+                    ('DISCOVERY', 30, '{"categories":["Economic"],"mechanics":["Deck Building"],"designers":["Table Weaver"]}', 112, NOW(), NOW() + INTERVAL '1 day', NOW() + INTERVAL '7 days', NOW())
                 """);
 
         assertThat(repository.findSnapshot()).contains(snapshot);
@@ -128,6 +131,19 @@ class PostgresBggRankedCatalogTest {
                 .as("the identity grid also has an expansion slot")
                 .extracting(game -> game.bggId())
                 .containsExactly(30);
+        assertThat(repository.findByMetadataFilters(
+                        List.of(),
+                        List.of("Economic"),
+                        List.of("Deck Building"),
+                        List.of("table weaver"),
+                        20))
+                .as("exact BGG taxonomy and designer relations compose and exclude expansions by default")
+                .extracting(RankedGame::bggId)
+                .containsExactly(10, 20);
+        assertThat(repository.findByMetadataFilters(
+                        List.of(), List.of(), List.of(), List.of("Table"), 20))
+                .as("metadata lookup is an exact relation, not a fuzzy prose search")
+                .isEmpty();
     }
 
     private static RankedGame game(

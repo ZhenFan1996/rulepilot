@@ -979,12 +979,14 @@ test('recommendation becomes one readable, taught, and answerable production jou
     report.journeySurfaceOpaque = await opaqueSurface(journeySurface)
     expect(report.journeyBackdropVisible).toBe(true)
     expect(report.journeySurfaceOpaque).toBe(true)
-    report.confirmedMilestonesAtSourceReview = await journeySurface
-      .locator('[data-fact-confirmed="true"]').count()
     if (restoredExistingJourney) {
       await expect(page.getByTestId('player-journey-progress')).toBeVisible({ timeout: 60_000 })
+      report.confirmedMilestonesAtSourceReview = await journeySurface
+        .locator('[data-fact-confirmed="true"]').count()
       expect(report.confirmedMilestonesAtSourceReview).toBeGreaterThanOrEqual(1)
     } else {
+      report.confirmedMilestonesAtSourceReview = await journeySurface
+        .locator('[data-fact-confirmed="true"]').count()
       expect(report.confirmedMilestonesAtSourceReview).toBe(1)
       const candidateCard = page.locator('li', {
         has: page.locator(`a[href="${gstoneCandidate!.url}"]`),

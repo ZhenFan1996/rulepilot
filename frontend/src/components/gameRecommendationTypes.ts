@@ -77,7 +77,7 @@ export type RecommendedGame = {
 
 export type RecommendationReplyPart = {
   role: 'why_fit' | 'tradeoff'
-  claimType: 'constraint_fit' | 'structured_fact' | 'taxonomy_classification' | 'attributed_experience' | 'rule_procedure' | 'publisher_description'
+  claimType: 'constraint_fit' | 'structured_fact' | 'taxonomy_classification' | 'attributed_experience' | 'rule_procedure' | 'publisher_description' | 'preference_inference'
   subject: string
   text: string
   sourceIndexes: number[]

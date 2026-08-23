@@ -44,6 +44,15 @@ public interface BggRankedCatalogRepository {
         return List.of();
     }
 
+    default List<RankedGame> findByMetadataFilters(
+            List<com.rulepilot.catalog.BggGameType> types,
+            List<String> categories,
+            List<String> mechanics,
+            List<String> designers,
+            int maximum) {
+        return List.of();
+    }
+
     default List<SelectionCandidate> searchSelections(String query, int maximum) {
         return List.of();
     }

@@ -11,6 +11,12 @@ public interface BoardGameRecommendationCatalog {
 
     List<Game> findGamesByIds(List<Integer> bggIds);
 
+    /** Searches the ranked catalog with exact BGG taxonomy and relationship filters. */
+    default CandidateSet searchGames(CatalogFilters filters) {
+        BggGameType required = filters.types().size() == 1 ? filters.types().getFirst() : BggGameType.ALL;
+        return findCandidates(required, filters.types(), filters.maximum());
+    }
+
     default List<Ranking> searchByNames(List<String> names) {
         return List.of();
     }
@@ -42,6 +48,23 @@ public interface BoardGameRecommendationCatalog {
     record CandidateSet(int sourceCount, List<Game> games) {
         public CandidateSet {
             games = List.copyOf(games);
+        }
+    }
+
+    record CatalogFilters(
+            List<BggGameType> types,
+            List<String> categories,
+            List<String> mechanics,
+            List<String> designers,
+            int maximum) {
+        public CatalogFilters {
+            types = types == null ? List.of() : List.copyOf(types);
+            categories = categories == null ? List.of() : List.copyOf(categories);
+            mechanics = mechanics == null ? List.of() : List.copyOf(mechanics);
+            designers = designers == null ? List.of() : List.copyOf(designers);
+            if (maximum < 1 || maximum > 20) {
+                throw new IllegalArgumentException("BGG catalog filter maximum must be between 1 and 20");
+            }
         }
     }
 

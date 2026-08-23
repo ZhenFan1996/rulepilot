@@ -37,10 +37,16 @@ public class BoardGameRecommendationTools {
         this.webResearch = webResearch;
     }
 
-    CatalogObservation searchCatalog(BggGameType requiredType, List<BggGameType> suggestedTypes, int maximum) {
+    CatalogObservation searchCatalog(
+            List<BggGameType> types,
+            List<String> categories,
+            List<String> mechanics,
+            List<String> designers,
+            int maximum) {
         try {
-            BoardGameRecommendationCatalog.CandidateSet result =
-                    catalog.findCandidates(requiredType, suggestedTypes, maximum);
+            BoardGameRecommendationCatalog.CandidateSet result = catalog.searchGames(
+                    new BoardGameRecommendationCatalog.CatalogFilters(
+                            types, categories, mechanics, designers, maximum));
             return new CatalogObservation(
                     ToolStatus.SUCCESS,
                     ToolName.SEARCH_BGG_CATALOG,
@@ -184,6 +190,12 @@ public class BoardGameRecommendationTools {
             LOGGER.warn("Recommendation candidate-discovery tool failed");
             return new DiscoveryObservation(ToolStatus.ERROR, null, "DISCOVERY_UNAVAILABLE");
         }
+    }
+
+    void rememberVerifiedIdentity(
+            DiscoveryRequest request,
+            BoardGameRecommendationWebResearch.CandidateDiscovery discovery) {
+        webResearch.rememberVerifiedIdentity(request, discovery);
     }
 
     ResearchObservation researchGameFit(List<Candidate> candidates, String locale, String question) {

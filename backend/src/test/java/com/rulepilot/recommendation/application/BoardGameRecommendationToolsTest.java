@@ -114,7 +114,8 @@ class BoardGameRecommendationToolsTest {
         };
         BoardGameRecommendationTools tools = new BoardGameRecommendationTools(failing, new DisabledResearch());
 
-        var observation = tools.searchCatalog(BggGameType.ALL, List.of(), 20);
+        var observation = tools.searchCatalog(
+                List.of(BggGameType.ALL), List.of(), List.of(), List.of(), 20);
 
         assertThat(observation.status()).isEqualTo(ToolStatus.ERROR);
         assertThat(observation.code()).isEqualTo("CATALOG_UNAVAILABLE");

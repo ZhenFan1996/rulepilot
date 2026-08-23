@@ -36,11 +36,6 @@ case "$RULEPILOT_RECOMMENDATION_CANARY_PROVIDER" in
 		;;
 esac
 
-if [ "${RULEPILOT_RECOMMENDATION_CANARY_SCENARIO:-}" = "creator-alias" ] && [ -z "${OPENAI_API_KEY:-}" ]; then
-	echo "FAIL OPENAI_API_KEY is required for the creator-alias public-discovery canary"
-	exit 2
-fi
-
 cd "$ROOT_DIR/backend"
 if [ "${RULEPILOT_RECOMMENDATION_CANARY_SCENARIO:-}" = "comparison-only" ]; then
 	./mvnw -q '-Dtest=BoardGameRecommendationAgentPaidCanaryTest#preservesANaturalComparisonWithoutASeparateDecisionReviewTurn' test
@@ -52,6 +47,8 @@ elif [ "${RULEPILOT_RECOMMENDATION_CANARY_SCENARIO:-}" = "classic-awards-convers
 	./mvnw -q '-Dtest=BoardGameRecommendationAgentPaidCanaryTest#carriesAwardWinningClassicsThroughCorrectionAndComparisonWithoutRediscovery' test
 elif [ "${RULEPILOT_RECOMMENDATION_CANARY_SCENARIO:-}" = "creator-alias" ]; then
 	./mvnw -q '-Dtest=BoardGameRecommendationAgentPaidCanaryTest#resolvesAPlayerCreatorAliasThroughTheRealPublicDiscoveryTool' test
+elif [ "${RULEPILOT_RECOMMENDATION_CANARY_SCENARIO:-}" = "creator-alias-identity" ]; then
+	./mvnw -q '-Dtest=BoardGameRecommendationAgentPaidCanaryTest#recognizesThePlayerCreatorAliasWithoutPublishingAGuessedIdentity' test
 elif [ "${RULEPILOT_RECOMMENDATION_CANARY_SCENARIO:-}" = "imaginative" ]; then
 	./mvnw -q '-Dtest=BoardGameRecommendationAgentPaidCanaryTest#keepsImaginativePreferencesSoftAndAppliesOnlyExplicitMidConversationCorrections' test
 elif [ "${RULEPILOT_RECOMMENDATION_CANARY_SCENARIO:-}" = "production-two-turn" ]; then
