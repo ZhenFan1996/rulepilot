@@ -7,7 +7,7 @@ const TARGET_BGG_ID = positiveIntegerEnvironment('RULEPILOT_RECOMMENDATION_TARGE
 const TARGET_NAME = aliasPattern(process.env.RULEPILOT_RECOMMENDATION_TARGET_NAMES ?? '花砖物语|Azul')
 const RECOMMENDATION_PROMPT = process.env.RULEPILOT_RECOMMENDATION_PROMPT
   ?? '我们今晚第一次玩花砖物语，规则书还没看。能帮我把这款找出来，然后带我们从规则书、讲解一路到现场答疑吗？'
-const MAX_EXPLICIT_TARGET_RECOMMENDATION_MS = 5_000
+const MAX_COMPLETE_GOAL_RECOMMENDATION_MS = 20_000
 const PRESERVED_DRAFT = '下次我还想给完全没玩过桌游的家人找一款更轻松的。'
 const RULE_QUESTION = process.env.RULEPILOT_RECOMMENDATION_RULE_QUESTION
   ?? '我从一个工厂展示板拿走同色砖以后，剩下的砖要放到哪里？请用日常的话简短回答，并引用规则书页码。'
@@ -879,12 +879,12 @@ test('recommendation becomes one readable, taught, and answerable production jou
     await composer.fill(RECOMMENDATION_PROMPT)
     await page.getByRole('button', { name: '发送', exact: true }).click()
 
-    await expect(targetDetailsButton).toBeVisible({ timeout: MAX_EXPLICIT_TARGET_RECOMMENDATION_MS })
+    await expect(targetDetailsButton).toBeVisible({ timeout: MAX_COMPLETE_GOAL_RECOMMENDATION_MS })
     report.recommendationMs = elapsed(recommendationStartedAt)
     expect(
       report.recommendationMs,
-      'An explicitly named local catalog game should not enter the paid recommendation-model path',
-    ).toBeLessThanOrEqual(MAX_EXPLICIT_TARGET_RECOMMENDATION_MS)
+      'The single recommendation Agent should understand and execute the complete player goal within the interaction budget',
+    ).toBeLessThanOrEqual(MAX_COMPLETE_GOAL_RECOMMENDATION_MS)
     await composer.fill(PRESERVED_DRAFT)
 
     report.stage = 'details-dialog'

@@ -86,21 +86,32 @@ public interface BoardGameRecommendationWebResearch {
 
     enum RelationshipKind {
         DESIGNER,
+        DESIGNER_GROUP,
         GAME,
         OTHER
     }
 
     record DiscoveryRequest(
             String query,
+            String subject,
             List<BggGameType> candidateTypes,
             String locale,
             DiscoveryGoal goal) {
         public DiscoveryRequest(String query, List<BggGameType> candidateTypes, String locale) {
-            this(query, candidateTypes, locale, DiscoveryGoal.SELECTABLE_CARDS);
+            this(query, query, candidateTypes, locale, DiscoveryGoal.SELECTABLE_CARDS);
+        }
+
+        public DiscoveryRequest(
+                String query,
+                List<BggGameType> candidateTypes,
+                String locale,
+                DiscoveryGoal goal) {
+            this(query, query, candidateTypes, locale, goal);
         }
 
         public DiscoveryRequest {
             query = query == null ? "" : query.strip();
+            subject = subject == null ? "" : subject.strip();
             candidateTypes = candidateTypes == null ? List.of() : List.copyOf(candidateTypes);
             goal = goal == null ? DiscoveryGoal.SELECTABLE_CARDS : goal;
         }
@@ -123,11 +134,33 @@ public interface BoardGameRecommendationWebResearch {
     /** Source-backed external relationship; BGG metadata must still canonicalize its entity. */
     record ResolvedRelationship(
             RelationshipKind kind,
-            String entityName,
+            List<String> entityNames,
             List<Integer> sourceIndexes) {
+        public ResolvedRelationship(RelationshipKind kind, String entityName, List<Integer> sourceIndexes) {
+            this(kind, entityName == null ? List.of() : List.of(entityName), sourceIndexes);
+        }
+
         public ResolvedRelationship {
-            entityName = entityName == null ? "" : entityName.strip();
+            entityNames = entityNames == null
+                    ? List.of()
+                    : entityNames.stream()
+                            .filter(java.util.Objects::nonNull)
+                            .map(String::strip)
+                            .filter(name -> !name.isBlank())
+                            .distinct()
+                            .toList();
             sourceIndexes = sourceIndexes == null ? List.of() : List.copyOf(sourceIndexes);
+            int requiredNames = kind == RelationshipKind.DESIGNER_GROUP ? 2 : 1;
+            if (kind == null
+                    || entityNames.size() < requiredNames
+                    || entityNames.size() > 4
+                    || entityNames.stream().anyMatch(name -> name.length() > 160)) {
+                throw new IllegalArgumentException("external relationship entity names are invalid");
+            }
+        }
+
+        public String entityName() {
+            return String.join(", ", entityNames);
         }
     }
 

@@ -2,6 +2,7 @@ package com.rulepilot.recommendation.application;
 
 import com.rulepilot.catalog.BggGameType;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog;
+import com.rulepilot.catalog.BoardGameRecommendationCatalog.CatalogSort;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.Game;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Candidate;
@@ -43,10 +44,55 @@ public class BoardGameRecommendationTools {
             List<String> mechanics,
             List<String> designers,
             int maximum) {
+        return searchCatalog(
+                types,
+                categories,
+                mechanics,
+                designers,
+                List.of(),
+                List.of(),
+                null,
+                null,
+                null,
+                null,
+                null,
+                CatalogSort.RANK,
+                maximum,
+                0);
+    }
+
+    CatalogObservation searchCatalog(
+            List<BggGameType> types,
+            List<String> categories,
+            List<String> mechanics,
+            List<String> designers,
+            List<String> publishers,
+            List<String> families,
+            Integer minimumPublicationYear,
+            Integer maximumPublicationYear,
+            java.math.BigDecimal minimumAverageRating,
+            Integer minimumRatingsCount,
+            String textQuery,
+            CatalogSort sort,
+            int maximum,
+            int offset) {
         try {
             BoardGameRecommendationCatalog.CandidateSet result = catalog.searchGames(
                     new BoardGameRecommendationCatalog.CatalogFilters(
-                            types, categories, mechanics, designers, maximum));
+                            types,
+                            categories,
+                            mechanics,
+                            designers,
+                            publishers,
+                            families,
+                            minimumPublicationYear,
+                            maximumPublicationYear,
+                            minimumAverageRating,
+                            minimumRatingsCount,
+                            textQuery,
+                            sort,
+                            maximum,
+                            offset));
             return new CatalogObservation(
                     ToolStatus.SUCCESS,
                     ToolName.SEARCH_BGG_CATALOG,

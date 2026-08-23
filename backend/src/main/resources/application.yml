@@ -268,12 +268,12 @@ rulepilot:
       detail-fresh-ttl: ${BGG_CACHE_DETAIL_FRESH_TTL:P7D}
       detail-stale-ttl: ${BGG_CACHE_DETAIL_STALE_TTL:P30D}
       maximum-entry-bytes: ${BGG_CACHE_MAXIMUM_ENTRY_BYTES:262144}
-      maximum-entries: ${BGG_CACHE_MAXIMUM_ENTRIES:10000}
-      maximum-bytes: ${BGG_CACHE_MAXIMUM_BYTES:67108864}
+      maximum-entries: ${BGG_CACHE_MAXIMUM_ENTRIES:20000}
+      maximum-bytes: ${BGG_CACHE_MAXIMUM_BYTES:268435456}
       cleanup-delay: ${BGG_CACHE_CLEANUP_DELAY:PT1H}
       prewarm:
         enabled: ${BGG_CACHE_PREWARM_ENABLED:true}
-        game-count: ${BGG_CACHE_PREWARM_GAME_COUNT:2000}
+        game-count: ${BGG_CACHE_PREWARM_GAME_COUNT:10000}
         cohort-size: ${BGG_CACHE_PREWARM_COHORT_SIZE:500}
         translation-cohort-size: ${BGG_CACHE_PREWARM_TRANSLATION_COHORT_SIZE:60}
         initial-delay: ${BGG_CACHE_PREWARM_INITIAL_DELAY:PT5M}

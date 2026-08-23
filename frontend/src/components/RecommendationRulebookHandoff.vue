@@ -824,7 +824,7 @@ async function enqueueImport() {
     identityNotice.value = ''
     pollingWarning.value = false
     persistJourney()
-    notifyBackgroundWorkChanged()
+    notifyBackgroundWorkChanged({ importJob: incoming })
     scheduleJourney(0)
   } catch {
     if (request === sequence) {
@@ -963,7 +963,7 @@ async function retryJourney() {
       preparationRun.value = null
       teachingRun.value = null
       teachingRunId.value = null
-      notifyBackgroundWorkChanged()
+      notifyBackgroundWorkChanged({ importJob: retriedJob })
       scheduleJourney(0)
       return
     }
@@ -1037,7 +1037,7 @@ async function retryOriginalImport() {
     ? 'browser-required'
     : 'journey'
   persistJourney()
-  notifyBackgroundWorkChanged()
+  notifyBackgroundWorkChanged({ importJob: retriedJob })
   if (retriedJob.stage !== 'FAILED') scheduleJourney(0)
 }
 
@@ -1098,6 +1098,7 @@ async function resumeGeneration() {
       if (!response.ok) throw new Error('teaching resume failed')
       importJob.value = normalizeImportJob(await response.json() as OfficialImportJob)
       preparationRunId.value = importJob.value.teachingPreparationRunId
+      notifyBackgroundWorkChanged({ importJob: importJob.value })
     }
     persistJourney()
     scheduleJourney(0)

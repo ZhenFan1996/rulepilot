@@ -3,6 +3,8 @@ package com.rulepilot.catalog.adapter.out.persistence;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.rulepilot.catalog.BggGameType;
+import com.rulepilot.catalog.BoardGameRecommendationCatalog.CatalogFilters;
+import com.rulepilot.catalog.BoardGameRecommendationCatalog.CatalogSort;
 import com.rulepilot.catalog.application.BggRankedCatalog.Query;
 import com.rulepilot.catalog.application.BggRankedCatalog.RankedGame;
 import com.rulepilot.catalog.application.BggRankedCatalog.Snapshot;
@@ -64,9 +66,9 @@ class PostgresBggRankedCatalogTest {
     void atomicallyPublishesAndQueriesHotRatingTypeAndTitleOrders() {
         UUID importId = UUID.randomUUID();
         repository.stage(importId, List.of(
-                game(10, "Strategy 100%", 10, "8.0", false, Map.of(BggGameType.STRATEGY, 3)),
-                game(20, "Family Game", 20, "9.0", false, Map.of(BggGameType.FAMILY, 2)),
-                game(30, "Expansion", null, "10.0", true, Map.of(BggGameType.EXPANSION, 1))));
+                game(10, "Strategy 100%", 2022, 10, "8.0", 5_000, false, Map.of(BggGameType.STRATEGY, 3)),
+                game(20, "Family Game", 2026, 20, "9.0", 1_000, false, Map.of(BggGameType.FAMILY, 2)),
+                game(30, "Expansion", 2025, null, "10.0", 500, true, Map.of(BggGameType.EXPANSION, 1))));
         Snapshot snapshot = new Snapshot(
                 Instant.parse("2026-08-07T08:00:00Z"), LocalDate.parse("2026-08-07"), 3, "a".repeat(64));
         repository.publish(importId, snapshot);
@@ -81,10 +83,10 @@ class PostgresBggRankedCatalogTest {
                     (cache_kind, bgg_id, payload, payload_bytes, cached_at, fresh_until, stale_until, last_accessed_at)
                 VALUES
                     ('DISCOVERY', 10,
-                     '{"chineseName":"百变策略","thumbnailUrl":"https://example.test/10-thumb.jpg","imageUrl":"https://example.test/10-full.jpg","categories":["Economic"],"mechanics":["Deck Building"],"designers":["Table Weaver"]}',
+                     '{"name":"Strategy 100%","chineseName":"百变策略","thumbnailUrl":"https://example.test/10-thumb.jpg","imageUrl":"https://example.test/10-full.jpg","categories":["Economic"],"mechanics":["Deck Building"],"designers":["Table Weaver"],"publishers":["Copper Press"],"families":["Industrial Age"],"description":"Build rail networks through industrial cities and smoky canals."}',
                      160, NOW(), NOW() + INTERVAL '1 day', NOW() + INTERVAL '7 days', NOW()),
-                    ('DISCOVERY', 20, '{"categories":["Economic"],"mechanics":["Deck Building"],"designers":["Table Weaver"]}', 112, NOW(), NOW() + INTERVAL '1 day', NOW() + INTERVAL '7 days', NOW()),
-                    ('DISCOVERY', 30, '{"categories":["Economic"],"mechanics":["Deck Building"],"designers":["Table Weaver"]}', 112, NOW(), NOW() + INTERVAL '1 day', NOW() + INTERVAL '7 days', NOW())
+                    ('DISCOVERY', 20, '{"name":"Family Game","categories":["Economic"],"mechanics":["Deck Building"],"designers":["Table Weaver"],"publishers":["Garden Press"],"families":["Peaceful Gardens"],"description":"Welcome animals into a peaceful garden."}', 112, NOW(), NOW() + INTERVAL '1 day', NOW() + INTERVAL '7 days', NOW()),
+                    ('DISCOVERY', 30, '{"name":"Expansion","categories":["Economic"],"mechanics":["Deck Building"],"designers":["Table Weaver"],"publishers":["Copper Press"],"families":["Industrial Age"],"description":"More industrial rail networks."}', 112, NOW(), NOW() + INTERVAL '1 day', NOW() + INTERVAL '7 days', NOW())
                 """);
 
         assertThat(repository.findSnapshot()).contains(snapshot);
@@ -144,23 +146,67 @@ class PostgresBggRankedCatalogTest {
                         List.of(), List.of(), List.of(), List.of("Table"), 20))
                 .as("metadata lookup is an exact relation, not a fuzzy prose search")
                 .isEmpty();
+        assertThat(repository.findByMetadataFilters(new CatalogFilters(
+                        List.of(),
+                        List.of("Economic"),
+                        List.of("Deck Building"),
+                        List.of("Table Weaver"),
+                        List.of("Copper Press"),
+                        List.of("Industrial Age"),
+                        2020,
+                        2024,
+                        new BigDecimal("7.5"),
+                        4_000,
+                        null,
+                        CatalogSort.POPULARITY,
+                        20,
+                        0)))
+                .as("publisher, family, year, rating and popularity constraints compose locally")
+                .extracting(RankedGame::bggId)
+                .containsExactly(10);
+        assertThat(repository.findByMetadataFilters(new CatalogFilters(
+                        List.of(), List.of(), List.of(), List.of(), List.of(), List.of(),
+                        null, null, null, null, null, CatalogSort.RANK, 1, 1)))
+                .as("stable offsets return a new page instead of repeating the first result")
+                .extracting(RankedGame::bggId)
+                .containsExactly(20);
+        assertThat(repository.findByMetadataFilters(new CatalogFilters(
+                        List.of(), List.of(), List.of(), List.of(), List.of(), List.of(),
+                        null, null, null, null, "industrial rail", CatalogSort.RELEVANCE, 20, 0)))
+                .as("cached BGG descriptions and tags support local retrieval-augmented candidate search")
+                .extracting(RankedGame::bggId)
+                .containsExactly(10);
+        assertThat(repository.findByMetadataFilters(new CatalogFilters(
+                        List.of(), List.of(), List.of(), List.of(), List.of(), List.of(),
+                        null, null, null, null, "industrial gardens", CatalogSort.RELEVANCE, 20, 0)))
+                .as("concept retrieval recalls partial and inflected matches before relevance ordering")
+                .extracting(RankedGame::bggId)
+                .containsExactly(10, 20);
+        assertThat(repository.findByMetadataFilters(new CatalogFilters(
+                        List.of(), List.of(), List.of(), List.of(), List.of(), List.of(),
+                        null, null, null, null, "unmatched constellation", CatalogSort.RELEVANCE, 20, 0)))
+                .as("a soft concept query must not erase otherwise eligible ranked games")
+                .extracting(RankedGame::bggId)
+                .containsExactly(10, 20);
     }
 
     private static RankedGame game(
             int id,
             String name,
+            int year,
             Integer rank,
             String rating,
+            int usersRated,
             boolean expansion,
             Map<BggGameType, Integer> types) {
         return new RankedGame(
                 id,
                 name,
-                2026,
+                year,
                 rank,
                 new BigDecimal(rating).subtract(new BigDecimal("0.5")),
                 new BigDecimal(rating),
-                1_000,
+                usersRated,
                 expansion,
                 types);
     }

@@ -49,7 +49,7 @@ final class RecommendationAgentState {
     boolean discoveryProducedVerifiedGames;
     DiscoveryPurpose discoveryPurpose;
     RelationshipKind discoveredRelationshipKind;
-    String discoveredRelationshipName = "";
+    List<String> discoveredRelationshipNames = List.of();
     boolean researchAttempted;
     boolean clarificationBlockedByExecutionFailure;
     String webResearchFailureCode = "";
@@ -156,11 +156,6 @@ final class RecommendationAgentState {
         previouslyShownIds.clear();
         titleInspectionAttempted = false;
         catalogBrowseAttempted = false;
-        discoveryAttempted = false;
-        discoveryProducedVerifiedGames = false;
-        discoveryPurpose = null;
-        discoveredRelationshipKind = null;
-        discoveredRelationshipName = "";
         researchAttempted = false;
         research = Research.empty();
         if (selectionWorkObserved) {
@@ -173,7 +168,21 @@ final class RecommendationAgentState {
     }
 
     boolean hasVerifiedIdentity() {
-        return discoveredRelationshipKind != null && !discoveredRelationshipName.isBlank();
+        return discoveredRelationshipKind != null && !discoveredRelationshipNames.isEmpty();
+    }
+
+    List<Integer> verifiedIdentityContextIds() {
+        return java.util.stream.Stream.concat(
+                        comparisonSubjectIds.stream(),
+                        comparisonReferenceIds.stream())
+                .distinct()
+                .filter(id -> {
+                    Game game = verified.get(id);
+                    return game != null
+                            && game.details() != null
+                            && !game.details().designers().isEmpty();
+                })
+                .toList();
     }
 
     record ContextualPreference(

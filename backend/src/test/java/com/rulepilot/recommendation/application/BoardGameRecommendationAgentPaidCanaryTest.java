@@ -236,18 +236,134 @@ class BoardGameRecommendationAgentPaidCanaryTest {
             visibleTurns.add(Map.copyOf(visible));
 
             assertThat(response.outcome()).isEqualTo(Outcome.CONVERSATION);
-            assertThat(response.mode()).isEqualTo(BoardGameRecommendationAgent.DecisionMode.MODEL_FAST_PATH);
+            assertThat(response.mode()).isEqualTo(BoardGameRecommendationAgent.DecisionMode.MODEL_ASSISTED);
             assertThat(response.games()).isEmpty();
             assertThat(response.harness().modelCalls()).isEqualTo(1);
             assertThat(response.harness().catalogCalls()).isZero();
             assertThat(response.harness().webResearchCalls()).isZero();
             assertThat(response.harness().fallbackUsed()).isFalse();
-            assertThat(response.harness().actions()).containsExactly("STREAMED_DIRECT_AGENT_REPLY");
-            assertThat(chunks).hasSizeGreaterThan(1);
+            assertThat(response.harness().actions()).containsExactly("REPLY_TO_USER");
+            assertThat(chunks).hasSize(1);
             assertThat(chunks.getLast()).isEqualTo(response.assistantMessage());
             assertThat(firstChunkMs.get()).isNotNull().isLessThan(totalMs);
-            assertThat(capture.lastTurnHadToolCalls()).isFalse();
-            assertThat(capture.lastAssistantText()).isEqualTo(response.assistantMessage());
+            assertThat(capture.lastTurnHadToolCalls()).isTrue();
+            assertThat(capture.lastToolCall().name()).isEqualTo(BoardGameRecommendationAgent.REPLY_TOOL);
+            assertThat(json.readTree(capture.lastToolCall().argumentsJson()).path("playerReply").asText())
+                    .isEqualTo(response.assistantMessage());
+            writeArtifact(capture, visibleTurns, null);
+        } catch (Throwable failure) {
+            writeArtifact(capture, visibleTurns, failure.getClass().getSimpleName());
+            throw failure;
+        } finally {
+            agent.stopBoundedCalls();
+        }
+    }
+
+    @Test
+    void routesWildConversationIntoCardsOnlyWhenThePlayerActuallyAsksForChoices() throws Exception {
+        assumeTrue("true".equalsIgnoreCase(System.getenv("RULEPILOT_RECOMMENDATION_PAID_CANARY")));
+        String provider = environment("RULEPILOT_RECOMMENDATION_CANARY_PROVIDER", "qwen")
+                .toLowerCase(Locale.ROOT);
+        String prefix = provider.toUpperCase(Locale.ROOT);
+        Capture capture = new Capture(provider, environment(prefix + "_MODEL", null));
+        BoardGameRecommendationModel model = model(
+                provider,
+                environment(prefix + "_API_KEY", null),
+                environment(prefix + "_BASE_URL", null),
+                environment(prefix + "_MODEL", null),
+                capture);
+        var properties = new BoardGameRecommendationProperties(
+                8, 3, new BigDecimal("0.66"), Duration.ofSeconds(30));
+        var agent = new BoardGameRecommendationAgent(
+                model,
+                new BoardGameRecommendationTools(new CanaryCatalog(), noResearch()),
+                new BoardGameRecommendationSelector(properties),
+                properties,
+                json);
+
+        List<Map<String, Object>> visibleTurns = new ArrayList<>();
+        try {
+            String opening = "如果桌游会做梦，你觉得一枚总掷出一点的骰子会梦见什么？别急着给我推荐游戏，我们就随便聊聊。";
+            long openingStarted = System.nanoTime();
+            var chat = agent.converse(
+                    new ConversationRequest(RecommendationProfile.empty(), opening),
+                    "zh-CN");
+            visibleTurns.add(visible("wild-chat-only", chat, elapsed(openingStarted)));
+
+            assertThat(chat.outcome()).isEqualTo(Outcome.CONVERSATION);
+            assertThat(chat.games()).isEmpty();
+            assertEmptyTypedProfile(chat.profile());
+            assertThat(chat.assistantMessage()).isNotBlank().doesNotContain(
+                    "模型调用", "工具调用", "内部工具", "验证流程");
+            assertThat(chat.harness().modelCalls()).isEqualTo(1);
+            assertThat(chat.harness().catalogCalls()).isZero();
+            assertThat(chat.harness().webResearchCalls()).isZero();
+            assertThat(chat.harness().actions()).containsExactly("REPLY_TO_USER");
+
+            String followup = "继续这个脑洞：如果它遇见一张害怕被洗牌的卡，会怎么安慰它？还是只聊天。";
+            List<DialogueMessage> chatTranscript = List.of(
+                    new DialogueMessage("user", opening),
+                    new DialogueMessage("assistant", chat.assistantMessage()),
+                    new DialogueMessage("user", followup));
+            long followupStarted = System.nanoTime();
+            var continuedChat = agent.converse(
+                    new ConversationRequest(
+                            RecommendationProfile.empty(),
+                            followup,
+                            List.of(),
+                            chatTranscript,
+                            null,
+                            List.of(),
+                            List.of()),
+                    "zh-CN");
+            visibleTurns.add(visible("wild-chat-followup", continuedChat, elapsed(followupStarted)));
+
+            assertThat(continuedChat.outcome()).isEqualTo(Outcome.CONVERSATION);
+            assertThat(continuedChat.games()).isEmpty();
+            assertEmptyTypedProfile(continuedChat.profile());
+            assertThat(continuedChat.harness().modelCalls()).isEqualTo(1);
+            assertThat(continuedChat.harness().catalogCalls()).isZero();
+            assertThat(continuedChat.harness().webResearchCalls()).isZero();
+
+            String choiceRequest = "现在把这个脑洞落到能选的卡片：给我两款，像在一座快要停电的月球旧货市场里做艰难决定。"
+                    + "这个比喻只用来启发你的推荐理由，不要硬存成人数、时长、难度或类型；每款说一个为什么值得看的理由。";
+            List<DialogueMessage> choiceTranscript = List.of(
+                    new DialogueMessage("user", opening),
+                    new DialogueMessage("assistant", chat.assistantMessage()),
+                    new DialogueMessage("user", followup),
+                    new DialogueMessage("assistant", continuedChat.assistantMessage()),
+                    new DialogueMessage("user", choiceRequest));
+            long choiceStarted = System.nanoTime();
+            var choices = agent.converse(
+                    new ConversationRequest(
+                            RecommendationProfile.empty(),
+                            choiceRequest,
+                            List.of(),
+                            choiceTranscript,
+                            null,
+                            List.of(),
+                            List.of()),
+                    "zh-CN");
+            visibleTurns.add(visible("wild-metaphor-to-selectable-cards", choices, elapsed(choiceStarted)));
+
+            assertThat(choices.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
+            assertThat(choices.games()).hasSize(2).allSatisfy(entry ->
+                    assertThat(entry.replyParts())
+                            .isNotEmpty()
+                            .anySatisfy(part -> assertThat(part.role())
+                                    .isEqualTo(BoardGameRecommendationAgent.ReplyPartRole.WHY_FIT)));
+            assertEmptyTypedProfile(choices.profile());
+            assertThat(choices.harness().catalogCalls()).isEqualTo(1);
+            assertThat(choices.harness().webResearchCalls()).isZero();
+            assertThat(choices.harness().actions())
+                    .contains("SEARCH_BGG_CATALOG", "RECOMMEND_GAMES")
+                    .noneMatch(action -> action.startsWith("REJECTED_")
+                            || action.startsWith("FALLBACK_")
+                            || action.equals("RUN_DEADLINE_EXCEEDED"));
+            assertThat(choices.harness().fallbackUsed()).isFalse();
+            assertRecommendationNarrativesPreserved(capture.lastToolCall(), choices);
+            assertNoPreferenceLinks(capture.lastToolCall());
+
             writeArtifact(capture, visibleTurns, null);
         } catch (Throwable failure) {
             writeArtifact(capture, visibleTurns, failure.getClass().getSimpleName());
@@ -971,7 +1087,7 @@ class BoardGameRecommendationAgentPaidCanaryTest {
     }
 
     @Test
-    void resolvesAPlayerCreatorAliasThroughTheRealPublicDiscoveryTool() throws Exception {
+    void resolvesAPlayerCreatorAliasThroughTheGeneralAgentAndLocalBggWhenPossible() throws Exception {
         assumeTrue("true".equalsIgnoreCase(System.getenv("RULEPILOT_RECOMMENDATION_PAID_CANARY")));
         String provider = environment("RULEPILOT_RECOMMENDATION_CANARY_PROVIDER", "qwen")
                 .toLowerCase(Locale.ROOT);
@@ -1005,6 +1121,11 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                 result.ifPresent(discoveryResult::set);
                 return result;
             }
+
+            @Override
+            public void rememberVerifiedIdentity(DiscoveryRequest request, CandidateDiscovery discovery) {
+                actualResearch.rememberVerifiedIdentity(request, discovery);
+            }
         };
         var properties = new BoardGameRecommendationProperties(
                 8, 3, new BigDecimal("0.66"), Duration.ofSeconds(30));
@@ -1017,36 +1138,33 @@ class BoardGameRecommendationAgentPaidCanaryTest {
 
         List<Map<String, Object>> visibleTurns = new ArrayList<>();
         try {
-            String request = "我想玩复杂哥设计的桌游，给我两款。";
+            String request = "你知道复杂哥么？请先说出他是谁，再推荐两款他的游戏。"
+                    + "我要从其中选择《里斯本》继续读规则书、听讲解并答疑。";
             long started = System.nanoTime();
             var response = agent.converse(
                     new ConversationRequest(RecommendationProfile.empty(), request),
                     "zh-CN");
             visibleTurns.add(visible("real-creator-alias-discovery", response, elapsed(started)));
 
-            assertThat(discoveryRequest.get()).isNotNull();
-            assertThat(discoveryRequest.get().query()).isNotBlank();
-            assertThat(discoveryResult.get()).isNotNull();
-            assertThat(discoveryResult.get().sources()).isNotEmpty();
-            assertThat(discoveryResult.get().candidates())
-                    .extracting(BoardGameRecommendationWebResearch.CandidateLead::name)
-                    .containsAnyOf("On Mars", "Lisboa");
+            if (discoveryRequest.get() != null) {
+                assertThat(discoveryRequest.get().query()).isNotBlank();
+                assertThat(discoveryResult.get()).isNotNull();
+                assertThat(discoveryResult.get().sources()).isNotEmpty();
+                assertThat(discoveryResult.get().relationship().entityNames())
+                        .contains("Vital Lacerda");
+            }
             assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
             assertThat(response.games()).hasSize(2);
             assertThat(response.games())
                     .extracting(entry -> entry.game().ranking().sourceName())
-                    .containsExactlyInAnyOrder("On Mars", "Lisboa");
+                    .contains("Lisboa");
             assertThat(response.games()).allSatisfy(entry ->
                     assertThat(entry.game().details().designers()).contains("Vital Lacerda"));
+            assertThat(response.assistantMessage()).containsIgnoringCase("Vital Lacerda");
             assertThat(response.profile()).isEqualTo(RecommendationProfile.empty());
-            assertThat(response.harness().webResearchCalls()).isEqualTo(1);
+            assertThat(response.harness().webResearchCalls()).isLessThanOrEqualTo(1);
             assertThat(response.harness().actions())
-                    .contains(
-                            "DISCOVER_CANDIDATES",
-                            "SEARCH_BGG_BY_NAME",
-                            "LOOKUP_BGG_CANDIDATES",
-                            "SEARCH_BGG_CATALOG",
-                            "RECOMMEND_GAMES")
+                    .contains("SEARCH_BGG_CATALOG", "RECOMMEND_GAMES")
                     .noneMatch(action -> action.startsWith("FALLBACK_") || action.equals("RUN_DEADLINE_EXCEEDED"));
             assertThat(response.harness().fallbackUsed()).isFalse();
             assertRecommendationNarrativesPreserved(capture.lastToolCall(), response);
@@ -1096,33 +1214,59 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                 result.ifPresent(discoveryResult::set);
                 return result;
             }
+
+            @Override
+            public void rememberVerifiedIdentity(DiscoveryRequest request, CandidateDiscovery discovery) {
+                actualResearch.rememberVerifiedIdentity(request, discovery);
+            }
         };
+        CanaryCatalog canaryCatalog = new CanaryCatalog();
         var agent = new BoardGameRecommendationAgent(
                 model,
-                new BoardGameRecommendationTools(new CanaryCatalog(), capturedResearch),
+                new BoardGameRecommendationTools(canaryCatalog, capturedResearch),
                 new BoardGameRecommendationSelector(properties),
                 properties,
                 json);
 
         List<Map<String, Object>> visibleTurns = new ArrayList<>();
         try {
+            String aliasQuestion = environment(
+                    "RULEPILOT_RECOMMENDATION_CANARY_ALIAS_MESSAGE",
+                    "你知道复杂哥么？");
+            String expectedIdentity = environment(
+                    "RULEPILOT_RECOMMENDATION_CANARY_ALIAS_EXPECTED",
+                    "Vital Lacerda");
+            BoardGameRecommendationWebResearch.RelationshipKind expectedKind =
+                    BoardGameRecommendationWebResearch.RelationshipKind.valueOf(environment(
+                            "RULEPILOT_RECOMMENDATION_CANARY_ALIAS_KIND",
+                            "DESIGNER"));
             long started = System.nanoTime();
             var response = agent.converse(
-                    new ConversationRequest(RecommendationProfile.empty(), "你知道复杂哥么？"),
+                    new ConversationRequest(RecommendationProfile.empty(), aliasQuestion),
                     "zh-CN");
-            visibleTurns.add(visible("exact-creator-alias-question", response, elapsed(started)));
+            Map<String, Object> capturedTurn = new LinkedHashMap<>(
+                    visible("creator-alias-identity-question", response, elapsed(started)));
+            if (discoveryRequest.get() != null) capturedTurn.put("discoveryRequest", discoveryRequest.get());
+            if (discoveryResult.get() != null) capturedTurn.put("discoveryResult", discoveryResult.get());
+            visibleTurns.add(Map.copyOf(capturedTurn));
 
             if (discoveryResult.get() != null) {
                 assertThat(discoveryResult.get().relationship())
                         .as("public discovery must return the actual relationship target, not its evidence carrier")
                         .isNotNull()
                         .satisfies(relationship -> {
-                            assertThat(relationship.kind()).isEqualTo(
-                                    BoardGameRecommendationWebResearch.RelationshipKind.DESIGNER);
-                            assertThat(relationship.entityName()).isEqualTo("Vital Lacerda");
-                        });
+                            assertThat(relationship.kind()).isEqualTo(expectedKind);
+                            assertThat(relationship.entityNames())
+                                    .anySatisfy(name -> assertThat(name).containsIgnoringCase(expectedIdentity));
+                });
                 long cachedStarted = System.nanoTime();
-                assertThat(actualResearch.discover(discoveryRequest.get())).contains(discoveryResult.get());
+                DiscoveryRequest laterRequest = new DiscoveryRequest(
+                        "a later request for games by the already verified relationship",
+                        discoveryRequest.get().subject(),
+                        discoveryRequest.get().candidateTypes(),
+                        discoveryRequest.get().locale(),
+                        BoardGameRecommendationWebResearch.DiscoveryGoal.SELECTABLE_CARDS);
+                assertThat(actualResearch.discover(laterRequest)).contains(discoveryResult.get());
                 assertThat(elapsed(cachedStarted))
                         .as("a verified external identity should be served locally after its first cross-check")
                         .isLessThan(100);
@@ -1130,11 +1274,21 @@ class BoardGameRecommendationAgentPaidCanaryTest {
             assertThat(response.outcome()).isEqualTo(Outcome.CONVERSATION);
             assertThat(response.games()).isEmpty();
             assertThat(response.assistantMessage())
-                    .containsIgnoringCase("Vital Lacerda")
-                    .doesNotContain("Vlaada Chvátil", "复杂游戏的玩家", "泛指");
+                    .containsIgnoringCase(expectedIdentity);
+            assertThat(response.assistantMessage().codePointCount(0, response.assistantMessage().length()))
+                    .as("the natural identity answer should feel conversational rather than like a label")
+                    .isGreaterThan(30);
+            if (expectedKind == BoardGameRecommendationWebResearch.RelationshipKind.DESIGNER) {
+                canaryCatalog.games.values().stream()
+                        .filter(game -> response.assistantMessage().contains(game.ranking().sourceName()))
+                        .forEach(game -> assertThat(game.details().designers())
+                                .as("every named representative work must belong to the verified designer")
+                                .contains(expectedIdentity));
+            }
             assertThat(response.profile()).isEqualTo(RecommendationProfile.empty());
             assertThat(response.harness().webResearchCalls()).isLessThanOrEqualTo(1);
-            assertThat(response.harness().modelCalls()).isLessThanOrEqualTo(2);
+            assertThat(response.harness().modelCalls()).isLessThanOrEqualTo(
+                    discoveryResult.get() == null ? 3 : 2);
             assertThat(response.harness().actions())
                     .noneMatch(action -> action.startsWith("FALLBACK_")
                             || action.startsWith("REJECTED_")
@@ -1356,8 +1510,10 @@ class BoardGameRecommendationAgentPaidCanaryTest {
             assertEmptyTypedProfile(metaphorResponse.profile());
             assertThat(metaphorResponse.games()).hasSize(2).allSatisfy(entry -> {
                 assertThat(entry.game().details().description()).isNotBlank();
-                assertThat(entry.reasons()).isNotEmpty();
-                assertThat(entry.tradeoffs()).isNotEmpty();
+                assertThat(entry.replyParts())
+                        .isNotEmpty()
+                        .anySatisfy(part -> assertThat(part.role())
+                                .isEqualTo(BoardGameRecommendationAgent.ReplyPartRole.WHY_FIT));
             });
             assertThat(metaphorResponse.assistantMessage().codePointCount(
                             0, metaphorResponse.assistantMessage().length()))
@@ -1445,8 +1601,10 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                 assertThat(entry.game().details().minPlayers()).isLessThanOrEqualTo(3);
                 assertThat(entry.game().details().maxPlayers()).isGreaterThanOrEqualTo(3);
                 assertThat(entry.game().details().maximumPlayTimeMinutes()).isLessThanOrEqualTo(45);
-                assertThat(entry.reasons()).isNotEmpty();
-                assertThat(entry.tradeoffs()).isNotEmpty();
+                assertThat(entry.replyParts())
+                        .isNotEmpty()
+                        .anySatisfy(part -> assertThat(part.role())
+                                .isEqualTo(BoardGameRecommendationAgent.ReplyPartRole.WHY_FIT));
             });
             assertThat(corrected.harness().fallbackUsed()).isFalse();
             assertThat(corrected.harness().modelCalls()).isLessThanOrEqualTo(3);
@@ -1704,19 +1862,6 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                 return result;
             }
 
-            @Override
-            public NaturalReply streamNaturalReply(
-                    NaturalReplyRequest request,
-                    String ownerUsername,
-                    java.util.function.Consumer<String> accumulatedTextListener) {
-                long started = System.nanoTime();
-                NaturalReply result = delegate.streamNaturalReply(request, ownerUsername, accumulatedTextListener);
-                capture.add(
-                        "natural_reply_stream",
-                        new Turn(result.text(), List.of(), result.completionStatus()),
-                        elapsed(started));
-                return result;
-            }
         };
     }
 
@@ -1975,15 +2120,32 @@ class BoardGameRecommendationAgentPaidCanaryTest {
 
     private static String canaryDescription(int id) {
         return switch (id) {
-            case 101 -> "Players trade produce along a changing river market and collect matching stalls before boats depart.";
-            case 102 -> "Players cooperate through limited signals to restore paths between groves before the last lantern fades.";
-            case 103 -> "Players place workers to fulfill exhibition contracts and assemble clockwork displays in a shared gallery.";
+            case 101 -> "Players face scarce resources and tense economic trading decisions along a changing river market.";
+            case 102 -> "Players solve a cooperative mystery through limited signals and hidden information before the last lantern fades.";
+            case 103 -> "Players uncover a narrative mystery through storytelling clues while assembling clockwork displays in a shared gallery.";
             case 104 -> "Players press their luck while extending lantern routes between villages and banking completed connections.";
             case 105 -> "Players choose songs simultaneously and vote on the chorus that best matches each harbor festival.";
             case 106 -> "Players build compact decks and manage foundry orders while developing their own production line.";
             case 107 -> "Players negotiate cedar contracts and bid for shipments whose values change across the round.";
-            case 184267 -> "Players establish a colony on Mars by coordinating orbital travel, surface construction, and research.";
+            case 184267 -> "Players establish a space colony on Mars through scarce resource management, orbital travel, construction, and research.";
             case 161533 -> "Players rebuild Lisbon through political influence, commerce, and carefully managed hands of cards.";
+            default -> "";
+        };
+    }
+
+    private static String canaryChineseName(int id) {
+        return switch (id) {
+            case 31260 -> "农场主";
+            case 203993 -> "洛伦佐";
+            case 126163 -> "玛雅历法";
+            case 171623 -> "马可波罗游记";
+            case 182874 -> "大奥地利酒店";
+            case 118 -> "现代艺术";
+            case 84876 -> "勃艮第城堡";
+            case 391137 -> "银河漫游";
+            case 175914 -> "快餐连锁大亨";
+            case 4174 -> "怒海求生";
+            case 2653 -> "逃离亚特兰蒂斯";
             default -> "";
         };
     }
@@ -2039,7 +2201,7 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                 List.of(BggGameType.STRATEGY));
         Details details = new Details(
                 name,
-                "",
+                canaryChineseName(id),
                 "",
                 minPlayers,
                 maxPlayers,
@@ -2140,7 +2302,21 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                     game(109, "Clocktower Commons", 1998, 2, 4, 35, 60, "2.1", List.of("Family"), List.of("Tile Placement", "Area Majority / Influence"), List.of("Archive Designer"), "Players rebuild a shared town square with tiles while competing for influence around the clocktower."),
                     game(110, "Paper Kingdom", 1999, 3, 5, 60, 90, "3.1", List.of("Strategy"), List.of("Hand Management", "Variable Player Powers"), List.of("Archive Designer"), "Each player leads an asymmetric paper court and manages a hand of decrees across a longer political contest."),
                     game(184267, "On Mars", 1, 4, 90, 150, "4.7", List.of("Strategy"), List.of("Worker Placement", "Hand Management"), List.of("Vital Lacerda")),
-                    game(161533, "Lisboa", 1, 4, 60, 120, "4.6", List.of("Strategy"), List.of("Area Majority / Influence", "Hand Management"), List.of("Vital Lacerda")));
+                    game(161533, "Lisboa", 1, 4, 60, 120, "4.6", List.of("Strategy"), List.of("Area Majority / Influence", "Hand Management"), List.of("Vital Lacerda")),
+                    game(125153, "The Gallerist", 2015, 1, 4, 60, 150, "4.2", List.of("Economic"), List.of("Worker Placement", "Set Collection"), List.of("Vital Lacerda")),
+                    game(31260, "Agricola", 2007, 1, 5, 30, 150, "3.6", List.of("Economic", "Farming"), List.of("Worker Placement", "Hand Management"), List.of("Uwe Rosenberg")),
+                    game(284435, "Nova Luna", 2019, 1, 4, 30, 60, "1.9", List.of("Abstract", "Puzzle"), List.of("Tile Placement", "Pattern Building"), List.of("Uwe Rosenberg", "Corné van Moorsel")),
+                    game(203993, "Lorenzo il Magnifico", 2016, 2, 4, 60, 120, "3.3", List.of("Renaissance"), List.of("Worker Placement", "Dice Rolling"), List.of("Flaminia Brasini", "Virginio Gigli", "Simone Luciani")),
+                    game(126163, "Tzolk'in: The Mayan Calendar", 2012, 2, 4, 90, 90, "3.7", List.of("Ancient"), List.of("Worker Placement"), List.of("Simone Luciani", "Daniele Tascini")),
+                    game(171623, "The Voyages of Marco Polo", 2015, 2, 4, 40, 100, "3.2", List.of("Travel"), List.of("Dice Rolling", "Contracts"), List.of("Simone Luciani", "Daniele Tascini")),
+                    game(182874, "Grand Austria Hotel", 2015, 2, 4, 60, 120, "3.2", List.of("Economic"), List.of("Dice Rolling", "Set Collection"), List.of("Virginio Gigli", "Simone Luciani")),
+                    game(387780, "Rats of Wistar", 2023, 1, 4, 90, 90, "3.4", List.of("Animals", "Exploration"), List.of("Worker Placement", "Set Collection"), List.of("Simone Luciani", "Danilo Sabia")),
+                    game(118, "Modern Art", 1992, 3, 5, 45, 60, "2.3", List.of("Economic"), List.of("Auction/Bidding"), List.of("Reiner Knizia")),
+                    game(84876, "The Castles of Burgundy", 2011, 2, 4, 30, 90, "3.0", List.of("Medieval"), List.of("Dice Rolling", "Tile Placement"), List.of("Stefan Feld")),
+                    game(391137, "Galactic Cruise", 2025, 1, 4, 90, 150, "4.2", List.of("Economic", "Science Fiction"), List.of("Worker Placement", "Tableau Building"), List.of("T.K. King", "Dennis Northcott", "Koltin Thompson")),
+                    game(175914, "Food Chain Magnate", 2015, 2, 5, 120, 240, "4.2", List.of("Economic", "Industry / Manufacturing"), List.of("Network and Route Building", "Simultaneous Action Selection"), List.of("Jeroen Doumen", "Joris Wiersinga")),
+                    game(4174, "Lifeboat", 2002, 4, 6, 60, 60, "1.7", List.of("Nautical"), List.of("Negotiation", "Player Elimination"), List.of("Jeff Siadek")),
+                    game(2653, "Survive: Escape from Atlantis!", 1982, 2, 4, 45, 60, "1.7", List.of("Adventure"), List.of("Take That", "Grid Movement"), List.of("Julian Courtland-Smith")));
             games = values.stream().collect(java.util.stream.Collectors.toUnmodifiableMap(
                     value -> value.ranking().bggId(), value -> value));
             Map<String, Integer> indexedNames = new LinkedHashMap<>();
@@ -2148,6 +2324,22 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                     value.ranking().sourceName().toLowerCase(Locale.ROOT),
                     value.ranking().bggId()));
             indexedNames.put("河市集（river market）", 101);
+            indexedNames.put("农场主", 31260);
+            indexedNames.put("马可波罗游记", 171623);
+            indexedNames.put("洛伦佐", 203993);
+            indexedNames.put("大奥地利酒店", 182874);
+            indexedNames.put("现代艺术", 118);
+            indexedNames.put("勃艮地城堡", 84876);
+            indexedNames.put("勃艮第城堡", 84876);
+            indexedNames.put("银河漫游", 391137);
+            indexedNames.put("快餐连锁大亨", 175914);
+            indexedNames.put("快餐大亨", 175914);
+            indexedNames.put("怒海求生", 4174);
+            indexedNames.put("骇浪求生", 4174);
+            indexedNames.put("逃出亚特兰蒂斯", 2653);
+            indexedNames.put("逃离亚特兰蒂斯", 2653);
+            indexedNames.put("逃离绝命岛", 2653);
+            indexedNames.put("escape from atlantis", 2653);
             names = Map.copyOf(indexedNames);
             this.candidateIds = List.copyOf(candidateIds);
         }
@@ -2162,7 +2354,7 @@ class BoardGameRecommendationAgentPaidCanaryTest {
 
         @Override
         public CandidateSet searchGames(BoardGameRecommendationCatalog.CatalogFilters filters) {
-            List<Game> candidates = games.values().stream()
+            java.util.stream.Stream<Game> matches = games.values().stream()
                     .filter(game -> filters.types().isEmpty()
                             || game.ranking().types().stream().anyMatch(filters.types()::contains))
                     .filter(game -> game.details() != null
@@ -2171,10 +2363,65 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                             && game.details().mechanics().containsAll(filters.mechanics()))
                     .filter(game -> game.details() != null
                             && game.details().designers().containsAll(filters.designers()))
-                    .sorted(java.util.Comparator.comparingInt(game -> game.ranking().bggId()))
+                    .filter(game -> game.details() != null
+                            && game.details().publishers().containsAll(filters.publishers()))
+                    .filter(game -> game.details() != null
+                            && game.details().families().containsAll(filters.families()))
+                    .filter(game -> filters.minimumPublicationYear() == null
+                            || game.ranking().publicationYear() != null
+                                    && game.ranking().publicationYear() >= filters.minimumPublicationYear())
+                    .filter(game -> filters.maximumPublicationYear() == null
+                            || game.ranking().publicationYear() != null
+                                    && game.ranking().publicationYear() <= filters.maximumPublicationYear())
+                    .filter(game -> filters.minimumAverageRating() == null
+                            || game.ranking().averageRating() != null
+                                    && game.ranking().averageRating().compareTo(filters.minimumAverageRating()) >= 0)
+                    .filter(game -> filters.minimumRatingsCount() == null
+                            || game.ranking().usersRated() >= filters.minimumRatingsCount());
+            java.util.Comparator<Game> order = switch (filters.sort()) {
+                case RATING -> java.util.Comparator.comparing(
+                                (Game game) -> game.ranking().averageRating(),
+                                java.util.Comparator.nullsLast(java.util.Comparator.reverseOrder()))
+                        .thenComparingInt(game -> game.ranking().bggId());
+                case POPULARITY -> java.util.Comparator.comparingInt(
+                                (Game game) -> game.ranking().usersRated())
+                        .reversed()
+                        .thenComparingInt(game -> game.ranking().bggId());
+                case NEWEST -> java.util.Comparator.comparing(
+                                (Game game) -> game.ranking().publicationYear(),
+                                java.util.Comparator.nullsLast(java.util.Comparator.reverseOrder()))
+                        .thenComparingInt(game -> game.ranking().bggId());
+                case RANK, RELEVANCE -> java.util.Comparator.comparingInt(game -> game.ranking().bggId());
+            };
+            java.util.Comparator<Game> relevance = java.util.Comparator.comparingInt(
+                            (Game game) -> textMatchScore(game, filters.textQuery()))
+                    .reversed();
+            List<Game> allMatches = matches.sorted(filters.textQuery() == null
+                            ? order
+                            : relevance.thenComparing(order))
+                    .toList();
+            List<Game> candidates = allMatches.stream()
+                    .skip(filters.offset())
                     .limit(filters.maximum())
                     .toList();
-            return new CandidateSet(games.size(), candidates);
+            return new CandidateSet(allMatches.size(), candidates);
+        }
+
+        private int textMatchScore(Game game, String query) {
+            if (query == null) return 0;
+            String searchable = String.join(
+                            " ",
+                            game.ranking().sourceName(),
+                            game.details().description(),
+                            String.join(" ", game.details().categories()),
+                            String.join(" ", game.details().mechanics()),
+                            String.join(" ", game.details().families()),
+                            String.join(" ", game.details().designers()),
+                            String.join(" ", game.details().publishers()))
+                    .toLowerCase(Locale.ROOT);
+            return (int) java.util.Arrays.stream(query.toLowerCase(Locale.ROOT).split("\\s+"))
+                    .filter(searchable::contains)
+                    .count();
         }
 
         @Override

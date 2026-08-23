@@ -68,14 +68,14 @@ test('production recommendation journey tests the deployed main release without 
   assert.match(productionRecommendationSpec, /report\.importReused = launchedJob\.reused/)
   assert.match(productionRecommendationSpec, /report\.pdfDownloadToTeachingStartMs = Math\.max/)
   assert.match(productionRecommendationSpec, /report\.pdfDownloadToFirstCitedLessonMs = Math\.max/)
-  assert.match(productionRecommendationSpec, /MAX_EXPLICIT_TARGET_RECOMMENDATION_MS = 5_000/)
+  assert.match(productionRecommendationSpec, /MAX_COMPLETE_GOAL_RECOMMENDATION_MS = 20_000/)
   assert.match(
     productionRecommendationSpec,
-    /targetDetailsButton\)\.toBeVisible\(\{ timeout: MAX_EXPLICIT_TARGET_RECOMMENDATION_MS \}\)/,
+    /targetDetailsButton\)\.toBeVisible\(\{ timeout: MAX_COMPLETE_GOAL_RECOMMENDATION_MS \}\)/,
   )
   assert.match(
     productionRecommendationSpec,
-    /report\.recommendationMs[\s\S]*?toBeLessThanOrEqual\(MAX_EXPLICIT_TARGET_RECOMMENDATION_MS\)/,
+    /report\.recommendationMs[\s\S]*?toBeLessThanOrEqual\(MAX_COMPLETE_GOAL_RECOMMENDATION_MS\)/,
   )
   assert.match(productionRecommendationSpec, /section\.evidenceStatus === 'SUPPORTED' \|\| section\.evidenceStatus === 'CITED_DRAFT'/)
   assert.match(
@@ -171,7 +171,9 @@ test('production deployment enables the staged persistent Chinese catalog cache 
   assert.match(deploymentWorkflow, /deepseek_enabled.*deepseek_key_present/s)
   assert.match(deploymentWorkflow, /'BGG_TRANSLATION_ENABLED=true'/)
   assert.match(deploymentWorkflow, /'BGG_CACHE_PREWARM_ENABLED=true'/)
-  assert.match(deploymentWorkflow, /'BGG_CACHE_PREWARM_GAME_COUNT=2000'/)
+  assert.match(deploymentWorkflow, /'BGG_CACHE_PREWARM_GAME_COUNT=10000'/)
+  assert.match(deploymentWorkflow, /'BGG_CACHE_MAXIMUM_ENTRIES=20000'/)
+  assert.match(deploymentWorkflow, /'BGG_CACHE_MAXIMUM_BYTES=268435456'/)
   assert.match(deploymentWorkflow, /'BGG_CACHE_PREWARM_COHORT_SIZE=500'/)
   assert.match(deploymentWorkflow, /'BGG_CACHE_PREWARM_TRANSLATION_COHORT_SIZE=60'/)
   assert.match(

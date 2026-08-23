@@ -29,8 +29,8 @@ public class BggMetadataCacheGarbageCollector {
     public BggMetadataCacheGarbageCollector(
             BggMetadataCache cache,
             MeterRegistry metrics,
-            @Value("${rulepilot.bgg.cache.maximum-entries:10000}") int maximumEntries,
-            @Value("${rulepilot.bgg.cache.maximum-bytes:67108864}") long maximumBytes) {
+            @Value("${rulepilot.bgg.cache.maximum-entries:20000}") int maximumEntries,
+            @Value("${rulepilot.bgg.cache.maximum-bytes:268435456}") long maximumBytes) {
         this(cache, metrics, Clock.systemUTC(), maximumEntries, maximumBytes);
     }
 
