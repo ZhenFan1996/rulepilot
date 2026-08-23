@@ -211,6 +211,16 @@ public class UserRuleDocumentController {
                 jobId, request.expectedPreparationRunId(), principal.getName()), true);
     }
 
+    @PostMapping("/official-imports/{jobId}/teaching-ensure-current")
+    @ResponseStatus(HttpStatus.ACCEPTED)
+    OfficialRulebookImportJobResponse ensureOfficialRulebookTeachingCurrent(
+            @PathVariable UUID jobId,
+            @RequestBody TeachingHandoffRetryRequest request,
+            Principal principal) {
+        return officialImportResponse(officialImports.ensureTeachingCurrent(
+                jobId, request.expectedPreparationRunId(), principal.getName()), true);
+    }
+
     @GetMapping("/upload-teaching-handoffs")
     List<UploadedRulebookTeachingHandoffResponse> uploadedRulebookTeachingHandoffs(
             Principal principal) {

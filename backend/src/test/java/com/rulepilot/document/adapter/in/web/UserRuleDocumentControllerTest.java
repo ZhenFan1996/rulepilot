@@ -299,6 +299,35 @@ class UserRuleDocumentControllerTest {
     }
 
     @Test
+    void ensuresCurrentTeachingEvidenceThroughAnExplicitOwnedMutation() {
+        OfficialRulebookImportJobService imports = mock(OfficialRulebookImportJobService.class);
+        UserRuleDocumentController controller = new UserRuleDocumentController(
+                mock(UploadRuleDocumentService.class),
+                mock(PhotographedRulebookUploadService.class),
+                mock(RuleDocumentRemovalService.class),
+                mock(RuleDocumentMetadataSuggestionService.class),
+                mock(RuleDocumentMetadataConfirmationService.class),
+                imports,
+                mock(UploadedRulebookTeachingHandoffService.class),
+                mock(CatalogEditionLookup.class));
+        UUID jobId = UUID.randomUUID();
+        UUID preparationRunId = UUID.randomUUID();
+        Instant now = Instant.parse("2026-08-14T00:00:00Z");
+        var job = OfficialRulebookImportJob.queued(
+                jobId, "alice", null, "Example Rules", DocumentSourceType.BASE_RULEBOOK,
+                "https://publisher.example/rules.pdf", true, null, now);
+        when(imports.ensureTeachingCurrent(jobId, preparationRunId, "alice")).thenReturn(job);
+
+        var response = controller.ensureOfficialRulebookTeachingCurrent(
+                jobId,
+                new UserRuleDocumentController.TeachingHandoffRetryRequest(preparationRunId),
+                () -> "alice");
+
+        assertThat(response.id()).isEqualTo(jobId);
+        verify(imports).ensureTeachingCurrent(jobId, preparationRunId, "alice");
+    }
+
+    @Test
     void retriesUploadedTeachingThroughTheOwnedDurableUploadHandoff() {
         UploadedRulebookTeachingHandoffService handoffs = mock(UploadedRulebookTeachingHandoffService.class);
         UserRuleDocumentController controller = new UserRuleDocumentController(

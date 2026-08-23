@@ -187,6 +187,57 @@ describe('RecommendationRulebookHandoff', () => {
     }
   })
 
+  it('checks persisted teaching evidence freshness before resuming a completed server journey', async () => {
+    const requests: Array<{ path: string; options?: RequestInit }> = []
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, options?: RequestInit) => {
+      const path = String(input)
+      requests.push({ path, options })
+      if (path === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      if (path === '/api/v1/bgg/games/266192/import') return Response.json({
+        game: { id: 'game-1', name: '展翅翱翔' },
+        edition: { id: 'edition-1', name: 'BGG 版本' },
+        alreadyImported: true,
+      })
+      if (path.startsWith('/api/v1/documents/official-imports?editionId=')) return Response.json([{
+        id: 'persisted-import', editionId: 'edition-1', stage: 'COMPLETED',
+        documentVersionId: 'version-old', duplicate: true, errorCode: null,
+        teachingHandoffState: 'LAUNCHED', teachingPreparationRunId: 'preparation-old',
+      }])
+      if (path === '/api/v1/documents/official-imports/persisted-import/teaching-ensure-current'
+        && options?.method === 'POST') {
+        return Response.json({
+          id: 'persisted-import', editionId: 'edition-1', stage: 'COMPLETED',
+          documentVersionId: 'version-old', duplicate: true, errorCode: null,
+          teachingHandoffState: 'WAITING_FOR_DOCUMENT', teachingPreparationRunId: null,
+        }, { status: 202 })
+      }
+      if (path === '/api/v1/documents/official-imports/persisted-import') return Response.json({
+        id: 'persisted-import', editionId: 'edition-1', stage: 'COMPLETED',
+        documentVersionId: 'version-old', duplicate: true, errorCode: null,
+        teachingHandoffState: 'WAITING_FOR_DOCUMENT', teachingPreparationRunId: null,
+      })
+      return new Response(null, { status: 404 })
+    }))
+
+    const { wrapper } = await mountHandoff()
+    try {
+      await vi.waitFor(() => expect(requests.some(request =>
+        request.path.endsWith('/teaching-ensure-current'))).toBe(true))
+      const ensured = requests.find(request => request.path.endsWith('/teaching-ensure-current'))
+      expect(ensured?.options).toMatchObject({
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json', 'X-CSRF-TOKEN': 'csrf' },
+      })
+      expect(JSON.parse(String(ensured?.options?.body))).toEqual({
+        expectedPreparationRunId: 'preparation-old',
+      })
+      expect(wrapper.text()).toContain('正在读取规则文字')
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
   it('keeps selection, candidate review, consent, download, and teaching recovery in one flow', async () => {
     const openSource = vi.fn()
     const backgroundWorkChanged = vi.fn()

@@ -704,6 +704,15 @@ function requiresPersistedPublicationActivity(
   return !report.importReused || report.teachingEvidenceRefreshRequested
 }
 
+function teachingEvidenceWasRefreshed(initial: ImportJob, current: ImportJob) {
+  if (!initial.reused) return false
+  if (initial.teachingPreparationRunId === null) {
+    return initial.teachingHandoffState === 'WAITING_FOR_DOCUMENT'
+      || initial.teachingHandoffState === 'LAUNCHING'
+  }
+  return current.teachingPreparationRunId !== initial.teachingPreparationRunId
+}
+
 test('requires current publication telemetry for fresh imports and stale-evidence refreshes', () => {
   expect(requiresPersistedPublicationActivity({
     importReused: false,
@@ -717,6 +726,17 @@ test('requires current publication telemetry for fresh imports and stale-evidenc
     importReused: true,
     teachingEvidenceRefreshRequested: false,
   })).toBe(false)
+
+  const initial = {
+    reused: true,
+    teachingHandoffState: 'LAUNCHED',
+    teachingPreparationRunId: 'old-run',
+  } as ImportJob
+  expect(teachingEvidenceWasRefreshed(initial, {
+    ...initial,
+    teachingPreparationRunId: 'current-run',
+  })).toBe(true)
+  expect(teachingEvidenceWasRefreshed(initial, initial)).toBe(false)
 })
 
 test('production target aliases are literal and cannot widen the title match', () => {
@@ -994,10 +1014,6 @@ test('recommendation becomes one readable, taught, and answerable production jou
     if (REQUIRE_FRESH_IMPORT) {
       expect(launchedJob.reused, 'The requested fresh-import journey reused an existing rulebook').toBe(false)
     }
-    report.teachingEvidenceRefreshRequested = launchedJob.reused
-      && launchedJob.teachingPreparationRunId === null
-      && (launchedJob.teachingHandoffState === 'WAITING_FOR_DOCUMENT'
-        || launchedJob.teachingHandoffState === 'LAUNCHING')
     report.importEditionMatchesSelection = launchedJob.editionId === boundGame.edition.id
       && (restoredExistingJourney
         || observedImportRequest?.editionId === boundGame.edition.id
@@ -1083,6 +1099,7 @@ test('recommendation becomes one readable, taught, and answerable production jou
     }
     report.teachingHandoffState = completedJob.teachingHandoffState
     report.teachingAutomaticRecoveryCount = completedJob.teachingAutomaticRecoveryCount
+    report.teachingEvidenceRefreshRequested = teachingEvidenceWasRefreshed(launchedJob, completedJob)
     const progressResponse = await page.request.get(
       `/api/v1/document-versions/${encodeURIComponent(completedJob.documentVersionId!)}/progress/snapshot`,
     )
