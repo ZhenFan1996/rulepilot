@@ -32,17 +32,25 @@ wait_for_api() {
 		exit 1
 	fi
 
-	attempt=1
-	while [ "$attempt" -le 36 ]; do
+	ready_timeout_seconds=${PRODUCTION_API_READY_TIMEOUT_SECONDS:-300}
+	case "$ready_timeout_seconds" in
+		''|*[!0-9]*|0)
+			echo "PRODUCTION_API_READY_TIMEOUT_SECONDS must be a positive integer."
+			exit 1
+			;;
+	esac
+	started_at=$(date +%s)
+	deadline=$((started_at + ready_timeout_seconds))
+	while [ "$(date +%s)" -lt "$deadline" ]; do
 		if curl -fsS "http://127.0.0.1:${BACKEND_PORT:-8080}/actuator/health" >/dev/null 2>&1; then
-			echo "Production API is ready."
+			ready_elapsed_seconds=$(($(date +%s) - started_at))
+			printf 'Production API is ready after %s second(s).\n' "$ready_elapsed_seconds"
 			return
 		fi
-		attempt=$((attempt + 1))
 		sleep 5
 	done
 
-	echo "Production API did not become ready."
+	printf 'Production API did not become ready within %s second(s).\n' "$ready_timeout_seconds"
 	exit 1
 }
 
