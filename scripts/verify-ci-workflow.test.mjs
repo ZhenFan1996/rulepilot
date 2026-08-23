@@ -120,6 +120,13 @@ test('production JVM ergonomics use the capacity of the two-core host', () => {
   assert.match(productionCompose, /worker:[\s\S]*?JAVA_TOOL_OPTIONS:[^\n]*-XX:\+UseSerialGC/)
 })
 
+test('production activation allows the measured cold boot to finish before rollback', () => {
+  assert.match(productionScript, /PRODUCTION_API_READY_TIMEOUT_SECONDS:-300/)
+  assert.match(productionScript, /Production API is ready after %s second\(s\)\./)
+  assert.match(productionScript, /Production API did not become ready within %s second\(s\)\./)
+  assert.doesNotMatch(productionScript, /while \[ "\$attempt" -le 36 \]/)
+})
+
 test('failed production recommendation journeys retain bounded API diagnostics without reading environment values', () => {
   assert.match(productionRecommendationWorkflow, /name: Collect bounded API diagnostics after a failed journey/)
   assert.match(productionRecommendationWorkflow, /if: failure\(\)/)
