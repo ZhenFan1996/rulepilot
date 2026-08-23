@@ -31,14 +31,27 @@ public interface RecommendationConversationStore {
 
     List<StoredConversation> findRecentOwned(String ownerUsername, int limit);
 
+    /** Claims a turn with a fresh opaque attempt id that fences every later mutation. */
     boolean claimTurn(
             UUID conversationId,
             String ownerUsername,
             long expectedRevision,
             UUID clientTurnId,
             String requestFingerprint,
+            UUID claimAttemptId,
             Instant startedAt,
             Instant staleBefore);
+
+    /** Saves facts settled by completed read actions without advancing the player-turn revision. */
+    boolean checkpointTurn(
+            UUID conversationId,
+            String ownerUsername,
+            long expectedRevision,
+            UUID clientTurnId,
+            String requestFingerprint,
+            UUID claimAttemptId,
+            ConversationState checkpointState,
+            Instant checkpointedAt);
 
     boolean completeTurn(
             UUID conversationId,
@@ -46,6 +59,7 @@ public interface RecommendationConversationStore {
             long expectedRevision,
             UUID clientTurnId,
             String requestFingerprint,
+            UUID claimAttemptId,
             ConversationState nextState,
             ConversationResponse response,
             String responseLocale,
@@ -57,6 +71,7 @@ public interface RecommendationConversationStore {
             long expectedRevision,
             UUID clientTurnId,
             String requestFingerprint,
+            UUID claimAttemptId,
             Instant releasedAt);
 
     boolean deleteOwned(UUID conversationId, String ownerUsername);
@@ -95,6 +110,7 @@ public interface RecommendationConversationStore {
             String lastResponseLocale,
             UUID activeClientTurnId,
             String activeRequestFingerprint,
+            UUID activeClaimAttemptId,
             Instant activeStartedAt,
             Instant createdAt,
             Instant updatedAt) {}

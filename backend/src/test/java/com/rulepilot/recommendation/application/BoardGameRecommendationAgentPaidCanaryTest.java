@@ -683,9 +683,14 @@ class BoardGameRecommendationAgentPaidCanaryTest {
             assertThat(raw.name()).isEqualTo(BoardGameRecommendationAgent.RESOLVE_TOOL);
             JsonNode arguments = json.readTree(raw.argumentsJson());
             assertThat(arguments.path("purpose").asText()).isEqualTo("TARGET_GAME");
-            assertThat(arguments.path("message").asText())
-                    .isNotBlank()
-                    .isEqualTo(response.assistantMessage());
+            assertThat(arguments.path("playerReply").asText()).isNotBlank();
+            assertThat(arguments.path("reason").asText()).isNotBlank();
+            assertThat(response.recommendationLead())
+                    .isEqualTo(arguments.path("playerReply").asText());
+            assertThat(response.assistantMessage())
+                    .isEqualTo(arguments.path("playerReply").asText()
+                            + "\n\n"
+                            + arguments.path("reason").asText());
 
             writeArtifact(capture, visibleTurns, null);
         } catch (Throwable failure) {
@@ -767,9 +772,14 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                 assertThat(entry.game().details().minPlayers()).isLessThanOrEqualTo(5);
                 assertThat(entry.game().details().maxPlayers()).isGreaterThanOrEqualTo(5);
                 assertThat(entry.game().details().maximumPlayTimeMinutes()).isLessThanOrEqualTo(90);
-                assertThat(entry.reasons().getFirst().kind())
-                        .isEqualTo(BoardGameRecommendationAgent.ReasonKind.PREFERENCE_INFERENCE);
-                assertThat(entry.tradeoffs()).isNotEmpty();
+                assertThat(entry.replyParts())
+                        .anySatisfy(part -> {
+                            assertThat(part.role())
+                                    .isEqualTo(BoardGameRecommendationAgent.ReplyPartRole.WHY_FIT);
+                            assertThat(part.claim().type())
+                                    .isEqualTo(com.rulepilot.recommendation.CandidateClaim.Type.PREFERENCE_INFERENCE);
+                            assertThat(part.claim().text()).isNotBlank();
+                        });
             });
             assertThat(recommendation.harness().actions()).contains("RECOMMEND_GAMES");
             assertThat(recommendation.harness().fallbackUsed()).isFalse();
@@ -1722,8 +1732,13 @@ class BoardGameRecommendationAgentPaidCanaryTest {
         }
         if (BoardGameRecommendationAgent.RESOLVE_TOOL.equals(call.name())
                 && "TARGET_GAME".equals(arguments.path("purpose").asText())) {
-            assertThat(arguments.has("message")).isFalse();
-            assertThat(response.assistantMessage()).isNotBlank();
+            assertThat(arguments.path("playerReply").asText()).isNotBlank();
+            assertThat(arguments.path("reason").asText()).isNotBlank();
+            assertThat(response.recommendationLead()).isEqualTo(arguments.path("playerReply").asText());
+            assertThat(response.assistantMessage())
+                    .isEqualTo(arguments.path("playerReply").asText()
+                            + "\n\n"
+                            + arguments.path("reason").asText());
             return;
         }
         String field = BoardGameRecommendationAgent.ASK_TOOL.equals(call.name()) ? "question" : "playerReply";
@@ -1836,7 +1851,10 @@ class BoardGameRecommendationAgentPaidCanaryTest {
         when(configuration.usesFake(RuntimeModelConfiguration.Role.RECOMMENDATION)).thenReturn(false);
         when(configuration.usesDeepSeekNonThinkingGeneration(RuntimeModelConfiguration.Role.RECOMMENDATION))
                 .thenReturn("deepseek".equals(provider));
-        BoardGameRecommendationModel delegate = new SpringAiBoardGameRecommendationModel(configuration, 0.2);
+        double canaryTemperature = Double.parseDouble(
+                environment("RULEPILOT_RECOMMENDATION_CANARY_TEMPERATURE", "0.0"));
+        BoardGameRecommendationModel delegate =
+                new SpringAiBoardGameRecommendationModel(configuration, canaryTemperature);
         return new BoardGameRecommendationModel() {
             @Override
             public boolean configured() {
@@ -1973,7 +1991,15 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                                         "text", reason.text(),
                                         "sourceIndexes", reason.sourceIndexes()))
                                 .toList(),
-                        "tradeoffs", entry.tradeoffs()))
+                        "tradeoffs", entry.tradeoffs(),
+                        "replyParts", entry.replyParts().stream()
+                                .map(part -> Map.of(
+                                        "role", part.role().name(),
+                                        "claimType", part.claim().type().name(),
+                                        "subject", part.claim().subject(),
+                                        "text", part.claim().text(),
+                                        "sourceIndexes", part.claim().sourceIndexes()))
+                                .toList()))
                 .toList());
         if (response.comparison() != null) {
             value.put("comparison", Map.of(
@@ -2055,6 +2081,9 @@ class BoardGameRecommendationAgentPaidCanaryTest {
         report.put("generatedAt", Instant.now().toString());
         report.put("provider", capture.provider);
         report.put("model", capture.model);
+        report.put(
+                "temperature",
+                Double.parseDouble(environment("RULEPILOT_RECOMMENDATION_CANARY_TEMPERATURE", "0.0")));
         report.put("rawModelCalls", capture.calls);
         report.put("visibleTurns", List.copyOf(visibleTurns));
         report.put("failure", failure == null ? "" : failure);
@@ -2432,6 +2461,11 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                     .map(games::get)
                     .map(Game::ranking)
                     .toList();
+        }
+
+        @Override
+        public List<Game> resolveLocalReferenceTitle(String title) {
+            return BoardGameRecommendationCatalog.super.resolveReferenceTitle(title);
         }
 
         @Override

@@ -8,6 +8,7 @@ import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.Dia
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.KnownGame;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ProgressUpdate;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendationProfile;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.TurnCheckpoint;
 import com.rulepilot.recommendation.application.RecommendationConversationException.Code;
 import com.rulepilot.recommendation.application.RecommendationConversationStore.ConversationState;
 import com.rulepilot.recommendation.application.RecommendationConversationStore.StoredConversation;
@@ -29,6 +30,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.locks.LockSupport;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Profile;
@@ -107,30 +109,52 @@ public class RecommendationConversationCoordinator {
         String owner = owner(ownerUsername);
         String locale = responseLocale(requestedLocale);
         StoredConversation conversation = resolveConversation(validatedTurn, owner);
-        ConversationRequest effectiveRequest = requestFrom(conversation.state(), validatedRequest);
         String fingerprint = fingerprint(validatedRequest, locale);
 
         Optional<TurnResult> replay = replay(conversation, validatedTurn.clientTurnId(), fingerprint);
         if (replay.isPresent()) return replay.get();
         requireRevision(validatedTurn.expectedRevision(), conversation.revision());
 
-        StoredConversation claimed = claimOrAwait(
+        ClaimedTurn claim = claimOrAwait(
                 conversation,
                 validatedTurn.clientTurnId(),
                 fingerprint,
                 validatedTurn.expectedRevision(),
                 progressListener);
+        StoredConversation claimed = claim.conversation();
         Optional<TurnResult> completedWhileClaiming = replay(claimed, validatedTurn.clientTurnId(), fingerprint);
         if (completedWhileClaiming.isPresent()) return completedWhileClaiming.get();
+        UUID claimAttemptId = Objects.requireNonNull(
+                claim.claimAttemptId(), "claimed recommendation turn has no claim attempt id");
+        ConversationRequest effectiveRequest = requestFrom(claimed.state(), validatedRequest);
 
+        ConversationResponse response;
         try {
-            ConversationResponse response = agent.conversePersisted(
+            AtomicReference<ConversationState> settledState = new AtomicReference<>(claimed.state());
+            response = agent.conversePersisted(
                     effectiveRequest,
                     locale,
                     owner,
                     progressListener,
-                    answerPartListener);
-            ConversationState nextState = nextState(claimed.state(), effectiveRequest, response);
+                    ignored -> {},
+                    checkpoint -> {
+                        ConversationState value = checkpointState(claimed.state(), checkpoint);
+                        if (!conversations.checkpointTurn(
+                                claimed.id(),
+                                owner,
+                                claimed.revision(),
+                                validatedTurn.clientTurnId(),
+                                fingerprint,
+                                claimAttemptId,
+                                value,
+                                clock.instant())) {
+                            throw conflict(
+                                    Code.CONCURRENT_TURN,
+                                    "recommendation conversation changed while a settled read was saved");
+                        }
+                        settledState.set(value);
+                    });
+            ConversationState nextState = nextState(settledState.get(), effectiveRequest, response);
             Instant completedAt = clock.instant();
             boolean completed = conversations.completeTurn(
                     claimed.id(),
@@ -138,6 +162,7 @@ public class RecommendationConversationCoordinator {
                     claimed.revision(),
                     validatedTurn.clientTurnId(),
                     fingerprint,
+                    claimAttemptId,
                     nextState,
                     response,
                     locale,
@@ -148,13 +173,6 @@ public class RecommendationConversationCoordinator {
                 if (concurrentReplay.isPresent()) return concurrentReplay.get();
                 throw conflict(Code.CONCURRENT_TURN, "recommendation conversation changed while the turn completed");
             }
-            return new TurnResult(
-                    claimed.id(),
-                    claimed.revision() + 1,
-                    validatedTurn.clientTurnId(),
-                    false,
-                    locale,
-                    response);
         } catch (RuntimeException | Error failure) {
             conversations.releaseTurn(
                     claimed.id(),
@@ -162,9 +180,18 @@ public class RecommendationConversationCoordinator {
                     claimed.revision(),
                     validatedTurn.clientTurnId(),
                     fingerprint,
+                    claimAttemptId,
                     clock.instant());
             throw failure;
         }
+        if (answerPartListener != null) answerPartListener.accept(response.assistantMessage());
+        return new TurnResult(
+                claimed.id(),
+                claimed.revision() + 1,
+                validatedTurn.clientTurnId(),
+                false,
+                locale,
+                response);
     }
 
     public Optional<SessionSnapshot> latest(String ownerUsername) {
@@ -231,7 +258,7 @@ public class RecommendationConversationCoordinator {
                 && conversation.lastClientTurnId() == null;
     }
 
-    private StoredConversation claimOrAwait(
+    private ClaimedTurn claimOrAwait(
             StoredConversation initial,
             UUID clientTurnId,
             String fingerprint,
@@ -241,20 +268,26 @@ public class RecommendationConversationCoordinator {
         Instant waitDeadline = clock.instant().plus(waitForOriginalTurn);
         while (true) {
             Optional<TurnResult> replay = replay(current, clientTurnId, fingerprint);
-            if (replay.isPresent()) return current;
+            if (replay.isPresent()) return new ClaimedTurn(current, null);
             requireRevision(expectedRevision, current.revision());
 
             if (current.activeClientTurnId() == null || sameActiveTurn(current, clientTurnId, fingerprint)) {
                 Instant now = clock.instant();
+                UUID claimAttemptId = UUID.randomUUID();
                 if (conversations.claimTurn(
                         current.id(),
                         current.ownerUsername(),
                         current.revision(),
                         clientTurnId,
                         fingerprint,
+                        claimAttemptId,
                         now,
                         now.minus(staleTurnAge))) {
-                    return requireOwned(current.id(), current.ownerUsername());
+                    StoredConversation claimed = requireOwned(current.id(), current.ownerUsername());
+                    if (claimAttemptId.equals(claimed.activeClaimAttemptId())) {
+                        return new ClaimedTurn(claimed, claimAttemptId);
+                    }
+                    current = claimed;
                 }
             } else {
                 throw conflict(Code.CONCURRENT_TURN, "another recommendation turn is already in progress");
@@ -262,7 +295,7 @@ public class RecommendationConversationCoordinator {
 
             current = requireOwned(current.id(), current.ownerUsername());
             Optional<TurnResult> afterClaimRace = replay(current, clientTurnId, fingerprint);
-            if (afterClaimRace.isPresent()) return current;
+            if (afterClaimRace.isPresent()) return new ClaimedTurn(current, null);
             if (!sameActiveTurn(current, clientTurnId, fingerprint)) {
                 if (current.activeClientTurnId() == null) continue;
                 if (current.activeClientTurnId().equals(clientTurnId)) {
@@ -326,11 +359,13 @@ public class RecommendationConversationCoordinator {
 
     private static ConversationRequest requestFrom(ConversationState state, ConversationRequest turn) {
         Objects.requireNonNull(turn, "recommendation request is required");
+        List<DialogueMessage> transcript = new ArrayList<>(state.transcript());
+        appendUnlessDuplicate(transcript, new DialogueMessage("user", turn.message()));
         return new ConversationRequest(
                 state.profile(),
                 turn.message(),
                 turn.excludedBggIds(),
-                state.transcript(),
+                boundedTranscript(transcript),
                 turn.focusedBggId(),
                 state.knownGames(),
                 state.shownBggIds(),
@@ -387,6 +422,26 @@ public class RecommendationConversationCoordinator {
                 boundedTranscript(transcript),
                 boundedKnownGames(new ArrayList<>(games.values())),
                 boundedIds(new ArrayList<>(shown)),
+                verified.values().stream().limit(RecommendationAgentState.MAX_VERIFIED_GAMES).toList());
+    }
+
+    private static ConversationState checkpointState(
+            ConversationState previous,
+            TurnCheckpoint checkpoint) {
+        Map<Integer, KnownGame> games = new LinkedHashMap<>();
+        checkpoint.verifiedGames().stream()
+                .map(RecommendationConversationCoordinator::knownGame)
+                .forEach(game -> games.putIfAbsent(game.bggId(), game));
+        previous.knownGames().forEach(game -> games.putIfAbsent(game.bggId(), game));
+
+        Map<Integer, Game> verified = new LinkedHashMap<>();
+        checkpoint.verifiedGames().forEach(game -> verified.putIfAbsent(game.ranking().bggId(), game));
+        previous.verifiedGames().forEach(game -> verified.putIfAbsent(game.ranking().bggId(), game));
+        return new ConversationState(
+                checkpoint.profile(),
+                previous.transcript(),
+                boundedKnownGames(new ArrayList<>(games.values())),
+                previous.shownBggIds(),
                 verified.values().stream().limit(RecommendationAgentState.MAX_VERIFIED_GAMES).toList());
     }
 
@@ -536,6 +591,8 @@ public class RecommendationConversationCoordinator {
             boolean replayed,
             String responseLocale,
             ConversationResponse response) {}
+
+    private record ClaimedTurn(StoredConversation conversation, UUID claimAttemptId) {}
 
     public record SessionSnapshot(
             UUID conversationId,

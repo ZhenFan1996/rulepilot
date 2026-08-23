@@ -32,7 +32,7 @@ public class BoardGameRecommendationAgent {
     static final String COMPARE_TOOL = "compare_candidates";
     static final String NO_MATCH_TOOL = "report_no_match";
     static final String RECOMMEND_TOOL = "recommend_games";
-    static final String PROMPT_VERSION = "recommendation-agent-v64-general-react-memory";
+    static final String PROMPT_VERSION = "recommendation-agent-v67-atomic-settled-actions";
 
     private final RecommendationReActLoop loop;
 
@@ -113,12 +113,36 @@ public class BoardGameRecommendationAgent {
             String modelConfigurationOwner,
             Consumer<ProgressUpdate> progressListener,
             Consumer<String> answerPartListener) {
+        return conversePersisted(
+                validatedRequestWithServerMemory,
+                requestedLocale,
+                modelConfigurationOwner,
+                progressListener,
+                answerPartListener,
+                ignored -> {});
+    }
+
+    ConversationResponse conversePersisted(
+            ConversationRequest validatedRequestWithServerMemory,
+            String requestedLocale,
+            String modelConfigurationOwner,
+            Consumer<ProgressUpdate> progressListener,
+            Consumer<String> answerPartListener,
+            Consumer<TurnCheckpoint> checkpointListener) {
         return loop.converseValidated(
                 validatedRequestWithServerMemory,
                 requestedLocale,
                 modelConfigurationOwner,
                 progressListener,
-                answerPartListener);
+                answerPartListener,
+                checkpointListener);
+    }
+
+    record TurnCheckpoint(RecommendationProfile profile, List<Game> verifiedGames) {
+        TurnCheckpoint {
+            profile = profile == null ? RecommendationProfile.empty() : profile;
+            verifiedGames = verifiedGames == null ? List.of() : List.copyOf(verifiedGames);
+        }
     }
 
     public record ConversationRequest(

@@ -1,5 +1,8 @@
 package com.rulepilot.catalog.adapter.out.persistence;
 
+import static com.rulepilot.catalog.application.BggPopularMetadataPrewarmProgress.MAX_COHORT_SIZE;
+import static com.rulepilot.catalog.application.BggPopularMetadataPrewarmProgress.MAX_TARGET_COUNT;
+
 import com.rulepilot.catalog.application.BggPopularMetadataPrewarmProgress;
 import java.sql.Timestamp;
 import java.time.Duration;
@@ -132,11 +135,11 @@ public class PostgresBggPopularMetadataPrewarmProgress implements BggPopularMeta
             throw new IllegalArgumentException("BGG prewarm requires a lowercase snapshot SHA-256 digest");
         }
         if (targetCount < 1
-                || targetCount > 5_000
+                || targetCount > MAX_TARGET_COUNT
                 || metadataCohortSize < 1
-                || metadataCohortSize > 500
+                || metadataCohortSize > MAX_COHORT_SIZE
                 || translationCohortSize < 1
-                || translationCohortSize > 500) {
+                || translationCohortSize > MAX_COHORT_SIZE) {
             throw new IllegalArgumentException("BGG prewarm target and cohort sizes are invalid");
         }
         if (claimedAt == null

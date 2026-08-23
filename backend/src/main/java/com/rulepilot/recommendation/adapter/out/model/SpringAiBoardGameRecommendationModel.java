@@ -42,13 +42,13 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
     private final double temperature;
 
     public SpringAiBoardGameRecommendationModel(RuntimeModelConfiguration models) {
-        this(models, 0.2);
+        this(models, 0.0);
     }
 
     @Autowired
     public SpringAiBoardGameRecommendationModel(
             RuntimeModelConfiguration models,
-            @Value("${rulepilot.bgg.recommendation-agent.temperature:0.2}") double temperature) {
+            @Value("${rulepilot.bgg.recommendation-agent.temperature:0.0}") double temperature) {
         if (!Double.isFinite(temperature) || temperature < 0.0 || temperature > 2.0) {
             throw new IllegalArgumentException("recommendation model temperature must be between 0 and 2");
         }
