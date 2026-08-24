@@ -33,14 +33,18 @@ public record CandidateObservation(
         return switch (kind) {
             case STRUCTURED_METADATA -> "publisherDescription".equals(attribute)
                     ? claimType == CandidateClaim.Type.PUBLISHER_DESCRIPTION
+                            || claimType == CandidateClaim.Type.PREFERENCE_INFERENCE
                     : claimType == CandidateClaim.Type.CONSTRAINT_FIT
-                            || claimType == CandidateClaim.Type.STRUCTURED_FACT;
+                            || claimType == CandidateClaim.Type.STRUCTURED_FACT
+                            || claimType == CandidateClaim.Type.PREFERENCE_INFERENCE;
             case TAXONOMY -> claimType == CandidateClaim.Type.CONSTRAINT_FIT
                     || claimType == CandidateClaim.Type.TAXONOMY_CLASSIFICATION
                     || claimType == CandidateClaim.Type.PREFERENCE_INFERENCE;
-            case ATTRIBUTED_REPORT -> claimType == CandidateClaim.Type.ATTRIBUTED_EXPERIENCE;
+            case ATTRIBUTED_REPORT -> claimType == CandidateClaim.Type.ATTRIBUTED_EXPERIENCE
+                    || claimType == CandidateClaim.Type.PREFERENCE_INFERENCE;
             case RULEBOOK_FACT -> claimType == CandidateClaim.Type.RULE_PROCEDURE
-                    || claimType == CandidateClaim.Type.STRUCTURED_FACT;
+                    || claimType == CandidateClaim.Type.STRUCTURED_FACT
+                    || claimType == CandidateClaim.Type.PREFERENCE_INFERENCE;
         };
     }
 

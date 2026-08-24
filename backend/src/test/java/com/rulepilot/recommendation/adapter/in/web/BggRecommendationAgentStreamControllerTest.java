@@ -155,7 +155,10 @@ class BggRecommendationAgentStreamControllerTest {
                     8,
                     6,
                     3,
-                    20));
+                    20,
+                    new BoardGameRecommendationAgent.ProgressFocus(
+                            BoardGameRecommendationAgent.ProgressFocusKind.CATALOG_MECHANICS,
+                            List.of("Deck Building"))));
             return new ConversationResponse(
                     Outcome.NO_MATCH,
                     DecisionMode.MODEL_ASSISTED,
@@ -189,6 +192,7 @@ class BggRecommendationAgentStreamControllerTest {
                 .contains("\"action\":\"understand_request\"")
                 .contains("searching_bgg_catalog")
                 .contains("\"action\":\"browse_bgg_catalog\"")
+                .contains("\"focus\":{\"kind\":\"catalog_mechanics\",\"values\":[\"Deck Building\"]}")
                 .contains("\"observedCandidates\":8")
                 .contains("\"verifiedCandidates\":6")
                 .contains("\"hardRejectedCandidates\":3")

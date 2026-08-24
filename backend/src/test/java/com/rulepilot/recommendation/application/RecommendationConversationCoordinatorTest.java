@@ -82,6 +82,40 @@ class RecommendationConversationCoordinatorTest {
     }
 
     @Test
+    void forwardsProvisionalAnswerPartsBeforeCommitWithoutRepeatingTheFinalMessage() {
+        BoardGameRecommendationAgent agent = mock(BoardGameRecommendationAgent.class);
+        InMemoryStore store = new InMemoryStore();
+        UUID clientTurnId = UUID.randomUUID();
+        String answer = "可以，先从你们这桌最想要的互动感聊起。";
+        when(agent.conversePersisted(any(), eq("zh-CN"), eq("alice"), any(), any(), any()))
+                .thenAnswer(invocation -> {
+                    @SuppressWarnings("unchecked")
+                    Consumer<String> listener = invocation.getArgument(4);
+                    StoredConversation active = store.findLatestOwned("alice").orElseThrow();
+                    assertThat(active.activeClientTurnId()).isEqualTo(clientTurnId);
+                    assertThat(active.lastClientTurnId()).isNull();
+                    listener.accept("可以，先从你们这桌");
+                    listener.accept(answer);
+                    return response(answer);
+                });
+        RecommendationConversationCoordinator coordinator = coordinator(agent, store);
+        List<String> streamed = new ArrayList<>();
+
+        var completed = coordinator.converse(
+                new SessionTurn(null, 0, clientTurnId, request("我们还没想好，先聊聊？")),
+                "zh-CN",
+                "alice",
+                ignored -> {},
+                streamed::add);
+
+        assertThat(streamed).containsExactly("可以，先从你们这桌", answer);
+        assertThat(completed.response().assistantMessage()).isEqualTo(answer);
+        StoredConversation committed = store.findLatestOwned("alice").orElseThrow();
+        assertThat(committed.activeClientTurnId()).isNull();
+        assertThat(committed.lastClientTurnId()).isEqualTo(clientTurnId);
+    }
+
+    @Test
     void startsANewConversationWhenANewTurnHasNoConversationIdentity() {
         BoardGameRecommendationAgent agent = mock(BoardGameRecommendationAgent.class);
         when(agent.conversePersisted(any(), eq("zh-CN"), eq("alice"), any(), any(), any()))
@@ -335,16 +369,16 @@ class RecommendationConversationCoordinatorTest {
     }
 
     @Test
-    void publishesThePersistedFinalAnswerOnlyAfterTheTurnCompletes() {
+    void streamsProvisionalPartsWhileOnlyTheFinalAnswerIsCommitted() {
         BoardGameRecommendationAgent agent = mock(BoardGameRecommendationAgent.class);
         InMemoryStore store = new InMemoryStore();
         List<String> published = new ArrayList<>();
-        AtomicReference<Long> revisionAtPublication = new AtomicReference<>();
+        List<Long> revisionsAtPublication = new ArrayList<>();
         when(agent.conversePersisted(any(), eq("en"), eq("alice"), any(), any(), any()))
                 .thenAnswer(invocation -> {
                     Consumer<String> internalAnswerParts = invocation.getArgument(4);
-                    internalAnswerParts.accept("Uncommitted draft.");
-                    assertThat(published).isEmpty();
+                    internalAnswerParts.accept("Committed");
+                    internalAnswerParts.accept("Committed answer.");
                     return response("Committed answer.");
                 });
         RecommendationConversationCoordinator coordinator = coordinator(agent, store);
@@ -355,36 +389,42 @@ class RecommendationConversationCoordinatorTest {
                 "alice",
                 ignored -> {},
                 part -> {
-                    revisionAtPublication.set(store.findLatestOwned("alice").orElseThrow().revision());
+                    revisionsAtPublication.add(store.findLatestOwned("alice").orElseThrow().revision());
                     published.add(part);
                 });
 
         assertThat(completed.revision()).isEqualTo(1);
-        assertThat(revisionAtPublication.get()).isEqualTo(1);
-        assertThat(published).containsExactly("Committed answer.");
+        assertThat(revisionsAtPublication).containsExactly(0L, 0L);
+        assertThat(published).containsExactly("Committed", "Committed answer.");
+        assertThat(store.findLatestOwned("alice").orElseThrow().lastResponse().assistantMessage())
+                .isEqualTo(published.getLast());
     }
 
     @Test
-    void publicationFailureLeavesACompletedTurnAvailableForReplay() {
+    void provisionalTransportFailureDoesNotDiscardTheDurableCompletedTurn() {
         BoardGameRecommendationAgent agent = mock(BoardGameRecommendationAgent.class);
         when(agent.conversePersisted(any(), eq("en"), eq("alice"), any(), any(), any()))
-                .thenReturn(response("Durable answer."));
+                .thenAnswer(invocation -> {
+                    Consumer<String> listener = invocation.getArgument(4);
+                    listener.accept("Durable answer.");
+                    return response("Durable answer.");
+                });
         InMemoryStore store = new InMemoryStore();
         RecommendationConversationCoordinator coordinator = coordinator(agent, store);
         UUID clientTurnId = UUID.randomUUID();
         ConversationRequest request = request("Keep the committed answer");
 
-        assertThatThrownBy(() -> coordinator.converse(
-                        new SessionTurn(null, 0, clientTurnId, request),
-                        "en",
-                        "alice",
-                        ignored -> {},
-                        ignored -> {
-                            throw new IllegalStateException("client disconnected during publication");
-                        }))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("client disconnected");
+        var completedTurn = coordinator.converse(
+                new SessionTurn(null, 0, clientTurnId, request),
+                "en",
+                "alice",
+                ignored -> {},
+                ignored -> {
+                    throw new IllegalStateException("client disconnected during publication");
+                });
 
+        assertThat(completedTurn.revision()).isEqualTo(1);
+        assertThat(completedTurn.response().assistantMessage()).isEqualTo("Durable answer.");
         StoredConversation completed = store.findLatestOwned("alice").orElseThrow();
         assertThat(completed.revision()).isEqualTo(1);
         assertThat(completed.activeClientTurnId()).isNull();

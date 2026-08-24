@@ -11,6 +11,7 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 
 /** Mutable state for one bounded recommendation conversation turn. */
@@ -202,5 +203,29 @@ final class RecommendationAgentState {
     enum DiscoveryPurpose {
         IDENTITY_ONLY,
         SELECTABLE_CARDS
+    }
+
+    enum CandidateUse {
+        PUBLISH_CARDS,
+        RESEARCH_THEN_PUBLISH,
+        CONTINUE_REACT
+    }
+
+    record PublicationSeed(
+            List<Integer> candidateBggIds,
+            List<Integer> referenceBggIds,
+            CandidateUse candidateUse) {
+        PublicationSeed {
+            candidateBggIds = candidateBggIds == null ? List.of() : List.copyOf(candidateBggIds);
+            referenceBggIds = referenceBggIds == null ? List.of() : List.copyOf(referenceBggIds);
+            Objects.requireNonNull(candidateUse, "candidateUse is required");
+            if (candidateBggIds.isEmpty()
+                    || candidateBggIds.stream().anyMatch(id -> id == null || id <= 0)
+                    || candidateBggIds.stream().distinct().count() != candidateBggIds.size()
+                    || referenceBggIds.stream().anyMatch(id -> id == null || id <= 0)
+                    || referenceBggIds.stream().distinct().count() != referenceBggIds.size()) {
+                throw new IllegalArgumentException("recommendation publication seed is invalid");
+            }
+        }
     }
 }

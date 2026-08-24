@@ -8,6 +8,7 @@ import com.rulepilot.recommendation.application.RecommendationConversationCoordi
 import com.rulepilot.recommendation.application.RecommendationConversationException;
 import java.io.IOException;
 import java.security.Principal;
+import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -200,6 +201,7 @@ public class BggRecommendationAgentStreamController {
                             update.action() == null
                                     ? null
                                     : update.action().name().toLowerCase(Locale.ROOT),
+                            ProgressFocusResponse.from(update.focus()),
                             update.elapsedMs(),
                             update.observedCandidates(),
                             update.verifiedCandidates(),
@@ -228,11 +230,20 @@ public class BggRecommendationAgentStreamController {
             String stage,
             String phase,
             String action,
+            ProgressFocusResponse focus,
             long elapsedMs,
             int observedCandidates,
             int verifiedCandidates,
             int hardRejectedCandidates,
             int sourceCount) {}
+
+    record ProgressFocusResponse(String kind, List<String> values) {
+        static ProgressFocusResponse from(BoardGameRecommendationAgent.ProgressFocus focus) {
+            return focus == null
+                    ? null
+                    : new ProgressFocusResponse(focus.kind().name().toLowerCase(Locale.ROOT), focus.values());
+        }
+    }
 
     record AnswerPart(String field, String text) {}
 

@@ -164,9 +164,7 @@ function responseT(
 }
 
 function visibleAssistantMessage(message: RecommendationMessage) {
-  return message.response?.games.length && message.response.recommendationLead
-    ? message.response.recommendationLead
-    : message.text
+  return message.text
 }
 
 function emptyProfile(): RecommendationProfile {
@@ -368,13 +366,51 @@ const loadingMessage = computed(() => {
 
 function progressStepLabel(update: RecommendationProgressUpdate) {
   const turnLocale = activeTurnLocale.value ?? locale.value
-  const action = update.action
+  const action = progressFocusCopy(update, turnLocale) ?? (update.action
     ? progressActionCopy[turnLocale][update.action]
-    : loadingCopy[turnLocale][update.stage]
+    : loadingCopy[turnLocale][update.stage])
   const phase = turnLocale === 'zh-CN'
     ? { started: '开始', completed: '完成', retrying: '未通过校验，重新选择', failed: '失败' }[update.phase]
     : { started: 'Started', completed: 'Completed', retrying: 'Validation failed; choosing again', failed: 'Failed' }[update.phase]
   return `${phase}：${action}`
+}
+
+function progressFocusCopy(update: RecommendationProgressUpdate, turnLocale: AppLocale) {
+  const focus = update.focus
+  if (!focus) return null
+  const quoted = turnLocale === 'zh-CN'
+    ? focus.values.map(value => `“${value}”`).join('、')
+    : focus.values.map(value => `“${value}”`).join(', ')
+  if (turnLocale === 'zh-CN') {
+    switch (focus.kind) {
+      case 'catalog_mechanics': return `按${quoted}机制筛选 BGG 候选`
+      case 'catalog_categories': return `按${quoted}类别筛选 BGG 候选`
+      case 'catalog_families': return `按${quoted}系列筛选 BGG 候选`
+      case 'catalog_designers': return `按设计师${quoted}筛选 BGG 候选`
+      case 'catalog_publishers': return `按出版方${quoted}筛选 BGG 候选`
+      case 'candidate_title_count': return `核对 ${focus.values[0]} 个候选标题`
+      case 'verified_game_count': return `读取 ${focus.values[0]} 款候选的 BGG 详情`
+      case 'research_games': return `查证${focus.values.map(value => `《${value}》`).join('、')}的公开游玩体验`
+    }
+  }
+  switch (focus.kind) {
+    case 'catalog_mechanics': return `Filter BGG candidates by the ${quoted} mechanism`
+    case 'catalog_categories': return `Filter BGG candidates by the ${quoted} category`
+    case 'catalog_families': return `Filter BGG candidates by the ${quoted} family`
+    case 'catalog_designers': return `Filter BGG candidates by designer ${quoted}`
+    case 'catalog_publishers': return `Filter BGG candidates by publisher ${quoted}`
+    case 'candidate_title_count': return `Resolve ${focus.values[0]} candidate titles in BGG`
+    case 'verified_game_count': return `Load BGG details for ${focus.values[0]} candidates`
+    case 'research_games': return `Check attributed play reports for ${quoted}`
+  }
+}
+
+function sameProgressFocus(left: RecommendationProgressUpdate['focus'], right: RecommendationProgressUpdate['focus']) {
+  return left === right || (left !== null
+    && right !== null
+    && left.kind === right.kind
+    && left.values.length === right.values.length
+    && left.values.every((value, index) => value === right.values[index]))
 }
 
 const reportedLoadingSteps = computed(() => {
@@ -632,6 +668,7 @@ async function submitPendingTurn(
         && previous.stage === update.stage
         && previous.phase === update.phase
         && previous.action === update.action
+        && sameProgressFocus(previous.focus, update.focus)
         && previous.observedCandidates === update.observedCandidates
         && previous.verifiedCandidates === update.verifiedCandidates
         && previous.hardRejectedCandidates === update.hardRejectedCandidates
@@ -1463,7 +1500,7 @@ onBeforeUnmount(() => {
                   <strong data-testid="player-work-status" class="block text-sm font-semibold text-ink/70">{{ loadingWorkTitle }}</strong>
                   <span class="mt-0.5 block text-xs">{{ loadingMessage }}</span>
                   <ol v-if="reportedLoadingSteps.length" data-testid="recommendation-progress-steps" class="mt-3 grid gap-1.5 text-xs leading-5">
-                    <li v-for="(step, index) in reportedLoadingSteps" :key="`${step.update.stage}-${step.update.phase}-${step.update.action}-${step.update.elapsedMs}-${index}`" class="flex items-start gap-2" :class="step.current ? 'font-semibold text-ink/70' : step.update.phase === 'failed' ? 'text-red-700' : step.update.phase === 'retrying' ? 'text-amber-700' : 'text-ink/50'">
+                    <li v-for="(step, index) in reportedLoadingSteps" :key="`${step.update.stage}-${step.update.phase}-${step.update.action}-${step.update.focus?.kind}-${step.update.focus?.values.join('|')}-${step.update.elapsedMs}-${index}`" class="flex items-start gap-2" :class="step.current ? 'font-semibold text-ink/70' : step.update.phase === 'failed' ? 'text-red-700' : step.update.phase === 'retrying' ? 'text-amber-700' : 'text-ink/50'">
                       <span aria-hidden="true" class="mt-px w-3 shrink-0 text-center">{{ step.icon }}</span>
                       <span>{{ step.label }}</span>
                     </li>

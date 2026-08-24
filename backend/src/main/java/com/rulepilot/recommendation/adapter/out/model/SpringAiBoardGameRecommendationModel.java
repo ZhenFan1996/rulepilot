@@ -4,14 +4,16 @@ import com.rulepilot.modelconfig.RuntimeModelConfiguration;
 import com.rulepilot.recommendation.BoardGameRecommendationModel;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.Message;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.Request;
+import com.rulepilot.recommendation.BoardGameRecommendationModel.StructuredTurn;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.ToolSpec;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.Turn;
-import java.util.List;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import org.slf4j.Logger;
@@ -23,7 +25,9 @@ import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.prompt.Prompt;
+import org.springframework.ai.google.genai.GoogleGenAiChatOptions;
 import org.springframework.ai.model.tool.ToolCallingChatOptions;
+import org.springframework.ai.openai.OpenAiChatModel;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.definition.ToolDefinition;
@@ -38,6 +42,7 @@ import org.springframework.stereotype.Component;
 public class SpringAiBoardGameRecommendationModel implements BoardGameRecommendationModel {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(SpringAiBoardGameRecommendationModel.class);
+    private static final ObjectMapper DECISION_JSON = new ObjectMapper();
     private final RuntimeModelConfiguration models;
     private final double temperature;
 
@@ -77,163 +82,148 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
     }
 
     @Override
-    public Turn streamNext(
+    public Turn streamDecision(
             Request request,
             String ownerUsername,
             Consumer<String> accumulatedTextListener) {
-        // Qwen emits valid continuation chunks that Spring AI 2.0 cannot aggregate when actions are advertised.
-        // Keep the same autonomous action turn, but execute it once through the buffered client.
-        if ("qwen".equals(providerFor(ownerUsername))) {
-            Turn turn = invoke(request, temperature, "react_buffered", ownerUsername);
-            if (turn.toolCalls().isEmpty() && !turn.text().isBlank()) {
-                accumulatedTextListener.accept(turn.text());
-            }
-            return turn;
-        }
         ChatModel model = modelFor(ownerUsername);
+        if (request.toolChoice() != BoardGameRecommendationModel.ToolChoice.AUTO
+                || request.structuredOutput() != null
+                || request.tools().isEmpty()) {
+            throw new IllegalArgumentException("first recommendation decision requires auto action options");
+        }
+        RecommendationDecisionStream decision =
+                new RecommendationDecisionStream(DECISION_JSON, request.tools(), accumulatedTextListener);
+        List<Message> decisionMessages = new ArrayList<>(request.messages());
+        int protocolPosition = 0;
+        while (protocolPosition < decisionMessages.size()
+                && decisionMessages.get(protocolPosition).role() == BoardGameRecommendationModel.Role.SYSTEM) {
+            protocolPosition++;
+        }
+        decisionMessages.add(
+                protocolPosition,
+                Message.system(decision.instruction(false)));
+        Request decisionRequest = new Request(
+                decisionMessages,
+                List.of(),
+                request.maxOutputTokens(),
+                BoardGameRecommendationModel.ToolChoice.NONE,
+                decision.output());
+        try {
+            StructuredTurn structured = streamJson(
+                    model,
+                    decisionRequest,
+                    ownerUsername,
+                    decision::accept,
+                    "structured_decision_stream");
+            decision.finish();
+            return decision.turn(structured.completionStatus());
+        } catch (RecommendationDecisionStream.Failure failure) {
+            throw new BoardGameRecommendationModel.ProtocolFailure(
+                    "DECISION_" + failure.code().name(), failure);
+        }
+    }
+
+    @Override
+    public StructuredTurn streamStructured(
+            Request request,
+            String ownerUsername,
+            Consumer<String> jsonDeltaListener) {
+        return streamJson(
+                modelFor(ownerUsername),
+                request,
+                ownerUsername,
+                jsonDeltaListener,
+                "structured_publication_stream");
+    }
+
+    private StructuredTurn streamJson(
+            ChatModel model,
+            Request request,
+            String ownerUsername,
+            Consumer<String> jsonDeltaListener,
+            String operation) {
+        List<Message> providerMessages = new ArrayList<>(request.messages());
+        if (!usesNativeJsonSchema(model, request, ownerUsername)) {
+            int schemaPosition = 0;
+            while (schemaPosition < providerMessages.size()
+                    && providerMessages.get(schemaPosition).role() == BoardGameRecommendationModel.Role.SYSTEM) {
+                schemaPosition++;
+            }
+            providerMessages.add(
+                    schemaPosition,
+                    Message.system("The exact JSON schema for this response is:\n"
+                            + request.structuredOutput().jsonSchema()));
+        }
+        providerMessages = mergeLeadingSystemMessages(providerMessages);
         Prompt prompt = new Prompt(
-                request.messages().stream().map(this::message).toList(),
-                actionOptions(model, request, ownerUsername).build());
+                providerMessages.stream().map(this::message).toList(),
+                requestOptions(model, request, ownerUsername).build());
         long startedAt = System.nanoTime();
         AtomicLong firstChunkAt = new AtomicLong();
-        AtomicReference<ChatResponse> lastResponse = new AtomicReference<>();
+        AtomicReference<ChatResponse> lastObservedResponse = new AtomicReference<>();
+        AtomicReference<ChatResponse> lastUsableResponse = new AtomicReference<>();
         AtomicReference<BoardGameRecommendationModel.CompletionStatus> completion =
                 new AtomicReference<>(BoardGameRecommendationModel.CompletionStatus.UNKNOWN);
         AtomicBoolean actionSeen = new AtomicBoolean();
-        AtomicBoolean textEmitted = new AtomicBoolean();
-        StringBuilder accumulatedText = new StringBuilder();
-        List<StreamingToolCall> streamedActions = new ArrayList<>();
+        StringBuilder accumulatedJson = new StringBuilder();
 
-        try {
-            model.stream(prompt).doOnNext(response -> {
-                lastResponse.set(response);
-                if (response == null || response.getResult() == null || response.getResult().getOutput() == null) return;
-                AssistantMessage output = response.getResult().getOutput();
-                if (!output.getToolCalls().isEmpty()) {
-                    actionSeen.set(true);
-                    mergeStreamedActions(streamedActions, output.getToolCalls());
-                }
-                String chunk = output.getText();
-                if (chunk != null && !chunk.isEmpty()) {
-                    firstChunkAt.compareAndSet(0, System.nanoTime());
-                    mergeStreamedText(accumulatedText, chunk);
-                    if (!actionSeen.get()) {
-                        textEmitted.set(true);
-                        accumulatedTextListener.accept(accumulatedText.toString());
-                    }
-                }
-                String finishReason = response.getResult().getMetadata() == null
-                        ? null
-                        : response.getResult().getMetadata().getFinishReason();
-                BoardGameRecommendationModel.CompletionStatus observed = completionStatus(finishReason);
-                if (observed != BoardGameRecommendationModel.CompletionStatus.UNKNOWN) completion.set(observed);
-            }).blockLast();
-        } catch (RuntimeException streamingFailure) {
-            if (textEmitted.get()) {
-                LOGGER.warn(
-                        "Recommendation action stream failed after emitting text (characters={}, actionSeen={})",
-                        accumulatedText.length(),
-                        actionSeen.get());
-                throw streamingFailure;
+        model.stream(prompt).doOnNext(response -> {
+            if (response != null) lastObservedResponse.set(response);
+            if (response == null || response.getResult() == null || response.getResult().getOutput() == null) return;
+            lastUsableResponse.set(response);
+            AssistantMessage output = response.getResult().getOutput();
+            if (!output.getToolCalls().isEmpty()) actionSeen.set(true);
+            String chunk = output.getText();
+            if (chunk != null && !chunk.isEmpty()) {
+                accumulatedJson.append(chunk);
+                firstChunkAt.compareAndSet(0, System.nanoTime());
+                jsonDeltaListener.accept(chunk);
             }
-            LOGGER.warn(
-                    "Recommendation action stream was incompatible with the provider; retrying the same turn without streaming ({})",
-                    streamingFailure.getClass().getSimpleName());
-            Turn recovered = invoke(request, temperature, "react_stream_recovery", ownerUsername);
-            if (recovered.toolCalls().isEmpty() && !recovered.text().isBlank()) {
-                accumulatedTextListener.accept(recovered.text());
-            }
-            return recovered;
+            String finishReason = response.getResult().getMetadata() == null
+                    ? null
+                    : response.getResult().getMetadata().getFinishReason();
+            BoardGameRecommendationModel.CompletionStatus observed = completionStatus(finishReason);
+            if (observed != BoardGameRecommendationModel.CompletionStatus.UNKNOWN) completion.set(observed);
+        }).blockLast();
+
+        ChatResponse response = lastUsableResponse.get();
+        if (response == null) {
+            throw new IllegalStateException("recommendation model returned no structured stream");
         }
-        ChatResponse response = lastResponse.get();
-        if (response == null || response.getResult() == null) {
-            throw new IllegalStateException("recommendation model returned no streamed turn");
+        if (actionSeen.get()) {
+            throw new IllegalStateException("structured recommendation turn returned an action call");
         }
-        if (!streamedActions.isEmpty() && textEmitted.get()) {
-            throw new IllegalStateException("recommendation model mixed player text with an action call");
+        if (accumulatedJson.isEmpty()) {
+            throw new IllegalStateException("recommendation model returned an empty structured stream");
         }
         logUsage(
                 request,
-                response,
+                lastObservedResponse.get() == null ? response : lastObservedResponse.get(),
                 (System.nanoTime() - startedAt) / 1_000_000,
                 temperature,
-                "react_stream",
+                operation,
                 ownerUsername,
                 firstChunkAt.get() == 0 ? -1 : (firstChunkAt.get() - startedAt) / 1_000_000);
-        List<ToolCall> actions = java.util.stream.IntStream.range(0, streamedActions.size())
-                .mapToObj(index -> streamedActions.get(index).finish(index))
-                .toList();
-        if (actions.isEmpty() && accumulatedText.isEmpty()) {
-            throw new IllegalStateException("recommendation model returned no streamed turn");
-        }
-        return new Turn(accumulatedText.toString(), actions, completion.get());
+        return new StructuredTurn(accumulatedJson.toString(), completion.get());
     }
 
-    private void mergeStreamedText(StringBuilder accumulated, String chunk) {
-        accumulated.append(chunk);
-    }
-
-    private void mergeStreamedActions(
-            List<StreamingToolCall> accumulated,
-            List<AssistantMessage.ToolCall> chunks) {
-        for (int index = 0; index < chunks.size(); index++) {
-            int position = index;
-            AssistantMessage.ToolCall chunk = chunks.get(index);
-            StreamingToolCall target = accumulated.stream()
-                    .filter(candidate -> candidate.matches(chunk))
-                    .findFirst()
-                    .orElseGet(() -> position < accumulated.size()
-                            ? accumulated.get(position)
-                            : addStreamingToolCall(accumulated));
-            target.merge(chunk);
+    private List<Message> mergeLeadingSystemMessages(List<Message> messages) {
+        int systemCount = 0;
+        while (systemCount < messages.size()
+                && messages.get(systemCount).role() == BoardGameRecommendationModel.Role.SYSTEM) {
+            systemCount++;
         }
-    }
-
-    private StreamingToolCall addStreamingToolCall(List<StreamingToolCall> accumulated) {
-        StreamingToolCall added = new StreamingToolCall();
-        accumulated.add(added);
-        return added;
-    }
-
-    private static final class StreamingToolCall {
-        private String id = "";
-        private String name = "";
-        private final StringBuilder arguments = new StringBuilder();
-
-        private boolean matches(AssistantMessage.ToolCall chunk) {
-            return !blank(chunk.id()) && chunk.id().equals(id)
-                    || !blank(chunk.name()) && chunk.name().equals(name);
+        if (systemCount < 2) {
+            return messages;
         }
-
-        private void merge(AssistantMessage.ToolCall chunk) {
-            if (!blank(chunk.id())) id = chunk.id();
-            if (!blank(chunk.name())) name = chunk.name();
-            mergeFragment(arguments, chunk.arguments());
-        }
-
-        private ToolCall finish(int index) {
-            if (name.isBlank()) {
-                throw new IllegalStateException("recommendation model streamed an action without a name");
-            }
-            String correlationId = id.isBlank() ? "stream-call-" + (index + 1) : id;
-            String argumentJson = arguments.isEmpty() ? "{}" : arguments.toString();
-            return new ToolCall(correlationId, name, argumentJson);
-        }
-
-        private static void mergeFragment(StringBuilder accumulated, String fragment) {
-            if (fragment == null || fragment.isEmpty()) return;
-            String current = accumulated.toString();
-            if (fragment.startsWith(current)) {
-                accumulated.setLength(0);
-                accumulated.append(fragment);
-            } else if (!current.endsWith(fragment)) {
-                accumulated.append(fragment);
-            }
-        }
-
-        private static boolean blank(String value) {
-            return value == null || value.isBlank();
-        }
+        String merged = messages.subList(0, systemCount).stream()
+                .map(Message::content)
+                .collect(java.util.stream.Collectors.joining("\n\n"));
+        List<Message> normalized = new ArrayList<>(messages.size() - systemCount + 1);
+        normalized.add(Message.system(merged));
+        normalized.addAll(messages.subList(systemCount, messages.size()));
+        return normalized;
     }
 
     private Turn invoke(
@@ -242,7 +232,7 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
         long startedAt = System.nanoTime();
         ChatResponse response = model.call(new Prompt(
                 request.messages().stream().map(this::message).toList(),
-                actionOptions(model, request, ownerUsername)
+                requestOptions(model, request, ownerUsername)
                         .temperature(requestTemperature)
                         .build()));
         if (response == null || response.getResult() == null || response.getResult().getOutput() == null) {
@@ -259,7 +249,7 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
         return turn(response);
     }
 
-    private ToolCallingChatOptions.Builder<?> actionOptions(
+    private ToolCallingChatOptions.Builder<?> requestOptions(
             ChatModel model,
             Request request,
             String ownerUsername) {
@@ -268,24 +258,40 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
                 .map(ToolCallback.class::cast)
                 .toList();
         ToolCallingChatOptions.Builder<?> options;
-        if (model.getDefaultOptions() instanceof OpenAiChatOptions defaults) {
+        if (model.getOptions() instanceof OpenAiChatOptions defaults) {
             OpenAiChatOptions.Builder builder = defaults.mutate();
-            // The first conversational turn may answer directly. Once the application has read external evidence,
-            // it requires a supplied action so prose cannot bypass the typed publication boundary.
-            builder.toolChoice(request.toolChoice() == BoardGameRecommendationModel.ToolChoice.REQUIRED
-                    ? "required"
-                    : "auto");
             if (usesDeepSeekNonThinkingGeneration(ownerUsername)) {
-                // Keep the low-latency non-thinking request mode used by Recommendation. Auto tool choice remains
-                // available, so a direct conversational response does not become a forced action.
                 builder.extraBody(Map.of("thinking", Map.of("type", "disabled")));
             } else if ("qwen".equals(providerFor(ownerUsername))) {
-                // Qwen's non-thinking mode keeps the direct-text versus action decision observable and bounded.
                 builder.extraBody(Map.of("enable_thinking", false));
             }
-            builder.parallelToolCalls(false);
+            if (request.tools().isEmpty()) {
+                builder.toolChoice(null);
+                builder.parallelToolCalls(null);
+                OpenAiChatModel.ResponseFormat format = usesNativeJsonSchema(model, request, ownerUsername)
+                        ? OpenAiChatModel.ResponseFormat.builder()
+                                .type(OpenAiChatModel.ResponseFormat.Type.JSON_SCHEMA)
+                                .jsonSchema(request.structuredOutput().jsonSchema())
+                                .build()
+                        : OpenAiChatModel.ResponseFormat.builder()
+                                .type(OpenAiChatModel.ResponseFormat.Type.JSON_OBJECT)
+                                .build();
+                builder.responseFormat(format);
+            } else {
+                // Action turns after the structured first-decision barrier require one supplied action.
+                builder.toolChoice(request.toolChoice() == BoardGameRecommendationModel.ToolChoice.REQUIRED
+                        ? "required"
+                        : "auto");
+                builder.parallelToolCalls(false);
+            }
             options = builder;
-        } else if (model.getDefaultOptions() instanceof ToolCallingChatOptions defaults) {
+        } else if (model.getOptions() instanceof GoogleGenAiChatOptions defaults) {
+            GoogleGenAiChatOptions.Builder builder = defaults.mutate();
+            if (request.tools().isEmpty()) {
+                builder.responseMimeType("application/json");
+            }
+            options = builder;
+        } else if (model.getOptions() instanceof ToolCallingChatOptions defaults) {
             options = defaults.mutate();
         } else {
             options = ToolCallingChatOptions.builder();
@@ -293,6 +299,13 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
         return options.toolCallbacks(callbacks)
                 .temperature(temperature)
                 .maxTokens(request.maxOutputTokens());
+    }
+
+    private boolean usesNativeJsonSchema(ChatModel model, Request request, String ownerUsername) {
+        return request.structuredOutput() != null
+                && request.structuredOutput().strictPreferred()
+                && model.getOptions() instanceof OpenAiChatOptions
+                && "openai".equals(providerFor(ownerUsername));
     }
 
     private Turn turn(ChatResponse response) {
@@ -333,7 +346,11 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
                         .mapToInt(tool -> tool.name().length()
                                 + tool.description().length()
                                 + tool.inputSchema().length())
-                        .sum();
+                        .sum()
+                + (request.structuredOutput() == null
+                        ? 0
+                        : request.structuredOutput().name().length()
+                                + request.structuredOutput().jsonSchema().length());
         org.springframework.ai.chat.metadata.Usage usage = response.getMetadata() == null
                 ? null
                 : response.getMetadata().getUsage();

@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -17,6 +19,7 @@ import com.rulepilot.catalog.BoardGameRecommendationCatalog.Ranking;
 import com.rulepilot.recommendation.BoardGameRecommendationModel;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.CompletionStatus;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.Request;
+import com.rulepilot.recommendation.BoardGameRecommendationModel.StructuredTurn;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.ToolCall;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.Turn;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch;
@@ -40,8 +43,10 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 import java.util.stream.Collectors;
 import org.junit.jupiter.api.Test;
+import org.mockito.invocation.InvocationOnMock;
 
 class RecommendationNaturalFrontDoorTest {
 
@@ -51,11 +56,10 @@ class RecommendationNaturalFrontDoorTest {
         BoardGameRecommendationTools tools = mock(BoardGameRecommendationTools.class);
         AtomicReference<Request> captured = new AtomicReference<>();
         Game target = game(801, "River Market", "河市集", List.of("Avery Stone"));
-        String lead = "找到了，就是你指定的《河市集》。";
-        String reason = "这张卡对应 River Market，可以直接继续阅读规则书、生成讲解，再进入答疑。";
+        String playerReply = "找到了，就是你指定的《河市集》。这张卡对应 River Market，可以直接继续阅读规则书、生成讲解，再进入答疑。";
 
         when(model.configured("player")).thenReturn(true);
-        when(model.streamNext(any(), eq("player"), any())).thenAnswer(invocation -> {
+        when(model.streamDecision(any(), eq("player"), any())).thenAnswer(invocation -> {
             captured.set(invocation.getArgument(0));
             return new Turn(
                     "",
@@ -63,9 +67,7 @@ class RecommendationNaturalFrontDoorTest {
                             "call-resolve-target",
                             BoardGameRecommendationAgent.RESOLVE_TOOL,
                             "{\"title\":\"河市集\",\"alternateTitles\":[\"River Market\"],\"purpose\":\"TARGET_GAME\",\"evidence\":\"U1\",\"playerReply\":\""
-                                    + lead
-                                    + "\",\"reason\":\""
-                                    + reason
+                                    + playerReply
                                     + "\"}")),
                     CompletionStatus.COMPLETE);
         });
@@ -91,15 +93,13 @@ class RecommendationNaturalFrontDoorTest {
                 ignored -> {});
 
         assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
-        assertThat(response.assistantMessage()).isEqualTo(lead + "\n\n" + reason);
-        assertThat(response.recommendationLead()).isEqualTo(lead);
+        assertThat(response.assistantMessage()).isEqualTo(playerReply);
+        assertThat(response.recommendationLead()).isEqualTo(playerReply);
         assertThat(response.games())
                 .singleElement()
                 .satisfies(game -> {
                     assertThat(game.game().ranking().bggId()).isEqualTo(801);
-                    assertThat(game.replyParts())
-                            .singleElement()
-                            .satisfies(part -> assertThat(part.claim().text()).isEqualTo(reason));
+                    assertThat(game.replyParts()).isEmpty();
                 });
         assertThat(response.harness().modelCalls()).isEqualTo(1);
         assertThat(response.harness().catalogCalls()).isEqualTo(2);
@@ -113,8 +113,10 @@ class RecommendationNaturalFrontDoorTest {
                     assertThat(tool.description())
                             .contains("same action immediately returns the selectable card");
                     assertThat(tool.inputSchema())
-                            .contains("alternateTitles", "playerReply", "reason");
+                            .contains("alternateTitles", "playerReply")
+                            .doesNotContain("\"reason\"");
                 });
+        verify(model, never()).streamStructured(any(), eq("player"), any());
 
         loop.stopBoundedCalls();
     }
@@ -127,12 +129,12 @@ class RecommendationNaturalFrontDoorTest {
         Game target = game(802, "Lantern Passage", "灯笼渡口", List.of("Blake North"));
 
         when(model.configured("player")).thenReturn(true);
-        when(model.streamNext(any(), eq("player"), any())).thenReturn(new Turn(
+        when(model.streamDecision(any(), eq("player"), any())).thenReturn(new Turn(
                 "",
                 List.of(new ToolCall(
                         "call-invalid-title",
                         BoardGameRecommendationAgent.RESOLVE_TOOL,
-                        "{\"title\":\"\",\"purpose\":\"TARGET_GAME\",\"evidence\":\"U1\",\"playerReply\":\"找到了。\",\"reason\":\"继续看规则。\"}")),
+                        "{\"title\":\"\",\"purpose\":\"TARGET_GAME\",\"evidence\":\"U1\",\"playerReply\":\"找到了，可以继续看规则。\"}")),
                 CompletionStatus.COMPLETE));
         when(model.next(any(), eq("player"))).thenAnswer(invocation -> {
             repairRequest.set(invocation.getArgument(0));
@@ -141,7 +143,7 @@ class RecommendationNaturalFrontDoorTest {
                     List.of(new ToolCall(
                             "call-corrected-title",
                             BoardGameRecommendationAgent.RESOLVE_TOOL,
-                            "{\"title\":\"Lantern Passage\",\"purpose\":\"TARGET_GAME\",\"evidence\":\"U1\",\"playerReply\":\"找到了，就是《灯笼渡口》。\",\"reason\":\"它是你明确指定的游戏，可以继续打开规则书。\"}")),
+                            "{\"title\":\"Lantern Passage\",\"purpose\":\"TARGET_GAME\",\"evidence\":\"U1\",\"playerReply\":\"找到了，就是《灯笼渡口》；它是你明确指定的游戏，可以继续打开规则书。\"}")),
                     CompletionStatus.COMPLETE);
         });
         when(tools.resolveLocalReferenceTitle("Lantern Passage"))
@@ -176,30 +178,29 @@ class RecommendationNaturalFrontDoorTest {
                         "REFERENCE_TITLE_LENGTH_INVALID",
                         "Copy only the exact board-game title substring",
                         "1 to 160 characters");
+        verify(model, never()).streamStructured(any(), eq("player"), any());
 
         loop.stopBoundedCalls();
     }
 
     @Test
-    void streamsStableBoardGameConversationWhileSeeingTheCompleteAgentToolSet() {
+    void streamsALightConversationDirectlyWithoutForcingAToolAction() {
         BoardGameRecommendationModel model = mock(BoardGameRecommendationModel.class);
         BoardGameRecommendationTools tools = mock(BoardGameRecommendationTools.class);
         BoardGameRecommendationSelector selector = mock(BoardGameRecommendationSelector.class);
         AtomicReference<Request> captured = new AtomicReference<>();
-        String answer = "如果你说的是桌游圈里的这个昵称，我知道；它指一位以重度设计闻名的设计师。";
+        String answer = "可以，我们先不急着套人数和时长。你只要说说最近哪一局让你意犹未尽，我会从那种感觉开始帮你找。";
 
         when(tools.webResearchConfigured()).thenReturn(true);
         when(model.configured("player")).thenReturn(true);
-        when(model.streamNext(any(), eq("player"), any())).thenAnswer(invocation -> {
+        when(model.streamDecision(any(), eq("player"), any())).thenAnswer(invocation -> {
             Request request = invocation.getArgument(0);
+            @SuppressWarnings("unchecked")
+            java.util.function.Consumer<String> listener = invocation.getArgument(2);
             captured.set(request);
-            return new Turn(
-                    "",
-                    List.of(new ToolCall(
-                            "call-reply",
-                            BoardGameRecommendationAgent.REPLY_TOOL,
-                            "{\"playerReply\":\"" + answer + "\"}")),
-                    CompletionStatus.COMPLETE);
+            listener.accept("可以，我们先不急着套人数和时长。");
+            listener.accept(answer);
+            return new Turn(answer, List.of(), CompletionStatus.COMPLETE);
         });
         RecommendationReActLoop loop = new RecommendationReActLoop(
                 model,
@@ -210,16 +211,16 @@ class RecommendationNaturalFrontDoorTest {
         List<String> streamed = new ArrayList<>();
 
         var response = loop.converse(
-                new ConversationRequest(RecommendationProfile.empty(), "你知道桌游圈里的‘齿轮先生’吗？"),
+                new ConversationRequest(RecommendationProfile.empty(), "我还没想好要玩什么，我们先随便聊聊？"),
                 "zh-CN",
                 "player",
                 ignored -> {},
                 streamed::add);
 
         assertThat(response.outcome()).isEqualTo(Outcome.CONVERSATION);
-        assertThat(response.mode()).isEqualTo(DecisionMode.MODEL_ASSISTED);
+        assertThat(response.mode()).isEqualTo(DecisionMode.MODEL_FAST_PATH);
         assertThat(response.assistantMessage()).isEqualTo(answer);
-        assertThat(streamed).containsExactly(answer);
+        assertThat(streamed).containsExactly("可以，我们先不急着套人数和时长。", answer);
         assertThat(response.harness().modelCalls()).isEqualTo(1);
         assertThat(response.harness().catalogCalls()).isZero();
         assertThat(response.harness().webResearchCalls()).isZero();
@@ -230,7 +231,7 @@ class RecommendationNaturalFrontDoorTest {
         assertThat(first.maxOutputTokens())
                 .as("an open conversational turn must have enough room to finish naturally")
                 .isGreaterThanOrEqualTo(512);
-        assertThat(first.toolChoice()).isEqualTo(BoardGameRecommendationModel.ToolChoice.REQUIRED);
+        assertThat(first.toolChoice()).isEqualTo(BoardGameRecommendationModel.ToolChoice.AUTO);
         assertThat(first.tools())
                 .extracting(BoardGameRecommendationModel.ToolSpec::name)
                 .contains(
@@ -238,8 +239,8 @@ class RecommendationNaturalFrontDoorTest {
                         BoardGameRecommendationAgent.RESOLVE_TOOL,
                         BoardGameRecommendationAgent.SEARCH_TOOL,
                         BoardGameRecommendationAgent.BROWSE_TOOL,
-                        BoardGameRecommendationAgent.DISCOVER_TOOL)
-                .doesNotContain(BoardGameRecommendationAgent.ASK_TOOL);
+                        BoardGameRecommendationAgent.DISCOVER_TOOL,
+                        BoardGameRecommendationAgent.ASK_TOOL);
         var toolSchemas = first.tools().stream().collect(Collectors.toMap(
                 BoardGameRecommendationModel.ToolSpec::name,
                 BoardGameRecommendationModel.ToolSpec::inputSchema));
@@ -285,8 +286,97 @@ class RecommendationNaturalFrontDoorTest {
                 .hasSizeLessThan(2_500);
         String userInput = first.messages().getLast().content();
         assertThat(userInput)
-                .contains("recentConversation", "齿轮先生")
+                .contains("recentConversation", "随便聊聊")
                 .doesNotContain("executionBudget", "availableCapabilities", "\"goal\"");
+        verify(model, never()).streamStructured(any(), eq("player"), any());
+
+        loop.stopBoundedCalls();
+    }
+
+    @Test
+    void exposesAProtocolFailureCodeWithoutRetryingOrChangingThePlayerFacingBoundary() {
+        BoardGameRecommendationModel model = mock(BoardGameRecommendationModel.class);
+        BoardGameRecommendationTools tools = mock(BoardGameRecommendationTools.class);
+        when(model.configured("player")).thenReturn(true);
+        when(model.streamDecision(any(), eq("player"), any())).thenThrow(
+                new BoardGameRecommendationModel.ProtocolFailure(
+                        "DECISION_INVALID_FIELD_ORDER",
+                        new IllegalStateException("raw provider output stays private")));
+        RecommendationReActLoop loop = new RecommendationReActLoop(
+                model,
+                tools,
+                mock(BoardGameRecommendationSelector.class),
+                new BoardGameRecommendationProperties(8, 3, new BigDecimal("0.65"), Duration.ofSeconds(30)),
+                new ObjectMapper());
+
+        var response = loop.converse(
+                new ConversationRequest(RecommendationProfile.empty(), "我们继续随便聊聊。"),
+                "zh-CN",
+                "player",
+                ignored -> {});
+
+        assertThat(response.outcome()).isEqualTo(Outcome.UNAVAILABLE);
+        assertThat(response.assistantMessage())
+                .doesNotContain("DECISION_INVALID_FIELD_ORDER", "raw provider output");
+        assertThat(response.harness().modelCalls()).isEqualTo(1);
+        assertThat(response.harness().catalogCalls()).isZero();
+        assertThat(response.harness().actions()).containsExactly(
+                "MODEL_PROTOCOL_FAILED:DECISION_INVALID_FIELD_ORDER",
+                "UNAVAILABLE:MODEL_PROTOCOL_FAILED:DECISION_INVALID_FIELD_ORDER");
+        verify(model, never()).next(any(), eq("player"));
+
+        loop.stopBoundedCalls();
+    }
+
+    @Test
+    void asksOneUsefulQuestionBeforeAnyCatalogReadWhenThePlayerInvitesGuidance() {
+        BoardGameRecommendationModel model = mock(BoardGameRecommendationModel.class);
+        BoardGameRecommendationTools tools = mock(BoardGameRecommendationTools.class);
+        BoardGameRecommendationSelector selector = mock(BoardGameRecommendationSelector.class);
+        AtomicReference<Request> captured = new AtomicReference<>();
+        String question = "我可以先给你一个有差异的起点：今晚更想一起琢磨，还是互相算计？";
+
+        when(model.configured("player")).thenReturn(true);
+        when(model.streamDecision(any(), eq("player"), any())).thenAnswer(invocation -> {
+            captured.set(invocation.getArgument(0));
+            return new Turn(
+                    "",
+                    List.of(new ToolCall(
+                            "ask-one",
+                            BoardGameRecommendationAgent.ASK_TOOL,
+                            "{\"question\":\""
+                                    + question
+                                    + "\",\"options\":[\"一起琢磨\",\"互相算计\"]}")),
+                    CompletionStatus.COMPLETE);
+        });
+        RecommendationReActLoop loop = new RecommendationReActLoop(
+                model,
+                tools,
+                selector,
+                new BoardGameRecommendationProperties(8, 3, new BigDecimal("0.65"), Duration.ofSeconds(30)),
+                new ObjectMapper());
+
+        var response = loop.converse(
+                new ConversationRequest(
+                        RecommendationProfile.empty(),
+                        "周末四个人，但大家都没想好玩什么。你先问我一个真正有用的问题吧。"),
+                "zh-CN",
+                "player",
+                ignored -> {});
+
+        assertThat(response.outcome()).isEqualTo(Outcome.NEEDS_CLARIFICATION);
+        assertThat(response.assistantMessage()).isEqualTo(question);
+        assertThat(response.clarification().options())
+                .extracting(BoardGameRecommendationAgent.ClarificationOption::label)
+                .containsExactly("一起琢磨", "互相算计");
+        assertThat(response.harness().modelCalls()).isOne();
+        assertThat(response.harness().catalogCalls()).isZero();
+        assertThat(response.harness().webResearchCalls()).isZero();
+        assertThat(response.harness().actions()).containsExactly("ASK_USER");
+        assertThat(captured.get().tools())
+                .extracting(BoardGameRecommendationModel.ToolSpec::name)
+                .contains(BoardGameRecommendationAgent.ASK_TOOL);
+        verify(model, never()).streamStructured(any(), eq("player"), any());
 
         loop.stopBoundedCalls();
     }
@@ -332,7 +422,7 @@ class RecommendationNaturalFrontDoorTest {
         };
         when(research.configured()).thenReturn(false);
         when(model.configured("player")).thenReturn(true);
-        when(model.streamNext(any(), eq("player"), any())).thenReturn(
+        when(model.streamDecision(any(), eq("player"), any())).thenReturn(
                 new Turn(
                         "",
                         List.of(new ToolCall(
@@ -347,21 +437,17 @@ class RecommendationNaturalFrontDoorTest {
                                 BoardGameRecommendationAgent.BROWSE_TOOL,
                                 "{\"purpose\":\"SELECTABLE_CARDS\",\"limit\":2,\"offset\":2}")),
                         CompletionStatus.COMPLETE));
-        when(model.next(any(), eq("player"))).thenReturn(
-                new Turn(
-                        "",
-                        List.of(new ToolCall(
-                                "recommend-first-page",
-                                BoardGameRecommendationAgent.RECOMMEND_TOOL,
-                                "{\"selections\":[{\"bggId\":901,\"reason\":\"它把探索节奏放在第一位。\"},{\"bggId\":902,\"reason\":\"它提供了另一种推进方向。\"}],\"requestedCount\":2,\"playerReply\":\"先看这两款。\"}")),
-                        CompletionStatus.COMPLETE),
-                new Turn(
-                        "",
-                        List.of(new ToolCall(
-                                "recommend-second-page",
-                                BoardGameRecommendationAgent.RECOMMEND_TOOL,
-                                "{\"selections\":[{\"bggId\":903,\"reason\":\"它延续条件但换了决策重心。\"},{\"bggId\":904,\"reason\":\"它是同一方向的另一种取舍。\"}],\"requestedCount\":2,\"playerReply\":\"这次换一批，不重复前两款。\"}")),
-                        CompletionStatus.COMPLETE));
+        String firstPublication = """
+                {"decision":{"requestedCount":2,"selections":[{"bggId":901},{"bggId":902}],"referenceBggIds":[]},"replyBlocks":[{"surface":"MESSAGE","role":"NARRATIVE","bggId":null,"internalEvidenceIds":[],"text":"先看这两款；它们沿着同一个方向，但推进重心不同。"},{"surface":"CARD","role":"WHY_FIT","bggId":901,"internalEvidenceIds":["B901:playerCount"],"text":"它把探索节奏放在第一位。"},{"surface":"CARD","role":"WHY_FIT","bggId":902,"internalEvidenceIds":["B902:playerCount"],"text":"它提供了另一种推进方向。"}]}
+                """
+                .strip();
+        String secondPublication = """
+                {"decision":{"requestedCount":2,"selections":[{"bggId":903},{"bggId":904}],"referenceBggIds":[]},"replyBlocks":[{"surface":"MESSAGE","role":"NARRATIVE","bggId":null,"internalEvidenceIds":[],"text":"这次换一批，不重复前两款；两款的取舍也不一样。"},{"surface":"CARD","role":"WHY_FIT","bggId":903,"internalEvidenceIds":["B903:playerCount"],"text":"它延续条件但换了决策重心。"},{"surface":"CARD","role":"WHY_FIT","bggId":904,"internalEvidenceIds":["B904:playerCount"],"text":"它是同一方向的另一种取舍。"}]}
+                """
+                .strip();
+        when(model.streamStructured(any(), eq("player"), any()))
+                .thenAnswer(invocation -> publishStructured(invocation, firstPublication))
+                .thenAnswer(invocation -> publishStructured(invocation, secondPublication));
         var properties = new BoardGameRecommendationProperties(
                 8, 3, new BigDecimal("0.65"), Duration.ofSeconds(30));
         RecommendationReActLoop loop = new RecommendationReActLoop(
@@ -480,7 +566,7 @@ class RecommendationNaturalFrontDoorTest {
             }
         };
         when(model.configured("player")).thenReturn(true);
-        when(model.streamNext(any(), eq("player"), any())).thenReturn(new Turn(
+        when(model.streamDecision(any(), eq("player"), any())).thenReturn(new Turn(
                 "",
                 List.of(new ToolCall(
                         "call-local-wrong-identity",
@@ -501,14 +587,13 @@ class RecommendationNaturalFrontDoorTest {
                                 "call-filter",
                                 BoardGameRecommendationAgent.BROWSE_TOOL,
                                 "{\"designers\":[\"Studio Architect\"],\"limit\":2}")),
-                        CompletionStatus.COMPLETE),
-                new Turn(
-                        "",
-                        List.of(new ToolCall(
-                                "call-recommend",
-                                BoardGameRecommendationAgent.RECOMMEND_TOOL,
-                                "{\"selections\":[{\"bggId\":701,\"reason\":\"先从它看这位设计师如何组织核心循环。\"},{\"bggId\":702,\"reason\":\"它提供了同一设计师的另一种结构方向。\"}],\"requestedCount\":2,\"playerReply\":\"这两款都来自已核对的设计师关系。\"}")),
                         CompletionStatus.COMPLETE));
+        String publication = """
+                {"decision":{"requestedCount":2,"selections":[{"bggId":701},{"bggId":702}],"referenceBggIds":[]},"replyBlocks":[{"surface":"MESSAGE","role":"NARRATIVE","bggId":null,"internalEvidenceIds":[],"text":"这两款都来自已核对的设计师关系，可以从不同结构方向认识他的设计。"},{"surface":"CARD","role":"WHY_FIT","bggId":701,"internalEvidenceIds":["B701:designers"],"text":"先从它看这位设计师如何组织核心循环。"},{"surface":"CARD","role":"WHY_FIT","bggId":702,"internalEvidenceIds":["B702:designers"],"text":"它提供了同一设计师的另一种结构方向。"}]}
+                """
+                .strip();
+        when(model.streamStructured(any(), eq("player"), any()))
+                .thenAnswer(invocation -> publishStructured(invocation, publication));
         var properties = new BoardGameRecommendationProperties(
                 8, 3, new BigDecimal("0.65"), Duration.ofSeconds(30));
         RecommendationReActLoop loop = new RecommendationReActLoop(
@@ -547,7 +632,8 @@ class RecommendationNaturalFrontDoorTest {
     void appliesExplicitHardPreferencesOnTheCandidateReadBeforeSelectingCards() {
         BoardGameRecommendationModel model = mock(BoardGameRecommendationModel.class);
         BoardGameRecommendationWebResearch research = mock(BoardGameRecommendationWebResearch.class);
-        AtomicReference<Request> recommendationRequest = new AtomicReference<>();
+        AtomicReference<Request> actionRequest = new AtomicReference<>();
+        AtomicReference<Request> publicationRequest = new AtomicReference<>();
         Game eligible = game(801, "Clockwork Supper", "Studio Architect", 75);
         Game tooLong = game(802, "Long Workshop", "Studio Architect", 90);
         BoardGameRecommendationCatalog catalog = new BoardGameRecommendationCatalog() {
@@ -580,29 +666,28 @@ class RecommendationNaturalFrontDoorTest {
         };
         when(research.configured()).thenReturn(false);
         when(model.configured("player")).thenReturn(true);
-        when(model.streamNext(any(), eq("player"), any())).thenReturn(new Turn(
-                "",
-                List.of(new ToolCall(
-                        "call-browse",
-                        BoardGameRecommendationAgent.BROWSE_TOOL,
-                        """
-                        {"purpose":"SELECTABLE_CARDS","limit":8,"preferenceUpdates":[
-                          {"field":"playerCount","value":4,"evidence":"U1","evidenceClassification":"DIRECT"},
-                          {"field":"durationMinutes","value":{"minimum":null,"maximum":75},"evidence":"U1","evidenceClassification":"DIRECT"}
-                        ]}
-                        """)),
-                CompletionStatus.COMPLETE));
-        when(model.next(any(), eq("player"))).thenAnswer(invocation -> {
-            recommendationRequest.set(invocation.getArgument(0));
+        when(model.streamDecision(any(), eq("player"), any())).thenAnswer(invocation -> {
+            actionRequest.set(invocation.getArgument(0));
             return new Turn(
                     "",
                     List.of(new ToolCall(
-                            "call-recommend",
-                            BoardGameRecommendationAgent.RECOMMEND_TOOL,
+                            "call-browse",
+                            BoardGameRecommendationAgent.BROWSE_TOOL,
                             """
-                            {"selections":[{"bggId":801,"reason":"能在今晚的时间上限内完整收尾。"}],"requestedCount":1,"playerReply":"先看这一款。"}
+                            {"purpose":"SELECTABLE_CARDS","limit":8,"preferenceUpdates":[
+                              {"field":"playerCount","value":4,"evidence":"U1","evidenceClassification":"DIRECT"},
+                              {"field":"durationMinutes","value":{"minimum":null,"maximum":75},"evidence":"U1","evidenceClassification":"DIRECT"}
+                            ]}
                             """)),
                     CompletionStatus.COMPLETE);
+        });
+        String publication = """
+                {"decision":{"requestedCount":1,"selections":[{"bggId":801}],"referenceBggIds":[]},"replyBlocks":[{"surface":"MESSAGE","role":"NARRATIVE","bggId":null,"internalEvidenceIds":[],"text":"先看这一款：目录时长落在今晚的上限内，四个人也能坐下。"},{"surface":"CARD","role":"WHY_FIT","bggId":801,"internalEvidenceIds":["B801:durationMinutes"],"text":"能在今晚的时间上限内完整收尾。"}]}
+                """
+                .strip();
+        when(model.streamStructured(any(), eq("player"), any())).thenAnswer(invocation -> {
+            publicationRequest.set(invocation.getArgument(0));
+            return publishStructured(invocation, publication);
         });
         var properties = new BoardGameRecommendationProperties(
                 8, 3, new BigDecimal("0.65"), Duration.ofSeconds(30));
@@ -629,12 +714,24 @@ class RecommendationNaturalFrontDoorTest {
         assertThat(response.harness().actions())
                 .containsSubsequence("UPDATE_PREFERENCES", "SEARCH_BGG_CATALOG", "RECOMMEND_GAMES")
                 .doesNotContain("RECONSIDER_SELECTION_AFTER_PREFERENCE_UPDATE");
-        String recommendationSchema = recommendationRequest.get().tools().stream()
-                .filter(tool -> BoardGameRecommendationAgent.RECOMMEND_TOOL.equals(tool.name()))
+        Request observedActionRequest = actionRequest.get();
+        assertThat(observedActionRequest.tools())
+                .extracting(BoardGameRecommendationModel.ToolSpec::name)
+                .doesNotContain("recommend_games");
+        String browseSchema = observedActionRequest.tools().stream()
+                .filter(tool -> BoardGameRecommendationAgent.BROWSE_TOOL.equals(tool.name()))
                 .findFirst()
                 .orElseThrow()
                 .inputSchema();
-        assertThat(recommendationSchema).doesNotContain("preferenceUpdates");
+        assertThat(browseSchema).contains("preferenceUpdates");
+        assertThat(publicationRequest.get()).satisfies(request -> {
+            assertThat(request.tools()).isEmpty();
+            assertThat(request.toolChoice()).isEqualTo(BoardGameRecommendationModel.ToolChoice.NONE);
+            assertThat(request.structuredOutput().name()).isEqualTo("recommendation_publication");
+            assertThat(request.structuredOutput().jsonSchema())
+                    .contains("decision", "replyBlocks")
+                    .doesNotContain("preferenceUpdates", "recommend_games");
+        });
 
         loop.stopBoundedCalls();
     }
@@ -695,7 +792,7 @@ class RecommendationNaturalFrontDoorTest {
         };
         AtomicReference<Request> followupRequest = new AtomicReference<>();
         when(model.configured("player")).thenReturn(true);
-        when(model.streamNext(any(), eq("player"), any())).thenReturn(new Turn(
+        when(model.streamDecision(any(), eq("player"), any())).thenReturn(new Turn(
                 "UNTRUSTED WRONG DRAFT",
                 List.of(new ToolCall(
                         "call-discover",
@@ -759,6 +856,7 @@ class RecommendationNaturalFrontDoorTest {
         assertThat(observedFollowup.messages().get(3).content())
                 .contains("discoveredRelationship", "Studio Architect", "verifiedGames")
                 .doesNotContain("UNTRUSTED WRONG DRAFT");
+        verify(model, never()).streamStructured(any(), eq("player"), any());
 
         loop.stopBoundedCalls();
     }
@@ -812,7 +910,7 @@ class RecommendationNaturalFrontDoorTest {
             }
         };
         when(model.configured("player")).thenReturn(true);
-        when(model.streamNext(any(), eq("player"), any())).thenReturn(new Turn(
+        when(model.streamDecision(any(), eq("player"), any())).thenReturn(new Turn(
                 "",
                 List.of(new ToolCall(
                         "call-discover",
@@ -865,6 +963,7 @@ class RecommendationNaturalFrontDoorTest {
                         "RESOLVE_BGG_REFERENCE",
                         "REPLY_TO_USER:IDENTITY_UNRESOLVED")
                 .doesNotContain("RESEARCH_GAME_FIT");
+        verify(model, never()).streamStructured(any(), eq("player"), any());
 
         loop.stopBoundedCalls();
     }
@@ -922,7 +1021,7 @@ class RecommendationNaturalFrontDoorTest {
             }
         };
         when(model.configured("player")).thenReturn(true);
-        when(model.streamNext(any(), eq("player"), any())).thenReturn(new Turn(
+        when(model.streamDecision(any(), eq("player"), any())).thenReturn(new Turn(
                 "",
                 List.of(new ToolCall(
                         "call-discover-group",
@@ -956,8 +1055,16 @@ class RecommendationNaturalFrontDoorTest {
                 .isEqualTo("知道，这个称呼说的不是某一位，而是 Avery Stone、Blake North 和 Casey Rivers 这组设计搭档。你要是感兴趣，我们还可以继续聊他们共同作品里的设计取向。");
         assertThat(response.harness().modelCalls()).isEqualTo(2);
         assertThat(response.harness().actions()).contains("REPLY_TO_USER");
+        verify(model, never()).streamStructured(any(), eq("player"), any());
 
         loop.stopBoundedCalls();
+    }
+
+    private StructuredTurn publishStructured(InvocationOnMock invocation, String payload) {
+        @SuppressWarnings("unchecked")
+        Consumer<String> listener = invocation.getArgument(2);
+        listener.accept(payload);
+        return new StructuredTurn(payload, CompletionStatus.COMPLETE);
     }
 
     private Game game(int id, String name, String designer) {

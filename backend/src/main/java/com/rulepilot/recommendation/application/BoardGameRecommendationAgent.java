@@ -31,8 +31,7 @@ public class BoardGameRecommendationAgent {
     static final String RESEARCH_TOOL = "research_game_fit";
     static final String COMPARE_TOOL = "compare_candidates";
     static final String NO_MATCH_TOOL = "report_no_match";
-    static final String RECOMMEND_TOOL = "recommend_games";
-    static final String PROMPT_VERSION = "recommendation-agent-v67-atomic-settled-actions";
+    static final String PROMPT_VERSION = "recommendation-agent-v69-structured-publication";
 
     private final RecommendationReActLoop loop;
 
@@ -218,6 +217,33 @@ public class BoardGameRecommendationAgent {
         RECOMMEND_GAMES
     }
 
+    /** Bounded public context for one validated action; it never contains raw tool JSON or internal identifiers. */
+    public enum ProgressFocusKind {
+        CATALOG_MECHANICS,
+        CATALOG_CATEGORIES,
+        CATALOG_FAMILIES,
+        CATALOG_DESIGNERS,
+        CATALOG_PUBLISHERS,
+        CANDIDATE_TITLE_COUNT,
+        VERIFIED_GAME_COUNT,
+        RESEARCH_GAMES
+    }
+
+    public record ProgressFocus(ProgressFocusKind kind, List<String> values) {
+        public ProgressFocus {
+            Objects.requireNonNull(kind, "progress focus kind is required");
+            Objects.requireNonNull(values, "progress focus values are required");
+            values = values.stream().map(value -> Objects.requireNonNull(value, "progress focus value is required").strip()).toList();
+            if (values.isEmpty()
+                    || values.size() > 3
+                    || values.stream().anyMatch(value -> value.isEmpty()
+                            || value.codePointCount(0, value.length()) > 120)
+                    || values.stream().distinct().count() != values.size()) {
+                throw new IllegalArgumentException("recommendation progress focus is invalid");
+            }
+        }
+    }
+
     public record ProgressUpdate(
             ProgressStage stage,
             ProgressPhase phase,
@@ -231,7 +257,39 @@ public class BoardGameRecommendationAgent {
             int observedCandidates,
             int verifiedCandidates,
             int hardRejectedCandidates,
-            int sourceCount) {
+            int sourceCount,
+            ProgressFocus focus) {
+        public ProgressUpdate(
+                ProgressStage stage,
+                ProgressPhase phase,
+                ProgressAction action,
+                long elapsedMs,
+                int decisionCycle,
+                int modelCalls,
+                int actionCalls,
+                int catalogCalls,
+                int webResearchCalls,
+                int observedCandidates,
+                int verifiedCandidates,
+                int hardRejectedCandidates,
+                int sourceCount) {
+            this(
+                    stage,
+                    phase,
+                    action,
+                    elapsedMs,
+                    decisionCycle,
+                    modelCalls,
+                    actionCalls,
+                    catalogCalls,
+                    webResearchCalls,
+                    observedCandidates,
+                    verifiedCandidates,
+                    hardRejectedCandidates,
+                    sourceCount,
+                    null);
+        }
+
         public ProgressUpdate(ProgressStage stage, long elapsedMs) {
             this(stage, ProgressPhase.STARTED, null, elapsedMs, 0, 0, 0, 0, 0, 0, 0, 0, 0);
         }

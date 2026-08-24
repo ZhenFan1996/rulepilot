@@ -26,7 +26,8 @@
         <jai-imageio-jpeg2000.version>1.4.0</jai-imageio-jpeg2000.version>
         <opencc4j.version>1.14.0</opencc4j.version>
         <jsoup.version>1.22.2</jsoup.version>
-        <spring-ai.version>2.0.0</spring-ai.version>
+        <spring-ai.version>2.0.1</spring-ai.version>
+        <openai-java.version>4.49.0</openai-java.version>
         <jackson-2-bom.version>2.21.5</jackson-2-bom.version>
         <argLine></argLine>
     </properties>
@@ -94,6 +95,11 @@
         <dependency>
             <groupId>org.springframework.ai</groupId>
             <artifactId>spring-ai-openai</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.openai</groupId>
+            <artifactId>openai-java-client-okhttp</artifactId>
+            <version>${openai-java.version}</version>
         </dependency>
         <dependency>
             <groupId>org.springframework.ai</groupId>

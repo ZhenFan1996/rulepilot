@@ -1,16 +1,21 @@
 package com.rulepilot.modelconfig.adapter.out;
 
 import com.google.genai.Client;
+import com.google.genai.types.ClientOptions;
 import com.google.genai.types.HttpOptions;
+import com.google.genai.types.HttpRetryOptions;
+import com.openai.client.OpenAIClientAsyncImpl;
+import com.openai.client.OpenAIClientImpl;
 import io.micrometer.observation.ObservationRegistry;
 import java.time.Duration;
+import org.springframework.ai.openai.OpenAiChatOptions;
+import org.springframework.core.retry.RetryPolicy;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.google.genai.GoogleGenAiChatModel;
 import org.springframework.ai.google.genai.GoogleGenAiChatOptions;
 import org.springframework.ai.model.tool.ToolCallingManager;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.ai.openai.OpenAiChatModel;
-import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.core.retry.RetryTemplate;
 import org.springframework.stereotype.Component;
 
@@ -48,9 +53,22 @@ public class ChatModelFactory {
     }
 
     private ChatModel gemini(String apiKey, String model) {
+        okhttp3.OkHttpClient transport = new okhttp3.OkHttpClient.Builder()
+                .retryOnConnectionFailure(false)
+                .followRedirects(false)
+                .followSslRedirects(false)
+                .connectTimeout(requestTimeout)
+                .readTimeout(requestTimeout)
+                .writeTimeout(requestTimeout)
+                .callTimeout(requestTimeout)
+                .build();
         Client client = Client.builder()
                 .apiKey(required(apiKey, "Gemini API key"))
-                .httpOptions(HttpOptions.builder().timeout(requestTimeoutMillis).build())
+                .clientOptions(ClientOptions.builder().customHttpClient(transport).build())
+                .httpOptions(HttpOptions.builder()
+                        .timeout(requestTimeoutMillis)
+                        .retryOptions(HttpRetryOptions.builder().attempts(1).build())
+                        .build())
                 .build();
         return GoogleGenAiChatModel.builder()
                 .genAiClient(client)
@@ -60,20 +78,38 @@ public class ChatModelFactory {
                 .toolCallingManager(ToolCallingManager.builder()
                         .observationRegistry(observations)
                         .build())
-                .retryTemplate(new RetryTemplate())
+                .retryTemplate(new RetryTemplate(RetryPolicy.withMaxRetries(0)))
                 .observationRegistry(observations)
                 .build();
     }
 
     private ChatModel openAi(String apiKey, String baseUrl, String model) {
+        String resolvedApiKey = required(apiKey, "model API key");
+        String resolvedBaseUrl = required(baseUrl, "model base URL");
+        String resolvedModel = required(model, "model name");
+        com.openai.core.ClientOptions syncOptions = openAiClientOptions(resolvedApiKey, resolvedBaseUrl);
+        com.openai.core.ClientOptions asyncOptions = openAiClientOptions(resolvedApiKey, resolvedBaseUrl);
         return OpenAiChatModel.builder()
                 .options(OpenAiChatOptions.builder()
-                        .apiKey(required(apiKey, "model API key"))
-                        .baseUrl(required(baseUrl, "model base URL"))
-                        .model(required(model, "model name"))
+                        .apiKey(resolvedApiKey)
+                        .baseUrl(resolvedBaseUrl)
+                        .model(resolvedModel)
+                        .maxRetries(0)
                         .build())
-                .httpClientBuilderCustomizer(builder -> builder.timeout(requestTimeout))
+                .openAiClient(new OpenAIClientImpl(syncOptions))
+                .openAiClientAsync(new OpenAIClientAsyncImpl(asyncOptions))
                 .observationRegistry(observations)
+                .build();
+    }
+
+    private com.openai.core.ClientOptions openAiClientOptions(String apiKey, String baseUrl) {
+        return com.openai.core.ClientOptions.builder()
+                .httpClient(new SingleAttemptOpenAiHttpClient(requestTimeout, observations))
+                .apiKey(apiKey)
+                .baseUrl(baseUrl)
+                .timeout(requestTimeout)
+                .maxRetries(0)
+                .putHeader("User-Agent", "spring-ai-openai")
                 .build();
     }
 

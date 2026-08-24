@@ -98,7 +98,7 @@ class BoardGameRecommendationAgentRealConversationEvaluationTest {
                     .containsEntry("dynamicCountOutcome", "RECOMMENDATIONS")
                     .containsEntry("dynamicCount", 5)
                     .containsEntry("dynamicCountDidNotSetPlayers", true)
-                    .containsEntry("recommendationPayloadsContainIdsOnly", true)
+                    .containsEntry("recommendationPublicationsAreStructuredNoActionTurns", true)
                     .containsEntry("refreshOutcome", "RECOMMENDATIONS")
                     .containsEntry("refreshOverlap", 0)
                     .containsEntry("fallbackUsed", false);
@@ -398,8 +398,8 @@ class BoardGameRecommendationAgentRealConversationEvaluationTest {
                     .toList());
             result.put("rawModelTurnCount", activeRawModelCapture.count());
             result.put(
-                    "recommendationPayloadsContainIdsOnly",
-                    activeRawModelCapture.recommendationPayloadsContainIdsOnly());
+                    "recommendationPublicationsAreStructuredNoActionTurns",
+                    activeRawModelCapture.recommendationPublicationsAreStructuredNoActionTurns());
             return Map.copyOf(result);
         } finally {
             agent.stopBoundedCalls();
@@ -942,6 +942,27 @@ class BoardGameRecommendationAgentRealConversationEvaluationTest {
                 return turn;
             }
 
+            @Override
+            public Turn streamDecision(
+                    Request request,
+                    String ownerUsername,
+                    java.util.function.Consumer<String> accumulatedTextListener) {
+                Turn turn = delegate.streamDecision(request, ownerUsername, accumulatedTextListener);
+                capture.record(turn);
+                return turn;
+            }
+
+            @Override
+            public BoardGameRecommendationModel.StructuredTurn streamStructured(
+                    Request request,
+                    String ownerUsername,
+                    java.util.function.Consumer<String> jsonDeltaListener) {
+                BoardGameRecommendationModel.StructuredTurn turn =
+                        delegate.streamStructured(request, ownerUsername, jsonDeltaListener);
+                capture.recordStructured(request, turn);
+                return turn;
+            }
+
         };
     }
 
@@ -1076,7 +1097,8 @@ class BoardGameRecommendationAgentRealConversationEvaluationTest {
         private final ObjectMapper json;
         private final Path output;
         private final List<Map<String, Object>> turns = new ArrayList<>();
-        private final List<String> recommendationArguments = new ArrayList<>();
+        private final List<BoardGameRecommendationModel.Request> structuredRequests = new ArrayList<>();
+        private final List<String> publicationJson = new ArrayList<>();
         private String scenario = "unassigned";
 
         private RawModelCapture(String provider, String model, double temperature, ObjectMapper json) {
@@ -1109,10 +1131,6 @@ class BoardGameRecommendationAgentRealConversationEvaluationTest {
         }
 
         private synchronized void record(BoardGameRecommendationModel.Turn turn) {
-            turn.toolCalls().stream()
-                    .filter(call -> BoardGameRecommendationAgent.RECOMMEND_TOOL.equals(call.name()))
-                    .map(BoardGameRecommendationModel.ToolCall::argumentsJson)
-                    .forEach(recommendationArguments::add);
             List<Map<String, String>> calls = turn.toolCalls().stream()
                     .map(call -> Map.of(
                             "id", call.id(),
@@ -1127,7 +1145,27 @@ class BoardGameRecommendationAgentRealConversationEvaluationTest {
             value.put("temperature", temperature);
             value.put("visibleText", turn.text());
             value.put("toolCalls", calls);
-            Map<String, Object> captured = Map.copyOf(value);
+            append(Map.copyOf(value));
+        }
+
+        private synchronized void recordStructured(
+                BoardGameRecommendationModel.Request request,
+                BoardGameRecommendationModel.StructuredTurn turn) {
+            structuredRequests.add(request);
+            publicationJson.add(turn.json());
+            Map<String, Object> value = new LinkedHashMap<>();
+            value.put("ordinal", turns.size() + 1);
+            value.put("scenario", scenario);
+            value.put("provider", provider);
+            value.put("model", model);
+            value.put("temperature", temperature);
+            value.put("structuredOutput", request.structuredOutput().name());
+            value.put("structuredJson", turn.json());
+            value.put("toolCalls", List.of());
+            append(Map.copyOf(value));
+        }
+
+        private void append(Map<String, Object> captured) {
             turns.add(captured);
             try {
                 Files.writeString(
@@ -1144,13 +1182,24 @@ class BoardGameRecommendationAgentRealConversationEvaluationTest {
             return turns.size();
         }
 
-        private synchronized boolean recommendationPayloadsContainIdsOnly() {
-            if (recommendationArguments.isEmpty()) return false;
+        private synchronized boolean recommendationPublicationsAreStructuredNoActionTurns() {
+            if (structuredRequests.isEmpty() || structuredRequests.size() != publicationJson.size()) return false;
             try {
-                for (String argumentsJson : recommendationArguments) {
-                    var arguments = json.readTree(argumentsJson);
-                    if (arguments.has("message") || !arguments.path("selections").isArray()) return false;
-                    for (var selection : arguments.path("selections")) {
+                for (int index = 0; index < structuredRequests.size(); index++) {
+                    BoardGameRecommendationModel.Request request = structuredRequests.get(index);
+                    if (!request.tools().isEmpty()
+                            || request.toolChoice() != BoardGameRecommendationModel.ToolChoice.NONE
+                            || request.structuredOutput() == null
+                            || !"recommendation_publication".equals(request.structuredOutput().name())) {
+                        return false;
+                    }
+                    var publication = json.readTree(publicationJson.get(index));
+                    if (!publication.path("decision").isObject()
+                            || !publication.path("replyBlocks").isArray()
+                            || !publication.path("decision").path("selections").isArray()) {
+                        return false;
+                    }
+                    for (var selection : publication.path("decision").path("selections")) {
                         if (!selection.isObject()
                                 || selection.size() != 1
                                 || !selection.path("bggId").canConvertToInt()) {
