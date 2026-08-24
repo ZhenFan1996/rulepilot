@@ -2,7 +2,6 @@ package com.rulepilot.teaching.application;
 
 import com.rulepilot.ingestion.layout.RulebookUnderstanding;
 import com.rulepilot.ingestion.layout.RulebookUnderstanding.Rectangle;
-import com.rulepilot.teaching.VisualRulebookPageFacts.PageFact;
 import com.rulepilot.teaching.VisualRulebookPageFacts.VisualAnchor;
 import java.util.List;
 import java.util.Set;
@@ -12,31 +11,36 @@ import org.springframework.stereotype.Component;
 @Component
 public final class VisualRegionCandidateSelector {
 
+    private static final int DEFAULT_PAGE_BUDGET = 6;
+
     public List<Candidate> select(
             RulebookUnderstanding understanding,
             Set<Integer> citedPages,
             List<String> sectionTerms) {
-        return select(understanding, citedPages, sectionTerms, List.of());
+        return select(understanding, citedPages, sectionTerms, DEFAULT_PAGE_BUDGET);
     }
 
     public List<Candidate> select(
             RulebookUnderstanding understanding,
             Set<Integer> citedPages,
             List<String> sectionTerms,
-            List<PageFact> visualPageFacts) {
-        if (understanding == null || citedPages == null || sectionTerms == null || visualPageFacts == null) {
+            int pageBudget) {
+        if (understanding == null || citedPages == null || sectionTerms == null) {
             throw new IllegalArgumentException("visual region selection input is required");
+        }
+        if (pageBudget < 1 || pageBudget > 12) {
+            throw new IllegalArgumentException("visual candidate page budget must be between one and twelve");
         }
         if (citedPages.stream().anyMatch(page -> page == null || page < 1)) {
             throw new IllegalArgumentException("visual region cited pages are invalid");
         }
         if (citedPages.isEmpty()) return List.of();
 
-        List<Integer> ordered = citedPages.stream().sorted().toList();
-        List<Integer> selected = ordered.size() <= 2
-                ? ordered
-                : List.of(ordered.getFirst(), ordered.getLast());
-        return selected.stream().map(this::citedPageCandidate).toList();
+        return citedPages.stream()
+                .sorted()
+                .limit(pageBudget)
+                .map(this::citedPageCandidate)
+                .toList();
     }
 
     private Candidate citedPageCandidate(int pageNumber) {

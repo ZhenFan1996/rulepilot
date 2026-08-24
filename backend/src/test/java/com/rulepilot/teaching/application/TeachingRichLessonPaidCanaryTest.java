@@ -208,7 +208,6 @@ class TeachingRichLessonPaidCanaryTest {
                 audit,
                 VisualRulebookPageFacts.empty(),
                 VisualRulebookPageCatalogModel.unavailable(),
-                72,
                 3,
                 3,
                 refiner);
@@ -324,7 +323,6 @@ class TeachingRichLessonPaidCanaryTest {
                 audit,
                 VisualRulebookPageFacts.empty(),
                 VisualRulebookPageCatalogModel.unavailable(),
-                72,
                 3,
                 3,
                 refiner);

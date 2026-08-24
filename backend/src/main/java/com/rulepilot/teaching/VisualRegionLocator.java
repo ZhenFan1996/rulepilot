@@ -1,6 +1,7 @@
 package com.rulepilot.teaching;
 
 import com.rulepilot.teaching.application.VisualRegionCandidateSelector.Candidate;
+import com.rulepilot.teaching.domain.IllustratedLesson.VisualSourceKind;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -38,7 +39,6 @@ public interface VisualRegionLocator {
     enum Diagnostic {
         FOUND,
         NO_REGION,
-        OVERSIZED_REGION,
         SEMANTIC_REJECTED,
         MODEL_UNAVAILABLE,
         EXPLICIT_NO_REGION,
@@ -49,6 +49,14 @@ public interface VisualRegionLocator {
         INTERRUPTED,
         EXECUTOR_BUSY,
         PROVIDER_FAILURE
+    }
+
+    /** Typed visual review outcomes; only ACCEPT and USE_FULL_PAGE may cross the publication boundary. */
+    enum ReviewAction {
+        ACCEPT,
+        RECROP,
+        USE_FULL_PAGE,
+        REJECT
     }
 
     record LocateResult(Optional<LocatedRegion> region, Diagnostic diagnostic) {
@@ -78,7 +86,7 @@ public interface VisualRegionLocator {
 
     record LocateGuideResult(List<LocatedRegion> regions, Diagnostic diagnostic) {
         public LocateGuideResult {
-            if (regions == null || diagnostic == null || regions.size() > 2
+            if (regions == null || regions.size() > 12 || diagnostic == null
                     || (regions.isEmpty() && diagnostic == Diagnostic.FOUND)
                     || (!regions.isEmpty() && diagnostic != Diagnostic.FOUND)) {
                 throw new IllegalArgumentException("visual guide result is invalid");
@@ -108,20 +116,53 @@ public interface VisualRegionLocator {
             List<PageImage> pages,
             String modelConfigurationOwner,
             UUID documentVersionId,
-            UUID runId) {
+            UUID runId,
+            int visualBudget) {
+        public static final int DEFAULT_VISUAL_BUDGET = 6;
+
+        public VisualLocationRequest(
+                String sectionTitle,
+                List<Claim> claims,
+                List<Candidate> candidates,
+                List<PageImage> pages,
+                String modelConfigurationOwner,
+                UUID documentVersionId,
+                UUID runId) {
+            this(
+                    sectionTitle,
+                    claims,
+                    candidates,
+                    pages,
+                    modelConfigurationOwner,
+                    documentVersionId,
+                    runId,
+                    DEFAULT_VISUAL_BUDGET);
+        }
+
         public VisualLocationRequest(
                 String sectionTitle,
                 List<Claim> claims,
                 List<Candidate> candidates,
                 List<PageImage> pages,
                 String modelConfigurationOwner) {
-            this(sectionTitle, claims, candidates, pages, modelConfigurationOwner, null, null);
+            this(
+                    sectionTitle,
+                    claims,
+                    candidates,
+                    pages,
+                    modelConfigurationOwner,
+                    null,
+                    null,
+                    DEFAULT_VISUAL_BUDGET);
         }
 
         public VisualLocationRequest {
             if (sectionTitle == null || sectionTitle.isBlank() || claims == null || claims.isEmpty()
-                    || candidates == null || candidates.isEmpty() || candidates.size() > 4
-                    || pages == null || pages.isEmpty() || pages.size() > 2) {
+                    || candidates == null || candidates.isEmpty()
+                    || pages == null || pages.isEmpty()
+                    || visualBudget < 1 || visualBudget > 12
+                    || candidates.size() > visualBudget
+                    || pages.size() > visualBudget) {
                 throw new IllegalArgumentException("visual location request is invalid");
             }
             claims = List.copyOf(claims);
@@ -137,7 +178,15 @@ public interface VisualRegionLocator {
 
         public VisualLocationRequest(
                 String sectionTitle, List<Claim> claims, List<Candidate> candidates, List<PageImage> pages) {
-            this(sectionTitle, claims, candidates, pages, null, null, null);
+            this(
+                    sectionTitle,
+                    claims,
+                    candidates,
+                    pages,
+                    null,
+                    null,
+                    null,
+                    DEFAULT_VISUAL_BUDGET);
         }
     }
 
@@ -191,7 +240,8 @@ public interface VisualRegionLocator {
             int height,
             List<UUID> supportedEvidenceIds,
             List<Integer> supportedStepPositions,
-            boolean claimContradicted) {
+            boolean claimContradicted,
+            VisualSourceKind sourceKind) {
         public LocatedRegion {
             if (pageNumber < 1 || label == null || label.isBlank() || label.length() > 80
                     || (visibleDescription != null && visibleDescription.length() > 240)
@@ -199,8 +249,13 @@ public interface VisualRegionLocator {
                     || supportedEvidenceIds == null || supportedEvidenceIds.isEmpty()
                     || supportedEvidenceIds.stream().anyMatch(java.util.Objects::isNull)
                     || supportedStepPositions == null
-                    || supportedStepPositions.stream().anyMatch(position -> position == null || position < 1)) {
+                    || supportedStepPositions.stream().anyMatch(position -> position == null || position < 1)
+                    || sourceKind == null) {
                 throw new IllegalArgumentException("located visual region is invalid");
+            }
+            boolean completePage = x == 0 && y == 0 && width == 1_000 && height == 1_000;
+            if ((sourceKind == VisualSourceKind.FULL_PAGE) != completePage) {
+                throw new IllegalArgumentException("full-page visual region kind and geometry must agree");
             }
             visibleDescription = visibleDescription == null ? "" : visibleDescription;
             supportedEvidenceIds = List.copyOf(supportedEvidenceIds);
@@ -227,7 +282,33 @@ public interface VisualRegionLocator {
                     height,
                     supportedEvidenceIds,
                     supportedStepPositions,
-                    false);
+                    false,
+                    inferredSourceKind(x, y, width, height));
+        }
+
+        public LocatedRegion(
+                int pageNumber,
+                String label,
+                String visibleDescription,
+                int x,
+                int y,
+                int width,
+                int height,
+                List<UUID> supportedEvidenceIds,
+                List<Integer> supportedStepPositions,
+                boolean claimContradicted) {
+            this(
+                    pageNumber,
+                    label,
+                    visibleDescription,
+                    x,
+                    y,
+                    width,
+                    height,
+                    supportedEvidenceIds,
+                    supportedStepPositions,
+                    claimContradicted,
+                    inferredSourceKind(x, y, width, height));
         }
 
         public LocatedRegion(
@@ -264,7 +345,14 @@ public interface VisualRegionLocator {
                     height,
                     supportedEvidenceIds,
                     supportedStepPositions,
-                    true);
+                    true,
+                    sourceKind);
+        }
+
+        private static VisualSourceKind inferredSourceKind(int x, int y, int width, int height) {
+            return x == 0 && y == 0 && width == 1_000 && height == 1_000
+                    ? VisualSourceKind.FULL_PAGE
+                    : VisualSourceKind.PAGE_REGION;
         }
     }
 }

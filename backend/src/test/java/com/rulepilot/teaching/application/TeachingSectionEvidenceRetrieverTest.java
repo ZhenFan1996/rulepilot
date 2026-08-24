@@ -80,6 +80,67 @@ class TeachingSectionEvidenceRetrieverTest {
     }
 
     @Test
+    void countsAFailedVisualPageReadWithoutClaimingExactPageProvenance() {
+        TeachingPlan visualPlan = new TeachingPlan(
+                UUID.randomUUID(),
+                documentVersionId,
+                "Test game",
+                "Keep the exact-page fallback explicit.",
+                List.of(new PlannedSection(
+                        1,
+                        "setup",
+                        "Setup",
+                        "Explain setup from the bound page.",
+                        true,
+                        true,
+                        List.of("setup"),
+                        List.of("setup"),
+                        List.of(2))),
+                "player",
+                Instant.now());
+        RuleEvidence placeholder = new RuleEvidence(
+                UUID.randomUUID(),
+                documentVersionId,
+                "SETUP",
+                "Setup",
+                "Image-only page",
+                2,
+                2,
+                List.of(),
+                RuleEvidence.ContentKind.VISUAL_PLACEHOLDER);
+        AssistantReadTools tools = new AssistantReadTools() {
+            @Override
+            public List<RuleEvidence> searchRuleEvidence(SearchRuleEvidence request) {
+                return List.of(placeholder);
+            }
+
+            @Override
+            public List<RuleEvidence> readRuleEvidencePages(
+                    UUID requestedVersion, java.util.Set<Integer> pages, boolean includePageImages) {
+                throw new IllegalStateException("page image storage unavailable");
+            }
+        };
+
+        var result = retriever(tools).retrieve(
+                visualPlan, visualPlan.sections().getFirst(), UUID.randomUUID(), 3, true);
+
+        assertThat(result.state()).isEqualTo(TeachingSectionEvidenceRetriever.State.VERIFIED);
+        assertThat(result.evidence()).containsExactly(placeholder);
+        assertThat(result.toolCalls()).isEqualTo(2);
+        assertThat(result.canonicalPageObservation()).isEmpty();
+    }
+
+    @Test
+    void doesNotClaimACompleteObservationWhenOneRequestedPageIsAbsent() {
+        RuleEvidence pageTwo = evidence(UUID.randomUUID(), documentVersionId, "Only page two was returned.");
+
+        var observation = TeachingVisualEvidenceResolver.CanonicalPageObservation.complete(
+                UUID.randomUUID(), documentVersionId, java.util.Set.of(2, 5), List.of(pageTwo));
+
+        assertThat(observation).isEmpty();
+    }
+
+    @Test
     void recoversOneBoundPageWhenProgressiveBackgroundPrefetchFailed() {
         UUID chunkId = UUID.randomUUID();
         AtomicInteger catalogCalls = new AtomicInteger();
@@ -214,6 +275,8 @@ class TeachingSectionEvidenceRetrieverTest {
                 true);
 
         assertThat(result.state()).isEqualTo(TeachingSectionEvidenceRetriever.State.VERIFIED);
+        assertThat(result.toolCalls()).isEqualTo(1);
+        assertThat(result.canonicalPageObservation()).isPresent();
         assertThat(result.evidence()).singleElement().satisfies(evidence -> {
             assertThat(evidence.chunkId()).isEqualTo(chunkId);
             assertThat(evidence.contentKind()).isEqualTo(RuleEvidence.ContentKind.VISUAL_TRANSCRIPTION);

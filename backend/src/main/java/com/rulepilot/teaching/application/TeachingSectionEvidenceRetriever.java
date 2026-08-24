@@ -14,6 +14,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import org.slf4j.Logger;
@@ -49,9 +50,13 @@ final class TeachingSectionEvidenceRetriever {
             boolean bindVisualPageEvidence) {
         if (bindVisualPageEvidence && ProgressiveVisualTeachingPlanPolicy.isProgressive(plan)) {
             try {
-                List<RuleEvidence> evidence = visualEvidenceResolver.resolve(
+                TeachingVisualEvidenceResolver.Resolution visual = visualEvidenceResolver.resolve(
                         plan, planned, List.of(), assistantRunId);
-                return verifiedResult(plan, evidence, 1);
+                return verifiedResult(
+                        plan,
+                        visual.evidence(),
+                        visual.toolCalls(),
+                        visual.canonicalPageObservation());
             } catch (AgentExecutionStoppedException stopped) {
                 throw stopped;
             } catch (RuntimeException visualFailure) {
@@ -59,11 +64,12 @@ final class TeachingSectionEvidenceRetriever {
                         "Teaching visual evidence resolution failed for topic {}: {}",
                         planned.topicKey(),
                         visualFailure.getMessage());
-                return new Result(List.of(), 1, State.EMPTY);
+                return new Result(List.of(), 0, State.EMPTY);
             }
         }
         Map<UUID, RuleEvidence> evidenceById = new LinkedHashMap<>();
         List<List<RuleEvidence>> evidenceByIntent = new ArrayList<>();
+        Optional<TeachingVisualEvidenceResolver.CanonicalPageObservation> canonicalPageObservation = Optional.empty();
         boolean conflictingEvidence = false;
         int toolCalls = 0;
         for (String query : TeachingEvidenceRetrievalPolicy.queries(planned, queryBudget)) {
@@ -97,7 +103,11 @@ final class TeachingSectionEvidenceRetriever {
                 : TeachingEvidenceRetrievalPolicy.balancedEvidence(evidenceByIntent);
         if (bindVisualPageEvidence) {
             try {
-                evidence = visualEvidenceResolver.resolve(plan, planned, evidence, assistantRunId);
+                TeachingVisualEvidenceResolver.Resolution visual = visualEvidenceResolver.resolve(
+                        plan, planned, evidence, assistantRunId);
+                evidence = visual.evidence();
+                toolCalls += visual.toolCalls();
+                canonicalPageObservation = visual.canonicalPageObservation();
             } catch (AgentExecutionStoppedException stopped) {
                 throw stopped;
             } catch (RuntimeException visualFailure) {
@@ -107,10 +117,30 @@ final class TeachingSectionEvidenceRetriever {
                         visualFailure.getMessage());
             }
         }
-        return verifiedResult(plan, evidence, toolCalls);
+        return verifiedResult(plan, evidence, toolCalls, canonicalPageObservation);
+    }
+
+    static int maximumToolCalls(
+            TeachingPlan plan,
+            TeachingPlan.PlannedSection planned,
+            int maxRetrievalQueries) {
+        if (ProgressiveVisualTeachingPlanPolicy.isProgressive(plan)) {
+            return TeachingVisualEvidenceResolver.maximumPageReadToolCalls(planned);
+        }
+        int searches = TeachingEvidenceRetrievalPolicy.queries(planned, maxRetrievalQueries).size();
+        int possibleVisualPageRead = TeachingVisualEvidenceResolver.maximumPageReadToolCalls(planned);
+        return Math.addExact(searches, possibleVisualPageRead);
     }
 
     private Result verifiedResult(TeachingPlan plan, List<RuleEvidence> evidence, int toolCalls) {
+        return verifiedResult(plan, evidence, toolCalls, Optional.empty());
+    }
+
+    private Result verifiedResult(
+            TeachingPlan plan,
+            List<RuleEvidence> evidence,
+            int toolCalls,
+            Optional<TeachingVisualEvidenceResolver.CanonicalPageObservation> canonicalPageObservation) {
         if (evidence.isEmpty()) return new Result(List.of(), toolCalls, State.EMPTY);
         boolean verified;
         try {
@@ -122,7 +152,7 @@ final class TeachingSectionEvidenceRetriever {
             verified = false;
         }
         return verified
-                ? new Result(evidence, toolCalls, State.VERIFIED)
+                ? new Result(evidence, toolCalls, State.VERIFIED, canonicalPageObservation)
                 : new Result(List.of(), toolCalls, State.INVALID);
     }
 
@@ -177,7 +207,22 @@ final class TeachingSectionEvidenceRetriever {
 
     enum State { VERIFIED, EMPTY, INVALID }
 
-    record Result(List<RuleEvidence> evidence, int toolCalls, State state) {
+    record Result(
+            List<RuleEvidence> evidence,
+            int toolCalls,
+            State state,
+            Optional<TeachingVisualEvidenceResolver.CanonicalPageObservation> canonicalPageObservation) {
+        Result(List<RuleEvidence> evidence, int toolCalls, State state) {
+            this(evidence, toolCalls, state, Optional.empty());
+        }
+
+        Result {
+            evidence = List.copyOf(evidence);
+            canonicalPageObservation = canonicalPageObservation == null
+                    ? Optional.empty()
+                    : canonicalPageObservation;
+        }
+
         boolean verified() {
             return state == State.VERIFIED;
         }

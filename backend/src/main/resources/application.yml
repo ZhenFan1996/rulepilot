@@ -141,13 +141,12 @@ rulepilot:
       # Claiming persisted READY intents must not wait behind Rabbit publisher confirms or queue metrics.
       scheduler-pool-size: ${TEACHING_IMPORT_HANDOFF_SCHEDULER_POOL_SIZE:1}
     agent:
+      # Legacy fallback for non-plan callers. Ordinary lessons replace these with the exact bounded call graph of
+      # their immutable Teaching plan; account quota and administrator entitlement are separate concerns.
       max-tool-calls: ${TEACHING_AGENT_MAX_TOOL_CALLS:72}
       max-model-calls: ${TEACHING_AGENT_MAX_MODEL_CALLS:36}
-      # Reserve enough bounded capacity for the whole-lesson factual and chapter-structure review after the
-      # complete cited draft is already readable. A ten-chapter visual lesson can otherwise exhaust its budget
-      # just before the review phase and remain permanently marked as a draft.
       max-tokens: ${TEACHING_AGENT_MAX_TOKENS:300000}
-      timeout: ${TEACHING_AGENT_TIMEOUT:PT10M}
+      timeout: ${TEACHING_AGENT_TIMEOUT:PT30M}
     background:
       core-pool-size: ${TEACHING_BACKGROUND_CORE_POOL_SIZE:1}
       max-pool-size: ${TEACHING_BACKGROUND_MAX_POOL_SIZE:3}
@@ -178,17 +177,13 @@ rulepilot:
     # Keep the application default aligned with the shipped environment example: at most five high-value sections
     # receive optional crop work, so vision cannot dominate an otherwise complete text lesson.
     max-sections: ${VISUAL_MAX_SECTIONS:5}
-    # Within each selected section, try at most two grounded steps for distinct local visuals; the enricher still
-    # declines duplicate, text-only, or unrelated crops instead of decorating prose with page images.
-    max-steps-per-section: ${VISUAL_MAX_STEPS_PER_SECTION:2}
+    # One typed section plan may attach zero or several owned visuals to each step, while this total result budget
+    # bounds model output, native crop tools, persistence growth, and player-facing density together.
+    max-results-per-section: ${VISUAL_MAX_RESULTS_PER_SECTION:6}
     # Page ledgers are independent and retain their original order after completion. Ten bounded requests let a
     # typical rulebook finish one page window at a time; deployments may still lower this when a provider account has
     # a stricter rate limit.
     request-parallelism: ${VISUAL_REQUEST_PARALLELISM:10}
-    # Crop discovery can be much more expensive than the initial page catalog. Keep it conservative by default;
-    # a verified crop arrives progressively and is never worth delaying another player's base lesson.
-    enrichment:
-      request-parallelism: ${VISUAL_ENRICHMENT_REQUEST_PARALLELISM:1}
     # Inspect only a small distributed sample of unowned sparse-text pages before coverage refinement. A cataloged
     # page still needs a concrete gameplay observation before it can create a teaching topic.
     coverage-probe-pages: ${VISUAL_COVERAGE_PROBE_PAGES:4}

@@ -3,6 +3,7 @@ package com.rulepilot.assistant.application;
 import com.rulepilot.assistant.AssistantRunMode;
 import com.rulepilot.assistant.AssistantRunState;
 import com.rulepilot.assistant.AssistantRuns;
+import com.rulepilot.assistant.AssistantRuns.WorkloadDemand;
 import com.rulepilot.assistant.AgentExecutionControl;
 import com.rulepilot.assistant.AgentExecutionControl.BudgetLimits;
 import com.rulepilot.assistant.domain.AssistantRun;
@@ -68,9 +69,20 @@ public class AssistantRunService implements AssistantRuns {
     @Override
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public RunSnapshot start(AssistantRunMode mode, UUID subjectId, String ownerUsername) {
+        return start(mode, subjectId, ownerUsername, null);
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public RunSnapshot start(
+            AssistantRunMode mode,
+            UUID subjectId,
+            String ownerUsername,
+            WorkloadDemand workloadDemand) {
+        BudgetLimits limits = limitsFor(mode, workloadDemand);
         AssistantRun run = AssistantRun.start(mode, subjectId, ownerUsername, Instant.now(clock));
         repository.insert(run, "Run received");
-        execution.initialize(run.id(), limitsFor(mode), run.createdAt());
+        execution.initialize(run.id(), limits, run.createdAt());
         return snapshot(run);
     }
 
@@ -234,6 +246,20 @@ public class AssistantRunService implements AssistantRuns {
             case VISUAL_ENRICHMENT -> visualEnrichmentLimits;
             case QUESTION_ANSWER -> answerLimits;
         };
+    }
+
+    private BudgetLimits limitsFor(AssistantRunMode mode, WorkloadDemand workloadDemand) {
+        BudgetLimits configured = limitsFor(mode);
+        if (workloadDemand == null) return configured;
+        if (mode != AssistantRunMode.TEACHING) {
+            throw new IllegalArgumentException("a workload demand is only available to teaching runs");
+        }
+        return new BudgetLimits(
+                configured.maxSteps(),
+                Math.max(1, workloadDemand.requiredToolCalls()),
+                workloadDemand.requiredModelCalls(),
+                configured.maxTokens(),
+                configured.timeout());
     }
 
     private void persist(AssistantRun current, AssistantRun changed, String summary) {

@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.rulepilot.ingestion.layout.RulebookUnderstanding.Rectangle;
 import com.rulepilot.teaching.VisualRegionLocator.LocatedRegion;
 import com.rulepilot.teaching.domain.IllustratedLesson.VisualFocus;
+import com.rulepilot.teaching.domain.IllustratedLesson.VisualSourceKind;
 import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -51,14 +52,23 @@ class VisualReaderCropPolicyTest {
     }
 
     @Test
-    void rejectsWholePagesAndUsesOnlyGeometryToReplaceOversizedPersistedCrops() {
-        LocatedRegion wholePage = region("完整页面", "图中有一张卡牌", 0, 0, 1_000, 1_000);
-        VisualFocus narrowScoreExample = new VisualFocus(2, "计分示例", 100, 100, 300, 500);
-        VisualFocus oversized = new VisualFocus(2, "组件布局", 0, 0, 800, 800);
+    void treatsFullPageAsATypedSourceInsteadOfRejectingItByArea() {
+        LocatedRegion wholePage = new LocatedRegion(
+                2,
+                "完整流程图",
+                "整页是一张由箭头连接的连续流程图",
+                0,
+                0,
+                1_000,
+                1_000,
+                List.of(evidence),
+                List.of(1),
+                false,
+                VisualSourceKind.FULL_PAGE);
 
-        assertThat(policy.isCompactReaderCrop(wholePage)).isFalse();
-        assertThat(policy.needsTighterReaderCrop(narrowScoreExample)).isFalse();
-        assertThat(policy.needsTighterReaderCrop(oversized)).isTrue();
+        assertThat(policy.isReadableForPlayer(wholePage)).isTrue();
+        assertThat(policy.needsReaderViewport(wholePage)).isFalse();
+        assertThat(policy.isUsefulPlayerVisual(wholePage)).isTrue();
     }
 
     @Test

@@ -4,7 +4,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.rulepilot.ingestion.layout.RulebookUnderstanding;
 import com.rulepilot.ingestion.layout.RulebookUnderstanding.Rectangle;
-import com.rulepilot.teaching.VisualRulebookPageFacts.PageFact;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
@@ -19,12 +18,8 @@ class VisualRegionCandidateSelectorTest {
     @Test
     void selectionIsStableAcrossNaturalPhrasingAndCatalogVocabulary() {
         Set<Integer> citedPages = new LinkedHashSet<>(List.of(4, 5));
-        List<PageFact> catalog = List.of(
-                new PageFact(4, "Setup", "一个空棋盘和起始组件", List.of("棋盘")),
-                new PageFact(5, "Scoring", "末局计分表", List.of("计分")));
-
-        var chinese = selector.select(understanding, citedPages, List.of("动物标记如何放置"), catalog);
-        var unrelatedEnglish = selector.select(understanding, citedPages, List.of("completely different prose"), catalog);
+        var chinese = selector.select(understanding, citedPages, List.of("动物标记如何放置"));
+        var unrelatedEnglish = selector.select(understanding, citedPages, List.of("completely different prose"));
 
         assertThat(chinese).isEqualTo(unrelatedEnglish);
         assertThat(chinese).extracting(VisualRegionCandidateSelector.Candidate::pageNumber)
@@ -36,16 +31,28 @@ class VisualRegionCandidateSelectorTest {
     }
 
     @Test
-    void keepsTheFirstAndLastTypedSourcePageWhenAClaimSpansMoreThanTwoPages() {
+    void keepsAllTypedSourcePagesWithinTheExplicitPageBudget() {
         var selected = selector.select(
                 understanding,
                 new LinkedHashSet<>(List.of(4, 5, 6, 7)),
                 List.of("free player-facing lesson prose"));
 
         assertThat(selected).extracting(VisualRegionCandidateSelector.Candidate::pageNumber)
-                .containsExactly(4, 7);
+                .containsExactly(4, 5, 6, 7);
         assertThat(selected).extracting(VisualRegionCandidateSelector.Candidate::sourceText)
-                .containsExactly("Cited page 4 visual context", "Cited page 7 visual context");
+                .containsExactly(
+                        "Cited page 4 visual context",
+                        "Cited page 5 visual context",
+                        "Cited page 6 visual context",
+                        "Cited page 7 visual context");
+
+        var bounded = selector.select(
+                understanding,
+                new LinkedHashSet<>(List.of(4, 5, 6, 7)),
+                List.of("free player-facing lesson prose"),
+                3);
+        assertThat(bounded).extracting(VisualRegionCandidateSelector.Candidate::pageNumber)
+                .containsExactly(4, 5, 6);
     }
 
     @Test

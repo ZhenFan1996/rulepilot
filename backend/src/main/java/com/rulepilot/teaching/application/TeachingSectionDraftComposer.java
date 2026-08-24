@@ -65,7 +65,8 @@ final class TeachingSectionDraftComposer {
                 assistantRunId,
                 sectionIndex,
                 includeVisualEvidence,
-                true);
+                true,
+                TeachingModelCallBudget.section());
     }
 
     TeachingSectionDraftCandidate compose(
@@ -77,6 +78,28 @@ final class TeachingSectionDraftComposer {
             int sectionIndex,
             boolean includeVisualEvidence,
             boolean allowValidationRevision) {
+        return compose(
+                plan,
+                planned,
+                priorSections,
+                evidence,
+                assistantRunId,
+                sectionIndex,
+                includeVisualEvidence,
+                allowValidationRevision,
+                TeachingModelCallBudget.section());
+    }
+
+    TeachingSectionDraftCandidate compose(
+            TeachingPlan plan,
+            TeachingPlan.PlannedSection planned,
+            List<PriorSectionContext> priorSections,
+            List<RuleEvidence> evidence,
+            UUID assistantRunId,
+            int sectionIndex,
+            boolean includeVisualEvidence,
+            boolean allowValidationRevision,
+            TeachingModelCallBudget modelCallBudget) {
         TeachingLessonModel.SectionRequest modelRequest = requestFactory.create(
                 plan,
                 planned,
@@ -94,7 +117,7 @@ final class TeachingSectionDraftComposer {
         }
         SectionDraft draft;
         try {
-            draft = composeModelDraft(assistantRunId, planned, modelRequest);
+            draft = composeModelDraft(assistantRunId, planned, modelRequest, modelCallBudget);
         } catch (AgentExecutionStoppedException stopped) {
             throw stopped;
         } catch (RuntimeException visualCompositionFailure) {
@@ -105,7 +128,7 @@ final class TeachingSectionDraftComposer {
                         visualCompositionFailure.getMessage());
                 recordVisualTextFallback(assistantRunId, planned);
                 return fallbackToTextDraft(
-                        plan, planned, evidence, modelRequest, assistantRunId, sectionIndex, 0);
+                        plan, planned, evidence, modelRequest, assistantRunId, sectionIndex, 0, modelCallBudget);
             }
             throw visualCompositionFailure;
         }
@@ -157,7 +180,8 @@ final class TeachingSectionDraftComposer {
                             feedback,
                             "reviseTeachingSection",
                             "repairTeachingSectionRevisionContract",
-                            "Teaching section revised from validation feedback");
+                            "Teaching section revised from validation feedback",
+                            modelCallBudget);
                 } catch (AgentExecutionStoppedException stopped) {
                     throw stopped;
                 } catch (RuntimeException visualRepairFailure) {
@@ -168,7 +192,14 @@ final class TeachingSectionDraftComposer {
                                 visualRepairFailure.getMessage());
                         recordVisualTextFallback(assistantRunId, planned);
                         return fallbackToTextDraft(
-                                plan, planned, evidence, modelRequest, assistantRunId, sectionIndex, repair + 1);
+                                plan,
+                                planned,
+                                evidence,
+                                modelRequest,
+                                assistantRunId,
+                                sectionIndex,
+                                repair + 1,
+                                modelCallBudget);
                     }
                     throw visualRepairFailure;
                 }
@@ -190,7 +221,8 @@ final class TeachingSectionDraftComposer {
             TeachingLessonModel.SectionRequest visualRequest,
             UUID assistantRunId,
             int sectionIndex,
-            int validationAttempt) {
+            int validationAttempt,
+            TeachingModelCallBudget modelCallBudget) {
         TeachingLessonModel.SectionRequest textOnlyRequest = withoutPageImages(visualRequest);
         SectionDraft textOnlyDraft = composeModelDraft(
                 assistantRunId,
@@ -198,7 +230,8 @@ final class TeachingSectionDraftComposer {
                 textOnlyRequest,
                 "fallbackToTextTeachingSection",
                 "repairTextTeachingSectionContract",
-                "Visual teaching section recomposed as complete grounded text");
+                "Visual teaching section recomposed as complete grounded text",
+                modelCallBudget);
         textOnlyDraft = normalizeDraft(textOnlyDraft, textOnlyRequest, evidence);
         for (int repair = 0; ; repair++) {
             try {
@@ -234,7 +267,8 @@ final class TeachingSectionDraftComposer {
                         List.of(diagnostic),
                         "reviseTextTeachingSection",
                         "repairTextTeachingSectionRevisionContract",
-                        "Text fallback revised from validation feedback");
+                        "Text fallback revised from validation feedback",
+                        modelCallBudget);
                 textOnlyDraft = candidateValidator.mergeRepairPreservingValidatedFields(
                         plan,
                         planned,
@@ -272,14 +306,16 @@ final class TeachingSectionDraftComposer {
     private SectionDraft composeModelDraft(
             UUID runId,
             TeachingPlan.PlannedSection planned,
-            TeachingLessonModel.SectionRequest request) {
+            TeachingLessonModel.SectionRequest request,
+            TeachingModelCallBudget modelCallBudget) {
         return composeModelDraft(
                 runId,
                 planned,
                 request,
                 "composeTeachingSection",
                 "repairTeachingSectionContract",
-                "Teaching section model output received");
+                "Teaching section model output received",
+                modelCallBudget);
     }
 
     private SectionDraft composeModelDraft(
@@ -288,9 +324,11 @@ final class TeachingSectionDraftComposer {
             TeachingLessonModel.SectionRequest request,
             String primaryOperation,
             String repairOperation,
-            String successSummary) {
+            String successSummary,
+            TeachingModelCallBudget modelCallBudget) {
         InputTokenProfile primaryProfile = model.compositionInputProfile(request);
         try {
+            modelCallBudget.acquire();
             return invocations.invoke(
                     runId,
                     ActivityType.MODEL,
@@ -304,6 +342,7 @@ final class TeachingSectionDraftComposer {
         } catch (InvalidOutputException firstFailure) {
             InputTokenProfile repairProfile = model.compositionRepairInputProfile(request);
             try {
+                modelCallBudget.acquire();
                 return invocations.invoke(
                         runId,
                         ActivityType.MODEL,
@@ -331,8 +370,31 @@ final class TeachingSectionDraftComposer {
             String primaryOperation,
             String repairOperation,
             String successSummary) {
+        return reviseModelDraft(
+                runId,
+                planned,
+                request,
+                previousDraft,
+                feedback,
+                primaryOperation,
+                repairOperation,
+                successSummary,
+                TeachingModelCallBudget.structuredOperation());
+    }
+
+    SectionDraft reviseModelDraft(
+            UUID runId,
+            TeachingPlan.PlannedSection planned,
+            TeachingLessonModel.SectionRequest request,
+            SectionDraft previousDraft,
+            List<String> feedback,
+            String primaryOperation,
+            String repairOperation,
+            String successSummary,
+            TeachingModelCallBudget modelCallBudget) {
         InputTokenProfile primaryProfile = model.revisionInputProfile(request, previousDraft, feedback);
         try {
+            modelCallBudget.acquire();
             return invocations.invoke(
                     runId,
                     ActivityType.MODEL,
@@ -346,6 +408,7 @@ final class TeachingSectionDraftComposer {
         } catch (InvalidOutputException firstFailure) {
             InputTokenProfile repairProfile = model.revisionRepairInputProfile(request, previousDraft, feedback);
             try {
+                modelCallBudget.acquire();
                 return invocations.invoke(
                         runId,
                         ActivityType.MODEL,

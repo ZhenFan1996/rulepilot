@@ -14,6 +14,7 @@ interface LessonReaderStep {
   ruleFacts?: LessonRuleFact[]
   sourcePages: number[]
   visualFocus: VisualFocus | null
+  visualFoci?: VisualFocus[]
 }
 
 interface LessonReaderSection {
@@ -49,6 +50,10 @@ function chapterId(position: number) {
 
 function activateChapter(position: number) {
   activePosition.value = position
+}
+
+function stepVisuals(step: LessonReaderStep) {
+  return step.visualFoci?.length ? step.visualFoci : step.visualFocus ? [step.visualFocus] : []
 }
 
 function registerSection(element: unknown, position: number) {
@@ -216,13 +221,16 @@ function stepKindLabel(kind: string) {
                   <p class="mt-3 text-[0.98rem] leading-7 text-ink/75">{{ step.text }}</p>
                   <LessonRuleFacts v-if="step.ruleFacts?.length" :facts="step.ruleFacts" />
 
-                  <LessonVisualEvidence
-                    v-if="step.visualFocus"
-                    :focus="step.visualFocus"
-                    :page-image-url="props.pageImageUrl"
-                    :page-preview-image-url="props.pagePreviewImageUrl"
-                    :focused-page-image-url="props.focusedPageImageUrl"
-                  />
+                  <div v-if="stepVisuals(step).length" class="grid gap-3 sm:grid-cols-2" data-testid="lesson-step-visuals">
+                    <LessonVisualEvidence
+                      v-for="focus in stepVisuals(step)"
+                      :key="`${focus.pageNumber}-${focus.x}-${focus.y}-${focus.width}-${focus.height}`"
+                      :focus="focus"
+                      :page-image-url="props.pageImageUrl"
+                      :page-preview-image-url="props.pagePreviewImageUrl"
+                      :focused-page-image-url="props.focusedPageImageUrl"
+                    />
+                  </div>
 
                   <a v-if="step.sourcePages.length" :href="props.pageImageUrl(step.sourcePages[0]!)" target="_blank" rel="noopener noreferrer" class="mt-4 inline-flex min-h-9 items-center rounded-full border border-ink/10 bg-canvas/70 px-3 text-xs font-semibold text-ink/50 transition hover:border-indigo/30 hover:text-indigo">{{ sourceLabel(step.sourcePages) }} ↗</a>
                 </div>

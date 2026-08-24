@@ -3,7 +3,6 @@ package com.rulepilot.teaching.application;
 import com.rulepilot.document.DocumentPageImages;
 import com.rulepilot.ingestion.RulebookUnderstandingCatalog;
 import com.rulepilot.teaching.VisualRegionLocator;
-import com.rulepilot.teaching.VisualRulebookPageFacts;
 import com.rulepilot.teaching.domain.IllustratedLesson;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonSection;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonStep;
@@ -30,49 +29,39 @@ public class VisualLessonEnricher {
 
     private final RulebookUnderstandingCatalog understanding;
     private final VisualSectionPrioritizer prioritizer;
-    private final VisualReaderCropPolicy cropPolicy;
-    private final VisualLessonMergePolicy mergePolicy;
     private final VisualLessonSectionEnricher sectionEnricher;
     private final int maxSections;
-    private final int maxVisualStepsPerSection;
+    private final int maxVisualsPerSection;
 
     @Autowired
     public VisualLessonEnricher(
             RulebookUnderstandingCatalog understanding,
             DocumentPageImages pageImages,
-            VisualRulebookPageFacts visualPageFacts,
             VisualRegionCandidateSelector candidates,
             @Qualifier("boundedVisualRegionLocator") VisualRegionLocator locator,
             VisualSectionPrioritizer prioritizer,
             @Value("${rulepilot.visual.max-sections:12}") int maxSections,
-            @Value("${rulepilot.visual.max-steps-per-section:6}") int maxVisualStepsPerSection,
-            @Value("${rulepilot.visual.enrichment.request-parallelism:1}") int requestParallelism) {
+            @Value("${rulepilot.visual.max-results-per-section:6}") int maxVisualsPerSection) {
         this.understanding = understanding;
         this.prioritizer = prioritizer;
-        this.cropPolicy = new VisualReaderCropPolicy();
-        this.mergePolicy = new VisualLessonMergePolicy(cropPolicy);
+        VisualReaderCropPolicy cropPolicy = new VisualReaderCropPolicy();
+        VisualLessonMergePolicy mergePolicy = new VisualLessonMergePolicy(cropPolicy);
         if (maxSections < 1 || maxSections > 20) {
             throw new IllegalArgumentException("visual section limit must be between one and twenty");
         }
-        if (maxVisualStepsPerSection < 1 || maxVisualStepsPerSection > 6) {
-            throw new IllegalArgumentException("visual step limit must be between one and six");
-        }
-        if (requestParallelism < 1 || requestParallelism > 3) {
-            throw new IllegalArgumentException("visual request parallelism must be between one and three");
+        if (maxVisualsPerSection < 1 || maxVisualsPerSection > 12) {
+            throw new IllegalArgumentException("visual result budget must be between one and twelve");
         }
         this.maxSections = maxSections;
-        this.maxVisualStepsPerSection = maxVisualStepsPerSection;
+        this.maxVisualsPerSection = maxVisualsPerSection;
         this.sectionEnricher = new VisualLessonSectionEnricher(
-                cropPolicy,
                 mergePolicy,
                 new VisualLessonStepLocator(
                         pageImages,
-                        visualPageFacts,
                         candidates,
                         locator,
                         cropPolicy),
-                maxVisualStepsPerSection,
-                requestParallelism);
+                maxVisualsPerSection);
     }
 
     public VisualLessonEnricher(
@@ -80,16 +69,7 @@ public class VisualLessonEnricher {
             DocumentPageImages pageImages,
             VisualRegionCandidateSelector candidates,
             VisualRegionLocator locator) {
-        this(understanding, pageImages, VisualRulebookPageFacts.empty(), candidates, locator, new VisualSectionPrioritizer(), 12, 6, 1);
-    }
-
-    VisualLessonEnricher(
-            RulebookUnderstandingCatalog understanding,
-            DocumentPageImages pageImages,
-            VisualRulebookPageFacts visualPageFacts,
-            VisualRegionCandidateSelector candidates,
-            VisualRegionLocator locator) {
-        this(understanding, pageImages, visualPageFacts, candidates, locator, new VisualSectionPrioritizer(), 12, 6, 1);
+        this(understanding, pageImages, candidates, locator, new VisualSectionPrioritizer(), 12, 6);
     }
 
     public IllustratedLesson enrich(UUID documentVersionId, IllustratedLesson lesson) {
@@ -149,19 +129,16 @@ public class VisualLessonEnricher {
         if (progress == null) throw new IllegalArgumentException("visual enrichment progress listener is required");
         var map = understanding.understanding(documentVersionId);
         Map<Integer, Set<Integer>> explicitVisualStepPositions = explicitVisualStepPositions(lesson);
-        IllustratedLesson readerReadyLesson = mergePolicy.discardOverlyBroadVisuals(lesson);
         Set<Integer> selectedPositions = prioritizer.positions(
-                lesson.sections(), maxSections, maxVisualStepsPerSection);
-        List<VisualFocus> acceptedVisuals = readerReadyLesson.sections().stream()
+                lesson.sections(), maxSections, maxVisualsPerSection);
+        List<VisualFocus> acceptedVisuals = lesson.sections().stream()
                 .flatMap(section -> section.steps().stream())
-                .map(LessonStep::visualFocus)
-                .filter(java.util.Objects::nonNull)
-                .filter(focus -> !cropPolicy.needsTighterReaderCrop(focus))
+                .flatMap(step -> step.visualFoci().stream())
                 .collect(Collectors.toCollection(ArrayList::new));
         List<SectionResult> sectionResults = new ArrayList<>();
-        List<LessonSection> currentSections = new ArrayList<>(readerReadyLesson.sections());
-        for (int sectionIndex = 0; sectionIndex < readerReadyLesson.sections().size(); sectionIndex++) {
-            LessonSection section = readerReadyLesson.sections().get(sectionIndex);
+        List<LessonSection> currentSections = new ArrayList<>(lesson.sections());
+        for (int sectionIndex = 0; sectionIndex < lesson.sections().size(); sectionIndex++) {
+            LessonSection section = lesson.sections().get(sectionIndex);
             if (!selectedPositions.contains(section.position())) continue;
             VisualLessonSectionEnricher.Result enriched = sectionEnricher.enrich(
                     map,
@@ -180,11 +157,11 @@ public class VisualLessonEnricher {
                 progress.sectionFinished(update);
                 if (sectionResult.outcome().outcome() == Outcome.ADDED
                         || sectionResult.outcome().outcome() == Outcome.ADDED_WITH_CLAIM_CONFLICT) {
-                    progress.sectionUpdated(update, lessonWithSections(readerReadyLesson, currentSections));
+                    progress.sectionUpdated(update, lessonWithSections(lesson, currentSections));
                 }
             }
         }
-        IllustratedLesson enriched = lessonWithSections(readerReadyLesson, currentSections);
+        IllustratedLesson enriched = lessonWithSections(lesson, currentSections);
         return new EnrichmentResult(
                 enriched,
                 sectionResults.stream().map(SectionResult::outcome).filter(java.util.Objects::nonNull).toList());
@@ -195,7 +172,7 @@ public class VisualLessonEnricher {
         for (LessonSection section : lesson.sections()) {
             Set<Integer> sectionPositions = section.steps().stream()
                     .filter(step -> step.kind() == IllustratedLesson.TeachingMove.VISUAL)
-                    .filter(step -> step.visualFocus() == null || cropPolicy.needsTighterReaderCrop(step.visualFocus()))
+                    .filter(step -> step.visualFoci().isEmpty())
                     .map(LessonStep::position)
                     .collect(Collectors.toCollection(LinkedHashSet::new));
             if (!sectionPositions.isEmpty()) positions.put(section.position(), Set.copyOf(sectionPositions));
@@ -232,7 +209,6 @@ public class VisualLessonEnricher {
             case NO_CITED_CANDIDATE -> "第 " + sectionPosition + " 节没有可引用的图片候选区域";
             case NO_PAGE_IMAGE -> "第 " + sectionPosition + " 节的候选页没有可用图片";
             case LOCATOR_RETURNED_NONE -> "第 " + sectionPosition + " 节的视觉模型未找到可靠局部图示";
-            case MODEL_OVERSIZED_REGION -> "第 " + sectionPosition + " 节的视觉模型只返回了整页或过大范围";
             case MODEL_SEMANTIC_REJECTED -> "第 " + sectionPosition + " 节的局部图示未通过当前规则步骤的二次核对";
             case MODEL_UNAVAILABLE -> "第 " + sectionPosition + " 节没有可用的视觉模型";
             case MODEL_EXPLICIT_NO_REGION -> "第 " + sectionPosition + " 节的视觉模型确认没有合适局部图示";
@@ -243,7 +219,6 @@ public class VisualLessonEnricher {
             case MODEL_INTERRUPTED -> "第 " + sectionPosition + " 节的视觉模型工作被安全中断";
             case MODEL_BUSY -> "第 " + sectionPosition + " 节的视觉模型正在处理其他任务";
             case MODEL_PROVIDER_FAILURE -> "第 " + sectionPosition + " 节的视觉模型调用失败，已保留正文";
-            case REJECTED_WHOLE_PAGE -> "第 " + sectionPosition + " 节返回整页，未把它误作局部讲解";
             case REJECTED_TOO_SMALL -> "第 " + sectionPosition + " 节的截图太小，无法辅助玩家理解，已跳过";
             case REJECTED_MISSING_OBSERVATION -> "第 " + sectionPosition + " 节的截图没有可核对的图中说明，已跳过";
             case REJECTED_NON_VISUAL -> "第 " + sectionPosition + " 节返回的区域只有文字或标题，已跳过";
@@ -309,7 +284,6 @@ public class VisualLessonEnricher {
         NO_CITED_CANDIDATE,
         NO_PAGE_IMAGE,
         LOCATOR_RETURNED_NONE,
-        MODEL_OVERSIZED_REGION,
         MODEL_SEMANTIC_REJECTED,
         MODEL_UNAVAILABLE,
         MODEL_EXPLICIT_NO_REGION,
@@ -320,7 +294,6 @@ public class VisualLessonEnricher {
         MODEL_INTERRUPTED,
         MODEL_BUSY,
         MODEL_PROVIDER_FAILURE,
-        REJECTED_WHOLE_PAGE,
         REJECTED_TOO_SMALL,
         REJECTED_MISSING_OBSERVATION,
         REJECTED_NON_VISUAL,

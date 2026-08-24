@@ -5,7 +5,6 @@ import com.rulepilot.ingestion.layout.RulebookUnderstanding;
 import com.rulepilot.teaching.VisualRegionLocator;
 import com.rulepilot.teaching.VisualRegionLocator.Claim;
 import com.rulepilot.teaching.VisualRegionLocator.PageImage;
-import com.rulepilot.teaching.VisualRulebookPageFacts;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonSection;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonStep;
 import java.util.ArrayList;
@@ -16,23 +15,20 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
-/** Grounds one cited lesson step in a compact, player-readable rulebook crop. */
+/** Grounds cited lesson steps in one typed, page- and evidence-owned visual plan. */
 final class VisualLessonStepLocator {
 
     private final DocumentPageImages pageImages;
-    private final VisualRulebookPageFacts visualPageFacts;
     private final VisualRegionCandidateSelector candidates;
     private final VisualRegionLocator locator;
     private final VisualReaderCropPolicy cropPolicy;
 
     VisualLessonStepLocator(
             DocumentPageImages pageImages,
-            VisualRulebookPageFacts visualPageFacts,
             VisualRegionCandidateSelector candidates,
             VisualRegionLocator locator,
             VisualReaderCropPolicy cropPolicy) {
         this.pageImages = pageImages;
-        this.visualPageFacts = visualPageFacts;
         this.candidates = candidates;
         this.locator = locator;
         this.cropPolicy = cropPolicy;
@@ -46,21 +42,38 @@ final class VisualLessonStepLocator {
             RulebookUnderstanding understanding,
             UUID documentVersionId,
             LessonSection section,
-            LessonStep step,
-            String modelConfigurationOwner) {
-        return locate(understanding, documentVersionId, section, step, modelConfigurationOwner, null);
+            List<LessonStep> steps,
+            String modelConfigurationOwner,
+            int visualBudget) {
+        return locate(
+                understanding,
+                documentVersionId,
+                section,
+                steps,
+                modelConfigurationOwner,
+                null,
+                visualBudget);
     }
 
     Result locate(
             RulebookUnderstanding understanding,
             UUID documentVersionId,
             LessonSection section,
-            LessonStep step,
+            List<LessonStep> steps,
             String modelConfigurationOwner,
-            UUID runId) {
-        Set<Integer> citedPages = new LinkedHashSet<>(step.sourcePages());
+            UUID runId,
+            int visualBudget) {
+        if (steps == null || steps.isEmpty()) {
+            throw new IllegalArgumentException("visual lesson steps are required");
+        }
+        Set<Integer> citedPages = steps.stream()
+                .flatMap(step -> step.sourcePages().stream())
+                .collect(Collectors.toCollection(LinkedHashSet::new));
         List<VisualRegionCandidateSelector.Candidate> selected = candidates.select(
-                understanding, citedPages, terms(section, step), visualPageFacts.find(documentVersionId, citedPages));
+                understanding,
+                citedPages,
+                terms(section, steps),
+                visualBudget);
         if (selected.isEmpty()) return Result.rejected(VisualLessonEnricher.Outcome.NO_CITED_CANDIDATE);
         List<Integer> candidatePageOrder = selected.stream()
                 .map(VisualRegionCandidateSelector.Candidate::pageNumber)
@@ -74,7 +87,6 @@ final class VisualLessonStepLocator {
         List<PageImage> pages = candidatePageOrder.stream()
                 .map(availablePages::get)
                 .filter(java.util.Objects::nonNull)
-                .limit(2)
                 .map(image -> new PageImage(image.pageNumber(), image.mediaType(), image.content()))
                 .toList();
         if (pages.isEmpty()) return Result.rejected(VisualLessonEnricher.Outcome.NO_PAGE_IMAGE);
@@ -82,19 +94,21 @@ final class VisualLessonStepLocator {
         List<VisualRegionCandidateSelector.Candidate> attachedCandidates = selected.stream()
                 .filter(candidate -> attachedPages.contains(candidate.pageNumber()))
                 .toList();
-        List<Claim> claims = claims(step);
+        List<Claim> claims = claims(steps);
         var guide = locator.locateGuideWithResult(new VisualRegionLocator.VisualLocationRequest(
-                section.title() + " · " + step.heading(),
+                section.title(),
                 claims,
                 attachedCandidates,
                 pages,
                 modelConfigurationOwner,
                 runId == null ? null : documentVersionId,
-                runId));
+                runId,
+                visualBudget));
         if (guide.regions().isEmpty()) return Result.rejected(outcomeFor(guide.diagnostic()));
         Set<UUID> evidenceIds = claims.stream().map(Claim::evidenceId).collect(Collectors.toSet());
+        List<VisualRegionLocator.LocatedRegion> accepted = new ArrayList<>();
         VisualLessonEnricher.Outcome rejected = null;
-        for (VisualRegionLocator.LocatedRegion candidate : guide.regions()) {
+        for (VisualRegionLocator.LocatedRegion candidate : guide.regions().stream().limit(visualBudget).toList()) {
             VisualRegionLocator.LocatedRegion region = candidate;
             if (cropPolicy.needsReaderViewport(region)) {
                 if (!cropPolicy.canExpandIntoReaderViewport(region)) {
@@ -104,27 +118,31 @@ final class VisualLessonStepLocator {
                 region = cropPolicy.expandIntoReaderViewport(region);
             }
             VisualLessonEnricher.Outcome rejection = rejectionFor(region, attachedCandidates, evidenceIds);
-            if (rejection == null && !supportsExactStep(region, step)) {
+            if (rejection == null && !supportsExactStep(region, steps)) {
                 rejection = VisualLessonEnricher.Outcome.REJECTED_STEP_MISMATCH;
             }
-            if (rejection == null) return Result.accepted(region);
-            rejected = rejection;
+            if (rejection == null) accepted.add(region);
+            else rejected = rejection;
         }
+        if (!accepted.isEmpty()) return Result.accepted(accepted);
         return Result.rejected(rejected == null ? VisualLessonEnricher.Outcome.REJECTED_UNKNOWN_EVIDENCE : rejected);
     }
 
-    private List<String> terms(LessonSection section, LessonStep step) {
+    private List<String> terms(LessonSection section, List<LessonStep> steps) {
         List<String> result = new ArrayList<>();
         result.add(section.title());
         result.addAll(section.coverageTags());
-        result.add(step.heading());
-        result.add(step.text());
+        steps.forEach(step -> {
+            result.add(step.heading());
+            result.add(step.text());
+        });
         return List.copyOf(result);
     }
 
-    private List<Claim> claims(LessonStep step) {
-        return new LinkedHashSet<>(step.sourceChunkIds()).stream()
-                .map(id -> new Claim(id, claimText(step), step.sourcePages(), step.position()))
+    private List<Claim> claims(List<LessonStep> steps) {
+        return steps.stream()
+                .flatMap(step -> new LinkedHashSet<>(step.sourceChunkIds()).stream()
+                        .map(id -> new Claim(id, claimText(step), step.sourcePages(), step.position())))
                 .toList();
     }
 
@@ -132,15 +150,16 @@ final class VisualLessonStepLocator {
         return "步骤 " + step.position() + "（" + step.heading() + "）：" + step.text();
     }
 
-    private boolean supportsExactStep(VisualRegionLocator.LocatedRegion region, LessonStep step) {
-        return region.supportedStepPositions().isEmpty() || region.supportedStepPositions().contains(step.position());
+    private boolean supportsExactStep(VisualRegionLocator.LocatedRegion region, List<LessonStep> steps) {
+        if (region.supportedStepPositions().isEmpty()) return steps.size() == 1;
+        Set<Integer> offeredPositions = steps.stream().map(LessonStep::position).collect(Collectors.toSet());
+        return region.supportedStepPositions().stream().allMatch(offeredPositions::contains);
     }
 
     private VisualLessonEnricher.Outcome rejectionFor(
             VisualRegionLocator.LocatedRegion region,
             List<VisualRegionCandidateSelector.Candidate> attachedCandidates,
             Set<UUID> evidenceIds) {
-        if (!cropPolicy.isCompactReaderCrop(region)) return VisualLessonEnricher.Outcome.REJECTED_WHOLE_PAGE;
         if (!cropPolicy.isReadableForPlayer(region)) return VisualLessonEnricher.Outcome.REJECTED_TOO_SMALL;
         if (region.visibleDescription().isBlank()) return VisualLessonEnricher.Outcome.REJECTED_MISSING_OBSERVATION;
         if (!cropPolicy.isUsefulPlayerVisual(region)) return VisualLessonEnricher.Outcome.REJECTED_NON_VISUAL;
@@ -152,7 +171,6 @@ final class VisualLessonStepLocator {
     private VisualLessonEnricher.Outcome outcomeFor(VisualRegionLocator.Diagnostic diagnostic) {
         return switch (diagnostic) {
             case NO_REGION -> VisualLessonEnricher.Outcome.LOCATOR_RETURNED_NONE;
-            case OVERSIZED_REGION -> VisualLessonEnricher.Outcome.MODEL_OVERSIZED_REGION;
             case SEMANTIC_REJECTED -> VisualLessonEnricher.Outcome.MODEL_SEMANTIC_REJECTED;
             case MODEL_UNAVAILABLE -> VisualLessonEnricher.Outcome.MODEL_UNAVAILABLE;
             case EXPLICIT_NO_REGION -> VisualLessonEnricher.Outcome.MODEL_EXPLICIT_NO_REGION;
@@ -167,13 +185,20 @@ final class VisualLessonStepLocator {
         };
     }
 
-    record Result(VisualRegionLocator.LocatedRegion region, VisualLessonEnricher.Outcome rejection) {
-        static Result accepted(VisualRegionLocator.LocatedRegion region) {
-            return new Result(region, null);
+    record Result(List<VisualRegionLocator.LocatedRegion> regions, VisualLessonEnricher.Outcome rejection) {
+        Result {
+            regions = regions == null ? List.of() : List.copyOf(regions);
+        }
+
+        static Result accepted(List<VisualRegionLocator.LocatedRegion> regions) {
+            if (regions == null || regions.isEmpty()) {
+                throw new IllegalArgumentException("accepted visual lesson plan needs at least one region");
+            }
+            return new Result(regions, null);
         }
 
         static Result rejected(VisualLessonEnricher.Outcome rejection) {
-            return new Result(null, rejection);
+            return new Result(List.of(), rejection);
         }
     }
 }

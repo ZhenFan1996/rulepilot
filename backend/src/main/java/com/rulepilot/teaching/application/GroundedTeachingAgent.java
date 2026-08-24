@@ -2,10 +2,10 @@ package com.rulepilot.teaching.application;
 
 import com.rulepilot.shared.AsyncContextPropagation;
 import com.rulepilot.assistant.AssistantReadTools;
-import com.rulepilot.assistant.AssistantReadTools.RuleEvidence;
 import com.rulepilot.assistant.AgentExecutionControl.ActivityType;
 import com.rulepilot.assistant.AgentExecutionControl.ActivityOutcome;
 import com.rulepilot.assistant.AgentExecutionStoppedException;
+import com.rulepilot.assistant.AssistantRuns.WorkloadDemand;
 import com.rulepilot.assistant.AuditedAgentInvocations;
 import com.rulepilot.assistant.EvidenceVerifier;
 import com.rulepilot.assistant.GeneratedContentCritic;
@@ -21,7 +21,6 @@ import com.rulepilot.teaching.domain.TeachingPlan;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -55,9 +54,8 @@ public class GroundedTeachingAgent {
             new TeachingBaseSectionPublicationPolicy();
     private final TeachingLessonAssemblyPolicy lessonAssembly = new TeachingLessonAssemblyPolicy();
     private final TeachingPublishedLessonReviewer publishedLessonReviewer;
-    private final int maxToolCalls;
+    private final TeachingRunWorkloadPolicy workloadPolicy;
     private final int baseSectionParallelism;
-    private final int baseMaxRetrievalQueriesPerSection;
 
     @Autowired
     public GroundedTeachingAgent(
@@ -68,7 +66,6 @@ public class GroundedTeachingAgent {
             AuditedAgentInvocations invocations,
             VisualRulebookPageFacts visualFacts,
             VisualRulebookPageCatalogModel visualCatalog,
-            @Value("${rulepilot.teaching.agent.max-tool-calls:72}") int maxToolCalls,
             @Value("${rulepilot.teaching.base-section-parallelism:3}") int baseSectionParallelism,
             @Value("${rulepilot.teaching.base-max-retrieval-queries-per-section:3}")
                     int baseMaxRetrievalQueriesPerSection,
@@ -88,9 +85,8 @@ public class GroundedTeachingAgent {
                 invocations,
                 sectionDraftComposer,
                 new TeachingReviewCorrectionPolicy());
-        this.maxToolCalls = Math.max(1, maxToolCalls);
+        this.workloadPolicy = new TeachingRunWorkloadPolicy(Math.max(1, baseMaxRetrievalQueriesPerSection));
         this.baseSectionParallelism = Math.max(1, Math.min(6, baseSectionParallelism));
-        this.baseMaxRetrievalQueriesPerSection = Math.max(1, baseMaxRetrievalQueriesPerSection);
     }
 
     public GroundedTeachingAgent(
@@ -101,7 +97,6 @@ public class GroundedTeachingAgent {
             AuditedAgentInvocations invocations,
             VisualRulebookPageFacts visualFacts,
             VisualRulebookPageCatalogModel visualCatalog,
-            int maxToolCalls,
             int baseSectionParallelism,
             int baseMaxRetrievalQueriesPerSection) {
         this(
@@ -112,7 +107,6 @@ public class GroundedTeachingAgent {
                 invocations,
                 visualFacts,
                 visualCatalog,
-                maxToolCalls,
                 baseSectionParallelism,
                 baseMaxRetrievalQueriesPerSection,
                 null);
@@ -126,7 +120,6 @@ public class GroundedTeachingAgent {
             AuditedAgentInvocations invocations,
             VisualRulebookPageFacts visualFacts,
             VisualRulebookPageCatalogModel visualCatalog,
-            int maxToolCalls,
             int baseSectionParallelism) {
         this(
                 tools,
@@ -136,7 +129,6 @@ public class GroundedTeachingAgent {
                 invocations,
                 visualFacts,
                 visualCatalog,
-                maxToolCalls,
                 baseSectionParallelism,
                 3);
     }
@@ -148,7 +140,6 @@ public class GroundedTeachingAgent {
             GeneratedContentCritic critic,
             AuditedAgentInvocations invocations,
             VisualRulebookPageFacts visualFacts,
-            int maxToolCalls,
             int baseSectionParallelism) {
         this(
                 tools,
@@ -158,7 +149,6 @@ public class GroundedTeachingAgent {
                 invocations,
                 visualFacts,
                 VisualRulebookPageCatalogModel.unavailable(),
-                maxToolCalls,
                 baseSectionParallelism,
                 3);
     }
@@ -169,7 +159,6 @@ public class GroundedTeachingAgent {
             EvidenceVerifier evidenceVerifier,
             GeneratedContentCritic critic,
             AuditedAgentInvocations invocations,
-            int maxToolCalls,
             int baseSectionParallelism) {
         this(
                 tools,
@@ -179,7 +168,6 @@ public class GroundedTeachingAgent {
                 invocations,
                 VisualRulebookPageFacts.empty(),
                 VisualRulebookPageCatalogModel.unavailable(),
-                maxToolCalls,
                 baseSectionParallelism,
                 3);
     }
@@ -189,8 +177,7 @@ public class GroundedTeachingAgent {
             TeachingLessonModel model,
             EvidenceVerifier evidenceVerifier,
             GeneratedContentCritic critic,
-            AuditedAgentInvocations invocations,
-            int maxToolCalls) {
+            AuditedAgentInvocations invocations) {
         this(
                 tools,
                 model,
@@ -199,7 +186,6 @@ public class GroundedTeachingAgent {
                 invocations,
                 VisualRulebookPageFacts.empty(),
                 VisualRulebookPageCatalogModel.unavailable(),
-                maxToolCalls,
                 3,
                 3);
     }
@@ -267,12 +253,9 @@ public class GroundedTeachingAgent {
         UUID lessonId = UUID.randomUUID();
         Instant createdAt = Instant.now();
         Map<String, LessonSection> reusable = reusableSections(plan, previousLesson);
-        int queriesPerTopic = baseQueryBudget(plan);
+        int queriesPerTopic = baseQueryBudget();
         List<LessonSection> sections = new ArrayList<>();
-        Set<Integer> invalidDraftPositions = new LinkedHashSet<>();
-        Set<Integer> missingEvidencePositions = new LinkedHashSet<>();
         List<TeachingSectionDraftCandidate> reviewCandidates = new ArrayList<>();
-        int retrievalToolCalls = 0;
         for (TeachingPlan.PlannedSection planned : plan.sections()) {
             SectionOutcome outcome = baseSection(
                     plan,
@@ -281,8 +264,6 @@ public class GroundedTeachingAgent {
                     reusable,
                     assistantRunId,
                     queriesPerTopic);
-            retrievalToolCalls += outcome.retrievalToolCalls();
-            trackFailure(outcome, invalidDraftPositions, missingEvidencePositions);
             if (outcome.reviewCandidate() != null
                     && outcome.section().evidenceStatus() == EvidenceStatus.CITED_DRAFT) {
                 reviewCandidates.add(outcome.reviewCandidate());
@@ -305,10 +286,7 @@ public class GroundedTeachingAgent {
                 reusable,
                 queriesPerTopic,
                 sections,
-                invalidDraftPositions,
-                missingEvidencePositions,
-                reviewCandidates,
-                retrievalToolCalls);
+                reviewCandidates);
     }
 
     IllustratedLesson continueBase(
@@ -364,10 +342,6 @@ public class GroundedTeachingAgent {
             }
         }
         IllustratedLesson firstPass = lesson(lessonId, plan, sections, createdAt);
-        if (firstPass.status() == LessonStatus.INCOMPLETE
-                && continuation.canRetryInvalidDrafts(maxToolCalls)) {
-            firstPass = retryInvalidDraftSections(continuation, progressPublisher);
-        }
         if (firstPass.status() == LessonStatus.DRAFT_READY && !continuation.reviewCandidates.isEmpty()) {
             publishedLessonReviewer.review(
                     plan,
@@ -380,59 +354,6 @@ public class GroundedTeachingAgent {
         return firstPass;
     }
 
-    private IllustratedLesson retryInvalidDraftSections(
-            BaseLessonContinuation continuation,
-            Consumer<IllustratedLesson> progressPublisher) {
-        List<Integer> positions = List.copyOf(continuation.invalidDraftPositions);
-        invocations.record(
-                continuation.assistantRunId,
-                ActivityType.VALIDATION,
-                "retryIncompleteTeachingSections",
-                ActivityOutcome.SUCCEEDED,
-                "Retrying " + positions.size() + " cited sections whose generated draft did not pass validation");
-        for (int position : positions) {
-            int remainingToolBudget = maxToolCalls - continuation.retrievalToolCalls;
-            if (remainingToolBudget <= 0) break;
-            TeachingPlan.PlannedSection planned = continuation.plan.sections().get(position - 1);
-            SectionOutcome outcome = baseSection(
-                    continuation.plan,
-                    planned,
-                    lessonAssembly.continuityContext(continuation.sections),
-                    continuation.reusableSections,
-                    continuation.assistantRunId,
-                    Math.min(continuation.queriesPerTopic, remainingToolBudget),
-                    false);
-            continuation.replace(outcome);
-            publishProgress(
-                    progressPublisher,
-                    continuation.lessonId,
-                    continuation.plan,
-                    continuation.sections,
-                    continuation.createdAt);
-            recordPublication(
-                    continuation.assistantRunId,
-                    planned,
-                    outcome.publicationOutcome(),
-                    outcome.publicationCategory());
-        }
-        return lesson(
-                continuation.lessonId,
-                continuation.plan,
-                continuation.sections,
-                continuation.createdAt);
-    }
-
-    private static void trackFailure(
-            SectionOutcome outcome,
-            Set<Integer> invalidDraftPositions,
-            Set<Integer> missingEvidencePositions) {
-        if (outcome.failure() == SectionFailure.INVALID_DRAFT) {
-            invalidDraftPositions.add(outcome.position());
-        } else if (outcome.failure() == SectionFailure.MISSING_EVIDENCE) {
-            missingEvidencePositions.add(outcome.position());
-        }
-    }
-
     static final class BaseLessonContinuation {
         private final TeachingPlan plan;
         private final UUID assistantRunId;
@@ -441,10 +362,7 @@ public class GroundedTeachingAgent {
         private final Map<String, LessonSection> reusableSections;
         private final int queriesPerTopic;
         private final List<LessonSection> sections;
-        private final Set<Integer> invalidDraftPositions;
-        private final Set<Integer> missingEvidencePositions;
         private final List<TeachingSectionDraftCandidate> reviewCandidates;
-        private int retrievalToolCalls;
 
         private BaseLessonContinuation(
                 TeachingPlan plan,
@@ -454,10 +372,7 @@ public class GroundedTeachingAgent {
                 Map<String, LessonSection> reusableSections,
                 int queriesPerTopic,
                 List<LessonSection> sections,
-                Set<Integer> invalidDraftPositions,
-                Set<Integer> missingEvidencePositions,
-                List<TeachingSectionDraftCandidate> reviewCandidates,
-                int retrievalToolCalls) {
+                List<TeachingSectionDraftCandidate> reviewCandidates) {
             this.plan = plan;
             this.assistantRunId = assistantRunId;
             this.lessonId = lessonId;
@@ -465,10 +380,7 @@ public class GroundedTeachingAgent {
             this.reusableSections = reusableSections;
             this.queriesPerTopic = queriesPerTopic;
             this.sections = sections;
-            this.invalidDraftPositions = invalidDraftPositions;
-            this.missingEvidencePositions = missingEvidencePositions;
             this.reviewCandidates = reviewCandidates;
-            this.retrievalToolCalls = retrievalToolCalls;
         }
 
         boolean hasRemainingWork() {
@@ -476,28 +388,12 @@ public class GroundedTeachingAgent {
         }
 
         private void track(SectionOutcome outcome) {
-            retrievalToolCalls += outcome.retrievalToolCalls();
-            trackFailure(outcome, invalidDraftPositions, missingEvidencePositions);
             if (outcome.reviewCandidate() != null
                     && outcome.section().evidenceStatus() == EvidenceStatus.CITED_DRAFT) {
                 reviewCandidates.add(outcome.reviewCandidate());
             }
         }
 
-        private void replace(SectionOutcome outcome) {
-            int position = outcome.position();
-            sections.set(position - 1, outcome.section());
-            invalidDraftPositions.remove(position);
-            missingEvidencePositions.remove(position);
-            reviewCandidates.removeIf(candidate -> candidate.planned().position() == position);
-            track(outcome);
-        }
-
-        private boolean canRetryInvalidDrafts(int maxToolCalls) {
-            return missingEvidencePositions.isEmpty()
-                    && !invalidDraftPositions.isEmpty()
-                    && maxToolCalls - retrievalToolCalls >= invalidDraftPositions.size();
-        }
     }
 
     private SectionOutcome baseSection(
@@ -537,9 +433,8 @@ public class GroundedTeachingAgent {
                 allowValidationRevision);
     }
 
-    private int baseQueryBudget(TeachingPlan plan) {
-        int shareOfGlobalBudget = Math.max(1, maxToolCalls / plan.sections().size());
-        return Math.min(baseMaxRetrievalQueriesPerSection, shareOfGlobalBudget);
+    private int baseQueryBudget() {
+        return workloadPolicy.maxRetrievalQueriesPerSection();
     }
 
     private SectionOutcome generateSection(
@@ -552,11 +447,13 @@ public class GroundedTeachingAgent {
             int sectionIndex,
             GenerationMode mode,
             boolean allowValidationRevision) {
+        TeachingModelCallBudget modelCallBudget = TeachingModelCallBudget.section();
         LessonSection reusable = reusableSections.get(planned.topicKey());
         if (reusable != null) {
             return new SectionOutcome(
-                    planned.position(), planned, reusable, null, 0,
-                    ActivityOutcome.SUCCEEDED, "REUSED_VERIFIED_SECTION", SectionFailure.NONE);
+                    planned.position(), planned, reusable, null,
+                    ActivityOutcome.SUCCEEDED,
+                    "REUSED_VERIFIED_SECTION");
         }
         TeachingSectionEvidenceRetriever.Result resolution = evidenceRetriever.retrieve(
                 plan, planned, assistantRunId, queryBudget, mode.bindVisualPageEvidence());
@@ -572,18 +469,38 @@ public class GroundedTeachingAgent {
                         optionalRefinementFailure.getMessage());
             }
         }
+        return composeResolvedSection(
+                plan,
+                planned,
+                priorSections,
+                assistantRunId,
+                resolution,
+                sectionIndex,
+                mode,
+                allowValidationRevision,
+                modelCallBudget);
+    }
+
+    private SectionOutcome composeResolvedSection(
+            TeachingPlan plan,
+            TeachingPlan.PlannedSection planned,
+            List<PriorSectionContext> priorSections,
+            UUID assistantRunId,
+            TeachingSectionEvidenceRetriever.Result resolution,
+            int sectionIndex,
+            GenerationMode mode,
+            boolean allowValidationRevision,
+            TeachingModelCallBudget modelCallBudget) {
         if (!resolution.verified()) {
             return new SectionOutcome(
                     planned.position(),
                     planned,
                     lessonAssembly.insufficient(planned),
                     null,
-                    resolution.toolCalls(),
                     ActivityOutcome.REJECTED,
                     resolution.state() == TeachingSectionEvidenceRetriever.State.EMPTY
                             ? mode.noEvidenceCategory()
-                            : mode.invalidEvidenceCategory(),
-                    SectionFailure.MISSING_EVIDENCE);
+                            : mode.invalidEvidenceCategory());
         }
         try {
             TeachingSectionDraftCandidate composed = sectionDraftComposer.compose(
@@ -594,20 +511,23 @@ public class GroundedTeachingAgent {
                     assistantRunId,
                     sectionIndex,
                     mode.includeVisualEvidence() && planned.visualEvidenceRecommended(),
-                    allowValidationRevision);
+                    allowValidationRevision,
+                    modelCallBudget);
             LessonSection published = mode.publishAfterDeterministicValidation()
                     ? basePublication.publish(composed)
                     : composed.section();
             return new SectionOutcome(
-                    planned.position(), planned, published, composed, resolution.toolCalls(),
-                    ActivityOutcome.SUCCEEDED, mode.publishedCategory(), SectionFailure.NONE);
+                    planned.position(), planned, published, composed,
+                    ActivityOutcome.SUCCEEDED,
+                    mode.publishedCategory());
         } catch (AgentExecutionStoppedException stopped) {
             throw stopped;
         } catch (RuntimeException invalidDraft) {
             log.warn("Teaching section {} was withheld: {}", planned.topicKey(), invalidDraft.getMessage());
             return new SectionOutcome(
-                    planned.position(), planned, lessonAssembly.insufficient(planned), null, resolution.toolCalls(),
-                    ActivityOutcome.REJECTED, mode.withheldCategory(), SectionFailure.INVALID_DRAFT);
+                    planned.position(), planned, lessonAssembly.insufficient(planned), null,
+                    ActivityOutcome.REJECTED,
+                    mode.withheldCategory());
         }
     }
 
@@ -634,28 +554,18 @@ public class GroundedTeachingAgent {
         List<LessonSection> sections = new ArrayList<>();
         List<TeachingSectionDraftCandidate> reviewCandidates = new ArrayList<>();
         Map<String, LessonSection> reusableSections = reusableSections(plan, previousLesson);
-        int toolCalls = 0;
-        int queriesPerTopic = Math.max(1, Math.min(6, maxToolCalls / plan.sections().size()));
+        int queriesPerTopic = baseQueryBudget();
         for (TeachingPlan.PlannedSection planned : plan.sections()) {
-            boolean reusable = reusableSections.containsKey(planned.topicKey());
-            if (!reusable && toolCalls >= maxToolCalls) {
-                log.warn("Teaching Agent tool budget exhausted before topic {}", planned.topicKey());
-                sections.add(lessonAssembly.insufficient(planned));
-                publishProgress(progressPublisher, lessonId, plan, sections, createdAt);
-                recordPublication(assistantRunId, planned, ActivityOutcome.REJECTED, "TOOL_BUDGET_EXHAUSTED");
-                continue;
-            }
             SectionOutcome outcome = generateSection(
                     plan,
                     planned,
                     lessonAssembly.continuityContext(sections),
                     reusableSections,
                     assistantRunId,
-                    Math.min(queriesPerTopic, maxToolCalls - toolCalls),
+                    queriesPerTopic,
                     sections.size(),
                     GenerationMode.COMPATIBILITY_COMPLETE,
                     true);
-            toolCalls += outcome.retrievalToolCalls();
             sections.add(outcome.section());
             if (outcome.reviewCandidate() != null) reviewCandidates.add(outcome.reviewCandidate());
             publishProgress(progressPublisher, lessonId, plan, sections, createdAt);
@@ -746,15 +656,11 @@ public class GroundedTeachingAgent {
             TeachingPlan.PlannedSection planned,
             LessonSection section,
             TeachingSectionDraftCandidate reviewCandidate,
-            int retrievalToolCalls,
             ActivityOutcome publicationOutcome,
-            String publicationCategory,
-            SectionFailure failure) {}
+            String publicationCategory) {}
 
-    private enum SectionFailure {
-        NONE,
-        MISSING_EVIDENCE,
-        INVALID_DRAFT
+    WorkloadDemand workload(TeachingPlan plan) {
+        return workloadPolicy.demand(plan);
     }
 
     private int estimateTokens(String value) {

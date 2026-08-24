@@ -50,7 +50,6 @@ services:
       VISUAL_ENRICHMENT_BACKGROUND_CORE_POOL_SIZE: "1"
       VISUAL_ENRICHMENT_BACKGROUND_MAX_POOL_SIZE: "1"
       VISUAL_ENRICHMENT_BACKGROUND_QUEUE_CAPACITY: "3"
-      VISUAL_ENRICHMENT_REQUEST_PARALLELISM: "1"
       # Each source page has an independent provider, validation, and persistence boundary. Ten bounded calls cover a
       # normal rulebook window without opening an unbounded provider queue.
       VISUAL_REQUEST_PARALLELISM: ${PRODUCTION_VISUAL_REQUEST_PARALLELISM:-10}
@@ -60,7 +59,7 @@ services:
       # gameplay chapters. The bounded request pool protects reading, upload, and answer traffic while the single
       # enrichment worker prevents several lessons from retaining rendered-page buffers at once.
       VISUAL_MAX_SECTIONS: ${PRODUCTION_VISUAL_MAX_SECTIONS:-6}
-      VISUAL_MAX_STEPS_PER_SECTION: ${PRODUCTION_VISUAL_MAX_STEPS_PER_SECTION:-1}
+      VISUAL_MAX_RESULTS_PER_SECTION: ${PRODUCTION_VISUAL_MAX_RESULTS_PER_SECTION:-6}
       ANSWER_RATE_PROVIDER_CONCURRENCY: ${PRODUCTION_ANSWER_PROVIDER_CONCURRENCY:-2}
       SERVER_TOMCAT_THREADS_MAX: ${PRODUCTION_TOMCAT_MAX_THREADS:-16}
       SERVER_TOMCAT_THREADS_MIN_SPARE: "4"

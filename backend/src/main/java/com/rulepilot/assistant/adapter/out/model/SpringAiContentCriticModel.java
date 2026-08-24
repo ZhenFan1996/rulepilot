@@ -88,20 +88,10 @@ public class SpringAiContentCriticModel implements ContentCriticModel {
         if (usesFake(ownerUsername)) {
             throw new IllegalStateException("a real critic model is required when model review is enabled");
         }
-        RuntimeException firstFailure;
-        try {
-            return critiqueOnce(request, "", ownerUsername);
-        } catch (RuntimeException exception) {
-            firstFailure = exception;
-        }
-        try {
-            String repair = prompts.criticOutputRepair();
-            if (repair == null || repair.isBlank()) repair = prompts.structuredOutputRepair();
-            return critiqueOnce(request, repair, ownerUsername);
-        } catch (RuntimeException secondFailure) {
-            secondFailure.addSuppressed(firstFailure);
-            throw secondFailure;
-        }
+        // The calling workflow owns recovery and fallback. Retrying here would make one budget unit issue two
+        // provider calls and would also misclassify transport, quota, timeout, and cancellation failures as
+        // output-contract defects.
+        return critiqueOnce(request, "", ownerUsername);
     }
 
     private CritiqueDraft critiqueOnce(

@@ -4,12 +4,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.rulepilot.assistant.GeneratedContentCritic.Claim;
-import com.rulepilot.assistant.GeneratedContentCritic.ClaimAspect;
 import com.rulepilot.assistant.GeneratedContentCritic.ContentType;
 import com.rulepilot.assistant.GeneratedContentCritic.Evidence;
 import com.rulepilot.assistant.GeneratedContentCritic.ReviewMode;
@@ -171,7 +169,7 @@ class SpringAiContentCriticModelTest {
     }
 
     @Test
-    void givesAnEmptyCriticResponseOneFinalBoundedSchemaRetry() {
+    void leavesAnEmptyCriticResponseToTheAuditedWorkflowWithoutAHiddenRetry() {
         RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
         ChatModel chatModel = mock(ChatModel.class);
         VersionedAgentPrompts prompts = mock(VersionedAgentPrompts.class);
@@ -197,20 +195,20 @@ class SpringAiContentCriticModelTest {
                 configuration, prompts);
         UUID evidenceId = UUID.randomUUID();
 
-        var result = model.critique(new ReviewRequest(
-                UUID.randomUUID(),
-                ContentType.LESSON,
-                ReviewMode.POST_PUBLICATION,
-                new TaskContext("Explain the ending.", "All terminal branches.", 1),
-                List.of(new Claim(0, "The game ends after the last round.", List.of(evidenceId))),
-                List.of(new Evidence(evidenceId, "After the last round, the game ends."))));
-
-        assertThat(result.issues()).isEmpty();
-        verify(chatModel, times(2)).call(any(Prompt.class));
+        assertThatThrownBy(() -> model.critique(new ReviewRequest(
+                        UUID.randomUUID(),
+                        ContentType.LESSON,
+                        ReviewMode.POST_PUBLICATION,
+                        new TaskContext("Explain the ending.", "All terminal branches.", 1),
+                        List.of(new Claim(0, "The game ends after the last round.", List.of(evidenceId))),
+                        List.of(new Evidence(evidenceId, "After the last round, the game ends.")))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("No content to map");
+        verify(chatModel).call(any(Prompt.class));
     }
 
     @Test
-    void givesAnInterruptedResponseReadOneFinalBoundedSchemaRetry() {
+    void doesNotMisclassifyAnInterruptedResponseAsASchemaRepair() {
         RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
         ChatModel chatModel = mock(ChatModel.class);
         VersionedAgentPrompts prompts = mock(VersionedAgentPrompts.class);
@@ -236,20 +234,20 @@ class SpringAiContentCriticModelTest {
                 configuration, prompts);
         UUID evidenceId = UUID.randomUUID();
 
-        var result = model.critique(new ReviewRequest(
-                UUID.randomUUID(),
-                ContentType.LESSON,
-                ReviewMode.POST_PUBLICATION,
-                new TaskContext("Explain the ending.", "All terminal branches.", 1),
-                List.of(new Claim(0, "The game ends after the last round.", List.of(evidenceId))),
-                List.of(new Evidence(evidenceId, "After the last round, the game ends."))));
-
-        assertThat(result.issues()).isEmpty();
-        verify(chatModel, times(2)).call(any(Prompt.class));
+        assertThatThrownBy(() -> model.critique(new ReviewRequest(
+                        UUID.randomUUID(),
+                        ContentType.LESSON,
+                        ReviewMode.POST_PUBLICATION,
+                        new TaskContext("Explain the ending.", "All terminal branches.", 1),
+                        List.of(new Claim(0, "The game ends after the last round.", List.of(evidenceId))),
+                        List.of(new Evidence(evidenceId, "After the last round, the game ends.")))))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Error reading response");
+        verify(chatModel).call(any(Prompt.class));
     }
 
     @Test
-    void givesAnIncompleteIssueSchemaOneFinalBoundedRetry() {
+    void rejectsAnIncompleteIssueSchemaWithoutAnUnauditedProviderRetry() {
         RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
         ChatModel chatModel = mock(ChatModel.class);
         VersionedAgentPrompts prompts = mock(VersionedAgentPrompts.class);
@@ -280,25 +278,19 @@ class SpringAiContentCriticModelTest {
                 configuration, prompts);
         UUID evidenceId = UUID.randomUUID();
 
-        var result = model.critique(new ReviewRequest(
-                UUID.randomUUID(),
-                ContentType.LESSON,
-                ReviewMode.ATOMIC_CONFIRMATION,
-                new TaskContext("Confirm one candidate.", "1=[UNSUPPORTED_CLAIM]", 1),
-                List.of(new Claim(1, "Claim.", List.of(evidenceId))),
-                List.of(new Evidence(evidenceId, "Evidence."))));
-
-        assertThat(result.issues()).isEmpty();
-        verify(chatModel, times(2)).call(any(Prompt.class));
-        ArgumentCaptor<Prompt> prompt = ArgumentCaptor.forClass(Prompt.class);
-        verify(chatModel, times(2)).call(prompt.capture());
-        assertThat(prompt.getAllValues().getLast().getInstructions())
-                .extracting(message -> message.getText())
-                .anyMatch(text -> text.contains("every retained issue requires a type"));
+        assertThatThrownBy(() -> model.critique(new ReviewRequest(
+                        UUID.randomUUID(),
+                        ContentType.LESSON,
+                        ReviewMode.ATOMIC_CONFIRMATION,
+                        new TaskContext("Confirm one candidate.", "1=[UNSUPPORTED_CLAIM]", 1),
+                        List.of(new Claim(1, "Claim.", List.of(evidenceId))),
+                        List.of(new Evidence(evidenceId, "Evidence.")))))
+                .isInstanceOf(IllegalArgumentException.class);
+        verify(chatModel).call(any(Prompt.class));
     }
 
     @Test
-    void repairsAConfirmedLessonDefectThatOmitsItsClaimAspect() {
+    void rejectsAConfirmedDefectMissingItsClaimAspectWithoutAHiddenRetry() {
         RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
         ChatModel chatModel = mock(ChatModel.class);
         VersionedAgentPrompts prompts = mock(VersionedAgentPrompts.class);
@@ -330,23 +322,19 @@ class SpringAiContentCriticModelTest {
                 configuration, prompts);
         UUID evidenceId = UUID.randomUUID();
 
-        var result = model.critique(new ReviewRequest(
-                UUID.randomUUID(),
-                ContentType.LESSON,
-                ReviewMode.ATOMIC_CONFIRMATION,
-                new TaskContext("Confirm one opaque procedure.", "1=[CONTRADICTION/TIMING]", 1),
-                List.of(new Claim(1, "The vek keeper seals the luma after the interval.", List.of(evidenceId))),
-                List.of(new Evidence(evidenceId, "The vek keeper seals the luma during the interval."))));
-
-        assertThat(result.issues()).singleElement().satisfies(issue -> {
-            assertThat(issue.claimAspect()).isEqualTo(ClaimAspect.TIMING);
-            assertThat(issue.evidenceIds()).containsExactly(evidenceId);
-        });
-        verify(chatModel, times(2)).call(any(Prompt.class));
+        assertThatThrownBy(() -> model.critique(new ReviewRequest(
+                        UUID.randomUUID(),
+                        ContentType.LESSON,
+                        ReviewMode.ATOMIC_CONFIRMATION,
+                        new TaskContext("Confirm one opaque procedure.", "1=[CONTRADICTION/TIMING]", 1),
+                        List.of(new Claim(1, "The vek keeper seals the luma after the interval.", List.of(evidenceId))),
+                        List.of(new Evidence(evidenceId, "The vek keeper seals the luma during the interval.")))))
+                .isInstanceOf(IllegalArgumentException.class);
+        verify(chatModel).call(any(Prompt.class));
     }
 
     @Test
-    void repairsAConfirmedLessonDefectThatHasNoClaimBoundEvidence() {
+    void rejectsAConfirmedDefectWithoutClaimBoundEvidenceWithoutAHiddenRetry() {
         RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
         ChatModel chatModel = mock(ChatModel.class);
         VersionedAgentPrompts prompts = mock(VersionedAgentPrompts.class);
@@ -374,16 +362,15 @@ class SpringAiContentCriticModelTest {
                 configuration, prompts);
         UUID evidenceId = UUID.randomUUID();
 
-        var result = model.critique(new ReviewRequest(
-                UUID.randomUUID(),
-                ContentType.LESSON,
-                ReviewMode.POST_PUBLICATION,
-                new TaskContext("Teach one opaque procedure.", "Preserve its actor.", 1),
-                List.of(new Claim(1, "The toro keeper opens the nari.", List.of(evidenceId))),
-                List.of(new Evidence(evidenceId, "The vek keeper opens the nari."))));
-
-        assertThat(result.issues()).isEmpty();
-        verify(chatModel, times(2)).call(any(Prompt.class));
+        assertThatThrownBy(() -> model.critique(new ReviewRequest(
+                        UUID.randomUUID(),
+                        ContentType.LESSON,
+                        ReviewMode.POST_PUBLICATION,
+                        new TaskContext("Teach one opaque procedure.", "Preserve its actor.", 1),
+                        List.of(new Claim(1, "The toro keeper opens the nari.", List.of(evidenceId))),
+                        List.of(new Evidence(evidenceId, "The vek keeper opens the nari.")))))
+                .isInstanceOf(IllegalArgumentException.class);
+        verify(chatModel).call(any(Prompt.class));
     }
 
     @Test

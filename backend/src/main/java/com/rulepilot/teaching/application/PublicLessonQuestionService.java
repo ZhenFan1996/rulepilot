@@ -17,6 +17,8 @@ import org.springframework.stereotype.Service;
 @Profile("!test")
 public class PublicLessonQuestionService {
 
+    private static final int MAX_ANSWER_VISUAL_AIDS = 6;
+
     private final PublicLessonReader lessons;
     private final RuleAnswering answers;
 
@@ -67,25 +69,18 @@ public class PublicLessonQuestionService {
             Set<Integer> citedPages,
             Set<UUID> citedEvidenceIds,
             PlayerLocale language) {
-        return relevantVisualSteps(lesson, citedPages, citedEvidenceIds)
-                .stream()
-                .map(step -> new VisualAid(visibleFocus(step.visualFocus(), language), visibleStepLabel(step, language)))
-                .toList();
-    }
-
-    private List<LessonStep> relevantVisualSteps(
-            PublicLessonReader.PublicLesson lesson,
-            Set<Integer> citedPages,
-            Set<UUID> citedEvidenceIds) {
         if (citedEvidenceIds.isEmpty()) return List.of();
         return lesson.lesson().sections().stream()
                 .flatMap(section -> section.steps().stream())
-                .filter(step -> step.visualFocus() != null)
                 .filter(step -> step.sourcePages().stream().anyMatch(citedPages::contains))
-                .filter(step -> citedPages.contains(step.visualFocus().pageNumber()))
                 .filter(step -> sharesCitedEvidence(step, citedEvidenceIds))
-                .sorted(java.util.Comparator.comparingInt(LessonStep::position))
-                .limit(1)
+                .flatMap(step -> step.visualFoci().stream().map(focus -> new OwnedVisual(step, focus)))
+                .filter(owned -> citedPages.contains(owned.focus().pageNumber()))
+                .sorted(java.util.Comparator.comparingInt(owned -> owned.step().position()))
+                .limit(MAX_ANSWER_VISUAL_AIDS)
+                .map(owned -> new VisualAid(
+                        visibleFocus(owned.focus(), language),
+                        visibleStepLabel(owned.step(), language)))
                 .toList();
     }
 
@@ -98,7 +93,8 @@ public class PublicLessonQuestionService {
                 source.x(),
                 source.y(),
                 source.width(),
-                source.height());
+                source.height(),
+                source.sourceKind());
     }
 
     private String visibleStepLabel(LessonStep step, PlayerLocale language) {
@@ -142,6 +138,8 @@ public class PublicLessonQuestionService {
     }
 
     public record VisualAid(VisualFocus visualFocus, String relatedStep) {}
+
+    private record OwnedVisual(LessonStep step, VisualFocus focus) {}
 
     public record Example(String heading, String text, List<Integer> sourcePages) {
         public Example {

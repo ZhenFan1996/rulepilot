@@ -47,6 +47,17 @@ interface IllustratedLesson {
   sections: LessonSection[]
 }
 
+interface LessonVisualFocus {
+  pageNumber: number
+  label: string
+  visibleDescription?: string
+  x: number
+  y: number
+  width: number
+  height: number
+  sourceKind?: 'FULL_PAGE' | 'PAGE_REGION' | 'EMBEDDED_AUTHOR_IMAGE'
+}
+
 interface LessonSection {
   position: number
   topicKey: string
@@ -64,15 +75,8 @@ interface LessonSection {
     kind: 'UNDERSTAND' | 'DO' | 'EXAMPLE' | 'WATCH' | 'CHECK' | 'VISUAL' | 'FLOW' | 'LEDGER' | 'REFERENCE_CARD' | 'LIMIT'
     text: string
     sourcePages: number[]
-    visualFocus: {
-      pageNumber: number
-      label: string
-      visibleDescription?: string
-      x: number
-      y: number
-      width: number
-      height: number
-    } | null
+    visualFocus: LessonVisualFocus | null
+    visualFoci?: LessonVisualFocus[]
   }>
 }
 

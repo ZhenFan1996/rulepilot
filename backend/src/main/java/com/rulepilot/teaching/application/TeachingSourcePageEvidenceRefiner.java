@@ -22,7 +22,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 
-/** Completes validated planned-page evidence through one scope-bound, audited canonical read. */
+/** Completes validated planned-page evidence from a proven exact-page observation or one audited canonical read. */
 @Service
 @Profile("!test")
 public class TeachingSourcePageEvidenceRefiner implements TeachingEvidenceRefiner {
@@ -58,37 +58,78 @@ public class TeachingSourcePageEvidenceRefiner implements TeachingEvidenceRefine
         if (scopes.create(plan.createdBy(), plan.documentVersionId(), assistantRunId).isEmpty()) return deterministic;
         List<Integer> plannedSourcePages = plannedSourcePages(planned);
         if (plannedSourcePages.isEmpty()) return deterministic;
+        Set<Integer> allowedPages = Set.copyOf(plannedSourcePages);
 
-        List<RuleEvidence> observed;
-        try {
-            observed = invocations.invoke(
-                    assistantRunId,
-                    ActivityType.TOOL,
-                    operationName(planned.position()),
-                    plannedSourcePages.size(),
-                    "Validated teaching source pages read",
-                    () -> tools.readRuleEvidencePages(
-                                    plan.documentVersionId(), Set.copyOf(plannedSourcePages), false)
-                            .stream()
-                            .limit(MAX_OBSERVED_EVIDENCE)
-                            .toList(),
-                    this::evidenceTokens);
-        } catch (AgentExecutionStoppedException stopped) {
-            throw stopped;
-        } catch (RuntimeException failure) {
-            LOGGER.warn(
-                    "Teaching source-page evidence read failed for section {}; preserving deterministic evidence",
-                    planned.position());
-            return new TeachingSectionEvidenceRetriever.Result(
-                    deterministic.evidence(), deterministic.toolCalls() + 1, deterministic.state());
+        var reusableObservation = deterministic.canonicalPageObservation()
+                .filter(observation -> observation.assistantRunId().equals(assistantRunId))
+                .filter(observation -> observation.documentVersionId().equals(plan.documentVersionId()))
+                .filter(observation -> observation.requestedPages().equals(allowedPages));
+        if (reusableObservation.isPresent()) {
+            List<RuleEvidence> observed = reusableObservation.orElseThrow().evidence().stream()
+                    .limit(MAX_OBSERVED_EVIDENCE)
+                    .toList();
+            return mergeCanonicalEvidence(
+                    plan.documentVersionId(),
+                    planned,
+                    deterministic,
+                    observed,
+                    allowedPages,
+                    deterministic.toolCalls());
         }
+
+        List<RuleEvidence> observed = new ArrayList<>();
+        int totalToolCalls = deterministic.toolCalls();
+        List<Set<Integer>> batches = TeachingVisualEvidenceResolver.pageReadBatches(plannedSourcePages);
+        int batchNumber = 0;
+        for (Set<Integer> batch : batches) {
+            batchNumber++;
+            totalToolCalls++;
+            try {
+                observed.addAll(invocations.invoke(
+                        assistantRunId,
+                        ActivityType.TOOL,
+                        operationName(planned.position(), batchNumber, batches.size()),
+                        batch.size(),
+                        "Validated teaching source pages read",
+                        () -> tools.readRuleEvidencePages(plan.documentVersionId(), batch, false),
+                        this::evidenceTokens));
+            } catch (AgentExecutionStoppedException stopped) {
+                throw stopped;
+            } catch (RuntimeException failure) {
+                LOGGER.warn(
+                        "Teaching source-page evidence read failed for section {} batch {}; retaining completed page reads",
+                        planned.position(),
+                        batchNumber);
+                if (observed.isEmpty()) {
+                    return new TeachingSectionEvidenceRetriever.Result(
+                            deterministic.evidence(), totalToolCalls, deterministic.state());
+                }
+                return mergeCanonicalEvidence(
+                        plan.documentVersionId(),
+                        planned,
+                        deterministic,
+                        observed.stream().limit(MAX_OBSERVED_EVIDENCE).toList(),
+                        allowedPages,
+                        totalToolCalls);
+            }
+        }
+        observed = observed.stream().limit(MAX_OBSERVED_EVIDENCE).toList();
         return mergeCanonicalEvidence(
                 plan.documentVersionId(),
                 planned,
                 deterministic,
                 observed,
-                Set.copyOf(plannedSourcePages),
-                deterministic.toolCalls() + 1);
+                allowedPages,
+                totalToolCalls);
+    }
+
+    static int maximumToolCalls(TeachingPlan plan, TeachingPlan.PlannedSection planned) {
+        if (plan == null || planned == null
+                || ProgressiveVisualTeachingPlanPolicy.isProgressive(plan)
+                || planned.sourcePageNumbers().isEmpty()) {
+            return 0;
+        }
+        return TeachingVisualEvidenceResolver.maximumPageReadToolCalls(planned);
     }
 
     private TeachingSectionEvidenceRetriever.Result mergeCanonicalEvidence(
@@ -245,7 +286,6 @@ public class TeachingSourcePageEvidenceRefiner implements TeachingEvidenceRefine
     private List<Integer> plannedSourcePages(TeachingPlan.PlannedSection planned) {
         return planned.sourcePageNumbers().stream()
                 .distinct()
-                .limit(5)
                 .toList();
     }
 
@@ -301,7 +341,8 @@ public class TeachingSourcePageEvidenceRefiner implements TeachingEvidenceRefine
         return value == null ? 0 : Math.max(1, (value.length() + 3) / 4);
     }
 
-    private String operationName(int sectionPosition) {
-        return "readTeachingSourcePages|" + sectionPosition;
+    private String operationName(int sectionPosition, int batchNumber, int batchCount) {
+        String operation = "readTeachingSourcePages|" + sectionPosition;
+        return batchCount == 1 ? operation : operation + "|" + batchNumber;
     }
 }

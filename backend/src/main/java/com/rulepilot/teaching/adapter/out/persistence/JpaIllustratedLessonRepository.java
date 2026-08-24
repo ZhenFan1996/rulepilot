@@ -401,6 +401,7 @@ class IllustratedLessonStepEntity {
     @Column(name = "source_pages", nullable = false, columnDefinition = "text") String sourcePages;
     @Column(name = "source_chunk_ids", nullable = false, columnDefinition = "text") String sourceChunkIds;
     @Column(name = "rule_facts_json", nullable = false, columnDefinition = "text") String ruleFactsJson = "[]";
+    @Column(name = "visual_foci_json", nullable = false, columnDefinition = "text") String visualFociJson = "[]";
     @Column(name = "visual_page") Integer visualPage;
     @Column(name = "visual_label", columnDefinition = "text") String visualLabel;
     @Column(name = "visual_description", nullable = false, columnDefinition = "text") String visualDescription = "";
@@ -421,6 +422,7 @@ class IllustratedLessonStepEntity {
         sourcePages = step.sourcePages().stream().map(String::valueOf).collect(Collectors.joining(","));
         sourceChunkIds = step.sourceChunkIds().stream().map(UUID::toString).collect(Collectors.joining(","));
         ruleFactsJson = writeRuleFacts(step.ruleFacts());
+        visualFociJson = writeVisualFoci(step.visualFoci());
         if (step.visualFocus() != null) {
             visualPage = step.visualFocus().pageNumber();
             visualLabel = step.visualFocus().label();
@@ -439,6 +441,17 @@ class IllustratedLessonStepEntity {
         List<UUID> chunkIds = sourceChunkIds.isBlank()
                 ? List.of()
                 : Arrays.stream(sourceChunkIds.split(",")).map(UUID::fromString).toList();
+        List<VisualFocus> visualFoci = readVisualFoci(visualFociJson);
+        if (visualFoci.isEmpty() && visualPage != null) {
+            visualFoci = List.of(new VisualFocus(
+                    visualPage,
+                    visualLabel,
+                    visualDescription,
+                    visualX,
+                    visualY,
+                    visualWidth,
+                    visualHeight));
+        }
         return new LessonStep(
                 position,
                 stepHeading,
@@ -447,16 +460,8 @@ class IllustratedLessonStepEntity {
                 pages,
                 chunkIds,
                 readRuleFacts(ruleFactsJson),
-                visualPage == null
-                        ? null
-                        : new VisualFocus(
-                                visualPage,
-                                visualLabel,
-                                visualDescription,
-                                visualX,
-                                visualY,
-                                visualWidth,
-                                visualHeight));
+                visualFoci.isEmpty() ? null : visualFoci.getFirst(),
+                visualFoci);
     }
 
     private static String writeRuleFacts(List<RuleFact> facts) {
@@ -473,6 +478,23 @@ class IllustratedLessonStepEntity {
             return JSON.readValue(value, new TypeReference<List<RuleFact>>() {});
         } catch (Exception invalidFacts) {
             throw new IllegalStateException("stored lesson rule facts are invalid", invalidFacts);
+        }
+    }
+
+    private static String writeVisualFoci(List<VisualFocus> visualFoci) {
+        try {
+            return JSON.writeValueAsString(visualFoci == null ? List.of() : visualFoci);
+        } catch (Exception invalidVisuals) {
+            throw new IllegalStateException("lesson visual foci could not be stored", invalidVisuals);
+        }
+    }
+
+    private static List<VisualFocus> readVisualFoci(String value) {
+        if (value == null || value.isBlank()) return List.of();
+        try {
+            return JSON.readValue(value, new TypeReference<List<VisualFocus>>() {});
+        } catch (Exception invalidVisuals) {
+            throw new IllegalStateException("stored lesson visual foci are invalid", invalidVisuals);
         }
     }
 }

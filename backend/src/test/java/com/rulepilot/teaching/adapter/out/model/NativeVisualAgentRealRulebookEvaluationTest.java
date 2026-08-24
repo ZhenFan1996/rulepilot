@@ -149,8 +149,12 @@ class NativeVisualAgentRealRulebookEvaluationTest {
         long latencyMs = Duration.ofNanos(System.nanoTime() - started).toMillis();
         boolean targetIntersected = result.regions().stream()
                 .allMatch(region -> intersects(region, targetRectangle));
-        boolean compact = result.regions().stream()
-                .allMatch(region -> (long) region.width() * region.height() < 600_000L);
+        boolean typedSourceGeometry = result.regions().stream().allMatch(region ->
+                region.sourceKind() != com.rulepilot.teaching.domain.IllustratedLesson.VisualSourceKind.FULL_PAGE
+                        || (region.x() == 0
+                                && region.y() == 0
+                                && region.width() == 1_000
+                                && region.height() == 1_000));
         boolean authority = loopResultAuthority(audited.observations);
         return Map.ofEntries(
                 Map.entry("caseId", node.path("caseId").asText()),
@@ -164,7 +168,7 @@ class NativeVisualAgentRealRulebookEvaluationTest {
                 Map.entry("runStatus", loop.result == null ? "MISSING" : loop.result.status().name()),
                 Map.entry("runReason", loop.result == null ? "MISSING" : loop.result.reason()),
                 Map.entry("targetIntersected", targetIntersected),
-                Map.entry("compactCrop", compact),
+                Map.entry("typedSourceGeometry", typedSourceGeometry),
                 Map.entry("mechanicalRuleAuthority", authority),
                 Map.entry("fallbackCalls", fallback.calls),
                 Map.entry("latencyMs", latencyMs),
@@ -183,6 +187,7 @@ class NativeVisualAgentRealRulebookEvaluationTest {
                                 "pageNumber", region.pageNumber(),
                                 "label", region.label(),
                                 "visibleDescription", region.visibleDescription(),
+                                "sourceKind", region.sourceKind().name(),
                                 "supportedClaimRefs", region.supportedClaimRefs(),
                                 "rectangle", List.of(
                                         region.x(), region.y(), region.width(), region.height())))

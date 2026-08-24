@@ -10,25 +10,23 @@ import java.util.Set;
 import java.util.stream.Collectors;
 import org.springframework.stereotype.Component;
 
-/** Limits background vision work to the sections where a compact diagram is most likely to teach. */
+/** Limits background vision work to the sections where an owned rulebook visual is most likely to teach. */
 @Component
 public final class VisualSectionPrioritizer {
 
-    private static final int DEFAULT_MAX_VISUAL_STEPS_PER_SECTION = 2;
-    private final VisualReaderCropPolicy cropPolicy = new VisualReaderCropPolicy();
+    private static final int DEFAULT_VISUAL_RESULT_BUDGET = 6;
 
     public Set<Integer> positions(List<LessonSection> sections, int limit) {
-        return positions(sections, limit, DEFAULT_MAX_VISUAL_STEPS_PER_SECTION);
+        return positions(sections, limit, DEFAULT_VISUAL_RESULT_BUDGET);
     }
 
-    public Set<Integer> positions(List<LessonSection> sections, int limit, int maxVisualStepsPerSection) {
-        if (sections == null || limit < 1 || maxVisualStepsPerSection < 1) {
+    public Set<Integer> positions(List<LessonSection> sections, int limit, int visualResultBudget) {
+        if (sections == null || limit < 1 || visualResultBudget < 1) {
             throw new IllegalArgumentException("visual section priority input is invalid");
         }
         List<LessonSection> eligible = sections.stream()
                 .filter(section -> section.evidenceStatus() != EvidenceStatus.INSUFFICIENT_EVIDENCE)
-                .filter(section -> resolvedVisualCount(section)
-                        < maxVisualStepsPerSection)
+                .filter(section -> resolvedVisualCount(section) < visualResultBudget)
                 .filter(section -> section.steps().stream().anyMatch(step -> !step.sourcePages().isEmpty()))
                 .toList();
         boolean hasExplicitVisualIntent = eligible.stream().anyMatch(this::hasUnresolvedExplicitVisual);
@@ -43,16 +41,14 @@ public final class VisualSectionPrioritizer {
 
     private long resolvedVisualCount(LessonSection section) {
         return section.steps().stream()
-                .filter(step -> step.kind() == TeachingMove.VISUAL)
-                .filter(step -> step.visualFocus() != null)
-                .filter(step -> !cropPolicy.needsTighterReaderCrop(step.visualFocus()))
-                .count();
+                .mapToLong(step -> step.visualFoci().size())
+                .sum();
     }
 
     private boolean hasUnresolvedExplicitVisual(LessonSection section) {
         return section.steps().stream()
                 .filter(step -> step.kind() == TeachingMove.VISUAL)
-                .filter(step -> step.visualFocus() == null || cropPolicy.needsTighterReaderCrop(step.visualFocus()))
+                .filter(step -> step.visualFoci().isEmpty())
                 .anyMatch(step -> !step.sourcePages().isEmpty() && !step.sourceChunkIds().isEmpty());
     }
 

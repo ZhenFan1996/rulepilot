@@ -128,16 +128,19 @@ public record LessonLocalization(
                 && (translated.visualLabel().isBlank() || translated.visualDescription().isBlank())) {
             throw new IllegalArgumentException("localized visual focus is incomplete");
         }
-        VisualFocus focus = source.visualFocus() == null
-                ? null
-                : new VisualFocus(
-                        source.visualFocus().pageNumber(),
-                        translated.visualLabel(),
-                        translated.visualDescription(),
-                        source.visualFocus().x(),
-                        source.visualFocus().y(),
-                        source.visualFocus().width(),
-                        source.visualFocus().height());
+        List<VisualFocus> visualFoci = new java.util.ArrayList<>(source.visualFoci());
+        if (!visualFoci.isEmpty()) {
+            VisualFocus primary = visualFoci.getFirst();
+            visualFoci.set(0, new VisualFocus(
+                    primary.pageNumber(),
+                    translated.visualLabel(),
+                    translated.visualDescription(),
+                    primary.x(),
+                    primary.y(),
+                    primary.width(),
+                    primary.height(),
+                    primary.sourceKind()));
+        }
         return new LessonStep(
                 source.position(),
                 translated.heading(),
@@ -146,7 +149,8 @@ public record LessonLocalization(
                 source.sourcePages(),
                 source.sourceChunkIds(),
                 ruleFacts,
-                focus);
+                visualFoci.isEmpty() ? null : visualFoci.getFirst(),
+                visualFoci);
     }
 
     public enum Status {
