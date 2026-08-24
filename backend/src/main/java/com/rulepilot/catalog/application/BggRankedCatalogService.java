@@ -140,10 +140,7 @@ public class BggRankedCatalogService
 
     @Override
     public Optional<GameSelection> find(int bggId) {
-        if (bggId <= 0) throw new IllegalArgumentException("BGG id must be positive");
-        Optional<GameSelection> local = repository.findSelectionsByIds(List.of(bggId)).stream()
-                .findFirst()
-                .map(this::selectionGame);
+        Optional<GameSelection> local = findStored(bggId);
         if (local.isPresent()) return local;
         return browseIds(List.of(bggId)).stream().findFirst().map(game -> {
             DiscoveryGame details = game.details();
@@ -155,6 +152,14 @@ public class BggRankedCatalogService
                     details == null ? "" : details.thumbnailUrl(),
                     details == null ? "" : details.imageUrl());
         });
+    }
+
+    @Override
+    public Optional<GameSelection> findStored(int bggId) {
+        if (bggId <= 0) throw new IllegalArgumentException("BGG id must be positive");
+        return repository.findSelectionsByIds(List.of(bggId)).stream()
+                .findFirst()
+                .map(this::selectionGame);
     }
 
     @Override

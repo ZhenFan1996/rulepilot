@@ -6,6 +6,7 @@ import io.minio.GetObjectArgs;
 import io.minio.MakeBucketArgs;
 import io.minio.MinioClient;
 import io.minio.PutObjectArgs;
+import io.minio.errors.ErrorResponseException;
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.util.Optional;
@@ -30,15 +31,21 @@ public class MinioCoverThumbnailCache implements CoverThumbnailCache {
 
     @Override
     public Optional<Thumbnail> find(String sourceDigest) {
+        String key = objectKey(sourceDigest);
         try (InputStream input = client.getObject(GetObjectArgs.builder()
                 .bucket(bucket)
-                .object(objectKey(sourceDigest))
+                .object(key)
                 .build())) {
             byte[] content = input.readNBytes(Thumbnail.MAX_CONTENT_BYTES + 1);
-            if (content.length == 0 || content.length > Thumbnail.MAX_CONTENT_BYTES) return Optional.empty();
+            if (content.length == 0 || content.length > Thumbnail.MAX_CONTENT_BYTES) {
+                throw new IllegalStateException("durable cover cache entry is invalid");
+            }
             return Optional.of(new Thumbnail(content));
-        } catch (Exception missingOrUnavailable) {
-            return Optional.empty();
+        } catch (ErrorResponseException response) {
+            if (isMissing(response)) return Optional.empty();
+            throw new IllegalStateException("could not read durable cover cache", response);
+        } catch (Exception unavailable) {
+            throw new IllegalStateException("could not read durable cover cache", unavailable);
         }
     }
 
@@ -63,6 +70,11 @@ public class MinioCoverThumbnailCache implements CoverThumbnailCache {
             throw new IllegalArgumentException("cover cache key is invalid");
         }
         return "catalog-covers/" + sourceDigest + ".jpg";
+    }
+
+    private boolean isMissing(ErrorResponseException response) {
+        String code = response.errorResponse() == null ? "" : response.errorResponse().code();
+        return "NoSuchKey".equals(code) || "NoSuchObject".equals(code) || "NoSuchBucket".equals(code);
     }
 
     private synchronized void ensureBucket() throws Exception {

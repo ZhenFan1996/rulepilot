@@ -1,6 +1,7 @@
 package com.rulepilot.shared.adapter.out.cover;
 
 import com.rulepilot.shared.cover.CoverThumbnailCache.Thumbnail;
+import com.rulepilot.shared.cover.DurableCoverThumbnailService.Profile;
 import java.awt.Color;
 import java.awt.Graphics2D;
 import java.awt.RenderingHints;
@@ -21,15 +22,17 @@ import javax.imageio.stream.ImageOutputStream;
 /** Converts bounded source artwork into the small JPEG used by catalog and identity cards. */
 final class CoverThumbnailer {
 
-    private static final int MAX_WIDTH = 960;
-    private static final int MAX_HEIGHT = 1_280;
+    private static final int COMPACT_MAX_WIDTH = 360;
+    private static final int COMPACT_MAX_HEIGHT = 480;
+    private static final int DISPLAY_MAX_WIDTH = 960;
+    private static final int DISPLAY_MAX_HEIGHT = 1_280;
     private static final int MAX_SOURCE_EDGE = 6_000;
     private static final long MAX_SOURCE_PIXELS = 18_000_000L;
     private static final float[] JPEG_QUALITIES = {0.82f, 0.70f, 0.58f};
 
-    Thumbnail create(byte[] sourceContent) {
+    Thumbnail create(byte[] sourceContent, Profile profile) {
         BufferedImage source = read(sourceContent);
-        int[] dimensions = dimensions(source.getWidth(), source.getHeight());
+        int[] dimensions = dimensions(source.getWidth(), source.getHeight(), profile);
         BufferedImage resized = new BufferedImage(dimensions[0], dimensions[1], BufferedImage.TYPE_INT_RGB);
         Graphics2D graphics = resized.createGraphics();
         try {
@@ -67,8 +70,10 @@ final class CoverThumbnailer {
         }
     }
 
-    private int[] dimensions(int width, int height) {
-        double scale = Math.min(1d, Math.min((double) MAX_WIDTH / width, (double) MAX_HEIGHT / height));
+    private int[] dimensions(int width, int height, Profile profile) {
+        int maximumWidth = profile == Profile.COMPACT_PROFILE ? COMPACT_MAX_WIDTH : DISPLAY_MAX_WIDTH;
+        int maximumHeight = profile == Profile.COMPACT_PROFILE ? COMPACT_MAX_HEIGHT : DISPLAY_MAX_HEIGHT;
+        double scale = Math.min(1d, Math.min((double) maximumWidth / width, (double) maximumHeight / height));
         return new int[] {Math.max(1, (int) Math.round(width * scale)), Math.max(1, (int) Math.round(height * scale))};
     }
 

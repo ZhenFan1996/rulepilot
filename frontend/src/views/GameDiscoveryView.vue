@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 
 import AppShell from '@/components/AppShell.vue'
+import ProgressiveCatalogCover from '@/components/ProgressiveCatalogCover.vue'
 import { notifyLoginRequired } from '@/lib/authSession'
 import { useLocale, type AppLocale } from '@/lib/locale'
 
@@ -88,6 +89,8 @@ const translating = ref(false)
 const selecting = ref(false)
 const errorMessage = ref('')
 const bggId = computed(() => Number(route.params.bggId))
+const validBggId = computed(() => Number.isSafeInteger(bggId.value) && bggId.value > 0)
+const displayName = computed(() => game.value?.name ?? `BGG #${bggId.value}`)
 let requestSequence = 0
 let selectionSequence = 0
 let disposed = false
@@ -284,27 +287,24 @@ onBeforeUnmount(() => {
     <div class="tabletop-page max-w-6xl">
       <RouterLink to="/discover" class="inline-flex min-h-11 items-center text-sm font-semibold text-indigo">← {{ copy.back }}</RouterLink>
 
-      <div v-if="loading" class="mt-8 animate-pulse rounded-2xl border border-ink/10 bg-paper p-6" :aria-label="copy.loading">
-        <div class="h-72 rounded-xl bg-ink/8 sm:h-96" />
-      </div>
-
-      <section v-else-if="game" class="tabletop-panel player-board mt-5 grid min-w-0 gap-6 p-4 sm:gap-8 sm:p-7">
+      <section v-if="validBggId" class="tabletop-panel player-board mt-5 grid min-w-0 gap-6 p-4 sm:gap-8 sm:p-7">
         <div data-testid="game-detail-hero" class="game-detail-hero grid min-w-0">
           <div data-testid="game-cover-column" class="game-detail-cover min-w-0 self-start rounded-xl border border-ink/8 bg-canvas p-2 sm:p-3 lg:p-4">
-            <img v-if="game.imageUrl || game.thumbnailUrl" :src="game.imageUrl || game.thumbnailUrl" :alt="copy.cover(game.name)" class="mx-auto aspect-[4/5] h-auto w-full max-w-full object-contain" referrerpolicy="no-referrer">
+            <ProgressiveCatalogCover :bgg-id="bggId" :alt="copy.cover(displayName)" class="mx-auto aspect-[4/5] w-full max-w-full" />
             <a href="https://boardgamegeek.com" target="_blank" rel="noopener noreferrer" class="mt-3 flex justify-center border-t border-ink/8 pt-3 lg:mt-4 lg:pt-4"><img src="/powered-by-bgg-rgb.svg" alt="Powered by BoardGameGeek" class="h-auto w-24 lg:w-[137px]" width="342" height="76"></a>
           </div>
           <div class="game-detail-summary">
             <div data-testid="game-detail-identity" class="game-detail-identity min-w-0 self-center">
               <p class="tabletop-kicker">{{ copy.eyebrow }}</p>
-              <h1 class="mt-2 font-display text-[1.85rem] font-semibold leading-[1.05] tracking-tight [overflow-wrap:anywhere] sm:text-4xl lg:text-5xl">{{ game.name }}</h1>
-              <p v-if="game.officialNameLocalized" class="mt-2 text-xs font-medium leading-5 text-copper sm:text-sm">{{ game.originalName }} · {{ copy.officialName }}</p>
-              <p class="mt-2 text-sm text-ink/45">{{ game.publicationYear ?? copy.unknownYear }}</p>
+              <h1 class="mt-2 font-display text-[1.85rem] font-semibold leading-[1.05] tracking-tight [overflow-wrap:anywhere] sm:text-4xl lg:text-5xl">{{ displayName }}</h1>
+              <p v-if="game?.officialNameLocalized" class="mt-2 text-xs font-medium leading-5 text-copper sm:text-sm">{{ game.originalName }} · {{ copy.officialName }}</p>
+              <p v-if="game" class="mt-2 text-sm text-ink/45">{{ game.publicationYear ?? copy.unknownYear }}</p>
+              <p v-if="loading" data-testid="game-detail-loading" class="mt-3 text-sm text-ink/50" role="status">{{ copy.loading }}</p>
             </div>
-            <ul v-if="stats.length" data-testid="game-detail-stats" class="game-detail-stats flex min-w-0 flex-wrap gap-2" :aria-label="copy.stats">
+            <ul v-if="game && stats.length" data-testid="game-detail-stats" class="game-detail-stats flex min-w-0 flex-wrap gap-2" :aria-label="copy.stats">
               <li v-for="stat in stats" :key="stat" class="tabletop-chip min-h-8 px-3 text-xs sm:min-h-9 sm:text-sm">{{ stat }}</li>
             </ul>
-            <div data-testid="game-detail-actions" class="game-detail-actions flex min-w-0 flex-col gap-3 sm:flex-row sm:items-center">
+            <div v-if="game" data-testid="game-detail-actions" class="game-detail-actions flex min-w-0 flex-col gap-3 sm:flex-row sm:items-center">
               <button type="button" :disabled="selecting" class="min-h-12 w-full rounded-xl bg-felt px-5 py-3 font-semibold leading-5 text-white disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto sm:px-6" @click="selectGame">
                 {{ selecting ? copy.selecting : copy.select }}
               </button>
@@ -312,7 +312,7 @@ onBeforeUnmount(() => {
             </div>
           </div>
         </div>
-        <div data-testid="game-long-details" class="min-w-0 border-t border-ink/10 pt-6">
+        <div v-if="game" data-testid="game-long-details" class="min-w-0 border-t border-ink/10 pt-6">
           <p v-if="translating" class="text-xs font-semibold text-copper" role="status">{{ copy.translating }}</p>
           <p v-else-if="game.descriptionTranslated" class="text-xs font-semibold text-copper">{{ copy.translation }}</p>
           <p v-if="game.description" :class="game.descriptionTranslated || translating ? 'mt-2' : ''" class="max-w-5xl whitespace-pre-line text-[0.95rem] leading-8 text-ink/68 [overflow-wrap:anywhere]">{{ game.description }}</p>
@@ -324,7 +324,7 @@ onBeforeUnmount(() => {
           </dl>
           <p class="mt-5 text-xs leading-5 text-ink/45">{{ copy.evidenceBoundary }}</p>
         </div>
-        <div class="min-w-0 border-t border-ink/10 pt-6">
+        <div v-if="game" class="min-w-0 border-t border-ink/10 pt-6">
           <div class="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
             <div>
               <h2 class="font-display text-2xl font-semibold">{{ copy.editionImages }}</h2>

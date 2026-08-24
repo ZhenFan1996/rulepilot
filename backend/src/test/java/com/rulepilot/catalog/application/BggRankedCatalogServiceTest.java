@@ -283,6 +283,21 @@ class BggRankedCatalogServiceTest {
         assertThat(bgg.searchQueries).isEmpty();
     }
 
+    @Test
+    void readsAStoredCoverSelectionWithoutCallingTheRemoteBggSource() {
+        MemoryRepository repository = new MemoryRepository();
+        FakeBgg bgg = new FakeBgg();
+        BggRankedCatalogService service = new BggRankedCatalogService(repository, bgg);
+
+        assertThat(service.findStored(20)).hasValueSatisfying(game -> {
+            assertThat(game.bggId()).isEqualTo(20);
+            assertThat(game.thumbnailUrl()).isEqualTo("https://example.test/20-thumb.jpg");
+            assertThat(game.imageUrl()).isEqualTo("https://example.test/20-full.jpg");
+        });
+        assertThat(bgg.detailIds).isEmpty();
+        assertThat(bgg.searchQueries).isEmpty();
+    }
+
     private static final class MemoryRepository implements BggRankedCatalogRepository {
         private Query query;
         private String selectionQuery;

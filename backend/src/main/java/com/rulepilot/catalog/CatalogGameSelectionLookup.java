@@ -7,6 +7,9 @@ public interface CatalogGameSelectionLookup {
 
     Optional<GameSelection> find(int bggId);
 
+    /** Reads only the current local catalog projection and never triggers source hydration. */
+    Optional<GameSelection> findStored(int bggId);
+
     List<GameSelection> findAll(List<Integer> bggIds);
 
     List<GameSelection> search(String query, int maximum);
