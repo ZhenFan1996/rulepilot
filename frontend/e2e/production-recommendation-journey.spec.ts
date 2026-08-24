@@ -3,44 +3,70 @@ import { writeFile } from 'node:fs/promises'
 import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test'
 
 const enabled = process.env.RULEPILOT_PRODUCTION_RECOMMENDATION_JOURNEY === 'true'
-const TARGET_BGG_ID = positiveIntegerEnvironment('RULEPILOT_RECOMMENDATION_TARGET_BGG_ID', 230802)
-const TARGET_NAME = aliasPattern(process.env.RULEPILOT_RECOMMENDATION_TARGET_NAMES ?? '花砖物语|Azul')
-const RECOMMENDATION_PROMPT = process.env.RULEPILOT_RECOMMENDATION_PROMPT
-  ?? '我们今晚第一次玩花砖物语，规则书还没看。能帮我把这款找出来，然后带我们从规则书、讲解一路到现场答疑吗？'
-const MAX_COMPLETE_GOAL_RECOMMENDATION_MS = 20_000
+const RECOMMENDATION_OPENING_PROMPT = process.env.RULEPILOT_RECOMMENDATION_OPENING_PROMPT
+  ?? '嗨，今晚五个人聚会，最近合作玩得有点腻，但我还没想清楚换什么方向。你会先怎么帮我挑？'
+const RECOMMENDATION_SELECTION_PROMPT = process.env.RULEPILOT_RECOMMENDATION_SELECTION_PROMPT
+  ?? '我想换成能谈判、互相骗一骗的；有两个新手，90 分钟内。你直接挑三款，并把你最推荐的一款放第一吧。我们选好后还想接着找规则书、听讲解。'
+const MAX_OPEN_GUIDANCE_MS = 15_000
+const MAX_SELECTION_RECOMMENDATION_MS = 20_000
 const PRESERVED_DRAFT = '下次我还想给完全没玩过桌游的家人找一款更轻松的。'
 const RULE_QUESTION = process.env.RULEPILOT_RECOMMENDATION_RULE_QUESTION
-  ?? '我从一个工厂展示板拿走同色砖以后，剩下的砖要放到哪里？请用日常的话简短回答，并引用规则书页码。'
+  ?? '我们现在要开第一局：所有组件分别怎么摆、每个人先拿什么？请按顺序说，并标出规则书页码。'
+const RULE_FOLLOW_UP = process.env.RULEPILOT_RECOMMENDATION_RULE_FOLLOW_UP
+  ?? '你刚才列出的第二个准备步骤具体需要哪些组件？仍然只根据同一本规则书回答并标页码。'
 const REQUIRE_FRESH_IMPORT = process.env.RULEPILOT_RECOMMENDATION_REQUIRE_FRESH_IMPORT === 'true'
 
-function positiveIntegerEnvironment(name: string, fallback: number) {
-  const raw = process.env[name]
-  if (raw === undefined || raw.trim() === '') return fallback
-  if (!/^[1-9]\d*$/.test(raw)) throw new Error(`${name} must be a positive integer`)
-  const value = Number(raw)
-  if (!Number.isSafeInteger(value)) throw new Error(`${name} must be a safe positive integer`)
+function bggIdFromBindingPath(pathname: string) {
+  const match = /^\/api\/v1\/bgg\/games\/([1-9]\d*)\/import$/.exec(pathname)
+  if (!match) throw new Error(`Unexpected BGG binding path: ${pathname}`)
+  const value = Number(match[1])
+  if (!Number.isSafeInteger(value)) throw new Error(`Unsafe BGG id in binding path: ${pathname}`)
   return value
-}
-
-function aliasPattern(raw: string) {
-  const aliases = raw.split('|').map(alias => alias.trim()).filter(Boolean)
-  if (aliases.length === 0) throw new Error('At least one target game name is required')
-  return new RegExp(aliases.map(alias => alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'), 'i')
 }
 
 interface RulebookCandidate {
   title: string
   url: string
+  publisher: string
   sourceDomain: string
   language: string
+  edition: string
+  officialDomainVerified: boolean
+  languageVerified: boolean
+  sourceType: 'PUBLISHER' | 'TRUSTED_REPOSITORY' | 'COMMUNITY_PLATFORM' | 'PUBLIC_WEB'
   acquisitionMode: 'DIRECT_PDF' | 'IMAGE_GALLERY' | 'SOURCE_PAGE'
   capability: 'DIRECT_DOCUMENT' | 'CONTIGUOUS_RULE_PAGES' | 'DOCUMENT_LISTING' | 'GAME_INFO_ONLY' | 'UNVERIFIED_PAGE'
+  capabilityEvidence: string[]
 }
 
 interface CandidateResponse {
   configured: boolean
   identity: { editionId: string; gameName: string; editionName: string; language: string }
   candidates: RulebookCandidate[]
+}
+
+type RecommendationRecoveryOutcome =
+  | 'REUSED_EXISTING_JOURNEY'
+  | 'SELECTED_VERIFIED_OFFICIAL_SOURCE'
+  | 'SKIPPED_NO_VERIFIED_OFFICIAL_SOURCE'
+
+interface RecommendationRecoveryObservation {
+  recommendationRank: number
+  bggId: number
+  gameName: string
+  boundEditionId: string
+  outcome: RecommendationRecoveryOutcome
+  existingJourneyId: string | null
+  discoveryConfigured: boolean | null
+  discoveredCandidateCount: number | null
+  verifiedCandidateCount: number
+  elapsedMs: number
+}
+
+interface RecommendationSessionResponse {
+  conversationId: string
+  revision: number
+  latestResponse: null | { outcome: string }
 }
 
 interface ImportJob {
@@ -122,6 +148,7 @@ interface RunDetailsResponse {
 
 interface LessonMilestoneResponse {
   id: string
+  teachingPlanId: string
   status: 'COMPLETE' | 'DRAFT_READY' | 'INCOMPLETE'
   sections: Array<{
     position?: number
@@ -197,7 +224,10 @@ interface ProductionJourneyReport {
   generatedAt: string
   completed: boolean
   stage: string
-  targetBggId: number
+  selectedBggId: number | null
+  selectedGameName: string | null
+  recommendationConversationId: string | null
+  openGuidanceOutcome: string | null
   modelAssignments: ModelConfigurationResponse['assignments'] | null
   visualModelVisionCapable: boolean | null
   routeStayedOnDiscover: boolean
@@ -211,6 +241,11 @@ interface ProductionJourneyReport {
   boundBggId: number | null
   boundGameName: string | null
   boundEditionId: string | null
+  documentVersionId: string | null
+  teachingPlanId: string | null
+  answerSessionId: string | null
+  firstAnswerTurnId: string | null
+  followUpAnswerTurnId: string | null
   candidateEditionMatchesSelection: boolean
   importEditionMatchesSelection: boolean
   documentEditionMatchesSelection: boolean
@@ -219,12 +254,23 @@ interface ProductionJourneyReport {
   planGameTitleMatchesSelection: boolean
   globalStatusVisibleAfterClosing: boolean
   globalStatusReopened: boolean
+  openGuidanceMs: number | null
   recommendationMs: number | null
+  recommendationCardCount: number
+  attemptedBggIds: number[]
+  selectedRecommendationRank: number | null
+  recommendationRecoveryOutcomes: RecommendationRecoveryObservation[]
   detailsDialogOpenedAndClosed: boolean
   discoveryMs: number | null
   sourceDomain: string | null
   sourceUrl: string | null
   sourceMode: string | null
+  sourcePublisher: string | null
+  sourceEdition: string | null
+  sourceLanguage: string | null
+  sourceLanguageVerified: boolean | null
+  sourceOfficialDomainVerified: boolean | null
+  sourceCapabilityEvidence: string[]
   importRequestCount: number
   importReused: boolean | null
   teachingEvidenceRefreshRequested: boolean
@@ -276,6 +322,11 @@ interface ProductionJourneyReport {
   answerStatus: string | null
   answerCitationCount: number
   citedAnswer: boolean
+  followUpAnswerMs: number | null
+  followUpAnswerStatus: string | null
+  followUpCitationCount: number
+  answerSessionTurnCount: number
+  answerSessionPreserved: boolean
   recommendationRestored: boolean
   answerRestored: boolean
   pageErrorCount: number
@@ -444,7 +495,12 @@ async function waitForFirstCitedLesson(
       )
       expect([200, 404], `Teaching plan returned HTTP ${planResponse.status()}`)
         .toContain(planResponse.status())
-      if (planResponse.ok()) plan = await planResponse.json() as TeachingPlanResponse
+      if (planResponse.ok()) {
+        const receivedPlan = await planResponse.json() as TeachingPlanResponse
+        expect(receivedPlan.documentVersionId,
+          'The latest teaching plan changed the imported document version identity').toBe(versionId)
+        plan = receivedPlan
+      }
     }
     if (plan) {
       const teachingRunResponse = await request.get(
@@ -474,6 +530,8 @@ async function waitForFirstCitedLesson(
         .toContain(lessonResponse.status())
       if (lessonResponse.ok()) {
         const lesson = await lessonResponse.json() as LessonMilestoneResponse
+        expect(lesson.teachingPlanId,
+          'The illustrated lesson changed the teaching plan identity').toBe(plan.id)
         latestLesson = lesson
         if (lesson.sections.some(section =>
           section.evidenceStatus === 'SUPPORTED' || section.evidenceStatus === 'CITED_DRAFT')
@@ -566,7 +624,11 @@ async function waitForCompletedLesson(
     )
     expect([200, 404], `Illustrated lesson returned HTTP ${lessonResponse.status()}`)
       .toContain(lessonResponse.status())
-    if (lessonResponse.ok()) latestLesson = await lessonResponse.json() as LessonMilestoneResponse
+    if (lessonResponse.ok()) {
+      latestLesson = await lessonResponse.json() as LessonMilestoneResponse
+      expect(latestLesson.teachingPlanId,
+        'The completed illustrated lesson changed the teaching plan identity').toBe(planId)
+    }
 
     await progress.emit(teachingWaitProgress(
       'COMPLETE_LESSON', null, planId, latestRunDetails, latestLesson,
@@ -713,6 +775,52 @@ function teachingEvidenceWasRefreshed(initial: ImportJob, current: ImportJob) {
   return current.teachingPreparationRunId !== initial.teachingPreparationRunId
 }
 
+function isImportableCandidate(candidate: RulebookCandidate) {
+  const capabilityVerified = candidate.capability === 'DIRECT_DOCUMENT'
+    && candidate.acquisitionMode === 'DIRECT_PDF'
+    && candidate.capabilityEvidence.includes('DOCUMENT_RESPONSE_CONFIRMED')
+    || candidate.capability === 'CONTIGUOUS_RULE_PAGES'
+      && candidate.acquisitionMode === 'IMAGE_GALLERY'
+      && candidate.capabilityEvidence.includes('ORDERED_PAGE_SEQUENCE_CONFIRMED')
+  return capabilityVerified
+    && candidate.officialDomainVerified === true
+    && candidate.languageVerified === true
+    && candidate.publisher.trim().length > 0
+    && candidate.edition.trim().length > 0
+}
+
+function isUsableExistingJourney(job: ImportJob, editionId: string) {
+  if (job.editionId !== editionId || job.stage === 'FAILED' || job.teachingHandoffState === 'NOT_REQUESTED') {
+    return false
+  }
+  if (job.teachingHandoffState !== 'FAILED') return true
+  return job.stage === 'COMPLETED'
+    && job.documentVersionId !== null
+    && job.teachingPreparationRunId !== null
+}
+
+type RecommendationRecoveryDecision =
+  | { outcome: 'REUSED_EXISTING_JOURNEY'; existingJourney: ImportJob; candidate: null }
+  | { outcome: 'SELECTED_VERIFIED_OFFICIAL_SOURCE'; existingJourney: null; candidate: RulebookCandidate }
+  | { outcome: 'SKIPPED_NO_VERIFIED_OFFICIAL_SOURCE'; existingJourney: null; candidate: null }
+
+function chooseRecommendationRecovery(
+  editionId: string,
+  existingJourneys: ImportJob[],
+  candidates: RulebookCandidate[],
+): RecommendationRecoveryDecision {
+  const restoredJourney = existingJourneys.find(job =>
+    job.editionId === editionId && job.teachingHandoffState !== 'NOT_REQUESTED')
+  if (restoredJourney && isUsableExistingJourney(restoredJourney, editionId)) {
+    return { outcome: 'REUSED_EXISTING_JOURNEY', existingJourney: restoredJourney, candidate: null }
+  }
+  const candidate = candidates.find(isImportableCandidate)
+  if (candidate) {
+    return { outcome: 'SELECTED_VERIFIED_OFFICIAL_SOURCE', existingJourney: null, candidate }
+  }
+  return { outcome: 'SKIPPED_NO_VERIFIED_OFFICIAL_SOURCE', existingJourney: null, candidate: null }
+}
+
 test('requires current publication telemetry for fresh imports and stale-evidence refreshes', () => {
   expect(requiresPersistedPublicationActivity({
     importReused: false,
@@ -739,12 +847,96 @@ test('requires current publication telemetry for fresh imports and stale-evidenc
   expect(teachingEvidenceWasRefreshed(initial, initial)).toBe(false)
 })
 
-test('production target aliases are literal and cannot widen the title match', () => {
-  const pattern = aliasPattern('奋进号：深海|Endeavor: Deep Sea (2024)')
+test('dynamic recommendation binding accepts only the exact BGG import route', () => {
+  expect(bggIdFromBindingPath('/api/v1/bgg/games/4174/import')).toBe(4174)
+  expect(() => bggIdFromBindingPath('/api/v1/bgg/games/4174/details')).toThrow('Unexpected BGG binding path')
+  expect(() => bggIdFromBindingPath('/api/v1/bgg/games/not-a-number/import'))
+    .toThrow('Unexpected BGG binding path')
+})
 
-  expect('奋进号：深海').toMatch(pattern)
-  expect('Endeavor: Deep Sea (2024)').toMatch(pattern)
-  expect('Endeavor: Deep Sea 2024').not.toMatch(pattern)
+test('automation confirms only a verified official source with explicit edition and language identity', () => {
+  const verified: RulebookCandidate = {
+    title: 'Rules',
+    url: 'https://publisher.example/rules.pdf',
+    publisher: 'Publisher',
+    sourceDomain: 'publisher.example',
+    language: 'en',
+    edition: 'First edition',
+    officialDomainVerified: true,
+    languageVerified: true,
+    sourceType: 'PUBLISHER',
+    acquisitionMode: 'DIRECT_PDF',
+    capability: 'DIRECT_DOCUMENT',
+    capabilityEvidence: ['DOCUMENT_RESPONSE_CONFIRMED'],
+  }
+  expect(isImportableCandidate(verified)).toBe(true)
+  expect(isImportableCandidate({ ...verified, officialDomainVerified: false })).toBe(false)
+  expect(isImportableCandidate({ ...verified, languageVerified: false })).toBe(false)
+  expect(isImportableCandidate({ ...verified, edition: '' })).toBe(false)
+  expect(isImportableCandidate({ ...verified, capabilityEvidence: ['CANDIDATE_ONLY'] })).toBe(false)
+})
+
+test('ranked recovery prefers a usable journey, accepts a verified source, and rejects unsafe dead ends', () => {
+  const verified: RulebookCandidate = {
+    title: 'Rules',
+    url: 'https://publisher.example/rules.pdf',
+    publisher: 'Publisher',
+    sourceDomain: 'publisher.example',
+    language: 'en',
+    edition: 'First edition',
+    officialDomainVerified: true,
+    languageVerified: true,
+    sourceType: 'PUBLISHER',
+    acquisitionMode: 'DIRECT_PDF',
+    capability: 'DIRECT_DOCUMENT',
+    capabilityEvidence: ['DOCUMENT_RESPONSE_CONFIRMED'],
+  }
+  const existing = {
+    id: 'existing-journey',
+    editionId: 'edition-1',
+    stage: 'COMPLETED',
+    teachingHandoffState: 'LAUNCHED',
+  } as ImportJob
+
+  expect(chooseRecommendationRecovery('edition-1', [existing], [verified])).toMatchObject({
+    outcome: 'REUSED_EXISTING_JOURNEY',
+    existingJourney: { id: 'existing-journey' },
+    candidate: null,
+  })
+  expect(chooseRecommendationRecovery('edition-1', [], [verified])).toMatchObject({
+    outcome: 'SELECTED_VERIFIED_OFFICIAL_SOURCE',
+    existingJourney: null,
+    candidate: { url: verified.url },
+  })
+
+  const retryableTeaching = {
+    ...existing,
+    documentVersionId: 'document-1',
+    teachingHandoffState: 'FAILED',
+    teachingPreparationRunId: 'failed-run',
+  } as ImportJob
+  expect(chooseRecommendationRecovery('edition-1', [retryableTeaching], [])).toMatchObject({
+    outcome: 'REUSED_EXISTING_JOURNEY',
+    existingJourney: { id: 'existing-journey' },
+  })
+
+  const failedExisting = { ...existing, stage: 'FAILED' } as ImportJob
+  const unverified = { ...verified, officialDomainVerified: false }
+  expect(chooseRecommendationRecovery('edition-1', [failedExisting], [unverified])).toEqual({
+    outcome: 'SKIPPED_NO_VERIFIED_OFFICIAL_SOURCE',
+    existingJourney: null,
+    candidate: null,
+  })
+  expect(chooseRecommendationRecovery('edition-1', [failedExisting, existing], [verified])).toMatchObject({
+    outcome: 'SELECTED_VERIFIED_OFFICIAL_SOURCE',
+    existingJourney: null,
+    candidate: { url: verified.url },
+  })
+  expect(chooseRecommendationRecovery('edition-2', [existing], [])).toEqual({
+    outcome: 'SKIPPED_NO_VERIFIED_OFFICIAL_SOURCE',
+    existingJourney: null,
+    candidate: null,
+  })
 })
 
 test('recommendation becomes one readable, taught, and answerable production journey', async ({ page }) => {
@@ -779,17 +971,26 @@ test('recommendation becomes one readable, taught, and answerable production jou
   })
 
   const report: ProductionJourneyReport = {
-    generatedAt: new Date().toISOString(), completed: false, stage: 'login', targetBggId: TARGET_BGG_ID,
+    generatedAt: new Date().toISOString(), completed: false, stage: 'login',
+    selectedBggId: null, selectedGameName: null,
+    recommendationConversationId: null, openGuidanceOutcome: null,
     modelAssignments: null, visualModelVisionCapable: null,
     routeStayedOnDiscover: false, journeyBackdropVisible: false, journeySurfaceOpaque: false,
     lessonBackdropVisible: false, lessonSurfaceOpaque: false,
     confirmedMilestonesAtSourceReview: 0, confirmedMilestonesFinal: 0,
     boundGameInCatalog: false, boundBggId: null, boundGameName: null, boundEditionId: null,
+    documentVersionId: null, teachingPlanId: null, answerSessionId: null,
+    firstAnswerTurnId: null, followUpAnswerTurnId: null,
     candidateEditionMatchesSelection: false, importEditionMatchesSelection: false,
     documentEditionMatchesSelection: false, myGuidesEntryVisibleBeforeLesson: false, myGuidesPlanListed: false,
     planGameTitleMatchesSelection: false, globalStatusVisibleAfterClosing: false, globalStatusReopened: false,
-    recommendationMs: null, detailsDialogOpenedAndClosed: false,
-    discoveryMs: null, sourceDomain: null, sourceUrl: null, sourceMode: null, importRequestCount: 0,
+    openGuidanceMs: null, recommendationMs: null, recommendationCardCount: 0,
+    attemptedBggIds: [], selectedRecommendationRank: null, recommendationRecoveryOutcomes: [],
+    detailsDialogOpenedAndClosed: false,
+    discoveryMs: null, sourceDomain: null, sourceUrl: null, sourceMode: null,
+    sourcePublisher: null, sourceEdition: null, sourceLanguage: null,
+    sourceLanguageVerified: null, sourceOfficialDomainVerified: null, sourceCapabilityEvidence: [],
+    importRequestCount: 0,
     importReused: null, teachingEvidenceRefreshRequested: false,
     importDuplicate: null, downloadedBytes: null, importMs: null,
     downloadCompletedAt: null, importCompletedAt: null, teachingHandoffUpdatedAt: null,
@@ -813,7 +1014,8 @@ test('recommendation becomes one readable, taught, and answerable production jou
     rulebookReadableMs: null, renderedRulebookPage: false, lessonReadableMs: null,
     lessonDockText: null,
     lessonSectionCount: 0, citedLessonStep: false, answerMs: null, answerStatus: null,
-    answerCitationCount: 0, citedAnswer: false,
+    answerCitationCount: 0, citedAnswer: false, followUpAnswerMs: null, followUpAnswerStatus: null,
+    followUpCitationCount: 0, answerSessionTurnCount: 0, answerSessionPreserved: false,
     recommendationRestored: false, answerRestored: false, pageErrorCount: 0,
   }
 
@@ -862,7 +1064,7 @@ test('recommendation becomes one readable, taught, and answerable production jou
     await retainReport(reportFile, report)
     report.stage = 'recommendation'
     await page.goto('/discover')
-    const targetDetailsButton = page.getByRole('button', { name: new RegExp(`查看完整资料：(?:${TARGET_NAME.source})`, 'i') })
+    const recommendationCards = page.getByTestId('recommendation-game-card')
     const newConversation = page.getByRole('button', { name: '建立新聊天', exact: true })
     await expect(newConversation).toBeEnabled({ timeout: 60_000 })
     const newConversationResponse = page.waitForResponse(response => {
@@ -871,96 +1073,238 @@ test('recommendation becomes one readable, taught, and answerable production jou
         && response.request().method() === 'POST'
     }, { timeout: 60_000 })
     await newConversation.click()
-    expect((await newConversationResponse).ok(), 'Production could not establish a fresh recommendation session')
+    const createdConversationResponse = await newConversationResponse
+    expect(createdConversationResponse.ok(), 'Production could not establish a fresh recommendation session')
       .toBe(true)
-    await expect(targetDetailsButton).toHaveCount(0)
-    const recommendationStartedAt = performance.now()
+    const createdConversation = await createdConversationResponse.json() as RecommendationSessionResponse
+    report.recommendationConversationId = createdConversation.conversationId
+    await expect(recommendationCards).toHaveCount(0)
     const composer = page.getByLabel('聊聊你想玩的游戏')
-    await composer.fill(RECOMMENDATION_PROMPT)
+    const guidanceTurnCount = await page.getByTestId('assistant-conversation-turn').count()
+    const guidanceStartedAt = performance.now()
+    await composer.fill(RECOMMENDATION_OPENING_PROMPT)
     await page.getByRole('button', { name: '发送', exact: true }).click()
+    await expect.poll(() => page.getByTestId('assistant-conversation-turn').count(), {
+      timeout: MAX_OPEN_GUIDANCE_MS,
+      message: 'The unknown-target opening did not produce a natural guidance turn',
+    }).toBeGreaterThan(guidanceTurnCount)
+    report.openGuidanceMs = elapsed(guidanceStartedAt)
+    expect(report.openGuidanceMs, 'Open recommendation guidance exceeded its interaction budget')
+      .toBeLessThanOrEqual(MAX_OPEN_GUIDANCE_MS)
+    await expect(page.getByTestId('assistant-conversation-turn').last()).toContainText(/\S/)
+    await expect(recommendationCards).toHaveCount(0)
+    const guidanceSessionResponse = await page.request.get(
+      `/api/v1/bgg/recommendation-agent/sessions/${encodeURIComponent(createdConversation.conversationId)}`,
+    )
+    expect(guidanceSessionResponse.ok(),
+      `Recommendation session returned HTTP ${guidanceSessionResponse.status()}`).toBe(true)
+    const guidanceSession = await guidanceSessionResponse.json() as RecommendationSessionResponse
+    report.openGuidanceOutcome = guidanceSession.latestResponse?.outcome ?? null
+    expect(['conversation', 'needs_clarification'],
+      'The unknown-target opening did not finish as useful guidance').toContain(report.openGuidanceOutcome)
 
-    await expect(targetDetailsButton).toBeVisible({ timeout: MAX_COMPLETE_GOAL_RECOMMENDATION_MS })
+    const recommendationStartedAt = performance.now()
+    await composer.fill(RECOMMENDATION_SELECTION_PROMPT)
+    await page.getByRole('button', { name: '发送', exact: true }).click()
+    await expect(recommendationCards).toHaveCount(3, { timeout: MAX_SELECTION_RECOMMENDATION_MS })
     report.recommendationMs = elapsed(recommendationStartedAt)
+    report.recommendationCardCount = await recommendationCards.count()
     expect(
       report.recommendationMs,
-      'The single recommendation Agent should understand and execute the complete player goal within the interaction budget',
-    ).toBeLessThanOrEqual(MAX_COMPLETE_GOAL_RECOMMENDATION_MS)
+      'The recommendation Agent should refine the unknown target into three choices within the interaction budget',
+    ).toBeLessThanOrEqual(MAX_SELECTION_RECOMMENDATION_MS)
     await composer.fill(PRESERVED_DRAFT)
+    type SelectedRecommendationJourney = {
+      recommendationRank: number
+      selectedCardBggId: number
+      selectedGameName: string
+      selectedDetailsButton: Locator
+      boundGame: BoundGameResponse
+      existingJourney: ImportJob | null
+      importableCandidate: RulebookCandidate | null
+      discoveryMs: number
+    }
+    let selectedJourney: SelectedRecommendationJourney | null = null
 
-    report.stage = 'details-dialog'
-    await targetDetailsButton.click()
-    let details = page.getByRole('dialog', { name: '桌游详细资料' })
-    await expect(details.getByRole('heading', { name: TARGET_NAME })).toBeVisible({ timeout: 60_000 })
-    await expect(page).toHaveURL(/\/discover$/)
-    await details.getByRole('button', { name: '关闭桌游资料' }).click()
-    await expect(details).toBeHidden()
-    report.detailsDialogOpenedAndClosed = true
+    const recommendationAttemptLimit = Math.min(report.recommendationCardCount, 3)
+    for (let cardIndex = 0; cardIndex < recommendationAttemptLimit; cardIndex += 1) {
+      const recommendationRank = cardIndex + 1
+      const attemptStartedAt = performance.now()
+      const recommendedCard = recommendationCards.nth(cardIndex)
+      const attemptedGameName = (await recommendedCard.locator('h3').innerText()).trim()
+      expect(attemptedGameName,
+        `Agent recommendation rank ${recommendationRank} has no player-visible identity`).not.toBe('')
+      const attemptedBggId = Number(await recommendedCard.getAttribute('data-bgg-id'))
+      expect(Number.isSafeInteger(attemptedBggId) && attemptedBggId > 0,
+        `Agent recommendation rank ${recommendationRank} has no typed BGG identity`).toBe(true)
+      expect(report.attemptedBggIds,
+        'The Agent recommendation slate repeated a BGG identity').not.toContain(attemptedBggId)
+      report.attemptedBggIds.push(attemptedBggId)
+      const attemptedDetailsButton = recommendedCard.getByRole('button', {
+        name: `查看完整资料：${attemptedGameName}`,
+        exact: true,
+      })
 
-    const discoveryStartedAt = performance.now()
-    const candidatesResponsePromise = page.waitForResponse(response => {
-      const url = new URL(response.url())
-      return url.pathname === '/api/v1/documents/rulebook-candidates' && response.ok()
-    }, { timeout: 90_000 }).catch(() => null)
-    const existingJourneyResponsePromise = page.waitForResponse(response => {
-      const url = new URL(response.url())
-      return url.pathname === '/api/v1/documents/official-imports'
-        && response.request().method() === 'GET'
-        && response.ok()
-    }, { timeout: 90_000 })
-    const bindingResponsePromise = page.waitForResponse(response => {
-      const url = new URL(response.url())
-      return url.pathname === `/api/v1/bgg/games/${TARGET_BGG_ID}/import`
-        && response.request().method() === 'POST'
-        && response.ok()
-    }, { timeout: 90_000 })
-    await targetDetailsButton.click()
-    details = page.getByRole('dialog', { name: '桌游详细资料' })
-    await details.getByRole('button', { name: '选这款，继续找规则书' }).click()
-    const [existingJourneyResponse, bindingResponse] = await Promise.all([
-      existingJourneyResponsePromise,
-      bindingResponsePromise,
-    ])
-    const boundGame = await bindingResponse.json() as BoundGameResponse
+      if (recommendationRank === 1) {
+        report.stage = 'details-dialog'
+        await attemptedDetailsButton.click()
+        const preview = page.getByRole('dialog', { name: '桌游详细资料' })
+        await expect(preview.getByRole('heading', { name: attemptedGameName, exact: true }))
+          .toBeVisible({ timeout: 60_000 })
+        await expect(page).toHaveURL(/\/discover$/)
+        await preview.getByRole('button', { name: '关闭桌游资料' }).click()
+        await expect(preview).toBeHidden()
+        report.detailsDialogOpenedAndClosed = true
+      }
+
+      report.stage = `rulebook-recovery-rank-${recommendationRank}`
+      const discoveryStartedAt = performance.now()
+      const candidatesResponsePromise = page.waitForResponse(response => {
+        const url = new URL(response.url())
+        return url.pathname === '/api/v1/documents/rulebook-candidates' && response.ok()
+      }, { timeout: 90_000 }).catch(() => null)
+      const existingJourneyResponsePromise = page.waitForResponse(response => {
+        const url = new URL(response.url())
+        return url.pathname === '/api/v1/documents/official-imports'
+          && response.request().method() === 'GET'
+          && response.ok()
+      }, { timeout: 90_000 })
+      const bindingResponsePromise = page.waitForResponse(response => {
+        const url = new URL(response.url())
+        return url.pathname === `/api/v1/bgg/games/${attemptedBggId}/import`
+          && response.request().method() === 'POST'
+          && response.ok()
+      }, { timeout: 90_000 })
+      await attemptedDetailsButton.click()
+      const details = page.getByRole('dialog', { name: '桌游详细资料' })
+      await expect(details.getByRole('heading', { name: attemptedGameName, exact: true }))
+        .toBeVisible({ timeout: 60_000 })
+      await details.getByRole('button', { name: '选这款，继续找规则书' }).click()
+      const [existingJourneyResponse, bindingResponse] = await Promise.all([
+        existingJourneyResponsePromise,
+        bindingResponsePromise,
+      ])
+      const attemptedBoundGame = await bindingResponse.json() as BoundGameResponse
+      const boundBggId = bggIdFromBindingPath(new URL(bindingResponse.url()).pathname)
+      expect(boundBggId, 'The binding route changed the attempted Agent-ranked BGG identity')
+        .toBe(attemptedBggId)
+      expect(attemptedBoundGame.bggId,
+        'The binding response did not preserve the attempted Agent-ranked BGG identity').toBe(attemptedBggId)
+      expect(attemptedBoundGame.game.name.trim(), 'The bound catalog game has no stable title').not.toBe('')
+
+      const existingJourneys = await existingJourneyResponse.json() as ImportJob[]
+      const restorableJourney = existingJourneys.find(job =>
+        job.editionId === attemptedBoundGame.edition.id && job.teachingHandoffState !== 'NOT_REQUESTED')
+      let candidateResult: CandidateResponse | null = null
+      let recovery = chooseRecommendationRecovery(attemptedBoundGame.edition.id, existingJourneys, [])
+      if (recovery.outcome !== 'REUSED_EXISTING_JOURNEY') {
+        if (restorableJourney) {
+          const chooseAnotherSource = page.getByTestId('player-journey-surface')
+            .getByRole('button', { name: '重新选择来源', exact: true })
+          await expect(chooseAnotherSource,
+            'An unusable existing journey did not expose its real UI source-recovery action')
+            .toBeVisible({ timeout: 60_000 })
+          await chooseAnotherSource.click()
+        }
+        const candidatesResponse = await candidatesResponsePromise
+        if (candidatesResponse) {
+          candidateResult = await candidatesResponse.json() as CandidateResponse
+          expect(new URL(candidatesResponse.url()).searchParams.get('editionId'),
+            'Rulebook discovery used a different edition from the attempted recommendation')
+            .toBe(attemptedBoundGame.edition.id)
+          expect(candidateResult.identity.editionId,
+            'Rulebook discovery response lost the attempted edition identity')
+            .toBe(attemptedBoundGame.edition.id)
+          recovery = chooseRecommendationRecovery(
+            attemptedBoundGame.edition.id,
+            existingJourneys,
+            candidateResult.configured ? candidateResult.candidates : [],
+          )
+        }
+      }
+
+      const verifiedCandidateCount = candidateResult?.configured
+        ? candidateResult.candidates.filter(isImportableCandidate).length
+        : 0
+      report.recommendationRecoveryOutcomes.push({
+        recommendationRank,
+        bggId: attemptedBggId,
+        gameName: attemptedGameName,
+        boundEditionId: attemptedBoundGame.edition.id,
+        outcome: recovery.outcome,
+        existingJourneyId: restorableJourney?.id ?? null,
+        discoveryConfigured: candidateResult?.configured ?? null,
+        discoveredCandidateCount: candidateResult?.candidates.length ?? null,
+        verifiedCandidateCount,
+        elapsedMs: elapsed(attemptStartedAt),
+      })
+
+      if (recovery.outcome === 'SKIPPED_NO_VERIFIED_OFFICIAL_SOURCE') {
+        const journeySurface = page.getByTestId('player-journey-surface')
+        await journeySurface.getByRole('button', { name: '关闭小窗', exact: true }).click()
+        await expect(journeySurface).toBeHidden()
+        continue
+      }
+
+      selectedJourney = {
+        recommendationRank,
+        selectedCardBggId: attemptedBggId,
+        selectedGameName: attemptedGameName,
+        selectedDetailsButton: attemptedDetailsButton,
+        boundGame: attemptedBoundGame,
+        existingJourney: recovery.existingJourney,
+        importableCandidate: recovery.candidate,
+        discoveryMs: elapsed(discoveryStartedAt),
+      }
+      break
+    }
+
+    if (!selectedJourney) {
+      throw new Error(
+        `None of the three Agent-ranked recommendations had a usable journey or verified official rulebook source: ${JSON.stringify(report.recommendationRecoveryOutcomes)}`,
+      )
+    }
+
+    const {
+      recommendationRank: selectedRecommendationRank,
+      selectedCardBggId,
+      selectedGameName,
+      selectedDetailsButton,
+      boundGame,
+      existingJourney,
+      importableCandidate,
+      discoveryMs,
+    } = selectedJourney
+    report.selectedRecommendationRank = selectedRecommendationRank
+    report.selectedBggId = selectedCardBggId
+    report.selectedGameName = selectedGameName
     report.boundBggId = boundGame.bggId
     report.boundGameName = boundGame.game.name
     report.boundEditionId = boundGame.edition.id
-    expect(boundGame.bggId, 'The binding response did not preserve the selected BGG identity').toBe(TARGET_BGG_ID)
-    expect(boundGame.game.name, 'The binding response used an unexpected game title').toMatch(TARGET_NAME)
-    const existingJourneys = await existingJourneyResponse.json() as ImportJob[]
-    const existingJourney = existingJourneys.find(job =>
-      job.editionId === boundGame.edition.id && job.teachingHandoffState !== 'NOT_REQUESTED')
-    const restoredExistingJourney = existingJourney !== undefined
+    report.discoveryMs = discoveryMs
+    const selectedJourneyContinuation = page.locator(
+      `[data-testid="player-journey-continuation"][data-bgg-id="${boundGame.bggId}"]`,
+    )
+    const restoredExistingJourney = existingJourney !== null
     let launchedJob: ImportJob
-    let gstoneCandidate: RulebookCandidate | null = null
     let importStartedAt = performance.now()
     if (existingJourney) {
       launchedJob = await retryFailedReusedTeaching(page.request, { ...existingJourney, reused: true })
       report.candidateEditionMatchesSelection = true
-      report.discoveryMs = elapsed(discoveryStartedAt)
       report.sourceDomain = launchedJob.sourceDomain ?? null
       report.sourceUrl = launchedJob.officialSourceUrl ?? null
       report.importReused = true
     } else {
-      const candidatesResponse = await candidatesResponsePromise
-      expect(candidatesResponse, 'Rulebook discovery did not answer for a new selected game journey').not.toBeNull()
-      const candidateResult = await candidatesResponse!.json() as CandidateResponse
-      report.candidateEditionMatchesSelection = new URL(candidatesResponse!.url()).searchParams.get('editionId')
-        === boundGame.edition.id
-      expect(report.candidateEditionMatchesSelection,
-        'Rulebook discovery used a different edition from the selected recommendation').toBe(true)
-      report.discoveryMs = elapsed(discoveryStartedAt)
-      expect(candidateResult.configured).toBe(true)
-      expect(candidateResult.identity.editionId,
-        'Rulebook discovery response lost the selected edition identity').toBe(boundGame.edition.id)
-      gstoneCandidate = candidateResult.candidates.find(candidate =>
-        candidate.sourceDomain.endsWith('gstonegames.com')
-        && candidate.language.toLowerCase().startsWith('zh')
-        && (candidate.capability === 'DIRECT_DOCUMENT' && candidate.acquisitionMode === 'DIRECT_PDF'
-          || candidate.capability === 'CONTIGUOUS_RULE_PAGES' && candidate.acquisitionMode === 'IMAGE_GALLERY')) ?? null
-      expect(gstoneCandidate, 'No importable Chinese Gstone rulebook was discovered').not.toBeNull()
-      report.sourceDomain = gstoneCandidate!.sourceDomain
-      report.sourceUrl = gstoneCandidate!.url
-      report.sourceMode = gstoneCandidate!.acquisitionMode
+      report.candidateEditionMatchesSelection = true
+      report.sourceDomain = importableCandidate!.sourceDomain
+      report.sourceUrl = importableCandidate!.url
+      report.sourceMode = importableCandidate!.acquisitionMode
+      report.sourcePublisher = importableCandidate!.publisher
+      report.sourceEdition = importableCandidate!.edition
+      report.sourceLanguage = importableCandidate!.language
+      report.sourceLanguageVerified = importableCandidate!.languageVerified
+      report.sourceOfficialDomainVerified = importableCandidate!.officialDomainVerified
+      report.sourceCapabilityEvidence = [...importableCandidate!.capabilityEvidence]
     }
 
     const catalogResponse = await page.request.get('/api/v1/games')
@@ -988,10 +1332,10 @@ test('recommendation becomes one readable, taught, and answerable production jou
       report.confirmedMilestonesAtSourceReview = await journeySurface
         .locator('[data-fact-confirmed="true"]').count()
       expect(report.confirmedMilestonesAtSourceReview).toBe(1)
-      const candidateCard = page.locator('li', {
-        has: page.locator(`a[href="${gstoneCandidate!.url}"]`),
+      const candidateCard = journeySurface.locator('li', {
+        has: page.locator(`a[href="${importableCandidate!.url}"]`),
       }).first()
-      await expect(candidateCard).toContainText('社区规则书来源')
+      await expect(candidateCard.getByRole('link')).toBeVisible()
       await candidateCard.getByRole('button', { name: '选择这份' }).click()
       const importButton = page.getByRole('button', { name: '下载规则书并生成讲解' })
       await expect(importButton).toBeDisabled()
@@ -1020,7 +1364,7 @@ test('recommendation becomes one readable, taught, and answerable production jou
       && (restoredExistingJourney
         || observedImportRequest?.editionId === boundGame.edition.id
           && observedImportRequest?.discoveredForEditionId === boundGame.edition.id
-          && observedImportRequest?.officialSourceUrl === gstoneCandidate!.url
+          && observedImportRequest?.officialSourceUrl === importableCandidate!.url
           && observedImportRequest?.identityConfirmed === true)
     expect(report.importEditionMatchesSelection,
       'The official import request or persisted job changed the selected edition/source identity').toBe(true)
@@ -1028,13 +1372,15 @@ test('recommendation becomes one readable, taught, and answerable production jou
       .toBe(boundGame.game.name)
     if (!restoredExistingJourney) {
       expect(launchedJob.sourceDomain, 'The official import response changed the selected source domain')
-        .toBe(gstoneCandidate!.sourceDomain)
+        .toBe(importableCandidate!.sourceDomain)
     }
 
     report.stage = 'close-and-recover-background-status'
     await page.getByTestId('player-journey-surface')
       .getByRole('button', { name: '关闭小窗' })
       .click()
+    await expect(selectedJourneyContinuation).toHaveCount(1)
+    await expect(selectedJourneyContinuation).toBeVisible()
     const globalStatusShortcut = page.getByTestId('background-work-persistent-shortcut')
     await expect(globalStatusShortcut).toBeVisible({ timeout: 60_000 })
     await expect(globalStatusShortcut).toContainText('讲解状态')
@@ -1045,11 +1391,11 @@ test('recommendation becomes one readable, taught, and answerable production jou
     await expect(backgroundWork).toContainText(boundGame.game.name)
     report.globalStatusReopened = true
     await backgroundWork.getByRole('button', { name: '关闭后台任务' }).click()
-    const journeyProgressButton = page.getByTestId('player-journey-progress-button')
+    const journeyProgressButton = selectedJourneyContinuation.getByTestId('player-journey-progress-button')
     if (await journeyProgressButton.isVisible()) {
       await journeyProgressButton.click()
     } else {
-      await page.getByTestId('player-journey-dock').click()
+      await selectedJourneyContinuation.getByTestId('player-journey-dock').click()
     }
     await expect(page.getByTestId('player-journey-surface')).toBeVisible()
     report.stage = 'import'
@@ -1062,6 +1408,7 @@ test('recommendation becomes one readable, taught, and answerable production jou
     expect(completedJob.teachingPreparationRunId).not.toBeNull()
     expect(completedJob.editionId).toBe(boundGame.edition.id)
     observedDocumentVersionId = completedJob.documentVersionId
+    report.documentVersionId = completedJob.documentVersionId
     observedPreparationRunId = completedJob.teachingPreparationRunId
     report.importDuplicate = completedJob.duplicate
     report.downloadedBytes = completedJob.downloadedBytes
@@ -1130,6 +1477,7 @@ test('recommendation becomes one readable, taught, and answerable production jou
       recordTeachingProgress,
     )
     observedTeachingPlanId = firstCitedLesson.planId
+    report.teachingPlanId = firstCitedLesson.planId
     report.teachingPreparationStartedMs = firstCitedLesson.teachingPreparationStartedMs
     report.firstCitedLessonMs = firstCitedLesson.firstCitedLessonMs
     report.preparationRunCreatedAt = firstCitedLesson.preparationRunCreatedAt
@@ -1210,7 +1558,7 @@ test('recommendation becomes one readable, taught, and answerable production jou
     report.citedDraftSectionCount = completedLesson.citedDraftSectionCount
     report.insufficientSectionCount = completedLesson.insufficientSectionCount
     report.lessonCompletionMs = elapsed(lessonStartedAt)
-    const journeyDock = page.getByTestId('player-journey-dock')
+    const journeyDock = selectedJourneyContinuation.getByTestId('player-journey-dock')
     await expect(journeyDock).toBeVisible()
     await expect(journeyDock).toContainText('打开讲解', { timeout: 60_000 })
     await expect(journeyDock).toContainText('基础讲解可读')
@@ -1238,10 +1586,12 @@ test('recommendation becomes one readable, taught, and answerable production jou
     const plansResponse = await page.request.get('/api/v1/teaching-plans')
     expect(plansResponse.ok(), `My Guides returned HTTP ${plansResponse.status()}`).toBe(true)
     const plans = await plansResponse.json() as TeachingPlanResponse[]
-    const persistedPlan = plans.find(plan => plan.documentVersionId === completedJob.documentVersionId)
+    const persistedPlan = plans.find(plan => plan.id === firstCitedLesson.planId)
     expect(persistedPlan, 'The generated plan was not listed in My Guides').toBeDefined()
     report.myGuidesPlanListed = persistedPlan != null
-    report.planGameTitleMatchesSelection = persistedPlan?.gameTitle === boundGame.game.name
+    expect(persistedPlan!.documentVersionId,
+      'My Guides changed the imported document version identity').toBe(completedJob.documentVersionId)
+    report.planGameTitleMatchesSelection = persistedPlan!.gameTitle === boundGame.game.name
     expect(report.planGameTitleMatchesSelection,
       `My Guides used ${persistedPlan?.gameTitle ?? 'no title'} instead of ${boundGame.game.name}`).toBe(true)
     await guidesPage.reload()
@@ -1268,16 +1618,27 @@ test('recommendation becomes one readable, taught, and answerable production jou
       completedJob.documentVersionId,
     )
     expect(answerSessionId, 'The answer workspace did not persist its server conversation identity').toBeTruthy()
-    const conversationResponse = await page.request.get(
-      `/api/v1/document-versions/${encodeURIComponent(completedJob.documentVersionId)}/answers/conversation?${new URLSearchParams({
-        gameSessionId: answerSessionId!,
-        language: 'zh-CN',
-      })}`,
+    report.answerSessionId = answerSessionId
+    const answerSessionResponse = await page.request.get(
+      `/api/v1/game-sessions/${encodeURIComponent(answerSessionId!)}`,
     )
+    expect(answerSessionResponse.ok(),
+      `Answer session returned HTTP ${answerSessionResponse.status()}`).toBe(true)
+    expect(await answerSessionResponse.json()).toMatchObject({
+      id: answerSessionId,
+      editionId: boundGame.edition.id,
+      documentVersionId: completedJob.documentVersionId,
+    })
+    const conversationUrl
+      = `/api/v1/document-versions/${encodeURIComponent(completedJob.documentVersionId)}/answers/conversation?${new URLSearchParams({
+        gameSessionId: answerSessionId!, language: 'zh-CN',
+      })}`
+    const conversationResponse = await page.request.get(conversationUrl)
     expect(conversationResponse.ok(), `Answer conversation returned HTTP ${conversationResponse.status()}`).toBe(true)
     const conversation = await conversationResponse.json() as ConversationTurnResponse[]
     const persistedAnswer = conversation.findLast(turn => turn.question === RULE_QUESTION)
     expect(persistedAnswer, 'The visible answer was not persisted in the server conversation').toBeDefined()
+    report.firstAnswerTurnId = persistedAnswer!.id
     report.answerStatus = persistedAnswer!.answer.status
     report.answerCitationCount = persistedAnswer!.answer.citations.length
     expect(['ANSWERED', 'ANSWERED_WITH_WARNING']).toContain(report.answerStatus)
@@ -1285,15 +1646,66 @@ test('recommendation becomes one readable, taught, and answerable production jou
     report.answerMs = elapsed(answerStartedAt)
     report.citedAnswer = true
 
+    report.stage = 'grounded-follow-up'
+    const followUpStartedAt = performance.now()
+    const followUpResponsePromise = page.waitForResponse(response => {
+      const url = new URL(response.url())
+      return url.pathname === `/api/v1/document-versions/${completedJob.documentVersionId}/answers/stream`
+        && response.request().method() === 'POST'
+        && (response.request().postDataJSON() as { question?: unknown } | null)?.question === RULE_FOLLOW_UP
+    }, { timeout: 4 * 60_000 })
+    await page.getByLabel('向规则书提问').fill(RULE_FOLLOW_UP)
+    await page.getByRole('button', { name: '提交问题' }).click()
+    const followUpResponse = await followUpResponsePromise
+    expect(followUpResponse.ok(), `Follow-up endpoint returned HTTP ${followUpResponse.status()}`).toBe(true)
+    const followUpRequest = followUpResponse.request().postDataJSON() as {
+      question?: string
+      gameSessionId?: string
+      language?: string
+      previousQuestion?: string
+    }
+    expect(followUpRequest).toMatchObject({
+      question: RULE_FOLLOW_UP,
+      gameSessionId: answerSessionId,
+      language: 'zh-CN',
+      previousQuestion: RULE_QUESTION,
+    })
+    let followUpConversation: ConversationTurnResponse[] = []
+    await expect.poll(async () => {
+      const response = await page.request.get(conversationUrl)
+      if (!response.ok()) return 0
+      followUpConversation = await response.json() as ConversationTurnResponse[]
+      return followUpConversation.filter(turn => turn.question === RULE_FOLLOW_UP).length
+    }, {
+      timeout: 4 * 60_000,
+      message: 'The natural follow-up was not persisted in the same grounded answer conversation',
+    }).toBe(1)
+    const initialAnswerIndex = followUpConversation.findIndex(turn => turn.question === RULE_QUESTION)
+    const followUpAnswerIndex = followUpConversation.findIndex(turn => turn.question === RULE_FOLLOW_UP)
+    const persistedFollowUp = followUpConversation[followUpAnswerIndex]
+    report.followUpAnswerTurnId = persistedFollowUp!.id
+    report.answerSessionTurnCount = followUpConversation.length
+    report.answerSessionPreserved = followUpRequest.gameSessionId === answerSessionId
+      && initialAnswerIndex >= 0
+      && followUpAnswerIndex > initialAnswerIndex
+    expect(report.answerSessionPreserved,
+      'The follow-up did not continue after the first answer in the same document-bound session').toBe(true)
+    report.followUpAnswerStatus = persistedFollowUp!.answer.status
+    report.followUpCitationCount = persistedFollowUp!.answer.citations.length
+    report.followUpAnswerMs = elapsed(followUpStartedAt)
+    expect(['ANSWERED', 'ANSWERED_WITH_WARNING']).toContain(report.followUpAnswerStatus)
+    expect(report.followUpCitationCount).toBeGreaterThan(0)
+    await expect(answerWorkspace.getByText(RULE_FOLLOW_UP, { exact: true })).toBeVisible()
+
     report.stage = 'role-switching'
     const roleSwitcher = page.getByTestId('agent-role-switcher')
     await roleSwitcher.getByRole('button', { name: '继续推荐' }).click()
     await expect(composer).toBeVisible()
     await expect(composer).toHaveValue(PRESERVED_DRAFT)
-    await expect.poll(() => targetDetailsButton.count(), {
+    await expect.poll(() => selectedDetailsButton.count(), {
       message: 'The recommendation workspace did not restore a matching verified game card',
     }).toBeGreaterThan(0)
-    await expect(targetDetailsButton.first()).toBeVisible()
+    await expect(selectedDetailsButton.first()).toBeVisible()
     await roleSwitcher.getByRole('button', { name: '规则答疑' }).click()
     await expect(answerWorkspace.locator('#lesson-answer-evidence-title')).toBeVisible()
     await roleSwitcher.getByRole('button', { name: '继续推荐' }).click()
@@ -1304,7 +1716,8 @@ test('recommendation becomes one readable, taught, and answerable production jou
     await expect(restoredComposer).toBeVisible({ timeout: 60_000 })
     await expect(restoredComposer).toHaveValue(PRESERVED_DRAFT)
     await expect(page.getByRole('button', {
-      name: new RegExp(`查看完整资料：(?:${TARGET_NAME.source})`, 'i'),
+      name: `查看完整资料：${selectedGameName}`,
+      exact: true,
     }).first()).toBeVisible({ timeout: 60_000 })
     report.recommendationRestored = true
     const restoredRoleSwitcher = page.getByTestId('agent-role-switcher')

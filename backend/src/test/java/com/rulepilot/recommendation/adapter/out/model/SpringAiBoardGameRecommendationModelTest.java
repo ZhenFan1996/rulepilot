@@ -58,7 +58,9 @@ class SpringAiBoardGameRecommendationModelTest {
         assertThat(turn.toolCalls()).isEmpty();
         ArgumentCaptor<Prompt> prompt = ArgumentCaptor.forClass(Prompt.class);
         verify(chatModel).call(prompt.capture());
-        assertThat(((OpenAiChatOptions) prompt.getValue().getOptions()).getToolChoice()).isEqualTo("auto");
+        OpenAiChatOptions options = (OpenAiChatOptions) prompt.getValue().getOptions();
+        assertThat(options.getToolChoice()).isEqualTo("auto");
+        assertThat(options.getTemperature()).isZero();
     }
 
     @Test

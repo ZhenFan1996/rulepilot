@@ -49,6 +49,7 @@ describe('RecommendationGameCard', () => {
     })
 
     expect(wrapper.text()).toContain('2–5 players · 45–75 min · Weight 2.2')
+    expect(wrapper.get('[data-testid="recommendation-game-card"]').attributes('data-bgg-id')).toBe('901')
     expect(wrapper.find('[data-testid="candidate-fit-claims"]').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('Constraint check')
     expect(wrapper.text()).not.toContain('Candidate player range is inside the request.')

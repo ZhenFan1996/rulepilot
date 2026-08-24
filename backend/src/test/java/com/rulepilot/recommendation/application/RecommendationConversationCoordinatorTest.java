@@ -9,12 +9,14 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ConversationRequest;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ConversationResponse;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.DecisionMode;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.Outcome;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendedGame;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendationProfile;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.TurnCheckpoint;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.Details;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.Game;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.Ranking;
@@ -27,6 +29,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -35,6 +38,9 @@ import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 import org.junit.jupiter.api.Test;
 
 class RecommendationConversationCoordinatorTest {
@@ -44,7 +50,7 @@ class RecommendationConversationCoordinatorTest {
     @Test
     void persistsOneOwnerScopedTurnAndReplaysTheSameClientTurnWithoutCallingTheAgentAgain() {
         BoardGameRecommendationAgent agent = mock(BoardGameRecommendationAgent.class);
-        when(agent.conversePersisted(any(), eq("zh-CN"), eq("alice"), any(), any()))
+        when(agent.conversePersisted(any(), eq("zh-CN"), eq("alice"), any(), any(), any()))
                 .thenReturn(response("我核对好了。"));
         InMemoryStore store = new InMemoryStore();
         RecommendationConversationCoordinator coordinator = coordinator(agent, store);
@@ -72,13 +78,13 @@ class RecommendationConversationCoordinatorTest {
         assertThat(latest.state().transcript())
                 .extracting(message -> message.role() + ":" + message.text())
                 .containsExactly("user:想找四人游戏", "assistant:我核对好了。");
-        verify(agent, times(1)).conversePersisted(any(), eq("zh-CN"), eq("alice"), any(), any());
+        verify(agent, times(1)).conversePersisted(any(), eq("zh-CN"), eq("alice"), any(), any(), any());
     }
 
     @Test
     void startsANewConversationWhenANewTurnHasNoConversationIdentity() {
         BoardGameRecommendationAgent agent = mock(BoardGameRecommendationAgent.class);
-        when(agent.conversePersisted(any(), eq("zh-CN"), eq("alice"), any(), any()))
+        when(agent.conversePersisted(any(), eq("zh-CN"), eq("alice"), any(), any(), any()))
                 .thenReturn(response("第一段对话。"), response("新的对话。"));
         RecommendationConversationCoordinator coordinator = coordinator(agent, new InMemoryStore());
 
@@ -102,7 +108,7 @@ class RecommendationConversationCoordinatorTest {
     @Test
     void replaysTheSameTurnWithoutAConversationIdentity() {
         BoardGameRecommendationAgent agent = mock(BoardGameRecommendationAgent.class);
-        when(agent.conversePersisted(any(), eq("en"), eq("alice"), any(), any()))
+        when(agent.conversePersisted(any(), eq("en"), eq("alice"), any(), any(), any()))
                 .thenReturn(response("One answer."));
         RecommendationConversationCoordinator coordinator = coordinator(agent, new InMemoryStore());
         UUID clientTurnId = UUID.randomUUID();
@@ -113,13 +119,13 @@ class RecommendationConversationCoordinatorTest {
 
         assertThat(replay.conversationId()).isEqualTo(first.conversationId());
         assertThat(replay.replayed()).isTrue();
-        verify(agent, times(1)).conversePersisted(any(), eq("en"), eq("alice"), any(), any());
+        verify(agent, times(1)).conversePersisted(any(), eq("en"), eq("alice"), any(), any(), any());
     }
 
     @Test
     void usesAnExplicitlyCreatedEmptyConversationForItsFirstTurn() {
         BoardGameRecommendationAgent agent = mock(BoardGameRecommendationAgent.class);
-        when(agent.conversePersisted(any(), eq("en"), eq("alice"), any(), any()))
+        when(agent.conversePersisted(any(), eq("en"), eq("alice"), any(), any(), any()))
                 .thenReturn(response("Started."));
         RecommendationConversationCoordinator coordinator = coordinator(agent, new InMemoryStore());
         var empty = coordinator.startNew("alice");
@@ -138,7 +144,7 @@ class RecommendationConversationCoordinatorTest {
     void carriesVerifiedCandidateFactsIntoLaterTurnsWithoutTrustingTheBrowserToReplayThem() {
         BoardGameRecommendationAgent agent = mock(BoardGameRecommendationAgent.class);
         Game verified = verifiedGame();
-        when(agent.conversePersisted(any(), eq("zh-CN"), eq("alice"), any(), any()))
+        when(agent.conversePersisted(any(), eq("zh-CN"), eq("alice"), any(), any(), any()))
                 .thenReturn(responseWithGame("先看这款。", verified), response("可以直接接着聊。"));
         RecommendationConversationCoordinator coordinator = coordinator(agent, new InMemoryStore());
 
@@ -154,7 +160,7 @@ class RecommendationConversationCoordinatorTest {
                 ignored -> {});
 
         var requests = org.mockito.ArgumentCaptor.forClass(ConversationRequest.class);
-        verify(agent, times(2)).conversePersisted(requests.capture(), eq("zh-CN"), eq("alice"), any(), any());
+        verify(agent, times(2)).conversePersisted(requests.capture(), eq("zh-CN"), eq("alice"), any(), any(), any());
         assertThat(requests.getAllValues().get(0).priorVerifiedGames()).isEmpty();
         assertThat(requests.getAllValues().get(1).priorVerifiedGames())
                 .extracting(game -> game.ranking().bggId())
@@ -165,10 +171,239 @@ class RecommendationConversationCoordinatorTest {
     }
 
     @Test
+    void appendsTheCurrentUserMessageAsTheLatestEvidenceForAPersistedSecondTurn() {
+        BoardGameRecommendationAgent agent = mock(BoardGameRecommendationAgent.class);
+        when(agent.conversePersisted(any(), eq("zh-CN"), eq("alice"), any(), any(), any()))
+                .thenReturn(response("先前回答。"), response("当前回答。"));
+        RecommendationConversationCoordinator coordinator = coordinator(agent, new InMemoryStore());
+        String priorMessage = "先看旧港。";
+        String currentMessage = "我改选新港，请从它开始讲解。";
+
+        var first = coordinator.converse(
+                new SessionTurn(null, 0, UUID.randomUUID(), request(priorMessage)),
+                "zh-CN",
+                "alice",
+                ignored -> {});
+        coordinator.converse(
+                new SessionTurn(first.conversationId(), 1, UUID.randomUUID(), request(currentMessage)),
+                "zh-CN",
+                "alice",
+                ignored -> {});
+
+        var requests = org.mockito.ArgumentCaptor.forClass(ConversationRequest.class);
+        verify(agent, times(2)).conversePersisted(requests.capture(), eq("zh-CN"), eq("alice"), any(), any(), any());
+        ConversationRequest effectiveSecondTurn = requests.getAllValues().get(1);
+        assertThat(effectiveSecondTurn.transcript())
+                .extracting(message -> message.role() + ":" + message.text())
+                .containsExactly(
+                        "user:" + priorMessage,
+                        "assistant:先前回答。",
+                        "user:" + currentMessage);
+        assertThat(new RecommendationEvidenceReview(new ObjectMapper(), null)
+                        .preferenceEvidence(effectiveSecondTurn)
+                        .entrySet())
+                .containsExactly(
+                        Map.entry("U1", priorMessage),
+                        Map.entry("U2", currentMessage));
+    }
+
+    @Test
+    void keepsTheLastSettledCatalogCheckpointWhenFinalCompositionFails() {
+        BoardGameRecommendationAgent agent = mock(BoardGameRecommendationAgent.class);
+        Game verified = verifiedGame(62);
+        when(agent.conversePersisted(any(), eq("zh-CN"), eq("alice"), any(), any(), any()))
+                .thenAnswer(invocation -> {
+                    Consumer<TurnCheckpoint> checkpoints = invocation.getArgument(5);
+                    checkpoints.accept(new TurnCheckpoint(RecommendationProfile.empty(), List.of(verified)));
+                    throw new IllegalStateException("final composition failed after catalog read");
+                });
+        InMemoryStore store = new InMemoryStore();
+        RecommendationConversationCoordinator coordinator = coordinator(agent, store);
+
+        assertThatThrownBy(() -> coordinator.converse(
+                        new SessionTurn(
+                                null,
+                                0,
+                                UUID.randomUUID(),
+                                request("我们四个人第一次聚会，我没想好玩什么；先帮我看看适合聊天的选择。")),
+                        "zh-CN",
+                        "alice",
+                        ignored -> {}))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("final composition failed");
+
+        StoredConversation recovered = store.findLatestOwned("alice").orElseThrow();
+        assertThat(recovered.revision()).isZero();
+        assertThat(recovered.activeClientTurnId()).isNull();
+        assertThat(recovered.state().verifiedGames())
+                .extracting(game -> game.ranking().bggId())
+                .containsExactly(62);
+        assertThat(recovered.state().knownGames())
+                .extracting(BoardGameRecommendationAgent.KnownGame::bggId)
+                .containsExactly(62);
+    }
+
+    @Test
+    void staleRecoveryUsesTheClaimedCheckpointStateAndFencesTheOriginalAttempt() throws Exception {
+        BoardGameRecommendationAgent agent = mock(BoardGameRecommendationAgent.class);
+        Game verified = verifiedGame(63);
+        CountDownLatch checkpointSaved = new CountDownLatch(1);
+        CountDownLatch releaseOriginal = new CountDownLatch(1);
+        AtomicInteger calls = new AtomicInteger();
+        AtomicReference<ConversationRequest> recoveryRequest = new AtomicReference<>();
+        when(agent.conversePersisted(any(), eq("en"), eq("alice"), any(), any(), any()))
+                .thenAnswer(invocation -> {
+                    int call = calls.incrementAndGet();
+                    if (call == 1) return response("Earlier answer.");
+                    if (call == 2) {
+                        Consumer<TurnCheckpoint> checkpoints = invocation.getArgument(5);
+                        checkpoints.accept(new TurnCheckpoint(RecommendationProfile.empty(), List.of(verified)));
+                        checkpointSaved.countDown();
+                        if (!releaseOriginal.await(2, TimeUnit.SECONDS)) {
+                            throw new IllegalStateException("test timed out waiting to finish the original attempt");
+                        }
+                        return response("Obsolete answer.");
+                    }
+                    recoveryRequest.set(invocation.getArgument(0));
+                    return response("Recovered answer.");
+                });
+        passThroughValidation(agent);
+        InMemoryStore store = new InMemoryStore();
+        RecommendationConversationCoordinator originalCoordinator = new RecommendationConversationCoordinator(
+                agent,
+                store,
+                Clock.fixed(NOW, ZoneOffset.UTC),
+                Duration.ofSeconds(1),
+                Duration.ofSeconds(10));
+        RecommendationConversationCoordinator recoveryCoordinator = new RecommendationConversationCoordinator(
+                agent,
+                store,
+                Clock.fixed(NOW.plusSeconds(20), ZoneOffset.UTC),
+                Duration.ofSeconds(1),
+                Duration.ofSeconds(10));
+        String priorMessage = "Earlier user request";
+        String currentMessage = "Current recoverable target";
+        var earlier = originalCoordinator.converse(
+                new SessionTurn(null, 0, UUID.randomUUID(), request(priorMessage)),
+                "en",
+                "alice",
+                ignored -> {});
+        UUID clientTurnId = UUID.randomUUID();
+        ConversationRequest request = request(currentMessage);
+
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            var original = executor.submit(() -> originalCoordinator.converse(
+                    new SessionTurn(earlier.conversationId(), 1, clientTurnId, request),
+                    "en",
+                    "alice",
+                    ignored -> {}));
+            assertThat(checkpointSaved.await(1, TimeUnit.SECONDS)).isTrue();
+            UUID conversationId = earlier.conversationId();
+
+            var recovered = recoveryCoordinator.converse(
+                    new SessionTurn(conversationId, 1, clientTurnId, request),
+                    "en",
+                    "alice",
+                    ignored -> {});
+            releaseOriginal.countDown();
+            var fencedOriginal = original.get(2, TimeUnit.SECONDS);
+
+            assertThat(recoveryRequest.get().priorVerifiedGames())
+                    .extracting(game -> game.ranking().bggId())
+                    .containsExactly(63);
+            assertThat(recoveryRequest.get().transcript())
+                    .extracting(message -> message.role() + ":" + message.text())
+                    .containsExactly(
+                            "user:" + priorMessage,
+                            "assistant:Earlier answer.",
+                            "user:" + currentMessage);
+            assertThat(new RecommendationEvidenceReview(new ObjectMapper(), null)
+                            .preferenceEvidence(recoveryRequest.get())
+                            .entrySet())
+                    .containsExactly(
+                            Map.entry("U1", priorMessage),
+                            Map.entry("U2", currentMessage));
+            assertThat(recovered.response().assistantMessage()).isEqualTo("Recovered answer.");
+            assertThat(fencedOriginal.replayed()).isTrue();
+            assertThat(fencedOriginal.response()).isEqualTo(recovered.response());
+            assertThat(store.findOwned(conversationId, "alice").orElseThrow().state().verifiedGames())
+                    .extracting(game -> game.ranking().bggId())
+                    .containsExactly(63);
+        } finally {
+            releaseOriginal.countDown();
+        }
+    }
+
+    @Test
+    void publishesThePersistedFinalAnswerOnlyAfterTheTurnCompletes() {
+        BoardGameRecommendationAgent agent = mock(BoardGameRecommendationAgent.class);
+        InMemoryStore store = new InMemoryStore();
+        List<String> published = new ArrayList<>();
+        AtomicReference<Long> revisionAtPublication = new AtomicReference<>();
+        when(agent.conversePersisted(any(), eq("en"), eq("alice"), any(), any(), any()))
+                .thenAnswer(invocation -> {
+                    Consumer<String> internalAnswerParts = invocation.getArgument(4);
+                    internalAnswerParts.accept("Uncommitted draft.");
+                    assertThat(published).isEmpty();
+                    return response("Committed answer.");
+                });
+        RecommendationConversationCoordinator coordinator = coordinator(agent, store);
+
+        var completed = coordinator.converse(
+                new SessionTurn(null, 0, UUID.randomUUID(), request("Publish safely")),
+                "en",
+                "alice",
+                ignored -> {},
+                part -> {
+                    revisionAtPublication.set(store.findLatestOwned("alice").orElseThrow().revision());
+                    published.add(part);
+                });
+
+        assertThat(completed.revision()).isEqualTo(1);
+        assertThat(revisionAtPublication.get()).isEqualTo(1);
+        assertThat(published).containsExactly("Committed answer.");
+    }
+
+    @Test
+    void publicationFailureLeavesACompletedTurnAvailableForReplay() {
+        BoardGameRecommendationAgent agent = mock(BoardGameRecommendationAgent.class);
+        when(agent.conversePersisted(any(), eq("en"), eq("alice"), any(), any(), any()))
+                .thenReturn(response("Durable answer."));
+        InMemoryStore store = new InMemoryStore();
+        RecommendationConversationCoordinator coordinator = coordinator(agent, store);
+        UUID clientTurnId = UUID.randomUUID();
+        ConversationRequest request = request("Keep the committed answer");
+
+        assertThatThrownBy(() -> coordinator.converse(
+                        new SessionTurn(null, 0, clientTurnId, request),
+                        "en",
+                        "alice",
+                        ignored -> {},
+                        ignored -> {
+                            throw new IllegalStateException("client disconnected during publication");
+                        }))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("client disconnected");
+
+        StoredConversation completed = store.findLatestOwned("alice").orElseThrow();
+        assertThat(completed.revision()).isEqualTo(1);
+        assertThat(completed.activeClientTurnId()).isNull();
+        assertThat(completed.lastResponse().assistantMessage()).isEqualTo("Durable answer.");
+        var replay = coordinator.converse(
+                new SessionTurn(completed.id(), 0, clientTurnId, request),
+                "en",
+                "alice",
+                ignored -> {});
+        assertThat(replay.replayed()).isTrue();
+        assertThat(replay.response().assistantMessage()).isEqualTo("Durable answer.");
+        verify(agent, times(1)).conversePersisted(any(), eq("en"), eq("alice"), any(), any(), any());
+    }
+
+    @Test
     void retainsNewlyObservedGameIdentityWhenLongTermIdentityMemoryIsFull() {
         BoardGameRecommendationAgent agent = mock(BoardGameRecommendationAgent.class);
         java.util.concurrent.atomic.AtomicInteger nextId = new java.util.concurrent.atomic.AtomicInteger();
-        when(agent.conversePersisted(any(), eq("zh-CN"), eq("alice"), any(), any()))
+        when(agent.conversePersisted(any(), eq("zh-CN"), eq("alice"), any(), any(), any()))
                 .thenAnswer(ignored -> {
                     int id = nextId.incrementAndGet();
                     return responseWithGame("第 " + id + " 款", verifiedGame(id));
@@ -198,7 +433,7 @@ class RecommendationConversationCoordinatorTest {
     @Test
     void rejectsCrossOwnerLookupStaleRevisionsAndTurnIdReuseWithDifferentInput() {
         BoardGameRecommendationAgent agent = mock(BoardGameRecommendationAgent.class);
-        when(agent.conversePersisted(any(), any(), any(), any(), any())).thenReturn(response("Done."));
+        when(agent.conversePersisted(any(), any(), any(), any(), any(), any())).thenReturn(response("Done."));
         RecommendationConversationCoordinator coordinator = coordinator(agent, new InMemoryStore());
         UUID clientTurnId = UUID.randomUUID();
         ConversationRequest firstRequest = request("Find a game");
@@ -236,7 +471,7 @@ class RecommendationConversationCoordinatorTest {
         BoardGameRecommendationAgent agent = mock(BoardGameRecommendationAgent.class);
         CountDownLatch enteredAgent = new CountDownLatch(1);
         CountDownLatch releaseAgent = new CountDownLatch(1);
-        when(agent.conversePersisted(any(), eq("en"), eq("alice"), any(), any())).thenAnswer(invocation -> {
+        when(agent.conversePersisted(any(), eq("en"), eq("alice"), any(), any(), any())).thenAnswer(invocation -> {
             enteredAgent.countDown();
             if (!releaseAgent.await(2, TimeUnit.SECONDS)) throw new IllegalStateException("test timed out");
             return response("One complete answer.");
@@ -263,13 +498,13 @@ class RecommendationConversationCoordinatorTest {
                     .containsExactlyInAnyOrder(false, true);
             assertThat(retryResult.response()).isEqualTo(originalResult.response());
         }
-        verify(agent, times(1)).conversePersisted(any(), eq("en"), eq("alice"), any(), any());
+        verify(agent, times(1)).conversePersisted(any(), eq("en"), eq("alice"), any(), any(), any());
     }
 
     @Test
     void releasesAClaimAfterFailureSoTheSameIdCanRetry() {
         BoardGameRecommendationAgent agent = mock(BoardGameRecommendationAgent.class);
-        when(agent.conversePersisted(any(), eq("en"), eq("alice"), any(), any()))
+        when(agent.conversePersisted(any(), eq("en"), eq("alice"), any(), any(), any()))
                 .thenThrow(new IllegalStateException("provider failed"))
                 .thenReturn(response("Recovered answer."));
         RecommendationConversationCoordinator coordinator = coordinator(agent, new InMemoryStore());
@@ -281,13 +516,13 @@ class RecommendationConversationCoordinatorTest {
 
         assertThat(recovered.revision()).isEqualTo(1);
         assertThat(recovered.response().assistantMessage()).isEqualTo("Recovered answer.");
-        verify(agent, times(2)).conversePersisted(any(), eq("en"), eq("alice"), any(), any());
+        verify(agent, times(2)).conversePersisted(any(), eq("en"), eq("alice"), any(), any(), any());
     }
 
     @Test
     void deletesOnlyTheOwnedConversation() {
         BoardGameRecommendationAgent agent = mock(BoardGameRecommendationAgent.class);
-        when(agent.conversePersisted(any(), any(), any(), any(), any())).thenReturn(response("Done."));
+        when(agent.conversePersisted(any(), any(), any(), any(), any(), any())).thenReturn(response("Done."));
         RecommendationConversationCoordinator coordinator = coordinator(agent, new InMemoryStore());
         var result = coordinator.converse(
                 new SessionTurn(null, 0, UUID.randomUUID(), request("Start")),
@@ -342,7 +577,7 @@ class RecommendationConversationCoordinatorTest {
                         ignored -> {}))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThat(store.findLatestOwned("alice")).isEmpty();
-        verify(agent, times(0)).conversePersisted(any(), any(), any(), any(), any());
+        verify(agent, times(0)).conversePersisted(any(), any(), any(), any(), any(), any());
     }
 
     private RecommendationConversationCoordinator coordinator(
@@ -449,6 +684,7 @@ class RecommendationConversationCoordinatorTest {
                     null,
                     null,
                     null,
+                    null,
                     now,
                     now);
             values.put(conversationId, created);
@@ -463,7 +699,7 @@ class RecommendationConversationCoordinatorTest {
                 Instant now) {
             StoredConversation created = new StoredConversation(
                     conversationId, ownerUsername, 0, initialState,
-                    null, null, null, null, null, null, null, now, now);
+                    null, null, null, null, null, null, null, null, now, now);
             values.put(conversationId, created);
             return created;
         }
@@ -497,6 +733,7 @@ class RecommendationConversationCoordinatorTest {
                 long expectedRevision,
                 UUID clientTurnId,
                 String requestFingerprint,
+                UUID claimAttemptId,
                 Instant startedAt,
                 Instant staleBefore) {
             StoredConversation current = findOwned(conversationId, ownerUsername).orElse(null);
@@ -516,8 +753,41 @@ class RecommendationConversationCoordinatorTest {
                     current.lastResponseLocale(),
                     clientTurnId,
                     requestFingerprint,
+                    claimAttemptId,
                     startedAt,
                     startedAt));
+            return true;
+        }
+
+        @Override
+        public synchronized boolean checkpointTurn(
+                UUID conversationId,
+                String ownerUsername,
+                long expectedRevision,
+                UUID clientTurnId,
+                String requestFingerprint,
+                UUID claimAttemptId,
+                ConversationState checkpointState,
+                Instant checkpointedAt) {
+            StoredConversation current = findOwned(conversationId, ownerUsername).orElse(null);
+            if (current == null
+                    || current.revision() != expectedRevision
+                    || !clientTurnId.equals(current.activeClientTurnId())
+                    || !requestFingerprint.equals(current.activeRequestFingerprint())
+                    || !claimAttemptId.equals(current.activeClaimAttemptId())) return false;
+            values.put(conversationId, copy(
+                    current,
+                    current.revision(),
+                    checkpointState,
+                    current.lastClientTurnId(),
+                    current.lastRequestFingerprint(),
+                    current.lastResponse(),
+                    current.lastResponseLocale(),
+                    clientTurnId,
+                    requestFingerprint,
+                    claimAttemptId,
+                    current.activeStartedAt(),
+                    checkpointedAt));
             return true;
         }
 
@@ -528,6 +798,7 @@ class RecommendationConversationCoordinatorTest {
                 long expectedRevision,
                 UUID clientTurnId,
                 String requestFingerprint,
+                UUID claimAttemptId,
                 ConversationState nextState,
                 ConversationResponse response,
                 String responseLocale,
@@ -536,7 +807,8 @@ class RecommendationConversationCoordinatorTest {
             if (current == null
                     || current.revision() != expectedRevision
                     || !clientTurnId.equals(current.activeClientTurnId())
-                    || !requestFingerprint.equals(current.activeRequestFingerprint())) return false;
+                    || !requestFingerprint.equals(current.activeRequestFingerprint())
+                    || !claimAttemptId.equals(current.activeClaimAttemptId())) return false;
             values.put(conversationId, copy(
                     current,
                     current.revision() + 1,
@@ -545,6 +817,7 @@ class RecommendationConversationCoordinatorTest {
                     requestFingerprint,
                     response,
                     responseLocale,
+                    null,
                     null,
                     null,
                     null,
@@ -559,12 +832,14 @@ class RecommendationConversationCoordinatorTest {
                 long expectedRevision,
                 UUID clientTurnId,
                 String requestFingerprint,
+                UUID claimAttemptId,
                 Instant releasedAt) {
             StoredConversation current = findOwned(conversationId, ownerUsername).orElse(null);
             if (current == null
                     || current.revision() != expectedRevision
                     || !clientTurnId.equals(current.activeClientTurnId())
-                    || !requestFingerprint.equals(current.activeRequestFingerprint())) return;
+                    || !requestFingerprint.equals(current.activeRequestFingerprint())
+                    || !claimAttemptId.equals(current.activeClaimAttemptId())) return;
             values.put(conversationId, copy(
                     current,
                     current.revision(),
@@ -573,6 +848,7 @@ class RecommendationConversationCoordinatorTest {
                     current.lastRequestFingerprint(),
                     current.lastResponse(),
                     current.lastResponseLocale(),
+                    null,
                     null,
                     null,
                     null,
@@ -597,6 +873,7 @@ class RecommendationConversationCoordinatorTest {
                 String lastResponseLocale,
                 UUID activeClientTurnId,
                 String activeRequestFingerprint,
+                UUID activeClaimAttemptId,
                 Instant activeStartedAt,
                 Instant updatedAt) {
             return new StoredConversation(
@@ -610,6 +887,7 @@ class RecommendationConversationCoordinatorTest {
                     lastResponseLocale,
                     activeClientTurnId,
                     activeRequestFingerprint,
+                    activeClaimAttemptId,
                     activeStartedAt,
                     current.createdAt(),
                     updatedAt);

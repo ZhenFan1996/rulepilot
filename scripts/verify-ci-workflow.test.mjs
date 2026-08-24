@@ -58,24 +58,68 @@ test('production recommendation journey tests the deployed main release without 
   assert.match(productionRecommendationWorkflow, /::add-mask::\$player_username/)
   assert.match(productionRecommendationWorkflow, /::add-mask::\$player_password/)
   assert.match(productionRecommendationWorkflow, /RULEPILOT_PRODUCTION_RECOMMENDATION_JOURNEY=true/)
-  assert.match(productionRecommendationWorkflow, /target_bgg_id:[\s\S]*?default: '230802'/)
+  assert.match(productionRecommendationWorkflow, /opening_prompt:[\s\S]*?还没想清楚换什么方向/)
+  assert.match(productionRecommendationWorkflow, /selection_prompt:[\s\S]*?你直接挑三款/)
+  assert.match(productionRecommendationWorkflow, /rule_follow_up:[\s\S]*?同一本规则书/)
+  assert.match(productionRecommendationWorkflow,
+    /RULEPILOT_RECOMMENDATION_OPENING_PROMPT: \$\{\{ inputs\.opening_prompt \}\}/)
+  assert.match(productionRecommendationWorkflow,
+    /RULEPILOT_RECOMMENDATION_SELECTION_PROMPT: \$\{\{ inputs\.selection_prompt \}\}/)
+  assert.match(productionRecommendationWorkflow,
+    /RULEPILOT_RECOMMENDATION_RULE_FOLLOW_UP: \$\{\{ inputs\.rule_follow_up \}\}/)
+  assert.doesNotMatch(productionRecommendationWorkflow, /target_bgg_id|target_names|230802|花砖物语|Azul/)
   assert.match(productionRecommendationWorkflow, /require_fresh_import:[\s\S]*?type: boolean[\s\S]*?default: false/)
   assert.match(productionRecommendationWorkflow, /playwright\.recommendation-production\.config\.ts/)
   assert.match(productionRecommendationConfig, /testMatch:\s*'production-recommendation-journey\.spec\.ts'/)
   assert.match(productionRecommendationConfig, /trace:\s*'off'/)
   assert.match(productionRecommendationConfig, /screenshot:\s*'off'/)
-  assert.match(productionRecommendationSpec, /gstoneCandidate/)
+  assert.match(productionRecommendationSpec, /chooseRecommendationRecovery\([\s\S]*?candidateResult\.candidates/)
+  assert.match(productionRecommendationSpec, /candidate\.officialDomainVerified === true/)
+  assert.match(productionRecommendationSpec, /candidate\.languageVerified === true/)
+  assert.match(productionRecommendationSpec, /DOCUMENT_RESPONSE_CONFIRMED/)
+  assert.match(productionRecommendationSpec, /ORDERED_PAGE_SEQUENCE_CONFIRMED/)
+  assert.match(productionRecommendationSpec, /bggIdFromBindingPath\(new URL\(bindingResponse\.url\(\)\)\.pathname\)/)
+  assert.match(productionRecommendationSpec, /report\.selectedGameName = selectedGameName/)
+  assert.match(productionRecommendationSpec, /getAttribute\('data-bgg-id'\)/)
+  assert.match(productionRecommendationSpec, /report\.selectedBggId = selectedCardBggId/)
+  assert.match(productionRecommendationSpec, /toBe\(attemptedBggId\)/)
+  assert.match(productionRecommendationSpec, /report\.attemptedBggIds\.push\(attemptedBggId\)/)
+  assert.match(productionRecommendationSpec, /report\.selectedRecommendationRank = selectedRecommendationRank/)
+  assert.match(productionRecommendationSpec, /report\.recommendationRecoveryOutcomes\.push\(/)
+  assert.match(productionRecommendationSpec, /candidateResult\.configured \? candidateResult\.candidates : \[\]/)
+  assert.match(productionRecommendationSpec, /REUSED_EXISTING_JOURNEY/)
+  assert.match(productionRecommendationSpec, /SELECTED_VERIFIED_OFFICIAL_SOURCE/)
+  assert.match(productionRecommendationSpec, /SKIPPED_NO_VERIFIED_OFFICIAL_SOURCE/)
+  assert.match(productionRecommendationSpec, /Math\.min\(report\.recommendationCardCount, 3\)/)
+  assert.match(productionRecommendationSpec, /for \(let cardIndex = 0; cardIndex < recommendationAttemptLimit/)
+  assert.match(productionRecommendationSpec, /getByRole\('button', \{ name: '关闭小窗', exact: true \}\)\.click\(\)/)
+  assert.match(productionRecommendationSpec, /None of the three Agent-ranked recommendations/)
+  assert.match(productionRecommendationSpec,
+    /\[data-testid="player-journey-continuation"\]\[data-bgg-id="\$\{boundGame\.bggId\}"\]/)
+  assert.match(productionRecommendationSpec,
+    /expect\(selectedJourneyContinuation\)\.toHaveCount\(1\)/)
+  assert.match(productionRecommendationSpec,
+    /expect\(selectedJourneyContinuation\)\.toBeVisible\(\)/)
+  assert.match(productionRecommendationSpec,
+    /selectedJourneyContinuation\.getByTestId\('player-journey-progress-button'\)/)
+  assert.match(productionRecommendationSpec,
+    /selectedJourneyContinuation\.getByTestId\('player-journey-dock'\)/)
+  assert.doesNotMatch(productionRecommendationSpec,
+    /page\.getByTestId\('player-journey-(?:progress-button|dock)'\)/)
+  assert.doesNotMatch(productionRecommendationSpec, /TARGET_BGG_ID|TARGET_NAME|gstoneCandidate|gstonegames\.com/)
   assert.match(productionRecommendationSpec, /report\.importReused = launchedJob\.reused/)
   assert.match(productionRecommendationSpec, /report\.pdfDownloadToTeachingStartMs = Math\.max/)
   assert.match(productionRecommendationSpec, /report\.pdfDownloadToFirstCitedLessonMs = Math\.max/)
-  assert.match(productionRecommendationSpec, /MAX_COMPLETE_GOAL_RECOMMENDATION_MS = 20_000/)
+  assert.match(productionRecommendationSpec, /MAX_OPEN_GUIDANCE_MS = 15_000/)
+  assert.match(productionRecommendationSpec, /MAX_SELECTION_RECOMMENDATION_MS = 20_000/)
+  assert.match(productionRecommendationSpec, /toContain\(report\.openGuidanceOutcome\)/)
   assert.match(
     productionRecommendationSpec,
-    /targetDetailsButton\)\.toBeVisible\(\{ timeout: MAX_COMPLETE_GOAL_RECOMMENDATION_MS \}\)/,
+    /expect\(recommendationCards\)\.toHaveCount\(3, \{ timeout: MAX_SELECTION_RECOMMENDATION_MS \}\)/,
   )
   assert.match(
     productionRecommendationSpec,
-    /report\.recommendationMs[\s\S]*?toBeLessThanOrEqual\(MAX_COMPLETE_GOAL_RECOMMENDATION_MS\)/,
+    /report\.recommendationMs[\s\S]*?toBeLessThanOrEqual\(MAX_SELECTION_RECOMMENDATION_MS\)/,
   )
   assert.match(productionRecommendationSpec, /section\.evidenceStatus === 'SUPPORTED' \|\| section\.evidenceStatus === 'CITED_DRAFT'/)
   assert.match(
@@ -88,13 +132,25 @@ test('production recommendation journey tests the deployed main release without 
     /expect\(importRequestCount\)\.toBe\(restoredExistingJourney \? 0 : 1\)/,
   )
   assert.match(productionRecommendationSpec, /expect\(completedJob\.documentVersionId\)\.not\.toBeNull\(\)/)
+  assert.match(productionRecommendationSpec, /receivedPlan\.documentVersionId[\s\S]*?toBe\(versionId\)/)
+  assert.match(productionRecommendationSpec, /lesson\.teachingPlanId[\s\S]*?toBe\(plan\.id\)/)
+  assert.match(productionRecommendationSpec, /plans\.find\(plan => plan\.id === firstCitedLesson\.planId\)/)
   assert.match(productionRecommendationSpec, /expect\(progressPayload\)\.toMatchObject\(\{ stage: 'READY', complete: true \}\)/)
   assert.match(productionRecommendationSpec, /const openRulebook = page\.getByRole\('button', \{ name: '先阅读原规则书' \}\)/)
   assert.match(productionRecommendationSpec, /await openRulebook\.click\(\)/)
   assert.match(productionRecommendationSpec, /RULEPILOT_RECOMMENDATION_RULE_QUESTION/)
-  assert.match(productionRecommendationSpec, /引用规则书页码/)
+  assert.match(productionRecommendationSpec, /标出规则书页码/)
   assert.match(productionRecommendationSpec, /toContain\(report\.answerStatus\)/)
   assert.match(productionRecommendationSpec, /expect\(report\.answerCitationCount\)\.toBeGreaterThan\(0\)/)
+  assert.match(productionRecommendationSpec, /RULEPILOT_RECOMMENDATION_RULE_FOLLOW_UP/)
+  assert.match(productionRecommendationSpec, /gameSessionId: answerSessionId/)
+  assert.match(productionRecommendationSpec, /editionId: boundGame\.edition\.id/)
+  assert.match(productionRecommendationSpec, /previousQuestion: RULE_QUESTION/)
+  assert.match(productionRecommendationSpec, /documentVersionId: completedJob\.documentVersionId/)
+  assert.match(productionRecommendationSpec, /report\.firstAnswerTurnId = persistedAnswer!\.id/)
+  assert.match(productionRecommendationSpec, /report\.followUpAnswerTurnId = persistedFollowUp!\.id/)
+  assert.match(productionRecommendationSpec, /expect\(report\.answerSessionPreserved[\s\S]*?\)\.toBe\(true\)/)
+  assert.match(productionRecommendationSpec, /expect\(report\.followUpCitationCount\)\.toBeGreaterThan\(0\)/)
   assert.match(productionRecommendationSpec, /name: '继续推荐'/)
   assert.match(productionRecommendationSpec, /name: '规则答疑'/)
   assert.doesNotMatch(productionRecommendationWorkflow, /echo "\$player_password"/)
@@ -172,6 +228,12 @@ test('production deployment assigns every player-facing Agent role to a configur
   assert.match(productionRecommendationSpec, /configuredProductionRole\(modelConfiguration, 'visual'\)/)
   assert.match(productionRecommendationSpec, /configuredProductionRole\(modelConfiguration, 'answer'\)/)
   assert.match(productionRecommendationSpec, /visualProvider\.visionCapable/)
+})
+
+test('production deployment replaces stale recommendation sampling overrides with the verified deterministic value', () => {
+  assert.match(deploymentWorkflow,
+    /managed_runtime_keys='[^']*\bBGG_RECOMMENDATION_TEMPERATURE\b[^']*'/)
+  assert.match(deploymentWorkflow, /'BGG_RECOMMENDATION_TEMPERATURE=0\.0'/)
 })
 
 test('production deployment enables the staged persistent Chinese catalog cache only with DeepSeek configured', () => {

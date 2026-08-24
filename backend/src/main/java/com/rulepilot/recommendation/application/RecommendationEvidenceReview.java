@@ -45,196 +45,74 @@ final class RecommendationEvidenceReview {
         this.runtime = runtime;
     }
 
-    void applyPreferenceUpdates(
+    PreferenceUpdatePlan planPreferenceUpdates(
             JsonNode arguments,
-            RecommendationAgentState state,
+            RecommendationProfile current,
             ConversationRequest request) {
-        if (!arguments.has("preferenceUpdates")) return;
+        if (!arguments.has("preferenceUpdates")) return PreferenceUpdatePlan.unchanged(current);
         JsonNode updates = arguments.path("preferenceUpdates");
         if (updates.isArray()) {
-            applyPreferenceUpdateList(updates, state, request, true);
-            return;
+            return planPreferenceUpdateList(updates, current, request);
         }
-        RecommendationProfile current = state.profile;
-        try {
-            state.profile = updatedProfile(updates, current, request);
-        } catch (InvalidAction invalid) {
-            if (!"PREFERENCE_IS_CONTEXTUAL".equals(invalid.code)) {
-                throw invalid;
-            }
-            return;
-        }
-        if (state.profile.equals(current)) {
-            state.actions.add("IGNORED_REDUNDANT_PREFERENCE_UPDATE");
-            return;
-        }
-        state.actions.add("UPDATE_PREFERENCES");
-        state.reconsiderSelectionAfterPreferenceUpdate();
+        RecommendationProfile candidate = updatedProfile(updates, current, request);
+        return new PreferenceUpdatePlan(candidate, Map.of(), !candidate.equals(current), true);
     }
 
-    List<String> applyPreferenceUpdatesForRead(
-            JsonNode arguments,
-            RecommendationAgentState state,
-            ConversationRequest request) {
-        if (!arguments.has("preferenceUpdates")) return List.of();
-        JsonNode updates = arguments.path("preferenceUpdates");
-        if (!updates.isArray()) {
-            try {
-                applyPreferenceUpdates(arguments, state, request);
-                return List.of();
-            } catch (InvalidAction invalid) {
-                state.actions.add("REJECTED_PREFERENCE_UPDATE:" + invalid.code);
-                return List.of(invalid.code);
-            }
-        }
-        return applyPreferenceUpdateList(updates, state, request, false);
-    }
-
-    void rejectInvalidHardPreferencesBeforeTerminalReply(
-            JsonNode arguments,
-            RecommendationAgentState state,
-            ConversationRequest request) {
-        JsonNode updates = arguments.path("preferenceUpdates");
-        if (!updates.isArray()) return;
-        RecommendationProfile candidate = state.profile;
-        for (JsonNode update : updates) {
-            try {
-                PreferenceEvidenceClassification classification = preferenceClassification(update, request);
-                if (!classification.contextual()) {
-                    candidate = updatedProfileFromList(
-                            json.createArrayNode().add(preferencePayload(update)),
-                            candidate,
-                            request);
-                }
-            } catch (InvalidAction invalid) {
-                if (Set.of(
-                                "PLAYERS_OUT_OF_RANGE",
-                                "DURATION_OUT_OF_RANGE",
-                                "WEIGHT_TYPE",
-                                "WEIGHT_OUT_OF_RANGE")
-                        .contains(invalid.code)) {
-                    throw invalid;
-                }
-            }
-        }
-    }
-
-    List<String> applyReadPreferenceDecisions(
-            JsonNode arguments,
-            RecommendationAgentState state,
-            ConversationRequest request) {
-        List<String> warnings = new ArrayList<>();
-        ArrayNode combinedUpdates = json.createArrayNode();
-        JsonNode proposed = arguments.path("preferenceUpdates");
-        if (proposed.isArray()) proposed.forEach(combinedUpdates::add);
-        JsonNode contextualGroup = arguments.path("contextualGroup");
-        if (!contextualGroup.isMissingNode()
-                && !contextualGroup.isNull()
-                && !containsAnyField(combinedUpdates, "players", "playerCount")) {
-            try {
-                requireObject(contextualGroup, Set.of("playerCount", "evidence"), Set.of());
-                ObjectNode update = json.createObjectNode();
-                update.put("field", "playerCount");
-                update.set("value", contextualGroup.path("playerCount"));
-                update.set("evidence", contextualGroup.path("evidence"));
-                update.put("evidenceClassification", "CONTEXTUAL_COMPLETE_GROUP");
-                PreferenceEvidenceClassification classification = preferenceClassification(update, request);
-                recordContextualPreference(update, state, request, classification.reason());
-            } catch (InvalidAction invalid) {
-                warnings.add(invalid.code);
-                state.actions.add("REJECTED_CONTEXTUAL_GROUP:" + invalid.code);
-            }
-        }
-        ObjectNode combinedArguments = arguments.deepCopy();
-        combinedArguments.set("preferenceUpdates", combinedUpdates);
-        warnings.addAll(applyPreferenceUpdatesForRead(combinedArguments, state, request));
-        return List.copyOf(new LinkedHashSet<>(warnings));
-    }
-
-    private boolean containsAnyField(JsonNode updates, String... fields) {
-        Set<String> expected = Set.of(fields);
-        for (JsonNode update : updates) {
-            if (expected.contains(update.path("field").asText())) return true;
-        }
-        return false;
-    }
-
-    private List<String> applyPreferenceUpdateList(
-            JsonNode updates,
-            RecommendationAgentState state,
-            ConversationRequest request,
-            boolean strictStructure) {
-        if (updates.isEmpty()) return List.of();
-        if (updates.size() > MAX_PROFILE_UPDATES) {
-            if (strictStructure) throw new InvalidAction("TOO_MANY_PREFERENCE_UPDATES");
-            state.actions.add("REJECTED_PREFERENCE_UPDATE:TOO_MANY_PREFERENCE_UPDATES");
-            return List.of("TOO_MANY_PREFERENCE_UPDATES");
-        }
-        if (strictStructure) {
-            // Validate the whole shape before committing any field so a malformed sibling cannot leave
-            // a partially applied state. Semantic decisions below are intentionally per field.
-            ArrayNode directUpdates = json.createArrayNode();
-            for (JsonNode update : updates) {
-                try {
-                    PreferenceEvidenceClassification classification = preferenceClassification(update, request);
-                    if (!classification.contextual()) directUpdates.add(preferencePayload(update));
-                } catch (InvalidAction invalid) {
-                    if (!unsupportedContextualInference(update, invalid)) throw invalid;
-                }
-            }
-            if (!directUpdates.isEmpty()) {
-                updatedProfileFromList(directUpdates, state.profile, request);
-            }
-        }
-        boolean updated = false;
-        boolean redundant = false;
-        Set<String> seen = new LinkedHashSet<>();
-        List<String> warnings = new ArrayList<>();
-        for (JsonNode update : updates) {
-            try {
-                PreferenceEvidenceClassification classification = preferenceClassification(update, request);
-                String field = text(update.path("field"), 1, 40);
-                if (!seen.add(field)) throw new InvalidAction("PREFERENCE_FIELD_INVALID");
-                if (classification.contextual()) {
-                    recordContextualPreference(update, state, request, classification.reason());
-                    continue;
-                }
-                RecommendationProfile current = state.profile;
-                state.profile = updatedProfileFromList(
-                        json.createArrayNode().add(preferencePayload(update)),
-                        current,
-                        request);
-                if (state.profile.equals(current)) {
-                    redundant = true;
-                } else {
-                    updated = true;
-                }
-            } catch (InvalidAction invalid) {
-                if ("PREFERENCE_IS_CONTEXTUAL".equals(invalid.code)) continue;
-                if (strictStructure && unsupportedContextualInference(update, invalid)) {
-                    state.actions.add("IGNORED_UNSUPPORTED_CONTEXTUAL_PREFERENCE");
-                    continue;
-                }
-                if (strictStructure) {
-                    throw invalid;
-                }
-                if (!warnings.contains(invalid.code)) {
-                    warnings.add(invalid.code);
-                    state.actions.add("REJECTED_PREFERENCE_UPDATE:" + invalid.code);
-                }
-            }
-        }
-        if (updated) {
+    void commitPreferenceUpdates(PreferenceUpdatePlan plan, RecommendationAgentState state) {
+        if (plan == null) throw new IllegalArgumentException("preference update plan is required");
+        state.profile = plan.profile();
+        state.contextualPreferences.putAll(plan.contextualUpdates());
+        if (!plan.contextualUpdates().isEmpty()) state.actions.add("RECORD_CONTEXTUAL_PREFERENCE");
+        if (plan.profileUpdated()) {
             state.actions.add("UPDATE_PREFERENCES");
             state.reconsiderSelectionAfterPreferenceUpdate();
+        } else if (plan.directUpdatesPresent()) {
+            state.actions.add("IGNORED_REDUNDANT_PREFERENCE_UPDATE");
         }
-        if (redundant) state.actions.add("IGNORED_REDUNDANT_PREFERENCE_UPDATE");
-        return List.copyOf(warnings);
     }
 
-    private boolean unsupportedContextualInference(JsonNode update, InvalidAction invalid) {
-        return "PREFERENCE_EVIDENCE_CLASSIFICATION_INVALID".equals(invalid.code)
-                && "CONTEXTUAL_COMPLETE_GROUP".equals(update.path("evidenceClassification").asText());
+    private PreferenceUpdatePlan planPreferenceUpdateList(
+            JsonNode updates,
+            RecommendationProfile current,
+            ConversationRequest request) {
+        if (updates.isEmpty()) return PreferenceUpdatePlan.unchanged(current);
+        if (updates.size() > MAX_PROFILE_UPDATES) {
+            throw new InvalidAction("TOO_MANY_PREFERENCE_UPDATES");
+        }
+        ArrayNode directUpdates = json.createArrayNode();
+        Map<String, ContextualPreference> contextualUpdates = new LinkedHashMap<>();
+        Set<String> seen = new LinkedHashSet<>();
+        for (JsonNode update : updates) {
+            PreferenceEvidenceClassification classification = preferenceClassification(update, request);
+            String field = text(update.path("field"), 1, 40);
+            if (!seen.add(canonicalPreferenceField(field))) {
+                throw new InvalidAction("PREFERENCE_FIELD_INVALID");
+            }
+            if (classification.contextual()) {
+                ContextualPreference contextual = contextualPreference(
+                        update, request, classification.reason());
+                contextualUpdates.put(contextual.field(), contextual);
+            } else {
+                directUpdates.add(preferencePayload(update));
+            }
+        }
+        RecommendationProfile candidate = directUpdates.isEmpty()
+                ? current
+                : updatedProfileFromList(directUpdates, current, request);
+        return new PreferenceUpdatePlan(
+                candidate,
+                contextualUpdates,
+                !candidate.equals(current),
+                !directUpdates.isEmpty());
+    }
+
+    private String canonicalPreferenceField(String field) {
+        return switch (field) {
+            case "players", "playerCount" -> "playerCount";
+            case "maxMinutes", "durationMinutes" -> "durationMinutes";
+            case "maxWeight", "complexity" -> "complexity";
+            default -> field;
+        };
     }
 
     private ObjectNode preferencePayload(JsonNode update) {
@@ -281,9 +159,8 @@ final class RecommendationEvidenceReview {
         return new PreferenceEvidenceClassification(true, classification);
     }
 
-    private void recordContextualPreference(
+    private ContextualPreference contextualPreference(
             JsonNode update,
-            RecommendationAgentState state,
             ConversationRequest request,
             String reason) {
         String evidenceId = text(update.path("evidence"), 1, 160);
@@ -296,16 +173,12 @@ final class RecommendationEvidenceReview {
                 : value.isIntegralNumber()
                         ? integer(value, 1, 20, "PLAYERS_OUT_OF_RANGE")
                         : integer(value.path("minimum"), 1, 20, "PLAYERS_OUT_OF_RANGE");
-        String contextualField = "players".equals(field) ? field : "playerCount";
-        state.contextualPreferences.put(
-                contextualField,
-                new ContextualPreference(
-                        contextualField,
-                        Integer.toString(players),
-                        evidenceId,
-                        evidenceText,
-                        reason));
-        state.actions.add("RECORD_CONTEXTUAL_PREFERENCE");
+        return new ContextualPreference(
+                "playerCount",
+                Integer.toString(players),
+                evidenceId,
+                evidenceText,
+                reason);
     }
 
     private RecommendationProfile updatedProfile(
@@ -857,4 +730,21 @@ final class RecommendationEvidenceReview {
     }
 
     private record PreferenceEvidenceClassification(boolean contextual, String reason) {}
+
+    record PreferenceUpdatePlan(
+            RecommendationProfile profile,
+            Map<String, ContextualPreference> contextualUpdates,
+            boolean profileUpdated,
+            boolean directUpdatesPresent) {
+        PreferenceUpdatePlan {
+            profile = profile == null ? RecommendationProfile.empty() : profile;
+            contextualUpdates = contextualUpdates == null
+                    ? Map.of()
+                    : java.util.Collections.unmodifiableMap(new LinkedHashMap<>(contextualUpdates));
+        }
+
+        static PreferenceUpdatePlan unchanged(RecommendationProfile profile) {
+            return new PreferenceUpdatePlan(profile, Map.of(), false, false);
+        }
+    }
 }

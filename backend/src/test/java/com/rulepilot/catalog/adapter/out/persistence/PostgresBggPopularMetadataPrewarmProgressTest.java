@@ -83,6 +83,25 @@ class PostgresBggPopularMetadataPrewarmProgressTest {
         assertThat(changed.translationStart()).isZero();
     }
 
+    @Test
+    void acceptsTheTenThousandGameTargetUsedByTheProductionWorker() {
+        Instant now = Instant.parse("2026-08-20T08:00:00Z");
+
+        var cohort = progress.claim(
+                        "c".repeat(64),
+                        10_000,
+                        500,
+                        60,
+                        now,
+                        Duration.ofMinutes(30))
+                .orElseThrow();
+
+        assertThat(cohort.metadataStart()).isZero();
+        assertThat(cohort.metadataEnd()).isEqualTo(500);
+        assertThat(cohort.translationStart()).isZero();
+        assertThat(cohort.translationEnd()).isEqualTo(60);
+    }
+
     private static void enableProductionExtensions() {
         try (var connection = DriverManager.getConnection(
                         POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());

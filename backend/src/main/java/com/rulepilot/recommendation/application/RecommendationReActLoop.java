@@ -16,7 +16,9 @@ import static com.rulepilot.recommendation.application.BoardGameRecommendationAg
 import static com.rulepilot.recommendation.application.RecommendationAgentState.MAX_VERIFIED_GAMES;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.io.JsonStringEncoder;
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -49,6 +51,7 @@ import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.Pro
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendationProfile;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendedGame;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ResearchSource;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.TurnCheckpoint;
 import com.rulepilot.recommendation.application.BoardGameRecommendationTools.CatalogObservation;
 import com.rulepilot.recommendation.application.RecommendationAgentState.NamedGamePurpose;
 import com.rulepilot.recommendation.application.RecommendationAgentState.DiscoveryPurpose;
@@ -97,6 +100,7 @@ final class RecommendationReActLoop {
     private final BoardGameRecommendationSelector selector;
     private final BoardGameRecommendationProperties properties;
     private final ObjectMapper json;
+    private final ObjectMapper actionFingerprintJson;
     private final ExecutorService boundedCalls;
     private final long maximumRunMillis;
     private final RecommendationEvidenceReview evidenceReview;
@@ -113,6 +117,9 @@ final class RecommendationReActLoop {
         this.selector = selector;
         this.properties = properties;
         this.json = json;
+        actionFingerprintJson = json.copy()
+                .enable(JsonParser.Feature.STRICT_DUPLICATE_DETECTION)
+                .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
         boundedCalls = Executors.newThreadPerTaskExecutor(
                 Thread.ofVirtual().name("recommendation-bounded-call-", 0).factory());
         maximumRunMillis = properties.timeout().toMillis();
@@ -170,6 +177,22 @@ final class RecommendationReActLoop {
             String modelConfigurationOwner,
             Consumer<ProgressUpdate> progressListener,
             Consumer<String> answerPartListener) {
+        return converseValidated(
+                request,
+                requestedLocale,
+                modelConfigurationOwner,
+                progressListener,
+                answerPartListener,
+                ignored -> {});
+    }
+
+    ConversationResponse converseValidated(
+            ConversationRequest request,
+            String requestedLocale,
+            String modelConfigurationOwner,
+            Consumer<ProgressUpdate> progressListener,
+            Consumer<String> answerPartListener,
+            Consumer<TurnCheckpoint> checkpointListener) {
         long startedAt = System.nanoTime();
         String locale = simplifiedChineseLocale(requestedLocale) ? "zh-CN" : "en";
         RecommendationAgentState state = new RecommendationAgentState(
@@ -194,8 +217,8 @@ final class RecommendationReActLoop {
                 Message.system(systemPromptV2()),
                 Message.user(input));
         List<Message> messages = new ArrayList<>(actionFoundation);
-        Set<String> executed = new LinkedHashSet<>();
-        int rejectedActions = 0;
+        Map<String, SettledAction> settledActions = new LinkedHashMap<>();
+        int stateEpoch = 0;
 
         while (state.modelCalls < MAX_DECISION_MODEL_CALLS && state.actionCalls < MAX_ACTION_CALLS) {
             state.modelCalls++;
@@ -269,22 +292,34 @@ final class RecommendationReActLoop {
             }
             progress.complete();
             state.actionCalls++;
-            String fingerprint = call.name() + "\n" + call.argumentsJson();
+            String fingerprint = actionFingerprint(call);
             RecommendationActions.ActionOutcome outcome;
+            boolean reused = false;
             progress.start(progressStage(call.name()), progressAction(call.name()));
-            if (currentActions.stream().noneMatch(action -> action.name().equals(call.name()))) {
+            SettledAction settled = settledActions.get(fingerprint);
+            if (settled != null && settled.stateEpoch() == stateEpoch) {
+                reused = true;
+                outcome = settled.outcome();
+                state.actions.add(outcome.rejected()
+                        ? "REUSED_ACTION_ERROR"
+                        : "REUSED_READ_OBSERVATION");
+            } else if (currentActions.stream().noneMatch(action -> action.name().equals(call.name()))) {
                 state.actions.add("REJECTED_UNAVAILABLE_ACTION");
                 if (!ASK_TOOL.equals(call.name())) state.clarificationBlockedByExecutionFailure = true;
                 outcome = RecommendationActions.ActionOutcome.rejected(error(
                         "ACTION_NOT_AVAILABLE",
                         "That capability is not available in this turn. Choose one action from the supplied list."));
-            } else if (executed.contains(fingerprint)) {
-                state.actions.add("REJECTED_REPEATED_ACTION");
-                progress.fail();
-                return unavailable(state, locale, "REPEATED_ACTION");
             } else {
-                executed.add(fingerprint);
                 outcome = actionExecutor.execute(call, state, request, locale, progress);
+            }
+            if (!reused && !outcome.rejected()) {
+                stateEpoch++;
+            }
+            if (!reused && (outcome.rejected() || READ_ACTIONS.contains(call.name()))) {
+                settledActions.put(fingerprint, new SettledAction(outcome, stateEpoch));
+            }
+            if (!reused && outcome.settledRead()) {
+                checkpointListener.accept(new TurnCheckpoint(state.profile, state.verifiedForAgent()));
             }
             if (outcome.response() != null) {
                 progress.complete();
@@ -295,23 +330,45 @@ final class RecommendationReActLoop {
                         answerPartListener);
             }
             if (outcome.rejected()) {
-                rejectedActions++;
-                if (rejectedActions > 1) {
-                    progress.fail();
-                    return unavailable(state, locale, "INVALID_ACTION_LIMIT");
-                }
                 progress.retry();
             } else {
                 progress.complete();
             }
             String observation = budgetedObservation(outcome.observation(), state);
-            messages = new ArrayList<>(actionFoundation);
+            compactPriorToolState(messages);
             messages.add(Message.assistant("", call));
             messages.add(Message.tool(call, observation));
         }
         progress.fail();
         state.actions.add("REACT_BUDGET_EXHAUSTED");
         return unavailable(state, locale, "BUDGET_EXHAUSTED");
+    }
+
+    String actionFingerprint(ToolCall call) {
+        try {
+            JsonNode arguments = actionFingerprintJson.readTree(call.argumentsJson());
+            return call.name() + "\n" + actionFingerprintJson.writeValueAsString(canonicalJson(arguments));
+        } catch (JsonProcessingException exception) {
+            // Invalid JSON still needs an exact retry identity so the same rejected payload can be reused;
+            // successful actions use their typed JSON value and are insensitive to object-key order or whitespace.
+            return call.name() + "\n" + call.argumentsJson();
+        }
+    }
+
+    private JsonNode canonicalJson(JsonNode value) {
+        if (value.isObject()) {
+            ObjectNode canonical = actionFingerprintJson.createObjectNode();
+            List<String> fields = new ArrayList<>();
+            value.fieldNames().forEachRemaining(fields::add);
+            fields.stream().sorted().forEach(field -> canonical.set(field, canonicalJson(value.path(field))));
+            return canonical;
+        }
+        if (value.isArray()) {
+            ArrayNode canonical = actionFingerprintJson.createArrayNode();
+            value.forEach(element -> canonical.add(canonicalJson(element)));
+            return canonical;
+        }
+        return value.deepCopy();
     }
 
     private ConversationResponse publishValidatedResponse(
@@ -472,7 +529,7 @@ final class RecommendationReActLoop {
                             "originalName", game.originalName()))
                     .toList());
             if (!state.verified.isEmpty()) {
-                data.put("restoredRunMemory", runMemory(state));
+                data.put("restoredTurnState", turnState(state));
             }
             data.put("shownBggIds", request.shownBggIds());
             data.put("excludedBggIds", request.excludedBggIds());
@@ -555,6 +612,7 @@ final class RecommendationReActLoop {
                 .filter(action -> !relaxableSubjects.isEmpty() || !NO_MATCH_TOOL.equals(action.name()))
                 .filter(action -> !verifiedSlateAvailable
                         || REPLY_TOOL.equals(action.name())
+                        || RESOLVE_TOOL.equals(action.name())
                         || COMPARE_TOOL.equals(action.name())
                         || RECOMMEND_TOOL.equals(action.name())
                         || RESEARCH_TOOL.equals(action.name())
@@ -705,10 +763,10 @@ final class RecommendationReActLoop {
                                 + "},\"required\":[\"question\"]}"),
                 new ToolSpec(
                         RESOLVE_TOOL,
-                        "Resolve one formal, localized, or original board-game title selected from a cited user turn. title, purpose, and evidence are the complete typed interpretation; the application validates the evidence and BGG identity without parsing user prose. Do not submit a nickname, initials, person, award, publisher, or list as a formal title: answer directly when confident, or use public discovery when verification is needed. TARGET_GAME selects that game for its card, rulebook, guide, or questions. COMPARISON_REFERENCE finds other games like it. DISCUSSION_SUBJECT supports factual conversation. IDENTITY_ONLY verifies only the title identity. A short correction keeps the earlier unresolved role. Preserve a real title as written.",
-                        "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"title\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":160},\"purpose\":{\"type\":\"string\",\"enum\":[\"TARGET_GAME\",\"COMPARISON_REFERENCE\",\"DISCUSSION_SUBJECT\",\"IDENTITY_ONLY\"]},\"evidence\":{\"type\":\"string\",\"enum\":"
+                        "Resolve one formal, localized, or original board-game title selected from a cited user turn. title, optional alternateTitles, purpose, and evidence are the complete typed interpretation; the application validates the evidence and BGG identity without parsing user prose. Copy only exact title spellings that are visibly present in the cited turn—never the whole sentence and never guessed aliases. Put the best title in title and up to two other explicit localized/original spellings in alternateTitles so the local catalog can try them in the same fast read. Do not submit a nickname, initials, person, award, publisher, or list as a formal title: answer directly when confident, or use public discovery when verification is needed. TARGET_GAME selects that game for its card, rulebook, guide, or questions and must include playerReply plus reason; when any supplied title resolves, that same action immediately returns the selectable card without another model turn. COMPARISON_REFERENCE finds other games like it. DISCUSSION_SUBJECT supports factual conversation. IDENTITY_ONLY verifies only the title identity. A short correction keeps the earlier unresolved role.",
+                        "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"title\":{\"type\":\"string\",\"description\":\"The best exact board-game title substring from the cited user turn, not the surrounding sentence.\",\"minLength\":1,\"maxLength\":160},\"alternateTitles\":{\"type\":\"array\",\"description\":\"At most two other exact localized or original title spellings explicitly present in the same cited user turn.\",\"maxItems\":2,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":160}},\"purpose\":{\"type\":\"string\",\"enum\":[\"TARGET_GAME\",\"COMPARISON_REFERENCE\",\"DISCUSSION_SUBJECT\",\"IDENTITY_ONLY\"]},\"evidence\":{\"type\":\"string\",\"enum\":"
                                 + jsonArray(preferenceEvidenceIds)
-                                + "}},\"required\":[\"title\",\"purpose\",\"evidence\"]}"),
+                                + "},\"playerReply\":{\"type\":\"string\",\"description\":\"Required for TARGET_GAME: a short, complete, locale-matched natural lead shown before the card.\",\"minLength\":1,\"maxLength\":500},\"reason\":{\"type\":\"string\",\"description\":\"Required for TARGET_GAME: one natural reason this exact resolved game is the requested choice and can continue to its rulebook or guide.\",\"minLength\":1,\"maxLength\":280}},\"required\":[\"title\",\"purpose\",\"evidence\"]}"),
                 new ToolSpec(
                         SEARCH_TOOL,
                         "Inspect one to eight generated original/English candidate titles. Never include a player-named title. Results are BGG-verified. Include every explicit hard preference from the current user turn in preferenceUpdates so eligibility is established in this read.",
@@ -778,7 +836,7 @@ final class RecommendationReActLoop {
                         + ". internalEvidenceIds must belong to the compared candidates and selected subjects; playerReply may make game-specific claims only from those observations. Publisher descriptions support their literal premise, setting, components, or advertised features; attributed reports support only what they report. Choose preferredBggId only when the evidence justifies a useful choice; otherwise use null and explain the remaining tradeoff naturally. Persist an explicit current-turn numeric/type correction in preferenceUpdates. Never use this action to replace candidates. Example shape: {\"candidateBggIds\":[11,22],\"subjects\":[\"duration\"],\"preferredBggId\":11,\"internalEvidenceIds\":[\"F11\",\"F22\"],\"playerReply\":\"如果今晚时间更紧，我会先选……\"}.",
                 "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"candidateBggIds\":{\"type\":\"array\",\"minItems\":2,\"maxItems\":5,\"uniqueItems\":true,\"items\":{\"type\":\"integer\","
                         + idConstraint
-                        + "}},\"subjects\":{\"type\":\"array\",\"description\":\"One to three observation attribute names from runMemory. Unknown attributes remain visibly unknown instead of invalidating the comparison.\",\"minItems\":1,\"maxItems\":3,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"minLength\":1}},\"preferredBggId\":{\"description\":\"The one candidate you would choose from the selected observations, or null when the evidence does not support choosing.\",\"anyOf\":[{\"type\":\"integer\","
+                        + "}},\"subjects\":{\"type\":\"array\",\"description\":\"One to three observation attribute names from turnState. Unknown attributes remain visibly unknown instead of invalidating the comparison.\",\"minItems\":1,\"maxItems\":3,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"minLength\":1}},\"preferredBggId\":{\"description\":\"The one candidate you would choose from the selected observations, or null when the evidence does not support choosing.\",\"anyOf\":[{\"type\":\"integer\","
                         + idConstraint
                         + "},{\"type\":\"null\"}]},\"internalEvidenceIds\":{\"type\":\"array\",\"description\":\"The complete machine-only factual allowance for the final streamed comparison. Every ID must belong to a compared candidate and one of subjects.\",\"minItems\":1,\"uniqueItems\":true,\"items\":{\"type\":\"string\","
                         + evidenceConstraint
@@ -929,7 +987,7 @@ final class RecommendationReActLoop {
                 .collect(java.util.stream.Collectors.joining(",", "[", "]"));
     }
 
-    private Map<String, Object> runMemory(RecommendationAgentState state) {
+    private Map<String, Object> turnState(RecommendationAgentState state) {
         Map<String, Object> memory = new LinkedHashMap<>();
         memory.put("observationLegend", Map.of(
                 "M", "verified BGG structured metadata or bounded publisher description",
@@ -1015,12 +1073,38 @@ final class RecommendationReActLoop {
             object.put("remainingModelCalls", Math.max(0, MAX_DECISION_MODEL_CALLS - state.modelCalls));
             object.put("remainingActionCalls", Math.max(0, MAX_ACTION_CALLS - state.actionCalls));
             object.set("availableCapabilities", json.valueToTree(availableCapabilities(state)));
-            object.set("runMemory", json.valueToTree(runMemory(state)));
+            object.set("turnState", json.valueToTree(turnState(state)));
             return json.writeValueAsString(object);
         } catch (JsonProcessingException exception) {
             throw new IllegalStateException("recommendation observation budget could not be serialized", exception);
         }
     }
+
+    private void compactPriorToolState(List<Message> messages) {
+        for (int index = 0; index < messages.size(); index++) {
+            Message message = messages.get(index);
+            if (message.role() != BoardGameRecommendationModel.Role.TOOL) continue;
+            try {
+                JsonNode parsed = json.readTree(message.content());
+                if (!(parsed instanceof ObjectNode object)) continue;
+                object.remove(List.of(
+                        "remainingModelCalls",
+                        "remainingActionCalls",
+                        "availableCapabilities",
+                        "turnState"));
+                messages.set(index, new Message(
+                        BoardGameRecommendationModel.Role.TOOL,
+                        json.writeValueAsString(object),
+                        List.of(),
+                        message.toolCallId(),
+                        message.toolName()));
+            } catch (JsonProcessingException exception) {
+                throw new IllegalStateException("recommendation tool observation could not be compacted", exception);
+            }
+        }
+    }
+
+    private record SettledAction(RecommendationActions.ActionOutcome outcome, int stateEpoch) {}
 
     String error(String code, String guidance) {
         return observation(Map.of("status", "ERROR", "code", code, "guidance", guidance));

@@ -27,6 +27,8 @@ import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Relations
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Research;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.ResolvedRelationship;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Source;
+import com.rulepilot.recommendation.application.BoardGameRecommendationTools.ReferenceObservation;
+import com.rulepilot.recommendation.application.BoardGameRecommendationTools.ToolStatus;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ConversationRequest;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.DialogueMessage;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.DecisionMode;
@@ -42,6 +44,141 @@ import java.util.stream.Collectors;
 import org.junit.jupiter.api.Test;
 
 class RecommendationNaturalFrontDoorTest {
+
+    @Test
+    void resolvesAnExplicitLocalizedTargetAndPublishesItsCardInOneAgentDecision() {
+        BoardGameRecommendationModel model = mock(BoardGameRecommendationModel.class);
+        BoardGameRecommendationTools tools = mock(BoardGameRecommendationTools.class);
+        AtomicReference<Request> captured = new AtomicReference<>();
+        Game target = game(801, "River Market", "河市集", List.of("Avery Stone"));
+        String lead = "找到了，就是你指定的《河市集》。";
+        String reason = "这张卡对应 River Market，可以直接继续阅读规则书、生成讲解，再进入答疑。";
+
+        when(model.configured("player")).thenReturn(true);
+        when(model.streamNext(any(), eq("player"), any())).thenAnswer(invocation -> {
+            captured.set(invocation.getArgument(0));
+            return new Turn(
+                    "",
+                    List.of(new ToolCall(
+                            "call-resolve-target",
+                            BoardGameRecommendationAgent.RESOLVE_TOOL,
+                            "{\"title\":\"河市集\",\"alternateTitles\":[\"River Market\"],\"purpose\":\"TARGET_GAME\",\"evidence\":\"U1\",\"playerReply\":\""
+                                    + lead
+                                    + "\",\"reason\":\""
+                                    + reason
+                                    + "\"}")),
+                    CompletionStatus.COMPLETE);
+        });
+        when(tools.resolveLocalReferenceTitle("河市集"))
+                .thenReturn(new ReferenceObservation(ToolStatus.PARTIAL, List.of(), "REFERENCE_NOT_FOUND"));
+        when(tools.resolveLocalReferenceTitle("River Market"))
+                .thenReturn(new ReferenceObservation(ToolStatus.SUCCESS, List.of(target), ""));
+        var properties = new BoardGameRecommendationProperties(
+                8, 3, new BigDecimal("0.65"), Duration.ofSeconds(30));
+        RecommendationReActLoop loop = new RecommendationReActLoop(
+                model,
+                tools,
+                new BoardGameRecommendationSelector(properties),
+                properties,
+                new ObjectMapper());
+
+        var response = loop.converse(
+                new ConversationRequest(
+                        RecommendationProfile.empty(),
+                        "今晚就玩《河市集（River Market）》，请找到后让我继续读规则书和讲解。"),
+                "zh-CN",
+                "player",
+                ignored -> {});
+
+        assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
+        assertThat(response.assistantMessage()).isEqualTo(lead + "\n\n" + reason);
+        assertThat(response.recommendationLead()).isEqualTo(lead);
+        assertThat(response.games())
+                .singleElement()
+                .satisfies(game -> {
+                    assertThat(game.game().ranking().bggId()).isEqualTo(801);
+                    assertThat(game.replyParts())
+                            .singleElement()
+                            .satisfies(part -> assertThat(part.claim().text()).isEqualTo(reason));
+                });
+        assertThat(response.harness().modelCalls()).isEqualTo(1);
+        assertThat(response.harness().catalogCalls()).isEqualTo(2);
+        assertThat(response.harness().actions())
+                .containsExactly("RESOLVE_BGG_REFERENCE", "RECOMMEND_GAMES");
+        assertThat(captured.get().tools().stream()
+                        .filter(tool -> BoardGameRecommendationAgent.RESOLVE_TOOL.equals(tool.name()))
+                        .findFirst()
+                        .orElseThrow())
+                .satisfies(tool -> {
+                    assertThat(tool.description())
+                            .contains("same action immediately returns the selectable card");
+                    assertThat(tool.inputSchema())
+                            .contains("alternateTitles", "playerReply", "reason");
+                });
+
+        loop.stopBoundedCalls();
+    }
+
+    @Test
+    void givesFieldSpecificRepairForAnInvalidReferenceTitleThenAcceptsANewAction() {
+        BoardGameRecommendationModel model = mock(BoardGameRecommendationModel.class);
+        BoardGameRecommendationTools tools = mock(BoardGameRecommendationTools.class);
+        AtomicReference<Request> repairRequest = new AtomicReference<>();
+        Game target = game(802, "Lantern Passage", "灯笼渡口", List.of("Blake North"));
+
+        when(model.configured("player")).thenReturn(true);
+        when(model.streamNext(any(), eq("player"), any())).thenReturn(new Turn(
+                "",
+                List.of(new ToolCall(
+                        "call-invalid-title",
+                        BoardGameRecommendationAgent.RESOLVE_TOOL,
+                        "{\"title\":\"\",\"purpose\":\"TARGET_GAME\",\"evidence\":\"U1\",\"playerReply\":\"找到了。\",\"reason\":\"继续看规则。\"}")),
+                CompletionStatus.COMPLETE));
+        when(model.next(any(), eq("player"))).thenAnswer(invocation -> {
+            repairRequest.set(invocation.getArgument(0));
+            return new Turn(
+                    "",
+                    List.of(new ToolCall(
+                            "call-corrected-title",
+                            BoardGameRecommendationAgent.RESOLVE_TOOL,
+                            "{\"title\":\"Lantern Passage\",\"purpose\":\"TARGET_GAME\",\"evidence\":\"U1\",\"playerReply\":\"找到了，就是《灯笼渡口》。\",\"reason\":\"它是你明确指定的游戏，可以继续打开规则书。\"}")),
+                    CompletionStatus.COMPLETE);
+        });
+        when(tools.resolveLocalReferenceTitle("Lantern Passage"))
+                .thenReturn(new ReferenceObservation(ToolStatus.SUCCESS, List.of(target), ""));
+        var properties = new BoardGameRecommendationProperties(
+                8, 3, new BigDecimal("0.65"), Duration.ofSeconds(30));
+        RecommendationReActLoop loop = new RecommendationReActLoop(
+                model,
+                tools,
+                new BoardGameRecommendationSelector(properties),
+                properties,
+                new ObjectMapper());
+
+        var response = loop.converse(
+                new ConversationRequest(
+                        RecommendationProfile.empty(),
+                        "请直接找到《Lantern Passage》，然后让我读规则书。"),
+                "zh-CN",
+                "player",
+                ignored -> {});
+
+        assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
+        assertThat(response.harness().modelCalls()).isEqualTo(2);
+        assertThat(response.harness().catalogCalls()).isEqualTo(1);
+        assertThat(response.harness().actions())
+                .containsExactly(
+                        "REJECTED_ACTION:REFERENCE_TITLE_LENGTH_INVALID",
+                        "RESOLVE_BGG_REFERENCE",
+                        "RECOMMEND_GAMES");
+        assertThat(repairRequest.get().messages().getLast().content())
+                .contains(
+                        "REFERENCE_TITLE_LENGTH_INVALID",
+                        "Copy only the exact board-game title substring",
+                        "1 to 160 characters");
+
+        loop.stopBoundedCalls();
+    }
 
     @Test
     void streamsStableBoardGameConversationWhileSeeingTheCompleteAgentToolSet() {

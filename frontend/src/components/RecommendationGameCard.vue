@@ -49,7 +49,7 @@ function hideBrokenImage(event: Event) {
 </script>
 
 <template>
-  <article class="game-tile min-w-0 p-3 sm:p-4" data-testid="recommendation-game-card">
+  <article class="game-tile min-w-0 p-3 sm:p-4" data-testid="recommendation-game-card" :data-bgg-id="entry.game.bggId">
     <button type="button" class="block w-full text-left" :aria-label="`${labels.details}${cardLocale === 'zh-CN' ? '：' : ': '}${entry.game.name}`" @click="$emit('details', entry.game)">
       <div class="flex aspect-[16/10] items-center justify-center overflow-hidden rounded-lg border border-ink/6 bg-canvas p-3 text-ink/25">
         <img v-if="entry.game.thumbnailUrl" :src="entry.game.thumbnailUrl" :alt="`${entry.game.name}${labels.cover}`" loading="lazy" class="h-full w-full object-contain" @error="hideBrokenImage">

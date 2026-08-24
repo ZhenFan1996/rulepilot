@@ -26,7 +26,7 @@ public class PostgresRecommendationConversationStore implements RecommendationCo
     private static final String SELECT_COLUMNS = """
             select id, owner_username, revision, state_json,
                    last_client_turn_id, last_request_fingerprint, last_response_json, last_response_locale,
-                   active_client_turn_id, active_request_fingerprint, active_started_at,
+                   active_client_turn_id, active_request_fingerprint, active_claim_attempt_id, active_started_at,
                    created_at, updated_at
             from recommendation_conversation
             """;
@@ -117,6 +117,7 @@ public class PostgresRecommendationConversationStore implements RecommendationCo
             long expectedRevision,
             UUID clientTurnId,
             String requestFingerprint,
+            UUID claimAttemptId,
             Instant startedAt,
             Instant staleBefore) {
         int updated = jdbc.update(
@@ -124,6 +125,7 @@ public class PostgresRecommendationConversationStore implements RecommendationCo
                 update recommendation_conversation
                 set active_client_turn_id = :clientTurnId,
                     active_request_fingerprint = :fingerprint,
+                    active_claim_attempt_id = :claimAttemptId,
                     active_started_at = :startedAt,
                     updated_at = :startedAt
                 where id = :id
@@ -144,8 +146,44 @@ public class PostgresRecommendationConversationStore implements RecommendationCo
                         .addValue("expectedRevision", expectedRevision)
                         .addValue("clientTurnId", clientTurnId)
                         .addValue("fingerprint", requestFingerprint)
+                        .addValue("claimAttemptId", claimAttemptId)
                         .addValue("startedAt", Timestamp.from(startedAt))
                         .addValue("staleBefore", Timestamp.from(staleBefore)));
+        return updated == 1;
+    }
+
+    @Override
+    @Transactional
+    public boolean checkpointTurn(
+            UUID conversationId,
+            String ownerUsername,
+            long expectedRevision,
+            UUID clientTurnId,
+            String requestFingerprint,
+            UUID claimAttemptId,
+            ConversationState checkpointState,
+            Instant checkpointedAt) {
+        int updated = jdbc.update(
+                """
+                update recommendation_conversation
+                set state_json = cast(:stateJson as jsonb),
+                    updated_at = :checkpointedAt
+                where id = :id
+                  and owner_username = :owner
+                  and revision = :expectedRevision
+                  and active_client_turn_id = :clientTurnId
+                  and active_request_fingerprint = :fingerprint
+                  and active_claim_attempt_id = :claimAttemptId
+                """,
+                new MapSqlParameterSource()
+                        .addValue("id", conversationId)
+                        .addValue("owner", ownerUsername)
+                        .addValue("expectedRevision", expectedRevision)
+                        .addValue("clientTurnId", clientTurnId)
+                        .addValue("fingerprint", requestFingerprint)
+                        .addValue("claimAttemptId", claimAttemptId)
+                        .addValue("stateJson", write(checkpointState))
+                        .addValue("checkpointedAt", Timestamp.from(checkpointedAt)));
         return updated == 1;
     }
 
@@ -157,6 +195,7 @@ public class PostgresRecommendationConversationStore implements RecommendationCo
             long expectedRevision,
             UUID clientTurnId,
             String requestFingerprint,
+            UUID claimAttemptId,
             ConversationState nextState,
             ConversationResponse response,
             String responseLocale,
@@ -172,6 +211,7 @@ public class PostgresRecommendationConversationStore implements RecommendationCo
                     last_response_locale = :responseLocale,
                     active_client_turn_id = null,
                     active_request_fingerprint = null,
+                    active_claim_attempt_id = null,
                     active_started_at = null,
                     updated_at = :completedAt
                 where id = :id
@@ -179,6 +219,7 @@ public class PostgresRecommendationConversationStore implements RecommendationCo
                   and revision = :expectedRevision
                   and active_client_turn_id = :clientTurnId
                   and active_request_fingerprint = :fingerprint
+                  and active_claim_attempt_id = :claimAttemptId
                 """,
                 new MapSqlParameterSource()
                         .addValue("id", conversationId)
@@ -186,6 +227,7 @@ public class PostgresRecommendationConversationStore implements RecommendationCo
                         .addValue("expectedRevision", expectedRevision)
                         .addValue("clientTurnId", clientTurnId)
                         .addValue("fingerprint", requestFingerprint)
+                        .addValue("claimAttemptId", claimAttemptId)
                         .addValue("stateJson", write(nextState))
                         .addValue("responseJson", write(response))
                         .addValue("responseLocale", responseLocale)
@@ -201,12 +243,14 @@ public class PostgresRecommendationConversationStore implements RecommendationCo
             long expectedRevision,
             UUID clientTurnId,
             String requestFingerprint,
+            UUID claimAttemptId,
             Instant releasedAt) {
         jdbc.update(
                 """
                 update recommendation_conversation
                 set active_client_turn_id = null,
                     active_request_fingerprint = null,
+                    active_claim_attempt_id = null,
                     active_started_at = null,
                     updated_at = :releasedAt
                 where id = :id
@@ -214,6 +258,7 @@ public class PostgresRecommendationConversationStore implements RecommendationCo
                   and revision = :expectedRevision
                   and active_client_turn_id = :clientTurnId
                   and active_request_fingerprint = :fingerprint
+                  and active_claim_attempt_id = :claimAttemptId
                 """,
                 new MapSqlParameterSource()
                         .addValue("id", conversationId)
@@ -221,6 +266,7 @@ public class PostgresRecommendationConversationStore implements RecommendationCo
                         .addValue("expectedRevision", expectedRevision)
                         .addValue("clientTurnId", clientTurnId)
                         .addValue("fingerprint", requestFingerprint)
+                        .addValue("claimAttemptId", claimAttemptId)
                         .addValue("releasedAt", Timestamp.from(releasedAt)));
     }
 
@@ -253,6 +299,7 @@ public class PostgresRecommendationConversationStore implements RecommendationCo
                 result.getString("last_response_locale"),
                 result.getObject("active_client_turn_id", UUID.class),
                 result.getString("active_request_fingerprint"),
+                result.getObject("active_claim_attempt_id", UUID.class),
                 instant(result, "active_started_at"),
                 instant(result, "created_at"),
                 instant(result, "updated_at"));

@@ -3,26 +3,26 @@ name: Production recommendation journey
 on:
   workflow_dispatch:
     inputs:
-      target_bgg_id:
-        description: Exact BGG base-game id
+      opening_prompt:
+        description: Natural opening from a player who does not know what to play yet
         required: true
         type: string
-        default: '230802'
-      target_names:
-        description: Literal game-name aliases separated by |
+        default: '嗨，今晚五个人聚会，最近合作玩得有点腻，但我还没想清楚换什么方向。你会先怎么帮我挑？'
+      selection_prompt:
+        description: Natural refinement that asks the Agent to select a ranked recommendation slate
         required: true
         type: string
-        default: '花砖物语|Azul'
-      recommendation_prompt:
-        description: Natural-language request that must produce the selected game
-        required: true
-        type: string
-        default: '我今晚已经决定玩花砖物语（Azul），第一次开桌。请直接帮我找到这款，不要换成相似游戏；找到后我想接着读规则书、听讲解，再问几个问题。'
+        default: '我想换成能谈判、互相骗一骗的；有两个新手，90 分钟内。你直接挑三款，并把你最推荐的一款放第一吧。我们选好后还想接着找规则书、听讲解。'
       rule_question:
         description: Question asked after the cited lesson becomes readable
         required: true
         type: string
-        default: '我从一个工厂展示板拿走同色砖以后，剩下的砖要放到哪里？请用日常的话简短回答，并引用规则书页码。'
+        default: '我们现在要开第一局：所有组件分别怎么摆、每个人先拿什么？请按顺序说，并标出规则书页码。'
+      rule_follow_up:
+        description: Natural follow-up that must reuse the same document-bound answer session
+        required: true
+        type: string
+        default: '你刚才列出的第二个准备步骤具体需要哪些组件？仍然只根据同一本规则书回答并标页码。'
       require_fresh_import:
         description: Fail if production reuses an existing imported rulebook
         required: true
@@ -38,7 +38,7 @@ concurrency:
 
 jobs:
   journey:
-    name: Recommendation, Gstone import, teaching, and cited Q&A
+    name: Unknown-target recommendation, rulebook, teaching, and cited Q&A
     runs-on: ubuntu-latest
     timeout-minutes: 50
     environment:
@@ -51,10 +51,10 @@ jobs:
       DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
       DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
       RULEPILOT_PUBLIC_URL: https://rulepilot.cn
-      RULEPILOT_RECOMMENDATION_TARGET_BGG_ID: ${{ inputs.target_bgg_id }}
-      RULEPILOT_RECOMMENDATION_TARGET_NAMES: ${{ inputs.target_names }}
-      RULEPILOT_RECOMMENDATION_PROMPT: ${{ inputs.recommendation_prompt }}
+      RULEPILOT_RECOMMENDATION_OPENING_PROMPT: ${{ inputs.opening_prompt }}
+      RULEPILOT_RECOMMENDATION_SELECTION_PROMPT: ${{ inputs.selection_prompt }}
       RULEPILOT_RECOMMENDATION_RULE_QUESTION: ${{ inputs.rule_question }}
+      RULEPILOT_RECOMMENDATION_RULE_FOLLOW_UP: ${{ inputs.rule_follow_up }}
       RULEPILOT_RECOMMENDATION_REQUIRE_FRESH_IMPORT: ${{ inputs.require_fresh_import }}
     steps:
       - uses: actions/checkout@v6

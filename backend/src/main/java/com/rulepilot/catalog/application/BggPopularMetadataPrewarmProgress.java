@@ -8,6 +8,9 @@ import java.util.UUID;
 /** Coordinates bounded catalog hydration across API and worker processes. */
 public interface BggPopularMetadataPrewarmProgress {
 
+    int MAX_TARGET_COUNT = 10_000;
+    int MAX_COHORT_SIZE = 500;
+
     Optional<Cohort> claim(
             String snapshotSha256,
             int targetCount,

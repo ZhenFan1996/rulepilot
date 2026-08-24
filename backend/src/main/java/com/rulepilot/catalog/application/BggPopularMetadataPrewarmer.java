@@ -1,5 +1,8 @@
 package com.rulepilot.catalog.application;
 
+import static com.rulepilot.catalog.application.BggPopularMetadataPrewarmProgress.MAX_COHORT_SIZE;
+import static com.rulepilot.catalog.application.BggPopularMetadataPrewarmProgress.MAX_TARGET_COUNT;
+
 import com.rulepilot.catalog.CatalogCoverImages;
 import com.rulepilot.catalog.application.BggPopularMetadataPrewarmProgress.Cohort;
 import com.rulepilot.catalog.BggMetadataTranslation.PrewarmResult;
@@ -245,13 +248,13 @@ class BggPopularMetadataPrewarmer {
             int metadataCohortSize,
             int translationCohortSize,
             Duration leaseDuration) {
-        if (targetGameCount < 0 || targetGameCount > 10_000) {
+        if (targetGameCount < 0 || targetGameCount > MAX_TARGET_COUNT) {
             throw new IllegalArgumentException("BGG prewarm game count must be between 0 and 10000");
         }
-        if (metadataCohortSize < 1 || metadataCohortSize > 500) {
+        if (metadataCohortSize < 1 || metadataCohortSize > MAX_COHORT_SIZE) {
             throw new IllegalArgumentException("BGG metadata prewarm cohort must be between 1 and 500 games");
         }
-        if (translationCohortSize < 1 || translationCohortSize > 500) {
+        if (translationCohortSize < 1 || translationCohortSize > MAX_COHORT_SIZE) {
             throw new IllegalArgumentException("BGG translation prewarm cohort must be between 1 and 500 games");
         }
         if (leaseDuration == null
