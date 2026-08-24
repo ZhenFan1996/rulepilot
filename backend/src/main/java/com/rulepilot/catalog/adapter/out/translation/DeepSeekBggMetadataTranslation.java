@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rulepilot.catalog.BggMetadataTranslation;
 import com.rulepilot.catalog.application.BggMetadataTranslationStore;
+import com.rulepilot.catalog.application.BggMetadataTranslationStore.Key;
 import com.rulepilot.catalog.application.SimplifiedChineseText;
 import java.io.IOException;
 import java.net.URI;
@@ -16,6 +17,7 @@ import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.HexFormat;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -45,6 +47,8 @@ public class DeepSeekBggMetadataTranslation implements BggMetadataTranslation {
     private static final int MAX_RESPONSE_BYTES = 512_000;
     private static final int MAX_TERMS_PER_GROUP = 50;
     private static final int KEY_LOCK_COUNT = 64;
+    private static final String TRANSLATION_LOCALE = "zh-CN";
+    private static final int TRANSLATION_CONTRACT_VERSION = 5;
     private static final DateTimeFormatter HOUR = DateTimeFormatter.ofPattern("yyyyMMddHH").withZone(ZoneOffset.UTC);
 
     private final Call.Factory calls;
@@ -128,50 +132,43 @@ public class DeepSeekBggMetadataTranslation implements BggMetadataTranslation {
     }
 
     @Override
-    public Optional<Translation> translate(Request request) {
-        return attempt(request).translation();
+    public Optional<Translation> readStored(Request request) {
+        if (!validRequest(request)) return Optional.empty();
+        String sourceDigest = sourceDigest(request);
+        return stored(request, sourceDigest, cacheKey(request, sourceDigest));
     }
 
     @Override
     public PrewarmResult prewarm(Request request) {
-        Attempt attempt = attempt(request);
-        return new PrewarmResult(attempt.translation().isPresent() ? PrewarmStatus.READY : attempt.status());
-    }
-
-    private Attempt attempt(Request request) {
-        if (!validRequest(request)) return Attempt.empty(PrewarmStatus.SKIPPED_INVALID_SOURCE);
+        if (!validRequest(request)) return result(PrewarmStatus.SKIPPED_INVALID_SOURCE);
         String sourceDigest = sourceDigest(request);
         String cacheKey = cacheKey(request, sourceDigest);
-        Optional<Translation> cached = cached(cacheKey, request);
-        if (cached.isPresent()) return Attempt.ready(cached.orElseThrow());
-        Optional<Translation> persisted = persisted(sourceDigest, request);
-        if (persisted.isPresent()) {
-            cache(cacheKey, persisted.orElseThrow());
-            return Attempt.ready(persisted.orElseThrow());
-        }
-        if (!configured()) return Attempt.empty(PrewarmStatus.RETRY_NOT_CONFIGURED);
+        if (stored(request, sourceDigest, cacheKey).isPresent()) return result(PrewarmStatus.READY);
+        if (!configured()) return result(PrewarmStatus.RETRY_NOT_CONFIGURED);
 
         Object keyLock = keyLocks[Math.floorMod(cacheKey.hashCode(), keyLocks.length)];
         synchronized (keyLock) {
-            cached = cached(cacheKey, request);
-            if (cached.isPresent()) return Attempt.ready(cached.orElseThrow());
-            persisted = persisted(sourceDigest, request);
-            if (persisted.isPresent()) {
-                cache(cacheKey, persisted.orElseThrow());
-                return Attempt.ready(persisted.orElseThrow());
-            }
-            if (!providerPermits.tryAcquire()) return Attempt.empty(PrewarmStatus.RETRY_PROVIDER_BUSY);
+            if (stored(request, sourceDigest, cacheKey).isPresent()) return result(PrewarmStatus.READY);
+            if (!providerPermits.tryAcquire()) return result(PrewarmStatus.RETRY_PROVIDER_BUSY);
             try {
-                if (!acquireHourlyAllowance()) return Attempt.empty(PrewarmStatus.RETRY_HOURLY_BUDGET);
+                if (!acquireHourlyAllowance()) return result(PrewarmStatus.RETRY_HOURLY_BUDGET);
                 Optional<Translation> translated = requestTranslation(request);
-                if (translated.isEmpty()) return Attempt.empty(PrewarmStatus.RETRY_PROVIDER_UNAVAILABLE);
-                persist(request.bggId(), sourceDigest, translated.orElseThrow());
+                if (translated.isEmpty()) return result(PrewarmStatus.RETRY_PROVIDER_UNAVAILABLE);
+                persist(translationKey(request, sourceDigest), translated.orElseThrow());
                 cache(cacheKey, translated.orElseThrow());
-                return Attempt.ready(translated.orElseThrow());
+                return result(PrewarmStatus.READY);
             } finally {
                 providerPermits.release();
             }
         }
+    }
+
+    private Optional<Translation> stored(Request request, String sourceDigest, String cacheKey) {
+        Optional<Translation> cached = cached(cacheKey, request);
+        if (cached.isPresent()) return cached;
+        Optional<Translation> persisted = persisted(translationKey(request, sourceDigest), request);
+        persisted.ifPresent(translation -> cache(cacheKey, translation));
+        return persisted;
     }
 
     private boolean configured() {
@@ -198,10 +195,10 @@ public class DeepSeekBggMetadataTranslation implements BggMetadataTranslation {
         }
     }
 
-    private Optional<Translation> persisted(String sourceDigest, Request request) {
+    private Optional<Translation> persisted(Key key, Request request) {
         try {
             return persistentTranslations
-                    .find(request.bggId(), sourceDigest)
+                    .find(key)
                     .map(translation -> normalizedTranslation(translation, request));
         } catch (RuntimeException exception) {
             LOGGER.warn("Persistent BGG metadata translations are temporarily unavailable");
@@ -230,11 +227,11 @@ public class DeepSeekBggMetadataTranslation implements BggMetadataTranslation {
         }
     }
 
-    private void persist(int bggId, String sourceDigest, Translation translation) {
+    private void persist(Key key, Translation translation) {
         try {
-            persistentTranslations.save(bggId, sourceDigest, translation, clock.instant());
+            persistentTranslations.save(key, translation, clock.instant());
         } catch (RuntimeException exception) {
-            LOGGER.warn("BGG metadata translation could not be persisted for bggId={}", bggId);
+            LOGGER.warn("BGG metadata translation could not be persisted for bggId={}", key.bggId());
         }
     }
 
@@ -349,11 +346,12 @@ public class DeepSeekBggMetadataTranslation implements BggMetadataTranslation {
 
     private String requestPayload(Request request, String description) {
         try {
-            return json.writeValueAsString(Map.of(
-                    "gameName", bounded(request.gameName(), 500),
-                    "description", description == null ? "" : description.strip(),
-                    "categories", request.categories(),
-                    "mechanics", request.mechanics()));
+            Map<String, Object> source = new LinkedHashMap<>();
+            source.put("gameName", bounded(request.gameName(), 500));
+            source.put("description", description == null ? "" : description.strip());
+            source.put("categories", request.categories());
+            source.put("mechanics", request.mechanics());
+            return json.writeValueAsString(source);
         } catch (IOException exception) {
             throw new IllegalStateException("BGG metadata could not be serialized", exception);
         }
@@ -365,7 +363,13 @@ public class DeepSeekBggMetadataTranslation implements BggMetadataTranslation {
     }
 
     private String cacheKey(Request request, String sourceDigest) {
-        return "rulepilot:bgg:metadata-translation:zh-CN:v4:" + request.bggId() + ":" + sourceDigest;
+        return "rulepilot:bgg:metadata-translation:" + TRANSLATION_LOCALE + ":v"
+                + TRANSLATION_CONTRACT_VERSION + ":" + request.bggId() + ":" + sourceDigest;
+    }
+
+    private Key translationKey(Request request, String sourceDigest) {
+        return new Key(
+                request.bggId(), TRANSLATION_LOCALE, TRANSLATION_CONTRACT_VERSION, sourceDigest);
     }
 
     private String sourceDigest(Request request) {
@@ -396,18 +400,7 @@ public class DeepSeekBggMetadataTranslation implements BggMetadataTranslation {
         return uri.toASCIIString();
     }
 
-    private record Attempt(Optional<Translation> translation, PrewarmStatus status) {
-        private Attempt {
-            translation = translation == null ? Optional.empty() : translation;
-            if (status == null) throw new IllegalArgumentException("BGG translation attempt status is required");
-        }
-
-        static Attempt ready(Translation translation) {
-            return new Attempt(Optional.of(translation), PrewarmStatus.READY);
-        }
-
-        static Attempt empty(PrewarmStatus status) {
-            return new Attempt(Optional.empty(), status);
-        }
+    private PrewarmResult result(PrewarmStatus status) {
+        return new PrewarmResult(status);
     }
 }

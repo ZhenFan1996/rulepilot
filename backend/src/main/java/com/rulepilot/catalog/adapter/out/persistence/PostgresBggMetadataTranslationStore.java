@@ -4,11 +4,11 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rulepilot.catalog.BggMetadataTranslation.Translation;
 import com.rulepilot.catalog.application.BggMetadataTranslationStore;
+import com.rulepilot.catalog.application.BggMetadataTranslationStore.Key;
 import java.nio.charset.StandardCharsets;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.Optional;
-import java.util.regex.Pattern;
 import org.springframework.context.annotation.Profile;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
@@ -19,8 +19,6 @@ import org.springframework.stereotype.Repository;
 public class PostgresBggMetadataTranslationStore implements BggMetadataTranslationStore {
 
     private static final int MAX_PAYLOAD_BYTES = 131_072;
-    private static final Pattern SHA256 = Pattern.compile("[0-9a-f]{64}");
-
     private final NamedParameterJdbcTemplate jdbc;
     private final ObjectMapper json;
 
@@ -30,26 +28,30 @@ public class PostgresBggMetadataTranslationStore implements BggMetadataTranslati
     }
 
     @Override
-    public Optional<Translation> find(int bggId, String sourceSha256) {
-        checkedKey(bggId, sourceSha256);
+    public Optional<Translation> find(Key key) {
+        if (key == null) throw new IllegalArgumentException("BGG translation key is required");
         return jdbc.query(
                         """
                         SELECT payload::text AS payload
                         FROM bgg_metadata_translation
-                        WHERE bgg_id = :bggId AND source_sha256 = :sourceSha256
+                        WHERE bgg_id = :bggId
+                          AND locale = :locale
+                          AND contract_version = :contractVersion
+                          AND source_sha256 = :sourceSha256
                         """,
                         new MapSqlParameterSource()
-                                .addValue("bggId", bggId)
-                                .addValue("sourceSha256", sourceSha256),
+                                .addValue("bggId", key.bggId())
+                                .addValue("locale", key.locale())
+                                .addValue("contractVersion", key.contractVersion())
+                                .addValue("sourceSha256", key.sourceSha256()),
                         (result, row) -> read(result.getString("payload")))
                 .stream()
                 .findFirst();
     }
 
     @Override
-    public void save(int bggId, String sourceSha256, Translation translation, Instant translatedAt) {
-        checkedKey(bggId, sourceSha256);
-        if (translation == null || translatedAt == null) {
+    public void save(Key key, Translation translation, Instant translatedAt) {
+        if (key == null || translation == null || translatedAt == null) {
             throw new IllegalArgumentException("BGG translation and timestamp are required");
         }
         String payload = write(translation);
@@ -60,25 +62,22 @@ public class PostgresBggMetadataTranslationStore implements BggMetadataTranslati
         jdbc.update(
                 """
                 INSERT INTO bgg_metadata_translation (
-                    bgg_id, source_sha256, locale, payload, payload_bytes, translated_at)
-                VALUES (:bggId, :sourceSha256, 'zh-CN', CAST(:payload AS jsonb), :payloadBytes, :translatedAt)
-                ON CONFLICT (bgg_id, source_sha256) DO UPDATE SET
+                    bgg_id, locale, contract_version, source_sha256, payload, payload_bytes, translated_at)
+                VALUES (:bggId, :locale, :contractVersion, :sourceSha256,
+                        CAST(:payload AS jsonb), :payloadBytes, :translatedAt)
+                ON CONFLICT (bgg_id, locale, contract_version, source_sha256) DO UPDATE SET
                     payload = EXCLUDED.payload,
                     payload_bytes = EXCLUDED.payload_bytes,
                     translated_at = GREATEST(bgg_metadata_translation.translated_at, EXCLUDED.translated_at)
                 """,
                 new MapSqlParameterSource()
-                        .addValue("bggId", bggId)
-                        .addValue("sourceSha256", sourceSha256)
+                        .addValue("bggId", key.bggId())
+                        .addValue("locale", key.locale())
+                        .addValue("contractVersion", key.contractVersion())
+                        .addValue("sourceSha256", key.sourceSha256())
                         .addValue("payload", payload)
                         .addValue("payloadBytes", payloadBytes)
                         .addValue("translatedAt", Timestamp.from(translatedAt)));
-    }
-
-    private void checkedKey(int bggId, String sourceSha256) {
-        if (bggId <= 0 || sourceSha256 == null || !SHA256.matcher(sourceSha256).matches()) {
-            throw new IllegalArgumentException("BGG translation requires a positive id and lowercase SHA-256 digest");
-        }
     }
 
     private String write(Translation translation) {

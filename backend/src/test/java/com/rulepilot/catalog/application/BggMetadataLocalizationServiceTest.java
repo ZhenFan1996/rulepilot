@@ -22,7 +22,7 @@ class BggMetadataLocalizationServiceTest {
     @Test
     void usesTheBggChineseEditionNameAndTranslatesStructuredMetadata() {
         var game = game(List.of("展翅翱翔"));
-        when(translations.translate(any())).thenReturn(Optional.of(new Translation(
+        when(translations.readStored(any())).thenReturn(Optional.of(new Translation(
                 "建造一座鸟类保护区。", List.of("动物"), List.of("卡牌轮抽"))));
 
         var localized = service.localize(game, "zh-CN");
@@ -48,7 +48,23 @@ class BggMetadataLocalizationServiceTest {
         assertThat(localized.categories()).isEqualTo(game.categories());
         assertThat(localized.mechanics()).isEqualTo(game.mechanics());
         assertThat(localized.officialNameLocalized()).isFalse();
-        verify(translations, never()).translate(any());
+        verify(translations, never()).readStored(any());
+    }
+
+    @Test
+    void interactiveChineseMissReturnsSourceImmediatelyWithoutMaterializingTranslation() {
+        var game = game(List.of("展翅翱翔"));
+        when(translations.readStored(any())).thenReturn(Optional.empty());
+
+        var localized = service.localize(game, "zh-CN");
+
+        assertThat(localized.name()).isEqualTo("展翅翱翔");
+        assertThat(localized.description()).isEqualTo("Build a bird reserve.");
+        assertThat(localized.categories()).containsExactly("Animals");
+        assertThat(localized.mechanics()).containsExactly("Card Drafting");
+        assertThat(localized.descriptionTranslated()).isFalse();
+        verify(translations).readStored(any());
+        verify(translations, never()).prewarm(any());
     }
 
     @Test
@@ -63,7 +79,7 @@ class BggMetadataLocalizationServiceTest {
         assertThat(localized.categories()).containsExactly("Animals");
         assertThat(localized.mechanics()).containsExactly("Card Drafting");
         assertThat(localized.descriptionTranslated()).isFalse();
-        verify(translations, never()).translate(any());
+        verify(translations, never()).readStored(any());
     }
 
     @Test
@@ -73,13 +89,13 @@ class BggMetadataLocalizationServiceTest {
         var localized = service.sourceOnly(game, "en");
 
         assertThat(localized.description()).isEqualTo("Build a reserve.\nWin — together.");
-        verify(translations, never()).translate(any());
+        verify(translations, never()).readStored(any());
     }
 
     @Test
     void keepsValidTranslatedFieldsWhenOneOptionalListHasTheWrongShape() {
         var game = game(List.of("展翅翱翔"));
-        when(translations.translate(any())).thenReturn(Optional.of(new Translation(
+        when(translations.readStored(any())).thenReturn(Optional.of(new Translation(
                 "建造一座鸟类保护区。", List.of(), List.of("卡牌轮抽"))));
 
         var localized = service.localize(game, "zh-Hans");
@@ -97,7 +113,7 @@ class BggMetadataLocalizationServiceTest {
     @Test
     void doesNotInventAChineseTitleWhenBggHasNoChineseEditionName() {
         var game = game(List.of());
-        when(translations.translate(any())).thenReturn(Optional.of(new Translation(
+        when(translations.readStored(any())).thenReturn(Optional.of(new Translation(
                 "建造一座鸟类保护区。", List.of("动物"), List.of("卡牌轮抽"))));
 
         var localized = service.localize(game, "zh-CN");
@@ -123,19 +139,19 @@ class BggMetadataLocalizationServiceTest {
 
     @Test
     void translatesTheBoundedDiscoveryCategoryVocabularyInOneRequest() {
-        when(translations.translate(any())).thenReturn(Optional.of(new Translation(
+        when(translations.readStored(any())).thenReturn(Optional.of(new Translation(
                 "", List.of("家庭", "策略"), List.of())));
 
         var localized = service.localizeDiscoveryCategories(List.of("Family", "Strategy", "Family"), "zh-CN");
 
         assertThat(localized.translated()).isTrue();
         assertThat(localized.categories()).containsEntry("Family", "家庭").containsEntry("Strategy", "策略");
-        verify(translations).translate(any());
+        verify(translations).readStored(any());
     }
 
     @Test
     void normalizesTraditionalTranslationOutputAtTheApplicationBoundary() {
-        when(translations.translate(any())).thenReturn(Optional.of(new Translation(
+        when(translations.readStored(any())).thenReturn(Optional.of(new Translation(
                 "建立一座鳥類保護區。", List.of("動物"), List.of("卡牌輪抽"))));
         var source = game(List.of(), "Build a bird reserve.");
 
@@ -148,7 +164,7 @@ class BggMetadataLocalizationServiceTest {
 
     @Test
     void translatesRankedCatalogCategoriesAndMechanicsInOneBoundedRequest() {
-        when(translations.translate(any())).thenReturn(Optional.of(new Translation(
+        when(translations.readStored(any())).thenReturn(Optional.of(new Translation(
                 "", List.of("策略"), List.of("牌库构筑"))));
 
         var localized = service.localizeDiscoveryTaxonomy(
@@ -157,7 +173,7 @@ class BggMetadataLocalizationServiceTest {
         assertThat(localized.translated()).isTrue();
         assertThat(localized.categories()).containsEntry("Strategy", "策略");
         assertThat(localized.mechanics()).containsEntry("Deck Building", "牌库构筑");
-        verify(translations).translate(any());
+        verify(translations).readStored(any());
     }
 
     @Test
@@ -171,7 +187,7 @@ class BggMetadataLocalizationServiceTest {
         assertThat(presentation.normalizeSourceName("遊戲說明")).isEqualTo("游戏说明");
         assertThat(taxonomy.categories()).containsEntry("Animals", "Animals");
         assertThat(taxonomy.mechanics()).containsEntry("Card Drafting", "Card Drafting");
-        verify(translations, never()).translate(any());
+        verify(translations, never()).readStored(any());
     }
 
     @Test
@@ -179,7 +195,7 @@ class BggMetadataLocalizationServiceTest {
         List<String> mechanics = java.util.stream.IntStream.rangeClosed(1, 51)
                 .mapToObj(index -> "Mechanic " + index)
                 .toList();
-        when(translations.translate(any())).thenAnswer(invocation -> {
+        when(translations.readStored(any())).thenAnswer(invocation -> {
             BggMetadataTranslation.Request request = invocation.getArgument(0);
             return Optional.of(new Translation(
                     "",
@@ -192,7 +208,7 @@ class BggMetadataLocalizationServiceTest {
         assertThat(localized.translated()).isTrue();
         assertThat(localized.categories()).containsEntry("Strategy", "译:Strategy");
         assertThat(localized.mechanics()).containsEntry("Mechanic 51", "译:Mechanic 51");
-        verify(translations, times(2)).translate(any());
+        verify(translations, times(2)).readStored(any());
     }
 
     @Test
@@ -200,7 +216,7 @@ class BggMetadataLocalizationServiceTest {
         List<String> mechanics = java.util.stream.IntStream.rangeClosed(1, 51)
                 .mapToObj(index -> "Mechanic " + index)
                 .toList();
-        when(translations.translate(any())).thenAnswer(invocation -> {
+        when(translations.readStored(any())).thenAnswer(invocation -> {
             BggMetadataTranslation.Request request = invocation.getArgument(0);
             if (request.mechanics().contains("Mechanic 50")) return Optional.empty();
             return Optional.of(new Translation(
@@ -216,13 +232,13 @@ class BggMetadataLocalizationServiceTest {
         assertThat(localized.mechanics())
                 .containsEntry("Mechanic 1", "译:Mechanic 1")
                 .containsEntry("Mechanic 51", "Mechanic 51");
-        verify(translations, times(2)).translate(any());
+        verify(translations, times(2)).readStored(any());
     }
 
     @Test
     void doesNotRejectAnOtherwiseValidTaxonomyTermAtAnArbitraryCharacterCount() {
         String longTranslation = "策略".repeat(120);
-        when(translations.translate(any())).thenReturn(Optional.of(new Translation(
+        when(translations.readStored(any())).thenReturn(Optional.of(new Translation(
                 "", List.of(longTranslation), List.of())));
 
         var localized = service.localizeDiscoveryCategories(List.of("Strategy"), "zh-CN");

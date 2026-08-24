@@ -13,6 +13,7 @@ import com.rulepilot.catalog.BggMetadataTranslation.Translation;
 import com.rulepilot.catalog.BggMetadataTranslation.Request;
 import com.rulepilot.catalog.BggMetadataTranslation.PrewarmStatus;
 import com.rulepilot.catalog.application.BggMetadataTranslationStore;
+import com.rulepilot.catalog.application.BggMetadataTranslationStore.Key;
 import com.sun.net.httpserver.HttpServer;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
@@ -40,7 +41,7 @@ class DeepSeekBggMetadataTranslationTest {
             List.of("Card Drafting"));
 
     @Test
-    void translatesStructuredMetadataAndCachesBySourceDigestWithoutLeakingTheKey() throws Exception {
+    void prewarmMaterializesStructuredMetadataAndCachesByVersionedSourceIdentity() throws Exception {
         AtomicReference<String> authorization = new AtomicReference<>();
         AtomicReference<String> requestBody = new AtomicReference<>();
         HttpServer server = translationServer(authorization, requestBody);
@@ -51,9 +52,10 @@ class DeepSeekBggMetadataTranslationTest {
             var adapter = adapter(
                     redis.template(), store, true, "http://127.0.0.1:" + server.getAddress().getPort());
 
-            var translation = adapter.translate(REQUEST);
+            var result = adapter.prewarm(REQUEST);
 
-            assertThat(translation).hasValueSatisfying(value -> {
+            assertThat(result.status()).isEqualTo(PrewarmStatus.READY);
+            assertThat(store.values.values()).singleElement().satisfies(value -> {
                 assertThat(value.description()).isEqualTo("建造一座鸟类保护区。");
                 assertThat(value.categories()).containsExactly("动物");
                 assertThat(value.mechanics()).containsExactly("卡牌轮抽");
@@ -70,11 +72,13 @@ class DeepSeekBggMetadataTranslationTest {
             verify(redis.values()).set(
                     key.capture(), value.capture(), org.mockito.ArgumentMatchers.eq(Duration.ofDays(30)));
             assertThat(key.getValue())
-                    .startsWith("rulepilot:bgg:metadata-translation:zh-CN:v4:266192:")
+                    .startsWith("rulepilot:bgg:metadata-translation:zh-CN:v5:266192:")
                     .doesNotContain("Build a bird reserve", "Animals", "Card Drafting");
             assertThat(value.getValue()).contains("建造一座鸟类保护区。", "动物", "卡牌轮抽");
             assertThat(store.values).hasSize(1).allSatisfy((storedKey, stored) -> {
-                assertThat(storedKey).startsWith("266192:");
+                assertThat(storedKey.bggId()).isEqualTo(266192);
+                assertThat(storedKey.locale()).isEqualTo("zh-CN");
+                assertThat(storedKey.contractVersion()).isEqualTo(5);
                 assertThat(stored.description()).isEqualTo("建造一座鸟类保护区。");
             });
         } finally {
@@ -92,7 +96,7 @@ class DeepSeekBggMetadataTranslationTest {
         OkHttpClient calls = mock(OkHttpClient.class);
         var adapter = adapter(calls, redis.template(), "http://provider.invalid");
 
-        var translation = adapter.translate(REQUEST);
+        var translation = adapter.readStored(REQUEST);
 
         assertThat(translation).hasValueSatisfying(value -> {
             assertThat(value.description()).isEqualTo("已缓存的中文简介。");
@@ -118,8 +122,9 @@ class DeepSeekBggMetadataTranslationTest {
                                     store,
                                     true,
                                     "http://127.0.0.1:" + server.getAddress().getPort())
-                            .translate(REQUEST))
-                    .isPresent();
+                            .prewarm(REQUEST)
+                            .status())
+                    .isEqualTo(PrewarmStatus.READY);
 
             RedisMocks restartedRedis = redisWithMissAndBudget(1L);
             OkHttpClient unavailableProvider = mock(OkHttpClient.class);
@@ -130,7 +135,7 @@ class DeepSeekBggMetadataTranslationTest {
                     false,
                     "http://provider.invalid");
 
-            assertThat(restarted.translate(REQUEST)).hasValueSatisfying(value ->
+            assertThat(restarted.readStored(REQUEST)).hasValueSatisfying(value ->
                     assertThat(value.description()).isEqualTo("持久化中文简介。"));
             verify(restartedRedis.values(), never()).increment(anyString());
             verify(unavailableProvider, never()).newCall(org.mockito.ArgumentMatchers.any());
@@ -160,11 +165,11 @@ class DeepSeekBggMetadataTranslationTest {
                             store,
                             true,
                             "http://127.0.0.1:" + server.getAddress().getPort())
-                    .translate(REQUEST);
+                    .prewarm(REQUEST);
 
-            assertThat(result).hasValueSatisfying(value ->
+            assertThat(result.status()).isEqualTo(PrewarmStatus.READY);
+            assertThat(store.values.values()).singleElement().satisfies(value ->
                     assertThat(value.description()).isEqualTo("可用中文简介。"));
-            assertThat(store.values).hasSize(1);
         } finally {
             server.stop(0);
         }
@@ -180,9 +185,12 @@ class DeepSeekBggMetadataTranslationTest {
         server.start();
         try {
             RedisMocks redis = redisWithMissAndBudget(1L);
-            var adapter = adapter(redis.template(), "http://127.0.0.1:" + server.getAddress().getPort());
+            MemoryTranslationStore store = new MemoryTranslationStore();
+            var adapter = adapter(
+                    redis.template(), store, true, "http://127.0.0.1:" + server.getAddress().getPort());
 
-            assertThat(adapter.translate(REQUEST)).hasValueSatisfying(value -> {
+            assertThat(adapter.prewarm(REQUEST).status()).isEqualTo(PrewarmStatus.READY);
+            assertThat(store.values.values()).singleElement().satisfies(value -> {
                 assertThat(value.description()).isEqualTo("建造一座鸟类保护区。");
                 assertThat(value.categories()).containsExactly("Animals");
                 assertThat(value.mechanics()).containsExactly("Card Drafting");
@@ -211,9 +219,12 @@ class DeepSeekBggMetadataTranslationTest {
         server.start();
         try {
             RedisMocks redis = redisWithMissAndBudget(1L);
-            var adapter = adapter(redis.template(), "http://127.0.0.1:" + server.getAddress().getPort());
+            MemoryTranslationStore store = new MemoryTranslationStore();
+            var adapter = adapter(
+                    redis.template(), store, true, "http://127.0.0.1:" + server.getAddress().getPort());
 
-            assertThat(adapter.translate(request)).hasValueSatisfying(value -> {
+            assertThat(adapter.prewarm(request).status()).isEqualTo(PrewarmStatus.READY);
+            assertThat(store.values.values()).singleElement().satisfies(value -> {
                 assertThat(value.description()).isEqualTo(sourceDescription.strip());
                 assertThat(value.categories()).containsExactly("动物");
                 assertThat(value.mechanics()).containsExactly("卡牌轮抽");
@@ -224,13 +235,14 @@ class DeepSeekBggMetadataTranslationTest {
     }
 
     @Test
-    void failsClosedBeforeTheProviderWhenTheGlobalHourlyBudgetIsExhausted() {
-        RedisMocks redis = redisWithMissAndBudget(61L);
+    void interactiveReadMissNeverSpendsBudgetOrCallsTheProvider() {
+        RedisMocks redis = redisWithMissAndBudget(1L);
         OkHttpClient calls = mock(OkHttpClient.class);
         var adapter = adapter(calls, redis.template(), "http://provider.invalid");
 
-        assertThat(adapter.translate(REQUEST)).isEmpty();
+        assertThat(adapter.readStored(REQUEST)).isEmpty();
 
+        verify(redis.values(), never()).increment(anyString());
         verify(calls, never()).newCall(org.mockito.ArgumentMatchers.any());
     }
 
@@ -338,16 +350,16 @@ class DeepSeekBggMetadataTranslationTest {
     private record RedisMocks(StringRedisTemplate template, ValueOperations<String, String> values) {}
 
     private static final class MemoryTranslationStore implements BggMetadataTranslationStore {
-        private final Map<String, Translation> values = new java.util.LinkedHashMap<>();
+        private final Map<Key, Translation> values = new java.util.LinkedHashMap<>();
 
         @Override
-        public java.util.Optional<Translation> find(int bggId, String sourceSha256) {
-            return java.util.Optional.ofNullable(values.get(bggId + ":" + sourceSha256));
+        public java.util.Optional<Translation> find(Key key) {
+            return java.util.Optional.ofNullable(values.get(key));
         }
 
         @Override
-        public void save(int bggId, String sourceSha256, Translation translation, Instant translatedAt) {
-            values.put(bggId + ":" + sourceSha256, translation);
+        public void save(Key key, Translation translation, Instant translatedAt) {
+            values.put(key, translation);
         }
     }
 }

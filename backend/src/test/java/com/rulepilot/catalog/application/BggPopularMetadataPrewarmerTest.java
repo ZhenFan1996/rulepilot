@@ -481,7 +481,7 @@ class BggPopularMetadataPrewarmerTest {
         }
 
         @Override
-        public Optional<Translation> translate(Request request) {
+        public Optional<Translation> readStored(Request request) {
             translatedIds.add(request.bggId());
             if (request.bggId() == unavailableId) return Optional.empty();
             return Optional.of(new Translation("中文简介", List.of("策略"), List.of("卡牌轮抽")));
