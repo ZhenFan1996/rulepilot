@@ -770,7 +770,8 @@ class BoardGameRecommendationAgentPaidCanaryTest {
             assertThat(recommendation.profile().playerCount().maximum()).isEqualTo(5);
             assertThat(recommendation.profile().durationMinutes().minimum()).isNull();
             assertThat(recommendation.profile().durationMinutes().maximum()).isEqualTo(90);
-            assertThat(recommendation.games()).hasSize(3).allSatisfy(entry -> {
+            assertRequestedCountOrExactShortfall(recommendation, 3);
+            assertThat(recommendation.games()).allSatisfy(entry -> {
                 assertThat(entry.game().details().minPlayers()).isLessThanOrEqualTo(5);
                 assertThat(entry.game().details().maxPlayers()).isGreaterThanOrEqualTo(5);
                 assertThat(entry.game().details().maximumPlayTimeMinutes()).isLessThanOrEqualTo(90);
@@ -870,7 +871,7 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                 8, 3, new BigDecimal("0.66"), Duration.ofSeconds(30));
         var agent = new BoardGameRecommendationAgent(
                 model,
-                new BoardGameRecommendationTools(new CanaryCatalog(List.of(102, 103)), noResearch()),
+                new BoardGameRecommendationTools(new CanaryCatalog(List.of(107, 4174)), noResearch()),
                 new BoardGameRecommendationSelector(properties),
                 properties,
                 json);
@@ -1323,9 +1324,10 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                 capture);
         var properties = new BoardGameRecommendationProperties(
                 8, 3, new BigDecimal("0.66"), Duration.ofSeconds(30));
+        var catalog = new CanaryCatalog();
         var agent = new BoardGameRecommendationAgent(
                 model,
-                new BoardGameRecommendationTools(new CanaryCatalog(), noResearch()),
+                new BoardGameRecommendationTools(catalog, noResearch()),
                 new BoardGameRecommendationSelector(properties),
                 properties,
                 json);
@@ -1334,7 +1336,7 @@ class BoardGameRecommendationAgentPaidCanaryTest {
         try {
             String requestText = "比较 River Market 和 Harbor Chorus 的时长、复杂度与机制，并自然地告诉我各自适合什么选择。事实和你的判断要分清楚。";
             long started = System.nanoTime();
-            var response = agent.converse(
+            ConversationRequest validatedClientRequest = agent.validatedConversationRequest(
                     new ConversationRequest(
                             RecommendationProfile.empty(),
                             requestText,
@@ -1344,8 +1346,21 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                             List.of(
                                     new KnownGame(101, "River Market", "River Market"),
                                     new KnownGame(105, "Harbor Chorus", "Harbor Chorus")),
-                            List.of(101, 105)),
-                    "zh-CN");
+                            List.of(101, 105)));
+            ConversationRequest persistedRequest = new ConversationRequest(
+                    validatedClientRequest.profile(),
+                    validatedClientRequest.message(),
+                    validatedClientRequest.excludedBggIds(),
+                    validatedClientRequest.transcript(),
+                    validatedClientRequest.focusedBggId(),
+                    validatedClientRequest.knownGames(),
+                    validatedClientRequest.shownBggIds(),
+                    catalog.findGamesByIds(List.of(101, 105)));
+            var response = agent.conversePersisted(
+                    persistedRequest,
+                    "zh-CN",
+                    null,
+                    ignored -> {});
             visibleTurns.add(visible("comparison-only", response, elapsed(started)));
 
             assertThat(response.outcome()).isEqualTo(Outcome.CONVERSATION);
@@ -1710,6 +1725,20 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                 .allSatisfy(title -> assertThat(response.assistantMessage())
                         .as("an explicit result count must not introduce an unselected candidate in prose")
                         .doesNotContain(title));
+    }
+
+    private void assertRequestedCountOrExactShortfall(
+            BoardGameRecommendationAgent.ConversationResponse response,
+            int requestedCount) {
+        int publishedCount = response.games().size();
+        assertThat(publishedCount).isBetween(1, requestedCount);
+        if (publishedCount == requestedCount) {
+            assertThat(response.shortfall()).isNull();
+            return;
+        }
+        assertThat(response.shortfall()).isNotNull();
+        assertThat(response.shortfall().requestedCount()).isEqualTo(requestedCount);
+        assertThat(response.shortfall().availableCount()).isEqualTo(publishedCount);
     }
 
     private void assertTerminalProsePreserved(
@@ -2487,6 +2516,8 @@ class BoardGameRecommendationAgentPaidCanaryTest {
         @Override
         public CandidateSet searchGames(BoardGameRecommendationCatalog.CatalogFilters filters) {
             java.util.stream.Stream<Game> matches = games.values().stream()
+                    .filter(game -> candidateIds.isEmpty()
+                            || candidateIds.contains(game.ranking().bggId()))
                     .filter(game -> filters.types().isEmpty()
                             || game.ranking().types().stream().anyMatch(filters.types()::contains))
                     .filter(game -> game.details() != null
