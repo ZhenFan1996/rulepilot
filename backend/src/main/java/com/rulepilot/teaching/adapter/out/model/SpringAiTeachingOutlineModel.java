@@ -29,7 +29,6 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ExecutionException;
@@ -67,7 +66,6 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
     private static final long OUTLINE_ATTEMPT_DEADLINE_SECONDS = 60;
     private static final int MAX_TRANSIENT_OUTLINE_ATTEMPTS = 2;
     static final int MAX_CANONICAL_LEDGER_EVIDENCE_CHARACTERS = 32_000;
-    private static final int MAX_CANONICAL_PAGE_EVIDENCE_CHARACTERS = 2_800;
 
     private final RuntimeModelConfiguration models;
     private final VersionedAgentPrompts prompts;
@@ -159,7 +157,7 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
             throw new OutlineGenerationException(
                     "visual rulebook has no safe canonical source ledger to plan",
                     new IllegalArgumentException(
-                            "typed visual pages require at least one exact rule anchor and no partial or legacy page state"));
+                            "typed visual pages require exact internal bindings, at least one admitted rule anchor, and no legacy page state"));
         }
         Role role = roleFor(request);
         String owner = request.modelConfigurationOwner();
@@ -354,9 +352,21 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
                 .map(canonicalById::get)
                 .map(CanonicalSourceSlot::pageNumber)
                 .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
-        String pageEvidence = request.pages().stream()
+        List<PageInput> missingPageInputs = request.pages().stream()
                 .filter(page -> missingPages.contains(page.pageNumber()))
-                .map(page -> "PAGE " + page.pageNumber() + "\n" + page.text())
+                .toList();
+        Map<Integer, String> typedEvidenceByPage = canonicalTypedEvidenceByPage(missingPageInputs);
+        String pageEvidence = missingPageInputs.stream()
+                .map(page -> {
+                    String evidence = typedEvidenceByPage.getOrDefault(page.pageNumber(), "");
+                    return "PAGE " + page.pageNumber()
+                            + "\nPAGE_LEDGER_STATE: " + page.pageLedgerState()
+                            + (page.pageLedgerState() == TeachingOutlineModel.PageLedgerState.VISUAL_PARTIAL
+                                    ? "\nSOURCE_INVENTORY: incomplete; unlisted source obligations are unknown"
+                                    : "")
+                            + "\n"
+                            + (evidence.isBlank() ? "ADMITTED_TYPED_EVIDENCE: none" : evidence);
+                })
                 .collect(java.util.stream.Collectors.joining("\n\n"));
 
         ChatClient.ChatClientRequestSpec prompt = ChatClient.create(models.modelFor(role, owner)).prompt();
@@ -702,10 +712,10 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
     }
 
     /**
-     * A complete visual ledger already owns exact identifiers and page bindings. Ask the model only for the semantic
-     * decisions that actually require it, then project those decisions back onto the immutable ledger. This keeps a
-     * dense rulebook from repeating every source string several times in the completion and makes source fidelity an
-     * application invariant rather than a copying task for the provider.
+     * A typed visual ledger already owns exact identifiers and page bindings, even when a page's wider inventory is
+     * incomplete. Ask the model only for the semantic decisions that require it, then project those decisions back
+     * onto the immutable ledger. This keeps a dense rulebook from repeating every source string several times in the
+     * completion and makes source fidelity an application invariant rather than a copying task for the provider.
      */
     private OutlineDraft organizeCanonicalLedgerOnce(
             OutlineRequest request, Role role, String owner, String repair) {
@@ -847,11 +857,8 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
                 CanonicalSourceSlot::pageNumber,
                 LinkedHashMap::new,
                 java.util.stream.Collectors.toList()));
+        Map<Integer, String> typedEvidenceByPage = canonicalTypedEvidenceByPage(request.pages());
         StringBuilder ledger = new StringBuilder();
-        int remainingEvidenceCharacters = MAX_CANONICAL_LEDGER_EVIDENCE_CHARACTERS;
-        int remainingPages = (int) request.pages().stream()
-                .filter(VisualSourceRuleGroupLedger::hasCompleteExactFactLedger)
-                .count();
         for (var page : request.pages()) {
             ledger.append("PAGE ").append(page.pageNumber()).append('\n');
             if (page.pageLedgerState()
@@ -860,7 +867,12 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
                         .append("CANONICAL_SLOTS: unavailable (source obligations for this page are unknown)\n\n");
                 continue;
             }
-            ledger.append("PAGE_LEDGER_STATE: VISUAL_EXACT_COMPLETE\n");
+            ledger.append("PAGE_LEDGER_STATE: ").append(page.pageLedgerState()).append('\n');
+            if (page.pageLedgerState() == TeachingOutlineModel.PageLedgerState.VISUAL_PARTIAL) {
+                ledger.append("SOURCE_INVENTORY: incomplete; unlisted source obligations are unknown\n");
+            } else {
+                ledger.append("SOURCE_INVENTORY: complete\n");
+            }
             List<CanonicalSourceSlot> pageSlots = slotsByPage.getOrDefault(page.pageNumber(), List.of());
             if (pageSlots.isEmpty()) {
                 ledger.append("CANONICAL_SLOTS: none (no independently teachable rule anchor)\n");
@@ -877,70 +889,74 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
                     ledger.append(" | identifier=").append(slot.sourceIdentifier()).append('\n');
                 }
             }
-            int pageEvidenceBudget = Math.min(
-                    MAX_CANONICAL_PAGE_EVIDENCE_CHARACTERS,
-                    Math.max(1, remainingEvidenceCharacters / Math.max(1, remainingPages)));
-            String pageEvidence = canonicalPageEvidence(page, pageEvidenceBudget);
-            remainingEvidenceCharacters -= pageEvidence.length();
-            remainingPages--;
+            if (!hasCanonicalPlanningEvidence(page)) {
+                ledger.append("PAGE_EVIDENCE: none (no admitted typed rule fact)\n\n");
+                continue;
+            }
             ledger.append("PAGE_EVIDENCE_BEGIN\n")
-                    .append(pageEvidence)
+                    .append(typedEvidenceByPage.get(page.pageNumber()))
                     .append("\nPAGE_EVIDENCE_END\n\n");
         }
         return ledger.toString().stripTrailing();
     }
 
-    /**
-     * The immutable slot ledger already preserves every auditable source identity. Planning needs the relationship
-     * around those identities, not another full copy of every page. Source-centred excerpts keep middle and tail
-     * rules visible while bounding the model context for long rulebooks.
-     */
-    static String canonicalPageEvidence(PageInput page, int maximumCharacters) {
+    private static Map<Integer, String> canonicalTypedEvidenceByPage(List<PageInput> pages) {
+        Map<Integer, String> typedEvidenceByPage = pages.stream()
+                .filter(SpringAiTeachingOutlineModel::hasCanonicalPlanningEvidence)
+                .collect(java.util.stream.Collectors.toMap(
+                        PageInput::pageNumber,
+                        page -> canonicalPlanningEvidence(page, MAX_CANONICAL_LEDGER_EVIDENCE_CHARACTERS),
+                        (first, duplicate) -> {
+                            throw new IllegalArgumentException("canonical teaching page numbers are not unique");
+                        },
+                        LinkedHashMap::new));
+        int typedEvidenceCharacters = typedEvidenceByPage.values().stream().mapToInt(String::length).sum();
+        if (typedEvidenceCharacters > MAX_CANONICAL_LEDGER_EVIDENCE_CHARACTERS) {
+            throw new IllegalArgumentException("typed rule facts exceed the canonical input budget");
+        }
+        return typedEvidenceByPage;
+    }
+
+    private static boolean hasCanonicalPlanningEvidence(PageInput page) {
+        return (page.pageLedgerState() == TeachingOutlineModel.PageLedgerState.VISUAL_EXACT_COMPLETE
+                        || page.pageLedgerState() == TeachingOutlineModel.PageLedgerState.VISUAL_PARTIAL)
+                && !page.sourceRuleGroupFacts().isEmpty();
+    }
+
+    static String canonicalPlanningEvidence(PageInput page, int maximumCharacters) {
         if (page == null || maximumCharacters < 1) {
             throw new IllegalArgumentException("canonical page evidence boundary is invalid");
         }
-        String text = page.text().strip().replaceAll("[\\t\\x0B\\f\\r ]+", " ");
-        if (text.length() <= maximumCharacters) return text;
-
-        List<String> identifiers = page.sourceRuleGroupIdentifiers();
-        if (identifiers.isEmpty()) return boundedAcrossPage(text, maximumCharacters);
-        int separatorCharacters = Math.max(0, identifiers.size() - 1) * 5;
-        int excerptBudget = Math.max(48, (maximumCharacters - separatorCharacters) / identifiers.size());
-        String searchable = text.toLowerCase(Locale.ROOT);
-        List<String> excerpts = new ArrayList<>();
-        LinkedHashSet<String> seen = new LinkedHashSet<>();
-        for (String identifier : identifiers) {
-            int index = searchable.indexOf(identifier.toLowerCase(Locale.ROOT));
-            if (index < 0) continue;
-            int usable = Math.min(excerptBudget, maximumCharacters);
-            int context = Math.max(0, usable - identifier.length());
-            int start = Math.max(0, index - context / 2);
-            int end = Math.min(text.length(), start + usable);
-            start = Math.max(0, end - usable);
-            String excerpt = text.substring(start, end).strip();
-            if (!excerpt.isBlank() && seen.add(excerpt)) excerpts.add(excerpt);
+        if (page.pageLedgerState() != TeachingOutlineModel.PageLedgerState.VISUAL_EXACT_COMPLETE
+                && page.pageLedgerState() != TeachingOutlineModel.PageLedgerState.VISUAL_PARTIAL) {
+            throw new IllegalArgumentException("canonical page has no admitted typed fact ledger");
         }
-        if (excerpts.isEmpty()) return boundedAcrossPage(text, maximumCharacters);
-        String joined = String.join("\n…\n", excerpts);
-        return joined.length() <= maximumCharacters
-                ? joined
-                : joined.substring(0, maximumCharacters).stripTrailing();
+        if (!VisualSourceRuleGroupLedger.hasExactFactBindings(
+                page.sourceRuleGroupIdentifiers(), page.sourceRuleGroupFacts())) {
+            throw new IllegalArgumentException("canonical page evidence has no exact typed fact ledger");
+        }
+        String typedFacts = canonicalTypedFactEvidence(page);
+        if (typedFacts.isBlank()) return "";
+        if (typedFacts.length() > maximumCharacters) {
+            throw new IllegalArgumentException("typed rule facts exceed their canonical evidence budget");
+        }
+        return typedFacts;
     }
 
-    private static String boundedAcrossPage(String text, int maximumCharacters) {
-        if (text.length() <= maximumCharacters) return text;
-        String gap = "\n…\n";
-        if (maximumCharacters <= gap.length() * 2) return text.substring(0, maximumCharacters);
-        int content = maximumCharacters - gap.length() * 2;
-        int head = content / 3;
-        int middle = content / 3;
-        int tail = content - head - middle;
-        int middleStart = Math.max(head, (text.length() - middle) / 2);
-        return text.substring(0, head)
-                + gap
-                + text.substring(middleStart, middleStart + middle)
-                + gap
-                + text.substring(text.length() - tail);
+    private static String canonicalTypedFactEvidence(PageInput page) {
+        List<String> records = new ArrayList<>();
+        for (int index = 0; index < page.sourceRuleGroupIdentifiers().size(); index++) {
+            String identifier = page.sourceRuleGroupIdentifiers().get(index);
+            var fact = page.sourceRuleGroupFacts().stream()
+                    .filter(candidate -> identifier.equals(candidate.identifier()))
+                    .findFirst()
+                    .orElseThrow();
+            records.add("SOURCE_SLOT: page-" + page.pageNumber() + "-rule-" + (index + 1)
+                    + " | RULE_GROUP_IDENTIFIER: " + fact.identifier()
+                    + " | RULE_GROUP_LABEL: " + fact.label()
+                    + " | RULE_GROUP_FACT: " + fact.fact());
+        }
+        return String.join("\n", records);
     }
 
     private static List<CanonicalSourceSlot> canonicalSourceSlots(OutlineRequest request) {
@@ -953,9 +969,14 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
                     == TeachingOutlineModel.PageLedgerState.VISUAL_EXPLICITLY_UNAVAILABLE) {
                 continue;
             }
-            if (page.pageLedgerState() != TeachingOutlineModel.PageLedgerState.VISUAL_EXACT_COMPLETE
-                    || !VisualSourceRuleGroupLedger.hasCompleteExactFactLedger(page)) {
-                throw new IllegalArgumentException("canonical teaching source page has no complete exact fact ledger");
+            boolean safeTypedLedger = switch (page.pageLedgerState()) {
+                case VISUAL_EXACT_COMPLETE -> VisualSourceRuleGroupLedger.hasCompleteExactFactLedger(page);
+                case VISUAL_PARTIAL -> VisualSourceRuleGroupLedger.hasExactFactBindings(
+                        page.sourceRuleGroupIdentifiers(), page.sourceRuleGroupFacts());
+                case LEGACY_TEXT, VISUAL_EXPLICITLY_UNAVAILABLE -> false;
+            };
+            if (!safeTypedLedger) {
+                throw new IllegalArgumentException("canonical teaching source page has no safe typed fact ledger");
             }
             for (int index = 0; index < page.sourceRuleGroupIdentifiers().size(); index++) {
                 slots.add(new CanonicalSourceSlot(
@@ -998,9 +1019,11 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
         LinkedHashSet<String> teachingUnitIds = new LinkedHashSet<>();
         List<TopicDraft> topics = new ArrayList<>();
         List<SourceCoverageSlotDraft> sourceSlots = new ArrayList<>();
+        List<Integer> partialSourcePages = partialSourcePages(request);
         List<Integer> unavailableSourcePages = unavailableSourcePages(request);
-        boolean partialSourcePageCatalog = !unavailableSourcePages.isEmpty();
-        String premise = premiseWithUnavailableSourceNotice(compact.premise(), unavailableSourcePages);
+        boolean partialSourcePageCatalog = !partialSourcePages.isEmpty() || !unavailableSourcePages.isEmpty();
+        String premise = premiseWithIncompleteSourceNotice(
+                compact.premise(), partialSourcePages, unavailableSourcePages);
 
         for (CompactTopicDraft topic : compact.topics()) {
             if (topic == null || topic.key() == null || !topic.key().matches("[a-z0-9]+(?:-[a-z0-9]+)*")
@@ -1139,13 +1162,33 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
                 .toList();
     }
 
-    private static String premiseWithUnavailableSourceNotice(String premise, List<Integer> unavailablePages) {
-        if (unavailablePages.isEmpty()) return premise;
-        String pageNumbers = unavailablePages.stream()
-                .map(String::valueOf)
-                .collect(java.util.stream.Collectors.joining("、"));
-        return premise + " 来源范围提示：规则书第" + pageNumbers
-                + "页本轮没有获得可验证的视觉证据；当前讲解仅涵盖已核验页面，不会推断这些页面的规则。";
+    private static List<Integer> partialSourcePages(OutlineRequest request) {
+        return request.pages().stream()
+                .filter(page -> page.pageLedgerState() == TeachingOutlineModel.PageLedgerState.VISUAL_PARTIAL)
+                .map(TeachingOutlineModel.PageInput::pageNumber)
+                .distinct()
+                .toList();
+    }
+
+    private static String premiseWithIncompleteSourceNotice(
+            String premise, List<Integer> partialPages, List<Integer> unavailablePages) {
+        if (partialPages.isEmpty() && unavailablePages.isEmpty()) return premise;
+        List<String> notices = new ArrayList<>();
+        if (!partialPages.isEmpty()) {
+            String pageNumbers = partialPages.stream()
+                    .map(String::valueOf)
+                    .collect(java.util.stream.Collectors.joining("、"));
+            notices.add("规则书第" + pageNumbers
+                    + "页仅纳入了已精确绑定的视觉规则，未列出的来源义务仍未知");
+        }
+        if (!unavailablePages.isEmpty()) {
+            String pageNumbers = unavailablePages.stream()
+                    .map(String::valueOf)
+                    .collect(java.util.stream.Collectors.joining("、"));
+            notices.add("规则书第" + pageNumbers + "页本轮没有获得可验证的视觉证据");
+        }
+        return premise + " 来源范围提示：" + String.join("；", notices)
+                + "；当前讲解仅涵盖已核验并纳入的规则，不会推断这些页面未纳入的规则。";
     }
 
     private static List<GlobalConceptDraft> canonicalConcepts(

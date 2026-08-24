@@ -125,18 +125,45 @@ class TeachingOutlineModelTest {
     }
 
     @Test
-    void rejectsUnsafeVisualLedgerStatesInsteadOfPromotingPartialOrUnavailableClaims() {
+    void admitsExactlyBoundFactsFromAPartialVisualInventoryWithoutClaimingCompleteness() {
         var exact = exactPage(1, "R-1");
         var partial = new PageInput(
                 2,
-                "A partial observation.",
+                "Free-form display text is not the typed fact ledger.",
                 List.of(),
                 List.of("R-2"),
                 false,
                 facts("R-2"),
                 PageLedgerState.VISUAL_PARTIAL);
+        var emptyPartial = new PageInput(
+                3,
+                "No claim reached the typed admission boundary.",
+                List.of(),
+                List.of(),
+                false,
+                List.of(),
+                PageLedgerState.VISUAL_PARTIAL);
 
-        assertThat(VisualSourceRuleGroupLedger.supportsTypedCanonicalOutline(List.of(exact, partial)))
+        assertThat(VisualSourceRuleGroupLedger.supportsTypedCanonicalOutline(
+                        List.of(exact, partial, emptyPartial)))
+                .isTrue();
+        assertThat(VisualSourceRuleGroupLedger.supportsTypedCanonicalOutline(List.of(partial)))
+                .isTrue();
+    }
+
+    @Test
+    void rejectsTypedLedgersWithoutAnAdmittedRuleAnchorOrWithDamagedPartialBindings() {
+        var exact = exactPage(1, "R-1");
+        var emptyPartial = new PageInput(
+                2,
+                "No admitted typed rule.",
+                List.of(),
+                List.of(),
+                false,
+                List.of(),
+                PageLedgerState.VISUAL_PARTIAL);
+
+        assertThat(VisualSourceRuleGroupLedger.supportsTypedCanonicalOutline(List.of(emptyPartial)))
                 .isFalse();
         assertThat(VisualSourceRuleGroupLedger.supportsTypedCanonicalOutline(
                         List.of(new PageInput(
@@ -153,21 +180,31 @@ class TeachingOutlineModelTest {
                 .isFalse();
         assertThatThrownBy(() -> new PageInput(
                         5,
-                        "Unsafe unavailable claim.",
+                        "Mismatched typed partial claims.",
                         List.of(),
                         List.of("R-5"),
                         false,
-                        facts("R-5"),
-                        PageLedgerState.VISUAL_EXPLICITLY_UNAVAILABLE))
+                        facts("different-rule"),
+                        PageLedgerState.VISUAL_PARTIAL))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("cannot carry source claims");
+                .hasMessageContaining("requires exact typed rule-group facts");
         assertThatThrownBy(() -> new PageInput(
                         6,
-                        "Incomplete exact claim.",
+                        "Unsafe unavailable claim.",
                         List.of(),
                         List.of("R-6"),
                         false,
                         facts("R-6"),
+                        PageLedgerState.VISUAL_EXPLICITLY_UNAVAILABLE))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("cannot carry source claims");
+        assertThatThrownBy(() -> new PageInput(
+                        7,
+                        "Incomplete exact claim.",
+                        List.of(),
+                        List.of("R-7"),
+                        false,
+                        facts("R-7"),
                         PageLedgerState.VISUAL_EXACT_COMPLETE))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("must be complete");
