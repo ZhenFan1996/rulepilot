@@ -106,6 +106,11 @@ public interface TeachingOutlineModel {
                     if (sourceRuleGroupInventoryComplete) {
                         throw new IllegalArgumentException("partial visual page ledger cannot be complete");
                     }
+                    if (!VisualSourceRuleGroupLedger.hasExactFactBindings(
+                            sourceRuleGroupIdentifiers, sourceRuleGroupFacts)) {
+                        throw new IllegalArgumentException(
+                                "partial visual page ledger requires exact typed rule-group facts");
+                    }
                 }
                 case VISUAL_EXPLICITLY_UNAVAILABLE -> {
                     if (sourceRuleGroupInventoryComplete

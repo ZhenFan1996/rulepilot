@@ -94,7 +94,7 @@ class TeachingSourceCoverageContractTest {
                 .satisfies(check -> {
                     assertThat(check.status()).isEqualTo(CheckStatus.NOT_EVALUATED);
                     assertThat(check.detail()).contains(
-                            "仍有页面未获得可验证的视觉证据",
+                            "仍有页面仅部分纳入或未获得可验证的视觉证据",
                             "不能声称覆盖了整本规则书");
                 });
     }
