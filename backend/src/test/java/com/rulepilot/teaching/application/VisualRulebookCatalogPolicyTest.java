@@ -3,6 +3,8 @@ package com.rulepilot.teaching.application;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.rulepilot.document.DocumentProcessing.PageView;
+import com.rulepilot.teaching.TeachingOutlineModel.PageInput;
+import com.rulepilot.teaching.TeachingOutlineModel.PageLedgerState;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.RuleGroupFact;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.SourceDependency;
@@ -204,7 +206,54 @@ class VisualRulebookCatalogPolicyTest {
             assertThat(input.sourceDependencies()).containsExactly(dependency);
             assertThat(input.sourceRuleGroupIdentifiers()).containsExactly("PLAY A CARD");
             assertThat(input.sourceRuleGroupInventoryComplete()).isTrue();
+            assertThat(input.pageLedgerState()).isEqualTo(PageLedgerState.VISUAL_EXACT_COMPLETE);
         });
+    }
+
+    @Test
+    void keepsVisualMissesAndPartialFactsInTheirTypedLedgerStates() {
+        var inputs = VisualRulebookCatalogPolicy.pageInputs(
+                List.of(new PageView(4, "", 0), new PageView(5, "", 0), new PageView(6, "", 0)),
+                List.of(
+                        visualPageFact(4, "MOVE", true),
+                        visualPageFact(6, "SCORE", false)));
+
+        assertThat(inputs).extracting(PageInput::pageLedgerState)
+                .containsExactly(
+                        PageLedgerState.VISUAL_EXACT_COMPLETE,
+                        PageLedgerState.VISUAL_EXPLICITLY_UNAVAILABLE,
+                        PageLedgerState.VISUAL_PARTIAL);
+        assertThat(inputs.get(1).sourceRuleGroupIdentifiers()).isEmpty();
+        assertThat(inputs.get(1).sourceRuleGroupInventoryComplete()).isFalse();
+    }
+
+    @Test
+    void visualEnhancementDoesNotPromoteAnOrdinaryTextRulebookIntoTheVisualCanonicalProtocol() {
+        PageInput legacyText = new PageInput(4, "MOVE: Move one piece.");
+
+        var enhanced = VisualRulebookCatalogPolicy.appendFactsToPageInputs(
+                List.of(legacyText), List.of(visualPageFact(4, "MOVE", true)));
+
+        assertThat(enhanced).singleElement().satisfies(page -> {
+            assertThat(page.pageLedgerState()).isEqualTo(PageLedgerState.LEGACY_TEXT);
+            assertThat(page.sourceRuleGroupInventoryComplete()).isTrue();
+        });
+    }
+
+    private PageFact visualPageFact(int pageNumber, String identifier, boolean complete) {
+        return new PageFact(
+                pageNumber,
+                identifier,
+                identifier + ": A directly visible observation.",
+                List.of(identifier.toLowerCase(java.util.Locale.ROOT)),
+                List.of(),
+                List.of(),
+                false,
+                PageFact.CURRENT_SCHEMA_VERSION,
+                List.of(),
+                List.of(identifier),
+                complete,
+                List.of(new RuleGroupFact(identifier, identifier, "A directly visible observation.")));
     }
 
     @Test
@@ -522,6 +571,32 @@ class VisualRulebookCatalogPolicyTest {
         assertThat(fact.factualSummary()).isEqualTo(dense.factualSummary());
         assertThat(fact.keywords()).containsExactlyElementsOf(dense.keywords());
         assertThat(fact.iconInventoryComplete()).isTrue();
+    }
+
+    @Test
+    void normalizesEmptyKeywordMetadataBeforeDurableProjectionWithoutWeakeningRuleEvidence() {
+        PageSummary sparseMetadata = new PageSummary(
+                9,
+                "R-1",
+                "R-1: Execute the visible procedure.",
+                List.of(),
+                List.of(),
+                List.of(),
+                false,
+                List.of(),
+                List.of("R-1"),
+                true,
+                List.of(),
+                List.of(new RuleGroupFact("R-1", "R-1", "Execute the visible procedure.")));
+
+        var fact = VisualRulebookCatalogPolicy.toPageFact(sparseMetadata);
+
+        assertThat(fact.keywords()).containsExactly("page 9");
+        assertThat(fact.schemaVersion()).isEqualTo(PageFact.CURRENT_SCHEMA_VERSION);
+        assertThat(fact.ruleGroupIdentifiers()).containsExactly("R-1");
+        assertThat(fact.ruleGroupFacts()).containsExactlyElementsOf(sparseMetadata.ruleGroupFacts());
+        assertThat(fact.ruleGroupInventoryComplete()).isTrue();
+        assertThat(VisualRulebookCatalogPolicy.hasReusableCompleteRuleLedger(fact)).isTrue();
     }
 
     @Test

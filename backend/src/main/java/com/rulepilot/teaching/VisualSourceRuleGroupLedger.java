@@ -1,6 +1,7 @@
 package com.rulepilot.teaching;
 
 import com.rulepilot.teaching.TeachingOutlineModel.PageInput;
+import com.rulepilot.teaching.TeachingOutlineModel.PageLedgerState;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.RuleGroupFact;
 import java.util.List;
 import java.util.Set;
@@ -47,5 +48,24 @@ public final class VisualSourceRuleGroupLedger {
     public static boolean hasCompleteExactFactLedger(PageInput page) {
         if (page == null || !page.sourceRuleGroupInventoryComplete()) return false;
         return hasExactFactBindings(page.sourceRuleGroupIdentifiers(), page.sourceRuleGroupFacts());
+    }
+
+    /**
+     * A typed visual outline may retain explicitly unreadable pages, but it must never absorb legacy text or partial
+     * visual prose into the canonical identity ledger. At least one exact rule anchor is required before planning.
+     */
+    public static boolean supportsTypedCanonicalOutline(List<PageInput> pages) {
+        return pages != null
+                && !pages.isEmpty()
+                && pages.stream().allMatch(page -> page.pageLedgerState() == PageLedgerState.VISUAL_EXACT_COMPLETE
+                        || page.pageLedgerState() == PageLedgerState.VISUAL_EXPLICITLY_UNAVAILABLE)
+                && pages.stream()
+                        .filter(page -> page.pageLedgerState() == PageLedgerState.VISUAL_EXACT_COMPLETE)
+                        .anyMatch(page -> !page.sourceRuleGroupIdentifiers().isEmpty());
+    }
+
+    public static boolean usesTypedVisualPageProtocol(List<PageInput> pages) {
+        return pages != null
+                && pages.stream().anyMatch(page -> page.pageLedgerState() != PageLedgerState.LEGACY_TEXT);
     }
 }

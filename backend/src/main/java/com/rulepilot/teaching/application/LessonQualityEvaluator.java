@@ -108,8 +108,13 @@ public class LessonQualityEvaluator {
                 .anyMatch(section -> section.coverageTags().contains(
                                 TeachingSourceCoverageContract.INCOMPLETE_INVENTORY_TAG)
                         || section.coverageTags().contains(TeachingSourceCoverageContract.UNSOURCED_TAG));
+        boolean sourcePageCatalogPartial = plan.sections().stream()
+                .flatMap(section -> section.coverageTags().stream())
+                .anyMatch(TeachingSourceCoverageContract.PARTIAL_SOURCE_PAGE_CATALOG_TAG::equals);
         CheckStatus status = sourceInventoryUnavailable
                 ? CheckStatus.FAIL
+                : sourcePageCatalogPartial
+                ? CheckStatus.NOT_EVALUATED
                 : available < required
                 ? CheckStatus.FAIL
                 : validated < required ? CheckStatus.NOT_EVALUATED : CheckStatus.PASS;
@@ -120,6 +125,9 @@ public class LessonQualityEvaluator {
                 sourceInventoryUnavailable
                         ? "来源义务清单仍不完整，或至少一个由规划 Agent 识别的必要教学单元没有可用来源；"
                                 + "即使已有章节带引用，也不能把整局标为完整。"
+                        : sourcePageCatalogPartial
+                        ? "所有已读取页面的来源义务都已归属，但规则书仍有页面未获得可验证的视觉证据；"
+                                + "当前讲解可阅读，但不能声称覆盖了整本规则书。"
                         : available < required
                         ? "有 " + (required - available) + " 个来源归属章节没有引用其规划时绑定的规则页。"
                         : validated < required

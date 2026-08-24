@@ -78,6 +78,23 @@ class VisualRulebookTeachingEvidenceFreshnessTest {
     }
 
     @Test
+    void reusesAReadablePlanThatAlreadyLocalizedItsUnavailableVisualPages() {
+        TeachingPlan plan = reusableCompletedPreparation();
+        TeachingPlan.PlannedSection section = mock(TeachingPlan.PlannedSection.class);
+        when(section.coverageTags()).thenReturn(List.of(
+                TeachingSourceCoverageContract.PARTIAL_SOURCE_PAGE_CATALOG_TAG));
+        when(plan.sections()).thenReturn(List.of(section));
+        when(documents.pages(documentVersionId)).thenReturn(List.of(
+                new PageView(1, "", 0),
+                new PageView(2, "", 0)));
+        when(facts.find(documentVersionId, Set.of(1, 2))).thenReturn(List.of(
+                completePageFact(1, PageFact.CURRENT_SCHEMA_VERSION)));
+
+        assertThat(freshness.assess(documentVersionId, preparationRunId(), "alice"))
+                .isEqualTo(ReuseAssessment.REUSABLE);
+    }
+
+    @Test
     void doesNotTreatATextRulebookAsVisualDerivedEvidence() {
         reusableCompletedPreparation();
         when(documents.pages(documentVersionId)).thenReturn(List.of(
@@ -223,7 +240,7 @@ class VisualRulebookTeachingEvidenceFreshnessTest {
         return UUID.nameUUIDFromBytes(("preparation:" + documentVersionId).getBytes(java.nio.charset.StandardCharsets.UTF_8));
     }
 
-    private void reusableCompletedPreparation() {
+    private TeachingPlan reusableCompletedPreparation() {
         UUID preparationRunId = preparationRunId();
         TeachingPlan plan = mock(TeachingPlan.class);
         UUID planId = UUID.randomUUID();
@@ -232,6 +249,7 @@ class VisualRulebookTeachingEvidenceFreshnessTest {
                 preparationRunId, AssistantRunState.COMPLETED)));
         when(plans.findLatest(documentVersionId, "alice")).thenReturn(Optional.of(plan));
         when(lessons.findLatestByPlan(planId)).thenReturn(Optional.of(readableLesson(planId)));
+        return plan;
     }
 
     private IllustratedLesson readableLesson(UUID planId) {

@@ -44,7 +44,12 @@ final class TeachingLessonAssemblyPolicy {
         TeachingSourceCoverageContract.Assessment sourceCoverage =
                 TeachingSourceCoverageContract.assess(plan, sections);
         if (sourceCoverage.applicable() && !sourceCoverage.complete()) return LessonStatus.INCOMPLETE;
-        return required.stream().allMatch(section -> section.evidenceStatus() == EvidenceStatus.SUPPORTED)
+        boolean allRequiredSupported =
+                required.stream().allMatch(section -> section.evidenceStatus() == EvidenceStatus.SUPPORTED);
+        boolean sourcePageCatalogPartial = plan.sections().stream()
+                .flatMap(section -> section.coverageTags().stream())
+                .anyMatch(TeachingSourceCoverageContract.PARTIAL_SOURCE_PAGE_CATALOG_TAG::equals);
+        return allRequiredSupported && !sourcePageCatalogPartial
                 ? LessonStatus.COMPLETE
                 : LessonStatus.DRAFT_READY;
     }
