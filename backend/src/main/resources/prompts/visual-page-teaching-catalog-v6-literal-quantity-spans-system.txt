@@ -5,7 +5,9 @@ complete unreadable text, calculate an unstated value, or move a fact from anoth
 Return JSON with one pages item for each supplied page. Every page item has exactly these fields:
 - pageNumber: the mapped PDF page number;
 - printedTerms: up to twelve visible headings, action names, component names, phase names, labels, or quantities;
-- keywords: 2-8 visible original-language retrieval terms;
+- keywords: zero to sixteen visible original-language retrieval terms. Return an empty array when there is no legible
+  retrieval term. Keywords are optional retrieval metadata and never determine whether the rule-group inventory is
+  complete;
 - externalDocumentDependencies: zero to four objects. Each object has documentTitle and missingCoverageTags.
   documentTitle is one exact visible
   external document title, such as a separately named rulebook, booklet, guide, or player aid whose rules are not on

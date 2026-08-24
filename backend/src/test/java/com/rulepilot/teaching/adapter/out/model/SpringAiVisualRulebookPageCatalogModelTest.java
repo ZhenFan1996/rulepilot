@@ -83,9 +83,13 @@ class SpringAiVisualRulebookPageCatalogModelTest {
                 "every distinct readable gameplay group",
                 "Inventory each distinct labelled block, list row, table row, and worked example",
                 "never replace them with a heading-only overview",
+                "zero to sixteen visible original-language retrieval terms",
+                "Return an empty array",
+                "never determine whether the rule-group inventory is complete",
                 "Do not inventory icons, propose rectangles or coordinates",
                 "Those belong to later enrichment")
                 .doesNotContain(
+                        "2-8 visible original-language retrieval terms",
                         "For every ruleGroupIdentifiers item",
                         "quantifierScope",
                         "resolution",
@@ -1378,6 +1382,79 @@ class SpringAiVisualRulebookPageCatalogModelTest {
                 """))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("must contain exactly");
+    }
+
+    @Test
+    void productionCatalogKeepsExactRuleEvidenceAcrossTheBoundedKeywordRange() {
+        String ledger = """
+                {"pages":[{"pageNumber":7,"printedTerms":["ΚΥΚΛΟΣ"],"keywords":%s,
+                "externalDocumentDependencies":[],"ruleGroups":[
+                  {"identifier":"ΚΥΚΛΟΣ","fact":"玩家执行这一项可见流程。","quantitySpans":[]}],
+                "ruleGroupInventoryComplete":true}]}
+                """;
+
+        var noKeywords = SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalogV6(
+                ledger.formatted("[]"));
+        var oneKeyword = SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalogV6(
+                ledger.formatted("[\"ΚΥΚΛΟΣ\"]"));
+        String sixteenKeywords = java.util.stream.IntStream.rangeClosed(1, 16)
+                .mapToObj(index -> "\"term-" + index + "\"")
+                .collect(java.util.stream.Collectors.joining(",", "[", "]"));
+        var denseKeywords = SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalogV6(
+                ledger.formatted(sixteenKeywords));
+
+        assertThat(noKeywords.pages()).singleElement().satisfies(page -> {
+            assertThat(page.keywords()).containsExactly("page 7");
+            assertThat(page.ruleGroupFacts()).singleElement();
+            assertThat(page.ruleGroupInventoryComplete()).isTrue();
+        });
+        assertThat(oneKeyword.pages()).singleElement().satisfies(page -> {
+            assertThat(page.keywords()).containsExactly("ΚΥΚΛΟΣ");
+            assertThat(page.ruleGroupInventoryComplete()).isTrue();
+        });
+        assertThat(denseKeywords.pages()).singleElement().satisfies(page -> {
+            assertThat(page.keywords()).hasSize(16);
+            assertThat(page.ruleGroupInventoryComplete()).isTrue();
+        });
+    }
+
+    @Test
+    void productionCatalogStillRejectsAnUnboundedKeywordPayload() {
+        String seventeenKeywords = java.util.stream.IntStream.rangeClosed(1, 17)
+                .mapToObj(index -> "\"term-" + index + "\"")
+                .collect(java.util.stream.Collectors.joining(",", "[", "]"));
+
+        assertThatThrownBy(() -> SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalogV6("""
+                        {"pages":[{"pageNumber":7,"printedTerms":["CYCLE"],"keywords":%s,
+                        "externalDocumentDependencies":[],"ruleGroups":[
+                          {"identifier":"CYCLE","fact":"玩家执行这一项可见流程。","quantitySpans":[]}],
+                        "ruleGroupInventoryComplete":true}]}
+                        """.formatted(seventeenKeywords)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("keywords must be an array with the declared size");
+    }
+
+    @Test
+    void productionCatalogKeepsKeywordElementsTypedNonBlankAndDistinct() {
+        String ledger = """
+                {"pages":[{"pageNumber":7,"printedTerms":["CYCLE"],"keywords":%s,
+                "externalDocumentDependencies":[],"ruleGroups":[
+                  {"identifier":"CYCLE","fact":"玩家执行这一项可见流程。","quantitySpans":[]}],
+                "ruleGroupInventoryComplete":true}]}
+                """;
+
+        assertThatThrownBy(() -> SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalogV6(
+                        ledger.formatted("[\"CYCLE\",\" CYCLE \"]")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("keywords must not contain duplicate text");
+        assertThatThrownBy(() -> SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalogV6(
+                        ledger.formatted("[\"CYCLE\",\" \"]")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("keywords must contain non-blank text");
+        assertThatThrownBy(() -> SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalogV6(
+                        ledger.formatted("[\"CYCLE\",7]")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("keywords must contain non-blank text");
     }
 
     @Test

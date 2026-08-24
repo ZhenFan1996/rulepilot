@@ -1,12 +1,14 @@
 package com.rulepilot.teaching;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static com.rulepilot.teaching.VisualRuleGroupTestFacts.facts;
 
 import com.rulepilot.teaching.TeachingOutlineModel.OutlineRequest;
 import com.rulepilot.teaching.TeachingOutlineModel.OutlineDraft;
 import com.rulepilot.teaching.TeachingOutlineModel.PageImageInput;
 import com.rulepilot.teaching.TeachingOutlineModel.PageInput;
+import com.rulepilot.teaching.TeachingOutlineModel.PageLedgerState;
 import com.rulepilot.teaching.TeachingOutlineModel.SourceCoverageAvailability;
 import com.rulepilot.teaching.TeachingOutlineModel.SourceCoverageRole;
 import com.rulepilot.teaching.TeachingOutlineModel.SourceCoverageSlotDraft;
@@ -93,5 +95,92 @@ class TeachingOutlineModelTest {
         assertThat(page.text()).isEqualTo("  page transcription stays exact  ");
         assertThat(page.sourceRuleGroupIdentifiers())
                 .containsExactlyElementsOf(identifiers.stream().map(String::strip).toList());
+    }
+
+    @Test
+    void distinguishesExactVisualEvidenceFromAnExplicitlyUnavailablePageWithoutParsingPromptText() {
+        var exact = exactPage(1, "R-1");
+        var verifiedNonGameplayPage = new PageInput(
+                2,
+                "Publisher credits only.",
+                List.of(),
+                List.of(),
+                true,
+                List.of(),
+                PageLedgerState.VISUAL_EXACT_COMPLETE);
+        var unavailable = new PageInput(
+                3,
+                "This display text is not rule evidence.",
+                List.of(),
+                List.of(),
+                false,
+                List.of(),
+                PageLedgerState.VISUAL_EXPLICITLY_UNAVAILABLE);
+
+        assertThat(VisualSourceRuleGroupLedger.supportsTypedCanonicalOutline(
+                        List.of(exact, verifiedNonGameplayPage, unavailable)))
+                .isTrue();
+        assertThat(new PageInput(4, "ordinary extracted text").pageLedgerState())
+                .isEqualTo(PageLedgerState.LEGACY_TEXT);
+    }
+
+    @Test
+    void rejectsUnsafeVisualLedgerStatesInsteadOfPromotingPartialOrUnavailableClaims() {
+        var exact = exactPage(1, "R-1");
+        var partial = new PageInput(
+                2,
+                "A partial observation.",
+                List.of(),
+                List.of("R-2"),
+                false,
+                facts("R-2"),
+                PageLedgerState.VISUAL_PARTIAL);
+
+        assertThat(VisualSourceRuleGroupLedger.supportsTypedCanonicalOutline(List.of(exact, partial)))
+                .isFalse();
+        assertThat(VisualSourceRuleGroupLedger.supportsTypedCanonicalOutline(
+                        List.of(new PageInput(
+                                3,
+                                "No observation.",
+                                List.of(),
+                                List.of(),
+                                false,
+                                List.of(),
+                                PageLedgerState.VISUAL_EXPLICITLY_UNAVAILABLE))))
+                .isFalse();
+        assertThat(VisualSourceRuleGroupLedger.supportsTypedCanonicalOutline(
+                        List.of(exact, new PageInput(4, "ordinary extracted text"))))
+                .isFalse();
+        assertThatThrownBy(() -> new PageInput(
+                        5,
+                        "Unsafe unavailable claim.",
+                        List.of(),
+                        List.of("R-5"),
+                        false,
+                        facts("R-5"),
+                        PageLedgerState.VISUAL_EXPLICITLY_UNAVAILABLE))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("cannot carry source claims");
+        assertThatThrownBy(() -> new PageInput(
+                        6,
+                        "Incomplete exact claim.",
+                        List.of(),
+                        List.of("R-6"),
+                        false,
+                        facts("R-6"),
+                        PageLedgerState.VISUAL_EXACT_COMPLETE))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("must be complete");
+    }
+
+    private PageInput exactPage(int pageNumber, String identifier) {
+        return new PageInput(
+                pageNumber,
+                identifier + " is directly visible.",
+                List.of(),
+                List.of(identifier),
+                true,
+                facts(identifier),
+                PageLedgerState.VISUAL_EXACT_COMPLETE);
     }
 }

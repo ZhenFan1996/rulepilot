@@ -104,6 +104,13 @@ final class VisualRulebookTeachingEvidenceFreshness implements RulebookTeachingE
         boolean visualOnly = !pages.isEmpty()
                 && pages.stream().allMatch(page -> page.text() == null || page.text().isBlank());
         if (!visualOnly) return ReuseAssessment.REUSABLE;
+        if (plan.orElseThrow().sections().stream()
+                .flatMap(section -> section.coverageTags().stream())
+                .anyMatch(TeachingSourceCoverageContract.PARTIAL_SOURCE_PAGE_CATALOG_TAG::equals)) {
+            // The completed plan already localized these unread pages and published useful cited content. Re-entering
+            // the handoff must reuse that result instead of turning the same explicit gap into an automatic retry loop.
+            return ReuseAssessment.REUSABLE;
+        }
         var requestedPages = pages.stream()
                 .map(DocumentProcessing.PageView::pageNumber)
                 .collect(Collectors.toCollection(LinkedHashSet::new));

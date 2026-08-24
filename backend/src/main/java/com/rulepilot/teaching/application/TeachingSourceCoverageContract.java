@@ -27,6 +27,7 @@ public final class TeachingSourceCoverageContract {
     static final String COMPLETE_INVENTORY_TAG = "source_contract_inventory_complete";
     static final String INCOMPLETE_INVENTORY_TAG = "source_contract_inventory_incomplete";
     static final String UNSOURCED_TAG = "source_contract_unsourced";
+    public static final String PARTIAL_SOURCE_PAGE_CATALOG_TAG = "source_page_catalog_incomplete";
     private static final String ROLE_TAG_PREFIX = "source_contract_role_";
 
     private TeachingSourceCoverageContract() {}

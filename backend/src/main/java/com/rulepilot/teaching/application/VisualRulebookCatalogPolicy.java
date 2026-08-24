@@ -1,6 +1,7 @@
 package com.rulepilot.teaching.application;
 
 import com.rulepilot.document.DocumentProcessing;
+import com.rulepilot.teaching.TeachingOutlineModel.PageLedgerState;
 import com.rulepilot.teaching.TeachingOutlineModel.PageInput;
 import com.rulepilot.teaching.VisualSourceRuleGroupLedger;
 import com.rulepilot.teaching.VisualRulebookPageFacts.PageFact;
@@ -112,8 +113,8 @@ final class VisualRulebookCatalogPolicy {
 
     /**
      * Narrows the model-facing summary contract to the durable fact contract. The model may return up to sixteen
-     * retrieval keywords so parsing can preserve a dense page, while the stored ledger deliberately indexes twelve.
-     * A valid page must not be discarded merely because it used the larger upstream allowance.
+     * bounded retrieval keywords and the durable ledger preserves them intact. A valid page must not be discarded
+     * merely because its non-authoritative retrieval metadata is sparse or dense.
      */
     static PageFact toPageFact(
             com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary summary) {
@@ -160,7 +161,10 @@ final class VisualRulebookCatalogPolicy {
                                     .toList(),
                             fact.ruleGroupIdentifiers(),
                             fact.ruleGroupInventoryComplete(),
-                            fact.ruleGroupFacts());
+                            fact.ruleGroupFacts(),
+                            page.pageLedgerState() == PageLedgerState.LEGACY_TEXT
+                                    ? PageLedgerState.LEGACY_TEXT
+                                    : PageLedgerState.VISUAL_EXACT_COMPLETE);
                 })
                 .toList();
     }
@@ -408,8 +412,14 @@ final class VisualRulebookCatalogPolicy {
                             + " and verify the original page image before teaching any detail."
                             + "\nKeywords: visual source page "
                             + pageNumber
-                            + ", incomplete visual catalog");
+                            + ", incomplete visual catalog",
+                    List.of(),
+                    List.of(),
+                    false,
+                    List.of(),
+                    PageLedgerState.VISUAL_EXPLICITLY_UNAVAILABLE);
         }
+        boolean exactCompleteLedger = hasReusableCompleteRuleLedger(fact);
         return new PageInput(
                 pageNumber,
                 TeachingOutlineRevisionPolicy.VISUAL_CATALOG_PREFIX
@@ -421,7 +431,10 @@ final class VisualRulebookCatalogPolicy {
                         + String.join(", ", fact.keywords()),
                 fact.sourceDependencies(),
                 fact.ruleGroupIdentifiers(),
-                fact.ruleGroupInventoryComplete(),
-                fact.ruleGroupFacts());
+                exactCompleteLedger,
+                fact.ruleGroupFacts(),
+                exactCompleteLedger
+                        ? PageLedgerState.VISUAL_EXACT_COMPLETE
+                        : PageLedgerState.VISUAL_PARTIAL);
     }
 }

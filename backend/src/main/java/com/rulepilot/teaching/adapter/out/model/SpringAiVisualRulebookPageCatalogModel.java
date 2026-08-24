@@ -863,7 +863,9 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
                     throw new IllegalArgumentException("visual teaching catalog pageNumber must be positive");
                 }
                 strictTextArray(page.get("printedTerms"), "printedTerms", 0, 12);
-                strictTextArray(page.get("keywords"), "keywords", 2, 8);
+                // Keywords are bounded retrieval metadata, not rule evidence. A sparse or dense but otherwise
+                // exact page ledger must not be discarded because the model chose fewer or more search terms.
+                strictTextArray(page.get("keywords"), "keywords", 0, 16);
                 strictExternalDocumentDependencies(page.get("externalDocumentDependencies"));
                 if (!page.get("ruleGroupInventoryComplete").isBoolean()) {
                     throw new IllegalArgumentException(

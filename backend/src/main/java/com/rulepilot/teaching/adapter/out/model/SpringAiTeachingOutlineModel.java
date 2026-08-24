@@ -154,6 +154,13 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
 
     @Override
     public OutlineDraft organize(OutlineRequest request) {
+        if (VisualSourceRuleGroupLedger.usesTypedVisualPageProtocol(request.pages())
+                && !VisualSourceRuleGroupLedger.supportsTypedCanonicalOutline(request.pages())) {
+            throw new OutlineGenerationException(
+                    "visual rulebook has no safe canonical source ledger to plan",
+                    new IllegalArgumentException(
+                            "typed visual pages require at least one exact rule anchor and no partial or legacy page state"));
+        }
         Role role = roleFor(request);
         String owner = request.modelConfigurationOwner();
         if (usesFake(role, owner)) {
@@ -830,11 +837,8 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
                 new WholeGameUnderstandingDraft(understanding.summary(), concepts, understanding.topicDependencies()));
     }
 
-    private boolean hasCanonicalVisualLedger(OutlineRequest request) {
-        return request != null
-                && !request.pages().isEmpty()
-                && request.pages().stream().allMatch(VisualSourceRuleGroupLedger::hasCompleteExactFactLedger)
-                && request.pages().stream().anyMatch(page -> !page.sourceRuleGroupIdentifiers().isEmpty());
+    static boolean hasCanonicalVisualLedger(OutlineRequest request) {
+        return request != null && VisualSourceRuleGroupLedger.supportsTypedCanonicalOutline(request.pages());
     }
 
     static String canonicalSourceLedger(OutlineRequest request) {
@@ -845,9 +849,18 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
                 java.util.stream.Collectors.toList()));
         StringBuilder ledger = new StringBuilder();
         int remainingEvidenceCharacters = MAX_CANONICAL_LEDGER_EVIDENCE_CHARACTERS;
-        int remainingPages = request.pages().size();
+        int remainingPages = (int) request.pages().stream()
+                .filter(VisualSourceRuleGroupLedger::hasCompleteExactFactLedger)
+                .count();
         for (var page : request.pages()) {
             ledger.append("PAGE ").append(page.pageNumber()).append('\n');
+            if (page.pageLedgerState()
+                    == TeachingOutlineModel.PageLedgerState.VISUAL_EXPLICITLY_UNAVAILABLE) {
+                ledger.append("PAGE_LEDGER_STATE: VISUAL_EXPLICITLY_UNAVAILABLE\n")
+                        .append("CANONICAL_SLOTS: unavailable (source obligations for this page are unknown)\n\n");
+                continue;
+            }
+            ledger.append("PAGE_LEDGER_STATE: VISUAL_EXACT_COMPLETE\n");
             List<CanonicalSourceSlot> pageSlots = slotsByPage.getOrDefault(page.pageNumber(), List.of());
             if (pageSlots.isEmpty()) {
                 ledger.append("CANONICAL_SLOTS: none (no independently teachable rule anchor)\n");
@@ -936,6 +949,14 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
         }
         List<CanonicalSourceSlot> slots = new ArrayList<>();
         for (var page : request.pages()) {
+            if (page.pageLedgerState()
+                    == TeachingOutlineModel.PageLedgerState.VISUAL_EXPLICITLY_UNAVAILABLE) {
+                continue;
+            }
+            if (page.pageLedgerState() != TeachingOutlineModel.PageLedgerState.VISUAL_EXACT_COMPLETE
+                    || !VisualSourceRuleGroupLedger.hasCompleteExactFactLedger(page)) {
+                throw new IllegalArgumentException("canonical teaching source page has no complete exact fact ledger");
+            }
             for (int index = 0; index < page.sourceRuleGroupIdentifiers().size(); index++) {
                 slots.add(new CanonicalSourceSlot(
                         "page-" + page.pageNumber() + "-rule-" + (index + 1),
@@ -977,6 +998,9 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
         LinkedHashSet<String> teachingUnitIds = new LinkedHashSet<>();
         List<TopicDraft> topics = new ArrayList<>();
         List<SourceCoverageSlotDraft> sourceSlots = new ArrayList<>();
+        List<Integer> unavailableSourcePages = unavailableSourcePages(request);
+        boolean partialSourcePageCatalog = !unavailableSourcePages.isEmpty();
+        String premise = premiseWithUnavailableSourceNotice(compact.premise(), unavailableSourcePages);
 
         for (CompactTopicDraft topic : compact.topics()) {
             if (topic == null || topic.key() == null || !topic.key().matches("[a-z0-9]+(?:-[a-z0-9]+)*")
@@ -1029,7 +1053,11 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
                     topic.required(),
                     topic.visualEvidenceRecommended(),
                     List.of(),
-                    canonicalCoverageTags(ownedCanonicalSlots, sourceSlots, topic.key()),
+                    canonicalCoverageTags(
+                            ownedCanonicalSlots,
+                            sourceSlots,
+                            topic.key(),
+                            partialSourcePageCatalog),
                     sourcePages));
         }
         if (!assignedSlotIds.equals(canonicalById.keySet())) {
@@ -1047,7 +1075,7 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
         } catch (IllegalArgumentException invalidContext) {
             OutlineDraft sourceOwnedOutline = new OutlineDraft(
                     compact.gameTitle(),
-                    compact.premise(),
+                    premise,
                     List.copyOf(topics),
                     List.copyOf(sourceSlots),
                     true,
@@ -1059,7 +1087,7 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
         }
         OutlineDraft outline = new OutlineDraft(
                 compact.gameTitle(),
-                compact.premise(),
+                premise,
                 List.copyOf(topics),
                 List.copyOf(sourceSlots),
                 true,
@@ -1073,7 +1101,8 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
     private static List<String> canonicalCoverageTags(
             List<CanonicalSourceSlot> canonicalSlots,
             List<SourceCoverageSlotDraft> expandedSlots,
-            String topicKey) {
+            String topicKey,
+            boolean partialSourcePageCatalog) {
         boolean hasSourced = canonicalSlots.stream()
                 .anyMatch(slot -> slot.availability() == SourceCoverageAvailability.SOURCED);
         LinkedHashSet<String> tags = new LinkedHashSet<>();
@@ -1095,7 +1124,28 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
                     .filter(java.util.Objects::nonNull)
                     .forEach(tags::add);
         }
+        if (partialSourcePageCatalog) {
+            tags.add(TeachingSourceCoverageContract.PARTIAL_SOURCE_PAGE_CATALOG_TAG);
+        }
         return List.copyOf(tags);
+    }
+
+    private static List<Integer> unavailableSourcePages(OutlineRequest request) {
+        return request.pages().stream()
+                .filter(page -> page.pageLedgerState()
+                        == TeachingOutlineModel.PageLedgerState.VISUAL_EXPLICITLY_UNAVAILABLE)
+                .map(TeachingOutlineModel.PageInput::pageNumber)
+                .distinct()
+                .toList();
+    }
+
+    private static String premiseWithUnavailableSourceNotice(String premise, List<Integer> unavailablePages) {
+        if (unavailablePages.isEmpty()) return premise;
+        String pageNumbers = unavailablePages.stream()
+                .map(String::valueOf)
+                .collect(java.util.stream.Collectors.joining("、"));
+        return premise + " 来源范围提示：规则书第" + pageNumbers
+                + "页本轮没有获得可验证的视觉证据；当前讲解仅涵盖已核验页面，不会推断这些页面的规则。";
     }
 
     private static List<GlobalConceptDraft> canonicalConcepts(
