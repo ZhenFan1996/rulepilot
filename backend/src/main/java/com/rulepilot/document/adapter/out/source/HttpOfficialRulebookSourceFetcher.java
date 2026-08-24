@@ -1,5 +1,6 @@
 package com.rulepilot.document.adapter.out.source;
 
+import com.rulepilot.shared.AsyncContextPropagation;
 import com.rulepilot.document.application.MinioStorageProperties;
 import com.rulepilot.document.application.OfficialRulebookPdfCompressor;
 import com.rulepilot.document.application.OfficialRulebookSourceAccessException;
@@ -288,9 +289,9 @@ public class HttpOfficialRulebookSourceFetcher implements OfficialRulebookSource
     private List<PhotoPage> fetchGalleryPages(
             URI gallerySource, List<URI> imageSources, GalleryDownload download) throws IOException {
         int concurrency = Math.min(MAX_GALLERY_DOWNLOAD_CONCURRENCY, imageSources.size());
-        ExecutorService executor = Executors.newFixedThreadPool(
+        ExecutorService executor = AsyncContextPropagation.executorService(Executors.newFixedThreadPool(
                 concurrency,
-                Thread.ofPlatform().daemon().name("rulebook-gallery-download-", 0).factory());
+                Thread.ofPlatform().daemon().name("rulebook-gallery-download-", 0).factory()));
         var completed = new ExecutorCompletionService<IndexedImage>(executor);
         var futures = new ArrayList<Future<IndexedImage>>(imageSources.size());
         List<PhotoPage> pages = new ArrayList<>(Collections.nCopies(imageSources.size(), null));

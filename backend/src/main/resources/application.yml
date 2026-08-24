@@ -37,6 +37,10 @@ spring:
     publisher-returns: true
     template:
       mandatory: true
+      observation-enabled: true
+    listener:
+      simple:
+        observation-enabled: true
   servlet:
     multipart:
       max-file-size: ${MAX_PDF_UPLOAD_SIZE:50MB}

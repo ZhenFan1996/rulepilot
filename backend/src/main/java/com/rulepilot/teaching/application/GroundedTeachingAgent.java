@@ -1,5 +1,6 @@
 package com.rulepilot.teaching.application;
 
+import com.rulepilot.shared.AsyncContextPropagation;
 import com.rulepilot.assistant.AssistantReadTools;
 import com.rulepilot.assistant.AssistantReadTools.RuleEvidence;
 import com.rulepilot.assistant.AgentExecutionControl.ActivityType;
@@ -334,7 +335,8 @@ public class GroundedTeachingAgent {
             int effectiveParallelism = Math.min(
                     remaining.size(),
                     Math.min(baseSectionParallelism, providerParallelism));
-            try (var executor = Executors.newFixedThreadPool(effectiveParallelism)) {
+            try (var executor = AsyncContextPropagation.executorService(
+                    Executors.newFixedThreadPool(effectiveParallelism))) {
                 List<Future<SectionOutcome>> futures = remaining.stream()
                         .map(planned -> executor.submit(() -> baseSection(
                                 plan,

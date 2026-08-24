@@ -26,6 +26,23 @@ if ! command -v docker >/dev/null 2>&1 || ! docker compose version >/dev/null 2>
 	exit 1
 fi
 
+validate_tracing_export() {
+	case "${PRODUCTION_TRACING_EXPORT_OTLP_ENABLED:-false}" in
+		false)
+			;;
+		true)
+			if [ -z "${PRODUCTION_TRACING_OTLP_ENDPOINT:-}" ]; then
+				echo "PRODUCTION_TRACING_OTLP_ENDPOINT is required when production OTLP tracing is enabled."
+				exit 1
+			fi
+			;;
+		*)
+			echo "PRODUCTION_TRACING_EXPORT_OTLP_ENABLED must be true or false."
+			exit 1
+			;;
+	esac
+}
+
 wait_for_api() {
 	if ! command -v curl >/dev/null 2>&1; then
 		echo "curl is required to verify the production API."
@@ -72,10 +89,12 @@ wait_for_frontend() {
 
 case "${1:-config}" in
 	config)
+		validate_tracing_export
 		compose config --quiet
 		echo "Production deployment configuration is valid."
 		;;
 	up)
+		validate_tracing_export
 		# rsync can preserve a developer's restrictive target/ umask. Docker must be
 		# able to traverse it or it silently reuses a stale application layer.
 		chmod -R a+rX "$ROOT_DIR/backend/target"

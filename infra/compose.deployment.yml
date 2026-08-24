@@ -92,8 +92,10 @@ services:
       VIDEO_PROVIDER: ${VIDEO_PROVIDER:-manifest}
       # A small production host must keep reader requests independent from
       # optional telemetry exporters and oversized idle JDBC pools.
-      MANAGEMENT_TRACING_ENABLED: ${MANAGEMENT_TRACING_ENABLED:-false}
-      OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: http://tempo:4318/v1/traces
+      # W3C propagation must remain active even when this small deployment does not run an OTLP collector.
+      MANAGEMENT_TRACING_EXPORT_ENABLED: "true"
+      MANAGEMENT_TRACING_EXPORT_OTLP_ENABLED: ${MANAGEMENT_TRACING_EXPORT_OTLP_ENABLED:-false}
+      OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: ${OTEL_EXPORTER_OTLP_TRACES_ENDPOINT:-http://tempo:4318/v1/traces}
       SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: ${DATABASE_POOL_SIZE:-4}
       SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE: ${DATABASE_MINIMUM_IDLE:-0}
       SPRING_DATASOURCE_HIKARI_CONNECTION_TIMEOUT: ${DATABASE_CONNECTION_TIMEOUT_MS:-5000}

@@ -12,6 +12,8 @@ import java.util.List;
 import java.util.Objects;
 import java.util.function.Consumer;
 import jakarta.annotation.PreDestroy;
+import io.micrometer.observation.ObservationRegistry;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 
@@ -41,7 +43,18 @@ public class BoardGameRecommendationAgent {
             BoardGameRecommendationSelector selector,
             BoardGameRecommendationProperties properties,
             ObjectMapper json) {
-        loop = new RecommendationReActLoop(model, tools, selector, properties, json);
+        this(model, tools, selector, properties, json, ObservationRegistry.NOOP);
+    }
+
+    @Autowired
+    public BoardGameRecommendationAgent(
+            BoardGameRecommendationModel model,
+            BoardGameRecommendationTools tools,
+            BoardGameRecommendationSelector selector,
+            BoardGameRecommendationProperties properties,
+            ObjectMapper json,
+            ObservationRegistry observations) {
+        loop = new RecommendationReActLoop(model, tools, selector, properties, json, observations);
     }
 
     @PreDestroy

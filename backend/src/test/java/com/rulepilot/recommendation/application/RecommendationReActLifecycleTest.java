@@ -35,6 +35,9 @@ import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.Rec
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.TurnCheckpoint;
 import com.rulepilot.recommendation.application.BoardGameRecommendationTools.ReferenceObservation;
 import com.rulepilot.recommendation.application.BoardGameRecommendationTools.ToolStatus;
+import io.micrometer.observation.Observation;
+import io.micrometer.observation.ObservationHandler;
+import io.micrometer.observation.ObservationRegistry;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.util.ArrayDeque;
@@ -46,6 +49,105 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 
 class RecommendationReActLifecycleTest {
+
+    @Test
+    void recordsOneLowCardinalityWorkflowObservationAroundTheCompleteReactTurn() {
+        var registry = ObservationRegistry.create();
+        var stopped = new AtomicReference<RecordedObservation>();
+        var stageOutcomes = new ArrayList<String>();
+        registry.observationConfig().observationHandler(new ObservationHandler<Observation.Context>() {
+            @Override
+            public void onStop(Observation.Context context) {
+                if ("rulepilot.recommendation.workflow".equals(context.getName())) {
+                    var outcome = context.getLowCardinalityKeyValue("outcome");
+                    stopped.set(new RecordedObservation(
+                            context.getName(),
+                            context.getContextualName(),
+                            outcome == null ? null : outcome.getValue()));
+                } else if ("rulepilot.recommendation.stage".equals(context.getName())) {
+                    stageOutcomes.add(context.getLowCardinalityKeyValue("stage").getValue()
+                            + ":"
+                            + context.getLowCardinalityKeyValue("action").getValue()
+                            + ":"
+                            + context.getLowCardinalityKeyValue("outcome").getValue());
+                }
+            }
+
+            @Override
+            public boolean supportsContext(Observation.Context context) {
+                return true;
+            }
+        });
+        ScriptedModel model = new ScriptedModel(List.of(action(
+                "reply",
+                BoardGameRecommendationAgent.REPLY_TOOL,
+                "{\"playerReply\":\"我先根据你已经说清楚的部分回答。\"}")));
+        RecordingCatalog catalog = new RecordingCatalog(game(499, "Unused", "未使用", "Unused."));
+        RecommendationReActLoop loop = loop(model, catalog, registry);
+
+        var response = loop.converse(
+                new ConversationRequest(RecommendationProfile.empty(), "先聊聊，不用查目录。"),
+                "zh-CN",
+                "player",
+                ignored -> {});
+
+        assertThat(response.outcome()).isEqualTo(Outcome.CONVERSATION);
+        assertThat(stopped).hasValue(new RecordedObservation(
+                "rulepilot.recommendation.workflow", "recommendation-react", "conversation"));
+        assertThat(stageOutcomes).containsExactly(
+                "understanding_request:understand_request:completed",
+                "selecting_tools:choose_next_action:completed",
+                "composing_response:stream_natural_reply:completed");
+        loop.stopBoundedCalls();
+    }
+
+    @Test
+    void closesTheActiveStageAndMarksTheWorkflowWhenAStreamingListenerFails() {
+        var registry = ObservationRegistry.create();
+        var workflowOutcome = new AtomicReference<String>();
+        var stageOutcomes = new ArrayList<String>();
+        registry.observationConfig().observationHandler(new ObservationHandler<Observation.Context>() {
+            @Override
+            public void onStop(Observation.Context context) {
+                var outcome = context.getLowCardinalityKeyValue("outcome");
+                if ("rulepilot.recommendation.workflow".equals(context.getName())) {
+                    workflowOutcome.set(outcome == null ? null : outcome.getValue());
+                } else if ("rulepilot.recommendation.stage".equals(context.getName())) {
+                    stageOutcomes.add(context.getLowCardinalityKeyValue("action").getValue()
+                            + ":"
+                            + (outcome == null ? null : outcome.getValue()));
+                }
+            }
+
+            @Override
+            public boolean supportsContext(Observation.Context context) {
+                return true;
+            }
+        });
+        ScriptedModel model = new ScriptedModel(List.of(action(
+                "reply",
+                BoardGameRecommendationAgent.REPLY_TOOL,
+                "{\"playerReply\":\"已经验证，但客户端断开了。\"}")));
+        RecommendationReActLoop loop = loop(
+                model,
+                new RecordingCatalog(game(499, "Unused", "未使用", "Unused.")),
+                registry);
+
+        assertThatThrownBy(() -> loop.converse(
+                        new ConversationRequest(RecommendationProfile.empty(), "先聊聊，不用查目录。"),
+                        "zh-CN",
+                        "player",
+                        ignored -> {},
+                        ignored -> {
+                            throw new IllegalStateException("stream disconnected");
+                        }))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("stream disconnected");
+
+        assertThat(workflowOutcome).hasValue("error");
+        assertThat(stageOutcomes).endsWith("stream_natural_reply:error");
+        loop.stopBoundedCalls();
+    }
 
     @Test
     void keepsModelAuthoredCategoriesReversibleInsteadOfTurningThemIntoHardCatalogGates() {
@@ -865,6 +967,13 @@ class RecommendationReActLifecycleTest {
     }
 
     private RecommendationReActLoop loop(ScriptedModel model, RecordingCatalog catalog) {
+        return loop(model, catalog, ObservationRegistry.NOOP);
+    }
+
+    private RecommendationReActLoop loop(
+            ScriptedModel model,
+            RecordingCatalog catalog,
+            ObservationRegistry observations) {
         BoardGameRecommendationWebResearch research = new BoardGameRecommendationWebResearch() {
             @Override
             public boolean configured() {
@@ -876,10 +985,17 @@ class RecommendationReActLifecycleTest {
                 return Optional.empty();
             }
         };
-        return loop(model, new BoardGameRecommendationTools(catalog, research));
+        return loop(model, new BoardGameRecommendationTools(catalog, research), observations);
     }
 
     private RecommendationReActLoop loop(ScriptedModel model, BoardGameRecommendationTools tools) {
+        return loop(model, tools, ObservationRegistry.NOOP);
+    }
+
+    private RecommendationReActLoop loop(
+            ScriptedModel model,
+            BoardGameRecommendationTools tools,
+            ObservationRegistry observations) {
         var properties = new BoardGameRecommendationProperties(
                 8, 3, new BigDecimal("0.65"), Duration.ofSeconds(30));
         return new RecommendationReActLoop(
@@ -887,8 +1003,11 @@ class RecommendationReActLifecycleTest {
                 tools,
                 new BoardGameRecommendationSelector(properties),
                 properties,
-                new ObjectMapper());
+                new ObjectMapper(),
+                observations);
     }
+
+    private record RecordedObservation(String name, String contextualName, String outcome) {}
 
     private static Turn action(String id, String name, String arguments) {
         return new Turn("", List.of(new ToolCall(id, name, arguments)), CompletionStatus.COMPLETE);

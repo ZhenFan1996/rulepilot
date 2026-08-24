@@ -58,6 +58,9 @@ import com.rulepilot.recommendation.application.RecommendationAgentState.Candida
 import com.rulepilot.recommendation.application.RecommendationAgentState.PublicationSeed;
 import com.rulepilot.recommendation.application.RecommendationAgentState.NamedGamePurpose;
 import com.rulepilot.recommendation.application.RecommendationAgentState.DiscoveryPurpose;
+import com.rulepilot.shared.AsyncContextPropagation;
+import io.micrometer.observation.Observation;
+import io.micrometer.observation.ObservationRegistry;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -116,6 +119,7 @@ final class RecommendationReActLoop {
     private final RecommendationEvidenceReview evidenceReview;
     private final RecommendationActions actionExecutor;
     private final RecommendationPublication publication;
+    private final ObservationRegistry observations;
 
     RecommendationReActLoop(
             BoardGameRecommendationModel model,
@@ -123,6 +127,16 @@ final class RecommendationReActLoop {
             BoardGameRecommendationSelector selector,
             BoardGameRecommendationProperties properties,
             ObjectMapper json) {
+        this(model, tools, selector, properties, json, ObservationRegistry.NOOP);
+    }
+
+    RecommendationReActLoop(
+            BoardGameRecommendationModel model,
+            BoardGameRecommendationTools tools,
+            BoardGameRecommendationSelector selector,
+            BoardGameRecommendationProperties properties,
+            ObjectMapper json,
+            ObservationRegistry observations) {
         this.model = model;
         this.tools = tools;
         this.selector = selector;
@@ -131,12 +145,13 @@ final class RecommendationReActLoop {
         actionFingerprintJson = json.copy()
                 .enable(JsonParser.Feature.STRICT_DUPLICATE_DETECTION)
                 .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
-        boundedCalls = Executors.newThreadPerTaskExecutor(
-                Thread.ofVirtual().name("recommendation-bounded-call-", 0).factory());
+        boundedCalls = AsyncContextPropagation.executorService(Executors.newThreadPerTaskExecutor(
+                Thread.ofVirtual().name("recommendation-bounded-call-", 0).factory()));
         maximumRunMillis = properties.timeout().toMillis();
         evidenceReview = new RecommendationEvidenceReview(json, this);
         actionExecutor = new RecommendationActions(tools, selector, properties, json, evidenceReview, this);
         publication = new RecommendationPublication(selector, evidenceReview, actionExecutor, this);
+        this.observations = observations == null ? ObservationRegistry.NOOP : observations;
     }
 
     void stopBoundedCalls() {
@@ -205,6 +220,34 @@ final class RecommendationReActLoop {
             Consumer<ProgressUpdate> progressListener,
             Consumer<String> answerPartListener,
             Consumer<TurnCheckpoint> checkpointListener) {
+        Observation workflow = Observation.createNotStarted("rulepilot.recommendation.workflow", observations)
+                .contextualName("recommendation-react");
+        return workflow.observe(() -> {
+            try {
+                ConversationResponse response = converseValidatedObserved(
+                        request,
+                        requestedLocale,
+                        modelConfigurationOwner,
+                        progressListener,
+                        answerPartListener,
+                        checkpointListener);
+                workflow.lowCardinalityKeyValue(
+                        "outcome", response.outcome().name().toLowerCase(Locale.ROOT));
+                return response;
+            } catch (RuntimeException | Error failure) {
+                workflow.lowCardinalityKeyValue("outcome", "error");
+                throw failure;
+            }
+        });
+    }
+
+    private ConversationResponse converseValidatedObserved(
+            ConversationRequest request,
+            String requestedLocale,
+            String modelConfigurationOwner,
+            Consumer<ProgressUpdate> progressListener,
+            Consumer<String> answerPartListener,
+            Consumer<TurnCheckpoint> checkpointListener) {
         long startedAt = System.nanoTime();
         String locale = simplifiedChineseLocale(requestedLocale) ? "zh-CN" : "en";
         RecommendationAgentState state = new RecommendationAgentState(
@@ -214,6 +257,27 @@ final class RecommendationReActLoop {
                 tools.webResearchConfigured(),
                 maximumRecommendationResults());
         ProgressTracker progress = new ProgressTracker(progressListener, state, startedAt);
+        try {
+            return converseWithProgress(
+                    request,
+                    locale,
+                    state,
+                    progress,
+                    answerPartListener,
+                    checkpointListener);
+        } catch (RuntimeException | Error failure) {
+            progress.abort(failure);
+            throw failure;
+        }
+    }
+
+    private ConversationResponse converseWithProgress(
+            ConversationRequest request,
+            String locale,
+            RecommendationAgentState state,
+            ProgressTracker progress,
+            Consumer<String> answerPartListener,
+            Consumer<TurnCheckpoint> checkpointListener) {
         progress.start(ProgressStage.UNDERSTANDING_REQUEST, ProgressAction.UNDERSTAND_REQUEST);
         progress.complete();
         if (!model.configured(state.modelConfigurationOwner)) {
@@ -742,7 +806,7 @@ final class RecommendationReActLoop {
     }
 
     private String agentInput(ConversationRequest request, RecommendationAgentState state, String locale) {
-        try {
+    try {
             Map<String, Object> data = new LinkedHashMap<>();
             data.put("locale", locale);
             data.put("currentProfile", evidenceReview.profileForAgent(state.profile));
@@ -879,7 +943,7 @@ final class RecommendationReActLoop {
     }
 
     private ToolSpec withoutPreferenceUpdates(ToolSpec action) {
-        try {
+    try {
             JsonNode schema = json.readTree(action.inputSchema());
             if (schema.path("properties") instanceof ObjectNode properties) {
                 properties.remove("preferenceUpdates");
@@ -1246,7 +1310,7 @@ final class RecommendationReActLoop {
     }
 
     String observation(Map<String, ?> value) {
-        try {
+    try {
             return json.writeValueAsString(value);
         } catch (JsonProcessingException exception) {
             throw new IllegalStateException("recommendation observation could not be serialized", exception);
@@ -1254,7 +1318,7 @@ final class RecommendationReActLoop {
     }
 
     private String budgetedObservation(String observation, RecommendationAgentState state) {
-        try {
+    try {
             JsonNode parsed = json.readTree(observation);
             if (!(parsed instanceof ObjectNode object)) {
                 throw new IllegalStateException("recommendation observation must be a JSON object");
@@ -1425,7 +1489,7 @@ final class RecommendationReActLoop {
         long remainingMillis = maximumRunMillis - state.elapsedMs();
         if (remainingMillis <= 0) throw new RunDeadlineExceeded();
         Future<T> pending = boundedCalls.submit(operation::get);
-        try {
+    try {
             return pending.get(remainingMillis, TimeUnit.MILLISECONDS);
         } catch (TimeoutException exception) {
             pending.cancel(true);
@@ -1506,6 +1570,8 @@ final class RecommendationReActLoop {
         private ProgressStage currentStage;
         private ProgressAction currentAction;
         private ProgressFocus currentFocus;
+        private Observation currentObservation;
+        private Observation.Scope currentObservationScope;
 
         private ProgressTracker(
                 Consumer<ProgressUpdate> listener,
@@ -1531,6 +1597,12 @@ final class RecommendationReActLoop {
             currentAction = action;
             currentFocus = focus;
             emitProgress(listener, stage, ProgressPhase.STARTED, action, focus, state, startedAt);
+            currentObservation = Observation.createNotStarted("rulepilot.recommendation.stage", observations)
+                    .contextualName("recommendation-" + stage.name().toLowerCase(Locale.ROOT).replace('_', '-'))
+                    .lowCardinalityKeyValue("stage", stage.name().toLowerCase(Locale.ROOT))
+                    .lowCardinalityKeyValue("action", action.name().toLowerCase(Locale.ROOT))
+                    .start();
+            currentObservationScope = currentObservation.openScope();
         }
 
         private void complete() {
@@ -1547,10 +1619,37 @@ final class RecommendationReActLoop {
 
         private void finish(ProgressPhase phase) {
             if (currentStage == null) return;
-            emitProgress(listener, currentStage, phase, currentAction, currentFocus, state, startedAt);
+            ProgressStage finishedStage = currentStage;
+            ProgressAction finishedAction = currentAction;
+            ProgressFocus finishedFocus = currentFocus;
             currentStage = null;
             currentAction = null;
             currentFocus = null;
+            stopObservation(phase.name().toLowerCase(Locale.ROOT), null);
+            emitProgress(listener, finishedStage, phase, finishedAction, finishedFocus, state, startedAt);
+        }
+
+        private void abort(Throwable failure) {
+            if (currentStage == null) return;
+            currentStage = null;
+            currentAction = null;
+            currentFocus = null;
+            stopObservation("error", failure);
+        }
+
+        private void stopObservation(String outcome, Throwable failure) {
+            Observation observation = currentObservation;
+            Observation.Scope scope = currentObservationScope;
+            currentObservation = null;
+            currentObservationScope = null;
+            if (observation == null) return;
+            observation.lowCardinalityKeyValue("outcome", outcome);
+            if (failure != null) observation.error(failure);
+            try {
+                if (scope != null) scope.close();
+            } finally {
+                observation.stop();
+            }
         }
     }
 

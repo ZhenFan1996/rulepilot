@@ -24,6 +24,7 @@ public class DocumentOutboxPublisher {
     private final OutboxEventPublication events;
     private final DocumentProcessingMessagePublisher messages;
     private final MeterRegistry metrics;
+    private final DocumentTraceContextBridge traceContexts;
     private final int batchSize;
     private final Clock clock;
     private boolean publishing;
@@ -34,8 +35,9 @@ public class DocumentOutboxPublisher {
             OutboxEventPublication events,
             DocumentProcessingMessagePublisher messages,
             MeterRegistry metrics,
+            DocumentTraceContextBridge traceContexts,
             @Value("${rulepilot.document.messaging.batch-size}") int batchSize) {
-        this(events, messages, metrics, batchSize, Clock.systemUTC());
+        this(events, messages, metrics, traceContexts, batchSize, Clock.systemUTC());
     }
 
     DocumentOutboxPublisher(
@@ -44,9 +46,20 @@ public class DocumentOutboxPublisher {
             MeterRegistry metrics,
             int batchSize,
             Clock clock) {
+        this(events, messages, metrics, DocumentTraceContextBridge.noop(), batchSize, clock);
+    }
+
+    DocumentOutboxPublisher(
+            OutboxEventPublication events,
+            DocumentProcessingMessagePublisher messages,
+            MeterRegistry metrics,
+            DocumentTraceContextBridge traceContexts,
+            int batchSize,
+            Clock clock) {
         this.events = events;
         this.messages = messages;
         this.metrics = metrics;
+        this.traceContexts = traceContexts;
         this.batchSize = batchSize;
         this.clock = clock;
     }
@@ -94,20 +107,24 @@ public class DocumentOutboxPublisher {
         for (var event : events.readyAt(Instant.now(clock), batchSize)) {
             String outcome = "failed";
             Instant attemptedAt = Instant.now(clock);
-            try {
-                messages.publish(event.id(), event.eventType(), event.payload());
-                events.markPublished(event.id(), Instant.now(clock));
-                outcome = "published";
-            } catch (RuntimeException exception) {
-                LOGGER.warn("Outbox publication failed for eventId={}", event.id(), exception);
-            } finally {
-                Duration queued = Duration.between(event.occurredAt(), attemptedAt);
-                if (queued.isNegative()) queued = Duration.ZERO;
-                Timer.builder("rulepilot.document.outbox.queued_to_publish")
-                        .description("Elapsed time from durable document outbox enqueue to a publication attempt")
-                        .tag("outcome", outcome)
-                        .register(metrics)
-                        .record(queued);
+            try (var trace = traceContexts.open(event.traceHeaders(), "document.outbox.publish")) {
+                try {
+                    messages.publish(event.id(), event.eventType(), event.payload());
+                    events.markPublished(event.id(), Instant.now(clock));
+                    outcome = "published";
+                } catch (RuntimeException exception) {
+                    trace.error(exception);
+                    LOGGER.warn("Outbox publication failed for eventId={}", event.id(), exception);
+                } finally {
+                    trace.outcome(outcome);
+                    Duration queued = Duration.between(event.occurredAt(), attemptedAt);
+                    if (queued.isNegative()) queued = Duration.ZERO;
+                    Timer.builder("rulepilot.document.outbox.queued_to_publish")
+                            .description("Elapsed time from durable document outbox enqueue to a publication attempt")
+                            .tag("outcome", outcome)
+                            .register(metrics)
+                            .record(queued);
+                }
             }
         }
     }

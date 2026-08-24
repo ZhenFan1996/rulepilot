@@ -1,5 +1,6 @@
 package com.rulepilot.teaching.application;
 
+import com.rulepilot.shared.AsyncContextPropagation;
 import com.rulepilot.ingestion.layout.RulebookUnderstanding;
 import com.rulepilot.teaching.VisualRegionLocator;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonSection;
@@ -93,7 +94,8 @@ final class VisualLessonSectionEnricher {
         int limit = Math.min(maxVisualStepsPerSection - existingVisualSteps, availableStepSlots);
         List<LessonStep> targets = visualTargets(section, limit, explicitVisualStepPositions);
         if (targets.isEmpty()) return Result.rejected(section, VisualLessonEnricher.Outcome.NO_CITED_CANDIDATE);
-        try (var executor = Executors.newFixedThreadPool(Math.min(requestParallelism, targets.size()))) {
+        try (var executor = AsyncContextPropagation.executorService(
+                Executors.newFixedThreadPool(Math.min(requestParallelism, targets.size())))) {
             List<Future<VisualLessonStepLocator.Result>> attempts = targets.stream()
                     .map(step -> executor.submit(() -> locateWithProgress(
                             understanding, documentVersionId, section, step, modelConfigurationOwner, runId, progress)))

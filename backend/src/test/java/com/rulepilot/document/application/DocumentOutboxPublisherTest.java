@@ -59,6 +59,34 @@ class DocumentOutboxPublisherTest {
     }
 
     @Test
+    void restoresThePersistedContextAroundPublicationAndRecordsTheStableOutcome() {
+        OutboxEventPublication events = Mockito.mock(OutboxEventPublication.class);
+        DocumentProcessingMessagePublisher messages = Mockito.mock(DocumentProcessingMessagePublisher.class);
+        DocumentTraceContextBridge traceContexts = Mockito.mock(DocumentTraceContextBridge.class);
+        DocumentTraceContextBridge.Scope scope = Mockito.mock(DocumentTraceContextBridge.Scope.class);
+        var headers = new DocumentOutboxStore.TraceHeaders(
+                "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01", "vendor=value");
+        UUID eventId = UUID.randomUUID();
+        var event = new DocumentOutboxStore.PendingEvent(
+                eventId, "DocumentProcessingRequested", "{}", NOW.minusMillis(250), headers);
+        when(events.readyAt(NOW, 20)).thenReturn(List.of(event));
+        when(traceContexts.open(headers, "document.outbox.publish")).thenReturn(scope);
+
+        new DocumentOutboxPublisher(
+                        events,
+                        messages,
+                        new SimpleMeterRegistry(),
+                        traceContexts,
+                        20,
+                        Clock.fixed(NOW, ZoneOffset.UTC))
+                .publishReadyEvents();
+
+        verify(traceContexts).open(headers, "document.outbox.publish");
+        verify(scope).outcome("published");
+        verify(scope).close();
+    }
+
+    @Test
     void anAfterCommitWakeupPublishesTheNewlyCommittedEventWithoutWaitingForTheScheduledScan() {
         OutboxEventPublication events = Mockito.mock(OutboxEventPublication.class);
         DocumentProcessingMessagePublisher messages = Mockito.mock(DocumentProcessingMessagePublisher.class);
