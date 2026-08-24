@@ -1,6 +1,6 @@
-package com.rulepilot.shared.cover;
+package com.rulepilot.catalog.adapter.out.cover;
 
-import com.rulepilot.shared.cover.CoverThumbnailCache.Thumbnail;
+import com.rulepilot.catalog.adapter.out.cover.CoverThumbnailCache.Thumbnail;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;

@@ -1,4 +1,4 @@
-package com.rulepilot.shared.adapter.in.web;
+package com.rulepilot.assistant.adapter.in.web;
 
 import com.rulepilot.assistant.AgentExecutionStoppedException;
 import jakarta.servlet.http.HttpServletRequest;

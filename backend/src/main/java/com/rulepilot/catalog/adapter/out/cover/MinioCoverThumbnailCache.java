@@ -1,6 +1,5 @@
-package com.rulepilot.shared.adapter.out.cover;
+package com.rulepilot.catalog.adapter.out.cover;
 
-import com.rulepilot.shared.cover.CoverThumbnailCache;
 import io.minio.BucketExistsArgs;
 import io.minio.GetObjectArgs;
 import io.minio.MakeBucketArgs;

@@ -1,4 +1,4 @@
-package com.rulepilot.shared.adapter.out.cover;
+package com.rulepilot.catalog.adapter.out.cover;
 
 import static org.assertj.core.api.Assertions.assertThat;
 

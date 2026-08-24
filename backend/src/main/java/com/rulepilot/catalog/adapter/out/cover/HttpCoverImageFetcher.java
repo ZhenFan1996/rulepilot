@@ -1,9 +1,7 @@
-package com.rulepilot.shared.adapter.out.cover;
+package com.rulepilot.catalog.adapter.out.cover;
 
-import com.rulepilot.shared.cover.CoverImageFetcher;
-import com.rulepilot.shared.cover.CoverImageFetcher.SourceAbsentException;
-import com.rulepilot.shared.cover.CoverThumbnailCache.Thumbnail;
-import com.rulepilot.shared.cover.DurableCoverThumbnailService;
+import com.rulepilot.catalog.adapter.out.cover.CoverImageFetcher.SourceAbsentException;
+import com.rulepilot.catalog.adapter.out.cover.CoverThumbnailCache.Thumbnail;
 import java.io.IOException;
 import java.net.Inet4Address;
 import java.net.Inet6Address;

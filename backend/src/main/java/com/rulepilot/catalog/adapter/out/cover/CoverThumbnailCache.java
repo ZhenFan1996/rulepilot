@@ -1,4 +1,4 @@
-package com.rulepilot.shared.cover;
+package com.rulepilot.catalog.adapter.out.cover;
 
 import java.util.Optional;
 

@@ -1,15 +1,14 @@
-package com.rulepilot.shared.adapter.out.cover;
+package com.rulepilot.catalog.adapter.out.cover;
 
 import static com.rulepilot.catalog.CatalogCoverImages.ContentType.JPEG;
-import static com.rulepilot.shared.cover.DurableCoverThumbnailService.Profile.COMPACT_PROFILE;
-import static com.rulepilot.shared.cover.DurableCoverThumbnailService.Profile.DISPLAY_PROFILE;
+import static com.rulepilot.catalog.adapter.out.cover.DurableCoverThumbnailService.Profile.COMPACT_PROFILE;
+import static com.rulepilot.catalog.adapter.out.cover.DurableCoverThumbnailService.Profile.DISPLAY_PROFILE;
 
 import com.rulepilot.catalog.CatalogCoverImages;
 import com.rulepilot.catalog.CatalogGameSelectionLookup;
 import com.rulepilot.catalog.CatalogGameSelectionLookup.GameSelection;
-import com.rulepilot.shared.cover.CoverImageFetcher.SourceAbsentException;
-import com.rulepilot.shared.cover.CoverThumbnailCache.Thumbnail;
-import com.rulepilot.shared.cover.DurableCoverThumbnailService;
+import com.rulepilot.catalog.adapter.out.cover.CoverImageFetcher.SourceAbsentException;
+import com.rulepilot.catalog.adapter.out.cover.CoverThumbnailCache.Thumbnail;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Duration;

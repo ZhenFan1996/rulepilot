@@ -1,7 +1,7 @@
-package com.rulepilot.shared.adapter.out.cover;
+package com.rulepilot.catalog.adapter.out.cover;
 
-import com.rulepilot.shared.cover.CoverThumbnailCache.Thumbnail;
-import com.rulepilot.shared.cover.DurableCoverThumbnailService.Profile;
+import com.rulepilot.catalog.adapter.out.cover.CoverThumbnailCache.Thumbnail;
+import com.rulepilot.catalog.adapter.out.cover.DurableCoverThumbnailService.Profile;
 import java.awt.Color;
 import java.awt.Graphics2D;
 import java.awt.RenderingHints;
