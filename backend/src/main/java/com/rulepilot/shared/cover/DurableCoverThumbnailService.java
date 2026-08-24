@@ -12,6 +12,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Semaphore;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 
@@ -28,6 +29,7 @@ public class DurableCoverThumbnailService {
     private final Semaphore fetchPermits;
     private final ConcurrentHashMap<String, CompletableFuture<Thumbnail>> inFlight = new ConcurrentHashMap<>();
 
+    @Autowired
     public DurableCoverThumbnailService(CoverThumbnailCache cache, CoverImageFetcher fetcher) {
         this(cache, fetcher, DEFAULT_MAX_CONCURRENT_FETCHES);
     }

@@ -19,8 +19,25 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
+import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 
 class DurableCoverThumbnailServiceTest {
+
+    @Test
+    void declaresTheRuntimeInjectionConstructorWhenTheTestConcurrencyConstructorAlsoExists() {
+        MemoryCache cache = new MemoryCache();
+        CoverImageFetcher fetcher = (source, profile) -> new Thumbnail(new byte[] {1});
+
+        try (var context = new AnnotationConfigApplicationContext()) {
+            context.registerBean(CoverThumbnailCache.class, () -> cache);
+            context.registerBean(CoverImageFetcher.class, () -> fetcher);
+            context.register(DurableCoverThumbnailService.class);
+            context.refresh();
+
+            assertThat(context.getBean(DurableCoverThumbnailService.class).formatVersion())
+                    .isEqualTo(DurableCoverThumbnailService.CACHE_FORMAT_VERSION);
+        }
+    }
 
     @Test
     void reusesTheSameVariantAcrossRestartsAndSeparatesCompactFromDisplay() {
