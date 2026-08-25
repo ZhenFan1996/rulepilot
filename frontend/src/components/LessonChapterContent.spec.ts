@@ -51,6 +51,20 @@ describe('LessonChapterContent', () => {
     expect(wrapper.emitted('rateVisualAid')).toEqual([[2, 2, 'HELPFUL'], [2, 2, 'NOT_HELPFUL']])
   })
 
+  it('renders every typed visual planned for the same rule step', () => {
+    const second = { ...visualFocus, pageNumber: 7, label: '牌面示例', x: 250, y: 400 }
+    const third = { ...visualFocus, pageNumber: 8, label: '完整流程图', x: 0, y: 0, width: 1000, height: 1000, sourceKind: 'FULL_PAGE' as const }
+    const wrapper = mountContent({
+      pathSteps: [{ ...visualStep, visualFoci: [visualFocus, second, third] }],
+      visualStepCount: 3,
+    })
+
+    expect(wrapper.get('[data-testid="lesson-visual-gallery"]').findAll('figure')).toHaveLength(3)
+    expect(wrapper.findAll('img').map((image) => image.attributes('alt')).join(' ')).toContain('行动网格')
+    expect(wrapper.findAll('img').map((image) => image.attributes('alt')).join(' ')).toContain('牌面示例')
+    expect(wrapper.findAll('img').map((image) => image.attributes('alt')).join(' ')).toContain('完整流程图')
+  })
+
   it('keeps visual feedback disabled while it is being saved or offline', () => {
     const wrapper = mountContent({ visualFeedbackSaving: 'visual-s2-v2', online: false })
     expect(wrapper.findAll('button').filter((button) => ['有帮助', '没帮上忙'].includes(button.text())).every((button) => button.attributes('disabled') !== undefined)).toBe(true)

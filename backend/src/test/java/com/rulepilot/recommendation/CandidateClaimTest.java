@@ -134,6 +134,35 @@ class CandidateClaimTest {
     }
 
     @Test
+    void groundsARecommendationJudgmentInCandidateFactsWithoutPretendingItIsAnotherFact() {
+        CandidateObservation playerCount = new CandidateObservation(
+                "bgg-73-players",
+                73,
+                CandidateObservation.Kind.STRUCTURED_METADATA,
+                "playerCount",
+                "3..5",
+                List.of());
+        CandidateObservation interaction = new CandidateObservation(
+                "bgg-73-mechanics",
+                73,
+                CandidateObservation.Kind.TAXONOMY,
+                "mechanics",
+                "Negotiation",
+                List.of());
+
+        CandidateClaim judgment = new CandidateClaim(
+                73,
+                "recommendationJudgment",
+                CandidateClaim.Type.PREFERENCE_INFERENCE,
+                null,
+                CandidateClaim.Relation.OBSERVED,
+                "This is a plausible fit for a five-player table that asked for negotiation.",
+                List.of(playerCount, interaction));
+
+        assertThat(judgment.evidence()).containsExactly(playerCount, interaction);
+    }
+
+    @Test
     void preservesLongClaimAndObservationTextWithAllCandidateScopedEvidenceAndSources() {
         String observationText = "  observation " + "e".repeat(900) + "  ";
         List<Integer> sourceIndexes = List.of(1, 2, 3, 4, 5, 6, 7);

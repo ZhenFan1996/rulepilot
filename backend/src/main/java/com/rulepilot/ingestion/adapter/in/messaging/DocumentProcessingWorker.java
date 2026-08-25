@@ -14,8 +14,11 @@ import com.rulepilot.document.RetryableDocumentProcessingException;
 import com.rulepilot.ingestion.application.UploadedDocumentIngestion;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
+import io.micrometer.observation.Observation;
+import io.micrometer.observation.ObservationRegistry;
 import java.io.IOException;
 import java.time.Instant;
+import java.util.Locale;
 import java.util.Set;
 import java.util.UUID;
 import org.slf4j.Logger;
@@ -47,6 +50,7 @@ public class DocumentProcessingWorker {
     private final DocumentReadyNotifications readyNotifications;
     private final DocumentVersionScopeLookup versions;
     private final MeterRegistry metrics;
+    private final ObservationRegistry observations;
     private final int maxAttempts;
 
     public DocumentProcessingWorker(
@@ -58,6 +62,7 @@ public class DocumentProcessingWorker {
             DocumentReadyNotifications readyNotifications,
             DocumentVersionScopeLookup versions,
             MeterRegistry metrics,
+            ObservationRegistry observations,
             @Value("${rulepilot.document.messaging.max-attempts}") int maxAttempts) {
         this.ingestion = ingestion;
         this.commands = commands;
@@ -67,15 +72,34 @@ public class DocumentProcessingWorker {
         this.readyNotifications = readyNotifications;
         this.versions = versions;
         this.metrics = metrics;
+        this.observations = observations;
         this.maxAttempts = maxAttempts;
     }
 
     @RabbitListener(queues = "${rulepilot.document.messaging.queue}")
     public void process(Message message) {
         try {
-            execute(readCommand(message), eventId(message), attempt(message));
+            observeStage(readCommand(message), eventId(message), attempt(message));
         } catch (IOException exception) {
             throw new IllegalArgumentException("Document processing message is not valid JSON", exception);
+        }
+    }
+
+    private void observeStage(DocumentProcessingCommand command, UUID eventId, int attempt) {
+        String stage = command.stage().name().toLowerCase(Locale.ROOT);
+        Observation observation = Observation.createNotStarted("rulepilot.document.processing.stage", observations)
+                .contextualName("document-processing-" + stage)
+                .lowCardinalityKeyValue("stage", stage)
+                .start();
+        String outcome = "internal_error";
+        try (Observation.Scope ignored = observation.openScope()) {
+            outcome = execute(command, eventId, attempt);
+        } catch (RuntimeException | Error failure) {
+            observation.error(failure);
+            throw failure;
+        } finally {
+            observation.lowCardinalityKeyValue("outcome", outcome);
+            observation.stop();
         }
     }
 
@@ -109,7 +133,7 @@ public class DocumentProcessingWorker {
                 DocumentProcessingStage.valueOf(stage));
     }
 
-    private void execute(DocumentProcessingCommand command, UUID eventId, int attempt) {
+    private String execute(DocumentProcessingCommand command, UUID eventId, int attempt) {
         var version = versions.findVersion(command.documentVersionId());
         if (version.isEmpty()) {
             metrics.counter(
@@ -121,7 +145,7 @@ public class DocumentProcessingWorker {
                     "Acknowledging document processing delivery after its document was removed for documentVersionId={}, stage={}",
                     command.documentVersionId(),
                     command.stage());
-            return;
+            return "orphaned";
         }
         if (!idempotency.begin(command, eventId, attempt)) {
             metrics.counter(
@@ -134,7 +158,7 @@ public class DocumentProcessingWorker {
                     command.documentVersionId(),
                     command.stage(),
                     command.pipelineVersion());
-            return;
+            return "duplicate";
         }
         if (command.stage() == DocumentProcessingStage.CHUNK
                 && LEGACY_CHUNK_OBSOLETE_STATUSES.contains(version.orElseThrow().processingStatus())) {
@@ -148,7 +172,7 @@ public class DocumentProcessingWorker {
                     "Acknowledging obsolete legacy CHUNK delivery for documentVersionId={}, processingStatus={}",
                     command.documentVersionId(),
                     version.orElseThrow().processingStatus());
-            return;
+            return "obsolete";
         }
         Timer.Sample duration = Timer.start(metrics);
         String outcome = "internal_error";
@@ -180,7 +204,7 @@ public class DocumentProcessingWorker {
             if (retryable && attempt < maxAttempts) {
                 failures.retry(command, attempt + 1);
                 outcome = "retry_scheduled";
-                return;
+                return outcome;
             }
             failures.deadLetter(command, attempt, errorCode);
             outcome = "dead_letter";
@@ -204,6 +228,7 @@ public class DocumentProcessingWorker {
                     .tag("outcome", outcome)
                     .register(metrics));
         }
+        return outcome;
     }
 
     private void notifyReady(UUID documentVersionId, Instant readyAt) {

@@ -202,12 +202,14 @@ class PdfBoxRulebookPreparationTest {
     }
 
     @Test
-    void acceptsOnlyExactInOrderPopplerProgressForTheCurrentSession() throws IOException {
+    void separatesExactProgressFramesFromDiagnosticsAndRejectsFramesForAnotherSession() throws IOException {
         assertThat(PdfBoxRulebookPreparation.completedPopplerPage("5 8 /tmp/page-5.jpg", 5, 8))
-                .isEqualTo(5);
-        assertThatThrownBy(() -> PdfBoxRulebookPreparation.completedPopplerPage("warning", 5, 8))
-                .isInstanceOf(IOException.class)
-                .hasMessage("Poppler progress output is invalid");
+                .hasValue(5);
+        assertThat(PdfBoxRulebookPreparation.completedPopplerPage(
+                        "Fontconfig error: Cannot load default config file", 5, 8))
+                .isEmpty();
+        assertThat(PdfBoxRulebookPreparation.completedPopplerPage("warning", 5, 8))
+                .isEmpty();
         assertThatThrownBy(() -> PdfBoxRulebookPreparation.completedPopplerPage("4 8 /tmp/page-4.jpg", 5, 8))
                 .isInstanceOf(IOException.class)
                 .hasMessage("Poppler progress output is outside the expected page range");

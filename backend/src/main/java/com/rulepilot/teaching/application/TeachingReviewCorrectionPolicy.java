@@ -14,6 +14,12 @@ final class TeachingReviewCorrectionPolicy {
 
     private static final int MAX_FACTUAL_CORRECTIONS = 4;
     private static final int MAX_CHAPTER_SCOPE_CORRECTIONS = 2;
+
+    static int maximumModelCalls() {
+        // Each semantic correction may make one request plus one typed structured-output repair.
+        return Math.multiplyExact(MAX_FACTUAL_CORRECTIONS + MAX_CHAPTER_SCOPE_CORRECTIONS, 2);
+    }
+
     CorrectionKind correctionKind(List<GeneratedContentCritic.Issue> issues) {
         return issues.stream().allMatch(issue -> issue.type()
                         == GeneratedContentCritic.IssueType.CHAPTER_SCOPE_DUPLICATION

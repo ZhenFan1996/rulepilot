@@ -8,6 +8,8 @@ import java.util.UUID;
 
 public interface TeachingLessonModel {
 
+    int ABSOLUTE_VISUAL_INPUT_BUDGET = 12;
+
     default String providerId() {
         return "unspecified";
     }
@@ -289,7 +291,7 @@ public interface TeachingLessonModel {
                     || coverageTags == null
                     || priorSections == null || priorSections.size() > 2
                     || evidence == null || evidence.isEmpty()
-                    || pageImages == null || pageImages.size() > 2
+                    || pageImages == null || pageImages.size() > ABSOLUTE_VISUAL_INPUT_BUDGET
                     || requiredRuleIntents == null
                     || requiredRuleIntents.stream()
                             .anyMatch(intent -> intent == null || intent.isBlank() || intent.length() > 300)

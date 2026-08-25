@@ -55,7 +55,7 @@ public class IllustratedLessonService {
     @Transactional
     public RunSnapshot begin(UUID teachingPlanId, String ownerUsername) {
         var plan = requireReadyPlan(teachingPlanId, ownerUsername);
-        return runs.start(AssistantRunMode.TEACHING, plan.id(), ownerUsername);
+        return startTeachingRun(plan, ownerUsername, plan.id());
     }
 
     /**
@@ -65,13 +65,21 @@ public class IllustratedLessonService {
     @Transactional
     RunSnapshot begin(TeachingPlan plan, String ownerUsername) {
         requireReadyPlan(plan, ownerUsername);
-        return runs.start(AssistantRunMode.TEACHING, plan.id(), ownerUsername);
+        return startTeachingRun(plan, ownerUsername, plan.id());
     }
 
     @Transactional
     public RunSnapshot beginCandidate(UUID teachingPlanId, String ownerUsername) {
-        requireReadyPlan(teachingPlanId, ownerUsername);
-        return runs.start(AssistantRunMode.TEACHING, candidateSubjectId(teachingPlanId), ownerUsername);
+        TeachingPlan plan = requireReadyPlan(teachingPlanId, ownerUsername);
+        return startTeachingRun(plan, ownerUsername, candidateSubjectId(teachingPlanId));
+    }
+
+    private RunSnapshot startTeachingRun(TeachingPlan plan, String ownerUsername, UUID subjectId) {
+        return runs.start(
+                AssistantRunMode.TEACHING,
+                subjectId,
+                ownerUsername,
+                agent.workload(plan));
     }
 
     public GenerationOutcome generate(UUID teachingPlanId, String ownerUsername, RunSnapshot run) {

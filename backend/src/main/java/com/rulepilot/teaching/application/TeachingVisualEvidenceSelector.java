@@ -8,6 +8,7 @@ import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.IntStream;
 
 /**
@@ -18,7 +19,7 @@ import java.util.stream.IntStream;
  */
 final class TeachingVisualEvidenceSelector {
 
-    private static final int MAX_PAGE_IMAGES = 2;
+    private static final int ABSOLUTE_PAGE_IMAGE_BUDGET = 12;
 
     private TeachingVisualEvidenceSelector() {}
 
@@ -34,6 +35,17 @@ final class TeachingVisualEvidenceSelector {
             TeachingPlan.PlannedSection planned,
             List<RuleEvidence> evidence,
             boolean modelSupportsVisualEvidence) {
+        return select(planned, evidence, modelSupportsVisualEvidence, visualBudget(planned, evidence));
+    }
+
+    static List<PageImageInput> select(
+            TeachingPlan.PlannedSection planned,
+            List<RuleEvidence> evidence,
+            boolean modelSupportsVisualEvidence,
+            int visualBudget) {
+        if (visualBudget < 1 || visualBudget > ABSOLUTE_PAGE_IMAGE_BUDGET) {
+            throw new IllegalArgumentException("teaching visual input budget is invalid");
+        }
         boolean imageOnlyEvidence = hasVisualPageEvidence(evidence);
         if ((!planned.visualEvidenceRecommended() && !imageOnlyEvidence) || !modelSupportsVisualEvidence) {
             return List.of();
@@ -61,11 +73,28 @@ final class TeachingVisualEvidenceSelector {
                         .reversed()
                         .thenComparingInt(page -> firstEvidenceRank.getOrDefault(page, Integer.MAX_VALUE))
                         .thenComparingInt(Integer::intValue))
-                .limit(MAX_PAGE_IMAGES)
+                .limit(visualBudget)
                 .map(images::get)
                 .map(image -> new PageImageInput(
                         image.pageNumber(), image.mediaType(), image.content(), image.width(), image.height()))
                 .toList();
+    }
+
+    /** Derives the request budget from typed source ownership instead of a fixed image count. */
+    static int visualBudget(TeachingPlan.PlannedSection planned, List<RuleEvidence> evidence) {
+        if (planned == null || evidence == null) {
+            throw new IllegalArgumentException("teaching visual input is required");
+        }
+        Set<Integer> plannedSourcePages = Set.copyOf(planned.sourcePageNumbers());
+        long ownedImagePages = evidence.stream()
+                .flatMap(source -> source.pageImages().stream())
+                .filter(image -> plannedSourcePages.isEmpty() || plannedSourcePages.contains(image.pageNumber()))
+                .map(RulePageImage::pageNumber)
+                .distinct()
+                .count();
+        long plannedPages = plannedSourcePages.size();
+        long boundedDemand = Math.max(1, Math.max(plannedPages, ownedImagePages));
+        return (int) Math.min(ABSOLUTE_PAGE_IMAGE_BUDGET, boundedDemand);
     }
 
 }

@@ -183,6 +183,14 @@ test('production activation allows the measured cold boot to finish before rollb
   assert.doesNotMatch(productionScript, /while \[ "\$attempt" -le 36 \]/)
 })
 
+test('production tracing opt-in requires an explicit reachable collector endpoint', () => {
+  assert.match(productionScript, /PRODUCTION_TRACING_EXPORT_OTLP_ENABLED:-false/)
+  assert.match(productionScript,
+    /PRODUCTION_TRACING_OTLP_ENDPOINT is required when production OTLP tracing is enabled\./)
+  const endpointOverride = /OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: \$\{PRODUCTION_TRACING_OTLP_ENDPOINT:-http:\/\/tempo:4318\/v1\/traces\}/g
+  assert.equal([...productionCompose.matchAll(endpointOverride)].length, 2)
+})
+
 test('failed production recommendation journeys retain bounded API diagnostics without reading environment values', () => {
   assert.match(productionRecommendationWorkflow, /name: Collect bounded API diagnostics after a failed journey/)
   assert.match(productionRecommendationWorkflow, /if: failure\(\)/)

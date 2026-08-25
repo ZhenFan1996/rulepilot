@@ -73,6 +73,9 @@ observability, and repository commands cannot meet the need.
 - Do not add a microservice without a new ADR and user approval.
 - Prefer deleting duplicate stages and collapsing responsibilities over adding a new framework.
 - Optional visual, critic, localization, or audit enrichment must not erase already validated useful content.
+- Do not turn a valid plan, document size, or administrator workflow into a fixed product ceiling merely to bound an
+  Agent loop. Derive each run's finite execution budget from its immutable typed plan; keep account quota and
+  administrator entitlement separate from loop-safety budgets.
 
 ## Clean code rules
 - Prefer explicit business names over generic Service/Manager/Util names.
@@ -109,6 +112,9 @@ observability, and repository commands cannot meet the need.
   actions so long-running work remains understandable. Do not expose private model reasoning, internal prompts,
   credentials, or sensitive tool parameters.
 - Enforce step, token, timeout, and tool-call budgets.
+- Treat page images from image-backed PDFs as first-class evidence. OCR is an optional accelerator, not a prerequisite
+  for teaching; a failed OCR or visual enrichment attempt must preserve usable page evidence and be retried only by
+  the owning orchestration boundary.
 - Do not call paid or real external models in normal CI.
 
 ## No patch-style fixes

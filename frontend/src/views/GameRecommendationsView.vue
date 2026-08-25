@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 
 import AppShell from '@/components/AppShell.vue'
+import ProgressiveCatalogCover from '@/components/ProgressiveCatalogCover.vue'
 import TabletopGlyph from '@/components/TabletopGlyph.vue'
 import { useLocale, type AppLocale } from '@/lib/locale'
 
@@ -45,12 +46,6 @@ interface CatalogResponse {
   sourceDate: string | null
   taxonomyTranslated: boolean
   games: CatalogGame[]
-}
-
-interface CatalogCover {
-  bggId: number
-  thumbnailUrl: string
-  imageUrl: string
 }
 
 const { locale } = useLocale()
@@ -121,7 +116,6 @@ let queryGeneration = 0
 let disposed = false
 let activeQuery: CatalogQuery | null = null
 let activeBaseRequest: { generation: number; controller: AbortController } | null = null
-let activeCoverRequest: { generation: number; controller: AbortController } | null = null
 const prefetches = new Map<string, PrefetchRecord>()
 
 interface PaginationItem {
@@ -239,8 +233,6 @@ function isCurrentQuery(generation: number, query: CatalogQuery) {
 function cancelQueryWork() {
   activeBaseRequest?.controller.abort()
   activeBaseRequest = null
-  activeCoverRequest?.controller.abort()
-  activeCoverRequest = null
   prefetches.forEach(entry => entry.controller.abort())
   prefetches.clear()
 }
@@ -264,8 +256,6 @@ function beginReplacementQuery(query: CatalogQuery, targetPage: number) {
 function preparePageNavigation() {
   activeBaseRequest?.controller.abort()
   activeBaseRequest = null
-  activeCoverRequest?.controller.abort()
-  activeCoverRequest = null
   loadFailed.value = false
   failedPage.value = null
 }
@@ -301,34 +291,6 @@ async function loadBasePage(generation: number, query: CatalogQuery, pageNumber:
   return data
 }
 
-async function enrichMissingCovers(generation: number, query: CatalogQuery, pageNumber: number, pageGames: CatalogGame[]) {
-  const missingIds = pageGames.filter(game => !game.thumbnailUrl).map(game => game.bggId)
-  if (!missingIds.length || !isCurrentQuery(generation, query)) return
-  const controller = new AbortController()
-  activeCoverRequest?.controller.abort()
-  activeCoverRequest = { generation, controller }
-  const parameters = new URLSearchParams()
-  missingIds.forEach(id => parameters.append('bggId', String(id)))
-  try {
-    const response = await fetch(`/api/v1/bgg/catalog/covers?${parameters.toString()}`, {
-      credentials: 'include',
-      signal: controller.signal,
-    })
-    if (!response.ok) return
-    const covers = await response.json() as CatalogCover[]
-    if (!isCurrentQuery(generation, query) || page.value !== pageNumber || activeCoverRequest?.controller !== controller) return
-    const byId = new Map(covers.map(cover => [cover.bggId, cover]))
-    games.value = games.value.map(game => {
-      const cover = byId.get(game.bggId)
-      return cover ? { ...game, thumbnailUrl: cover.thumbnailUrl || cover.imageUrl } : game
-    })
-  } catch (error) {
-    if (!isAbortError(error)) return
-  } finally {
-    if (activeCoverRequest?.controller === controller) activeCoverRequest = null
-  }
-}
-
 async function loadPage(generation: number, query: CatalogQuery, targetPage: number) {
   loading.value = true
   loadFailed.value = false
@@ -340,7 +302,6 @@ async function loadPage(generation: number, query: CatalogQuery, targetPage: num
     page.value = data.page
     games.value = data.games
     loading.value = false
-    void enrichMissingCovers(generation, query, data.page, data.games)
     prefetchNextPage(generation, query, data)
     syncRoute(data.page)
   } catch (error) {
@@ -399,12 +360,8 @@ function playerTime(game: CatalogGame) {
   return values.join(' · ')
 }
 
-function coverImageUrl(game: CatalogGame) {
-  return `/api/v1/bgg/catalog/covers/${game.bggId}/image`
-}
-
-function hideBrokenImage(game: CatalogGame) {
-  games.value = games.value.map(candidate => candidate.bggId === game.bggId ? { ...candidate, thumbnailUrl: '' } : candidate)
+function hasValidBggId(game: CatalogGame) {
+  return Number.isSafeInteger(game.bggId) && game.bggId > 0
 }
 
 onMounted(() => {
@@ -500,7 +457,15 @@ onBeforeUnmount(() => {
           <article v-for="(game, index) in games" :key="game.bggId" class="game-tile group min-w-0 p-3">
             <RouterLink :to="{ name: 'game-discovery', params: { bggId: game.bggId } }" class="block">
               <div class="relative flex aspect-[4/3] items-center justify-center overflow-hidden rounded-lg border border-ink/6 bg-canvas p-3 text-ink/25">
-                <img v-if="game.thumbnailUrl" :key="`${game.bggId}-${game.thumbnailUrl}`" :src="coverImageUrl(game)" :alt="t('coverAlt', { game: game.name })" :loading="index < 4 ? 'eager' : 'lazy'" :fetchpriority="index < 4 ? 'high' : 'auto'" decoding="async" class="h-full w-full object-contain" @error="hideBrokenImage(game)">
+                <ProgressiveCatalogCover
+                  v-if="hasValidBggId(game)"
+                  :bgg-id="game.bggId"
+                  :alt="t('coverAlt', { game: game.name })"
+                  :upgrade="false"
+                  :loading="index < 4 ? 'eager' : 'lazy'"
+                  :fetch-priority="index < 4 ? 'high' : 'auto'"
+                  class="h-full w-full"
+                />
                 <TabletopGlyph v-else name="cards" :size="48" />
                 <span v-if="game.hotRank" class="absolute left-2 top-2 rounded-full bg-copper px-2.5 py-1 text-xs font-bold text-white">{{ t('hotRank', { rank: game.hotRank }) }}</span>
               </div>

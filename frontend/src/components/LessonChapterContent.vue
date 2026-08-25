@@ -10,6 +10,7 @@ interface VisualFocus {
   y: number
   width: number
   height: number
+  sourceKind?: 'FULL_PAGE' | 'PAGE_REGION' | 'EMBEDDED_AUTHOR_IMAGE'
 }
 
 interface ReaderStep {
@@ -20,6 +21,7 @@ interface ReaderStep {
   ruleFacts?: LessonRuleFact[]
   sourcePages: number[]
   visualFocus: VisualFocus | null
+  visualFoci?: VisualFocus[]
 }
 
 interface ReaderSection {
@@ -83,6 +85,10 @@ function stepCountLabel(count: number) {
 function pageList(pages: number[]) {
   return pages.join(locale.value === 'en' ? ', ' : '、')
 }
+
+function stepVisuals(step: ReaderStep) {
+  return step.visualFoci?.length ? step.visualFoci : step.visualFocus ? [step.visualFocus] : []
+}
 </script>
 
 <template>
@@ -93,16 +99,18 @@ function pageList(pages: number[]) {
         <h3 id="chapter-core-title" class="mt-2 font-display text-xl font-semibold leading-7 sm:text-2xl sm:leading-8">{{ leadStep.heading || section.title }}</h3>
         <p class="mt-3 text-sm leading-6 text-panel-text/80 sm:text-base sm:leading-8">{{ leadStep.text }}</p>
         <LessonRuleFacts v-if="leadStep.ruleFacts?.length" :facts="leadStep.ruleFacts" />
-        <figure v-if="leadStep.visualFocus" class="mt-5 overflow-hidden rounded-xl border border-panel-text/15 bg-canvas text-ink sm:max-w-2xl">
-          <figcaption class="border-b border-ink/10 bg-indigo/[0.045] px-3 py-2">
-            <p class="text-xs font-bold uppercase tracking-[0.12em] text-indigo">{{ t('lesson.chapter.visual.observationEyebrow') }}</p>
-            <p class="mt-1 text-sm leading-6 text-ink/70">{{ leadStep.visualFocus.visibleDescription || leadStep.visualFocus.label }}</p>
-          </figcaption>
-          <a :href="pageImageUrl(leadStep.visualFocus.pageNumber)" target="_blank" rel="noopener" :title="t('lesson.chapter.openFullPage')">
-            <img :src="focusedPageImageUrl(leadStep.visualFocus)" :alt="t('lesson.chapter.visual.alt', { label: leadStep.visualFocus.label, page: leadStep.visualFocus.pageNumber })" class="block max-h-[30rem] w-full object-contain" loading="lazy">
-          </a>
-          <figcaption class="border-t border-ink/10 px-3 py-2 text-xs font-semibold text-copper">{{ t('lesson.chapter.visual.coreCaption', { label: leadStep.visualFocus.label }) }}</figcaption>
-        </figure>
+        <div v-if="stepVisuals(leadStep).length" class="mt-5 grid gap-4 sm:max-w-2xl sm:grid-cols-2" data-testid="lesson-lead-visuals">
+          <figure v-for="focus in stepVisuals(leadStep)" :key="`${focus.pageNumber}-${focus.x}-${focus.y}-${focus.width}-${focus.height}`" class="overflow-hidden rounded-xl border border-panel-text/15 bg-canvas text-ink">
+            <figcaption class="border-b border-ink/10 bg-indigo/[0.045] px-3 py-2">
+              <p class="text-xs font-bold uppercase tracking-[0.12em] text-indigo">{{ t('lesson.chapter.visual.observationEyebrow') }}</p>
+              <p class="mt-1 text-sm leading-6 text-ink/70">{{ focus.visibleDescription || focus.label }}</p>
+            </figcaption>
+            <a :href="pageImageUrl(focus.pageNumber)" target="_blank" rel="noopener" :title="t('lesson.chapter.openFullPage')">
+              <img :src="focusedPageImageUrl(focus)" :alt="t('lesson.chapter.visual.alt', { label: focus.label, page: focus.pageNumber })" class="block max-h-[30rem] w-full object-contain" loading="lazy">
+            </a>
+            <figcaption class="border-t border-ink/10 px-3 py-2 text-xs font-semibold text-copper">{{ t('lesson.chapter.visual.coreCaption', { label: focus.label }) }}</figcaption>
+          </figure>
+        </div>
         <a v-if="stepSourceLabel(leadStep)" :href="pageImageUrl(leadStep.sourcePages[0]!)" target="_blank" rel="noopener" class="mt-4 inline-flex text-xs font-semibold text-panel-text/60 hover:text-panel-text">
           {{ stepSourceLabel(leadStep) }} ↗
         </a>
@@ -130,29 +138,31 @@ function pageList(pages: number[]) {
                 <h4 class="font-display text-xl font-semibold leading-7">{{ step.heading || t('lesson.chapter.stepFallback', { position: index + 1 }) }}</h4>
                 <span class="text-xs font-semibold" :class="moveMeta(step.kind).tone.split(' ')[1]">{{ moveLabel(step.kind) }}</span>
               </div>
-              <div v-if="step.kind === 'VISUAL' && step.visualFocus" class="mt-4 min-w-0" data-testid="lesson-visual-step">
+              <div v-if="step.kind === 'VISUAL' && stepVisuals(step).length" class="mt-4 min-w-0" data-testid="lesson-visual-step">
                 <div>
                   <p class="max-w-3xl text-[0.95rem] leading-7 text-ink/72">{{ step.text }}</p>
                   <LessonRuleFacts v-if="step.ruleFacts?.length" :facts="step.ruleFacts" />
-                  <a :href="pageImageUrl(step.visualFocus.pageNumber)" target="_blank" rel="noopener" class="mt-2 inline-flex text-xs font-semibold text-indigo hover:underline">{{ t('lesson.chapter.visual.openContext', { page: step.visualFocus.pageNumber }) }} ↗</a>
+                  <a :href="pageImageUrl(stepVisuals(step)[0]!.pageNumber)" target="_blank" rel="noopener" class="mt-2 inline-flex text-xs font-semibold text-indigo hover:underline">{{ t('lesson.chapter.visual.openContext', { page: stepVisuals(step)[0]!.pageNumber }) }} ↗</a>
                 </div>
-                <figure class="mt-4 max-w-3xl overflow-hidden rounded-xl border border-indigo/15 bg-canvas">
-                  <figcaption class="border-b border-indigo/10 bg-indigo/[0.045] px-3 py-2">
-                    <p class="text-xs font-bold uppercase tracking-[0.12em] text-indigo">{{ t('lesson.chapter.visual.observationEyebrow') }}</p>
-                    <p class="mt-1 text-sm leading-6 text-ink/70">{{ step.visualFocus.visibleDescription || step.visualFocus.label }}</p>
-                  </figcaption>
-                  <a :href="pageImageUrl(step.visualFocus.pageNumber)" target="_blank" rel="noopener" :title="t('lesson.chapter.openFullPage')">
-                    <img :src="focusedPageImageUrl(step.visualFocus)" :alt="t('lesson.chapter.visual.alt', { label: step.visualFocus.label, page: step.visualFocus.pageNumber })" class="block max-h-[30rem] w-full object-contain" loading="lazy">
-                  </a>
-                  <figcaption class="border-t border-indigo/10 px-3 py-2 text-xs font-semibold text-copper">{{ t('lesson.chapter.visual.caption', { label: step.visualFocus.label, page: step.visualFocus.pageNumber }) }}</figcaption>
-                  <div v-if="hasVisualAid(section.position, step.position)" class="border-t border-indigo/10 px-3 py-2">
-                    <p class="text-xs font-semibold text-ink/55">{{ t('lesson.chapter.visual.feedback') }}</p>
-                    <div class="mt-2 grid grid-cols-2 gap-2">
-                      <button type="button" class="min-h-9 rounded-lg border px-2 text-xs font-semibold disabled:opacity-40" :class="visualAidResult(section.position, step.position) === 'HELPFUL' ? 'border-indigo bg-indigo/8 text-indigo' : 'border-ink/15'" :disabled="visualFeedbackSaving !== null || !online" @click="emit('rateVisualAid', section.position, step.position, 'HELPFUL')">{{ t('lesson.chapter.visual.helpful') }}</button>
-                      <button type="button" class="min-h-9 rounded-lg border px-2 text-xs font-semibold disabled:opacity-40" :class="visualAidResult(section.position, step.position) === 'NOT_HELPFUL' ? 'border-amber-700 bg-amber-50 text-amber-950' : 'border-ink/15'" :disabled="visualFeedbackSaving !== null || !online" @click="emit('rateVisualAid', section.position, step.position, 'NOT_HELPFUL')">{{ t('lesson.chapter.visual.notHelpful') }}</button>
-                    </div>
+                <div class="mt-4 grid max-w-3xl gap-4 sm:grid-cols-2" data-testid="lesson-visual-gallery">
+                  <figure v-for="focus in stepVisuals(step)" :key="`${focus.pageNumber}-${focus.x}-${focus.y}-${focus.width}-${focus.height}`" class="overflow-hidden rounded-xl border border-indigo/15 bg-canvas">
+                    <figcaption class="border-b border-indigo/10 bg-indigo/[0.045] px-3 py-2">
+                      <p class="text-xs font-bold uppercase tracking-[0.12em] text-indigo">{{ t('lesson.chapter.visual.observationEyebrow') }}</p>
+                      <p class="mt-1 text-sm leading-6 text-ink/70">{{ focus.visibleDescription || focus.label }}</p>
+                    </figcaption>
+                    <a :href="pageImageUrl(focus.pageNumber)" target="_blank" rel="noopener" :title="t('lesson.chapter.openFullPage')">
+                      <img :src="focusedPageImageUrl(focus)" :alt="t('lesson.chapter.visual.alt', { label: focus.label, page: focus.pageNumber })" class="block max-h-[30rem] w-full object-contain" loading="lazy">
+                    </a>
+                    <figcaption class="border-t border-indigo/10 px-3 py-2 text-xs font-semibold text-copper">{{ t('lesson.chapter.visual.caption', { label: focus.label, page: focus.pageNumber }) }}</figcaption>
+                  </figure>
+                </div>
+                <div v-if="hasVisualAid(section.position, step.position)" class="mt-3 max-w-3xl rounded-xl border border-indigo/10 px-3 py-2">
+                  <p class="text-xs font-semibold text-ink/55">{{ t('lesson.chapter.visual.feedback') }}</p>
+                  <div class="mt-2 grid grid-cols-2 gap-2">
+                    <button type="button" class="min-h-9 rounded-lg border px-2 text-xs font-semibold disabled:opacity-40" :class="visualAidResult(section.position, step.position) === 'HELPFUL' ? 'border-indigo bg-indigo/8 text-indigo' : 'border-ink/15'" :disabled="visualFeedbackSaving !== null || !online" @click="emit('rateVisualAid', section.position, step.position, 'HELPFUL')">{{ t('lesson.chapter.visual.helpful') }}</button>
+                    <button type="button" class="min-h-9 rounded-lg border px-2 text-xs font-semibold disabled:opacity-40" :class="visualAidResult(section.position, step.position) === 'NOT_HELPFUL' ? 'border-amber-700 bg-amber-50 text-amber-950' : 'border-ink/15'" :disabled="visualFeedbackSaving !== null || !online" @click="emit('rateVisualAid', section.position, step.position, 'NOT_HELPFUL')">{{ t('lesson.chapter.visual.notHelpful') }}</button>
                   </div>
-                </figure>
+                </div>
               </div>
               <template v-else>
                 <p class="mt-2 text-[0.95rem] leading-7 text-ink/72">{{ step.text }}</p>

@@ -12,9 +12,12 @@ import com.rulepilot.teaching.VisualRegionLocator;
 import com.rulepilot.teaching.VisualRegionLocator.Diagnostic;
 import com.rulepilot.teaching.VisualRegionLocator.LocateGuideResult;
 import com.rulepilot.teaching.VisualRegionLocator.LocatedRegion;
+import com.rulepilot.teaching.VisualRegionLocator.ReviewAction;
 import com.rulepilot.teaching.VisualRegionLocator.VisualLocationRequest;
 import com.rulepilot.teaching.adapter.out.model.VisualLocatorResponsePolicy.ModelGuide;
 import com.rulepilot.teaching.adapter.out.model.VisualLocatorResponsePolicy.ModelRegion;
+import com.rulepilot.teaching.adapter.out.model.VisualLocatorResponsePolicy.ModelReview;
+import com.rulepilot.teaching.domain.IllustratedLesson.VisualSourceKind;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -35,18 +38,18 @@ public class AgenticVisualRegionLocator implements VisualRegionLocator {
     private static final String SYSTEM_PROMPT = """
             You are a rulebook visual evidence Agent. Work only with the supplied cited evidence handles and pages.
             First call read_rule_page_image for a cited evidenceId and one of that claim's sourcePages. You may call
-            read_visual_page_facts only as a navigation hint. Then call crop_rule_page_image for a compact rectangle
-            around the literal object, icon group, board relationship, table row, or worked state that helps the claim.
-            Request at most one crop for each intended result. The successful crop response is the inspection result:
-            when nextAction says RETURN_FINAL_JSON_WITH_THIS_EXACT_RECTANGLE, call no more tools and immediately finish
-            with that exact rectangle. A page, crop, or visual fact proves appearance only; never infer
+            read_visual_page_facts only as a navigation hint. Call crop_rule_page_image when a page region or embedded
+            author image is useful. A page, crop, or visual fact proves appearance only; never infer
             a mechanical effect, condition, quantity, score, timing, or exception beyond the cited claim text.
 
-            Finish with one JSON object whose regions array has zero, one, or two objects. Every accepted object needs
-            pageNumber, a short Simplified Chinese label, a literal Simplified Chinese visibleDescription, x, y, width,
-            height, and supportedClaimRefs. Its rectangle must exactly match a successful crop tool observation. Return
-            an empty regions array if no compact crop visibly helps, the crop conflicts with the claim, or evidence is
-            insufficient. Do not expose reasoning.
+            Finish with one JSON object whose reviews array contains typed decisions. Every decision has
+            stepPosition, action, and source. action is ACCEPT, RECROP, USE_FULL_PAGE, or REJECT. REJECT has source null.
+            ACCEPT and RECROP require a sourceKind of PAGE_REGION or EMBEDDED_AUTHOR_IMAGE and a rectangle that exactly
+            matches a successful crop observation. USE_FULL_PAGE requires sourceKind FULL_PAGE and the exact rectangle
+            0,0,1000,1000 backed by a successful full-page read. A non-null source also needs pageNumber, a short
+            Simplified Chinese label, a literal Simplified Chinese visibleDescription, x, y, width, height, and
+            supportedClaimRefs. Return one REJECT decision for a step when no visual helps. Several ACCEPT decisions may
+            belong to the same step, but never exceed the supplied visualBudget across all steps. Do not expose reasoning.
             """;
 
     private final NativeToolAgent agent;
@@ -90,12 +93,12 @@ public class AgenticVisualRegionLocator implements VisualRegionLocator {
                 scope.get(),
                 SYSTEM_PROMPT,
                 playerRequest(request),
-                "{\"regions\":[]}",
-                6,
-                512,
+                explicitRejections(request),
+                Math.min(12, 4 + request.visualBudget()),
+                Math.min(2_048, 384 + request.visualBudget() * 192),
                 Set.of("read_rule_page_image", "read_visual_page_facts", "crop_rule_page_image"),
                 Set.of(),
-                6,
+                Math.min(24, 4 + request.visualBudget() * 2),
                 "",
                 Map.of("crop_rule_page_image", visualResultBudget(request))));
         if (result.status() != RunStatus.COMPLETED) {
@@ -104,15 +107,21 @@ public class AgenticVisualRegionLocator implements VisualRegionLocator {
 
         Optional<ModelGuide> parsed = VisualLocatorResponsePolicy.parseModelGuide(result.text());
         if (parsed.isEmpty()) return LocateGuideResult.unavailable(Diagnostic.MALFORMED_RESPONSE);
-        if (parsed.get().regions().isEmpty()) {
+        if (parsed.get().reviews().stream().filter(review -> review.source() != null).count() > request.visualBudget()) {
+            return LocateGuideResult.unavailable(Diagnostic.UNSUPPORTED_SCOPE);
+        }
+        if (parsed.get().hasOnlyRejections()) {
             return LocateGuideResult.unavailable(Diagnostic.EXPLICIT_NO_REGION);
         }
         List<ObservedCrop> crops = observedCrops(result);
-        List<LocatedRegion> accepted = parsed.get().regions().stream()
-                .map(region -> accepted(region, request, crops))
+        List<ObservedPage> pages = observedPages(result);
+        List<LocatedRegion> accepted = parsed.get().reviews().stream()
+                .filter(review -> review.action() == ReviewAction.ACCEPT
+                        || review.action() == ReviewAction.USE_FULL_PAGE)
+                .map(review -> accepted(review, request, crops, pages))
                 .flatMap(Optional::stream)
                 .distinct()
-                .limit(2)
+                .limit(request.visualBudget())
                 .toList();
         return accepted.isEmpty()
                 ? LocateGuideResult.unavailable(Diagnostic.UNSUPPORTED_SCOPE)
@@ -127,12 +136,28 @@ public class AgenticVisualRegionLocator implements VisualRegionLocator {
     }
 
     private int visualResultBudget(VisualLocationRequest request) {
-        long distinctSteps = request.claims().stream()
-                .map(VisualRegionLocator.Claim::stepPosition)
-                .filter(position -> position > 0)
-                .distinct()
-                .count();
-        return (int) Math.max(1, Math.min(2, distinctSteps));
+        return request.visualBudget();
+    }
+
+    private String explicitRejections(VisualLocationRequest request) {
+        try {
+            return objectMapper.writeValueAsString(Map.of("reviews", request.claims().stream()
+                    .map(VisualRegionLocator.Claim::stepPosition)
+                    .filter(position -> position > 0)
+                    .distinct()
+                    .map(this::rejection)
+                    .toList()));
+        } catch (JsonProcessingException exception) {
+            throw new IllegalStateException("visual Agent fallback serialization failed", exception);
+        }
+    }
+
+    private Map<String, Object> rejection(int stepPosition) {
+        Map<String, Object> rejection = new LinkedHashMap<>();
+        rejection.put("stepPosition", stepPosition);
+        rejection.put("action", "REJECT");
+        rejection.put("source", null);
+        return rejection;
     }
 
     private String playerRequest(VisualLocationRequest request) {
@@ -147,6 +172,7 @@ public class AgenticVisualRegionLocator implements VisualRegionLocator {
                         "sourcePages", request.claims().get(index).sourcePages()))
                 .toList());
         payload.put("candidateHints", VisualLocatorResponsePolicy.candidatePromptPayload(request.candidates(), true));
+        payload.put("visualBudget", request.visualBudget());
         try {
             return objectMapper.writeValueAsString(payload);
         } catch (JsonProcessingException exception) {
@@ -155,20 +181,25 @@ public class AgenticVisualRegionLocator implements VisualRegionLocator {
     }
 
     private Optional<LocatedRegion> accepted(
-            ModelRegion region, VisualLocationRequest request, List<ObservedCrop> observedCrops) {
+            ModelReview review,
+            VisualLocationRequest request,
+            List<ObservedCrop> observedCrops,
+            List<ObservedPage> observedPages) {
+        ModelRegion region = review.source();
         if (region == null) return Optional.empty();
-        List<CropBinding> bindings = observedCrops.stream()
-                .filter(crop -> crop.pageNumber() == region.pageNumber())
-                .map(crop -> new CropBinding(crop, supportedClaims(region, request, crop)))
-                .filter(binding -> !binding.claims().isEmpty())
-                .toList();
-        CropBinding binding = bindings.stream()
-                .filter(candidate -> candidate.crop().sameRectangle(region))
+        List<VisualRegionLocator.Claim> claims = ownedClaims(review, request);
+        if (claims.isEmpty()) return Optional.empty();
+        if (review.action() == ReviewAction.USE_FULL_PAGE) {
+            return acceptedFullPage(review, claims, observedPages);
+        }
+        ObservedCrop crop = observedCrops.stream()
+                .filter(observed -> observed.pageNumber() == region.pageNumber())
+                .filter(candidate -> candidate.sameRectangle(region))
+                .filter(candidate -> claims.stream()
+                        .anyMatch(claim -> claim.evidenceId().equals(candidate.evidenceId())))
                 .findFirst()
                 .orElse(null);
-        if (binding == null) return Optional.empty();
-        ObservedCrop crop = binding.crop();
-        List<VisualRegionLocator.Claim> claims = binding.claims();
+        if (crop == null) return Optional.empty();
         try {
             return Optional.of(new LocatedRegion(
                     crop.pageNumber(),
@@ -183,22 +214,55 @@ public class AgenticVisualRegionLocator implements VisualRegionLocator {
                             .map(VisualRegionLocator.Claim::stepPosition)
                             .filter(position -> position > 0)
                             .distinct()
-                            .toList()));
+                            .toList(),
+                    false,
+                    region.sourceKind()));
         } catch (IllegalArgumentException invalid) {
             return Optional.empty();
         }
     }
 
-    private List<VisualRegionLocator.Claim> supportedClaims(
-            ModelRegion region, VisualLocationRequest request, ObservedCrop crop) {
+    private Optional<LocatedRegion> acceptedFullPage(
+            ModelReview review,
+            List<VisualRegionLocator.Claim> claims,
+            List<ObservedPage> observedPages) {
+        ModelRegion region = review.source();
+        if (region == null || region.sourceKind() != VisualSourceKind.FULL_PAGE) return Optional.empty();
+        for (ObservedPage page : observedPages) {
+            if (page.pageNumber() != region.pageNumber()) continue;
+            if (claims.stream().noneMatch(claim -> claim.evidenceId().equals(page.evidenceId()))) continue;
+            try {
+                return Optional.of(new LocatedRegion(
+                        page.pageNumber(),
+                        region.label(),
+                        region.visibleDescription(),
+                        0,
+                        0,
+                        1_000,
+                        1_000,
+                        claims.stream().map(VisualRegionLocator.Claim::evidenceId).toList(),
+                        List.of(review.stepPosition()),
+                        false,
+                        VisualSourceKind.FULL_PAGE));
+            } catch (IllegalArgumentException invalid) {
+                return Optional.empty();
+            }
+        }
+        return Optional.empty();
+    }
+
+    private List<VisualRegionLocator.Claim> ownedClaims(
+            ModelReview review, VisualLocationRequest request) {
+        ModelRegion region = review.source();
+        if (region == null) return List.of();
         List<VisualRegionLocator.Claim> claims = region.supportedClaimRefs().stream()
                 .map(reference -> claim(reference, request))
                 .filter(java.util.Objects::nonNull)
-                .filter(claim -> claim.evidenceId().equals(crop.evidenceId()))
-                .filter(claim -> claim.sourcePages().contains(crop.pageNumber()))
+                .filter(claim -> claim.stepPosition() == review.stepPosition())
+                .filter(claim -> claim.sourcePages().contains(region.pageNumber()))
                 .distinct()
                 .toList();
-        return claims;
+        return claims.size() == region.supportedClaimRefs().size() ? claims : List.of();
     }
 
     private VisualRegionLocator.Claim claim(String reference, VisualLocationRequest request) {
@@ -222,6 +286,28 @@ public class AgenticVisualRegionLocator implements VisualRegionLocator {
                 .flatMap(Optional::stream)
                 .forEach(crops::add);
         return List.copyOf(crops);
+    }
+
+    private List<ObservedPage> observedPages(NativeToolAgent.RunResult result) {
+        List<ObservedPage> pages = new ArrayList<>();
+        result.observations().stream()
+                .filter(record -> record.toolName().equals("read_rule_page_image"))
+                .map(NativeToolAgent.ObservationRecord::observation)
+                .filter(observation -> observation.code().equals("PAGE_IMAGE_FOUND"))
+                .map(this::observedPage)
+                .flatMap(Optional::stream)
+                .forEach(pages::add);
+        return List.copyOf(pages);
+    }
+
+    private Optional<ObservedPage> observedPage(ToolObservation observation) {
+        try {
+            return Optional.of(new ObservedPage(
+                    UUID.fromString(String.valueOf(observation.data().get("evidenceId"))),
+                    number(observation.data().get("pageNumber"))));
+        } catch (IllegalArgumentException invalid) {
+            return Optional.empty();
+        }
     }
 
     private Optional<ObservedCrop> observedCrop(ToolObservation observation) {
@@ -254,5 +340,6 @@ public class AgenticVisualRegionLocator implements VisualRegionLocator {
         }
     }
 
-    private record CropBinding(ObservedCrop crop, List<VisualRegionLocator.Claim> claims) {}
+    private record ObservedPage(UUID evidenceId, int pageNumber) {}
+
 }

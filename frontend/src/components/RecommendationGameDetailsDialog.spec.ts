@@ -23,6 +23,24 @@ describe('RecommendationGameDetailsDialog', () => {
     vi.unstubAllGlobals()
   })
 
+  it('shows prop identity and starts its cover while source details are pending', async () => {
+    let resolveSource!: (response: Response) => void
+    const source = new Promise<Response>(resolve => { resolveSource = resolve })
+    vi.stubGlobal('fetch', vi.fn(() => source))
+
+    const wrapper = mount(RecommendationGameDetailsDialog, { props: { game, open: true } })
+    await flushPromises()
+
+    expect(wrapper.get('h2').text()).toBe('展翅翱翔')
+    expect(wrapper.get('[data-testid="recommendation-details-loading"]').text()).toContain('正在读取详细资料')
+    expect(wrapper.get('img[alt="展翅翱翔"]').attributes('src'))
+      .toBe('/api/v1/bgg/catalog/covers/266192/thumbnail')
+    expect(wrapper.find('[data-cover-kind="display"]').exists()).toBe(false)
+
+    wrapper.unmount()
+    resolveSource(Response.json(game))
+  })
+
   it('shows source details immediately, then replaces them with localized details without leaving the page', async () => {
     let resolveLocalized!: (response: Response) => void
     const localized = new Promise<Response>(resolve => { resolveLocalized = resolve })
@@ -50,6 +68,16 @@ describe('RecommendationGameDetailsDialog', () => {
     expect(wrapper.text()).toContain('复杂度 2.5 / 5（987 票）')
     expect(wrapper.text()).toContain('Animals: Birds')
     expect(wrapper.text()).toContain('Best with 3 players')
+    expect(wrapper.get('img[alt="展翅翱翔"]').attributes('src'))
+      .toBe('/api/v1/bgg/catalog/covers/266192/thumbnail')
+    expect(wrapper.find('img[aria-hidden="true"]').exists()).toBe(false)
+    await wrapper.get('img[alt="展翅翱翔"]').trigger('load')
+    expect(wrapper.get('img[aria-hidden="true"]').attributes('src'))
+      .toBe('/api/v1/bgg/catalog/covers/266192/image')
+    await wrapper.get('img[aria-hidden="true"]').trigger('error')
+    expect(wrapper.find('img[aria-hidden="true"]').exists()).toBe(false)
+    expect(wrapper.get('img[alt="展翅翱翔"]').attributes('src'))
+      .toBe('/api/v1/bgg/catalog/covers/266192/thumbnail')
     expect(wrapper.get('a[href="https://boardgamegeek.com/boardgame/266192"]').attributes('target')).toBe('_blank')
 
     resolveLocalized(Response.json({
@@ -199,6 +227,8 @@ describe('RecommendationGameDetailsDialog', () => {
 
     expect(wrapper.text()).toContain('暂时无法读取详细资料。')
     expect(wrapper.text()).not.toContain('Wrong identity.')
+    expect(wrapper.get('img[alt="展翅翱翔"]').attributes('src'))
+      .toBe('/api/v1/bgg/catalog/covers/266192/thumbnail')
     expect(wrapper.findAll('button').some(button => button.text() === '选这款，继续找规则书')).toBe(false)
   })
 

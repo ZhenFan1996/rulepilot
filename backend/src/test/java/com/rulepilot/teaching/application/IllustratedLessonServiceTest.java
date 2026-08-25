@@ -13,6 +13,7 @@ import com.rulepilot.assistant.AssistantRunMode;
 import com.rulepilot.assistant.AssistantRunState;
 import com.rulepilot.assistant.AssistantRuns;
 import com.rulepilot.assistant.AssistantRuns.RunSnapshot;
+import com.rulepilot.assistant.AssistantRuns.WorkloadDemand;
 import com.rulepilot.document.DocumentVersionScopeLookup;
 import com.rulepilot.document.DocumentVersionScopeLookup.VersionScope;
 import com.rulepilot.teaching.application.IllustratedLessonService.GenerationOutcome;
@@ -71,14 +72,22 @@ class IllustratedLessonServiceTest {
         when(plan.createdBy()).thenReturn("alice");
         TeachingPlanRepository plans = mock(TeachingPlanRepository.class);
         AssistantRuns runs = mock(AssistantRuns.class);
+        GroundedTeachingAgent agent = mock(GroundedTeachingAgent.class);
+        WorkloadDemand workload = new WorkloadDemand(95, 77);
+        when(agent.workload(plan)).thenReturn(workload);
         DocumentVersionScopeLookup documents = mock(DocumentVersionScopeLookup.class);
         when(documents.findVersion(versionId))
                 .thenReturn(java.util.Optional.of(new VersionScope(versionId, UUID.randomUUID(), "READY", "alice")));
         RunSnapshot received = run(planId, "alice", AssistantRunState.RECEIVED, 1);
-        when(runs.start(AssistantRunMode.TEACHING, planId, "alice")).thenReturn(received);
+        when(runs.start(
+                        AssistantRunMode.TEACHING,
+                        planId,
+                        "alice",
+                        workload))
+                .thenReturn(received);
         IllustratedLessonService service = new IllustratedLessonService(
                 plans,
-                mock(GroundedTeachingAgent.class),
+                agent,
                 mock(IllustratedLessonRepository.class),
                 runs,
                 documents,
@@ -90,6 +99,11 @@ class IllustratedLessonServiceTest {
         assertThat(started).isEqualTo(received);
         verify(documents).findVersion(versionId);
         verify(plans, never()).findById(planId);
+        verify(runs).start(
+                AssistantRunMode.TEACHING,
+                planId,
+                "alice",
+                workload);
     }
 
     @Test

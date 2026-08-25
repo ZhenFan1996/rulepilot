@@ -22,6 +22,7 @@ interface VisualFocus {
   y: number
   width: number
   height: number
+  sourceKind?: 'FULL_PAGE' | 'PAGE_REGION' | 'EMBEDDED_AUTHOR_IMAGE'
 }
 
 interface LessonStep {
@@ -31,6 +32,7 @@ interface LessonStep {
   text: string
   sourcePages: number[]
   visualFocus: VisualFocus | null
+  visualFoci?: VisualFocus[]
 }
 
 interface LessonSection {

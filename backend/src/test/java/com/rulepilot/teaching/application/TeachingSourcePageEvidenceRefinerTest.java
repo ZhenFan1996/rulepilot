@@ -17,6 +17,10 @@ import com.rulepilot.assistant.AuditedAgentInvocations;
 import com.rulepilot.assistant.NativeAgentTool.ToolScope;
 import com.rulepilot.assistant.NativeToolScopes;
 import com.rulepilot.assistant.application.PolicyEvidenceVerifier;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.RuleGroupFact;
+import com.rulepilot.teaching.VisualRulebookPageFacts;
+import com.rulepilot.teaching.VisualRulebookPageFacts.PageFact;
 import com.rulepilot.teaching.domain.TeachingPlan;
 import com.rulepilot.teaching.domain.TeachingPlan.PlannedSection;
 import java.time.Instant;
@@ -51,6 +55,152 @@ class TeachingSourcePageEvidenceRefinerTest {
         assertThat(result.evidence()).containsExactly(searchHit, laterClause);
         assertThat(invocations.toolCalls).hasValue(1);
         verify(tools).readRuleEvidencePages(versionId, Set.of(2), false);
+    }
+
+    @Test
+    void reusesACompleteExactVisualPageObservationWithoutReadingTheSamePageAgain() {
+        UUID sourceId = UUID.randomUUID();
+        RuleEvidence visualTranscript = new RuleEvidence(
+                sourceId,
+                versionId,
+                "SETUP",
+                "Setup",
+                "[rule-group:prepare-board] Put the board in the middle.",
+                2,
+                2,
+                List.of(new RulePageImage(2, "image/png", new byte[] {1}, 100, 80)),
+                RuleEvidence.ContentKind.VISUAL_TRANSCRIPTION);
+        RuleEvidence canonicalPlaceholder = new RuleEvidence(
+                sourceId,
+                versionId,
+                "SETUP",
+                "Setup",
+                "Image-only page",
+                2,
+                2,
+                List.of(new RulePageImage(2, "image/png", new byte[] {1}, 100, 80)),
+                RuleEvidence.ContentKind.VISUAL_PLACEHOLDER);
+        RuleEvidence laterClause = evidence(UUID.randomUUID(), 2, "A later exception on the same page.");
+        var observation = new TeachingVisualEvidenceResolver.CanonicalPageObservation(
+                runId, versionId, Set.of(2), List.of(canonicalPlaceholder, laterClause));
+        var deterministic = new TeachingSectionEvidenceRetriever.Result(
+                List.of(visualTranscript, laterClause),
+                3,
+                TeachingSectionEvidenceRetriever.State.VERIFIED,
+                Optional.of(observation));
+        AssistantReadTools tools = mock(AssistantReadTools.class);
+        RecordingInvocations invocations = new RecordingInvocations();
+        TeachingPlan plan = plan(List.of(2));
+
+        var result = refiner(scopes(), tools, invocations)
+                .refine(plan, plan.sections().getFirst(), runId, deterministic);
+
+        assertThat(result.state()).isEqualTo(TeachingSectionEvidenceRetriever.State.VERIFIED);
+        assertThat(result.toolCalls()).isEqualTo(3);
+        assertThat(result.evidence()).containsExactly(visualTranscript, laterClause);
+        assertThat(invocations.toolCalls).hasValue(0);
+        verify(tools, never()).readRuleEvidencePages(
+                org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.anySet(),
+                org.mockito.ArgumentMatchers.anyBoolean());
+    }
+
+    @Test
+    void reusesTheActualNonProgressiveVisualReadAcrossRetrievalAndRefinement() {
+        UUID sourceId = UUID.randomUUID();
+        String transcript = "[rule-group:prepare-board] Put the board in the middle.";
+        RuleEvidence searchPlaceholder = new RuleEvidence(
+                sourceId,
+                versionId,
+                "SETUP",
+                "Setup",
+                "Image-only page",
+                2,
+                2,
+                List.of(),
+                RuleEvidence.ContentKind.VISUAL_PLACEHOLDER);
+        RuleEvidence canonicalPlaceholder = new RuleEvidence(
+                sourceId,
+                versionId,
+                "SETUP",
+                "Setup",
+                "Image-only page",
+                2,
+                2,
+                List.of(new RulePageImage(2, "image/png", new byte[] {1}, 100, 80)),
+                RuleEvidence.ContentKind.VISUAL_PLACEHOLDER);
+        RuleEvidence laterClause = evidence(UUID.randomUUID(), 2, "A later exception on the same page.");
+        AssistantReadTools tools = mock(AssistantReadTools.class);
+        when(tools.searchRuleEvidence(org.mockito.ArgumentMatchers.any()))
+                .thenReturn(List.of(searchPlaceholder));
+        when(tools.readRuleEvidencePages(versionId, Set.of(2), true))
+                .thenReturn(List.of(canonicalPlaceholder, laterClause));
+        VisualRulebookPageFacts visualFacts = mock(VisualRulebookPageFacts.class);
+        when(visualFacts.find(versionId, Set.of(2))).thenReturn(List.of(new PageFact(
+                2,
+                "SETUP",
+                transcript,
+                List.of("setup"),
+                List.of(),
+                List.of(),
+                true,
+                PageFact.CURRENT_SCHEMA_VERSION,
+                List.of(),
+                List.of("prepare-board"),
+                true,
+                List.of(new RuleGroupFact("prepare-board", "Prepare board", transcript)))));
+        RecordingInvocations invocations = new RecordingInvocations();
+        var resolver = new TeachingVisualEvidenceResolver(
+                tools,
+                invocations,
+                visualFacts,
+                VisualRulebookPageCatalogModel.unavailable());
+        var retriever = new TeachingSectionEvidenceRetriever(
+                tools, new PolicyEvidenceVerifier(), invocations, resolver);
+        TeachingPlan plan = plan(List.of(2));
+
+        var retrieved = retriever.retrieve(
+                plan, plan.sections().getFirst(), runId, 3, true);
+        var result = refiner(scopes(), tools, invocations)
+                .refine(plan, plan.sections().getFirst(), runId, retrieved);
+
+        assertThat(retrieved.canonicalPageObservation()).isPresent();
+        assertThat(result.state()).isEqualTo(TeachingSectionEvidenceRetriever.State.VERIFIED);
+        assertThat(result.toolCalls()).isEqualTo(2);
+        assertThat(invocations.toolCalls).hasValue(2);
+        assertThat(invocations.operations).containsExactly(
+                "searchRuleEvidence|1", "readRuleEvidencePages|1");
+        assertThat(result.evidence()).hasSize(2);
+        assertThat(result.evidence().getFirst()).satisfies(derived -> {
+            assertThat(derived.chunkId()).isEqualTo(sourceId);
+            assertThat(derived.excerpt()).isEqualTo(transcript);
+            assertThat(derived.contentKind()).isEqualTo(RuleEvidence.ContentKind.VISUAL_TRANSCRIPTION);
+        });
+        assertThat(result.evidence().get(1)).isEqualTo(laterClause);
+        verify(tools).readRuleEvidencePages(versionId, Set.of(2), true);
+        verify(tools, never()).readRuleEvidencePages(versionId, Set.of(2), false);
+    }
+
+    @Test
+    void fallsBackToACanonicalReadWhenThePriorObservationCoversDifferentPages() {
+        RuleEvidence pageTwo = evidence(UUID.randomUUID(), 2, "A page two clause.");
+        RuleEvidence pageFive = evidence(UUID.randomUUID(), 5, "A page five clause.");
+        var observation = new TeachingVisualEvidenceResolver.CanonicalPageObservation(
+                runId, versionId, Set.of(2), List.of(pageTwo));
+        var deterministic = new TeachingSectionEvidenceRetriever.Result(
+                List.of(pageTwo),
+                2,
+                TeachingSectionEvidenceRetriever.State.VERIFIED,
+                Optional.of(observation));
+        AssistantReadTools tools = tools(List.of(pageTwo, pageFive));
+        TeachingPlan plan = plan(List.of(2, 5));
+
+        var result = refiner(scopes(), tools, new RecordingInvocations())
+                .refine(plan, plan.sections().getFirst(), runId, deterministic);
+
+        assertThat(result.toolCalls()).isEqualTo(3);
+        assertThat(result.evidence()).containsExactly(pageTwo, pageFive);
+        verify(tools).readRuleEvidencePages(versionId, Set.of(2, 5), false);
     }
 
     @Test
@@ -119,6 +269,47 @@ class TeachingSourcePageEvidenceRefinerTest {
         verify(tools).readRuleEvidencePages(versionId, Set.of(2, 5), false);
         verify(tools, never()).readRuleEvidenceIds(
                 org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anySet());
+    }
+
+    @Test
+    void readsEveryValidatedPageAcrossMultipleBoundedBatches() {
+        RuleEvidence firstPage = evidence(UUID.randomUUID(), 1, "First independently verified rule.");
+        List<Set<Integer>> requestedBatches = new java.util.ArrayList<>();
+        AssistantReadTools tools = new AssistantReadTools() {
+            @Override
+            public List<RuleEvidence> searchRuleEvidence(SearchRuleEvidence request) {
+                return List.of();
+            }
+
+            @Override
+            public List<RuleEvidence> readRuleEvidencePages(
+                    UUID documentVersionId,
+                    Set<Integer> pageNumbers,
+                    boolean includePageImages) {
+                assertThat(documentVersionId).isEqualTo(versionId);
+                assertThat(includePageImages).isFalse();
+                assertThat(pageNumbers).hasSizeLessThanOrEqualTo(5);
+                requestedBatches.add(Set.copyOf(pageNumbers));
+                return pageNumbers.stream()
+                        .map(page -> page == 1
+                                ? firstPage
+                                : evidence(UUID.randomUUID(), page, "Verified rule on page " + page + "."))
+                        .toList();
+            }
+        };
+        RecordingInvocations invocations = new RecordingInvocations();
+        TeachingPlan plan = plan(List.of(1, 2, 3, 4, 5, 6));
+
+        var result = refiner(scopes(), tools, invocations)
+                .refine(plan, plan.sections().getFirst(), runId, verified(2, firstPage));
+
+        assertThat(requestedBatches).hasSize(2);
+        assertThat(requestedBatches.stream().flatMap(Set::stream)).containsExactlyInAnyOrder(1, 2, 3, 4, 5, 6);
+        assertThat(invocations.operations).containsExactly(
+                "readTeachingSourcePages|1|1", "readTeachingSourcePages|1|2");
+        assertThat(result.toolCalls()).isEqualTo(4);
+        assertThat(result.state()).isEqualTo(TeachingSectionEvidenceRetriever.State.VERIFIED);
+        assertThat(result.evidence()).extracting(RuleEvidence::pageFrom).containsExactly(1, 2, 3, 4, 5, 6);
     }
 
     @Test
@@ -222,6 +413,38 @@ class TeachingSourcePageEvidenceRefinerTest {
         assertThat(result.evidence()).containsExactly(initial);
         assertThat(result.toolCalls()).isEqualTo(3);
         assertThat(result.state()).isEqualTo(TeachingSectionEvidenceRetriever.State.VERIFIED);
+    }
+
+    @Test
+    void retainsCompletedCanonicalBatchesWhenALaterBatchFails() {
+        AssistantReadTools tools = new AssistantReadTools() {
+            @Override
+            public List<RuleEvidence> searchRuleEvidence(SearchRuleEvidence request) {
+                return List.of();
+            }
+
+            @Override
+            public List<RuleEvidence> readRuleEvidencePages(
+                    UUID documentVersionId,
+                    Set<Integer> pageNumbers,
+                    boolean includePageImages) {
+                if (pageNumbers.contains(6)) throw new IllegalStateException("second batch unavailable");
+                return pageNumbers.stream()
+                        .map(page -> evidence(UUID.randomUUID(), page, "Verified page " + page + "."))
+                        .toList();
+            }
+        };
+        TeachingPlan plan = plan(List.of(1, 2, 3, 4, 5, 6));
+        var empty = new TeachingSectionEvidenceRetriever.Result(
+                List.of(), 0, TeachingSectionEvidenceRetriever.State.EMPTY);
+
+        var result = refiner(scopes(), tools, new RecordingInvocations())
+                .refine(plan, plan.sections().getFirst(), runId, empty);
+
+        assertThat(result.toolCalls()).isEqualTo(2);
+        assertThat(result.state()).isEqualTo(TeachingSectionEvidenceRetriever.State.VERIFIED);
+        assertThat(result.evidence()).extracting(RuleEvidence::pageFrom)
+                .containsExactlyInAnyOrder(1, 2, 3, 4, 5);
     }
 
     @Test

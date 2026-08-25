@@ -1,5 +1,6 @@
 package com.rulepilot.teaching.adapter.out.background;
 
+import com.rulepilot.shared.AsyncContextPropagation;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
@@ -7,7 +8,6 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Profile;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
-import org.springframework.security.concurrent.DelegatingSecurityContextRunnable;
 
 @Configuration(proxyBeanMethods = false)
 @Profile("!test")
@@ -45,7 +45,7 @@ class TeachingGenerationConfiguration {
         executor.setQueueCapacity(queueCapacity);
         executor.setThreadNamePrefix("teaching-startup-");
         executor.setWaitForTasksToCompleteOnShutdown(false);
-        executor.setTaskDecorator(DelegatingSecurityContextRunnable::new);
+        executor.setTaskDecorator(AsyncContextPropagation.taskDecorator());
         return executor;
     }
 
@@ -60,7 +60,7 @@ class TeachingGenerationConfiguration {
         executor.setQueueCapacity(queueCapacity);
         executor.setThreadNamePrefix("teaching-generation-");
         executor.setWaitForTasksToCompleteOnShutdown(false);
-        executor.setTaskDecorator(DelegatingSecurityContextRunnable::new);
+        executor.setTaskDecorator(AsyncContextPropagation.taskDecorator());
         return executor;
     }
 
@@ -79,7 +79,7 @@ class TeachingGenerationConfiguration {
         executor.setQueueCapacity(queueCapacity);
         executor.setThreadNamePrefix("visual-enrichment-");
         executor.setWaitForTasksToCompleteOnShutdown(false);
-        executor.setTaskDecorator(DelegatingSecurityContextRunnable::new);
+        executor.setTaskDecorator(AsyncContextPropagation.taskDecorator());
         return executor;
     }
 
@@ -100,6 +100,7 @@ class TeachingGenerationConfiguration {
         executor.setQueueCapacity(0);
         executor.setThreadNamePrefix("visual-location-");
         executor.setWaitForTasksToCompleteOnShutdown(false);
+        executor.setTaskDecorator(AsyncContextPropagation.taskDecorator());
         return executor;
     }
 
@@ -111,6 +112,7 @@ class TeachingGenerationConfiguration {
         executor.setQueueCapacity(60);
         executor.setThreadNamePrefix("public-cover-warmup-");
         executor.setWaitForTasksToCompleteOnShutdown(false);
+        executor.setTaskDecorator(AsyncContextPropagation.taskDecorator());
         return executor;
     }
 
@@ -122,6 +124,7 @@ class TeachingGenerationConfiguration {
         scheduler.setExecuteExistingDelayedTasksAfterShutdownPolicy(false);
         scheduler.setContinueExistingPeriodicTasksAfterShutdownPolicy(false);
         scheduler.setRemoveOnCancelPolicy(true);
+        scheduler.setTaskDecorator(AsyncContextPropagation.taskDecorator());
         return scheduler;
     }
 }

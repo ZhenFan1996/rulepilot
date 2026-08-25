@@ -114,32 +114,54 @@ describe('GameRecommendationsView', () => {
     expect(fetchMock.mock.calls.some(([input]) => String(input).includes('enrich=false'))).toBe(true)
   })
 
-  it('paints catalog text before asynchronously filling missing covers', async () => {
-    let resolveCovers!: (response: Response) => void
-    const coversResponse = new Promise<Response>(resolve => { resolveCovers = resolve })
-    const fetchMock = vi.fn((input: string | URL | Request) => {
-      const url = String(input)
-      if (url.includes('/api/v1/bgg/catalog/covers?')) return coversResponse
-      return Promise.resolve(Response.json({
-        ...catalog,
-        total: 1,
-        totalPages: 1,
-        games: [{ ...catalog.games[0], thumbnailUrl: '' }],
-      }))
-    })
+  it('mounts a compact same-origin cover directly without a cover metadata preflight', async () => {
+    const fetchMock = vi.fn(async (_input: string | URL | Request) => Response.json({
+      ...catalog,
+      total: 1,
+      totalPages: 1,
+      games: [{ ...catalog.games[0], thumbnailUrl: '' }],
+    }))
     vi.stubGlobal('fetch', fetchMock)
 
     const wrapper = await mountView()
     await flushPromises()
 
     expect(wrapper.text()).toContain('展翅翱翔')
-    expect(wrapper.find('img[alt="展翅翱翔 的 BGG 封面"]').exists()).toBe(false)
-    expect(fetchMock.mock.calls.some(([input]) => String(input).includes('bggId=266192'))).toBe(true)
+    const thumbnail = wrapper.get('img[alt="展翅翱翔 的 BGG 封面"]')
+    expect(thumbnail.attributes('src')).toBe('/api/v1/bgg/catalog/covers/266192/thumbnail')
+    expect(thumbnail.attributes('loading')).toBe('eager')
+    expect(thumbnail.attributes('fetchpriority')).toBe('high')
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/api/v1/bgg/catalog/covers?'))).toBe(false)
+  })
 
-    resolveCovers(Response.json([{ bggId: 266192, thumbnailUrl: 'https://example.test/fresh-cover.jpg', imageUrl: '' }]))
+  it('loads only the first four catalog thumbnails eagerly and never upgrades list cards', async () => {
+    const games = Array.from({ length: 5 }, (_, index) => ({
+      ...catalog.games[0],
+      bggId: index + 1,
+      name: `Game ${index + 1}`,
+      originalName: `Game ${index + 1}`,
+      nameLocalized: false,
+      thumbnailUrl: '',
+    }))
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({
+      ...catalog,
+      total: games.length,
+      totalPages: 1,
+      games,
+    })))
+
+    const wrapper = await mountView()
     await flushPromises()
 
-    expect(wrapper.get('img[alt="展翅翱翔 的 BGG 封面"]').attributes('src')).toBe('/api/v1/bgg/catalog/covers/266192/image')
+    const thumbnails = wrapper.findAll('[data-cover-kind="thumbnail"]')
+    expect(thumbnails).toHaveLength(5)
+    expect(thumbnails.slice(0, 4).every(image => image.attributes('loading') === 'eager')).toBe(true)
+    expect(thumbnails.slice(0, 4).every(image => image.attributes('fetchpriority') === 'high')).toBe(true)
+    expect(thumbnails[4]!.attributes('loading')).toBe('lazy')
+    expect(thumbnails[4]!.attributes('fetchpriority')).toBe('auto')
+
+    await Promise.all(thumbnails.map(image => image.trigger('load')))
+    expect(wrapper.find('[data-cover-kind="display"]').exists()).toBe(false)
   })
 
   it('sends rating and BGG type filters to the server-side catalog query', async () => {

@@ -381,8 +381,8 @@ public class PostgresBggRankedCatalog implements BggRankedCatalogRepository {
                 SELECT g.bgg_id, g.source_name, g.publication_year,
                        COALESCE(NULLIF(discovery.payload->>'chineseName', ''), match.chinese_alias, '') AS chinese_name,
                        COALESCE(NULLIF(discovery.payload->>'thumbnailUrl', ''), game_cache.payload->>'thumbnailUrl', '') AS thumbnail_url,
-                       COALESCE(NULLIF(discovery.payload->>'imageUrl', ''), NULLIF(game_cache.payload->>'imageUrl', ''),
-                                NULLIF(discovery.payload->>'thumbnailUrl', ''), game_cache.payload->>'thumbnailUrl', '') AS image_url
+                       COALESCE(NULLIF(discovery.payload->>'imageUrl', ''),
+                                NULLIF(game_cache.payload->>'imageUrl', ''), '') AS image_url
                 FROM best_matches match
                 JOIN bgg_ranked_game g ON g.bgg_id = match.bgg_id
                 LEFT JOIN bgg_metadata_cache discovery
@@ -403,8 +403,8 @@ public class PostgresBggRankedCatalog implements BggRankedCatalogRepository {
                 SELECT g.bgg_id, g.source_name, g.publication_year,
                        COALESCE(NULLIF(discovery.payload->>'chineseName', ''), chinese_alias.alias, '') AS chinese_name,
                        COALESCE(NULLIF(discovery.payload->>'thumbnailUrl', ''), game_cache.payload->>'thumbnailUrl', '') AS thumbnail_url,
-                       COALESCE(NULLIF(discovery.payload->>'imageUrl', ''), NULLIF(game_cache.payload->>'imageUrl', ''),
-                                NULLIF(discovery.payload->>'thumbnailUrl', ''), game_cache.payload->>'thumbnailUrl', '') AS image_url
+                       COALESCE(NULLIF(discovery.payload->>'imageUrl', ''),
+                                NULLIF(game_cache.payload->>'imageUrl', ''), '') AS image_url
                 FROM bgg_ranked_game g
                 LEFT JOIN bgg_metadata_cache discovery
                   ON discovery.cache_kind = 'DISCOVERY' AND discovery.bgg_id = g.bgg_id

@@ -1,5 +1,6 @@
 package com.rulepilot.assistant.adapter.in.web;
 
+import com.rulepilot.shared.AsyncContextPropagation;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Profile;
@@ -17,6 +18,7 @@ class StructuredRuleAnswerStreamConfiguration {
         executor.setMaxPoolSize(4);
         executor.setQueueCapacity(20);
         executor.setWaitForTasksToCompleteOnShutdown(false);
+        executor.setTaskDecorator(AsyncContextPropagation.taskDecorator());
         return executor;
     }
 }

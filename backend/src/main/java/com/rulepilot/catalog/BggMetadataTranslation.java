@@ -6,10 +6,11 @@ import java.util.Optional;
 /** Localizes public BGG presentation metadata without exposing a model credential to the browser. */
 public interface BggMetadataTranslation {
 
-    Optional<Translation> translate(Request request);
+    /** Reads an already materialized translation and never calls a model provider. */
+    Optional<Translation> readStored(Request request);
 
     default PrewarmResult prewarm(Request request) {
-        return translate(request).isPresent()
+        return readStored(request).isPresent()
                 ? new PrewarmResult(PrewarmStatus.READY)
                 : new PrewarmResult(PrewarmStatus.RETRY_LATER);
     }

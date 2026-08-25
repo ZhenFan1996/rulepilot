@@ -50,7 +50,6 @@ services:
       VISUAL_ENRICHMENT_BACKGROUND_CORE_POOL_SIZE: "1"
       VISUAL_ENRICHMENT_BACKGROUND_MAX_POOL_SIZE: "1"
       VISUAL_ENRICHMENT_BACKGROUND_QUEUE_CAPACITY: "3"
-      VISUAL_ENRICHMENT_REQUEST_PARALLELISM: "1"
       # Each source page has an independent provider, validation, and persistence boundary. Ten bounded calls cover a
       # normal rulebook window without opening an unbounded provider queue.
       VISUAL_REQUEST_PARALLELISM: ${PRODUCTION_VISUAL_REQUEST_PARALLELISM:-10}
@@ -60,7 +59,7 @@ services:
       # gameplay chapters. The bounded request pool protects reading, upload, and answer traffic while the single
       # enrichment worker prevents several lessons from retaining rendered-page buffers at once.
       VISUAL_MAX_SECTIONS: ${PRODUCTION_VISUAL_MAX_SECTIONS:-6}
-      VISUAL_MAX_STEPS_PER_SECTION: ${PRODUCTION_VISUAL_MAX_STEPS_PER_SECTION:-1}
+      VISUAL_MAX_RESULTS_PER_SECTION: ${PRODUCTION_VISUAL_MAX_RESULTS_PER_SECTION:-6}
       ANSWER_RATE_PROVIDER_CONCURRENCY: ${PRODUCTION_ANSWER_PROVIDER_CONCURRENCY:-2}
       SERVER_TOMCAT_THREADS_MAX: ${PRODUCTION_TOMCAT_MAX_THREADS:-16}
       SERVER_TOMCAT_THREADS_MIN_SPARE: "4"
@@ -72,7 +71,9 @@ services:
       # useful for local integrations, but costs a small host a full server/tool graph without
       # serving reader traffic.
       SPRING_AI_MCP_SERVER_ENABLED: "false"
-      MANAGEMENT_TRACING_SAMPLING_PROBABILITY: "0.0"
+      MANAGEMENT_TRACING_EXPORT_OTLP_ENABLED: ${PRODUCTION_TRACING_EXPORT_OTLP_ENABLED:-false}
+      OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: ${PRODUCTION_TRACING_OTLP_ENDPOINT:-http://tempo:4318/v1/traces}
+      MANAGEMENT_TRACING_SAMPLING_PROBABILITY: ${PRODUCTION_TRACING_SAMPLING_PROBABILITY:-0.05}
     # Measured production RSS reached ~852 MiB under a 896 MiB limit while post-GC heap remained healthy. 1.2 GiB
     # keeps the 512 MiB heap, ~190 MiB metaspace, thread stacks and bounded image buffers inside the cgroup; limits
     # are ceilings rather than reservations, and measured host availability leaves the required operating margin.
@@ -90,7 +91,9 @@ services:
       SPRING_RABBITMQ_LISTENER_SIMPLE_CONCURRENCY: "1"
       SPRING_RABBITMQ_LISTENER_SIMPLE_MAX_CONCURRENCY: "1"
       SPRING_RABBITMQ_LISTENER_SIMPLE_PREFETCH: "1"
-      MANAGEMENT_TRACING_SAMPLING_PROBABILITY: "0.0"
+      MANAGEMENT_TRACING_EXPORT_OTLP_ENABLED: ${PRODUCTION_TRACING_EXPORT_OTLP_ENABLED:-false}
+      OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: ${PRODUCTION_TRACING_OTLP_ENDPOINT:-http://tempo:4318/v1/traces}
+      MANAGEMENT_TRACING_SAMPLING_PROBABILITY: ${PRODUCTION_TRACING_SAMPLING_PROBABILITY:-0.05}
     mem_limit: 560m
 
   prometheus:

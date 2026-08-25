@@ -147,6 +147,58 @@ describe('GameRecommendationAgent', () => {
     expect(turn.text()).toContain('<script>alert(1)</script>')
   })
 
+  it('完整显示带推荐卡片的助手回答，而不是用短 recommendationLead 覆盖它', async () => {
+    const assistantMessage = '如果你们四个人今晚想玩一局，我会先选《展翅翱翔》：人数和约 70 分钟时长都在你给出的范围内；它的卡牌组合会让每个人都有规划空间。取舍是卡牌文字较多，第一次讲解最好预留一点时间。'
+    const recommendationLead = '先选它。'
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      if (String(input) === '/api/auth/csrf') {
+        return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      }
+      return Response.json({
+        outcome: 'recommendations',
+        mode: 'model_assisted',
+        assistantMessage,
+        recommendationLead,
+        profile: { ...baseProfile, players: 4, maxMinutes: 90 },
+        clarification: null,
+        sourceCount: 1,
+        candidatesEvaluated: 1,
+        games: [{
+          game,
+          matches: [],
+          tradeoffs: [],
+          replyParts: [
+            {
+              role: 'why_fit',
+              claimType: 'constraint_fit',
+              subject: 'durationMinutes',
+              text: '约 70 分钟的时长适合今晚的安排。',
+              sourceIndexes: [],
+            },
+            {
+              role: 'tradeoff',
+              claimType: 'structured_fact',
+              subject: 'complexity',
+              text: '第一次讲解时要照顾卡牌文字量。',
+              sourceIndexes: [],
+            },
+          ],
+        }],
+      })
+    }))
+    const wrapper = await mountAgent()
+
+    await wrapper.get('textarea').setValue('四个人，90 分钟内，想要大家都有参与感')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    const turn = wrapper.get('[data-testid="assistant-recommendation-turn"]')
+    expect(turn.text()).toContain(assistantMessage)
+    expect(turn.text()).not.toContain(recommendationLead)
+    expect(turn.findAll('dt').filter(label => label.text() === '为什么选它')).toHaveLength(1)
+    expect(turn.findAll('dt').filter(label => label.text() === '需要留意')).toHaveLength(1)
+  })
+
   it('restores an account-scoped transcript, preferences, and verified candidate names after route remount', async () => {
     const fetchMock = vi.fn(async (input: string | URL | Request, _init?: RequestInit) => {
       if (String(input) === '/api/auth/csrf') {
@@ -1591,17 +1643,17 @@ describe('GameRecommendationAgent', () => {
     expect(wrapper.get('[data-testid="player-work-status"]').text()).toBe('正在回复')
     expect(wrapper.get('[role="status"]').text()).toContain('正在生成回复')
 
-    streamController?.enqueue(encoder.encode('event: progress\ndata: {"stage":"searching_bgg_catalog","phase":"started","action":"browse_bgg_catalog","elapsedMs":120}\n\n'))
+    streamController?.enqueue(encoder.encode('event: progress\ndata: {"stage":"searching_bgg_catalog","phase":"started","action":"browse_bgg_catalog","focus":{"kind":"catalog_mechanics","values":["牌组构筑"]},"elapsedMs":120}\n\n'))
     await flushPromises()
     expect(wrapper.get('[data-testid="player-work-status"]').text()).toBe('正在查找桌游')
     expect(wrapper.get('[role="status"]').text()).toContain('正在桌游目录里查找')
-    expect(wrapper.get('[data-testid="recommendation-progress-steps"]').text()).toContain('开始：按当前条件浏览 BGG 候选')
+    expect(wrapper.get('[data-testid="recommendation-progress-steps"]').text()).toContain('开始：按“牌组构筑”机制筛选 BGG 候选')
 
-    streamController?.enqueue(encoder.encode('event: progress\ndata: {"stage":"searching_bgg_catalog","phase":"completed","action":"browse_bgg_catalog","elapsedMs":170,"observedCandidates":8,"verifiedCandidates":5,"hardRejectedCandidates":2}\n\n'))
+    streamController?.enqueue(encoder.encode('event: progress\ndata: {"stage":"searching_bgg_catalog","phase":"completed","action":"browse_bgg_catalog","focus":{"kind":"catalog_mechanics","values":["牌组构筑"]},"elapsedMs":170,"observedCandidates":8,"verifiedCandidates":5,"hardRejectedCandidates":2}\n\n'))
     streamController?.enqueue(encoder.encode('event: progress\ndata: {"stage":"verifying_bgg_candidates","phase":"started","action":"lookup_bgg_games","elapsedMs":180,"observedCandidates":8,"verifiedCandidates":5,"hardRejectedCandidates":2}\n\n'))
     await flushPromises()
     const reportedSteps = wrapper.get('[data-testid="recommendation-progress-steps"]')
-    expect(reportedSteps.text()).toContain('完成：按当前条件浏览 BGG 候选')
+    expect(reportedSteps.text()).toContain('完成：按“牌组构筑”机制筛选 BGG 候选')
     expect(reportedSteps.text()).toContain('开始：读取候选的 BGG 人数、时长与机制详情')
     expect(reportedSteps.text()).not.toContain('第 2 轮')
     expect(reportedSteps.text()).not.toContain('BGG 2 次 / 公开资料 0 次')

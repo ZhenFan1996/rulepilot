@@ -7,6 +7,7 @@ import com.rulepilot.assistant.AuditedAgentInvocations;
 import com.rulepilot.document.DocumentPageImages;
 import com.rulepilot.document.DocumentPageImages.PageImage;
 import com.rulepilot.document.DocumentProcessing;
+import com.rulepilot.shared.AsyncContextPropagation;
 import com.rulepilot.teaching.TeachingOutlineModel;
 import com.rulepilot.teaching.TeachingOutlineModel.PageImageInput;
 import com.rulepilot.teaching.TeachingOutlineModel.PageInput;
@@ -113,7 +114,8 @@ class VisualRulebookCataloger {
         List<PageImageInput> images = readTeachingPageImages(documentVersionId, requestedPages);
         if (images.size() != requestedPages.size()) return Optional.empty();
         var request = new VisualRulebookPageCatalogModel.CatalogRequest(images, owner, rulebookTitle);
-        ExecutorService executor = Executors.newSingleThreadExecutor();
+        ExecutorService executor =
+                AsyncContextPropagation.executorService(Executors.newSingleThreadExecutor());
         try {
             Future<ProgressiveTeachingStartDraft> modelCall = executor.submit(() -> invokeModel(
                     assistantRunId,
@@ -327,7 +329,8 @@ class VisualRulebookCataloger {
         int parallelism = Math.min(visualRequestParallelism, batches.size());
         for (int windowStart = 0; windowStart < batches.size(); windowStart += parallelism) {
             int windowEnd = Math.min(windowStart + parallelism, batches.size());
-            ExecutorService executor = Executors.newFixedThreadPool(windowEnd - windowStart);
+            ExecutorService executor = AsyncContextPropagation.executorService(
+                    Executors.newFixedThreadPool(windowEnd - windowStart));
             try {
                 List<Future<VisualRulebookPageCatalogModel.CatalogDraft>> futures = new ArrayList<>();
                 for (int index = windowStart; index < windowEnd; index++) {
@@ -596,7 +599,8 @@ class VisualRulebookCataloger {
             int parallelism = Math.min(visualRequestParallelism, tiles.size());
             for (int windowStart = 0; windowStart < tiles.size(); windowStart += parallelism) {
                 int windowEnd = Math.min(windowStart + parallelism, tiles.size());
-                ExecutorService executor = Executors.newFixedThreadPool(windowEnd - windowStart);
+                ExecutorService executor = AsyncContextPropagation.executorService(
+                        Executors.newFixedThreadPool(windowEnd - windowStart));
                 try {
                     List<Future<VisualRulebookPageCatalogModel.CatalogDraft>> futures = new ArrayList<>();
                     for (int index = windowStart; index < windowEnd; index++) {
@@ -687,7 +691,8 @@ class VisualRulebookCataloger {
         int parallelism = Math.min(visualRequestParallelism, batches.size());
         for (int windowStart = 0; windowStart < batches.size(); windowStart += parallelism) {
             int windowEnd = Math.min(windowStart + parallelism, batches.size());
-            ExecutorService executor = Executors.newFixedThreadPool(windowEnd - windowStart);
+            ExecutorService executor = AsyncContextPropagation.executorService(
+                    Executors.newFixedThreadPool(windowEnd - windowStart));
             try {
                 List<Future<VisualRulebookPageCatalogModel.CatalogDraft>> futures = new ArrayList<>();
                 for (int index = windowStart; index < windowEnd; index++) {

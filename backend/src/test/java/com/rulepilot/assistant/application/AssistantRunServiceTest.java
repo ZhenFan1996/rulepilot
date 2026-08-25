@@ -13,6 +13,7 @@ import com.rulepilot.assistant.AgentExecutionControl;
 import com.rulepilot.assistant.AgentExecutionControl.BudgetLimits;
 import com.rulepilot.assistant.AssistantRunMode;
 import com.rulepilot.assistant.AssistantRunState;
+import com.rulepilot.assistant.AssistantRuns.WorkloadDemand;
 import com.rulepilot.assistant.domain.AssistantRun;
 import java.time.Duration;
 import java.time.Instant;
@@ -77,6 +78,25 @@ class AssistantRunServiceTest {
                         org.assertj.core.groups.Tuple.tuple(40, 300_000, Duration.ofMinutes(30)),
                         org.assertj.core.groups.Tuple.tuple(192, 600_000, Duration.ofMinutes(30)),
                         org.assertj.core.groups.Tuple.tuple(16, 24_000, Duration.ofSeconds(30)));
+    }
+
+    @Test
+    void initializesTheExactPlanSizedCallBudgetWithoutTreatingFallbacksAsAccountLimits() {
+        AssistantRunRepository repository = mock(AssistantRunRepository.class);
+        AgentExecutionControl execution = mock(AgentExecutionControl.class);
+        AssistantRunService service = service(repository, execution);
+
+        service.start(
+                AssistantRunMode.TEACHING,
+                UUID.randomUUID(),
+                "player",
+                new WorkloadDemand(95, 127));
+
+        ArgumentCaptor<BudgetLimits> limits = ArgumentCaptor.forClass(BudgetLimits.class);
+        verify(execution).initialize(any(), limits.capture(), any());
+        assertThat(limits.getValue().maxToolCalls()).isEqualTo(95);
+        assertThat(limits.getValue().maxModelCalls()).isEqualTo(127);
+        assertThat(limits.getValue().maxTokens()).isEqualTo(300_000);
     }
 
     @Test

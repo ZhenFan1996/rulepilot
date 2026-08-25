@@ -816,7 +816,7 @@ class SpringAiVisualRulebookPageCatalogModelTest {
     }
 
     @Test
-    void repairsAnInvalidTeachingLedgerOnceWithTheConfiguredQualityModel() throws IOException {
+    void returnsAnInvalidTeachingLedgerToTheAuditedCatalogWorkflowWithoutAHiddenRetry() throws IOException {
         RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
         ChatModel chatModel = mock(ChatModel.class);
         OpenAiChatOptions defaults = OpenAiChatOptions.builder().model("qwen3.7-plus").build();
@@ -827,56 +827,20 @@ class SpringAiVisualRulebookPageCatalogModelTest {
         when(configuration.modelFor(Role.VISUAL, "owner")).thenReturn(chatModel);
         when(chatModel.getDefaultOptions()).thenReturn(defaults);
         when(chatModel.getOptions()).thenReturn(defaults);
-        when(chatModel.call(any(Prompt.class))).thenReturn(
-                response("""
-                        {"pages":[{"pageNumber":1,"printedTerms":["MOVE"],
-                         "keywords":["move","pawn"],"externalDocumentDependencies":[],
-                         "ruleGroups":[{"identifier":"MOVE","fact":"Move one pawn.",
-                         "quantitySpans":[{"total":1,"originalSpan":"one pawn"}]}],
-                         "ruleGroupInventoryComplete":true}]}
-                        """),
-                response("""
-                        {"pages":[{"pageNumber":1,"printedTerms":["MOVE"],
-                         "keywords":["move","pawn"],"externalDocumentDependencies":[],
-                         "ruleGroups":[{"identifier":"MOVE","fact":"Move one pawn.",
-                         "quantitySpans":["one pawn"]}],
-                         "ruleGroupInventoryComplete":true}]}
-                        """));
+        when(chatModel.call(any(Prompt.class))).thenReturn(response("""
+                {"pages":[{"pageNumber":1,"printedTerms":["MOVE"],
+                 "keywords":["move","pawn"],"externalDocumentDependencies":[],
+                 "ruleGroups":[{"identifier":"MOVE","fact":"Move one pawn.",
+                 "quantitySpans":[{"total":1,"originalSpan":"one pawn"}]}],
+                 "ruleGroupInventoryComplete":true}]}
+                """));
         SpringAiVisualRulebookPageCatalogModel model = model(configuration);
 
-        CatalogDraft repaired = model.summarizeForTeaching(new CatalogRequest(
-                List.of(new PageImageInput(1, "image/png", png())), "owner", "Example Game"));
-
-        assertThat(repaired.pages()).singleElement().satisfies(page -> {
-            assertThat(page.factualSummary()).isEqualTo("page-1-group-1: [MOVE] Move one pawn.");
-            assertThat(page.quantityObservations()).singleElement().satisfies(observation -> {
-                assertThat(observation.quantifierScope()).isEqualTo(QuantifierScope.LITERAL_SOURCE_SPAN);
-                assertThat(observation.resolution()).isEqualTo(QuantityResolution.TRANSCRIBED_SOURCE_SPAN);
-            });
-        });
-        ArgumentCaptor<Prompt> prompts = ArgumentCaptor.forClass(Prompt.class);
-        verify(chatModel, times(2)).call(prompts.capture());
-        OpenAiChatOptions initialOptions = (OpenAiChatOptions) prompts.getAllValues().getFirst().getOptions();
-        OpenAiChatOptions repairOptions = (OpenAiChatOptions) prompts.getAllValues().getLast().getOptions();
-        assertThat(initialOptions.getModel()).isEqualTo("qwen3.7-plus");
-        assertThat(initialOptions.getMaxTokens()).isEqualTo(4_800);
-        assertThat(repairOptions.getModel()).isEqualTo("qwen3.7-plus");
-        assertThat(repairOptions.getMaxTokens()).isEqualTo(4_800);
-        assertThat(prompts.getAllValues().getLast().getInstructions().stream()
-                        .map(message -> message.getText().replaceAll("\\s+", " "))
-                        .toList())
-                .anySatisfy(text -> assertThat(text).contains(
-                        "The previous ledger failed deterministic contract validation",
-                        "each visible rule group as one ruleGroups object",
-                        "identifier, its same-page fact, and quantitySpans",
-                        "Every identifier must be unique within its page",
-                        "shortest exact visible opening phrase for each later group",
-                        "never return a separate ruleGroupIdentifiers or quantityObservations array",
-                        "Do not return kind",
-                        "must bind every such value through one or more strings in its own quantitySpans",
-                        "Never calculate a replacement total",
-                        "Detected deterministic issue:",
-                        "quantitySpans must contain non-blank text"));
+        assertThatThrownBy(() -> model.summarizeForTeaching(new CatalogRequest(
+                        List.of(new PageImageInput(1, "image/png", png())), "owner", "Example Game")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("quantitySpans");
+        verify(chatModel).call(any(Prompt.class));
     }
 
     @Test

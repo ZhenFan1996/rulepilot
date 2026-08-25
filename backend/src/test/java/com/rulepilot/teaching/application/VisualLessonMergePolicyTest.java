@@ -8,7 +8,8 @@ import com.rulepilot.teaching.domain.IllustratedLesson.LessonSection;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonStep;
 import com.rulepilot.teaching.domain.IllustratedLesson.TeachingMove;
 import com.rulepilot.teaching.domain.IllustratedLesson.VisualFocus;
-import java.time.Instant;
+import com.rulepilot.teaching.domain.IllustratedLesson.VisualSourceKind;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -18,94 +19,83 @@ class VisualLessonMergePolicyTest {
     private final VisualLessonMergePolicy policy = new VisualLessonMergePolicy(new VisualReaderCropPolicy());
 
     @Test
-    void dropsOnlyBroadVisualMetadataAndPreservesTheExactPlayerFacingText() {
-        UUID evidence = UUID.randomUUID();
-        LessonStep broad = new LessonStep(
-                1,
-                "放置探测器",
-                TeachingMove.VISUAL,
-                "图中可见旧的整页组件总览。结合图片完成这一步：把探测器放到轨道上。",
-                List.of(2),
-                List.of(evidence),
-                new VisualFocus(2, "旧的整页组件总览", 50, 60, 900, 850));
-
-        IllustratedLesson restored = policy.discardOverlyBroadVisuals(lesson(section(List.of(broad), List.of(2), List.of(evidence))));
-
-        LessonSection section = restored.sections().getFirst();
-        assertThat(section.steps().getFirst())
-                .extracting(LessonStep::kind, LessonStep::text, LessonStep::visualFocus)
-                .containsExactly(
-                        TeachingMove.DO,
-                        "图中可见旧的整页组件总览。结合图片完成这一步：把探测器放到轨道上。",
-                        null);
-        assertThat(section.visualSourcePages()).isEmpty();
-        assertThat(section.visualSourceChunkIds()).isEmpty();
-    }
-
-    @Test
-    void bindsARegionWithoutChangingOriginalStepOrVisualModelProse() {
+    void attachesSeveralOwnedVisualsToOneStepWithoutChangingValidatedProse() {
         UUID evidence = UUID.randomUUID();
         LessonSection source = section(List.of(ruleStep(evidence)), List.of(), List.of());
-        LocatedRegion region = new LocatedRegion(
-                2,
-                " 轨道与探测器 ",
-                " 圆形探测器标记位于弧形刻度旁，箭头指向前进方向。 ",
-                120,
-                220,
-                180,
-                120,
-                List.of(evidence),
-                List.of(1));
-
-        VisualLessonMergePolicy.MergedVisualSection merged = policy.mergeVisualIntoSupportedSteps(source, List.of(region));
-
-        assertThat(merged.addedCount()).isEqualTo(1);
-        assertThat(merged.section().steps().getFirst())
-                .extracting(LessonStep::kind, LessonStep::heading, LessonStep::text, LessonStep::visualFocus)
-                .containsExactly(
-                        TeachingMove.VISUAL,
-                        "放置探测器",
-                        "把探测器放到轨道上。",
-                        new VisualFocus(
-                                2,
-                                " 轨道与探测器 ",
-                                " 圆形探测器标记位于弧形刻度旁，箭头指向前进方向。 ",
-                                120,
-                                220,
+        List<LocatedRegion> regions = List.of(
+                region(evidence, "行动图标", 80, 120, 160, 120),
+                region(evidence, "轨道状态", 320, 360, 260, 180),
+                new LocatedRegion(
+                        2,
+                        "牌面示例",
+                        "卡牌下方有一排资源图标",
+                        650,
                         180,
-                        120));
+                        240,
+                        340,
+                        List.of(evidence),
+                        List.of(1),
+                        false,
+                        VisualSourceKind.EMBEDDED_AUTHOR_IMAGE));
+
+        VisualLessonMergePolicy.MergedVisualSection merged = policy.mergeVisualIntoSupportedSteps(
+                source, regions, new ArrayList<>());
+
+        LessonStep step = merged.section().steps().getFirst();
+        assertThat(merged.addedCount()).isEqualTo(3);
+        assertThat(step.kind()).isEqualTo(TeachingMove.VISUAL);
+        assertThat(step.text()).isEqualTo("把探测器放到轨道上。");
+        assertThat(step.visualFocus()).isEqualTo(step.visualFoci().getFirst());
+        assertThat(step.visualFoci()).hasSize(3)
+                .extracting(VisualFocus::label)
+                .containsExactly("行动图标", "轨道状态", "牌面示例");
+        assertThat(step.visualFoci().get(2).sourceKind()).isEqualTo(VisualSourceKind.EMBEDDED_AUTHOR_IMAGE);
     }
 
     @Test
-    void rejectsOnlyAContradictingCropAndKeepsTheValidatedSectionUntouched() {
+    void keepsAnExistingFullPageVisualAndAddsASeparateOwnedRegion() {
         UUID evidence = UUID.randomUUID();
-        LessonSection supported = new LessonSection(
+        VisualFocus fullPage = new VisualFocus(
+                2,
+                "完整流程图",
+                "整页是一张由箭头连接的流程图",
+                0,
+                0,
+                1_000,
+                1_000,
+                VisualSourceKind.FULL_PAGE);
+        LessonStep existing = new LessonStep(
                 1,
-                "scoring",
-                List.of("scoring"),
-                "计分",
-                true,
-                IllustratedLesson.EvidenceStatus.SUPPORTED,
-                IllustratedLesson.VisualKind.SCOREBOARD,
-                "核对计分示例。",
+                "执行流程",
+                TeachingMove.VISUAL,
+                "依次执行三个阶段。",
+                List.of(2),
+                List.of(evidence),
                 List.of(),
-                List.of(),
-                List.of(new LessonStep(
-                        1, "计算总分", TeachingMove.DO, "4 个对象每个 3 分，共 8 分。", List.of(5), List.of(evidence))));
-        LocatedRegion contradiction = new LocatedRegion(
-                        5,
-                        "计分示例",
-                        "图中列出 4 个对象，每个 3 分，右侧总计 12 分。",
-                        120,
-                        220,
-                        420,
-                        280,
-                        List.of(evidence),
-                        List.of(1))
+                fullPage,
+                List.of(fullPage));
+        LessonSection source = section(List.of(existing), List.of(2), List.of(evidence));
+
+        var merged = policy.mergeVisualIntoSupportedSteps(
+                source,
+                List.of(region(evidence, "阶段图标", 120, 140, 180, 120)),
+                new ArrayList<>(List.of(fullPage)));
+
+        assertThat(merged.section().steps().getFirst().text()).isEqualTo("依次执行三个阶段。");
+        assertThat(merged.section().steps().getFirst().visualFoci())
+                .extracting(VisualFocus::sourceKind)
+                .containsExactly(VisualSourceKind.FULL_PAGE, VisualSourceKind.PAGE_REGION);
+    }
+
+    @Test
+    void rejectsOnlyAContradictingVisualAndKeepsTheValidatedSectionUntouched() {
+        UUID evidence = UUID.randomUUID();
+        LessonSection supported = section(List.of(ruleStep(evidence)), List.of(), List.of());
+        LocatedRegion contradiction = region(evidence, "冲突计分示例", 120, 220, 420, 280)
                 .withClaimContradiction();
 
-        VisualLessonMergePolicy.MergedVisualSection merged =
-                policy.mergeVisualIntoSupportedSteps(supported, List.of(contradiction));
+        var merged = policy.mergeVisualIntoSupportedSteps(
+                supported, List.of(contradiction), new ArrayList<>());
 
         assertThat(merged.addedCount()).isZero();
         assertThat(merged.claimConflictCount()).isEqualTo(1);
@@ -113,26 +103,32 @@ class VisualLessonMergePolicyTest {
     }
 
     @Test
-    void restoresTheOriginalStepWhenTheNewViewportDuplicatesAnAcceptedAid() {
+    void rejectsOnlyADuplicateVisualAndDoesNotEraseTheStep() {
         UUID evidence = UUID.randomUUID();
-        LessonSection original = section(List.of(ruleStep(evidence)), List.of(), List.of());
-        VisualFocus focus = new VisualFocus(2, "轨道与探测器", 120, 220, 180, 120);
-        LessonStep visual = new LessonStep(
-                1,
-                "放置探测器",
-                TeachingMove.VISUAL,
-                "图中可见探测器。结合图片完成这一步：把探测器放到轨道上。",
-                List.of(2),
+        LessonSection source = section(List.of(ruleStep(evidence)), List.of(), List.of());
+        VisualFocus accepted = new VisualFocus(2, "前文轨道", 100, 200, 220, 160);
+
+        var merged = policy.mergeVisualIntoSupportedSteps(
+                source,
+                List.of(region(evidence, "重复轨道", 110, 210, 200, 150)),
+                new ArrayList<>(List.of(accepted)));
+
+        assertThat(merged.addedCount()).isZero();
+        assertThat(merged.duplicateCount()).isEqualTo(1);
+        assertThat(merged.section()).isEqualTo(source);
+    }
+
+    private LocatedRegion region(UUID evidence, String label, int x, int y, int width, int height) {
+        return new LocatedRegion(
+                2,
+                label,
+                "图中可见" + label,
+                x,
+                y,
+                width,
+                height,
                 List.of(evidence),
-                focus);
-        LessonSection candidate = section(List.of(visual), List.of(2), List.of(evidence));
-
-        VisualLessonMergePolicy.DistinctVisualSection distinct =
-                policy.keepDistinctVisuals(original, candidate, new java.util.ArrayList<>(List.of(focus)));
-
-        assertThat(distinct.hadDuplicate()).isTrue();
-        assertThat(distinct.addedCount()).isZero();
-        assertThat(distinct.section()).isEqualTo(original);
+                List.of(1));
     }
 
     private LessonStep ruleStep(UUID evidence) {
@@ -147,21 +143,11 @@ class VisualLessonMergePolicyTest {
                 List.of("setup"),
                 "开局设置",
                 true,
-                IllustratedLesson.EvidenceStatus.CITED_DRAFT,
+                IllustratedLesson.EvidenceStatus.SUPPORTED,
                 IllustratedLesson.VisualKind.TABLE_LAYOUT,
-                "把探测器放到轨道上。",
+                "按规则设置。",
                 visualPages,
                 visualChunks,
                 steps);
-    }
-
-    private IllustratedLesson lesson(LessonSection section) {
-        return new IllustratedLesson(
-                UUID.randomUUID(),
-                UUID.randomUUID(),
-                IllustratedLesson.LessonStatus.DRAFT_READY,
-                List.of(section),
-                "test",
-                Instant.now());
     }
 }

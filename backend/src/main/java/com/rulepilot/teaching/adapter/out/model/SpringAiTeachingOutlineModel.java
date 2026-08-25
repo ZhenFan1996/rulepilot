@@ -10,6 +10,7 @@ import com.rulepilot.assistant.AgentExecutionStoppedException;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration.Role;
 import com.rulepilot.modelconfig.VersionedAgentPrompts;
+import com.rulepilot.shared.AsyncContextPropagation;
 import com.rulepilot.teaching.TeachingOutlineModel;
 import com.rulepilot.teaching.TeachingOutlineModel.GlobalConceptDraft;
 import com.rulepilot.teaching.TeachingOutlineModel.OutlineGenerationException;
@@ -74,7 +75,8 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
     private final String canonicalLedgerSystemPrompt;
     private final String canonicalLedgerUserPrompt;
     private final TeachingOutlineImagePreparer images = new TeachingOutlineImagePreparer();
-    private final ExecutorService outlineCalls = Executors.newVirtualThreadPerTaskExecutor();
+    private final ExecutorService outlineCalls =
+            AsyncContextPropagation.executorService(Executors.newVirtualThreadPerTaskExecutor());
     private final double temperature;
 
     public SpringAiTeachingOutlineModel(RuntimeModelConfiguration models, VersionedAgentPrompts prompts) {

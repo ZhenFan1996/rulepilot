@@ -1,5 +1,6 @@
 package com.rulepilot.ingestion.adapter.in.messaging;
 
+import com.rulepilot.shared.AsyncContextPropagation;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.SynchronousQueue;
@@ -22,7 +23,7 @@ class DocumentPageImageStorageConfiguration {
         if (parallelism < 1 || parallelism > 4) {
             throw new IllegalArgumentException("page image storage parallelism must be between one and four");
         }
-        return new ThreadPoolExecutor(
+        return AsyncContextPropagation.executorService(new ThreadPoolExecutor(
                 parallelism,
                 parallelism,
                 0,
@@ -41,6 +42,6 @@ class DocumentPageImageStorageConfiguration {
                         Thread.currentThread().interrupt();
                         throw new RejectedExecutionException("page image storage submission was interrupted", interrupted);
                     }
-                });
+                }));
     }
 }

@@ -2,6 +2,7 @@ package com.rulepilot.document.application;
 
 import com.rulepilot.catalog.CatalogGamePresentationLookup;
 import com.rulepilot.catalog.CatalogGameSourceIdentityLookup;
+import com.rulepilot.shared.AsyncContextPropagation;
 import java.net.IDN;
 import java.net.URI;
 import java.text.Normalizer;
@@ -950,7 +951,7 @@ public class OfficialRulebookDiscoveryService {
             var task = new FutureTask<>(action::get);
             Thread thread = Thread.ofVirtual()
                     .name("rulebook-discovery-" + provider.name().toLowerCase(Locale.ROOT))
-                    .unstarted(task);
+                    .unstarted(AsyncContextPropagation.runnable(task));
             long callStartedNanos = System.nanoTime();
             thread.start();
             try {

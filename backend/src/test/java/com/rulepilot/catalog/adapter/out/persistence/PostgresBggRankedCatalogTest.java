@@ -85,7 +85,7 @@ class PostgresBggRankedCatalogTest {
                     ('DISCOVERY', 10,
                      '{"name":"Strategy 100%","chineseName":"百变策略","thumbnailUrl":"https://example.test/10-thumb.jpg","imageUrl":"https://example.test/10-full.jpg","categories":["Economic"],"mechanics":["Deck Building"],"designers":["Table Weaver"],"publishers":["Copper Press"],"families":["Industrial Age"],"description":"Build rail networks through industrial cities and smoky canals."}',
                      160, NOW(), NOW() + INTERVAL '1 day', NOW() + INTERVAL '7 days', NOW()),
-                    ('DISCOVERY', 20, '{"name":"Family Game","categories":["Economic"],"mechanics":["Deck Building"],"designers":["Table Weaver"],"publishers":["Garden Press"],"families":["Peaceful Gardens"],"description":"Welcome animals into a peaceful garden."}', 112, NOW(), NOW() + INTERVAL '1 day', NOW() + INTERVAL '7 days', NOW()),
+                    ('DISCOVERY', 20, '{"name":"Family Game","thumbnailUrl":"https://example.test/20-thumb.jpg","categories":["Economic"],"mechanics":["Deck Building"],"designers":["Table Weaver"],"publishers":["Garden Press"],"families":["Peaceful Gardens"],"description":"Welcome animals into a peaceful garden."}', 112, NOW(), NOW() + INTERVAL '1 day', NOW() + INTERVAL '7 days', NOW()),
                     ('DISCOVERY', 30, '{"name":"Expansion","categories":["Economic"],"mechanics":["Deck Building"],"designers":["Table Weaver"],"publishers":["Copper Press"],"families":["Industrial Age"],"description":"More industrial rail networks."}', 112, NOW(), NOW() + INTERVAL '1 day', NOW() + INTERVAL '7 days', NOW())
                 """);
 
@@ -124,6 +124,12 @@ class PostgresBggRankedCatalogTest {
             assertThat(game.bggId()).isEqualTo(10);
             assertThat(game.chineseName()).isEqualTo("百变策略");
             assertThat(game.imageUrl()).isEqualTo("https://example.test/10-full.jpg");
+        });
+        assertThat(repository.findSelectionsByIds(List.of(20))).singleElement().satisfies(game -> {
+            assertThat(game.thumbnailUrl()).isEqualTo("https://example.test/20-thumb.jpg");
+            assertThat(game.imageUrl())
+                    .as("a thumbnail-only projection must not impersonate the display source")
+                    .isEmpty();
         });
         assertThat(repository.searchSelections("变策", 12))
                 .as("two-character Chinese fragments should match within an official alias")

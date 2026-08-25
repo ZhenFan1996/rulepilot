@@ -63,6 +63,33 @@ class TeachingVisualEvidenceSelectorTest {
         assertThat(TeachingVisualEvidenceSelector.select(planned, List.of(imageOnly), false)).isEmpty();
     }
 
+    @Test
+    void derivesAMultiImageBudgetFromTypedOwnedPagesInsteadOfTruncatingAtTwo() {
+        PlannedSection planned = new PlannedSection(
+                1,
+                "turn-flow",
+                "Turn flow",
+                "Explain the full turn flow.",
+                true,
+                true,
+                List.of("turn flow"),
+                List.of("turn"),
+                List.of(2, 3, 4, 5));
+        UUID versionId = UUID.randomUUID();
+        List<RuleEvidence> evidence = java.util.stream.IntStream.rangeClosed(2, 5)
+                .mapToObj(page -> evidence(
+                        versionId,
+                        "Phase " + page,
+                        page,
+                        new RulePageImage(page, "image/jpeg", new byte[] {(byte) page}, 800, 1_200)))
+                .toList();
+
+        List<PageImageInput> selected = TeachingVisualEvidenceSelector.select(planned, evidence, true);
+
+        assertThat(TeachingVisualEvidenceSelector.visualBudget(planned, evidence)).isEqualTo(4);
+        assertThat(selected).extracting(PageImageInput::pageNumber).containsExactly(2, 3, 4, 5);
+    }
+
     private RuleEvidence evidence(UUID versionId, String heading, int page, RulePageImage image) {
         return new RuleEvidence(
                 UUID.randomUUID(),

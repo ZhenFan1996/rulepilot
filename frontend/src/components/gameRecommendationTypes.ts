@@ -118,6 +118,7 @@ export type RecommendationAgentResponse = {
   outcome: 'conversation' | 'needs_clarification' | 'recommendations' | 'no_match' | 'unavailable'
   responseLocale?: 'zh-CN' | 'en'
   assistantMessage: string
+  /** Rolling-deploy wire compatibility only; the UI always renders assistantMessage. */
   recommendationLead?: string | null
   profile: RecommendationProfile
   clarification: RecommendationClarification | null
@@ -173,11 +174,25 @@ export type RecommendationProgressUpdate = {
   stage: RecommendationProgressStage
   phase: 'started' | 'completed' | 'retrying' | 'failed'
   action: RecommendationProgressAction | null
+  focus: RecommendationProgressFocus | null
   elapsedMs: number
   observedCandidates: number
   verifiedCandidates: number
   hardRejectedCandidates: number
   sourceCount: number
+}
+
+export type RecommendationProgressFocus = {
+  kind:
+    | 'catalog_mechanics'
+    | 'catalog_categories'
+    | 'catalog_families'
+    | 'catalog_designers'
+    | 'catalog_publishers'
+    | 'candidate_title_count'
+    | 'verified_game_count'
+    | 'research_games'
+  values: string[]
 }
 
 export type RecommendationProgressAction =

@@ -25,6 +25,13 @@ final class TeachingPublishedLessonReviewer {
     private static final Logger log = LoggerFactory.getLogger(TeachingPublishedLessonReviewer.class);
     private static final int MAX_POST_PUBLICATION_REVIEW_PASSES = 4;
 
+    static int maximumModelCalls() {
+        // A review pass may make one discovery and one independent confirmation call.
+        return Math.addExact(
+                Math.multiplyExact(MAX_POST_PUBLICATION_REVIEW_PASSES, 2),
+                TeachingReviewCorrectionPolicy.maximumModelCalls());
+    }
+
     private final GeneratedContentCritic critic;
     private final AuditedAgentInvocations invocations;
     private final TeachingSectionDraftComposer sectionDraftComposer;

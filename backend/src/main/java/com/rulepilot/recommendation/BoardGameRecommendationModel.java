@@ -20,16 +20,32 @@ public interface BoardGameRecommendationModel {
     }
 
     /**
-     * Streams a model-owned first turn while preserving native action calls. The listener receives accumulated
-     * player-facing text only when the model chooses text instead of an action; action arguments are never emitted.
+     * Streams the first ReAct decision behind a typed REPLY/ACTION barrier. The listener receives accumulated
+     * player-facing text only after a complete reply mode is known; action arguments are never emitted.
      */
-    default Turn streamNext(
+    default Turn streamDecision(
             Request request,
             String ownerUsername,
             Consumer<String> accumulatedTextListener) {
         Turn turn = next(request, ownerUsername);
         if (turn.toolCalls().isEmpty() && !turn.text().isEmpty()) accumulatedTextListener.accept(turn.text());
         return turn;
+    }
+
+    /**
+     * Streams raw JSON deltas for a final structured publication turn. Unlike {@link #streamDecision}, this turn never
+     * advertises actions and the listener must not expose its protocol bytes directly to a player.
+     */
+    default StructuredTurn streamStructured(
+            Request request,
+            String ownerUsername,
+            Consumer<String> jsonDeltaListener) {
+        Turn turn = next(request, ownerUsername);
+        if (!turn.toolCalls().isEmpty()) {
+            throw new IllegalStateException("structured recommendation turn returned an action call");
+        }
+        if (!turn.text().isEmpty()) jsonDeltaListener.accept(turn.text());
+        return new StructuredTurn(turn.text(), turn.completionStatus());
     }
 
     record ToolSpec(String name, String description, String inputSchema) {
@@ -88,19 +104,40 @@ public interface BoardGameRecommendationModel {
 
     enum ToolChoice {
         AUTO,
-        REQUIRED
+        REQUIRED,
+        NONE
     }
 
-    record Request(List<Message> messages, List<ToolSpec> tools, int maxOutputTokens, ToolChoice toolChoice) {
+    record StructuredOutput(String name, String jsonSchema, boolean strictPreferred) {
+        public StructuredOutput {
+            if (blank(name) || blank(jsonSchema)) {
+                throw new IllegalArgumentException("recommendation structured output specification is invalid");
+            }
+        }
+    }
+
+    record Request(
+            List<Message> messages,
+            List<ToolSpec> tools,
+            int maxOutputTokens,
+            ToolChoice toolChoice,
+            StructuredOutput structuredOutput) {
         public Request(List<Message> messages, List<ToolSpec> tools, int maxOutputTokens) {
-            this(messages, tools, maxOutputTokens, ToolChoice.AUTO);
+            this(messages, tools, maxOutputTokens, ToolChoice.AUTO, null);
+        }
+
+        public Request(
+                List<Message> messages,
+                List<ToolSpec> tools,
+                int maxOutputTokens,
+                ToolChoice toolChoice) {
+            this(messages, tools, maxOutputTokens, toolChoice, null);
         }
 
         public Request {
             if (messages == null
                     || messages.isEmpty()
                     || tools == null
-                    || tools.isEmpty()
                     || maxOutputTokens < 128
                     || maxOutputTokens > 2_048
                     || toolChoice == null) {
@@ -108,6 +145,20 @@ public interface BoardGameRecommendationModel {
             }
             messages = List.copyOf(messages);
             tools = List.copyOf(tools);
+            boolean actionTurn = !tools.isEmpty();
+            if (actionTurn && (toolChoice == ToolChoice.NONE || structuredOutput != null)) {
+                throw new IllegalArgumentException("recommendation action turn cannot request structured output");
+            }
+            if (!actionTurn && (toolChoice != ToolChoice.NONE || structuredOutput == null)) {
+                throw new IllegalArgumentException("recommendation no-action turn requires structured output");
+            }
+        }
+    }
+
+    record StructuredTurn(String json, CompletionStatus completionStatus) {
+        public StructuredTurn {
+            if (blank(json)) throw new IllegalArgumentException("recommendation structured turn is empty");
+            completionStatus = completionStatus == null ? CompletionStatus.UNKNOWN : completionStatus;
         }
     }
 
@@ -127,6 +178,23 @@ public interface BoardGameRecommendationModel {
         COMPLETE,
         OUTPUT_LIMIT,
         UNKNOWN
+    }
+
+    /** Safe provider-protocol diagnosis; never contains raw model output or player text. */
+    final class ProtocolFailure extends RuntimeException {
+        private final String code;
+
+        public ProtocolFailure(String code, Throwable cause) {
+            super(code, cause);
+            if (blank(code) || !code.matches("[A-Z0-9_]{3,80}")) {
+                throw new IllegalArgumentException("recommendation protocol failure code is invalid");
+            }
+            this.code = code;
+        }
+
+        public String code() {
+            return code;
+        }
     }
 
     private static boolean blank(String value) {

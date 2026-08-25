@@ -6,16 +6,11 @@ import com.rulepilot.document.DocumentPageImages;
 import com.rulepilot.ingestion.RulebookUnderstandingCatalog;
 import com.rulepilot.ingestion.layout.RulebookUnderstanding;
 import com.rulepilot.teaching.VisualRegionLocator;
-import com.rulepilot.teaching.VisualRulebookPageFacts;
-import com.rulepilot.teaching.VisualRulebookPageFacts.PageFact;
 import com.rulepilot.teaching.domain.IllustratedLesson;
 import java.time.Instant;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 
 class VisualLessonEnricherTest {
@@ -105,51 +100,48 @@ class VisualLessonEnricherTest {
     }
 
     @Test
-    void starts_independent_visual_steps_together_with_a_small_bounded_parallelism() throws Exception {
+    void plansIndependentVisualStepsInOneBoundedTypedRequest() {
         UUID iconEvidence = UUID.randomUUID();
         UUID stateEvidence = UUID.randomUUID();
-        CountDownLatch bothStarted = new CountDownLatch(2);
-        CountDownLatch release = new CountDownLatch(1);
-        VisualRegionLocator locator = request -> {
-            bothStarted.countDown();
-            try {
-                if (!release.await(1, TimeUnit.SECONDS)) return java.util.Optional.empty();
-            } catch (InterruptedException interrupted) {
-                Thread.currentThread().interrupt();
+        java.util.concurrent.atomic.AtomicInteger calls = new java.util.concurrent.atomic.AtomicInteger();
+        VisualRegionLocator locator = new VisualRegionLocator() {
+            @Override
+            public java.util.Optional<VisualRegionLocator.LocatedRegion> locate(
+                    VisualRegionLocator.VisualLocationRequest request) {
                 return java.util.Optional.empty();
             }
-            var claim = request.claims().getFirst();
-            return java.util.Optional.of(new VisualRegionLocator.LocatedRegion(
-                    2,
-                    "行动标记",
-                    "圆形行动标记旁有指向轨道的箭头",
-                    120,
-                    claim.stepPosition() == 1 ? 220 : 420,
-                    180,
-                    120,
-                    List.of(claim.evidenceId()),
-                    List.of(claim.stepPosition())));
+
+            @Override
+            public VisualRegionLocator.LocateGuideResult locateGuideWithResult(
+                    VisualRegionLocator.VisualLocationRequest request) {
+                calls.incrementAndGet();
+                assertThat(request.claims()).extracting(VisualRegionLocator.Claim::stepPosition)
+                        .containsExactly(1, 2);
+                assertThat(request.visualBudget()).isEqualTo(6);
+                return VisualRegionLocator.LocateGuideResult.found(List.of(
+                        new VisualRegionLocator.LocatedRegion(
+                                2, "行动标记", "圆形行动标记旁有指向轨道的箭头", 120, 220, 180, 120,
+                                List.of(iconEvidence), List.of(1)),
+                        new VisualRegionLocator.LocatedRegion(
+                                2, "轨道状态", "探测器位于轨道第三格", 420, 420, 180, 120,
+                                List.of(stateEvidence), List.of(2))));
+            }
         };
         var enricher = new VisualLessonEnricher(
                 ignored -> understanding(),
                 (ignored, pages) -> List.of(new DocumentPageImages.PageImage(
                         2, "image/png", new byte[] {1}, 1_000, 1_000)),
-                VisualRulebookPageFacts.empty(),
                 new VisualRegionCandidateSelector(),
                 locator,
                 new VisualSectionPrioritizer(),
                 12,
-                6,
-                2);
-        try (var caller = Executors.newSingleThreadExecutor()) {
-            var result = caller.submit(() -> enricher.enrich(UUID.randomUUID(), twoRuleLesson(iconEvidence, stateEvidence)));
-            assertThat(bothStarted.await(1, TimeUnit.SECONDS)).isTrue();
-            release.countDown();
-            assertThat(result.get(1, TimeUnit.SECONDS).sections().getFirst().steps())
-                    .allSatisfy(step -> assertThat(step.kind()).isEqualTo(IllustratedLesson.TeachingMove.VISUAL));
-        } finally {
-            release.countDown();
-        }
+                6);
+
+        var result = enricher.enrich(UUID.randomUUID(), twoRuleLesson(iconEvidence, stateEvidence));
+
+        assertThat(calls).hasValue(1);
+        assertThat(result.sections().getFirst().steps())
+                .allSatisfy(step -> assertThat(step.kind()).isEqualTo(IllustratedLesson.TeachingMove.VISUAL));
     }
 
     @Test
@@ -437,9 +429,11 @@ class VisualLessonEnricherTest {
                     VisualRegionLocator.VisualLocationRequest ignored) {
                 return VisualRegionLocator.LocateGuideResult.found(List.of(
                         new VisualRegionLocator.LocatedRegion(
-                                2, "行动图标", "一个六点骰子图标紧挨着向右箭头", 120, 220, 34, 34, List.of(iconEvidence)),
+                                2, "行动图标", "一个六点骰子图标紧挨着向右箭头", 120, 220, 34, 34,
+                                List.of(iconEvidence), List.of(1)),
                         new VisualRegionLocator.LocatedRegion(
-                                2, "棋子状态", "一枚探测器标记位于轨道的第三格", 440, 420, 180, 120, List.of(stateEvidence))));
+                                2, "棋子状态", "一枚探测器标记位于轨道的第三格", 440, 420, 180, 120,
+                                List.of(stateEvidence), List.of(2))));
             }
         };
         var result = new VisualLessonEnricher(
@@ -468,19 +462,32 @@ class VisualLessonEnricherTest {
     void attempts_a_distinct_visual_for_every_published_rule_step_in_a_section() {
         UUID sharedEvidence = UUID.randomUUID();
         java.util.List<Integer> requestedSteps = new java.util.ArrayList<>();
-        VisualRegionLocator locator = request -> {
-            int stepPosition = request.claims().getFirst().stepPosition();
-            requestedSteps.add(stepPosition);
-            return java.util.Optional.of(new VisualRegionLocator.LocatedRegion(
-                    2,
-                    "规则图例 " + stepPosition,
-                    "一个彩色行动图标组，旁边有指向下一步的箭头",
-                    100 + stepPosition * 120,
-                    180,
-                    100,
-                    100,
-                    List.of(sharedEvidence),
-                    List.of(stepPosition)));
+        VisualRegionLocator locator = new VisualRegionLocator() {
+            @Override
+            public java.util.Optional<VisualRegionLocator.LocatedRegion> locate(
+                    VisualRegionLocator.VisualLocationRequest request) {
+                return java.util.Optional.empty();
+            }
+
+            @Override
+            public VisualRegionLocator.LocateGuideResult locateGuideWithResult(
+                    VisualRegionLocator.VisualLocationRequest request) {
+                requestedSteps.addAll(request.claims().stream()
+                        .map(VisualRegionLocator.Claim::stepPosition)
+                        .toList());
+                return VisualRegionLocator.LocateGuideResult.found(request.claims().stream()
+                        .map(claim -> new VisualRegionLocator.LocatedRegion(
+                                2,
+                                "规则图例 " + claim.stepPosition(),
+                                "一个彩色行动图标组，旁边有指向下一步的箭头",
+                                100 + claim.stepPosition() * 120,
+                                180,
+                                100,
+                                100,
+                                List.of(sharedEvidence),
+                                List.of(claim.stepPosition())))
+                        .toList());
+            }
         };
 
         IllustratedLesson enriched = new VisualLessonEnricher(
@@ -551,7 +558,8 @@ class VisualLessonEnricherTest {
                                 40,
                                 860,
                                 520,
-                                List.of(sharedEvidence))))
+                                List.of(sharedEvidence),
+                                List.of(2))))
                 .enrich(UUID.randomUUID(), sameEvidenceAcrossPagesLesson(sharedEvidence));
 
         var steps = enriched.sections().getFirst().steps();
@@ -566,11 +574,10 @@ class VisualLessonEnricherTest {
         IllustratedLesson source = twoSamePageRulesLesson(sharedEvidence);
         List<Integer> requestedSteps = new java.util.ArrayList<>();
         VisualRegionLocator locator = request -> {
-            assertThat(request.claims()).hasSize(1);
-            requestedSteps.add(request.claims().getFirst().stepPosition());
+            assertThat(request.claims()).hasSize(2);
+            requestedSteps.addAll(request.claims().stream().map(VisualRegionLocator.Claim::stepPosition).toList());
             assertThat(request.claims()).extracting(VisualRegionLocator.Claim::text)
                     .allSatisfy(text -> assertThat(text).startsWith("步骤 "));
-            if (request.claims().getFirst().stepPosition() != 2) return java.util.Optional.empty();
             return java.util.Optional.of(new VisualRegionLocator.LocatedRegion(
                     2,
                     "资源图例",
@@ -740,7 +747,7 @@ class VisualLessonEnricherTest {
     }
 
     @Test
-    void rejects_a_whole_page_response_even_when_the_page_is_the_search_boundary() {
+    void acceptsAWholePageWhenTheLocatorTypesItAsTheReadableFallback() {
         UUID chunk = UUID.randomUUID();
         IllustratedLesson source = lesson(chunk);
 
@@ -750,14 +757,26 @@ class VisualLessonEnricherTest {
                                 2, "image/png", new byte[] {1}, 1_000, 1_000)),
                         new VisualRegionCandidateSelector(),
                         request -> java.util.Optional.of(new VisualRegionLocator.LocatedRegion(
-                                2, "Entire page", 0, 0, 1_000, 1_000, List.of(chunk))))
+                                2,
+                                "完整流程图",
+                                "整页是一张由箭头连接的连续流程图",
+                                0,
+                                0,
+                                1_000,
+                                1_000,
+                                List.of(chunk),
+                                List.of(1),
+                                false,
+                                IllustratedLesson.VisualSourceKind.FULL_PAGE)))
                 .enrich(UUID.randomUUID(), source);
 
-        assertThat(enriched.sections().getFirst().steps()).hasSize(1);
+        var focus = enriched.sections().getFirst().steps().getFirst().visualFocus();
+        assertThat(focus.sourceKind()).isEqualTo(IllustratedLesson.VisualSourceKind.FULL_PAGE);
+        assertThat(focus.width()).isEqualTo(1_000);
     }
 
     @Test
-    void rejects_a_near_whole_page_response_instead_of_passing_a_shrunken_page_as_a_rule_diagram() {
+    void acceptsALargeOwnedPageRegionWithoutTheLegacyAreaThreshold() {
         UUID chunk = UUID.randomUUID();
         var result = new VisualLessonEnricher(
                         ignored -> understanding(),
@@ -769,13 +788,13 @@ class VisualLessonEnricherTest {
                 .enrichWithReport(UUID.randomUUID(), lesson(chunk), "owner");
 
         assertThat(result.lesson().sections().getFirst().steps().getFirst().kind())
-                .isEqualTo(IllustratedLesson.TeachingMove.DO);
+                .isEqualTo(IllustratedLesson.TeachingMove.VISUAL);
         assertThat(result.outcomes()).singleElement().extracting(VisualLessonEnricher.SectionOutcome::outcome)
-                .isEqualTo(VisualLessonEnricher.Outcome.REJECTED_WHOLE_PAGE);
+                .isEqualTo(VisualLessonEnricher.Outcome.ADDED);
     }
 
     @Test
-    void replaces_an_overly_broad_existing_visual_with_a_compact_crop_for_the_same_rule() {
+    void keepsAnExistingLargeVisualAndCanAddASeparateOwnedCropForTheSameRule() {
         UUID chunk = UUID.randomUUID();
         IllustratedLesson source = lessonWithOverlyBroadVisual(chunk);
         String originalText = source.sections().getFirst().steps().getFirst().text();
@@ -790,13 +809,14 @@ class VisualLessonEnricherTest {
 
         var step = result.lesson().sections().getFirst().steps().getFirst();
         assertThat(step.kind()).isEqualTo(IllustratedLesson.TeachingMove.VISUAL);
-        assertThat(step.visualFocus()).isEqualTo(new IllustratedLesson.VisualFocus(
+        assertThat(step.visualFoci()).hasSize(2);
+        assertThat(step.visualFoci().get(1)).isEqualTo(new IllustratedLesson.VisualFocus(
                 2, "轨道与探测器", "一枚圆形探测器标记位于弧形轨道旁", 320, 420, 260, 180));
         assertThat(step.text()).isEqualTo(originalText);
     }
 
     @Test
-    void discards_an_overly_broad_visual_without_rewriting_the_original_step_text() {
+    void keepsAnExistingLargeVisualWhenOptionalVisualWorkFindsNothing() {
         UUID chunk = UUID.randomUUID();
         IllustratedLesson source = lessonWithOverlyBroadVisual(chunk);
         String originalText = source.sections().getFirst().steps().getFirst().text();
@@ -809,8 +829,8 @@ class VisualLessonEnricherTest {
                 .enrichWithReport(UUID.randomUUID(), source, "owner");
 
         var step = result.lesson().sections().getFirst().steps().getFirst();
-        assertThat(step.kind()).isEqualTo(IllustratedLesson.TeachingMove.DO);
-        assertThat(step.visualFocus()).isNull();
+        assertThat(step.kind()).isEqualTo(IllustratedLesson.TeachingMove.VISUAL);
+        assertThat(step.visualFocus()).isNotNull();
         assertThat(step.text()).isEqualTo(originalText);
     }
 
@@ -833,7 +853,7 @@ class VisualLessonEnricherTest {
         assertThat(requestedSteps).containsExactly(1);
         assertThat(result.lesson().sections().getFirst().steps())
                 .extracting(IllustratedLesson.LessonStep::kind)
-                .containsExactly(IllustratedLesson.TeachingMove.DO, IllustratedLesson.TeachingMove.DO);
+                .containsExactly(IllustratedLesson.TeachingMove.VISUAL, IllustratedLesson.TeachingMove.DO);
     }
 
     @Test
@@ -926,7 +946,15 @@ class VisualLessonEnricherTest {
                 "图中可见旧的整页组件总览。结合图片完成这一步：把探测器放到轨道上。",
                 List.of(2),
                 List.of(chunk),
-                new IllustratedLesson.VisualFocus(2, "旧的整页组件总览", 50, 60, 900, 850));
+                new IllustratedLesson.VisualFocus(
+                        2,
+                        "旧的整页组件总览",
+                        "整页展示所有组件与轨道关系",
+                        0,
+                        0,
+                        1_000,
+                        1_000,
+                        IllustratedLesson.VisualSourceKind.FULL_PAGE));
         var section = new IllustratedLesson.LessonSection(
                 1, "setup", List.of("setup"), "开局设置", true,
                 IllustratedLesson.EvidenceStatus.CITED_DRAFT, IllustratedLesson.VisualKind.TABLE_LAYOUT,

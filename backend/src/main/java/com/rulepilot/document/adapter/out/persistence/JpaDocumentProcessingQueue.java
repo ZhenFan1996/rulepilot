@@ -4,8 +4,10 @@ import com.rulepilot.document.DocumentProcessingCommand;
 import com.rulepilot.document.DocumentProcessingStage;
 import com.rulepilot.document.application.DocumentProcessingDeduplicationStore;
 import com.rulepilot.document.application.DocumentOutboxStore;
+import com.rulepilot.document.application.DocumentOutboxStore.TraceHeaders;
 import com.rulepilot.document.application.DocumentProcessingJobStore;
 import com.rulepilot.document.application.DocumentProcessingQueue;
+import com.rulepilot.document.application.DocumentTraceContextBridge;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EntityManager;
@@ -16,6 +18,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.hibernate.annotations.ColumnTransformer;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Repository;
@@ -30,17 +33,29 @@ public class JpaDocumentProcessingQueue
 
     @PersistenceContext
     private EntityManager entityManager;
+    private final DocumentTraceContextBridge traceContexts;
+
+    public JpaDocumentProcessingQueue() {
+        this(DocumentTraceContextBridge.noop());
+    }
+
+    @Autowired
+    public JpaDocumentProcessingQueue(DocumentTraceContextBridge traceContexts) {
+        this.traceContexts = traceContexts;
+    }
 
     @Override
     public void enqueue(UUID documentVersionId, Instant occurredAt) {
         UUID jobId = UUID.randomUUID();
+        TraceHeaders traceHeaders = traceContexts.capture();
         entityManager.persist(new DocumentProcessingJobEntity(jobId, documentVersionId, occurredAt));
         entityManager.persist(new OutboxEventEntity(
                 UUID.randomUUID(),
                 documentVersionId,
                 "DocumentProcessingRequested",
                 payload(documentVersionId, jobId),
-                occurredAt));
+                occurredAt,
+                traceHeaders));
     }
 
     @Override
@@ -59,7 +74,12 @@ public class JpaDocumentProcessingQueue
                 .setMaxResults(limit)
                 .getResultList()
                 .stream()
-                .map(event -> new PendingEvent(event.id, event.eventType, event.payload, event.occurredAt))
+                .map(event -> new PendingEvent(
+                        event.id,
+                        event.eventType,
+                        event.payload,
+                        event.occurredAt,
+                        new TraceHeaders(event.traceParent, event.traceState)))
                 .toList();
     }
 
@@ -254,10 +274,18 @@ class OutboxEventEntity {
     @Column(name = "published_at") Instant publishedAt;
     @Column(name = "publish_attempts", nullable = false) int publishAttempts;
     @Column(name = "next_attempt_at", nullable = false) Instant nextAttemptAt;
+    @Column(name = "trace_parent", length = 55) String traceParent;
+    @Column(name = "trace_state", length = 512) String traceState;
 
     protected OutboxEventEntity() {}
 
-    OutboxEventEntity(UUID id, UUID aggregateId, String eventType, String payload, Instant occurredAt) {
+    OutboxEventEntity(
+            UUID id,
+            UUID aggregateId,
+            String eventType,
+            String payload,
+            Instant occurredAt,
+            TraceHeaders traceHeaders) {
         this.id = id;
         this.aggregateType = "DOCUMENT_VERSION";
         this.aggregateId = aggregateId;
@@ -267,5 +295,8 @@ class OutboxEventEntity {
         this.occurredAt = occurredAt;
         this.publishAttempts = 0;
         this.nextAttemptAt = occurredAt;
+        TraceHeaders stored = traceHeaders == null ? TraceHeaders.none() : traceHeaders;
+        this.traceParent = stored.traceParent();
+        this.traceState = stored.traceState();
     }
 }

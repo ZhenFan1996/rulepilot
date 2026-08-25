@@ -50,6 +50,7 @@ public record CandidateClaim(
             throw new IllegalArgumentException("candidate claim type and relation are inconsistent");
         }
         if (!evidence.isEmpty()
+                && type != Type.PREFERENCE_INFERENCE
                 && evidence.stream().noneMatch(observation -> observation.attribute().equals(checkedSubject))) {
             throw new IllegalArgumentException("candidate claim evidence must match the claim subject");
         }

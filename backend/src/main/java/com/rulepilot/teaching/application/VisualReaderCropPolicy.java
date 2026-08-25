@@ -10,16 +10,6 @@ final class VisualReaderCropPolicy {
 
     private static final int MIN_READER_VIEWPORT_WIDTH = 180;
     private static final int MIN_READER_VIEWPORT_HEIGHT = 120;
-    private static final long MAX_READER_CROP_AREA = 600_000L;
-
-    boolean isCompactReaderCrop(LocatedRegion region) {
-        return (region.x() != 0 || region.y() != 0 || region.width() != 1_000 || region.height() != 1_000)
-                && (long) region.width() * region.height() <= MAX_READER_CROP_AREA;
-    }
-
-    boolean needsTighterReaderCrop(VisualFocus focus) {
-        return focus != null && (long) focus.width() * focus.height() > MAX_READER_CROP_AREA;
-    }
 
     boolean isReadableForPlayer(LocatedRegion region) {
         return region.width() >= 32 && region.height() >= 32;
@@ -48,7 +38,8 @@ final class VisualReaderCropPolicy {
                 height,
                 region.supportedEvidenceIds(),
                 region.supportedStepPositions(),
-                region.claimContradicted());
+                region.claimContradicted(),
+                region.sourceKind());
     }
 
     boolean isUsefulPlayerVisual(LocatedRegion region) {
@@ -61,7 +52,7 @@ final class VisualReaderCropPolicy {
     }
 
     boolean overlapsSubstantially(VisualFocus first, VisualFocus second) {
-        if (first.pageNumber() != second.pageNumber()) return false;
+        if (first.pageNumber() != second.pageNumber() || first.sourceKind() != second.sourceKind()) return false;
         int overlapWidth = Math.max(0, Math.min(first.x() + first.width(), second.x() + second.width())
                 - Math.max(first.x(), second.x()));
         int overlapHeight = Math.max(0, Math.min(first.y() + first.height(), second.y() + second.height())

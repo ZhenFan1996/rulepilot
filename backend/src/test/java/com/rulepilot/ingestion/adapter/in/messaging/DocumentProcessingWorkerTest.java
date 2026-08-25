@@ -18,10 +18,14 @@ import com.rulepilot.document.DocumentVersionScopeLookup;
 import com.rulepilot.document.RetryableDocumentProcessingException;
 import com.rulepilot.ingestion.application.UploadedDocumentIngestion;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import io.micrometer.observation.Observation;
+import io.micrometer.observation.ObservationHandler;
+import io.micrometer.observation.ObservationRegistry;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -73,6 +77,55 @@ class DocumentProcessingWorkerTest {
                         .timer("rulepilot.document.processing.stage.duration", "stage", "parse", "outcome", "completed")
                         .count())
                 .isEqualTo(1);
+    }
+
+    @Test
+    void recordsTheTypedStageAndOutcomeInsideTheRabbitTrace() {
+        UploadedDocumentIngestion ingestion = Mockito.mock(UploadedDocumentIngestion.class);
+        DocumentProcessingCommands commands = Mockito.mock(DocumentProcessingCommands.class);
+        DocumentProcessingJobs jobs = Mockito.mock(DocumentProcessingJobs.class);
+        DocumentProcessingIdempotency idempotency = Mockito.mock(DocumentProcessingIdempotency.class);
+        DocumentProcessingFailures failures = Mockito.mock(DocumentProcessingFailures.class);
+        DocumentVersionScopeLookup versions = Mockito.mock(DocumentVersionScopeLookup.class);
+        UUID documentVersionId = UUID.randomUUID();
+        UUID jobId = UUID.randomUUID();
+        UUID eventId = UUID.randomUUID();
+        var command = new DocumentProcessingCommand(1, documentVersionId, jobId, "v1", DocumentProcessingStage.PARSE);
+        when(versions.findVersion(documentVersionId)).thenReturn(Optional.of(
+                new DocumentVersionScopeLookup.VersionScope(documentVersionId, UUID.randomUUID(), "UPLOADED", "player")));
+        when(idempotency.begin(command, eventId, 1)).thenReturn(true);
+        var stopped = new AtomicReference<RecordedObservation>();
+        var observations = ObservationRegistry.create();
+        observations.observationConfig().observationHandler(new ObservationHandler<Observation.Context>() {
+            @Override
+            public void onStop(Observation.Context context) {
+                if (!"rulepilot.document.processing.stage".equals(context.getName())) return;
+                stopped.set(new RecordedObservation(
+                        context.getContextualName(),
+                        context.getLowCardinalityKeyValue("stage").getValue(),
+                        context.getLowCardinalityKeyValue("outcome").getValue()));
+            }
+
+            @Override
+            public boolean supportsContext(Observation.Context context) {
+                return true;
+            }
+        });
+
+        new DocumentProcessingWorker(
+                        ingestion,
+                        commands,
+                        jobs,
+                        idempotency,
+                        failures,
+                        Mockito.mock(DocumentReadyNotifications.class),
+                        versions,
+                        new SimpleMeterRegistry(),
+                        observations,
+                        4)
+                .process(message(payload(documentVersionId, jobId, "PARSE"), eventId, 1));
+
+        assertThat(stopped).hasValue(new RecordedObservation("document-processing-parse", "parse", "completed"));
     }
 
     @Test
@@ -401,6 +454,7 @@ class DocumentProcessingWorkerTest {
                 Mockito.mock(DocumentReadyNotifications.class),
                 versions,
                 metrics,
+                ObservationRegistry.NOOP,
                 4);
     }
 
@@ -424,8 +478,11 @@ class DocumentProcessingWorkerTest {
                 readyNotifications,
                 versions,
                 metrics,
+                ObservationRegistry.NOOP,
                 4);
     }
+
+    private record RecordedObservation(String contextualName, String stage, String outcome) {}
 
     private String payload(UUID documentVersionId, UUID jobId, String stage) {
         return """

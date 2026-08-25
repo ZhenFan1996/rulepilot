@@ -6,6 +6,7 @@ export interface VisualFocus {
   y: number
   width: number
   height: number
+  sourceKind?: 'FULL_PAGE' | 'PAGE_REGION' | 'EMBEDDED_AUTHOR_IMAGE'
 }
 
 export interface LessonQualityReport {

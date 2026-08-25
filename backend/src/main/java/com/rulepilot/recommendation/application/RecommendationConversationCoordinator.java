@@ -29,9 +29,12 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
-import java.util.concurrent.locks.LockSupport;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.LockSupport;
 import java.util.function.Consumer;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
@@ -41,6 +44,7 @@ import org.springframework.stereotype.Service;
 @Profile("!test")
 public class RecommendationConversationCoordinator {
 
+    private static final Logger LOGGER = LoggerFactory.getLogger(RecommendationConversationCoordinator.class);
     static final int MAX_TRANSCRIPT_TURNS = 12;
     static final int MAX_KNOWN_GAMES = 60;
     static final int MAX_SHOWN_GAMES = 60;
@@ -110,6 +114,18 @@ public class RecommendationConversationCoordinator {
         String locale = responseLocale(requestedLocale);
         StoredConversation conversation = resolveConversation(validatedTurn, owner);
         String fingerprint = fingerprint(validatedRequest, locale);
+        AtomicBoolean streamOpen = new AtomicBoolean(true);
+        Consumer<String> streamListener = text -> {
+            if (!streamOpen.get() || answerPartListener == null) return;
+            try {
+                answerPartListener.accept(text);
+            } catch (RuntimeException streamFailure) {
+                // Incremental delivery is optional transport. Losing it must not discard a fully validated paid
+                // model result or force the same durable turn to run again.
+                streamOpen.set(false);
+                LOGGER.debug("Recommendation answer listener stopped before durable completion");
+            }
+        };
 
         Optional<TurnResult> replay = replay(conversation, validatedTurn.clientTurnId(), fingerprint);
         if (replay.isPresent()) return replay.get();
@@ -136,7 +152,7 @@ public class RecommendationConversationCoordinator {
                     locale,
                     owner,
                     progressListener,
-                    ignored -> {},
+                    streamListener,
                     checkpoint -> {
                         ConversationState value = checkpointState(claimed.state(), checkpoint);
                         if (!conversations.checkpointTurn(
@@ -184,7 +200,6 @@ public class RecommendationConversationCoordinator {
                     clock.instant());
             throw failure;
         }
-        if (answerPartListener != null) answerPartListener.accept(response.assistantMessage());
         return new TurnResult(
                 claimed.id(),
                 claimed.revision() + 1,

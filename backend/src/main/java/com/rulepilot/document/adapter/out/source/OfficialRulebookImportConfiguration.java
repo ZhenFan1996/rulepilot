@@ -1,5 +1,6 @@
 package com.rulepilot.document.adapter.out.source;
 
+import com.rulepilot.shared.AsyncContextPropagation;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -24,6 +25,7 @@ class OfficialRulebookImportConfiguration {
         executor.setQueueCapacity(queueCapacity);
         executor.setThreadNamePrefix("official-rulebook-import-");
         executor.setWaitForTasksToCompleteOnShutdown(false);
+        executor.setTaskDecorator(AsyncContextPropagation.taskDecorator());
         return executor;
     }
 }

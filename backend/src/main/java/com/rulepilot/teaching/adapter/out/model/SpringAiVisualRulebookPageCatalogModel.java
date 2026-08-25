@@ -67,25 +67,6 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
             .enable(JsonParser.Feature.STRICT_DUPLICATE_DETECTION)
             .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
     private static final String QWEN_BALANCED_VISUAL_MODEL = "qwen3.7-plus";
-    private static final String TEACHING_CONTRACT_REPAIR = """
-            The previous ledger failed deterministic contract validation. Reinspect the attached pages and return one
-            complete replacement JSON object. Keep each visible rule group as one ruleGroups object with exactly
-            identifier, its same-page fact, and quantitySpans; never return a separate ruleGroupIdentifiers or
-            quantityObservations array. quantitySpans contains only exact strings copied from the page and belongs to
-            that same ruleGroups item. Do not return kind, indexes, numeric fields, interpreted scope, or calculated total.
-            Every identifier must be unique within its page. If one heading governs several distinct groups, use the
-            heading once and the shortest exact visible opening phrase for each later group; do not repeat the heading.
-            Return externalDocumentDependencies only for a separately named document whose required rules are absent
-            from this rulebook; a reference to another page in this same rulebook belongs in ruleGroups instead.
-            Every ruleGroups fact containing a rule-significant number, written number, ordinal, threshold, range, or
-            worked-example value must bind every such value through one or more strings in its own quantitySpans.
-            Written counts such as Chinese “一张牌” and English “two
-            actions” require a copied span too. For each ruleGroups item in index order, compare its fact against its
-            quantitySpans before returning ruleGroupInventoryComplete=true. Re-read tables row by row. A range remains one literal span,
-            never an integer field. Never calculate a replacement total or copy a guessed value into both the fact
-            and originalSpan. If a governing value cannot be read, remove the uncertain exact value from the fact and
-            do not report the page inventory complete. Return every supplied page and the exact field set as JSON only.
-            """;
     private static final Set<String> RULE_GROUP_FIELDS = Set.of("identifier", "fact");
     private static final Set<String> RULE_GROUP_FIELDS_WITH_REDUNDANT_INDEX =
             Set.of("identifier", "fact", "ruleGroupIndex");
@@ -266,21 +247,7 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
         if (models.usesFake(Role.VISUAL, owner) || !models.supportsVision(Role.VISUAL, owner)) {
             return fake.summarize(request);
         }
-        RuntimeException firstFailure;
-        try {
-            return normalizePageBindings(request, summarizeOnce(request, owner, ""));
-        } catch (RuntimeException failure) {
-            firstFailure = failure;
-        }
-        try {
-            return normalizePageBindings(request, summarizeOnce(request, owner, """
-                    The first catalog was invalid. Return one summary for every supplied page, use only supplied page
-                    numbers, preserve visible original-language terms, and return structured data only.
-                    """));
-        } catch (RuntimeException failure) {
-            failure.addSuppressed(firstFailure);
-            throw failure;
-        }
+        return normalizePageBindings(request, summarizeOnce(request, owner, ""));
     }
 
     @Override
@@ -289,33 +256,8 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
         if (models.usesFake(Role.VISUAL, owner) || !models.supportsVision(Role.VISUAL, owner)) {
             return fake.summarizeForTeaching(request);
         }
-        RuntimeException firstFailure;
-        try {
-            return normalizeTeachingPageBindings(request, summarizeTeachingOnce(request, owner, ""));
-        } catch (RuntimeException failure) {
-            // The cataloger already splits a rejected multi-page ledger into single-page requests. Repairing the
-            // whole batch here can consume its complete deadline before that more precise fallback can begin.
-            if (request.pages().size() > 1) throw failure;
-            firstFailure = failure;
-        }
-        try {
-            return normalizeTeachingPageBindings(
-                    request,
-                    summarizeTeachingOnce(
-                            request,
-                            owner,
-                            TEACHING_CONTRACT_REPAIR + "\nDetected deterministic issue: "
-                                    + repairDiagnostic(firstFailure)));
-        } catch (RuntimeException failure) {
-            failure.addSuppressed(firstFailure);
-            throw failure;
-        }
-    }
-
-    private static String repairDiagnostic(RuntimeException failure) {
-        String message = failure.getMessage();
-        if (message == null || message.isBlank()) return failure.getClass().getSimpleName();
-        return message.strip();
+        // Catalog orchestration owns page splitting and retry. One audited model call must issue one provider request.
+        return normalizeTeachingPageBindings(request, summarizeTeachingOnce(request, owner, ""));
     }
 
     @Override

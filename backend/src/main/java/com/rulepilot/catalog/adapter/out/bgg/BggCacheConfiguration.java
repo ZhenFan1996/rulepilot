@@ -1,5 +1,6 @@
 package com.rulepilot.catalog.adapter.out.bgg;
 
+import com.rulepilot.shared.AsyncContextPropagation;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -22,6 +23,7 @@ class BggCacheConfiguration {
         executor.setMaxPoolSize(1);
         executor.setQueueCapacity(100);
         executor.setWaitForTasksToCompleteOnShutdown(false);
+        executor.setTaskDecorator(AsyncContextPropagation.taskDecorator());
         return executor;
     }
 
@@ -34,6 +36,7 @@ class BggCacheConfiguration {
         executor.setMaxPoolSize(1);
         executor.setQueueCapacity(1);
         executor.setWaitForTasksToCompleteOnShutdown(false);
+        executor.setTaskDecorator(AsyncContextPropagation.taskDecorator());
         return executor;
     }
 
@@ -46,6 +49,7 @@ class BggCacheConfiguration {
         executor.setMaxPoolSize(4);
         executor.setQueueCapacity(40);
         executor.setWaitForTasksToCompleteOnShutdown(false);
+        executor.setTaskDecorator(AsyncContextPropagation.taskDecorator());
         return executor;
     }
 }

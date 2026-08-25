@@ -109,42 +109,44 @@ class VisualTeachingCatalogPaidCanaryTest {
                 .getFirst();
         long latencyMs = Duration.ofNanos(System.nanoTime() - started).toMillis();
 
-        assertThat(rawResponses).hasSizeBetween(1, 2);
         JsonNode rawPage = rawJson(rawResponses.getLast()).path("pages").get(0);
-        assertThat(rawPage.path("ruleGroups").isArray()).isTrue();
-        assertThat(rawPage.has("ruleGroupIdentifiers")).isFalse();
-        assertThat(rawPage.path("ruleGroups").isEmpty()).isFalse();
-        assertThat(rawPage.has("quantityObservations")).isFalse();
         List<JsonNode> rawGroups = java.util.stream.StreamSupport.stream(
                         rawPage.path("ruleGroups").spliterator(), false)
                 .toList();
-        assertThat(rawGroups).allSatisfy(group -> assertThat(group.path("quantitySpans").isArray()).isTrue());
-        assertThat(rawGroups.stream()
+        List<JsonNode> rawQuantitySpans = rawGroups.stream()
                         .flatMap(group -> java.util.stream.StreamSupport.stream(
                                 group.path("quantitySpans").spliterator(), false))
-                        .toList())
-                .isNotEmpty();
-        assertThat(rawPage.path("ruleGroupInventoryComplete").asBoolean()).isTrue();
-
-        List<String> rawIdentifiers = java.util.stream.StreamSupport.stream(
-                        rawPage.path("ruleGroups").spliterator(), false)
-                .map(group -> group.path("identifier").asText())
+                        .toList();
+        List<String> ownedIdentifiers = java.util.stream.IntStream.range(0, rawGroups.size())
+                .mapToObj(index -> "page-" + pageNumber + "-group-" + (index + 1))
                 .toList();
-        assertThat(page.ruleGroupIdentifiers()).containsExactlyElementsOf(rawIdentifiers);
-        assertThat(page.ruleGroupInventoryComplete()).isTrue();
-        rawPage.path("ruleGroups").forEach(group -> assertThat(page.factualSummary())
-                .contains(group.path("identifier").asText() + ": " + group.path("fact").asText()));
-        assertThat(page.quantityObservations()).allSatisfy(observation -> {
-            assertThat(observation.quantifierScope()).isEqualTo(QuantifierScope.LITERAL_SOURCE_SPAN);
-            assertThat(observation.resolution()).isEqualTo(QuantityResolution.TRANSCRIBED_SOURCE_SPAN);
-            assertThat(observation.variantCount()).isNull();
-            assertThat(observation.perVariantQuantity()).isNull();
-            assertThat(observation.derivedTotal()).isNull();
-        });
-        assertThat(latencyMs).isLessThan(90_000L);
+        List<QuantityBinding> expectedQuantityBindings = java.util.stream.IntStream.range(0, rawGroups.size())
+                .boxed()
+                .flatMap(index -> java.util.stream.StreamSupport.stream(
+                                rawGroups.get(index).path("quantitySpans").spliterator(), false)
+                        .map(span -> new QuantityBinding(
+                                pageNumber,
+                                ownedIdentifiers.get(index),
+                                span.asText().strip())))
+                .toList();
+        List<QuantityBinding> projectedQuantityBindings = page.quantityObservations().stream()
+                .map(observation -> new QuantityBinding(
+                        observation.pageNumber(),
+                        observation.ruleGroupIdentifier(),
+                        observation.originalSpan()))
+                .toList();
+        boolean rawPairsProjectedExactly = page.ruleGroupFacts().size() == rawGroups.size()
+                && java.util.stream.IntStream.range(0, rawGroups.size()).allMatch(index -> {
+                    var projected = page.ruleGroupFacts().get(index);
+                    JsonNode raw = rawGroups.get(index);
+                    return projected.identifier().equals(ownedIdentifiers.get(index))
+                            && projected.label().equals(raw.path("identifier").asText().strip())
+                            && projected.fact().equals(raw.path("fact").asText().strip());
+                });
+        boolean quantityBindingsExact = projectedQuantityBindings.equals(expectedQuantityBindings);
 
         Map<String, Object> artifact = new LinkedHashMap<>();
-        artifact.put("schemaVersion", 1);
+        artifact.put("schemaVersion", 3);
         artifact.put("generatedAt", Instant.now().toString());
         artifact.put("provider", "qwen");
         artifact.put("configuredModel", modelName);
@@ -154,15 +156,51 @@ class VisualTeachingCatalogPaidCanaryTest {
         artifact.put("rawResponses", rawResponses.stream().map(this::rawJson).toList());
         artifact.put("ruleGroupCount", page.ruleGroupIdentifiers().size());
         artifact.put("quantityObservationCount", page.quantityObservations().size());
+        artifact.put("ownedRuleGroupIdentifiers", ownedIdentifiers);
+        artifact.put("projectedRuleGroupFacts", page.ruleGroupFacts());
+        artifact.put("expectedQuantityBindings", expectedQuantityBindings);
+        artifact.put("projectedQuantityBindings", projectedQuantityBindings);
+        artifact.put("projectedQuantityObservations", page.quantityObservations());
         artifact.put("ruleGroupInventoryComplete", page.ruleGroupInventoryComplete());
         artifact.put("parallelIdentifierArrayAbsent", !rawPage.has("ruleGroupIdentifiers"));
-        artifact.put("quantitySpansBoundInsideRuleGroups", true);
-        artifact.put("rawPairsProjectedExactly", true);
+        artifact.put("quantitySpansBoundInsideRuleGroups", !rawQuantitySpans.isEmpty());
+        artifact.put("quantityBindingsExact", quantityBindingsExact);
+        artifact.put("rawPairsProjectedExactly", rawPairsProjectedExactly);
         Files.createDirectories(root.resolve(".local/agent-evaluation"));
         Files.writeString(
                 root.resolve(".local/agent-evaluation/visual-teaching-catalog-v5-paid-canary.json"),
                 json.writerWithDefaultPrettyPrinter().writeValueAsString(artifact) + "\n",
                 StandardCharsets.UTF_8);
+
+        assertThat(rawResponses).hasSizeBetween(1, 2);
+        assertThat(rawPage.path("ruleGroups").isArray()).isTrue();
+        assertThat(rawPage.has("ruleGroupIdentifiers")).isFalse();
+        assertThat(rawGroups).isNotEmpty().allSatisfy(group -> {
+            assertThat(group.path("identifier").isTextual()).isTrue();
+            assertThat(group.path("fact").isTextual()).isTrue();
+            assertThat(group.path("quantitySpans").isArray()).isTrue();
+        });
+        assertThat(rawPage.has("quantityObservations")).isFalse();
+        assertThat(rawQuantitySpans).isNotEmpty();
+        assertThat(rawPage.path("ruleGroupInventoryComplete").asBoolean()).isTrue();
+        assertThat(page.ruleGroupIdentifiers()).containsExactlyElementsOf(ownedIdentifiers);
+        assertThat(page.ruleGroupInventoryComplete()).isTrue();
+        assertThat(rawPairsProjectedExactly).isTrue();
+        java.util.stream.IntStream.range(0, rawGroups.size()).forEach(index -> {
+            JsonNode raw = rawGroups.get(index);
+            assertThat(page.factualSummary()).contains(
+                    ownedIdentifiers.get(index) + ": [" + raw.path("identifier").asText().strip() + "] "
+                            + raw.path("fact").asText().strip());
+        });
+        assertThat(page.quantityObservations()).isNotEmpty().allSatisfy(observation -> {
+            assertThat(observation.quantifierScope()).isEqualTo(QuantifierScope.LITERAL_SOURCE_SPAN);
+            assertThat(observation.resolution()).isEqualTo(QuantityResolution.TRANSCRIBED_SOURCE_SPAN);
+            assertThat(observation.variantCount()).isNull();
+            assertThat(observation.perVariantQuantity()).isNull();
+            assertThat(observation.derivedTotal()).isNull();
+        });
+        assertThat(quantityBindingsExact).isTrue();
+        assertThat(latencyMs).isLessThan(90_000L);
     }
 
     @Test
@@ -804,6 +842,8 @@ class VisualTeachingCatalogPaidCanaryTest {
             int ruleGroupCount,
             long latencyMs,
             String failure) {}
+
+    private record QuantityBinding(int pageNumber, String ruleGroupIdentifier, String originalSpan) {}
 
     private record GstonePageCatalogResult(PageInput pageInput) {}
 }

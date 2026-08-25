@@ -31,6 +31,7 @@ interface TestSection {
     }>
     sourcePages: number[]
     visualFocus: TestVisualFocus | null
+    visualFoci?: TestVisualFocus[]
   }>
 }
 
@@ -156,6 +157,25 @@ describe('LessonChapterList', () => {
     expect(wrapper.get('[data-testid="lesson-visual-detail"] img').attributes('src')).toBe('/crop/2')
     expect(wrapper.text()).toContain('把主板放在桌面中央。')
     expect(wrapper.text()).toContain('规则含义以上方有引用的步骤为准')
+  })
+
+  it('renders every visual focus attached to the same cited step', () => {
+    const first: TestVisualFocus = { pageNumber: 2, label: '行动图标', x: 100, y: 150, width: 300, height: 250 }
+    const second: TestVisualFocus = { pageNumber: 3, label: '牌面示例', x: 200, y: 250, width: 320, height: 280 }
+    const third: TestVisualFocus = { pageNumber: 4, label: '完整流程', x: 0, y: 0, width: 1000, height: 1000 }
+    const wrapper = mountDirectory([{
+      ...sections[0]!,
+      steps: [{
+        ...sections[0]!.steps[0]!,
+        kind: 'VISUAL',
+        visualFocus: first,
+        visualFoci: [first, second, third],
+      }],
+    }])
+
+    expect(wrapper.get('[data-testid="lesson-step-visuals"]').findAll('[data-testid="lesson-visual-storyboard"]')).toHaveLength(3)
+    expect(wrapper.findAll('[data-testid="lesson-visual-detail"] img').map((image) => image.attributes('src')))
+      .toEqual(['/crop/2', '/crop/3', '/crop/4'])
   })
 
   it('renders model-authored rule fact roles without parsing the natural step text', () => {

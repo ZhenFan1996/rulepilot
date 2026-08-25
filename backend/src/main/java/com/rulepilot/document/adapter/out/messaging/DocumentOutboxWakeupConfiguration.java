@@ -1,5 +1,6 @@
 package com.rulepilot.document.adapter.out.messaging;
 
+import com.rulepilot.shared.AsyncContextPropagation;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
@@ -24,6 +25,7 @@ class DocumentOutboxWakeupConfiguration {
         executor.setQueueCapacity(queueCapacity);
         executor.setThreadNamePrefix("document-outbox-wakeup-");
         executor.setWaitForTasksToCompleteOnShutdown(false);
+        executor.setTaskDecorator(AsyncContextPropagation.taskDecorator());
         return executor;
     }
 }

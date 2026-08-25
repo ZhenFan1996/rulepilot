@@ -14,7 +14,7 @@ test('keeps discovery bound to the current route while the previous response is 
 
   await mockShellAndDiscovery(page, oldRequestGate, () => { oldHandlerSettled = true })
   await page.goto('/discover/42')
-  await expect(page.getByLabel('正在读取桌游资料')).toBeVisible()
+  await expect(page.getByRole('status')).toHaveText('正在读取桌游资料')
 
   await page.evaluate(() => {
     window.history.pushState(window.history.state, '', '/discover/43')

@@ -57,7 +57,7 @@ describe('streamGameRecommendation', () => {
       clarification: null, sourceCount: 20, candidatesEvaluated: 6, games: [],
     }
     vi.stubGlobal('fetch', vi.fn(async () => new Response(
-      `event: progress\ndata: {"stage":"verifying_bgg_candidates","phase":"completed","action":"lookup_bgg_games","elapsedMs":120,"observedCandidates":8,"verifiedCandidates":6,"hardRejectedCandidates":3,"sourceCount":20}\n\nevent: result\ndata: ${JSON.stringify(payload)}\n\n`,
+      `event: progress\ndata: {"stage":"verifying_bgg_candidates","phase":"completed","action":"lookup_bgg_games","focus":{"kind":"verified_game_count","values":["6"]},"elapsedMs":120,"observedCandidates":8,"verifiedCandidates":6,"hardRejectedCandidates":3,"sourceCount":20}\n\nevent: result\ndata: ${JSON.stringify(payload)}\n\n`,
       { headers: { 'Content-Type': 'text/event-stream' } },
     )))
     const progress: unknown[] = []
@@ -71,6 +71,32 @@ describe('streamGameRecommendation', () => {
       verifiedCandidates: 6,
       hardRejectedCandidates: 3,
       sourceCount: 20,
+      focus: { kind: 'verified_game_count', values: ['6'] },
+    })])
+  })
+
+  it('drops an unknown or unbounded focus without dropping honest progress', async () => {
+    const payload = {
+      outcome: 'conversation', mode: 'model_assisted', assistantMessage: '我会继续核对。',
+      profile: { players: null, maxMinutes: null, maxWeight: null, type: 'all', interaction: 'any' },
+      clarification: null, sourceCount: 0, candidatesEvaluated: 0, games: [],
+    }
+    const tooManyValues = ['one', 'two', 'three', 'four']
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(
+      `event: progress\ndata: ${JSON.stringify({
+        stage: 'searching_bgg_catalog', phase: 'started', action: 'browse_bgg_catalog',
+        focus: { kind: 'raw_tool_query', values: tooManyValues }, elapsedMs: 12,
+      })}\n\nevent: result\ndata: ${JSON.stringify(payload)}\n\n`,
+      { headers: { 'Content-Type': 'text/event-stream' } },
+    )))
+    const progress: unknown[] = []
+
+    await streamGameRecommendation('/stream', { method: 'POST' }, update => progress.push(update))
+
+    expect(progress).toEqual([expect.objectContaining({
+      stage: 'searching_bgg_catalog',
+      action: 'browse_bgg_catalog',
+      focus: null,
     })])
   })
 

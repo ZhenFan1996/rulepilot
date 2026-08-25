@@ -60,6 +60,34 @@ class PublicLessonQuestionServiceTest {
     }
 
     @Test
+    void returnsEveryOwnedVisualForTheCitedTeachingStepWithinTheAnswerBudget() {
+        UUID planId = UUID.randomUUID();
+        UUID versionId = UUID.randomUUID();
+        UUID citedChunk = UUID.randomUUID();
+        when(lessons.find(planId)).thenReturn(Optional.of(publicLessonWithMultiVisualStep(
+                planId, versionId, citedChunk)));
+        RuleAnswering.Answer answer = new RuleAnswering.Answer(
+                "ANSWERED",
+                "先认出图标，再对照牌面与完整流程。",
+                "三张图都属于同一个有引用的步骤。",
+                List.of(new RuleAnswering.Citation("设置", 2, 2)),
+                List.of(),
+                "HIGH",
+                null);
+        when(answers.answerForPublicReader(
+                        eq(versionId), eq("这一步看哪几张图？"), eq(null), eq(PlayerLocale.ZH_CN)))
+                .thenReturn(new RuleAnswering.AnswerResult(UUID.randomUUID(), answer, Set.of(citedChunk)));
+
+        var result = service.answer(
+                planId, new PublicLessonQuestionService.QuestionRequest("这一步看哪几张图？", null));
+
+        assertThat(result).hasValueSatisfying(value -> assertThat(value.visualAids())
+                .hasSize(3)
+                .extracting(aid -> aid.visualFocus().label())
+                .containsExactly("标记图例", "牌面示例", "完整流程图"));
+    }
+
+    @Test
     void keepsTheCitedTextAnswerWhenNoLessonVisualSharesItsEvidence() {
         UUID planId = UUID.randomUUID();
         UUID versionId = UUID.randomUUID();
@@ -268,5 +296,68 @@ class PublicLessonQuestionServiceTest {
                 "test", Instant.now());
         return new PublicLessonReader.PublicLesson(
                 planId, versionId, "规则书", "https://publisher.example/rules.pdf", null, null, lesson);
+    }
+
+    private PublicLessonReader.PublicLesson publicLessonWithMultiVisualStep(
+            UUID planId, UUID versionId, UUID chunk) {
+        PublicLessonReader.PublicLesson source = publicLesson(planId, versionId, chunk);
+        IllustratedLesson.LessonSection section = source.lesson().sections().getFirst();
+        IllustratedLesson.LessonStep step = section.steps().stream()
+                .filter(candidate -> candidate.heading().equals("识别标记"))
+                .findFirst()
+                .orElseThrow();
+        List<IllustratedLesson.VisualFocus> visuals = List.of(
+                step.visualFocus(),
+                new IllustratedLesson.VisualFocus(
+                        2, "牌面示例", "一张卡牌下方排列三个资源图标", 360, 320, 240, 300),
+                new IllustratedLesson.VisualFocus(
+                        2,
+                        "完整流程图",
+                        "整页是一张连续流程图",
+                        0,
+                        0,
+                        1_000,
+                        1_000,
+                        IllustratedLesson.VisualSourceKind.FULL_PAGE));
+        IllustratedLesson.LessonStep multiVisual = new IllustratedLesson.LessonStep(
+                step.position(),
+                step.heading(),
+                step.kind(),
+                step.text(),
+                step.sourcePages(),
+                step.sourceChunkIds(),
+                step.ruleFacts(),
+                visuals.getFirst(),
+                visuals);
+        List<IllustratedLesson.LessonStep> steps = section.steps().stream()
+                .map(candidate -> candidate == step ? multiVisual : candidate)
+                .toList();
+        IllustratedLesson.LessonSection multiVisualSection = new IllustratedLesson.LessonSection(
+                section.position(),
+                section.topicKey(),
+                section.coverageTags(),
+                section.title(),
+                section.required(),
+                section.evidenceStatus(),
+                section.visualKind(),
+                section.visualCaption(),
+                section.visualSourcePages(),
+                section.visualSourceChunkIds(),
+                steps);
+        IllustratedLesson lesson = new IllustratedLesson(
+                source.lesson().id(),
+                source.lesson().teachingPlanId(),
+                source.lesson().status(),
+                List.of(multiVisualSection),
+                source.lesson().generatorVersion(),
+                source.lesson().createdAt());
+        return new PublicLessonReader.PublicLesson(
+                planId,
+                versionId,
+                source.rulebookTitle(),
+                source.officialSourceUrl(),
+                source.gameCover(),
+                source.publicGame(),
+                lesson);
     }
 }

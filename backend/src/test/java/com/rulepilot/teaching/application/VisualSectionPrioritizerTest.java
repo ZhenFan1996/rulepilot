@@ -28,12 +28,12 @@ class VisualSectionPrioritizerTest {
     }
 
     @Test
-    void allows_a_second_visual_anchor_but_does_not_revisit_a_section_that_already_has_two() {
+    void uses_the_default_total_visual_budget_instead_of_a_fixed_two_visual_cap() {
         var selected = new VisualSectionPrioritizer().positions(List.of(
                 sectionWithVisualSteps(1, 1),
                 sectionWithVisualSteps(2, 2)), 2);
 
-        assertThat(selected).containsExactly(1);
+        assertThat(selected).containsExactlyInAnyOrder(1, 2);
     }
 
     @Test

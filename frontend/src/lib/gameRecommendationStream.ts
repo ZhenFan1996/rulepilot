@@ -1,5 +1,6 @@
 import type {
   RecommendationAgentResponse,
+  RecommendationProgressFocus,
   RecommendationProgressUpdate,
 } from '@/components/gameRecommendationTypes'
 
@@ -115,11 +116,33 @@ function parseProgress(value: unknown): RecommendationProgressUpdate | null {
     stage: stage as RecommendationProgressUpdate['stage'],
     phase: phase as RecommendationProgressUpdate['phase'],
     action: action as RecommendationProgressUpdate['action'],
+    focus: parseProgressFocus(candidate.focus),
     elapsedMs: candidate.elapsedMs as number,
     observedCandidates,
     verifiedCandidates,
     hardRejectedCandidates,
     sourceCount: count('sourceCount'),
+  }
+}
+
+function parseProgressFocus(value: unknown): RecommendationProgressFocus | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const candidate = value as Record<string, unknown>
+  const kinds = new Set([
+    'catalog_mechanics', 'catalog_categories', 'catalog_families', 'catalog_designers',
+    'catalog_publishers', 'candidate_title_count', 'verified_game_count',
+    'research_games',
+  ])
+  if (typeof candidate.kind !== 'string' || !kinds.has(candidate.kind)) return null
+  if (!Array.isArray(candidate.values) || candidate.values.length < 1 || candidate.values.length > 3) return null
+  if (candidate.values.some(item => typeof item !== 'string'
+    || item.trim().length === 0
+    || [...item].length > 120)) return null
+  const values = candidate.values.map(item => (item as string).trim())
+  if (new Set(values).size !== values.length) return null
+  return {
+    kind: candidate.kind as RecommendationProgressFocus['kind'],
+    values,
   }
 }
 

@@ -19,8 +19,10 @@ import java.util.Deque;
 import java.util.IdentityHashMap;
 import java.util.Iterator;
 import java.util.List;
+import java.util.OptionalInt;
 import java.util.Set;
 import java.util.function.Consumer;
+import java.util.regex.Pattern;
 import java.util.stream.Stream;
 import javax.imageio.IIOImage;
 import javax.imageio.ImageIO;
@@ -68,6 +70,7 @@ public class PdfBoxRulebookPreparation implements PdfRulebookPreparation {
     // on compact publisher page sizes, which makes both visual models and reader crops unreliable.
     private static final float RENDER_DPI = 200;
     private static final float JPEG_QUALITY = 0.90f;
+    private static final Pattern POPPLER_PROGRESS = Pattern.compile("^([0-9]+)\\s+([0-9]+)\\s+(.+)$");
     static final int MAX_RENDER_SESSION_PAGES = 8;
 
     private final int maxPages;
@@ -230,7 +233,9 @@ public class PdfBoxRulebookPreparation implements PdfRulebookPreparation {
                 new InputStreamReader(process.getInputStream(), java.nio.charset.StandardCharsets.UTF_8))) {
             String line;
             while ((line = progress.readLine()) != null) {
-                int pageNumber = completedPopplerPage(line, firstPage, lastPage);
+                OptionalInt completedPage = completedPopplerPage(line, firstPage, lastPage);
+                if (completedPage.isEmpty()) continue;
+                int pageNumber = completedPage.orElseThrow();
                 if (pageNumber != emittedPages + 1) {
                     throw new IOException("Poppler reported pages out of order");
                 }
@@ -285,18 +290,16 @@ public class PdfBoxRulebookPreparation implements PdfRulebookPreparation {
                 .start();
     }
 
-    static int completedPopplerPage(String progress, int firstPage, int lastPage) throws IOException {
-        String[] fields = progress == null ? new String[0] : progress.strip().split("\\s+", 3);
-        if (fields.length != 3) {
-            throw new IOException("Poppler progress output is invalid");
-        }
+    static OptionalInt completedPopplerPage(String progress, int firstPage, int lastPage) throws IOException {
+        var frame = POPPLER_PROGRESS.matcher(progress == null ? "" : progress.strip());
+        if (!frame.matches()) return OptionalInt.empty();
         try {
-            int pageNumber = Integer.parseInt(fields[0]);
-            int reportedLastPage = Integer.parseInt(fields[1]);
+            int pageNumber = Integer.parseInt(frame.group(1));
+            int reportedLastPage = Integer.parseInt(frame.group(2));
             if (pageNumber < firstPage || pageNumber > lastPage || reportedLastPage != lastPage) {
                 throw new IOException("Poppler progress output is outside the expected page range");
             }
-            return pageNumber;
+            return OptionalInt.of(pageNumber);
         } catch (NumberFormatException invalidProgress) {
             throw new IOException("Poppler progress output is invalid", invalidProgress);
         }

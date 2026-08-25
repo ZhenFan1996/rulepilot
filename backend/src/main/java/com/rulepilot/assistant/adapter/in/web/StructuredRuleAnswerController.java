@@ -14,6 +14,7 @@ import com.rulepilot.assistant.domain.AnswerFeedback.Rating;
 import com.rulepilot.assistant.domain.GameSessionConversationTurn;
 import com.rulepilot.assistant.domain.StructuredRuleAnswer;
 import com.rulepilot.gamesession.GameSessionContextLookup;
+import com.rulepilot.shared.AsyncContextPropagation;
 import java.io.IOException;
 import java.security.Principal;
 import java.time.Instant;
@@ -270,7 +271,7 @@ public class StructuredRuleAnswerController {
         }
 
         private void start() {
-            Thread.startVirtualThread(() -> {
+            Thread.startVirtualThread(AsyncContextPropagation.runnable(() -> {
                 while (open.get() && !finished.get()) {
                     flush();
                     try {
@@ -280,7 +281,7 @@ public class StructuredRuleAnswerController {
                         return;
                     }
                 }
-            });
+            }));
         }
 
         private void finish() {

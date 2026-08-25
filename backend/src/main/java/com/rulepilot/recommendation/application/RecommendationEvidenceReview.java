@@ -51,11 +51,8 @@ final class RecommendationEvidenceReview {
             ConversationRequest request) {
         if (!arguments.has("preferenceUpdates")) return PreferenceUpdatePlan.unchanged(current);
         JsonNode updates = arguments.path("preferenceUpdates");
-        if (updates.isArray()) {
-            return planPreferenceUpdateList(updates, current, request);
-        }
-        RecommendationProfile candidate = updatedProfile(updates, current, request);
-        return new PreferenceUpdatePlan(candidate, Map.of(), !candidate.equals(current), true);
+        if (!updates.isArray()) throw new InvalidAction("PREFERENCE_UPDATE_LIST_REQUIRED");
+        return planPreferenceUpdateList(updates, current, request);
     }
 
     void commitPreferenceUpdates(PreferenceUpdatePlan plan, RecommendationAgentState state) {
@@ -133,6 +130,14 @@ final class RecommendationEvidenceReview {
         String classification = update.has("evidenceClassification")
                 ? text(update.path("evidenceClassification"), 1, 40)
                 : "DIRECT";
+        String field = canonicalPreferenceField(text(update.path("field"), 1, 40));
+        if (Set.of("type", "interaction").contains(field)) {
+            if (!"DIRECT".equals(classification)) {
+                throw new InvalidAction("PREFERENCE_EVIDENCE_CLASSIFICATION_INVALID");
+            }
+            requirePreferenceEvidence(update.path("evidence").asText(), request);
+            return new PreferenceEvidenceClassification(true, "REVERSIBLE_CATEGORICAL_PREFERENCE");
+        }
         if ("DIRECT".equals(classification)) {
             requirePreferenceEvidence(update.path("evidence").asText(), request);
             return new PreferenceEvidenceClassification(false, classification);
@@ -140,9 +145,8 @@ final class RecommendationEvidenceReview {
         if (!"CONTEXTUAL_COMPLETE_GROUP".equals(classification)) {
             throw new InvalidAction("PREFERENCE_EVIDENCE_CLASSIFICATION_INVALID");
         }
-        String field = text(update.path("field"), 1, 40);
         JsonNode value = update.path("value");
-        boolean exactPlayerCount = ("players".equals(field) || "playerCount".equals(field))
+        boolean exactPlayerCount = "playerCount".equals(field)
                         && value.isIntegralNumber()
                         && value.canConvertToInt()
                 || "playerCount".equals(field)
@@ -166,125 +170,24 @@ final class RecommendationEvidenceReview {
         String evidenceId = text(update.path("evidence"), 1, 160);
         String evidenceText = preferenceEvidence(request).get(evidenceId);
         if (evidenceText == null) throw new InvalidAction("PREFERENCE_EVIDENCE_NOT_GROUNDED");
-        String field = text(update.path("field"), 1, 40);
+        String field = canonicalPreferenceField(text(update.path("field"), 1, 40));
         JsonNode value = update.path("value");
-        int players = "players".equals(field)
-                ? integer(value, 1, 20, "PLAYERS_OUT_OF_RANGE")
-                : value.isIntegralNumber()
-                        ? integer(value, 1, 20, "PLAYERS_OUT_OF_RANGE")
-                        : integer(value.path("minimum"), 1, 20, "PLAYERS_OUT_OF_RANGE");
+        String contextualValue = switch (field) {
+            case "playerCount" -> Integer.toString(value.isIntegralNumber()
+                    ? integer(value, 1, 20, "PLAYERS_OUT_OF_RANGE")
+                    : integer(value.path("minimum"), 1, 20, "PLAYERS_OUT_OF_RANGE"));
+            case "type" -> enumValue(BggGameType.class, value, "GAME_TYPE_INVALID").name();
+            case "interaction" -> enumValue(
+                            InteractionPreference.class, value, "INTERACTION_INVALID")
+                    .name();
+            default -> throw new InvalidAction("PREFERENCE_EVIDENCE_CLASSIFICATION_INVALID");
+        };
         return new ContextualPreference(
-                "playerCount",
-                Integer.toString(players),
+                field,
+                contextualValue,
                 evidenceId,
                 evidenceText,
                 reason);
-    }
-
-    private RecommendationProfile updatedProfile(
-            JsonNode arguments,
-            RecommendationProfile current,
-            ConversationRequest request) {
-        if (arguments != null && arguments.isArray()) {
-            return updatedProfileFromList(arguments, current, request);
-        }
-        requireObject(arguments, Set.of(), PROFILE_FIELDS);
-        if (arguments.isEmpty()) throw new InvalidAction("EMPTY_PREFERENCE_UPDATE");
-        ConstraintRange<Integer> playerCount = current.playerCount();
-        ConstraintRange<Integer> durationMinutes = current.durationMinutes();
-        ConstraintRange<BigDecimal> complexity = current.complexity();
-        BggGameType type = current.type();
-        InteractionPreference interaction = current.interaction();
-        rejectDuplicateRangeForms(arguments, "playerCount", "players");
-        rejectDuplicateRangeForms(arguments, "durationMinutes", "maxMinutes");
-        rejectDuplicateRangeForms(arguments, "complexity", "maxWeight");
-        if (arguments.has("playerCount")) {
-            JsonNode update = preference(arguments.path("playerCount"));
-            String evidence = text(update.path("evidence"), 1, 160);
-            ConstraintRange<Integer> proposed = playerCountConstraint(
-                    update.path("value"), evidence, request);
-            if (!sameRange(playerCount, proposed)) {
-                requirePreferenceEvidence(evidence, request);
-                playerCount = proposed;
-            }
-        }
-        if (arguments.has("players")) {
-            JsonNode update = preference(arguments.path("players"));
-            int players = integer(update.path("value"), 1, 20, "PLAYERS_OUT_OF_RANGE");
-            if (playerCount == null || !playerCount.exact() || !Objects.equals(playerCount.minimum(), players)) {
-                requirePreferenceEvidence(text(update.path("evidence"), 1, 160), request);
-                playerCount = exactIntegerConstraint(players, text(update.path("evidence"), 1, 160), request);
-            }
-        }
-        if (arguments.has("durationMinutes")) {
-            JsonNode update = preference(arguments.path("durationMinutes"));
-            String evidence = text(update.path("evidence"), 1, 160);
-            ConstraintRange<Integer> proposed = update.path("value").isNull()
-                    ? null
-                    : durationConstraintRange(update.path("value"), evidence, request);
-            if (!sameRange(durationMinutes, proposed)) {
-                requirePreferenceEvidence(evidence, request);
-                durationMinutes = proposed;
-            }
-        }
-        if (arguments.has("maxMinutes")) {
-            JsonNode update = preference(arguments.path("maxMinutes"));
-            int maxMinutes = integer(update.path("value"), 0, 1_440, "DURATION_OUT_OF_RANGE");
-            if (maxMinutes > 0 && maxMinutes < 5) throw new InvalidAction("DURATION_OUT_OF_RANGE");
-            ConstraintRange<Integer> proposed = maxMinutes == 0
-                    ? null
-                    : maximumIntegerConstraint(maxMinutes, text(update.path("evidence"), 1, 160), request);
-            if (!sameRange(durationMinutes, proposed)) {
-                requirePreferenceEvidence(text(update.path("evidence"), 1, 160), request);
-                durationMinutes = proposed;
-            }
-        }
-        if (arguments.has("complexity")) {
-            JsonNode update = preference(arguments.path("complexity"));
-            String evidence = text(update.path("evidence"), 1, 160);
-            ConstraintRange<BigDecimal> proposed = update.path("value").isNull()
-                    ? null
-                    : decimalConstraintRange(
-                            update.path("value"), BigDecimal.ZERO, new BigDecimal("5"), evidence, request);
-            if (!sameRange(complexity, proposed)) {
-                requirePreferenceEvidence(evidence, request);
-                complexity = proposed;
-            }
-        }
-        if (arguments.has("maxWeight")) {
-            JsonNode update = preference(arguments.path("maxWeight"));
-            if (!update.path("value").isNumber()) throw new InvalidAction("WEIGHT_TYPE");
-            BigDecimal maxWeight = update.path("value").decimalValue();
-            if (maxWeight.compareTo(BigDecimal.ZERO) < 0 || maxWeight.compareTo(new BigDecimal("5")) > 0) {
-                throw new InvalidAction("WEIGHT_OUT_OF_RANGE");
-            }
-            ConstraintRange<BigDecimal> proposed = maxWeight.compareTo(BigDecimal.ZERO) == 0
-                    ? null
-                    : maximumDecimalConstraint(maxWeight, text(update.path("evidence"), 1, 160), request);
-            if (!sameRange(complexity, proposed)) {
-                requirePreferenceEvidence(text(update.path("evidence"), 1, 160), request);
-                complexity = proposed;
-            }
-        }
-        if (arguments.has("type")) {
-            JsonNode update = preference(arguments.path("type"));
-            BggGameType value = enumValue(
-                    BggGameType.class, update.path("value"), "GAME_TYPE_INVALID");
-            if (current.type() != value) {
-                requirePreferenceEvidence(text(update.path("evidence"), 1, 160), request);
-            }
-            type = value;
-        }
-        if (arguments.has("interaction")) {
-            JsonNode update = preference(arguments.path("interaction"));
-            InteractionPreference value = enumValue(
-                    InteractionPreference.class, update.path("value"), "INTERACTION_INVALID");
-            if (current.interaction() != value) {
-                requirePreferenceEvidence(text(update.path("evidence"), 1, 160), request);
-            }
-            interaction = value;
-        }
-        return new RecommendationProfile(playerCount, durationMinutes, complexity, type, interaction);
     }
 
     private RecommendationProfile updatedProfileFromList(
@@ -409,18 +312,6 @@ final class RecommendationEvidenceReview {
             };
         }
         return result;
-    }
-
-    private JsonNode preference(JsonNode value) {
-        requireObject(value, Set.of("value", "evidence"), Set.of());
-        text(value.path("evidence"), 1, 160);
-        return value;
-    }
-
-    private void rejectDuplicateRangeForms(JsonNode updates, String rangeField, String legacyField) {
-        if (updates.has(rangeField) && updates.has(legacyField)) {
-            throw new InvalidAction("DUPLICATE_PREFERENCE_RANGE");
-        }
     }
 
     private ConstraintRange<Integer> integerConstraintRange(

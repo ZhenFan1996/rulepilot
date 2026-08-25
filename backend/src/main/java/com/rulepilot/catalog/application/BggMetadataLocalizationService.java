@@ -42,7 +42,7 @@ public class BggMetadataLocalizationService {
         Request request = new Request(
                 game.bggId(), fallback.name(), description, game.categories(), game.mechanics());
         try {
-            return translations.translate(request)
+            return translations.readStored(request)
                     .map(translation -> localized(fallback, request, translation))
                     .orElse(fallback);
         } catch (RuntimeException exception) {
@@ -107,7 +107,7 @@ public class BggMetadataLocalizationService {
         }
         Request request = new Request(DISCOVERY_TAXONOMY_ID, "BGG discovery categories", "", source, List.of());
         try {
-            return translations.translate(request)
+            return translations.readStored(request)
                     .map(translation -> {
                         List<String> localized = translatedTerms(source, translation.categories());
                         return new LocalizedTaxonomy(indexed(source, localized), !localized.equals(source));
@@ -149,7 +149,7 @@ public class BggMetadataLocalizationService {
                     mechanicChunk);
             Translation translation;
             try {
-                translation = translations.translate(request).orElse(null);
+                translation = translations.readStored(request).orElse(null);
             } catch (RuntimeException exception) {
                 LOGGER.warn("One BGG ranked catalog taxonomy translation chunk fell back to source values");
                 continue;

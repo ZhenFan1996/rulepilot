@@ -4,6 +4,7 @@ import com.rulepilot.assistant.AgentExecutionControl;
 import com.rulepilot.assistant.AgentExecutionControl.BudgetSnapshot;
 import com.rulepilot.assistant.AgentExecutionStoppedException;
 import com.rulepilot.assistant.AgentExecutionStoppedException.StopReason;
+import com.rulepilot.shared.AsyncContextPropagation;
 import jakarta.annotation.PreDestroy;
 import java.time.Duration;
 import java.time.Instant;
@@ -32,8 +33,8 @@ final class AgentInvocationDeadline {
     AgentInvocationDeadline(AgentExecutionControl execution) {
         this(
                 execution,
-                Executors.newThreadPerTaskExecutor(
-                        Thread.ofVirtual().name("answer-bounded-call-", 0).factory()),
+                AsyncContextPropagation.executorService(Executors.newThreadPerTaskExecutor(
+                        Thread.ofVirtual().name("answer-bounded-call-", 0).factory())),
                 CANCELLATION_POLL_INTERVAL);
     }
 
