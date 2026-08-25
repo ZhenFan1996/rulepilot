@@ -77,7 +77,6 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
@@ -90,7 +89,7 @@ final class RecommendationReActLoop {
     static final int MAX_MODEL_CALLS = 6;
     private static final int MAX_DECISION_MODEL_CALLS = MAX_MODEL_CALLS - 1;
     private static final int MAX_ACTION_CALLS = 6;
-    private static final long OPTIONAL_PUBLICATION_MODEL_DEADLINE_MILLIS = 18_000;
+    private static final long PUBLICATION_COMPLETION_RESERVE_MILLIS = 3_000;
     private static final int ACTION_SELECTION_OUTPUT_TOKENS = 512;
     private static final int EVIDENCE_RESPONSE_OUTPUT_TOKENS = 1_536;
     private static final int PUBLICATION_OUTPUT_TOKENS = 2_048;
@@ -637,6 +636,10 @@ final class RecommendationReActLoop {
                     seed,
                     progress,
                     answerPartListener);
+        } catch (RunInterrupted exception) {
+            progress.fail();
+            state.actions.add("RUN_DEADLINE_EXCEEDED");
+            return unavailable(state, locale, "RUN_DEADLINE_EXCEEDED");
         } catch (RunDeadlineExceeded exception) {
             progress.fail();
             state.actions.add("RUN_DEADLINE_EXCEEDED");
@@ -660,37 +663,34 @@ final class RecommendationReActLoop {
         progress.start(ProgressStage.COMPOSING_RESPONSE, ProgressAction.STREAM_NATURAL_REPLY);
         AtomicReference<RecommendationPublication.Permit> permit = new AtomicReference<>();
         AtomicReference<RecommendationPublication.Session> session = new AtomicReference<>();
-        AtomicBoolean acceptingPublication = new AtomicBoolean(true);
-        Object publicationLifecycle = new Object();
-        Runnable closePublication = () -> {
-            synchronized (publicationLifecycle) {
-                acceptingPublication.set(false);
-            }
-        };
+        PublicationLifecycle publicationLifecycle = new PublicationLifecycle();
+        PublicationDelivery publicationDelivery = new PublicationDelivery(answerPartListener);
+        Runnable closePublication = publicationLifecycle::close;
         RecommendationPublicationStream stream = new RecommendationPublicationStream(
                 json,
-                decision -> {
-                    synchronized (publicationLifecycle) {
-                        if (!acceptingPublication.get()) {
-                            throw new IllegalStateException("recommendation publication is no longer accepting output");
-                        }
+                decision -> publicationLifecycle.mutate(() -> {
                         RecommendationPublication.Permit approved = publication.permit(decision, state, seed);
                         if (!permit.compareAndSet(null, approved)) {
                             throw new IllegalStateException("recommendation publication repeated its decision");
                         }
-                        session.set(publication.open(approved, state, locale, answerPartListener));
-                    }
-                },
+                        session.set(publication.open(approved, state, locale));
+                        return null;
+                    }),
                 block -> {
-                    synchronized (publicationLifecycle) {
-                        if (!acceptingPublication.get()) {
-                            throw new IllegalStateException("recommendation publication is no longer accepting output");
-                        }
+                    List<String> snapshots = publicationLifecycle.beginDelivery(() -> {
                         RecommendationPublication.Session active = session.get();
                         if (active == null) {
                             throw new IllegalStateException("recommendation reply block arrived before its decision");
                         }
                         active.acceptBlock(block);
+                        return active.drainAnswerSnapshots();
+                    });
+                    try {
+                        // Scheduling happens after the state monitor is released. The delivery worker is serial and
+                        // may call a network listener without ever owning the publication lifecycle lock.
+                        publicationDelivery.enqueue(snapshots);
+                    } finally {
+                        publicationLifecycle.endDelivery();
                     }
                 },
                 65_536,
@@ -723,7 +723,11 @@ final class RecommendationReActLoop {
             if (permit.get() == null || session.get() == null) {
                 throw new RecoverablePublicationFailure("PUBLICATION_DECISION_MISSING");
             }
-            ConversationResponse response = session.get().finish();
+            RecommendationPublication.Session active = session.get();
+            ConversationResponse response = active.finish();
+            publicationDelivery.enqueue(active.drainAnswerSnapshots());
+            publicationDelivery.await(state);
+            active.commit();
             progress.complete();
             logRun(response);
             return response;
@@ -742,11 +746,13 @@ final class RecommendationReActLoop {
                     seed,
                     permit.get(),
                     session.get(),
-                    answerPartListener,
+                    publicationDelivery,
                     code);
             progress.complete();
             logRun(response);
             return response;
+        } finally {
+            publicationDelivery.close();
         }
     }
 
@@ -756,7 +762,7 @@ final class RecommendationReActLoop {
             PublicationSeed seed,
             RecommendationPublication.Permit approved,
             RecommendationPublication.Session active,
-            Consumer<String> answerPartListener,
+            PublicationDelivery publicationDelivery,
             String code) {
         RecommendationPublication.Permit safePermit = approved;
         RecommendationPublication.Session safeSession = active;
@@ -772,9 +778,13 @@ final class RecommendationReActLoop {
             safePermit = publication.permit(decision, state, seed);
         }
         if (safeSession == null) {
-            safeSession = publication.open(safePermit, state, locale, answerPartListener);
+            safeSession = publication.open(safePermit, state, locale);
         }
-        return safeSession.finishWithVerifiedCandidates(code);
+        ConversationResponse response = safeSession.finishWithVerifiedCandidates(code);
+        publicationDelivery.enqueue(safeSession.drainAnswerSnapshots());
+        publicationDelivery.await(state);
+        safeSession.commit();
+        return response;
     }
 
     private String publicationContext(
@@ -856,6 +866,9 @@ final class RecommendationReActLoop {
             }
             if (current instanceof RecommendationPublication.InvalidPublication invalid) {
                 return invalid.code().name();
+            }
+            if (current instanceof RecommendationPublication.DeliveryFailure) {
+                return "PUBLICATION_DELIVERY_FAILED";
             }
             if (current instanceof RecommendationPublicationStream.Failure failure) {
                 if (failure.getCause() != null) {
@@ -1715,9 +1728,7 @@ final class RecommendationReActLoop {
             RecommendationAgentState state, Runnable closePublication, Supplier<T> operation) {
         // The run deadline bounds optional provider work. Once a typed, verified publication seed exists, the
         // deterministic projection may still finish immediately afterward instead of erasing safe cards.
-        long publicationDeadlineMillis = Math.min(
-                maximumRunMillis,
-                OPTIONAL_PUBLICATION_MODEL_DEADLINE_MILLIS);
+        long publicationDeadlineMillis = publicationModelDeadlineMillis();
         long remainingMillis = publicationDeadlineMillis - state.elapsedMs();
         if (remainingMillis <= 0) {
             closePublication.run();
@@ -1744,6 +1755,146 @@ final class RecommendationReActLoop {
             if (cause instanceof Error error) throw error;
             throw new IllegalStateException("bounded recommendation publication failed", cause);
         }
+    }
+
+    /** Serializes complete answer snapshots without letting player I/O own the model-state monitor. */
+    private final class PublicationDelivery implements AutoCloseable {
+        private final Consumer<String> listener;
+        private final ExecutorService deliveryCalls = AsyncContextPropagation.executorService(
+                Executors.newSingleThreadExecutor(
+                        Thread.ofVirtual().name("recommendation-publication-delivery-", 0).factory()));
+        private final List<Future<?>> pending = new ArrayList<>();
+        private final AtomicReference<Throwable> failure = new AtomicReference<>();
+        private boolean sealed;
+
+        private PublicationDelivery(Consumer<String> listener) {
+            this.listener = Objects.requireNonNull(listener, "answer listener is required");
+        }
+
+        synchronized void enqueue(List<String> snapshots) {
+            if (sealed) {
+                throw new RecommendationPublication.DeliveryFailure(
+                        new IllegalStateException("recommendation publication delivery is closed"));
+            }
+            for (String snapshot : snapshots) {
+                pending.add(deliveryCalls.submit(() -> {
+                    if (failure.get() != null) return;
+                    try {
+                        listener.accept(snapshot);
+                    } catch (RuntimeException | Error exception) {
+                        failure.compareAndSet(null, exception);
+                        throw exception;
+                    }
+                }));
+            }
+        }
+
+        void await(RecommendationAgentState state) {
+            List<Future<?>> scheduled;
+            synchronized (this) {
+                sealed = true;
+                scheduled = List.copyOf(pending);
+                deliveryCalls.shutdown();
+            }
+            try {
+                for (Future<?> delivery : scheduled) {
+                    long remainingMillis = Math.max(0, maximumRunMillis - state.elapsedMs());
+                    // Future#get(0, ...) still returns an already completed delivery. This preserves a successful
+                    // player write that settled at the boundary while refusing to wait beyond the run budget.
+                    delivery.get(remainingMillis, TimeUnit.MILLISECONDS);
+                }
+            } catch (TimeoutException exception) {
+                throw deliveryDeadlineExceeded();
+            } catch (InterruptedException exception) {
+                deliveryCalls.shutdownNow();
+                Thread.currentThread().interrupt();
+                throw new RunInterrupted();
+            } catch (ExecutionException exception) {
+                deliveryCalls.shutdownNow();
+                Throwable cause = exception.getCause();
+                if (cause instanceof RuntimeException runtime) {
+                    throw new RecommendationPublication.DeliveryFailure(runtime);
+                }
+                if (cause instanceof Error error) throw error;
+                throw new RecommendationPublication.DeliveryFailure(
+                        new IllegalStateException("recommendation publication delivery failed", cause));
+            }
+        }
+
+        private RecommendationPublication.DeliveryFailure deliveryDeadlineExceeded() {
+            deliveryCalls.shutdownNow();
+            return new RecommendationPublication.DeliveryFailure(
+                    new IllegalStateException("recommendation publication delivery exceeded the run deadline"));
+        }
+
+        @Override
+        public synchronized void close() {
+            sealed = true;
+            deliveryCalls.shutdownNow();
+        }
+    }
+
+    /** Fences parser state while allowing the resulting delivery submission to happen after releasing the lock. */
+    private static final class PublicationLifecycle {
+        private boolean accepting = true;
+        private int deliveriesBeingScheduled;
+
+        synchronized <T> T mutate(Supplier<T> mutation) {
+            requireAccepting();
+            return mutation.get();
+        }
+
+        synchronized <T> T beginDelivery(Supplier<T> mutation) {
+            requireAccepting();
+            deliveriesBeingScheduled++;
+            try {
+                return mutation.get();
+            } catch (RuntimeException | Error failure) {
+                deliveriesBeingScheduled--;
+                notifyAll();
+                throw failure;
+            }
+        }
+
+        synchronized void endDelivery() {
+            if (deliveriesBeingScheduled <= 0) {
+                throw new IllegalStateException("recommendation publication delivery lifecycle is invalid");
+            }
+            deliveriesBeingScheduled--;
+            notifyAll();
+        }
+
+        void close() {
+            boolean interrupted = false;
+            synchronized (this) {
+                accepting = false;
+                while (deliveriesBeingScheduled > 0) {
+                    try {
+                        wait();
+                    } catch (InterruptedException exception) {
+                        interrupted = true;
+                    }
+                }
+            }
+            if (interrupted) {
+                Thread.currentThread().interrupt();
+                throw new RunInterrupted();
+            }
+        }
+
+        private void requireAccepting() {
+            if (!accepting) {
+                throw new IllegalStateException("recommendation publication is no longer accepting output");
+            }
+        }
+    }
+
+    long publicationModelDeadlineMillis() {
+        if (maximumRunMillis <= 1) return maximumRunMillis;
+        long completionReserveMillis = Math.min(
+                PUBLICATION_COMPLETION_RESERVE_MILLIS,
+                Math.max(1, maximumRunMillis / 2));
+        return maximumRunMillis - completionReserveMillis;
     }
 
     private void emitProgress(

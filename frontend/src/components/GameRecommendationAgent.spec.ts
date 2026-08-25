@@ -556,7 +556,7 @@ describe('GameRecommendationAgent', () => {
     expect(wrapper.text()).toContain('重试只执行了原来的玩家回合。')
   })
 
-  it('keeps an unavailable result retryable without publishing its provisional answer', async () => {
+  it('keeps an unavailable result retryable and shows its terminal player-facing explanation', async () => {
     const conversationId = 'cb9e5386-415f-48ea-8991-0cad2fc67d02'
     const originalRequest = '找一些适合四个人的科幻主题桌游'
     const provisionalAnswer = '我已经找到几款可核对的候选，正在确认它们与主题的关系。'
@@ -614,9 +614,11 @@ describe('GameRecommendationAgent', () => {
     const failedTurn = wrapper.get('[role="alert"]')
     expect(failedTurn.text()).toContain('这次推荐没有完成，也没有写入对话结果')
     expect(failedTurn.text()).toContain('模型这次没有返回完整、可执行的结构')
+    expect(failedTurn.text()).not.toContain(unavailableMessage)
+    expect(wrapper.get('[data-testid="recommendation-failed-assistant-reply"]').text())
+      .toBe(unavailableMessage)
     expect(wrapper.find('[data-testid="recommendation-provisional-failure"]').exists()).toBe(false)
     expect(wrapper.text()).not.toContain(provisionalAnswer)
-    expect(wrapper.text()).not.toContain(unavailableMessage)
     expect(requestBodies[0]).toMatchObject({ revision: 0, message: originalRequest })
     expect(wrapper.findAll('[data-conversation-message]').filter(turn => turn.text().includes(originalRequest)))
       .toHaveLength(1)
@@ -1098,6 +1100,8 @@ describe('GameRecommendationAgent', () => {
 
     const returned = await mountAgent({}, { sessionIdentity: 'alice' })
     expect(returned.text()).toContain('刚才没有接上')
+    expect(returned.get('[data-testid="recommendation-failed-assistant-reply"]').text())
+      .toContain('我没有猜测或伪造候选')
     expect(returned.findAll('button').some(button => button.text() === '重试')).toBe(true)
     expect(fetchMock).toHaveBeenCalledOnce()
     expect(String(fetchMock.mock.calls[0]?.[0])).toBe('/api/v1/bgg/recommendation-agent/session')
@@ -1430,6 +1434,8 @@ describe('GameRecommendationAgent', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('你写下的条件还在')
+    expect(wrapper.get('[data-testid="recommendation-failed-assistant-reply"]').text())
+      .toContain('我没有猜测或伪造候选')
     expect(wrapper.get('[role="alert"] button').text()).toBe('重试')
   })
 
@@ -1553,6 +1559,8 @@ describe('GameRecommendationAgent', () => {
     expect(alert.get('button').text()).toBe('Retry')
     expect(alert.text()).not.toContain('刚才没有接上')
     expect(alert.text()).not.toContain('重试')
+    expect(wrapper.get('[data-testid="recommendation-failed-assistant-reply"]').text())
+      .toContain('I did not guess or invent candidates')
   })
 
   it('keeps the browser fallback recovery summary in the last successful response language', async () => {

@@ -56,9 +56,9 @@ class BoardGameRecommendationSelector {
             boolean chinese,
             com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Research research) {
         return selected.stream()
-                // Cards retain structured, candidate-scoped fit evidence for comparison and recovery, but never
-                // receive application-authored recommendation sentences. The final model voice sees the selected
-                // raw observations and owns the natural explanation; the compact card renders only source fields.
+                // Cards retain structured, candidate-scoped fit evidence for comparison and recovery. The final
+                // model voice owns the ordinary explanation; a failed final writer may receive only an explicit
+                // satisfied constraint or a neutral fact that preserves the candidate observation's evidence class.
                 .map(game -> new RecommendedGame(
                         game,
                         List.of(),
