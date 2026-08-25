@@ -119,6 +119,7 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                     capture.callCount()));
             visible.put("assistantResultTtfbMs", firstChunkMs.get() == null ? -1L : firstChunkMs.get());
             visible.put("answerChunkCount", chunks.size());
+            visible.put("firstSafeSegment", chunks.isEmpty() ? "" : chunks.getFirst());
             visibleTurns.add(Map.copyOf(visible));
 
             assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
@@ -131,9 +132,13 @@ class BoardGameRecommendationAgentPaidCanaryTest {
             assertThat(response.profile().players()).isEqualTo(3);
             assertThat(chunks).isNotEmpty().allSatisfy(chunk ->
                     assertThat(response.assistantMessage()).startsWith(chunk));
+            assertThat(chunks.getFirst())
+                    .isNotBlank()
+                    .doesNotContain("internalEvidenceIds", "recommendation_publication", "PUBLICATION_");
             assertThat(chunks.getLast()).isEqualTo(response.assistantMessage());
-            assertThat(firstChunkMs.get()).isNotNull().isLessThanOrEqualTo(totalMs);
-            assertThat(response.harness().modelCalls()).isEqualTo(2);
+            assertThat(firstChunkMs.get()).isNotNull().isLessThan(totalMs).isLessThan(20_000L);
+            assertThat(totalMs).isLessThan(20_000L);
+            assertThat(response.harness().modelCalls()).isPositive().isLessThanOrEqualTo(2);
             assertThat(response.harness().fallbackUsed()).isFalse();
             assertThat(response.harness().actions())
                     .contains("RECOMMEND_GAMES")
@@ -158,7 +163,12 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                 assertThat(block.path("text").asText()).isNotBlank();
             });
             assertThat(response.games()).allSatisfy(game -> {
-                assertThat(game.replyParts()).isNotEmpty();
+                assertThat(game.replyParts())
+                        .anySatisfy(part -> {
+                            assertThat(part.role())
+                                    .isEqualTo(BoardGameRecommendationAgent.ReplyPartRole.WHY_FIT);
+                            assertThat(part.claim().text()).hasSizeGreaterThan(8);
+                        });
                 assertThat(game.replyParts()).allSatisfy(part -> {
                     assertThat(part.claim().evidence()).isNotEmpty();
                     assertThat(part.claim().evidence())

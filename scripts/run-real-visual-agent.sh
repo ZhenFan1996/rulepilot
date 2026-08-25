@@ -3,6 +3,7 @@
 set -eu
 
 ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+. "$ROOT_DIR/scripts/require-paid-canary-authorization.sh"
 
 if [ ! -f "$ROOT_DIR/.env" ]; then
 	echo "FAIL .env is required for the authorized paid visual Agent evaluation"
