@@ -493,6 +493,428 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
   }
 })
 
+test('refuses to assert image-gallery rights unless the operator passed the explicit flag', async () => {
+  const result = await spawnResult(
+    'bash',
+    [resolve('scripts/smoke-production-ordinary-user.sh'),
+      '--base-url', 'http://127.0.0.1:1',
+      '--source-mode', 'official_image_gallery',
+      '--official-source-url', 'https://www.gstonegames.com/game/doc-4417.html',
+      '--expected-title', 'dune: imperium',
+      '--uploaded-title', 'Dune: Imperium',
+      '--bgg-id', '316554',
+      '--expected-page-count', '20',
+      '--language', 'zh-CN',
+      '--canary-id', 'rights-negative',
+      '--question', '游戏什么时候结束？'],
+    { ...process.env, RULEPILOT_SMOKE_PASSWORD: 'smoke-password' },
+  )
+
+  assert.equal(result.code, 2)
+  assert.match(result.stderr, /--rights-confirmed is required/)
+})
+
+test('imports one fresh ordered image gallery, reuses its automatic Teaching handoff, and cleans up only that document', async () => {
+  const calls = []
+  const editionId = '11111111-2222-4333-8444-555555555555'
+  const documentId = '22222222-3333-4444-8555-666666666666'
+  const retainedDocumentId = '22222222-3333-4444-8555-777777777777'
+  const versionId = '33333333-4444-4555-8666-777777777777'
+  const importJobId = '44444444-5555-4666-8777-888888888888'
+  const preparationRunId = '55555555-6666-4777-8888-999999999999'
+  const planId = '66666666-7777-4888-8999-000000000000'
+  const lessonRunId = '77777777-8888-4999-8000-111111111111'
+  const canonicalSource = 'https://www.gstonegames.com/game/doc-4417.html'
+  const effectiveSource = `${canonicalSource}?rulepilot_canary=run-1`
+  const canaryTitle = 'Dune: Imperium · RulePilot canary run-1'
+  let deleted = false
+
+  const run = (id, state, createdAt, completedAt, activities) => ({
+    run: { id, state, createdAt, completedAt, lastErrorCode: null },
+    steps: [],
+    activities,
+    budget: { usedModelCalls: activities.filter(activity => activity.type === 'MODEL').length,
+      usedToolCalls: 0, usedTokens: 1000 },
+  })
+  const preparation = run(preparationRunId, 'COMPLETED', '2026-08-25T00:00:00Z', '2026-08-25T00:00:10Z', [
+    { sequence: 1, type: 'MODEL', operation: 'transcribeTeachingVisualPage|1|3', outcome: 'SUCCEEDED',
+      latencyMs: 1200, occurredAt: '2026-08-25T00:00:02Z' },
+    { sequence: 2, type: 'MODEL', operation: 'transcribeTeachingVisualPage|2|3', outcome: 'SUCCEEDED',
+      latencyMs: 1400, occurredAt: '2026-08-25T00:00:03Z' },
+    { sequence: 3, type: 'MODEL', operation: 'transcribeTeachingVisualPage|3|3', outcome: 'SUCCEEDED',
+      latencyMs: 1300, occurredAt: '2026-08-25T00:00:03Z' },
+    { sequence: 4, type: 'MODEL', operation: 'inspectTeachingVisualPage|1|3', outcome: 'FAILED',
+      latencyMs: 1000, occurredAt: '2026-08-25T00:00:04Z' },
+    { sequence: 5, type: 'MODEL', operation: 'inspectTeachingVisualPage|2|3', outcome: 'FAILED',
+      latencyMs: 900, occurredAt: '2026-08-25T00:00:04Z' },
+    { sequence: 6, type: 'MODEL', operation: 'inspectTeachingVisualPage|3|3', outcome: 'SUCCEEDED',
+      latencyMs: 900, occurredAt: '2026-08-25T00:00:04Z' },
+    { sequence: 7, type: 'MODEL', operation: 'inspectTeachingVisualRepair|1|3|DUPLICATE_RULE_GROUP', outcome: 'SUCCEEDED',
+      latencyMs: 1100, occurredAt: '2026-08-25T00:00:05Z' },
+    { sequence: 8, type: 'MODEL', operation: 'inspectTeachingVisualRetry|2|3', outcome: 'SUCCEEDED',
+      latencyMs: 1050, occurredAt: '2026-08-25T00:00:05Z' },
+  ])
+  const lessonRun = run(lessonRunId, 'COMPLETED', '2026-08-25T00:00:10Z', '2026-08-25T00:00:18Z', [
+    { sequence: 1, type: 'MODEL', operation: 'composeLessonSection', outcome: 'SUCCEEDED',
+      latencyMs: 5000, occurredAt: '2026-08-25T00:00:15Z' },
+    { sequence: 2, type: 'VALIDATION', operation: 'publishTeachingSection|1', outcome: 'SUCCEEDED',
+      latencyMs: 0, occurredAt: '2026-08-25T00:00:16Z' },
+  ])
+  const importJob = {
+    id: importJobId,
+    title: 'Dune: Imperium',
+    rulebookTitle: canaryTitle,
+    editionId,
+    officialSourceUrl: effectiveSource,
+    stage: 'COMPLETED',
+    downloadedBytes: 8192,
+    totalBytes: null,
+    documentVersionId: versionId,
+    duplicate: false,
+    errorCode: null,
+    teachingHandoffState: 'LAUNCHED',
+    teachingPreparationRunId: preparationRunId,
+    teachingErrorCode: null,
+    teachingAutomaticRecoveryCount: 0,
+    downloadCompletedAt: '2026-08-25T00:00:00Z',
+    importCompletedAt: '2026-08-25T00:00:01Z',
+    teachingHandoffUpdatedAt: '2026-08-25T00:00:01Z',
+    reused: false,
+  }
+  const lesson = {
+    teachingPlanId: planId,
+    status: 'COMPLETE',
+    sections: [{ position: 1, evidenceStatus: 'SUPPORTED', steps: [{
+      kind: 'RULE', citationIds: ['99999999-0000-4111-8222-333333333333'],
+    }] }],
+  }
+
+  const server = createServer(async (request, response) => {
+    const body = await readBody(request)
+    calls.push({ method: request.method, url: request.url, body })
+    response.setHeader('Content-Type', 'application/json')
+    response.setHeader('Set-Cookie', 'RULEPILOT_TEST=authenticated; Path=/')
+    if (request.method === 'GET' && request.url === '/api/auth/csrf') {
+      return json(response, 200, { headerName: 'X-CSRF-TOKEN', token: 'csrf-token' })
+    }
+    if (request.method === 'POST' && request.url === '/api/auth/login') return json(response, 200, {})
+    if (request.method === 'GET' && request.url === '/api/auth/session') {
+      return json(response, 200, { username: 'player', roles: ['USER'] })
+    }
+    if (request.method === 'POST' && request.url === '/api/v1/bgg/games/316554/import') {
+      return json(response, 200, {
+        game: { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', name: 'Dune: Imperium' },
+        edition: { id: editionId, gameId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', name: 'BGG version', language: 'und' },
+        bggId: 316554,
+      })
+    }
+    if (request.method === 'GET' && request.url
+      === `/api/v1/documents/rulebook-candidates?editionId=${editionId}&language=zh-CN`) {
+      return json(response, 200, {
+        configured: true,
+        identity: { editionId, gameName: 'Dune: Imperium', editionName: 'BGG version', language: 'und' },
+        candidates: [{
+          title: '官方中文规则', url: canonicalSource, publisher: '集石', language: 'zh-CN',
+          edition: 'BGG version', sourceDomain: 'www.gstonegames.com', officialDomainVerified: false,
+          languageVerified: true, sourceType: 'COMMUNITY_PLATFORM', acquisitionMode: 'IMAGE_GALLERY',
+          capability: 'CONTIGUOUS_RULE_PAGES', capabilityEvidence: ['ORDERED_PAGE_SEQUENCE_CONFIRMED'],
+          nextAction: 'IMPORT_PAGE_SEQUENCE',
+        }],
+      })
+    }
+    if (request.method === 'POST' && request.url === '/api/v1/documents/official-imports') {
+      const payload = JSON.parse(body.toString())
+      assert.deepEqual(payload, {
+        editionId,
+        title: canaryTitle,
+        sourceType: 'BASE_RULEBOOK',
+        officialSourceUrl: effectiveSource,
+        rightsConfirmed: true,
+        startTeaching: true,
+        learningGoal: null,
+        discoveredForEditionId: editionId,
+        sourceEdition: 'BGG version',
+        sourceLanguage: 'zh-CN',
+        sourceLanguageVerified: true,
+        identityConfirmed: true,
+      })
+      return json(response, 202, { ...importJob, stage: 'QUEUED', downloadedBytes: 0,
+        documentVersionId: null, teachingHandoffState: 'WAITING_FOR_DOCUMENT',
+        teachingPreparationRunId: null })
+    }
+    if (request.method === 'GET' && request.url === `/api/v1/documents/official-imports/${importJobId}`) {
+      return json(response, 200, importJob)
+    }
+    if (request.method === 'GET' && request.url === '/api/v1/documents') {
+      return json(response, 200, [
+        {
+          document: { id: retainedDocumentId, gameEditionId: editionId, title: 'Existing user rulebook' },
+          latestVersion: { id: '33333333-4444-4555-8666-888888888888', status: 'READY' },
+        },
+        ...deleted ? [] : [{
+          document: { id: documentId, gameEditionId: editionId, title: canaryTitle },
+          latestVersion: { id: versionId, status: 'READY' },
+        }],
+      ])
+    }
+    if (request.method === 'GET' && request.url === '/api/v1/teaching-plans') return json(response, 200, [])
+    if (request.method === 'GET' && request.url === '/api/public/lessons') return json(response, 200, [])
+    if (request.method === 'GET' && request.url === `/api/v1/document-versions/${versionId}/pages/summaries`) {
+      return json(response, 200, [
+        { pageNumber: 1, characterCount: 0 },
+        { pageNumber: 2, characterCount: 0 },
+        { pageNumber: 3, characterCount: 0 },
+      ])
+    }
+    if (request.method === 'GET' && request.url === `/api/v1/assistant-runs/${preparationRunId}`) {
+      return json(response, 200, preparation)
+    }
+    if (request.method === 'GET' && request.url === `/api/v1/document-versions/${versionId}/teaching-plans/latest`) {
+      return json(response, 200, { id: planId, documentVersionId: versionId,
+        gameTitle: 'Dune: Imperium', sections: [{ position: 1 }] })
+    }
+    if (request.method === 'GET'
+      && request.url === `/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=${planId}`) {
+      return json(response, 200, lessonRun)
+    }
+    if (request.method === 'GET' && request.url === `/api/v1/assistant-runs/${lessonRunId}`) {
+      return json(response, 200, lessonRun)
+    }
+    if (request.method === 'GET' && request.url === `/api/v1/teaching-plans/${planId}/illustrated-lessons/latest`) {
+      return json(response, 200, lesson)
+    }
+    if (request.method === 'POST' && request.url === `/api/v1/document-versions/${versionId}/answers`) {
+      assert.deepEqual(JSON.parse(body.toString()), {
+        question: '游戏什么时候结束？胜利点相同时如何决胜？请标出规则书页码。',
+        language: 'zh-CN',
+      })
+      return json(response, 200, {
+        answer: {
+          language: 'zh-CN', status: 'ANSWERED', shortVerdict: '达到结束条件后比较胜利点。',
+          explanation: '平手时按规则书列出的资源顺序决胜。',
+          citations: [{ pageFrom: 2, pageTo: 2, excerpt: '游戏结束与平手规则。' }],
+        },
+        rulingReference: { citationIds: ['99999999-0000-4111-8222-333333333333'],
+          confirmedRulingId: null, confirmedRulingVersion: null },
+      })
+    }
+    if (request.method === 'POST' && request.url?.endsWith('/cancellation')) return json(response, 202, {})
+    if (request.method === 'DELETE' && request.url === `/api/v1/documents/${documentId}`) {
+      deleted = true
+      response.statusCode = 204
+      return response.end()
+    }
+    return json(response, 404, { error: 'unexpected request' })
+  })
+
+  await new Promise((resolvePromise) => server.listen(0, '127.0.0.1', resolvePromise))
+  const directory = await mkdtemp(join(tmpdir(), 'rulepilot-production-gallery-smoke-'))
+  const retainedResult = join(directory, 'retained-result.json')
+  try {
+    const address = server.address()
+    assert.equal(typeof address, 'object')
+    const result = await spawnResult(
+      'bash',
+      [resolve('scripts/smoke-production-ordinary-user.sh'),
+        '--base-url', `http://127.0.0.1:${address.port}`,
+        '--source-mode', 'official_image_gallery',
+        '--official-source-url', canonicalSource,
+        '--expected-title', 'dune: imperium',
+        '--uploaded-title', 'Dune: Imperium',
+        '--bgg-id', '316554',
+        '--expected-page-count', '3',
+        '--language', 'zh-CN',
+        '--canary-id', 'run-1',
+        '--rights-confirmed',
+        '--navigation-mode', 'api',
+        '--question', '游戏什么时候结束？胜利点相同时如何决胜？请标出规则书页码。',
+        '--result-file', retainedResult,
+        '--timeout-seconds', '10'],
+      { ...process.env, RULEPILOT_SMOKE_PASSWORD: 'smoke-password' },
+    )
+    assert.equal(result.code, 0, result.stderr)
+    const summary = JSON.parse(result.stdout)
+    assert.equal(summary.sourceMode, 'official_image_gallery')
+    assert.equal(summary.title, 'Dune: Imperium')
+    assert.equal(summary.sourceUrl, canonicalSource)
+    assert.equal(summary.effectiveSourceUrl, effectiveSource)
+    assert.equal(summary.pageCount, 3)
+    assert.deepEqual(summary.pageAttempts, {
+      pages: [
+        { page: 1, ocrOutcome: 'SUCCEEDED', initialOutcome: 'FAILED', recoveryKind: 'CONTRACT_REPAIR',
+          repairCode: 'DUPLICATE_RULE_GROUP', recoveryOutcome: 'SUCCEEDED', semanticAttempts: 2,
+          finalOutcome: 'SUCCEEDED' },
+        { page: 2, ocrOutcome: 'SUCCEEDED', initialOutcome: 'FAILED', recoveryKind: 'TRANSIENT_RETRY',
+          repairCode: null, recoveryOutcome: 'SUCCEEDED', semanticAttempts: 2, finalOutcome: 'SUCCEEDED' },
+        { page: 3, ocrOutcome: 'SUCCEEDED', initialOutcome: 'SUCCEEDED', recoveryKind: null,
+          repairCode: null, recoveryOutcome: null, semanticAttempts: 1, finalOutcome: 'SUCCEEDED' },
+      ],
+      ocrSucceeded: 3,
+      ocrFailed: 0,
+      ocrRejected: 0,
+      ocrRetryAttempted: 0,
+      initialSucceeded: 1,
+      initialFailed: 2,
+      initialRejected: 0,
+      transientRetryAttempted: 1,
+      transientRetrySucceeded: 1,
+      transientRetryFailed: 0,
+      repairAttempted: 1,
+      repairSucceeded: 1,
+      repairFailed: 0,
+      finalUnavailablePages: [],
+      maximumSemanticAttemptsForAnyPage: 2,
+      valid: true,
+    })
+    assert.equal(summary.preparationState, 'COMPLETED')
+    assert.equal(summary.lessonState, 'COMPLETED')
+    assert.equal(summary.lessonStatus, 'COMPLETE')
+    assert.equal(summary.answerStatus, 'ANSWERED')
+    assert.equal(deleted, true)
+    assert.match(result.stderr, /SMOKE_STAGE image-gallery-candidate-verified/)
+    assert.match(result.stderr, /SMOKE_STAGE official-import-completed/)
+    assert.match(result.stderr, /SMOKE_PAGE_ATTEMPTS .*"maximumSemanticAttemptsForAnyPage":2/)
+    assert.match(result.stderr, /SMOKE_STAGE cleanup-completed/)
+    assert.equal(calls.filter(call => call.method === 'POST'
+      && call.url === '/api/v1/documents/official-imports').length, 1)
+    assert.equal(calls.filter(call => call.method === 'POST'
+      && /\/document-versions\/[^/]+\/teaching-plans$/.test(call.url ?? '')).length, 0)
+    assert.equal(calls.filter(call => call.method === 'POST'
+      && /\/illustrated-lessons$/.test(call.url ?? '')).length, 0)
+    assert.equal(calls.filter(call => call.method === 'POST' && call.url === '/api/v1/documents').length, 0)
+    assert.deepEqual(calls.filter(call => call.method === 'DELETE').map(call => call.url),
+      [`/api/v1/documents/${documentId}`])
+    const retained = JSON.parse(await readFile(retainedResult, 'utf8'))
+    assert.equal(retained.importJobId, importJobId)
+    assert.equal(retained.documentId, documentId)
+    assert.equal(retained.documentVersionId, versionId)
+    assert.equal(retained.summary.pageAttempts.repairSucceeded, 1)
+  } finally {
+    server.closeAllConnections()
+    await new Promise((resolvePromise) => server.close(resolvePromise))
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test('keeps a timed-out accepted import failed while deleting only its later exact fresh document', async () => {
+  const editionId = '81111111-2222-4333-8444-555555555555'
+  const importJobId = '82222222-3333-4444-8555-666666666666'
+  const documentId = '83333333-4444-4555-8666-777777777777'
+  const retainedDocumentId = '84444444-5555-4666-8777-888888888888'
+  const versionId = '85555555-6666-4777-8888-999999999999'
+  const source = 'https://www.gstonegames.com/game/doc-4417.html'
+  const effectiveSource = `${source}?rulepilot_canary=cleanup-later`
+  const canaryTitle = 'Dune: Imperium · RulePilot canary cleanup-later'
+  const deleted = []
+  let importReads = 0
+
+  const server = createServer(async (request, response) => {
+    await readBody(request)
+    response.setHeader('Content-Type', 'application/json')
+    response.setHeader('Set-Cookie', 'RULEPILOT_TEST=authenticated; Path=/')
+    if (request.method === 'GET' && request.url === '/api/auth/csrf') {
+      return json(response, 200, { headerName: 'X-CSRF-TOKEN', token: 'csrf-token' })
+    }
+    if (request.method === 'POST' && request.url === '/api/auth/login') return json(response, 200, {})
+    if (request.method === 'GET' && request.url === '/api/auth/session') {
+      return json(response, 200, { username: 'player', roles: ['USER'] })
+    }
+    if (request.method === 'POST' && request.url === '/api/v1/bgg/games/316554/import') {
+      return json(response, 200, {
+        game: { id: '8aaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', name: 'Dune: Imperium' },
+        edition: { id: editionId, gameId: '8aaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', name: 'BGG version', language: 'und' },
+        bggId: 316554,
+      })
+    }
+    if (request.method === 'GET'
+      && request.url === `/api/v1/documents/rulebook-candidates?editionId=${editionId}&language=zh-CN`) {
+      return json(response, 200, {
+        configured: true,
+        identity: { editionId },
+        candidates: [{
+          title: '官方中文规则', url: source, language: 'zh-CN', languageVerified: true,
+          edition: 'BGG version', acquisitionMode: 'IMAGE_GALLERY', capability: 'CONTIGUOUS_RULE_PAGES',
+          capabilityEvidence: ['ORDERED_PAGE_SEQUENCE_CONFIRMED'], nextAction: 'IMPORT_PAGE_SEQUENCE',
+        }],
+      })
+    }
+    if (request.method === 'POST' && request.url === '/api/v1/documents/official-imports') {
+      return json(response, 202, {
+        id: importJobId, reused: false, editionId, officialSourceUrl: effectiveSource,
+        stage: 'QUEUED', duplicate: false, documentVersionId: null,
+      })
+    }
+    if (request.method === 'GET' && request.url === `/api/v1/documents/official-imports/${importJobId}`) {
+      importReads += 1
+      if (importReads === 1) {
+        return json(response, 200, {
+          id: importJobId, stage: 'QUEUED', duplicate: false, documentVersionId: null,
+          teachingHandoffState: 'WAITING_FOR_DOCUMENT',
+        })
+      }
+      return json(response, 200, {
+        id: importJobId, stage: 'COMPLETED', duplicate: false, documentVersionId: versionId,
+        teachingHandoffState: 'LAUNCHED', teachingPreparationRunId: null,
+      })
+    }
+    if (request.method === 'GET' && request.url === '/api/v1/documents') {
+      return json(response, 200, [
+        {
+          document: { id: retainedDocumentId, title: canaryTitle, gameEditionId: editionId },
+          latestVersion: { id: '86666666-7777-4888-8999-000000000000', status: 'READY' },
+        },
+        {
+          document: { id: documentId, title: canaryTitle, gameEditionId: editionId },
+          latestVersion: { id: versionId, status: 'READY' },
+        },
+      ])
+    }
+    if (request.method === 'DELETE') {
+      deleted.push(request.url)
+      response.statusCode = 204
+      return response.end()
+    }
+    return json(response, 404, { error: 'unexpected request' })
+  })
+
+  await new Promise((resolvePromise) => server.listen(0, '127.0.0.1', resolvePromise))
+  try {
+    const address = server.address()
+    assert.equal(typeof address, 'object')
+    const result = await spawnResult(
+      'bash',
+      [resolve('scripts/smoke-production-ordinary-user.sh'),
+        '--base-url', `http://127.0.0.1:${address.port}`,
+        '--source-mode', 'official_image_gallery',
+        '--official-source-url', source,
+        '--expected-title', 'dune: imperium',
+        '--uploaded-title', 'Dune: Imperium',
+        '--bgg-id', '316554',
+        '--expected-page-count', '20',
+        '--language', 'zh-CN',
+        '--canary-id', 'cleanup-later',
+        '--rights-confirmed',
+        '--navigation-mode', 'api',
+        '--question', '游戏什么时候结束？',
+        '--timeout-seconds', '1'],
+      {
+        ...process.env,
+        RULEPILOT_SMOKE_PASSWORD: 'smoke-password',
+        RULEPILOT_SMOKE_CLEANUP_TIMEOUT_SECONDS: '5',
+      },
+    )
+
+    assert.equal(result.code, 1, result.stderr)
+    assert.match(result.stderr, /Official image-gallery import timed out/)
+    assert.match(result.stderr, /SMOKE_STAGE cleanup-import-resolved/)
+    assert.match(result.stderr, /SMOKE_STAGE cleanup-completed/)
+    assert.deepEqual(deleted, [`/api/v1/documents/${documentId}`])
+  } finally {
+    server.closeAllConnections()
+    await new Promise((resolvePromise) => server.close(resolvePromise))
+  }
+})
+
 test('production workflows never execute an operator-supplied Git ref with production credentials', async () => {
   const deployment = await readFile(resolve('.github/workflows/deploy-production.yml'), 'utf8')
   const smoke = await readFile(resolve('.github/workflows/production-ordinary-user-smoke.yml'), 'utf8')

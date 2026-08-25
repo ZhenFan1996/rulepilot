@@ -85,8 +85,9 @@ class TeachingGenerationConfiguration {
 
     /**
      * Vision calls are deliberately isolated from base lesson generation. Each page request owns its source image,
-     * provider response, validation, and persistence boundary, so up to ten pages can make progress without a shared
-     * response queue. The zero-capacity queue still rejects work above the configured per-lesson bound.
+     * provider response, validation, and persistence boundary. This pool serves post-publication positioning and
+     * complete visual audits; Teaching OCR and semantic catalog calls own separate bounded lanes in the cataloger.
+     * The zero-capacity queue still rejects work above the configured per-lesson bound.
      */
     @Bean(name = "visualLocationExecutor")
     ThreadPoolTaskExecutor visualLocationExecutor(

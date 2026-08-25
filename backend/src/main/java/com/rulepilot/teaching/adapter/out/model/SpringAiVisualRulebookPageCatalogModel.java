@@ -24,6 +24,8 @@ import com.rulepilot.teaching.VisualRulebookPageCatalogModel.RuleGroupCoverage;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.SourceDependency;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.TeachingPageRole;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.TeachingPageSketch;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.TeachingCatalogContractViolation;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.TeachingCatalogRepairCode;
 import com.rulepilot.teaching.TeachingOutlineModel.PageImageInput;
 import com.rulepilot.teaching.TeachingOutlineModel.SourceCoverageRole;
 import com.rulepilot.teaching.VisualRulebookPageFacts.IconMeaningStatus;
@@ -261,6 +263,16 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
     }
 
     @Override
+    public CatalogDraft repairTeachingCatalog(CatalogRequest request, TeachingCatalogRepairCode repairCode) {
+        String owner = request.modelConfigurationOwner();
+        if (models.usesFake(Role.VISUAL, owner) || !models.supportsVision(Role.VISUAL, owner)) {
+            return VisualRulebookPageCatalogModel.super.repairTeachingCatalog(request, repairCode);
+        }
+        return normalizeTeachingPageBindings(
+                request, summarizeTeachingOnce(request, owner, teachingCatalogRepairInstruction(repairCode)));
+    }
+
+    @Override
     public boolean supportsProgressiveTeachingStart(String owner) {
         return !models.usesFake(Role.VISUAL, owner)
                 && models.supportsVision(Role.VISUAL, owner)
@@ -336,6 +348,20 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
                 .call()
                 .content();
         return parseTeachingCatalogV6(content);
+    }
+
+    private static String teachingCatalogRepairInstruction(TeachingCatalogRepairCode repairCode) {
+        if (repairCode == null) throw new IllegalArgumentException("Teaching catalog repair code is required");
+        return switch (repairCode) {
+            case MALFORMED_JSON ->
+                "Return exactly one syntactically valid JSON object and no prose, Markdown, prefix, or suffix.";
+            case SCHEMA_MISMATCH ->
+                "Return exactly the declared root, page, rule-group, dependency, and quantity-span fields with the declared JSON types and bounds; omit every undeclared field.";
+            case DUPLICATE_RULE_GROUP ->
+                "Within one page, emit each exact identifier-and-fact tuple at most once. The same identifier may appear more than once only when its facts are different.";
+            case PAGE_BINDING_MISMATCH ->
+                "Return exactly one pages item for the supplied PDF page and copy its supplied pageNumber exactly; do not add, omit, duplicate, or renumber a page.";
+        };
     }
 
     private static String pageTranscripts(CatalogRequest request) {
@@ -780,12 +806,21 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
     }
 
     static CatalogDraft parseTeachingCatalogV6(String content) {
-        return parseCatalog(inlineQuantitySpansAsObservations(content), true, true, true, false, true);
+        try {
+            return parseCatalog(inlineQuantitySpansAsObservations(content), true, true, true, false, true);
+        } catch (TeachingCatalogContractViolation violation) {
+            throw violation;
+        } catch (IllegalArgumentException schemaMismatch) {
+            throw new TeachingCatalogContractViolation(
+                    TeachingCatalogRepairCode.SCHEMA_MISMATCH, schemaMismatch);
+        }
     }
 
     private static String inlineQuantitySpansAsObservations(String content) {
         if (content == null || content.isBlank()) {
-            throw new IllegalArgumentException("visual page catalog model returned no content");
+            throw new TeachingCatalogContractViolation(
+                    TeachingCatalogRepairCode.MALFORMED_JSON,
+                    new IllegalArgumentException("visual page catalog model returned no content"));
         }
         String json = content.strip();
         try {
@@ -863,7 +898,9 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
             }
             return JSON.writeValueAsString(root);
         } catch (JsonProcessingException invalidJson) {
-            throw new IllegalArgumentException("visual page catalog model returned invalid JSON", invalidJson);
+            throw new TeachingCatalogContractViolation(
+                    TeachingCatalogRepairCode.MALFORMED_JSON,
+                    new IllegalArgumentException("visual page catalog model returned invalid JSON", invalidJson));
         }
     }
 
@@ -1136,8 +1173,10 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
                     + "\u0000"
                     + VisualSourceRuleGroupLedger.identity(fact);
             if (!exactGroups.add(exactGroup)) {
-                throw new IllegalArgumentException(
-                        "visual teaching catalog contains an exactly duplicated rule group");
+                throw new TeachingCatalogContractViolation(
+                        TeachingCatalogRepairCode.DUPLICATE_RULE_GROUP,
+                        new IllegalArgumentException(
+                                "visual teaching catalog contains an exactly duplicated rule group"));
             }
             if (fact.indexOf('\n') >= 0 || fact.indexOf('\r') >= 0) {
                 throw new IllegalArgumentException("visual teaching catalog rule-group fact must be a single line");
@@ -1911,31 +1950,31 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
                 .toList());
     }
 
-    /**
-     * Multi-page startup responses are deliberately partial-tolerant: exact, unique page bindings are retained and
-     * the application retries only absent pages. Unknown or duplicate bindings are never guessed across multiple
-     * images. A one-image retry may safely repair its sole returned page number because no cross-page binding exists.
-     */
+    /** Teaching responses must preserve every supplied page binding exactly; repair is owned by the typed caller. */
     static CatalogDraft normalizeTeachingPageBindings(CatalogRequest request, CatalogDraft draft) {
-        if (draft == null) throw new IllegalArgumentException("visual teaching catalog model returned no draft");
-        List<Integer> requestedOrder = request.pages().stream().map(PageImageInput::pageNumber).toList();
-        if (requestedOrder.size() == 1 && draft.pages().size() == 1) {
-            return new CatalogDraft(List.of(withoutVisualEnrichment(
-                    rebound(draft.pages().getFirst(), requestedOrder.getFirst()))));
+        if (draft == null) {
+            throw new TeachingCatalogContractViolation(
+                    TeachingCatalogRepairCode.PAGE_BINDING_MISMATCH,
+                    new IllegalArgumentException("visual teaching catalog model returned no draft"));
         }
+        List<Integer> requestedOrder = request.pages().stream().map(PageImageInput::pageNumber).toList();
         Set<Integer> requested = Set.copyOf(requestedOrder);
         Map<Integer, Long> returnedCounts = draft.pages().stream().collect(Collectors.groupingBy(
                 PageSummary::pageNumber, Collectors.counting()));
+        boolean exactBindings = draft.pages().size() == requestedOrder.size()
+                && returnedCounts.size() == requested.size()
+                && returnedCounts.entrySet().stream()
+                        .allMatch(entry -> requested.contains(entry.getKey()) && entry.getValue() == 1);
+        if (!exactBindings) {
+            throw new TeachingCatalogContractViolation(
+                    TeachingCatalogRepairCode.PAGE_BINDING_MISMATCH,
+                    new IllegalArgumentException(
+                            "visual teaching catalog returned no safely bound supplied page; requested=" + requested));
+        }
         List<PageSummary> accepted = draft.pages().stream()
-                .filter(summary -> requested.contains(summary.pageNumber()))
-                .filter(summary -> returnedCounts.get(summary.pageNumber()) == 1)
                 .map(SpringAiVisualRulebookPageCatalogModel::withoutVisualEnrichment)
                 .sorted(java.util.Comparator.comparingInt(summary -> requestedOrder.indexOf(summary.pageNumber())))
                 .toList();
-        if (accepted.isEmpty()) {
-            throw new IllegalArgumentException(
-                    "visual teaching catalog returned no safely bound supplied page; requested=" + requested);
-        }
         return new CatalogDraft(accepted);
     }
 

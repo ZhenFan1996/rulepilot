@@ -54,7 +54,9 @@ export function mergeTeachingRunProgress(
   incoming: TeachingRunProgress | null,
 ) {
   if (!incoming) return previous
-  if (previous?.run.id !== incoming.run.id) return incoming
+  if (previous?.run.id !== incoming.run.id) {
+    return { ...incoming, activities: normalizeTeachingActivities(incoming.activities) }
+  }
   const previousUpdatedAt = Date.parse(previous.run.updatedAt)
   const incomingUpdatedAt = Date.parse(incoming.run.updatedAt)
   const latest = !Number.isNaN(previousUpdatedAt)
@@ -64,11 +66,14 @@ export function mergeTeachingRunProgress(
     : incoming
   return {
     ...latest,
-    activities: Array.from(new Map(
-      [...previous.activities, ...incoming.activities]
-        .map((activity) => [activity.sequence, activity]),
-    ).values()).sort((left, right) => left.sequence - right.sequence),
+    activities: normalizeTeachingActivities([...previous.activities, ...incoming.activities]),
   }
+}
+
+function normalizeTeachingActivities(activities: readonly TeachingActivity[]) {
+  return Array.from(new Map(
+    activities.map((activity) => [activity.sequence, activity]),
+  ).values()).sort((left, right) => left.sequence - right.sequence)
 }
 
 export function teachingActivityText(
@@ -322,6 +327,7 @@ function isPlayerFacingTeachingPreparationOperation(operation: string) {
     || operation.startsWith('inspectTeachingVisualBatch')
     || operation.startsWith('inspectTeachingVisualPage')
     || operation.startsWith('inspectTeachingVisualRetry')
+    || operation.startsWith('inspectTeachingVisualRepair')
     || operation.startsWith('selectProgressiveTeachingStart')
     || operation.startsWith('organizeTeachingOutline')
     || operation.startsWith('refineTeachingOutlineCoverage')
@@ -333,73 +339,139 @@ function teachingPreparationActivityText(
   activity: TeachingActivitySummary,
   locale: AppLocale,
 ) {
-  const failed = activity.outcome === 'FAILED' || activity.outcome === 'REJECTED'
+  const unsuccessful = activity.outcome === 'FAILED' || activity.outcome === 'REJECTED'
   const visualPageProgress = visualPreparationPageProgress(activity.operation)
+  if (activity.operation.startsWith('transcribeTeachingVisual')) {
+    return visualPageActivityText(activity.outcome, visualPageProgress, 'transcription', locale)
+  }
+  if (activity.operation.startsWith('inspectTeachingVisual')) {
+    return visualPageActivityText(activity.outcome, visualPageProgress, 'grouping', locale)
+  }
   if (locale === 'en') {
-    if (activity.operation.startsWith('transcribeTeachingVisual')) {
-      if (visualPageProgress) return failed
-        ? `Text recognition for visual rulebook page ${visualPageProgress.page} of ${visualPageProgress.total} needs another pass`
-        : `Transcribing visual rulebook page ${visualPageProgress.page} of ${visualPageProgress.total}`
-      return failed ? 'A visual rulebook page needs another transcription pass' : 'Transcribing the visual rulebook page'
-    }
-    if (activity.operation.startsWith('inspectTeachingVisual')) {
-      if (visualPageProgress) return failed
-        ? `Rule grouping for visual rulebook page ${visualPageProgress.page} of ${visualPageProgress.total} needs another pass`
-        : `Organising the rules on visual rulebook page ${visualPageProgress.page} of ${visualPageProgress.total}`
-      return failed ? 'Some visual rulebook pages need another rule-grouping pass' : 'Organising the visual rulebook pages into rule groups'
-    }
     if (activity.operation.startsWith('selectProgressiveTeachingStart')) {
-      return failed ? 'Continuing with the complete rulebook plan' : 'Choosing the first rule pages that can be taught clearly'
+      return unsuccessful ? 'The first-page selection did not complete; continuing with the complete rulebook plan' : 'Choosing the first rule pages that can be taught clearly'
     }
     if (activity.operation.startsWith('organizeTeachingOutline')) {
-      return failed ? 'The chapter plan needs another attempt' : activity.outcome === 'SUCCEEDED'
+      if (activity.outcome === 'FAILED') return 'The chapter plan did not complete this time'
+      if (activity.outcome === 'REJECTED') return 'The chapter plan did not pass validation this time'
+      return activity.outcome === 'SUCCEEDED'
         ? 'A whole-game view is ready and the rulebook is organized into teachable chapters'
         : 'Reading across the rulebook to build a whole-game view before planning chapters'
     }
     if (activity.operation.startsWith('refineTeachingOutlineCoverage')) {
-      return failed ? 'Keeping the usable chapter plan' : 'Checking the chapter plan for omitted rulebook material'
+      return unsuccessful ? 'Keeping the usable chapter plan' : 'Checking the chapter plan for omitted rulebook material'
     }
     if (activity.operation.startsWith('refineTeachingOutlineOwnership')) {
-      return failed ? 'Keeping the usable chapter boundaries' : 'Giving each rule one clear chapter home'
+      return unsuccessful ? 'Keeping the usable chapter boundaries' : 'Giving each rule one clear chapter home'
     }
     return 'The chapter plan is ready for writing'
   }
-  if (activity.operation.startsWith('transcribeTeachingVisual')) {
-    if (visualPageProgress) return failed
-      ? `图像规则页第 ${visualPageProgress.page} / ${visualPageProgress.total} 页需要重新逐字识别`
-      : `正在逐字识别图像规则页第 ${visualPageProgress.page} / ${visualPageProgress.total} 页`
-    return failed ? '有一页图像规则书需要重新逐字识别' : '正在逐字识别图像规则页'
-  }
-  if (activity.operation.startsWith('inspectTeachingVisual')) {
-    if (visualPageProgress) return failed
-      ? `图像规则页第 ${visualPageProgress.page} / ${visualPageProgress.total} 页的规则整理需要重试`
-      : `正在整理图像规则页第 ${visualPageProgress.page} / ${visualPageProgress.total} 页的规则组`
-    return failed ? '部分图像规则页需要重新整理规则组' : '正在把图像规则页整理成规则组'
-  }
   if (activity.operation.startsWith('selectProgressiveTeachingStart')) {
-    return failed ? '正在改用完整规则书规划讲解' : '正在选择最先能够讲清楚的规则页'
+    return unsuccessful ? '首批规则页选择本次未完成，继续使用完整规则书规划讲解' : '正在选择最先能够讲清楚的规则页'
   }
   if (activity.operation.startsWith('organizeTeachingOutline')) {
-    return failed ? '讲解章节规划需要重新尝试' : activity.outcome === 'SUCCEEDED'
+    if (activity.outcome === 'FAILED') return '讲解章节规划本次未完成'
+    if (activity.outcome === 'REJECTED') return '讲解章节规划本次校验未通过'
+    return activity.outcome === 'SUCCEEDED'
       ? '已形成整局认识，并把规则书整理成可讲解的章节'
       : '正在通读规则书，先形成整局认识再规划讲解章节'
   }
   if (activity.operation.startsWith('refineTeachingOutlineCoverage')) {
-    return failed ? '保留当前可用的章节规划' : '正在检查章节规划有没有漏掉规则内容'
+    return unsuccessful ? '保留当前可用的章节规划' : '正在检查章节规划有没有漏掉规则内容'
   }
   if (activity.operation.startsWith('refineTeachingOutlineOwnership')) {
-    return failed ? '保留当前可用的章节边界' : '正在为每条规则安排清晰的讲解章节'
+    return unsuccessful ? '保留当前可用的章节边界' : '正在为每条规则安排清晰的讲解章节'
   }
   return '讲解章节规划已完成，准备编写正文'
 }
 
+function visualPageActivityText(
+  outcome: TeachingActivity['outcome'],
+  progress: ReturnType<typeof visualPreparationPageProgress>,
+  kind: 'transcription' | 'grouping',
+  locale: AppLocale,
+) {
+  if (progress?.repairCode) {
+    const reason = visualContractRepairReason(progress.repairCode, locale)
+    if (locale === 'en') {
+      const target = `visual rulebook page ${progress.page} of ${progress.total}`
+      if (outcome === 'RUNNING') return `${reason}; correcting the rule grouping for ${target}`
+      if (outcome === 'SUCCEEDED') return `Rule grouping correction completed for ${target}`
+      if (outcome === 'FAILED') return `Rule grouping for ${target} still did not complete after one correction`
+      return `Rule grouping for ${target} still did not pass validation after one correction`
+    }
+    const target = `图像规则页第 ${progress.page} / ${progress.total} 页的规则整理`
+    if (outcome === 'RUNNING') return `${reason}，正在修正${target}`
+    if (outcome === 'SUCCEEDED') return `${target}修正完成`
+    if (outcome === 'FAILED') return `${target}经过一次修正后仍未完成`
+    return `${target}经过一次修正后仍未通过校验`
+  }
+  if (locale === 'en') {
+    const label = kind === 'transcription' ? 'Text recognition' : 'Rule grouping'
+    const target = progress ? ` for visual rulebook page ${progress.page} of ${progress.total}` : ''
+    const subject = progress ? `${label}${target}` : `Visual rulebook page ${kind}`
+    if (progress?.retry) {
+      if (outcome === 'RUNNING') return `A temporary service error occurred; retrying ${label.toLocaleLowerCase()}${target}`
+      if (outcome === 'SUCCEEDED') return `${label} retry completed after a temporary service error${target}`
+      if (outcome === 'FAILED') return `${label} retry${target} still did not complete after a temporary service error`
+      return `${label} retry${target} did not pass validation after a temporary service error`
+    }
+    if (outcome === 'SUCCEEDED') return `${subject} completed`
+    if (outcome === 'FAILED') return `${subject} did not complete this time`
+    if (outcome === 'REJECTED') return `${subject} did not pass validation this time`
+    return progress
+      ? kind === 'transcription'
+        ? `Transcribing visual rulebook page ${progress.page} of ${progress.total}`
+        : `Organising the rules on visual rulebook page ${progress.page} of ${progress.total}`
+      : kind === 'transcription'
+        ? 'Transcribing the visual rulebook page'
+        : 'Organising the visual rulebook page into rule groups'
+  }
+  const subject = progress
+    ? `图像规则页第 ${progress.page} / ${progress.total} 页的${kind === 'transcription' ? '逐字识别' : '规则整理'}`
+    : `图像规则页的${kind === 'transcription' ? '逐字识别' : '规则整理'}`
+  if (progress?.retry) {
+    if (outcome === 'RUNNING') return `临时服务异常，正在重试${subject}`
+    if (outcome === 'SUCCEEDED') return `${subject}在临时服务异常后重试完成`
+    if (outcome === 'FAILED') return `${subject}在临时服务异常后重试仍未完成`
+    return `${subject}在临时服务异常后重试仍未通过校验`
+  }
+  if (outcome === 'SUCCEEDED') return `${subject}完成`
+  if (outcome === 'FAILED') return `${subject}本次未完成`
+  if (outcome === 'REJECTED') return `${subject}本次校验未通过`
+  return progress
+    ? kind === 'transcription'
+      ? `正在逐字识别图像规则页第 ${progress.page} / ${progress.total} 页`
+      : `正在整理图像规则页第 ${progress.page} / ${progress.total} 页的规则组`
+    : kind === 'transcription'
+      ? '正在逐字识别图像规则页'
+      : '正在把图像规则页整理成规则组'
+}
+
 function visualPreparationPageProgress(operation: string) {
-  const [kind, pageText, totalText] = operation.split('|')
-  if (kind !== 'inspectTeachingVisualPage' && kind !== 'transcribeTeachingVisualPage') return null
+  const [kind, pageText, totalText, repairCode] = operation.split('|')
+  const retry = kind === 'inspectTeachingVisualRetry' || kind === 'transcribeTeachingVisualRetry'
+  const repair = kind === 'inspectTeachingVisualRepair'
+  if (!retry && !repair && kind !== 'inspectTeachingVisualPage' && kind !== 'transcribeTeachingVisualPage') return null
   const page = Number(pageText)
   const total = Number(totalText)
   if (!Number.isInteger(page) || page < 1 || !Number.isInteger(total) || total < page) return null
-  return { page, total }
+  return { page, total, retry, repairCode: repair ? repairCode ?? '' : '' }
+}
+
+function visualContractRepairReason(code: string, locale: AppLocale) {
+  if (locale === 'en') {
+    if (code === 'MALFORMED_JSON') return 'The returned format did not pass validation'
+    if (code === 'SCHEMA_MISMATCH') return 'The returned fields did not match the rule-group contract'
+    if (code === 'DUPLICATE_RULE_GROUP') return 'The returned result contained an exactly duplicated rule group'
+    if (code === 'PAGE_BINDING_MISMATCH') return 'The returned result was not safely bound to this page'
+    return 'The returned rule-group structure did not pass validation'
+  }
+  if (code === 'MALFORMED_JSON') return '返回格式没有通过校验'
+  if (code === 'SCHEMA_MISMATCH') return '返回字段不符合规则组约定'
+  if (code === 'DUPLICATE_RULE_GROUP') return '返回结果含有完全重复的规则组'
+  if (code === 'PAGE_BINDING_MISMATCH') return '返回结果无法安全绑定到这一页'
+  return '返回的规则组结构没有通过校验'
 }
 
 function publishedPositions(activities: TeachingActivity[]) {

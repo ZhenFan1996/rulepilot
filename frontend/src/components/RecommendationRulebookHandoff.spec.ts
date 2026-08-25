@@ -664,6 +664,9 @@ describe('RecommendationRulebookHandoff', () => {
     await vi.waitFor(() => expect(wrapper.text()).toContain('需要处理'))
     expect(wrapper.text()).not.toContain('TEACHING_PREPARATION_FAILED')
     expect(wrapper.get('[data-testid="player-work-status"]').text()).toBe('需要处理')
+    expect(wrapper.findAll('[data-testid="recommendation-journey-terminal-alert"]')).toHaveLength(1)
+    expect(wrapper.findAll('[data-testid="recommendation-teaching-generation-steps"]')).toHaveLength(1)
+    expect(wrapper.text()).toContain('只有最终找不到可引用规则')
 
     await wrapper.findAll('button').find(button => button.text() === '重试当前步骤')!.trigger('click')
     await vi.waitFor(
@@ -701,6 +704,7 @@ describe('RecommendationRulebookHandoff', () => {
       if (path === '/api/v1/documents/official-imports') return Response.json({
         id: 'import-1', stage: 'COMPLETED', documentVersionId: 'version-1', duplicate: false, errorCode: null,
         teachingHandoffState: 'LAUNCHED', teachingPreparationRunId: 'preparation-run-1',
+        teachingNextAction: 'OPEN_PROGRESS',
       }, { status: 202 })
       if (path === '/api/v1/assistant-runs/preparation-run-1') return Response.json(runSnapshot('preparation-run-1', 'COMPLETED'))
       if (path === '/api/v1/document-versions/version-1/teaching-plans/latest') return Response.json(planFixture('plan-1', 'version-1'))
@@ -841,6 +845,73 @@ describe('RecommendationRulebookHandoff', () => {
       expect(lessonRequests).toBe(3)
       expect(wrapper.text()).toContain('完整讲解已经生成')
       expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      wrapper?.unmount()
+      vi.useRealTimers()
+    }
+  })
+
+  it('keeps local page-attempt history compact without turning an active run into a task retry', async () => {
+    vi.useFakeTimers()
+    let wrapper: Awaited<ReturnType<typeof mountHandoff>>['wrapper'] | undefined
+    try {
+      sessionStorage.setItem('rulepilot:recommendation-journey:266192', JSON.stringify({
+        imported: {
+          game: { id: 'game-1', name: '展翅翱翔' },
+          edition: { id: 'edition-1', name: 'BGG 版本' },
+          alreadyImported: false,
+        },
+        importJob: {
+          id: 'import-1', stage: 'COMPLETED', documentVersionId: 'version-1', duplicate: false, errorCode: null,
+          teachingHandoffState: 'LAUNCHED', teachingPreparationRunId: 'preparation-run-1',
+        },
+        preparationRunId: 'preparation-run-1',
+      }))
+      const activities = Array.from({ length: 8 }, (_, index) => ({
+        sequence: index + 1,
+        operation: `inspectTeachingVisualPage|${index + 1}|20`,
+        summary: `internal page ${index + 1} attempt`,
+        outcome: index % 2 === 0 ? 'FAILED' : 'REJECTED',
+      }))
+      vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+        const path = String(input)
+        if (path === '/api/v1/document-versions/version-1/progress/snapshot') {
+          return Response.json({ stage: 'READY', percentage: 100, processedPages: 20, totalPages: 20, complete: true })
+        }
+        if (path === '/api/v1/assistant-runs/preparation-run-1') {
+          return Response.json({ ...runSnapshot('preparation-run-1', 'LESSON_PLANNING'), activities })
+        }
+        return new Response(null, { status: 404 })
+      }))
+
+      const mounted = await mountHandoff()
+      wrapper = mounted.wrapper
+      await vi.advanceTimersByTimeAsync(0)
+      await flushPromises()
+
+      expect(wrapper.text()).toContain('正在通读规则书并组织讲解章节')
+      expect(wrapper.text()).not.toContain('重试当前步骤')
+      expect(wrapper.text()).not.toContain('需要重试')
+      expect(wrapper.text()).toContain('单页本次未完成不等于整份讲解失败')
+      expect(wrapper.text()).toContain('规则整理遇到被明确分类为临时服务异常时，原请求重试一次')
+      expect(wrapper.text()).toContain('页码绑定未通过时，会按失败类型修正一次')
+      expect(wrapper.text()).toContain('超时、中断、取消、预算耗尽')
+
+      const activityList = wrapper.get('[data-testid="recommendation-teaching-activity-list"]')
+      expect(activityList.findAll('li')).toHaveLength(5)
+      expect(activityList.text()).toContain('第 8 / 20 页的规则整理本次校验未通过')
+      expect(activityList.text()).toContain('第 4 / 20 页的规则整理本次校验未通过')
+      expect(activityList.text()).not.toContain('第 3 / 20 页')
+
+      const toggle = wrapper.get('[data-testid="recommendation-teaching-history-toggle"]')
+      expect(toggle.text()).toBe('展开另外 3 条历史')
+      expect(toggle.attributes('aria-expanded')).toBe('false')
+      await toggle.trigger('click')
+
+      expect(activityList.findAll('li')).toHaveLength(8)
+      expect(activityList.text()).toContain('第 1 / 20 页的规则整理本次未完成')
+      expect(toggle.text()).toBe('收起历史')
+      expect(toggle.attributes('aria-expanded')).toBe('true')
     } finally {
       wrapper?.unmount()
       vi.useRealTimers()

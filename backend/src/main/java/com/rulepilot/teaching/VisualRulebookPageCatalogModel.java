@@ -33,6 +33,51 @@ public interface VisualRulebookPageCatalogModel {
     }
 
     /**
+     * Performs one changed, validator-owned repair request for a typed Teaching catalog violation. The repair code is
+     * the complete input contract: raw model output and exception prose must never be copied into the next prompt.
+     */
+    default CatalogDraft repairTeachingCatalog(CatalogRequest request, TeachingCatalogRepairCode repairCode) {
+        throw new UnsupportedOperationException("visual Teaching catalog repair is unavailable");
+    }
+
+    enum TeachingCatalogRepairCode {
+        MALFORMED_JSON,
+        SCHEMA_MISMATCH,
+        DUPLICATE_RULE_GROUP,
+        PAGE_BINDING_MISMATCH
+    }
+
+    final class TeachingCatalogContractViolation extends IllegalArgumentException {
+
+        private final TeachingCatalogRepairCode repairCode;
+
+        public TeachingCatalogContractViolation(TeachingCatalogRepairCode repairCode) {
+            this(repairCode, null);
+        }
+
+        public TeachingCatalogContractViolation(TeachingCatalogRepairCode repairCode, Throwable cause) {
+            super(violationMessage(repairCode, cause), cause);
+            this.repairCode = repairCode;
+        }
+
+        public TeachingCatalogRepairCode repairCode() {
+            return repairCode;
+        }
+
+        private static TeachingCatalogRepairCode requireRepairCode(TeachingCatalogRepairCode repairCode) {
+            if (repairCode == null) throw new IllegalArgumentException("Teaching catalog repair code is required");
+            return repairCode;
+        }
+
+        private static String violationMessage(TeachingCatalogRepairCode repairCode, Throwable cause) {
+            TeachingCatalogRepairCode required = requireRepairCode(repairCode);
+            return cause == null || cause.getMessage() == null || cause.getMessage().isBlank()
+                    ? "visual Teaching catalog violated " + required
+                    : cause.getMessage();
+        }
+    }
+
+    /**
      * Whether this adapter can run a page-local document transcription before semantic rule grouping. The
      * transcription is a separate, audited model call: implementations must not hide it inside
      * {@link #summarizeForTeaching(CatalogRequest)}.
