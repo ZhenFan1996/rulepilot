@@ -250,49 +250,11 @@ jobs:
               > "$artifact_dir/summary.json" 2> "$artifact_dir/diagnostics.log"
           chmod -R go-rwx "$artifact_dir"
 
-      - name: Collect bounded service diagnostics after a failed journey
-        if: failure()
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          artifact_dir="$GITHUB_WORKSPACE/.artifacts/production-ordinary-user-smoke"
-          diagnostic_file="$artifact_dir/service-diagnostics.log"
-          mkdir -p "$artifact_dir"
-          ssh \
-            -i "$HOME/.ssh/id_ed25519" \
-            -o BatchMode=yes \
-            -o StrictHostKeyChecking=yes \
-            -p "$DEPLOY_SSH_PORT" \
-            "${DEPLOY_USER}@${DEPLOY_HOST}" \
-            'bash -s' -- "$DEPLOY_PATH" > "$diagnostic_file" 2>&1 <<'REMOTE' || true
-          set -Eeuo pipefail
-          application_root=$1
-          active_release=$(readlink -f "${application_root}/current")
-          if [[ "$active_release" != "${application_root}/releases/"* ]]; then
-            echo "Refusing to inspect an active release outside ${application_root}/releases" >&2
-            exit 1
-          fi
-          cd "$active_release"
-          compose=(
-            docker compose --env-file .env
-            -f infra/compose.yml
-            -f infra/compose.deployment.yml
-            -f infra/compose.production.yml
-          )
-          echo "Active production services:"
-          "${compose[@]}" ps api worker
-          echo "API logs from the last 35 minutes (bounded to 500 lines):"
-          "${compose[@]}" logs --since 35m --tail 500 --no-color api
-          echo "Worker logs from the last 35 minutes (bounded to 500 lines):"
-          "${compose[@]}" logs --since 35m --tail 500 --no-color worker
-          REMOTE
-          chmod 600 "$diagnostic_file"
-
-      - name: Upload private diagnostic output
+      - name: Upload sanitized journey output
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: production-ordinary-user-smoke-${{ github.run_id }}
-          path: .artifacts/production-ordinary-user-smoke
+          path: .artifacts/production-ordinary-user-smoke/summary.json
           if-no-files-found: warn
           retention-days: 1

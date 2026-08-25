@@ -13,6 +13,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ConversationRequest;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ConversationResponse;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.DecisionMode;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.DialogueMessage;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.Outcome;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendedGame;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendationProfile;
@@ -275,6 +276,161 @@ class RecommendationConversationCoordinatorTest {
         assertThat(recovered.state().knownGames())
                 .extracting(BoardGameRecommendationAgent.KnownGame::bggId)
                 .containsExactly(62);
+    }
+
+    @Test
+    void completesUnavailableForIdempotencyWithoutWritingItIntoConversationSemantics() {
+        BoardGameRecommendationAgent agent = mock(BoardGameRecommendationAgent.class);
+        Game verified = verifiedGame(64);
+        RecommendationProfile checkpointProfile =
+                new RecommendationProfile(4, 90, null, null, null);
+        String requestMessage = "四个人，想找九十分钟内的合作游戏";
+        String unavailableMessage = "推荐服务暂时不可用。";
+        when(agent.conversePersisted(any(), eq("zh-CN"), eq("alice"), any(), any(), any()))
+                .thenAnswer(invocation -> {
+                    @SuppressWarnings("unchecked")
+                    Consumer<TurnCheckpoint> checkpoints = invocation.getArgument(5);
+                    checkpoints.accept(new TurnCheckpoint(checkpointProfile, List.of(verified)));
+                    return unavailableResponse(unavailableMessage);
+                })
+                .thenReturn(response("这次已经完成。"));
+        InMemoryStore store = new InMemoryStore();
+        RecommendationConversationCoordinator coordinator = coordinator(agent, store);
+        UUID unavailableTurnId = UUID.randomUUID();
+
+        var unavailable = coordinator.converse(
+                new SessionTurn(null, 0, unavailableTurnId, request(requestMessage)),
+                "zh-CN",
+                "alice",
+                ignored -> {});
+
+        assertThat(unavailable.revision()).isEqualTo(1);
+        assertThat(unavailable.response().outcome()).isEqualTo(Outcome.UNAVAILABLE);
+        StoredConversation afterUnavailable = store.findLatestOwned("alice").orElseThrow();
+        assertThat(afterUnavailable.lastClientTurnId()).isEqualTo(unavailableTurnId);
+        assertThat(afterUnavailable.state().profile()).isEqualTo(checkpointProfile);
+        assertThat(afterUnavailable.state().transcript()).isEmpty();
+        assertThat(afterUnavailable.state().knownGames())
+                .extracting(BoardGameRecommendationAgent.KnownGame::bggId)
+                .containsExactly(64);
+        assertThat(afterUnavailable.state().verifiedGames())
+                .extracting(game -> game.ranking().bggId())
+                .containsExactly(64);
+
+        var replayedUnavailable = coordinator.converse(
+                new SessionTurn(
+                        unavailable.conversationId(),
+                        0,
+                        unavailableTurnId,
+                        request(requestMessage)),
+                "zh-CN",
+                "alice",
+                ignored -> {});
+        assertThat(replayedUnavailable.replayed()).isTrue();
+        assertThat(replayedUnavailable.response().outcome()).isEqualTo(Outcome.UNAVAILABLE);
+
+        UUID retryTurnId = UUID.randomUUID();
+        var recovered = coordinator.converse(
+                new SessionTurn(
+                        unavailable.conversationId(),
+                        unavailable.revision(),
+                        retryTurnId,
+                        request(requestMessage)),
+                "zh-CN",
+                "alice",
+                ignored -> {});
+
+        assertThat(recovered.revision()).isEqualTo(2);
+        var requests = org.mockito.ArgumentCaptor.forClass(ConversationRequest.class);
+        verify(agent, times(2)).conversePersisted(requests.capture(), eq("zh-CN"), eq("alice"), any(), any(), any());
+        ConversationRequest retryRequest = requests.getAllValues().get(1);
+        assertThat(retryRequest.profile()).isEqualTo(checkpointProfile);
+        assertThat(retryRequest.priorVerifiedGames())
+                .extracting(game -> game.ranking().bggId())
+                .containsExactly(64);
+        assertThat(retryRequest.transcript())
+                .extracting(message -> message.role() + ":" + message.text())
+                .containsExactly("user:" + requestMessage);
+        assertThat(store.findLatestOwned("alice").orElseThrow().state().transcript())
+                .extracting(message -> message.role() + ":" + message.text())
+                .containsExactly("user:" + requestMessage, "assistant:这次已经完成。");
+        assertThat(store.findLatestOwned("alice").orElseThrow().state().transcript())
+                .noneMatch(message -> message.text().equals(unavailableMessage));
+    }
+
+    @Test
+    void implicitConversationDoesNotImportTheOptimisticCurrentTurnWhenItEndsUnavailable() {
+        BoardGameRecommendationAgent agent = mock(BoardGameRecommendationAgent.class);
+        String initialGreeting = "晚上好，想从哪种桌游开始聊？";
+        String requestMessage = "找一些适合四个人的科幻主题桌游";
+        when(agent.conversePersisted(any(), eq("zh-CN"), eq("alice"), any(), any(), any()))
+                .thenReturn(unavailableResponse("推荐服务暂时不可用。"));
+        InMemoryStore store = new InMemoryStore();
+        RecommendationConversationCoordinator coordinator = coordinator(agent, store);
+        ConversationRequest browserRequest = new ConversationRequest(
+                RecommendationProfile.empty(),
+                requestMessage,
+                List.of(),
+                List.of(
+                        new DialogueMessage("assistant", initialGreeting),
+                        new DialogueMessage("user", requestMessage)),
+                null,
+                List.of(),
+                List.of());
+
+        var unavailable = coordinator.converse(
+                new SessionTurn(null, 0, UUID.randomUUID(), browserRequest),
+                "zh-CN",
+                "alice",
+                ignored -> {});
+
+        assertThat(unavailable.response().outcome()).isEqualTo(Outcome.UNAVAILABLE);
+        assertThat(store.findLatestOwned("alice").orElseThrow().state().transcript())
+                .extracting(message -> message.role() + ":" + message.text())
+                .containsExactly("assistant:" + initialGreeting)
+                .noneMatch(turn -> turn.equals("user:" + requestMessage));
+        var effectiveRequest = org.mockito.ArgumentCaptor.forClass(ConversationRequest.class);
+        verify(agent).conversePersisted(effectiveRequest.capture(), eq("zh-CN"), eq("alice"), any(), any(), any());
+        assertThat(effectiveRequest.getValue().transcript())
+                .extracting(message -> message.role() + ":" + message.text())
+                .containsExactly("assistant:" + initialGreeting, "user:" + requestMessage);
+    }
+
+    @Test
+    void optimisticCurrentTurnIsRemovedBeforeBoundingTheImportedHistory() {
+        BoardGameRecommendationAgent agent = mock(BoardGameRecommendationAgent.class);
+        String requestMessage = "这是当前浏览器乐观追加的回合";
+        when(agent.conversePersisted(any(), eq("zh-CN"), eq("alice"), any(), any(), any()))
+                .thenReturn(unavailableResponse("推荐服务暂时不可用。"));
+        List<DialogueMessage> fullHistory = java.util.stream.IntStream.rangeClosed(1, 12)
+                .mapToObj(index -> new DialogueMessage(
+                        index % 2 == 0 ? "assistant" : "user",
+                        "历史回合 " + index))
+                .toList();
+        List<DialogueMessage> optimisticTranscript = new ArrayList<>(fullHistory);
+        optimisticTranscript.add(new DialogueMessage("user", requestMessage));
+        InMemoryStore store = new InMemoryStore();
+        RecommendationConversationCoordinator coordinator = coordinator(agent, store);
+
+        coordinator.converse(
+                new SessionTurn(
+                        null,
+                        0,
+                        UUID.randomUUID(),
+                        new ConversationRequest(
+                                RecommendationProfile.empty(),
+                                requestMessage,
+                                List.of(),
+                                optimisticTranscript,
+                                null,
+                                List.of(),
+                                List.of())),
+                "zh-CN",
+                "alice",
+                ignored -> {});
+
+        assertThat(store.findLatestOwned("alice").orElseThrow().state().transcript())
+                .containsExactlyElementsOf(fullHistory);
     }
 
     @Test
@@ -643,6 +799,18 @@ class RecommendationConversationCoordinatorTest {
     private ConversationResponse response(String message) {
         return new ConversationResponse(
                 Outcome.CONVERSATION,
+                DecisionMode.MODEL_ASSISTED,
+                message,
+                RecommendationProfile.empty(),
+                null,
+                10,
+                0,
+                List.of());
+    }
+
+    private ConversationResponse unavailableResponse(String message) {
+        return new ConversationResponse(
+                Outcome.UNAVAILABLE,
                 DecisionMode.MODEL_ASSISTED,
                 message,
                 RecommendationProfile.empty(),

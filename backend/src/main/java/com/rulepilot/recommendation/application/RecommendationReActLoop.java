@@ -77,6 +77,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
@@ -296,6 +297,7 @@ final class RecommendationReActLoop {
         Map<String, SettledAction> settledActions = new LinkedHashMap<>();
         int stateEpoch = 0;
         PublicationSeed pendingPublication = null;
+        boolean invalidFirstDecisionRepairUsed = false;
 
         while (state.modelCalls < MAX_DECISION_MODEL_CALLS && state.actionCalls < MAX_ACTION_CALLS) {
             state.modelCalls++;
@@ -306,6 +308,8 @@ final class RecommendationReActLoop {
                     && state.catalogCalls == 0
                     && state.webResearchCalls == 0
                     && messages.size() == 2;
+            AnswerStreamGate firstDecisionAnswer =
+                    firstDecision ? new AnswerStreamGate(answerPartListener) : null;
             List<ToolSpec> currentActions = availableActions(state, actions, preferenceEvidenceIds);
             if (pendingPublication != null) {
                 currentActions = currentActions.stream()
@@ -319,19 +323,35 @@ final class RecommendationReActLoop {
                         currentActions,
                         outputTokenBudget(state),
                         firstDecision ? ToolChoice.AUTO : ToolChoice.REQUIRED);
-                turn = withinDeadline(
-                        state,
-                        () -> firstDecision
-                                ? model.streamDecision(
-                                        modelRequest,
-                                        state.modelConfigurationOwner,
-                                        answerPartListener)
-                                : model.next(modelRequest, state.modelConfigurationOwner));
+                try {
+                    turn = withinDeadline(
+                            state,
+                            () -> firstDecision
+                                    ? model.streamDecision(
+                                            modelRequest,
+                                            state.modelConfigurationOwner,
+                                            firstDecisionAnswer::accept)
+                                    : model.next(modelRequest, state.modelConfigurationOwner));
+                } finally {
+                    if (firstDecisionAnswer != null) firstDecisionAnswer.close();
+                }
             } catch (RunDeadlineExceeded exception) {
                 progress.fail();
                 state.actions.add("RUN_DEADLINE_EXCEEDED");
                 return unavailable(state, locale, "RUN_DEADLINE_EXCEEDED");
             } catch (RuntimeException exception) {
+                if (firstDecision
+                        && !invalidFirstDecisionRepairUsed
+                        && exception instanceof BoardGameRecommendationModel.ProtocolFailure protocol
+                        && "DECISION_INVALID_ACTION".equals(protocol.code())
+                        && state.modelCalls < MAX_DECISION_MODEL_CALLS) {
+                    invalidFirstDecisionRepairUsed = true;
+                    progress.retry();
+                    state.actions.add("REPAIR_MODEL_DECISION:" + protocol.code());
+                    messages.set(0, Message.system(
+                            systemPromptV2() + "\n\n" + decisionProtocolRepairPrompt(protocol.code())));
+                    continue;
+                }
                 progress.fail();
                 String failureCode = exception instanceof BoardGameRecommendationModel.ProtocolFailure protocol
                         ? "MODEL_PROTOCOL_FAILED:" + protocol.code()
@@ -545,14 +565,23 @@ final class RecommendationReActLoop {
         progress.start(ProgressStage.COMPOSING_RESPONSE, ProgressAction.STREAM_NATURAL_REPLY);
         AtomicReference<RecommendationPublication.Permit> permit = new AtomicReference<>();
         AtomicReference<RecommendationPublication.Session> session = new AtomicReference<>();
+        AtomicBoolean acceptingPublication = new AtomicBoolean(true);
         RecommendationPublicationStream stream = new RecommendationPublicationStream(
                 json,
                 decision -> {
+                    if (!acceptingPublication.get()) {
+                        throw new IllegalStateException("recommendation publication is no longer accepting output");
+                    }
                     RecommendationPublication.Permit approved = publication.permit(decision, state, seed);
-                    permit.set(approved);
+                    if (!permit.compareAndSet(null, approved)) {
+                        throw new IllegalStateException("recommendation publication repeated its decision");
+                    }
                     session.set(publication.open(approved, state, locale, answerPartListener));
                 },
                 block -> {
+                    if (!acceptingPublication.get()) {
+                        throw new IllegalStateException("recommendation publication is no longer accepting output");
+                    }
                     RecommendationPublication.Session active = session.get();
                     if (active == null) {
                         throw new IllegalStateException("recommendation reply block arrived before its decision");
@@ -569,23 +598,73 @@ final class RecommendationReActLoop {
                 PUBLICATION_OUTPUT_TOKENS,
                 ToolChoice.NONE,
                 new StructuredOutput("recommendation_publication", PUBLICATION_SCHEMA, true));
-        BoardGameRecommendationModel.StructuredTurn turn = withinDeadline(
-                state,
-                () -> model.streamStructured(
-                        modelRequest,
-                        state.modelConfigurationOwner,
-                        stream::accept));
-        if (turn.completionStatus() == BoardGameRecommendationModel.CompletionStatus.OUTPUT_LIMIT) {
-            throw new IllegalStateException("recommendation publication reached its output limit");
+        try {
+            BoardGameRecommendationModel.StructuredTurn turn = withinDeadline(
+                    state,
+                    () -> model.streamStructured(
+                            modelRequest,
+                            state.modelConfigurationOwner,
+                            stream::accept));
+            if (turn.completionStatus() == BoardGameRecommendationModel.CompletionStatus.OUTPUT_LIMIT) {
+                throw new RecoverablePublicationFailure("PUBLICATION_OUTPUT_LIMIT");
+            }
+            stream.finish();
+            acceptingPublication.set(false);
+            if (permit.get() == null || session.get() == null) {
+                throw new RecoverablePublicationFailure("PUBLICATION_DECISION_MISSING");
+            }
+            ConversationResponse response = session.get().finish();
+            progress.complete();
+            logRun(response);
+            return response;
+        } catch (RuntimeException exception) {
+            acceptingPublication.set(false);
+            if (exception instanceof RunDeadlineExceeded) throw exception;
+            if (hasCause(exception, RecommendationPublication.DeliveryFailure.class)) throw exception;
+            String code = publicationFailureCode(exception);
+            LOGGER.warn(
+                    "Recommendation publication prose degraded after verified candidates (type={}, code={})",
+                    exception.getClass().getSimpleName(),
+                    code);
+            ConversationResponse response = recoverVerifiedPublication(
+                    state,
+                    locale,
+                    seed,
+                    permit.get(),
+                    session.get(),
+                    answerPartListener,
+                    code);
+            progress.complete();
+            logRun(response);
+            return response;
         }
-        stream.finish();
-        if (permit.get() == null || session.get() == null) {
-            throw new IllegalStateException("recommendation publication omitted its decision");
+    }
+
+    private ConversationResponse recoverVerifiedPublication(
+            RecommendationAgentState state,
+            String locale,
+            PublicationSeed seed,
+            RecommendationPublication.Permit approved,
+            RecommendationPublication.Session active,
+            Consumer<String> answerPartListener,
+            String code) {
+        RecommendationPublication.Permit safePermit = approved;
+        RecommendationPublication.Session safeSession = active;
+        if (safePermit == null) {
+            ObjectNode decision = json.createObjectNode();
+            List<Integer> candidateIds = seed.candidateBggIds().stream()
+                    .limit(state.maximumRecommendationResults)
+                    .toList();
+            decision.put("requestedCount", candidateIds.size());
+            ArrayNode selections = decision.putArray("selections");
+            candidateIds.forEach(id -> selections.addObject().put("bggId", id));
+            decision.putArray("referenceBggIds");
+            safePermit = publication.permit(decision, state, seed);
         }
-        ConversationResponse response = session.get().finish();
-        progress.complete();
-        logRun(response);
-        return response;
+        if (safeSession == null) {
+            safeSession = publication.open(safePermit, state, locale, answerPartListener);
+        }
+        return safeSession.finishWithVerifiedCandidates(code);
     }
 
     private String publicationContext(
@@ -662,6 +741,9 @@ final class RecommendationReActLoop {
     private String publicationFailureCode(RuntimeException exception) {
         Throwable current = exception;
         while (current != null) {
+            if (current instanceof RecoverablePublicationFailure failure) {
+                return failure.code;
+            }
             if (current instanceof RecommendationPublication.InvalidPublication invalid) {
                 return invalid.code().name();
             }
@@ -672,9 +754,28 @@ final class RecommendationReActLoop {
                 }
                 return "PUBLICATION_" + failure.code().name();
             }
+            if (current instanceof BoardGameRecommendationModel.ProtocolFailure protocol) {
+                return "PUBLICATION_" + protocol.code();
+            }
             current = current.getCause();
         }
-        return "PUBLICATION_UNAVAILABLE";
+        return "PUBLICATION_MODEL_FAILED";
+    }
+
+    private boolean hasCause(Throwable failure, Class<? extends Throwable> type) {
+        Throwable current = failure;
+        while (current != null) {
+            if (type.isInstance(current)) return true;
+            current = current.getCause();
+        }
+        return false;
+    }
+
+    private static String decisionProtocolRepairPrompt(String code) {
+        return "The previous first-decision envelope failed the typed contract with safe code "
+                + code
+                + ". Do not repeat or describe that output. Choose exactly one action from the currently supplied "
+                + "allowlist through the provider tool-call contract. Do not emit player-facing prose in this repair turn.";
     }
 
     private int outputTokenBudget(RecommendationAgentState state) {
@@ -861,8 +962,9 @@ final class RecommendationReActLoop {
         boolean verifiedSlateAvailable = !recommendableIds.isEmpty();
         boolean identityTurnCanFinish = state.discoveryPurpose == DiscoveryPurpose.IDENTITY_ONLY
                 && (state.discoveryAttempted || state.catalogBrowseAttempted);
-        boolean verifiedIdentityStillNeedsCards = state.discoveryPurpose == DiscoveryPurpose.SELECTABLE_CARDS
-                && state.hasVerifiedIdentity();
+        boolean verifiedSelectableSlateStillNeedsCards = state.discoveryPurpose == DiscoveryPurpose.SELECTABLE_CARDS
+                && state.discoveryProducedVerifiedGames
+                && verifiedSlateAvailable;
         boolean unresolvedIdentityCanStillBeClarified = state.unresolvedPlayerTitle;
         boolean clarificationWouldMaskFailure = !unresolvedIdentityCanStillBeClarified
                 && (state.clarificationBlockedByExecutionFailure
@@ -875,7 +977,7 @@ final class RecommendationReActLoop {
                         || isDiscoveryAction(action.name())
                         || ASK_TOOL.equals(action.name())
                         || REPLY_TOOL.equals(action.name()))
-                .filter(action -> !verifiedIdentityStillNeedsCards || !REPLY_TOOL.equals(action.name()))
+                .filter(action -> !verifiedSelectableSlateStillNeedsCards || !REPLY_TOOL.equals(action.name()))
                 .filter(action -> !comparisonNeedsCandidateInspection
                         || !REPLY_TOOL.equals(action.name()) && !ASK_TOOL.equals(action.name()))
                 .filter(action -> !clarificationWouldMaskFailure || !ASK_TOOL.equals(action.name()))
@@ -1660,6 +1762,33 @@ final class RecommendationReActLoop {
     private boolean simplifiedChineseLocale(String locale) {
         String value = locale == null ? "" : locale.strip().toLowerCase(Locale.ROOT);
         return value.equals("zh") || value.equals("zh-cn") || value.equals("zh-hans");
+    }
+
+    private static final class RecoverablePublicationFailure extends RuntimeException {
+        private final String code;
+
+        private RecoverablePublicationFailure(String code) {
+            super(code);
+            this.code = code;
+        }
+    }
+
+    /** Prevents a provider that ignores cancellation from publishing after this run has settled. */
+    private static final class AnswerStreamGate {
+        private final Consumer<String> listener;
+        private boolean open = true;
+
+        private AnswerStreamGate(Consumer<String> listener) {
+            this.listener = Objects.requireNonNull(listener, "answer listener is required");
+        }
+
+        private synchronized void accept(String answer) {
+            if (open) listener.accept(answer);
+        }
+
+        private synchronized void close() {
+            open = false;
+        }
     }
 
     static final class RunDeadlineExceeded extends RuntimeException {}

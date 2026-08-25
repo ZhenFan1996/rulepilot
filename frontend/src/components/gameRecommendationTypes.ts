@@ -110,6 +110,14 @@ export type CandidateComparison = {
 
 export type ResearchSource = { index: number; title: string; url: string; domain: string }
 
+export type RecommendationFailureBoundary =
+  | 'time_budget'
+  | 'model_response'
+  | 'service_configuration'
+  | 'action_budget'
+  | 'publication_boundary'
+  | 'service_failure'
+
 export type RecommendationAgentResponse = {
   conversationId?: string | null
   revision?: number | null
@@ -125,6 +133,11 @@ export type RecommendationAgentResponse = {
   shortfall?: RecommendationShortfall | null
   sourceCount: number
   candidatesEvaluated: number
+  modelCalls?: number
+  catalogCalls?: number
+  webResearchCalls?: number
+  publicationRecovered?: boolean
+  failureBoundary?: RecommendationFailureBoundary | null
   userModel?: {
     summary: string
     hypotheses: {

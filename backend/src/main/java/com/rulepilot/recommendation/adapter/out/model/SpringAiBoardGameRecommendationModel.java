@@ -2,6 +2,7 @@ package com.rulepilot.recommendation.adapter.out.model;
 
 import com.rulepilot.modelconfig.RuntimeModelConfiguration;
 import com.rulepilot.recommendation.BoardGameRecommendationModel;
+import com.rulepilot.recommendation.BoardGameRecommendationModel.CompletionStatus;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.Message;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.Request;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.StructuredTurn;
@@ -117,7 +118,11 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
                     decision::accept,
                     "structured_decision_stream");
             decision.finish();
-            return decision.turn(structured.completionStatus());
+            Turn turn = decision.turn(structured.completionStatus());
+            if (structured.completionStatus() != CompletionStatus.OUTPUT_LIMIT) {
+                decision.publishReply();
+            }
+            return turn;
         } catch (RecommendationDecisionStream.Failure failure) {
             throw new BoardGameRecommendationModel.ProtocolFailure(
                     "DECISION_" + failure.code().name(), failure);

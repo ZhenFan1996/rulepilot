@@ -354,14 +354,18 @@ class RecommendationReActLifecycleTest {
     @Test
     void reusesASuccessfulReadWhileKeepingOneBoundedCurrentStateViewAndEveryCallResultPair() {
         String browse = "{\"purpose\":\"SELECTABLE_CARDS\",\"candidateUse\":\"CONTINUE_REACT\",\"limit\":1,\"offset\":0}";
+        String publicationBrowse = "{\"purpose\":\"SELECTABLE_CARDS\",\"candidateUse\":\"PUBLISH_CARDS\",\"limit\":1,\"offset\":0}";
         String userRequest = "我们没有明确目标，只想找一款四个人第一次见面也不会冷场的桌游。";
-        ScriptedModel model = new ScriptedModel(List.of(
-                action("read-1", BoardGameRecommendationAgent.BROWSE_TOOL, browse),
-                action("read-2", BoardGameRecommendationAgent.BROWSE_TOOL, browse),
-                action(
-                        "finish",
-                        BoardGameRecommendationAgent.REPLY_TOOL,
-                        "{\"playerReply\":\"目录读取已经完成，而且重复的同一页没有再次访问目录；这轮先停在这里。\"}")));
+        ScriptedModel model = new ScriptedModel(
+                List.of(
+                        action("read-1", BoardGameRecommendationAgent.BROWSE_TOOL, browse),
+                        action("read-2", BoardGameRecommendationAgent.BROWSE_TOOL, browse),
+                        action("publish-read", BoardGameRecommendationAgent.BROWSE_TOOL, publicationBrowse)),
+                List.of(publication(
+                        502,
+                        List.of("B502:playerCount"),
+                        "目录里有一款适合初次见面的选择，我会先从它开始。",
+                        "它支持四个人一起参与，也给第一次见面的玩家留下自然交流的空间。")));
         String longDescription = "Players build a shared garden and talk through each turn. "
                 + "Every round adds another gentle choice. ".repeat(120)
                 + "TAIL_SHOULD_NOT_REACH_CONTEXT";
@@ -376,8 +380,10 @@ class RecommendationReActLifecycleTest {
                 "player",
                 ignored -> {});
 
-        assertThat(response.outcome()).isEqualTo(Outcome.CONVERSATION);
-        assertThat(catalog.searches).hasValue(1);
+        assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
+        assertThat(response.games()).singleElement()
+                .satisfies(value -> assertThat(value.game().ranking().bggId()).isEqualTo(502));
+        assertThat(catalog.searches).hasValue(2);
         assertThat(response.harness().actions())
                 .contains("SEARCH_BGG_CATALOG", "REUSED_READ_OBSERVATION")
                 .doesNotContain("REJECTED_REPEATED_ACTION");
@@ -397,6 +403,37 @@ class RecommendationReActLifecycleTest {
         assertThat(toolMessages).allSatisfy(message -> assertThat(message.content()).doesNotContain(userRequest));
         assertThat(toolMessages.stream().filter(message -> message.content().contains("\"turnState\"")).count())
                 .isEqualTo(1);
+
+        loop.stopBoundedCalls();
+    }
+
+    @Test
+    void keepsTransparentReplyAvailableWhenOnlyARestoredCandidateExistsAndCurrentBrowseIsEmpty() {
+        Game restored = game(510, "Earlier Harbor", "旧港", "A candidate verified in an earlier turn.");
+        ScriptedModel model = new ScriptedModel(List.of(
+                action(
+                        "empty-current-browse",
+                        BoardGameRecommendationAgent.BROWSE_TOOL,
+                        "{\"purpose\":\"SELECTABLE_CARDS\",\"candidateUse\":\"CONTINUE_REACT\",\"textQuery\":\"a materially different request\",\"limit\":1}"),
+                action(
+                        "transparent-finish",
+                        BoardGameRecommendationAgent.REPLY_TOOL,
+                        "{\"playerReply\":\"这次目录检索没有找到符合新方向的选择；我不会把上一轮的候选冒充成本轮结果。\"}")));
+        RecordingCatalog emptyCatalog = new RecordingCatalog();
+        RecommendationReActLoop loop = loop(model, emptyCatalog);
+
+        var response = loop.converseValidated(
+                validatedRequest("请按一个完全不同的新方向再找一次；找不到就直接告诉我。", List.of(restored)),
+                "zh-CN",
+                "player",
+                ignored -> {},
+                ignored -> {},
+                ignored -> {});
+
+        assertThat(response.outcome()).isEqualTo(Outcome.CONVERSATION);
+        assertThat(response.games()).isEmpty();
+        assertThat(emptyCatalog.searches).hasValue(1);
+        assertThat(response.harness().actions()).contains("SEARCH_BGG_CATALOG", "REPLY_TO_USER");
 
         loop.stopBoundedCalls();
     }

@@ -28,7 +28,7 @@ class RecommendationDecisionStreamTest {
                     "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"question\":{\"type\":\"string\",\"maxLength\":160}},\"required\":[\"question\"]}"));
 
     @Test
-    void streamsReplyDeltasOnlyAfterTheReplyModeAndNullActionBarrierAtEveryCutPoint() {
+    void publishesReplyDeltasOnlyAfterTheCompleteEnvelopePassesAtEveryCutPoint() {
         String payload =
                 "{\"mode\":\"REPLY\",\"action\":null,\"replyDeltas\":[\"你好，\",\"一起找桌游吧 🎲\"]}";
 
@@ -38,7 +38,12 @@ class RecommendationDecisionStreamTest {
 
             stream.accept(payload.substring(0, cut));
             stream.accept(payload.substring(cut));
+            assertThat(replies)
+                    .as("provisional reply events at UTF-16 cut %s", cut)
+                    .isEmpty();
             stream.finish();
+            assertThat(replies).isEmpty();
+            stream.publishReply();
 
             assertThat(replies)
                     .as("reply events at UTF-16 cut %s", cut)
@@ -88,13 +93,20 @@ class RecommendationDecisionStreamTest {
     }
 
     @Test
-    void rejectsUnknownActionsWrongRootOrderAndTrailingData() {
+    void acceptsRootMembersInAnyOrderButRejectsUnknownActionsFieldsAndTrailingData() {
         assertFailure(
                 FailureCode.INVALID_ACTION,
                 "{\"mode\":\"ACTION\",\"action\":{\"name\":\"delete_everything\",\"arguments\":{}},\"replyDeltas\":[]}");
+        List<String> replies = new ArrayList<>();
+        RecommendationDecisionStream reordered = new RecommendationDecisionStream(json, actions, replies::add);
+        reordered.accept("{\"replyDeltas\":[\"hello\"],\"action\":null,\"mode\":\"REPLY\"}");
+        reordered.finish();
+        reordered.publishReply();
+        assertThat(reordered.turn(CompletionStatus.COMPLETE).text()).isEqualTo("hello");
+        assertThat(replies).containsExactly("hello");
         assertFailure(
-                FailureCode.INVALID_FIELD_ORDER,
-                "{\"action\":null,\"mode\":\"REPLY\",\"replyDeltas\":[\"hello\"]}");
+                FailureCode.INVALID_ENVELOPE,
+                "{\"mode\":\"REPLY\",\"action\":null}");
         assertFailure(
                 FailureCode.UNKNOWN_ROOT_FIELD,
                 "{\"mode\":\"REPLY\",\"action\":null,\"replyDeltas\":[\"hello\"],\"extra\":true}");
@@ -112,6 +124,8 @@ class RecommendationDecisionStreamTest {
                 + longFragment
                 + "\"]}");
         accepted.finish();
+        assertThat(replies).isEmpty();
+        accepted.publishReply();
         assertThat(replies).containsExactly(longFragment);
 
         assertFailure(
@@ -140,15 +154,15 @@ class RecommendationDecisionStreamTest {
             throw new IllegalStateException("client disconnected");
         });
 
-        Failure failure = assertFailure(
-                FailureCode.LISTENER_FAILURE,
-                () -> stream.accept(
-                        "{\"mode\":\"REPLY\",\"action\":null,\"replyDeltas\":[\"first\",\"second\"]}"));
+        stream.accept(
+                "{\"mode\":\"REPLY\",\"action\":null,\"replyDeltas\":[\"first\",\"second\"]}");
+        stream.finish();
+        assertThat(calls).hasValue(0);
+        Failure failure = assertFailure(FailureCode.LISTENER_FAILURE, stream::publishReply);
 
         assertThat(failure).hasCauseInstanceOf(IllegalStateException.class);
         assertThat(calls).hasValue(1);
-        assertFailure(FailureCode.LISTENER_FAILURE, () -> stream.accept(" "));
-        assertFailure(FailureCode.LISTENER_FAILURE, stream::finish);
+        assertFailure(FailureCode.LISTENER_FAILURE, stream::publishReply);
     }
 
     private Failure assertFailure(FailureCode expected, String payload) {

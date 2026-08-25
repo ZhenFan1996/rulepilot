@@ -353,6 +353,42 @@ class SpringAiBoardGameRecommendationModelTest {
     }
 
     @Test
+    void neverPublishesAClosedReplyEnvelopeWhenTheProviderReportsAnOutputLimit() {
+        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        ChatModel chatModel = mock(ChatModel.class);
+        when(configuration.modelFor(RuntimeModelConfiguration.Role.RECOMMENDATION)).thenReturn(chatModel);
+        when(configuration.providerFor(RuntimeModelConfiguration.Role.RECOMMENDATION)).thenReturn("qwen");
+        when(configuration.modelNameFor(RuntimeModelConfiguration.Role.RECOMMENDATION)).thenReturn("qwen3.7-plus");
+        when(chatModel.getOptions()).thenReturn(OpenAiChatOptions.builder()
+                .apiKey("test-key")
+                .baseUrl("https://provider.example/v1")
+                .model("qwen3.7-plus")
+                .build());
+        when(chatModel.stream(any(Prompt.class))).thenReturn(Flux.just(new ChatResponse(List.of(new Generation(
+                AssistantMessage.builder()
+                        .content("{\"mode\":\"REPLY\",\"action\":null,\"replyDeltas\":[\"这段看似完整，但供应商明确标记输出被截断。\"]}")
+                        .build(),
+                ChatGenerationMetadata.builder().finishReason("max_tokens").build())))));
+        var adapter = new SpringAiBoardGameRecommendationModel(configuration);
+        java.util.ArrayList<String> parts = new java.util.ArrayList<>();
+
+        var turn = adapter.streamDecision(
+                new Request(
+                        List.of(Message.system("Choose text or one action."), Message.user("请继续。")),
+                        List.of(new ToolSpec("search", "Search only when needed", "{\"type\":\"object\"}")),
+                        384,
+                        ToolChoice.AUTO),
+                null,
+                parts::add);
+
+        assertThat(turn.completionStatus()).isEqualTo(CompletionStatus.OUTPUT_LIMIT);
+        assertThat(turn.text()).contains("供应商明确标记输出被截断");
+        assertThat(parts)
+                .as("an output-limited reply remains private so ReAct can reject the turn atomically")
+                .isEmpty();
+    }
+
+    @Test
     void aggregatesAnAutonomousActionWithoutPublishingItsArgumentsAsPlayerText() {
         RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
         ChatModel chatModel = mock(ChatModel.class);

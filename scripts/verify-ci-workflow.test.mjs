@@ -73,6 +73,13 @@ test('production recommendation journey tests the deployed main release without 
     /RULEPILOT_RECOMMENDATION_RULE_FOLLOW_UP: \$\{\{ inputs\.rule_follow_up \}\}/)
   assert.doesNotMatch(productionRecommendationWorkflow, /target_bgg_id|target_names|230802|花砖物语|Azul/)
   assert.match(productionRecommendationWorkflow, /require_fresh_import:[\s\S]*?type: boolean[\s\S]*?default: false/)
+  assert.match(productionRecommendationWorkflow, /recommendation_only:[\s\S]*?type: boolean[\s\S]*?default: false/)
+  assert.match(productionRecommendationWorkflow,
+    /RULEPILOT_RECOMMENDATION_ONLY: \$\{\{ inputs\.recommendation_only \}\}/)
+  assert.match(productionRecommendationWorkflow,
+    /expected_title_term:[\s\S]*?type: string[\s\S]*?default: ''/)
+  assert.match(productionRecommendationWorkflow,
+    /RULEPILOT_RECOMMENDATION_EXPECTED_TITLE_TERM: \$\{\{ inputs\.expected_title_term \}\}/)
   assert.match(productionRecommendationWorkflow, /playwright\.recommendation-production\.config\.ts/)
   assert.match(productionRecommendationConfig, /testMatch:\s*'production-recommendation-journey\.spec\.ts'/)
   assert.match(productionRecommendationConfig, /trace:\s*'off'/)
@@ -116,7 +123,27 @@ test('production recommendation journey tests the deployed main release without 
   assert.match(productionRecommendationSpec, /report\.pdfDownloadToFirstCitedLessonMs = Math\.max/)
   assert.match(productionRecommendationSpec, /MAX_OPEN_GUIDANCE_MS = 15_000/)
   assert.match(productionRecommendationSpec, /MAX_SELECTION_RECOMMENDATION_MS = 20_000/)
+  assert.match(productionRecommendationSpec, /MAX_SELECTION_TERMINAL_OBSERVATION_MS = 35_000/)
   assert.match(productionRecommendationSpec, /toContain\(report\.openGuidanceOutcome\)/)
+  assert.match(productionRecommendationSpec, /RULEPILOT_RECOMMENDATION_ONLY === 'true'/)
+  assert.match(productionRecommendationSpec, /waitForPersistedRecommendationTerminal\(/)
+  assert.match(productionRecommendationSpec, /selectionBaselineRevision = guidanceSession\.revision/)
+  assert.match(productionRecommendationSpec, /latestResponse\.clientTurnId !== expectedClientTurnId/)
+  assert.match(productionRecommendationSpec, /everyPublishedGameMatchesTitleTerm\(/)
+  assert.match(productionRecommendationSpec, /recommendationPublishedGames/)
+  assert.match(productionRecommendationSpec, /recommendationModelCalls/)
+  assert.match(productionRecommendationSpec, /recommendationFailureBoundary/)
+  assert.match(productionRecommendationSpec, /rawModelOutputCaptured: false/)
+  assert.match(productionRecommendationSpec,
+    /toBe\('RECOMMENDATIONS_WITHIN_INTERACTION_BUDGET'\)/)
+  assert.match(productionRecommendationSpec, /finalResult\?\.outcome[\s\S]*?toBe\('recommendations'\)/)
+  assert.match(productionRecommendationSpec, /recommendationCardCount\)\.toBeGreaterThanOrEqual\(2\)/)
+  assert.match(productionRecommendationSpec, /positiveDistinctBggIds\(terminalGames\)/)
+  assert.match(productionRecommendationSpec, /recommendationOutcome[\s\S]*?not\.toBe\('unavailable'\)/)
+  assert.match(productionRecommendationSpec, /RECOMMENDATION_ONLY_NO_RULEBOOK_IMPORT/)
+  assert.match(productionRecommendationSpec, /PERSISTED_FINAL_SESSION/)
+  assert.match(productionRecommendationSpec,
+    /Recommendation-only verification must not start a rulebook import[\s\S]*?toBe\(0\)/)
   assert.match(
     productionRecommendationSpec,
     /expect\(recommendationCards\)\.toHaveCount\(3, \{ timeout: MAX_SELECTION_RECOMMENDATION_MS \}\)/,
@@ -195,24 +222,33 @@ test('production tracing opt-in requires an explicit reachable collector endpoin
   assert.equal([...productionCompose.matchAll(endpointOverride)].length, 2)
 })
 
-test('failed production recommendation journeys retain bounded API diagnostics without reading environment values', () => {
-  assert.match(productionRecommendationWorkflow, /name: Collect bounded API diagnostics after a failed journey/)
-  assert.match(productionRecommendationWorkflow, /if: failure\(\)/)
-  assert.match(productionRecommendationWorkflow, /api-diagnostics\.log/)
-  assert.match(productionRecommendationWorkflow, /logs --since 35m --tail 500 --no-color api/)
-  assert.match(productionRecommendationWorkflow, /logs --since 35m --tail 500 --no-color worker/)
-  assert.match(productionRecommendationWorkflow, /Refusing to inspect an active release outside/)
-  assert.doesNotMatch(productionRecommendationWorkflow, /(?:cat|sed|grep|rg) [^\n]*\.env/)
+test('public production recommendation artifacts contain only sanitized journey evidence', () => {
+  const publicSummaryStep = productionRecommendationWorkflow.match(
+    /- name: Build public-safe journey summary([\s\S]*?)- name: Upload sanitized journey measurements/,
+  )?.[1] ?? ''
+
+  assert.notEqual(publicSummaryStep, '')
+  assert.match(productionRecommendationWorkflow, /name: Upload sanitized journey measurements/)
+  assert.match(productionRecommendationWorkflow,
+    /path: \.artifacts\/production-recommendation-journey\/public-summary\.json/)
+  assert.match(publicSummaryStep, /jq '\{/)
+  assert.match(publicSummaryStep, /recommendationPublishedGames/)
+  assert.doesNotMatch(publicSummaryStep,
+    /recommendationConversationId|modelAssignments|sourceUrl|lessonDockText|teachingPlanId|answerSessionId|TurnId|ErrorCode/)
+  assert.doesNotMatch(productionRecommendationWorkflow, /api-diagnostics\.log|docker compose[^\n]*logs|Upload private/)
+  assert.doesNotMatch(productionRecommendationSpec, /recommendationPublishedReply/)
+  assert.match(productionRecommendationSpec,
+    /recommendationPublishedGames = terminalGames\.map\(entry => \(\{[\s\S]*?bggId: entry\.game\.bggId,[\s\S]*?name: entry\.game\.name,[\s\S]*?originalName: entry\.game\.originalName,[\s\S]*?\}\)\)/)
+  assert.doesNotMatch(productionRecommendationSpec, /terminalGames\.map\(entry => \(\{ \.\.\.entry\.game \}\)\)/)
+  assert.match(productionRecommendationWorkflow,
+    /if \[\[ "\$RULEPILOT_RECOMMENDATION_ONLY" == true[\s\S]*?recommendation_only requires a non-empty expected_title_term/)
 })
 
-test('failed ordinary-user production journeys retain bounded API and worker diagnostics', () => {
-  assert.match(productionOrdinaryUserWorkflow, /name: Collect bounded service diagnostics after a failed journey/)
-  assert.match(productionOrdinaryUserWorkflow, /if: failure\(\)/)
-  assert.match(productionOrdinaryUserWorkflow, /service-diagnostics\.log/)
-  assert.match(productionOrdinaryUserWorkflow, /logs --since 35m --tail 500 --no-color api/)
-  assert.match(productionOrdinaryUserWorkflow, /logs --since 35m --tail 500 --no-color worker/)
-  assert.match(productionOrdinaryUserWorkflow, /Refusing to inspect an active release outside/)
-  assert.doesNotMatch(productionOrdinaryUserWorkflow, /(?:cat|sed|grep|rg) [^\n]*\.env/)
+test('public ordinary-user smoke artifacts exclude production service logs', () => {
+  assert.match(productionOrdinaryUserWorkflow, /name: Upload sanitized journey output/)
+  assert.match(productionOrdinaryUserWorkflow,
+    /path: \.artifacts\/production-ordinary-user-smoke\/summary\.json/)
+  assert.doesNotMatch(productionOrdinaryUserWorkflow, /service-diagnostics\.log|docker compose[^\n]*logs|Upload private/)
 })
 
 test('ordinary-user production smoke can exercise one fresh official image gallery without uploading it', () => {
@@ -314,11 +350,12 @@ test('production deployment does not couple release availability to a stochastic
   assert.doesNotMatch(productionAvailabilityScript, /recommendation-agent|authorization|paid model/i)
 })
 
-test('production deployment captures bounded API diagnostics without reading protected environment values', () => {
-  assert.match(deploymentWorkflow, /name: Collect bounded production diagnostics after a failed verification/)
+test('production deployment failure output includes service status but not application logs', () => {
+  assert.match(deploymentWorkflow, /name: Collect production service status after a failed verification/)
   assert.match(deploymentWorkflow, /if: failure\(\)/)
-  assert.match(deploymentWorkflow, /logs --since 10m --tail 250 --no-color api/)
+  assert.match(deploymentWorkflow, /ps api worker frontend gateway/)
   assert.match(deploymentWorkflow, /Refusing to inspect an active release outside/)
+  assert.doesNotMatch(deploymentWorkflow, /docker compose[^\n]*logs|logs --since/)
   assert.doesNotMatch(deploymentWorkflow, /(?:cat|sed|grep|rg) [^\n]*\.env/)
 })
 

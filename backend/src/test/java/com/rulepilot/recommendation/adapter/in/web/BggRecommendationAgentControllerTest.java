@@ -76,7 +76,11 @@ class BggRecommendationAgentControllerTest {
                         1,
                         0,
                         false,
-                        List.of("SEARCH_BGG_CATALOG", "REJECTED_ACTION:bad", "RECOMMEND_GAMES")),
+                        List.of(
+                                "SEARCH_BGG_CATALOG",
+                                "REJECTED_ACTION:bad",
+                                "RECOMMENDATION_PUBLICATION_RECOVERED:PUBLICATION_MODEL_FAILED",
+                                "RECOMMEND_GAMES")),
                 List.of(),
                 null,
                 shortfall);
@@ -95,6 +99,10 @@ class BggRecommendationAgentControllerTest {
         assertThat(response.shortfall()).isNotNull();
         assertThat(response.shortfall().requestedCount()).isEqualTo(3);
         assertThat(response.shortfall().availableCount()).isEqualTo(2);
+        assertThat(response.modelCalls()).isEqualTo(2);
+        assertThat(response.catalogCalls()).isEqualTo(1);
+        assertThat(response.webResearchCalls()).isZero();
+        assertThat(response.publicationRecovered()).isTrue();
         assertThat(response.completedWork()).containsExactly("browse_bgg_catalog", "recommend_games");
     }
 
@@ -130,6 +138,42 @@ class BggRecommendationAgentControllerTest {
                 false);
 
         assertThat(response.assistantMessage()).isEqualTo("嗨，今天想聊哪款桌游？");
+        assertThat(response.completedWork()).isEmpty();
+        assertThat(response.failureBoundary()).isNull();
+    }
+
+    @Test
+    void exposesOnlyAStablePlayerSafeFailureBoundary() {
+        var domain = new ConversationResponse(
+                Outcome.UNAVAILABLE,
+                DecisionMode.MODEL_ASSISTED,
+                "这轮推荐没有完成。",
+                RecommendationProfile.empty(),
+                null,
+                0,
+                0,
+                new BoardGameRecommendationAgent.UserModelView("", List.of()),
+                List.of(),
+                new BoardGameRecommendationAgent.HarnessTrace(
+                        1,
+                        0,
+                        0,
+                        false,
+                        List.of("RUN_DEADLINE_EXCEEDED", "UNAVAILABLE:RUN_DEADLINE_EXCEEDED")),
+                List.of(),
+                null);
+
+        var response = BggRecommendationAgentController.RecommendationConversationResponse.from(
+                domain,
+                new LocalizedTaxonomy(Map.of(), Map.of()),
+                "zh-CN",
+                presentation,
+                null,
+                null,
+                null,
+                false);
+
+        assertThat(response.failureBoundary()).isEqualTo("time_budget");
         assertThat(response.completedWork()).isEmpty();
     }
 

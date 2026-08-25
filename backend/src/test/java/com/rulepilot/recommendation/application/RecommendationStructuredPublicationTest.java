@@ -27,7 +27,11 @@ import java.math.BigDecimal;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 import org.junit.jupiter.api.Test;
 
 class RecommendationStructuredPublicationTest {
@@ -113,6 +117,263 @@ class RecommendationStructuredPublicationTest {
         });
 
         loop.stopBoundedCalls();
+    }
+
+    @Test
+    void keepsVerifiedCardsWhenALateModelRationaleViolatesTheEvidenceBoundary() {
+        BoardGameRecommendationModel model = mock(BoardGameRecommendationModel.class);
+        BoardGameRecommendationTools tools = mock(BoardGameRecommendationTools.class);
+        Game game = game(101);
+        List<String> streamed = new ArrayList<>();
+        String unsafeDraft = "先给你一段还没有完整校验的推荐理由。";
+        String payload = """
+                {"decision":{"requestedCount":1,"selections":[{"bggId":101}],"referenceBggIds":[]},"replyBlocks":[{"surface":"MESSAGE","role":"NARRATIVE","bggId":null,"internalEvidenceIds":[],"text":"先给你一段还没有完整校验的推荐理由。"},{"surface":"CARD","role":"WHY_FIT","bggId":101,"internalEvidenceIds":["B999:mechanics"],"text":"这句错误地引用了别的候选。"}]}
+                """
+                .strip();
+
+        when(model.configured("player")).thenReturn(true);
+        when(tools.webResearchConfigured()).thenReturn(false);
+        when(tools.inspectTitles(List.of("Signal Grove"))).thenReturn(new CatalogObservation(
+                ToolStatus.SUCCESS,
+                ToolName.INSPECT_BGG_TITLES,
+                1,
+                List.of(game),
+                List.of(),
+                ""));
+        when(model.streamDecision(any(), eq("player"), any())).thenReturn(new Turn(
+                "",
+                List.of(new ToolCall(
+                        "inspect-candidates",
+                        BoardGameRecommendationAgent.SEARCH_TOOL,
+                        "{\"titles\":[\"Signal Grove\"]}")),
+                CompletionStatus.COMPLETE));
+        when(model.streamStructured(any(), eq("player"), any())).thenAnswer(invocation -> {
+            @SuppressWarnings("unchecked")
+            java.util.function.Consumer<String> listener = invocation.getArgument(2);
+            int invalidCard = payload.indexOf(",{\"surface\":\"CARD\"");
+            listener.accept(payload.substring(0, invalidCard));
+            listener.accept(payload.substring(invalidCard));
+            return new StructuredTurn(payload, CompletionStatus.COMPLETE);
+        });
+        var properties = new BoardGameRecommendationProperties(
+                8, 3, new BigDecimal("0.65"), Duration.ofSeconds(30));
+        RecommendationReActLoop loop = new RecommendationReActLoop(
+                model,
+                tools,
+                new BoardGameRecommendationSelector(properties),
+                properties,
+                new ObjectMapper());
+
+        var response = loop.converse(
+                new ConversationRequest(
+                        RecommendationProfile.empty(),
+                        "请给我一款可选择的合作游戏卡片。"),
+                "zh-CN",
+                "player",
+                ignored -> {},
+                streamed::add);
+
+        assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
+        assertThat(response.games())
+                .extracting(entry -> entry.game().ranking().bggId())
+                .containsExactly(101);
+        assertThat(response.assistantMessage())
+                .contains("候选已经通过身份和基础资料校验")
+                .doesNotContain(unsafeDraft, "错误地引用");
+        assertThat(streamed).containsExactly(response.assistantMessage());
+        assertThat(response.harness().modelCalls()).isEqualTo(2);
+        assertThat(response.harness().actions())
+                .contains(
+                        "RECOMMENDATION_PUBLICATION_RECOVERED:BLOCK_EVIDENCE_NOT_GROUNDED",
+                        "RECOMMEND_GAMES")
+                .doesNotContain("UNAVAILABLE:PUBLICATION_MODEL_FAILED");
+
+        loop.stopBoundedCalls();
+    }
+
+    @Test
+    void publishesVerifiedSeedCardsWhenTheFinalWriterFailsBeforeItsDecision() {
+        BoardGameRecommendationModel model = mock(BoardGameRecommendationModel.class);
+        BoardGameRecommendationTools tools = mock(BoardGameRecommendationTools.class);
+        Game game = game(101);
+        List<String> streamed = new ArrayList<>();
+
+        when(model.configured("player")).thenReturn(true);
+        when(tools.webResearchConfigured()).thenReturn(false);
+        when(tools.inspectTitles(List.of("Signal Grove"))).thenReturn(new CatalogObservation(
+                ToolStatus.SUCCESS,
+                ToolName.INSPECT_BGG_TITLES,
+                1,
+                List.of(game),
+                List.of(),
+                ""));
+        when(model.streamDecision(any(), eq("player"), any())).thenReturn(new Turn(
+                "",
+                List.of(new ToolCall(
+                        "inspect-candidates",
+                        BoardGameRecommendationAgent.SEARCH_TOOL,
+                        "{\"titles\":[\"Signal Grove\"]}")),
+                CompletionStatus.COMPLETE));
+        when(model.streamStructured(any(), eq("player"), any())).thenThrow(
+                new IllegalStateException("raw provider failure stays private"));
+        var properties = new BoardGameRecommendationProperties(
+                8, 3, new BigDecimal("0.65"), Duration.ofSeconds(30));
+        RecommendationReActLoop loop = new RecommendationReActLoop(
+                model,
+                tools,
+                new BoardGameRecommendationSelector(properties),
+                properties,
+                new ObjectMapper());
+
+        var response = loop.converse(
+                new ConversationRequest(
+                        RecommendationProfile.empty(),
+                        "请给我一款可以继续查看详情的候选卡。"),
+                "zh-CN",
+                "player",
+                ignored -> {},
+                streamed::add);
+
+        assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
+        assertThat(response.games())
+                .extracting(entry -> entry.game().ranking().bggId())
+                .containsExactly(101);
+        assertThat(response.assistantMessage())
+                .contains("候选已经通过身份和基础资料校验")
+                .doesNotContain("raw provider failure");
+        assertThat(streamed).containsExactly(response.assistantMessage());
+        assertThat(response.harness().actions())
+                .contains(
+                        "RECOMMENDATION_PUBLICATION_RECOVERED:PUBLICATION_MODEL_FAILED",
+                        "RECOMMEND_GAMES");
+
+        loop.stopBoundedCalls();
+    }
+
+    @Test
+    void keepsTheHardRunDeadlineTerminalInsteadOfPublishingFallbackCards() {
+        BoardGameRecommendationModel model = mock(BoardGameRecommendationModel.class);
+        BoardGameRecommendationTools tools = mock(BoardGameRecommendationTools.class);
+        Game game = game(101);
+        List<String> streamed = new ArrayList<>();
+
+        when(model.configured("player")).thenReturn(true);
+        when(tools.webResearchConfigured()).thenReturn(false);
+        when(tools.inspectTitles(List.of("Signal Grove"))).thenReturn(new CatalogObservation(
+                ToolStatus.SUCCESS,
+                ToolName.INSPECT_BGG_TITLES,
+                1,
+                List.of(game),
+                List.of(),
+                ""));
+        when(model.streamDecision(any(), eq("player"), any())).thenReturn(new Turn(
+                "",
+                List.of(new ToolCall(
+                        "inspect-candidates",
+                        BoardGameRecommendationAgent.SEARCH_TOOL,
+                        "{\"titles\":[\"Signal Grove\"]}")),
+                CompletionStatus.COMPLETE));
+        when(model.streamStructured(any(), eq("player"), any())).thenAnswer(invocation -> {
+            try {
+                Thread.sleep(5_000);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("writer was cancelled at the run deadline", interrupted);
+            }
+            throw new AssertionError("the final writer should have been cancelled");
+        });
+        var properties = new BoardGameRecommendationProperties(
+                8, 3, new BigDecimal("0.65"), Duration.ofMillis(250));
+        RecommendationReActLoop loop = new RecommendationReActLoop(
+                model,
+                tools,
+                new BoardGameRecommendationSelector(properties),
+                properties,
+                new ObjectMapper());
+
+        var response = loop.converse(
+                new ConversationRequest(
+                        RecommendationProfile.empty(),
+                        "请给我一款可以继续查看详情的候选卡。"),
+                "zh-CN",
+                "player",
+                ignored -> {},
+                streamed::add);
+
+        assertThat(response.outcome()).isEqualTo(Outcome.UNAVAILABLE);
+        assertThat(response.games()).isEmpty();
+        assertThat(streamed).isEmpty();
+        assertThat(response.harness().actions())
+                .contains("RUN_DEADLINE_EXCEEDED", "UNAVAILABLE:RUN_DEADLINE_EXCEEDED")
+                .noneMatch(action -> action.startsWith("RECOMMENDATION_PUBLICATION_RECOVERED:"));
+
+        loop.stopBoundedCalls();
+    }
+
+    @Test
+    void dropsAFirstDecisionReplyThatArrivesAfterTheHardDeadlineWhenTheProviderIgnoresInterrupt()
+            throws InterruptedException {
+        BoardGameRecommendationModel model = mock(BoardGameRecommendationModel.class);
+        BoardGameRecommendationTools tools = mock(BoardGameRecommendationTools.class);
+        CountDownLatch decisionStarted = new CountDownLatch(1);
+        CountDownLatch releaseLateReply = new CountDownLatch(1);
+        CountDownLatch lateReplyAttempted = new CountDownLatch(1);
+        List<String> streamed = new CopyOnWriteArrayList<>();
+        String lateReply = "这段回复来自已经超时的首轮模型调用，不能再发送给玩家。";
+
+        when(model.configured("player")).thenReturn(true);
+        when(tools.webResearchConfigured()).thenReturn(false);
+        when(model.streamDecision(any(), eq("player"), any())).thenAnswer(invocation -> {
+            decisionStarted.countDown();
+            boolean released = false;
+            while (!released) {
+                try {
+                    releaseLateReply.await();
+                    released = true;
+                } catch (InterruptedException ignored) {
+                    // This fake provider deliberately ignores cancellation to exercise the lifecycle fence.
+                }
+            }
+            @SuppressWarnings("unchecked")
+            Consumer<String> listener = invocation.getArgument(2);
+            try {
+                listener.accept(lateReply);
+            } finally {
+                lateReplyAttempted.countDown();
+            }
+            return new Turn(lateReply, List.of(), CompletionStatus.COMPLETE);
+        });
+        var properties = new BoardGameRecommendationProperties(
+                8, 3, new BigDecimal("0.65"), Duration.ofMillis(150));
+        RecommendationReActLoop loop = new RecommendationReActLoop(
+                model,
+                tools,
+                new BoardGameRecommendationSelector(properties),
+                properties,
+                new ObjectMapper());
+
+        try {
+            var response = loop.converse(
+                    new ConversationRequest(
+                            RecommendationProfile.empty(),
+                            "先给我一个不需要查资料的简短建议。"),
+                    "zh-CN",
+                    "player",
+                    ignored -> {},
+                    streamed::add);
+
+            assertThat(decisionStarted.await(1, TimeUnit.SECONDS)).isTrue();
+            assertThat(response.outcome()).isEqualTo(Outcome.UNAVAILABLE);
+            assertThat(response.harness().actions())
+                    .contains("RUN_DEADLINE_EXCEEDED", "UNAVAILABLE:RUN_DEADLINE_EXCEEDED");
+
+            releaseLateReply.countDown();
+            assertThat(lateReplyAttempted.await(1, TimeUnit.SECONDS)).isTrue();
+            assertThat(streamed).isEmpty();
+        } finally {
+            releaseLateReply.countDown();
+            loop.stopBoundedCalls();
+        }
     }
 
     private Game game(int id) {

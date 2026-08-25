@@ -13,6 +13,7 @@ import SafeMarkdown from '@/components/SafeMarkdown.vue'
 import type {
   RecommendationAgentResponse,
   RecommendationClarification,
+  RecommendationFailureBoundary,
   RecommendationGame,
   RecommendationMessage,
   RecommendationProgressAction,
@@ -43,7 +44,7 @@ const copy = {
     description: '可以像和朋友一样聊：说一个游戏、一个感觉，或者上一批哪里不对。我会沿着上下文继续，不用按表格报条件。',
     initial: '晚上好。想一起挑一款，还是先聊聊最近喜欢的桌游？游戏名、气氛、人数，想到什么就说什么。',
     inputLabel: '聊聊你想玩的游戏', inputPlaceholder: '例如：想找和花砖物语机制接近、但互动再多一点的游戏', send: '发送', sending: '正在接着你的话想…', workingReply: '正在回复', workingSearch: '正在查找桌游', workingRecommendation: '正在整理推荐', replyingDetail: '正在生成回复…',
-    reset: '清空这次对话', newChat: '建立新聊天', chatHistory: '聊天记录', chatUntitled: '新的桌游聊天', error: '刚才没有接上。你写下的条件还在，可以直接重试。', retry: '重试', profile: '这次想找',
+    reset: '清空这次对话', newChat: '建立新聊天', chatHistory: '聊天记录', chatUntitled: '新的桌游聊天', error: '刚才没有接上。你写下的条件还在，可以直接重试。', unavailableError: '这次推荐没有完成，也没有写入对话结果。当前页面仍保留你刚才的请求，已核对条件也保留在会话中，可以直接重试。', failureTimeBudget: '失败原因：查找、核对或生成没有在本轮时间上限内完成。', failureModelResponse: '失败原因：模型这次没有返回完整、可执行的结构，因此未发布临时文字。', failureServiceConfiguration: '失败原因：推荐模型或所需能力当前没有可用配置。', failureActionBudget: '失败原因：在限定步骤内仍未形成可安全发布的结果。', failurePublicationBoundary: '失败原因：最终结果没有在安全发布边界内完整交付。', failureService: '失败原因：推荐服务没有完成本轮请求。', retry: '重试', profile: '这次想找',
     players: '{value} 人', duration: '{value} 分钟内', durationAny: '时长不限', weight: '复杂度 ≤ {value}', weightAny: '复杂度不限',
     source: '可核对的 BGG 资料 · 从完整 BGG 目录中核对了 {count} 款候选。', more: '换一批',
     researchSources: '资料来源',
@@ -68,7 +69,7 @@ const copy = {
     description: 'Talk as you would with a friend: name a game, describe a feeling, or say what missed the mark. I will continue from context; no form-filling required.',
     initial: 'Good evening. Want to choose a game together, or chat about what you have enjoyed lately? Start anywhere—a title, a mood, or the group.',
     inputLabel: 'Tell us what you want to play', inputPlaceholder: 'For example: something with similar mechanisms to a tile-drafting game, but more interaction', send: 'Send', sending: 'Thinking from where we left off…', workingReply: 'Replying', workingSearch: 'Finding board games', workingRecommendation: 'Preparing the recommendation', replyingDetail: 'Writing the reply…',
-    reset: 'Clear this conversation', newChat: 'New chat', chatHistory: 'Chat history', chatUntitled: 'New board-game chat', error: 'That reply did not come through. Your preferences are still here.', retry: 'Retry', profile: 'Looking for',
+    reset: 'Clear this conversation', newChat: 'New chat', chatHistory: 'Chat history', chatUntitled: 'New board-game chat', error: 'That reply did not come through. Your preferences are still here.', unavailableError: 'This recommendation did not complete and was not written into the conversation. This page still has your request, and verified context remains in the session, so you can retry it.', failureTimeBudget: 'Why it failed: search, verification, or generation did not finish within this turn’s time limit.', failureModelResponse: 'Why it failed: the model did not return a complete executable structure, so provisional text was not published.', failureServiceConfiguration: 'Why it failed: the recommendation model or a required capability is not currently configured.', failureActionBudget: 'Why it failed: the bounded steps ended before a result was safe to publish.', failurePublicationBoundary: 'Why it failed: the final result did not complete inside the safe publication boundary.', failureService: 'Why it failed: the recommendation service did not complete this turn.', retry: 'Retry', profile: 'Looking for',
     players: '{value} players', duration: 'Up to {value} min', durationAny: 'Any duration', weight: 'Complexity ≤ {value}', weightAny: 'Any complexity',
     source: 'Verifiable BGG details · Checked {count} candidates against the complete BGG catalog.', more: 'Try another batch',
     researchSources: 'Sources',
@@ -192,6 +193,17 @@ function protocolUuid(value: unknown): value is string {
   return true
 }
 
+function playerSafeFailureBoundary(value: unknown): RecommendationFailureBoundary | null {
+  return value === 'time_budget'
+    || value === 'model_response'
+    || value === 'service_configuration'
+    || value === 'action_budget'
+    || value === 'publication_boundary'
+    || value === 'service_failure'
+    ? value
+    : null
+}
+
 function restoredDraft() {
   try {
     const parsed = JSON.parse(sessionStorage.getItem(DRAFT_STORAGE_KEY) ?? 'null') as unknown
@@ -230,6 +242,9 @@ const latestRecommendationProgress = ref<RecommendationProgressUpdate | null>(nu
 const streamedRecommendationMessage = ref('')
 const loadingElapsedSeconds = ref(0)
 const failed = ref(false)
+const unavailableFailure = ref(false)
+const turnIdentityConflict = ref(false)
+const failureBoundary = ref<RecommendationFailureBoundary | null>(null)
 const activeTurnLocale = ref<AppLocale | null>(null)
 const failedTurnLocale = ref<AppLocale | null>(null)
 const loginGateVisible = ref(false)
@@ -453,7 +468,20 @@ const recommendationSoftBudgetCopy = computed(() => {
     ? 'There is not yet a new candidate safe to show. Catalog facts and fit tradeoffs still need checking; unfinished candidates stay hidden.'
     : '目前还没有足以展示的新候选；还需核对目录事实与匹配取舍，未完成候选不会提前显示。'
 })
-const failureMessage = computed(() => translated(failedTurnLocale.value ?? locale.value, 'error'))
+const failureBoundaryCopy: Record<RecommendationFailureBoundary, CopyKey> = {
+  time_budget: 'failureTimeBudget',
+  model_response: 'failureModelResponse',
+  service_configuration: 'failureServiceConfiguration',
+  action_budget: 'failureActionBudget',
+  publication_boundary: 'failurePublicationBoundary',
+  service_failure: 'failureService',
+}
+const failureMessage = computed(() => {
+  const responseLocale = failedTurnLocale.value ?? locale.value
+  const summary = translated(responseLocale, unavailableFailure.value ? 'unavailableError' : 'error')
+  if (!unavailableFailure.value || !failureBoundary.value) return summary
+  return `${summary} ${translated(responseLocale, failureBoundaryCopy[failureBoundary.value])}`
+})
 const retryLabel = computed(() => translated(failedTurnLocale.value ?? locale.value, 'retry'))
 const loginLocale = computed(() => activeTurnLocale.value ?? locale.value)
 
@@ -642,6 +670,9 @@ async function submitPendingTurn(
   lastRequest.value = pending
   activeTurnLocale.value = pending.responseLocale
   failedTurnLocale.value = null
+  unavailableFailure.value = false
+  turnIdentityConflict.value = false
+  failureBoundary.value = null
   beginLoading()
   failed.value = false
   try {
@@ -701,6 +732,16 @@ async function submitPendingTurn(
       responseLocale: serverResponse.responseLocale ?? pending.responseLocale,
     }
     activeTurnLocale.value = parsed.responseLocale ?? pending.responseLocale
+    if (parsed.outcome === 'unavailable') {
+      streamedRecommendationMessage.value = ''
+      profile.value = parsed.profile
+      clarification.value = null
+      failedTurnLocale.value = parsed.responseLocale ?? pending.responseLocale
+      unavailableFailure.value = true
+      failureBoundary.value = playerSafeFailureBoundary(parsed.failureBoundary)
+      failed.value = true
+      return
+    }
     profile.value = parsed.profile
     clarification.value = parsed.clarification
     response.value = parsed
@@ -735,6 +776,7 @@ async function submitPendingTurn(
       && error.code === 'revision_conflict'
       && revisionRetry === 0
       && restoredConversationOwner) {
+      clarification.value = null
       serverSessionReady.value = false
       serverRestoreGeneration += 1
       const generation = serverRestoreGeneration
@@ -750,9 +792,15 @@ async function submitPendingTurn(
       }
       failed.value = true
     } else {
+      clarification.value = null
+      turnIdentityConflict.value = error instanceof RecommendationStreamError
+        && error.code === 'turn_id_reused'
+      if (turnIdentityConflict.value) {
+        lastRequest.value = { ...copiedPendingRequest(pending), clientTurnId: crypto.randomUUID() }
+      }
       failed.value = true
       if (!disposed
-        && !(error instanceof RecommendationStreamError && error.code === 'turn_id_reused')
+        && !turnIdentityConflict.value
         && restoredConversationOwner) {
         serverSessionReady.value = false
         serverRestoreGeneration += 1
@@ -936,8 +984,11 @@ function changeJourneyGame() {
 function retry() {
   const pending = lastRequest.value
   if (!pending) return
+  const retried = unavailableFailure.value
+    ? { ...copiedPendingRequest(pending), clientTurnId: crypto.randomUUID() }
+    : pending
   failed.value = false
-  void submitPendingTurn(pending)
+  void submitPendingTurn(retried)
 }
 
 function playerConversationTranscript() {
@@ -999,6 +1050,9 @@ function clearVisibleRecommendationConversation(preserveSelectedIdentity = false
   response.value = null
   messages.value = [{ id: ++messageId, role: 'assistant', text: t('initial') }]
   failed.value = false
+  unavailableFailure.value = false
+  turnIdentityConflict.value = false
+  failureBoundary.value = null
   activeTurnLocale.value = null
   failedTurnLocale.value = null
   lastRequest.value = null
@@ -1085,7 +1139,9 @@ function isRecommendationServerSession(value: unknown): value is RecommendationS
 
 function applyServerRecommendationConversation(session: RecommendationServerSession) {
   const pending = lastRequest.value ? copiedPendingRequest(lastRequest.value) : null
+  const pendingTurnIdentityConflict = turnIdentityConflict.value
   const selectedBggId = selectedGame.value?.bggId ?? selectedBggIdToRestore
+  const unavailableResponse = session.latestResponse?.outcome === 'unavailable'
   clearVisibleRecommendationConversation(true)
   conversationId.value = session.conversationId
   conversationRevision.value = session.revision
@@ -1097,7 +1153,7 @@ function applyServerRecommendationConversation(session: RecommendationServerSess
   rememberedKnownGames.value = session.knownGames.map(game => ({ ...game }))
   seenBggIds.value = [...session.shownBggIds]
 
-  if (session.latestResponse) {
+  if (session.latestResponse && !unavailableResponse) {
     const latest = {
       ...session.latestResponse,
       profile: canonicalRecommendationProfile(session.latestResponse.profile),
@@ -1124,14 +1180,24 @@ function applyServerRecommendationConversation(session: RecommendationServerSess
   }
 
   const completedPending = pending
+    && !unavailableResponse
+    && !pendingTurnIdentityConflict
     && protocolUuid(session.latestResponse?.clientTurnId)
     && session.latestResponse.clientTurnId === pending.clientTurnId
   if (pending && !completedPending) {
+    clarification.value = null
     lastRequest.value = pending
     activeTurnLocale.value = pending.responseLocale
     failedTurnLocale.value = pending.responseLocale
     activeFocusedBggId.value = pending.focusedBggId
     failed.value = true
+    turnIdentityConflict.value = pendingTurnIdentityConflict
+    unavailableFailure.value = Boolean(
+      unavailableResponse && session.latestResponse?.clientTurnId === pending.clientTurnId,
+    )
+    failureBoundary.value = unavailableFailure.value
+      ? playerSafeFailureBoundary(session.latestResponse?.failureBoundary)
+      : null
     const pendingTurn = pending.transcript.at(-1)
     const visibleLastTurn = messages.value.at(-1)
     if (pendingTurn?.role === 'user'
@@ -1267,6 +1333,9 @@ function reset(preserveJourney = false) {
   response.value = null
   messages.value = [{ id: ++messageId, role: 'assistant', text: t('initial') }]
   failed.value = false
+  unavailableFailure.value = false
+  turnIdentityConflict.value = false
+  failureBoundary.value = null
   activeTurnLocale.value = null
   failedTurnLocale.value = null
   lastRequest.value = null
@@ -1511,8 +1580,11 @@ onBeforeUnmount(() => {
                 </div>
               </div>
             </div>
-            <div v-if="clarification?.options.length && !loading" class="border-t border-ink/8 px-4 py-4 sm:px-6"><div class="flex flex-wrap gap-2"><button v-for="option in clarification.options" :key="option.value" type="button" class="min-h-11 rounded-lg border border-ink/15 bg-ink/5 px-4 text-sm font-semibold text-ink/72 hover:border-copper/50" @click="choose(option)">{{ option.label }}</button></div></div>
-            <div v-if="failed" class="mx-4 mb-3 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800 sm:mx-6" role="alert"><p>{{ failureMessage }}</p><button type="button" class="mt-2 min-h-11 font-semibold underline" @click="retry">{{ retryLabel }}</button></div>
+            <div v-if="clarification?.options.length && !loading && !failed" class="border-t border-ink/8 px-4 py-4 sm:px-6"><div class="flex flex-wrap gap-2"><button v-for="option in clarification.options" :key="option.value" type="button" class="min-h-11 rounded-lg border border-ink/15 bg-ink/5 px-4 text-sm font-semibold text-ink/72 hover:border-copper/50" @click="choose(option)">{{ option.label }}</button></div></div>
+            <div v-if="failed" class="mx-4 mb-3 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800 sm:mx-6" role="alert">
+              <p>{{ failureMessage }}</p>
+              <button type="button" class="mt-2 min-h-11 font-semibold underline" @click="retry">{{ retryLabel }}</button>
+            </div>
             <div v-if="loginGateVisible" class="mx-4 mb-3 rounded-xl border border-copper/25 bg-copper/5 p-4 text-sm leading-6 text-ink/72 sm:mx-6" role="status">
               <p>{{ loginT('loginRequired') }}</p>
               <div class="mt-3 flex flex-wrap gap-4">
