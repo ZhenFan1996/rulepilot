@@ -33,7 +33,7 @@ public class PostgresBggMetadataTranslationStore implements BggMetadataTranslati
         return jdbc.query(
                         """
                         SELECT payload::text AS payload
-                        FROM bgg_metadata_translation
+                        FROM bgg_metadata_translation_versioned
                         WHERE bgg_id = :bggId
                           AND locale = :locale
                           AND contract_version = :contractVersion
@@ -61,14 +61,16 @@ public class PostgresBggMetadataTranslationStore implements BggMetadataTranslati
         }
         jdbc.update(
                 """
-                INSERT INTO bgg_metadata_translation (
+                INSERT INTO bgg_metadata_translation_versioned (
                     bgg_id, locale, contract_version, source_sha256, payload, payload_bytes, translated_at)
                 VALUES (:bggId, :locale, :contractVersion, :sourceSha256,
                         CAST(:payload AS jsonb), :payloadBytes, :translatedAt)
                 ON CONFLICT (bgg_id, locale, contract_version, source_sha256) DO UPDATE SET
                     payload = EXCLUDED.payload,
                     payload_bytes = EXCLUDED.payload_bytes,
-                    translated_at = GREATEST(bgg_metadata_translation.translated_at, EXCLUDED.translated_at)
+                    translated_at = GREATEST(
+                        bgg_metadata_translation_versioned.translated_at,
+                        EXCLUDED.translated_at)
                 """,
                 new MapSqlParameterSource()
                         .addValue("bggId", key.bggId())
