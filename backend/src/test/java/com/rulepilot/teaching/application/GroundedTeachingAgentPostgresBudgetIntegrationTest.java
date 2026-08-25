@@ -135,7 +135,10 @@ class GroundedTeachingAgentPostgresBudgetIntegrationTest {
 
         BudgetSnapshot budget = execution.budget(runId);
         List<ActivitySnapshot> activities = execution.activities(runId);
-        assertThat(demand).isEqualTo(new WorkloadDemand(95, 115));
+        // The durable admission must cover the longest mutually exclusive page-catalog branch for every bound page:
+        // initial image semantics, OCR after a typed-contract failure, then semantics with the changed transcript.
+        // This fixture's visual catalog is unavailable, so its lower actual usage remains asserted independently.
+        assertThat(demand).isEqualTo(new WorkloadDemand(95, 134));
         assertThat(lesson.sections()).hasSize(19).allSatisfy(section ->
                 assertThat(section.evidenceStatus()).isEqualTo(EvidenceStatus.SUPPORTED));
         assertThat(model.maximumConcurrentCalls()).isGreaterThanOrEqualTo(3);
@@ -143,8 +146,8 @@ class GroundedTeachingAgentPostgresBudgetIntegrationTest {
         assertThat(tools.searches()).isEqualTo(57);
         assertThat(tools.visualPageReads()).isEqualTo(19);
         assertThat(tools.canonicalFallbackReads()).isOne();
-        assertThat(budget.maxToolCalls()).isEqualTo(95);
-        assertThat(budget.maxModelCalls()).isEqualTo(115);
+        assertThat(budget.maxToolCalls()).isEqualTo(demand.requiredToolCalls());
+        assertThat(budget.maxModelCalls()).isEqualTo(demand.requiredModelCalls());
         assertThat(budget.usedToolCalls()).isEqualTo(77).isLessThanOrEqualTo(budget.maxToolCalls());
         assertThat(budget.usedModelCalls()).isEqualTo(21).isLessThanOrEqualTo(budget.maxModelCalls());
         assertThat(activities).filteredOn(activity -> activity.type() == ActivityType.TOOL).hasSize(77);
