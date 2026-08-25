@@ -90,6 +90,7 @@ final class RecommendationReActLoop {
     static final int MAX_MODEL_CALLS = 6;
     private static final int MAX_DECISION_MODEL_CALLS = MAX_MODEL_CALLS - 1;
     private static final int MAX_ACTION_CALLS = 6;
+    private static final long OPTIONAL_PUBLICATION_MODEL_DEADLINE_MILLIS = 18_000;
     private static final int ACTION_SELECTION_OUTPUT_TOKENS = 512;
     private static final int EVIDENCE_RESPONSE_OUTPUT_TOKENS = 1_536;
     private static final int PUBLICATION_OUTPUT_TOKENS = 2_048;
@@ -297,19 +298,11 @@ final class RecommendationReActLoop {
         Map<String, SettledAction> settledActions = new LinkedHashMap<>();
         int stateEpoch = 0;
         PublicationSeed pendingPublication = null;
-        boolean invalidFirstDecisionRepairUsed = false;
 
         while (state.modelCalls < MAX_DECISION_MODEL_CALLS && state.actionCalls < MAX_ACTION_CALLS) {
             state.modelCalls++;
             progress.start(ProgressStage.SELECTING_TOOLS, ProgressAction.CHOOSE_NEXT_ACTION);
             BoardGameRecommendationModel.Turn turn;
-            boolean firstDecision = state.modelCalls == 1
-                    && state.actionCalls == 0
-                    && state.catalogCalls == 0
-                    && state.webResearchCalls == 0
-                    && messages.size() == 2;
-            AnswerStreamGate firstDecisionAnswer =
-                    firstDecision ? new AnswerStreamGate(answerPartListener) : null;
             List<ToolSpec> currentActions = availableActions(state, actions, preferenceEvidenceIds);
             if (pendingPublication != null) {
                 currentActions = currentActions.stream()
@@ -322,37 +315,29 @@ final class RecommendationReActLoop {
                         turnMessages,
                         currentActions,
                         outputTokenBudget(state),
-                        firstDecision ? ToolChoice.AUTO : ToolChoice.REQUIRED);
-                try {
-                    turn = withinDeadline(
-                            state,
-                            () -> firstDecision
-                                    ? model.streamDecision(
-                                            modelRequest,
-                                            state.modelConfigurationOwner,
-                                            firstDecisionAnswer::accept)
-                                    : model.next(modelRequest, state.modelConfigurationOwner));
-                } finally {
-                    if (firstDecisionAnswer != null) firstDecisionAnswer.close();
-                }
+                        ToolChoice.REQUIRED);
+                turn = withinDeadline(
+                        state,
+                        () -> model.next(modelRequest, state.modelConfigurationOwner));
+            } catch (RunInterrupted exception) {
+                progress.fail();
+                state.actions.add("RUN_DEADLINE_EXCEEDED");
+                return unavailable(state, locale, "RUN_DEADLINE_EXCEEDED");
             } catch (RunDeadlineExceeded exception) {
+                if (pendingPublication != null) {
+                    return publishWithoutOptionalResearch(
+                            request,
+                            state,
+                            locale,
+                            pendingPublication,
+                            progress,
+                            answerPartListener,
+                            "TIME_BUDGET");
+                }
                 progress.fail();
                 state.actions.add("RUN_DEADLINE_EXCEEDED");
                 return unavailable(state, locale, "RUN_DEADLINE_EXCEEDED");
             } catch (RuntimeException exception) {
-                if (firstDecision
-                        && !invalidFirstDecisionRepairUsed
-                        && exception instanceof BoardGameRecommendationModel.ProtocolFailure protocol
-                        && "DECISION_INVALID_ACTION".equals(protocol.code())
-                        && state.modelCalls < MAX_DECISION_MODEL_CALLS) {
-                    invalidFirstDecisionRepairUsed = true;
-                    progress.retry();
-                    state.actions.add("REPAIR_MODEL_DECISION:" + protocol.code());
-                    messages.set(0, Message.system(
-                            systemPromptV2() + "\n\n" + decisionProtocolRepairPrompt(protocol.code())));
-                    continue;
-                }
-                progress.fail();
                 String failureCode = exception instanceof BoardGameRecommendationModel.ProtocolFailure protocol
                         ? "MODEL_PROTOCOL_FAILED:" + protocol.code()
                         : "MODEL_CALL_FAILED";
@@ -360,26 +345,48 @@ final class RecommendationReActLoop {
                         "Recommendation ReAct turn failed (type={}, code={})",
                         exception.getClass().getSimpleName(),
                         failureCode);
+                if (pendingPublication != null) {
+                    return publishWithoutOptionalResearch(
+                            request,
+                            state,
+                            locale,
+                            pendingPublication,
+                            progress,
+                            answerPartListener,
+                            exception instanceof BoardGameRecommendationModel.ProtocolFailure
+                                    ? "MODEL_PROTOCOL_FAILED"
+                                    : "MODEL_CALL_FAILED");
+                }
+                progress.fail();
                 state.actions.add(failureCode);
                 return unavailable(state, locale, failureCode);
             }
             if (turn.completionStatus() == BoardGameRecommendationModel.CompletionStatus.OUTPUT_LIMIT) {
+                if (pendingPublication != null) {
+                    return publishWithoutOptionalResearch(
+                            request,
+                            state,
+                            locale,
+                            pendingPublication,
+                            progress,
+                            answerPartListener,
+                            "MODEL_OUTPUT_LIMIT");
+                }
                 progress.fail();
                 state.actions.add("MODEL_OUTPUT_TRUNCATED");
                 return unavailable(state, locale, "MODEL_OUTPUT_TRUNCATED");
             }
             if (turn.toolCalls().isEmpty()) {
-                if (turn.text().isBlank()) {
-                    progress.fail();
-                    LOGGER.warn("Recommendation Agent turn returned neither player text nor an action");
-                    state.actions.add("EMPTY_MODEL_TURN");
-                    return unavailable(state, locale, "EMPTY_MODEL_TURN");
-                }
-                if (firstDecision) {
-                    progress.complete();
-                    ConversationResponse response = actionExecutor.directReply(turn.text(), state, locale);
-                    logRun(response);
-                    return response;
+                LOGGER.warn("Recommendation Agent turn returned no required typed action");
+                if (pendingPublication != null) {
+                    return publishWithoutOptionalResearch(
+                            request,
+                            state,
+                            locale,
+                            pendingPublication,
+                            progress,
+                            answerPartListener,
+                            "ACTION_MISSING");
                 }
                 progress.fail();
                 state.actions.add("UNSTRUCTURED_EVIDENCE_REPLY");
@@ -393,11 +400,21 @@ final class RecommendationReActLoop {
                 boolean sameReadAction = READ_ACTIONS.contains(actionName)
                         && turn.toolCalls().stream().allMatch(candidate -> actionName.equals(candidate.name()));
                 if (!sameReadAction) {
-                    progress.fail();
                     LOGGER.warn(
                             "Recommendation ReAct turn returned {} incompatible actions (textCharacters={})",
                             turn.toolCalls().size(),
                             turn.text().length());
+                    if (pendingPublication != null) {
+                        return publishWithoutOptionalResearch(
+                                request,
+                                state,
+                                locale,
+                                pendingPublication,
+                                progress,
+                                answerPartListener,
+                                "INVALID_ACTION_COUNT");
+                    }
+                    progress.fail();
                     state.actions.add("INVALID_ACTION_COUNT");
                     return unavailable(state, locale, "INVALID_ACTION_COUNT");
                 }
@@ -426,12 +443,42 @@ final class RecommendationReActLoop {
                         "ACTION_NOT_AVAILABLE",
                         "That capability is not available in this turn. Choose one action from the supplied list."));
             } else {
-                outcome = actionExecutor.execute(
-                        call,
-                        state,
+                try {
+                    outcome = actionExecutor.execute(
+                            call,
+                            state,
+                            request,
+                            locale,
+                            (stage, focus) -> progress.start(stage, progressAction(call.name()), focus));
+                } catch (RunInterrupted exception) {
+                    progress.fail();
+                    state.actions.add("RUN_DEADLINE_EXCEEDED");
+                    return unavailable(state, locale, "RUN_DEADLINE_EXCEEDED");
+                } catch (RunDeadlineExceeded exception) {
+                    if (pendingPublication != null) {
+                        return publishWithoutOptionalResearch(
+                                request,
+                                state,
+                                locale,
+                                pendingPublication,
+                                progress,
+                                answerPartListener,
+                                "TIME_BUDGET");
+                    }
+                    progress.fail();
+                    state.actions.add("RUN_DEADLINE_EXCEEDED");
+                    return unavailable(state, locale, "RUN_DEADLINE_EXCEEDED");
+                }
+            }
+            if (pendingPublication != null && outcome.rejected()) {
+                return publishWithoutOptionalResearch(
                         request,
+                        state,
                         locale,
-                        (stage, focus) -> progress.start(stage, progressAction(call.name()), focus));
+                        pendingPublication,
+                        progress,
+                        answerPartListener,
+                        "ACTION_REJECTED");
             }
             if (!reused && !outcome.rejected()) {
                 stateEpoch++;
@@ -475,25 +522,13 @@ final class RecommendationReActLoop {
                                 CandidateUse.PUBLISH_CARDS);
                     }
                     progress.complete();
-                    try {
-                        return publishRecommendation(
-                                request,
-                                state,
-                                locale,
-                                publicationSeed,
-                                progress,
-                                answerPartListener);
-                    } catch (RunDeadlineExceeded exception) {
-                        progress.fail();
-                        state.actions.add("RUN_DEADLINE_EXCEEDED");
-                        return unavailable(state, locale, "RUN_DEADLINE_EXCEEDED");
-                    } catch (RuntimeException exception) {
-                        progress.fail();
-                        String code = publicationFailureCode(exception);
-                        state.actions.add("PUBLICATION_FAILED:" + code);
-                        LOGGER.warn("Recommendation publication failed ({})", code);
-                        return unavailable(state, locale, code);
-                    }
+                    return publishRecommendationWithinBoundary(
+                            request,
+                            state,
+                            locale,
+                            publicationSeed,
+                            progress,
+                            answerPartListener);
                 }
             }
             if (outcome.rejected()) {
@@ -505,6 +540,16 @@ final class RecommendationReActLoop {
             compactPriorToolState(messages);
             messages.add(Message.assistant("", call));
             messages.add(Message.tool(call, observation));
+        }
+        if (pendingPublication != null) {
+            return publishWithoutOptionalResearch(
+                    request,
+                    state,
+                    locale,
+                    pendingPublication,
+                    progress,
+                    answerPartListener,
+                    "BUDGET");
         }
         progress.fail();
         state.actions.add("REACT_BUDGET_EXHAUSTED");
@@ -554,6 +599,57 @@ final class RecommendationReActLoop {
         return decision;
     }
 
+    private ConversationResponse publishWithoutOptionalResearch(
+            ConversationRequest request,
+            RecommendationAgentState state,
+            String locale,
+            PublicationSeed pendingPublication,
+            ProgressTracker progress,
+            Consumer<String> answerPartListener,
+            String reason) {
+        progress.retry();
+        state.actions.add("RESEARCH_SKIPPED_FOR_PUBLICATION_" + reason);
+        PublicationSeed verifiedFallback = new PublicationSeed(
+                pendingPublication.candidateBggIds(),
+                pendingPublication.referenceBggIds(),
+                CandidateUse.PUBLISH_CARDS);
+        return publishRecommendationWithinBoundary(
+                request,
+                state,
+                locale,
+                verifiedFallback,
+                progress,
+                answerPartListener);
+    }
+
+    private ConversationResponse publishRecommendationWithinBoundary(
+            ConversationRequest request,
+            RecommendationAgentState state,
+            String locale,
+            PublicationSeed seed,
+            ProgressTracker progress,
+            Consumer<String> answerPartListener) {
+        try {
+            return publishRecommendation(
+                    request,
+                    state,
+                    locale,
+                    seed,
+                    progress,
+                    answerPartListener);
+        } catch (RunDeadlineExceeded exception) {
+            progress.fail();
+            state.actions.add("RUN_DEADLINE_EXCEEDED");
+            return unavailable(state, locale, "RUN_DEADLINE_EXCEEDED");
+        } catch (RuntimeException exception) {
+            progress.fail();
+            String code = publicationFailureCode(exception);
+            state.actions.add("PUBLICATION_FAILED:" + code);
+            LOGGER.warn("Recommendation publication failed ({})", code);
+            return unavailable(state, locale, code);
+        }
+    }
+
     private ConversationResponse publishRecommendation(
             ConversationRequest request,
             RecommendationAgentState state,
@@ -561,32 +657,41 @@ final class RecommendationReActLoop {
             PublicationSeed seed,
             ProgressTracker progress,
             Consumer<String> answerPartListener) {
-        state.modelCalls++;
         progress.start(ProgressStage.COMPOSING_RESPONSE, ProgressAction.STREAM_NATURAL_REPLY);
         AtomicReference<RecommendationPublication.Permit> permit = new AtomicReference<>();
         AtomicReference<RecommendationPublication.Session> session = new AtomicReference<>();
         AtomicBoolean acceptingPublication = new AtomicBoolean(true);
+        Object publicationLifecycle = new Object();
+        Runnable closePublication = () -> {
+            synchronized (publicationLifecycle) {
+                acceptingPublication.set(false);
+            }
+        };
         RecommendationPublicationStream stream = new RecommendationPublicationStream(
                 json,
                 decision -> {
-                    if (!acceptingPublication.get()) {
-                        throw new IllegalStateException("recommendation publication is no longer accepting output");
+                    synchronized (publicationLifecycle) {
+                        if (!acceptingPublication.get()) {
+                            throw new IllegalStateException("recommendation publication is no longer accepting output");
+                        }
+                        RecommendationPublication.Permit approved = publication.permit(decision, state, seed);
+                        if (!permit.compareAndSet(null, approved)) {
+                            throw new IllegalStateException("recommendation publication repeated its decision");
+                        }
+                        session.set(publication.open(approved, state, locale, answerPartListener));
                     }
-                    RecommendationPublication.Permit approved = publication.permit(decision, state, seed);
-                    if (!permit.compareAndSet(null, approved)) {
-                        throw new IllegalStateException("recommendation publication repeated its decision");
-                    }
-                    session.set(publication.open(approved, state, locale, answerPartListener));
                 },
                 block -> {
-                    if (!acceptingPublication.get()) {
-                        throw new IllegalStateException("recommendation publication is no longer accepting output");
+                    synchronized (publicationLifecycle) {
+                        if (!acceptingPublication.get()) {
+                            throw new IllegalStateException("recommendation publication is no longer accepting output");
+                        }
+                        RecommendationPublication.Session active = session.get();
+                        if (active == null) {
+                            throw new IllegalStateException("recommendation reply block arrived before its decision");
+                        }
+                        active.acceptBlock(block);
                     }
-                    RecommendationPublication.Session active = session.get();
-                    if (active == null) {
-                        throw new IllegalStateException("recommendation reply block arrived before its decision");
-                    }
-                    active.acceptBlock(block);
                 },
                 65_536,
                 32);
@@ -599,17 +704,22 @@ final class RecommendationReActLoop {
                 ToolChoice.NONE,
                 new StructuredOutput("recommendation_publication", PUBLICATION_SCHEMA, true));
         try {
-            BoardGameRecommendationModel.StructuredTurn turn = withinDeadline(
+            Optional<BoardGameRecommendationModel.StructuredTurn> completed = withinPublicationDeadline(
                     state,
+                    closePublication,
                     () -> model.streamStructured(
                             modelRequest,
                             state.modelConfigurationOwner,
                             stream::accept));
+            if (completed.isEmpty()) {
+                throw new RecoverablePublicationFailure("PUBLICATION_TIME_BUDGET");
+            }
+            BoardGameRecommendationModel.StructuredTurn turn = completed.orElseThrow();
             if (turn.completionStatus() == BoardGameRecommendationModel.CompletionStatus.OUTPUT_LIMIT) {
                 throw new RecoverablePublicationFailure("PUBLICATION_OUTPUT_LIMIT");
             }
             stream.finish();
-            acceptingPublication.set(false);
+            closePublication.run();
             if (permit.get() == null || session.get() == null) {
                 throw new RecoverablePublicationFailure("PUBLICATION_DECISION_MISSING");
             }
@@ -618,7 +728,7 @@ final class RecommendationReActLoop {
             logRun(response);
             return response;
         } catch (RuntimeException exception) {
-            acceptingPublication.set(false);
+            closePublication.run();
             if (exception instanceof RunDeadlineExceeded) throw exception;
             if (hasCause(exception, RecommendationPublication.DeliveryFailure.class)) throw exception;
             String code = publicationFailureCode(exception);
@@ -769,13 +879,6 @@ final class RecommendationReActLoop {
             current = current.getCause();
         }
         return false;
-    }
-
-    private static String decisionProtocolRepairPrompt(String code) {
-        return "The previous first-decision envelope failed the typed contract with safe code "
-                + code
-                + ". Do not repeat or describe that output. Choose exactly one action from the currently supplied "
-                + "allowlist through the provider tool-call contract. Do not emit player-facing prose in this repair turn.";
     }
 
     private int outputTokenBudget(RecommendationAgentState state) {
@@ -941,7 +1044,7 @@ final class RecommendationReActLoop {
         return """
                 You are RulePilot, one knowledgeable and natural board-game companion. Read the recent conversation as a whole, honor the latest correction, and respond in the player's language.
 
-                Run the ReAct loop yourself. On the first decision, choose REPLY when the turn needs neither retrieval, selectable cards, nor a typed memory update; otherwise choose one supplied ACTION. The actions all belong to you, not to separate models or roles. Continue planning until the player's complete request is actually answered. If you want to add a game-specific factual detail, use an action instead of guessing.
+                Run the ReAct loop yourself by choosing exactly one supplied typed action on every turn. Use reply_to_user when the complete turn needs neither retrieval, selectable cards, nor factual game lookup; submit any explicit memory update through that action's typed preferenceUpdates argument. The actions all belong to you, not to separate models or roles. Continue planning until the player's complete request is actually answered. If you want to add a game-specific factual detail, use a retrieval action instead of guessing.
 
                 Prefer the local BGG catalog for titles, designers, metadata, filtering, text retrieval, and selectable cards. When you recognize a creator nickname or informal reference, test the canonical name you know against the local BGG identity fields before using public discovery; use public discovery when the relationship is uncertain or needs a current source. Record only preferences the player actually stated. A title, nickname, story, metaphor, or mood is not automatically a hard filter: use BGG text retrieval as helpful candidate recall, then apply your own recommendation judgment. Use another page or sort when the player wants a fresh slate, and ask one useful question only when their answer would materially change the result.
 
@@ -1135,7 +1238,7 @@ final class RecommendationReActLoop {
         return List.of(
                 new ToolSpec(
                         REPLY_TOOL,
-                        "Finish a turn that needs no more retrieval and no new selectable card. playerReply is the complete natural answer shown to the player; write the useful answer now, not a status line or promise of later work. referencedBggIds is optional and may contain only already-verified games being discussed; it grants factual context but never creates cards. For new/selectable candidates, choose a candidate-producing read and declare candidateUse so the application can open grounded natural publication. Use resolve_bgg_game for a named title whose guide or rulebook should open. Example: {\"playerReply\":\"可以，下一局我会优先看更短的选择。\",\"referencedBggIds\":[],\"preferenceUpdates\":[]}.",
+                        "Finish a turn that needs no more retrieval and no new selectable card, including a memory-only confirmation. playerReply is the complete natural answer shown to the player; write the useful answer now, not a status line or promise of later work. Submit only explicit cited preferences through preferenceUpdates. referencedBggIds is optional and may contain only already-verified games being discussed; it grants factual context but never creates cards. For new/selectable candidates, choose a candidate-producing read and declare candidateUse so the application can open grounded natural publication. Use resolve_bgg_game for a named title whose guide or rulebook should open. Example: {\"playerReply\":\"可以，下一局我会优先看更短的选择。\",\"referencedBggIds\":[],\"preferenceUpdates\":[]}.",
                         "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"playerReply\":{\"type\":\"string\",\"description\":\"The complete locale-matched natural answer shown to the player. It must not contain hidden IDs, evidence markers, workflow narration, or unsupported game facts.\",\"minLength\":1,\"maxLength\":1200},\"referencedBggIds\":{\"type\":\"array\",\"maxItems\":5,\"items\":{\"type\":\"integer\",\"minimum\":1}},\"preferenceUpdates\":"
                                 + preferences
                                 + "},\"required\":[\"playerReply\"]}"),
@@ -1599,7 +1702,7 @@ final class RecommendationReActLoop {
         } catch (InterruptedException exception) {
             pending.cancel(true);
             Thread.currentThread().interrupt();
-            throw new RunDeadlineExceeded();
+            throw new RunInterrupted();
         } catch (ExecutionException exception) {
             Throwable cause = exception.getCause();
             if (cause instanceof RuntimeException runtime) throw runtime;
@@ -1608,27 +1711,38 @@ final class RecommendationReActLoop {
         }
     }
 
-    private <T> Optional<T> withinSoftDeadline(
-            RecommendationAgentState state, long maximumOperationMillis, Supplier<T> operation) {
-        long remainingMillis = maximumRunMillis - state.elapsedMs();
-        if (remainingMillis <= 0) throw new RunDeadlineExceeded();
-        long waitMillis = Math.min(remainingMillis, maximumOperationMillis);
+    private <T> Optional<T> withinPublicationDeadline(
+            RecommendationAgentState state, Runnable closePublication, Supplier<T> operation) {
+        // The run deadline bounds optional provider work. Once a typed, verified publication seed exists, the
+        // deterministic projection may still finish immediately afterward instead of erasing safe cards.
+        long publicationDeadlineMillis = Math.min(
+                maximumRunMillis,
+                OPTIONAL_PUBLICATION_MODEL_DEADLINE_MILLIS);
+        long remainingMillis = publicationDeadlineMillis - state.elapsedMs();
+        if (remainingMillis <= 0) {
+            closePublication.run();
+            return Optional.empty();
+        }
+        // Count the provider attempt on the owning thread. A timed-out Future has no successful get() happens-before
+        // edge, so mutating the trace from its worker could make the recovered response undercount nondeterministically.
+        state.modelCalls++;
         Future<T> pending = boundedCalls.submit(operation::get);
         try {
-            return Optional.ofNullable(pending.get(waitMillis, TimeUnit.MILLISECONDS));
+            return Optional.ofNullable(pending.get(remainingMillis, TimeUnit.MILLISECONDS));
         } catch (TimeoutException exception) {
+            closePublication.run();
             pending.cancel(true);
-            if (state.elapsedMs() >= maximumRunMillis) throw new RunDeadlineExceeded();
             return Optional.empty();
         } catch (InterruptedException exception) {
+            closePublication.run();
             pending.cancel(true);
             Thread.currentThread().interrupt();
-            throw new RunDeadlineExceeded();
+            throw new RunInterrupted();
         } catch (ExecutionException exception) {
             Throwable cause = exception.getCause();
             if (cause instanceof RuntimeException runtime) throw runtime;
             if (cause instanceof Error error) throw error;
-            throw new IllegalStateException("soft-bounded recommendation operation failed", cause);
+            throw new IllegalStateException("bounded recommendation publication failed", cause);
         }
     }
 
@@ -1773,23 +1887,7 @@ final class RecommendationReActLoop {
         }
     }
 
-    /** Prevents a provider that ignores cancellation from publishing after this run has settled. */
-    private static final class AnswerStreamGate {
-        private final Consumer<String> listener;
-        private boolean open = true;
+    static class RunDeadlineExceeded extends RuntimeException {}
 
-        private AnswerStreamGate(Consumer<String> listener) {
-            this.listener = Objects.requireNonNull(listener, "answer listener is required");
-        }
-
-        private synchronized void accept(String answer) {
-            if (open) listener.accept(answer);
-        }
-
-        private synchronized void close() {
-            open = false;
-        }
-    }
-
-    static final class RunDeadlineExceeded extends RuntimeException {}
+    static final class RunInterrupted extends RunDeadlineExceeded {}
 }

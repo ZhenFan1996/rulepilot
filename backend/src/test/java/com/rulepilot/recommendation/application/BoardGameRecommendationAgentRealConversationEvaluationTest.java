@@ -943,16 +943,6 @@ class BoardGameRecommendationAgentRealConversationEvaluationTest {
             }
 
             @Override
-            public Turn streamDecision(
-                    Request request,
-                    String ownerUsername,
-                    java.util.function.Consumer<String> accumulatedTextListener) {
-                Turn turn = delegate.streamDecision(request, ownerUsername, accumulatedTextListener);
-                capture.record(turn);
-                return turn;
-            }
-
-            @Override
             public BoardGameRecommendationModel.StructuredTurn streamStructured(
                     Request request,
                     String ownerUsername,

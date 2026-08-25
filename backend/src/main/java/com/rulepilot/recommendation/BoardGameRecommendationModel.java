@@ -20,21 +20,8 @@ public interface BoardGameRecommendationModel {
     }
 
     /**
-     * Streams the first ReAct decision behind a typed REPLY/ACTION barrier. The listener receives accumulated
-     * player-facing text only after a complete reply mode is known; action arguments are never emitted.
-     */
-    default Turn streamDecision(
-            Request request,
-            String ownerUsername,
-            Consumer<String> accumulatedTextListener) {
-        Turn turn = next(request, ownerUsername);
-        if (turn.toolCalls().isEmpty() && !turn.text().isEmpty()) accumulatedTextListener.accept(turn.text());
-        return turn;
-    }
-
-    /**
-     * Streams raw JSON deltas for a final structured publication turn. Unlike {@link #streamDecision}, this turn never
-     * advertises actions and the listener must not expose its protocol bytes directly to a player.
+     * Streams raw JSON deltas for a final structured publication turn. This turn never advertises actions and the
+     * listener must not expose its protocol bytes directly to a player.
      */
     default StructuredTurn streamStructured(
             Request request,
@@ -103,7 +90,6 @@ public interface BoardGameRecommendationModel {
     }
 
     enum ToolChoice {
-        AUTO,
         REQUIRED,
         NONE
     }
@@ -122,10 +108,6 @@ public interface BoardGameRecommendationModel {
             int maxOutputTokens,
             ToolChoice toolChoice,
             StructuredOutput structuredOutput) {
-        public Request(List<Message> messages, List<ToolSpec> tools, int maxOutputTokens) {
-            this(messages, tools, maxOutputTokens, ToolChoice.AUTO, null);
-        }
-
         public Request(
                 List<Message> messages,
                 List<ToolSpec> tools,
@@ -146,7 +128,7 @@ public interface BoardGameRecommendationModel {
             messages = List.copyOf(messages);
             tools = List.copyOf(tools);
             boolean actionTurn = !tools.isEmpty();
-            if (actionTurn && (toolChoice == ToolChoice.NONE || structuredOutput != null)) {
+            if (actionTurn && (toolChoice != ToolChoice.REQUIRED || structuredOutput != null)) {
                 throw new IllegalArgumentException("recommendation action turn cannot request structured output");
             }
             if (!actionTurn && (toolChoice != ToolChoice.NONE || structuredOutput == null)) {

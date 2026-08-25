@@ -176,7 +176,7 @@ class BoardGameRecommendationAgentPaidCanaryTest {
     }
 
     @Test
-    void streamsAnObviousConversationTurnWithoutRecommendationWork() throws Exception {
+    void answersAnObviousConversationThroughOneTypedReplyWithoutRecommendationWork() throws Exception {
         assumeTrue("true".equalsIgnoreCase(System.getenv("RULEPILOT_RECOMMENDATION_PAID_CANARY")));
         String provider = environment("RULEPILOT_RECOMMENDATION_CANARY_PROVIDER", "qwen")
                 .toLowerCase(Locale.ROOT);
@@ -240,18 +240,16 @@ class BoardGameRecommendationAgentPaidCanaryTest {
             visibleTurns.add(Map.copyOf(visible));
 
             assertThat(response.outcome()).isEqualTo(Outcome.CONVERSATION);
-            assertThat(response.mode()).isEqualTo(BoardGameRecommendationAgent.DecisionMode.MODEL_FAST_PATH);
+            assertThat(response.mode()).isEqualTo(BoardGameRecommendationAgent.DecisionMode.MODEL_ASSISTED);
             assertThat(response.games()).isEmpty();
             assertThat(response.harness().modelCalls()).isEqualTo(1);
             assertThat(response.harness().catalogCalls()).isZero();
             assertThat(response.harness().webResearchCalls()).isZero();
             assertThat(response.harness().fallbackUsed()).isFalse();
             assertThat(response.harness().actions()).containsExactly("REPLY_TO_USER");
-            assertThat(chunks).isNotEmpty().allSatisfy(chunk ->
-                    assertThat(response.assistantMessage()).startsWith(chunk));
-            assertThat(chunks.getLast()).isEqualTo(response.assistantMessage());
-            assertThat(firstChunkMs.get()).isNotNull().isLessThan(totalMs);
-            assertThat(capture.lastTurnHadToolCalls()).isFalse();
+            assertThat(chunks).containsExactly(response.assistantMessage());
+            assertThat(firstChunkMs.get()).isNotNull().isLessThanOrEqualTo(totalMs);
+            assertThat(capture.lastTurnHadToolCalls()).isTrue();
             writeArtifact(capture, visibleTurns, null);
         } catch (Throwable failure) {
             writeArtifact(capture, visibleTurns, failure.getClass().getSimpleName());
@@ -1928,17 +1926,6 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                 long started = System.nanoTime();
                 Turn result = delegate.next(request);
                 capture.add("react", result, elapsed(started));
-                return result;
-            }
-
-            @Override
-            public Turn streamDecision(
-                    Request request,
-                    String ownerUsername,
-                    java.util.function.Consumer<String> accumulatedTextListener) {
-                long started = System.nanoTime();
-                Turn result = delegate.streamDecision(request, ownerUsername, accumulatedTextListener);
-                capture.add("react_stream", result, elapsed(started));
                 return result;
             }
 
