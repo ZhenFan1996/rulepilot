@@ -5,6 +5,7 @@ import com.rulepilot.teaching.domain.IllustratedLesson.LessonSection;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonStep;
 import com.rulepilot.teaching.domain.IllustratedLesson.TeachingMove;
 import com.rulepilot.teaching.domain.IllustratedLesson.VisualFocus;
+import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
@@ -18,15 +19,12 @@ final class VisualLessonSectionEnricher {
 
     private final VisualLessonMergePolicy mergePolicy;
     private final VisualLessonStepLocator stepLocator;
-    private final int maxVisualsPerSection;
 
     VisualLessonSectionEnricher(
             VisualLessonMergePolicy mergePolicy,
-            VisualLessonStepLocator stepLocator,
-            int maxVisualsPerSection) {
+            VisualLessonStepLocator stepLocator) {
         this.mergePolicy = mergePolicy;
         this.stepLocator = stepLocator;
-        this.maxVisualsPerSection = maxVisualsPerSection;
     }
 
     boolean supportsVisualEvidence(String modelConfigurationOwner) {
@@ -47,6 +45,7 @@ final class VisualLessonSectionEnricher {
                 section,
                 modelConfigurationOwner,
                 null,
+                null,
                 progress,
                 acceptedVisuals,
                 explicitVisualStepPositions);
@@ -58,17 +57,13 @@ final class VisualLessonSectionEnricher {
             LessonSection section,
             String modelConfigurationOwner,
             UUID runId,
+            Instant compatibilityDeadline,
             VisualLessonEnricher.VisualProgressListener progress,
             List<VisualFocus> acceptedVisuals,
             java.util.Set<Integer> explicitVisualStepPositions) {
         if (explicitVisualStepPositions == null) {
             throw new IllegalArgumentException("explicit visual step positions are required");
         }
-        int existingVisuals = section.steps().stream().mapToInt(step -> step.visualFoci().size()).sum();
-        if (existingVisuals >= maxVisualsPerSection) {
-            return Result.rejected(section, VisualLessonEnricher.Outcome.ALREADY_PRESENT);
-        }
-        int remainingVisualBudget = maxVisualsPerSection - existingVisuals;
         List<LessonStep> targets = visualTargets(section, explicitVisualStepPositions);
         if (targets.isEmpty()) return Result.rejected(section, VisualLessonEnricher.Outcome.NO_CITED_CANDIDATE);
         targets.forEach(step -> progress.targetStarted(target(section, step)));
@@ -79,7 +74,7 @@ final class VisualLessonSectionEnricher {
                 targets,
                 modelConfigurationOwner,
                 runId,
-                remainingVisualBudget);
+                compatibilityDeadline);
         for (LessonStep step : targets) {
             boolean acceptedForStep = location.regions().stream().anyMatch(region ->
                     region.supportedStepPositions().isEmpty()

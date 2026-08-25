@@ -21,6 +21,10 @@ class LessonLocalizationTest {
         UUID lessonId = UUID.randomUUID();
         UUID planId = UUID.randomUUID();
         UUID chunkId = UUID.randomUUID();
+        VisualFocus primary = new VisualFocus(
+                2, "玩家板", "蓝色玩家板旁放着三个木制标记", 100, 200, 300, 400);
+        VisualFocus secondary = new VisualFocus(
+                4, "行动牌", "三张行动牌并排放在玩家板右侧", 250, 150, 450, 250);
         IllustratedLesson source = new IllustratedLesson(
                 lessonId,
                 planId,
@@ -43,7 +47,9 @@ class LessonLocalizationTest {
                                 "把玩家板放在自己面前。",
                                 List.of(2),
                                 List.of(chunkId),
-                                new VisualFocus(2, "玩家板", "蓝色玩家板旁放着三个木制标记", 100, 200, 300, 400))))),
+                                List.of(),
+                                primary,
+                                List.of(primary, secondary))))),
                 "test",
                 Instant.parse("2026-07-23T00:00:00Z"));
         LessonLocalization localization = LessonLocalization.pending(lessonId, PlayerLocale.EN, Instant.now())
@@ -75,6 +81,17 @@ class LessonLocalizationTest {
                 200,
                 300,
                 400));
+        assertThat(step.visualFoci())
+                .containsExactly(
+                        new VisualFocus(
+                                2,
+                                "Player mat",
+                                "Three wooden markers sit beside a blue player mat.",
+                                100,
+                                200,
+                                300,
+                                400),
+                        secondary);
     }
 
     @Test
@@ -93,9 +110,54 @@ class LessonLocalizationTest {
     }
 
     @Test
-    void rejectsAMissingVisualTranslationInsteadOfSilentlyRestoringTheSourceText() {
+    void keepsLateSourceVisualsWhenAReadyTranslationPredatesEnrichment() {
         UUID lessonId = UUID.randomUUID();
-        IllustratedLesson source = new IllustratedLesson(
+        IllustratedLesson source = lessonWithLateVisuals(lessonId);
+        LessonLocalization localization = LessonLocalization.pending(lessonId, PlayerLocale.EN, Instant.now())
+                .complete(
+                        List.of(new SectionTranslation(
+                                1, "Set up", "", List.of(new StepTranslation(1, "Check components", "Check the components.", "")))),
+                        Instant.now());
+
+        IllustratedLesson localized = localization.applyTo(source);
+
+        assertThat(localized.sections().getFirst().title()).isEqualTo("Set up");
+        assertThat(localized.sections().getFirst().steps().getFirst().heading()).isEqualTo("Check components");
+        assertThat(localized.sections().getFirst().steps().getFirst().text()).isEqualTo("Check the components.");
+        assertThat(localized.sections().getFirst().steps().getFirst().visualFoci())
+                .containsExactlyElementsOf(source.sections().getFirst().steps().getFirst().visualFoci());
+    }
+
+    @Test
+    void rejectsAPartiallyTranslatedVisualOverlay() {
+        UUID lessonId = UUID.randomUUID();
+        LessonLocalization localization = LessonLocalization.pending(lessonId, PlayerLocale.EN, Instant.now())
+                .complete(
+                        List.of(new SectionTranslation(
+                                1,
+                                "Set up",
+                                "",
+                                List.of(new StepTranslation(
+                                        1,
+                                        "Check components",
+                                        "Check the components.",
+                                        "Score marker",
+                                        "",
+                                        List.of())))),
+                        Instant.now());
+
+        assertThatThrownBy(() -> localization.applyTo(lessonWithLateVisuals(lessonId)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("localized visual focus");
+    }
+
+    private IllustratedLesson lessonWithLateVisuals(UUID lessonId) {
+        UUID chunkId = UUID.randomUUID();
+        VisualFocus primary = new VisualFocus(
+                3, "计分标记", "圆形计分标记位于分数轨道旁", 10, 20, 30, 40);
+        VisualFocus secondary = new VisualFocus(
+                5, "回合标记", "木制回合标记位于回合轨道左侧", 110, 120, 230, 240);
+        return new IllustratedLesson(
                 lessonId,
                 UUID.randomUUID(),
                 IllustratedLesson.LessonStatus.COMPLETE,
@@ -108,27 +170,20 @@ class LessonLocalizationTest {
                         IllustratedLesson.EvidenceStatus.SUPPORTED,
                         IllustratedLesson.VisualKind.TABLE_LAYOUT,
                         "",
-                        List.of(3),
-                        List.of(UUID.randomUUID()),
+                        List.of(3, 5),
+                        List.of(chunkId),
                         List.of(new LessonStep(
                                 1,
                                 "查看组件",
                                 IllustratedLesson.TeachingMove.VISUAL,
                                 "查看组件。",
-                                List.of(3),
-                                List.of(UUID.randomUUID()),
-                                new VisualFocus(3, "计分标记", "圆形计分标记位于分数轨道旁", 10, 20, 30, 40))))),
+                                List.of(3, 5),
+                                List.of(chunkId),
+                                List.of(),
+                                primary,
+                                List.of(primary, secondary))))),
                 "test",
                 Instant.now());
-        LessonLocalization localization = LessonLocalization.pending(lessonId, PlayerLocale.EN, Instant.now())
-                .complete(
-                        List.of(new SectionTranslation(
-                                1, "Set up", "", List.of(new StepTranslation(1, "Check components", "Check the components.", "")))),
-                        Instant.now());
-
-        assertThatThrownBy(() -> localization.applyTo(source))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("localized visual focus");
     }
 
     private IllustratedLesson lessonWithTwoSteps(UUID lessonId) {

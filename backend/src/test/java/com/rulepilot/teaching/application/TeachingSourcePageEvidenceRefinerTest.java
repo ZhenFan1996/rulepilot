@@ -133,7 +133,7 @@ class TeachingSourcePageEvidenceRefinerTest {
         AssistantReadTools tools = mock(AssistantReadTools.class);
         when(tools.searchRuleEvidence(org.mockito.ArgumentMatchers.any()))
                 .thenReturn(List.of(searchPlaceholder));
-        when(tools.readRuleEvidencePages(versionId, Set.of(2), true))
+        when(tools.readRuleEvidencePages(versionId, Set.of(2), false))
                 .thenReturn(List.of(canonicalPlaceholder, laterClause));
         VisualRulebookPageFacts visualFacts = mock(VisualRulebookPageFacts.class);
         when(visualFacts.find(versionId, Set.of(2))).thenReturn(List.of(new PageFact(
@@ -177,8 +177,8 @@ class TeachingSourcePageEvidenceRefinerTest {
             assertThat(derived.contentKind()).isEqualTo(RuleEvidence.ContentKind.VISUAL_TRANSCRIPTION);
         });
         assertThat(result.evidence().get(1)).isEqualTo(laterClause);
-        verify(tools).readRuleEvidencePages(versionId, Set.of(2), true);
-        verify(tools, never()).readRuleEvidencePages(versionId, Set.of(2), false);
+        verify(tools).readRuleEvidencePages(versionId, Set.of(2), false);
+        verify(tools, never()).readRuleEvidencePages(versionId, Set.of(2), true);
     }
 
     @Test

@@ -25,6 +25,7 @@ import com.rulepilot.teaching.VisualQuantityObservation.QuantityResolution;
 import com.rulepilot.teaching.VisualQuantityObservation.QuantifierScope;
 import com.rulepilot.teaching.application.TeachingPlanFactory;
 import com.rulepilot.teaching.application.TeachingSourceCoverageContract;
+import com.rulepilot.testing.PaidCanaryTrace;
 import io.micrometer.observation.ObservationRegistry;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
@@ -488,78 +489,112 @@ class VisualTeachingCatalogPaidCanaryTest {
                 .build();
         List<URI> pageImages = gstonePageImages(http, documentUrl);
         assertThat(pageNumber).isBetween(1, pageImages.size());
-
-        String modelName = requiredEnvironment("QWEN_MODEL");
-        List<String> rawResponses = new ArrayList<>();
-        ChatModel delegate = new ChatModelFactory(ObservationRegistry.NOOP, Duration.ofSeconds(120))
-                .create(
-                        "qwen",
-                        requiredEnvironment("QWEN_API_KEY"),
-                        requiredEnvironment("QWEN_BASE_URL"),
-                        modelName);
-        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
-        when(configuration.usesFake(Role.VISUAL, OWNER)).thenReturn(false);
-        when(configuration.supportsVision(Role.VISUAL, OWNER)).thenReturn(true);
-        when(configuration.providerFor(Role.VISUAL, OWNER)).thenReturn("qwen");
-        when(configuration.modelNameFor(Role.VISUAL, OWNER)).thenReturn(modelName);
-        when(configuration.modelFor(Role.VISUAL, OWNER)).thenReturn(recording(delegate, rawResponses));
-        SpringAiVisualRulebookPageCatalogModel catalog = model(configuration);
         byte[] image = rgbJpeg(fetchBytes(http, pageImages.get(pageNumber - 1)));
 
-        long started = System.nanoTime();
-        PageSummary page;
-        PageTranscript transcript = null;
-        try {
-            PageImageInput pageImage = new PageImageInput(pageNumber, "image/jpeg", image);
-            transcript = catalog.transcribeTeachingPage(pageImage, OWNER);
-            page = catalog.summarizeForTeaching(new CatalogRequest(
-                            List.of(pageImage),
-                            OWNER,
-                            rulebookTitle,
-                            List.of(transcript)))
-                    .pages()
-                    .getFirst();
-        } catch (RuntimeException failure) {
-            Map<String, Object> failedArtifact = new LinkedHashMap<>();
-            failedArtifact.put("schemaVersion", 1);
-            failedArtifact.put("generatedAt", Instant.now().toString());
-            failedArtifact.put("sourceUrl", documentUrl);
-            failedArtifact.put("pageNumber", pageNumber);
-            failedArtifact.put("provider", "qwen");
-            failedArtifact.put("model", modelName);
-            failedArtifact.put("modelCalls", rawResponses.size());
-            failedArtifact.put("ocrTranscript", transcript == null ? null : transcript.text());
-            failedArtifact.put("latencyMs", Duration.ofNanos(System.nanoTime() - started).toMillis());
-            failedArtifact.put("failure", failure.toString());
-            failedArtifact.put("rawResponses", rawResponses.stream().map(this::rawJsonOrText).toList());
+        try (PaidCanaryTrace trace = PaidCanaryTrace.start("teaching-visual-page")) {
+            String modelName = environmentOrRequired(
+                    "RULEPILOT_GSTONE_VISUAL_PAGE_MODEL", "QWEN_MODEL");
+            boolean skipOcr = "true".equalsIgnoreCase(
+                    System.getenv("RULEPILOT_GSTONE_VISUAL_PAGE_SKIP_OCR"));
+            List<String> rawResponses = new ArrayList<>();
+            ChatModel delegate = new ChatModelFactory(trace.observations(), Duration.ofSeconds(120))
+                    .create(
+                            "qwen",
+                            requiredEnvironment("QWEN_API_KEY"),
+                            requiredEnvironment("QWEN_BASE_URL"),
+                            modelName);
+            RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+            when(configuration.usesFake(Role.VISUAL, OWNER)).thenReturn(false);
+            when(configuration.supportsVision(Role.VISUAL, OWNER)).thenReturn(true);
+            when(configuration.providerFor(Role.VISUAL, OWNER)).thenReturn("qwen");
+            when(configuration.modelNameFor(Role.VISUAL, OWNER)).thenReturn(modelName);
+            when(configuration.modelFor(Role.VISUAL, OWNER)).thenReturn(recording(delegate, rawResponses));
+            SpringAiVisualRulebookPageCatalogModel catalog = model(configuration);
+            var executionIdentity = catalog.teachingStartupExecutionIdentity(OWNER).orElseThrow();
+
+            long started = System.nanoTime();
+            long ocrLatencyMs = -1L;
+            long semanticLatencyMs = -1L;
+            PageSummary page;
+            PageTranscript transcript = null;
+            try {
+                PageImageInput pageImage = new PageImageInput(pageNumber, "image/jpeg", image);
+                if (!skipOcr) {
+                    long ocrStarted = System.nanoTime();
+                    transcript = trace.observe(
+                            "teaching-visual-ocr",
+                            () -> catalog.transcribeTeachingPage(pageImage, OWNER));
+                    ocrLatencyMs = Duration.ofNanos(System.nanoTime() - ocrStarted).toMillis();
+                }
+                List<PageTranscript> transcripts = transcript == null ? List.of() : List.of(transcript);
+                long semanticStarted = System.nanoTime();
+                page = trace.observe(
+                                "teaching-visual-semantic-catalog",
+                                () -> catalog.summarizeForTeaching(new CatalogRequest(
+                                        List.of(pageImage),
+                                        OWNER,
+                                        rulebookTitle,
+                                        transcripts)))
+                        .pages()
+                        .getFirst();
+                semanticLatencyMs = Duration.ofNanos(System.nanoTime() - semanticStarted).toMillis();
+            } catch (RuntimeException failure) {
+                trace.recordFailure(failure);
+                Map<String, Object> failedArtifact = new LinkedHashMap<>();
+                failedArtifact.put("schemaVersion", 1);
+                failedArtifact.put("generatedAt", Instant.now().toString());
+                failedArtifact.put("sourceUrl", documentUrl);
+                failedArtifact.put("pageNumber", pageNumber);
+                failedArtifact.put("provider", executionIdentity.provider());
+                failedArtifact.put("configuredModel", modelName);
+                failedArtifact.put("model", executionIdentity.model());
+                failedArtifact.put("traceId", trace.traceId());
+                failedArtifact.put("modelCalls", rawResponses.size());
+                failedArtifact.put("ocrTranscript", transcript == null ? null : transcript.text());
+                failedArtifact.put("ocrLatencyMs", ocrLatencyMs);
+                failedArtifact.put("semanticCatalogLatencyMs", semanticLatencyMs);
+                failedArtifact.put("latencyMs", Duration.ofNanos(System.nanoTime() - started).toMillis());
+                failedArtifact.put("failure", failure.toString());
+                failedArtifact.put("rawResponses", rawResponses.stream().map(this::rawJsonOrText).toList());
+                writeArtifact(
+                        root.resolve(".local/agent-evaluation/gstone-visual-page-" + pageNumber + "-canary.json"),
+                        failedArtifact);
+                throw failure;
+            }
+            long latencyMs = Duration.ofNanos(System.nanoTime() - started).toMillis();
+
+            assertThat(page.pageNumber()).isEqualTo(pageNumber);
+            assertThat(page.ruleGroupInventoryComplete()).isTrue();
+            assertThat(page.ruleGroupIdentifiers()).isNotEmpty();
+            assertThat(rawResponses).hasSizeBetween(skipOcr ? 1 : 2, 3);
+
+            Map<String, Object> artifact = new LinkedHashMap<>();
+            artifact.put("schemaVersion", 1);
+            artifact.put("generatedAt", Instant.now().toString());
+            artifact.put("sourceUrl", documentUrl);
+            artifact.put("pageNumber", pageNumber);
+            artifact.put("provider", executionIdentity.provider());
+            artifact.put("configuredModel", modelName);
+            artifact.put("model", executionIdentity.model());
+            artifact.put("traceId", trace.traceId());
+            artifact.put("modelCalls", rawResponses.size());
+            artifact.put("latencyMs", latencyMs);
+            artifact.put("ocrLatencyMs", ocrLatencyMs);
+            artifact.put("semanticCatalogLatencyMs", semanticLatencyMs);
+            artifact.put("ocrModel", skipOcr ? null : "qwen3.5-ocr");
+            artifact.put("ocrTranscript", transcript == null ? null : transcript.text());
+            artifact.put("ocrSkipped", skipOcr);
+            artifact.put("rawResponses", rawResponses.stream().map(this::rawJsonOrText).toList());
+            artifact.put("pageSummary", json.valueToTree(page));
             writeArtifact(
                     root.resolve(".local/agent-evaluation/gstone-visual-page-" + pageNumber + "-canary.json"),
-                    failedArtifact);
-            throw failure;
+                    artifact);
         }
-        long latencyMs = Duration.ofNanos(System.nanoTime() - started).toMillis();
+    }
 
-        assertThat(page.pageNumber()).isEqualTo(pageNumber);
-        assertThat(page.ruleGroupInventoryComplete()).isTrue();
-        assertThat(page.ruleGroupIdentifiers()).isNotEmpty();
-        assertThat(rawResponses).hasSizeBetween(2, 3);
-
-        Map<String, Object> artifact = new LinkedHashMap<>();
-        artifact.put("schemaVersion", 1);
-        artifact.put("generatedAt", Instant.now().toString());
-        artifact.put("sourceUrl", documentUrl);
-        artifact.put("pageNumber", pageNumber);
-        artifact.put("provider", "qwen");
-        artifact.put("model", modelName);
-        artifact.put("modelCalls", rawResponses.size());
-        artifact.put("latencyMs", latencyMs);
-        artifact.put("ocrModel", "qwen3.5-ocr");
-        artifact.put("ocrTranscript", transcript.text());
-        artifact.put("rawResponses", rawResponses.stream().map(this::rawJsonOrText).toList());
-        artifact.put("pageSummary", json.valueToTree(page));
-        writeArtifact(
-                root.resolve(".local/agent-evaluation/gstone-visual-page-" + pageNumber + "-canary.json"),
-                artifact);
+    private String environmentOrRequired(String preferredName, String requiredName) {
+        String preferred = System.getenv(preferredName);
+        return preferred == null || preferred.isBlank() ? requiredEnvironment(requiredName) : preferred.strip();
     }
 
     private SpringAiVisualRulebookPageCatalogModel model(RuntimeModelConfiguration configuration) throws Exception {

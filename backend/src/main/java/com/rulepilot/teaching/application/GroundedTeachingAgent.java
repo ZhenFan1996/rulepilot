@@ -65,16 +65,16 @@ public class GroundedTeachingAgent {
             GeneratedContentCritic critic,
             AuditedAgentInvocations invocations,
             VisualRulebookPageFacts visualFacts,
-            VisualRulebookPageCatalogModel visualCatalog,
             @Value("${rulepilot.teaching.base-section-parallelism:3}") int baseSectionParallelism,
             @Value("${rulepilot.teaching.base-max-retrieval-queries-per-section:3}")
                     int baseMaxRetrievalQueriesPerSection,
-            TeachingEvidenceRefiner evidenceRefiner) {
+            TeachingEvidenceRefiner evidenceRefiner,
+            VisualRulebookCataloger visualCataloger) {
         this.tools = tools;
         this.model = model;
         this.invocations = invocations;
         TeachingVisualEvidenceResolver visualEvidenceResolver = new TeachingVisualEvidenceResolver(
-                tools, invocations, visualFacts, visualCatalog);
+                tools, invocations, visualFacts, visualCataloger);
         this.evidenceRetriever = new TeachingSectionEvidenceRetriever(
                 tools, evidenceVerifier, invocations, visualEvidenceResolver);
         this.evidenceRefiner = evidenceRefiner;
@@ -87,6 +87,31 @@ public class GroundedTeachingAgent {
                 new TeachingReviewCorrectionPolicy());
         this.workloadPolicy = new TeachingRunWorkloadPolicy(Math.max(1, baseMaxRetrievalQueriesPerSection));
         this.baseSectionParallelism = Math.max(1, Math.min(6, baseSectionParallelism));
+    }
+
+    public GroundedTeachingAgent(
+            AssistantReadTools tools,
+            TeachingLessonModel model,
+            EvidenceVerifier evidenceVerifier,
+            GeneratedContentCritic critic,
+            AuditedAgentInvocations invocations,
+            VisualRulebookPageFacts visualFacts,
+            VisualRulebookPageCatalogModel visualCatalog,
+            int baseSectionParallelism,
+            int baseMaxRetrievalQueriesPerSection,
+            TeachingEvidenceRefiner evidenceRefiner) {
+        this(
+                tools,
+                model,
+                evidenceVerifier,
+                critic,
+                invocations,
+                visualFacts,
+                baseSectionParallelism,
+                baseMaxRetrievalQueriesPerSection,
+                evidenceRefiner,
+                TeachingVisualEvidenceResolver.compatibilityCataloger(
+                        tools, invocations, visualFacts, visualCatalog));
     }
 
     public GroundedTeachingAgent(

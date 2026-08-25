@@ -45,7 +45,7 @@ function importJob(overrides: Partial<PlayerJourneyImportJob> = {}): PlayerJourn
 
 function run(state: string, revision = 1): PlayerJourneyRun {
   return {
-    run: { id: 'run-1', state, revision, updatedAt: `2026-08-10T10:00:0${revision}Z`, lastErrorCode: null },
+    run: { id: 'run-1', subjectId: 'subject-1', state, revision, updatedAt: `2026-08-10T10:00:0${revision}Z`, lastErrorCode: null },
     activities: [],
   }
 }

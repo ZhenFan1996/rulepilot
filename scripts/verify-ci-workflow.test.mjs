@@ -12,6 +12,7 @@ const productionAvailabilityScript = await readFile(
   'utf8',
 )
 const productionCompose = await readFile(new URL('../infra/compose.production.yml', import.meta.url), 'utf8')
+const deploymentCompose = await readFile(new URL('../infra/compose.deployment.yml', import.meta.url), 'utf8')
 const productionScript = await readFile(new URL('./run-production.sh', import.meta.url), 'utf8')
 const playwrightConfig = await readFile(new URL('../frontend/playwright.config.ts', import.meta.url), 'utf8')
 const productionRecommendationWorkflow = await readFile(
@@ -337,6 +338,14 @@ test('production deployment replaces stale recommendation sampling overrides wit
   assert.match(deploymentWorkflow,
     /managed_runtime_keys='[^']*\bBGG_RECOMMENDATION_TEMPERATURE\b[^']*'/)
   assert.match(deploymentWorkflow, /'BGG_RECOMMENDATION_TEMPERATURE=0\.0'/)
+})
+
+test('production deployment keeps the recommendation transport and run budget on the measured 45-second boundary', () => {
+  assert.match(deploymentWorkflow,
+    /managed_runtime_keys='[^']*\bBGG_RECOMMENDATION_AGENT_TIMEOUT\b[^']*'/)
+  assert.match(deploymentWorkflow, /'BGG_RECOMMENDATION_AGENT_TIMEOUT=PT45S'/)
+  assert.match(deploymentCompose,
+    /BGG_RECOMMENDATION_AGENT_TIMEOUT: \$\{BGG_RECOMMENDATION_AGENT_TIMEOUT:-PT45S\}/)
 })
 
 test('production deployment enables the staged persistent Chinese catalog cache only with DeepSeek configured', () => {

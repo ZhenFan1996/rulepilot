@@ -124,12 +124,16 @@ public record LessonLocalization(
                             fact.sourceChunkIds());
                 })
                 .toList();
-        if (source.visualFocus() != null
-                && (translated.visualLabel().isBlank() || translated.visualDescription().isBlank())) {
+        boolean hasTranslatedVisualLabel = !translated.visualLabel().isBlank();
+        boolean hasTranslatedVisualDescription = !translated.visualDescription().isBlank();
+        if (hasTranslatedVisualLabel != hasTranslatedVisualDescription) {
             throw new IllegalArgumentException("localized visual focus is incomplete");
         }
         List<VisualFocus> visualFoci = new java.util.ArrayList<>(source.visualFoci());
-        if (!visualFoci.isEmpty()) {
+        if (visualFoci.isEmpty() && hasTranslatedVisualLabel) {
+            throw new IllegalArgumentException("localized visual focus does not match the source lesson");
+        }
+        if (!visualFoci.isEmpty() && hasTranslatedVisualLabel) {
             VisualFocus primary = visualFoci.getFirst();
             visualFoci.set(0, new VisualFocus(
                     primary.pageNumber(),

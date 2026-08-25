@@ -71,7 +71,7 @@ agent-teaching-real: ## Run the explicitly authorized complete real-rulebook tea
 agent-teaching-page-canary: ## Run one explicitly authorized paid Gstone image-page OCR/catalog canary
 	@sh scripts/run-gstone-visual-page-canary.sh
 
-agent-visual-real: ## Evaluate capability-scoped multimodal tools on ignored real rulebooks
+agent-visual-real: ## Evaluate opaque visual-candidate selection on ignored local rulebook crops
 	@sh scripts/run-real-visual-agent.sh
 
 agent-context-real: ## Evaluate multi-turn context, recovery, and fallback on ignored real rulebooks

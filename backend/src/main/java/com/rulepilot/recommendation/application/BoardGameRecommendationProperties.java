@@ -11,6 +11,8 @@ public record BoardGameRecommendationProperties(
         BigDecimal diversityOverlapLimit,
         Duration timeout) {
 
+    public static final Duration MAXIMUM_TIMEOUT = Duration.ofSeconds(45);
+
     public BoardGameRecommendationProperties {
         if (resultCount < 1 || resultCount > 5) {
             throw new IllegalArgumentException("recommendation result count is invalid");
@@ -26,8 +28,8 @@ public record BoardGameRecommendationProperties(
         if (timeout == null
                 || timeout.isZero()
                 || timeout.isNegative()
-                || timeout.compareTo(Duration.ofSeconds(30)) > 0) {
-            throw new IllegalArgumentException("recommendation timeout must be positive and no longer than 30 seconds");
+                || timeout.compareTo(MAXIMUM_TIMEOUT) > 0) {
+            throw new IllegalArgumentException("recommendation timeout must be positive and no longer than 45 seconds");
         }
     }
 }

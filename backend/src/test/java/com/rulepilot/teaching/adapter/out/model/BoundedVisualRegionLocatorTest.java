@@ -1,12 +1,15 @@
 package com.rulepilot.teaching.adapter.out.model;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.rulepilot.assistant.AgentExecutionStoppedException;
 import com.rulepilot.ingestion.layout.RulebookUnderstanding;
 import com.rulepilot.teaching.VisualRegionLocator;
 import com.rulepilot.teaching.VisualRegionLocator.LocatedRegion;
 import com.rulepilot.teaching.VisualRegionLocator.VisualLocationRequest;
 import com.rulepilot.teaching.application.VisualRegionCandidateSelector.Candidate;
+import com.rulepilot.teaching.domain.IllustratedLesson.VisualSourceKind;
 import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
@@ -53,6 +56,48 @@ class BoundedVisualRegionLocatorTest {
     }
 
     @Test
+    void usesTheRemainingWorkflowTimeWhenItIsShorterThanThePerCallLimit() {
+        var executor = executor();
+        try {
+            var bounded = new BoundedVisualRegionLocator(ignored -> {
+                try {
+                    Thread.sleep(500);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                }
+                return Optional.empty();
+            }, executor, Duration.ofSeconds(1));
+
+            long started = System.nanoTime();
+            var result = bounded.locateGuideWithResult(
+                    request(UUID.randomUUID()),
+                    Duration.ofMillis(25));
+
+            assertThat(result.diagnostic()).isEqualTo(VisualRegionLocator.Diagnostic.TIMEOUT);
+            assertThat(Duration.ofNanos(System.nanoTime() - started)).isLessThan(Duration.ofMillis(250));
+        } finally {
+            executor.shutdown();
+        }
+    }
+
+    @Test
+    void preservesRunCancellationInsteadOfRelabelingItAsAProviderFailure() {
+        var executor = executor();
+        try {
+            VisualRegionLocator stopped = ignored -> {
+                throw new AgentExecutionStoppedException(AgentExecutionStoppedException.StopReason.CANCELLED);
+            };
+            var bounded = new BoundedVisualRegionLocator(stopped, executor, Duration.ofSeconds(1));
+
+            assertThatThrownBy(() -> bounded.locateGuideWithResult(request(UUID.randomUUID())))
+                    .isInstanceOf(AgentExecutionStoppedException.class)
+                    .hasMessageContaining("CANCELLED");
+        } finally {
+            executor.shutdown();
+        }
+    }
+
+    @Test
     void preservesTheOwnersVisualCapabilityBoundary() {
         VisualRegionLocator textOnly = new VisualRegionLocator() {
             @Override
@@ -88,7 +133,11 @@ class BoundedVisualRegionLocatorTest {
         return new VisualRegionLocator.VisualLocationRequest(
                 "开局设置",
                 List.of(new VisualRegionLocator.Claim(evidence, "把棋子放到起始位置。")),
-                List.of(new Candidate(1, new RulebookUnderstanding.Rectangle(100, 100, 200, 200), "起始位置")),
+                List.of(new Candidate(
+                        "candidate_1",
+                        1,
+                        new RulebookUnderstanding.Rectangle(100, 100, 200, 200),
+                        VisualSourceKind.PAGE_REGION)),
                 List.of(new VisualRegionLocator.PageImage(1, "image/png", new byte[] {1})));
     }
 }

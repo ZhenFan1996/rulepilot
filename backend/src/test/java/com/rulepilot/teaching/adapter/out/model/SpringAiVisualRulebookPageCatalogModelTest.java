@@ -828,7 +828,7 @@ class SpringAiVisualRulebookPageCatalogModelTest {
         verify(chatModel).call(prompt.capture());
         assertThat(prompt.getValue().getOptions()).isInstanceOf(OpenAiChatOptions.class);
         OpenAiChatOptions options = (OpenAiChatOptions) prompt.getValue().getOptions();
-        assertThat(options.getModel()).isEqualTo("qwen3.7-plus");
+        assertThat(options.getModel()).isEqualTo("qwen3-vl-flash");
         assertThat(options.getMaxTokens()).isEqualTo(4_800);
         assertThat(options.getExtraBody()).containsEntry("enable_thinking", false);
         assertThat(options.getResponseFormat().getType()).isEqualTo(Type.JSON_OBJECT);
@@ -850,7 +850,7 @@ class SpringAiVisualRulebookPageCatalogModelTest {
                 "return externalDocumentDependencies as an empty array"));
         assertThat(model.teachingStartupExecutionIdentity("owner")).hasValueSatisfying(identity -> {
             assertThat(identity.provider()).isEqualTo("qwen");
-            assertThat(identity.model()).isEqualTo("qwen3.7-plus");
+            assertThat(identity.model()).isEqualTo("qwen3-vl-flash");
         });
 
         model.summarize(request);
@@ -974,14 +974,14 @@ class SpringAiVisualRulebookPageCatalogModelTest {
         ArgumentCaptor<Prompt> prompt = ArgumentCaptor.forClass(Prompt.class);
         verify(chatModel).call(prompt.capture());
         OpenAiChatOptions options = (OpenAiChatOptions) prompt.getValue().getOptions();
-        assertThat(options.getModel()).isEqualTo("qwen3.7-plus");
+        assertThat(options.getModel()).isEqualTo("qwen3-vl-flash");
         assertThat(options.getMaxTokens()).isEqualTo(4_800);
     }
 
     @Test
-    void preservesEveryExplicitNonTargetModelInsteadOfSilentlyReplacingIt() {
+    void usesTheMeasuredFastQwenModelOnlyForTeachingStartupRequests() {
         assertThat(SpringAiVisualRulebookPageCatalogModel.teachingStartupModelName("qwen", "qwen3.6-plus"))
-                .isEqualTo("qwen3.6-plus");
+                .isEqualTo("qwen3-vl-flash");
         assertThat(SpringAiVisualRulebookPageCatalogModel.teachingStartupModelName("qwen", "qwen3-vl-flash"))
                 .isEqualTo("qwen3-vl-flash");
         assertThat(SpringAiVisualRulebookPageCatalogModel.teachingStartupModelName("gemini", "gemini-2.5-flash"))
@@ -989,7 +989,7 @@ class SpringAiVisualRulebookPageCatalogModelTest {
     }
 
     @Test
-    void progressiveTeachingStartUsesConfiguredQwenAndKeepsExactPageRolesSeparateFromSelectedFacts() throws IOException {
+    void progressiveTeachingStartUsesTheFastQwenOverrideAndKeepsExactPageRolesSeparateFromSelectedFacts() throws IOException {
         RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
         ChatModel chatModel = mock(ChatModel.class);
         OpenAiChatOptions defaults = OpenAiChatOptions.builder().model("qwen3.7-plus").build();
@@ -1065,7 +1065,7 @@ class SpringAiVisualRulebookPageCatalogModelTest {
         ArgumentCaptor<Prompt> prompt = ArgumentCaptor.forClass(Prompt.class);
         verify(chatModel).call(prompt.capture());
         OpenAiChatOptions options = (OpenAiChatOptions) prompt.getValue().getOptions();
-        assertThat(options.getModel()).isEqualTo("qwen3.7-plus");
+        assertThat(options.getModel()).isEqualTo("qwen3-vl-flash");
         assertThat(options.getMaxTokens()).isEqualTo(1_600);
         assertThat(options.getExtraBody()).containsEntry("enable_thinking", false);
         assertThat(prompt.getValue().getInstructions().stream()
@@ -1476,34 +1476,52 @@ class SpringAiVisualRulebookPageCatalogModelTest {
     }
 
     @Test
-    void productionCatalogStillRejectsAnUnboundedKeywordPayload() {
-        String seventeenKeywords = java.util.stream.IntStream.rangeClosed(1, 17)
+    void productionCatalogBoundsOptionalMetadataWithoutDiscardingValidatedRuleGroups() {
+        String fifteenPrintedTerms = java.util.stream.IntStream.rangeClosed(1, 15)
+                .mapToObj(index -> "\"printed-" + index + "\"")
+                .collect(java.util.stream.Collectors.joining(",", "[", "]"));
+        String twentyKeywords = java.util.stream.IntStream.rangeClosed(1, 20)
                 .mapToObj(index -> "\"term-" + index + "\"")
                 .collect(java.util.stream.Collectors.joining(",", "[", "]"));
 
-        assertThatThrownBy(() -> SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalogV6("""
-                        {"pages":[{"pageNumber":7,"printedTerms":["CYCLE"],"keywords":%s,
+        var accepted = SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalogV6("""
+                        {"pages":[{"pageNumber":7,"printedTerms":%s,"keywords":%s,
                         "externalDocumentDependencies":[],"ruleGroups":[
                           {"identifier":"CYCLE","fact":"玩家执行这一项可见流程。","quantitySpans":[]}],
                         "ruleGroupInventoryComplete":true}]}
-                        """.formatted(seventeenKeywords)))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("keywords must be an array with the declared size");
+                        """.formatted(fifteenPrintedTerms, twentyKeywords));
+
+        assertThat(accepted.pages()).singleElement().satisfies(page -> {
+            assertThat(page.printedTerms()).isEqualTo(java.util.stream.IntStream.rangeClosed(1, 12)
+                    .mapToObj(index -> "printed-" + index)
+                    .collect(java.util.stream.Collectors.joining("; ")));
+            assertThat(page.keywords()).containsExactlyElementsOf(
+                    java.util.stream.IntStream.rangeClosed(1, 16).mapToObj(index -> "term-" + index).toList());
+            assertThat(page.ruleGroupFacts()).singleElement().satisfies(fact -> {
+                assertThat(fact.label()).isEqualTo("CYCLE");
+                assertThat(fact.fact()).isEqualTo("玩家执行这一项可见流程。");
+            });
+            assertThat(page.ruleGroupInventoryComplete()).isTrue();
+        });
     }
 
     @Test
-    void productionCatalogKeepsKeywordElementsTypedNonBlankAndDistinct() {
+    void productionCatalogDeduplicatesOptionalMetadataButKeepsItsTypeAndAbuseBoundaries() {
         String ledger = """
-                {"pages":[{"pageNumber":7,"printedTerms":["CYCLE"],"keywords":%s,
+                {"pages":[{"pageNumber":7,"printedTerms":["CYCLE"," CYCLE ","TURN"],"keywords":%s,
                 "externalDocumentDependencies":[],"ruleGroups":[
                   {"identifier":"CYCLE","fact":"玩家执行这一项可见流程。","quantitySpans":[]}],
                 "ruleGroupInventoryComplete":true}]}
                 """;
 
-        assertThatThrownBy(() -> SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalogV6(
-                        ledger.formatted("[\"CYCLE\",\" CYCLE \"]")))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("keywords must not contain duplicate text");
+        var deduplicated = SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalogV6(
+                ledger.formatted("[\"CYCLE\",\" CYCLE \",\"TURN\"]"));
+
+        assertThat(deduplicated.pages()).singleElement().satisfies(page -> {
+            assertThat(page.printedTerms()).isEqualTo("CYCLE; TURN");
+            assertThat(page.keywords()).containsExactly("CYCLE", "TURN");
+            assertThat(page.ruleGroupInventoryComplete()).isTrue();
+        });
         assertThatThrownBy(() -> SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalogV6(
                         ledger.formatted("[\"CYCLE\",\" \"]")))
                 .isInstanceOf(IllegalArgumentException.class)
@@ -1512,6 +1530,14 @@ class SpringAiVisualRulebookPageCatalogModelTest {
                         ledger.formatted("[\"CYCLE\",7]")))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("keywords must contain non-blank text");
+
+        String abusiveKeywords = java.util.stream.IntStream.rangeClosed(1, 65)
+                .mapToObj(index -> "\"term-" + index + "\"")
+                .collect(java.util.stream.Collectors.joining(",", "[", "]"));
+        assertThatThrownBy(() -> SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalogV6(
+                        ledger.formatted(abusiveKeywords)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("keywords exceeds the absolute metadata item limit");
     }
 
     @Test

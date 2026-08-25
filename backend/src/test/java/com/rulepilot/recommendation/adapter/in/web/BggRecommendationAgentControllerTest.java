@@ -58,8 +58,8 @@ class BggRecommendationAgentControllerTest {
     private final Principal principal = () -> "player";
 
     @Test
-    void exposesTypedAvailabilityShortfallAlongsideTheUnchangedAgentExplanation() {
-        String rawExplanation = "你要三款，但在五人和九十分钟这两个硬条件下，当前目录只有两款可核对的候选；我先把它们都给你。";
+    void exposesTypedVerifiedSetShortfallAlongsideTheUnchangedAgentExplanation() {
+        String rawExplanation = "你要三款，但在五人和九十分钟这两个硬条件下，本轮核对到两款候选；我先把它们都给你。";
         var shortfall = new RecommendationShortfall(3, 2);
         var domain = new ConversationResponse(
                 Outcome.RECOMMENDATIONS,
@@ -79,7 +79,7 @@ class BggRecommendationAgentControllerTest {
                         List.of(
                                 "SEARCH_BGG_CATALOG",
                                 "REJECTED_ACTION:bad",
-                                "RECOMMENDATION_PUBLICATION_RECOVERED:PUBLICATION_MODEL_FAILED",
+                                "RESEARCH_SKIPPED_FOR_PUBLICATION_ALREADY_ATTEMPTED",
                                 "RECOMMEND_GAMES")),
                 List.of(),
                 null,

@@ -14,9 +14,14 @@ set -a
 . "$ROOT_DIR/.env"
 set +a
 
-export RULEPILOT_REAL_VISUAL_AGENT_EVAL=true
+if [ -z "${RULEPILOT_VISUAL_CANDIDATE_FIXTURE_DIR:-}" ]; then
+	echo "FAIL RULEPILOT_VISUAL_CANDIDATE_FIXTURE_DIR is required for the paid visual candidate evaluation"
+	exit 2
+fi
+
+export RULEPILOT_REAL_VISUAL_CANDIDATE_EVAL=true
 
 cd "$ROOT_DIR/backend"
-./mvnw -q -Dtest=NativeVisualAgentRealRulebookEvaluationTest test
+./mvnw -q -Dtest=VisualCandidateSelectionPaidCanaryTest test
 
-echo "Real-rulebook visual Agent evaluation passed."
+echo "Real-rulebook visual candidate evaluation passed."

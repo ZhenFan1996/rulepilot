@@ -78,9 +78,9 @@ public interface VisualRulebookPageCatalogModel {
     }
 
     /**
-     * Whether this adapter can run a page-local document transcription before semantic rule grouping. The
-     * transcription is a separate, audited model call: implementations must not hide it inside
-     * {@link #summarizeForTeaching(CatalogRequest)}.
+     * Whether this adapter can run a page-local document transcription as a changed typed-repair input after the
+     * ordinary vision-to-facts request violates its contract. The transcription is a separate, audited model call:
+     * implementations must not hide it inside {@link #summarizeForTeaching(CatalogRequest)}.
      */
     default boolean supportsTeachingPageTranscription(String modelConfigurationOwner) {
         return false;

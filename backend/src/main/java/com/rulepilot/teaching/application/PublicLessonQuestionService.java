@@ -17,8 +17,6 @@ import org.springframework.stereotype.Service;
 @Profile("!test")
 public class PublicLessonQuestionService {
 
-    private static final int MAX_ANSWER_VISUAL_AIDS = 6;
-
     private final PublicLessonReader lessons;
     private final RuleAnswering answers;
 
@@ -77,7 +75,6 @@ public class PublicLessonQuestionService {
                 .flatMap(step -> step.visualFoci().stream().map(focus -> new OwnedVisual(step, focus)))
                 .filter(owned -> citedPages.contains(owned.focus().pageNumber()))
                 .sorted(java.util.Comparator.comparingInt(owned -> owned.step().position()))
-                .limit(MAX_ANSWER_VISUAL_AIDS)
                 .map(owned -> new VisualAid(
                         visibleFocus(owned.focus(), language),
                         visibleStepLabel(owned.step(), language)))

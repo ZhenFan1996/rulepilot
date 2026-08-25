@@ -86,9 +86,9 @@ class GroundedTeachingAgentWorkloadTest {
         assertThat(tools.canonicalFallbackReads()).isOne();
         assertThat(invocations.usedToolCalls()).isEqualTo(77).isLessThanOrEqualTo(demand.requiredToolCalls());
         assertThat(invocations.usedModelCalls()).isEqualTo(21).isLessThanOrEqualTo(demand.requiredModelCalls());
-        // Admission reserves both audited interpretation attempts for every bound page even though this fixture's
-        // catalog is unavailable. Runtime availability and cached facts may reduce work, never its safe upper bound.
-        assertThat(demand).isEqualTo(new WorkloadDemand(95, 115));
+        // Admission reserves the longest OCR-repair branch per bound page, although an ordinary cold page consumes
+        // only its initial image-to-typed-facts semantic call. Runtime availability and cached facts reduce work.
+        assertThat(demand).isEqualTo(new WorkloadDemand(95, 134));
     }
 
     static TeachingPlan plan(UUID versionId) {

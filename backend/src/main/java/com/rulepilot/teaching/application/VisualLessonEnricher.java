@@ -1,5 +1,6 @@
 package com.rulepilot.teaching.application;
 
+import com.rulepilot.assistant.AgentExecutionControl;
 import com.rulepilot.document.DocumentPageImages;
 import com.rulepilot.ingestion.RulebookUnderstandingCatalog;
 import com.rulepilot.teaching.VisualRegionLocator;
@@ -7,6 +8,9 @@ import com.rulepilot.teaching.domain.IllustratedLesson;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonSection;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonStep;
 import com.rulepilot.teaching.domain.IllustratedLesson.VisualFocus;
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -30,8 +34,8 @@ public class VisualLessonEnricher {
     private final RulebookUnderstandingCatalog understanding;
     private final VisualSectionPrioritizer prioritizer;
     private final VisualLessonSectionEnricher sectionEnricher;
-    private final int maxSections;
-    private final int maxVisualsPerSection;
+    private final Clock clock;
+    private final Duration compatibilityWorkflowTimeout;
 
     @Autowired
     public VisualLessonEnricher(
@@ -40,28 +44,62 @@ public class VisualLessonEnricher {
             VisualRegionCandidateSelector candidates,
             @Qualifier("boundedVisualRegionLocator") VisualRegionLocator locator,
             VisualSectionPrioritizer prioritizer,
-            @Value("${rulepilot.visual.max-sections:12}") int maxSections,
-            @Value("${rulepilot.visual.max-results-per-section:6}") int maxVisualsPerSection) {
+            AgentExecutionControl execution,
+            @Value("${rulepilot.visual.compatibility-workflow-timeout:PT10M}")
+                    Duration compatibilityWorkflowTimeout) {
+        this(
+                understanding,
+                pageImages,
+                candidates,
+                locator,
+                prioritizer,
+                execution,
+                compatibilityWorkflowTimeout,
+                Clock.systemUTC());
+    }
+
+    VisualLessonEnricher(
+            RulebookUnderstandingCatalog understanding,
+            DocumentPageImages pageImages,
+            VisualRegionCandidateSelector candidates,
+            VisualRegionLocator locator,
+            VisualSectionPrioritizer prioritizer,
+            AgentExecutionControl execution,
+            Duration compatibilityWorkflowTimeout,
+            Clock clock) {
+        if (clock == null) throw new IllegalArgumentException("visual enrichment clock is required");
         this.understanding = understanding;
         this.prioritizer = prioritizer;
+        this.clock = clock;
+        this.compatibilityWorkflowTimeout = compatibilityWorkflowTimeout;
         VisualReaderCropPolicy cropPolicy = new VisualReaderCropPolicy();
         VisualLessonMergePolicy mergePolicy = new VisualLessonMergePolicy(cropPolicy);
-        if (maxSections < 1 || maxSections > 20) {
-            throw new IllegalArgumentException("visual section limit must be between one and twenty");
-        }
-        if (maxVisualsPerSection < 1 || maxVisualsPerSection > 12) {
-            throw new IllegalArgumentException("visual result budget must be between one and twelve");
-        }
-        this.maxSections = maxSections;
-        this.maxVisualsPerSection = maxVisualsPerSection;
         this.sectionEnricher = new VisualLessonSectionEnricher(
                 mergePolicy,
                 new VisualLessonStepLocator(
                         pageImages,
                         candidates,
                         locator,
-                        cropPolicy),
-                maxVisualsPerSection);
+                        cropPolicy,
+                        execution,
+                        clock,
+                        compatibilityWorkflowTimeout));
+    }
+
+    public VisualLessonEnricher(
+            RulebookUnderstandingCatalog understanding,
+            DocumentPageImages pageImages,
+            VisualRegionCandidateSelector candidates,
+            VisualRegionLocator locator,
+            VisualSectionPrioritizer prioritizer) {
+        this(
+                understanding,
+                pageImages,
+                candidates,
+                locator,
+                prioritizer,
+                null,
+                VisualLessonStepLocator.DEFAULT_COMPATIBILITY_WORKFLOW_TIMEOUT);
     }
 
     public VisualLessonEnricher(
@@ -69,7 +107,7 @@ public class VisualLessonEnricher {
             DocumentPageImages pageImages,
             VisualRegionCandidateSelector candidates,
             VisualRegionLocator locator) {
-        this(understanding, pageImages, candidates, locator, new VisualSectionPrioritizer(), 12, 6);
+        this(understanding, pageImages, candidates, locator, new VisualSectionPrioritizer());
     }
 
     public IllustratedLesson enrich(UUID documentVersionId, IllustratedLesson lesson) {
@@ -129,14 +167,14 @@ public class VisualLessonEnricher {
         if (progress == null) throw new IllegalArgumentException("visual enrichment progress listener is required");
         var map = understanding.understanding(documentVersionId);
         Map<Integer, Set<Integer>> explicitVisualStepPositions = explicitVisualStepPositions(lesson);
-        Set<Integer> selectedPositions = prioritizer.positions(
-                lesson.sections(), maxSections, maxVisualsPerSection);
+        Set<Integer> selectedPositions = prioritizer.positions(lesson.sections());
         List<VisualFocus> acceptedVisuals = lesson.sections().stream()
                 .flatMap(section -> section.steps().stream())
                 .flatMap(step -> step.visualFoci().stream())
                 .collect(Collectors.toCollection(ArrayList::new));
         List<SectionResult> sectionResults = new ArrayList<>();
         List<LessonSection> currentSections = new ArrayList<>(lesson.sections());
+        Instant compatibilityDeadline = clock.instant().plus(compatibilityWorkflowTimeout);
         for (int sectionIndex = 0; sectionIndex < lesson.sections().size(); sectionIndex++) {
             LessonSection section = lesson.sections().get(sectionIndex);
             if (!selectedPositions.contains(section.position())) continue;
@@ -146,6 +184,7 @@ public class VisualLessonEnricher {
                     section,
                     modelConfigurationOwner,
                     runId,
+                    compatibilityDeadline,
                     progress,
                     acceptedVisuals,
                     explicitVisualStepPositions.getOrDefault(section.position(), Set.of()));
@@ -212,9 +251,9 @@ public class VisualLessonEnricher {
             case MODEL_SEMANTIC_REJECTED -> "第 " + sectionPosition + " 节的局部图示未通过当前规则步骤的二次核对";
             case MODEL_UNAVAILABLE -> "第 " + sectionPosition + " 节没有可用的视觉模型";
             case MODEL_EXPLICIT_NO_REGION -> "第 " + sectionPosition + " 节的视觉模型确认没有合适局部图示";
-            case MODEL_MALFORMED_RESPONSE -> "第 " + sectionPosition + " 节的视觉模型没有返回可用坐标";
+            case MODEL_MALFORMED_RESPONSE -> "第 " + sectionPosition + " 节的视觉模型没有返回合规的候选选择";
             case MODEL_UNSUPPORTED_SCOPE -> "第 " + sectionPosition + " 节的视觉模型引用了未提供的页面或依据";
-            case MODEL_INVALID_GEOMETRY -> "第 " + sectionPosition + " 节的视觉模型返回了无效截图坐标";
+            case MODEL_INVALID_GEOMETRY -> "第 " + sectionPosition + " 节的候选图边界未通过校验";
             case MODEL_TIMEOUT -> "第 " + sectionPosition + " 节的视觉模型响应超时";
             case MODEL_INTERRUPTED -> "第 " + sectionPosition + " 节的视觉模型工作被安全中断";
             case MODEL_BUSY -> "第 " + sectionPosition + " 节的视觉模型正在处理其他任务";

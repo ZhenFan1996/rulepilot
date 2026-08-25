@@ -11,6 +11,7 @@ import {
   type TeachingProgressPlan,
   type TeachingRunProgress,
 } from '@/lib/teachingProgress'
+import { visualEnrichmentResult } from '@/lib/visualEnrichment'
 
 interface GenerationLesson {
   status: 'COMPLETE' | 'DRAFT_READY' | 'INCOMPLETE'
@@ -33,18 +34,26 @@ export function useLessonGenerationPresentation(options: UseLessonGenerationPres
     () => options.generationStatusUnknown.value || teachingRunIsActive(options.generationRun.value?.run.state),
   )
   const visualEnrichmentActive = computed(() => teachingRunIsActive(options.visualEnrichmentRun.value?.run.state))
-  const visualEnrichmentActivities = computed(() => (options.visualEnrichmentRun.value?.activities ?? [])
-    .filter((activity) => activity.operation.startsWith('visualStep|') || activity.operation.startsWith('visualSection|')))
-  const visualEnrichmentSectionResults = computed(() => visualEnrichmentActivities.value
-    .filter((activity) => activity.operation.startsWith('visualSection|')))
+  const visualEnrichmentResultState = computed(() => visualEnrichmentResult(
+    options.visualEnrichmentRun.value,
+    visualEnrichmentActive.value,
+  ))
+  const visualEnrichmentFailed = computed(() => ['FAILED', 'PARTIAL'].includes(visualEnrichmentResultState.value.outcome))
   const visualEnrichmentSummary = computed(() => {
-    const latest = visualEnrichmentActivities.value.at(-1)
-    if (visualEnrichmentActive.value) return latest?.summary ?? t('lesson.generation.visual.active')
-    if (!options.visualEnrichmentRun.value || visualEnrichmentSectionResults.value.length === 0) return ''
-    const added = visualEnrichmentSectionResults.value.filter((activity) => activity.outcome === 'SUCCEEDED').length
-    return added > 0
-      ? t(added === 1 ? 'lesson.generation.visual.added.one' : 'lesson.generation.visual.added.many', { count: added })
-      : t('lesson.generation.visual.none')
+    if (visualEnrichmentActive.value) return t('lesson.generation.visual.active')
+    const result = visualEnrichmentResultState.value
+    if (result.outcome === 'ABSENT') return ''
+    if (result.outcome === 'FAILED') return t('lesson.generation.visual.failed')
+    if (result.outcome === 'PARTIAL') {
+      return t('lesson.generation.visual.partial', { count: result.addedSectionCount })
+    }
+    if (result.outcome === 'EMPTY') return t('lesson.generation.visual.none')
+    return t(
+      result.addedSectionCount === 1
+        ? 'lesson.generation.visual.added.one'
+        : 'lesson.generation.visual.added.many',
+      { count: result.addedSectionCount },
+    )
   })
   const draftReady = computed(() => options.lesson.value?.status === 'DRAFT_READY')
   const lessonStillGrowing = computed(() => generationActive.value && !draftReady.value)
@@ -79,6 +88,7 @@ export function useLessonGenerationPresentation(options: UseLessonGenerationPres
   return {
     generationActive,
     visualEnrichmentActive,
+    visualEnrichmentFailed,
     visualEnrichmentSummary,
     draftReady,
     lessonStillGrowing,

@@ -348,9 +348,9 @@ public class VisualLessonEnrichmentService {
             case LOCATOR_RETURNED_NONE -> "视觉模型未找到可用图示，已保留文字讲解";
             case MODEL_SEMANTIC_REJECTED -> "图示未通过当前规则步骤的核对，未采用";
             case MODEL_EXPLICIT_NO_REGION -> "未找到能直接对应此步骤的图示，已保留文字讲解";
-            case MODEL_MALFORMED_RESPONSE -> "视觉模型没有返回可用截图坐标，已保留文字讲解";
+            case MODEL_MALFORMED_RESPONSE -> "视觉模型没有返回合规的候选选择，已保留文字讲解";
             case MODEL_UNSUPPORTED_SCOPE -> "视觉模型返回的图片与当前规则页不一致，未采用";
-            case MODEL_INVALID_GEOMETRY -> "视觉模型返回的截图范围无效，未采用";
+            case MODEL_INVALID_GEOMETRY -> "候选图边界未通过校验，未采用";
             case MODEL_BUSY -> "视觉模型正在处理其他图片；此步可稍后重试";
             case MODEL_TIMEOUT -> "查看图片超时；此步可稍后重试";
             case MODEL_UNAVAILABLE -> "当前没有可用的视觉模型";

@@ -1,12 +1,18 @@
 package com.rulepilot.teaching.application;
 
+import com.rulepilot.assistant.AgentExecutionControl;
+import com.rulepilot.assistant.AgentExecutionStoppedException;
 import com.rulepilot.document.DocumentPageImages;
 import com.rulepilot.ingestion.layout.RulebookUnderstanding;
 import com.rulepilot.teaching.VisualRegionLocator;
+import com.rulepilot.teaching.VisualRegionLocator.BatchAction;
 import com.rulepilot.teaching.VisualRegionLocator.Claim;
 import com.rulepilot.teaching.VisualRegionLocator.PageImage;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonSection;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonStep;
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -18,20 +24,52 @@ import java.util.stream.Collectors;
 /** Grounds cited lesson steps in one typed, page- and evidence-owned visual plan. */
 final class VisualLessonStepLocator {
 
+    static final Duration DEFAULT_COMPATIBILITY_WORKFLOW_TIMEOUT = Duration.ofMinutes(10);
+
     private final DocumentPageImages pageImages;
     private final VisualRegionCandidateSelector candidates;
     private final VisualRegionLocator locator;
     private final VisualReaderCropPolicy cropPolicy;
+    private final AgentExecutionControl execution;
+    private final Clock clock;
+    private final Duration compatibilityWorkflowTimeout;
 
     VisualLessonStepLocator(
             DocumentPageImages pageImages,
             VisualRegionCandidateSelector candidates,
             VisualRegionLocator locator,
             VisualReaderCropPolicy cropPolicy) {
+        this(
+                pageImages,
+                candidates,
+                locator,
+                cropPolicy,
+                null,
+                Clock.systemUTC(),
+                DEFAULT_COMPATIBILITY_WORKFLOW_TIMEOUT);
+    }
+
+    VisualLessonStepLocator(
+            DocumentPageImages pageImages,
+            VisualRegionCandidateSelector candidates,
+            VisualRegionLocator locator,
+            VisualReaderCropPolicy cropPolicy,
+            AgentExecutionControl execution,
+            Clock clock,
+            Duration compatibilityWorkflowTimeout) {
+        if (pageImages == null || candidates == null || locator == null || cropPolicy == null || clock == null
+                || compatibilityWorkflowTimeout == null
+                || compatibilityWorkflowTimeout.isZero()
+                || compatibilityWorkflowTimeout.isNegative()) {
+            throw new IllegalArgumentException("visual lesson locator dependencies are invalid");
+        }
         this.pageImages = pageImages;
         this.candidates = candidates;
         this.locator = locator;
         this.cropPolicy = cropPolicy;
+        this.execution = execution;
+        this.clock = clock;
+        this.compatibilityWorkflowTimeout = compatibilityWorkflowTimeout;
     }
 
     boolean supportsVisualEvidence(String modelConfigurationOwner) {
@@ -43,8 +81,7 @@ final class VisualLessonStepLocator {
             UUID documentVersionId,
             LessonSection section,
             List<LessonStep> steps,
-            String modelConfigurationOwner,
-            int visualBudget) {
+            String modelConfigurationOwner) {
         return locate(
                 understanding,
                 documentVersionId,
@@ -52,7 +89,24 @@ final class VisualLessonStepLocator {
                 steps,
                 modelConfigurationOwner,
                 null,
-                visualBudget);
+                clock.instant().plus(compatibilityWorkflowTimeout));
+    }
+
+    Result locate(
+            RulebookUnderstanding understanding,
+            UUID documentVersionId,
+            LessonSection section,
+            List<LessonStep> steps,
+            String modelConfigurationOwner,
+            UUID runId) {
+        return locate(
+                understanding,
+                documentVersionId,
+                section,
+                steps,
+                modelConfigurationOwner,
+                runId,
+                clock.instant().plus(compatibilityWorkflowTimeout));
     }
 
     Result locate(
@@ -62,70 +116,141 @@ final class VisualLessonStepLocator {
             List<LessonStep> steps,
             String modelConfigurationOwner,
             UUID runId,
-            int visualBudget) {
+            Instant compatibilityDeadline) {
         if (steps == null || steps.isEmpty()) {
             throw new IllegalArgumentException("visual lesson steps are required");
         }
+        Instant workflowDeadline = compatibilityDeadline == null
+                ? clock.instant().plus(compatibilityWorkflowTimeout)
+                : compatibilityDeadline;
         Set<Integer> citedPages = steps.stream()
                 .flatMap(step -> step.sourcePages().stream())
                 .collect(Collectors.toCollection(LinkedHashSet::new));
         List<VisualRegionCandidateSelector.Candidate> selected = candidates.select(
                 understanding,
                 citedPages,
-                terms(section, steps),
-                visualBudget);
+                terms(section, steps));
         if (selected.isEmpty()) return Result.rejected(VisualLessonEnricher.Outcome.NO_CITED_CANDIDATE);
-        List<Integer> candidatePageOrder = selected.stream()
-                .map(VisualRegionCandidateSelector.Candidate::pageNumber)
-                .distinct()
-                .toList();
-        Map<Integer, DocumentPageImages.PageImage> availablePages = pageImages.read(
-                        documentVersionId, new LinkedHashSet<>(candidatePageOrder))
-                .stream()
-                .collect(Collectors.toMap(
-                        DocumentPageImages.PageImage::pageNumber, image -> image, (first, ignored) -> first));
-        List<PageImage> pages = candidatePageOrder.stream()
-                .map(availablePages::get)
-                .filter(java.util.Objects::nonNull)
-                .map(image -> new PageImage(image.pageNumber(), image.mediaType(), image.content()))
-                .toList();
-        if (pages.isEmpty()) return Result.rejected(VisualLessonEnricher.Outcome.NO_PAGE_IMAGE);
-        Set<Integer> attachedPages = pages.stream().map(PageImage::pageNumber).collect(Collectors.toUnmodifiableSet());
-        List<VisualRegionCandidateSelector.Candidate> attachedCandidates = selected.stream()
-                .filter(candidate -> attachedPages.contains(candidate.pageNumber()))
-                .toList();
         List<Claim> claims = claims(steps);
-        var guide = locator.locateGuideWithResult(new VisualRegionLocator.VisualLocationRequest(
-                section.title(),
-                claims,
-                attachedCandidates,
-                pages,
-                modelConfigurationOwner,
-                runId == null ? null : documentVersionId,
-                runId,
-                visualBudget));
-        if (guide.regions().isEmpty()) return Result.rejected(outcomeFor(guide.diagnostic()));
         Set<UUID> evidenceIds = claims.stream().map(Claim::evidenceId).collect(Collectors.toSet());
         List<VisualRegionLocator.LocatedRegion> accepted = new ArrayList<>();
-        VisualLessonEnricher.Outcome rejected = null;
-        for (VisualRegionLocator.LocatedRegion candidate : guide.regions().stream().limit(visualBudget).toList()) {
-            VisualRegionLocator.LocatedRegion region = candidate;
-            if (cropPolicy.needsReaderViewport(region)) {
-                if (!cropPolicy.canExpandIntoReaderViewport(region)) {
-                    rejected = VisualLessonEnricher.Outcome.REJECTED_TOO_SMALL;
-                    continue;
+        VisualLessonEnricher.Outcome firstRejection = null;
+        for (int offset = 0, batchNumber = 1;
+                offset < selected.size();
+                offset += VisualRegionLocator.VisualLocationRequest.MAX_CANDIDATES_PER_BATCH, batchNumber++) {
+            Boundary boundary = boundary(runId, workflowDeadline);
+            if (boundary.stoppedOutcome() != null) {
+                if (firstRejection == null) firstRejection = boundary.stoppedOutcome();
+                break;
+            }
+            int end = Math.min(
+                    selected.size(),
+                    offset + VisualRegionLocator.VisualLocationRequest.MAX_CANDIDATES_PER_BATCH);
+            List<VisualRegionCandidateSelector.Candidate> offeredBatch = selected.subList(offset, end);
+            Set<Integer> batchPageNumbers = offeredBatch.stream()
+                    .map(VisualRegionCandidateSelector.Candidate::pageNumber)
+                    .collect(Collectors.toCollection(LinkedHashSet::new));
+            Map<Integer, DocumentPageImages.PageImage> availablePages;
+            try {
+                // Keep only the current transport window. A later batch may reread a page in exchange for bounded
+                // memory; no page bytes survive in a section-wide cache.
+                availablePages = readPages(documentVersionId, batchPageNumbers.stream().toList());
+            } catch (RuntimeException pageReadFailure) {
+                if (firstRejection == null) firstRejection = VisualLessonEnricher.Outcome.NO_PAGE_IMAGE;
+                break;
+            }
+            List<VisualRegionCandidateSelector.Candidate> batch = offeredBatch.stream()
+                    .filter(candidate -> availablePages.containsKey(candidate.pageNumber()))
+                    .toList();
+            if (batch.isEmpty()) {
+                if (firstRejection == null) firstRejection = VisualLessonEnricher.Outcome.NO_PAGE_IMAGE;
+                continue;
+            }
+            List<PageImage> batchPages = batch.stream()
+                    .map(VisualRegionCandidateSelector.Candidate::pageNumber)
+                    .distinct()
+                    .map(availablePages::get)
+                    .map(image -> new PageImage(image.pageNumber(), image.mediaType(), image.content()))
+                    .toList();
+            boolean hasMoreCandidates = end < selected.size();
+            boundary = boundary(runId, workflowDeadline);
+            if (boundary.stoppedOutcome() != null) {
+                if (firstRejection == null) firstRejection = boundary.stoppedOutcome();
+                break;
+            }
+            VisualRegionLocator.LocateGuideResult guide;
+            try {
+                guide = locator.locateGuideWithResult(
+                        new VisualRegionLocator.VisualLocationRequest(
+                                section.title(),
+                                claims,
+                                batch,
+                                batchPages,
+                                modelConfigurationOwner,
+                                runId == null ? null : documentVersionId,
+                                runId,
+                                batchNumber,
+                                hasMoreCandidates),
+                        boundary.remaining());
+            } catch (AgentExecutionStoppedException stopped) {
+                if (firstRejection == null) firstRejection = outcomeFor(stopped);
+                break;
+            }
+            if (guide.regions().isEmpty()) {
+                if (firstRejection == null) firstRejection = outcomeFor(guide.diagnostic());
+                if (guide.batchAction() == BatchAction.STOP) break;
+                continue;
+            }
+            for (VisualRegionLocator.LocatedRegion candidate : guide.regions()) {
+                VisualRegionLocator.LocatedRegion region = candidate;
+                if (cropPolicy.needsReaderViewport(region)) {
+                    if (!cropPolicy.canExpandIntoReaderViewport(region)) {
+                        if (firstRejection == null) {
+                            firstRejection = VisualLessonEnricher.Outcome.REJECTED_TOO_SMALL;
+                        }
+                        continue;
+                    }
+                    region = cropPolicy.expandIntoReaderViewport(region);
                 }
-                region = cropPolicy.expandIntoReaderViewport(region);
+                VisualLessonEnricher.Outcome rejection = rejectionFor(region, batch, evidenceIds);
+                if (rejection == null && !supportsExactStep(region, steps)) {
+                    rejection = VisualLessonEnricher.Outcome.REJECTED_STEP_MISMATCH;
+                }
+                if (rejection == null) accepted.add(region);
+                else if (firstRejection == null) firstRejection = rejection;
             }
-            VisualLessonEnricher.Outcome rejection = rejectionFor(region, attachedCandidates, evidenceIds);
-            if (rejection == null && !supportsExactStep(region, steps)) {
-                rejection = VisualLessonEnricher.Outcome.REJECTED_STEP_MISMATCH;
-            }
-            if (rejection == null) accepted.add(region);
-            else rejected = rejection;
+            if (guide.batchAction() == BatchAction.STOP) break;
         }
         if (!accepted.isEmpty()) return Result.accepted(accepted);
-        return Result.rejected(rejected == null ? VisualLessonEnricher.Outcome.REJECTED_UNKNOWN_EVIDENCE : rejected);
+        return Result.rejected(firstRejection == null
+                ? VisualLessonEnricher.Outcome.REJECTED_UNKNOWN_EVIDENCE
+                : firstRejection);
+    }
+
+    private Boundary boundary(UUID runId, Instant compatibilityDeadline) {
+        Instant now = clock.instant();
+        Instant deadline = compatibilityDeadline;
+        if (runId != null && execution != null) {
+            AgentExecutionControl.BudgetSnapshot budget = execution.budget(runId);
+            if (budget.cancellationRequestedAt() != null) {
+                return Boundary.stopped(VisualLessonEnricher.Outcome.MODEL_INTERRUPTED);
+            }
+            if (budget.usedModelCalls() >= budget.maxModelCalls()
+                    || budget.usedTokens() >= budget.maxTokens()) {
+                return Boundary.stopped(VisualLessonEnricher.Outcome.MODEL_INTERRUPTED);
+            }
+            deadline = budget.deadlineAt();
+        }
+        if (!now.isBefore(deadline)) {
+            return Boundary.stopped(VisualLessonEnricher.Outcome.MODEL_TIMEOUT);
+        }
+        return Boundary.active(Duration.between(now, deadline));
+    }
+
+    private VisualLessonEnricher.Outcome outcomeFor(AgentExecutionStoppedException stopped) {
+        return stopped.reason() == AgentExecutionStoppedException.StopReason.TIMEOUT
+                ? VisualLessonEnricher.Outcome.MODEL_TIMEOUT
+                : VisualLessonEnricher.Outcome.MODEL_INTERRUPTED;
     }
 
     private List<String> terms(LessonSection section, List<LessonStep> steps) {
@@ -137,6 +262,18 @@ final class VisualLessonStepLocator {
             result.add(step.text());
         });
         return List.copyOf(result);
+    }
+
+    private Map<Integer, DocumentPageImages.PageImage> readPages(
+            UUID documentVersionId, List<Integer> pageNumbers) {
+        Map<Integer, DocumentPageImages.PageImage> available = new java.util.LinkedHashMap<>();
+        for (int start = 0; start < pageNumbers.size(); start += DocumentPageImages.MAX_PAGES_PER_READ) {
+            List<Integer> batch = pageNumbers.subList(
+                    start, Math.min(start + DocumentPageImages.MAX_PAGES_PER_READ, pageNumbers.size()));
+            pageImages.read(documentVersionId, new LinkedHashSet<>(batch))
+                    .forEach(image -> available.putIfAbsent(image.pageNumber(), image));
+        }
+        return Map.copyOf(available);
     }
 
     private List<Claim> claims(List<LessonStep> steps) {
@@ -199,6 +336,16 @@ final class VisualLessonStepLocator {
 
         static Result rejected(VisualLessonEnricher.Outcome rejection) {
             return new Result(List.of(), rejection);
+        }
+    }
+
+    private record Boundary(Duration remaining, VisualLessonEnricher.Outcome stoppedOutcome) {
+        private static Boundary active(Duration remaining) {
+            return new Boundary(remaining, null);
+        }
+
+        private static Boundary stopped(VisualLessonEnricher.Outcome outcome) {
+            return new Boundary(Duration.ZERO, outcome);
         }
     }
 }

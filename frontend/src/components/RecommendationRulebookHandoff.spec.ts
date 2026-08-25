@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { readPendingRulebookLessons } from '@/lib/pendingRulebookLesson'
 import { BACKGROUND_WORK_CHANGED_EVENT } from '@/lib/backgroundWorkRefresh'
+import { LOGIN_REQUIRED_EVENT } from '@/lib/authSession'
 
 import RecommendationRulebookHandoff from './RecommendationRulebookHandoff.vue'
 
@@ -55,20 +56,20 @@ const documentListingCapability = {
   nextAction: 'CONTINUE_ON_SOURCE',
 } as const
 
-function runSnapshot(id: string, state: string) {
+function runSnapshot(id: string, state: string, subjectId = 'plan-1') {
   return {
     run: {
-      id, state, revision: 4,
+      id, subjectId, state, revision: 4,
       updatedAt: '2026-08-10T10:00:04Z', lastErrorCode: null,
     },
     activities: [],
   }
 }
 
-function planFixture(id: string, documentVersionId: string) {
+function planFixture(id: string, documentVersionId: string, visualEvidenceRecommended = false) {
   return {
     id, documentVersionId, gameTitle: 'Wingspan', premise: 'Learn the complete game',
-    sections: [{ position: 1, title: 'Setup' }],
+    sections: [{ position: 1, title: 'Setup', visualEvidenceRecommended }],
   }
 }
 
@@ -76,6 +77,21 @@ function lessonFixture(id: string, teachingPlanId = 'plan-1') {
   return {
     id, teachingPlanId, status: 'COMPLETE', sections: [{ position: 1, title: 'Setup' }],
   }
+}
+
+function seedCompletedJourney() {
+  sessionStorage.setItem('rulepilot:recommendation-journey:266192', JSON.stringify({
+    imported: {
+      game: { id: 'game-1', name: '展翅翱翔' },
+      edition: { id: 'edition-1', name: 'BGG 版本' },
+      alreadyImported: true,
+    },
+    importJob: {
+      id: 'import-1', stage: 'COMPLETED', documentVersionId: 'version-1', duplicate: true,
+      errorCode: null, teachingHandoffState: 'LAUNCHED', teachingPreparationRunId: 'preparation-run-1',
+    },
+    preparationRunId: 'preparation-run-1',
+  }))
 }
 
 describe('RecommendationRulebookHandoff', () => {
@@ -108,7 +124,7 @@ describe('RecommendationRulebookHandoff', () => {
     close() { this.closed = true }
   }
 
-  async function mountHandoff() {
+  async function mountHandoff(gameOverride = game) {
     const router = createRouter({
       history: createMemoryHistory(),
       routes: [
@@ -123,7 +139,7 @@ describe('RecommendationRulebookHandoff', () => {
     await router.isReady()
     const wrapper = mount(RecommendationRulebookHandoff, {
       props: {
-        game,
+        game: gameOverride,
         profile: {
           type: 'all',
           interaction: 'any',
@@ -298,7 +314,7 @@ describe('RecommendationRulebookHandoff', () => {
         teachingHandoffState: 'LAUNCHED', teachingPreparationRunId: 'preparation-run-1',
       })
       if (path === '/api/v1/assistant-runs/preparation-run-1') {
-        return Response.json(runSnapshot('preparation-run-1', 'COMPLETED'))
+        return Response.json(runSnapshot('preparation-run-1', 'COMPLETED', 'version-1'))
       }
       if (path === '/api/v1/document-versions/version-1/teaching-plans/latest') {
         return Response.json(planFixture('plan-1', 'version-1'))
@@ -514,13 +530,13 @@ describe('RecommendationRulebookHandoff', () => {
         teachingHandoffState: 'LAUNCHED', teachingPreparationRunId: 'preparation-run-gallery',
       })
       if (path === '/api/v1/assistant-runs/preparation-run-gallery') {
-        return Response.json(runSnapshot('preparation-run-gallery', 'COMPLETED'))
+        return Response.json(runSnapshot('preparation-run-gallery', 'COMPLETED', 'version-gallery'))
       }
       if (path === '/api/v1/document-versions/version-gallery/teaching-plans/latest') {
         return Response.json(planFixture('plan-gallery', 'version-gallery'))
       }
       if (path === '/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=plan-gallery') {
-        return Response.json(runSnapshot('teaching-run-gallery', 'COMPLETED'))
+        return Response.json(runSnapshot('teaching-run-gallery', 'COMPLETED', 'plan-gallery'))
       }
       if (path === '/api/v1/teaching-plans/plan-gallery/illustrated-lessons/latest') {
         return Response.json(lessonFixture('lesson-gallery', 'plan-gallery'))
@@ -583,13 +599,13 @@ describe('RecommendationRulebookHandoff', () => {
         stage: 'READY', percentage: 100, processedPages: 12, totalPages: 12, complete: true,
       })
       if (path === '/api/v1/assistant-runs/preparation-complete') {
-        return Response.json(runSnapshot('preparation-complete', 'COMPLETED'))
+        return Response.json(runSnapshot('preparation-complete', 'COMPLETED', 'version-ready'))
       }
       if (path === '/api/v1/document-versions/version-ready/teaching-plans/latest') {
         return Response.json(planFixture('plan-complete', 'version-ready'))
       }
       if (path === '/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=plan-complete') {
-        return Response.json(runSnapshot('teaching-complete', 'COMPLETED'))
+        return Response.json(runSnapshot('teaching-complete', 'COMPLETED', 'plan-complete'))
       }
       if (path === '/api/v1/teaching-plans/plan-complete/illustrated-lessons/latest') {
         return Response.json(lessonFixture('lesson-complete', 'plan-complete'))
@@ -616,6 +632,1027 @@ describe('RecommendationRulebookHandoff', () => {
     expect(requests).toContain('/api/v1/document-versions/version-ready/progress/snapshot')
   })
 
+  it('reports a failed visual handoff without downgrading the completed text lesson', async () => {
+    vi.useFakeTimers()
+    let wrapper: Awaited<ReturnType<typeof mountHandoff>>['wrapper'] | undefined
+    let visualRunReads = 0
+    try {
+      sessionStorage.setItem('rulepilot:recommendation-journey:266192', JSON.stringify({
+        imported: {
+          game: { id: 'game-1', name: '展翅翱翔' },
+          edition: { id: 'edition-1', name: 'BGG 版本' },
+          alreadyImported: true,
+        },
+        importJob: {
+          id: 'import-1', stage: 'COMPLETED', documentVersionId: 'version-1', duplicate: true,
+          errorCode: null, teachingHandoffState: 'LAUNCHED', teachingPreparationRunId: 'preparation-run-1',
+        },
+        preparationRunId: 'preparation-run-1',
+      }))
+      vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+        const path = String(input)
+        if (path === '/api/v1/document-versions/version-1/progress/snapshot') {
+          return Response.json({ stage: 'READY', percentage: 100, processedPages: 12, totalPages: 12, complete: true })
+        }
+        if (path === '/api/v1/assistant-runs/preparation-run-1') {
+          return Response.json(runSnapshot('preparation-run-1', 'COMPLETED', 'version-1'))
+        }
+        if (path === '/api/v1/document-versions/version-1/teaching-plans/latest') {
+          return Response.json(planFixture('plan-1', 'version-1', true))
+        }
+        if (path === '/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=plan-1') {
+          return Response.json(runSnapshot('teaching-run-1', 'COMPLETED'))
+        }
+        if (path === '/api/v1/assistant-runs/latest?mode=VISUAL_ENRICHMENT&subjectId=plan-1') {
+          visualRunReads += 1
+          return Response.json({
+            ...runSnapshot('visual-run-1', 'FAILED'),
+            run: {
+              ...runSnapshot('visual-run-1', 'FAILED').run,
+              lastErrorCode: 'VISUAL_ENRICHMENT_FAILED',
+            },
+          })
+        }
+        if (path === '/api/v1/teaching-plans/plan-1/illustrated-lessons/latest') {
+          return Response.json(lessonFixture('lesson-1'))
+        }
+        return new Response(null, { status: 404 })
+      }))
+
+      const mounted = await mountHandoff()
+      wrapper = mounted.wrapper
+      await vi.advanceTimersByTimeAsync(0)
+      await flushPromises()
+
+      expect(wrapper.text()).toContain('完整讲解已经生成')
+      expect(wrapper.text()).toContain('打开已生成的讲解')
+      expect(wrapper.text()).toContain('局部配图没有完成')
+      expect(wrapper.text()).toContain('文字讲解仍可完整阅读')
+      await vi.advanceTimersByTimeAsync(10_000)
+      await flushPromises()
+      expect(visualRunReads).toBe(1)
+    } finally {
+      wrapper?.unmount()
+      vi.useRealTimers()
+    }
+  })
+
+  it('keeps the completed guide and Q&A available while an optional visual read reaches its own deadline', async () => {
+    vi.useFakeTimers()
+    let wrapper: Awaited<ReturnType<typeof mountHandoff>>['wrapper'] | undefined
+    let visualRunReads = 0
+    try {
+      seedCompletedJourney()
+      vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+        const path = String(input)
+        if (path === '/api/v1/document-versions/version-1/progress/snapshot') {
+          return Response.json({ stage: 'READY', percentage: 100, processedPages: 12, totalPages: 12, complete: true })
+        }
+        if (path === '/api/v1/assistant-runs/preparation-run-1') {
+          return Response.json(runSnapshot('preparation-run-1', 'COMPLETED', 'version-1'))
+        }
+        if (path === '/api/v1/document-versions/version-1/teaching-plans/latest') {
+          return Response.json(planFixture('plan-1', 'version-1', true))
+        }
+        if (path === '/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=plan-1') {
+          return Response.json(runSnapshot('teaching-run-1', 'COMPLETED'))
+        }
+        if (path === '/api/v1/teaching-plans/plan-1/illustrated-lessons/latest') {
+          return Response.json(lessonFixture('lesson-1'))
+        }
+        if (path === '/api/v1/assistant-runs/latest?mode=VISUAL_ENRICHMENT&subjectId=plan-1') {
+          visualRunReads += 1
+          return new Promise<Response>(() => undefined)
+        }
+        return new Response(null, { status: 404 })
+      }))
+
+      const mounted = await mountHandoff()
+      wrapper = mounted.wrapper
+      await vi.advanceTimersByTimeAsync(0)
+      await flushPromises()
+
+      expect(visualRunReads).toBe(1)
+      expect(wrapper.text()).toContain('完整讲解已经生成')
+      expect(wrapper.text()).toContain('打开已生成的讲解')
+      expect(wrapper.text()).toContain('切换为规则答疑')
+
+      await vi.advanceTimersByTimeAsync(8_000)
+      await flushPromises()
+      expect(visualRunReads).toBe(2)
+      expect(wrapper.text()).toContain('完整讲解已经生成')
+    } finally {
+      wrapper?.unmount()
+      await flushPromises()
+      vi.useRealTimers()
+    }
+  })
+
+  it('bounds visual handoff transport failures and recovers through the visible retry control', async () => {
+    vi.useFakeTimers()
+    let wrapper: Awaited<ReturnType<typeof mountHandoff>>['wrapper'] | undefined
+    let visualRunReads = 0
+    let recovered = false
+    try {
+      sessionStorage.setItem('rulepilot:recommendation-journey:266192', JSON.stringify({
+        imported: {
+          game: { id: 'game-1', name: '展翅翱翔' },
+          edition: { id: 'edition-1', name: 'BGG 版本' },
+          alreadyImported: true,
+        },
+        importJob: {
+          id: 'import-1', stage: 'COMPLETED', documentVersionId: 'version-1', duplicate: true,
+          errorCode: null, teachingHandoffState: 'LAUNCHED', teachingPreparationRunId: 'preparation-run-1',
+        },
+        preparationRunId: 'preparation-run-1',
+      }))
+      vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+        const path = String(input)
+        if (path === '/api/v1/document-versions/version-1/progress/snapshot') {
+          return Response.json({ stage: 'READY', percentage: 100, processedPages: 12, totalPages: 12, complete: true })
+        }
+        if (path === '/api/v1/assistant-runs/preparation-run-1') {
+          return Response.json(runSnapshot('preparation-run-1', 'COMPLETED', 'version-1'))
+        }
+        if (path === '/api/v1/document-versions/version-1/teaching-plans/latest') {
+          return Response.json(planFixture('plan-1', 'version-1', true))
+        }
+        if (path === '/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=plan-1') {
+          return Response.json(runSnapshot('teaching-run-1', 'COMPLETED'))
+        }
+        if (path === '/api/v1/assistant-runs/latest?mode=VISUAL_ENRICHMENT&subjectId=plan-1') {
+          visualRunReads += 1
+          return recovered
+            ? Response.json(runSnapshot('visual-run-1', 'COMPLETED'))
+            : new Response(null, { status: 503 })
+        }
+        if (path === '/api/v1/teaching-plans/plan-1/illustrated-lessons/latest') {
+          return Response.json(lessonFixture('lesson-1'))
+        }
+        return new Response(null, { status: 404 })
+      }))
+
+      const mounted = await mountHandoff()
+      wrapper = mounted.wrapper
+      await vi.advanceTimersByTimeAsync(0)
+      await flushPromises()
+      expect(visualRunReads).toBe(1)
+
+      await vi.advanceTimersByTimeAsync(6_000)
+      await flushPromises()
+      expect(visualRunReads).toBe(3)
+      expect(wrapper.text()).toContain('暂时无法确认最新配图状态')
+      const readsAtStop = visualRunReads
+      await vi.advanceTimersByTimeAsync(30_000)
+      expect(visualRunReads).toBe(readsAtStop)
+
+      recovered = true
+      await wrapper.findAll('button').find(button => button.text() === '重试配图状态')!.trigger('click')
+      await vi.advanceTimersByTimeAsync(250)
+      await flushPromises()
+      expect(visualRunReads).toBe(4)
+      expect(wrapper.text()).toContain('这次没有找到可靠的局部图示')
+    } finally {
+      wrapper?.unmount()
+      vi.useRealTimers()
+    }
+  })
+
+  it('preserves the last trusted active visual run when repeated 404s stop automatic refresh', async () => {
+    vi.useFakeTimers()
+    let wrapper: Awaited<ReturnType<typeof mountHandoff>>['wrapper'] | undefined
+    let visualRunReads = 0
+    let recovered = false
+    try {
+      seedCompletedJourney()
+      vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+        const path = String(input)
+        if (path === '/api/v1/document-versions/version-1/progress/snapshot') {
+          return Response.json({ stage: 'READY', percentage: 100, processedPages: 12, totalPages: 12, complete: true })
+        }
+        if (path === '/api/v1/assistant-runs/preparation-run-1') {
+          return Response.json(runSnapshot('preparation-run-1', 'COMPLETED', 'version-1'))
+        }
+        if (path === '/api/v1/document-versions/version-1/teaching-plans/latest') {
+          return Response.json(planFixture('plan-1', 'version-1', true))
+        }
+        if (path === '/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=plan-1') {
+          return Response.json(runSnapshot('teaching-run-1', 'COMPLETED'))
+        }
+        if (path === '/api/v1/assistant-runs/teaching-run-1') {
+          return Response.json(runSnapshot('teaching-run-1', 'COMPLETED'))
+        }
+        if (path === '/api/v1/teaching-plans/plan-1/illustrated-lessons/latest') {
+          return Response.json(lessonFixture('lesson-1'))
+        }
+        if (path === '/api/v1/assistant-runs/latest?mode=VISUAL_ENRICHMENT&subjectId=plan-1') {
+          visualRunReads += 1
+          if (visualRunReads === 1) return Response.json(runSnapshot('visual-run-1', 'RETRIEVING'))
+          if (!recovered) return new Response(null, { status: 404 })
+          return Response.json({
+            ...runSnapshot('visual-run-1', 'COMPLETED'),
+            activities: [{
+              sequence: 1,
+              type: 'VALIDATION',
+              operation: 'visualSection|1',
+              summary: 'opaque',
+              outcome: 'SUCCEEDED',
+              latencyMs: 1,
+              occurredAt: '2026-08-10T10:00:05Z',
+            }],
+          })
+        }
+        return new Response(null, { status: 404 })
+      }))
+
+      const mounted = await mountHandoff()
+      wrapper = mounted.wrapper
+      await vi.advanceTimersByTimeAsync(0)
+      await flushPromises()
+      expect(wrapper.text()).toContain('正在从规则书中挑选')
+
+      await vi.runOnlyPendingTimersAsync()
+      await flushPromises()
+      await vi.runOnlyPendingTimersAsync()
+      await flushPromises()
+
+      expect(visualRunReads).toBe(3)
+      expect(wrapper.get('[data-testid="recommendation-visual-enrichment-status"]').text())
+        .toContain('暂时无法确认最新配图状态')
+      expect(wrapper.text()).not.toContain('正在自动重试')
+      const readsAtStop = visualRunReads
+      await vi.advanceTimersByTimeAsync(30_000)
+      expect(visualRunReads).toBe(readsAtStop)
+
+      recovered = true
+      await wrapper.findAll('button').find(button => button.text() === '重试配图状态')!.trigger('click')
+      await vi.advanceTimersByTimeAsync(250)
+      await flushPromises()
+
+      expect(visualRunReads).toBe(4)
+      expect(wrapper.text()).toContain('已有 1 节具备图示')
+    } finally {
+      wrapper?.unmount()
+      vi.useRealTimers()
+    }
+  })
+
+  it('stops after two missing visual-run checks and explicitly retries a late completed run', async () => {
+    vi.useFakeTimers()
+    let wrapper: Awaited<ReturnType<typeof mountHandoff>>['wrapper'] | undefined
+    let visualRunReads = 0
+    let recovered = false
+    try {
+      seedCompletedJourney()
+      vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+        const path = String(input)
+        if (path === '/api/v1/document-versions/version-1/progress/snapshot') {
+          return Response.json({ stage: 'READY', percentage: 100, processedPages: 12, totalPages: 12, complete: true })
+        }
+        if (path === '/api/v1/assistant-runs/preparation-run-1') {
+          return Response.json(runSnapshot('preparation-run-1', 'COMPLETED', 'version-1'))
+        }
+        if (path === '/api/v1/document-versions/version-1/teaching-plans/latest') {
+          return Response.json(planFixture('plan-1', 'version-1', true))
+        }
+        if (path === '/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=plan-1'
+          || path === '/api/v1/assistant-runs/teaching-run-1') {
+          return Response.json(runSnapshot('teaching-run-1', 'COMPLETED'))
+        }
+        if (path === '/api/v1/teaching-plans/plan-1/illustrated-lessons/latest') {
+          return Response.json(lessonFixture('lesson-1'))
+        }
+        if (path === '/api/v1/assistant-runs/latest?mode=VISUAL_ENRICHMENT&subjectId=plan-1') {
+          visualRunReads += 1
+          if (!recovered) return new Response(null, { status: 404 })
+          return Response.json({
+            ...runSnapshot('visual-run-late', 'COMPLETED'),
+            activities: [{
+              sequence: 1,
+              operation: 'visualSection|1',
+              summary: 'opaque',
+              outcome: 'SUCCEEDED',
+            }],
+          })
+        }
+        return new Response(null, { status: 404 })
+      }))
+
+      const mounted = await mountHandoff()
+      wrapper = mounted.wrapper
+      await vi.advanceTimersByTimeAsync(0)
+      await flushPromises()
+      expect(visualRunReads).toBe(1)
+
+      await vi.advanceTimersByTimeAsync(1_250)
+      await flushPromises()
+      expect(visualRunReads).toBe(2)
+      const stopped = wrapper.get('[data-testid="recommendation-visual-enrichment-status"]')
+      expect(stopped.text()).toContain('连续两次都没有等到配图任务')
+      expect(stopped.text()).toContain('已停止自动查询')
+      expect(stopped.text()).toContain('文字和答疑不受影响')
+      expect(stopped.find('button').text()).toBe('重试配图状态')
+
+      await vi.advanceTimersByTimeAsync(30_000)
+      expect(visualRunReads).toBe(2)
+
+      recovered = true
+      await stopped.find('button').trigger('click')
+      await vi.advanceTimersByTimeAsync(250)
+      await flushPromises()
+      expect(visualRunReads).toBe(3)
+      expect(wrapper.text()).toContain('已有 1 节具备图示')
+      expect(wrapper.text()).toContain('切换为规则答疑')
+    } finally {
+      wrapper?.unmount()
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not spend the visual failure budget on ordinary lesson refresh errors', async () => {
+    vi.useFakeTimers()
+    let wrapper: Awaited<ReturnType<typeof mountHandoff>>['wrapper'] | undefined
+    let lessonReads = 0
+    let visualRunReads = 0
+    let lessonRecovered = false
+    try {
+      seedCompletedJourney()
+      vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+        const path = String(input)
+        if (path === '/api/v1/document-versions/version-1/progress/snapshot') {
+          return Response.json({ stage: 'READY', percentage: 100, processedPages: 12, totalPages: 12, complete: true })
+        }
+        if (path === '/api/v1/assistant-runs/preparation-run-1') {
+          return Response.json(runSnapshot('preparation-run-1', 'COMPLETED', 'version-1'))
+        }
+        if (path === '/api/v1/document-versions/version-1/teaching-plans/latest') {
+          return Response.json(planFixture('plan-1', 'version-1', true))
+        }
+        if (path === '/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=plan-1') {
+          return Response.json(runSnapshot('teaching-run-1', 'COMPLETED'))
+        }
+        if (path === '/api/v1/assistant-runs/teaching-run-1') {
+          return Response.json(runSnapshot('teaching-run-1', 'COMPLETED'))
+        }
+        if (path === '/api/v1/teaching-plans/plan-1/illustrated-lessons/latest') {
+          lessonReads += 1
+          return lessonReads > 1 && !lessonRecovered
+            ? new Response(null, { status: 503 })
+            : Response.json(lessonFixture('lesson-1'))
+        }
+        if (path === '/api/v1/assistant-runs/latest?mode=VISUAL_ENRICHMENT&subjectId=plan-1') {
+          visualRunReads += 1
+          return Response.json(runSnapshot(
+            'visual-run-1',
+            visualRunReads === 1 ? 'RETRIEVING' : 'COMPLETED',
+          ))
+        }
+        return new Response(null, { status: 404 })
+      }))
+
+      const mounted = await mountHandoff()
+      wrapper = mounted.wrapper
+      await vi.advanceTimersByTimeAsync(0)
+      await flushPromises()
+      expect(visualRunReads).toBe(1)
+
+      await vi.advanceTimersByTimeAsync(1_250 + 3_000 + 3_000)
+      await flushPromises()
+      expect(lessonReads).toBe(4)
+      expect(visualRunReads).toBe(1)
+      expect(wrapper.text()).toContain('正在从规则书中挑选')
+      expect(wrapper.findAll('button').some(button => button.text() === '重试配图状态')).toBe(false)
+
+      lessonRecovered = true
+      await vi.advanceTimersByTimeAsync(3_000)
+      await flushPromises()
+      expect(visualRunReads).toBe(2)
+      expect(wrapper.text()).toContain('这次没有找到可靠的局部图示')
+    } finally {
+      wrapper?.unmount()
+      vi.useRealTimers()
+    }
+  })
+
+  it.each([
+    ['missing', undefined],
+    ['cross-plan', 'plan-other'],
+  ])('rejects a %s visual handoff subject identity', async (_label, subjectId) => {
+    vi.useFakeTimers()
+    let wrapper: Awaited<ReturnType<typeof mountHandoff>>['wrapper'] | undefined
+    let visualRunReads = 0
+    try {
+      sessionStorage.setItem('rulepilot:recommendation-journey:266192', JSON.stringify({
+        imported: {
+          game: { id: 'game-1', name: '展翅翱翔' },
+          edition: { id: 'edition-1', name: 'BGG 版本' },
+          alreadyImported: true,
+        },
+        importJob: {
+          id: 'import-1', stage: 'COMPLETED', documentVersionId: 'version-1', duplicate: true,
+          errorCode: null, teachingHandoffState: 'LAUNCHED', teachingPreparationRunId: 'preparation-run-1',
+        },
+        preparationRunId: 'preparation-run-1',
+      }))
+      vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+        const path = String(input)
+        if (path === '/api/v1/document-versions/version-1/progress/snapshot') {
+          return Response.json({ stage: 'READY', percentage: 100, processedPages: 12, totalPages: 12, complete: true })
+        }
+        if (path === '/api/v1/assistant-runs/preparation-run-1') {
+          return Response.json(runSnapshot('preparation-run-1', 'COMPLETED', 'version-1'))
+        }
+        if (path === '/api/v1/document-versions/version-1/teaching-plans/latest') {
+          return Response.json(planFixture('plan-1', 'version-1', true))
+        }
+        if (path === '/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=plan-1') {
+          return Response.json(runSnapshot('teaching-run-1', 'COMPLETED'))
+        }
+        if (path === '/api/v1/assistant-runs/latest?mode=VISUAL_ENRICHMENT&subjectId=plan-1') {
+          visualRunReads += 1
+          const candidate = runSnapshot('visual-run-1', 'COMPLETED')
+          if (subjectId === undefined) {
+            const runWithoutSubject: Partial<typeof candidate.run> = { ...candidate.run }
+            delete runWithoutSubject.subjectId
+            return Response.json({ ...candidate, run: runWithoutSubject })
+          }
+          return Response.json({ ...candidate, run: { ...candidate.run, subjectId } })
+        }
+        if (path === '/api/v1/teaching-plans/plan-1/illustrated-lessons/latest') {
+          return Response.json(lessonFixture('lesson-1'))
+        }
+        return new Response(null, { status: 404 })
+      }))
+
+      const mounted = await mountHandoff()
+      wrapper = mounted.wrapper
+      await vi.advanceTimersByTimeAsync(0)
+      await flushPromises()
+
+      expect(visualRunReads).toBe(1)
+      expect(wrapper.text()).toContain('暂时无法确认最新配图状态')
+      expect(wrapper.text()).not.toContain('已有 1 节具备图示')
+      await vi.advanceTimersByTimeAsync(30_000)
+      expect(visualRunReads).toBe(1)
+    } finally {
+      wrapper?.unmount()
+      vi.useRealTimers()
+    }
+  })
+
+  it('settles the lesson after a terminal visual run and emits a late visual-focus-only change', async () => {
+    vi.useFakeTimers()
+    let wrapper: Awaited<ReturnType<typeof mountHandoff>>['wrapper'] | undefined
+    let lessonReads = 0
+    let visualRunReads = 0
+    try {
+      seedCompletedJourney()
+      vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+        const path = String(input)
+        if (path === '/api/v1/document-versions/version-1/progress/snapshot') {
+          return Response.json({ stage: 'READY', percentage: 100, processedPages: 12, totalPages: 12, complete: true })
+        }
+        if (path === '/api/v1/assistant-runs/preparation-run-1') {
+          return Response.json(runSnapshot('preparation-run-1', 'COMPLETED', 'version-1'))
+        }
+        if (path === '/api/v1/document-versions/version-1/teaching-plans/latest') {
+          return Response.json(planFixture('plan-1', 'version-1', true))
+        }
+        if (path === '/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=plan-1') {
+          return Response.json(runSnapshot('teaching-run-1', 'COMPLETED'))
+        }
+        if (path === '/api/v1/assistant-runs/teaching-run-1') {
+          return Response.json(runSnapshot('teaching-run-1', 'COMPLETED'))
+        }
+        if (path === '/api/v1/teaching-plans/plan-1/illustrated-lessons/latest') {
+          lessonReads += 1
+          return Response.json({
+            id: 'lesson-1',
+            teachingPlanId: 'plan-1',
+            status: 'COMPLETE',
+            sections: [{
+              position: 1,
+              topicKey: 'SETUP',
+              coverageTags: [],
+              title: 'Setup',
+              required: true,
+              evidenceStatus: 'SUPPORTED',
+              visualKind: 'TABLE_LAYOUT',
+              visualCaption: '',
+              visualSourcePages: [2],
+              visualSourceChunkIds: ['chunk-1'],
+              steps: [{
+                position: 1,
+                heading: 'Place the board',
+                kind: 'DO',
+                text: 'Place it centrally.',
+                sourcePages: [2],
+                visualFocus: lessonReads >= 4
+                  ? { pageNumber: 2, label: 'Board', x: 100, y: 200, width: 300, height: 400 }
+                  : null,
+              }],
+            }],
+          })
+        }
+        if (path === '/api/v1/assistant-runs/latest?mode=VISUAL_ENRICHMENT&subjectId=plan-1') {
+          visualRunReads += 1
+          return Response.json(runSnapshot(
+            'visual-run-1',
+            visualRunReads === 1 ? 'RETRIEVING' : 'COMPLETED',
+          ))
+        }
+        return new Response(null, { status: 404 })
+      }))
+
+      const mounted = await mountHandoff()
+      wrapper = mounted.wrapper
+      await vi.advanceTimersByTimeAsync(0)
+      await flushPromises()
+      await vi.runOnlyPendingTimersAsync()
+      await flushPromises()
+      await vi.runOnlyPendingTimersAsync()
+      await flushPromises()
+      await vi.runOnlyPendingTimersAsync()
+      await flushPromises()
+
+      expect(visualRunReads).toBe(2)
+      expect(lessonReads).toBe(4)
+      const statuses = (wrapper.emitted('status') ?? [])
+        .map(args => args[0] as { lesson: { sections: Array<{ steps?: Array<{ visualFocus?: unknown }> }> } | null })
+      expect(statuses.at(-1)?.lesson?.sections[0]?.steps?.[0]?.visualFocus).toEqual({
+        pageNumber: 2,
+        label: 'Board',
+        x: 100,
+        y: 200,
+        width: 300,
+        height: 400,
+      })
+
+      await vi.advanceTimersByTimeAsync(30_000)
+      expect(visualRunReads).toBe(2)
+      expect(lessonReads).toBe(4)
+    } finally {
+      wrapper?.unmount()
+      vi.useRealTimers()
+    }
+  })
+
+  it('spends terminal visual settling reads only on accepted lesson snapshots before emitting a recovered crop', async () => {
+    vi.useFakeTimers()
+    let wrapper: Awaited<ReturnType<typeof mountHandoff>>['wrapper'] | undefined
+    let lessonReads = 0
+    let visualRunReads = 0
+    try {
+      seedCompletedJourney()
+      vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+        const path = String(input)
+        if (path === '/api/v1/document-versions/version-1/progress/snapshot') {
+          return Response.json({ stage: 'READY', percentage: 100, processedPages: 12, totalPages: 12, complete: true })
+        }
+        if (path === '/api/v1/assistant-runs/preparation-run-1') {
+          return Response.json(runSnapshot('preparation-run-1', 'COMPLETED', 'version-1'))
+        }
+        if (path === '/api/v1/document-versions/version-1/teaching-plans/latest') {
+          return Response.json(planFixture('plan-1', 'version-1', true))
+        }
+        if (path === '/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=plan-1'
+          || path === '/api/v1/assistant-runs/teaching-run-1') {
+          return Response.json(runSnapshot('teaching-run-1', 'COMPLETED'))
+        }
+        if (path === '/api/v1/teaching-plans/plan-1/illustrated-lessons/latest') {
+          lessonReads += 1
+          if (lessonReads === 3) return new Response(null, { status: 404 })
+          if (lessonReads === 4) return new Response(null, { status: 503 })
+          if (lessonReads === 5) {
+            return new Response('{', { status: 200, headers: { 'Content-Type': 'application/json' } })
+          }
+          return Response.json({
+            id: 'lesson-1',
+            teachingPlanId: 'plan-1',
+            status: 'COMPLETE',
+            sections: [{
+              position: 1,
+              topicKey: 'SETUP',
+              coverageTags: [],
+              title: 'Setup',
+              required: true,
+              evidenceStatus: 'SUPPORTED',
+              visualKind: 'TABLE_LAYOUT',
+              visualCaption: '',
+              visualSourcePages: [2],
+              visualSourceChunkIds: ['chunk-1'],
+              steps: [{
+                position: 1,
+                heading: 'Place the board',
+                kind: 'DO',
+                text: 'Place it centrally.',
+                sourcePages: [2],
+                visualFocus: lessonReads >= 6
+                  ? { pageNumber: 2, label: 'Recovered board', x: 100, y: 200, width: 300, height: 400 }
+                  : null,
+              }],
+            }],
+          })
+        }
+        if (path === '/api/v1/assistant-runs/latest?mode=VISUAL_ENRICHMENT&subjectId=plan-1') {
+          visualRunReads += 1
+          return Response.json(runSnapshot(
+            'visual-run-1',
+            visualRunReads === 1 ? 'RETRIEVING' : 'COMPLETED',
+          ))
+        }
+        return new Response(null, { status: 404 })
+      }))
+
+      const mounted = await mountHandoff()
+      wrapper = mounted.wrapper
+      await vi.advanceTimersByTimeAsync(0)
+      await flushPromises()
+      expect(lessonReads).toBe(1)
+      expect(visualRunReads).toBe(1)
+
+      for (let refresh = 0; refresh < 4; refresh += 1) {
+        await vi.runOnlyPendingTimersAsync()
+        await flushPromises()
+      }
+
+      expect(lessonReads).toBe(5)
+      expect(visualRunReads).toBe(2)
+      expect(wrapper.text()).toContain('正在自动重试')
+      expect(wrapper.findAll('button').some(button => button.text() === '重试配图状态')).toBe(false)
+
+      await vi.runOnlyPendingTimersAsync()
+      await flushPromises()
+      expect(lessonReads).toBe(6)
+
+      await vi.runOnlyPendingTimersAsync()
+      await flushPromises()
+      expect(lessonReads).toBe(7)
+      expect(vi.getTimerCount()).toBe(0)
+      const statuses = (wrapper.emitted('status') ?? [])
+        .map(args => args[0] as { lesson: { sections: Array<{ steps?: Array<{ visualFocus?: unknown }> }> } | null })
+      expect(statuses.at(-1)?.lesson?.sections[0]?.steps?.[0]?.visualFocus).toEqual({
+        pageNumber: 2,
+        label: 'Recovered board',
+        x: 100,
+        y: 200,
+        width: 300,
+        height: 400,
+      })
+
+      await vi.advanceTimersByTimeAsync(30_000)
+      expect(lessonReads).toBe(7)
+    } finally {
+      wrapper?.unmount()
+      vi.useRealTimers()
+    }
+  })
+
+  it('stops repeated unaccepted settling snapshots and resumes only after an explicit visual retry', async () => {
+    vi.useFakeTimers()
+    let wrapper: Awaited<ReturnType<typeof mountHandoff>>['wrapper'] | undefined
+    let lessonReads = 0
+    let visualRunReads = 0
+    let recovered = false
+    try {
+      seedCompletedJourney()
+      vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+        const path = String(input)
+        if (path === '/api/v1/document-versions/version-1/progress/snapshot') {
+          return Response.json({ stage: 'READY', percentage: 100, processedPages: 12, totalPages: 12, complete: true })
+        }
+        if (path === '/api/v1/assistant-runs/preparation-run-1') {
+          return Response.json(runSnapshot('preparation-run-1', 'COMPLETED', 'version-1'))
+        }
+        if (path === '/api/v1/document-versions/version-1/teaching-plans/latest') {
+          return Response.json(planFixture('plan-1', 'version-1', true))
+        }
+        if (path === '/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=plan-1'
+          || path === '/api/v1/assistant-runs/teaching-run-1') {
+          return Response.json(runSnapshot('teaching-run-1', 'COMPLETED'))
+        }
+        if (path === '/api/v1/teaching-plans/plan-1/illustrated-lessons/latest') {
+          lessonReads += 1
+          if (!recovered && lessonReads === 3) return new Response(null, { status: 404 })
+          if (!recovered && (lessonReads === 4 || lessonReads === 6)) {
+            return new Response(null, { status: 503 })
+          }
+          if (!recovered && lessonReads === 5) {
+            return new Response('{', { status: 200, headers: { 'Content-Type': 'application/json' } })
+          }
+          return Response.json({
+            id: 'lesson-1',
+            teachingPlanId: 'plan-1',
+            status: 'COMPLETE',
+            sections: [{
+              position: 1,
+              topicKey: 'SETUP',
+              coverageTags: [],
+              title: 'Setup',
+              required: true,
+              evidenceStatus: 'SUPPORTED',
+              visualKind: 'TABLE_LAYOUT',
+              visualCaption: '',
+              visualSourcePages: [2],
+              visualSourceChunkIds: ['chunk-1'],
+              steps: [{
+                position: 1,
+                heading: 'Place the board',
+                kind: 'DO',
+                text: 'Place it centrally.',
+                sourcePages: [2],
+                visualFocus: recovered
+                  ? { pageNumber: 2, label: 'Explicitly recovered board', x: 100, y: 200, width: 300, height: 400 }
+                  : null,
+              }],
+            }],
+          })
+        }
+        if (path === '/api/v1/assistant-runs/latest?mode=VISUAL_ENRICHMENT&subjectId=plan-1') {
+          visualRunReads += 1
+          return Response.json(runSnapshot(
+            'visual-run-1',
+            visualRunReads === 1 ? 'RETRIEVING' : 'COMPLETED',
+          ))
+        }
+        return new Response(null, { status: 404 })
+      }))
+
+      const mounted = await mountHandoff()
+      wrapper = mounted.wrapper
+      await vi.advanceTimersByTimeAsync(0)
+      await flushPromises()
+      for (let refresh = 0; refresh < 5; refresh += 1) {
+        await vi.runOnlyPendingTimersAsync()
+        await flushPromises()
+      }
+
+      expect(lessonReads).toBe(6)
+      expect(wrapper.text()).toContain('暂时无法确认最新配图状态')
+      expect(wrapper.text()).not.toContain('正在自动重试')
+      expect(wrapper.findAll('button').some(button => button.text() === '重试配图状态')).toBe(true)
+      expect(vi.getTimerCount()).toBe(0)
+      await vi.advanceTimersByTimeAsync(30_000)
+      expect(lessonReads).toBe(6)
+
+      recovered = true
+      await wrapper.findAll('button').find(button => button.text() === '重试配图状态')!.trigger('click')
+      await vi.runOnlyPendingTimersAsync()
+      await flushPromises()
+      await vi.runOnlyPendingTimersAsync()
+      await flushPromises()
+
+      expect(lessonReads).toBe(8)
+      expect(vi.getTimerCount()).toBe(0)
+      const statuses = (wrapper.emitted('status') ?? [])
+        .map(args => args[0] as { lesson: { sections: Array<{ steps?: Array<{ visualFocus?: unknown }> }> } | null })
+      expect(statuses.at(-1)?.lesson?.sections[0]?.steps?.[0]?.visualFocus).toEqual({
+        pageNumber: 2,
+        label: 'Explicitly recovered board',
+        x: 100,
+        y: 200,
+        width: 300,
+        height: 400,
+      })
+    } finally {
+      wrapper?.unmount()
+      vi.useRealTimers()
+    }
+  })
+
+  it.each([401, 403])('stops current visual polling and requests login once for %s', async (status) => {
+    vi.useFakeTimers()
+    let wrapper: Awaited<ReturnType<typeof mountHandoff>>['wrapper'] | undefined
+    let visualRunReads = 0
+    const loginRequired = vi.fn()
+    window.addEventListener(LOGIN_REQUIRED_EVENT, loginRequired)
+    try {
+      seedCompletedJourney()
+      vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+        const path = String(input)
+        if (path === '/api/v1/document-versions/version-1/progress/snapshot') {
+          return Response.json({ stage: 'READY', percentage: 100, processedPages: 12, totalPages: 12, complete: true })
+        }
+        if (path === '/api/v1/assistant-runs/preparation-run-1') {
+          return Response.json(runSnapshot('preparation-run-1', 'COMPLETED', 'version-1'))
+        }
+        if (path === '/api/v1/document-versions/version-1/teaching-plans/latest') {
+          return Response.json(planFixture('plan-1', 'version-1', true))
+        }
+        if (path === '/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=plan-1') {
+          return Response.json(runSnapshot('teaching-run-1', 'COMPLETED'))
+        }
+        if (path === '/api/v1/teaching-plans/plan-1/illustrated-lessons/latest') {
+          return Response.json(lessonFixture('lesson-1'))
+        }
+        if (path === '/api/v1/assistant-runs/latest?mode=VISUAL_ENRICHMENT&subjectId=plan-1') {
+          visualRunReads += 1
+          return new Response(null, { status })
+        }
+        return new Response(null, { status: 404 })
+      }))
+
+      const mounted = await mountHandoff()
+      wrapper = mounted.wrapper
+      await vi.advanceTimersByTimeAsync(0)
+      await flushPromises()
+
+      expect(loginRequired).toHaveBeenCalledOnce()
+      expect(visualRunReads).toBe(1)
+      expect(wrapper.text()).toContain('登录后即可保留这次选择')
+      await vi.advanceTimersByTimeAsync(30_000)
+      await flushPromises()
+      expect(loginRequired).toHaveBeenCalledOnce()
+      expect(visualRunReads).toBe(1)
+    } finally {
+      window.removeEventListener(LOGIN_REQUIRED_EVENT, loginRequired)
+      wrapper?.unmount()
+      vi.useRealTimers()
+    }
+  })
+
+  it('deduplicates login when current visual and overlapping core authorization failures settle sequentially', async () => {
+    vi.useFakeTimers()
+    let wrapper: Awaited<ReturnType<typeof mountHandoff>>['wrapper'] | undefined
+    let resolveVisual!: (response: Response) => void
+    let resolveCoreLesson!: (response: Response) => void
+    const visualResponse = new Promise<Response>((resolve) => { resolveVisual = resolve })
+    const coreLessonResponse = new Promise<Response>((resolve) => { resolveCoreLesson = resolve })
+    const loginRequired = vi.fn()
+    let lessonReads = 0
+    let visualRunReads = 0
+    window.addEventListener(LOGIN_REQUIRED_EVENT, loginRequired)
+    try {
+      seedCompletedJourney()
+      vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+        const path = String(input)
+        if (path === '/api/v1/document-versions/version-1/progress/snapshot') {
+          return Response.json({ stage: 'READY', percentage: 100, processedPages: 12, totalPages: 12, complete: true })
+        }
+        if (path === '/api/v1/assistant-runs/preparation-run-1') {
+          return Response.json(runSnapshot('preparation-run-1', 'COMPLETED', 'version-1'))
+        }
+        if (path === '/api/v1/document-versions/version-1/teaching-plans/latest') {
+          return Response.json(planFixture('plan-1', 'version-1', true))
+        }
+        if (path === '/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=plan-1'
+          || path === '/api/v1/assistant-runs/teaching-run-1') {
+          return Response.json(runSnapshot('teaching-run-1', 'COMPLETED'))
+        }
+        if (path === '/api/v1/teaching-plans/plan-1/illustrated-lessons/latest') {
+          lessonReads += 1
+          return lessonReads === 1
+            ? Response.json(lessonFixture('lesson-1'))
+            : coreLessonResponse
+        }
+        if (path === '/api/v1/assistant-runs/latest?mode=VISUAL_ENRICHMENT&subjectId=plan-1') {
+          visualRunReads += 1
+          return visualResponse
+        }
+        return new Response(null, { status: 404 })
+      }))
+
+      const mounted = await mountHandoff()
+      wrapper = mounted.wrapper
+      await vi.advanceTimersByTimeAsync(0)
+      await flushPromises()
+
+      expect(visualRunReads).toBe(1)
+      await vi.advanceTimersByTimeAsync(1_250)
+      await flushPromises()
+      expect(lessonReads).toBe(2)
+
+      resolveVisual(new Response(null, { status: 401 }))
+      await flushPromises()
+      expect(loginRequired).toHaveBeenCalledOnce()
+      expect(wrapper.text()).toContain('登录后即可保留这次选择')
+
+      resolveCoreLesson(new Response(null, { status: 401 }))
+      await flushPromises()
+      expect(loginRequired).toHaveBeenCalledOnce()
+      expect(vi.getTimerCount()).toBe(0)
+
+      const readsAfterLogin = { lessonReads, visualRunReads }
+      await vi.advanceTimersByTimeAsync(30_000)
+      await flushPromises()
+      expect({ lessonReads, visualRunReads }).toEqual(readsAfterLogin)
+    } finally {
+      window.removeEventListener(LOGIN_REQUIRED_EVENT, loginRequired)
+      wrapper?.unmount()
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not trigger login for a stale visual authorization response', async () => {
+    vi.useFakeTimers()
+    let wrapper: Awaited<ReturnType<typeof mountHandoff>>['wrapper'] | undefined
+    let resolveVisual!: (response: Response) => void
+    const visualResponse = new Promise<Response>((resolve) => { resolveVisual = resolve })
+    const loginRequired = vi.fn()
+    window.addEventListener(LOGIN_REQUIRED_EVENT, loginRequired)
+    try {
+      seedCompletedJourney()
+      vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+        const path = String(input)
+        if (path === '/api/auth/csrf') {
+          return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+        }
+        if (path === '/api/v1/bgg/games/999/import') return new Promise<Response>(() => undefined)
+        if (path === '/api/v1/document-versions/version-1/progress/snapshot') {
+          return Response.json({ stage: 'READY', percentage: 100, processedPages: 12, totalPages: 12, complete: true })
+        }
+        if (path === '/api/v1/assistant-runs/preparation-run-1') {
+          return Response.json(runSnapshot('preparation-run-1', 'COMPLETED', 'version-1'))
+        }
+        if (path === '/api/v1/document-versions/version-1/teaching-plans/latest') {
+          return Response.json(planFixture('plan-1', 'version-1', true))
+        }
+        if (path === '/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=plan-1') {
+          return Response.json(runSnapshot('teaching-run-1', 'COMPLETED'))
+        }
+        if (path === '/api/v1/assistant-runs/teaching-run-1') {
+          return Response.json(runSnapshot('teaching-run-1', 'COMPLETED'))
+        }
+        if (path === '/api/v1/teaching-plans/plan-1/illustrated-lessons/latest') {
+          return Response.json(lessonFixture('lesson-1'))
+        }
+        if (path === '/api/v1/assistant-runs/latest?mode=VISUAL_ENRICHMENT&subjectId=plan-1') {
+          return visualResponse
+        }
+        return new Response(null, { status: 404 })
+      }))
+
+      const mounted = await mountHandoff()
+      wrapper = mounted.wrapper
+      await vi.advanceTimersByTimeAsync(0)
+      await flushPromises()
+
+      await wrapper.setProps({ game: { ...game, bggId: 999, name: '新桌游' } })
+      await flushPromises()
+      resolveVisual(new Response(null, { status: 401 }))
+      await flushPromises()
+
+      expect(loginRequired).not.toHaveBeenCalled()
+      expect(wrapper.text()).not.toContain('登录后即可保留这次选择')
+    } finally {
+      window.removeEventListener(LOGIN_REQUIRED_EVENT, loginRequired)
+      wrapper?.unmount()
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not trigger login for a stale lesson authorization response', async () => {
+    vi.useFakeTimers()
+    let wrapper: Awaited<ReturnType<typeof mountHandoff>>['wrapper'] | undefined
+    let resolveLesson!: (response: Response) => void
+    const lessonResponse = new Promise<Response>((resolve) => { resolveLesson = resolve })
+    const loginRequired = vi.fn()
+    window.addEventListener(LOGIN_REQUIRED_EVENT, loginRequired)
+    try {
+      seedCompletedJourney()
+      vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+        const path = String(input)
+        if (path === '/api/auth/csrf') {
+          return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+        }
+        if (path === '/api/v1/bgg/games/999/import') return new Promise<Response>(() => undefined)
+        if (path === '/api/v1/document-versions/version-1/progress/snapshot') {
+          return Response.json({ stage: 'READY', percentage: 100, processedPages: 12, totalPages: 12, complete: true })
+        }
+        if (path === '/api/v1/assistant-runs/preparation-run-1') {
+          return Response.json(runSnapshot('preparation-run-1', 'COMPLETED', 'version-1'))
+        }
+        if (path === '/api/v1/document-versions/version-1/teaching-plans/latest') {
+          return Response.json(planFixture('plan-1', 'version-1', true))
+        }
+        if (path === '/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=plan-1') {
+          return Response.json(runSnapshot('teaching-run-1', 'COMPLETED'))
+        }
+        if (path === '/api/v1/teaching-plans/plan-1/illustrated-lessons/latest') {
+          return lessonResponse
+        }
+        return new Response(null, { status: 404 })
+      }))
+
+      const mounted = await mountHandoff()
+      wrapper = mounted.wrapper
+      await vi.advanceTimersByTimeAsync(0)
+      await flushPromises()
+
+      await wrapper.setProps({ game: { ...game, bggId: 999, name: '新桌游' } })
+      await flushPromises()
+      resolveLesson(new Response(null, { status: 401 }))
+      await flushPromises()
+
+      expect(loginRequired).not.toHaveBeenCalled()
+      expect(wrapper.text()).not.toContain('登录后即可保留这次选择')
+    } finally {
+      window.removeEventListener(LOGIN_REQUIRED_EVENT, loginRequired)
+      wrapper?.unmount()
+      vi.useRealTimers()
+    }
+  })
+
   it('retries failed teaching preparation without downloading or binding the game twice', async () => {
     const requests: Array<{ path: string; options?: RequestInit }> = []
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, options?: RequestInit) => {
@@ -640,7 +1677,7 @@ describe('RecommendationRulebookHandoff', () => {
         teachingHandoffState: 'LAUNCHED', teachingPreparationRunId: 'preparation-failed',
       }, { status: 202 })
       if (path === '/api/v1/assistant-runs/preparation-failed') {
-        const snapshot = runSnapshot('preparation-failed', 'FAILED')
+        const snapshot = runSnapshot('preparation-failed', 'FAILED', 'version-1')
         const failed = { ...snapshot, run: { ...snapshot.run, lastErrorCode: 'TEACHING_PREPARATION_FAILED' } }
         return Response.json(failed)
       }
@@ -650,7 +1687,7 @@ describe('RecommendationRulebookHandoff', () => {
           teachingHandoffState: 'LAUNCHED', teachingPreparationRunId: 'preparation-retry',
         }, { status: 202 })
       }
-      if (path === '/api/v1/assistant-runs/preparation-retry') return Response.json(runSnapshot('preparation-retry', 'COMPLETED'))
+      if (path === '/api/v1/assistant-runs/preparation-retry') return Response.json(runSnapshot('preparation-retry', 'COMPLETED', 'version-1'))
       if (path === '/api/v1/document-versions/version-1/teaching-plans/latest') return Response.json(planFixture('plan-1', 'version-1'))
       if (path === '/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=plan-1') return Response.json(runSnapshot('teaching-run-1', 'COMPLETED'))
       if (path === '/api/v1/teaching-plans/plan-1/illustrated-lessons/latest') return Response.json(lessonFixture('lesson-1'))
@@ -706,7 +1743,7 @@ describe('RecommendationRulebookHandoff', () => {
         teachingHandoffState: 'LAUNCHED', teachingPreparationRunId: 'preparation-run-1',
         teachingNextAction: 'OPEN_PROGRESS',
       }, { status: 202 })
-      if (path === '/api/v1/assistant-runs/preparation-run-1') return Response.json(runSnapshot('preparation-run-1', 'COMPLETED'))
+      if (path === '/api/v1/assistant-runs/preparation-run-1') return Response.json(runSnapshot('preparation-run-1', 'COMPLETED', 'version-1'))
       if (path === '/api/v1/document-versions/version-1/teaching-plans/latest') return Response.json(planFixture('plan-1', 'version-1'))
       if (path === '/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=plan-1') {
         const snapshot = runSnapshot('teaching-degraded', 'DEGRADED')
@@ -770,7 +1807,7 @@ describe('RecommendationRulebookHandoff', () => {
         }
         if (path === '/api/v1/assistant-runs/preparation-run-1') {
           return Response.json({
-            ...runSnapshot('preparation-run-1', 'COMPLETED'),
+            ...runSnapshot('preparation-run-1', 'COMPLETED', 'version-1'),
             activities: [{
               sequence: 1,
               operation: 'organizeTeachingOutline',
@@ -879,7 +1916,7 @@ describe('RecommendationRulebookHandoff', () => {
           return Response.json({ stage: 'READY', percentage: 100, processedPages: 20, totalPages: 20, complete: true })
         }
         if (path === '/api/v1/assistant-runs/preparation-run-1') {
-          return Response.json({ ...runSnapshot('preparation-run-1', 'LESSON_PLANNING'), activities })
+          return Response.json({ ...runSnapshot('preparation-run-1', 'LESSON_PLANNING', 'version-1'), activities })
         }
         return new Response(null, { status: 404 })
       }))
@@ -956,7 +1993,7 @@ describe('RecommendationRulebookHandoff', () => {
           })
         }
         if (path === '/api/v1/assistant-runs/preparation-stream') {
-          return Response.json(runSnapshot('preparation-stream', 'LESSON_PLANNING'))
+          return Response.json(runSnapshot('preparation-stream', 'LESSON_PLANNING', 'version-stream'))
         }
         return new Response(null, { status: 404 })
       }))
@@ -991,7 +2028,8 @@ describe('RecommendationRulebookHandoff', () => {
       expect(status.attributes('data-player-work-capability')).toBe('rulebook')
       const generationSteps = wrapper.get('[data-testid="recommendation-teaching-generation-steps"]')
       expect(generationSteps.text()).toContain('通读整本规则书，形成整局认识并规划章节')
-      expect(generationSteps.text()).toContain('图片规则书先逐页识别可见文字')
+      expect(generationSteps.text()).toContain('图片页直接生成带页码绑定的结构化规则事实')
+      expect(generationSteps.text()).toContain('只有结构化契约未通过时才退回 OCR 并修正一次')
       expect(generationSteps.text()).toContain('按页面整理规则组')
       expect(generationSteps.text()).toContain('读取当前章节绑定的规则页与引用')
       expect(generationSteps.text()).toContain('依据原文生成玩家可以直接照做的讲解步骤')

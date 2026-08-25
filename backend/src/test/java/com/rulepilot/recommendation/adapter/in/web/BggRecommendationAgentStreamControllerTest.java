@@ -22,11 +22,14 @@ import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.Out
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ProgressStage;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ProgressUpdate;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendationProfile;
+import com.rulepilot.recommendation.application.BoardGameRecommendationProperties;
+import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
-import java.nio.charset.StandardCharsets;
 import org.junit.jupiter.api.Test;
 import org.springframework.core.task.SyncTaskExecutor;
 import org.springframework.http.MediaType;
@@ -36,18 +39,23 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 class BggRecommendationAgentStreamControllerTest {
 
     @Test
-    void keepsAThirtyFiveSecondTransportEnvelopeAroundTheThirtySecondAgentBudget() {
+    void keepsAFiveSecondTransportGraceBeyondTheConfiguredAgentBudget() {
         BoardGameRecommendationAgent agent = mock(BoardGameRecommendationAgent.class);
         BggRecommendationPresentation presentation = mock(BggRecommendationPresentation.class);
         var controller = new BggRecommendationAgentStreamController(
-                agent, presentation, ignored -> {});
+                agent,
+                presentation,
+                ignored -> {},
+                null,
+                new BoardGameRecommendationProperties(
+                        8, 3, new BigDecimal("0.66"), Duration.ofSeconds(45)));
 
         SseEmitter emitter = controller.converse(
                 new BggRecommendationAgentController.RecommendationConversationRequest(null, "四人区控"),
                 "zh-CN",
                 () -> "player");
 
-        assertThat(emitter.getTimeout()).isEqualTo(35_000L);
+        assertThat(emitter.getTimeout()).isEqualTo(50_000L);
         verify(agent, never()).converse(any(), any(), any(), any(), any());
     }
 

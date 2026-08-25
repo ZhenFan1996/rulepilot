@@ -176,16 +176,12 @@ rulepilot:
   visual:
     provider: ${VISUAL_PROVIDER:fake}
     model-provider: ${VISUAL_MODEL_PROVIDER:gemini}
-    # Keep the application default aligned with the shipped environment example: at most five high-value sections
-    # receive optional crop work, so vision cannot dominate an otherwise complete text lesson.
-    max-sections: ${VISUAL_MAX_SECTIONS:5}
-    # One typed section plan may attach zero or several owned visuals to each step, while this total result budget
-    # bounds model output, native crop tools, persistence growth, and player-facing density together.
-    max-results-per-section: ${VISUAL_MAX_RESULTS_PER_SECTION:6}
+    # Every cited, sufficiently evidenced section may receive optional crop work. Candidate images travel in bounded
+    # per-call batches; the visual Agent decides when another finite batch is no longer useful.
     # Complete post-publication positioning and visual audits use their own bounded pool.
     request-parallelism: ${VISUAL_REQUEST_PARALLELISM:10}
-    # OCR is page-local and I/O bound. It finishes before semantic interpretation, so its provider capacity is not
-    # coupled to the lower semantic concurrency or to the later full visual audit.
+    # OCR is page-local and I/O bound, but it runs only after an image-to-typed-facts contract failure. Its repair
+    # capacity is independent of ordinary semantic concurrency and the later full visual audit.
     ocr-request-parallelism: ${VISUAL_OCR_REQUEST_PARALLELISM:10}
     # Structured rule interpretation is heavier and retains the measured four-request provider headroom.
     semantic-request-parallelism: ${VISUAL_SEMANTIC_REQUEST_PARALLELISM:4}
@@ -193,6 +189,9 @@ rulepilot:
     # page still needs a concrete gameplay observation before it can create a teaching topic.
     coverage-probe-pages: ${VISUAL_COVERAGE_PROBE_PAGES:4}
     location-timeout: ${VISUAL_LOCATION_TIMEOUT:PT45S}
+    # Legacy callers without an observable Agent run still share one workflow wall deadline across every candidate
+    # batch. This bounds elapsed time without imposing a final image or section count.
+    compatibility-workflow-timeout: ${VISUAL_COMPATIBILITY_WORKFLOW_TIMEOUT:PT10M}
     # Full-page icon inventories are deliberately richer than crop localization responses and large VL models can
     # need more than 45 seconds on dense reference sheets. One immediately-started window shares this deadline, so
     # several slow provider calls cannot multiply the player-visible wait.
@@ -303,7 +302,7 @@ rulepilot:
       model-candidate-limit: ${BGG_RECOMMENDATION_MODEL_CANDIDATE_LIMIT:8}
       result-count: ${BGG_RECOMMENDATION_RESULT_COUNT:3}
       diversity-overlap-limit: ${BGG_RECOMMENDATION_DIVERSITY_OVERLAP_LIMIT:0.66}
-      timeout: ${BGG_RECOMMENDATION_AGENT_TIMEOUT:PT30S}
+      timeout: ${BGG_RECOMMENDATION_AGENT_TIMEOUT:PT45S}
       web-research:
         enabled: ${BGG_RECOMMENDATION_WEB_RESEARCH_ENABLED:false}
         api-key: ${WEB_SEARCH_API_KEY:${QWEN_API_KEY:}}

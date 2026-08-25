@@ -207,8 +207,7 @@ test('does not label a catalog game as unowned while its import membership read 
   await expect(page.locator('.animate-pulse')).toHaveCount(0)
 })
 
-test('shows an exact failed preparation and stops claiming or observing background work', async ({ page }) => {
-  let importReads = 0
+test('shows an exact failed preparation and stops polling its terminal run', async ({ page }) => {
   let preparationReads = 0
   await page.route('**/api/**', async route => {
     const url = new URL(route.request().url())
@@ -218,7 +217,6 @@ test('shows an exact failed preparation and stops claiming or observing backgrou
       json: [ownedDocument('document-1', 'edition-1', 'version-1', 'Official Rules')],
     })
     if (url.pathname === '/api/v1/documents/official-imports') {
-      importReads += 1
       return route.fulfill({ json: [] })
     }
     if (url.pathname === '/api/v1/documents/upload-teaching-handoffs') return route.fulfill({ json: [{
@@ -242,10 +240,9 @@ test('shows an exact failed preparation and stops claiming or observing backgrou
   await expect(page.getByText('讲解准备没有完成')).toBeVisible()
   await expect(page.getByText('讲解任务已持久化，正在后台准备')).toHaveCount(0)
   await expect(page.getByRole('link', { name: /去我的讲解重试/ })).toHaveAttribute('href', '/lessons')
-  const settledImportReads = importReads
+  await expect.poll(() => preparationReads).toBeGreaterThan(0)
   const settledPreparationReads = preparationReads
   await page.clock.fastForward(12_000)
-  expect(importReads).toBe(settledImportReads)
   expect(preparationReads).toBe(settledPreparationReads)
 })
 

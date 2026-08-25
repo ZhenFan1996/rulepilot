@@ -8,27 +8,28 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rulepilot.catalog.BggGameType;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.Details;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.Game;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.Ranking;
-import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ConversationRequest;
-import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.InteractionPreference;
-import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendationProfile;
-import com.rulepilot.recommendation.application.RecommendationAgentState.CandidateUse;
-import com.rulepilot.recommendation.application.RecommendationAgentState.PublicationSeed;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.GameResearch;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Observation;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Research;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Source;
+import com.rulepilot.recommendation.CandidateClaim;
+import com.rulepilot.recommendation.CandidateObservation;
+import com.rulepilot.recommendation.ConstraintRange;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ConversationRequest;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.InteractionPreference;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.Outcome;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendationProfile;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ReplyPartRole;
+import com.rulepilot.recommendation.application.RecommendationAgentState.CandidateUse;
+import com.rulepilot.recommendation.application.RecommendationAgentState.PublicationSeed;
 import java.math.BigDecimal;
 import java.time.Duration;
-import java.util.ArrayList;
 import java.util.List;
-import java.util.function.Consumer;
 import org.junit.jupiter.api.Test;
 
 class RecommendationPublicationTest {
@@ -36,329 +37,158 @@ class RecommendationPublicationTest {
     private final ObjectMapper json = new ObjectMapper();
 
     @Test
-    void publishesNaturalParagraphsAndCandidateScopedCardJudgmentsThroughOnePermit() throws Exception {
-        Fixture fixture = fixture(List.of(101));
-        RecommendationPublication.Permit permit = fixture.publication.permit(
-                decision(101),
+    void publishesTheTypedLeadAndTwoEvidenceBackedPartsForEverySeededCard() {
+        Fixture fixture = fixture(
+                List.of(101, 102),
+                new RecommendationProfile(3, 60, null, BggGameType.ALL, InteractionPreference.ANY),
+                "三个人，六十分钟以内");
+        String lead = "我按你给出的三人桌和一小时边界整理了两款，先看各自的明确依据与选择边界。";
+
+        var response = fixture.publication.publish(
                 fixture.state,
-                seed(101));
-        List<String> streamed = new ArrayList<>();
-        RecommendationPublication.Session session = fixture.publication.open(
-                permit, fixture.state, "zh-CN");
+                new PublicationSeed(
+                        List.of(102, 101),
+                        List.of(),
+                        CandidateUse.PUBLISH_CARDS,
+                        2,
+                        lead),
+                "zh-CN");
 
-        acceptAndDeliver(session, streamed::add, block(
-                "MESSAGE",
-                "NARRATIVE",
-                null,
-                List.of("B101:mechanics"),
-                "我会先看《Signal Grove》。它的合作机制让三个人很容易围绕同一个目标讨论。"));
-        assertThat(streamed)
-                .as("a complete evidence-validated paragraph reaches the player before the writer finishes")
-                .containsExactly("我会先看《Signal Grove》。它的合作机制让三个人很容易围绕同一个目标讨论。");
-        acceptAndDeliver(session, streamed::add, block(
-                "MESSAGE",
-                "NARRATIVE",
-                null,
-                List.of("B101:complexity"),
-                "复杂度是 2.8，入门压力不算大；不过仍需要有人把核心流程讲清楚。"));
-        String completeReply = "我会先看《Signal Grove》。它的合作机制让三个人很容易围绕同一个目标讨论。"
-                + "\n\n复杂度是 2.8，入门压力不算大；不过仍需要有人把核心流程讲清楚。";
-        assertThat(streamed).containsExactly(
-                "我会先看《Signal Grove》。它的合作机制让三个人很容易围绕同一个目标讨论。",
-                completeReply);
-        acceptAndDeliver(session, streamed::add, block(
-                "CARD",
-                "WHY_FIT",
-                101,
-                List.of("B101:mechanics", "B101:complexity"),
-                "合作机制有共同焦点，复杂度也在这桌可接受的范围内。"));
-        acceptAndDeliver(session, streamed::add, block(
-                "CARD",
-                "TRADEOFF",
-                101,
-                List.of("B101:complexity"),
-                "它不是完全不需要讲规则的派对游戏。"));
-
-        var response = finishAndDeliver(session, streamed::add);
-        assertThat(streamed).containsExactly(
-                "我会先看《Signal Grove》。它的合作机制让三个人很容易围绕同一个目标讨论。",
-                completeReply);
-        assertThat(response.assistantMessage()).isEqualTo(completeReply);
-        assertThat(response.recommendationLead()).isEqualTo(completeReply);
-        assertThat(response.games()).singleElement().satisfies(recommended -> {
-            assertThat(recommended.game().ranking().bggId()).isEqualTo(101);
-            assertThat(recommended.replyParts()).hasSize(2).allSatisfy(part ->
-                    assertThat(part.claim().evidence())
-                            .extracting(com.rulepilot.recommendation.CandidateObservation::bggId)
-                            .containsOnly(101));
+        assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
+        assertThat(response.assistantMessage()).isEqualTo(lead);
+        assertThat(response.recommendationLead()).isEqualTo(lead);
+        assertThat(response.games())
+                .extracting(game -> game.game().ranking().bggId())
+                .containsExactly(102, 101);
+        assertThat(response.games()).allSatisfy(game -> {
+            assertThat(game.matches()).isEmpty();
+            assertThat(game.tradeoffs()).isEmpty();
+            assertThat(game.reasons()).isEmpty();
+            assertThat(game.replyParts())
+                    .extracting(BoardGameRecommendationAgent.RecommendationReplyPart::role)
+                    .containsExactly(ReplyPartRole.WHY_FIT, ReplyPartRole.TRADEOFF);
+            assertThat(game.replyParts()).allSatisfy(part -> {
+                assertThat(part.claim().bggId()).isEqualTo(game.game().ranking().bggId());
+                assertThat(part.claim().evidence()).isNotEmpty().allSatisfy(evidence ->
+                        assertThat(evidence.bggId()).isEqualTo(game.game().ranking().bggId()));
+                assertThat(part.claim().text()).isNotBlank();
+            });
         });
-        assertThat(fixture.state.finalResponseGameIds).containsExactly(101);
-        assertThat(fixture.state.finalResponseEvidenceIds)
-                .containsExactlyInAnyOrder("B101:mechanics", "B101:complexity");
+        assertThat(fixture.state.finalResponseGameIds).containsExactlyInAnyOrder(101, 102);
+        assertThat(fixture.state.finalResponseEvidenceIds).isNotEmpty();
         assertThat(fixture.state.actions).containsExactly("RECOMMEND_GAMES");
     }
 
     @Test
-    void rejectsTheRetiredDuplicateSelectionEvidenceContract() {
-        Fixture fixture = fixture(List.of(101));
-
-        assertFailure(
-                () -> fixture.publication.permit(
-                        json("""
-                                {"requestedCount":1,"selections":[{"bggId":101,"internalEvidenceIds":["B101:mechanics"]}],"referenceBggIds":[]}
-                                """),
-                        fixture.state,
-                        seed(101)),
-                RecommendationPublication.Code.OBJECT_FIELDS_INVALID);
-        assertUncommitted(fixture.state);
-    }
-
-    @Test
-    void rejectsAnUnverifiedIdentityEvenWhenASeedClaimsIt() {
-        Fixture fixture = fixture(List.of(101));
-        when(fixture.runtime.recommendableIds(fixture.state)).thenReturn(List.of(101, 999));
-
-        assertFailure(
-                () -> fixture.publication.permit(
-                        decision(999),
-                        fixture.state,
-                        seed(999)),
-                RecommendationPublication.Code.FINAL_ID_NOT_VERIFIED);
-        assertUncommitted(fixture.state);
-    }
-
-    @Test
-    void localizesALateCardFailureWithoutRetractingValidatedProseOrDiscardingVerifiedCards() throws Exception {
+    void selectsTheExplicitCountInSeedOrderAndReportsAnHonestAvailabilityShortfall() {
         Fixture fixture = fixture(List.of(101, 102));
+
         RecommendationPublication.Permit permit = fixture.publication.permit(
-                decision(101),
                 fixture.state,
-                new PublicationSeed(List.of(101, 102), List.of(), CandidateUse.PUBLISH_CARDS));
-        List<String> streamed = new ArrayList<>();
-        RecommendationPublication.Session session = fixture.publication.open(
-                permit, fixture.state, "zh-CN");
-        acceptAndDeliver(session, streamed::add, block(
-                "MESSAGE", "NARRATIVE", null, List.of("B101:mechanics"), "先看这一款。"));
-
-        assertFailure(
-                () -> session.acceptBlock(block(
-                        "CARD", "WHY_FIT", 101, List.of("B102:playerCount"), "错误地借用了另一款的事实。")),
-                RecommendationPublication.Code.BLOCK_EVIDENCE_NOT_GROUNDED);
-        assertThat(streamed)
-                .as("an independently validated paragraph is durable even if a later card block is rejected")
-                .containsExactly("先看这一款。");
-        assertUncommitted(fixture.state);
-
-        var recovered = recoverAndDeliver(
-                session, streamed::add, "BLOCK_EVIDENCE_NOT_GROUNDED");
-
-        assertThat(recovered.outcome()).isEqualTo(BoardGameRecommendationAgent.Outcome.RECOMMENDATIONS);
-        assertThat(recovered.games())
-                .extracting(game -> game.game().ranking().bggId())
-                .containsExactly(101);
-        assertThat(recovered.assistantMessage())
-                .startsWith("先看这一款。")
-                .contains("后半段没有完整生成")
-                .doesNotContain("错误地借用");
-        assertThat(recovered.games()).singleElement().satisfies(game ->
-                assertThat(game.replyParts()).singleElement().satisfies(part -> {
-                    assertThat(part.role()).isEqualTo(BoardGameRecommendationAgent.ReplyPartRole.WHY_FIT);
-                    assertThat(part.claim().text()).isNotBlank();
-                    assertThat(part.claim().evidence())
-                            .allSatisfy(evidence -> assertThat(evidence.bggId()).isEqualTo(101));
-                }));
-        assertThat(streamed).containsExactly("先看这一款。", recovered.assistantMessage());
-        assertThat(fixture.state.finalResponseGameIds).containsExactly(101);
-        assertThat(fixture.state.finalResponseEvidenceIds).isNotEmpty();
-        assertThat(fixture.state.actions)
-                .containsExactly(
-                        "RECOMMENDATION_PUBLICATION_RECOVERED:BLOCK_EVIDENCE_NOT_GROUNDED",
-                        "RECOMMEND_GAMES");
-    }
-
-    @Test
-    void rejectsAnUngroundedMessageBeforeAnyTextCrossesTheStreamBoundary() throws Exception {
-        Fixture fixture = fixture(List.of(101, 102));
-        RecommendationPublication.Permit permit = fixture.publication.permit(
-                decision(101),
+                new PublicationSeed(
+                        List.of(102, 101),
+                        List.of(),
+                        CandidateUse.PUBLISH_CARDS,
+                        3,
+                        "先给你目前通过边界的候选。"));
+        var response = fixture.publication.publish(
                 fixture.state,
-                seed(101));
-        List<String> streamed = new ArrayList<>();
-        RecommendationPublication.Session session = fixture.publication.open(
-                permit, fixture.state, "zh-CN");
-
-        assertFailure(
-                () -> session.acceptBlock(block(
-                        "MESSAGE",
-                        "NARRATIVE",
-                        101,
-                        List.of("B102:mechanics"),
-                        "这句话错误地借用了另一款游戏的资料。")),
-                RecommendationPublication.Code.BLOCK_EVIDENCE_NOT_GROUNDED);
-        assertThat(streamed).isEmpty();
-        assertUncommitted(fixture.state);
-    }
-
-    @Test
-    void acceptsEveryKnownSameCandidateObservationNeededByOneFactualParagraph() throws Exception {
-        Fixture fixture = fixture(List.of(101));
-        RecommendationPublication.Permit permit = fixture.publication.permit(
-                decision(101),
-                fixture.state,
-                seed(101));
-        RecommendationPublication.Session session = fixture.publication.open(
-                permit, fixture.state, "zh-CN");
-        List<String> paragraphEvidence = List.of(
-                "B101:playerCount",
-                "B101:durationMinutes",
-                "B101:complexity",
-                "B101:bggType",
-                "B101:categories",
-                "B101:mechanics",
-                "B101:minimumAge",
-                "B101:bestWith",
-                "B101:recommendedWith");
-
-        acceptAndDeliver(session, ignored -> {}, block(
-                "MESSAGE",
-                "NARRATIVE",
-                101,
-                paragraphEvidence,
-                "这一段同时概括人数、时长、复杂度、类型和机制，但每条事实仍只属于这一款游戏。"));
-        acceptAndDeliver(session, ignored -> {}, block(
-                "CARD", "WHY_FIT", 101, List.of("B101:mechanics"), "合作机制给了三个人共同目标。"));
-
-        var response = finishAndDeliver(session, ignored -> {});
-        assertThat(response.outcome()).isEqualTo(BoardGameRecommendationAgent.Outcome.RECOMMENDATIONS);
-        assertThat(fixture.state.finalResponseEvidenceIds).containsAll(paragraphEvidence);
-    }
-
-    @Test
-    void responseProjectionFailureCanRecoverWithVerifiedCardsWithoutHalfPublishedState() throws Exception {
-        Fixture fixture = fixture(List.of(101));
-        RecommendationPublication.Permit permit = fixture.publication.permit(
-                decision(101),
-                fixture.state,
-                seed(101));
-        RecommendationPublication.Session session = fixture.publication.open(
-                permit, fixture.state, "zh-CN");
-        acceptAndDeliver(session, ignored -> {}, block(
-                "MESSAGE", "NARRATIVE", null, List.of("B101:mechanics"), "先看这一款。"));
-        acceptAndDeliver(session, ignored -> {}, block(
-                "CARD", "WHY_FIT", 101, List.of("B101:mechanics"), "合作机制适合一起讨论。"));
-        when(fixture.runtime.responseSources(eq(fixture.state), anyList(), anySet()))
-                .thenThrow(new IllegalStateException("source projection failed"));
-
-        assertThatThrownBy(session::finish)
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessage("source projection failed");
-        assertUncommitted(fixture.state);
-
-        var recovered = recoverAndDeliver(
-                session, ignored -> {}, "PUBLICATION_MODEL_FAILED");
-
-        assertThat(recovered.outcome()).isEqualTo(BoardGameRecommendationAgent.Outcome.RECOMMENDATIONS);
-        assertThat(recovered.assistantMessage()).startsWith("先看这一款。");
-        assertThat(recovered.games()).singleElement().satisfies(game -> {
-            assertThat(game.game().ranking().bggId()).isEqualTo(101);
-            assertThat(game.replyParts()).singleElement().satisfies(part ->
-                    assertThat(part.claim().text()).isEqualTo("合作机制适合一起讨论。"));
-        });
-        assertThat(fixture.state.finalResponseGameIds).containsExactly(101);
-        assertThat(fixture.state.finalResponseEvidenceIds).containsExactly("B101:mechanics");
-    }
-
-    @Test
-    void neverTurnsAPlayerDeliveryFailureIntoAFakeRecoveredPublication() throws Exception {
-        Fixture fixture = fixture(List.of(101));
-        RecommendationPublication.Permit permit = fixture.publication.permit(
-                decision(101),
-                fixture.state,
-                seed(101));
-        RecommendationPublication.Session session = fixture.publication.open(
-                permit,
-                fixture.state,
+                new PublicationSeed(
+                        List.of(102, 101),
+                        List.of(),
+                        CandidateUse.PUBLISH_CARDS,
+                        3,
+                        "先给你目前通过边界的候选。"),
                 "zh-CN");
-        session.acceptBlock(block(
-                "MESSAGE", "NARRATIVE", null, List.of(), "这段完整内容已经通过模型协议校验。"));
-        assertThatThrownBy(() -> deliverPending(session, ignored -> {
-                    throw new IllegalStateException("client disconnected");
-                }))
-                .isInstanceOf(RecommendationPublication.DeliveryFailure.class)
-                .hasRootCauseMessage("client disconnected");
-        assertUncommitted(fixture.state);
+
+        assertThat(permit.selectedGames())
+                .extracting(game -> game.ranking().bggId())
+                .containsExactly(102, 101);
+        assertThat(response.games())
+                .extracting(game -> game.game().ranking().bggId())
+                .containsExactly(102, 101);
+        assertThat(response.shortfall()).satisfies(shortfall -> {
+            assertThat(shortfall.requestedCount()).isEqualTo(3);
+            assertThat(shortfall.availableCount()).isEqualTo(2);
+        });
+        assertThat(response.harness().actions()).contains("RECOMMENDATION_VERIFIED_SET_SHORTFALL");
     }
 
     @Test
-    void aWriterFailureUsesOnlyAnExplicitSatisfiedConstraintAsWhyFit() throws Exception {
+    void missingOrOverlongPlayerLeadUsesALocalNaturalLeadWithoutDiscardingCards() {
         Fixture fixture = fixture(List.of(101));
-        RecommendationPublication.Permit permit = fixture.publication.permit(
-                decision(101),
+        String overlong = "很".repeat(RecommendationAgentState.MAX_PLAYER_LEAD_CODE_POINTS + 1);
+
+        var missing = fixture.publication.publish(
                 fixture.state,
-                seed(101));
-        List<String> streamed = new ArrayList<>();
-        RecommendationPublication.Session session = fixture.publication.open(
-                permit, fixture.state, "zh-CN");
+                new PublicationSeed(List.of(101), List.of(), CandidateUse.PUBLISH_CARDS, 1),
+                "zh-CN");
+        Fixture secondFixture = fixture(List.of(101));
+        var invalid = secondFixture.publication.publish(
+                secondFixture.state,
+                new PublicationSeed(List.of(101), List.of(), CandidateUse.PUBLISH_CARDS, 1, overlong),
+                "en");
 
-        var recovered = recoverAndDeliver(
-                session, streamed::add, "PUBLICATION_TIME_BUDGET");
-
-        assertThat(recovered.assistantMessage()).contains("确认这些候选对应到具体桌游");
-        assertThat(streamed).containsExactly(recovered.assistantMessage());
-        assertThat(recovered.games()).singleElement().satisfies(game ->
-                assertThat(game.replyParts()).singleElement().satisfies(part -> {
-                    assertThat(part.role()).isEqualTo(BoardGameRecommendationAgent.ReplyPartRole.WHY_FIT);
-                    assertThat(part.claim().type())
-                            .isEqualTo(com.rulepilot.recommendation.CandidateClaim.Type.CONSTRAINT_FIT);
-                    assertThat(part.claim().relation())
-                            .isEqualTo(com.rulepilot.recommendation.CandidateClaim.Relation.SATISFIED);
-                    assertThat(part.claim().evidence())
-                            .allSatisfy(evidence -> assertThat(evidence.bggId()).isEqualTo(101));
-                }));
-        assertThat(fixture.state.finalResponseEvidenceIds).isNotEmpty();
+        assertThat(missing.assistantMessage())
+                .contains("已经核对", "选择边界")
+                .doesNotContain("失败", "fallback");
+        assertThat(invalid.assistantMessage())
+                .contains("verified slate", "boundary")
+                .doesNotContain(overlong, "fallback");
+        assertThat(missing.games()).singleElement().satisfies(game ->
+                assertThat(game.replyParts()).hasSize(2));
+        assertThat(invalid.games()).singleElement().satisfies(game ->
+                assertThat(game.replyParts()).hasSize(2));
+        assertThat(missing.harness().fallbackUsed()).isFalse();
+        assertThat(invalid.harness().fallbackUsed()).isFalse();
     }
 
     @Test
-    void aWriterFailureLabelsMetadataAsANeutralVerifiedFactWhenNoPreferenceWasPersisted()
-            throws Exception {
-        Fixture fixture = fixture(
-                List.of(101),
-                RecommendationProfile.empty(),
-                "请直接给我一款候选");
-        RecommendationPublication.Permit permit = fixture.publication.permit(
-                decision(101),
+    void usesAnExplicitSatisfiedConstraintForWhyFitAndASoftConflictForTradeoff() {
+        RecommendationProfile profile = new RecommendationProfile(
+                ConstraintRange.hardExact(3),
+                ConstraintRange.hardAtMost(60),
+                new ConstraintRange<>(
+                        null,
+                        new BigDecimal("2.0"),
+                        ConstraintRange.Strength.SOFT,
+                        "最好别太重",
+                        1),
+                BggGameType.ALL,
+                InteractionPreference.ANY);
+        Fixture fixture = fixture(List.of(101), profile, "三个人，一小时内，最好别太重");
+
+        var response = fixture.publication.publish(
                 fixture.state,
-                seed(101));
-        List<String> streamed = new ArrayList<>();
-        RecommendationPublication.Session session = fixture.publication.open(
-                permit, fixture.state, "zh-CN");
+                new PublicationSeed(
+                        List.of(101),
+                        List.of(),
+                        CandidateUse.PUBLISH_CARDS,
+                        1,
+                        "先看这张卡的硬条件和取舍。"),
+                "zh-CN");
 
-        var recovered = recoverAndDeliver(
-                session, streamed::add, "PUBLICATION_MODEL_FAILED");
-
-        assertThat(recovered.assistantMessage()).contains("可追溯资料");
-        assertThat(recovered.games()).singleElement().satisfies(game ->
-                assertThat(game.replyParts()).singleElement().satisfies(part -> {
-                    assertThat(part.role())
-                            .isEqualTo(BoardGameRecommendationAgent.ReplyPartRole.VERIFIED_FACT);
-                    assertThat(part.claim().type())
-                            .isNotEqualTo(com.rulepilot.recommendation.CandidateClaim.Type.PREFERENCE_INFERENCE);
-                    assertThat(part.claim().subject())
-                            .isEqualTo(part.claim().evidence().getFirst().attribute());
-                    assertThat(part.claim().text())
-                            .contains("已核对")
-                            .doesNotContain("适合", "因为");
-                }));
-        assertThat(streamed).containsExactly(recovered.assistantMessage());
-        assertThat(fixture.state.finalResponseGameIds).containsExactly(101);
+        assertThat(response.games()).singleElement().satisfies(game -> {
+            assertThat(game.replyParts()).first().satisfies(part -> {
+                assertThat(part.role()).isEqualTo(ReplyPartRole.WHY_FIT);
+                assertThat(part.claim().type()).isEqualTo(CandidateClaim.Type.CONSTRAINT_FIT);
+                assertThat(part.claim().relation()).isEqualTo(CandidateClaim.Relation.SATISFIED);
+            });
+            assertThat(game.replyParts()).element(1).satisfies(part -> {
+                assertThat(part.role()).isEqualTo(ReplyPartRole.TRADEOFF);
+                assertThat(part.claim().type()).isEqualTo(CandidateClaim.Type.CONSTRAINT_FIT);
+                assertThat(part.claim().strength()).isEqualTo(ConstraintRange.Strength.SOFT);
+                assertThat(part.claim().relation()).isEqualTo(CandidateClaim.Relation.CONFLICT);
+                assertThat(part.claim().evidence())
+                        .extracting(CandidateObservation::attribute)
+                        .containsExactly("complexity");
+            });
+        });
     }
 
     @Test
-    void aWriterFailureKeepsAttributedExperienceExplicitlyAttributed() throws Exception {
-        Fixture fixture = fixture(
-                List.of(),
-                RecommendationProfile.empty(),
-                "请直接给我一款候选");
+    void keepsResearchedExperienceAttributedInBothTheReasonAndItsBoundary() {
+        Fixture fixture = fixture(List.of(), RecommendationProfile.empty(), "请直接给我一款候选");
         fixture.state.addVerified(attributedOnlyGame(101));
         fixture.state.research = new Research(
                 List.of(new GameResearch(
@@ -366,26 +196,51 @@ class RecommendationPublicationTest {
                         List.of(new Observation("有玩家报告说首局节奏偏慢", List.of(1))))),
                 List.of(new Source(1, "体验报告", "https://example.test/report", "example.test")));
         when(fixture.runtime.recommendableIds(fixture.state)).thenReturn(List.of(101));
-        RecommendationPublication.Permit permit = fixture.publication.permit(
-                decision(101),
+
+        var response = fixture.publication.publish(
                 fixture.state,
-                seed(101));
-        RecommendationPublication.Session session = fixture.publication.open(
-                permit, fixture.state, "zh-CN");
+                new PublicationSeed(
+                        List.of(101),
+                        List.of(),
+                        CandidateUse.PUBLISH_CARDS,
+                        1,
+                        "先看有来源的体验边界。"),
+                "zh-CN");
 
-        var recovered = recoverAndDeliver(
-                session, ignored -> {}, "PUBLICATION_MODEL_FAILED");
-
-        assertThat(recovered.games()).singleElement().satisfies(game ->
-                assertThat(game.replyParts()).singleElement().satisfies(part -> {
-                    assertThat(part.role())
-                            .isEqualTo(BoardGameRecommendationAgent.ReplyPartRole.VERIFIED_FACT);
-                    assertThat(part.claim().type())
-                            .isEqualTo(com.rulepilot.recommendation.CandidateClaim.Type.ATTRIBUTED_EXPERIENCE);
-                    assertThat(part.claim().text())
-                            .contains("来源资料提到")
-                            .doesNotContain("已核对");
+        assertThat(response.games()).singleElement().satisfies(game ->
+                assertThat(game.replyParts()).allSatisfy(part -> {
+                    assertThat(part.claim().type()).isEqualTo(CandidateClaim.Type.ATTRIBUTED_EXPERIENCE);
+                    assertThat(part.claim().text()).containsAnyOf("有来源", "归因报告", "来源资料");
+                    assertThat(part.claim().evidence()).singleElement().satisfies(evidence -> {
+                        assertThat(evidence.kind()).isEqualTo(CandidateObservation.Kind.ATTRIBUTED_REPORT);
+                        assertThat(evidence.sourceIndexes()).containsExactly(1);
+                    });
                 }));
+    }
+
+    @Test
+    void rejectsAnUnverifiedOrHardIneligibleSeedBeforePublication() {
+        Fixture fixture = fixture(List.of(101));
+        when(fixture.runtime.recommendableIds(fixture.state)).thenReturn(List.of(101, 999));
+
+        assertFailure(
+                () -> fixture.publication.permit(
+                        fixture.state,
+                        new PublicationSeed(List.of(999), List.of(), CandidateUse.PUBLISH_CARDS, 1)),
+                RecommendationPublication.Code.FINAL_ID_NOT_VERIFIED);
+
+        Fixture ineligible = fixture(
+                List.of(101),
+                new RecommendationProfile(5, 60, null, BggGameType.ALL, InteractionPreference.ANY),
+                "五个人，一小时内");
+        when(ineligible.runtime.recommendableIds(ineligible.state)).thenReturn(List.of(101));
+        assertFailure(
+                () -> ineligible.publication.permit(
+                        ineligible.state,
+                        new PublicationSeed(List.of(101), List.of(), CandidateUse.PUBLISH_CARDS, 1)),
+                RecommendationPublication.Code.FINAL_ID_FAILS_HARD_GATES);
+        assertThat(ineligible.state.finalResponseGameIds).isEmpty();
+        assertThat(ineligible.state.finalResponseEvidenceIds).isEmpty();
     }
 
     private Fixture fixture(List<Integer> verifiedIds) {
@@ -419,93 +274,12 @@ class RecommendationPublicationTest {
         return new Fixture(state, runtime, publication);
     }
 
-    private JsonNode decision(int bggId) {
-        var root = json.createObjectNode();
-        root.put("requestedCount", 1);
-        var selection = root.putArray("selections").addObject();
-        selection.put("bggId", bggId);
-        root.putArray("referenceBggIds");
-        return root;
-    }
-
-    private JsonNode block(
-            String surface,
-            String role,
-            Integer bggId,
-            List<String> evidenceIds,
-            String text) {
-        var block = json.createObjectNode();
-        block.put("surface", surface);
-        block.put("role", role);
-        if (bggId == null) block.putNull("bggId");
-        else block.put("bggId", bggId);
-        evidenceIds.forEach(block.putArray("internalEvidenceIds")::add);
-        block.put("text", text);
-        return block;
-    }
-
-    private void acceptAndDeliver(
-            RecommendationPublication.Session session,
-            Consumer<String> listener,
-            JsonNode block) {
-        session.acceptBlock(block);
-        deliverPending(session, listener);
-    }
-
-    private BoardGameRecommendationAgent.ConversationResponse finishAndDeliver(
-            RecommendationPublication.Session session,
-            Consumer<String> listener) {
-        BoardGameRecommendationAgent.ConversationResponse response = session.finish();
-        deliverPending(session, listener);
-        session.commit();
-        return response;
-    }
-
-    private BoardGameRecommendationAgent.ConversationResponse recoverAndDeliver(
-            RecommendationPublication.Session session,
-            Consumer<String> listener,
-            String code) {
-        BoardGameRecommendationAgent.ConversationResponse response =
-                session.finishWithVerifiedCandidates(code);
-        deliverPending(session, listener);
-        session.commit();
-        return response;
-    }
-
-    private void deliverPending(
-            RecommendationPublication.Session session,
-            Consumer<String> listener) {
-        try {
-            session.drainAnswerSnapshots().forEach(listener);
-        } catch (RuntimeException exception) {
-            throw new RecommendationPublication.DeliveryFailure(exception);
-        }
-    }
-
-    private JsonNode json(String value) {
-        try {
-            return json.readTree(value);
-        } catch (JsonProcessingException exception) {
-            throw new AssertionError(exception);
-        }
-    }
-
-    private PublicationSeed seed(int bggId) {
-        return new PublicationSeed(List.of(bggId), List.of(), CandidateUse.PUBLISH_CARDS);
-    }
-
     private void assertFailure(
             org.assertj.core.api.ThrowableAssert.ThrowingCallable callable,
             RecommendationPublication.Code expected) {
         assertThatThrownBy(callable).isInstanceOfSatisfying(
                 RecommendationPublication.InvalidPublication.class,
                 failure -> assertThat(failure.code()).isEqualTo(expected));
-    }
-
-    private void assertUncommitted(RecommendationAgentState state) {
-        assertThat(state.finalResponseGameIds).isEmpty();
-        assertThat(state.finalResponseEvidenceIds).isEmpty();
-        assertThat(state.actions).isEmpty();
     }
 
     private BoardGameRecommendationProperties properties() {

@@ -69,6 +69,7 @@ export interface PlayerJourneyDocumentProgress {
 export interface PlayerJourneyRun {
   run: {
     id: string
+    subjectId: string
     state: string
     revision?: number
     updatedAt?: string
@@ -87,7 +88,7 @@ export interface PlayerJourneyPlan {
   documentVersionId: string
   gameTitle: string
   premise: string
-  sections: Array<{ position: number; title: string }>
+  sections: Array<{ position: number; title: string; visualEvidenceRecommended?: boolean }>
 }
 
 export interface PlayerJourneyLesson {

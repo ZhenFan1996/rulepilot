@@ -45,7 +45,11 @@ public interface BoardGameRecommendationCatalog {
 
     int gameCount();
 
-    record CandidateSet(int sourceCount, List<Game> games) {
+    record CandidateSet(int sourceCount, List<Game> games, boolean pageExhausted) {
+        public CandidateSet(int sourceCount, List<Game> games) {
+            this(sourceCount, games, true);
+        }
+
         public CandidateSet {
             games = List.copyOf(games);
         }

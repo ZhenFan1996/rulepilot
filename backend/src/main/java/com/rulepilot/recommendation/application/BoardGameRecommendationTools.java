@@ -99,7 +99,8 @@ public class BoardGameRecommendationTools {
                     result.sourceCount(),
                     result.games(),
                     List.of(),
-                    "");
+                    "",
+                    result.pageExhausted());
         } catch (RuntimeException exception) {
             LOGGER.warn("Recommendation catalog search tool failed");
             return CatalogObservation.error(ToolName.SEARCH_BGG_CATALOG, "CATALOG_UNAVAILABLE");
@@ -292,7 +293,18 @@ public class BoardGameRecommendationTools {
             int sourceCount,
             List<Game> games,
             List<TitleResolution> titleResolutions,
-            String code) {
+            String code,
+            boolean pageExhausted) {
+        CatalogObservation(
+                ToolStatus status,
+                ToolName tool,
+                int sourceCount,
+                List<Game> games,
+                List<TitleResolution> titleResolutions,
+                String code) {
+            this(status, tool, sourceCount, games, titleResolutions, code, true);
+        }
+
         CatalogObservation {
             games = List.copyOf(games);
             titleResolutions = List.copyOf(titleResolutions);

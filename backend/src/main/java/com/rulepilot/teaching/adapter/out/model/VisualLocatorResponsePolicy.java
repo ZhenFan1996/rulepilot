@@ -1,15 +1,15 @@
 package com.rulepilot.teaching.adapter.out.model;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.rulepilot.teaching.VisualRegionLocator.BatchAction;
 import com.rulepilot.teaching.VisualRegionLocator.Diagnostic;
-import com.rulepilot.teaching.VisualRegionLocator.ReviewAction;
 import com.rulepilot.teaching.application.VisualRegionCandidateSelector.Candidate;
-import com.rulepilot.teaching.domain.IllustratedLesson.VisualSourceKind;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -17,7 +17,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
-/** Strict schema admission for the Agent's typed per-step visual plan and review. */
+/** Strict admission for a model that may select application-owned candidates but can never author geometry. */
 final class VisualLocatorResponsePolicy {
 
     private static final int ABSOLUTE_REVIEW_LIMIT = 12;
@@ -27,25 +27,22 @@ final class VisualLocatorResponsePolicy {
 
     private VisualLocatorResponsePolicy() {}
 
-    static boolean isExplicitNoRegion(String content) {
-        return parseModelGuide(content).map(ModelGuide::hasOnlyRejections).orElse(false);
-    }
-
-    static String retryInstruction(Rejection rejection) {
-        return switch (rejection) {
-            case EXPLICIT_NO_REGION, NONE -> "";
-            case RECROP -> "The previous review requested RECROP. Inspect the proposed source again and return a final ACCEPT, USE_FULL_PAGE, or REJECT decision with exact evidence ownership.";
-            case MALFORMED_JSON -> "The previous response did not match the exact JSON contract. Return one object with a reviews array and typed action/source values.";
-            case UNSUPPORTED_SCOPE -> "The previous response used an unavailable page, step, or claim reference. Use only supplied stepPosition values, page numbers, and C references whose sourcePages include the visual page.";
-            case INVALID_GEOMETRY -> "The previous rectangle was outside the page. Verify x + width <= 1000 and y + height <= 1000; USE_FULL_PAGE must be exactly 0,0,1000,1000.";
-        };
-    }
-
     static Optional<ModelGuide> parseModelGuide(String content) {
         if (content == null || content.isBlank()) return Optional.empty();
         try {
             JsonNode root = JSON.readTree(content.strip());
-            if (root == null || !root.isObject() || root.size() != 1 || !root.has("reviews")) {
+            if (root == null
+                    || !root.isObject()
+                    || root.size() != 2
+                    || !root.has("batchAction")
+                    || !root.get("batchAction").isTextual()
+                    || !root.has("reviews")) {
+                return Optional.empty();
+            }
+            BatchAction batchAction;
+            try {
+                batchAction = BatchAction.valueOf(root.get("batchAction").textValue());
+            } catch (IllegalArgumentException invalidAction) {
                 return Optional.empty();
             }
             JsonNode reviews = root.get("reviews");
@@ -58,7 +55,7 @@ final class VisualLocatorResponsePolicy {
                 if (value.isEmpty()) return Optional.empty();
                 parsed.add(value.get());
             }
-            return Optional.of(new ModelGuide(parsed));
+            return Optional.of(new ModelGuide(batchAction, parsed));
         } catch (JsonProcessingException invalidJson) {
             return Optional.empty();
         }
@@ -67,100 +64,67 @@ final class VisualLocatorResponsePolicy {
     private static Optional<ModelReview> parseReview(JsonNode review) {
         if (review == null
                 || !review.isObject()
-                || review.size() != 3
+                || review.size() != 6
                 || !integral(review, "stepPosition")
-                || !review.has("action")
-                || !review.get("action").isTextual()
-                || !review.has("source")) {
+                || !text(review, "action")
+                || !review.has("candidateId")
+                || !review.has("label")
+                || !review.has("visibleDescription")
+                || !review.has("supportedClaimRefs")) {
             return Optional.empty();
         }
         int stepPosition = review.get("stepPosition").intValue();
         if (stepPosition < 1) return Optional.empty();
-        ReviewAction action;
+        ModelAction action;
         try {
-            action = ReviewAction.valueOf(review.get("action").textValue());
+            action = ModelAction.valueOf(review.get("action").textValue());
         } catch (IllegalArgumentException invalidAction) {
             return Optional.empty();
         }
-        JsonNode source = review.get("source");
-        if (action == ReviewAction.REJECT) {
-            return source.isNull()
-                    ? Optional.of(new ModelReview(stepPosition, action, null))
-                    : Optional.empty();
+        if (action == ModelAction.NO_VISUAL) {
+            if (!review.get("candidateId").isNull()
+                    || !review.get("label").isNull()
+                    || !review.get("visibleDescription").isNull()
+                    || !review.get("supportedClaimRefs").isArray()
+                    || !review.get("supportedClaimRefs").isEmpty()) {
+                return Optional.empty();
+            }
+            return Optional.of(new ModelReview(stepPosition, action, null, null, null, List.of()));
         }
-        Optional<ModelRegion> parsedSource = parseSource(source);
-        if (parsedSource.isEmpty() || !actionMatchesSource(action, parsedSource.get())) return Optional.empty();
-        return Optional.of(new ModelReview(stepPosition, action, parsedSource.get()));
-    }
-
-    private static Optional<ModelRegion> parseSource(JsonNode source) {
-        if (source == null || !source.isObject() || source.size() != 9) return Optional.empty();
-        if (!(integral(source, "pageNumber")
-                && nonBlankText(source, "label")
-                && nonBlankText(source, "visibleDescription")
-                && integral(source, "x")
-                && integral(source, "y")
-                && integral(source, "width")
-                && integral(source, "height")
-                && nonBlankText(source, "sourceKind")
-                && textArray(source, "supportedClaimRefs"))) return Optional.empty();
-        int pageNumber = source.get("pageNumber").intValue();
-        int x = source.get("x").intValue();
-        int y = source.get("y").intValue();
-        int width = source.get("width").intValue();
-        int height = source.get("height").intValue();
-        VisualSourceKind sourceKind;
-        try {
-            sourceKind = VisualSourceKind.valueOf(source.get("sourceKind").textValue());
-        } catch (IllegalArgumentException invalidKind) {
+        if (!nonBlankText(review, "candidateId")
+                || !nonBlankText(review, "label")
+                || !nonBlankText(review, "visibleDescription")
+                || !uniqueTextArray(review, "supportedClaimRefs")) {
             return Optional.empty();
         }
-        if (pageNumber < 1
-                || source.get("label").textValue().strip().length() > 80
-                || source.get("visibleDescription").textValue().strip().length() > 240
-                || x < 0
-                || y < 0
-                || width < 20
-                || height < 20
-                || x + width > 1_000
-                || y + height > 1_000) return Optional.empty();
-        try {
-            return Optional.of(new ModelRegion(
-                    pageNumber,
-                    source.get("label").textValue().strip(),
-                    source.get("visibleDescription").textValue().strip(),
-                    x,
-                    y,
-                    width,
-                    height,
-                    sourceKind,
-                    strings(source.get("supportedClaimRefs"))));
-        } catch (IllegalArgumentException invalidSource) {
+        String candidateId = review.get("candidateId").textValue().strip();
+        String label = review.get("label").textValue().strip();
+        String visibleDescription = review.get("visibleDescription").textValue().strip();
+        if (candidateId.length() > 64 || label.length() > 80 || visibleDescription.length() > 240) {
             return Optional.empty();
         }
-    }
-
-    private static boolean actionMatchesSource(ReviewAction action, ModelRegion source) {
-        boolean wholePage = source.x() == 0
-                && source.y() == 0
-                && source.width() == 1_000
-                && source.height() == 1_000;
-        if (action == ReviewAction.USE_FULL_PAGE) {
-            return source.sourceKind() == VisualSourceKind.FULL_PAGE && wholePage;
-        }
-        if (source.sourceKind() == VisualSourceKind.FULL_PAGE || wholePage) return false;
-        return action == ReviewAction.ACCEPT || action == ReviewAction.RECROP;
+        return Optional.of(new ModelReview(
+                stepPosition,
+                action,
+                candidateId,
+                label,
+                visibleDescription,
+                strings(review.get("supportedClaimRefs"))));
     }
 
     private static boolean integral(JsonNode object, String field) {
         return object.has(field) && object.get(field).isIntegralNumber();
     }
 
-    private static boolean nonBlankText(JsonNode object, String field) {
-        return object.has(field) && object.get(field).isTextual() && !object.get(field).asText().isBlank();
+    private static boolean text(JsonNode object, String field) {
+        return object.has(field) && object.get(field).isTextual();
     }
 
-    private static boolean textArray(JsonNode object, String field) {
+    private static boolean nonBlankText(JsonNode object, String field) {
+        return text(object, field) && !object.get(field).asText().isBlank();
+    }
+
+    private static boolean uniqueTextArray(JsonNode object, String field) {
         if (!object.has(field) || !object.get(field).isArray()) return false;
         Set<String> unique = new LinkedHashSet<>();
         for (JsonNode value : object.get(field)) {
@@ -175,89 +139,91 @@ final class VisualLocatorResponsePolicy {
         return List.copyOf(result);
     }
 
-    static List<Map<String, Object>> candidatePromptPayload(List<Candidate> candidates, boolean compactForQwen) {
-        return candidates.stream().map(candidate -> candidatePromptPayload(candidate, compactForQwen)).toList();
+    static List<Map<String, Object>> candidateManifest(List<Candidate> candidates) {
+        List<Map<String, Object>> manifest = new ArrayList<>(candidates.size());
+        for (int index = 0; index < candidates.size(); index++) {
+            Candidate candidate = candidates.get(index);
+            Map<String, Object> entry = new LinkedHashMap<>();
+            entry.put("candidateId", candidate.candidateId());
+            entry.put("attachmentIndex", index + 1);
+            entry.put("pageNumber", candidate.pageNumber());
+            manifest.add(Collections.unmodifiableMap(entry));
+        }
+        return List.copyOf(manifest);
     }
 
-    private static Map<String, Object> candidatePromptPayload(Candidate candidate, boolean compactForQwen) {
-        Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("pageNumber", candidate.pageNumber());
-        payload.put("candidateKind", candidate.kind().name());
-        if (!compactForQwen) payload.put("allowedRectangle", candidate.rectangle());
-        if (candidate.catalogedAnchor() != null) {
-            payload.put("catalogedAnchor", Map.of(
-                    "anchorKind", candidate.catalogedAnchor().kind(),
-                    "label", candidate.catalogedAnchor().label(),
-                    "visibleDescription", candidate.catalogedAnchor().visibleDescription(),
-                    "rectangle", Map.of(
-                            "x", candidate.catalogedAnchor().x(),
-                            "y", candidate.catalogedAnchor().y(),
-                            "width", candidate.catalogedAnchor().width(),
-                            "height", candidate.catalogedAnchor().height())));
+    static String promptJson(Object payload) {
+        try {
+            return JSON.writeValueAsString(payload);
+        } catch (JsonProcessingException failure) {
+            throw new IllegalStateException("could not serialize visual candidate prompt payload", failure);
         }
-        return Map.copyOf(payload);
+    }
+
+    static String malformedRepairInstruction() {
+        return "The previous response did not match the exact batchAction plus six-field review contract. "
+                + "Return JSON only with batchAction STOP or CONTINUE and reviews. "
+                + "Use ACCEPT_CANDIDATE with one offered candidateId or NO_VISUAL with null candidateId, label, "
+                + "and visibleDescription plus an empty supportedClaimRefs array. Keep label within 80 characters "
+                + "and visibleDescription within 240 characters. Do not add page or geometry fields.";
     }
 
     static Diagnostic diagnosticFor(Rejection rejection) {
         return switch (rejection) {
             case NONE -> Diagnostic.NO_REGION;
             case EXPLICIT_NO_REGION -> Diagnostic.EXPLICIT_NO_REGION;
-            case RECROP -> Diagnostic.NO_REGION;
             case MALFORMED_JSON -> Diagnostic.MALFORMED_RESPONSE;
             case UNSUPPORTED_SCOPE -> Diagnostic.UNSUPPORTED_SCOPE;
-            case INVALID_GEOMETRY -> Diagnostic.INVALID_GEOMETRY;
         };
     }
 
-    record ModelRegion(
-            int pageNumber,
+    enum ModelAction {
+        ACCEPT_CANDIDATE,
+        NO_VISUAL
+    }
+
+    record ModelReview(
+            int stepPosition,
+            ModelAction action,
+            String candidateId,
             String label,
             String visibleDescription,
-            int x,
-            int y,
-            int width,
-            int height,
-            VisualSourceKind sourceKind,
             List<String> supportedClaimRefs) {
-        ModelRegion {
-            if (sourceKind == null || supportedClaimRefs == null || supportedClaimRefs.isEmpty()) {
-                throw new IllegalArgumentException("model visual source is invalid");
-            }
-            supportedClaimRefs = List.copyOf(supportedClaimRefs);
-        }
-    }
-
-    record ModelReview(int stepPosition, ReviewAction action, ModelRegion source) {
         ModelReview {
-            if (stepPosition < 1 || action == null || (action == ReviewAction.REJECT) != (source == null)) {
+            if (stepPosition < 1 || action == null || supportedClaimRefs == null) {
                 throw new IllegalArgumentException("model visual review is invalid");
             }
+            supportedClaimRefs = List.copyOf(supportedClaimRefs);
+            boolean noVisual = action == ModelAction.NO_VISUAL;
+            if (noVisual != (candidateId == null)
+                    || noVisual != (label == null)
+                    || noVisual != (visibleDescription == null)
+                    || noVisual != supportedClaimRefs.isEmpty()) {
+                throw new IllegalArgumentException("model visual review action is invalid");
+            }
         }
     }
 
-    record ModelGuide(List<ModelReview> reviews) {
+    record ModelGuide(BatchAction batchAction, List<ModelReview> reviews) {
         ModelGuide {
-            if (reviews == null || reviews.isEmpty() || reviews.size() > ABSOLUTE_REVIEW_LIMIT) {
+            if (batchAction == null
+                    || reviews == null
+                    || reviews.isEmpty()
+                    || reviews.size() > ABSOLUTE_REVIEW_LIMIT) {
                 throw new IllegalArgumentException("visual guide review plan is invalid");
             }
             reviews = List.copyOf(reviews);
         }
 
-        List<ModelRegion> regions() {
-            return reviews.stream().map(ModelReview::source).filter(java.util.Objects::nonNull).toList();
-        }
-
-        boolean hasOnlyRejections() {
-            return reviews.stream().allMatch(review -> review.action() == ReviewAction.REJECT);
+        boolean hasOnlyNoVisual() {
+            return reviews.stream().allMatch(review -> review.action() == ModelAction.NO_VISUAL);
         }
     }
 
     enum Rejection {
         NONE,
         EXPLICIT_NO_REGION,
-        RECROP,
         MALFORMED_JSON,
-        UNSUPPORTED_SCOPE,
-        INVALID_GEOMETRY
+        UNSUPPORTED_SCOPE
     }
 }
