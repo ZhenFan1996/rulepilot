@@ -60,7 +60,7 @@ class RecommendationNaturalFrontDoorTest {
         String playerReply = "找到了，就是你指定的《河市集》。这张卡对应 River Market，可以直接继续阅读规则书、生成讲解，再进入答疑。";
 
         when(model.configured("player")).thenReturn(true);
-        when(model.streamDecision(any(), eq("player"), any())).thenAnswer(invocation -> {
+        when(model.next(any(), eq("player"))).thenAnswer(invocation -> {
             captured.set(invocation.getArgument(0));
             return new Turn(
                     "",
@@ -130,23 +130,24 @@ class RecommendationNaturalFrontDoorTest {
         Game target = game(802, "Lantern Passage", "灯笼渡口", List.of("Blake North"));
 
         when(model.configured("player")).thenReturn(true);
-        when(model.streamDecision(any(), eq("player"), any())).thenReturn(new Turn(
-                "",
-                List.of(new ToolCall(
-                        "call-invalid-title",
-                        BoardGameRecommendationAgent.RESOLVE_TOOL,
-                        "{\"title\":\"\",\"purpose\":\"TARGET_GAME\",\"evidence\":\"U1\",\"playerReply\":\"找到了，可以继续看规则。\"}")),
-                CompletionStatus.COMPLETE));
-        when(model.next(any(), eq("player"))).thenAnswer(invocation -> {
-            repairRequest.set(invocation.getArgument(0));
-            return new Turn(
-                    "",
-                    List.of(new ToolCall(
-                            "call-corrected-title",
-                            BoardGameRecommendationAgent.RESOLVE_TOOL,
-                            "{\"title\":\"Lantern Passage\",\"purpose\":\"TARGET_GAME\",\"evidence\":\"U1\",\"playerReply\":\"找到了，就是《灯笼渡口》；它是你明确指定的游戏，可以继续打开规则书。\"}")),
-                    CompletionStatus.COMPLETE);
-        });
+        when(model.next(any(), eq("player")))
+                .thenReturn(new Turn(
+                        "",
+                        List.of(new ToolCall(
+                                "call-invalid-title",
+                                BoardGameRecommendationAgent.RESOLVE_TOOL,
+                                "{\"title\":\"\",\"purpose\":\"TARGET_GAME\",\"evidence\":\"U1\",\"playerReply\":\"找到了，可以继续看规则。\"}")),
+                        CompletionStatus.COMPLETE))
+                .thenAnswer(invocation -> {
+                    repairRequest.set(invocation.getArgument(0));
+                    return new Turn(
+                            "",
+                            List.of(new ToolCall(
+                                    "call-corrected-title",
+                                    BoardGameRecommendationAgent.RESOLVE_TOOL,
+                                    "{\"title\":\"Lantern Passage\",\"purpose\":\"TARGET_GAME\",\"evidence\":\"U1\",\"playerReply\":\"找到了，就是《灯笼渡口》；它是你明确指定的游戏，可以继续打开规则书。\"}")),
+                            CompletionStatus.COMPLETE);
+                });
         when(tools.resolveLocalReferenceTitle("Lantern Passage"))
                 .thenReturn(new ReferenceObservation(ToolStatus.SUCCESS, List.of(target), ""));
         var properties = new BoardGameRecommendationProperties(
@@ -185,7 +186,7 @@ class RecommendationNaturalFrontDoorTest {
     }
 
     @Test
-    void streamsALightConversationDirectlyWithoutForcingAToolAction() {
+    void usesTheTypedReplyActionForALightConversationWithoutRetrieval() {
         BoardGameRecommendationModel model = mock(BoardGameRecommendationModel.class);
         BoardGameRecommendationTools tools = mock(BoardGameRecommendationTools.class);
         BoardGameRecommendationSelector selector = mock(BoardGameRecommendationSelector.class);
@@ -194,14 +195,16 @@ class RecommendationNaturalFrontDoorTest {
 
         when(tools.webResearchConfigured()).thenReturn(true);
         when(model.configured("player")).thenReturn(true);
-        when(model.streamDecision(any(), eq("player"), any())).thenAnswer(invocation -> {
+        when(model.next(any(), eq("player"))).thenAnswer(invocation -> {
             Request request = invocation.getArgument(0);
-            @SuppressWarnings("unchecked")
-            java.util.function.Consumer<String> listener = invocation.getArgument(2);
             captured.set(request);
-            listener.accept("可以，我们先不急着套人数和时长。");
-            listener.accept(answer);
-            return new Turn(answer, List.of(), CompletionStatus.COMPLETE);
+            return new Turn(
+                    "",
+                    List.of(new ToolCall(
+                            "reply-light-conversation",
+                            BoardGameRecommendationAgent.REPLY_TOOL,
+                            new ObjectMapper().writeValueAsString(java.util.Map.of("playerReply", answer)))),
+                    CompletionStatus.COMPLETE);
         });
         RecommendationReActLoop loop = new RecommendationReActLoop(
                 model,
@@ -219,9 +222,9 @@ class RecommendationNaturalFrontDoorTest {
                 streamed::add);
 
         assertThat(response.outcome()).isEqualTo(Outcome.CONVERSATION);
-        assertThat(response.mode()).isEqualTo(DecisionMode.MODEL_FAST_PATH);
+        assertThat(response.mode()).isEqualTo(DecisionMode.MODEL_ASSISTED);
         assertThat(response.assistantMessage()).isEqualTo(answer);
-        assertThat(streamed).containsExactly("可以，我们先不急着套人数和时长。", answer);
+        assertThat(streamed).containsExactly(answer);
         assertThat(response.harness().modelCalls()).isEqualTo(1);
         assertThat(response.harness().catalogCalls()).isZero();
         assertThat(response.harness().webResearchCalls()).isZero();
@@ -232,7 +235,7 @@ class RecommendationNaturalFrontDoorTest {
         assertThat(first.maxOutputTokens())
                 .as("an open conversational turn must have enough room to finish naturally")
                 .isGreaterThanOrEqualTo(512);
-        assertThat(first.toolChoice()).isEqualTo(BoardGameRecommendationModel.ToolChoice.AUTO);
+        assertThat(first.toolChoice()).isEqualTo(BoardGameRecommendationModel.ToolChoice.REQUIRED);
         assertThat(first.tools())
                 .extracting(BoardGameRecommendationModel.ToolSpec::name)
                 .contains(
@@ -295,13 +298,60 @@ class RecommendationNaturalFrontDoorTest {
     }
 
     @Test
+    void recordsAnExplicitPreferenceThroughOneTypedReplyWithoutRetrieval() {
+        BoardGameRecommendationModel model = mock(BoardGameRecommendationModel.class);
+        BoardGameRecommendationTools tools = mock(BoardGameRecommendationTools.class);
+        BoardGameRecommendationSelector selector = mock(BoardGameRecommendationSelector.class);
+        AtomicReference<Request> captured = new AtomicReference<>();
+
+        when(tools.webResearchConfigured()).thenReturn(true);
+        when(model.configured("player")).thenReturn(true);
+        when(model.next(any(), eq("player"))).thenAnswer(invocation -> {
+            captured.set(invocation.getArgument(0));
+            return new Turn(
+                    "",
+                    List.of(new ToolCall(
+                            "remember-player-count",
+                            BoardGameRecommendationAgent.REPLY_TOOL,
+                            "{\"playerReply\":\"记住了：以后默认按四个人玩；这次先不推荐。\","
+                                    + "\"preferenceUpdates\":[{\"field\":\"playerCount\",\"value\":4,"
+                                    + "\"evidence\":\"U1\",\"evidenceClassification\":\"DIRECT\"}]}")),
+                    CompletionStatus.COMPLETE);
+        });
+        RecommendationReActLoop loop = new RecommendationReActLoop(
+                model,
+                tools,
+                selector,
+                new BoardGameRecommendationProperties(8, 3, new BigDecimal("0.65"), Duration.ofSeconds(30)),
+                new ObjectMapper());
+
+        var response = loop.converse(
+                new ConversationRequest(RecommendationProfile.empty(), "以后默认按四个人玩，先记住就好，不用推荐。"),
+                "zh-CN",
+                "player",
+                ignored -> {});
+
+        assertThat(response.outcome()).isEqualTo(Outcome.CONVERSATION);
+        assertThat(response.harness().modelCalls()).isEqualTo(1);
+        assertThat(response.harness().catalogCalls()).isZero();
+        assertThat(response.harness().webResearchCalls()).isZero();
+        assertThat(response.profile().playerCount().minimum()).isEqualTo(4);
+        assertThat(response.profile().playerCount().maximum()).isEqualTo(4);
+        assertThat(captured.get().toolChoice()).isEqualTo(BoardGameRecommendationModel.ToolChoice.REQUIRED);
+        assertThat(captured.get().messages().getFirst().content())
+                .contains("submit any explicit memory update", "typed preferenceUpdates argument");
+
+        loop.stopBoundedCalls();
+    }
+
+    @Test
     void exposesAProtocolFailureCodeWithoutRetryingOrChangingThePlayerFacingBoundary() {
         BoardGameRecommendationModel model = mock(BoardGameRecommendationModel.class);
         BoardGameRecommendationTools tools = mock(BoardGameRecommendationTools.class);
         when(model.configured("player")).thenReturn(true);
-        when(model.streamDecision(any(), eq("player"), any())).thenThrow(
+        when(model.next(any(), eq("player"))).thenThrow(
                 new BoardGameRecommendationModel.ProtocolFailure(
-                        "DECISION_INVALID_ENVELOPE",
+                        "ACTION_PROTOCOL_INVALID",
                         new IllegalStateException("raw provider output stays private")));
         RecommendationReActLoop loop = new RecommendationReActLoop(
                 model,
@@ -318,36 +368,31 @@ class RecommendationNaturalFrontDoorTest {
 
         assertThat(response.outcome()).isEqualTo(Outcome.UNAVAILABLE);
         assertThat(response.assistantMessage())
-                .doesNotContain("DECISION_INVALID_ENVELOPE", "raw provider output");
+                .doesNotContain("ACTION_PROTOCOL_INVALID", "raw provider output");
         assertThat(response.harness().modelCalls()).isEqualTo(1);
         assertThat(response.harness().catalogCalls()).isZero();
         assertThat(response.harness().actions()).containsExactly(
-                "MODEL_PROTOCOL_FAILED:DECISION_INVALID_ENVELOPE",
-                "UNAVAILABLE:MODEL_PROTOCOL_FAILED:DECISION_INVALID_ENVELOPE");
-        verify(model, never()).next(any(), eq("player"));
+                "MODEL_PROTOCOL_FAILED:ACTION_PROTOCOL_INVALID",
+                "UNAVAILABLE:MODEL_PROTOCOL_FAILED:ACTION_PROTOCOL_INVALID");
 
         loop.stopBoundedCalls();
     }
 
     @Test
-    void repairsOneInvalidFirstDecisionBeforePublishingVerifiedCards() {
+    void usesOneNativeTypedDecisionBeforePublishingVerifiedCards() {
         BoardGameRecommendationModel model = mock(BoardGameRecommendationModel.class);
         BoardGameRecommendationTools tools = mock(BoardGameRecommendationTools.class);
-        AtomicReference<Request> repairRequest = new AtomicReference<>();
+        AtomicReference<Request> actionRequest = new AtomicReference<>();
         Game candidate = game(901, "Protocol Meadow", "协议草甸", List.of("Avery Stone"));
 
         when(model.configured("player")).thenReturn(true);
         when(tools.webResearchConfigured()).thenReturn(false);
-        when(model.streamDecision(any(), eq("player"), any())).thenThrow(
-                new BoardGameRecommendationModel.ProtocolFailure(
-                        "DECISION_INVALID_ACTION",
-                        new IllegalStateException("raw invalid action stays private")));
         when(model.next(any(), eq("player"))).thenAnswer(invocation -> {
-            repairRequest.set(invocation.getArgument(0));
+            actionRequest.set(invocation.getArgument(0));
             return new Turn(
                     "",
                     List.of(new ToolCall(
-                            "repair-search",
+                            "native-search",
                             BoardGameRecommendationAgent.SEARCH_TOOL,
                             "{\"titles\":[\"Protocol Meadow\"]}")),
                     CompletionStatus.COMPLETE);
@@ -387,39 +432,31 @@ class RecommendationNaturalFrontDoorTest {
         assertThat(response.games())
                 .extracting(entry -> entry.game().ranking().bggId())
                 .containsExactly(901);
-        assertThat(response.harness().modelCalls()).isEqualTo(3);
+        assertThat(response.harness().modelCalls()).isEqualTo(2);
         assertThat(response.harness().actions())
                 .contains(
-                        "REPAIR_MODEL_DECISION:DECISION_INVALID_ACTION",
                         "SEARCH_BGG_BY_NAME",
                         "LOOKUP_BGG_CANDIDATES",
                         "RECOMMEND_GAMES")
+                .noneMatch(action -> action.startsWith("REPAIR_MODEL_DECISION:"))
                 .noneMatch(action -> action.startsWith("UNAVAILABLE:"));
-        assertThat(repairRequest.get()).satisfies(request -> {
+        assertThat(actionRequest.get()).satisfies(request -> {
             assertThat(request.toolChoice()).isEqualTo(BoardGameRecommendationModel.ToolChoice.REQUIRED);
             assertThat(request.messages())
                     .extracting(BoardGameRecommendationModel.Message::content)
-                    .anyMatch(message -> message.contains("DECISION_INVALID_ACTION")
-                            && message.contains("Choose exactly one action"))
-                    .noneMatch(message -> message.contains("raw invalid action stays private"));
+                    .anyMatch(message -> message.contains("choosing exactly one supplied typed action"));
         });
 
         loop.stopBoundedCalls();
     }
 
     @Test
-    void stopsAfterTheSingleInvalidFirstDecisionRepairAlsoFails() {
+    void rejectsUnstructuredNativeReplyWithoutPublishingIt() {
         BoardGameRecommendationModel model = mock(BoardGameRecommendationModel.class);
         BoardGameRecommendationTools tools = mock(BoardGameRecommendationTools.class);
         when(model.configured("player")).thenReturn(true);
-        when(model.streamDecision(any(), eq("player"), any())).thenThrow(
-                new BoardGameRecommendationModel.ProtocolFailure(
-                        "DECISION_INVALID_ACTION",
-                        new IllegalStateException("first raw output stays private")));
-        when(model.next(any(), eq("player"))).thenThrow(
-                new BoardGameRecommendationModel.ProtocolFailure(
-                        "DECISION_INVALID_ACTION",
-                        new IllegalStateException("second raw output stays private")));
+        when(model.next(any(), eq("player"))).thenReturn(
+                new Turn("这段没有经过 typed reply action，不能直接发布。", List.of(), CompletionStatus.COMPLETE));
         RecommendationReActLoop loop = new RecommendationReActLoop(
                 model,
                 tools,
@@ -435,14 +472,12 @@ class RecommendationNaturalFrontDoorTest {
 
         assertThat(response.outcome()).isEqualTo(Outcome.UNAVAILABLE);
         assertThat(response.assistantMessage())
-                .doesNotContain("DECISION_INVALID_ACTION", "raw output");
-        assertThat(response.harness().modelCalls()).isEqualTo(2);
+                .doesNotContain("typed reply action");
+        assertThat(response.harness().modelCalls()).isEqualTo(1);
         assertThat(response.harness().catalogCalls()).isZero();
         assertThat(response.harness().actions()).containsExactly(
-                "REPAIR_MODEL_DECISION:DECISION_INVALID_ACTION",
-                "MODEL_PROTOCOL_FAILED:DECISION_INVALID_ACTION",
-                "UNAVAILABLE:MODEL_PROTOCOL_FAILED:DECISION_INVALID_ACTION");
-        verify(model).next(any(), eq("player"));
+                "UNSTRUCTURED_EVIDENCE_REPLY",
+                "UNAVAILABLE:UNSTRUCTURED_EVIDENCE_REPLY");
         verify(model, never()).streamStructured(any(), eq("player"), any());
 
         loop.stopBoundedCalls();
@@ -457,7 +492,7 @@ class RecommendationNaturalFrontDoorTest {
         String question = "我可以先给你一个有差异的起点：今晚更想一起琢磨，还是互相算计？";
 
         when(model.configured("player")).thenReturn(true);
-        when(model.streamDecision(any(), eq("player"), any())).thenAnswer(invocation -> {
+        when(model.next(any(), eq("player"))).thenAnswer(invocation -> {
             captured.set(invocation.getArgument(0));
             return new Turn(
                     "",
@@ -542,7 +577,7 @@ class RecommendationNaturalFrontDoorTest {
         };
         when(research.configured()).thenReturn(false);
         when(model.configured("player")).thenReturn(true);
-        when(model.streamDecision(any(), eq("player"), any())).thenReturn(
+        when(model.next(any(), eq("player"))).thenReturn(
                 new Turn(
                         "",
                         List.of(new ToolCall(
@@ -686,14 +721,14 @@ class RecommendationNaturalFrontDoorTest {
             }
         };
         when(model.configured("player")).thenReturn(true);
-        when(model.streamDecision(any(), eq("player"), any())).thenReturn(new Turn(
-                "",
-                List.of(new ToolCall(
-                        "call-local-wrong-identity",
-                        BoardGameRecommendationAgent.BROWSE_TOOL,
-                        "{\"designers\":[\"Wrong Architect\"],\"purpose\":\"IDENTITY_ONLY\"}")),
-                CompletionStatus.COMPLETE));
         when(model.next(any(), eq("player"))).thenReturn(
+                new Turn(
+                        "",
+                        List.of(new ToolCall(
+                                "call-local-wrong-identity",
+                                BoardGameRecommendationAgent.BROWSE_TOOL,
+                                "{\"designers\":[\"Wrong Architect\"],\"purpose\":\"IDENTITY_ONLY\"}")),
+                        CompletionStatus.COMPLETE),
                 new Turn(
                         "",
                         List.of(new ToolCall(
@@ -815,23 +850,24 @@ class RecommendationNaturalFrontDoorTest {
             }
         };
         when(model.configured("player")).thenReturn(true);
-        when(model.streamDecision(any(), eq("player"), any())).thenReturn(new Turn(
-                "",
-                List.of(new ToolCall(
-                        "call-discover-franchise",
-                        BoardGameRecommendationAgent.DISCOVER_TOOL,
-                        "{\"evidence\":\"U1\",\"subject\":\"Orion Saga IP\",\"afterIdentity\":\"RECOMMEND_WITH_CARDS\",\"candidateUse\":\"CONTINUE_REACT\"}")),
-                CompletionStatus.COMPLETE));
-        when(model.next(any(), eq("player"))).thenAnswer(invocation -> {
-            continuationRequest.set(invocation.getArgument(0));
-            return new Turn(
-                    "",
-                    List.of(new ToolCall(
-                            "call-publish-franchise-titles",
-                            BoardGameRecommendationAgent.SEARCH_TOOL,
-                            "{\"titles\":[\"Orion Frontier\",\"Orion Rebellion\"],\"candidateUse\":\"PUBLISH_CARDS\"}")),
-                    CompletionStatus.COMPLETE);
-        });
+        when(model.next(any(), eq("player")))
+                .thenReturn(new Turn(
+                        "",
+                        List.of(new ToolCall(
+                                "call-discover-franchise",
+                                BoardGameRecommendationAgent.DISCOVER_TOOL,
+                                "{\"evidence\":\"U1\",\"subject\":\"Orion Saga IP\",\"afterIdentity\":\"RECOMMEND_WITH_CARDS\",\"candidateUse\":\"CONTINUE_REACT\"}")),
+                        CompletionStatus.COMPLETE))
+                .thenAnswer(invocation -> {
+                    continuationRequest.set(invocation.getArgument(0));
+                    return new Turn(
+                            "",
+                            List.of(new ToolCall(
+                                    "call-publish-franchise-titles",
+                                    BoardGameRecommendationAgent.SEARCH_TOOL,
+                                    "{\"titles\":[\"Orion Frontier\",\"Orion Rebellion\"],\"candidateUse\":\"PUBLISH_CARDS\"}")),
+                            CompletionStatus.COMPLETE);
+                });
         String publication = """
                 {"decision":{"requestedCount":2,"selections":[{"bggId":711},{"bggId":712}],"referenceBggIds":[]},"replyBlocks":[{"surface":"MESSAGE","role":"NARRATIVE","bggId":711,"internalEvidenceIds":["R711:1"],"text":"公开系列资料把《Orion Frontier》列为这个 IP 的桌游作品。"},{"surface":"MESSAGE","role":"NARRATIVE","bggId":712,"internalEvidenceIds":["R712:1"],"text":"同一份系列资料也把《Orion Rebellion》列为这个 IP 的桌游作品。"},{"surface":"CARD","role":"WHY_FIT","bggId":711,"internalEvidenceIds":["B711:designers"],"text":"这款已核对的候选由 Morgan Vale 设计。"},{"surface":"CARD","role":"WHY_FIT","bggId":712,"internalEvidenceIds":["B712:designers"],"text":"这款已核对的候选由 Riley North 设计。"}]}
                 """
@@ -908,20 +944,21 @@ class RecommendationNaturalFrontDoorTest {
         };
         String unresolvedReply = "这个称呼目前没有足够的公开证据，我不想把它猜成某个系列或设计师。";
         when(model.configured("player")).thenReturn(true);
-        when(model.streamDecision(any(), eq("player"), any())).thenReturn(new Turn(
-                "",
-                List.of(new ToolCall(
-                        "call-discover-identity",
-                        BoardGameRecommendationAgent.DISCOVER_TOOL,
-                        "{\"evidence\":\"U1\",\"subject\":\"Silver Comet alias\",\"afterIdentity\":\"REPLY_WITH_IDENTITY\"}")),
-                CompletionStatus.COMPLETE));
-        when(model.next(any(), eq("player"))).thenReturn(new Turn(
-                "",
-                List.of(new ToolCall(
-                        "call-finish-unresolved-identity",
-                        BoardGameRecommendationAgent.IDENTITY_REPLY_TOOL,
-                        "{\"status\":\"UNRESOLVED\",\"playerReply\":\"" + unresolvedReply + "\"}")),
-                CompletionStatus.COMPLETE));
+        when(model.next(any(), eq("player"))).thenReturn(
+                new Turn(
+                        "",
+                        List.of(new ToolCall(
+                                "call-discover-identity",
+                                BoardGameRecommendationAgent.DISCOVER_TOOL,
+                                "{\"evidence\":\"U1\",\"subject\":\"Silver Comet alias\",\"afterIdentity\":\"REPLY_WITH_IDENTITY\"}")),
+                        CompletionStatus.COMPLETE),
+                new Turn(
+                        "",
+                        List.of(new ToolCall(
+                                "call-finish-unresolved-identity",
+                                BoardGameRecommendationAgent.IDENTITY_REPLY_TOOL,
+                                "{\"status\":\"UNRESOLVED\",\"playerReply\":\"" + unresolvedReply + "\"}")),
+                        CompletionStatus.COMPLETE));
         var properties = new BoardGameRecommendationProperties(
                 8, 3, new BigDecimal("0.65"), Duration.ofSeconds(30));
         RecommendationReActLoop loop = new RecommendationReActLoop(
@@ -992,7 +1029,7 @@ class RecommendationNaturalFrontDoorTest {
         };
         when(research.configured()).thenReturn(false);
         when(model.configured("player")).thenReturn(true);
-        when(model.streamDecision(any(), eq("player"), any())).thenAnswer(invocation -> {
+        when(model.next(any(), eq("player"))).thenAnswer(invocation -> {
             actionRequest.set(invocation.getArgument(0));
             return new Turn(
                     "",
@@ -1118,26 +1155,27 @@ class RecommendationNaturalFrontDoorTest {
         };
         AtomicReference<Request> followupRequest = new AtomicReference<>();
         when(model.configured("player")).thenReturn(true);
-        when(model.streamDecision(any(), eq("player"), any())).thenReturn(new Turn(
-                "UNTRUSTED WRONG DRAFT",
-                List.of(new ToolCall(
-                        "call-discover",
-                        BoardGameRecommendationAgent.DISCOVER_TOOL,
-                        "{\"evidence\":\"U2\",\"subject\":\"Studio Architect alias\",\"afterIdentity\":\"REPLY_WITH_IDENTITY\"}")),
-                CompletionStatus.COMPLETE));
         String naturalReply = "知道，你说的是 Studio Architect。这个圈内叫法还挺形象的；如果你愿意，我们可以接着聊聊他的作品有什么共同气质。";
-        when(model.next(any(), eq("player"))).thenAnswer(invocation -> {
-            followupRequest.set(invocation.getArgument(0));
-            return new Turn(
-                    "",
-                    List.of(new ToolCall(
-                            "call-finish-identity",
-                            BoardGameRecommendationAgent.IDENTITY_REPLY_TOOL,
-                            "{\"status\":\"VERIFIED\",\"entityKind\":\"DESIGNER\",\"entityNames\":[\"Studio Architect\"],\"playerReply\":\""
-                                    + naturalReply
-                                    + "\"}")),
-                    CompletionStatus.COMPLETE);
-        });
+        when(model.next(any(), eq("player")))
+                .thenReturn(new Turn(
+                        "UNTRUSTED WRONG DRAFT",
+                        List.of(new ToolCall(
+                                "call-discover",
+                                BoardGameRecommendationAgent.DISCOVER_TOOL,
+                                "{\"evidence\":\"U2\",\"subject\":\"Studio Architect alias\",\"afterIdentity\":\"REPLY_WITH_IDENTITY\"}")),
+                        CompletionStatus.COMPLETE))
+                .thenAnswer(invocation -> {
+                    followupRequest.set(invocation.getArgument(0));
+                    return new Turn(
+                            "",
+                            List.of(new ToolCall(
+                                    "call-finish-identity",
+                                    BoardGameRecommendationAgent.IDENTITY_REPLY_TOOL,
+                                    "{\"status\":\"VERIFIED\",\"entityKind\":\"DESIGNER\",\"entityNames\":[\"Studio Architect\"],\"playerReply\":\""
+                                            + naturalReply
+                                            + "\"}")),
+                            CompletionStatus.COMPLETE);
+                });
         var properties = new BoardGameRecommendationProperties(
                 8, 3, new BigDecimal("0.65"), Duration.ofSeconds(30));
         RecommendationReActLoop loop = new RecommendationReActLoop(
@@ -1236,16 +1274,16 @@ class RecommendationNaturalFrontDoorTest {
             }
         };
         when(model.configured("player")).thenReturn(true);
-        when(model.streamDecision(any(), eq("player"), any())).thenReturn(new Turn(
-                "",
-                List.of(new ToolCall(
-                        "call-discover",
-                        BoardGameRecommendationAgent.DISCOVER_TOOL,
-                        "{\"evidence\":\"U1\",\"subject\":\"the creator alias\",\"afterIdentity\":\"REPLY_WITH_IDENTITY\"}")),
-                CompletionStatus.COMPLETE));
         String unresolvedReply = "这个叫法我还不能可靠地缩小到某一位，所以不想随便猜。"
                 + "《银河漫游》的 BGG 署名是 Avery Stone、Blake North 和 Casey Rivers；目前更稳妥的说法，是线索只指向这组设计团队。";
         when(model.next(any(), eq("player"))).thenReturn(
+                new Turn(
+                        "",
+                        List.of(new ToolCall(
+                                "call-discover",
+                                BoardGameRecommendationAgent.DISCOVER_TOOL,
+                                "{\"evidence\":\"U1\",\"subject\":\"the creator alias\",\"afterIdentity\":\"REPLY_WITH_IDENTITY\"}")),
+                        CompletionStatus.COMPLETE),
                 new Turn(
                         "",
                         List.of(new ToolCall(
@@ -1347,20 +1385,21 @@ class RecommendationNaturalFrontDoorTest {
             }
         };
         when(model.configured("player")).thenReturn(true);
-        when(model.streamDecision(any(), eq("player"), any())).thenReturn(new Turn(
-                "",
-                List.of(new ToolCall(
-                        "call-discover-group",
-                        BoardGameRecommendationAgent.DISCOVER_TOOL,
-                        "{\"evidence\":\"U1\",\"subject\":\"the team alias\",\"afterIdentity\":\"REPLY_WITH_IDENTITY\"}")),
-                CompletionStatus.COMPLETE));
-        when(model.next(any(), eq("player"))).thenReturn(new Turn(
-                "",
-                List.of(new ToolCall(
-                        "call-finish-group",
-                        BoardGameRecommendationAgent.IDENTITY_REPLY_TOOL,
-                        "{\"status\":\"VERIFIED\",\"entityKind\":\"DESIGNER_GROUP\",\"entityNames\":[\"Avery Stone\",\"Blake North\",\"Casey Rivers\"],\"playerReply\":\"知道，这个称呼说的不是某一位，而是 Avery Stone、Blake North 和 Casey Rivers 这组设计搭档。你要是感兴趣，我们还可以继续聊他们共同作品里的设计取向。\"}")),
-                CompletionStatus.COMPLETE));
+        when(model.next(any(), eq("player"))).thenReturn(
+                new Turn(
+                        "",
+                        List.of(new ToolCall(
+                                "call-discover-group",
+                                BoardGameRecommendationAgent.DISCOVER_TOOL,
+                                "{\"evidence\":\"U1\",\"subject\":\"the team alias\",\"afterIdentity\":\"REPLY_WITH_IDENTITY\"}")),
+                        CompletionStatus.COMPLETE),
+                new Turn(
+                        "",
+                        List.of(new ToolCall(
+                                "call-finish-group",
+                                BoardGameRecommendationAgent.IDENTITY_REPLY_TOOL,
+                                "{\"status\":\"VERIFIED\",\"entityKind\":\"DESIGNER_GROUP\",\"entityNames\":[\"Avery Stone\",\"Blake North\",\"Casey Rivers\"],\"playerReply\":\"知道，这个称呼说的不是某一位，而是 Avery Stone、Blake North 和 Casey Rivers 这组设计搭档。你要是感兴趣，我们还可以继续聊他们共同作品里的设计取向。\"}")),
+                        CompletionStatus.COMPLETE));
         var properties = new BoardGameRecommendationProperties(
                 8, 3, new BigDecimal("0.65"), Duration.ofSeconds(30));
         RecommendationReActLoop loop = new RecommendationReActLoop(

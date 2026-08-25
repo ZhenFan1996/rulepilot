@@ -59,7 +59,7 @@ class RecommendationStructuredPublicationTest {
                 List.of(game),
                 List.of(),
                 ""));
-        when(model.streamDecision(any(), eq("player"), any())).thenReturn(new Turn(
+        when(model.next(any(), eq("player"))).thenReturn(new Turn(
                 "",
                 List.of(new ToolCall(
                         "inspect-candidates",
@@ -140,7 +140,7 @@ class RecommendationStructuredPublicationTest {
                 List.of(game),
                 List.of(),
                 ""));
-        when(model.streamDecision(any(), eq("player"), any())).thenReturn(new Turn(
+        when(model.next(any(), eq("player"))).thenReturn(new Turn(
                 "",
                 List.of(new ToolCall(
                         "inspect-candidates",
@@ -207,7 +207,7 @@ class RecommendationStructuredPublicationTest {
                 List.of(game),
                 List.of(),
                 ""));
-        when(model.streamDecision(any(), eq("player"), any())).thenReturn(new Turn(
+        when(model.next(any(), eq("player"))).thenReturn(new Turn(
                 "",
                 List.of(new ToolCall(
                         "inspect-candidates",
@@ -242,6 +242,7 @@ class RecommendationStructuredPublicationTest {
                 .contains("候选已经通过身份和基础资料校验")
                 .doesNotContain("raw provider failure");
         assertThat(streamed).containsExactly(response.assistantMessage());
+        assertThat(response.harness().modelCalls()).isEqualTo(2);
         assertThat(response.harness().actions())
                 .contains(
                         "RECOMMENDATION_PUBLICATION_RECOVERED:PUBLICATION_MODEL_FAILED",
@@ -251,7 +252,7 @@ class RecommendationStructuredPublicationTest {
     }
 
     @Test
-    void keepsTheHardRunDeadlineTerminalInsteadOfPublishingFallbackCards() {
+    void publishesVerifiedCardsWhenOptionalFinalProseUsesTheRemainingRunBudget() {
         BoardGameRecommendationModel model = mock(BoardGameRecommendationModel.class);
         BoardGameRecommendationTools tools = mock(BoardGameRecommendationTools.class);
         Game game = game(101);
@@ -266,7 +267,7 @@ class RecommendationStructuredPublicationTest {
                 List.of(game),
                 List.of(),
                 ""));
-        when(model.streamDecision(any(), eq("player"), any())).thenReturn(new Turn(
+        when(model.next(any(), eq("player"))).thenReturn(new Turn(
                 "",
                 List.of(new ToolCall(
                         "inspect-candidates",
@@ -300,35 +301,57 @@ class RecommendationStructuredPublicationTest {
                 ignored -> {},
                 streamed::add);
 
-        assertThat(response.outcome()).isEqualTo(Outcome.UNAVAILABLE);
-        assertThat(response.games()).isEmpty();
-        assertThat(streamed).isEmpty();
+        assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
+        assertThat(response.games())
+                .extracting(entry -> entry.game().ranking().bggId())
+                .containsExactly(101);
+        assertThat(streamed).containsExactly(response.assistantMessage());
         assertThat(response.harness().actions())
-                .contains("RUN_DEADLINE_EXCEEDED", "UNAVAILABLE:RUN_DEADLINE_EXCEEDED")
-                .noneMatch(action -> action.startsWith("RECOMMENDATION_PUBLICATION_RECOVERED:"));
+                .contains(
+                        "RECOMMENDATION_PUBLICATION_RECOVERED:PUBLICATION_TIME_BUDGET",
+                        "RECOMMEND_GAMES")
+                .noneMatch(action -> action.startsWith("UNAVAILABLE:"));
 
         loop.stopBoundedCalls();
     }
 
     @Test
-    void dropsAFirstDecisionReplyThatArrivesAfterTheHardDeadlineWhenTheProviderIgnoresInterrupt()
+    void dropsFinalWriterOutputThatArrivesAfterVerifiedCardsRecoveredFromTheTimeBudget()
             throws InterruptedException {
         BoardGameRecommendationModel model = mock(BoardGameRecommendationModel.class);
         BoardGameRecommendationTools tools = mock(BoardGameRecommendationTools.class);
-        CountDownLatch decisionStarted = new CountDownLatch(1);
-        CountDownLatch releaseLateReply = new CountDownLatch(1);
-        CountDownLatch lateReplyAttempted = new CountDownLatch(1);
+        Game game = game(101);
+        CountDownLatch publicationStarted = new CountDownLatch(1);
+        CountDownLatch releaseLatePublication = new CountDownLatch(1);
+        CountDownLatch latePublicationAttempted = new CountDownLatch(1);
         List<String> streamed = new CopyOnWriteArrayList<>();
-        String lateReply = "这段回复来自已经超时的首轮模型调用，不能再发送给玩家。";
+        String latePayload = """
+                {"decision":{"requestedCount":1,"selections":[{"bggId":101}],"referenceBggIds":[]},"replyBlocks":[{"surface":"MESSAGE","role":"NARRATIVE","bggId":null,"internalEvidenceIds":[],"text":"这段文案来自已经超时的最终写作调用，不能覆盖恢复结果。"},{"surface":"CARD","role":"WHY_FIT","bggId":101,"internalEvidenceIds":["B101:mechanics"],"text":"合作机制适合共同讨论。"}]}
+                """
+                .strip();
 
         when(model.configured("player")).thenReturn(true);
         when(tools.webResearchConfigured()).thenReturn(false);
-        when(model.streamDecision(any(), eq("player"), any())).thenAnswer(invocation -> {
-            decisionStarted.countDown();
+        when(tools.inspectTitles(List.of("Signal Grove"))).thenReturn(new CatalogObservation(
+                ToolStatus.SUCCESS,
+                ToolName.INSPECT_BGG_TITLES,
+                1,
+                List.of(game),
+                List.of(),
+                ""));
+        when(model.next(any(), eq("player"))).thenReturn(new Turn(
+                "",
+                List.of(new ToolCall(
+                        "inspect-candidates",
+                        BoardGameRecommendationAgent.SEARCH_TOOL,
+                        "{\"titles\":[\"Signal Grove\"]}")),
+                CompletionStatus.COMPLETE));
+        when(model.streamStructured(any(), eq("player"), any())).thenAnswer(invocation -> {
+            publicationStarted.countDown();
             boolean released = false;
             while (!released) {
                 try {
-                    releaseLateReply.await();
+                    releaseLatePublication.await();
                     released = true;
                 } catch (InterruptedException ignored) {
                     // This fake provider deliberately ignores cancellation to exercise the lifecycle fence.
@@ -337,11 +360,11 @@ class RecommendationStructuredPublicationTest {
             @SuppressWarnings("unchecked")
             Consumer<String> listener = invocation.getArgument(2);
             try {
-                listener.accept(lateReply);
+                listener.accept(latePayload);
             } finally {
-                lateReplyAttempted.countDown();
+                latePublicationAttempted.countDown();
             }
-            return new Turn(lateReply, List.of(), CompletionStatus.COMPLETE);
+            return new StructuredTurn(latePayload, CompletionStatus.COMPLETE);
         });
         var properties = new BoardGameRecommendationProperties(
                 8, 3, new BigDecimal("0.65"), Duration.ofMillis(150));
@@ -356,22 +379,22 @@ class RecommendationStructuredPublicationTest {
             var response = loop.converse(
                     new ConversationRequest(
                             RecommendationProfile.empty(),
-                            "先给我一个不需要查资料的简短建议。"),
+                            "请给我一款可以继续查看详情的候选卡。"),
                     "zh-CN",
                     "player",
                     ignored -> {},
                     streamed::add);
 
-            assertThat(decisionStarted.await(1, TimeUnit.SECONDS)).isTrue();
-            assertThat(response.outcome()).isEqualTo(Outcome.UNAVAILABLE);
-            assertThat(response.harness().actions())
-                    .contains("RUN_DEADLINE_EXCEEDED", "UNAVAILABLE:RUN_DEADLINE_EXCEEDED");
+            assertThat(publicationStarted.await(1, TimeUnit.SECONDS)).isTrue();
+            assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
+            assertThat(response.harness().modelCalls()).isEqualTo(2);
+            assertThat(streamed).containsExactly(response.assistantMessage());
 
-            releaseLateReply.countDown();
-            assertThat(lateReplyAttempted.await(1, TimeUnit.SECONDS)).isTrue();
-            assertThat(streamed).isEmpty();
+            releaseLatePublication.countDown();
+            assertThat(latePublicationAttempted.await(1, TimeUnit.SECONDS)).isTrue();
+            assertThat(streamed).containsExactly(response.assistantMessage());
         } finally {
-            releaseLateReply.countDown();
+            releaseLatePublication.countDown();
             loop.stopBoundedCalls();
         }
     }

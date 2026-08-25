@@ -2,7 +2,9 @@ package com.rulepilot.recommendation.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -605,6 +607,155 @@ class RecommendationReActLifecycleTest {
     }
 
     @Test
+    void publishesAValidatedSlateWhenTheOptionalResearchDecisionChoosesAnUnavailableAction() {
+        Game candidate = game(
+                514,
+                "Budget Harbor",
+                "余量港",
+                "Four players coordinate a shared harbor within forty-five minutes.");
+        RecordingCatalog catalog = new RecordingCatalog(candidate);
+        ScriptedModel model = new ScriptedModel(
+                List.of(
+                        action(
+                                "read-research-slate",
+                                BoardGameRecommendationAgent.BROWSE_TOOL,
+                                "{\"purpose\":\"SELECTABLE_CARDS\",\"candidateUse\":\"RESEARCH_THEN_PUBLISH\",\"limit\":1}"),
+                        action(
+                                "unavailable-one",
+                                BoardGameRecommendationAgent.REPLY_TOOL,
+                                "{\"playerReply\":\"先再想一步。\"}")),
+                List.of(publication(
+                        514,
+                        List.of("B514:playerCount"),
+                        "可选的额外调研没有在这轮预算内启动，但已核对的目录资料足以先保留这张候选卡。",
+                        "目录人数范围覆盖四人，因此它仍是一个可以继续查看的安全候选。")));
+        RecommendationReActLoop loop = loop(
+                model,
+                new BoardGameRecommendationTools(catalog, configuredResearchThatMustNotRun()));
+
+        var response = loop.converse(
+                new ConversationRequest(
+                        RecommendationProfile.empty(),
+                        "我们四个人想先拿到一款可以继续查看的候选；如果来不及补玩家反馈，不要把已验证卡片丢掉。"),
+                "zh-CN",
+                "player",
+                ignored -> {});
+
+        assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
+        assertThat(response.games()).singleElement()
+                .satisfies(value -> assertThat(value.game().ranking().bggId()).isEqualTo(514));
+        assertThat(response.harness().modelCalls()).isEqualTo(3);
+        assertThat(response.harness().webResearchCalls()).isZero();
+        assertThat(response.harness().actions())
+                .contains(
+                        "SEARCH_BGG_CATALOG",
+                        "REJECTED_UNAVAILABLE_ACTION",
+                        "RESEARCH_SKIPPED_FOR_PUBLICATION_ACTION_REJECTED",
+                        "RECOMMEND_GAMES")
+                .doesNotContain("REACT_BUDGET_EXHAUSTED");
+        assertThat(model.publicationRequests).hasSize(1);
+
+        loop.stopBoundedCalls();
+    }
+
+    @Test
+    void publishesAValidatedSlateWhenTheOptionalResearchDecisionReturnsNoTypedAction() {
+        Game candidate = game(
+                515,
+                "Typed Shelter",
+                "类型避风港",
+                "Four players coordinate a shared shelter within forty-five minutes.");
+        RecordingCatalog catalog = new RecordingCatalog(candidate);
+        String unsafeText = "这段没有 typed action 的调研计划不能直接显示，也不能抹掉候选。";
+        ScriptedModel model = new ScriptedModel(
+                List.of(
+                        action(
+                                "read-research-slate",
+                                BoardGameRecommendationAgent.BROWSE_TOOL,
+                                "{\"purpose\":\"SELECTABLE_CARDS\",\"candidateUse\":\"RESEARCH_THEN_PUBLISH\",\"limit\":1}"),
+                        new Turn(unsafeText, List.of(), CompletionStatus.COMPLETE)),
+                List.of(publication(
+                        515,
+                        List.of("B515:playerCount"),
+                        "可选调研没有返回可执行动作，所以这轮只发布已经核对过的目录候选。",
+                        "目录人数范围覆盖四人，这张卡仍可安全保留。")));
+        RecommendationReActLoop loop = loop(
+                model,
+                new BoardGameRecommendationTools(catalog, configuredResearchThatMustNotRun()));
+
+        var response = loop.converse(
+                new ConversationRequest(
+                        RecommendationProfile.empty(),
+                        "我们四个人想先拿到一张候选卡；可选调研失败时保留目录结果。"),
+                "zh-CN",
+                "player",
+                ignored -> {});
+
+        assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
+        assertThat(response.assistantMessage()).doesNotContain(unsafeText);
+        assertThat(response.harness().modelCalls()).isEqualTo(3);
+        assertThat(response.harness().webResearchCalls()).isZero();
+        assertThat(response.harness().actions())
+                .contains(
+                        "RESEARCH_SKIPPED_FOR_PUBLICATION_ACTION_MISSING",
+                        "RECOMMEND_GAMES")
+                .noneMatch(action -> action.startsWith("UNAVAILABLE:"));
+
+        loop.stopBoundedCalls();
+    }
+
+    @Test
+    void publishesAValidatedSlateWhenTheOptionalResearchDecisionModelFails() {
+        Game candidate = game(
+                516,
+                "Failure Orchard",
+                "故障果园",
+                "Four players coordinate an orchard within forty-five minutes.");
+        RecordingCatalog catalog = new RecordingCatalog(candidate);
+        String payload = publication(
+                516,
+                List.of("B516:playerCount"),
+                "可选调研调用失败了；已核对的目录候选仍然保留。",
+                "目录人数范围覆盖四人，所以这张卡仍可继续查看。");
+        BoardGameRecommendationModel model = mock(BoardGameRecommendationModel.class);
+        when(model.configured("player")).thenReturn(true);
+        when(model.next(any(Request.class), eq("player")))
+                .thenReturn(action(
+                        "read-research-slate",
+                        BoardGameRecommendationAgent.BROWSE_TOOL,
+                        "{\"purpose\":\"SELECTABLE_CARDS\",\"candidateUse\":\"RESEARCH_THEN_PUBLISH\",\"limit\":1}"))
+                .thenThrow(new IllegalStateException("optional research planner unavailable"));
+        when(model.streamStructured(any(Request.class), eq("player"), any())).thenAnswer(invocation -> {
+            @SuppressWarnings("unchecked")
+            java.util.function.Consumer<String> listener = invocation.getArgument(2);
+            listener.accept(payload);
+            return new StructuredTurn(payload, CompletionStatus.COMPLETE);
+        });
+        RecommendationReActLoop loop = loop(
+                model,
+                new BoardGameRecommendationTools(catalog, configuredResearchThatMustNotRun()));
+
+        var response = loop.converse(
+                new ConversationRequest(
+                        RecommendationProfile.empty(),
+                        "我们四个人想先拿到一张候选卡；调研模型暂时失败时不要丢掉目录结果。"),
+                "zh-CN",
+                "player",
+                ignored -> {});
+
+        assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
+        assertThat(response.harness().modelCalls()).isEqualTo(3);
+        assertThat(response.harness().webResearchCalls()).isZero();
+        assertThat(response.harness().actions())
+                .contains(
+                        "RESEARCH_SKIPPED_FOR_PUBLICATION_MODEL_CALL_FAILED",
+                        "RECOMMEND_GAMES")
+                .doesNotContain("MODEL_CALL_FAILED");
+
+        loop.stopBoundedCalls();
+    }
+
+    @Test
     void doesNotConsumeTheBrowseOrPreferenceWhenALaterBrowseArgumentIsInvalid() {
         String preference = "[{\"field\":\"durationMinutes\","
                 + "\"value\":{\"minimum\":null,\"maximum\":60},"
@@ -1003,12 +1154,12 @@ class RecommendationReActLifecycleTest {
                 priorVerifiedGames);
     }
 
-    private RecommendationReActLoop loop(ScriptedModel model, RecordingCatalog catalog) {
+    private RecommendationReActLoop loop(BoardGameRecommendationModel model, RecordingCatalog catalog) {
         return loop(model, catalog, ObservationRegistry.NOOP);
     }
 
     private RecommendationReActLoop loop(
-            ScriptedModel model,
+            BoardGameRecommendationModel model,
             RecordingCatalog catalog,
             ObservationRegistry observations) {
         BoardGameRecommendationWebResearch research = new BoardGameRecommendationWebResearch() {
@@ -1025,12 +1176,12 @@ class RecommendationReActLifecycleTest {
         return loop(model, new BoardGameRecommendationTools(catalog, research), observations);
     }
 
-    private RecommendationReActLoop loop(ScriptedModel model, BoardGameRecommendationTools tools) {
+    private RecommendationReActLoop loop(BoardGameRecommendationModel model, BoardGameRecommendationTools tools) {
         return loop(model, tools, ObservationRegistry.NOOP);
     }
 
     private RecommendationReActLoop loop(
-            ScriptedModel model,
+            BoardGameRecommendationModel model,
             BoardGameRecommendationTools tools,
             ObservationRegistry observations) {
         var properties = new BoardGameRecommendationProperties(
@@ -1076,6 +1227,20 @@ class RecommendationReActLifecycleTest {
         evidenceIds.forEach(card.putArray("internalEvidenceIds")::add);
         card.put("text", reason);
         return root.toString();
+    }
+
+    private static BoardGameRecommendationWebResearch configuredResearchThatMustNotRun() {
+        return new BoardGameRecommendationWebResearch() {
+            @Override
+            public boolean configured() {
+                return true;
+            }
+
+            @Override
+            public Optional<Research> research(Request request) {
+                throw new AssertionError("the optional research action should not execute in this scenario");
+            }
+        };
     }
 
     private static Game game(int bggId, String name, String chineseName, String description) {
@@ -1148,11 +1313,6 @@ class RecommendationReActLifecycleTest {
 
         @Override
         public Turn next(Request request, String ownerUsername) {
-            return next(request);
-        }
-
-        @Override
-        public Turn streamDecision(Request request, String ownerUsername, java.util.function.Consumer<String> listener) {
             return next(request);
         }
 

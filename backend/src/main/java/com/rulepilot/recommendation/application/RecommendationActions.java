@@ -131,8 +131,7 @@ final class RecommendationActions {
                 default -> rejected(state, "TOOL_NOT_ALLOWED", "Choose one action from the supplied action list.");
             };
         } catch (RecommendationReActLoop.RunDeadlineExceeded exception) {
-            state.actions.add("RUN_DEADLINE_EXCEEDED");
-            return ActionOutcome.terminal(runtime.unavailable(state, locale, "RUN_DEADLINE_EXCEEDED"));
+            throw exception;
         } catch (JsonProcessingException | InvalidAction exception) {
             InvalidAction invalid = exception instanceof InvalidAction value ? value : null;
             String code = invalid == null ? "INVALID_JSON" : invalid.code;
@@ -179,23 +178,6 @@ final class RecommendationActions {
                 locale,
                 null,
                 List.of()));
-    }
-
-    ConversationResponse directReply(
-            String playerReply,
-            RecommendationAgentState state,
-            String locale) {
-        state.actions.add("REPLY_TO_USER");
-        return response(
-                Outcome.CONVERSATION,
-                DecisionMode.MODEL_FAST_PATH,
-                playerReply,
-                state,
-                locale,
-                null,
-                List.of(),
-                null,
-                null);
     }
 
     private ActionOutcome identityReply(

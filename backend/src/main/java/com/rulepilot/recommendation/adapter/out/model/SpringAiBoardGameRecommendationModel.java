@@ -8,7 +8,6 @@ import com.rulepilot.recommendation.BoardGameRecommendationModel.Request;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.StructuredTurn;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.ToolSpec;
 import com.rulepilot.recommendation.BoardGameRecommendationModel.Turn;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -43,7 +42,6 @@ import org.springframework.stereotype.Component;
 public class SpringAiBoardGameRecommendationModel implements BoardGameRecommendationModel {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(SpringAiBoardGameRecommendationModel.class);
-    private static final ObjectMapper DECISION_JSON = new ObjectMapper();
     private final RuntimeModelConfiguration models;
     private final double temperature;
 
@@ -80,53 +78,6 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
     @Override
     public Turn next(Request request, String ownerUsername) {
         return invoke(request, temperature, "react", ownerUsername);
-    }
-
-    @Override
-    public Turn streamDecision(
-            Request request,
-            String ownerUsername,
-            Consumer<String> accumulatedTextListener) {
-        ChatModel model = modelFor(ownerUsername);
-        if (request.toolChoice() != BoardGameRecommendationModel.ToolChoice.AUTO
-                || request.structuredOutput() != null
-                || request.tools().isEmpty()) {
-            throw new IllegalArgumentException("first recommendation decision requires auto action options");
-        }
-        RecommendationDecisionStream decision =
-                new RecommendationDecisionStream(DECISION_JSON, request.tools(), accumulatedTextListener);
-        List<Message> decisionMessages = new ArrayList<>(request.messages());
-        int protocolPosition = 0;
-        while (protocolPosition < decisionMessages.size()
-                && decisionMessages.get(protocolPosition).role() == BoardGameRecommendationModel.Role.SYSTEM) {
-            protocolPosition++;
-        }
-        decisionMessages.add(
-                protocolPosition,
-                Message.system(decision.instruction(false)));
-        Request decisionRequest = new Request(
-                decisionMessages,
-                List.of(),
-                request.maxOutputTokens(),
-                BoardGameRecommendationModel.ToolChoice.NONE,
-                decision.output());
-        try {
-            StructuredTurn structured = streamJson(
-                    model,
-                    decisionRequest,
-                    ownerUsername,
-                    decision::accept,
-                    "structured_decision_stream");
-            decision.finish();
-            Turn turn = decision.turn(structured.completionStatus());
-            if (structured.completionStatus() != CompletionStatus.OUTPUT_LIMIT) {
-                decision.publishReply();
-            }
-            return turn;
-        } catch (RecommendationDecisionStream.Failure failure) {
-            throw new BoardGameRecommendationModel.ProtocolFailure(
-                    "DECISION_" + failure.code().name(), failure);
-        }
     }
 
     @Override
@@ -283,17 +234,20 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
                                 .build();
                 builder.responseFormat(format);
             } else {
-                // Action turns after the structured first-decision barrier require one supplied action.
-                builder.toolChoice(request.toolChoice() == BoardGameRecommendationModel.ToolChoice.REQUIRED
-                        ? "required"
-                        : "auto");
+                // Action turns use the provider's native function-calling contract.
+                builder.toolChoice("required");
                 builder.parallelToolCalls(false);
             }
             options = builder;
         } else if (model.getOptions() instanceof GoogleGenAiChatOptions defaults) {
             GoogleGenAiChatOptions.Builder builder = defaults.mutate();
             if (request.tools().isEmpty()) {
+                builder.toolChoice(null);
                 builder.responseMimeType("application/json");
+            } else {
+                builder.toolChoice(new GoogleGenAiChatOptions.ToolChoice(
+                        GoogleGenAiChatOptions.ToolChoice.Mode.ANY,
+                        request.tools().stream().map(ToolSpec::name).toList()));
             }
             options = builder;
         } else if (model.getOptions() instanceof ToolCallingChatOptions defaults) {
