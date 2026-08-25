@@ -3,6 +3,7 @@
 set -eu
 
 ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+. "$ROOT_DIR/scripts/require-paid-canary-authorization.sh"
 RELEASE_STARTED_AT=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
 
 cd "$ROOT_DIR"

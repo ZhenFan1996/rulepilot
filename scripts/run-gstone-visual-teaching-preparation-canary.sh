@@ -3,11 +3,7 @@
 set -eu
 
 ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-
-if [ "${RULEPILOT_ALLOW_PAID_CANARY:-false}" != "true" ]; then
-	echo "FAIL set RULEPILOT_ALLOW_PAID_CANARY=true to authorize the real Gstone Teaching canary"
-	exit 2
-fi
+. "$ROOT_DIR/scripts/require-paid-canary-authorization.sh"
 
 if [ ! -f "$ROOT_DIR/.env" ]; then
 	echo "FAIL .env is required for the authorized Gstone Teaching canary"

@@ -22,12 +22,12 @@ const cardLocale = computed(() => props.responseLocale ?? locale.value)
 const labels = computed(() => cardLocale.value === 'zh-CN'
   ? {
       introduce: '介绍一下', select: '选这款，找规则书', details: '查看完整资料', source: '来源', noCover: '封面加载中', cover: '的 BGG 封面',
-      whyFit: '为什么选它', tradeoff: '需要留意',
+      whyFit: '为什么选它', verifiedFact: '已核对资料', tradeoff: '需要留意',
       players: (min: number, max: number) => `${min}–${max} 人`, minutes: (min: number, max: number) => min === max ? `约 ${max} 分钟` : `${min}–${max} 分钟`, weight: (value: number) => `复杂度 ${value.toFixed(1)}`, designer: (value: string) => `设计：${value}`,
     }
   : {
       introduce: 'Tell me more', select: 'Choose and find rulebook', details: 'View full details', source: 'Source', noCover: 'Cover loading', cover: ' BGG cover',
-      whyFit: 'Why it fits', tradeoff: 'Tradeoff',
+      whyFit: 'Why it fits', verifiedFact: 'Verified detail', tradeoff: 'Tradeoff',
       players: (min: number, max: number) => `${min}–${max} players`, minutes: (min: number, max: number) => min === max ? `About ${max} min` : `${min}–${max} min`, weight: (value: number) => `Weight ${value.toFixed(1)}`, designer: (value: string) => `By ${value}`,
     })
 
@@ -46,6 +46,12 @@ const quickFacts = computed(() => {
 function hideBrokenImage(event: Event) {
   ;(event.currentTarget as HTMLImageElement).hidden = true
 }
+
+function replyPartLabel(role: NonNullable<RecommendedGame['replyParts']>[number]['role']) {
+  if (role === 'tradeoff') return labels.value.tradeoff
+  if (role === 'verified_fact') return labels.value.verifiedFact
+  return labels.value.whyFit
+}
 </script>
 
 <template>
@@ -62,7 +68,7 @@ function hideBrokenImage(event: Event) {
 
     <dl v-if="entry.replyParts?.length" class="mt-3 grid gap-2 border-t border-ink/8 pt-3 text-sm leading-5">
       <div v-for="(part, index) in entry.replyParts" :key="`${part.role}-${part.subject}-${index}`" class="grid gap-0.5">
-        <dt class="text-[0.6875rem] font-semibold uppercase tracking-[0.08em]" :class="part.role === 'tradeoff' ? 'text-copper' : 'text-felt'">{{ part.role === 'tradeoff' ? labels.tradeoff : labels.whyFit }}</dt>
+        <dt class="text-[0.6875rem] font-semibold uppercase tracking-[0.08em]" :class="part.role === 'tradeoff' ? 'text-copper' : 'text-felt'">{{ replyPartLabel(part.role) }}</dt>
         <dd class="text-ink/65">{{ part.text }}</dd>
       </div>
     </dl>

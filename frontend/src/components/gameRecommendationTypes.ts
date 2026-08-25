@@ -76,7 +76,7 @@ export type RecommendedGame = {
 }
 
 export type RecommendationReplyPart = {
-  role: 'why_fit' | 'tradeoff'
+  role: 'why_fit' | 'verified_fact' | 'tradeoff'
   claimType: 'constraint_fit' | 'structured_fact' | 'taxonomy_classification' | 'attributed_experience' | 'rule_procedure' | 'publisher_description' | 'preference_inference'
   subject: string
   text: string

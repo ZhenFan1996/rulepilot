@@ -1,13 +1,9 @@
 #!/bin/sh
+
 set -eu
 
-if [ "${RULEPILOT_ALLOW_PAID_CANARY:-}" != "true" ]; then
-  echo "Refusing paid teaching canary. Set RULEPILOT_ALLOW_PAID_CANARY=true explicitly." >&2
-  exit 2
-fi
-
-script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-repo_dir=$(CDPATH= cd -- "$script_dir/.." && pwd)
+repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+. "$repo_dir/scripts/require-paid-canary-authorization.sh"
 
 if [ -f "$repo_dir/.env" ]; then
   set -a

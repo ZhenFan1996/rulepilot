@@ -123,4 +123,30 @@ describe('RecommendationGameCard', () => {
     expect(wrapper.text()).toContain('BGG 标注复杂度：2.2 / 5')
     expect(wrapper.text()).not.toContain('evidenceId')
   })
+
+  it('labels a recovery fact as verified material instead of claiming it explains user fit', () => {
+    const wrapper = mount(RecommendationGameCard, {
+      props: {
+        entry: {
+          game,
+          matches: [],
+          tradeoffs: [],
+          replyParts: [{
+            role: 'verified_fact',
+            claimType: 'taxonomy_classification',
+            subject: 'mechanics',
+            text: '已核对的机制包括：牌库构筑。',
+            sourceIndexes: [],
+          }],
+        },
+        sources: [],
+        loading: false,
+        responseLocale: 'zh-CN',
+      },
+    })
+
+    expect(wrapper.text()).toContain('已核对资料')
+    expect(wrapper.text()).toContain('已核对的机制包括：牌库构筑。')
+    expect(wrapper.text()).not.toContain('为什么选它')
+  })
 })

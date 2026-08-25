@@ -30,6 +30,8 @@ import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import org.junit.jupiter.api.Test;
@@ -37,12 +39,31 @@ import org.junit.jupiter.api.Test;
 class RecommendationStructuredPublicationTest {
 
     @Test
-    void validatesTheDecisionThenStreamsCompleteNaturalBlocksWithoutAdvertisingATerminalTool() {
+    void givesTheFinalWriterTheRunBudgetWhileReservingADeterministicCompletionTail() {
+        var properties = new BoardGameRecommendationProperties(
+                8, 3, new BigDecimal("0.65"), Duration.ofSeconds(30));
+        RecommendationReActLoop loop = new RecommendationReActLoop(
+                mock(BoardGameRecommendationModel.class),
+                mock(BoardGameRecommendationTools.class),
+                new BoardGameRecommendationSelector(properties),
+                properties,
+                new ObjectMapper());
+
+        assertThat(loop.publicationModelDeadlineMillis()).isEqualTo(27_000);
+
+        loop.stopBoundedCalls();
+    }
+
+    @Test
+    void validatesTheDecisionThenStreamsCompleteNaturalBlocksWithoutAdvertisingATerminalTool()
+            throws InterruptedException {
         BoardGameRecommendationModel model = mock(BoardGameRecommendationModel.class);
         BoardGameRecommendationTools tools = mock(BoardGameRecommendationTools.class);
         Game game = game(101);
         AtomicReference<Request> structuredRequest = new AtomicReference<>();
-        List<String> streamed = new ArrayList<>();
+        List<String> streamed = new CopyOnWriteArrayList<>();
+        CountDownLatch firstParagraphDelivered = new CountDownLatch(1);
+        CountDownLatch secondParagraphDelivered = new CountDownLatch(1);
         String firstParagraph = "先给你一个明确答案：我会从《Signal Grove》开始。";
         String secondParagraph = "它是合作游戏，三个人会围绕同一目标讨论。";
         String payload = """
@@ -74,8 +95,15 @@ class RecommendationStructuredPublicationTest {
             int firstBlockEnd = payload.indexOf("},{\"surface\":\"MESSAGE\"", decisionEnd) + 1;
             int secondBlockEnd = payload.indexOf("},{\"surface\":\"CARD\"", firstBlockEnd) + 1;
             listener.accept(payload.substring(0, decisionEnd));
+            assertThat(streamed).isEmpty();
             listener.accept(payload.substring(decisionEnd, firstBlockEnd));
+            assertThat(firstParagraphDelivered.await(1, TimeUnit.SECONDS)).isTrue();
+            assertThat(streamed)
+                    .as("the first complete validated paragraph streams before the provider call returns")
+                    .containsExactly(firstParagraph);
             listener.accept(payload.substring(firstBlockEnd, secondBlockEnd));
+            assertThat(secondParagraphDelivered.await(1, TimeUnit.SECONDS)).isTrue();
+            assertThat(streamed).containsExactly(firstParagraph, firstParagraph + "\n\n" + secondParagraph);
             listener.accept(payload.substring(secondBlockEnd));
             return new StructuredTurn(payload, CompletionStatus.COMPLETE);
         });
@@ -95,7 +123,11 @@ class RecommendationStructuredPublicationTest {
                 "zh-CN",
                 "player",
                 ignored -> {},
-                streamed::add);
+                value -> {
+                    streamed.add(value);
+                    if (streamed.size() == 1) firstParagraphDelivered.countDown();
+                    if (streamed.size() == 2) secondParagraphDelivered.countDown();
+                });
 
         assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
         assertThat(streamed).containsExactly(firstParagraph, firstParagraph + "\n\n" + secondParagraph);
@@ -120,14 +152,16 @@ class RecommendationStructuredPublicationTest {
     }
 
     @Test
-    void keepsVerifiedCardsWhenALateModelRationaleViolatesTheEvidenceBoundary() {
+    void keepsVerifiedCardsWhenALateModelRationaleViolatesTheEvidenceBoundary()
+            throws InterruptedException {
         BoardGameRecommendationModel model = mock(BoardGameRecommendationModel.class);
         BoardGameRecommendationTools tools = mock(BoardGameRecommendationTools.class);
         Game game = game(101);
-        List<String> streamed = new ArrayList<>();
-        String unsafeDraft = "先给你一段还没有完整校验的推荐理由。";
+        List<String> streamed = new CopyOnWriteArrayList<>();
+        CountDownLatch validatedLeadDelivered = new CountDownLatch(1);
+        String validatedLead = "先给你一段已经完成自身证据校验的推荐理由。";
         String payload = """
-                {"decision":{"requestedCount":1,"selections":[{"bggId":101}],"referenceBggIds":[]},"replyBlocks":[{"surface":"MESSAGE","role":"NARRATIVE","bggId":null,"internalEvidenceIds":[],"text":"先给你一段还没有完整校验的推荐理由。"},{"surface":"CARD","role":"WHY_FIT","bggId":101,"internalEvidenceIds":["B999:mechanics"],"text":"这句错误地引用了别的候选。"}]}
+                {"decision":{"requestedCount":1,"selections":[{"bggId":101}],"referenceBggIds":[]},"replyBlocks":[{"surface":"MESSAGE","role":"NARRATIVE","bggId":null,"internalEvidenceIds":[],"text":"先给你一段已经完成自身证据校验的推荐理由。"},{"surface":"CARD","role":"WHY_FIT","bggId":101,"internalEvidenceIds":["B999:mechanics"],"text":"这句错误地引用了别的候选。"}]}
                 """
                 .strip();
 
@@ -152,6 +186,10 @@ class RecommendationStructuredPublicationTest {
             java.util.function.Consumer<String> listener = invocation.getArgument(2);
             int invalidCard = payload.indexOf(",{\"surface\":\"CARD\"");
             listener.accept(payload.substring(0, invalidCard));
+            assertThat(validatedLeadDelivered.await(1, TimeUnit.SECONDS)).isTrue();
+            assertThat(streamed)
+                    .as("a safe paragraph is visible while the final card rationale is still arriving")
+                    .containsExactly(validatedLead);
             listener.accept(payload.substring(invalidCard));
             return new StructuredTurn(payload, CompletionStatus.COMPLETE);
         });
@@ -171,16 +209,27 @@ class RecommendationStructuredPublicationTest {
                 "zh-CN",
                 "player",
                 ignored -> {},
-                streamed::add);
+                value -> {
+                    streamed.add(value);
+                    if (streamed.size() == 1) validatedLeadDelivered.countDown();
+                });
 
         assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
         assertThat(response.games())
                 .extracting(entry -> entry.game().ranking().bggId())
                 .containsExactly(101);
         assertThat(response.assistantMessage())
-                .contains("候选已经通过身份和基础资料校验")
-                .doesNotContain(unsafeDraft, "错误地引用");
-        assertThat(streamed).containsExactly(response.assistantMessage());
+                .startsWith(validatedLead)
+                .contains("后半段没有完整生成")
+                .doesNotContain("错误地引用");
+        assertThat(response.games()).singleElement().satisfies(entry ->
+                assertThat(entry.replyParts()).singleElement().satisfies(part -> {
+                    assertThat(part.role())
+                            .isEqualTo(BoardGameRecommendationAgent.ReplyPartRole.VERIFIED_FACT);
+                    assertThat(part.claim().type())
+                            .isNotEqualTo(com.rulepilot.recommendation.CandidateClaim.Type.PREFERENCE_INFERENCE);
+                }));
+        assertThat(streamed).containsExactly(validatedLead, response.assistantMessage());
         assertThat(response.harness().modelCalls()).isEqualTo(2);
         assertThat(response.harness().actions())
                 .contains(
@@ -239,9 +288,12 @@ class RecommendationStructuredPublicationTest {
                 .extracting(entry -> entry.game().ranking().bggId())
                 .containsExactly(101);
         assertThat(response.assistantMessage())
-                .contains("候选已经通过身份和基础资料校验")
+                .contains("确认这些候选对应到具体桌游")
                 .doesNotContain("raw provider failure");
         assertThat(streamed).containsExactly(response.assistantMessage());
+        assertThat(response.games()).singleElement().satisfies(entry ->
+                assertThat(entry.replyParts()).singleElement().satisfies(part ->
+                        assertThat(part.claim().text()).isNotBlank()));
         assertThat(response.harness().modelCalls()).isEqualTo(2);
         assertThat(response.harness().actions())
                 .contains(
@@ -306,6 +358,9 @@ class RecommendationStructuredPublicationTest {
                 .extracting(entry -> entry.game().ranking().bggId())
                 .containsExactly(101);
         assertThat(streamed).containsExactly(response.assistantMessage());
+        assertThat(response.games()).singleElement().satisfies(entry ->
+                assertThat(entry.replyParts()).singleElement().satisfies(part ->
+                        assertThat(part.claim().text()).isNotBlank()));
         assertThat(response.harness().actions())
                 .contains(
                         "RECOMMENDATION_PUBLICATION_RECOVERED:PUBLICATION_TIME_BUDGET",
@@ -313,6 +368,115 @@ class RecommendationStructuredPublicationTest {
                 .noneMatch(action -> action.startsWith("UNAVAILABLE:"));
 
         loop.stopBoundedCalls();
+    }
+
+    @Test
+    void aPermanentlyBlockingPlayerListenerCannotHoldTheModelLifecycleOrSharedCallBudget()
+            throws InterruptedException {
+        BoardGameRecommendationModel model = mock(BoardGameRecommendationModel.class);
+        BoardGameRecommendationTools tools = mock(BoardGameRecommendationTools.class);
+        Game game = game(101);
+        CountDownLatch blockedDeliveryStarted = new CountDownLatch(1);
+        CountDownLatch releaseBlockedDelivery = new CountDownLatch(1);
+        CountDownLatch blockedDeliveryFinished = new CountDownLatch(1);
+        AtomicBoolean providerReturned = new AtomicBoolean();
+        AtomicInteger providerCalls = new AtomicInteger();
+        String payload = """
+                {"decision":{"requestedCount":1,"selections":[{"bggId":101}],"referenceBggIds":[]},"replyBlocks":[{"surface":"MESSAGE","role":"NARRATIVE","bggId":null,"internalEvidenceIds":[],"text":"先给你一款已经核对身份的候选。"},{"surface":"CARD","role":"WHY_FIT","bggId":101,"internalEvidenceIds":["B101:mechanics"],"text":"合作机制适合共同讨论。"}]}
+                """
+                .strip();
+
+        when(model.configured("player")).thenReturn(true);
+        when(tools.webResearchConfigured()).thenReturn(false);
+        when(tools.inspectTitles(List.of("Signal Grove"))).thenReturn(new CatalogObservation(
+                ToolStatus.SUCCESS,
+                ToolName.INSPECT_BGG_TITLES,
+                1,
+                List.of(game),
+                List.of(),
+                ""));
+        when(model.next(any(), eq("player"))).thenReturn(new Turn(
+                "",
+                List.of(new ToolCall(
+                        "inspect-candidates",
+                        BoardGameRecommendationAgent.SEARCH_TOOL,
+                        "{\"titles\":[\"Signal Grove\"]}")),
+                CompletionStatus.COMPLETE));
+        when(model.streamStructured(any(), eq("player"), any())).thenAnswer(invocation -> {
+            providerCalls.incrementAndGet();
+            @SuppressWarnings("unchecked")
+            Consumer<String> listener = invocation.getArgument(2);
+            listener.accept(payload);
+            providerReturned.set(true);
+            return new StructuredTurn(payload, CompletionStatus.COMPLETE);
+        });
+        var properties = new BoardGameRecommendationProperties(
+                8, 3, new BigDecimal("0.65"), Duration.ofMillis(250));
+        RecommendationReActLoop loop = new RecommendationReActLoop(
+                model,
+                tools,
+                new BoardGameRecommendationSelector(properties),
+                properties,
+                new ObjectMapper());
+
+        try {
+            long startedAt = System.nanoTime();
+            var failed = loop.converse(
+                    new ConversationRequest(
+                            RecommendationProfile.empty(),
+                            "请给我一款可以继续查看详情的候选卡。"),
+                    "zh-CN",
+                    "player",
+                    ignored -> {},
+                    ignored -> {
+                        blockedDeliveryStarted.countDown();
+                        try {
+                            boolean released = false;
+                            while (!released) {
+                                try {
+                                    releaseBlockedDelivery.await();
+                                    released = true;
+                                } catch (InterruptedException ignoredInterrupt) {
+                                    // Deliberately ignore cancellation until the test releases this fake network sink.
+                                }
+                            }
+                        } finally {
+                            blockedDeliveryFinished.countDown();
+                        }
+                    });
+            long elapsedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt);
+
+            assertThat(blockedDeliveryStarted.await(1, TimeUnit.SECONDS)).isTrue();
+            assertThat(providerReturned).isTrue();
+            assertThat(elapsedMillis)
+                    .as("the owning request returns at its configured budget despite a stuck network sink")
+                    .isLessThan(1_500);
+            assertThat(failed.outcome()).isEqualTo(Outcome.UNAVAILABLE);
+            assertThat(failed.games()).isEmpty();
+            assertThat(failed.harness().actions())
+                    .contains(
+                            "PUBLICATION_FAILED:PUBLICATION_DELIVERY_FAILED",
+                            "UNAVAILABLE:PUBLICATION_DELIVERY_FAILED")
+                    .doesNotContain("RECOMMEND_GAMES");
+
+            List<String> secondStream = new CopyOnWriteArrayList<>();
+            var second = loop.converse(
+                    new ConversationRequest(
+                            RecommendationProfile.empty(),
+                            "再给我一款可以继续查看详情的候选卡。"),
+                    "zh-CN",
+                    "player",
+                    ignored -> {},
+                    secondStream::add);
+
+            assertThat(second.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
+            assertThat(secondStream).containsExactly(second.assistantMessage());
+            assertThat(providerCalls).hasValue(2);
+        } finally {
+            releaseBlockedDelivery.countDown();
+            assertThat(blockedDeliveryFinished.await(1, TimeUnit.SECONDS)).isTrue();
+            loop.stopBoundedCalls();
+        }
     }
 
     @Test

@@ -248,7 +248,31 @@ test('public ordinary-user smoke artifacts exclude production service logs', () 
   assert.match(productionOrdinaryUserWorkflow, /name: Upload sanitized journey output/)
   assert.match(productionOrdinaryUserWorkflow,
     /path: \.artifacts\/production-ordinary-user-smoke\/summary\.json/)
+  assert.match(productionOrdinaryUserWorkflow, /success-summary\.tmp/)
+  assert.match(productionOrdinaryUserWorkflow, /RULEPILOT_SMOKE_PUBLIC_STATUS_FILE="\$public_status"/)
+  assert.match(productionOrdinaryUserWorkflow, /set \+e[\s\S]*?smoke_exit=\$\?[\s\S]*?set -e/)
+  assert.match(productionOrdinaryUserWorkflow,
+    /--validate-public-status "\$public_status" "\$smoke_exit"/)
+  assert.match(productionOrdinaryUserWorkflow, /cleanupOutcome: "FAILED"/)
+  assert.match(productionOrdinaryUserWorkflow, /pageAttempts: \(if \$source\.pageAttempts == null/)
+  assert.match(productionOrdinaryUserWorkflow, /execution: \$execution\[0\]/)
+  assert.doesNotMatch(productionOrdinaryUserWorkflow, /\.\[0\] \+ \{execution:/)
+  assert.match(productionOrdinaryUserWorkflow, /exit "\$smoke_exit"/)
+  assert.match(productionOrdinaryUserWorkflow, /if-no-files-found: error/)
   assert.doesNotMatch(productionOrdinaryUserWorkflow, /service-diagnostics\.log|docker compose[^\n]*logs|Upload private/)
+  assert.doesNotMatch(productionOrdinaryUserWorkflow,
+    /path:.*(?:diagnostics\.log|result\.json|success-summary\.tmp)/)
+  assert.match(productionOrdinaryUserSmokeScript, /last_completed_stage=not-started/)
+  assert.match(productionOrdinaryUserSmokeScript, /pending_failure_code=INPUT_INVALID/)
+  assert.match(productionOrdinaryUserSmokeScript, /cleanup_outcome=NOT_REQUIRED/)
+  assert.match(productionOrdinaryUserSmokeScript,
+    /cleanupOutcome", "exitCode", "failureCode", "lastCompletedStage", "outcome"/)
+  assert.match(productionOrdinaryUserSmokeScript,
+    /SUCCEEDED\|FAILED\|NOT_REQUIRED/)
+  assert.match(productionOrdinaryUserSmokeScript, /pending_failure_code=TEACHING_PREPARATION_FAILED/)
+  assert.match(productionOrdinaryUserSmokeScript, /pending_failure_code=ANSWER_EVIDENCE_INVALID/)
+  assert.match(productionOrdinaryUserSmokeScript,
+    /if \[ "\$navigation_failures" -gt 0 \]; then[\s\S]*?return 1[\s\S]*?log_stage "navigation-verified/)
 })
 
 test('ordinary-user production smoke can exercise one fresh official image gallery without uploading it', () => {

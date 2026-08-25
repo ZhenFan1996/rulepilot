@@ -21,7 +21,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
-import java.util.function.Consumer;
 
 /** The single deterministic publication boundary for model-written recommendation decisions and prose. */
 final class RecommendationPublication {
@@ -30,6 +29,17 @@ final class RecommendationPublication {
     private static final int MAX_MESSAGE_BLOCK_CODE_POINTS = 700;
     private static final int MAX_REASON_CODE_POINTS = 280;
     private static final int MAX_TRADEOFF_CODE_POINTS = 220;
+    private static final List<String> RECOVERY_EVIDENCE_PRIORITY = List.of(
+            "families",
+            "mechanics",
+            "categories",
+            "playerCount",
+            "durationMinutes",
+            "complexity",
+            "bggType",
+            "designers",
+            "publishers",
+            "publisherDescription");
 
     private final BoardGameRecommendationSelector selector;
     private final RecommendationEvidenceReview evidenceReview;
@@ -135,13 +145,11 @@ final class RecommendationPublication {
     Session open(
             Permit permit,
             RecommendationAgentState state,
-            String locale,
-            Consumer<String> accumulatedAnswerListener) {
+            String locale) {
         return new Session(
                 Objects.requireNonNull(permit, "publication permit is required"),
                 Objects.requireNonNull(state, "recommendation state is required"),
-                locale,
-                Objects.requireNonNull(accumulatedAnswerListener, "answer listener is required"));
+                locale);
     }
 
     private Map<Integer, Map<String, CandidateObservation>> immutableEvidence(
@@ -212,7 +220,6 @@ final class RecommendationPublication {
         private final Permit permit;
         private final RecommendationAgentState state;
         private final String locale;
-        private final Consumer<String> accumulatedAnswerListener;
         private final StringBuilder answer = new StringBuilder();
         private final List<String> answerSnapshots = new ArrayList<>();
         private final List<RecommendationReplyPart> replyParts = new ArrayList<>();
@@ -220,17 +227,20 @@ final class RecommendationPublication {
         private final Set<Integer> gamesWithReasons = new LinkedHashSet<>();
         private final Set<Integer> gamesWithTradeoffs = new LinkedHashSet<>();
         private int messageBlocks;
+        private int drainedSnapshotCount;
         private boolean finished;
+        private boolean committed;
+        private Set<Integer> completedGameIds = Set.of();
+        private Set<String> completedEvidenceIds = Set.of();
+        private List<String> completedActions = List.of();
 
         private Session(
                 Permit permit,
                 RecommendationAgentState state,
-                String locale,
-                Consumer<String> accumulatedAnswerListener) {
+                String locale) {
             this.permit = permit;
             this.state = state;
             this.locale = locale;
-            this.accumulatedAnswerListener = accumulatedAnswerListener;
         }
 
         void acceptBlock(JsonNode block) {
@@ -265,7 +275,6 @@ final class RecommendationPublication {
                     answer.toString(),
                     replyParts,
                     usedEvidenceIds,
-                    answerSnapshots,
                     null);
         }
 
@@ -274,14 +283,35 @@ final class RecommendationPublication {
             String code = failureCode != null && failureCode.matches("[A-Z0-9_]{3,80}")
                     ? failureCode
                     : "PUBLICATION_UNAVAILABLE";
-            String fallback = runtime.chinese(locale)
-                    ? "候选已经通过身份和基础资料校验；这轮自然语言的推荐理由没有安全完成，所以没有发布那部分内容。你仍然可以先看下面的卡片，再让我重写取舍。"
-                    : "These candidates passed identity and catalog checks. The natural-language rationale did not finish safely, so that text was not published. You can still inspect the cards below and ask me to rewrite the tradeoffs.";
+            List<RecommendationReplyPart> recoveredReplyParts = new ArrayList<>(replyParts);
+            Set<String> recoveredEvidenceIds = new LinkedHashSet<>(usedEvidenceIds);
+            permit.selectedGames().stream()
+                    .map(game -> game.ranking().bggId())
+                    .filter(bggId -> !gamesWithReasons.contains(bggId))
+                    .forEach(bggId -> {
+                        RecoveryReason recovered = recoveryReason(bggId);
+                        recoveredReplyParts.add(new RecommendationReplyPart(
+                                recovered.role(),
+                                recovered.claim()));
+                        recoveredEvidenceIds.addAll(recovered.evidenceIds());
+                    });
+
+            String completeAnswer;
+            if (answer.isEmpty()) {
+                completeAnswer = runtime.chinese(locale)
+                        ? "我已经确认这些候选对应到具体桌游，也整理了卡片所需的可追溯资料。最后一段写作没有完整结束，所以我先保留可选择的卡片，并用这些资料补上每款说明。"
+                        : "I confirmed that these candidates refer to specific games and collected traceable material for their cards. The final passage did not finish, so I kept the selectable cards and used that material to fill each note.";
+                addAnswerSnapshot(completeAnswer);
+            } else {
+                String notice = runtime.chinese(locale)
+                        ? "后半段没有完整生成；下面缺失的卡片说明已用可追溯资料补齐。"
+                        : "The later passage did not finish; missing card notes below were filled from traceable material.";
+                completeAnswer = appendRecoveryNotice(notice);
+            }
             return complete(
-                    fallback,
-                    List.of(),
-                    Set.of(),
-                    List.of(fallback),
+                    completeAnswer,
+                    recoveredReplyParts,
+                    recoveredEvidenceIds,
                     code);
         }
 
@@ -289,7 +319,6 @@ final class RecommendationPublication {
                 String completeAnswer,
                 List<RecommendationReplyPart> publishedReplyParts,
                 Set<String> publishedEvidenceIds,
-                List<String> publishedAnswerSnapshots,
                 String recoveryCode) {
             Set<Integer> selectedIds = permit.selectedGames().stream()
                     .map(game -> game.ranking().bggId())
@@ -312,16 +341,20 @@ final class RecommendationPublication {
                                             == game.game().ranking().bggId())
                                     .toList()))
                     .toList();
-            List<String> completedActions = new ArrayList<>(state.actions);
-            if (permit.shortfall() != null) completedActions.add("RECOMMENDATION_AVAILABILITY_SHORTFALL");
+            List<String> responseActions = new ArrayList<>(state.actions);
+            if (permit.shortfall() != null) responseActions.add("RECOMMENDATION_AVAILABILITY_SHORTFALL");
             if (recoveryCode != null) {
-                completedActions.add("RECOMMENDATION_PUBLICATION_RECOVERED:" + recoveryCode);
+                responseActions.add("RECOMMENDATION_PUBLICATION_RECOVERED:" + recoveryCode);
             }
-            completedActions.add("RECOMMEND_GAMES");
+            responseActions.add("RECOMMEND_GAMES");
             var userModel = evidenceReview.userModelView(state, locale);
-            var sources = recoveryCode == null
-                    ? runtime.responseSources(state, games, publishedEvidenceIds)
-                    : List.<BoardGameRecommendationAgent.ResearchSource>of();
+            List<BoardGameRecommendationAgent.ResearchSource> sources;
+            try {
+                sources = runtime.responseSources(state, games, publishedEvidenceIds);
+            } catch (RuntimeException projectionFailure) {
+                if (recoveryCode == null) throw projectionFailure;
+                sources = List.of();
+            }
             ConversationResponse response = new ConversationResponse(
                     Outcome.RECOMMENDATIONS,
                     DecisionMode.MODEL_ASSISTED,
@@ -337,33 +370,40 @@ final class RecommendationPublication {
                             state.catalogCalls,
                             state.webResearchCalls,
                             false,
-                            completedActions,
+                            responseActions,
                             state.elapsedMs()),
                     games,
                     state.comparison,
                     permit.shortfall(),
                     completeAnswer);
 
-            // Model prose is provisional until every required block, evidence binding, and response projection
-            // succeeds. Only then may accumulated paragraphs cross the player-facing stream boundary.
-            publish(publishedAnswerSnapshots);
             finished = true;
-
-            // Commit only after the whole response projection and player delivery succeed. A late source,
-            // presentation, or disconnected-listener failure must not leave a half-published turn in Agent state.
-            state.finalResponseGameIds.addAll(selectedIds);
-            state.finalResponseEvidenceIds.addAll(publishedEvidenceIds);
-            state.actions.clear();
-            state.actions.addAll(completedActions);
+            completedGameIds = Set.copyOf(selectedIds);
+            completedEvidenceIds = Set.copyOf(publishedEvidenceIds);
+            completedActions = List.copyOf(responseActions);
             return response;
         }
 
-        private void publish(List<String> snapshots) {
-            try {
-                snapshots.forEach(accumulatedAnswerListener);
-            } catch (RuntimeException exception) {
-                throw new DeliveryFailure(exception);
+        List<String> drainAnswerSnapshots() {
+            if (drainedSnapshotCount == answerSnapshots.size()) return List.of();
+            List<String> pending = List.copyOf(answerSnapshots.subList(drainedSnapshotCount, answerSnapshots.size()));
+            drainedSnapshotCount = answerSnapshots.size();
+            return pending;
+        }
+
+        void commit() {
+            if (!finished) throw new IllegalStateException("recommendation publication is not finished");
+            if (committed) throw new IllegalStateException("recommendation publication is already committed");
+            if (drainedSnapshotCount != answerSnapshots.size()) {
+                throw new IllegalStateException("recommendation publication still has undelivered snapshots");
             }
+            committed = true;
+            // The caller invokes this only after every queued player delivery succeeds. A late source,
+            // presentation, timeout, or disconnected-listener failure therefore cannot commit a partial turn.
+            state.finalResponseGameIds.addAll(completedGameIds);
+            state.finalResponseEvidenceIds.addAll(completedEvidenceIds);
+            state.actions.clear();
+            state.actions.addAll(completedActions);
         }
 
         private void acceptMessage(
@@ -383,6 +423,134 @@ final class RecommendationPublication {
             messageBlocks++;
             usedEvidenceIds.addAll(evidenceIds);
             answerSnapshots.add(answer.toString());
+            // A complete paragraph has passed the structured block boundary and every declared evidence id belongs
+            // to the permitted candidates. The lifecycle owner drains this snapshot and delivers it outside its
+            // state lock, so streaming never exposes partial JSON or lets a blocked network listener hold the lock.
+        }
+
+        private void addAnswerSnapshot(String text) {
+            answer.setLength(0);
+            answer.append(text);
+            messageBlocks = Math.max(messageBlocks, 1);
+            answerSnapshots.add(answer.toString());
+        }
+
+        private String appendRecoveryNotice(String notice) {
+            int separatorLength = answer.isEmpty() ? 0 : 2;
+            int nextLength = answer.codePointCount(0, answer.length())
+                    + separatorLength
+                    + notice.codePointCount(0, notice.length());
+            if (nextLength <= MAX_MESSAGE_CODE_POINTS) {
+                if (!answer.isEmpty()) answer.append("\n\n");
+                answer.append(notice);
+                answerSnapshots.add(answer.toString());
+            }
+            return answer.toString();
+        }
+
+        private RecoveryReason recoveryReason(int bggId) {
+            CandidateClaim explicitFit = permit.selectedGames().stream()
+                    .filter(game -> game.ranking().bggId() == bggId)
+                    .findFirst()
+                    .stream()
+                    .flatMap(game -> selector.fitClaims(game, state.profile, runtime.chinese(locale)).stream())
+                    .filter(claim -> claim.relation() == CandidateClaim.Relation.SATISFIED)
+                    .filter(claim -> !claim.evidence().isEmpty())
+                    .findFirst()
+                    .orElse(null);
+            if (explicitFit != null) {
+                return new RecoveryReason(
+                        ReplyPartRole.WHY_FIT,
+                        explicitFit,
+                        explicitFit.evidence().stream().map(CandidateObservation::id).toList());
+            }
+
+            Map<String, CandidateObservation> available =
+                    permit.allowedEvidenceByGame().getOrDefault(bggId, Map.of());
+            CandidateObservation observation = RECOVERY_EVIDENCE_PRIORITY.stream()
+                    .flatMap(attribute -> available.values().stream()
+                            .filter(candidate -> attribute.equals(candidate.attribute()))
+                            .limit(1))
+                    .findFirst()
+                    .orElseGet(() -> available.values().stream().findFirst().orElseThrow(
+                            () -> invalid(Code.RECOMMENDATION_EVIDENCE_REQUIRED)));
+            String value = bounded(observation.value(), 140);
+            String text = recoveryFact(observation, value);
+            CandidateClaim claim = new CandidateClaim(
+                    bggId,
+                    observation.attribute(),
+                    neutralClaimType(observation),
+                    null,
+                    CandidateClaim.Relation.OBSERVED,
+                    bounded(text, MAX_REASON_CODE_POINTS),
+                    List.of(observation));
+            return new RecoveryReason(ReplyPartRole.VERIFIED_FACT, claim, List.of(observation.id()));
+        }
+
+        private CandidateClaim.Type neutralClaimType(CandidateObservation observation) {
+            return switch (observation.kind()) {
+                case STRUCTURED_METADATA -> "publisherDescription".equals(observation.attribute())
+                        ? CandidateClaim.Type.PUBLISHER_DESCRIPTION
+                        : CandidateClaim.Type.STRUCTURED_FACT;
+                case TAXONOMY -> CandidateClaim.Type.TAXONOMY_CLASSIFICATION;
+                case ATTRIBUTED_REPORT -> CandidateClaim.Type.ATTRIBUTED_EXPERIENCE;
+                case RULEBOOK_FACT -> CandidateClaim.Type.STRUCTURED_FACT;
+            };
+        }
+
+        private String recoveryFact(CandidateObservation observation, String value) {
+            if (runtime.chinese(locale)) {
+                if (observation.kind() == CandidateObservation.Kind.ATTRIBUTED_REPORT) {
+                    return "来源资料提到：" + value + "。";
+                }
+                if (observation.kind() == CandidateObservation.Kind.RULEBOOK_FACT) {
+                    return "规则书资料写明：" + value + "。";
+                }
+                if ("publisherDescription".equals(observation.attribute())) {
+                    return "出版方资料写明：" + value + "。";
+                }
+                return switch (observation.attribute()) {
+                    case "families" -> "已核对的系列资料包含：" + value + "。";
+                    case "mechanics" -> "已核对的机制包括：" + value + "。";
+                    case "categories" -> "已核对的类别包括：" + value + "。";
+                    case "playerCount" -> "已核对的玩家人数为 " + value + "。";
+                    case "durationMinutes" -> "已核对的游玩时长范围为 " + value + " 分钟。";
+                    case "complexity" -> "已核对的 BGG 复杂度为 " + value + "。";
+                    case "bggType" -> "已核对的 BGG 类型为 " + value + "。";
+                    case "designers" -> "已核对的设计者资料包含：" + value + "。";
+                    case "publishers" -> "已核对的出版方资料包含：" + value + "。";
+                    default -> "卡片中的这项资料已经核对：" + value + "。";
+                };
+            }
+            if (observation.kind() == CandidateObservation.Kind.ATTRIBUTED_REPORT) {
+                return "An attributed source reports: " + value + ".";
+            }
+            if (observation.kind() == CandidateObservation.Kind.RULEBOOK_FACT) {
+                return "The rulebook material states: " + value + ".";
+            }
+            if ("publisherDescription".equals(observation.attribute())) {
+                return "The publisher material states: " + value + ".";
+            }
+            return switch (observation.attribute()) {
+                case "families" -> "verified family data includes " + value + ".";
+                case "mechanics" -> "verified mechanisms include " + value + ".";
+                case "categories" -> "verified categories include " + value + ".";
+                case "playerCount" -> "the verified player range is " + value + ".";
+                case "durationMinutes" -> "the verified play-time range is " + value + " minutes.";
+                case "complexity" -> "the verified BGG weight is " + value + ".";
+                case "bggType" -> "the verified BGG type is " + value + ".";
+                case "designers" -> "verified designer data includes " + value + ".";
+                case "publishers" -> "verified publisher data includes " + value + ".";
+                default -> "this card fact was verified: " + value + ".";
+            };
+        }
+
+        private String bounded(String value, int maximumCodePoints) {
+            String text = value == null ? "" : value.strip();
+            int length = text.codePointCount(0, text.length());
+            if (length <= maximumCodePoints) return text;
+            int end = text.offsetByCodePoints(0, Math.max(1, maximumCodePoints - 1));
+            return text.substring(0, end).stripTrailing() + "…";
         }
 
         private void acceptCard(
@@ -472,6 +640,14 @@ final class RecommendationPublication {
                 throw invalid(code);
             }
         }
+
+        private record RecoveryReason(
+                ReplyPartRole role, CandidateClaim claim, List<String> evidenceIds) {
+            private RecoveryReason {
+                Objects.requireNonNull(role, "recovery reply role is required");
+                evidenceIds = List.copyOf(evidenceIds);
+            }
+        }
     }
 
     enum Code {
@@ -521,7 +697,7 @@ final class RecommendationPublication {
     }
 
     static final class DeliveryFailure extends RuntimeException {
-        private DeliveryFailure(RuntimeException cause) {
+        DeliveryFailure(RuntimeException cause) {
             super("recommendation publication delivery failed", cause);
         }
     }
