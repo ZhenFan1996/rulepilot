@@ -215,6 +215,10 @@ jobs:
 
           artifact_dir="$GITHUB_WORKSPACE/.artifacts/production-ordinary-user-smoke"
           mkdir -p "$artifact_dir"
+          public_status="$artifact_dir/public-status.json"
+          success_summary="$artifact_dir/success-summary.tmp"
+          printf '%s\n' '{"outcome":"FAILED","exitCode":1,"lastCompletedStage":"not-started","failureCode":"UNEXPECTED_SMOKE_FAILURE","cleanupOutcome":"NOT_REQUIRED"}' > "$public_status"
+          chmod 600 "$public_status"
           smoke_args=(--base-url http://127.0.0.1:18080 --result-file "$artifact_dir/result.json")
           preparation_mode=$(<"$RUNNER_TEMP/preparation-mode")
           if [[ "$preparation_mode" == official_image_gallery ]]; then
@@ -245,10 +249,112 @@ jobs:
               --question "$RULEBOOK_QUESTION"
             )
           fi
+          set +e
           RULEPILOT_SMOKE_PASSWORD="$player_password" \
+            RULEPILOT_SMOKE_PUBLIC_STATUS_FILE="$public_status" \
             bash scripts/smoke-production-ordinary-user.sh "${smoke_args[@]}" \
-              > "$artifact_dir/summary.json" 2> "$artifact_dir/diagnostics.log"
+              > "$success_summary" 2> "$artifact_dir/diagnostics.log"
+          smoke_exit=$?
+          set -e
+
+          if ! bash scripts/smoke-production-ordinary-user.sh \
+              --validate-public-status "$public_status" "$smoke_exit"; then
+            if [[ "$smoke_exit" == 0 ]]; then smoke_exit=1; fi
+            jq -n --argjson exitCode "$smoke_exit" '
+              {outcome: "FAILED", exitCode: $exitCode, lastCompletedStage: "status-unavailable",
+               failureCode: "UNEXPECTED_SMOKE_FAILURE", cleanupOutcome: "FAILED"}
+            ' > "$public_status"
+          fi
+
+          if [[ "$smoke_exit" == 0 ]] && jq -e --slurpfile execution "$public_status" '
+            select(type == "object")
+            | select(
+                (.title | type == "string" and length > 0)
+                and (.preparationState | type == "string" and length > 0)
+                and (.lessonState | type == "string" and length > 0)
+                and (.lessonStatus | type == "string" and length > 0)
+                and (.answerStatus | type == "string" and length > 0)
+                and (.sectionCount | type == "number" and . >= 0)
+                and (.answerCitationCount | type == "number" and . >= 0)
+                and (.visualStepCount | type == "number" and . >= 0)
+                and (.focusedVisualStepCount | type == "number" and . >= 0)
+                and (.visualEnrichmentState | type == "string" and length > 0)
+                and (.cleanup == "scheduled")
+                and (.navigation | type == "object")
+                and (.navigation | keys | sort == ["averageMs", "failureCount", "maxMs", "requestCount"])
+                and (.navigation.requestCount | type == "number" and . >= 0)
+                and (.navigation.failureCount == 0)
+                and (.navigation.averageMs | type == "number" and . >= 0)
+                and (.navigation.maxMs | type == "number" and . >= 0)
+                and (if .sourceMode == "official_image_gallery" then
+                  (.sourceUrl | type == "string" and length > 0)
+                  and (.effectiveSourceUrl | type == "string" and length > 0)
+                  and (.pageCount | type == "number" and . > 0)
+                  and (.pageAttempts | type == "object" and .valid == true)
+                else .sourceMode == null end)
+              )
+            | . as $source
+            | {
+                sourceMode: $source.sourceMode,
+                title: $source.title,
+                sourceUrl: $source.sourceUrl,
+                effectiveSourceUrl: $source.effectiveSourceUrl,
+                pageCount: $source.pageCount,
+                pageAttempts: (if $source.pageAttempts == null then null else {
+                  pages: [$source.pageAttempts.pages[]? | {
+                    page, ocrOutcome, initialOutcome, recoveryKind, repairCode,
+                    recoveryOutcome, semanticAttempts, finalOutcome
+                  }],
+                  ocrSucceeded: $source.pageAttempts.ocrSucceeded,
+                  ocrFailed: $source.pageAttempts.ocrFailed,
+                  ocrRejected: $source.pageAttempts.ocrRejected,
+                  ocrRetryAttempted: $source.pageAttempts.ocrRetryAttempted,
+                  initialSucceeded: $source.pageAttempts.initialSucceeded,
+                  initialFailed: $source.pageAttempts.initialFailed,
+                  initialRejected: $source.pageAttempts.initialRejected,
+                  transientRetryAttempted: $source.pageAttempts.transientRetryAttempted,
+                  transientRetrySucceeded: $source.pageAttempts.transientRetrySucceeded,
+                  transientRetryFailed: $source.pageAttempts.transientRetryFailed,
+                  repairAttempted: $source.pageAttempts.repairAttempted,
+                  repairSucceeded: $source.pageAttempts.repairSucceeded,
+                  repairFailed: $source.pageAttempts.repairFailed,
+                  finalUnavailablePages: $source.pageAttempts.finalUnavailablePages,
+                  maximumSemanticAttemptsForAnyPage: $source.pageAttempts.maximumSemanticAttemptsForAnyPage,
+                  valid: $source.pageAttempts.valid
+                } end),
+                preparationState: $source.preparationState,
+                lessonState: $source.lessonState,
+                lessonStatus: $source.lessonStatus,
+                answerStatus: $source.answerStatus,
+                sectionCount: $source.sectionCount,
+                answerCitationCount: $source.answerCitationCount,
+                visualStepCount: $source.visualStepCount,
+                focusedVisualStepCount: $source.focusedVisualStepCount,
+                visualEnrichmentState: $source.visualEnrichmentState,
+                navigation: {
+                  requestCount: $source.navigation.requestCount,
+                  failureCount: $source.navigation.failureCount,
+                  averageMs: $source.navigation.averageMs,
+                  maxMs: $source.navigation.maxMs
+                },
+                cleanup: $source.cleanup,
+                execution: $execution[0]
+              }
+            | with_entries(select(.value != null))
+          ' "$success_summary" > "$artifact_dir/summary.tmp"; then
+            mv "$artifact_dir/summary.tmp" "$artifact_dir/summary.json"
+          else
+            if [[ "$smoke_exit" == 0 ]]; then
+              smoke_exit=1
+              jq '{outcome: "FAILED", exitCode: 1, lastCompletedStage: "summary-unavailable",
+                   failureCode: "UNEXPECTED_SMOKE_FAILURE", cleanupOutcome}' "$public_status" \
+                > "$artifact_dir/public-status.tmp"
+              mv "$artifact_dir/public-status.tmp" "$public_status"
+            fi
+            cp "$public_status" "$artifact_dir/summary.json"
+          fi
           chmod -R go-rwx "$artifact_dir"
+          exit "$smoke_exit"
 
       - name: Upload sanitized journey output
         if: always()
@@ -256,5 +362,5 @@ jobs:
         with:
           name: production-ordinary-user-smoke-${{ github.run_id }}
           path: .artifacts/production-ordinary-user-smoke/summary.json
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 1

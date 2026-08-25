@@ -6,6 +6,77 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 
+test('writes a controlled public failure status even when input validation stops before the journey', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'rulepilot-production-smoke-status-'))
+  const publicStatus = join(directory, 'public-status.json')
+  try {
+    const result = await spawnResult(
+      'bash',
+      [resolve('scripts/smoke-production-ordinary-user.sh'), '--unsupported-input'],
+      { ...process.env, RULEPILOT_SMOKE_PUBLIC_STATUS_FILE: publicStatus },
+    )
+
+    assert.equal(result.code, 2)
+    assert.deepEqual(JSON.parse(await readFile(publicStatus, 'utf8')), {
+      outcome: 'FAILED',
+      exitCode: 2,
+      lastCompletedStage: 'not-started',
+      failureCode: 'INPUT_INVALID',
+      cleanupOutcome: 'NOT_REQUIRED',
+    })
+    assert.doesNotMatch(await readFile(publicStatus, 'utf8'), /unsupported-input/)
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test('public status validator rejects contradictory or expanded workflow artifacts', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'rulepilot-production-status-contract-'))
+  const publicStatus = join(directory, 'public-status.json')
+  const validator = resolve('scripts/smoke-production-ordinary-user.sh')
+  const validDoubleFailure = {
+    outcome: 'FAILED',
+    exitCode: 1,
+    lastCompletedStage: 'answer-verified',
+    failureCode: 'NAVIGATION_FAILED',
+    cleanupOutcome: 'FAILED',
+  }
+  try {
+    await writeFile(publicStatus, JSON.stringify(validDoubleFailure))
+    assert.equal((await spawnResult('bash', [validator, '--validate-public-status', publicStatus, '1'])).code, 0)
+
+    const counterexamples = [
+      { ...validDoubleFailure, outcome: 'SUCCEEDED' },
+      { ...validDoubleFailure, exitCode: 0, failureCode: null, cleanupOutcome: 'SUCCEEDED' },
+      { ...validDoubleFailure, failureCode: null },
+      { ...validDoubleFailure, failureCode: 'UNBOUNDED_FAILURE_CODE' },
+      {
+        outcome: 'SUCCEEDED', exitCode: 0, lastCompletedStage: 'journey-completed',
+        failureCode: 'NAVIGATION_FAILED', cleanupOutcome: 'SUCCEEDED',
+      },
+      {
+        outcome: 'FAILED', exitCode: 1, lastCompletedStage: 'journey-completed',
+        failureCode: 'CLEANUP_FAILED', cleanupOutcome: 'SUCCEEDED',
+      },
+      { ...validDoubleFailure, rawModelOutput: 'must never become public' },
+    ]
+    for (const status of counterexamples) {
+      await writeFile(publicStatus, JSON.stringify(status))
+      const expectedExit = String(status.exitCode)
+      const result = await spawnResult('bash', [validator, '--validate-public-status', publicStatus, expectedExit])
+      assert.notEqual(result.code, 0, JSON.stringify(status))
+    }
+
+    await writeFile(publicStatus, JSON.stringify(validDoubleFailure))
+    assert.notEqual(
+      (await spawnResult('bash', [validator, '--validate-public-status', publicStatus, '0'])).code,
+      0,
+    )
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
 test('replays the ordinary-user upload journey and cleans up the synthetic document', async () => {
   const calls = []
   let planStarted = false
@@ -21,6 +92,9 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
   let visualRunReads = 0
   let answerHasCitations = true
   let answerReferencesAlign = true
+  let navigationFails = false
+  let deletionFails = false
+  let completeLessonImmediately = false
   let expectedQuestion = 'How many victory points is each lit dock worth during final scoring?'
   const server = createServer(async (request, response) => {
     const body = await readBody(request)
@@ -41,6 +115,9 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
     }
     if (request.method === 'GET' && ['/', '/teach', '/lessons', '/catalog', '/library', '/account'].includes(request.url)) {
       return json(response, 200, {})
+    }
+    if (request.method === 'GET' && request.url === '/api/v1/teaching-plans' && navigationFails) {
+      return json(response, 503, { error: 'navigation unavailable' })
     }
     if (request.method === 'GET' && ['/api/v1/teaching-plans', '/api/public/lessons'].includes(request.url)) {
       return json(response, 200, [])
@@ -123,7 +200,7 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
     }
     if (request.method === 'GET' && request.url === '/api/v1/assistant-runs/55555555-5555-5555-5555-555555555555') {
       lessonRunReads += 1
-      const state = lessonRunReads === 1
+      const state = completeLessonImmediately ? 'COMPLETED' : lessonRunReads === 1
         ? 'RECEIVED'
         : lessonRunReads === 2
           ? 'RETRIEVING'
@@ -230,6 +307,7 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
       return json(response, 202, {})
     }
     if (request.method === 'DELETE' && request.url === '/api/v1/documents/11111111-1111-1111-1111-111111111111') {
+      if (deletionFails) return json(response, 503, { error: 'cleanup unavailable' })
       deleted = true
       response.statusCode = 204
       return response.end()
@@ -243,6 +321,8 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
   const navigation = join(directory, 'navigation.tsv')
   const retainedResult = join(directory, 'retained-result.json')
   const retainedPlanCheckpoint = join(directory, 'retained-plan-checkpoint.json')
+  const publicStatus = join(directory, 'public-status.json')
+  const failedPublicStatus = join(directory, 'failed-public-status.json')
   await writeFile(pdf, '%PDF-1.4\n%%EOF\n')
 
   try {
@@ -258,7 +338,11 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
         '--navigation-file', navigation,
         '--result-file', retainedResult,
         '--timeout-seconds', '10'],
-      { ...process.env, RULEPILOT_SMOKE_PASSWORD: 'smoke-password' },
+      {
+        ...process.env,
+        RULEPILOT_SMOKE_PASSWORD: 'smoke-password',
+        RULEPILOT_SMOKE_PUBLIC_STATUS_FILE: publicStatus,
+      },
     )
     assert.equal(result.code, 0, result.stderr)
     const summary = JSON.parse(result.stdout)
@@ -280,6 +364,13 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
     assert.equal(summary.navigation.failureCount, 0)
     assert.ok(summary.navigation.averageMs >= 0)
     assert.ok(summary.navigation.maxMs >= 0)
+    assert.deepEqual(JSON.parse(await readFile(publicStatus, 'utf8')), {
+      outcome: 'SUCCEEDED',
+      exitCode: 0,
+      lastCompletedStage: 'journey-completed',
+      failureCode: null,
+      cleanupOutcome: 'SUCCEEDED',
+    })
     const retained = JSON.parse(await readFile(retainedResult, 'utf8'))
     assert.equal(retained.stage, 'lesson')
     assert.equal(retained.sourceUrl, 'https://example.com/lantern-relay-rules.pdf')
@@ -318,10 +409,21 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
         '--base-url', `http://127.0.0.1:${address.port}`,
         '--pdf', pdf,
         '--timeout-seconds', '10'],
-      { ...process.env, RULEPILOT_SMOKE_PASSWORD: 'smoke-password' },
+      {
+        ...process.env,
+        RULEPILOT_SMOKE_PASSWORD: 'smoke-password',
+        RULEPILOT_SMOKE_PUBLIC_STATUS_FILE: failedPublicStatus,
+      },
     )
     assert.notEqual(ungroundedAnswer.code, 0)
     assert.match(ungroundedAnswer.stderr, /Rule answer did not publish a conclusion with page evidence and aligned source references/)
+    assert.deepEqual(JSON.parse(await readFile(failedPublicStatus, 'utf8')), {
+      outcome: 'FAILED',
+      exitCode: 1,
+      lastCompletedStage: 'lesson-verified',
+      failureCode: 'ANSWER_EVIDENCE_INVALID',
+      cleanupOutcome: 'SUCCEEDED',
+    })
     assert.equal(deleted, true)
     answerHasCitations = true
 
@@ -486,6 +588,96 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
     assert.match(insufficient.stderr, /SMOKE_TIMING phase=Illustrated-lesson-failure kind=activity/)
     assert.match(insufficient.stderr, /Illustrated lesson ended in INSUFFICIENT_EVIDENCE/)
     assert.equal(deleted, true)
+
+    insufficientLesson = false
+    completeLessonImmediately = true
+    navigationFails = true
+    deletionFails = false
+    deleted = false
+    planStarted = false
+    const navigationFailureStatus = join(directory, 'navigation-failure-status.json')
+    const navigationFailure = await spawnResult(
+      'bash',
+      [resolve('scripts/smoke-production-ordinary-user.sh'),
+        '--base-url', `http://127.0.0.1:${address.port}`,
+        '--pdf', pdf,
+        '--navigation-mode', 'api',
+        '--navigation-file', join(directory, 'navigation-failure.tsv'),
+        '--timeout-seconds', '10'],
+      {
+        ...process.env,
+        RULEPILOT_SMOKE_PASSWORD: 'smoke-password',
+        RULEPILOT_SMOKE_PUBLIC_STATUS_FILE: navigationFailureStatus,
+      },
+    )
+    assert.equal(navigationFailure.code, 1, navigationFailure.stderr)
+    assert.match(navigationFailure.stderr, /Concurrent navigation observed 1 non-successful responses/)
+    assert.doesNotMatch(navigationFailure.stderr, /SMOKE_STAGE navigation-verified/)
+    assert.deepEqual(JSON.parse(await readFile(navigationFailureStatus, 'utf8')), {
+      outcome: 'FAILED',
+      exitCode: 1,
+      lastCompletedStage: 'answer-verified',
+      failureCode: 'NAVIGATION_FAILED',
+      cleanupOutcome: 'SUCCEEDED',
+    })
+    assert.equal(deleted, true)
+
+    deletionFails = true
+    deleted = false
+    planStarted = false
+    const doubleFailureStatus = join(directory, 'double-failure-status.json')
+    const doubleFailure = await spawnResult(
+      'bash',
+      [resolve('scripts/smoke-production-ordinary-user.sh'),
+        '--base-url', `http://127.0.0.1:${address.port}`,
+        '--pdf', pdf,
+        '--navigation-mode', 'api',
+        '--navigation-file', join(directory, 'double-failure-navigation.tsv'),
+        '--timeout-seconds', '10'],
+      {
+        ...process.env,
+        RULEPILOT_SMOKE_PASSWORD: 'smoke-password',
+        RULEPILOT_SMOKE_PUBLIC_STATUS_FILE: doubleFailureStatus,
+      },
+    )
+    assert.equal(doubleFailure.code, 1, doubleFailure.stderr)
+    assert.match(doubleFailure.stderr, /SMOKE_STAGE cleanup-failed/)
+    assert.deepEqual(JSON.parse(await readFile(doubleFailureStatus, 'utf8')), {
+      outcome: 'FAILED',
+      exitCode: 1,
+      lastCompletedStage: 'answer-verified',
+      failureCode: 'NAVIGATION_FAILED',
+      cleanupOutcome: 'FAILED',
+    })
+    assert.equal(deleted, false)
+
+    navigationFails = false
+    deleted = false
+    planStarted = false
+    const cleanupFailureStatus = join(directory, 'cleanup-failure-status.json')
+    const cleanupFailure = await spawnResult(
+      'bash',
+      [resolve('scripts/smoke-production-ordinary-user.sh'),
+        '--base-url', `http://127.0.0.1:${address.port}`,
+        '--pdf', pdf,
+        '--timeout-seconds', '10'],
+      {
+        ...process.env,
+        RULEPILOT_SMOKE_PASSWORD: 'smoke-password',
+        RULEPILOT_SMOKE_PUBLIC_STATUS_FILE: cleanupFailureStatus,
+      },
+    )
+    assert.equal(cleanupFailure.code, 1, cleanupFailure.stderr)
+    assert.match(cleanupFailure.stderr, /SMOKE_STAGE journey-completed/)
+    assert.match(cleanupFailure.stderr, /SMOKE_STAGE cleanup-failed/)
+    assert.deepEqual(JSON.parse(await readFile(cleanupFailureStatus, 'utf8')), {
+      outcome: 'FAILED',
+      exitCode: 1,
+      lastCompletedStage: 'journey-completed',
+      failureCode: 'CLEANUP_FAILED',
+      cleanupOutcome: 'FAILED',
+    })
+    assert.equal(deleted, false)
   } finally {
     server.closeAllConnections()
     await new Promise((resolvePromise) => server.close(resolvePromise))
@@ -807,6 +999,8 @@ test('keeps a timed-out accepted import failed while deleting only its later exa
   const canaryTitle = 'Dune: Imperium · RulePilot canary cleanup-later'
   const deleted = []
   let importReads = 0
+  const statusDirectory = await mkdtemp(join(tmpdir(), 'rulepilot-production-gallery-status-'))
+  const publicStatus = join(statusDirectory, 'public-status.json')
 
   const server = createServer(async (request, response) => {
     await readBody(request)
@@ -901,6 +1095,7 @@ test('keeps a timed-out accepted import failed while deleting only its later exa
         ...process.env,
         RULEPILOT_SMOKE_PASSWORD: 'smoke-password',
         RULEPILOT_SMOKE_CLEANUP_TIMEOUT_SECONDS: '5',
+        RULEPILOT_SMOKE_PUBLIC_STATUS_FILE: publicStatus,
       },
     )
 
@@ -908,10 +1103,18 @@ test('keeps a timed-out accepted import failed while deleting only its later exa
     assert.match(result.stderr, /Official image-gallery import timed out/)
     assert.match(result.stderr, /SMOKE_STAGE cleanup-import-resolved/)
     assert.match(result.stderr, /SMOKE_STAGE cleanup-completed/)
+    assert.deepEqual(JSON.parse(await readFile(publicStatus, 'utf8')), {
+      outcome: 'FAILED',
+      exitCode: 1,
+      lastCompletedStage: 'official-import-accepted',
+      failureCode: 'OFFICIAL_IMPORT_FAILED',
+      cleanupOutcome: 'SUCCEEDED',
+    })
     assert.deepEqual(deleted, [`/api/v1/documents/${documentId}`])
   } finally {
     server.closeAllConnections()
     await new Promise((resolvePromise) => server.close(resolvePromise))
+    await rm(statusDirectory, { recursive: true, force: true })
   }
 })
 

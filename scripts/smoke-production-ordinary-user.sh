@@ -2,6 +2,104 @@
 
 set -Eeuo pipefail
 
+validate_public_status() {
+	local status_file=${1:-}
+	local expected_exit=${2:-}
+	if [ -z "$status_file" ] || ! [[ "$expected_exit" =~ ^(0|[1-9][0-9]{0,2})$ ]] \
+			|| [ "$expected_exit" -gt 255 ] || [ ! -f "$status_file" ]; then
+		return 2
+	fi
+	jq -e --argjson expectedExit "$expected_exit" '
+		type == "object"
+		and (keys | sort == ["cleanupOutcome", "exitCode", "failureCode", "lastCompletedStage", "outcome"])
+		and (.exitCode == $expectedExit)
+		and (.lastCompletedStage | type == "string" and test("^[a-z0-9-]+$"))
+		and (.cleanupOutcome == "SUCCEEDED" or .cleanupOutcome == "FAILED" or .cleanupOutcome == "NOT_REQUIRED")
+		and (
+			if $expectedExit == 0 then
+				.outcome == "SUCCEEDED"
+				and .failureCode == null
+				and .lastCompletedStage == "journey-completed"
+				and .cleanupOutcome != "FAILED"
+			else
+				.outcome == "FAILED"
+				and (.failureCode == "INPUT_INVALID"
+					or .failureCode == "AUTHENTICATION_FAILED"
+					or .failureCode == "SOURCE_DISCOVERY_FAILED"
+					or .failureCode == "SOURCE_UPLOAD_FAILED"
+					or .failureCode == "OFFICIAL_IMPORT_FAILED"
+					or .failureCode == "PAGE_SEQUENCE_INVALID"
+					or .failureCode == "TEACHING_PREPARATION_FAILED"
+					or .failureCode == "TEACHING_PLAN_INVALID"
+					or .failureCode == "LESSON_GENERATION_FAILED"
+					or .failureCode == "ANSWER_EVIDENCE_INVALID"
+					or .failureCode == "NAVIGATION_FAILED"
+					or .failureCode == "CLEANUP_FAILED"
+					or .failureCode == "UNEXPECTED_SMOKE_FAILURE")
+				and (if .failureCode == "CLEANUP_FAILED" then
+					.cleanupOutcome == "FAILED" and .lastCompletedStage == "journey-completed"
+				else true end)
+			end
+		)
+	' "$status_file" >/dev/null
+}
+
+# Workflow-only validation keeps the public artifact contract executable and testable.
+if [ "${1:-}" = --validate-public-status ]; then
+	if validate_public_status "${2:-}" "${3:-}"; then
+		exit 0
+	else
+		exit $?
+	fi
+fi
+
+public_status_file=${RULEPILOT_SMOKE_PUBLIC_STATUS_FILE:-}
+last_completed_stage=not-started
+pending_failure_code=INPUT_INVALID
+cleanup_outcome=NOT_REQUIRED
+cleanup_required=false
+
+write_public_status() {
+	local exit_status=$1
+	[ -n "$public_status_file" ] || return 0
+	local outcome failure_json safe_stage safe_code safe_cleanup status_dir status_tmp
+	safe_stage=$last_completed_stage
+	if ! [[ "$safe_stage" =~ ^[a-z0-9-]+$ ]]; then safe_stage=unknown; fi
+	safe_code=$pending_failure_code
+	case "$safe_code" in
+		INPUT_INVALID|AUTHENTICATION_FAILED|SOURCE_DISCOVERY_FAILED|SOURCE_UPLOAD_FAILED|OFFICIAL_IMPORT_FAILED|PAGE_SEQUENCE_INVALID|TEACHING_PREPARATION_FAILED|TEACHING_PLAN_INVALID|LESSON_GENERATION_FAILED|ANSWER_EVIDENCE_INVALID|NAVIGATION_FAILED|CLEANUP_FAILED|UNEXPECTED_SMOKE_FAILURE) ;;
+		*) safe_code=UNEXPECTED_SMOKE_FAILURE ;;
+	esac
+	safe_cleanup=$cleanup_outcome
+	case "$safe_cleanup" in
+		SUCCEEDED|FAILED|NOT_REQUIRED) ;;
+		*) safe_cleanup=FAILED ;;
+	esac
+	if [ "$exit_status" -eq 0 ]; then
+		outcome=SUCCEEDED
+		failure_json=null
+	else
+		outcome=FAILED
+		failure_json="\"$safe_code\""
+	fi
+	status_dir=$(dirname "$public_status_file")
+	mkdir -p "$status_dir"
+	status_tmp="${public_status_file}.tmp.$$"
+	umask 077
+	printf '{"outcome":"%s","exitCode":%d,"lastCompletedStage":"%s","failureCode":%s,"cleanupOutcome":"%s"}\n' \
+		"$outcome" "$exit_status" "$safe_stage" "$failure_json" "$safe_cleanup" > "$status_tmp"
+	chmod 600 "$status_tmp"
+	mv "$status_tmp" "$public_status_file"
+}
+
+write_early_public_status() {
+	local exit_status=$?
+	trap - EXIT
+	write_public_status "$exit_status"
+	exit "$exit_status"
+}
+trap write_early_public_status EXIT
+
 usage() {
 	cat <<'EOF'
 Usage: RULEPILOT_SMOKE_PASSWORD=... smoke-production-ordinary-user.sh \
@@ -235,7 +333,6 @@ visual_result=null
 page_attempts=null
 csrf_header=
 csrf_token=
-probe_index=0
 
 probe_navigation() {
 	[ -n "$navigation_file" ] || return 0
@@ -260,7 +357,11 @@ probe_navigation() {
 			"/api/public/lessons"
 		)
 	fi
-	local path=${paths[$((probe_index % ${#paths[@]}))]}
+	local completed_probe_count=0
+	if [ -s "$navigation_file" ]; then
+		completed_probe_count=$(awk 'END { print NR + 0 }' "$navigation_file")
+	fi
+	local path=${paths[$((completed_probe_count % ${#paths[@]}))]}
 	local measurement http_code elapsed_seconds
 	measurement=$(curl --location --silent --show-error --output /dev/null \
 		--cookie "$cookie_jar" --cookie-jar "$cookie_jar" \
@@ -269,7 +370,6 @@ probe_navigation() {
 	http_code=${measurement%%$'\t'*}
 	elapsed_seconds=${measurement#*$'\t'}
 	printf '%s\t%s\t%s\t%s\n' "$phase" "$path" "$http_code" "$elapsed_seconds" >> "$navigation_file"
-	probe_index=$((probe_index + 1))
 }
 
 navigation_summary() {
@@ -464,7 +564,11 @@ page_attempt_report() {
 }
 
 log_stage() {
+	local event=${1%% *}
 	printf 'SMOKE_STAGE %s\n' "$1" >&2
+	if [[ "$event" =~ ^[a-z0-9-]+$ ]] && [[ "$event" != cleanup-* ]]; then
+		last_completed_stage=$event
+	fi
 }
 
 log_run_timing() {
@@ -656,9 +760,16 @@ resolve_pending_official_import_for_cleanup() {
 
 cleanup() {
 	local exit_status=$?
+	local forward_stage=$last_completed_stage
+	local forward_failure_code=$pending_failure_code
 	local cleanup_failed=0
 	set +e
-	if [ -n "$csrf_header" ] && [ -n "$csrf_token" ]; then
+	if [ "$cleanup_required" = true ]; then
+		cleanup_outcome=SUCCEEDED
+	fi
+	if [ "$cleanup_required" = true ] && { [ -z "$csrf_header" ] || [ -z "$csrf_token" ]; }; then
+		cleanup_failed=1
+	elif [ -n "$csrf_header" ] && [ -n "$csrf_token" ]; then
 		if ! resolve_pending_official_import_for_cleanup; then cleanup_failed=1; fi
 		cancel_run "$visual_run_id"
 		cancel_run "$lesson_run_id"
@@ -679,8 +790,18 @@ cleanup() {
 				fi
 			fi
 		fi
-	if [ "$cleanup_failed" -ne 0 ] && [ "$exit_status" -eq 0 ]; then exit_status=1; fi
+	last_completed_stage=$forward_stage
+	pending_failure_code=$forward_failure_code
+	if [ "$cleanup_failed" -ne 0 ]; then
+		cleanup_outcome=FAILED
+	fi
+	if [ "$cleanup_failed" -ne 0 ] && [ "$exit_status" -eq 0 ]; then
+		exit_status=1
+		pending_failure_code=CLEANUP_FAILED
+	fi
+	write_public_status "$exit_status"
 	rm -rf "$work_dir"
+	trap - EXIT
 	exit "$exit_status"
 }
 trap cleanup EXIT
@@ -854,6 +975,7 @@ run_official_image_gallery() {
 	local lesson_result lesson_state lesson lesson_status section_count visual_step_count focused_visual_step_count
 	local answer_payload answer_response answer_run_id answer_status answer_citation_count navigation navigation_failures summary
 
+	pending_failure_code=SOURCE_DISCOVERY_FAILED
 	refresh_csrf
 	binding=$(post_json "/api/v1/bgg/games/$bgg_id/import" '{}')
 	if ! jq -e --argjson bgg_id "$bgg_id" '.bggId == $bgg_id and (.edition.id | type == "string" and length > 0)' \
@@ -900,6 +1022,7 @@ run_official_image_gallery() {
 	official_import_edition_id=$edition_id
 	official_import_canary_title=$canary_title
 	log_stage "image-gallery-candidate-verified source=$official_source_url pages=$expected_page_count"
+	pending_failure_code=OFFICIAL_IMPORT_FAILED
 
 	import_payload=$(jq -cn \
 		--arg editionId "$edition_id" \
@@ -924,6 +1047,7 @@ run_official_image_gallery() {
 		return 1
 	fi
 	official_import_job_id=$(jq -er '.id' <<<"$import_launch")
+	cleanup_required=true
 	log_stage "official-import-accepted job=$official_import_job_id"
 
 	import_result=$(wait_for_official_import "$official_import_job_id")
@@ -962,6 +1086,7 @@ run_official_image_gallery() {
 	fi
 	preparation_run_id=$(jq -er '.teachingPreparationRunId' <<<"$import_result")
 	log_stage "official-import-completed version=$version_id"
+	pending_failure_code=PAGE_SEQUENCE_INVALID
 
 	page_summaries=$(get_json "/api/v1/document-versions/$version_id/pages/summaries")
 	if ! jq -e --argjson expected "$expected_page_count" '
@@ -971,6 +1096,7 @@ run_official_image_gallery() {
 		return 1
 	fi
 	log_stage "image-gallery-pages-verified count=$expected_page_count"
+	pending_failure_code=TEACHING_PREPARATION_FAILED
 
 	preparation_result=$(wait_for_run "$preparation_run_id" "Teaching preparation")
 	preparation_state=$(jq -er '.run.state' <<<"$preparation_result")
@@ -987,6 +1113,7 @@ run_official_image_gallery() {
 	fi
 	printf 'SMOKE_PAGE_ATTEMPTS %s\n' "$page_attempts" >&2
 	log_stage "teaching-preparation-completed"
+	pending_failure_code=TEACHING_PLAN_INVALID
 
 	plan=$(get_json "/api/v1/document-versions/$version_id/teaching-plans/latest")
 	plan_id=$(jq -er '.id' <<<"$plan")
@@ -1002,6 +1129,7 @@ run_official_image_gallery() {
 		return 1
 	fi
 	log_stage "teaching-plan-verified"
+	pending_failure_code=LESSON_GENERATION_FAILED
 
 	lesson_run_id=$(wait_for_latest_teaching_run_id "$plan_id")
 	verify_launched_run "$lesson_run_id" "Illustrated lesson"
@@ -1020,6 +1148,7 @@ run_official_image_gallery() {
 		return 1
 	fi
 	log_stage "lesson-verified"
+	pending_failure_code=ANSWER_EVIDENCE_INVALID
 
 	refresh_csrf
 	answer_payload=$(jq -cn --arg question "$question" --arg language "$answer_language" \
@@ -1045,6 +1174,7 @@ run_official_image_gallery() {
 		return 1
 	fi
 	log_stage "answer-verified run=$answer_run_id status=$answer_status citations=$answer_citation_count"
+	pending_failure_code=NAVIGATION_FAILED
 
 	navigation=$(navigation_summary)
 	navigation_failures=$(jq -er '.failureCount' <<<"$navigation")
@@ -1052,6 +1182,7 @@ run_official_image_gallery() {
 		echo "Concurrent navigation observed $navigation_failures non-successful responses" >&2
 		return 1
 	fi
+	log_stage "navigation-verified requests=$(jq -er '.requestCount' <<<"$navigation") averageMs=$(jq -er '.averageMs' <<<"$navigation") maxMs=$(jq -er '.maxMs' <<<"$navigation")"
 	summary=$(jq -n \
 		--arg title "$plan_title" \
 		--arg preparationState "$preparation_state" \
@@ -1094,9 +1225,11 @@ run_official_image_gallery() {
 			  lessonRun: $lessonRun, lesson: $lesson, answer: $answer}' > "$result_file"
 		chmod 600 "$result_file"
 	fi
+	log_stage "journey-completed"
 	printf '%s\n' "$summary"
 }
 
+pending_failure_code=AUTHENTICATION_FAILED
 refresh_csrf
 log_stage "csrf-ready"
 curl --fail-with-body --silent --show-error --output /dev/null \
@@ -1119,6 +1252,7 @@ if [ "$source_mode" = official_image_gallery ]; then
 	exit 0
 fi
 
+pending_failure_code=SOURCE_UPLOAD_FAILED
 refresh_csrf
 upload_form=(
 	--form "title=$uploaded_title"
@@ -1141,9 +1275,11 @@ if ! jq -e '.duplicate == false' >/dev/null <<<"$upload_response"; then
 	exit 1
 fi
 cleanup_document=true
+cleanup_required=true
 log_stage "upload-completed"
 wait_for_document_ready "$version_id"
 log_stage "document-ready"
+pending_failure_code=TEACHING_PREPARATION_FAILED
 
 refresh_csrf
 preparation_launch=$(curl --fail-with-body --silent --show-error \
@@ -1158,6 +1294,7 @@ preparation_state=$(jq -er '.run.state' <<<"$preparation_result")
 log_run_timing "preparation" "$preparation_result"
 verify_preparation_critical_path "$preparation_result"
 log_stage "teaching-preparation-completed"
+pending_failure_code=TEACHING_PLAN_INVALID
 
 plan=$(get_json "/api/v1/document-versions/$version_id/teaching-plans/latest")
 plan_id=$(jq -er '.id' <<<"$plan")
@@ -1184,6 +1321,7 @@ if ! jq -e --arg expected "$expected_title" '
 	exit 1
 fi
 log_stage "teaching-plan-verified"
+pending_failure_code=LESSON_GENERATION_FAILED
 
 documents_response=$(get_json "/api/v1/documents")
 document_response=$(jq -er --arg document_id "$document_id" \
@@ -1234,6 +1372,7 @@ if [ "$visual_expectation" = forbidden ] && [ "$visual_step_count" -gt 0 ]; then
 fi
 log_stage "visual-expectation-verified expectation=$visual_expectation visualSteps=$visual_step_count focusedVisualSteps=$focused_visual_step_count"
 log_stage "lesson-verified"
+pending_failure_code=ANSWER_EVIDENCE_INVALID
 
 refresh_csrf
 answer_payload=$(jq -cn --arg question "$question" --arg language "$answer_language" \
@@ -1271,14 +1410,15 @@ if ! jq -e '
 	exit 1
 fi
 log_stage "answer-verified run=$answer_run_id status=$answer_status citations=$answer_citation_count"
+pending_failure_code=NAVIGATION_FAILED
 
 navigation=$(navigation_summary)
 navigation_failures=$(jq -er '.failureCount' <<<"$navigation")
-log_stage "navigation-verified requests=$(jq -er '.requestCount' <<<"$navigation") averageMs=$(jq -er '.averageMs' <<<"$navigation") maxMs=$(jq -er '.maxMs' <<<"$navigation")"
 if [ "$navigation_failures" -gt 0 ]; then
 	echo "Concurrent navigation observed $navigation_failures non-successful responses" >&2
 	exit 1
 fi
+log_stage "navigation-verified requests=$(jq -er '.requestCount' <<<"$navigation") averageMs=$(jq -er '.averageMs' <<<"$navigation") maxMs=$(jq -er '.maxMs' <<<"$navigation")"
 
 summary=$(jq -n \
 	--arg title "$actual_title" \
@@ -1318,4 +1458,5 @@ if [ -n "$result_file" ]; then
 	chmod 600 "$result_file"
 fi
 
+log_stage "journey-completed"
 printf '%s\n' "$summary"
