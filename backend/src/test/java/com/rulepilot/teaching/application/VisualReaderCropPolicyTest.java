@@ -75,9 +75,9 @@ class VisualReaderCropPolicyTest {
     void keeps_candidate_and_duplicate_geometry_checks_independent_of_model_work() {
         LocatedRegion region = region("行动箭头", "箭头指向下一个行动", 180, 180, 200, 160);
         var matchingCandidate = new VisualRegionCandidateSelector.Candidate(
-                2, new Rectangle(100, 100, 300, 300), "图中行动箭头");
+                "matching_1", 2, new Rectangle(100, 100, 300, 300), VisualSourceKind.PAGE_REGION);
         var otherPageCandidate = new VisualRegionCandidateSelector.Candidate(
-                3, new Rectangle(100, 100, 300, 300), "另一页");
+                "other_page_1", 3, new Rectangle(100, 100, 300, 300), VisualSourceKind.PAGE_REGION);
         VisualFocus sameViewport = new VisualFocus(2, "行动", 190, 190, 180, 150);
         VisualFocus differentViewport = new VisualFocus(2, "另一处", 600, 600, 120, 120);
 

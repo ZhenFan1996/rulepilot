@@ -7,10 +7,14 @@ import com.rulepilot.ingestion.RulebookUnderstandingCatalog;
 import com.rulepilot.ingestion.layout.RulebookUnderstanding;
 import com.rulepilot.teaching.VisualRegionLocator;
 import com.rulepilot.teaching.domain.IllustratedLesson;
+import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
+import java.time.ZoneId;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 
 class VisualLessonEnricherTest {
@@ -74,6 +78,65 @@ class VisualLessonEnricherTest {
     }
 
     @Test
+    void compatibilityEnrichmentSharesOneWallDeadlineAcrossAllSections() {
+        UUID firstEvidence = UUID.randomUUID();
+        UUID secondEvidence = UUID.randomUUID();
+        AtomicReference<Instant> now = new AtomicReference<>(Instant.parse("2026-08-26T00:00:00Z"));
+        Clock clock = new Clock() {
+            @Override
+            public ZoneId getZone() {
+                return ZoneId.of("UTC");
+            }
+
+            @Override
+            public Clock withZone(ZoneId zone) {
+                return this;
+            }
+
+            @Override
+            public Instant instant() {
+                return now.get();
+            }
+        };
+        java.util.concurrent.atomic.AtomicInteger calls = new java.util.concurrent.atomic.AtomicInteger();
+        VisualRegionLocator visual = request -> {
+            calls.incrementAndGet();
+            now.set(now.get().plusSeconds(2));
+            var candidate = request.candidates().getFirst();
+            return java.util.Optional.of(new VisualRegionLocator.LocatedRegion(
+                    candidate.pageNumber(),
+                    "可核对图示",
+                    "候选区域中可见组件与相邻的流程箭头",
+                    candidate.rectangle().x(),
+                    candidate.rectangle().y(),
+                    candidate.rectangle().width(),
+                    candidate.rectangle().height(),
+                    List.of(request.claims().getFirst().evidenceId())));
+        };
+        var enricher = new VisualLessonEnricher(
+                ignored -> understanding(),
+                (ignored, pages) -> pages.stream().map(page -> new DocumentPageImages.PageImage(
+                        page, "image/png", new byte[] {1}, 1_000, 1_000)).toList(),
+                new VisualRegionCandidateSelector(),
+                visual,
+                new VisualSectionPrioritizer(),
+                null,
+                Duration.ofSeconds(1),
+                clock);
+
+        var result = enricher.enrichWithReport(
+                UUID.randomUUID(),
+                twoSectionsWithOverlappingVisuals(firstEvidence, secondEvidence),
+                "owner");
+
+        assertThat(calls).hasValue(1);
+        assertThat(result.outcomes()).extracting(VisualLessonEnricher.SectionOutcome::outcome)
+                .containsExactly(
+                        VisualLessonEnricher.Outcome.ADDED,
+                        VisualLessonEnricher.Outcome.MODEL_TIMEOUT);
+    }
+
+    @Test
     void announces_the_exact_rule_step_before_the_visual_model_is_called() {
         UUID chunk = UUID.randomUUID();
         List<String> events = new java.util.ArrayList<>();
@@ -117,7 +180,10 @@ class VisualLessonEnricherTest {
                 calls.incrementAndGet();
                 assertThat(request.claims()).extracting(VisualRegionLocator.Claim::stepPosition)
                         .containsExactly(1, 2);
-                assertThat(request.visualBudget()).isEqualTo(6);
+                assertThat(request.candidates())
+                        .hasSizeLessThanOrEqualTo(VisualRegionLocator.VisualLocationRequest.MAX_CANDIDATES_PER_BATCH);
+                assertThat(request.batchNumber()).isOne();
+                assertThat(request.hasMoreCandidates()).isFalse();
                 return VisualRegionLocator.LocateGuideResult.found(List.of(
                         new VisualRegionLocator.LocatedRegion(
                                 2, "行动标记", "圆形行动标记旁有指向轨道的箭头", 120, 220, 180, 120,
@@ -133,9 +199,7 @@ class VisualLessonEnricherTest {
                         2, "image/png", new byte[] {1}, 1_000, 1_000)),
                 new VisualRegionCandidateSelector(),
                 locator,
-                new VisualSectionPrioritizer(),
-                12,
-                6);
+                new VisualSectionPrioritizer());
 
         var result = enricher.enrich(UUID.randomUUID(), twoRuleLesson(iconEvidence, stateEvidence));
 

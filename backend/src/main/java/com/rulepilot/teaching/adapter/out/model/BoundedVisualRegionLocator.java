@@ -1,5 +1,6 @@
 package com.rulepilot.teaching.adapter.out.model;
 
+import com.rulepilot.assistant.AgentExecutionStoppedException;
 import com.rulepilot.teaching.VisualRegionLocator;
 import com.rulepilot.teaching.VisualRegionLocator.Diagnostic;
 import com.rulepilot.teaching.VisualRegionLocator.LocatedRegion;
@@ -35,7 +36,7 @@ public class BoundedVisualRegionLocator implements VisualRegionLocator {
     private final Duration timeout;
 
     public BoundedVisualRegionLocator(
-            @Qualifier("agenticVisualRegionLocator") VisualRegionLocator delegate,
+            @Qualifier("springAiVisualRegionLocator") VisualRegionLocator delegate,
             @Qualifier("visualLocationExecutor") AsyncTaskExecutor executor,
             @Value("${rulepilot.visual.location-timeout:PT45S}") Duration timeout) {
         this.delegate = delegate;
@@ -67,6 +68,17 @@ public class BoundedVisualRegionLocator implements VisualRegionLocator {
 
     @Override
     public LocateGuideResult locateGuideWithResult(VisualLocationRequest request) {
+        return locateGuideWithResult(request, timeout);
+    }
+
+    @Override
+    public LocateGuideResult locateGuideWithResult(VisualLocationRequest request, Duration remainingWorkflowTime) {
+        if (remainingWorkflowTime == null || remainingWorkflowTime.isZero() || remainingWorkflowTime.isNegative()) {
+            return LocateGuideResult.unavailable(Diagnostic.TIMEOUT);
+        }
+        Duration effectiveTimeout = remainingWorkflowTime.compareTo(timeout) < 0
+                ? remainingWorkflowTime
+                : timeout;
         Future<LocateGuideResult> work;
         try {
             work = executor.submit(() -> delegate.locateGuideWithResult(request));
@@ -75,16 +87,17 @@ public class BoundedVisualRegionLocator implements VisualRegionLocator {
             return LocateGuideResult.unavailable(Diagnostic.EXECUTOR_BUSY);
         }
         try {
-            return work.get(timeout.toMillis(), TimeUnit.MILLISECONDS);
+            return work.get(Math.max(1L, effectiveTimeout.toMillis()), TimeUnit.MILLISECONDS);
         } catch (TimeoutException slowProvider) {
             work.cancel(true);
-            log.info("Skipped visual enrichment after {} ms", timeout.toMillis());
+            log.info("Skipped visual enrichment after {} ms", effectiveTimeout.toMillis());
             return LocateGuideResult.unavailable(Diagnostic.TIMEOUT);
         } catch (InterruptedException interrupted) {
             work.cancel(true);
             Thread.currentThread().interrupt();
             return LocateGuideResult.unavailable(Diagnostic.INTERRUPTED);
         } catch (ExecutionException failed) {
+            if (failed.getCause() instanceof AgentExecutionStoppedException stopped) throw stopped;
             log.info("Skipped visual enrichment after provider failure: {}", rootMessage(failed));
             return LocateGuideResult.unavailable(Diagnostic.PROVIDER_FAILURE);
         }

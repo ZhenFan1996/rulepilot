@@ -80,11 +80,13 @@ final class RecommendationEvidenceReview {
         Map<String, ContextualPreference> contextualUpdates = new LinkedHashMap<>();
         Set<String> seen = new LinkedHashSet<>();
         for (JsonNode update : updates) {
-            PreferenceEvidenceClassification classification = preferenceClassification(update, request);
             String field = text(update.path("field"), 1, 40);
-            if (!seen.add(canonicalPreferenceField(field))) {
+            String canonicalField = canonicalPreferenceField(field);
+            if (!seen.add(canonicalField)) {
                 throw new InvalidAction("PREFERENCE_FIELD_INVALID");
             }
+            if (redundantCategoricalClear(update, canonicalField, current, request)) continue;
+            PreferenceEvidenceClassification classification = preferenceClassification(update, request);
             if (classification.contextual()) {
                 ContextualPreference contextual = contextualPreference(
                         update, request, classification.reason());
@@ -101,6 +103,31 @@ final class RecommendationEvidenceReview {
                 contextualUpdates,
                 !candidate.equals(current),
                 !directUpdates.isEmpty());
+    }
+
+    private boolean redundantCategoricalClear(
+            JsonNode update,
+            String field,
+            RecommendationProfile current,
+            ConversationRequest request) {
+        if (!update.path("value").isNull()
+                || !"type".equals(field) && !"interaction".equals(field)
+                || "type".equals(field) && current.type() != BggGameType.ALL
+                || "interaction".equals(field) && current.interaction() != InteractionPreference.ANY) {
+            return false;
+        }
+        requireObject(
+                update,
+                Set.of("field", "value", "evidence"),
+                Set.of("evidenceClassification"));
+        String classification = update.has("evidenceClassification")
+                ? text(update.path("evidenceClassification"), 1, 40)
+                : "DIRECT";
+        if (!"DIRECT".equals(classification)) {
+            throw new InvalidAction("PREFERENCE_EVIDENCE_CLASSIFICATION_INVALID");
+        }
+        requirePreferenceEvidence(update.path("evidence").asText(), request);
+        return true;
     }
 
     private String canonicalPreferenceField(String field) {
@@ -209,7 +236,8 @@ final class RecommendationEvidenceReview {
             JsonNode value = update.path("value");
             result = switch (field) {
                 case "playerCount" -> {
-                    ConstraintRange<Integer> proposed = playerCountConstraint(value, evidence, request);
+                    ConstraintRange<Integer> proposed =
+                            playerCountConstraint(value, result.playerCount(), evidence, request);
                     if (!sameRange(result.playerCount(), proposed)) {
                         requirePreferenceEvidence(evidence, request);
                     }
@@ -235,7 +263,7 @@ final class RecommendationEvidenceReview {
                 case "durationMinutes" -> {
                     ConstraintRange<Integer> proposed = value.isNull()
                             ? null
-                            : durationConstraintRange(value, evidence, request);
+                            : durationConstraintRange(value, result.durationMinutes(), evidence, request);
                     if (!sameRange(result.durationMinutes(), proposed)) {
                         requirePreferenceEvidence(evidence, request);
                     }
@@ -262,7 +290,12 @@ final class RecommendationEvidenceReview {
                     ConstraintRange<BigDecimal> proposed = value.isNull()
                             ? null
                             : decimalConstraintRange(
-                                    value, BigDecimal.ZERO, new BigDecimal("5"), evidence, request);
+                                    value,
+                                    result.complexity(),
+                                    BigDecimal.ZERO,
+                                    new BigDecimal("5"),
+                                    evidence,
+                                    request);
                     if (!sameRange(result.complexity(), proposed)) {
                         requirePreferenceEvidence(evidence, request);
                     }
@@ -316,14 +349,22 @@ final class RecommendationEvidenceReview {
 
     private ConstraintRange<Integer> integerConstraintRange(
             JsonNode value,
+            ConstraintRange<Integer> current,
             int allowedMinimum,
             int allowedMaximum,
             String evidenceId,
             ConversationRequest request,
             String errorCode) {
         requireObject(value, Set.of(), Set.of("minimum", "maximum"));
-        Integer minimum = nullableInteger(value.path("minimum"), allowedMinimum, allowedMaximum, errorCode);
-        Integer maximum = nullableInteger(value.path("maximum"), allowedMinimum, allowedMaximum, errorCode);
+        if (!value.has("minimum") && !value.has("maximum")) {
+            throw new InvalidAction(errorCode);
+        }
+        Integer minimum = value.has("minimum")
+                ? nullableInteger(value.path("minimum"), allowedMinimum, allowedMaximum, errorCode)
+                : current == null ? null : current.minimum();
+        Integer maximum = value.has("maximum")
+                ? nullableInteger(value.path("maximum"), allowedMinimum, allowedMaximum, errorCode)
+                : current == null ? null : current.maximum();
         if (minimum == null && maximum == null || minimum != null && maximum != null && minimum > maximum) {
             throw new InvalidAction(errorCode);
         }
@@ -333,6 +374,7 @@ final class RecommendationEvidenceReview {
 
     private ConstraintRange<Integer> playerCountConstraint(
             JsonNode value,
+            ConstraintRange<Integer> current,
             String evidenceId,
             ConversationRequest request) {
         if (value.isNull()) return null;
@@ -341,26 +383,35 @@ final class RecommendationEvidenceReview {
                     integer(value, 1, 20, "PLAYERS_OUT_OF_RANGE"), evidenceId, request);
         }
         return integerConstraintRange(
-                value, 1, 20, evidenceId, request, "PLAYERS_OUT_OF_RANGE");
+                value, current, 1, 20, evidenceId, request, "PLAYERS_OUT_OF_RANGE");
     }
 
     private ConstraintRange<Integer> durationConstraintRange(
             JsonNode value,
+            ConstraintRange<Integer> current,
             String evidenceId,
             ConversationRequest request) {
         return integerConstraintRange(
-                value, 5, 1_440, evidenceId, request, "DURATION_OUT_OF_RANGE");
+                value, current, 5, 1_440, evidenceId, request, "DURATION_OUT_OF_RANGE");
     }
 
     private ConstraintRange<BigDecimal> decimalConstraintRange(
             JsonNode value,
+            ConstraintRange<BigDecimal> current,
             BigDecimal allowedMinimum,
             BigDecimal allowedMaximum,
             String evidenceId,
             ConversationRequest request) {
         requireObject(value, Set.of(), Set.of("minimum", "maximum"));
-        BigDecimal minimum = nullableDecimal(value.path("minimum"), allowedMinimum, allowedMaximum);
-        BigDecimal maximum = nullableDecimal(value.path("maximum"), allowedMinimum, allowedMaximum);
+        if (!value.has("minimum") && !value.has("maximum")) {
+            throw new InvalidAction("WEIGHT_OUT_OF_RANGE");
+        }
+        BigDecimal minimum = value.has("minimum")
+                ? nullableDecimal(value.path("minimum"), allowedMinimum, allowedMaximum)
+                : current == null ? null : current.minimum();
+        BigDecimal maximum = value.has("maximum")
+                ? nullableDecimal(value.path("maximum"), allowedMinimum, allowedMaximum)
+                : current == null ? null : current.maximum();
         if (minimum == null && maximum == null
                 || minimum != null && maximum != null && minimum.compareTo(maximum) > 0) {
             throw new InvalidAction("WEIGHT_OUT_OF_RANGE");

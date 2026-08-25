@@ -57,11 +57,9 @@ services:
       VISUAL_SEMANTIC_REQUEST_PARALLELISM: ${PRODUCTION_VISUAL_SEMANTIC_REQUEST_PARALLELISM:-4}
       VISUAL_CATALOG_TIMEOUT: PT120S
       VISUAL_PROGRESSIVE_START_TIMEOUT: PT35S
-      # Publish the cited text lesson first, then give the first visual pass enough breadth to cover the major
-      # gameplay chapters. The bounded request pool protects reading, upload, and answer traffic while the single
-      # enrichment worker prevents several lessons from retaining rendered-page buffers at once.
-      VISUAL_MAX_SECTIONS: ${PRODUCTION_VISUAL_MAX_SECTIONS:-6}
-      VISUAL_MAX_RESULTS_PER_SECTION: ${PRODUCTION_VISUAL_MAX_RESULTS_PER_SECTION:-6}
+      VISUAL_COMPATIBILITY_WORKFLOW_TIMEOUT: ${VISUAL_COMPATIBILITY_WORKFLOW_TIMEOUT:-PT10M}
+      # Publish the cited text lesson first. The single enrichment worker and per-call candidate attachment batch
+      # protect reading, upload, and answer traffic without truncating the lesson's eligible visual chapters.
       ANSWER_RATE_PROVIDER_CONCURRENCY: ${PRODUCTION_ANSWER_PROVIDER_CONCURRENCY:-2}
       SERVER_TOMCAT_THREADS_MAX: ${PRODUCTION_TOMCAT_MAX_THREADS:-16}
       SERVER_TOMCAT_THREADS_MIN_SPARE: "4"

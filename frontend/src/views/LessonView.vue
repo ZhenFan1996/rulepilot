@@ -27,6 +27,13 @@ import {
   type TeachingRunProgress,
 } from '@/lib/teachingProgress'
 import { useLocale } from '@/lib/locale'
+import {
+  fetchVisualStatusWithDeadline,
+  VISUAL_LESSON_SETTLING_READS,
+  VISUAL_REFRESH_FAILURE_LIMIT,
+  VISUAL_RUN_DISCOVERY_LIMIT,
+  visualRunIsTerminal,
+} from '@/lib/visualEnrichment'
 
 interface TeachingPlan {
   id: string
@@ -100,7 +107,10 @@ const catalogPresentation = ref<CatalogGamePresentation | null>(null)
 const catalogCoverUnavailable = ref(false)
 const generationStatusUnknown = ref(false)
 const generationRefreshError = ref('')
+const generationIdentityBlocked = ref(false)
 const generationFinishedMessage = ref('')
+const visualRefreshWarning = ref('')
+const visualRefreshStopped = ref(false)
 const generationNow = ref(Date.now())
 let generationClockTimer: ReturnType<typeof setInterval> | undefined
 let lessonViewDisposed = false
@@ -110,6 +120,20 @@ let activeLessonLoadController: AbortController | null = null
 let activeGenerationController: AbortController | null = null
 let activeVisualController: AbortController | null = null
 let activeSupportingController: AbortController | null = null
+let missingVisualRunRefreshes = 0
+let visualRefreshFailures = 0
+let visualLessonSettlingReads = 0
+let visualDiscoveryScope: string | null = null
+let observedTerminalVisualRunId: string | null = null
+let visualIdentityBlocked = false
+
+const VISUAL_RETRY_DELAY_MS = 250
+
+type VisualRunRead =
+  | { outcome: 'PRESENT'; value: TeachingRunProgress }
+  | { outcome: 'ABSENT' }
+  | { outcome: 'FAILED' }
+  | { outcome: 'IDENTITY' }
 
 const {
   comprehension,
@@ -132,6 +156,8 @@ const {
 const {
   generationActive,
   visualEnrichmentActive,
+  visualEnrichmentFailed,
+  visualEnrichmentSummary,
   draftReady,
   currentGenerationText,
   generationElapsed,
@@ -150,13 +176,32 @@ const {
   now: generationNow,
 })
 
+const visualEvidenceExpected = computed(() => plan.value?.sections.some(
+  section => section.visualEvidenceRecommended,
+) === true)
+const teachingRunTerminal = computed(() => visualRunIsTerminal(teachingRun.value?.run.state))
+
+function shouldPollVisualEnrichment() {
+  if (visualIdentityBlocked || visualRefreshFailures >= VISUAL_REFRESH_FAILURE_LIMIT) return false
+  if (visualLessonSettlingReads > 0) return true
+  return visualEnrichmentActive.value
+    ? missingVisualRunRefreshes < VISUAL_RUN_DISCOVERY_LIMIT
+    : (!visualEnrichmentRun.value
+      && teachingRunTerminal.value
+      && visualEvidenceExpected.value
+      && missingVisualRunRefreshes < VISUAL_RUN_DISCOVERY_LIMIT)
+}
+
 const generationPolling = useConditionalPolling({
-  enabled: () => !lessonViewDisposed && online.value && generationActive.value,
+  enabled: () => !lessonViewDisposed
+    && online.value
+    && generationActive.value
+    && !generationIdentityBlocked.value,
   refresh: refreshGeneration,
   defaultDelay: 1_500,
 })
 const visualPolling = useConditionalPolling({
-  enabled: () => !lessonViewDisposed && online.value && visualEnrichmentActive.value,
+  enabled: () => !lessonViewDisposed && online.value && shouldPollVisualEnrichment(),
   refresh: refreshVisualEnrichment,
   defaultDelay: 2_500,
 })
@@ -226,6 +271,166 @@ function responseMatchesPlan(
 ) {
   return (!incomingLesson || incomingLesson.teachingPlanId === targetPlanId)
     && (!incomingRun || incomingRun.run.subjectId === targetPlanId)
+}
+
+function resetVisualLifecycle(clearRun = true) {
+  if (clearRun) visualEnrichmentRun.value = null
+  missingVisualRunRefreshes = 0
+  visualRefreshFailures = 0
+  visualLessonSettlingReads = 0
+  visualDiscoveryScope = null
+  observedTerminalVisualRunId = null
+  visualIdentityBlocked = false
+  visualRefreshWarning.value = ''
+  visualRefreshStopped.value = false
+}
+
+function syncVisualDiscoveryScope(targetPlanId: string) {
+  const nextScope = teachingRun.value ? `${targetPlanId}:${teachingRun.value.run.id}` : null
+  if (visualDiscoveryScope === nextScope) return
+  const replacingRun = visualDiscoveryScope !== null && visualDiscoveryScope !== nextScope
+  visualDiscoveryScope = nextScope
+  missingVisualRunRefreshes = 0
+  visualRefreshFailures = 0
+  visualLessonSettlingReads = 0
+  observedTerminalVisualRunId = null
+  visualIdentityBlocked = false
+  visualRefreshWarning.value = ''
+  visualRefreshStopped.value = false
+  if (replacingRun) visualEnrichmentRun.value = null
+}
+
+function acceptVisualRun(incoming: TeachingRunProgress) {
+  visualEnrichmentRun.value = mergeTeachingRunProgress(visualEnrichmentRun.value, incoming)
+  missingVisualRunRefreshes = 0
+  visualRefreshFailures = 0
+  visualRefreshWarning.value = ''
+  visualRefreshStopped.value = false
+  if (visualRunIsTerminal(visualEnrichmentRun.value?.run.state)
+    && observedTerminalVisualRunId !== visualEnrichmentRun.value?.run.id) {
+    observedTerminalVisualRunId = visualEnrichmentRun.value!.run.id
+    visualLessonSettlingReads = VISUAL_LESSON_SETTLING_READS
+  }
+}
+
+async function readVisualRunSnapshot(targetPlanId: string, signal: AbortSignal): Promise<VisualRunRead> {
+  let response: Response
+  try {
+    response = await fetchVisualStatusWithDeadline(
+      `/api/v1/assistant-runs/latest?mode=VISUAL_ENRICHMENT&subjectId=${encodeURIComponent(targetPlanId)}`,
+      { credentials: 'include', signal },
+    )
+  } catch {
+    if (signal.aborted) throw new DOMException('Aborted', 'AbortError')
+    return { outcome: 'FAILED' }
+  }
+  if (response.status === 401 || response.status === 403) return { outcome: 'IDENTITY' }
+  if (response.status === 404) return { outcome: 'ABSENT' }
+  if (!response.ok) return { outcome: 'FAILED' }
+  try {
+    return { outcome: 'PRESENT', value: await response.json() as TeachingRunProgress }
+  } catch {
+    return { outcome: 'FAILED' }
+  }
+}
+
+function applyVisualRunRead(targetPlanId: string, incoming: VisualRunRead) {
+  if (incoming.outcome === 'IDENTITY') {
+    notifyLoginRequired()
+    visualIdentityBlocked = true
+    visualRefreshStopped.value = true
+    visualRefreshWarning.value = t('lesson.reader.error.loginRequired')
+    return
+  }
+  if (incoming.outcome === 'FAILED') {
+    visualRefreshFailures += 1
+    visualRefreshWarning.value = t('lesson.generation.visual.refreshFailed')
+    if (visualRefreshFailures >= VISUAL_REFRESH_FAILURE_LIMIT) visualRefreshStopped.value = true
+    return
+  }
+  if (incoming.outcome === 'ABSENT') {
+    missingVisualRunRefreshes += 1
+    visualRefreshFailures = 0
+    if (missingVisualRunRefreshes >= VISUAL_RUN_DISCOVERY_LIMIT) {
+      visualRefreshStopped.value = true
+      visualRefreshWarning.value = t('lesson.generation.visual.refreshFailed')
+    }
+    return
+  }
+  if (incoming.value.run.subjectId !== targetPlanId) {
+    visualIdentityBlocked = true
+    visualRefreshStopped.value = true
+    visualRefreshWarning.value = t('lesson.generation.visual.refreshFailed')
+    return
+  }
+  acceptVisualRun(incoming.value)
+}
+
+function visualFocusSignature(candidate: IllustratedLesson | null) {
+  if (!candidate) return ''
+  const values: string[] = []
+  for (const section of candidate.sections) {
+    for (const step of section.steps) {
+      const foci = step.visualFoci?.length
+        ? step.visualFoci
+        : step.visualFocus ? [step.visualFocus] : []
+      for (const focus of foci) {
+        values.push([
+          section.position,
+          step.position,
+          focus.pageNumber,
+          focus.x,
+          focus.y,
+          focus.width,
+          focus.height,
+        ].join(':'))
+      }
+    }
+  }
+  return values.join('|')
+}
+
+function retryVisualEnrichment() {
+  if (!online.value || lessonViewDisposed) return
+  missingVisualRunRefreshes = 0
+  visualRefreshFailures = 0
+  visualIdentityBlocked = false
+  visualRefreshStopped.value = false
+  visualRefreshWarning.value = ''
+  visualPolling.schedule(VISUAL_RETRY_DELAY_MS)
+}
+
+function retryGenerationStatus() {
+  if (!online.value || lessonViewDisposed) return
+  generationIdentityBlocked.value = false
+  generationRefreshError.value = ''
+  generationPolling.schedule(0)
+}
+
+async function discoverInitialVisualRun() {
+  if (!online.value || lessonViewDisposed || !shouldPollVisualEnrichment()) return
+  const targetPlanId = planId.value
+  const request = latestLessonLoad
+  activeVisualController?.abort()
+  const controller = new AbortController()
+  activeVisualController = controller
+  let retryDelay = VISUAL_RETRY_DELAY_MS
+  try {
+    const visualRunRead = await readVisualRunSnapshot(targetPlanId, controller.signal)
+    if (!isCurrentRead(request, targetPlanId, controller, activeVisualController)) return
+    applyVisualRunRead(targetPlanId, visualRunRead)
+    if (visualRunRead.outcome === 'PRESENT' && visualEnrichmentActive.value) retryDelay = 2_500
+  } catch {
+    if (isCurrentRead(request, targetPlanId, controller, activeVisualController)
+      && !controller.signal.aborted) {
+      applyVisualRunRead(targetPlanId, { outcome: 'FAILED' })
+    }
+  } finally {
+    if (isCurrentRead(request, targetPlanId, controller, activeVisualController)) {
+      activeVisualController = null
+      visualPolling.schedule(retryDelay)
+    }
+  }
 }
 
 function isCurrentRead(
@@ -332,9 +537,10 @@ async function loadLesson() {
   errorMessage.value = ''
   resetLessonReader()
   teachingRun.value = null
-  visualEnrichmentRun.value = null
+  resetVisualLifecycle()
   generationStatusUnknown.value = false
   generationRefreshError.value = ''
+  generationIdentityBlocked.value = false
   generationFinishedMessage.value = ''
   clearSupportingContent()
   if (!targetPlanId) {
@@ -351,7 +557,7 @@ async function loadLesson() {
   const controller = new AbortController()
   activeLessonLoadController = controller
   try {
-    const [planResponse, lessonResponse, runResponse, visualRunResponse, loadedCatalogPresentation] = await Promise.all([
+    const [planResponse, lessonResponse, runResponse, loadedCatalogPresentation] = await Promise.all([
       fetch(`/api/v1/teaching-plans/${encodeURIComponent(targetPlanId)}`, {
         credentials: 'include', signal: controller.signal,
       }),
@@ -362,14 +568,12 @@ async function loadLesson() {
         `/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=${encodeURIComponent(targetPlanId)}`,
         controller.signal,
       ),
-      optionalFetch(
-        `/api/v1/assistant-runs/latest?mode=VISUAL_ENRICHMENT&subjectId=${encodeURIComponent(targetPlanId)}`,
-        controller.signal,
-      ),
       loadCatalogPresentation(targetPlanId, controller.signal),
     ])
     if (!isCurrentRead(request, targetPlanId, controller, activeLessonLoadController)) return
-    if (planResponse.status === 401 || lessonResponse.status === 401 || runResponse?.status === 401 || visualRunResponse?.status === 401) {
+    if ([planResponse.status, lessonResponse.status, runResponse?.status].some(
+      status => status === 401 || status === 403,
+    )) {
       notifyLoginRequired()
       errorMessage.value = t('lesson.reader.error.loginRequired')
       return
@@ -377,16 +581,14 @@ async function loadLesson() {
     if (!planResponse.ok || !lessonResponse.ok) {
       throw new Error(t('lesson.reader.error.load'))
     }
-    const [loadedPlan, loadedLesson, loadedRun, loadedVisualRun] = await Promise.all([
+    const [loadedPlan, loadedLesson, loadedRun] = await Promise.all([
       planResponse.json() as Promise<TeachingPlan>,
       lessonResponse.json() as Promise<IllustratedLesson>,
       runResponse?.ok ? runResponse.json() as Promise<TeachingRunProgress> : Promise.resolve(null),
-      visualRunResponse?.ok ? visualRunResponse.json() as Promise<TeachingRunProgress> : Promise.resolve(null),
     ])
     if (!isCurrentRead(request, targetPlanId, controller, activeLessonLoadController)) return
     if (loadedPlan.id !== targetPlanId
-      || !responseMatchesPlan(targetPlanId, loadedLesson, loadedRun)
-      || !responseMatchesPlan(targetPlanId, null, loadedVisualRun)) {
+      || !responseMatchesPlan(targetPlanId, loadedLesson, loadedRun)) {
       throw new Error()
     }
     plan.value = loadedPlan
@@ -396,7 +598,7 @@ async function loadLesson() {
     await applySelectedLocale(targetPlanId, request)
     if (!isCurrentRead(request, targetPlanId, controller, activeLessonLoadController)) return
     teachingRun.value = loadedRun
-    visualEnrichmentRun.value = loadedVisualRun
+    syncVisualDiscoveryScope(targetPlanId)
     generationStatusUnknown.value = runResponse === null || (!runResponse.ok && runResponse.status !== 404)
     if (generationStatusUnknown.value) generationRefreshError.value = t('lesson.generation.refreshFailed')
     localStorage.setItem('rulepilot:last-plan-id', targetPlanId)
@@ -405,7 +607,13 @@ async function loadLesson() {
     if (generationActive.value) generationPolling.schedule()
     else await loadSupportingContent(targetPlanId, request)
     if (!isCurrentLessonLoad(request, targetPlanId)) return
-    if (visualEnrichmentActive.value) visualPolling.schedule()
+    if (shouldPollVisualEnrichment()) {
+      if (teachingRunTerminal.value && visualEvidenceExpected.value && !visualEnrichmentRun.value) {
+        void discoverInitialVisualRun()
+      } else {
+        visualPolling.schedule(visualEnrichmentActive.value ? 2_500 : VISUAL_RETRY_DELAY_MS)
+      }
+    }
   } catch {
     if (!isCurrentRead(request, targetPlanId, controller, activeLessonLoadController)) return
     if (controller.signal.aborted) return
@@ -425,44 +633,68 @@ async function loadLesson() {
 }
 
 async function refreshVisualEnrichment() {
-  if (!online.value || lessonViewDisposed) return
+  if (!online.value || lessonViewDisposed || !shouldPollVisualEnrichment()) return
   const targetPlanId = planId.value
   const request = latestLessonLoad
   activeVisualController?.abort()
   const controller = new AbortController()
   activeVisualController = controller
-  let retryDelay = 2500
+  const settlingLessonRead = visualLessonSettlingReads > 0
+  const previousVisualSignature = visualFocusSignature(sourceLesson.value)
+  const queryVisualRun = !visualIdentityBlocked
+    && visualRefreshFailures < VISUAL_REFRESH_FAILURE_LIMIT
+    && (visualEnrichmentActive.value || !visualEnrichmentRun.value)
+  let retryDelay = 2_500
   try {
-    const [response, lessonResponse] = await Promise.all([
-      optionalFetch(
-        `/api/v1/assistant-runs/latest?mode=VISUAL_ENRICHMENT&subjectId=${encodeURIComponent(targetPlanId)}`,
-        controller.signal,
-      ),
-      fetch(`/api/v1/teaching-plans/${encodeURIComponent(targetPlanId)}/illustrated-lessons/latest`, {
+    const [visualRunRead, lessonResponse] = await Promise.all([
+      queryVisualRun
+        ? readVisualRunSnapshot(targetPlanId, controller.signal)
+        : Promise.resolve<VisualRunRead | null>(null),
+      fetchVisualStatusWithDeadline(`/api/v1/teaching-plans/${encodeURIComponent(targetPlanId)}/illustrated-lessons/latest`, {
         credentials: 'include', signal: controller.signal,
       }),
     ])
     if (!isCurrentRead(request, targetPlanId, controller, activeVisualController)) return
-    if (response?.status === 401 || lessonResponse.status === 401) {
+    if (lessonResponse.status === 401 || lessonResponse.status === 403) {
       notifyLoginRequired()
+      visualIdentityBlocked = true
+      visualRefreshStopped.value = true
+      visualRefreshWarning.value = t('lesson.reader.error.loginRequired')
       return
     }
     if (!lessonResponse.ok) throw new Error(t('lesson.generation.refreshFailed'))
     const incomingLesson = await lessonResponse.json() as IllustratedLesson
-    const incomingRun = response?.ok ? await response.json() as TeachingRunProgress : null
     if (!isCurrentRead(request, targetPlanId, controller, activeVisualController)) return
-    if (!responseMatchesPlan(targetPlanId, incomingLesson, incomingRun)) {
+    if (!responseMatchesPlan(targetPlanId, incomingLesson, null)) {
       throw new Error()
     }
     sourceLesson.value = acceptProgressiveLesson(sourceLesson.value, incomingLesson)
     lesson.value = sourceLesson.value
     await applySelectedLocale(targetPlanId, request)
     if (!isCurrentRead(request, targetPlanId, controller, activeVisualController)) return
-    if (incomingRun) visualEnrichmentRun.value = incomingRun
+    if (visualRunRead) {
+      applyVisualRunRead(targetPlanId, visualRunRead)
+      if (visualRunRead.outcome === 'ABSENT' && !visualEnrichmentRun.value) {
+        retryDelay = VISUAL_RETRY_DELAY_MS
+      }
+      if (visualRunRead.outcome === 'FAILED') {
+        retryDelay = Math.min(12_000, 3_000 * 2 ** (visualRefreshFailures - 1))
+      }
+    }
+    if (settlingLessonRead && visualLessonSettlingReads > 0) {
+      visualLessonSettlingReads -= 1
+    }
+    if (visualFocusSignature(sourceLesson.value) !== previousVisualSignature) {
+      await loadSupportingContent(targetPlanId, request)
+      if (!isCurrentLessonLoad(request, targetPlanId)) return
+    }
   } catch {
     if (!isCurrentRead(request, targetPlanId, controller, activeVisualController) || controller.signal.aborted) return
     controller.abort()
-    retryDelay = 5000
+    visualRefreshFailures += 1
+    visualRefreshWarning.value = t('lesson.generation.visual.refreshFailed')
+    retryDelay = Math.min(16_000, 4_000 * 2 ** (visualRefreshFailures - 1))
+    if (visualRefreshFailures >= VISUAL_REFRESH_FAILURE_LIMIT) visualRefreshStopped.value = true
   } finally {
     if (isCurrentRead(request, targetPlanId, controller, activeVisualController)) {
       activeVisualController = null
@@ -500,8 +732,9 @@ async function refreshGeneration() {
       }),
     ])
     if (!isCurrentRead(request, targetPlanId, controller, activeGenerationController)) return
-    if (runResponse.status === 401 || lessonResponse.status === 401) {
-      notifyLoginRequired()
+    if ([runResponse.status, lessonResponse.status].some(status => status === 401 || status === 403)) {
+      if (!generationIdentityBlocked.value) notifyLoginRequired()
+      generationIdentityBlocked.value = true
       generationRefreshError.value = t('lesson.reader.error.loginRequired')
       return
     }
@@ -527,7 +760,9 @@ async function refreshGeneration() {
     await applySelectedLocale(targetPlanId, request)
     if (!isCurrentRead(request, targetPlanId, controller, activeGenerationController)) return
     teachingRun.value = acceptedRun
+    syncVisualDiscoveryScope(targetPlanId)
     generationStatusUnknown.value = false
+    generationIdentityBlocked.value = false
     generationRefreshError.value = ''
 
     if (lessonReplaced) {
@@ -542,7 +777,7 @@ async function refreshGeneration() {
       generationFinishedMessage.value = terminalGenerationMessage(terminalState, acceptedLesson.sections.length)
       await loadSupportingContent(targetPlanId, request)
       if (!isCurrentLessonLoad(request, targetPlanId)) return
-      await refreshVisualEnrichment()
+      void refreshVisualEnrichment()
     }
   } catch {
     if (!isCurrentRead(request, targetPlanId, controller, activeGenerationController) || controller.signal.aborted) return
@@ -584,7 +819,7 @@ function updateOnlineStatus() {
   void applySelectedLocale(planId.value, latestLessonLoad)
   if (!generationActive.value) void loadSupportingContent(planId.value, latestLessonLoad)
   if (generationActive.value) generationPolling.schedule(0)
-  if (visualEnrichmentActive.value) visualPolling.schedule(0)
+  if (shouldPollVisualEnrichment()) visualPolling.schedule(VISUAL_RETRY_DELAY_MS)
 }
 
 onMounted(() => {
@@ -652,10 +887,48 @@ onUnmounted(() => {
         :progress-width="generationProgressWidth"
         :remaining-time="generationRemainingTime"
         :activities="recentGenerationActivities"
-        :refresh-failed="Boolean(generationRefreshError)"
+        :refresh-failed="Boolean(generationRefreshError) && !generationIdentityBlocked"
         :finished-message="generationFinishedMessage"
         :finished-complete="teachingRun?.run.state === 'COMPLETED' && Boolean(lesson?.sections.length)"
       />
+
+      <section
+        v-if="generationIdentityBlocked"
+        data-testid="lesson-generation-auth-stopped"
+        class="border-b border-amber-200 bg-amber-50 px-5 py-3 text-amber-950"
+        role="alert"
+      >
+        <div class="mx-auto flex max-w-4xl flex-wrap items-center justify-between gap-3 text-sm leading-6">
+          <p>{{ generationRefreshError }}</p>
+          <button type="button" class="min-h-10 rounded-xl border border-amber-300 px-4 text-xs font-semibold" @click="retryGenerationStatus">
+            {{ t('lesson.reader.state.error.retry') }}
+          </button>
+        </div>
+      </section>
+
+      <section
+        v-if="visualEnrichmentSummary || visualRefreshWarning"
+        data-testid="lesson-visual-enrichment-status"
+        class="border-b px-5 py-3"
+        :class="visualEnrichmentFailed || visualRefreshWarning ? 'border-amber-200 bg-amber-50 text-amber-950' : 'border-indigo/15 bg-indigo/5 text-indigo'"
+        role="status"
+      >
+        <div class="mx-auto flex max-w-4xl flex-wrap items-center justify-between gap-3 text-sm leading-6">
+          <div class="min-w-0 flex-1">
+            <p v-if="visualEnrichmentSummary" class="font-semibold">{{ visualEnrichmentActive ? t('lesson.sidebar.visual.enriching') : visualEnrichmentFailed ? t('lesson.sidebar.visual.failed') : t('lesson.sidebar.visual.completed') }}</p>
+            <p v-if="visualEnrichmentSummary" class="break-words text-xs opacity-80">{{ visualEnrichmentSummary }}</p>
+            <p v-if="visualRefreshWarning" class="break-words text-xs font-semibold">{{ visualRefreshWarning }}</p>
+          </div>
+          <button
+            v-if="visualRefreshStopped"
+            type="button"
+            class="min-h-10 shrink-0 rounded-xl border border-amber-300 px-4 text-xs font-semibold"
+            @click="retryVisualEnrichment"
+          >
+            {{ t('lesson.generation.visual.retry') }}
+          </button>
+        </div>
+      </section>
 
       <LessonOfflineKnowledgePanel v-if="!online && offlineKnowledge.length" :entries="offlineKnowledge" />
 

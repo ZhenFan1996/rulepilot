@@ -6,10 +6,11 @@ import com.rulepilot.assistant.AssistantReadTools.RulePageImage;
 import com.rulepilot.assistant.AgentExecutionControl.ActivityType;
 import com.rulepilot.assistant.AgentExecutionStoppedException;
 import com.rulepilot.assistant.AuditedAgentInvocations;
-import com.rulepilot.teaching.TeachingOutlineModel.PageImageInput;
+import com.rulepilot.document.DocumentPageImages;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel;
 import com.rulepilot.teaching.VisualRulebookPageFacts;
 import com.rulepilot.teaching.domain.TeachingPlan;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -19,7 +20,6 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
-import java.util.stream.Stream;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -28,22 +28,31 @@ final class TeachingVisualEvidenceResolver {
 
     private static final Logger log = LoggerFactory.getLogger(TeachingVisualEvidenceResolver.class);
     private static final int MAX_PAGES_PER_TOOL_READ = 5;
-    private static final int MAX_REQUIRED_PAGE_INTERPRETATION_ATTEMPTS = 2;
+    private static final int MAX_CATALOG_OWNER_MODEL_CALLS_PER_PAGE = 3;
 
     private final AssistantReadTools tools;
     private final AuditedAgentInvocations invocations;
     private final VisualRulebookPageFacts visualFacts;
-    private final VisualRulebookPageCatalogModel visualCatalog;
+    private final VisualRulebookCataloger visualCataloger;
 
     TeachingVisualEvidenceResolver(
             AssistantReadTools tools,
             AuditedAgentInvocations invocations,
             VisualRulebookPageFacts visualFacts,
-            VisualRulebookPageCatalogModel visualCatalog) {
+            VisualRulebookCataloger visualCataloger) {
         this.tools = tools;
         this.invocations = invocations;
         this.visualFacts = visualFacts;
-        this.visualCatalog = visualCatalog;
+        this.visualCataloger = visualCataloger;
+    }
+
+    /** Compatibility constructor for focused tests and standalone callers; semantics still run inside the cataloger. */
+    TeachingVisualEvidenceResolver(
+            AssistantReadTools tools,
+            AuditedAgentInvocations invocations,
+            VisualRulebookPageFacts visualFacts,
+            VisualRulebookPageCatalogModel visualCatalog) {
+        this(tools, invocations, visualFacts, compatibilityCataloger(tools, invocations, visualFacts, visualCatalog));
     }
 
     Resolution resolve(
@@ -52,7 +61,11 @@ final class TeachingVisualEvidenceResolver {
             List<RuleEvidence> retrieved,
             UUID assistantRunId) {
         if (!requiresPageRead(plan, planned, retrieved)) return Resolution.unread(retrieved);
+        Set<Integer> requestedPages = Set.copyOf(planned.sourcePageNumbers());
+        ensurePageFacts(plan, requestedPages, assistantRunId);
+        boolean completeFacts = hasCompleteFacts(plan.documentVersionId(), requestedPages);
         Map<UUID, RuleEvidence> pageEvidenceById = new LinkedHashMap<>();
+        mergePageEvidence(pageEvidenceById, matchingPageEvidence(plan.documentVersionId(), requestedPages, retrieved));
         List<Set<Integer>> batches = pageReadBatches(planned.sourcePageNumbers());
         int toolCalls = 0;
         boolean completeRead = true;
@@ -65,8 +78,10 @@ final class TeachingVisualEvidenceResolver {
                         batchOperationName(
                                 operationName("readRuleEvidencePages", planned.position()), toolCalls, batches.size()),
                         batch.size(),
-                        "Planner-selected visual rulebook pages retrieved",
-                        () -> tools.readRuleEvidencePages(plan.documentVersionId(), batch, true),
+                        completeFacts
+                                ? "Planner-selected durable page evidence retrieved"
+                                : "Planner-selected visual rulebook pages retrieved",
+                        () -> tools.readRuleEvidencePages(plan.documentVersionId(), batch, !completeFacts),
                         this::evidenceTokens);
                 if (CanonicalPageObservation.complete(
                                 assistantRunId, plan.documentVersionId(), batch, batchEvidence)
@@ -98,15 +113,8 @@ final class TeachingVisualEvidenceResolver {
                     "Teaching topic {} is bound to visual source pages {}",
                     planned.topicKey(),
                     planned.sourcePageNumbers());
-            List<RuleEvidence> enriched = enrichPageFacts(plan.documentVersionId(), pageEvidence, List.of());
-            if (!TeachingVisualEvidenceSelector.hasVisualPageEvidence(enriched)
-                    || !visualCatalog.available(plan.createdBy())) {
-                return new Resolution(enriched, canonical, toolCalls);
-            }
-            return new Resolution(
-                    enrichRequiredPageFacts(plan, planned, pageEvidence, enriched, assistantRunId),
-                    canonical,
-                    toolCalls);
+            List<RuleEvidence> enriched = enrichPageFacts(plan.documentVersionId(), pageEvidence);
+            return new Resolution(enriched, canonical, toolCalls);
         }
         if (!pageEvidence.isEmpty()) {
             log.warn(
@@ -120,11 +128,7 @@ final class TeachingVisualEvidenceResolver {
                             .anyMatch(planned.sourcePageNumbers()::contains))
                     .forEach(source -> mergePageEvidence(retained, List.of(source)));
             List<RuleEvidence> partial = List.copyOf(retained.values());
-            List<RuleEvidence> enriched = enrichPageFacts(plan.documentVersionId(), partial, List.of());
-            if (TeachingVisualEvidenceSelector.hasVisualPageEvidence(enriched)
-                    && visualCatalog.available(plan.createdBy())) {
-                enriched = enrichRequiredPageFacts(plan, planned, partial, enriched, assistantRunId);
-            }
+            List<RuleEvidence> enriched = enrichPageFacts(plan.documentVersionId(), partial);
             return new Resolution(enriched, Optional.empty(), toolCalls);
         }
         return new Resolution(retrieved, Optional.empty(), toolCalls);
@@ -137,50 +141,21 @@ final class TeachingVisualEvidenceResolver {
         if (!ProgressiveVisualTeachingPlanPolicy.isProgressive(plan)
                 || completedSections < 1
                 || completedSections >= plan.sections().size()
-                || !visualCatalog.available(plan.createdBy())) {
+                || !visualCataloger.available(plan.createdBy())) {
             return;
         }
         LinkedHashSet<Integer> requested = plan.sections().subList(completedSections, plan.sections().size()).stream()
                 .flatMap(section -> section.sourcePageNumbers().stream())
                 .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
-        visualFacts.find(plan.documentVersionId(), requested).stream()
-                .filter(VisualRulebookCatalogPolicy::hasReusableCompleteRuleLedger)
-                .map(VisualRulebookPageFacts.PageFact::pageNumber)
-                .forEach(requested::remove);
         if (requested.isEmpty()) return;
         try {
-            Map<Integer, AssistantReadTools.RulePageImage> images = readProgressivePageImages(
-                    plan, requested, completedSections + 1, assistantRunId);
-            if (images.isEmpty()) return;
-            List<PageImageInput> pageInputs = requested.stream()
-                    .map(images::get)
-                    .filter(java.util.Objects::nonNull)
-                    .limit(VisualRulebookPageCatalogModel.MAX_PAGES_PER_REQUEST)
-                    .map(image -> new PageImageInput(image.pageNumber(), image.mediaType(), image.content()))
-                    .toList();
-            if (pageInputs.isEmpty()) return;
-            var request = new VisualRulebookPageCatalogModel.CatalogRequest(
-                    pageInputs, plan.createdBy(), plan.gameTitle());
-            var catalog = invocations.invoke(
-                    assistantRunId,
-                    ActivityType.MODEL,
-                    "prefetchProgressiveVisualPages|" + (completedSections + 1),
-                    pageInputs.size() * 600,
-                    progressivePrefetchSummary(plan.createdBy(), pageInputs.size()),
-                    () -> visualCatalog.summarizeForTeaching(request),
-                    result -> estimateTokens(result.toString()));
-            List<VisualRulebookPageFacts.PageFact> interpreted = catalog.pages().stream()
-                    .filter(summary -> requested.contains(summary.pageNumber()))
-                    .map(VisualRulebookCatalogPolicy::teachingStartupFact)
-                    .map(VisualRulebookCatalogPolicy::toPageFact)
-                    .toList();
-            if (!interpreted.isEmpty()) {
-                persistInterpretedFacts(plan.documentVersionId(), interpreted);
-                log.info(
-                        "Progressive Teaching continuation stored visual facts for document {} pages {}",
-                        plan.documentVersionId(),
-                        interpreted.stream().map(VisualRulebookPageFacts.PageFact::pageNumber).toList());
-            }
+            visualCataloger.ensureTeachingPageFacts(
+                    plan.documentVersionId(),
+                    requested,
+                    sourcePageTotal(plan),
+                    plan.gameTitle(),
+                    plan.createdBy(),
+                    assistantRunId);
         } catch (AgentExecutionStoppedException stopped) {
             throw stopped;
         } catch (RuntimeException failure) {
@@ -189,33 +164,6 @@ final class TeachingVisualEvidenceResolver {
                     plan.id(),
                     failure);
         }
-    }
-
-    private Map<Integer, AssistantReadTools.RulePageImage> readProgressivePageImages(
-            TeachingPlan plan,
-            LinkedHashSet<Integer> requested,
-            int firstRemainingPosition,
-            UUID assistantRunId) {
-        List<Integer> ordered = List.copyOf(requested);
-        Map<Integer, AssistantReadTools.RulePageImage> images = new LinkedHashMap<>();
-        for (int start = 0; start < ordered.size(); start += MAX_PAGES_PER_TOOL_READ) {
-            int batchNumber = start / MAX_PAGES_PER_TOOL_READ + 1;
-            Set<Integer> batch = new LinkedHashSet<>(ordered.subList(
-                    start, Math.min(start + MAX_PAGES_PER_TOOL_READ, ordered.size())));
-            List<RuleEvidence> evidence = invocations.invoke(
-                    assistantRunId,
-                    ActivityType.TOOL,
-                    "readProgressiveVisualPages|" + firstRemainingPosition + "|" + batchNumber,
-                    batch.size(),
-                    "Remaining source-bound rulebook page images retrieved",
-                    () -> tools.readRuleEvidencePages(plan.documentVersionId(), batch, true),
-                    this::evidenceTokens);
-            evidence.stream()
-                    .flatMap(source -> source.pageImages().stream())
-                    .filter(image -> batch.contains(image.pageNumber()))
-                    .forEach(image -> images.putIfAbsent(image.pageNumber(), image));
-        }
-        return images;
     }
 
     static boolean requiresPageRead(
@@ -230,12 +178,7 @@ final class TeachingVisualEvidenceResolver {
     }
 
     static int maximumPrefetchToolCalls(TeachingPlan plan) {
-        if (!ProgressiveVisualTeachingPlanPolicy.isProgressive(plan) || plan.sections().size() < 2) return 0;
-        long remainingPages = plan.sections().subList(1, plan.sections().size()).stream()
-                .flatMap(section -> section.sourcePageNumbers().stream())
-                .distinct()
-                .count();
-        return Math.toIntExact((remainingPages + MAX_PAGES_PER_TOOL_READ - 1) / MAX_PAGES_PER_TOOL_READ);
+        return 0;
     }
 
     static int maximumPageReadToolCalls(TeachingPlan.PlannedSection planned) {
@@ -256,20 +199,14 @@ final class TeachingVisualEvidenceResolver {
 
     static int maximumModelCalls(TeachingPlan plan) {
         if (plan == null || plan.sections().isEmpty()) return 0;
-        // Admission uses only the immutable plan. Model availability and the reusable fact ledger may change after
-        // a run is admitted, so they can reduce actual work but must never reduce its statically safe upper bound.
-        long sectionCalls = Math.multiplyExact(
-                plan.sections().stream()
+        // One page has one catalog owner regardless of how many chapters cite it. The ordinary path is one semantic
+        // call. Reserve the larger mutually exclusive failure branch: initial semantics plus OCR plus changed typed
+        // semantics (three calls total); a transient image-only replay consumes only two.
+        long uniquePages = plan.sections().stream()
                 .flatMap(section -> section.sourcePageNumbers().stream())
-                .count(),
-                MAX_REQUIRED_PAGE_INTERPRETATION_ATTEMPTS);
-        boolean progressivePrefetch = ProgressiveVisualTeachingPlanPolicy.isProgressive(plan)
-                && plan.sections().size() > 1
-                && plan.sections().subList(1, plan.sections().size()).stream()
-                        .flatMap(section -> section.sourcePageNumbers().stream())
-                        .findAny()
-                        .isPresent();
-        return Math.toIntExact(sectionCalls + (progressivePrefetch ? 1 : 0));
+                .distinct()
+                .count();
+        return Math.toIntExact(Math.multiplyExact(uniquePages, MAX_CATALOG_OWNER_MODEL_CALLS_PER_PAGE));
     }
 
     record Resolution(
@@ -371,131 +308,93 @@ final class TeachingVisualEvidenceResolver {
                 && first.contentKind() == second.contentKind();
     }
 
-    private String progressivePrefetchSummary(String owner, int pageCount) {
-        return visualCatalog.teachingStartupExecutionIdentity(owner)
-                .map(identity -> "Remaining " + pageCount + " Teaching page fact(s) interpreted via "
-                        + identity.auditLabel())
-                .orElse("Remaining " + pageCount + " Teaching page fact(s) interpreted");
-    }
-
-    private String requiredPageInterpretationSummary(TeachingPlan plan) {
-        if (!ProgressiveVisualTeachingPlanPolicy.isProgressive(plan)) {
-            return "Required visual rulebook page interpreted for grounded teaching";
+    private void ensurePageFacts(TeachingPlan plan, Set<Integer> requestedPages, UUID assistantRunId) {
+        try {
+            visualCataloger.ensureTeachingPageFacts(
+                    plan.documentVersionId(),
+                    requestedPages,
+                    sourcePageTotal(plan),
+                    plan.gameTitle(),
+                    plan.createdBy(),
+                    assistantRunId);
+        } catch (AgentExecutionStoppedException stopped) {
+            throw stopped;
+        } catch (RuntimeException failure) {
+            log.warn(
+                    "Teaching page-fact owner could not complete pages for topic {}; retaining source evidence: {}",
+                    plan.id(),
+                    failure.getMessage());
         }
-        return visualCatalog.teachingStartupExecutionIdentity(plan.createdBy())
-                .map(identity -> "Required Teaching page fact interpreted via " + identity.auditLabel())
-                .orElse("Required Teaching page fact interpreted");
     }
 
-    private List<RuleEvidence> enrichRequiredPageFacts(
-            TeachingPlan plan,
-            TeachingPlan.PlannedSection planned,
-            List<RuleEvidence> pageEvidence,
-            List<RuleEvidence> enriched,
-            UUID assistantRunId) {
-        boolean progressive = ProgressiveVisualTeachingPlanPolicy.isProgressive(plan);
-        Set<Integer> plannedPages = Set.copyOf(planned.sourcePageNumbers());
-        Map<Integer, AssistantReadTools.RulePageImage> images = new LinkedHashMap<>();
-        pageEvidence.stream()
-                .filter(TeachingVisualEvidenceSelector::isVisualPageEvidence)
+    private boolean hasCompleteFacts(UUID documentVersionId, Set<Integer> requestedPages) {
+        Set<Integer> completePages = visualFacts.find(documentVersionId, requestedPages).stream()
+                .filter(VisualRulebookCatalogPolicy::hasReusableCompleteRuleLedger)
+                .map(VisualRulebookPageFacts.PageFact::pageNumber)
+                .collect(Collectors.toSet());
+        return completePages.containsAll(requestedPages);
+    }
+
+    private static List<RuleEvidence> matchingPageEvidence(
+            UUID documentVersionId, Set<Integer> requestedPages, List<RuleEvidence> evidence) {
+        return evidence.stream()
+                .filter(source -> documentVersionId.equals(source.documentVersionId()))
+                .filter(source -> java.util.stream.IntStream.rangeClosed(source.pageFrom(), source.pageTo())
+                        .anyMatch(requestedPages::contains))
+                .toList();
+    }
+
+    private static int sourcePageTotal(TeachingPlan plan) {
+        return plan.sections().stream()
+                .flatMap(section -> section.sourcePageNumbers().stream())
+                .mapToInt(Integer::intValue)
+                .max()
+                .orElseThrow(() -> new IllegalArgumentException("Teaching plan has no source pages"));
+    }
+
+    static VisualRulebookCataloger compatibilityCataloger(
+            AssistantReadTools tools,
+            AuditedAgentInvocations invocations,
+            VisualRulebookPageFacts visualFacts,
+            VisualRulebookPageCatalogModel visualCatalog) {
+        DocumentPageImages images = (documentVersionId, pageNumbers) -> tools
+                .readRuleEvidencePages(documentVersionId, pageNumbers, true).stream()
                 .flatMap(source -> source.pageImages().stream())
-                .filter(image -> plannedPages.contains(image.pageNumber()))
-                .forEach(image -> images.putIfAbsent(image.pageNumber(), image));
-        List<VisualRulebookPageFacts.PageFact> interpreted = new ArrayList<>();
-        for (AssistantReadTools.RulePageImage image : images.values()) {
-            try {
-                var request = new VisualRulebookPageCatalogModel.CatalogRequest(
-                        List.of(new PageImageInput(image.pageNumber(), image.mediaType(), image.content())),
-                        plan.createdBy(),
-                        plan.gameTitle());
-                var catalog = inspectRequiredPage(
-                        plan, planned, request, image.pageNumber(), assistantRunId, progressive);
-                interpreted.addAll(catalog.pages().stream()
-                        .map(summary -> {
-                            if (progressive) return VisualRulebookCatalogPolicy.teachingStartupFact(summary);
-                            if (summary.ruleGroupInventoryComplete()) {
-                                VisualRulebookCatalogPolicy.validateRuleGroupFactBindings(
-                                        summary.ruleGroupIdentifiers(), summary.ruleGroupFacts());
-                            }
-                            return summary;
-                        })
-                        .map(VisualRulebookCatalogPolicy::toPageFact)
-                        .toList());
-            } catch (AgentExecutionStoppedException stopped) {
-                throw stopped;
-            } catch (RuntimeException failure) {
-                log.warn(
-                        "Required visual page interpretation failed for topic {} page {}: {}",
-                        planned.topicKey(),
-                        image.pageNumber(),
-                        failure.getMessage());
-            }
-        }
-        if (interpreted.isEmpty()) return enriched;
-        persistInterpretedFacts(plan.documentVersionId(), interpreted);
-        log.info(
-                "Teaching topic {} added on-demand visual facts for pages {}",
-                planned.topicKey(),
-                interpreted.stream().map(VisualRulebookPageFacts.PageFact::pageNumber).toList());
-        return enrichPageFacts(plan.documentVersionId(), pageEvidence, interpreted);
-    }
-
-    private VisualRulebookPageCatalogModel.CatalogDraft inspectRequiredPage(
-            TeachingPlan plan,
-            TeachingPlan.PlannedSection planned,
-            VisualRulebookPageCatalogModel.CatalogRequest request,
-            int pageNumber,
-            UUID assistantRunId,
-            boolean progressive) {
-        RuntimeException firstFailure = null;
-        for (int attempt = 1; attempt <= MAX_REQUIRED_PAGE_INTERPRETATION_ATTEMPTS; attempt++) {
-            try {
-                int currentAttempt = attempt;
-                return invocations.invoke(
-                        assistantRunId,
-                        ActivityType.MODEL,
-                        requiredPageOperation(planned.position(), pageNumber, currentAttempt),
-                        800,
-                        requiredPageInterpretationSummary(plan),
-                        () -> progressive
-                                ? visualCatalog.summarizeForTeaching(request)
-                                : visualCatalog.summarize(request),
-                        result -> estimateTokens(result.toString()));
-            } catch (AgentExecutionStoppedException stopped) {
-                throw stopped;
-            } catch (RuntimeException failure) {
-                if (firstFailure == null) {
-                    firstFailure = failure;
-                    log.warn(
-                            "Required visual page interpretation will retry topic {} page {} after: {}",
-                            planned.topicKey(),
-                            pageNumber,
-                            failure.getMessage());
-                    continue;
-                }
-                failure.addSuppressed(firstFailure);
-                throw failure;
-            }
-        }
-        throw new IllegalStateException("required visual page interpretation did not settle");
-    }
-
-    private String requiredPageOperation(int sectionPosition, int pageNumber, int attempt) {
-        String operation = "inspectRequiredVisualPage|" + sectionPosition + "|" + pageNumber;
-        return attempt == 1 ? operation : operation + "|retry";
+                .filter(image -> pageNumbers.contains(image.pageNumber()))
+                .collect(Collectors.toMap(
+                        RulePageImage::pageNumber,
+                        image -> new DocumentPageImages.PageImage(
+                                image.pageNumber(),
+                                image.mediaType(),
+                                image.content(),
+                                image.width(),
+                                image.height()),
+                        (first, ignored) -> first,
+                        LinkedHashMap::new))
+                .values().stream()
+                .toList();
+        return new VisualRulebookCataloger(
+                images,
+                visualCatalog,
+                visualFacts,
+                invocations,
+                Duration.ofSeconds(45),
+                Duration.ofSeconds(35),
+                4,
+                10,
+                4,
+                10);
     }
 
     private List<RuleEvidence> enrichPageFacts(
             UUID documentVersionId,
-            List<RuleEvidence> evidence,
-            List<VisualRulebookPageFacts.PageFact> supplementalFacts) {
+            List<RuleEvidence> evidence) {
         Set<Integer> pages = evidence.stream()
                 .filter(source -> source.pageFrom() == source.pageTo())
                 .map(RuleEvidence::pageFrom)
                 .collect(Collectors.toUnmodifiableSet());
         if (pages.isEmpty()) return evidence;
-        Map<Integer, String> factsByPage = Stream.concat(
-                        visualFacts.find(documentVersionId, pages).stream(), supplementalFacts.stream())
+        Map<Integer, String> factsByPage = visualFacts.find(documentVersionId, pages).stream()
                 .filter(VisualRulebookCatalogPolicy::hasReusableCompleteRuleLedger)
                 .collect(Collectors.toUnmodifiableMap(
                         VisualRulebookPageFacts.PageFact::pageNumber,
@@ -518,30 +417,6 @@ final class TeachingVisualEvidenceResolver {
                             RuleEvidence.ContentKind.VISUAL_TRANSCRIPTION);
                 })
                 .toList();
-    }
-
-    private void persistInterpretedFacts(
-            UUID documentVersionId, List<VisualRulebookPageFacts.PageFact> interpreted) {
-        if (interpreted.stream().anyMatch(fact -> !VisualRulebookCatalogPolicy.hasReusableCompleteRuleLedger(fact))) {
-            throw new IllegalArgumentException("teaching visual page fact does not contain a reusable complete rule ledger");
-        }
-        Set<Integer> pages = interpreted.stream()
-                .map(VisualRulebookPageFacts.PageFact::pageNumber)
-                .collect(Collectors.toCollection(LinkedHashSet::new));
-        Map<Integer, VisualRulebookPageFacts.PageFact> existing = visualFacts.find(documentVersionId, pages).stream()
-                .collect(Collectors.toMap(
-                        VisualRulebookPageFacts.PageFact::pageNumber,
-                        java.util.function.Function.identity(),
-                        (first, ignored) -> first));
-        List<VisualRulebookPageFacts.PageFact> durable = interpreted.stream()
-                .map(observation -> {
-                    VisualRulebookPageFacts.PageFact prior = existing.get(observation.pageNumber());
-                    return prior == null
-                            ? observation
-                            : VisualRulebookCatalogPolicy.mergePersistedPageFact(prior, observation);
-                })
-                .toList();
-        visualFacts.merge(documentVersionId, durable);
     }
 
     private int evidenceTokens(List<RuleEvidence> evidence) {

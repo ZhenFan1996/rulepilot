@@ -385,9 +385,9 @@ public class BggRecommendationAgentController {
         }
 
         private static boolean publicationRecovered(List<String> actions) {
-            String prefix = "RECOMMENDATION_PUBLICATION_RECOVERED:";
             return actions.stream()
-                    .anyMatch(action -> action.startsWith(prefix));
+                    .anyMatch(action -> action.startsWith("RECOMMENDATION_PUBLICATION_RECOVERED:")
+                            || action.startsWith("RESEARCH_SKIPPED_FOR_PUBLICATION_"));
         }
 
         private static String publicFailureBoundary(ConversationResponse response) {

@@ -4,10 +4,12 @@ import com.rulepilot.catalog.BggRecommendationPresentation;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ConversationRequest;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ProgressUpdate;
+import com.rulepilot.recommendation.application.BoardGameRecommendationProperties;
 import com.rulepilot.recommendation.application.RecommendationConversationCoordinator;
 import com.rulepilot.recommendation.application.RecommendationConversationException;
 import java.io.IOException;
 import java.security.Principal;
+import java.time.Duration;
 import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
@@ -30,30 +32,41 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 public class BggRecommendationAgentStreamController {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(BggRecommendationAgentStreamController.class);
-    private static final long STREAM_TIMEOUT_MILLIS = 35_000;
+    private static final Duration STREAM_COMPLETION_GRACE = Duration.ofSeconds(5);
 
     private final BoardGameRecommendationAgent agent;
     private final BggRecommendationPresentation presentation;
     private final TaskExecutor executor;
     private final RecommendationConversationCoordinator conversations;
+    private final long streamTimeoutMillis;
 
     @Autowired
     public BggRecommendationAgentStreamController(
             BoardGameRecommendationAgent agent,
             BggRecommendationPresentation presentation,
             @Qualifier("bggRecommendationStreamExecutor") TaskExecutor executor,
-            RecommendationConversationCoordinator conversations) {
+            RecommendationConversationCoordinator conversations,
+            BoardGameRecommendationProperties properties) {
         this.agent = agent;
         this.presentation = presentation;
         this.executor = executor;
         this.conversations = conversations;
+        this.streamTimeoutMillis = streamTimeoutMillis(properties.timeout());
     }
 
     BggRecommendationAgentStreamController(
             BoardGameRecommendationAgent agent,
             BggRecommendationPresentation presentation,
             TaskExecutor executor) {
-        this(agent, presentation, executor, null);
+        this.agent = agent;
+        this.presentation = presentation;
+        this.executor = executor;
+        this.conversations = null;
+        this.streamTimeoutMillis = streamTimeoutMillis(BoardGameRecommendationProperties.MAXIMUM_TIMEOUT);
+    }
+
+    static long streamTimeoutMillis(Duration recommendationTimeout) {
+        return recommendationTimeout.plus(STREAM_COMPLETION_GRACE).toMillis();
     }
 
     @PostMapping(
@@ -64,7 +77,7 @@ public class BggRecommendationAgentStreamController {
             @RequestParam(defaultValue = "en") String locale,
             Principal principal) {
         ConversationRequest command = request.toCommand();
-        SseEmitter emitter = new SseEmitter(STREAM_TIMEOUT_MILLIS);
+        SseEmitter emitter = new SseEmitter(streamTimeoutMillis);
         AtomicBoolean open = new AtomicBoolean(true);
         emitter.onCompletion(() -> open.set(false));
         emitter.onTimeout(() -> open.set(false));

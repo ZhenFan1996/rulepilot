@@ -60,7 +60,7 @@ class PublicLessonQuestionServiceTest {
     }
 
     @Test
-    void returnsEveryOwnedVisualForTheCitedTeachingStepWithinTheAnswerBudget() {
+    void returnsEveryOwnedVisualForTheCitedTeachingStep() {
         UUID planId = UUID.randomUUID();
         UUID versionId = UUID.randomUUID();
         UUID citedChunk = UUID.randomUUID();
@@ -85,6 +85,43 @@ class PublicLessonQuestionServiceTest {
                 .hasSize(3)
                 .extracting(aid -> aid.visualFocus().label())
                 .containsExactly("标记图例", "牌面示例", "完整流程图"));
+    }
+
+    @Test
+    void doesNotTruncateMoreThanSixVisualsSelectedByTheAnswerEvidence() {
+        UUID planId = UUID.randomUUID();
+        UUID versionId = UUID.randomUUID();
+        UUID citedChunk = UUID.randomUUID();
+        when(lessons.find(planId)).thenReturn(Optional.of(publicLessonWithManyOwnedVisuals(
+                planId, versionId, citedChunk, 8)));
+        RuleAnswering.Answer answer = new RuleAnswering.Answer(
+                "ANSWERED",
+                "按引用顺序查看八张规则图。",
+                "这些图都属于回答引用的同一条已验证规则证据。",
+                List.of(new RuleAnswering.Citation("流程", 2, 2)),
+                List.of(),
+                "HIGH",
+                null);
+        when(answers.answerForPublicReader(
+                        eq(versionId), eq("完整流程需要看哪些图？"), eq(null), eq(PlayerLocale.ZH_CN)))
+                .thenReturn(new RuleAnswering.AnswerResult(UUID.randomUUID(), answer, Set.of(citedChunk)));
+
+        var result = service.answer(
+                planId,
+                new PublicLessonQuestionService.QuestionRequest("完整流程需要看哪些图？", null));
+
+        assertThat(result).hasValueSatisfying(value -> assertThat(value.visualAids())
+                .hasSize(8)
+                .extracting(aid -> aid.visualFocus().label())
+                .containsExactly(
+                        "规则图 1",
+                        "规则图 2",
+                        "规则图 3",
+                        "规则图 4",
+                        "规则图 5",
+                        "规则图 6",
+                        "规则图 7",
+                        "规则图 8"));
     }
 
     @Test
@@ -319,6 +356,37 @@ class PublicLessonQuestionServiceTest {
                         1_000,
                         1_000,
                         IllustratedLesson.VisualSourceKind.FULL_PAGE));
+        return publicLessonWithStepVisuals(planId, versionId, source, step, visuals);
+    }
+
+    private PublicLessonReader.PublicLesson publicLessonWithManyOwnedVisuals(
+            UUID planId, UUID versionId, UUID chunk, int visualCount) {
+        PublicLessonReader.PublicLesson source = publicLesson(planId, versionId, chunk);
+        IllustratedLesson.LessonSection section = source.lesson().sections().getFirst();
+        IllustratedLesson.LessonStep step = section.steps().stream()
+                .filter(candidate -> candidate.heading().equals("识别标记"))
+                .findFirst()
+                .orElseThrow();
+        List<IllustratedLesson.VisualFocus> visuals = java.util.stream.IntStream.rangeClosed(1, visualCount)
+                .mapToObj(index -> new IllustratedLesson.VisualFocus(
+                        2,
+                        "规则图 " + index,
+                        "回答引用证据对应的规则图 " + index,
+                        index * 10,
+                        index * 10,
+                        100,
+                        100))
+                .toList();
+        return publicLessonWithStepVisuals(planId, versionId, source, step, visuals);
+    }
+
+    private PublicLessonReader.PublicLesson publicLessonWithStepVisuals(
+            UUID planId,
+            UUID versionId,
+            PublicLessonReader.PublicLesson source,
+            IllustratedLesson.LessonStep step,
+            List<IllustratedLesson.VisualFocus> visuals) {
+        IllustratedLesson.LessonSection section = source.lesson().sections().getFirst();
         IllustratedLesson.LessonStep multiVisual = new IllustratedLesson.LessonStep(
                 step.position(),
                 step.heading(),

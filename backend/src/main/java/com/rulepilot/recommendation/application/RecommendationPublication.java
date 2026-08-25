@@ -1,9 +1,9 @@
 package com.rulepilot.recommendation.application;
 
-import com.fasterxml.jackson.databind.JsonNode;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.Game;
 import com.rulepilot.recommendation.CandidateClaim;
 import com.rulepilot.recommendation.CandidateObservation;
+import com.rulepilot.recommendation.ConstraintRange;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ConversationResponse;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.DecisionMode;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.HarnessTrace;
@@ -22,24 +22,40 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 
-/** The single deterministic publication boundary for model-written recommendation decisions and prose. */
+/** The deterministic boundary for application-owned recommendation selection and evidence projection. */
 final class RecommendationPublication {
 
-    private static final int MAX_MESSAGE_CODE_POINTS = 1_200;
-    private static final int MAX_MESSAGE_BLOCK_CODE_POINTS = 700;
-    private static final int MAX_REASON_CODE_POINTS = 280;
-    private static final int MAX_TRADEOFF_CODE_POINTS = 220;
-    private static final List<String> RECOVERY_EVIDENCE_PRIORITY = List.of(
-            "families",
+    private static final int MAX_ANNOTATION_CODE_POINTS = 280;
+    private static final List<String> WHY_EVIDENCE_PRIORITY = List.of(
+            "reportedExperience",
             "mechanics",
+            "families",
             "categories",
             "playerCount",
             "durationMinutes",
             "complexity",
             "bggType",
+            "bestWith",
+            "recommendedWith",
+            "publisherDescription",
             "designers",
             "publishers",
-            "publisherDescription");
+            "minimumAge");
+    private static final List<String> BOUNDARY_EVIDENCE_PRIORITY = List.of(
+            "complexity",
+            "durationMinutes",
+            "playerCount",
+            "minimumAge",
+            "bestWith",
+            "recommendedWith",
+            "bggType",
+            "categories",
+            "mechanics",
+            "families",
+            "reportedExperience",
+            "publisherDescription",
+            "designers",
+            "publishers");
 
     private final BoardGameRecommendationSelector selector;
     private final RecommendationEvidenceReview evidenceReview;
@@ -57,43 +73,97 @@ final class RecommendationPublication {
         this.runtime = runtime;
     }
 
-    Permit permit(
-            JsonNode decision,
+    ConversationResponse publish(
             RecommendationAgentState state,
-            PublicationSeed seed) {
+            PublicationSeed seed,
+            String locale) {
+        Permit permit = permit(state, seed);
+        boolean chinese = runtime.chinese(locale);
+        Set<String> publishedEvidenceIds = new LinkedHashSet<>();
+        List<RecommendedGame> games = selector.present(
+                        permit.selectedGames(),
+                        state.profile,
+                        permit.referenceGames(),
+                        chinese,
+                        state.research)
+                .stream()
+                .map(game -> {
+                    List<RecommendationReplyPart> replyParts = replyParts(
+                            game.game(),
+                            permit.allowedEvidenceByGame().get(game.game().ranking().bggId()),
+                            state,
+                            chinese);
+                    replyParts.stream()
+                            .flatMap(part -> part.claim().evidence().stream())
+                            .map(CandidateObservation::id)
+                            .forEach(publishedEvidenceIds::add);
+                    return new RecommendedGame(
+                            game.game(),
+                            game.matches(),
+                            game.tradeoffs(),
+                            game.reasons(),
+                            game.claims(),
+                            replyParts);
+                })
+                .toList();
+
+        String lead = seed.playerLead().isBlank() ? safeLead(chinese) : seed.playerLead();
+        List<String> responseActions = new ArrayList<>(state.actions);
+        if (permit.shortfall() != null) responseActions.add("RECOMMENDATION_VERIFIED_SET_SHORTFALL");
+        responseActions.add("RECOMMEND_GAMES");
+        List<BoardGameRecommendationAgent.ResearchSource> sources =
+                runtime.responseSources(state, games, publishedEvidenceIds);
+        ConversationResponse response = new ConversationResponse(
+                Outcome.RECOMMENDATIONS,
+                DecisionMode.MODEL_ASSISTED,
+                lead,
+                state.profile,
+                null,
+                state.sourceCount,
+                state.verified.size(),
+                evidenceReview.userModelView(state, locale),
+                sources,
+                new HarnessTrace(
+                        state.modelCalls,
+                        state.catalogCalls,
+                        state.webResearchCalls,
+                        false,
+                        responseActions,
+                        state.elapsedMs()),
+                games,
+                state.comparison,
+                permit.shortfall(),
+                lead);
+
+        state.finalResponseGameIds.addAll(permit.selectedGames().stream()
+                .map(game -> game.ranking().bggId())
+                .toList());
+        state.finalResponseEvidenceIds.addAll(publishedEvidenceIds);
+        state.actions.clear();
+        state.actions.addAll(responseActions);
+        return response;
+    }
+
+    Permit permit(RecommendationAgentState state, PublicationSeed seed) {
         Objects.requireNonNull(state, "recommendation state is required");
         Objects.requireNonNull(seed, "publication seed is required");
         if (seed.candidateUse() == CandidateUse.CONTINUE_REACT) {
             throw invalid(Code.PUBLICATION_SEED_INVALID);
         }
-        requireObject(decision, Set.of("requestedCount", "selections", "referenceBggIds"));
-        int requestedCount = integer(
-                decision.path("requestedCount"),
-                1,
-                state.maximumRecommendationResults,
-                Code.SELECTION_COUNT_INVALID);
-
         Set<Integer> currentRecommendable = new LinkedHashSet<>(runtime.recommendableIds(state));
         if (!currentRecommendable.containsAll(seed.candidateBggIds())) {
             throw invalid(Code.PUBLICATION_SEED_INVALID);
         }
-        JsonNode selections = decision.path("selections");
-        int expectedSelectionCount = Math.min(requestedCount, seed.candidateBggIds().size());
-        if (!selections.isArray()
-                || selections.size() != expectedSelectionCount
-                || selections.isEmpty()
-                || selections.size() > state.maximumRecommendationResults) {
-            throw invalid(Code.SELECTION_COUNT_INVALID);
-        }
+        int requestedCount = Math.min(seed.requestedCount(), state.maximumRecommendationResults);
+        List<Integer> selectedCandidateIds = seed.candidateBggIds().stream()
+                .limit(requestedCount)
+                .toList();
 
         List<Game> selectedGames = new ArrayList<>();
         Map<Integer, Map<String, CandidateObservation>> allowedEvidence = new LinkedHashMap<>();
         Set<Integer> selectedIds = new LinkedHashSet<>();
-        for (JsonNode selection : selections) {
-            requireObject(selection, Set.of("bggId"));
-            int bggId = integer(selection.path("bggId"), 1, Integer.MAX_VALUE, Code.BGG_ID_INVALID);
+        for (Integer bggId : selectedCandidateIds) {
             if (!selectedIds.add(bggId)) throw invalid(Code.DUPLICATE_SELECTION);
-            if (!seed.candidateBggIds().contains(bggId)) throw invalid(Code.FINAL_ID_NOT_IN_PUBLICATION_SEED);
             Game game = state.verified.get(bggId);
             if (game == null) throw invalid(Code.FINAL_ID_NOT_VERIFIED);
             if (state.excludedIds.contains(bggId)) throw invalid(Code.FINAL_ID_EXCLUDED);
@@ -107,20 +177,15 @@ final class RecommendationPublication {
                 throw invalid(Code.FINAL_ID_FAILS_HARD_GATES);
             }
             Map<String, CandidateObservation> available = observations.narrativeObservations(game, state.research);
-            if (available.isEmpty()) {
-                throw invalid(Code.RECOMMENDATION_EVIDENCE_REQUIRED);
-            }
+            if (available.isEmpty()) throw invalid(Code.RECOMMENDATION_EVIDENCE_REQUIRED);
             selectedGames.add(game);
-            allowedEvidence.put(bggId, available);
+            allowedEvidence.put(
+                    bggId,
+                    java.util.Collections.unmodifiableMap(new LinkedHashMap<>(available)));
         }
 
-        List<Integer> referenceIds = ids(decision.path("referenceBggIds"), 0, 2);
-        if (!seed.referenceBggIds().containsAll(referenceIds)) {
-            throw invalid(Code.REFERENCE_ID_NOT_IN_PUBLICATION_SEED);
-        }
-        if (referenceIds.stream().anyMatch(selectedIds::contains)) {
-            throw invalid(Code.REFERENCE_ID_SELECTED);
-        }
+        List<Integer> referenceIds = seed.referenceBggIds().stream().limit(2).toList();
+        if (referenceIds.stream().anyMatch(selectedIds::contains)) throw invalid(Code.REFERENCE_ID_SELECTED);
         List<Game> referenceGames = new ArrayList<>();
         for (Integer referenceId : referenceIds) {
             Game reference = state.verified.get(referenceId);
@@ -128,75 +193,216 @@ final class RecommendationPublication {
                 throw invalid(Code.REFERENCE_ID_NOT_VERIFIED);
             }
             referenceGames.add(reference);
-            allowedEvidence.put(referenceId, observations.narrativeObservations(reference, state.research));
+            allowedEvidence.put(
+                    referenceId,
+                    java.util.Collections.unmodifiableMap(
+                            new LinkedHashMap<>(observations.narrativeObservations(reference, state.research))));
         }
 
-        RecommendationShortfall shortfall = seed.candidateBggIds().size() < requestedCount
-                ? new RecommendationShortfall(requestedCount, seed.candidateBggIds().size())
+        RecommendationShortfall shortfall = selectedGames.size() < requestedCount
+                ? new RecommendationShortfall(requestedCount, selectedGames.size())
                 : null;
         return new Permit(
                 requestedCount,
-                List.copyOf(selectedGames),
-                List.copyOf(referenceGames),
+                selectedGames,
+                referenceGames,
                 shortfall,
-                immutableEvidence(allowedEvidence));
+                java.util.Collections.unmodifiableMap(new LinkedHashMap<>(allowedEvidence)));
     }
 
-    Session open(
-            Permit permit,
+    private List<RecommendationReplyPart> replyParts(
+            Game game,
+            Map<String, CandidateObservation> availableEvidence,
             RecommendationAgentState state,
-            String locale) {
-        return new Session(
-                Objects.requireNonNull(permit, "publication permit is required"),
-                Objects.requireNonNull(state, "recommendation state is required"),
-                locale);
-    }
-
-    private Map<Integer, Map<String, CandidateObservation>> immutableEvidence(
-            Map<Integer, Map<String, CandidateObservation>> values) {
-        LinkedHashMap<Integer, Map<String, CandidateObservation>> copy = new LinkedHashMap<>();
-        values.forEach((id, evidence) -> copy.put(id, Map.copyOf(evidence)));
-        return java.util.Collections.unmodifiableMap(copy);
-    }
-
-    private void requireObject(JsonNode value, Set<String> required) {
-        if (value == null || !value.isObject()) throw invalid(Code.OBJECT_REQUIRED);
-        Set<String> actual = new LinkedHashSet<>();
-        value.fieldNames().forEachRemaining(actual::add);
-        if (!actual.equals(required)) throw invalid(Code.OBJECT_FIELDS_INVALID);
-    }
-
-    private int integer(JsonNode value, int minimum, int maximum, Code code) {
-        if (!value.canConvertToInt()) throw invalid(code);
-        int parsed = value.intValue();
-        if (parsed < minimum || parsed > maximum) throw invalid(code);
-        return parsed;
-    }
-
-    private List<Integer> ids(JsonNode value, int minimumItems, int maximumItems) {
-        if (!value.isArray() || value.size() < minimumItems || value.size() > maximumItems) {
-            throw invalid(Code.ID_LIST_INVALID);
+            boolean chinese) {
+        if (availableEvidence == null || availableEvidence.isEmpty()) {
+            throw invalid(Code.RECOMMENDATION_EVIDENCE_REQUIRED);
         }
-        List<Integer> values = new ArrayList<>();
-        for (JsonNode item : value) values.add(integer(item, 1, Integer.MAX_VALUE, Code.BGG_ID_INVALID));
-        if (values.stream().distinct().count() != values.size()) throw invalid(Code.DUPLICATE_LIST_VALUE);
-        return List.copyOf(values);
+        List<CandidateClaim> fitClaims = selector.fitClaims(game, state.profile, chinese);
+        CandidateClaim why = fitClaims.stream()
+                .filter(claim -> claim.relation() == CandidateClaim.Relation.SATISFIED)
+                .filter(claim -> !claim.evidence().isEmpty())
+                .findFirst()
+                .orElseGet(() -> observedClaim(
+                        preferredObservation(availableEvidence, WHY_EVIDENCE_PRIORITY),
+                        chinese,
+                        AnnotationPurpose.WHY_FIT));
+        CandidateClaim boundary = fitClaims.stream()
+                .filter(claim -> claim.strength() == ConstraintRange.Strength.SOFT)
+                .filter(claim -> claim.relation() == CandidateClaim.Relation.CONFLICT)
+                .filter(claim -> !claim.evidence().isEmpty())
+                .findFirst()
+                .orElseGet(() -> observedClaim(
+                        preferredObservation(availableEvidence, BOUNDARY_EVIDENCE_PRIORITY),
+                        chinese,
+                        AnnotationPurpose.SELECTION_BOUNDARY));
+        return List.of(
+                new RecommendationReplyPart(ReplyPartRole.WHY_FIT, why),
+                new RecommendationReplyPart(ReplyPartRole.TRADEOFF, boundary));
     }
 
-    private List<String> strings(JsonNode value, int minimumItems, int maximumItems) {
-        if (!value.isArray() || value.size() < minimumItems || value.size() > maximumItems) {
-            throw invalid(Code.EVIDENCE_LIST_INVALID);
+    private CandidateObservation preferredObservation(
+            Map<String, CandidateObservation> available,
+            List<String> priority) {
+        for (String attribute : priority) {
+            CandidateObservation observation = available.values().stream()
+                    .filter(candidate -> attribute.equals(candidate.attribute()))
+                    .findFirst()
+                    .orElse(null);
+            if (observation != null) return observation;
         }
-        List<String> values = new ArrayList<>();
-        for (JsonNode item : value) {
-            if (!item.isTextual()) throw invalid(Code.EVIDENCE_LIST_INVALID);
-            String text = item.asText().strip();
-            int length = text.codePointCount(0, text.length());
-            if (length < 3 || length > 80) throw invalid(Code.EVIDENCE_LIST_INVALID);
-            values.add(text);
+        return available.values().stream()
+                .findFirst()
+                .orElseThrow(() -> invalid(Code.RECOMMENDATION_EVIDENCE_REQUIRED));
+    }
+
+    private CandidateClaim observedClaim(
+            CandidateObservation observation,
+            boolean chinese,
+            AnnotationPurpose purpose) {
+        String value = bounded(observation.value(), 140);
+        String text = purpose == AnnotationPurpose.WHY_FIT
+                ? whyText(observation, value, chinese)
+                : boundaryText(observation, value, chinese);
+        return new CandidateClaim(
+                observation.bggId(),
+                observation.attribute(),
+                claimType(observation),
+                null,
+                CandidateClaim.Relation.OBSERVED,
+                bounded(text, MAX_ANNOTATION_CODE_POINTS),
+                List.of(observation));
+    }
+
+    private CandidateClaim.Type claimType(CandidateObservation observation) {
+        return switch (observation.kind()) {
+            case STRUCTURED_METADATA -> "publisherDescription".equals(observation.attribute())
+                    ? CandidateClaim.Type.PUBLISHER_DESCRIPTION
+                    : CandidateClaim.Type.STRUCTURED_FACT;
+            case TAXONOMY -> CandidateClaim.Type.TAXONOMY_CLASSIFICATION;
+            case ATTRIBUTED_REPORT -> CandidateClaim.Type.ATTRIBUTED_EXPERIENCE;
+            case RULEBOOK_FACT -> CandidateClaim.Type.STRUCTURED_FACT;
+        };
+    }
+
+    private String whyText(CandidateObservation observation, String value, boolean chinese) {
+        if (chinese) {
+            if (observation.kind() == CandidateObservation.Kind.ATTRIBUTED_REPORT) {
+                return "一条有来源的考虑依据是：资料提到“" + value + "”。";
+            }
+            if (observation.kind() == CandidateObservation.Kind.RULEBOOK_FACT) {
+                return "一条已核对的考虑依据是：规则书资料写明“" + value + "”。";
+            }
+            if ("publisherDescription".equals(observation.attribute())) {
+                return "一条可追溯的考虑依据是：出版方资料写明“" + value + "”。";
+            }
+            return switch (observation.attribute()) {
+                case "mechanics" -> "一条已核对的入选依据是：BGG 机制标签包含“" + value + "”。";
+                case "categories" -> "一条已核对的入选依据是：BGG 类别标签包含“" + value + "”。";
+                case "families" -> "一条已核对的入选依据是：BGG 系列资料包含“" + value + "”。";
+                case "playerCount" -> "一条已核对的考虑依据是：支持人数范围为 " + value + " 人。";
+                case "durationMinutes" -> "一条已核对的考虑依据是：资料时长范围为 " + value + " 分钟。";
+                case "complexity" -> "一条已核对的考虑依据是：BGG 复杂度为 " + value + "。";
+                case "bggType" -> "一条已核对的考虑依据是：BGG 类型为 " + value + "。";
+                case "bestWith" -> "一条已核对的考虑依据是：BGG 的 best-with 资料为 " + value + "。";
+                case "recommendedWith" -> "一条已核对的考虑依据是：BGG 的推荐人数资料为 " + value + "。";
+                case "minimumAge" -> "一条已核对的考虑依据是：资料标注最低年龄为 " + value + "。";
+                case "designers" -> "一条已核对的考虑依据是：设计者资料包含“" + value + "”。";
+                case "publishers" -> "一条已核对的考虑依据是：出版方资料包含“" + value + "”。";
+                default -> "一条已核对的考虑依据是：“" + value + "”。";
+            };
         }
-        if (values.stream().distinct().count() != values.size()) throw invalid(Code.DUPLICATE_LIST_VALUE);
-        return List.copyOf(values);
+        if (observation.kind() == CandidateObservation.Kind.ATTRIBUTED_REPORT) {
+            return "One source-backed reason to consider it is this attributed report: “" + value + ".”";
+        }
+        if (observation.kind() == CandidateObservation.Kind.RULEBOOK_FACT) {
+            return "One verified reason to consider it is this rulebook fact: “" + value + ".”";
+        }
+        if ("publisherDescription".equals(observation.attribute())) {
+            return "One traceable reason to consider it is this publisher description: “" + value + ".”";
+        }
+        return switch (observation.attribute()) {
+            case "mechanics" -> "One verified reason it made the slate: BGG mechanism labels include “" + value + ".”";
+            case "categories" -> "One verified reason it made the slate: BGG category labels include “" + value + ".”";
+            case "families" -> "One verified reason it made the slate: BGG family data includes “" + value + ".”";
+            case "playerCount" -> "One verified reason to consider it: the supported player range is " + value + ".";
+            case "durationMinutes" -> "One verified reason to consider it: the listed play-time range is " + value + " minutes.";
+            case "complexity" -> "One verified reason to consider it: its BGG weight is " + value + ".";
+            case "bggType" -> "One verified reason to consider it: its BGG type is " + value + ".";
+            case "bestWith" -> "One verified reason to consider it: BGG's best-with field says " + value + ".";
+            case "recommendedWith" -> "One verified reason to consider it: BGG's recommended-with field says " + value + ".";
+            case "minimumAge" -> "One verified reason to consider it: the listed minimum age is " + value + ".";
+            case "designers" -> "One verified reason to consider it: designer data includes “" + value + ".”";
+            case "publishers" -> "One verified reason to consider it: publisher data includes “" + value + ".”";
+            default -> "One verified reason to consider it is this recorded fact: “" + value + ".”";
+        };
+    }
+
+    private String boundaryText(CandidateObservation observation, String value, boolean chinese) {
+        if (chinese) {
+            if (observation.kind() == CandidateObservation.Kind.ATTRIBUTED_REPORT) {
+                return "选择边界：来源资料提到“" + value + "”，但这是一条归因报告，不代表每桌都会如此。";
+            }
+            if (observation.kind() == CandidateObservation.Kind.RULEBOOK_FACT) {
+                return "选择边界：规则书资料写明“" + value + "”，它只支持这项规则事实，不延伸为桌感判断。";
+            }
+            if ("publisherDescription".equals(observation.attribute())) {
+                return "选择边界：出版方资料写明“" + value + "”，这不是独立的玩家体验结论。";
+            }
+            return switch (observation.attribute()) {
+                case "complexity" -> "选择边界：已核对的 BGG 复杂度为 " + value + "，但该数值不保证你这桌的实际学习感受。";
+                case "durationMinutes" -> "选择边界：本轮只能确认资料时长为 " + value + " 分钟，不能据此保证实际局长。";
+                case "playerCount" -> "选择边界：本轮只能确认支持 " + value + " 人，不能从这个范围推出最佳人数。";
+                case "minimumAge" -> "选择边界：资料标注最低年龄为 " + value + "，这不等同于你这桌的教学难度。";
+                case "bestWith" -> "选择边界：BGG 的 best-with 资料为 " + value + "，它是选择参考而不是规则限制。";
+                case "recommendedWith" -> "选择边界：BGG 的推荐人数资料为 " + value + "，它是参考而不是硬性保证。";
+                case "bggType" -> "选择边界：BGG 类型为 " + value + "；这个分类本身不证明具体桌感。";
+                case "categories" -> "选择边界：BGG 类别标签包含“" + value + "”，标签本身不保证具体体验。";
+                case "mechanics" -> "选择边界：BGG 机制标签包含“" + value + "”，标签本身不保证你期待的桌感。";
+                case "families" -> "选择边界：BGG 系列资料包含“" + value + "”，系列归属本身不是体验保证。";
+                case "designers" -> "选择边界：设计者资料包含“" + value + "”，这只能确认创作者身份。";
+                case "publishers" -> "选择边界：出版方资料包含“" + value + "”，这只能确认出版身份。";
+                default -> "选择边界：本轮能确认的只是这项资料——“" + value + "”，不能据此延伸出未证实的桌感。";
+            };
+        }
+        if (observation.kind() == CandidateObservation.Kind.ATTRIBUTED_REPORT) {
+            return "Choice boundary: an attributed source reports “" + value + ",” but that is not a universal table result.";
+        }
+        if (observation.kind() == CandidateObservation.Kind.RULEBOOK_FACT) {
+            return "Choice boundary: the rulebook states “" + value + ";” that supports this rule fact, not a broader claim about table feel.";
+        }
+        if ("publisherDescription".equals(observation.attribute())) {
+            return "Choice boundary: the publisher says “" + value + ";” this is not an independent player-experience finding.";
+        }
+        return switch (observation.attribute()) {
+            case "complexity" -> "Choice boundary: the verified BGG weight is " + value + ", but that number cannot guarantee your group's learning experience.";
+            case "durationMinutes" -> "Choice boundary: the listed play-time range is " + value + " minutes; it cannot guarantee your actual session length.";
+            case "playerCount" -> "Choice boundary: the verified supported range is " + value + " players; that range alone does not establish the best count.";
+            case "minimumAge" -> "Choice boundary: the listed minimum age is " + value + "; it is not the same as your group's teaching difficulty.";
+            case "bestWith" -> "Choice boundary: BGG's best-with field says " + value + "; treat it as guidance, not a rules limit.";
+            case "recommendedWith" -> "Choice boundary: BGG's recommended-with field says " + value + "; it is guidance rather than a guarantee.";
+            case "bggType" -> "Choice boundary: the verified BGG type is " + value + "; that classification alone does not prove table feel.";
+            case "categories" -> "Choice boundary: BGG category labels include “" + value + ";” labels alone do not guarantee the experience.";
+            case "mechanics" -> "Choice boundary: BGG mechanism labels include “" + value + ";” labels alone do not guarantee the table feel you want.";
+            case "families" -> "Choice boundary: BGG family data includes “" + value + ";” family membership is not an experience guarantee.";
+            case "designers" -> "Choice boundary: designer data includes “" + value + ";” that establishes creator identity only.";
+            case "publishers" -> "Choice boundary: publisher data includes “" + value + ";” that establishes publisher identity only.";
+            default -> "Choice boundary: the available evidence establishes only “" + value + ",” not any broader claim about table feel.";
+        };
+    }
+
+    private String safeLead(boolean chinese) {
+        return chinese
+                ? "下面是这轮已经核对并可继续查看的候选。每张卡片都列出一条有证据的考虑依据，以及一条需要留意的选择边界。"
+                : "Here is the verified slate for this turn. Each card shows one evidence-backed reason to consider it and one boundary worth checking before you choose.";
+    }
+
+    private String bounded(String value, int maximumCodePoints) {
+        String text = value == null ? "" : value.strip();
+        int length = text.codePointCount(0, text.length());
+        if (length <= maximumCodePoints) return text;
+        int end = text.offsetByCodePoints(0, Math.max(1, maximumCodePoints - 1));
+        return text.substring(0, end).stripTrailing() + "…";
     }
 
     private InvalidPublication invalid(Code code) {
@@ -212,475 +418,22 @@ final class RecommendationPublication {
         Permit {
             selectedGames = List.copyOf(selectedGames);
             referenceGames = List.copyOf(referenceGames);
-            allowedEvidenceByGame = Map.copyOf(allowedEvidenceByGame);
-        }
-    }
-
-    final class Session {
-        private final Permit permit;
-        private final RecommendationAgentState state;
-        private final String locale;
-        private final StringBuilder answer = new StringBuilder();
-        private final List<String> answerSnapshots = new ArrayList<>();
-        private final List<RecommendationReplyPart> replyParts = new ArrayList<>();
-        private final Set<String> usedEvidenceIds = new LinkedHashSet<>();
-        private final Set<Integer> gamesWithReasons = new LinkedHashSet<>();
-        private final Set<Integer> gamesWithTradeoffs = new LinkedHashSet<>();
-        private int messageBlocks;
-        private int drainedSnapshotCount;
-        private boolean finished;
-        private boolean committed;
-        private Set<Integer> completedGameIds = Set.of();
-        private Set<String> completedEvidenceIds = Set.of();
-        private List<String> completedActions = List.of();
-
-        private Session(
-                Permit permit,
-                RecommendationAgentState state,
-                String locale) {
-            this.permit = permit;
-            this.state = state;
-            this.locale = locale;
-        }
-
-        void acceptBlock(JsonNode block) {
-            if (finished) throw new IllegalStateException("recommendation publication is already finished");
-            requireObject(block, Set.of("surface", "role", "bggId", "internalEvidenceIds", "text"));
-            Surface surface = enumValue(Surface.class, block.path("surface"), Code.SURFACE_INVALID);
-            BlockRole role = enumValue(BlockRole.class, block.path("role"), Code.ROLE_INVALID);
-            Integer bggId = nullableId(block.path("bggId"));
-            int availableEvidenceCount = permit.allowedEvidenceByGame().values().stream()
-                    .mapToInt(Map::size)
-                    .sum();
-            List<String> evidenceIds = strings(
-                    block.path("internalEvidenceIds"),
-                    0,
-                    availableEvidenceCount);
-            if (surface == Surface.MESSAGE) {
-                acceptMessage(role, bggId, evidenceIds, text(block.path("text"), MAX_MESSAGE_BLOCK_CODE_POINTS));
-            } else {
-                acceptCard(role, bggId, evidenceIds, block.path("text"));
-            }
-        }
-
-        ConversationResponse finish() {
-            if (finished) throw new IllegalStateException("recommendation publication is already finished");
-            Set<Integer> selectedIds = permit.selectedGames().stream()
-                    .map(game -> game.ranking().bggId())
-                    .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
-            if (messageBlocks == 0 || answer.isEmpty()) throw invalid(Code.MESSAGE_REQUIRED);
-            if (!gamesWithReasons.containsAll(selectedIds)) throw invalid(Code.CARD_REASON_REQUIRED);
-
-            return complete(
-                    answer.toString(),
-                    replyParts,
-                    usedEvidenceIds,
-                    null);
-        }
-
-        ConversationResponse finishWithVerifiedCandidates(String failureCode) {
-            if (finished) throw new IllegalStateException("recommendation publication is already finished");
-            String code = failureCode != null && failureCode.matches("[A-Z0-9_]{3,80}")
-                    ? failureCode
-                    : "PUBLICATION_UNAVAILABLE";
-            List<RecommendationReplyPart> recoveredReplyParts = new ArrayList<>(replyParts);
-            Set<String> recoveredEvidenceIds = new LinkedHashSet<>(usedEvidenceIds);
-            permit.selectedGames().stream()
-                    .map(game -> game.ranking().bggId())
-                    .filter(bggId -> !gamesWithReasons.contains(bggId))
-                    .forEach(bggId -> {
-                        RecoveryReason recovered = recoveryReason(bggId);
-                        recoveredReplyParts.add(new RecommendationReplyPart(
-                                recovered.role(),
-                                recovered.claim()));
-                        recoveredEvidenceIds.addAll(recovered.evidenceIds());
-                    });
-
-            String completeAnswer;
-            if (answer.isEmpty()) {
-                completeAnswer = runtime.chinese(locale)
-                        ? "我已经确认这些候选对应到具体桌游，也整理了卡片所需的可追溯资料。最后一段写作没有完整结束，所以我先保留可选择的卡片，并用这些资料补上每款说明。"
-                        : "I confirmed that these candidates refer to specific games and collected traceable material for their cards. The final passage did not finish, so I kept the selectable cards and used that material to fill each note.";
-                addAnswerSnapshot(completeAnswer);
-            } else {
-                String notice = runtime.chinese(locale)
-                        ? "后半段没有完整生成；下面缺失的卡片说明已用可追溯资料补齐。"
-                        : "The later passage did not finish; missing card notes below were filled from traceable material.";
-                completeAnswer = appendRecoveryNotice(notice);
-            }
-            return complete(
-                    completeAnswer,
-                    recoveredReplyParts,
-                    recoveredEvidenceIds,
-                    code);
-        }
-
-        private ConversationResponse complete(
-                String completeAnswer,
-                List<RecommendationReplyPart> publishedReplyParts,
-                Set<String> publishedEvidenceIds,
-                String recoveryCode) {
-            Set<Integer> selectedIds = permit.selectedGames().stream()
-                    .map(game -> game.ranking().bggId())
-                    .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
-
-            List<RecommendedGame> games = selector.present(
-                    permit.selectedGames(),
-                    state.profile,
-                    permit.referenceGames(),
-                    runtime.chinese(locale),
-                    state.research).stream()
-                    .map(game -> new RecommendedGame(
-                            game.game(),
-                            game.matches(),
-                            game.tradeoffs(),
-                            game.reasons(),
-                            game.claims(),
-                            publishedReplyParts.stream()
-                                    .filter(part -> part.claim().bggId()
-                                            == game.game().ranking().bggId())
-                                    .toList()))
-                    .toList();
-            List<String> responseActions = new ArrayList<>(state.actions);
-            if (permit.shortfall() != null) responseActions.add("RECOMMENDATION_AVAILABILITY_SHORTFALL");
-            if (recoveryCode != null) {
-                responseActions.add("RECOMMENDATION_PUBLICATION_RECOVERED:" + recoveryCode);
-            }
-            responseActions.add("RECOMMEND_GAMES");
-            var userModel = evidenceReview.userModelView(state, locale);
-            List<BoardGameRecommendationAgent.ResearchSource> sources;
-            try {
-                sources = runtime.responseSources(state, games, publishedEvidenceIds);
-            } catch (RuntimeException projectionFailure) {
-                if (recoveryCode == null) throw projectionFailure;
-                sources = List.of();
-            }
-            ConversationResponse response = new ConversationResponse(
-                    Outcome.RECOMMENDATIONS,
-                    DecisionMode.MODEL_ASSISTED,
-                    completeAnswer,
-                    state.profile,
-                    null,
-                    state.sourceCount,
-                    state.verified.size(),
-                    userModel,
-                    sources,
-                    new HarnessTrace(
-                            state.modelCalls,
-                            state.catalogCalls,
-                            state.webResearchCalls,
-                            false,
-                            responseActions,
-                            state.elapsedMs()),
-                    games,
-                    state.comparison,
-                    permit.shortfall(),
-                    completeAnswer);
-
-            finished = true;
-            completedGameIds = Set.copyOf(selectedIds);
-            completedEvidenceIds = Set.copyOf(publishedEvidenceIds);
-            completedActions = List.copyOf(responseActions);
-            return response;
-        }
-
-        List<String> drainAnswerSnapshots() {
-            if (drainedSnapshotCount == answerSnapshots.size()) return List.of();
-            List<String> pending = List.copyOf(answerSnapshots.subList(drainedSnapshotCount, answerSnapshots.size()));
-            drainedSnapshotCount = answerSnapshots.size();
-            return pending;
-        }
-
-        void commit() {
-            if (!finished) throw new IllegalStateException("recommendation publication is not finished");
-            if (committed) throw new IllegalStateException("recommendation publication is already committed");
-            if (drainedSnapshotCount != answerSnapshots.size()) {
-                throw new IllegalStateException("recommendation publication still has undelivered snapshots");
-            }
-            committed = true;
-            // The caller invokes this only after every queued player delivery succeeds. A late source,
-            // presentation, timeout, or disconnected-listener failure therefore cannot commit a partial turn.
-            state.finalResponseGameIds.addAll(completedGameIds);
-            state.finalResponseEvidenceIds.addAll(completedEvidenceIds);
-            state.actions.clear();
-            state.actions.addAll(completedActions);
-        }
-
-        private void acceptMessage(
-                BlockRole role,
-                Integer bggId,
-                List<String> evidenceIds,
-                String text) {
-            if (role != BlockRole.NARRATIVE) throw invalid(Code.MESSAGE_ROLE_INVALID);
-            validateEvidence(bggId, evidenceIds, false);
-            int separatorLength = answer.isEmpty() ? 0 : 2;
-            int nextLength = answer.codePointCount(0, answer.length())
-                    + separatorLength
-                    + text.codePointCount(0, text.length());
-            if (nextLength > MAX_MESSAGE_CODE_POINTS) throw invalid(Code.MESSAGE_TOO_LONG);
-            if (!answer.isEmpty()) answer.append("\n\n");
-            answer.append(text);
-            messageBlocks++;
-            usedEvidenceIds.addAll(evidenceIds);
-            answerSnapshots.add(answer.toString());
-            // A complete paragraph has passed the structured block boundary and every declared evidence id belongs
-            // to the permitted candidates. The lifecycle owner drains this snapshot and delivers it outside its
-            // state lock, so streaming never exposes partial JSON or lets a blocked network listener hold the lock.
-        }
-
-        private void addAnswerSnapshot(String text) {
-            answer.setLength(0);
-            answer.append(text);
-            messageBlocks = Math.max(messageBlocks, 1);
-            answerSnapshots.add(answer.toString());
-        }
-
-        private String appendRecoveryNotice(String notice) {
-            int separatorLength = answer.isEmpty() ? 0 : 2;
-            int nextLength = answer.codePointCount(0, answer.length())
-                    + separatorLength
-                    + notice.codePointCount(0, notice.length());
-            if (nextLength <= MAX_MESSAGE_CODE_POINTS) {
-                if (!answer.isEmpty()) answer.append("\n\n");
-                answer.append(notice);
-                answerSnapshots.add(answer.toString());
-            }
-            return answer.toString();
-        }
-
-        private RecoveryReason recoveryReason(int bggId) {
-            CandidateClaim explicitFit = permit.selectedGames().stream()
-                    .filter(game -> game.ranking().bggId() == bggId)
-                    .findFirst()
-                    .stream()
-                    .flatMap(game -> selector.fitClaims(game, state.profile, runtime.chinese(locale)).stream())
-                    .filter(claim -> claim.relation() == CandidateClaim.Relation.SATISFIED)
-                    .filter(claim -> !claim.evidence().isEmpty())
-                    .findFirst()
-                    .orElse(null);
-            if (explicitFit != null) {
-                return new RecoveryReason(
-                        ReplyPartRole.WHY_FIT,
-                        explicitFit,
-                        explicitFit.evidence().stream().map(CandidateObservation::id).toList());
-            }
-
-            Map<String, CandidateObservation> available =
-                    permit.allowedEvidenceByGame().getOrDefault(bggId, Map.of());
-            CandidateObservation observation = RECOVERY_EVIDENCE_PRIORITY.stream()
-                    .flatMap(attribute -> available.values().stream()
-                            .filter(candidate -> attribute.equals(candidate.attribute()))
-                            .limit(1))
-                    .findFirst()
-                    .orElseGet(() -> available.values().stream().findFirst().orElseThrow(
-                            () -> invalid(Code.RECOMMENDATION_EVIDENCE_REQUIRED)));
-            String value = bounded(observation.value(), 140);
-            String text = recoveryFact(observation, value);
-            CandidateClaim claim = new CandidateClaim(
-                    bggId,
-                    observation.attribute(),
-                    neutralClaimType(observation),
-                    null,
-                    CandidateClaim.Relation.OBSERVED,
-                    bounded(text, MAX_REASON_CODE_POINTS),
-                    List.of(observation));
-            return new RecoveryReason(ReplyPartRole.VERIFIED_FACT, claim, List.of(observation.id()));
-        }
-
-        private CandidateClaim.Type neutralClaimType(CandidateObservation observation) {
-            return switch (observation.kind()) {
-                case STRUCTURED_METADATA -> "publisherDescription".equals(observation.attribute())
-                        ? CandidateClaim.Type.PUBLISHER_DESCRIPTION
-                        : CandidateClaim.Type.STRUCTURED_FACT;
-                case TAXONOMY -> CandidateClaim.Type.TAXONOMY_CLASSIFICATION;
-                case ATTRIBUTED_REPORT -> CandidateClaim.Type.ATTRIBUTED_EXPERIENCE;
-                case RULEBOOK_FACT -> CandidateClaim.Type.STRUCTURED_FACT;
-            };
-        }
-
-        private String recoveryFact(CandidateObservation observation, String value) {
-            if (runtime.chinese(locale)) {
-                if (observation.kind() == CandidateObservation.Kind.ATTRIBUTED_REPORT) {
-                    return "来源资料提到：" + value + "。";
-                }
-                if (observation.kind() == CandidateObservation.Kind.RULEBOOK_FACT) {
-                    return "规则书资料写明：" + value + "。";
-                }
-                if ("publisherDescription".equals(observation.attribute())) {
-                    return "出版方资料写明：" + value + "。";
-                }
-                return switch (observation.attribute()) {
-                    case "families" -> "已核对的系列资料包含：" + value + "。";
-                    case "mechanics" -> "已核对的机制包括：" + value + "。";
-                    case "categories" -> "已核对的类别包括：" + value + "。";
-                    case "playerCount" -> "已核对的玩家人数为 " + value + "。";
-                    case "durationMinutes" -> "已核对的游玩时长范围为 " + value + " 分钟。";
-                    case "complexity" -> "已核对的 BGG 复杂度为 " + value + "。";
-                    case "bggType" -> "已核对的 BGG 类型为 " + value + "。";
-                    case "designers" -> "已核对的设计者资料包含：" + value + "。";
-                    case "publishers" -> "已核对的出版方资料包含：" + value + "。";
-                    default -> "卡片中的这项资料已经核对：" + value + "。";
-                };
-            }
-            if (observation.kind() == CandidateObservation.Kind.ATTRIBUTED_REPORT) {
-                return "An attributed source reports: " + value + ".";
-            }
-            if (observation.kind() == CandidateObservation.Kind.RULEBOOK_FACT) {
-                return "The rulebook material states: " + value + ".";
-            }
-            if ("publisherDescription".equals(observation.attribute())) {
-                return "The publisher material states: " + value + ".";
-            }
-            return switch (observation.attribute()) {
-                case "families" -> "verified family data includes " + value + ".";
-                case "mechanics" -> "verified mechanisms include " + value + ".";
-                case "categories" -> "verified categories include " + value + ".";
-                case "playerCount" -> "the verified player range is " + value + ".";
-                case "durationMinutes" -> "the verified play-time range is " + value + " minutes.";
-                case "complexity" -> "the verified BGG weight is " + value + ".";
-                case "bggType" -> "the verified BGG type is " + value + ".";
-                case "designers" -> "verified designer data includes " + value + ".";
-                case "publishers" -> "verified publisher data includes " + value + ".";
-                default -> "this card fact was verified: " + value + ".";
-            };
-        }
-
-        private String bounded(String value, int maximumCodePoints) {
-            String text = value == null ? "" : value.strip();
-            int length = text.codePointCount(0, text.length());
-            if (length <= maximumCodePoints) return text;
-            int end = text.offsetByCodePoints(0, Math.max(1, maximumCodePoints - 1));
-            return text.substring(0, end).stripTrailing() + "…";
-        }
-
-        private void acceptCard(
-                BlockRole role,
-                Integer bggId,
-                List<String> evidenceIds,
-                JsonNode textNode) {
-            if (role != BlockRole.WHY_FIT && role != BlockRole.TRADEOFF) {
-                throw invalid(Code.CARD_ROLE_INVALID);
-            }
-            if (bggId == null || permit.selectedGames().stream()
-                    .map(game -> game.ranking().bggId())
-                    .noneMatch(id -> Objects.equals(id, bggId))) {
-                throw invalid(Code.CARD_GAME_INVALID);
-            }
-            if (evidenceIds.isEmpty()) throw invalid(Code.RECOMMENDATION_EVIDENCE_REQUIRED);
-            List<CandidateObservation> evidence = validateEvidence(bggId, evidenceIds, true);
-            String text = text(
-                    textNode,
-                    role == BlockRole.WHY_FIT ? MAX_REASON_CODE_POINTS : MAX_TRADEOFF_CODE_POINTS);
-            if (role == BlockRole.WHY_FIT) {
-                gamesWithReasons.add(bggId);
-            } else if (!gamesWithTradeoffs.add(bggId)) {
-                throw invalid(Code.DUPLICATE_TRADEOFF);
-            }
-            replyParts.add(new RecommendationReplyPart(
-                    role == BlockRole.WHY_FIT ? ReplyPartRole.WHY_FIT : ReplyPartRole.TRADEOFF,
-                    new CandidateClaim(
-                            bggId,
-                            "recommendationJudgment",
-                            CandidateClaim.Type.PREFERENCE_INFERENCE,
-                            null,
-                            CandidateClaim.Relation.OBSERVED,
-                            text,
-                            evidence)));
-            usedEvidenceIds.addAll(evidenceIds);
-        }
-
-        private List<CandidateObservation> validateEvidence(
-                Integer bggId,
-                List<String> evidenceIds,
-                boolean selectedGameRequired) {
-            if (bggId != null) {
-                Map<String, CandidateObservation> allowed = permit.allowedEvidenceByGame().get(bggId);
-                if (allowed == null || selectedGameRequired && permit.selectedGames().stream()
-                        .map(game -> game.ranking().bggId())
-                        .noneMatch(id -> Objects.equals(id, bggId))) {
-                    throw invalid(Code.BLOCK_EVIDENCE_NOT_GROUNDED);
-                }
-                List<CandidateObservation> values = evidenceIds.stream().map(allowed::get).toList();
-                if (values.stream().anyMatch(Objects::isNull)) {
-                    throw invalid(Code.BLOCK_EVIDENCE_NOT_GROUNDED);
-                }
-                return values;
-            }
-            List<CandidateObservation> values = new ArrayList<>();
-            for (String evidenceId : evidenceIds) {
-                CandidateObservation found = permit.allowedEvidenceByGame().values().stream()
-                        .map(evidence -> evidence.get(evidenceId))
-                        .filter(Objects::nonNull)
-                        .findFirst()
-                        .orElseThrow(() -> invalid(Code.BLOCK_EVIDENCE_NOT_GROUNDED));
-                values.add(found);
-            }
-            return List.copyOf(values);
-        }
-
-        private Integer nullableId(JsonNode value) {
-            return value.isNull()
-                    ? null
-                    : integer(value, 1, Integer.MAX_VALUE, Code.BGG_ID_INVALID);
-        }
-
-        private String text(JsonNode value, int maximumCodePoints) {
-            if (!value.isTextual()) throw invalid(Code.TEXT_INVALID);
-            String text = value.asText().strip();
-            int length = text.codePointCount(0, text.length());
-            if (length < 1 || length > maximumCodePoints) throw invalid(Code.TEXT_INVALID);
-            return text;
-        }
-
-        private <E extends Enum<E>> E enumValue(Class<E> type, JsonNode value, Code code) {
-            if (!value.isTextual()) throw invalid(code);
-            try {
-                return Enum.valueOf(type, value.asText());
-            } catch (IllegalArgumentException exception) {
-                throw invalid(code);
-            }
-        }
-
-        private record RecoveryReason(
-                ReplyPartRole role, CandidateClaim claim, List<String> evidenceIds) {
-            private RecoveryReason {
-                Objects.requireNonNull(role, "recovery reply role is required");
-                evidenceIds = List.copyOf(evidenceIds);
-            }
+            allowedEvidenceByGame = java.util.Collections.unmodifiableMap(
+                    new LinkedHashMap<>(allowedEvidenceByGame));
         }
     }
 
     enum Code {
-        OBJECT_REQUIRED,
-        OBJECT_FIELDS_INVALID,
         PUBLICATION_SEED_INVALID,
-        SELECTION_COUNT_INVALID,
-        BGG_ID_INVALID,
         DUPLICATE_SELECTION,
-        FINAL_ID_NOT_IN_PUBLICATION_SEED,
         FINAL_ID_NOT_VERIFIED,
         FINAL_ID_EXCLUDED,
         FINAL_ID_PREVIOUSLY_SHOWN,
         FINAL_ID_IS_COMPARISON_REFERENCE,
         FINAL_ID_FAILS_HARD_GATES,
         RECOMMENDATION_EVIDENCE_REQUIRED,
-        REFERENCE_ID_NOT_IN_PUBLICATION_SEED,
         REFERENCE_ID_SELECTED,
-        REFERENCE_ID_NOT_VERIFIED,
-        ID_LIST_INVALID,
-        EVIDENCE_LIST_INVALID,
-        DUPLICATE_LIST_VALUE,
-        SURFACE_INVALID,
-        ROLE_INVALID,
-        MESSAGE_ROLE_INVALID,
-        CARD_ROLE_INVALID,
-        CARD_GAME_INVALID,
-        BLOCK_EVIDENCE_NOT_GROUNDED,
-        TEXT_INVALID,
-        MESSAGE_TOO_LONG,
-        DUPLICATE_TRADEOFF,
-        MESSAGE_REQUIRED,
-        CARD_REASON_REQUIRED
+        REFERENCE_ID_NOT_VERIFIED
     }
 
     static final class InvalidPublication extends RuntimeException {
@@ -696,20 +449,8 @@ final class RecommendationPublication {
         }
     }
 
-    static final class DeliveryFailure extends RuntimeException {
-        DeliveryFailure(RuntimeException cause) {
-            super("recommendation publication delivery failed", cause);
-        }
-    }
-
-    private enum Surface {
-        MESSAGE,
-        CARD
-    }
-
-    private enum BlockRole {
-        NARRATIVE,
+    private enum AnnotationPurpose {
         WHY_FIT,
-        TRADEOFF
+        SELECTION_BOUNDARY
     }
 }

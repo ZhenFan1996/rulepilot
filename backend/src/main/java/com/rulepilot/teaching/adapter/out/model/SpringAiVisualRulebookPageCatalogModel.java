@@ -68,7 +68,7 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
     private static final ObjectMapper JSON = new ObjectMapper()
             .enable(JsonParser.Feature.STRICT_DUPLICATE_DETECTION)
             .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
-    private static final String QWEN_BALANCED_VISUAL_MODEL = "qwen3.7-plus";
+    private static final String QWEN_TEACHING_STARTUP_MODEL = "qwen3-vl-flash";
     private static final Set<String> RULE_GROUP_FIELDS = Set.of("identifier", "fact");
     private static final Set<String> RULE_GROUP_FIELDS_WITH_REDUNDANT_INDEX =
             Set.of("identifier", "fact", "ruleGroupIndex");
@@ -120,6 +120,11 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
             Set.of("documentTitle", "missingCoverageTags");
     private static final Set<String> EXTERNAL_DOCUMENT_COVERAGE_TAGS =
             Set.of("setup", "core_loop", "end", "scoring");
+    private static final int MAX_PRINTED_TERMS = 12;
+    private static final int MAX_KEYWORDS = 16;
+    private static final int OPTIONAL_METADATA_ABUSE_ITEM_LIMIT = 64;
+    private static final int OPTIONAL_METADATA_ITEM_CHARACTER_LIMIT = 512;
+    private static final int OPTIONAL_METADATA_TOTAL_CHARACTER_LIMIT = 8_192;
     private static final Set<String> PROGRESSIVE_V4_ROOT_FIELDS =
             Set.of("pageSketches", "selectedPageFacts");
     private static final Set<String> PROGRESSIVE_V4_PAGE_FIELDS = Set.of(
@@ -276,8 +281,7 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
     public boolean supportsProgressiveTeachingStart(String owner) {
         return !models.usesFake(Role.VISUAL, owner)
                 && models.supportsVision(Role.VISUAL, owner)
-                && "qwen".equals(models.providerFor(Role.VISUAL, owner))
-                && QWEN_BALANCED_VISUAL_MODEL.equalsIgnoreCase(models.modelNameFor(Role.VISUAL, owner));
+                && "qwen".equals(models.providerFor(Role.VISUAL, owner));
     }
 
     @Override
@@ -780,7 +784,12 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
     }
 
     static String teachingStartupModelName(String provider, String configuredModel) {
-        return configuredModel;
+        // Teaching startup is a bounded image-to-typed-facts workload, not the provider's general reasoning role.
+        // A paid trace on the same immutable source page established that Qwen's dedicated VL flash model retained
+        // the complete typed ledger while removing about four seconds from the semantic call. Keep the override at
+        // the request boundary so recommendation, answers, and the richer post-publication visual audit still honor
+        // their configured model, and expose the resolved name through teachingStartupExecutionIdentity for audit.
+        return "qwen".equals(provider) ? QWEN_TEACHING_STARTUP_MODEL : configuredModel;
     }
 
     private record CropBounds(int x, int y, int width, int height) {}
@@ -839,10 +848,13 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
                 if (pageNumber < 1) {
                     throw new IllegalArgumentException("visual teaching catalog pageNumber must be positive");
                 }
-                strictTextArray(page.get("printedTerms"), "printedTerms", 0, 12);
-                // Keywords are bounded retrieval metadata, not rule evidence. A sparse or dense but otherwise
-                // exact page ledger must not be discarded because the model chose fewer or more search terms.
-                strictTextArray(page.get("keywords"), "keywords", 0, 16);
+                // These fields are non-authoritative retrieval metadata. Normalize them locally so a valid typed
+                // rule ledger is not discarded (and paid for again) because the model returned a few extra labels.
+                // The absolute input limits still reject abusive payloads before they reach persistence or search.
+                objectPage.set(
+                        "printedTerms",
+                        boundedOptionalMetadata(page.get("printedTerms"), "printedTerms", MAX_PRINTED_TERMS));
+                objectPage.set("keywords", boundedOptionalMetadata(page.get("keywords"), "keywords", MAX_KEYWORDS));
                 strictExternalDocumentDependencies(page.get("externalDocumentDependencies"));
                 if (!page.get("ruleGroupInventoryComplete").isBoolean()) {
                     throw new IllegalArgumentException(
@@ -970,6 +982,32 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
             values.add(text);
         }
         return List.copyOf(values);
+    }
+
+    private static ArrayNode boundedOptionalMetadata(JsonNode value, String field, int retainedItems) {
+        if (value == null || !value.isArray()) {
+            throw new IllegalArgumentException(field + " must be an array");
+        }
+        if (value.size() > OPTIONAL_METADATA_ABUSE_ITEM_LIMIT) {
+            throw new IllegalArgumentException(field + " exceeds the absolute metadata item limit");
+        }
+        LinkedHashSet<String> distinct = new LinkedHashSet<>();
+        int characters = 0;
+        for (JsonNode item : value) {
+            if (!item.isTextual() || item.textValue().isBlank()) {
+                throw new IllegalArgumentException(field + " must contain non-blank text");
+            }
+            String text = item.textValue().strip();
+            characters = Math.addExact(characters, text.length());
+            if (text.length() > OPTIONAL_METADATA_ITEM_CHARACTER_LIMIT
+                    || characters > OPTIONAL_METADATA_TOTAL_CHARACTER_LIMIT) {
+                throw new IllegalArgumentException(field + " exceeds the absolute metadata character limit");
+            }
+            distinct.add(text);
+        }
+        ArrayNode bounded = JSON.createArrayNode();
+        distinct.stream().limit(retainedItems).forEach(bounded::add);
+        return bounded;
     }
 
     private static void requireExactObjectFields(JsonNode value, Set<String> expected, String contract) {

@@ -98,7 +98,7 @@ class BoardGameRecommendationAgentRealConversationEvaluationTest {
                     .containsEntry("dynamicCountOutcome", "RECOMMENDATIONS")
                     .containsEntry("dynamicCount", 5)
                     .containsEntry("dynamicCountDidNotSetPlayers", true)
-                    .containsEntry("recommendationPublicationsAreStructuredNoActionTurns", true)
+                    .containsEntry("recommendationPublicationsAvoidWriterCalls", true)
                     .containsEntry("refreshOutcome", "RECOMMENDATIONS")
                     .containsEntry("refreshOverlap", 0)
                     .containsEntry("fallbackUsed", false);
@@ -398,8 +398,8 @@ class BoardGameRecommendationAgentRealConversationEvaluationTest {
                     .toList());
             result.put("rawModelTurnCount", activeRawModelCapture.count());
             result.put(
-                    "recommendationPublicationsAreStructuredNoActionTurns",
-                    activeRawModelCapture.recommendationPublicationsAreStructuredNoActionTurns());
+                    "recommendationPublicationsAvoidWriterCalls",
+                    activeRawModelCapture.recommendationPublicationsAvoidWriterCalls());
             return Map.copyOf(result);
         } finally {
             agent.stopBoundedCalls();
@@ -947,10 +947,8 @@ class BoardGameRecommendationAgentRealConversationEvaluationTest {
                     Request request,
                     String ownerUsername,
                     java.util.function.Consumer<String> jsonDeltaListener) {
-                BoardGameRecommendationModel.StructuredTurn turn =
-                        delegate.streamStructured(request, ownerUsername, jsonDeltaListener);
-                capture.recordStructured(request, turn);
-                return turn;
+                capture.recordUnexpectedWriterCall();
+                throw new AssertionError("recommendation evaluation unexpectedly opened a writer call");
             }
 
         };
@@ -1087,8 +1085,7 @@ class BoardGameRecommendationAgentRealConversationEvaluationTest {
         private final ObjectMapper json;
         private final Path output;
         private final List<Map<String, Object>> turns = new ArrayList<>();
-        private final List<BoardGameRecommendationModel.Request> structuredRequests = new ArrayList<>();
-        private final List<String> publicationJson = new ArrayList<>();
+        private int writerCalls;
         private String scenario = "unassigned";
 
         private RawModelCapture(String provider, String model, double temperature, ObjectMapper json) {
@@ -1138,21 +1135,8 @@ class BoardGameRecommendationAgentRealConversationEvaluationTest {
             append(Map.copyOf(value));
         }
 
-        private synchronized void recordStructured(
-                BoardGameRecommendationModel.Request request,
-                BoardGameRecommendationModel.StructuredTurn turn) {
-            structuredRequests.add(request);
-            publicationJson.add(turn.json());
-            Map<String, Object> value = new LinkedHashMap<>();
-            value.put("ordinal", turns.size() + 1);
-            value.put("scenario", scenario);
-            value.put("provider", provider);
-            value.put("model", model);
-            value.put("temperature", temperature);
-            value.put("structuredOutput", request.structuredOutput().name());
-            value.put("structuredJson", turn.json());
-            value.put("toolCalls", List.of());
-            append(Map.copyOf(value));
+        private synchronized void recordUnexpectedWriterCall() {
+            writerCalls++;
         }
 
         private void append(Map<String, Object> captured) {
@@ -1172,35 +1156,8 @@ class BoardGameRecommendationAgentRealConversationEvaluationTest {
             return turns.size();
         }
 
-        private synchronized boolean recommendationPublicationsAreStructuredNoActionTurns() {
-            if (structuredRequests.isEmpty() || structuredRequests.size() != publicationJson.size()) return false;
-            try {
-                for (int index = 0; index < structuredRequests.size(); index++) {
-                    BoardGameRecommendationModel.Request request = structuredRequests.get(index);
-                    if (!request.tools().isEmpty()
-                            || request.toolChoice() != BoardGameRecommendationModel.ToolChoice.NONE
-                            || request.structuredOutput() == null
-                            || !"recommendation_publication".equals(request.structuredOutput().name())) {
-                        return false;
-                    }
-                    var publication = json.readTree(publicationJson.get(index));
-                    if (!publication.path("decision").isObject()
-                            || !publication.path("replyBlocks").isArray()
-                            || !publication.path("decision").path("selections").isArray()) {
-                        return false;
-                    }
-                    for (var selection : publication.path("decision").path("selections")) {
-                        if (!selection.isObject()
-                                || selection.size() != 1
-                                || !selection.path("bggId").canConvertToInt()) {
-                            return false;
-                        }
-                    }
-                }
-                return true;
-            } catch (java.io.IOException invalidJson) {
-                return false;
-            }
+        private synchronized boolean recommendationPublicationsAvoidWriterCalls() {
+            return writerCalls == 0;
         }
 
         private double temperature() {

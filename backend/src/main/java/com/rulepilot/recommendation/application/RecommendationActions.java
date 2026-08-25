@@ -11,6 +11,7 @@ import static com.rulepilot.recommendation.application.BoardGameRecommendationAg
 import static com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RESEARCH_TOOL;
 import static com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RESOLVE_TOOL;
 import static com.rulepilot.recommendation.application.BoardGameRecommendationAgent.SEARCH_TOOL;
+import static com.rulepilot.recommendation.application.RecommendationAgentState.MAX_PLAYER_LEAD_CODE_POINTS;
 import static com.rulepilot.recommendation.application.RecommendationAgentState.MAX_VERIFIED_GAMES;
 import static com.rulepilot.recommendation.application.RecommendationReActLoop.MAX_REFERENCE_RESOLUTION_ATTEMPTS;
 
@@ -84,6 +85,8 @@ final class RecommendationActions {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(BoardGameRecommendationAgent.class);
     private static final int MAX_PUBLISHER_DESCRIPTION_CONTEXT_CODE_POINTS = 800;
+    private static final int MAX_LOCAL_CATALOG_SCAN_RESULTS = 20;
+    private static final int MAX_LOCAL_CATALOG_SCAN_OFFSET = 200;
     private final BoardGameRecommendationTools tools;
     private final BoardGameRecommendationSelector selector;
     private final BoardGameRecommendationProperties properties;
@@ -362,6 +365,15 @@ final class RecommendationActions {
             int value = node.intValue();
             if (value > 0) return value;
         }
+        if (node.isTextual()) {
+            String value = node.textValue();
+            try {
+                int parsed = Integer.parseInt(value);
+                if (parsed > 0 && Integer.toString(parsed).equals(value)) return parsed;
+            } catch (NumberFormatException ignored) {
+                // A decimal string is a documented provider transport form, not free-form prose.
+            }
+        }
         throw new InvalidAction("COMPARISON_PREFERENCE_INVALID");
     }
 
@@ -564,11 +576,20 @@ final class RecommendationActions {
             RecommendationAgentState state,
             ConversationRequest request,
             BiConsumer<ProgressStage, ProgressFocus> progress) {
-        requireObject(arguments, Set.of("titles"), Set.of("preferenceUpdates", "candidateUse"));
+        requireObject(
+                arguments,
+                Set.of("titles"),
+                Set.of(
+                        "preferenceUpdates",
+                        "candidateUse",
+                        "requestedCount",
+                        "requestedCountEvidence",
+                        "playerLead"));
         PreferenceUpdatePlan preferencePlan =
                 evidenceReview.planPreferenceUpdates(arguments, state.profile, request);
         List<String> titles = strings(arguments.path("titles"), 1, 8, 2, 120);
         CandidateUse use = candidateUse(arguments, CandidateUse.PUBLISH_CARDS, true);
+        int requestedCount = publicationCount(arguments, request);
         progress.accept(
                 ProgressStage.SEARCHING_BGG_CATALOG,
                 new ProgressFocus(ProgressFocusKind.CANDIDATE_TITLE_COUNT, List.of(Integer.toString(titles.size()))));
@@ -587,7 +608,13 @@ final class RecommendationActions {
         state.actions.add("LOOKUP_BGG_CANDIDATES");
         state.sourceCount = Math.max(state.sourceCount, result.sourceCount());
         result.games().forEach(state::addVerified);
-        return candidateObservation(observation, state, result.games(), use);
+        return candidateObservation(
+                observation,
+                state,
+                result.games(),
+                use,
+                requestedCount,
+                playerLead(arguments));
     }
 
     private ActionOutcome browse(
@@ -613,6 +640,9 @@ final class RecommendationActions {
                         "textQuery",
                         "sort",
                         "limit",
+                        "requestedCount",
+                        "requestedCountEvidence",
+                        "playerLead",
                         "offset",
                         "preferenceUpdates",
                         "candidateUse"));
@@ -684,40 +714,92 @@ final class RecommendationActions {
         int limit = arguments.has("limit")
                 ? integer(arguments.path("limit"), 1, MAX_VERIFIED_GAMES, "LIMIT_OUT_OF_RANGE")
                 : Math.min(properties.modelCandidateLimit(), MAX_VERIFIED_GAMES);
-        int eligibilityLimit = limit;
+        int publicationCount = publicationCount(arguments, request);
+        int eligibilityLimit = use == CandidateUse.CONTINUE_REACT
+                ? limit
+                : Math.max(limit, publicationCount);
         Set<Integer> unavailableCandidateIds = new LinkedHashSet<>(state.excludedIds);
         unavailableCandidateIds.addAll(state.previouslyShownIds);
+        unavailableCandidateIds.addAll(state.comparisonReferenceIds);
         int requestedCandidateCount = Math.max(eligibilityLimit, properties.resultCount());
-        int catalogLimit = Math.min(
-                runtime.maximumRecommendationResults(),
+        int boundedPlanningWindow = Math.min(
+                MAX_LOCAL_CATALOG_SCAN_RESULTS,
                 requestedCandidateCount
                         + Math.min(
                                 Math.max(properties.resultCount(), unavailableCandidateIds.size()),
-                                runtime.maximumRecommendationResults()));
+                                MAX_LOCAL_CATALOG_SCAN_RESULTS));
+        int catalogLimit = use == CandidateUse.CONTINUE_REACT
+                ? boundedPlanningWindow
+                : MAX_LOCAL_CATALOG_SCAN_RESULTS;
         progress.accept(
                 ProgressStage.SEARCHING_BGG_CATALOG,
                 browseFocus(categories, mechanics, designers, publishers, families));
-        state.catalogCalls++;
-        CatalogObservation result = runtime.withinDeadline(
-                state,
-                () -> tools.searchCatalog(
-                        types,
-                        categories,
-                        mechanics,
-                        designers,
-                        publishers,
-                        families,
-                        minimumPublicationYear,
-                        maximumPublicationYear,
-                        minimumAverageRating,
-                        minimumRatingsCount,
-                        textQuery,
-                        sort,
-                        catalogLimit,
-                        offset));
-        List<Game> eligible = result.succeeded()
-                ? selector.eligible(result.games(), preferencePlan.profile(), unavailableCandidateIds, eligibilityLimit)
-                : List.of();
+        List<Game> scannedGames = new ArrayList<>();
+        Set<Integer> scannedIds = new LinkedHashSet<>();
+        List<Game> eligible = List.of();
+        CatalogObservation result = null;
+        int catalogSourceCount = 0;
+        int pageOffset = offset;
+        int scannedPages = 0;
+        boolean scanBudgetReached = false;
+        boolean completedCatalogPage = false;
+        while (true) {
+            state.catalogCalls++;
+            CatalogObservation page;
+            try {
+                int currentOffset = pageOffset;
+                page = runtime.withinDeadline(
+                        state,
+                        () -> tools.searchCatalog(
+                                types,
+                                categories,
+                                mechanics,
+                                designers,
+                                publishers,
+                                families,
+                                minimumPublicationYear,
+                                maximumPublicationYear,
+                                minimumAverageRating,
+                                minimumRatingsCount,
+                                textQuery,
+                                sort,
+                                catalogLimit,
+                                currentOffset));
+            } catch (RecommendationReActLoop.RunDeadlineExceeded exception) {
+                if (eligible.isEmpty()) throw exception;
+                state.actions.add("CATALOG_SCAN_STOPPED:TIME_BUDGET");
+                break;
+            }
+            result = page;
+            scannedPages++;
+            catalogSourceCount = Math.max(catalogSourceCount, page.sourceCount());
+            if (!page.succeeded()) break;
+            completedCatalogPage = true;
+            int distinctBefore = scannedIds.size();
+            page.games().forEach(game -> {
+                if (scannedIds.add(game.ranking().bggId())) scannedGames.add(game);
+            });
+            eligible = selector.eligible(
+                    scannedGames,
+                    preferencePlan.profile(),
+                    unavailableCandidateIds,
+                    eligibilityLimit);
+            if (use == CandidateUse.CONTINUE_REACT
+                    || purpose == DiscoveryPurpose.IDENTITY_ONLY
+                    || eligible.size() >= eligibilityLimit
+                    || page.pageExhausted()
+                    || page.games().isEmpty()
+                    || scannedIds.size() == distinctBefore) {
+                break;
+            }
+            if (pageOffset > MAX_LOCAL_CATALOG_SCAN_OFFSET - catalogLimit) {
+                scanBudgetReached = true;
+                state.actions.add("CATALOG_SCAN_STOPPED:ROW_BUDGET");
+                break;
+            }
+            pageOffset += catalogLimit;
+        }
+        CatalogObservation terminalResult = Objects.requireNonNull(result, "catalog scan must complete one page");
         List<String> verifiedIdentityNames = purpose == DiscoveryPurpose.IDENTITY_ONLY && !designers.isEmpty()
                 ? result.games().stream()
                     .filter(game -> game.details() != null)
@@ -746,9 +828,13 @@ final class RecommendationActions {
         appliedFilters.put("textQuery", textQuery);
         appliedFilters.put("sort", sort);
         appliedFilters.put("offset", offset);
+        appliedFilters.put("pagesScanned", scannedPages);
+        appliedFilters.put("scanBudgetReached", scanBudgetReached);
         String observation = runtime.observation(Map.of(
-                "status", result.succeeded() ? "SUCCESS" : "ERROR",
-                "code", result.code(),
+                "status", completedCatalogPage
+                        ? terminalResult.succeeded() ? "SUCCESS" : "PARTIAL"
+                        : "ERROR",
+                "code", terminalResult.code(),
                 "guidance", eligible.isEmpty()
                         ? purpose == DiscoveryPurpose.IDENTITY_ONLY && state.webResearchAvailable
                                 ? "The local BGG catalog did not verify that creator identity. Treat the guessed name as disproved for this alias and use public discovery with the original user evidence; do not retry or publish the guess."
@@ -760,7 +846,7 @@ final class RecommendationActions {
         state.catalogBrowseAttempted = true;
         state.discoveryPurpose = purpose;
         state.actions.add("SEARCH_BGG_CATALOG");
-        state.sourceCount = Math.max(state.sourceCount, result.sourceCount());
+        state.sourceCount = Math.max(state.sourceCount, catalogSourceCount);
         eligible.forEach(state::addVerified);
         if (!verifiedIdentityNames.isEmpty()) {
             state.discoveredRelationshipKind = designers.size() > 1
@@ -769,7 +855,13 @@ final class RecommendationActions {
             state.discoveredRelationshipNames = verifiedIdentityNames;
             state.actions.add("CATALOG_IDENTITY_VERIFIED");
         }
-        return candidateObservation(observation, state, eligible, use);
+        return candidateObservation(
+                observation,
+                state,
+                eligible,
+                use,
+                publicationCount,
+                playerLead(arguments));
     }
 
     private ActionOutcome discover(
@@ -781,7 +873,12 @@ final class RecommendationActions {
         requireObject(
                 arguments,
                 Set.of("evidence", "subject", "afterIdentity"),
-                Set.of("types", "candidateUse"));
+                Set.of(
+                        "types",
+                        "candidateUse",
+                        "requestedCount",
+                        "requestedCountEvidence",
+                        "playerLead"));
         AfterIdentity afterIdentity = enumValue(
                 AfterIdentity.class,
                 arguments.path("afterIdentity"),
@@ -795,6 +892,7 @@ final class RecommendationActions {
                         ? CandidateUse.PUBLISH_CARDS
                         : CandidateUse.CONTINUE_REACT,
                 purpose == DiscoveryPurpose.SELECTABLE_CARDS);
+        int requestedCount = publicationCount(arguments, request);
         String evidenceId = text(arguments.path("evidence"), 1, 16);
         evidenceReview.requireUserEvidence(evidenceId, request);
         String query = evidenceReview.preferenceEvidence(request).get(evidenceId);
@@ -882,7 +980,13 @@ final class RecommendationActions {
         state.discoveryAttempted = true;
         state.discoveryPurpose = purpose;
         state.actions.add("DISCOVER_CANDIDATES");
-        return candidateObservation(observation, state, inspection.games(), use);
+        return candidateObservation(
+                observation,
+                state,
+                inspection.games(),
+                use,
+                requestedCount,
+                playerLead(arguments));
     }
 
     private CatalogObservation searchDesignerGames(
@@ -1087,9 +1191,9 @@ final class RecommendationActions {
             case "SELECTIONS_ARRAY_REQUIRED" ->
                 "selections must be a native JSON array of selection objects. Never quote or JSON-encode the array as a string.";
             case "RECOMMENDATION_SHORTFALL_REQUIRED" ->
-                "Fewer hard-eligible candidates exist than the player requested. Return every available ID once and include the required shortfall object with the exact schema counts and one concrete allowed relaxation reply when offered.";
+                "The verified hard-eligible set is smaller than the player requested. Return every verified ID once and include the required shortfall object with the exact schema counts and one concrete allowed relaxation reply when offered. Never claim the whole catalog is exhausted.";
             case "RECOMMENDATION_SHORTFALL_UNEXPECTED" ->
-                "Omit shortfall because the current hard-eligible pool can satisfy the requested count.";
+                "Omit shortfall because the current verified hard-eligible set can satisfy the requested count.";
             case "SHORTFALL_COUNT_INVALID" ->
                 "Copy requestedCount and availableCount exactly from the current shortfall schema. Never pad or duplicate candidates.";
             case "SHORTFALL_RELAXATION_INVALID" ->
@@ -1561,11 +1665,38 @@ final class RecommendationActions {
         return use;
     }
 
+    private int publicationCount(JsonNode arguments, ConversationRequest request) {
+        boolean hasCount = arguments.has("requestedCount");
+        boolean hasEvidence = arguments.has("requestedCountEvidence");
+        if (hasCount != hasEvidence) {
+            throw new InvalidAction("REQUESTED_COUNT_EVIDENCE_REQUIRED");
+        }
+        if (!hasCount) return properties.resultCount();
+        String evidenceId = text(arguments.path("requestedCountEvidence"), 1, 32);
+        int requestedCount = integer(
+                arguments.path("requestedCount"),
+                1,
+                runtime.maximumRecommendationResults(),
+                "REQUESTED_COUNT_OUT_OF_RANGE");
+        evidenceReview.requireUserEvidence(evidenceId, request);
+        return requestedCount;
+    }
+
+    private String playerLead(JsonNode arguments) {
+        JsonNode value = arguments.path("playerLead");
+        if (!value.isTextual()) return "";
+        String lead = value.asText().strip();
+        int length = lead.codePointCount(0, lead.length());
+        return length >= 1 && length <= MAX_PLAYER_LEAD_CODE_POINTS ? lead : "";
+    }
+
     private ActionOutcome candidateObservation(
             String observation,
             RecommendationAgentState state,
             List<Game> candidates,
-            CandidateUse use) {
+            CandidateUse use,
+            int requestedCount,
+            String playerLead) {
         if (use == CandidateUse.CONTINUE_REACT) return ActionOutcome.observation(observation);
         Set<Integer> recommendable = new LinkedHashSet<>(runtime.recommendableIds(state));
         List<Integer> candidateIds = candidates.stream()
@@ -1579,7 +1710,9 @@ final class RecommendationActions {
                 new PublicationSeed(
                         candidateIds,
                         state.comparisonReferenceIds.stream().toList(),
-                        use));
+                        use,
+                        requestedCount,
+                        playerLead));
     }
 
     private List<String> optionalStrings(

@@ -104,6 +104,7 @@ export default defineConfig({
           'assets/AppShell-*.js',
           'assets/LanguageSwitcher-*.{js,css}',
           'assets/liveLesson-*.js',
+          'assets/visualEnrichment-*.js',
           'assets/offlineKnowledge-*.js',
           'assets/playerFacingCitation-*.js',
           'assets/NotFoundView-*.js',

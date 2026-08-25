@@ -16,52 +16,52 @@ import org.junit.jupiter.api.Test;
 class VisualSectionPrioritizerTest {
 
     @Test
-    void selects_a_bounded_set_of_the_most_teachable_visual_sections() {
+    void selects_every_evidenced_section_with_a_cited_page() {
         var selected = new VisualSectionPrioritizer().positions(List.of(
                 section(1, VisualKind.REFERENCE_CARD, true, EvidenceStatus.SUPPORTED),
                 section(2, VisualKind.SCOREBOARD, true, EvidenceStatus.SUPPORTED),
                 section(3, VisualKind.FLOW_DIAGRAM, false, EvidenceStatus.SUPPORTED),
                 section(4, VisualKind.TABLE_LAYOUT, true, EvidenceStatus.SUPPORTED),
-                section(5, VisualKind.TABLE_LAYOUT, true, EvidenceStatus.INSUFFICIENT_EVIDENCE)), 3);
+                section(5, VisualKind.TABLE_LAYOUT, true, EvidenceStatus.INSUFFICIENT_EVIDENCE)));
 
-        assertThat(selected).isEqualTo(Set.of(2, 3, 4));
+        assertThat(selected).isEqualTo(Set.of(1, 2, 3, 4));
     }
 
     @Test
-    void uses_the_default_total_visual_budget_instead_of_a_fixed_two_visual_cap() {
+    void existing_visual_count_does_not_create_a_final_result_cap() {
         var selected = new VisualSectionPrioritizer().positions(List.of(
                 sectionWithVisualSteps(1, 1),
-                sectionWithVisualSteps(2, 2)), 2);
+                sectionWithVisualSteps(2, 12)));
 
         assertThat(selected).containsExactlyInAnyOrder(1, 2);
     }
 
     @Test
-    void supports_a_higher_visual_density_when_the_published_lesson_requests_it() {
+    void does_not_drop_a_section_at_any_fixed_visual_density() {
         var selected = new VisualSectionPrioritizer().positions(List.of(
                 sectionWithVisualSteps(1, 3),
-                sectionWithVisualSteps(2, 4)), 2, 4);
+                sectionWithVisualSteps(2, 8)));
 
-        assertThat(selected).containsExactly(1);
+        assertThat(selected).containsExactlyInAnyOrder(1, 2);
     }
 
     @Test
-    void keeps_a_section_eligible_until_every_published_rule_step_has_been_considered() {
+    void keeps_every_cited_section_eligible_after_six_existing_visuals() {
         var selected = new VisualSectionPrioritizer().positions(List.of(
                 sectionWithVisualSteps(1, 5),
-                sectionWithVisualSteps(2, 6)), 2, 6);
+                sectionWithVisualSteps(2, 6)));
 
-        assertThat(selected).containsExactly(1);
+        assertThat(selected).containsExactlyInAnyOrder(1, 2);
     }
 
     @Test
-    void prioritizesOnlySectionsWithUnresolvedExplicitVisualIntentWhenTheLessonProvidesIt() {
+    void explicit_visual_intent_does_not_hide_other_evidenced_sections() {
         var selected = new VisualSectionPrioritizer().positions(List.of(
                 section(1, VisualKind.TABLE_LAYOUT, true, EvidenceStatus.SUPPORTED),
                 sectionWithUnresolvedVisualStep(2),
-                section(3, VisualKind.FLOW_DIAGRAM, true, EvidenceStatus.SUPPORTED)), 3, 6);
+                section(3, VisualKind.FLOW_DIAGRAM, true, EvidenceStatus.SUPPORTED)));
 
-        assertThat(selected).containsExactly(2);
+        assertThat(selected).containsExactlyInAnyOrder(1, 2, 3);
     }
 
     private LessonSection section(int position, VisualKind kind, boolean required, EvidenceStatus evidence) {

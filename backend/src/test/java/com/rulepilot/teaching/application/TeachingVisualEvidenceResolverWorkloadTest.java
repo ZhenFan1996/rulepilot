@@ -8,9 +8,13 @@ import com.rulepilot.assistant.AssistantReadTools.RulePageImage;
 import com.rulepilot.assistant.ImmediateAuditedAgentInvocations;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel;
 import com.rulepilot.teaching.VisualRulebookPageFacts;
+import com.rulepilot.teaching.VisualRulebookPageFacts.PageFact;
 import com.rulepilot.teaching.domain.TeachingPlan;
+import java.time.Duration;
 import java.time.Instant;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -23,7 +27,7 @@ class TeachingVisualEvidenceResolverWorkloadTest {
     void countsEveryBoundPageEvenWhenASectionBindsMoreThanOneReadBatch() {
         TeachingPlan plan = plan(List.of(List.of(1, 2, 3, 4, 5, 6)), false);
 
-        assertThat(TeachingVisualEvidenceResolver.maximumModelCalls(plan)).isEqualTo(12);
+        assertThat(TeachingVisualEvidenceResolver.maximumModelCalls(plan)).isEqualTo(18);
         assertThat(TeachingSectionEvidenceRetriever.maximumToolCalls(plan, plan.sections().getFirst(), 3))
                 .isEqualTo(3);
         assertThat(TeachingSourcePageEvidenceRefiner.maximumToolCalls(plan, plan.sections().getFirst()))
@@ -80,7 +84,7 @@ class TeachingVisualEvidenceResolverWorkloadTest {
     }
 
     @Test
-    void retriesFailedImageInterpretationAtTheAuditedPageOrchestrationBoundary() {
+    void delegatesOneTransientReplayToThePageCatalogOwner() {
         UUID versionId = UUID.randomUUID();
         AtomicInteger interpretations = new AtomicInteger();
         AssistantReadTools tools = new AssistantReadTools() {
@@ -115,7 +119,7 @@ class TeachingVisualEvidenceResolverWorkloadTest {
             @Override
             public CatalogDraft summarizeForTeaching(CatalogRequest request) {
                 if (interpretations.incrementAndGet() == 1) {
-                    throw new IllegalStateException("temporary visual response failure");
+                    throw new org.springframework.ai.retry.TransientAiException("temporary visual response failure");
                 }
                 return new CatalogDraft(List.of(new PageSummary(
                         1,
@@ -137,10 +141,11 @@ class TeachingVisualEvidenceResolverWorkloadTest {
                 return true;
             }
         };
+        StoredFacts facts = new StoredFacts();
         TeachingVisualEvidenceResolver resolver = new TeachingVisualEvidenceResolver(
                 tools,
                 new ImmediateAuditedAgentInvocations(),
-                VisualRulebookPageFacts.empty(),
+                facts,
                 catalog);
         TeachingPlan plan = new TeachingPlan(
                 UUID.randomUUID(),
@@ -169,6 +174,81 @@ class TeachingVisualEvidenceResolverWorkloadTest {
             assertThat(source.contentKind()).isEqualTo(RuleEvidence.ContentKind.VISUAL_TRANSCRIPTION);
             assertThat(source.excerpt()).contains("Perform the visible action");
         });
+    }
+
+    @Test
+    void reusesOneDurablePageAcrossThreeChaptersWithoutReadingAnImageOrCallingAModel() {
+        UUID versionId = UUID.randomUUID();
+        StoredFacts facts = new StoredFacts();
+        facts.merge(versionId, List.of(completeFact(1)));
+        AtomicInteger imageReads = new AtomicInteger();
+        AtomicInteger modelCalls = new AtomicInteger();
+        AtomicInteger evidenceReads = new AtomicInteger();
+        VisualRulebookPageCatalogModel model = new VisualRulebookPageCatalogModel() {
+            @Override
+            public CatalogDraft summarize(CatalogRequest request) {
+                modelCalls.incrementAndGet();
+                throw new AssertionError("a durable complete fact must bypass the model");
+            }
+
+            @Override
+            public boolean available(String owner) {
+                return true;
+            }
+        };
+        VisualRulebookCataloger cataloger = new VisualRulebookCataloger(
+                (id, pages) -> {
+                    imageReads.incrementAndGet();
+                    throw new AssertionError("a durable complete fact must bypass page-image storage");
+                },
+                model,
+                facts,
+                new ImmediateAuditedAgentInvocations(),
+                Duration.ofSeconds(2),
+                Duration.ofSeconds(2),
+                4,
+                1);
+        AssistantReadTools tools = new AssistantReadTools() {
+            @Override
+            public List<RuleEvidence> searchRuleEvidence(SearchRuleEvidence request) {
+                return List.of();
+            }
+
+            @Override
+            public List<RuleEvidence> readRuleEvidencePages(
+                    UUID documentVersionId,
+                    Set<Integer> pageNumbers,
+                    boolean includePageImages) {
+                assertThat(includePageImages).isFalse();
+                evidenceReads.incrementAndGet();
+                return List.of(new RuleEvidence(
+                        UUID.nameUUIDFromBytes((documentVersionId + ":1").getBytes(java.nio.charset.StandardCharsets.UTF_8)),
+                        documentVersionId,
+                        "RULES",
+                        "Page 1",
+                        "Image-only page",
+                        1,
+                        1,
+                        List.of(),
+                        RuleEvidence.ContentKind.VISUAL_PLACEHOLDER));
+            }
+        };
+        TeachingVisualEvidenceResolver resolver = new TeachingVisualEvidenceResolver(
+                tools, new ImmediateAuditedAgentInvocations(), facts, cataloger);
+        TeachingPlan plan = plan(versionId, List.of(List.of(1), List.of(1), List.of(1)), true);
+
+        plan.sections().forEach(section -> {
+            var resolution = resolver.resolve(plan, section, List.of(), UUID.randomUUID());
+            assertThat(resolution.evidence()).singleElement().satisfies(source -> {
+                assertThat(source.contentKind()).isEqualTo(RuleEvidence.ContentKind.VISUAL_TRANSCRIPTION);
+                assertThat(source.excerpt()).contains("Perform the visible action");
+                assertThat(source.pageImages()).isEmpty();
+            });
+        });
+
+        assertThat(imageReads).hasValue(0);
+        assertThat(modelCalls).hasValue(0);
+        assertThat(evidenceReads).hasValue(3);
     }
 
     @Test
@@ -237,11 +317,16 @@ class TeachingVisualEvidenceResolverWorkloadTest {
     void keepsAdmissionIndependentOfMutableCatalogAvailabilityAndAddsProgressivePrefetch() {
         TeachingPlan plan = plan(List.of(List.of(1), List.of(2), List.of(3)), true);
 
-        // Two owned attempts for every required page, plus one bounded continuation prefetch.
-        assertThat(TeachingVisualEvidenceResolver.maximumModelCalls(plan)).isEqualTo(7);
+        // Reserve the longest mutually exclusive owner branch: initial semantic, OCR, then changed typed semantic.
+        // The ordinary path remains one image-to-typed-facts call per distinct page.
+        assertThat(TeachingVisualEvidenceResolver.maximumModelCalls(plan)).isEqualTo(9);
     }
 
     private TeachingPlan plan(List<List<Integer>> sourcePages, boolean progressive) {
+        return plan(UUID.randomUUID(), sourcePages, progressive);
+    }
+
+    private TeachingPlan plan(UUID documentVersionId, List<List<Integer>> sourcePages, boolean progressive) {
         List<TeachingPlan.PlannedSection> sections = IntStream.range(0, sourcePages.size())
                 .mapToObj(index -> new TeachingPlan.PlannedSection(
                         index + 1,
@@ -256,11 +341,52 @@ class TeachingVisualEvidenceResolverWorkloadTest {
                 .toList();
         return new TeachingPlan(
                 UUID.randomUUID(),
-                UUID.randomUUID(),
+                documentVersionId,
                 "Visual workload fixture",
                 "Count the immutable plan before execution.",
                 sections,
                 "player",
                 Instant.now());
+    }
+
+    private static PageFact completeFact(int pageNumber) {
+        return new PageFact(
+                pageNumber,
+                "TURN",
+                "TURN: Perform the visible action.",
+                List.of("turn"),
+                List.of(),
+                List.of(),
+                false,
+                PageFact.CURRENT_SCHEMA_VERSION,
+                List.of(),
+                List.of("turn"),
+                true,
+                List.of(new VisualRulebookPageCatalogModel.RuleGroupFact(
+                        "turn", "Turn", "Perform the visible action.")));
+    }
+
+    private static final class StoredFacts implements VisualRulebookPageFacts {
+        private final Map<UUID, List<PageFact>> facts = new HashMap<>();
+
+        @Override
+        public void replace(UUID documentVersionId, List<PageFact> pages) {
+            facts.put(documentVersionId, List.copyOf(pages));
+        }
+
+        @Override
+        public void merge(UUID documentVersionId, List<PageFact> pages) {
+            Map<Integer, PageFact> byPage = new HashMap<>();
+            facts.getOrDefault(documentVersionId, List.of()).forEach(page -> byPage.put(page.pageNumber(), page));
+            pages.forEach(page -> byPage.put(page.pageNumber(), page));
+            facts.put(documentVersionId, List.copyOf(byPage.values()));
+        }
+
+        @Override
+        public List<PageFact> find(UUID documentVersionId, Set<Integer> pageNumbers) {
+            return facts.getOrDefault(documentVersionId, List.of()).stream()
+                    .filter(page -> pageNumbers.contains(page.pageNumber()))
+                    .toList();
+        }
     }
 }

@@ -1,82 +1,143 @@
 package com.rulepilot.teaching.application;
 
 import com.rulepilot.ingestion.layout.RulebookUnderstanding;
+import com.rulepilot.ingestion.layout.RulebookUnderstanding.BlockRole;
 import com.rulepilot.ingestion.layout.RulebookUnderstanding.Rectangle;
-import com.rulepilot.teaching.VisualRulebookPageFacts.VisualAnchor;
+import com.rulepilot.teaching.domain.IllustratedLesson.VisualSourceKind;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import org.springframework.stereotype.Component;
 
-/** Selects only plan-bound source pages; semantic crop choice belongs to the visual model's typed response. */
+/** Builds bounded, application-owned crop candidates from source layout only. */
 @Component
 public final class VisualRegionCandidateSelector {
 
-    private static final int DEFAULT_PAGE_BUDGET = 6;
+    private static final Rectangle WHOLE_PAGE = new Rectangle(0, 0, 1_000, 1_000);
+    private static final int MIN_REGION_SIZE = 20;
+    private static final int TILE_SIZE = 550;
+    private static final int SECOND_TILE_ORIGIN = 1_000 - TILE_SIZE;
 
+    /** sectionTerms is validation-only: player or model prose must never steer crop geometry. */
     public List<Candidate> select(
             RulebookUnderstanding understanding,
             Set<Integer> citedPages,
             List<String> sectionTerms) {
-        return select(understanding, citedPages, sectionTerms, DEFAULT_PAGE_BUDGET);
-    }
-
-    public List<Candidate> select(
-            RulebookUnderstanding understanding,
-            Set<Integer> citedPages,
-            List<String> sectionTerms,
-            int pageBudget) {
         if (understanding == null || citedPages == null || sectionTerms == null) {
             throw new IllegalArgumentException("visual region selection input is required");
-        }
-        if (pageBudget < 1 || pageBudget > 12) {
-            throw new IllegalArgumentException("visual candidate page budget must be between one and twelve");
         }
         if (citedPages.stream().anyMatch(page -> page == null || page < 1)) {
             throw new IllegalArgumentException("visual region cited pages are invalid");
         }
         if (citedPages.isEmpty()) return List.of();
 
-        return citedPages.stream()
-                .sorted()
-                .limit(pageBudget)
-                .map(this::citedPageCandidate)
+        List<Integer> pages = citedPages.stream().sorted().toList();
+        Map<Integer, List<Candidate>> byPage = new LinkedHashMap<>();
+        pages.forEach(page -> byPage.put(page, candidatesForPage(understanding, page)));
+
+        List<Candidate> selected = new ArrayList<>();
+        for (int index = 0; ; index++) {
+            boolean added = false;
+            for (int page : pages) {
+                List<Candidate> pageCandidates = byPage.get(page);
+                if (index < pageCandidates.size()) {
+                    selected.add(pageCandidates.get(index));
+                    added = true;
+                }
+            }
+            if (!added) break;
+        }
+        return List.copyOf(selected);
+    }
+
+    private List<Candidate> candidatesForPage(RulebookUnderstanding understanding, int pageNumber) {
+        List<Candidate> tiles = pageTiles(pageNumber);
+        List<Candidate> nativeBlocks = understanding.pageBlocks().stream()
+                .filter(block -> block.pageNumber() == pageNumber)
+                .filter(block -> block.role() != BlockRole.FOOTER)
+                .filter(block -> !WHOLE_PAGE.equals(block.rectangle()))
+                .filter(block -> block.rectangle().width() >= MIN_REGION_SIZE
+                        && block.rectangle().height() >= MIN_REGION_SIZE)
+                .sorted(Comparator.comparingInt(RulebookUnderstanding.PageBlock::readingOrder)
+                        .thenComparingInt(RulebookUnderstanding.PageBlock::blockIndex))
+                .map(block -> candidate(pageNumber, block.rectangle(), VisualSourceKind.PAGE_REGION))
                 .toList();
+
+        Map<Rectangle, Candidate> candidates = new LinkedHashMap<>();
+        // PDF text layout does not describe adjacent diagrams or component art. Four fixed coverage crops keep those
+        // areas inspectable. Interleaving them with native blocks prevents either source from consuming the bounded
+        // multi-page pool, and does not interpret block text or lesson wording.
+        int count = Math.max(tiles.size(), nativeBlocks.size());
+        for (int index = 0; index < count; index++) {
+            if (index < tiles.size()) {
+                Candidate tile = tiles.get(index);
+                candidates.putIfAbsent(tile.rectangle(), tile);
+            }
+            if (index < nativeBlocks.size()) {
+                Candidate block = nativeBlocks.get(index);
+                candidates.putIfAbsent(block.rectangle(), block);
+            }
+        }
+        return List.copyOf(candidates.values());
     }
 
-    private Candidate citedPageCandidate(int pageNumber) {
-        return new Candidate(
+    private List<Candidate> pageTiles(int pageNumber) {
+        List<Candidate> tiles = new ArrayList<>(4);
+        for (int y : List.of(0, SECOND_TILE_ORIGIN)) {
+            for (int x : List.of(0, SECOND_TILE_ORIGIN)) {
+                tiles.add(candidate(
+                        pageNumber,
+                        new Rectangle(x, y, TILE_SIZE, TILE_SIZE),
+                        VisualSourceKind.PAGE_REGION));
+            }
+        }
+        return List.copyOf(tiles);
+    }
+
+    private Candidate candidate(int pageNumber, Rectangle rectangle, VisualSourceKind sourceKind) {
+        return new Candidate(candidateId(pageNumber, rectangle, sourceKind), pageNumber, rectangle, sourceKind);
+    }
+
+    private String candidateId(int pageNumber, Rectangle rectangle, VisualSourceKind sourceKind) {
+        String structuralIdentity = "%d:%d:%d:%d:%d:%s".formatted(
                 pageNumber,
-                new Rectangle(0, 0, 1_000, 1_000),
-                "Cited page " + pageNumber + " visual context");
+                rectangle.x(),
+                rectangle.y(),
+                rectangle.width(),
+                rectangle.height(),
+                sourceKind.name());
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256")
+                    .digest(structuralIdentity.getBytes(StandardCharsets.UTF_8));
+            return "vc_" + java.util.HexFormat.of().formatHex(digest, 0, 12);
+        } catch (NoSuchAlgorithmException impossible) {
+            throw new IllegalStateException("SHA-256 is unavailable", impossible);
+        }
     }
 
-    /**
-     * A cataloged anchor remains readable for stored/legacy requests, but new selection never guesses one from lesson
-     * prose. The visual model receives the full cited page and returns its own page/claim/geometry binding.
-     */
-    public record Candidate(int pageNumber, Rectangle rectangle, String sourceText, VisualAnchor catalogedAnchor) {
+    public record Candidate(
+            String candidateId,
+            int pageNumber,
+            Rectangle rectangle,
+            VisualSourceKind sourceKind) {
         public Candidate {
-            if (pageNumber < 1 || rectangle == null || sourceText == null || sourceText.isBlank()) {
+            if (candidateId == null
+                    || !candidateId.matches("[A-Za-z0-9_-]{4,64}")
+                    || pageNumber < 1
+                    || rectangle == null
+                    || sourceKind == null) {
                 throw new IllegalArgumentException("visual region candidate is invalid");
             }
-            sourceText = sourceText.strip();
+            boolean wholePage = rectangle.equals(WHOLE_PAGE);
+            if ((sourceKind == VisualSourceKind.FULL_PAGE) != wholePage) {
+                throw new IllegalArgumentException("visual candidate kind and geometry must agree");
+            }
         }
-
-        public Candidate(int pageNumber, Rectangle rectangle, String sourceText) {
-            this(pageNumber, rectangle, sourceText, null);
-        }
-
-        /**
-         * The candidate contract is structural. Adapters must never infer its origin from the human-readable
-         * sourceText because that text is diagnostic context, not a protocol discriminator.
-         */
-        public CandidateKind kind() {
-            return catalogedAnchor == null ? CandidateKind.CITED_PAGE_CONTEXT : CandidateKind.CATALOGED_VISUAL_ANCHOR;
-        }
-    }
-
-    public enum CandidateKind {
-        CITED_PAGE_CONTEXT,
-        CATALOGED_VISUAL_ANCHOR
     }
 }

@@ -228,7 +228,7 @@ public class BggRankedCatalogService
                 filters.maximum(),
                 filters.offset());
         List<RankedGame> ranked = repository.findByMetadataFilters(checkedFilters);
-        if (ranked.isEmpty()) return new CandidateSet(gameCount(), List.of());
+        if (ranked.isEmpty()) return new CandidateSet(gameCount(), List.of(), true);
 
         Map<Integer, DiscoveryGame> available = new LinkedHashMap<>(storedDetails(ranked));
         // Filtered browsing is the low-latency Agent tool. Production always has the
@@ -239,7 +239,7 @@ public class BggRankedCatalogService
                 .filter(game -> game.details() != null)
                 .map(this::recommendationGame)
                 .toList();
-        return new CandidateSet(gameCount(), games);
+        return new CandidateSet(gameCount(), games, ranked.size() < checkedFilters.maximum());
     }
 
     private String checkedTextQuery(String value) {

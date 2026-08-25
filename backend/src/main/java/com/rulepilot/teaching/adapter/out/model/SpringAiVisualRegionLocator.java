@@ -1,78 +1,109 @@
 package com.rulepilot.teaching.adapter.out.model;
 
+import com.rulepilot.assistant.AgentExecutionControl.ActivityType;
+import com.rulepilot.assistant.AuditedAgentInvocations;
+import com.rulepilot.ingestion.layout.RulebookUnderstanding.Rectangle;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration.Role;
 import com.rulepilot.teaching.VisualRegionLocator;
+import com.rulepilot.teaching.VisualRegionLocator.BatchAction;
 import com.rulepilot.teaching.VisualRegionLocator.Diagnostic;
 import com.rulepilot.teaching.VisualRegionLocator.LocateGuideResult;
 import com.rulepilot.teaching.VisualRegionLocator.LocatedRegion;
 import com.rulepilot.teaching.VisualRegionLocator.LocateResult;
-import com.rulepilot.teaching.VisualRegionLocator.ReviewAction;
 import com.rulepilot.teaching.VisualRegionLocator.VisualLocationRequest;
+import com.rulepilot.teaching.adapter.out.model.VisualLocatorResponsePolicy.ModelAction;
 import com.rulepilot.teaching.adapter.out.model.VisualLocatorResponsePolicy.ModelGuide;
-import com.rulepilot.teaching.adapter.out.model.VisualLocatorResponsePolicy.ModelRegion;
 import com.rulepilot.teaching.adapter.out.model.VisualLocatorResponsePolicy.ModelReview;
 import com.rulepilot.teaching.adapter.out.model.VisualLocatorResponsePolicy.Rejection;
+import com.rulepilot.teaching.application.VisualRegionCandidateSelector.Candidate;
+import java.awt.Graphics2D;
+import java.awt.RenderingHints;
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.IntStream;
+import javax.imageio.ImageIO;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.openai.OpenAiChatModel.ResponseFormat;
 import org.springframework.ai.openai.OpenAiChatOptions;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.stereotype.Component;
 import org.springframework.util.MimeTypeUtils;
 
-/** One bounded vision decision owns planning and literal visual review; the application owns publication checks. */
+/** One bounded vision call selects immutable application-owned crops; the model never authors page geometry. */
 @Component
 public class SpringAiVisualRegionLocator implements VisualRegionLocator {
 
     static final String SYSTEM = """
-            You are a rulebook visual evidence Agent. Inspect only supplied cited claims, candidate pages, and page
-            images. Produce a typed visual plan for every offered step. A step may have zero, one, or several useful
-            visuals, but the total number of non-null sources must not exceed visualBudget.
+            You select useful visual evidence from already-localized rulebook crop candidates. Geometry, page
+            ownership, attachment order, and source kind are owned by the application. Never return, estimate, or
+            discuss coordinates. Inspect candidate images in manifest attachmentIndex order.
 
-            Return one JSON object with a reviews array. Every review has exactly stepPosition, action, and source.
-            action is ACCEPT, RECROP, USE_FULL_PAGE, or REJECT. REJECT has source null. ACCEPT and RECROP require a
-            PAGE_REGION or EMBEDDED_AUTHOR_IMAGE source. USE_FULL_PAGE requires a FULL_PAGE source whose x,y,width,
-            height are exactly 0,0,1000,1000. Use RECROP only when another bounded inspection could make a proposed
-            local source useful; otherwise choose a final action. Return at least one REJECT review for a step with no
-            useful visual. Several ACCEPT reviews may use the same stepPosition.
+            Return one JSON object with exactly batchAction and reviews. batchAction is STOP or CONTINUE. Use CONTINUE
+            only when hasMoreCandidates is true and inspecting the next finite batch is still useful after this batch's
+            selections; otherwise use STOP. Every review has exactly stepPosition, action, candidateId, label,
+            visibleDescription, and supportedClaimRefs. action is ACCEPT_CANDIDATE or NO_VISUAL.
+            ACCEPT_CANDIDATE requires one offered candidateId, a short literal label and visibleDescription, and one
+            or more offered C references belonging to that step whose sourcePages contain the candidate page.
+            label is at most 80 characters and visibleDescription is at most 240 characters.
+            NO_VISUAL requires candidateId, label, and visibleDescription to be null and supportedClaimRefs to be an
+            empty array. A step may accept several different candidates. Select every useful candidate needed for the
+            lesson; do not target a fixed count. The same candidate may never be selected twice or shared across steps.
 
-            Every non-null source has exactly pageNumber, label, visibleDescription, x, y, width, height, sourceKind,
-            and supportedClaimRefs. Coordinates use the complete page's top-left 0-1000 system and must stay inside
-            the page. sourceKind is FULL_PAGE, PAGE_REGION, or EMBEDDED_AUTHOR_IMAGE. EMBEDDED_AUTHOR_IMAGE means an
-            illustration, diagram, table, card face, or other image authored into the rulebook page, not decorative
-            page chrome. PAGE_REGION is any useful mixed page region. A full page is valid when its overall layout or
-            tightly integrated diagram is the smallest readable context; never reject it merely for area.
-
-            supportedClaimRefs may contain only offered C references whose sourcePages include the source page and
-            whose stepPosition equals the review's stepPosition. label and visibleDescription describe literal visible
-            content only. Images never prove a mechanical effect, condition, quantity, score, timing, or exception;
-            cited text remains authoritative. Reject unrelated, decorative, prose-only, contradictory, or ambiguous
-            visuals. Do not expose reasoning or add fields.
+            Select a crop only when its literal visible content helps a player inspect the offered claim. An image
+            never proves a mechanical effect, condition, quantity, score, timing, or exception; cited text remains
+            authoritative. Reject decorative, prose-only, contradictory, or ambiguous crops. Do not add fields,
+            page numbers, geometry, source kinds, reasoning, or prose outside the JSON object.
             """;
 
-    /** Kept compact for providers that follow shorter multimodal JSON contracts more reliably. */
+    /** Shorter wording preserves the same six-field contract for Qwen multimodal JSON mode. */
     static final String QWEN_SYSTEM = """
-            Inspect supplied rulebook page images for the exact offered C claims. Return JSON only with a reviews
-            array. Each item has exactly stepPosition, action, source. action is ACCEPT, RECROP, USE_FULL_PAGE, or
-            REJECT; REJECT uses source null. A non-null source has pageNumber, label, visibleDescription, x, y, width,
-            height, sourceKind, supportedClaimRefs. sourceKind is PAGE_REGION, EMBEDDED_AUTHOR_IMAGE, or FULL_PAGE.
-            USE_FULL_PAGE is legal only with FULL_PAGE at 0,0,1000,1000. ACCEPT/RECROP may not use a whole-page box.
-            Bind every C reference to the same step and one of its sourcePages. Describe only literal visible content,
-            never a rule effect. Each step may have zero or several accepted visuals, bounded by visualBudget overall.
-            Use REJECT when no literal visual helps. Do not add fields or prose.
+            Select useful visual evidence from the attached pre-cropped candidates. The application owns geometry,
+            pages, attachment order, and source kind; never return coordinates. Return JSON only with exactly
+            batchAction and reviews. batchAction is STOP or CONTINUE; CONTINUE is legal only when hasMoreCandidates is
+            true and another batch remains useful after the current selections. Each review has exactly stepPosition,
+            action, candidateId, label, visibleDescription,
+            supportedClaimRefs. action is ACCEPT_CANDIDATE or NO_VISUAL. ACCEPT_CANDIDATE uses one offered candidateId,
+            literal label/description, and only C refs for that step whose sourcePages contain the candidate page.
+            label is at most 80 characters and visibleDescription is at most 240 characters.
+            NO_VISUAL uses null candidateId/label/visibleDescription and an empty supportedClaimRefs array. Never select
+            one candidate twice. Select all useful candidates without targeting a fixed count. Images prove appearance
+            only. Add no fields.
             """;
+
+    private static final int MAX_ATTACHMENT_EDGE = 1_024;
 
     private final RuntimeModelConfiguration models;
-    private final TeachingOutlineImagePreparer images = new TeachingOutlineImagePreparer();
+    private final AuditedAgentInvocations invocations;
 
     public SpringAiVisualRegionLocator(RuntimeModelConfiguration models) {
+        this(models, (AuditedAgentInvocations) null);
+    }
+
+    public SpringAiVisualRegionLocator(
+            RuntimeModelConfiguration models,
+            AuditedAgentInvocations invocations) {
         this.models = models;
+        this.invocations = invocations;
+    }
+
+    @Autowired
+    SpringAiVisualRegionLocator(
+            RuntimeModelConfiguration models,
+            ObjectProvider<AuditedAgentInvocations> invocations) {
+        this(models, invocations.getIfAvailable());
     }
 
     @Override
@@ -101,16 +132,69 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
         if (models.usesFake(Role.VISUAL, owner) || !models.supportsVision(Role.VISUAL, owner)) {
             return LocateGuideResult.unavailable(Diagnostic.MODEL_UNAVAILABLE);
         }
-        GuideAttempt first = locateGuideOnce(request, owner, "");
-        if (!first.guide().regions().isEmpty() || !first.retryable()) return first.guide();
-        GuideAttempt retried = locateGuideOnce(
-                request, owner, VisualLocatorResponsePolicy.retryInstruction(first.rejection()));
-        return retried.guide();
+        List<CandidateAttachment> attachments = candidateAttachments(request);
+        GuideAttempt first = invokeGuideAttempt(request, owner, "", attachments, 1);
+        if (first.rejection() != Rejection.MALFORMED_JSON) return first.guide();
+        return invokeGuideAttempt(
+                        request,
+                        owner,
+                        VisualLocatorResponsePolicy.malformedRepairInstruction(),
+                        attachments,
+                        2)
+                .guide();
     }
 
-    private GuideAttempt locateGuideOnce(VisualLocationRequest request, String owner, String correction) {
+    private GuideAttempt invokeGuideAttempt(
+            VisualLocationRequest request,
+            String owner,
+            String correction,
+            List<CandidateAttachment> attachments,
+            int attemptNumber) {
+        if (request.runId() == null || invocations == null) {
+            if (request.runId() != null) {
+                throw new IllegalStateException("observable visual model attempts require audited invocations");
+            }
+            return locateGuideOnce(request, owner, correction, attachments);
+        }
+        return invocations.invoke(
+                request.runId(),
+                ActivityType.MODEL,
+                "visualCandidateBatch|" + request.batchNumber() + "|" + attemptNumber,
+                estimatedInputTokens(request, attachments),
+                "视觉候选批次已完成检查",
+                () -> locateGuideOnce(request, owner, correction, attachments),
+                ignored -> 1_000,
+                this::attemptSummary);
+    }
+
+    private int estimatedInputTokens(
+            VisualLocationRequest request,
+            List<CandidateAttachment> attachments) {
+        int claimCharacters = request.claims().stream()
+                .mapToInt(claim -> claim.text().length())
+                .sum();
+        return 256
+                + Math.max(1, (claimCharacters + 3) / 4)
+                + request.candidates().size() * 48
+                + attachments.size() * 256;
+    }
+
+    private String attemptSummary(GuideAttempt attempt) {
+        if (attempt.rejection() == Rejection.MALFORMED_JSON) {
+            return "视觉候选批次返回了格式不合格的响应，准备一次结构修复";
+        }
+        if (attempt.guide().regions().isEmpty()) {
+            return "视觉候选批次未采用图片：" + attempt.guide().diagnostic().name();
+        }
+        return "视觉候选批次已验证 " + attempt.guide().regions().size() + " 张局部图片";
+    }
+
+    private GuideAttempt locateGuideOnce(
+            VisualLocationRequest request,
+            String owner,
+            String correction,
+            List<CandidateAttachment> attachments) {
         boolean qwen = "qwen".equals(models.providerFor(Role.VISUAL, owner));
-        List<VisualRegionLocator.PageImage> preparedPages = request.pages().stream().map(images::prepare).toList();
         var prompt = ChatClient.create(models.modelFor(Role.VISUAL, owner)).prompt();
         if (qwen) prompt = prompt.options(qwenJsonOptions(models.modelNameFor(Role.VISUAL, owner)));
         String content = prompt
@@ -119,94 +203,103 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
                     user.text("""
                                     Section: {section}
                                     Claims: {claims}
-                                    Candidate pages: {candidates}
-                                    visualBudget: {visualBudget}
+                                    Candidate manifest (same order as image attachments): {manifest}
+                                    batchNumber: {batchNumber}
+                                    hasMoreCandidates: {hasMoreCandidates}
                                     {correction}
-                                    Return the exact reviews JSON object only.
+                                    Return the exact batchAction plus reviews JSON object only.
                                     """)
                             .param("section", request.sectionTitle())
-                            .param("claims", IntStream.range(0, request.claims().size())
-                                    .mapToObj(index -> Map.of(
-                                            "ref", "C" + (index + 1),
-                                            "stepPosition", request.claims().get(index).stepPosition(),
-                                            "text", request.claims().get(index).text(),
-                                            "sourcePages", request.claims().get(index).sourcePages()))
-                                    .toList())
-                            .param("candidates", VisualLocatorResponsePolicy.candidatePromptPayload(
-                                    request.candidates(), qwen))
-                            .param("visualBudget", request.visualBudget())
+                            .param("claims", VisualLocatorResponsePolicy.promptJson(
+                                    IntStream.range(0, request.claims().size())
+                                            .mapToObj(index -> Map.of(
+                                                    "ref", "C" + (index + 1),
+                                                    "stepPosition", request.claims().get(index).stepPosition(),
+                                                    "text", request.claims().get(index).text(),
+                                                    "sourcePages", request.claims().get(index).sourcePages()))
+                                            .toList()))
+                            .param("manifest", VisualLocatorResponsePolicy.promptJson(
+                                    VisualLocatorResponsePolicy.candidateManifest(request.candidates())))
+                            .param("batchNumber", request.batchNumber())
+                            .param("hasMoreCandidates", request.hasMoreCandidates())
                             .param("correction", correction);
-                    preparedPages.forEach(page -> user.media(
-                            MimeTypeUtils.parseMimeType(page.mediaType()), new ByteArrayResource(page.content())));
+                    attachments.forEach(attachment -> user.media(
+                            MimeTypeUtils.IMAGE_JPEG, new ByteArrayResource(attachment.content())));
                 })
                 .call()
                 .content();
         Optional<ModelGuide> parsed = VisualLocatorResponsePolicy.parseModelGuide(content);
-        if (parsed.isEmpty()) return unavailable(Rejection.MALFORMED_JSON, true);
-        long proposedVisuals = parsed.get().reviews().stream().filter(review -> review.source() != null).count();
-        if (proposedVisuals > request.visualBudget()) return unavailable(Rejection.UNSUPPORTED_SCOPE, true);
+        if (parsed.isEmpty()) return unavailable(Rejection.MALFORMED_JSON);
+        return admit(parsed.get(), request);
+    }
+
+    private GuideAttempt admit(ModelGuide guide, VisualLocationRequest request) {
+        BatchAction batchAction = request.hasMoreCandidates() ? guide.batchAction() : BatchAction.STOP;
 
         Set<Integer> offeredSteps = request.claims().stream()
                 .map(VisualRegionLocator.Claim::stepPosition)
                 .filter(position -> position > 0)
                 .collect(java.util.stream.Collectors.toSet());
+        Map<String, Candidate> candidates = request.candidates().stream().collect(java.util.stream.Collectors.toMap(
+                Candidate::candidateId,
+                candidate -> candidate,
+                (first, ignored) -> first,
+                LinkedHashMap::new));
+        Set<String> selectedIds = new LinkedHashSet<>();
+        Set<Integer> acceptedSteps = new LinkedHashSet<>();
+        Set<Integer> rejectedSteps = new LinkedHashSet<>();
         List<LocatedRegion> accepted = new ArrayList<>();
-        Rejection rejected = Rejection.NONE;
-        boolean requestedRecrop = false;
-        for (ModelReview review : parsed.get().reviews()) {
-            if (!offeredSteps.contains(review.stepPosition())) {
-                rejected = Rejection.UNSUPPORTED_SCOPE;
+
+        for (ModelReview review : guide.reviews()) {
+            if (!offeredSteps.contains(review.stepPosition())) return unavailable(Rejection.UNSUPPORTED_SCOPE);
+            if (review.action() == ModelAction.NO_VISUAL) {
+                if (!rejectedSteps.add(review.stepPosition()) || acceptedSteps.contains(review.stepPosition())) {
+                    return unavailable(Rejection.UNSUPPORTED_SCOPE);
+                }
                 continue;
             }
-            if (review.action() == ReviewAction.REJECT) continue;
-            if (review.action() == ReviewAction.RECROP) {
-                requestedRecrop = true;
-                continue;
+            if (rejectedSteps.contains(review.stepPosition()) || !selectedIds.add(review.candidateId())) {
+                return unavailable(Rejection.UNSUPPORTED_SCOPE);
             }
-            ModelRegion source = review.source();
-            List<VisualRegionLocator.Claim> claims = ownedClaims(review, request);
-            if (source == null
-                    || claims.isEmpty()
-                    || request.pages().stream().noneMatch(page -> page.pageNumber() == source.pageNumber())) {
-                rejected = Rejection.UNSUPPORTED_SCOPE;
-                continue;
-            }
-            try {
-                LocatedRegion region = new LocatedRegion(
-                        source.pageNumber(),
-                        source.label(),
-                        source.visibleDescription(),
-                        source.x(),
-                        source.y(),
-                        source.width(),
-                        source.height(),
-                        claims.stream().map(VisualRegionLocator.Claim::evidenceId).distinct().toList(),
-                        List.of(review.stepPosition()),
-                        false,
-                        source.sourceKind());
-                if (accepted.stream().noneMatch(existing -> sameRegion(existing, region))) accepted.add(region);
-            } catch (IllegalArgumentException invalidGeometry) {
-                rejected = Rejection.INVALID_GEOMETRY;
-            }
+            Candidate candidate = candidates.get(review.candidateId());
+            if (candidate == null) return unavailable(Rejection.UNSUPPORTED_SCOPE);
+            List<VisualRegionLocator.Claim> claims = ownedClaims(review, candidate, request);
+            if (claims.isEmpty()) return unavailable(Rejection.UNSUPPORTED_SCOPE);
+            Rectangle rectangle = candidate.rectangle();
+            accepted.add(new LocatedRegion(
+                    candidate.pageNumber(),
+                    review.label(),
+                    review.visibleDescription(),
+                    rectangle.x(),
+                    rectangle.y(),
+                    rectangle.width(),
+                    rectangle.height(),
+                    claims.stream().map(VisualRegionLocator.Claim::evidenceId).distinct().toList(),
+                    List.of(review.stepPosition()),
+                    false,
+                    candidate.sourceKind()));
+            acceptedSteps.add(review.stepPosition());
         }
-        if (!accepted.isEmpty()) return new GuideAttempt(LocateGuideResult.found(accepted), false, Rejection.NONE);
-        if (requestedRecrop) return unavailable(Rejection.RECROP, true);
-        if (parsed.get().hasOnlyRejections()) return unavailable(Rejection.EXPLICIT_NO_REGION, false);
-        return unavailable(rejected == Rejection.NONE ? Rejection.UNSUPPORTED_SCOPE : rejected, true);
+        if (!accepted.isEmpty()) {
+            return new GuideAttempt(LocateGuideResult.found(accepted, batchAction), Rejection.NONE);
+        }
+        return unavailable(
+                guide.hasOnlyNoVisual() ? Rejection.EXPLICIT_NO_REGION : Rejection.UNSUPPORTED_SCOPE,
+                batchAction);
     }
 
     List<VisualRegionLocator.Claim> ownedClaims(
-            ModelReview review, VisualLocationRequest request) {
-        ModelRegion source = review.source();
-        if (source == null) return List.of();
-        List<VisualRegionLocator.Claim> claims = source.supportedClaimRefs().stream()
+            ModelReview review,
+            Candidate candidate,
+            VisualLocationRequest request) {
+        List<VisualRegionLocator.Claim> claims = review.supportedClaimRefs().stream()
                 .map(reference -> claim(reference, request))
                 .filter(java.util.Objects::nonNull)
                 .filter(claim -> claim.stepPosition() == review.stepPosition())
-                .filter(claim -> claim.sourcePages().contains(source.pageNumber()))
+                .filter(claim -> claim.sourcePages().contains(candidate.pageNumber()))
                 .distinct()
                 .toList();
-        return claims.size() == source.supportedClaimRefs().size() ? claims : List.of();
+        return claims.size() == review.supportedClaimRefs().size() ? claims : List.of();
     }
 
     private VisualRegionLocator.Claim claim(String reference, VisualLocationRequest request) {
@@ -219,29 +312,115 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
         }
     }
 
-    private GuideAttempt unavailable(Rejection rejection, boolean retryable) {
-        return new GuideAttempt(
-                LocateGuideResult.unavailable(VisualLocatorResponsePolicy.diagnosticFor(rejection)),
-                retryable,
-                rejection);
+    List<CandidateAttachment> candidateAttachments(VisualLocationRequest request) {
+        List<CandidateAttachment> attachments = new ArrayList<>(request.candidates().size());
+        for (int index = 0; index < request.candidates().size(); index++) {
+            attachments.add(null);
+        }
+        for (VisualRegionLocator.PageImage source : request.pages()) {
+            BufferedImage page = decode(source);
+            try {
+                for (int index = 0; index < request.candidates().size(); index++) {
+                    Candidate candidate = request.candidates().get(index);
+                    if (candidate.pageNumber() != source.pageNumber()) continue;
+                    attachments.set(index, new CandidateAttachment(
+                            candidate.candidateId(),
+                            index + 1,
+                            candidate.pageNumber(),
+                            crop(page, candidate.rectangle())));
+                }
+            } finally {
+                page.flush();
+            }
+        }
+        return List.copyOf(attachments);
     }
 
-    private boolean sameRegion(LocatedRegion first, LocatedRegion second) {
-        return first.pageNumber() == second.pageNumber()
-                && first.x() == second.x()
-                && first.y() == second.y()
-                && first.width() == second.width()
-                && first.height() == second.height()
-                && first.sourceKind() == second.sourceKind();
+    BufferedImage decode(VisualRegionLocator.PageImage page) {
+        try {
+            BufferedImage decoded = ImageIO.read(new ByteArrayInputStream(page.content()));
+            if (decoded == null) throw new IllegalArgumentException("visual candidate page cannot be decoded");
+            return decoded;
+        } catch (IOException exception) {
+            throw new UncheckedIOException("could not decode visual candidate page", exception);
+        }
+    }
+
+    private byte[] crop(BufferedImage page, Rectangle rectangle) {
+        int left = pixel(rectangle.x(), page.getWidth());
+        int top = pixel(rectangle.y(), page.getHeight());
+        int right = pixelCeiling(rectangle.x() + rectangle.width(), page.getWidth());
+        int bottom = pixelCeiling(rectangle.y() + rectangle.height(), page.getHeight());
+        int sourceWidth = right - left;
+        int sourceHeight = bottom - top;
+        double scale = Math.min(1d, (double) MAX_ATTACHMENT_EDGE / Math.max(sourceWidth, sourceHeight));
+        int outputWidth = Math.max(1, (int) Math.round(sourceWidth * scale));
+        int outputHeight = Math.max(1, (int) Math.round(sourceHeight * scale));
+        BufferedImage output = new BufferedImage(outputWidth, outputHeight, BufferedImage.TYPE_INT_RGB);
+        Graphics2D graphics = output.createGraphics();
+        try {
+            graphics.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC);
+            graphics.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
+            graphics.drawImage(page, 0, 0, outputWidth, outputHeight, left, top, right, bottom, null);
+        } finally {
+            graphics.dispose();
+        }
+        try (ByteArrayOutputStream bytes = new ByteArrayOutputStream()) {
+            if (!ImageIO.write(output, "jpeg", bytes)) {
+                throw new IllegalStateException("JPEG image writer is unavailable");
+            }
+            return bytes.toByteArray();
+        } catch (IOException exception) {
+            throw new UncheckedIOException("could not encode visual candidate crop", exception);
+        } finally {
+            output.flush();
+        }
+    }
+
+    private int pixel(int normalized, int size) {
+        return Math.min(size - 1, normalized * size / 1_000);
+    }
+
+    private int pixelCeiling(int normalized, int size) {
+        return Math.max(1, Math.min(size, (normalized * size + 999) / 1_000));
+    }
+
+    private GuideAttempt unavailable(Rejection rejection) {
+        return unavailable(rejection, BatchAction.STOP);
+    }
+
+    private GuideAttempt unavailable(Rejection rejection, BatchAction batchAction) {
+        return new GuideAttempt(
+                LocateGuideResult.unavailable(
+                        VisualLocatorResponsePolicy.diagnosticFor(rejection), batchAction),
+                rejection);
     }
 
     static OpenAiChatOptions.Builder qwenJsonOptions(String modelName) {
         return OpenAiChatOptions.builder()
                 .model(modelName)
-                .maxTokens(1_600)
+                .temperature(0.0)
+                .maxTokens(1_000)
                 .extraBody(Map.of("enable_thinking", false))
                 .responseFormat(ResponseFormat.builder().type(ResponseFormat.Type.JSON_OBJECT).build());
     }
 
-    private record GuideAttempt(LocateGuideResult guide, boolean retryable, Rejection rejection) {}
+    record CandidateAttachment(String candidateId, int attachmentIndex, int pageNumber, byte[] content) {
+        CandidateAttachment {
+            if (candidateId == null
+                    || attachmentIndex < 1
+                    || pageNumber < 1
+                    || content == null
+                    || content.length == 0) {
+                throw new IllegalArgumentException("visual candidate attachment is invalid");
+            }
+            content = content.clone();
+        }
+
+        @Override public byte[] content() {
+            return content.clone();
+        }
+    }
+
+    private record GuideAttempt(LocateGuideResult guide, Rejection rejection) {}
 }

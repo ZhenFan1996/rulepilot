@@ -2,8 +2,10 @@ package com.rulepilot.teaching;
 
 import com.rulepilot.teaching.application.VisualRegionCandidateSelector.Candidate;
 import com.rulepilot.teaching.domain.IllustratedLesson.VisualSourceKind;
+import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 /** A vision-only port: it may locate a cited region but can never compose lesson prose. */
@@ -36,6 +38,17 @@ public interface VisualRegionLocator {
                 .orElseGet(() -> LocateGuideResult.unavailable(result.diagnostic()));
     }
 
+    /**
+     * Lets the application shorten one transport call to the remaining workflow wall-time. The timeout is a resource
+     * boundary only: it never limits how many finite candidate batches the Agent may choose to inspect.
+     */
+    default LocateGuideResult locateGuideWithResult(VisualLocationRequest request, Duration timeout) {
+        if (timeout == null || timeout.isZero() || timeout.isNegative()) {
+            throw new IllegalArgumentException("visual location timeout must be positive");
+        }
+        return locateGuideWithResult(request);
+    }
+
     enum Diagnostic {
         FOUND,
         NO_REGION,
@@ -51,12 +64,10 @@ public interface VisualRegionLocator {
         PROVIDER_FAILURE
     }
 
-    /** Typed visual review outcomes; only ACCEPT and USE_FULL_PAGE may cross the publication boundary. */
-    enum ReviewAction {
-        ACCEPT,
-        RECROP,
-        USE_FULL_PAGE,
-        REJECT
+    /** The model decides whether inspecting another finite attachment batch is worth another bounded call. */
+    enum BatchAction {
+        STOP,
+        CONTINUE
     }
 
     record LocateResult(Optional<LocatedRegion> region, Diagnostic diagnostic) {
@@ -84,9 +95,12 @@ public interface VisualRegionLocator {
         }
     }
 
-    record LocateGuideResult(List<LocatedRegion> regions, Diagnostic diagnostic) {
+    record LocateGuideResult(List<LocatedRegion> regions, Diagnostic diagnostic, BatchAction batchAction) {
         public LocateGuideResult {
-            if (regions == null || regions.size() > 12 || diagnostic == null
+            if (regions == null
+                    || regions.size() > VisualLocationRequest.MAX_CANDIDATES_PER_BATCH
+                    || diagnostic == null
+                    || batchAction == null
                     || (regions.isEmpty() && diagnostic == Diagnostic.FOUND)
                     || (!regions.isEmpty() && diagnostic != Diagnostic.FOUND)) {
                 throw new IllegalArgumentException("visual guide result is invalid");
@@ -95,17 +109,25 @@ public interface VisualRegionLocator {
         }
 
         public static LocateGuideResult found(List<LocatedRegion> regions) {
+            return found(regions, BatchAction.STOP);
+        }
+
+        public static LocateGuideResult found(List<LocatedRegion> regions, BatchAction batchAction) {
             if (regions == null || regions.isEmpty()) {
                 throw new IllegalArgumentException("a found visual guide needs at least one region");
             }
-            return new LocateGuideResult(regions, Diagnostic.FOUND);
+            return new LocateGuideResult(regions, Diagnostic.FOUND, batchAction);
         }
 
         public static LocateGuideResult unavailable(Diagnostic diagnostic) {
+            return unavailable(diagnostic, BatchAction.STOP);
+        }
+
+        public static LocateGuideResult unavailable(Diagnostic diagnostic, BatchAction batchAction) {
             if (diagnostic == null || diagnostic == Diagnostic.FOUND) {
                 throw new IllegalArgumentException("visual guide diagnostic is invalid");
             }
-            return new LocateGuideResult(List.of(), diagnostic);
+            return new LocateGuideResult(List.of(), diagnostic, batchAction);
         }
     }
 
@@ -117,8 +139,9 @@ public interface VisualRegionLocator {
             String modelConfigurationOwner,
             UUID documentVersionId,
             UUID runId,
-            int visualBudget) {
-        public static final int DEFAULT_VISUAL_BUDGET = 6;
+            int batchNumber,
+            boolean hasMoreCandidates) {
+        public static final int MAX_CANDIDATES_PER_BATCH = 12;
 
         public VisualLocationRequest(
                 String sectionTitle,
@@ -136,7 +159,8 @@ public interface VisualRegionLocator {
                     modelConfigurationOwner,
                     documentVersionId,
                     runId,
-                    DEFAULT_VISUAL_BUDGET);
+                    1,
+                    false);
         }
 
         public VisualLocationRequest(
@@ -153,21 +177,38 @@ public interface VisualRegionLocator {
                     modelConfigurationOwner,
                     null,
                     null,
-                    DEFAULT_VISUAL_BUDGET);
+                    1,
+                    false);
         }
 
         public VisualLocationRequest {
             if (sectionTitle == null || sectionTitle.isBlank() || claims == null || claims.isEmpty()
                     || candidates == null || candidates.isEmpty()
                     || pages == null || pages.isEmpty()
-                    || visualBudget < 1 || visualBudget > 12
-                    || candidates.size() > visualBudget
-                    || pages.size() > visualBudget) {
+                    || candidates.size() > MAX_CANDIDATES_PER_BATCH
+                    || pages.size() > MAX_CANDIDATES_PER_BATCH
+                    || batchNumber < 1) {
                 throw new IllegalArgumentException("visual location request is invalid");
             }
             claims = List.copyOf(claims);
             candidates = List.copyOf(candidates);
             pages = List.copyOf(pages);
+            Set<String> candidateIds = candidates.stream()
+                    .map(Candidate::candidateId)
+                    .collect(java.util.stream.Collectors.toSet());
+            Set<CandidateBoundary> candidateBoundaries = candidates.stream()
+                    .map(candidate -> new CandidateBoundary(
+                            candidate.pageNumber(), candidate.rectangle(), candidate.sourceKind()))
+                    .collect(java.util.stream.Collectors.toSet());
+            Set<Integer> pageNumbers = pages.stream()
+                    .map(PageImage::pageNumber)
+                    .collect(java.util.stream.Collectors.toSet());
+            if (candidateIds.size() != candidates.size()
+                    || candidateBoundaries.size() != candidates.size()
+                    || pageNumbers.size() != pages.size()
+                    || candidates.stream().anyMatch(candidate -> !pageNumbers.contains(candidate.pageNumber()))) {
+                throw new IllegalArgumentException("visual candidate attachments are invalid");
+            }
             modelConfigurationOwner = modelConfigurationOwner == null || modelConfigurationOwner.isBlank()
                     ? null
                     : modelConfigurationOwner.strip();
@@ -186,8 +227,14 @@ public interface VisualRegionLocator {
                     null,
                     null,
                     null,
-                    DEFAULT_VISUAL_BUDGET);
+                    1,
+                    false);
         }
+
+        private record CandidateBoundary(
+                int pageNumber,
+                com.rulepilot.ingestion.layout.RulebookUnderstanding.Rectangle rectangle,
+                VisualSourceKind sourceKind) {}
     }
 
     /**

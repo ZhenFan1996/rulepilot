@@ -20,8 +20,9 @@ class TeachingRunWorkloadPolicyTest {
 
         // Three searches, one possible image read, and one canonical fallback read per section.
         assertThat(demand.requiredToolCalls()).isEqualTo(95);
-        // Three shared section calls, one possible visual interpretation per page, and bounded whole-lesson review.
-        assertThat(demand.requiredModelCalls()).isEqualTo(115);
+        // Three shared section calls, plus the conservative OCR-repair branch (semantic + OCR + changed semantic)
+        // for each page and final review. Ordinary cold pages consume only the first semantic reservation.
+        assertThat(demand.requiredModelCalls()).isEqualTo(134);
     }
 
     @Test
@@ -37,21 +38,21 @@ class TeachingRunWorkloadPolicyTest {
         var demand = policy.demand(plan(30, true, false));
 
         assertThat(demand.requiredToolCalls()).isEqualTo(150);
-        assertThat(demand.requiredModelCalls()).isEqualTo(170);
+        assertThat(demand.requiredModelCalls()).isEqualTo(200);
     }
 
     @Test
     void includesProgressivePagePrefetchAndPageInterpretation() {
         var demand = policy.demand(plan(80, true, true));
 
-        // Eighty exact-page reads plus sixteen five-page prefetch batches.
-        assertThat(demand.requiredToolCalls()).isEqualTo(96);
-        assertThat(demand.requiredModelCalls()).isEqualTo(421);
+        // Prefetch now delegates to the page catalog owner and no longer performs a duplicate Assistant tool read.
+        assertThat(demand.requiredToolCalls()).isEqualTo(80);
+        assertThat(demand.requiredModelCalls()).isEqualTo(500);
     }
 
     @Test
     void countsVisualInterpretationFromTheImmutablePlanInsteadOfMutableCatalogAvailability() {
-        assertThat(policy.demand(plan(19, true, false)).requiredModelCalls()).isEqualTo(115);
+        assertThat(policy.demand(plan(19, true, false)).requiredModelCalls()).isEqualTo(134);
     }
 
     @Test
@@ -64,9 +65,9 @@ class TeachingRunWorkloadPolicyTest {
         TeachingPlan plan = plan(pageBindings, false);
         int visualCalls = TeachingVisualEvidenceResolver.maximumModelCalls(plan);
 
-        assertThat(visualCalls).isEqualTo(50);
+        assertThat(visualCalls).isEqualTo(63);
         assertThat(policy.demand(plan))
-                .isEqualTo(new com.rulepilot.assistant.AssistantRuns.WorkloadDemand(95, 127));
+                .isEqualTo(new com.rulepilot.assistant.AssistantRuns.WorkloadDemand(95, 140));
     }
 
     private TeachingPlan plan(int sectionCount, boolean sourceBound, boolean progressive) {

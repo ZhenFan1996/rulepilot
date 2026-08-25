@@ -24,15 +24,15 @@ class BoardGameRecommendationSelectorTest {
             new BoardGameRecommendationProperties(8, 3, new BigDecimal("0.66"), Duration.ofSeconds(20)));
 
     @Test
-    void acceptsTheMeasuredThirtySecondRunBudgetAndRejectsAnythingLonger() {
+    void acceptsTheMeasuredFortyFiveSecondRunBudgetAndRejectsAnythingLonger() {
         var accepted = new BoardGameRecommendationProperties(
-                8, 3, new BigDecimal("0.66"), Duration.ofSeconds(30));
+                8, 3, new BigDecimal("0.66"), Duration.ofSeconds(45));
 
-        assertThat(accepted.timeout()).isEqualTo(Duration.ofSeconds(30));
+        assertThat(accepted.timeout()).isEqualTo(Duration.ofSeconds(45));
         assertThatThrownBy(() -> new BoardGameRecommendationProperties(
-                        8, 3, new BigDecimal("0.66"), Duration.ofSeconds(31)))
+                        8, 3, new BigDecimal("0.66"), Duration.ofSeconds(46)))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("no longer than 30 seconds");
+                .hasMessageContaining("no longer than 45 seconds");
     }
 
     @Test

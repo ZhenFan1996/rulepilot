@@ -19,6 +19,7 @@ final class RecommendationAgentState {
 
     static final int MAX_VERIFIED_GAMES = 8;
     static final int MAX_OBSERVED_CANDIDATES = 16;
+    static final int MAX_PLAYER_LEAD_CODE_POINTS = 480;
 
     final long startedAtNanos;
     final String modelConfigurationOwner;
@@ -214,18 +215,38 @@ final class RecommendationAgentState {
     record PublicationSeed(
             List<Integer> candidateBggIds,
             List<Integer> referenceBggIds,
-            CandidateUse candidateUse) {
+            CandidateUse candidateUse,
+            int requestedCount,
+            String playerLead) {
+        PublicationSeed(
+                List<Integer> candidateBggIds,
+                List<Integer> referenceBggIds,
+                CandidateUse candidateUse,
+                int requestedCount) {
+            this(candidateBggIds, referenceBggIds, candidateUse, requestedCount, "");
+        }
+
         PublicationSeed {
             candidateBggIds = candidateBggIds == null ? List.of() : List.copyOf(candidateBggIds);
             referenceBggIds = referenceBggIds == null ? List.of() : List.copyOf(referenceBggIds);
             Objects.requireNonNull(candidateUse, "candidateUse is required");
+            playerLead = boundedPlayerLead(playerLead);
             if (candidateBggIds.isEmpty()
                     || candidateBggIds.stream().anyMatch(id -> id == null || id <= 0)
                     || candidateBggIds.stream().distinct().count() != candidateBggIds.size()
                     || referenceBggIds.stream().anyMatch(id -> id == null || id <= 0)
-                    || referenceBggIds.stream().distinct().count() != referenceBggIds.size()) {
+                    || referenceBggIds.stream().distinct().count() != referenceBggIds.size()
+                    || requestedCount < 1
+                    || requestedCount > MAX_VERIFIED_GAMES) {
                 throw new IllegalArgumentException("recommendation publication seed is invalid");
             }
+        }
+
+        private static String boundedPlayerLead(String value) {
+            if (value == null) return "";
+            String checked = value.strip();
+            int length = checked.codePointCount(0, checked.length());
+            return length >= 1 && length <= MAX_PLAYER_LEAD_CODE_POINTS ? checked : "";
         }
     }
 }

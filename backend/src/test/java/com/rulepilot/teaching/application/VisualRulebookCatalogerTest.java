@@ -33,10 +33,16 @@ import com.rulepilot.teaching.VisualRulebookPageFacts.IconMeaningStatus;
 import com.rulepilot.teaching.VisualRulebookPageFacts.IconOccurrence;
 import com.rulepilot.teaching.VisualRulebookPageFacts.PageFact;
 import com.rulepilot.teaching.VisualRulebookPageFacts.VisualAnchor;
+import io.micrometer.observation.Observation;
+import io.micrometer.observation.ObservationHandler;
+import io.micrometer.observation.ObservationRegistry;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.time.Clock;
 import java.time.Duration;
+import java.time.Instant;
+import java.time.ZoneId;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -44,9 +50,13 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.IntStream;
 import java.util.function.Supplier;
 import java.util.function.ToIntFunction;
@@ -1652,6 +1662,106 @@ class VisualRulebookCatalogerTest {
     }
 
     @Test
+    void observesSingleCallOcrRepairTransientReplayAndPersistenceWithOnlyLowCardinalityTags() {
+        UUID documentVersionId = UUID.randomUUID();
+        AtomicInteger pageTwoInitialCalls = new AtomicInteger();
+        var recorded = new java.util.concurrent.CopyOnWriteArrayList<String>();
+        ObservationRegistry observations = ObservationRegistry.create();
+        observations.observationConfig().observationHandler(new ObservationHandler<Observation.Context>() {
+            @Override
+            public void onStop(Observation.Context context) {
+                if (!"rulepilot.teaching.visual_page_catalog".equals(context.getName())) return;
+                List<String> keys = java.util.stream.StreamSupport.stream(
+                                context.getLowCardinalityKeyValues().spliterator(), false)
+                        .map(io.micrometer.common.KeyValue::getKey)
+                        .sorted()
+                        .toList();
+                assertThat(keys).containsExactly("outcome", "retry_kind", "stage");
+                assertThat(context.getHighCardinalityKeyValues()).isEmpty();
+                recorded.add(context.getLowCardinalityKeyValue("stage").getValue()
+                        + ":" + context.getLowCardinalityKeyValue("retry_kind").getValue()
+                        + ":" + context.getLowCardinalityKeyValue("outcome").getValue());
+            }
+
+            @Override
+            public boolean supportsContext(Observation.Context context) {
+                return true;
+            }
+        });
+        VisualRulebookPageCatalogModel model = new VisualRulebookPageCatalogModel() {
+            @Override
+            public CatalogDraft summarize(CatalogRequest request) {
+                throw new AssertionError("Teaching facts must use the Teaching catalog");
+            }
+
+            @Override
+            public boolean available(String owner) {
+                return true;
+            }
+
+            @Override
+            public boolean supportsTeachingPageTranscription(String owner) {
+                return true;
+            }
+
+            @Override
+            public PageTranscript transcribeTeachingPage(
+                    com.rulepilot.teaching.TeachingOutlineModel.PageImageInput page,
+                    String owner) {
+                return new PageTranscript(page.pageNumber(), "stable transcript");
+            }
+
+            @Override
+            public CatalogDraft summarizeForTeaching(CatalogRequest request) {
+                int pageNumber = request.pages().getFirst().pageNumber();
+                if (pageNumber == 1) {
+                    throw new TeachingCatalogContractViolation(TeachingCatalogRepairCode.SCHEMA_MISMATCH);
+                }
+                if (pageTwoInitialCalls.incrementAndGet() == 1) {
+                    throw new org.springframework.ai.retry.TransientAiException("provider reset");
+                }
+                return new CatalogDraft(List.of(teachingSummary(
+                        pageNumber, "TURN", "The player performs one action.", List.of("turn"))));
+            }
+
+            @Override
+            public CatalogDraft repairTeachingCatalog(
+                    CatalogRequest request, TeachingCatalogRepairCode repairCode) {
+                assertThat(repairCode).isEqualTo(TeachingCatalogRepairCode.SCHEMA_MISMATCH);
+                return new CatalogDraft(List.of(teachingSummary(
+                        1, "SETUP", "The player prepares the board.", List.of("setup"))));
+            }
+        };
+        VisualRulebookCataloger cataloger = new VisualRulebookCataloger(
+                (id, pages) -> pages.stream()
+                        .map(page -> new DocumentPageImages.PageImage(
+                                page, "image/png", new byte[] {(byte) (int) page}, 100, 120))
+                        .toList(),
+                model,
+                new InMemoryFacts(),
+                directAudit(),
+                Duration.ofSeconds(2),
+                Duration.ofSeconds(2),
+                4,
+                1,
+                1,
+                1,
+                observations);
+
+        cataloger.ensureTeachingPageFacts(documentVersionId, Set.of(1), 2, "Example game", "owner", null);
+        cataloger.ensureTeachingPageFacts(documentVersionId, Set.of(2), 2, "Example game", "owner", null);
+
+        assertThat(recorded).containsExactly(
+                "semantic:single_call:failed",
+                "ocr_window:ocr_repair:completed",
+                "semantic:ocr_repair:completed",
+                "persist:ocr_repair:completed",
+                "semantic:single_call:failed",
+                "semantic:transient_replay:completed",
+                "persist:transient_replay:completed");
+    }
+
+    @Test
     void recordsTheActualTeachingStartupProviderAndRequestModelInTheRunActivity() {
         UUID documentVersionId = UUID.randomUUID();
         List<String> activitySummaries = new java.util.ArrayList<>();
@@ -1707,16 +1817,13 @@ class VisualRulebookCatalogerTest {
     }
 
     @Test
-    void transcribesPagesBeforeSemanticCatalogWithIndependentTenAndFourRequestLanes()
+    void ordinaryColdPagesUseOneSemanticCallWithTheBoundedFourRequestLane()
             throws InterruptedException {
         UUID documentVersionId = UUID.randomUUID();
-        AtomicInteger completedOcr = new AtomicInteger();
-        AtomicInteger activeOcr = new AtomicInteger();
-        AtomicInteger peakOcr = new AtomicInteger();
+        AtomicInteger ocrCalls = new AtomicInteger();
+        AtomicInteger semanticCalls = new AtomicInteger();
         AtomicInteger activeSemantic = new AtomicInteger();
         AtomicInteger peakSemantic = new AtomicInteger();
-        java.util.concurrent.atomic.AtomicBoolean semanticStartedEarly = new java.util.concurrent.atomic.AtomicBoolean();
-        CountDownLatch firstOcrWindow = new CountDownLatch(10);
         CountDownLatch firstSemanticWindow = new CountDownLatch(4);
         VisualRulebookPageCatalogModel model = new VisualRulebookPageCatalogModel() {
             @Override
@@ -1733,26 +1840,13 @@ class VisualRulebookCatalogerTest {
             public PageTranscript transcribeTeachingPage(
                     com.rulepilot.teaching.TeachingOutlineModel.PageImageInput page,
                     String owner) {
-                int active = activeOcr.incrementAndGet();
-                peakOcr.accumulateAndGet(active, Math::max);
-                try {
-                    if (page.pageNumber() <= 10) {
-                        firstOcrWindow.countDown();
-                        assertThat(firstOcrWindow.await(2, TimeUnit.SECONDS)).isTrue();
-                    }
-                    return new PageTranscript(page.pageNumber(), "OCR page " + page.pageNumber());
-                } catch (InterruptedException interrupted) {
-                    Thread.currentThread().interrupt();
-                    throw new IllegalStateException(interrupted);
-                } finally {
-                    completedOcr.incrementAndGet();
-                    activeOcr.decrementAndGet();
-                }
+                ocrCalls.incrementAndGet();
+                throw new AssertionError("ordinary vision semantics must not prepay OCR");
             }
 
             @Override
             public CatalogDraft summarizeForTeaching(CatalogRequest request) {
-                if (completedOcr.get() != 12) semanticStartedEarly.set(true);
+                semanticCalls.incrementAndGet();
                 int active = activeSemantic.incrementAndGet();
                 peakSemantic.accumulateAndGet(active, Math::max);
                 int pageNumber = request.pages().getFirst().pageNumber();
@@ -1761,10 +1855,7 @@ class VisualRulebookCatalogerTest {
                         firstSemanticWindow.countDown();
                         assertThat(firstSemanticWindow.await(2, TimeUnit.SECONDS)).isTrue();
                     }
-                    assertThat(request.transcripts()).singleElement().satisfies(transcript -> {
-                        assertThat(transcript.pageNumber()).isEqualTo(pageNumber);
-                        assertThat(transcript.text()).isEqualTo("OCR page " + pageNumber);
-                    });
+                    assertThat(request.transcripts()).isEmpty();
                     return new CatalogDraft(List.of(teachingSummary(
                             pageNumber,
                             "PAGE " + pageNumber,
@@ -1800,18 +1891,17 @@ class VisualRulebookCatalogerTest {
                 "owner",
                 null);
 
-        assertThat(semanticStartedEarly).isFalse();
-        assertThat(completedOcr).hasValue(12);
-        assertThat(peakOcr).hasValue(10);
+        assertThat(ocrCalls).hasValue(0);
+        assertThat(semanticCalls).hasValue(12);
         assertThat(peakSemantic).hasValue(4);
         assertThat(result).hasSize(12);
     }
 
     @Test
-    void keepsLargeTeachingImageReadsBoundedAndRereadsOnlyTheCurrentSemanticWindowAfterOcr() {
+    void keepsLargeTeachingImageReadsBoundedToTheCurrentSemanticWindow() {
         UUID documentVersionId = UUID.randomUUID();
         List<List<Integer>> imageReads = new java.util.concurrent.CopyOnWriteArrayList<>();
-        AtomicInteger completedOcr = new AtomicInteger();
+        AtomicInteger ocrCalls = new AtomicInteger();
         VisualRulebookPageCatalogModel model = new VisualRulebookPageCatalogModel() {
             @Override
             public CatalogDraft summarize(CatalogRequest request) {
@@ -1827,18 +1917,14 @@ class VisualRulebookCatalogerTest {
             public PageTranscript transcribeTeachingPage(
                     com.rulepilot.teaching.TeachingOutlineModel.PageImageInput page,
                     String owner) {
-                completedOcr.incrementAndGet();
-                return new PageTranscript(page.pageNumber(), "literal page " + page.pageNumber());
+                ocrCalls.incrementAndGet();
+                throw new AssertionError("ordinary vision semantics must not prepay OCR");
             }
 
             @Override
             public CatalogDraft summarizeForTeaching(CatalogRequest request) {
-                assertThat(completedOcr).hasValue(18);
                 int pageNumber = request.pages().getFirst().pageNumber();
-                assertThat(request.transcripts()).singleElement().satisfies(transcript -> {
-                    assertThat(transcript.pageNumber()).isEqualTo(pageNumber);
-                    assertThat(transcript.text()).isEqualTo("literal page " + pageNumber);
-                });
+                assertThat(request.transcripts()).isEmpty();
                 return new CatalogDraft(List.of(teachingSummary(
                         pageNumber,
                         "PAGE " + pageNumber,
@@ -1872,13 +1958,10 @@ class VisualRulebookCatalogerTest {
                 null);
 
         assertThat(result).hasSize(18);
+        assertThat(ocrCalls).hasValue(0);
         assertThat(imageReads).allSatisfy(read -> assertThat(read)
                 .hasSizeLessThanOrEqualTo(DocumentPageImages.MAX_PAGES_PER_READ));
         assertThat(imageReads).containsExactly(
-                List.of(1, 2, 3, 4, 5),
-                List.of(6, 7, 8, 9, 10),
-                List.of(11, 12, 13, 14, 15),
-                List.of(16, 17, 18),
                 List.of(1, 2, 3, 4),
                 List.of(5, 6, 7, 8),
                 List.of(9, 10, 11, 12),
@@ -1887,11 +1970,11 @@ class VisualRulebookCatalogerTest {
         Map<Integer, Long> readsPerPage = imageReads.stream()
                 .flatMap(List::stream)
                 .collect(java.util.stream.Collectors.groupingBy(page -> page, java.util.stream.Collectors.counting()));
-        assertThat(readsPerPage).hasSize(18).allSatisfy((page, reads) -> assertThat(reads).isEqualTo(2));
+        assertThat(readsPerPage).hasSize(18).allSatisfy((page, reads) -> assertThat(reads).isEqualTo(1));
     }
 
     @Test
-    void keepsSuccessfulPageBoundTranscriptsWhenOneOcrPageFailsAndFallsBackToItsOriginalImage() {
+    void typedRepairKeepsSuccessfulPageBoundTranscriptsAndLocalizesOneOcrFailure() {
         UUID documentVersionId = UUID.randomUUID();
         List<String> operations = new java.util.concurrent.CopyOnWriteArrayList<>();
         Map<Integer, List<PageTranscript>> semanticTranscripts = new java.util.concurrent.ConcurrentHashMap<>();
@@ -1918,6 +2001,14 @@ class VisualRulebookCatalogerTest {
 
             @Override
             public CatalogDraft summarizeForTeaching(CatalogRequest request) {
+                assertThat(request.transcripts()).isEmpty();
+                throw new TeachingCatalogContractViolation(TeachingCatalogRepairCode.SCHEMA_MISMATCH);
+            }
+
+            @Override
+            public CatalogDraft repairTeachingCatalog(
+                    CatalogRequest request, TeachingCatalogRepairCode repairCode) {
+                assertThat(repairCode).isEqualTo(TeachingCatalogRepairCode.SCHEMA_MISMATCH);
                 int pageNumber = request.pages().getFirst().pageNumber();
                 semanticTranscripts.put(pageNumber, request.transcripts());
                 return new CatalogDraft(List.of(teachingSummary(
@@ -1979,21 +2070,24 @@ class VisualRulebookCatalogerTest {
             assertThat(transcript.text()).isEqualTo("literal page 3");
         });
         assertThat(operations).contains(
-                "transcribeTeachingVisualPage|1|3",
-                "transcribeTeachingVisualPage|2|3",
-                "transcribeTeachingVisualPage|3|3",
                 "inspectTeachingVisualPage|1|3",
                 "inspectTeachingVisualPage|2|3",
-                "inspectTeachingVisualPage|3|3");
+                "inspectTeachingVisualPage|3|3",
+                "transcribeTeachingVisualRepairPage|1|3",
+                "transcribeTeachingVisualRepairPage|2|3",
+                "transcribeTeachingVisualRepairPage|3|3",
+                "inspectTeachingVisualRepair|1|3|SCHEMA_MISMATCH",
+                "inspectTeachingVisualRepair|2|3|SCHEMA_MISMATCH",
+                "inspectTeachingVisualRepair|3|3|SCHEMA_MISMATCH");
     }
 
     @Test
-    void semanticRecoveryReusesTheFirstTranscriptWithoutCallingOcrAgain() {
+    void transientReplayRemainsImageOnlyAndNeverStartsOcr() {
         UUID documentVersionId = UUID.randomUUID();
         AtomicInteger imageReads = new AtomicInteger();
         AtomicInteger ocrCalls = new AtomicInteger();
         AtomicInteger semanticCalls = new AtomicInteger();
-        List<PageTranscript> suppliedTranscripts = new java.util.concurrent.CopyOnWriteArrayList<>();
+        List<List<PageTranscript>> suppliedTranscripts = new java.util.concurrent.CopyOnWriteArrayList<>();
         List<String> operations = new java.util.concurrent.CopyOnWriteArrayList<>();
         VisualRulebookPageCatalogModel model = new VisualRulebookPageCatalogModel() {
             @Override
@@ -2016,7 +2110,7 @@ class VisualRulebookCatalogerTest {
 
             @Override
             public CatalogDraft summarizeForTeaching(CatalogRequest request) {
-                suppliedTranscripts.add(request.transcripts().getFirst());
+                suppliedTranscripts.add(request.transcripts());
                 if (semanticCalls.incrementAndGet() == 1) {
                     throw new org.springframework.ai.retry.TransientAiException("provider connection reset");
                 }
@@ -2057,21 +2151,17 @@ class VisualRulebookCatalogerTest {
         cataloger.catalogVisualPages(
                 documentVersionId, List.of(page(1)), "Example game", "owner", UUID.randomUUID());
 
-        assertThat(imageReads).hasValue(3);
-        assertThat(ocrCalls).hasValue(1);
+        assertThat(imageReads).hasValue(2);
+        assertThat(ocrCalls).hasValue(0);
         assertThat(semanticCalls).hasValue(2);
         assertThat(operations).containsExactly(
-                "transcribeTeachingVisualPage|1|1",
                 "inspectTeachingVisualPage|1|1",
                 "inspectTeachingVisualRetry|1|1");
-        assertThat(suppliedTranscripts).hasSize(2).allSatisfy(transcript -> {
-            assertThat(transcript.pageNumber()).isEqualTo(1);
-            assertThat(transcript.text()).isEqualTo("stable literal transcript");
-        });
+        assertThat(suppliedTranscripts).hasSize(2).allSatisfy(transcripts -> assertThat(transcripts).isEmpty());
     }
 
     @Test
-    void repairsEachTypedSemanticViolationOnceWithItsCodeAndTheOriginalOcrTranscript() {
+    void repairsEachTypedSemanticViolationOnceWithItsCodeAndAnOcrTranscript() {
         for (TeachingCatalogRepairCode repairCode : TeachingCatalogRepairCode.values()) {
             UUID documentVersionId = UUID.randomUUID();
             AtomicInteger imageReads = new AtomicInteger();
@@ -2099,11 +2189,10 @@ class VisualRulebookCatalogerTest {
                 }
 
                 @Override
-                public CatalogDraft summarizeForTeaching(CatalogRequest request) {
-                    initialCalls.incrementAndGet();
-                    assertThat(request.transcripts()).singleElement().satisfies(transcript ->
-                            assertThat(transcript.text()).isEqualTo("stable literal transcript"));
-                    throw new TeachingCatalogContractViolation(repairCode);
+            public CatalogDraft summarizeForTeaching(CatalogRequest request) {
+                initialCalls.incrementAndGet();
+                assertThat(request.transcripts()).isEmpty();
+                throw new TeachingCatalogContractViolation(repairCode);
                 }
 
                 @Override
@@ -2159,8 +2248,8 @@ class VisualRulebookCatalogerTest {
             assertThat(initialCalls).hasValue(1);
             assertThat(repairCalls).hasValue(1);
             assertThat(operations).containsExactly(
-                    "transcribeTeachingVisualPage|1|1",
                     "inspectTeachingVisualPage|1|1",
+                    "transcribeTeachingVisualRepairPage|1|1",
                     "inspectTeachingVisualRepair|1|1|" + repairCode);
             assertThat(result).singleElement().satisfies(input ->
                     assertThat(input.text()).contains("The active player takes one action."));
@@ -2221,6 +2310,7 @@ class VisualRulebookCatalogerTest {
                 new org.springframework.ai.retry.TransientAiException(
                         "interrupted IO",
                         new IllegalStateException(new java.io.InterruptedIOException("request interrupted"))),
+                new org.springframework.ai.retry.NonTransientAiException("401 unauthorized"),
                 new org.springframework.ai.retry.NonTransientAiException("provider rejected request"),
                 new IllegalArgumentException("untyped schema failure"),
                 new IllegalStateException("unknown failure"));
@@ -2279,7 +2369,7 @@ class VisualRulebookCatalogerTest {
     }
 
     @Test
-    void stoppedOcrBudgetPropagatesWithoutProviderOrSemanticRetry() {
+    void stoppedInitialSemanticBudgetPropagatesBeforeProviderOrOcrRepair() {
         UUID documentVersionId = UUID.randomUUID();
         AtomicInteger providerCalls = new AtomicInteger();
         AtomicInteger semanticCalls = new AtomicInteger();
@@ -2306,7 +2396,7 @@ class VisualRulebookCatalogerTest {
             @Override
             public CatalogDraft summarizeForTeaching(CatalogRequest request) {
                 semanticCalls.incrementAndGet();
-                throw new AssertionError("semantic catalog must not start after a stopped OCR budget");
+                throw new AssertionError("provider must not start after the audited semantic budget stops");
             }
         };
         AuditedAgentInvocations stoppedAudit = new AuditedAgentInvocations() {
@@ -2348,6 +2438,440 @@ class VisualRulebookCatalogerTest {
         assertThat(reservations).hasValue(1);
         assertThat(providerCalls).hasValue(0);
         assertThat(semanticCalls).hasValue(0);
+    }
+
+    @Test
+    void concurrentSectionsShareOneSemanticAttemptForTheSameMissingPage() throws Exception {
+        UUID documentVersionId = UUID.randomUUID();
+        CountDownLatch distinctReaders = new CountDownLatch(2);
+        CountDownLatch semanticStarted = new CountDownLatch(1);
+        CountDownLatch releaseSemantic = new CountDownLatch(1);
+        AtomicInteger semanticCalls = new AtomicInteger();
+        InMemoryFacts facts = new InMemoryFacts(distinctReaders);
+        VisualRulebookPageCatalogModel model = new VisualRulebookPageCatalogModel() {
+            @Override
+            public CatalogDraft summarize(CatalogRequest request) {
+                throw new AssertionError("Teaching facts must use the Teaching catalog");
+            }
+
+            @Override
+            public CatalogDraft summarizeForTeaching(CatalogRequest request) {
+                semanticCalls.incrementAndGet();
+                semanticStarted.countDown();
+                awaitLatch(distinctReaders, "both section callers must observe the initial durable miss");
+                awaitLatch(releaseSemantic, "test must release the single semantic owner");
+                return new CatalogDraft(List.of(teachingSummary(
+                        1, "TURN", "The active player takes one action.", List.of("turn"))));
+            }
+        };
+        VisualRulebookCataloger cataloger = cataloger(
+                (id, pages) -> List.of(new DocumentPageImages.PageImage(
+                        1, "image/png", new byte[] {1}, 100, 120)),
+                model,
+                facts);
+        ExecutorService callers = Executors.newFixedThreadPool(2);
+        try {
+            Future<List<PageFact>> first = callers.submit(() -> cataloger.ensureTeachingPageFacts(
+                    documentVersionId, Set.of(1), 1, "Example game", "owner", null));
+            Future<List<PageFact>> second = callers.submit(() -> cataloger.ensureTeachingPageFacts(
+                    documentVersionId, Set.of(1), 1, "Example game", "owner", null));
+
+            assertThat(semanticStarted.await(2, TimeUnit.SECONDS)).isTrue();
+            assertThat(distinctReaders.await(2, TimeUnit.SECONDS)).isTrue();
+            assertThat(semanticCalls).hasValue(1);
+            releaseSemantic.countDown();
+
+            assertThat(first.get(2, TimeUnit.SECONDS)).singleElement().satisfies(fact ->
+                    assertThat(fact.pageNumber()).isEqualTo(1));
+            assertThat(second.get(2, TimeUnit.SECONDS)).singleElement().satisfies(fact ->
+                    assertThat(fact.pageNumber()).isEqualTo(1));
+            assertThat(semanticCalls).hasValue(1);
+        } finally {
+            releaseSemantic.countDown();
+            callers.shutdownNow();
+        }
+    }
+
+    @Test
+    void concurrentTypedContractRepairRunsOneSemanticOcrAndRepairStack() throws Exception {
+        UUID documentVersionId = UUID.randomUUID();
+        CountDownLatch distinctReaders = new CountDownLatch(2);
+        AtomicInteger initialCalls = new AtomicInteger();
+        AtomicInteger ocrCalls = new AtomicInteger();
+        AtomicInteger repairCalls = new AtomicInteger();
+        InMemoryFacts facts = new InMemoryFacts(distinctReaders);
+        VisualRulebookPageCatalogModel model = new VisualRulebookPageCatalogModel() {
+            @Override
+            public CatalogDraft summarize(CatalogRequest request) {
+                throw new AssertionError("Teaching facts must use the Teaching catalog");
+            }
+
+            @Override
+            public boolean supportsTeachingPageTranscription(String owner) {
+                return true;
+            }
+
+            @Override
+            public CatalogDraft summarizeForTeaching(CatalogRequest request) {
+                initialCalls.incrementAndGet();
+                awaitLatch(distinctReaders, "both section callers must join before typed repair");
+                throw new TeachingCatalogContractViolation(TeachingCatalogRepairCode.SCHEMA_MISMATCH);
+            }
+
+            @Override
+            public PageTranscript transcribeTeachingPage(
+                    com.rulepilot.teaching.TeachingOutlineModel.PageImageInput page,
+                    String owner) {
+                ocrCalls.incrementAndGet();
+                return new PageTranscript(page.pageNumber(), "literal page transcript");
+            }
+
+            @Override
+            public CatalogDraft repairTeachingCatalog(
+                    CatalogRequest request, TeachingCatalogRepairCode repairCode) {
+                repairCalls.incrementAndGet();
+                assertThat(repairCode).isEqualTo(TeachingCatalogRepairCode.SCHEMA_MISMATCH);
+                assertThat(request.transcripts()).singleElement().satisfies(transcript ->
+                        assertThat(transcript.text()).isEqualTo("literal page transcript"));
+                return new CatalogDraft(List.of(teachingSummary(
+                        1, "SETUP", "Prepare the shared board before play.", List.of("setup"))));
+            }
+        };
+        VisualRulebookCataloger cataloger = cataloger(
+                (id, pages) -> List.of(new DocumentPageImages.PageImage(
+                        1, "image/png", new byte[] {1}, 100, 120)),
+                model,
+                facts);
+        ExecutorService callers = Executors.newFixedThreadPool(2);
+        try {
+            Future<List<PageFact>> first = callers.submit(() -> cataloger.ensureTeachingPageFacts(
+                    documentVersionId, Set.of(1), 1, "Example game", "owner", null));
+            Future<List<PageFact>> second = callers.submit(() -> cataloger.ensureTeachingPageFacts(
+                    documentVersionId, Set.of(1), 1, "Example game", "owner", null));
+
+            assertThat(first.get(2, TimeUnit.SECONDS)).singleElement().satisfies(fact ->
+                    assertThat(fact.factualSummary()).contains("Prepare the shared board"));
+            assertThat(second.get(2, TimeUnit.SECONDS)).singleElement().satisfies(fact ->
+                    assertThat(fact.factualSummary()).contains("Prepare the shared board"));
+            assertThat(initialCalls).hasValue(1);
+            assertThat(ocrCalls).hasValue(1);
+            assertThat(repairCalls).hasValue(1);
+        } finally {
+            callers.shutdownNow();
+        }
+    }
+
+    @Test
+    void sequentialSectionsReuseALocalizedNegativeOutcomeWithinOneRunButANewRunMayRetry() {
+        UUID documentVersionId = UUID.randomUUID();
+        UUID firstRunId = UUID.randomUUID();
+        AtomicInteger semanticCalls = new AtomicInteger();
+        VisualRulebookPageCatalogModel model = request -> {
+            if (semanticCalls.incrementAndGet() == 1) {
+                throw new IllegalStateException("provider rejected this page");
+            }
+            return new CatalogDraft(List.of(teachingSummary(
+                    1, "TURN", "The active player takes one action.", List.of("turn"))));
+        };
+        VisualRulebookCataloger cataloger = cataloger(
+                (id, pages) -> List.of(new DocumentPageImages.PageImage(
+                        1, "image/png", new byte[] {1}, 100, 120)),
+                model,
+                new InMemoryFacts());
+
+        assertThat(cataloger.ensureTeachingPageFacts(
+                        documentVersionId, Set.of(1), 1, "Example game", "owner", firstRunId))
+                .isEmpty();
+        assertThat(cataloger.ensureTeachingPageFacts(
+                        documentVersionId, Set.of(1), 1, "Example game", "owner", firstRunId))
+                .isEmpty();
+        assertThat(semanticCalls).hasValue(1);
+
+        assertThat(cataloger.ensureTeachingPageFacts(
+                        documentVersionId, Set.of(1), 1, "Example game", "owner", UUID.randomUUID()))
+                .singleElement()
+                .satisfies(fact -> assertThat(fact.pageNumber()).isEqualTo(1));
+        assertThat(semanticCalls).hasValue(2);
+    }
+
+    @Test
+    void concurrentRunsDoNotShareRunSpecificBudgetFailure() throws Exception {
+        UUID documentVersionId = UUID.randomUUID();
+        UUID budgetStoppedRunId = UUID.randomUUID();
+        UUID independentRunId = UUID.randomUUID();
+        CountDownLatch stoppedRunReserved = new CountDownLatch(1);
+        CountDownLatch releaseStoppedRun = new CountDownLatch(1);
+        CountDownLatch independentSemanticStarted = new CountDownLatch(1);
+        AtomicInteger stoppedRunReservations = new AtomicInteger();
+        AtomicInteger independentRunReservations = new AtomicInteger();
+        AtomicInteger semanticCalls = new AtomicInteger();
+        AuditedAgentInvocations audit = new AuditedAgentInvocations() {
+            @Override
+            public <T> T invoke(
+                    UUID runId,
+                    com.rulepilot.assistant.AgentExecutionControl.ActivityType type,
+                    String operation,
+                    int estimatedInputTokens,
+                    String successSummary,
+                    Supplier<T> invocation,
+                    ToIntFunction<T> outputTokenEstimator) {
+                if (budgetStoppedRunId.equals(runId)) {
+                    stoppedRunReservations.incrementAndGet();
+                    stoppedRunReserved.countDown();
+                    awaitLatch(releaseStoppedRun, "test must release the budget-stopped run");
+                    throw new AgentExecutionStoppedException(StopReason.MODEL_BUDGET);
+                }
+                assertThat(runId).isEqualTo(independentRunId);
+                independentRunReservations.incrementAndGet();
+                return invocation.get();
+            }
+        };
+        VisualRulebookPageCatalogModel model = request -> {
+            semanticCalls.incrementAndGet();
+            independentSemanticStarted.countDown();
+            return new CatalogDraft(List.of(teachingSummary(
+                    1, "TURN", "The active player takes one action.", List.of("turn"))));
+        };
+        VisualRulebookCataloger cataloger = new VisualRulebookCataloger(
+                (id, pages) -> List.of(new DocumentPageImages.PageImage(
+                        1, "image/png", new byte[] {1}, 100, 120)),
+                model,
+                new InMemoryFacts(),
+                audit,
+                Duration.ofSeconds(2),
+                Duration.ofSeconds(2),
+                4,
+                1);
+        ExecutorService callers = Executors.newFixedThreadPool(2);
+        Future<List<PageFact>> stoppedRun = null;
+        Future<List<PageFact>> independentRun = null;
+        try {
+            stoppedRun = callers.submit(() -> cataloger.ensureTeachingPageFacts(
+                    documentVersionId, Set.of(1), 1, "Example game", "owner", budgetStoppedRunId));
+            assertThat(stoppedRunReserved.await(2, TimeUnit.SECONDS)).isTrue();
+            independentRun = callers.submit(() -> cataloger.ensureTeachingPageFacts(
+                    documentVersionId, Set.of(1), 1, "Example game", "owner", independentRunId));
+
+            assertThat(independentSemanticStarted.await(2, TimeUnit.SECONDS)).isTrue();
+            assertThat(independentRun.get(2, TimeUnit.SECONDS)).singleElement().satisfies(fact ->
+                    assertThat(fact.pageNumber()).isEqualTo(1));
+            assertThat(stoppedRunReservations).hasValue(1);
+            assertThat(independentRunReservations).hasValue(1);
+            assertThat(semanticCalls).hasValue(1);
+
+            releaseStoppedRun.countDown();
+            Future<List<PageFact>> failedRun = stoppedRun;
+            assertThatThrownBy(() -> failedRun.get(2, TimeUnit.SECONDS))
+                    .isInstanceOfSatisfying(java.util.concurrent.ExecutionException.class, failed ->
+                            assertThat(failed.getCause()).isInstanceOfSatisfying(
+                                            AgentExecutionStoppedException.class,
+                                            stopped -> assertThat(stopped.reason())
+                                                    .isEqualTo(StopReason.MODEL_BUDGET)));
+        } finally {
+            releaseStoppedRun.countDown();
+            if (stoppedRun != null) stoppedRun.cancel(true);
+            if (independentRun != null) independentRun.cancel(true);
+            callers.shutdownNow();
+        }
+    }
+
+    @Test
+    void expiredRunNegativeOutcomeAllowsTheSameRunToAttemptAgain() {
+        UUID documentVersionId = UUID.randomUUID();
+        UUID runId = UUID.randomUUID();
+        MutableClock clock = new MutableClock(Instant.parse("2026-08-26T00:00:00Z"));
+        AtomicInteger semanticCalls = new AtomicInteger();
+        VisualRulebookCataloger cataloger = catalogerWithRunAttemptRetention(
+                request -> {
+                    semanticCalls.incrementAndGet();
+                    throw new IllegalStateException("provider rejected this page");
+                },
+                clock,
+                Duration.ofMinutes(1),
+                8);
+
+        assertThat(cataloger.ensureTeachingPageFacts(
+                        documentVersionId, Set.of(1), 1, "Example game", "owner", runId))
+                .isEmpty();
+        clock.advance(Duration.ofSeconds(59));
+        assertThat(cataloger.ensureTeachingPageFacts(
+                        documentVersionId, Set.of(1), 1, "Example game", "owner", runId))
+                .isEmpty();
+        assertThat(semanticCalls).hasValue(1);
+
+        clock.advance(Duration.ofSeconds(2));
+        assertThat(cataloger.ensureTeachingPageFacts(
+                        documentVersionId, Set.of(1), 1, "Example game", "owner", runId))
+                .isEmpty();
+        assertThat(semanticCalls).hasValue(2);
+    }
+
+    @Test
+    void settledRunNegativeOutcomesEvictTheOldestEntryAtCapacity() {
+        UUID documentVersionId = UUID.randomUUID();
+        UUID oldestRunId = UUID.randomUUID();
+        UUID retainedRunId = UUID.randomUUID();
+        AtomicInteger semanticCalls = new AtomicInteger();
+        VisualRulebookCataloger cataloger = catalogerWithRunAttemptRetention(
+                request -> {
+                    semanticCalls.incrementAndGet();
+                    throw new IllegalStateException("provider rejected this page");
+                },
+                Clock.systemUTC(),
+                Duration.ofHours(1),
+                2);
+
+        for (UUID runId : List.of(oldestRunId, retainedRunId, UUID.randomUUID())) {
+            assertThat(cataloger.ensureTeachingPageFacts(
+                            documentVersionId, Set.of(1), 1, "Example game", "owner", runId))
+                    .isEmpty();
+        }
+        assertThat(semanticCalls).hasValue(3);
+
+        assertThat(cataloger.ensureTeachingPageFacts(
+                        documentVersionId, Set.of(1), 1, "Example game", "owner", retainedRunId))
+                .isEmpty();
+        assertThat(semanticCalls).hasValue(3);
+        assertThat(cataloger.ensureTeachingPageFacts(
+                        documentVersionId, Set.of(1), 1, "Example game", "owner", oldestRunId))
+                .isEmpty();
+        assertThat(semanticCalls).hasValue(4);
+    }
+
+    @Test
+    void failedTeachingPageOwnerSharesAndSettlesTheFailureForItsRunButANewRunMayRetry() throws Exception {
+        UUID documentVersionId = UUID.randomUUID();
+        CountDownLatch distinctReaders = new CountDownLatch(2);
+        AtomicInteger reservations = new AtomicInteger();
+        AtomicInteger semanticCalls = new AtomicInteger();
+        AuditedAgentInvocations failOnceAudit = new AuditedAgentInvocations() {
+            @Override
+            public <T> T invoke(
+                    UUID runId,
+                    com.rulepilot.assistant.AgentExecutionControl.ActivityType type,
+                    String operation,
+                    int estimatedInputTokens,
+                    String successSummary,
+                    Supplier<T> invocation,
+                    ToIntFunction<T> outputTokenEstimator) {
+                if (reservations.incrementAndGet() == 1) {
+                    awaitLatch(distinctReaders, "both section callers must share the failed owner");
+                    throw new AgentExecutionStoppedException(StopReason.MODEL_BUDGET);
+                }
+                return invocation.get();
+            }
+        };
+        VisualRulebookPageCatalogModel model = request -> {
+            semanticCalls.incrementAndGet();
+            return new CatalogDraft(List.of(teachingSummary(
+                    1, "TURN", "The active player takes one action.", List.of("turn"))));
+        };
+        VisualRulebookCataloger cataloger = new VisualRulebookCataloger(
+                (id, pages) -> List.of(new DocumentPageImages.PageImage(
+                        1, "image/png", new byte[] {1}, 100, 120)),
+                model,
+                new InMemoryFacts(distinctReaders),
+                failOnceAudit,
+                Duration.ofSeconds(2),
+                Duration.ofSeconds(2),
+                4,
+                1);
+        UUID runId = UUID.randomUUID();
+        ExecutorService callers = Executors.newFixedThreadPool(2);
+        try {
+            Future<List<PageFact>> first = callers.submit(() -> cataloger.ensureTeachingPageFacts(
+                    documentVersionId, Set.of(1), 1, "Example game", "owner", runId));
+            Future<List<PageFact>> second = callers.submit(() -> cataloger.ensureTeachingPageFacts(
+                    documentVersionId, Set.of(1), 1, "Example game", "owner", runId));
+
+            assertThatThrownBy(() -> first.get(2, TimeUnit.SECONDS))
+                    .isInstanceOfSatisfying(java.util.concurrent.ExecutionException.class, failed ->
+                            assertThat(failed.getCause()).isInstanceOfSatisfying(
+                                            AgentExecutionStoppedException.class,
+                                            stopped -> assertThat(stopped.reason())
+                                                    .isEqualTo(StopReason.MODEL_BUDGET)));
+            assertThatThrownBy(() -> second.get(2, TimeUnit.SECONDS))
+                    .isInstanceOfSatisfying(java.util.concurrent.ExecutionException.class, failed ->
+                            assertThat(failed.getCause()).isInstanceOfSatisfying(
+                                            AgentExecutionStoppedException.class,
+                                            stopped -> assertThat(stopped.reason())
+                                                    .isEqualTo(StopReason.MODEL_BUDGET)));
+            assertThat(reservations).hasValue(1);
+
+            assertThatThrownBy(() -> cataloger.ensureTeachingPageFacts(
+                            documentVersionId, Set.of(1), 1, "Example game", "owner", runId))
+                    .isInstanceOfSatisfying(
+                            AgentExecutionStoppedException.class,
+                            stopped -> assertThat(stopped.reason()).isEqualTo(StopReason.MODEL_BUDGET));
+            assertThat(reservations).hasValue(1);
+
+            assertThat(cataloger.ensureTeachingPageFacts(
+                            documentVersionId, Set.of(1), 1, "Example game", "owner", UUID.randomUUID()))
+                    .singleElement()
+                    .satisfies(fact -> assertThat(fact.pageNumber()).isEqualTo(1));
+            assertThat(reservations).hasValue(2);
+            assertThat(semanticCalls).hasValue(1);
+        } finally {
+            callers.shutdownNow();
+        }
+    }
+
+    @Test
+    void interruptedFollowerStopsWaitingWithoutCancellingTheTeachingPageOwner() throws Exception {
+        UUID documentVersionId = UUID.randomUUID();
+        CountDownLatch distinctReaders = new CountDownLatch(2);
+        CountDownLatch semanticStarted = new CountDownLatch(1);
+        CountDownLatch releaseSemantic = new CountDownLatch(1);
+        AtomicInteger semanticCalls = new AtomicInteger();
+        InMemoryFacts facts = new InMemoryFacts(distinctReaders);
+        VisualRulebookPageCatalogModel model = request -> {
+            semanticCalls.incrementAndGet();
+            semanticStarted.countDown();
+            awaitLatch(releaseSemantic, "test must release the Teaching page owner");
+            return new CatalogDraft(List.of(teachingSummary(
+                    1, "TURN", "The active player takes one action.", List.of("turn"))));
+        };
+        VisualRulebookCataloger cataloger = cataloger(
+                (id, pages) -> List.of(new DocumentPageImages.PageImage(
+                        1, "image/png", new byte[] {1}, 100, 120)),
+                model,
+                facts);
+        ExecutorService ownerExecutor = Executors.newSingleThreadExecutor();
+        AtomicReference<Throwable> followerFailure = new AtomicReference<>();
+        AtomicBoolean followerInterrupted = new AtomicBoolean();
+        try {
+            Future<List<PageFact>> owner = ownerExecutor.submit(() -> cataloger.ensureTeachingPageFacts(
+                    documentVersionId, Set.of(1), 1, "Example game", "owner", null));
+            assertThat(semanticStarted.await(2, TimeUnit.SECONDS)).isTrue();
+            Thread follower = new Thread(() -> {
+                try {
+                    cataloger.ensureTeachingPageFacts(
+                            documentVersionId, Set.of(1), 1, "Example game", "owner", null);
+                } catch (Throwable failure) {
+                    followerFailure.set(failure);
+                    followerInterrupted.set(Thread.currentThread().isInterrupted());
+                }
+            }, "teaching-page-fact-follower");
+            follower.start();
+            assertThat(distinctReaders.await(2, TimeUnit.SECONDS)).isTrue();
+            follower.interrupt();
+            follower.join(2_000);
+
+            assertThat(follower.isAlive()).isFalse();
+            assertThat(followerInterrupted).isTrue();
+            assertThat(followerFailure.get())
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasCauseInstanceOf(InterruptedException.class);
+            assertThat(semanticCalls).hasValue(1);
+
+            releaseSemantic.countDown();
+            assertThat(owner.get(2, TimeUnit.SECONDS)).singleElement().satisfies(fact ->
+                    assertThat(fact.pageNumber()).isEqualTo(1));
+            assertThat(semanticCalls).hasValue(1);
+        } finally {
+            releaseSemantic.countDown();
+            ownerExecutor.shutdownNow();
+        }
     }
 
     @Test
@@ -2435,6 +2959,31 @@ class VisualRulebookCatalogerTest {
                 visualRequestParallelism);
     }
 
+    private static VisualRulebookCataloger catalogerWithRunAttemptRetention(
+            VisualRulebookPageCatalogModel model,
+            Clock clock,
+            Duration retention,
+            int settledCapacity) {
+        return new VisualRulebookCataloger(
+                (id, pages) -> pages.stream()
+                        .map(page -> new DocumentPageImages.PageImage(
+                                page, "image/png", new byte[] {(byte) (int) page}, 100, 120))
+                        .toList(),
+                model,
+                new InMemoryFacts(),
+                directAudit(),
+                Duration.ofSeconds(2),
+                Duration.ofSeconds(2),
+                4,
+                1,
+                1,
+                1,
+                ObservationRegistry.NOOP,
+                clock,
+                retention,
+                settledCapacity);
+    }
+
     private static AuditedAgentInvocations directAudit() {
         return new AuditedAgentInvocations() {
             @Override
@@ -2449,6 +2998,15 @@ class VisualRulebookCatalogerTest {
                 return invocation.get();
             }
         };
+    }
+
+    private static void awaitLatch(CountDownLatch latch, String timeoutMessage) {
+        try {
+            if (!latch.await(2, TimeUnit.SECONDS)) throw new AssertionError(timeoutMessage);
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(interrupted);
+        }
     }
 
     private static PageView page(int pageNumber) {
@@ -2557,14 +3115,24 @@ class VisualRulebookCatalogerTest {
     private static final class InMemoryFacts implements VisualRulebookPageFacts {
 
         private final Map<UUID, List<PageFact>> factsByVersion = new HashMap<>();
+        private final CountDownLatch distinctReaderLatch;
+        private final Set<Thread> distinctReaders = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+        private InMemoryFacts() {
+            this(null);
+        }
+
+        private InMemoryFacts(CountDownLatch distinctReaderLatch) {
+            this.distinctReaderLatch = distinctReaderLatch;
+        }
 
         @Override
-        public void replace(UUID documentVersionId, List<PageFact> pages) {
+        public synchronized void replace(UUID documentVersionId, List<PageFact> pages) {
             factsByVersion.put(documentVersionId, List.copyOf(pages));
         }
 
         @Override
-        public void merge(UUID documentVersionId, List<PageFact> pages) {
+        public synchronized void merge(UUID documentVersionId, List<PageFact> pages) {
             Map<Integer, PageFact> byPage = new HashMap<>();
             factsByVersion.getOrDefault(documentVersionId, List.of())
                     .forEach(fact -> byPage.put(fact.pageNumber(), fact));
@@ -2575,10 +3143,42 @@ class VisualRulebookCatalogerTest {
         }
 
         @Override
-        public List<PageFact> find(UUID documentVersionId, Set<Integer> pageNumbers) {
+        public synchronized List<PageFact> find(UUID documentVersionId, Set<Integer> pageNumbers) {
+            if (distinctReaderLatch != null && distinctReaders.add(Thread.currentThread())) {
+                distinctReaderLatch.countDown();
+            }
             return factsByVersion.getOrDefault(documentVersionId, List.of()).stream()
                     .filter(fact -> pageNumbers.contains(fact.pageNumber()))
                     .toList();
+        }
+    }
+
+    private static final class MutableClock extends Clock {
+
+        private final AtomicReference<Instant> current;
+
+        private MutableClock(Instant initial) {
+            this.current = new AtomicReference<>(initial);
+        }
+
+        private void advance(Duration duration) {
+            current.updateAndGet(now -> now.plus(duration));
+        }
+
+        @Override
+        public ZoneId getZone() {
+            return ZoneId.of("UTC");
+        }
+
+        @Override
+        public Clock withZone(ZoneId zone) {
+            if (!getZone().equals(zone)) throw new UnsupportedOperationException("test clock uses UTC");
+            return this;
+        }
+
+        @Override
+        public Instant instant() {
+            return current.get();
         }
     }
 }

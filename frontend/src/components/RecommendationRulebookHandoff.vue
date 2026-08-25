@@ -52,6 +52,13 @@ import {
   teachingActivityText,
   type TeachingActivity,
 } from '@/lib/teachingProgress'
+import {
+  fetchVisualStatusWithDeadline,
+  VISUAL_LESSON_SETTLING_READS,
+  VISUAL_REFRESH_FAILURE_LIMIT,
+  VISUAL_RUN_DISCOVERY_LIMIT,
+  visualEnrichmentResult,
+} from '@/lib/visualEnrichment'
 
 interface ImportedGame {
   game: { id: string; name: string }
@@ -101,6 +108,15 @@ interface IllustratedLesson extends PlayerJourneyLesson {
         width: number
         height: number
       } | null
+      visualFoci?: Array<{
+        pageNumber: number
+        label: string
+        visibleDescription?: string
+        x: number
+        y: number
+        width: number
+        height: number
+      }>
     }>
   }>
 }
@@ -173,9 +189,10 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   invalidChapter: (titles: string) => `“${titles}”的草稿没有通过引用或结构校验，因此没有发布；其他已校验章节仍可阅读。`,
   retry: '重试当前步骤', pause: '暂停生成', resume: '继续生成', remove: '删除讲解', removeConfirm: '确认删除这份讲解及其生成任务？规则书会保留，已生成章节会被删除。', removeYes: '确认删除', removeNo: '先保留', close: '关闭小窗', change: '换一款',
   safe: '可以关闭这个小窗继续聊天；下载和讲解会继续。关闭后，页面上的“讲解状态”入口会一直显示，也可以随时打开“我的讲解”。',
+  visualActive: '正在从规则书中挑选能帮助上桌的局部图示。', visualAdded: (count: number) => `已有 ${count} 节具备图示。`, visualNone: '这次没有找到可靠的局部图示；文字讲解仍可完整阅读。', visualFailed: '局部配图没有完成；文字讲解仍可完整阅读。', visualPartial: (count: number) => `已有 ${count} 节具备图示；后续配图没有完成，文字讲解仍可完整阅读。`, visualMissing: '文字讲解已完成，但连续两次都没有等到配图任务。已停止自动查询；可手动重试接收稍后完成的配图，文字和答疑不受影响。', visualRefreshFailed: '暂时无法确认最新配图状态；文字讲解仍可阅读。', visualRetry: '重试配图状态',
   progress: '完整链路进度', current: '现在正在做', generationSteps: '讲解生成步骤', generationLatest: '最新实际进度', generationProcessHint: '真实后台活动会在下方逐条追加；进入逐章生成后，第 4～7 步会按章节重复。', generationAttemptHint: '单页本次未完成不等于整份讲解失败：逐字识别失败时只让该页退回原图；规则整理遇到被明确分类为临时服务异常时，原请求重试一次；返回格式、字段结构、重复规则组或页码绑定未通过时，会按失败类型修正一次。超时、中断、取消、预算耗尽、权限或参数错误、未知程序异常和保存失败都不会盲目重试。已确认页面始终保留。只有最终找不到可引用规则、章节规划或首章无法安全完成、运行预算或时限耗尽、服务无法继续，或任务被取消时，整次任务才会停下；上方会单独说明下一步。', generationShowHistory: (count: number) => `展开另外 ${count} 条历史`, generationHideHistory: '收起历史', planning: '规划中', pollingWarning: '暂时没有拿到最新进度，正在自动重试；已确认的进度不会倒退。',
   generationProcess: [
-    '图片规则书先逐页识别可见文字；文字版直接读取原文',
+    '图片页直接生成带页码绑定的结构化规则事实，文字层直接读取原文；只有结构化契约未通过时才退回 OCR 并修正一次',
     '按页面整理规则组，并记录规则书要求的外部资料',
     '通读整本规则书，形成整局认识并规划章节',
     '读取当前章节绑定的规则页与引用',
@@ -246,9 +263,10 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   invalidChapter: (titles: string) => `The draft for “${titles}” did not pass citation or structure checks, so it was not published. Other validated chapters remain readable.`,
   retry: 'Retry this step', pause: 'Pause generation', resume: 'Resume generation', remove: 'Delete guide', removeConfirm: 'Delete this guide and its generation work? The rulebook stays, but published chapters are removed.', removeYes: 'Delete guide', removeNo: 'Keep it', close: 'Close', change: 'Choose another game',
   safe: 'You may close this panel and keep chatting. Download and guide generation will continue. The “Guide status” shortcut stays visible, and My guides is always available.',
+  visualActive: 'Selecting focused rulebook visuals that help at the table.', visualAdded: (count: number) => `${count} ${count === 1 ? 'chapter now includes' : 'chapters now include'} visuals.`, visualNone: 'No reliable focused visual was found; the text guide remains fully readable.', visualFailed: 'Focused visual enrichment did not finish. The text guide remains fully readable.', visualPartial: (count: number) => `${count} ${count === 1 ? 'chapter now includes' : 'chapters now include'} visuals; later visual enrichment did not finish, and the text guide remains fully readable.`, visualMissing: 'The text guide is ready, but no visual task appeared in two consecutive checks. Automatic checks stopped; retry to pick up visuals that finish later. The guide and Q&A remain available.', visualRefreshFailed: 'The latest visual status is temporarily unavailable. The text guide remains readable.', visualRetry: 'Retry visual status',
   progress: 'End-to-end progress', current: 'Working on', generationSteps: 'Guide generation steps', generationLatest: 'Latest actual progress', generationProcessHint: 'Real background activities are appended below. Once chapter writing starts, steps 4–7 repeat for each chapter.', generationAttemptHint: 'A page not completing this time does not mean the whole guide failed: a transcription failure falls back to that page image; a rule-catalog request explicitly classified as a temporary service error is replayed once; and invalid formatting, fields, duplicate rule groups, or page binding receive one typed correction. Timeouts, interruption, cancellation, exhausted budgets, authorization or parameter errors, unknown program failures, and storage failures are never replayed blindly. Confirmed pages stay available. The whole task stops only when no citable rule remains, chapter planning or the first chapter cannot complete safely, the execution budget or deadline is exhausted, the service cannot continue, or the task is cancelled; a separate message above then explains the next action.', generationShowHistory: (count: number) => `Show ${count} earlier activities`, generationHideHistory: 'Hide earlier activities', planning: 'Planning', pollingWarning: 'The latest update is temporarily unavailable. Retrying automatically without rolling back confirmed progress.',
   generationProcess: [
-    'Transcribe each image-only page; read the original text directly when a text layer is available',
+    'Generate typed, page-bound rule facts directly from image pages and read text layers as source text; fall back to OCR and one correction only when the typed contract fails validation',
     'Organise each page into rule groups and record any external material the rulebook requires',
     'Read the whole rulebook, form a whole-game view, and plan the chapters',
     'Read the source pages and citations bound to the current chapter',
@@ -296,6 +314,7 @@ const preparationRunId = ref<string | null>(null)
 const plan = ref<PlayerJourneyPlan | null>(null)
 const teachingRun = ref<PlayerJourneyRun | null>(null)
 const teachingRunId = ref<string | null>(null)
+const visualEnrichmentRun = ref<PlayerJourneyRun | null>(null)
 const lesson = ref<IllustratedLesson | null>(null)
 const pollingWarning = ref(false)
 const retrying = ref(false)
@@ -313,7 +332,25 @@ let documentProgressVersionId: string | null = null
 let documentProgressStreamRetryAt = 0
 let documentProgressStreamRetryAttempt = 0
 let documentReadyRefreshPending = false
+const missingVisualRunRefreshes = ref(0)
+const visualRefreshFailures = ref(0)
+const visualLessonSettlingReads = ref(0)
+const visualLessonUnacceptedSnapshots = ref(0)
+let visualDiscoveryScope: string | null = null
+let observedTerminalVisualRunId: string | null = null
+const visualIdentityBlocked = ref(false)
+let activeVisualStatusController: AbortController | null = null
 const ensuredLessonPlans = new Set<string>()
+
+class VisualRunRefreshError extends Error {}
+class IdentityBoundaryError extends Error {}
+
+const VISUAL_LESSON_UNACCEPTED_LIMIT = 4
+
+type VisualRunSnapshot =
+  | { outcome: 'PRESENT'; value: PlayerJourneyRun }
+  | { outcome: 'ABSENT' }
+  | { outcome: 'IDENTITY' }
 
 const hasImportableCandidate = computed(() => candidates.value.some(isImportableCandidate))
 const sourceCandidates = computed(() => candidates.value.filter(candidate => candidate.capability !== 'GAME_INFO_ONLY'))
@@ -407,6 +444,50 @@ const importFailureDetail = computed(() => {
   if (importJob.value?.stage !== 'FAILED') return ''
   return copy.value.importFailureDetail[importJob.value.recovery?.failureKind ?? 'OTHER']
 })
+const visualEnrichmentState = computed(() => visualEnrichmentResult(
+  visualEnrichmentRun.value,
+  teachingRunIsActive(visualEnrichmentRun.value?.run.state),
+))
+const visualEnrichmentActive = computed(() => visualEnrichmentState.value.outcome === 'ACTIVE')
+const visualEnrichmentFailed = computed(() => ['FAILED', 'PARTIAL'].includes(
+  visualEnrichmentState.value.outcome,
+))
+const visualEvidenceExpected = computed(() => plan.value?.sections.some(
+  section => section.visualEvidenceRecommended === true,
+) === true)
+const visualRunDiscoveryExpected = computed(() => Boolean(
+  teachingRun.value
+    && runTerminal(teachingRun.value.run.state)
+    && lesson.value
+    && lesson.value.status !== 'INCOMPLETE'
+    && visualEvidenceExpected.value,
+))
+const visualDiscoveryStopped = computed(() => visualRunDiscoveryExpected.value
+  && !visualEnrichmentRun.value
+  && missingVisualRunRefreshes.value >= VISUAL_RUN_DISCOVERY_LIMIT)
+const visualEnrichmentStatus = computed(() => {
+  if (visualDiscoveryStopped.value) return copy.value.visualMissing
+  if (visualRefreshFailures.value >= VISUAL_REFRESH_FAILURE_LIMIT
+    || visualLessonUnacceptedSnapshots.value >= VISUAL_LESSON_UNACCEPTED_LIMIT
+    || visualIdentityBlocked.value
+    || Boolean(visualEnrichmentRun.value
+      && missingVisualRunRefreshes.value >= VISUAL_RUN_DISCOVERY_LIMIT)) {
+    return copy.value.visualRefreshFailed
+  }
+  const current = visualEnrichmentState.value
+  if (current.outcome === 'ABSENT') return ''
+  if (current.outcome === 'ACTIVE') return copy.value.visualActive
+  if (current.outcome === 'FAILED') return copy.value.visualFailed
+  if (current.outcome === 'PARTIAL') return copy.value.visualPartial(current.addedSectionCount)
+  if (current.outcome === 'EMPTY') return copy.value.visualNone
+  return copy.value.visualAdded(current.addedSectionCount)
+})
+const visualRefreshStopped = computed(() => visualRefreshFailures.value >= VISUAL_REFRESH_FAILURE_LIMIT
+  || visualLessonUnacceptedSnapshots.value >= VISUAL_LESSON_UNACCEPTED_LIMIT
+  || visualIdentityBlocked.value
+  || visualDiscoveryStopped.value
+  || Boolean(visualEnrichmentRun.value
+    && missingVisualRunRefreshes.value >= VISUAL_RUN_DISCOVERY_LIMIT))
 const journeyDetail = computed(() => {
   if (importJob.value?.stage === 'DOWNLOADING' && importJob.value.downloadedBytes > 0) {
     const done = formatBytes(importJob.value.downloadedBytes)
@@ -425,7 +506,7 @@ const journeyDetail = computed(() => {
     const progressPlan = {
       sections: plan.value.sections.map(section => ({
         ...section,
-        visualEvidenceRecommended: false,
+        visualEvidenceRecommended: section.visualEvidenceRecommended ?? false,
       })),
     }
     return teachingActivityText(
@@ -467,7 +548,7 @@ const journeyTeachingSteps = computed(() => {
   const progressPlan = {
     sections: plan.value.sections.map(section => ({
       ...section,
-      visualEvidenceRecommended: false,
+      visualEvidenceRecommended: section.visualEvidenceRecommended ?? false,
     })),
   }
   const chapterSteps = recentTeachingActivitySteps(
@@ -545,6 +626,37 @@ const journeyStatus = computed<RecommendationJourneyStatus>(() => ({
 }))
 let lastEmittedStatus = ''
 
+function visualFocusSignature(candidate: IllustratedLesson | null) {
+  if (!candidate) return ''
+  const values: string[] = []
+  const sections = [...candidate.sections].sort((left, right) => left.position - right.position)
+  for (const section of sections) {
+    const steps = [...(section.steps ?? [])].sort((left, right) => left.position - right.position)
+    for (const step of steps) {
+      const foci = step.visualFoci?.length
+        ? [...step.visualFoci]
+        : step.visualFocus ? [step.visualFocus] : []
+      foci.sort((left, right) => left.pageNumber - right.pageNumber
+        || left.x - right.x
+        || left.y - right.y
+        || left.width - right.width
+        || left.height - right.height)
+      for (const focus of foci) {
+        values.push([
+          section.position,
+          step.position,
+          focus.pageNumber,
+          focus.x,
+          focus.y,
+          focus.width,
+          focus.height,
+        ].join(':'))
+      }
+    }
+  }
+  return values.join('|')
+}
+
 function emitJourneyStatus(value: RecommendationJourneyStatus) {
   const signature = JSON.stringify({
     bggId: value.game.bggId,
@@ -561,6 +673,7 @@ function emitJourneyStatus(value: RecommendationJourneyStatus) {
     lessonId: value.lesson?.id ?? null,
     lessonStatus: value.lesson?.status ?? null,
     availableSections: value.lesson?.sections.length ?? 0,
+    visualFocus: visualFocusSignature(value.lesson),
   })
   if (signature === lastEmittedStatus) return
   lastEmittedStatus = signature
@@ -587,20 +700,135 @@ async function csrfToken() {
 }
 
 function requireLogin() {
+  const shouldNotify = state.value !== 'login'
   state.value = 'login'
   clearJourneyTimer()
-  notifyLoginRequired()
+  cancelVisualStatusRead()
+  if (shouldNotify) notifyLoginRequired()
 }
 
 async function checkedJson<T>(path: string, optional = false): Promise<T | null> {
   const response = await fetch(path, { credentials: 'include' })
   if (response.status === 401 || response.status === 403) {
-    requireLogin()
-    throw new Error('login required')
+    throw new IdentityBoundaryError('login required')
   }
   if (optional && response.status === 404) return null
   if (!response.ok) throw new Error(`request failed: ${path}`)
   return await response.json() as T
+}
+
+async function optionalVisualRunSnapshot(planId: string, signal: AbortSignal): Promise<VisualRunSnapshot> {
+  let response: Response
+  try {
+    response = await fetchVisualStatusWithDeadline(
+      `/api/v1/assistant-runs/latest?mode=VISUAL_ENRICHMENT&subjectId=${encodeURIComponent(planId)}`,
+      { credentials: 'include', signal },
+    )
+  } catch {
+    throw new VisualRunRefreshError('visual run request failed')
+  }
+  if (response.status === 401 || response.status === 403) {
+    return { outcome: 'IDENTITY' }
+  }
+  if (response.status === 404) return { outcome: 'ABSENT' }
+  if (!response.ok) throw new VisualRunRefreshError('visual run request failed')
+  try {
+    return { outcome: 'PRESENT', value: await response.json() as PlayerJourneyRun }
+  } catch {
+    throw new VisualRunRefreshError('visual run response is invalid')
+  }
+}
+
+function cancelVisualStatusRead() {
+  activeVisualStatusController?.abort()
+  activeVisualStatusController = null
+}
+
+function syncVisualDiscoveryScope(planId: string) {
+  const nextScope = teachingRun.value ? `${planId}:${teachingRun.value.run.id}` : null
+  if (visualDiscoveryScope === nextScope) return
+  cancelVisualStatusRead()
+  const replacingRun = visualDiscoveryScope !== null && visualDiscoveryScope !== nextScope
+  visualDiscoveryScope = nextScope
+  missingVisualRunRefreshes.value = 0
+  visualRefreshFailures.value = 0
+  visualLessonSettlingReads.value = 0
+  visualLessonUnacceptedSnapshots.value = 0
+  observedTerminalVisualRunId = null
+  visualIdentityBlocked.value = false
+  if (replacingRun) visualEnrichmentRun.value = null
+}
+
+function retryVisualStatus() {
+  cancelVisualStatusRead()
+  missingVisualRunRefreshes.value = 0
+  visualRefreshFailures.value = 0
+  visualLessonUnacceptedSnapshots.value = 0
+  visualIdentityBlocked.value = false
+  pollingWarning.value = false
+  scheduleJourney(250)
+}
+
+function acceptVisualRun(incoming: PlayerJourneyRun) {
+  visualEnrichmentRun.value = acceptJourneyRun(visualEnrichmentRun.value, incoming)
+  missingVisualRunRefreshes.value = 0
+  visualRefreshFailures.value = 0
+  if (runTerminal(visualEnrichmentRun.value.run.state)
+    && observedTerminalVisualRunId !== visualEnrichmentRun.value.run.id) {
+    observedTerminalVisualRunId = visualEnrichmentRun.value.run.id
+    visualLessonSettlingReads.value = VISUAL_LESSON_SETTLING_READS
+    visualLessonUnacceptedSnapshots.value = 0
+  }
+}
+
+function visualStatusReadIsCurrent(
+  request: number,
+  targetPlanId: string,
+  scope: string | null,
+  controller: AbortController,
+) {
+  return request === sequence
+    && plan.value?.id === targetPlanId
+    && visualDiscoveryScope === scope
+    && activeVisualStatusController === controller
+}
+
+function startVisualRunSnapshotRead(request: number, targetPlanId: string, scope: string | null) {
+  if (activeVisualStatusController) return
+  const controller = new AbortController()
+  activeVisualStatusController = controller
+  let nextDelay = playerJourneyPollDelay(false, false)
+  void optionalVisualRunSnapshot(targetPlanId, controller.signal)
+    .then((snapshot) => {
+      if (!visualStatusReadIsCurrent(request, targetPlanId, scope, controller)) return
+      if (snapshot.outcome === 'IDENTITY') {
+        visualIdentityBlocked.value = true
+        requireLogin()
+        return
+      }
+      if (snapshot.outcome === 'PRESENT' && snapshot.value.run.subjectId !== targetPlanId) {
+        visualIdentityBlocked.value = true
+        return
+      }
+      if (snapshot.outcome === 'PRESENT') {
+        acceptVisualRun(snapshot.value)
+        if (runTerminal(snapshot.value.run.state)) nextDelay = 250
+        return
+      }
+      missingVisualRunRefreshes.value += 1
+      visualRefreshFailures.value = 0
+    })
+    .catch(() => {
+      if (!visualStatusReadIsCurrent(request, targetPlanId, scope, controller)
+        || controller.signal.aborted) return
+      visualRefreshFailures.value += 1
+      nextDelay = playerJourneyPollDelay(true, false)
+    })
+    .finally(() => {
+      if (activeVisualStatusController === controller) activeVisualStatusController = null
+      if (request !== sequence || plan.value?.id !== targetPlanId || visualDiscoveryScope !== scope) return
+      scheduleJourney(nextDelay)
+    })
 }
 
 async function prepare() {
@@ -854,6 +1082,8 @@ async function refreshJourney(request = sequence) {
   if (request !== sequence || refreshingJourney || !importJob.value || state.value === 'login') return
   refreshingJourney = true
   clearJourneyTimer()
+  const settlingLessonRead = visualLessonSettlingReads.value > 0
+  let acceptedSettlingLesson = false
   try {
     let currentJob = importJob.value
     if (!importHandoffSettled(currentJob)) {
@@ -894,7 +1124,10 @@ async function refreshJourney(request = sequence) {
         `/api/v1/assistant-runs/${encodeURIComponent(activePreparationRunId)}`,
       )
       if (request !== sequence) return
-      if (incoming) preparationRun.value = acceptJourneyRun(preparationRun.value, incoming)
+      if (incoming) {
+        if (incoming.run.subjectId !== versionId) throw new Error('preparation run response identity mismatch')
+        preparationRun.value = acceptJourneyRun(preparationRun.value, incoming)
+      }
     }
 
     if (versionId && preparationRun.value?.run.state === 'COMPLETED' && !plan.value) {
@@ -914,12 +1147,31 @@ async function refreshJourney(request = sequence) {
       ])
       if (request !== sequence) return
       if (incomingRun) {
+        if (incomingRun.run.subjectId !== targetPlanId) throw new Error('teaching run response identity mismatch')
         teachingRun.value = acceptJourneyRun(teachingRun.value, incomingRun)
         teachingRunId.value = incomingRun.run.id
+        syncVisualDiscoveryScope(targetPlanId)
       }
       if (incomingLesson) {
         if (incomingLesson.teachingPlanId !== targetPlanId) throw new Error('lesson response identity mismatch')
         lesson.value = acceptProgressiveLesson(lesson.value, incomingLesson)
+        if (settlingLessonRead && visualLessonSettlingReads.value > 0) {
+          visualLessonSettlingReads.value -= 1
+          visualLessonUnacceptedSnapshots.value = 0
+          acceptedSettlingLesson = true
+        }
+      } else if (settlingLessonRead) {
+        visualLessonUnacceptedSnapshots.value += 1
+      }
+      const discoverVisualRun = visualRunDiscoveryExpected.value
+        && !visualEnrichmentRun.value
+        && missingVisualRunRefreshes.value < VISUAL_RUN_DISCOVERY_LIMIT
+      if (!visualIdentityBlocked.value
+        && visualRefreshFailures.value < VISUAL_REFRESH_FAILURE_LIMIT
+        && ((visualEnrichmentActive.value
+          && missingVisualRunRefreshes.value < VISUAL_RUN_DISCOVERY_LIMIT) || discoverVisualRun)) {
+        const visualScopeAtRead = visualDiscoveryScope
+        startVisualRunSnapshotRead(request, targetPlanId, visualScopeAtRead)
       }
       if (!incomingRun && preparationRun.value?.run.state === 'COMPLETED' && !ensuredLessonPlans.has(targetPlanId)) {
         ensuredLessonPlans.add(targetPlanId)
@@ -931,10 +1183,24 @@ async function refreshJourney(request = sequence) {
         }
       }
     }
-    pollingWarning.value = false
+    pollingWarning.value = settlingLessonRead
+      && !acceptedSettlingLesson
+      && visualLessonUnacceptedSnapshots.value < VISUAL_LESSON_UNACCEPTED_LIMIT
     persistJourney()
-  } catch {
-    if (request === sequence) pollingWarning.value = true
+  } catch (caught) {
+    if (request === sequence) {
+      if (caught instanceof IdentityBoundaryError) {
+        requireLogin()
+        pollingWarning.value = false
+      } else {
+        if (settlingLessonRead && !acceptedSettlingLesson) {
+          visualLessonUnacceptedSnapshots.value += 1
+          pollingWarning.value = visualLessonUnacceptedSnapshots.value < VISUAL_LESSON_UNACCEPTED_LIMIT
+        } else {
+          pollingWarning.value = true
+        }
+      }
+    }
   } finally {
     refreshingJourney = false
     if (request === sequence) {
@@ -977,6 +1243,15 @@ async function retryJourney() {
       preparationRun.value = null
       teachingRun.value = null
       teachingRunId.value = null
+      cancelVisualStatusRead()
+      visualEnrichmentRun.value = null
+      missingVisualRunRefreshes.value = 0
+      visualRefreshFailures.value = 0
+      visualLessonSettlingReads.value = 0
+      visualLessonUnacceptedSnapshots.value = 0
+      visualDiscoveryScope = null
+      observedTerminalVisualRunId = null
+      visualIdentityBlocked.value = false
       notifyBackgroundWorkChanged({ importJob: retriedJob })
       scheduleJourney(0)
       return
@@ -998,6 +1273,7 @@ async function retryJourney() {
 
 function clearImportDownstreamState() {
   clearJourneyTimer()
+  cancelVisualStatusRead()
   closeDocumentProgress()
   documentProgressStreamRetryAt = 0
   documentProgressStreamRetryAttempt = 0
@@ -1009,6 +1285,14 @@ function clearImportDownstreamState() {
   plan.value = null
   teachingRun.value = null
   teachingRunId.value = null
+  visualEnrichmentRun.value = null
+  missingVisualRunRefreshes.value = 0
+  visualRefreshFailures.value = 0
+  visualLessonSettlingReads.value = 0
+  visualLessonUnacceptedSnapshots.value = 0
+  visualDiscoveryScope = null
+  observedTerminalVisualRunId = null
+  visualIdentityBlocked.value = false
   lesson.value = null
   pollingWarning.value = false
   ensuredLessonPlans.clear()
@@ -1064,7 +1348,18 @@ async function launchLesson(planId: string, clearFailedRun: boolean) {
   const launch = await response.json() as LaunchResponse
   teachingRunId.value = launch.assistantRunId
   notifyTeachingLaunched({ planId, runId: launch.assistantRunId, gameTitle: props.game.name })
-  if (clearFailedRun) teachingRun.value = null
+  if (clearFailedRun) {
+    cancelVisualStatusRead()
+    teachingRun.value = null
+    visualEnrichmentRun.value = null
+    missingVisualRunRefreshes.value = 0
+    visualRefreshFailures.value = 0
+    visualLessonSettlingReads.value = 0
+    visualLessonUnacceptedSnapshots.value = 0
+    visualDiscoveryScope = null
+    observedTerminalVisualRunId = null
+    visualIdentityBlocked.value = false
+  }
 }
 
 const activeGenerationRunId = computed(() => {
@@ -1156,7 +1451,22 @@ function scheduleJourney(delay: number) {
   const generationStillRunning = Boolean(plan.value && !teachingRun.value)
     || teachingRunIsActive(teachingRun.value?.run.state)
     || teachingLessonNeedsFinalSnapshot(teachingRun.value?.run.state, lesson.value?.status)
-  if (current.state === 'complete' || current.state === 'failed' || current.state === 'ready' && !generationStillRunning) return
+  const visualSnapshotStillRunning = visualEnrichmentActive.value
+    ? !visualIdentityBlocked.value
+      && visualRefreshFailures.value < VISUAL_REFRESH_FAILURE_LIMIT
+      && missingVisualRunRefreshes.value < VISUAL_RUN_DISCOVERY_LIMIT
+    : (visualRunDiscoveryExpected.value
+      && !visualEnrichmentRun.value
+      && !visualIdentityBlocked.value
+      && visualRefreshFailures.value < VISUAL_REFRESH_FAILURE_LIMIT
+      && missingVisualRunRefreshes.value < VISUAL_RUN_DISCOVERY_LIMIT)
+  const visualLessonStillSettling = visualLessonSettlingReads.value > 0
+    && !visualIdentityBlocked.value
+    && visualRefreshFailures.value < VISUAL_REFRESH_FAILURE_LIMIT
+    && visualLessonUnacceptedSnapshots.value < VISUAL_LESSON_UNACCEPTED_LIMIT
+  const visualStillRunning = visualSnapshotStillRunning || visualLessonStillSettling
+  if ((current.state === 'complete' || current.state === 'failed'
+    || current.state === 'ready' && !generationStillRunning) && !visualStillRunning) return
   journeyTimer = setTimeout(() => { void refreshJourney() }, delay)
 }
 
@@ -1229,6 +1539,7 @@ function clearJourneyTimer() {
 
 function resetJourneyState() {
   clearJourneyTimer()
+  cancelVisualStatusRead()
   stopFindingClock(false)
   closeDocumentProgress()
   documentProgressStreamRetryAt = 0
@@ -1250,6 +1561,14 @@ function resetJourneyState() {
   plan.value = null
   teachingRun.value = null
   teachingRunId.value = null
+  visualEnrichmentRun.value = null
+  missingVisualRunRefreshes.value = 0
+  visualRefreshFailures.value = 0
+  visualLessonSettlingReads.value = 0
+  visualLessonUnacceptedSnapshots.value = 0
+  visualDiscoveryScope = null
+  observedTerminalVisualRunId = null
+  visualIdentityBlocked.value = false
   lesson.value = null
   pollingWarning.value = false
   teachingHistoryExpanded.value = false
@@ -1414,6 +1733,7 @@ onMounted(startForCurrentGame)
 onBeforeUnmount(() => {
   sequence += 1
   clearJourneyTimer()
+  cancelVisualStatusRead()
   closeDocumentProgress()
   stopFindingClock(false)
 })
@@ -1606,6 +1926,16 @@ onBeforeUnmount(() => {
           </button>
         </section>
         <p class="mt-4 rounded-xl border border-indigo/10 bg-indigo/5 px-4 py-3 text-xs leading-5 text-ink/60">{{ copy.safe }}</p>
+        <div
+          v-if="visualEnrichmentStatus"
+          data-testid="recommendation-visual-enrichment-status"
+          class="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border px-4 py-3 text-xs font-semibold leading-5"
+          :class="visualEnrichmentFailed || visualRefreshStopped ? 'border-amber-200 bg-amber-50 text-amber-950' : visualEnrichmentActive ? 'border-indigo/20 bg-indigo/5 text-indigo' : 'border-emerald-200 bg-emerald-50 text-emerald-900'"
+          role="status"
+        >
+          <p class="min-w-0 flex-1 break-words">{{ visualEnrichmentStatus }}</p>
+          <button v-if="visualRefreshStopped" type="button" class="min-h-10 shrink-0 rounded-lg border border-current/30 px-3" @click="retryVisualStatus">{{ copy.visualRetry }}</button>
+        </div>
         <p v-if="pollingWarning" class="mt-3 rounded-lg bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-900" role="status">{{ copy.pollingWarning }}</p>
         <div v-if="projection.canReadRulebook" class="mt-4 rounded-xl border border-indigo/15 bg-indigo/5 p-4 text-sm leading-6 text-ink/65">
           <p>{{ projection.canReadLesson ? copy.rulebookAvailable : copy.rulebookReady }}</p>
