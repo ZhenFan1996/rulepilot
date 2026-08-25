@@ -34,6 +34,28 @@ describe('teaching progress', () => {
       .activities).toHaveLength(1)
   })
 
+  it('normalizes first and replacement run snapshots with the last incoming sequence winning', () => {
+    const first = run('run-1', [
+      activity(3, 'composeTeachingSection|1', 'RUNNING'),
+      activity(1, 'searchRuleEvidence|1', 'RUNNING', 'older sequence state'),
+      activity(1, 'searchRuleEvidence|1', 'SUCCEEDED', 'newer sequence state'),
+    ])
+
+    const acceptedFirst = mergeTeachingRunProgress(null, first)!
+    expect(acceptedFirst.activities.map(item => item.sequence)).toEqual([1, 3])
+    expect(acceptedFirst.activities[0]).toMatchObject({ outcome: 'SUCCEEDED', summary: 'newer sequence state' })
+
+    const replacement = run('run-2', [
+      activity(4, 'composeTeachingSection|1', 'RUNNING'),
+      activity(2, 'searchRuleEvidence|1', 'RUNNING'),
+      activity(2, 'searchRuleEvidence|1', 'SUCCEEDED'),
+    ])
+    expect(mergeTeachingRunProgress(acceptedFirst, replacement)!.activities).toMatchObject([
+      { sequence: 2, outcome: 'SUCCEEDED' },
+      { sequence: 4, outcome: 'RUNNING' },
+    ])
+  })
+
   it('keeps the newer run metadata when an older snapshot arrives late', () => {
     const current = run('run-1', [activity(2, 'publishTeachingSection|1', 'SUCCEEDED')])
     current.run.state = 'COMPLETED'
@@ -167,22 +189,72 @@ describe('teaching progress', () => {
     const steps = recentTeachingPreparationActivitySteps(activities)
 
     expect(steps.map(step => step.text)).toEqual([
-      '正在逐字识别图像规则页第 3 / 16 页',
-      '正在整理图像规则页第 3 / 16 页的规则组',
+      '图像规则页第 3 / 16 页的逐字识别完成',
+      '图像规则页第 3 / 16 页的规则整理完成',
       '正在通读规则书，先形成整局认识再规划讲解章节',
       '正在检查章节规划有没有漏掉规则内容',
     ])
     expect(JSON.stringify(steps)).not.toMatch(/organizeTeachingOutline|refineTeachingOutlineCoverage|internalOutlineTelemetry/)
   })
 
-  it('shows the exact visual page that needs another pass without exposing operation names', () => {
-    const activities = [activity(1, 'inspectTeachingVisualPage|7|16', 'FAILED')]
+  it('keeps unsuccessful first page attempts neutral without declaring a task retry', () => {
+    const activities = [
+      activity(1, 'inspectTeachingVisualPage|7|16', 'FAILED'),
+      activity(2, 'inspectTeachingVisualPage|8|16', 'REJECTED'),
+    ]
 
     expect(recentTeachingPreparationActivitySteps(activities).map(step => step.text)).toEqual([
-      '图像规则页第 7 / 16 页的规则整理需要重试',
+      '图像规则页第 7 / 16 页的规则整理本次未完成',
+      '图像规则页第 8 / 16 页的规则整理本次校验未通过',
     ])
     expect(recentTeachingPreparationActivitySteps(activities, 'en').map(step => step.text)).toEqual([
-      'Rule grouping for visual rulebook page 7 of 16 needs another pass',
+      'Rule grouping for visual rulebook page 7 of 16 did not complete this time',
+      'Rule grouping for visual rulebook page 8 of 16 did not pass validation this time',
+    ])
+    expect(JSON.stringify(recentTeachingPreparationActivitySteps(activities))).not.toContain('需要重试')
+  })
+
+  it('names reprocessing only when a retry activity was actually emitted', () => {
+    const activities = [
+      activity(1, 'inspectTeachingVisualRetry|7|16', 'RUNNING'),
+      activity(2, 'inspectTeachingVisualRetry|8|16', 'SUCCEEDED'),
+      activity(3, 'inspectTeachingVisualRetry|9|16', 'FAILED'),
+      activity(4, 'inspectTeachingVisualRetry|10|16', 'REJECTED'),
+    ]
+
+    expect(recentTeachingPreparationActivitySteps(activities).map(step => step.text)).toEqual([
+      '临时服务异常，正在重试图像规则页第 7 / 16 页的规则整理',
+      '图像规则页第 8 / 16 页的规则整理在临时服务异常后重试完成',
+      '图像规则页第 9 / 16 页的规则整理在临时服务异常后重试仍未完成',
+      '图像规则页第 10 / 16 页的规则整理在临时服务异常后重试仍未通过校验',
+    ])
+    expect(recentTeachingPreparationActivitySteps(activities, 'en').map(step => step.text)).toEqual([
+      'A temporary service error occurred; retrying rule grouping for visual rulebook page 7 of 16',
+      'Rule grouping retry completed after a temporary service error for visual rulebook page 8 of 16',
+      'Rule grouping retry for visual rulebook page 9 of 16 still did not complete after a temporary service error',
+      'Rule grouping retry for visual rulebook page 10 of 16 did not pass validation after a temporary service error',
+    ])
+  })
+
+  it('explains validator-owned page repair without presenting it as a transport retry', () => {
+    const activities = [
+      activity(1, 'inspectTeachingVisualRepair|7|16|MALFORMED_JSON', 'RUNNING'),
+      activity(2, 'inspectTeachingVisualRepair|8|16|DUPLICATE_RULE_GROUP', 'SUCCEEDED'),
+      activity(3, 'inspectTeachingVisualRepair|9|16|PAGE_BINDING_MISMATCH', 'FAILED'),
+      activity(4, 'inspectTeachingVisualRepair|10|16|SCHEMA_MISMATCH', 'REJECTED'),
+    ]
+
+    expect(recentTeachingPreparationActivitySteps(activities).map(step => step.text)).toEqual([
+      '返回格式没有通过校验，正在修正图像规则页第 7 / 16 页的规则整理',
+      '图像规则页第 8 / 16 页的规则整理修正完成',
+      '图像规则页第 9 / 16 页的规则整理经过一次修正后仍未完成',
+      '图像规则页第 10 / 16 页的规则整理经过一次修正后仍未通过校验',
+    ])
+    expect(recentTeachingPreparationActivitySteps(activities, 'en').map(step => step.text)).toEqual([
+      'The returned format did not pass validation; correcting the rule grouping for visual rulebook page 7 of 16',
+      'Rule grouping correction completed for visual rulebook page 8 of 16',
+      'Rule grouping for visual rulebook page 9 of 16 still did not complete after one correction',
+      'Rule grouping for visual rulebook page 10 of 16 still did not pass validation after one correction',
     ])
   })
 
@@ -208,8 +280,8 @@ describe('teaching progress', () => {
     const steps = recentTeachingPreparationActivitySteps(activities)
 
     expect(steps).toHaveLength(32)
-    expect(steps[0]?.text).toBe('正在逐字识别图像规则页第 1 / 16 页')
-    expect(steps.at(-1)?.text).toBe('正在整理图像规则页第 16 / 16 页的规则组')
+    expect(steps[0]?.text).toBe('图像规则页第 1 / 16 页的逐字识别完成')
+    expect(steps.at(-1)?.text).toBe('图像规则页第 16 / 16 页的规则整理完成')
   })
 
   it('shows a repair only when the backend actually emitted one', () => {

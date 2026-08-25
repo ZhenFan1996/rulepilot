@@ -76,6 +76,7 @@ class JpaOfficialRulebookImportJobRepositoryPostgresTest {
     @BeforeEach
     void clearImportJobs() {
         jdbc.update("DELETE FROM official_rulebook_import_job");
+        jdbc.update("DELETE FROM uploaded_rulebook_teaching_handoff");
         jdbc.update("DELETE FROM assistant_run WHERE owner_username = 'official-handoff-player'");
         jdbc.update("DELETE FROM document_version WHERE object_key LIKE 'official-handoff-test/%'");
         jdbc.update("DELETE FROM rule_document WHERE created_by IN ('official-handoff-player', 'other-identity-player')");
@@ -506,6 +507,49 @@ class JpaOfficialRulebookImportJobRepositoryPostgresTest {
                         Integer.class,
                         dismissedVersionId))
                 .isOne();
+    }
+
+    @Test
+    void deletingAnImportedDocumentAlsoRemovesItsCompletedImportAndTeachingHandoffs() {
+        Instant now = Instant.parse("2026-08-10T03:30:00Z");
+        UUID versionId = insertDocument("delete-import", "READY", now);
+        UUID documentId = jdbc.queryForObject(
+                "SELECT document_id FROM document_version WHERE id = ?", UUID.class, versionId);
+        UUID jobId = insertCompletedTeachingJob(versionId, now);
+        UUID runId = UUID.randomUUID();
+        UUID uploadHandoffId = UUID.randomUUID();
+        insertPreparationRun(runId, versionId, "COMPLETED", now.plusSeconds(1));
+        jdbc.update(
+                """
+                INSERT INTO uploaded_rulebook_teaching_handoff (
+                    id, document_version_id, owner_username, state, preparation_run_id,
+                    created_at, updated_at
+                ) VALUES (?, ?, 'official-handoff-player', 'LAUNCHED', ?, ?, ?)
+                """,
+                uploadHandoffId,
+                versionId,
+                runId,
+                OffsetDateTime.ofInstant(now.plusSeconds(1), ZoneOffset.UTC),
+                OffsetDateTime.ofInstant(now.plusSeconds(1), ZoneOffset.UTC));
+
+        inDocumentTransactionReturning(repository -> {
+            repository.deleteDocument(documentId);
+            return null;
+        });
+
+        assertThat(jdbc.queryForObject(
+                        "SELECT count(*) FROM official_rulebook_import_job WHERE id = ?", Integer.class, jobId))
+                .isZero();
+        assertThat(jdbc.queryForObject(
+                        "SELECT count(*) FROM uploaded_rulebook_teaching_handoff WHERE id = ?",
+                        Integer.class,
+                        uploadHandoffId))
+                .isZero();
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM assistant_run WHERE id = ?", Integer.class, runId))
+                .isZero();
+        assertThat(jdbc.queryForObject(
+                        "SELECT count(*) FROM rule_document WHERE id = ?", Integer.class, documentId))
+                .isZero();
     }
 
     private static UUID insertFailedDocument(Instant now) {

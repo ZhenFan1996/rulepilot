@@ -173,7 +173,7 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   invalidChapter: (titles: string) => `“${titles}”的草稿没有通过引用或结构校验，因此没有发布；其他已校验章节仍可阅读。`,
   retry: '重试当前步骤', pause: '暂停生成', resume: '继续生成', remove: '删除讲解', removeConfirm: '确认删除这份讲解及其生成任务？规则书会保留，已生成章节会被删除。', removeYes: '确认删除', removeNo: '先保留', close: '关闭小窗', change: '换一款',
   safe: '可以关闭这个小窗继续聊天；下载和讲解会继续。关闭后，页面上的“讲解状态”入口会一直显示，也可以随时打开“我的讲解”。',
-  progress: '完整链路进度', current: '现在正在做', generationSteps: '讲解生成步骤', generationLatest: '最新实际进度', generationProcessHint: '真实后台活动会在下方逐条追加；进入逐章生成后，第 4～7 步会按章节重复。', planning: '规划中', pollingWarning: '暂时没有拿到最新进度，正在自动重试；已确认的进度不会倒退。',
+  progress: '完整链路进度', current: '现在正在做', generationSteps: '讲解生成步骤', generationLatest: '最新实际进度', generationProcessHint: '真实后台活动会在下方逐条追加；进入逐章生成后，第 4～7 步会按章节重复。', generationAttemptHint: '单页本次未完成不等于整份讲解失败：逐字识别失败时只让该页退回原图；规则整理遇到被明确分类为临时服务异常时，原请求重试一次；返回格式、字段结构、重复规则组或页码绑定未通过时，会按失败类型修正一次。超时、中断、取消、预算耗尽、权限或参数错误、未知程序异常和保存失败都不会盲目重试。已确认页面始终保留。只有最终找不到可引用规则、章节规划或首章无法安全完成、运行预算或时限耗尽、服务无法继续，或任务被取消时，整次任务才会停下；上方会单独说明下一步。', generationShowHistory: (count: number) => `展开另外 ${count} 条历史`, generationHideHistory: '收起历史', planning: '规划中', pollingWarning: '暂时没有拿到最新进度，正在自动重试；已确认的进度不会倒退。',
   generationProcess: [
     '图片规则书先逐页识别可见文字；文字版直接读取原文',
     '按页面整理规则组，并记录规则书要求的外部资料',
@@ -246,7 +246,7 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   invalidChapter: (titles: string) => `The draft for “${titles}” did not pass citation or structure checks, so it was not published. Other validated chapters remain readable.`,
   retry: 'Retry this step', pause: 'Pause generation', resume: 'Resume generation', remove: 'Delete guide', removeConfirm: 'Delete this guide and its generation work? The rulebook stays, but published chapters are removed.', removeYes: 'Delete guide', removeNo: 'Keep it', close: 'Close', change: 'Choose another game',
   safe: 'You may close this panel and keep chatting. Download and guide generation will continue. The “Guide status” shortcut stays visible, and My guides is always available.',
-  progress: 'End-to-end progress', current: 'Working on', generationSteps: 'Guide generation steps', generationLatest: 'Latest actual progress', generationProcessHint: 'Real background activities are appended below. Once chapter writing starts, steps 4–7 repeat for each chapter.', planning: 'Planning', pollingWarning: 'The latest update is temporarily unavailable. Retrying automatically without rolling back confirmed progress.',
+  progress: 'End-to-end progress', current: 'Working on', generationSteps: 'Guide generation steps', generationLatest: 'Latest actual progress', generationProcessHint: 'Real background activities are appended below. Once chapter writing starts, steps 4–7 repeat for each chapter.', generationAttemptHint: 'A page not completing this time does not mean the whole guide failed: a transcription failure falls back to that page image; a rule-catalog request explicitly classified as a temporary service error is replayed once; and invalid formatting, fields, duplicate rule groups, or page binding receive one typed correction. Timeouts, interruption, cancellation, exhausted budgets, authorization or parameter errors, unknown program failures, and storage failures are never replayed blindly. Confirmed pages stay available. The whole task stops only when no citable rule remains, chapter planning or the first chapter cannot complete safely, the execution budget or deadline is exhausted, the service cannot continue, or the task is cancelled; a separate message above then explains the next action.', generationShowHistory: (count: number) => `Show ${count} earlier activities`, generationHideHistory: 'Hide earlier activities', planning: 'Planning', pollingWarning: 'The latest update is temporarily unavailable. Retrying automatically without rolling back confirmed progress.',
   generationProcess: [
     'Transcribe each image-only page; read the original text directly when a text layer is available',
     'Organise each page into rule groups and record any external material the rulebook requires',
@@ -481,9 +481,23 @@ const teachingJourneyPhases = new Set([
   'TEACHING_PREPARATION_QUEUED', 'TEACHING_PREPARING', 'LESSON_GENERATION_QUEUED',
   'LESSON_GENERATING', 'LESSON_READABLE', 'LESSON_COMPLETE',
 ])
-const showTeachingGenerationSteps = computed(() => teachingJourneyPhases.has(projection.value.phase))
+const showTeachingGenerationSteps = computed(() => teachingJourneyPhases.has(projection.value.phase)
+  || projection.value.phase === 'FAILED' && Boolean(
+    projection.value.canReadRulebook || preparationRun.value || plan.value || teachingRun.value,
+  ))
+const teachingHistoryExpanded = ref(false)
+const teachingHistoryPreviewLimit = 5
+const hiddenJourneyTeachingStepCount = computed(() => Math.max(
+  0,
+  journeyTeachingSteps.value.length - teachingHistoryPreviewLimit,
+))
 const visibleJourneyTeachingSteps = computed(() => {
-  if (journeyTeachingSteps.value.length) return [...journeyTeachingSteps.value].reverse()
+  if (journeyTeachingSteps.value.length) {
+    const newestFirst = [...journeyTeachingSteps.value].reverse()
+    return teachingHistoryExpanded.value
+      ? newestFirst
+      : newestFirst.slice(0, teachingHistoryPreviewLimit)
+  }
   const phase = projection.value.phase
   const preparationState = preparationRun.value?.run.state
   let text = copy.value.generationFallback.queued
@@ -1238,6 +1252,7 @@ function resetJourneyState() {
   teachingRunId.value = null
   lesson.value = null
   pollingWarning.value = false
+  teachingHistoryExpanded.value = false
   ensuredLessonPlans.clear()
 }
 
@@ -1524,6 +1539,21 @@ onBeforeUnmount(() => {
         <div v-if="journeyProgressValue !== null" class="mt-3 h-2 overflow-hidden rounded-full bg-copper/10" role="progressbar" :aria-label="copy.progress" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="journeyProgressValue">
           <div class="h-full rounded-full bg-copper transition-[width] duration-500" :style="{ width: `${journeyProgressValue}%` }" />
         </div>
+        <div v-if="projection.state === 'failed' || projection.canReadLesson && projection.retryAction" data-testid="recommendation-journey-terminal-alert" class="mt-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800" role="alert">
+          <template v-if="importJob?.stage === 'FAILED'">
+            <p class="leading-6">{{ importFailureDetail }}</p>
+            <div class="mt-3 flex flex-wrap gap-3">
+              <button v-if="importJob.recovery?.canChooseAnotherSource !== false" type="button" class="min-h-11 rounded-lg bg-indigo px-4 font-semibold text-white" @click="reviewAnotherSource">{{ copy.chooseAnotherSource }}</button>
+              <RouterLink v-if="importJob.recovery?.canUseLocalUpload !== false" :to="manualRoute" class="inline-flex min-h-11 items-center rounded-lg border border-indigo/25 px-4 font-semibold text-indigo underline" @click="reviewAnotherSource">{{ copy.manual }} →</RouterLink>
+              <a v-if="importJob.recovery?.canOpenSourceInBrowser && selected" :href="selected.url" target="_blank" rel="noopener noreferrer" class="inline-flex min-h-11 items-center font-semibold text-indigo underline">{{ copy.browserAction }} ↗</a>
+              <button v-if="importJob.recovery?.canRetryOriginalSource" type="button" :disabled="retrying" class="min-h-11 rounded-lg border border-red-300 px-4 font-semibold disabled:opacity-40" @click="retryJourney">{{ copy.retryOriginalSource }}</button>
+            </div>
+          </template>
+          <template v-else>
+            <p>{{ projection.canReadLesson ? teachingFailureDetail : copy.error }}</p>
+            <button v-if="projection.retryAction" type="button" :disabled="retrying" class="mt-2 min-h-11 font-semibold underline disabled:opacity-40" @click="retryJourney">{{ copy.retry }}</button>
+          </template>
+        </div>
         <ol class="mt-4 grid grid-cols-2 gap-2 text-xs sm:grid-cols-5" :aria-label="copy.progress">
           <li v-for="milestone in milestones" :key="milestone.label" :data-fact-confirmed="milestone.done ? 'true' : 'false'" class="rounded-lg border px-2.5 py-2" :class="milestone.done ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : milestone.active ? 'border-copper/30 bg-copper/5 font-semibold text-copper' : 'border-ink/8 bg-paper text-ink/40'">
             <span class="mr-1" aria-hidden="true">{{ milestone.done ? '✓' : milestone.active ? '●' : '○' }}</span>{{ milestone.label }}
@@ -1549,7 +1579,8 @@ onBeforeUnmount(() => {
             </li>
           </ol>
           <p class="mt-3 text-[11px] font-bold uppercase tracking-[0.08em] text-ink/45">{{ copy.generationLatest }}</p>
-          <ol class="mt-2 grid max-h-72 gap-2 overflow-y-auto pr-1 sm:grid-cols-2">
+          <p class="mt-1 text-xs leading-5 text-ink/50">{{ copy.generationAttemptHint }}</p>
+          <ol data-testid="recommendation-teaching-activity-list" class="mt-2 grid max-h-72 gap-2 overflow-y-auto pr-1 sm:grid-cols-2">
             <li
               v-for="step in visibleJourneyTeachingSteps"
               :key="step.key"
@@ -1563,27 +1594,22 @@ onBeforeUnmount(() => {
               <span>{{ step.text }}</span>
             </li>
           </ol>
+          <button
+            v-if="hiddenJourneyTeachingStepCount > 0"
+            type="button"
+            data-testid="recommendation-teaching-history-toggle"
+            class="mt-3 min-h-11 text-xs font-semibold text-indigo underline underline-offset-2"
+            :aria-expanded="teachingHistoryExpanded"
+            @click="teachingHistoryExpanded = !teachingHistoryExpanded"
+          >
+            {{ teachingHistoryExpanded ? copy.generationHideHistory : copy.generationShowHistory(hiddenJourneyTeachingStepCount) }}
+          </button>
         </section>
         <p class="mt-4 rounded-xl border border-indigo/10 bg-indigo/5 px-4 py-3 text-xs leading-5 text-ink/60">{{ copy.safe }}</p>
         <p v-if="pollingWarning" class="mt-3 rounded-lg bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-900" role="status">{{ copy.pollingWarning }}</p>
         <div v-if="projection.canReadRulebook" class="mt-4 rounded-xl border border-indigo/15 bg-indigo/5 p-4 text-sm leading-6 text-ink/65">
           <p>{{ projection.canReadLesson ? copy.rulebookAvailable : copy.rulebookReady }}</p>
           <button type="button" class="mt-3 min-h-11 rounded-lg border border-indigo/25 px-4 font-semibold text-indigo" @click="emit('open-rulebook', journeyStatus)">{{ copy.readRulebook }}</button>
-        </div>
-        <div v-if="projection.state === 'failed' || projection.canReadLesson && projection.retryAction" class="mt-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800" role="alert">
-          <template v-if="importJob?.stage === 'FAILED'">
-            <p class="leading-6">{{ importFailureDetail }}</p>
-            <div class="mt-3 flex flex-wrap gap-3">
-              <button v-if="importJob.recovery?.canChooseAnotherSource !== false" type="button" class="min-h-11 rounded-lg bg-indigo px-4 font-semibold text-white" @click="reviewAnotherSource">{{ copy.chooseAnotherSource }}</button>
-              <RouterLink v-if="importJob.recovery?.canUseLocalUpload !== false" :to="manualRoute" class="inline-flex min-h-11 items-center rounded-lg border border-indigo/25 px-4 font-semibold text-indigo underline" @click="reviewAnotherSource">{{ copy.manual }} →</RouterLink>
-              <a v-if="importJob.recovery?.canOpenSourceInBrowser && selected" :href="selected.url" target="_blank" rel="noopener noreferrer" class="inline-flex min-h-11 items-center font-semibold text-indigo underline">{{ copy.browserAction }} ↗</a>
-              <button v-if="importJob.recovery?.canRetryOriginalSource" type="button" :disabled="retrying" class="min-h-11 rounded-lg border border-red-300 px-4 font-semibold disabled:opacity-40" @click="retryJourney">{{ copy.retryOriginalSource }}</button>
-            </div>
-          </template>
-          <template v-else>
-            <p>{{ projection.canReadLesson ? teachingFailureDetail : copy.error }}</p>
-            <button v-if="projection.retryAction" type="button" :disabled="retrying" class="mt-2 min-h-11 font-semibold underline disabled:opacity-40" @click="retryJourney">{{ copy.retry }}</button>
-          </template>
         </div>
         <div v-if="projection.canReadLesson" class="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm leading-6 text-emerald-900">
           <p>{{ projection.state === 'complete' ? copy.complete : copy.readable }}</p>

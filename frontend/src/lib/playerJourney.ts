@@ -175,15 +175,20 @@ export function derivePlayerJourney(input: PlayerJourneyInput): PlayerJourneyPro
 
   if (canReadLesson) {
     const fullyComplete = input.lesson?.status === 'COMPLETE' && teachingState === 'COMPLETED'
-    const retryTeaching = input.importJob?.teachingNextAction === 'RETRY_TEACHING'
-      || input.importJob?.teachingNextAction === undefined && FAILED_RUN_STATES.has(teachingState ?? '')
+    const teachingRunStopped = FAILED_RUN_STATES.has(teachingState ?? '')
+    const retryTeaching = !fullyComplete && (
+      teachingRunStopped || input.importJob?.teachingNextAction === 'RETRY_TEACHING'
+    )
     return projection({
       phase: fullyComplete ? 'LESSON_COMPLETE' : 'LESSON_READABLE',
       state: fullyComplete ? 'complete' : 'ready',
       progress: fullyComplete ? 100 : lessonProgress(availableSections, totalSections),
       retryAction: retryTeaching ? 'GENERATE_LESSON' : null,
       errorCode: retryTeaching
-        ? input.teachingRun?.run.lastErrorCode ?? teachingState
+        ? input.teachingRun?.run.lastErrorCode
+          ?? input.importJob?.teachingErrorCode
+          ?? teachingState
+          ?? 'TEACHING_RUN_FAILED'
         : null,
       canReadRulebook,
       canReadLesson: true,
@@ -380,18 +385,31 @@ export function acceptImportJob(
 }
 
 export function acceptJourneyRun(previous: PlayerJourneyRun | null, incoming: PlayerJourneyRun) {
-  if (!previous || previous.run.id !== incoming.run.id) return incoming
+  if (!previous || previous.run.id !== incoming.run.id) return normalizeJourneyRun(incoming)
   const previousRevision = previous.run.revision ?? 0
   const incomingRevision = incoming.run.revision ?? 0
   if (previousRevision > incomingRevision) return previous
   if (isTerminalRun(previous.run.state) && !isTerminalRun(incoming.run.state)) return previous
   return {
     ...incoming,
-    activities: Array.from(new Map(
-      [...(previous.activities ?? []), ...(incoming.activities ?? [])]
-        .map(activity => [activity.sequence, activity]),
-    ).values()).sort((left, right) => left.sequence - right.sequence),
+    activities: normalizeJourneyActivities([
+      ...(previous.activities ?? []),
+      ...(incoming.activities ?? []),
+    ]),
   }
+}
+
+function normalizeJourneyRun(run: PlayerJourneyRun): PlayerJourneyRun {
+  return {
+    ...run,
+    activities: run.activities ? normalizeJourneyActivities(run.activities) : run.activities,
+  }
+}
+
+function normalizeJourneyActivities(activities: NonNullable<PlayerJourneyRun['activities']>) {
+  return Array.from(new Map(
+    activities.map(activity => [activity.sequence, activity]),
+  ).values()).sort((left, right) => left.sequence - right.sequence)
 }
 
 function isTerminalImport(job: PlayerJourneyImportJob) {

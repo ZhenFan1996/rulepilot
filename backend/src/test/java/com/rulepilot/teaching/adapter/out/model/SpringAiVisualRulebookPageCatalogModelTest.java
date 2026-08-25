@@ -20,6 +20,8 @@ import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IconCropDecision;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageTranscript;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.SourceDependency;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.TeachingCatalogContractViolation;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.TeachingCatalogRepairCode;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.TeachingPageRole;
 import com.rulepilot.teaching.VisualQuantityObservation.QuantityResolution;
 import com.rulepilot.teaching.VisualQuantityObservation.QuantifierScope;
@@ -698,6 +700,97 @@ class SpringAiVisualRulebookPageCatalogModelTest {
                         "玩家分数：9、13、16",
                         "门槛：33",
                         "Do not replace transcript digits with a calculated or inferred value"));
+    }
+
+    @Test
+    void classifiesEveryTeachingCatalogValidatorFailureAndAllowsRepeatedLabelsWithDifferentFacts() {
+        assertTeachingViolation(
+                () -> SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalogV6("not JSON"),
+                TeachingCatalogRepairCode.MALFORMED_JSON);
+        assertTeachingViolation(
+                () -> SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalogV6("""
+                        {"pages":[{"pageNumber":1,"printedTerms":"SETUP","keywords":[],
+                        "externalDocumentDependencies":[],"ruleGroups":[],
+                        "ruleGroupInventoryComplete":true}]}
+                        """),
+                TeachingCatalogRepairCode.SCHEMA_MISMATCH);
+        assertTeachingViolation(
+                () -> SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalogV6("""
+                        {"pages":[{"pageNumber":1,"printedTerms":["MOVE"],"keywords":[],
+                        "externalDocumentDependencies":[],"ruleGroups":[
+                        {"identifier":"MOVE","fact":"Move one pawn.","quantitySpans":[]},
+                        {"identifier":"MOVE","fact":"Move one pawn.","quantitySpans":[]}],
+                        "ruleGroupInventoryComplete":true}]}
+                        """),
+                TeachingCatalogRepairCode.DUPLICATE_RULE_GROUP);
+
+        CatalogDraft repeatedLabelWithDistinctFacts = SpringAiVisualRulebookPageCatalogModel.parseTeachingCatalogV6("""
+                {"pages":[{"pageNumber":1,"printedTerms":["MOVE"],"keywords":[],
+                "externalDocumentDependencies":[],"ruleGroups":[
+                {"identifier":"MOVE","fact":"Move one pawn.","quantitySpans":[]},
+                {"identifier":"MOVE","fact":"Move a second pawn.","quantitySpans":[]}],
+                "ruleGroupInventoryComplete":true}]}
+                """);
+        assertThat(repeatedLabelWithDistinctFacts.pages().getFirst().ruleGroupFacts()).hasSize(2);
+
+        CatalogRequest request = new CatalogRequest(
+                List.of(new PageImageInput(1, "image/png", new byte[] {1})), "owner", "Example Game");
+        assertTeachingViolation(
+                () -> SpringAiVisualRulebookPageCatalogModel.normalizeTeachingPageBindings(
+                        request,
+                        new CatalogDraft(List.of(new PageSummary(
+                                2, "SETUP", "Visible setup rule.", List.of("setup"))))),
+                TeachingCatalogRepairCode.PAGE_BINDING_MISMATCH);
+    }
+
+    @Test
+    void repairUsesOneFixedExhaustiveInstructionPerCodeWithoutRawOutputOrExceptionText() throws IOException {
+        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        ChatModel chatModel = mock(ChatModel.class);
+        OpenAiChatOptions defaults = OpenAiChatOptions.builder().model("qwen3.7-plus").build();
+        when(configuration.usesFake(Role.VISUAL, "owner")).thenReturn(false);
+        when(configuration.supportsVision(Role.VISUAL, "owner")).thenReturn(true);
+        when(configuration.providerFor(Role.VISUAL, "owner")).thenReturn("qwen");
+        when(configuration.modelNameFor(Role.VISUAL, "owner")).thenReturn("qwen3.7-plus");
+        when(configuration.modelFor(Role.VISUAL, "owner")).thenReturn(chatModel);
+        when(chatModel.getDefaultOptions()).thenReturn(defaults);
+        when(chatModel.getOptions()).thenReturn(defaults);
+        when(chatModel.call(any(Prompt.class))).thenReturn(response("""
+                {"pages":[{"pageNumber":1,"printedTerms":["SETUP"],"keywords":["setup"],
+                "externalDocumentDependencies":[],"ruleGroups":[
+                {"identifier":"SETUP","fact":"Place the board.","quantitySpans":[]}],
+                "ruleGroupInventoryComplete":true}]}
+                """));
+        SpringAiVisualRulebookPageCatalogModel model = model(configuration);
+        CatalogRequest request = new CatalogRequest(
+                List.of(new PageImageInput(1, "image/png", png())),
+                "owner",
+                "Example Game",
+                List.of(new PageTranscript(1, "Literal setup text")));
+        String rawFailure = "RAW_PROVIDER_OUTPUT_MUST_NOT_ENTER_REPAIR";
+
+        for (TeachingCatalogRepairCode code : TeachingCatalogRepairCode.values()) {
+            TeachingCatalogContractViolation violation =
+                    new TeachingCatalogContractViolation(code, new IllegalArgumentException(rawFailure));
+            model.repairTeachingCatalog(request, violation.repairCode());
+        }
+
+        ArgumentCaptor<Prompt> prompts = ArgumentCaptor.forClass(Prompt.class);
+        verify(chatModel, times(4)).call(prompts.capture());
+        List<String> repairPrompts = prompts.getAllValues().stream()
+                .map(prompt -> prompt.getInstructions().stream()
+                        .map(message -> message.getText())
+                        .collect(java.util.stream.Collectors.joining("\n")))
+                .toList();
+        assertThat(repairPrompts).noneMatch(text -> text.contains(rawFailure));
+        assertThat(repairPrompts).anySatisfy(text -> assertThat(text).contains(
+                "exactly one syntactically valid JSON object"));
+        assertThat(repairPrompts).anySatisfy(text -> assertThat(text).contains(
+                "exactly the declared root, page, rule-group, dependency, and quantity-span fields"));
+        assertThat(repairPrompts).anySatisfy(text -> assertThat(text).contains(
+                "each exact identifier-and-fact tuple at most once"));
+        assertThat(repairPrompts).anySatisfy(text -> assertThat(text).contains(
+                "copy its supplied pageNumber exactly"));
     }
 
     @Test
@@ -1811,5 +1904,13 @@ class SpringAiVisualRulebookPageCatalogModelTest {
         } catch (com.fasterxml.jackson.core.JsonProcessingException exception) {
             throw new AssertionError(exception);
         }
+    }
+
+    private static void assertTeachingViolation(
+            org.assertj.core.api.ThrowableAssert.ThrowingCallable invocation,
+            TeachingCatalogRepairCode expectedCode) {
+        assertThatThrownBy(invocation).isInstanceOfSatisfying(
+                TeachingCatalogContractViolation.class,
+                violation -> assertThat(violation.repairCode()).isEqualTo(expectedCode));
     }
 }

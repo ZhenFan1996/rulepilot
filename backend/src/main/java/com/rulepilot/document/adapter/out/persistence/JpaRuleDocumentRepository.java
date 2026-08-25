@@ -295,6 +295,21 @@ public class JpaRuleDocumentRepository implements RuleDocumentRepository {
 
     @Override
     public void deleteDocument(UUID documentId) {
+        // A completed import must retain its document-version binding, so PostgreSQL cannot apply the FK's SET NULL
+        // action while deleting the document. Import and upload handoffs are part of the owned document lifecycle and
+        // must leave first; this also releases their optional preparation-run references before run cleanup below.
+        entityManager.createNativeQuery("""
+                        delete from official_rulebook_import_job
+                        where document_version_id in (select id from document_version where document_id = :documentId)
+                        """)
+                .setParameter("documentId", documentId)
+                .executeUpdate();
+        entityManager.createNativeQuery("""
+                        delete from uploaded_rulebook_teaching_handoff
+                        where document_version_id in (select id from document_version where document_id = :documentId)
+                        """)
+                .setParameter("documentId", documentId)
+                .executeUpdate();
         entityManager.createNativeQuery("""
                         delete from outbox_event
                         where aggregate_type = 'DOCUMENT_VERSION'

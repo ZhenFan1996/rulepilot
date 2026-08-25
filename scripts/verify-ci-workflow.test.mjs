@@ -22,6 +22,10 @@ const productionOrdinaryUserWorkflow = await readFile(
   new URL('../.github/workflows/production-ordinary-user-smoke.yml', import.meta.url),
   'utf8',
 )
+const productionOrdinaryUserSmokeScript = await readFile(
+  new URL('./smoke-production-ordinary-user.sh', import.meta.url),
+  'utf8',
+)
 const productionRealRulebookWorkflow = await readFile(
   new URL('../.github/workflows/production-real-rulebook-experience.yml', import.meta.url),
   'utf8',
@@ -209,6 +213,37 @@ test('failed ordinary-user production journeys retain bounded API and worker dia
   assert.match(productionOrdinaryUserWorkflow, /logs --since 35m --tail 500 --no-color worker/)
   assert.match(productionOrdinaryUserWorkflow, /Refusing to inspect an active release outside/)
   assert.doesNotMatch(productionOrdinaryUserWorkflow, /(?:cat|sed|grep|rg) [^\n]*\.env/)
+})
+
+test('ordinary-user production smoke can exercise one fresh official image gallery without uploading it', () => {
+  assert.match(productionOrdinaryUserWorkflow,
+    /source_mode:[\s\S]*?options:\s*\n\s+- upload\s*\n\s+- official_image_gallery/)
+  assert.match(productionOrdinaryUserWorkflow,
+    /if \[\[ "\$RULEBOOK_SOURCE_MODE" == official_image_gallery \]\]; then[\s\S]*?exit 0/)
+  assert.match(productionOrdinaryUserWorkflow,
+    /--source-mode official_image_gallery[\s\S]*?--bgg-id "\$RULEBOOK_BGG_ID"/)
+  assert.match(productionOrdinaryUserWorkflow,
+    /--expected-page-count "\$RULEBOOK_EXPECTED_PAGE_COUNT"[\s\S]*?--language "\$RULEBOOK_LANGUAGE"/)
+  assert.match(productionOrdinaryUserWorkflow,
+    /--canary-id "\$\{GITHUB_RUN_ID\}-\$\{GITHUB_RUN_ATTEMPT\}"/)
+  assert.match(productionOrdinaryUserWorkflow,
+    /rights_confirmed:[\s\S]*?default: false[\s\S]*?type: boolean/)
+  assert.match(productionOrdinaryUserWorkflow,
+    /RULEBOOK_RIGHTS_CONFIRMED: \$\{\{ inputs\.rights_confirmed \}\}/)
+  assert.match(productionOrdinaryUserWorkflow,
+    /\[\[ "\$RULEBOOK_RIGHTS_CONFIRMED" == true \]\][\s\S]*?--rights-confirmed/)
+  assert.match(productionOrdinaryUserWorkflow,
+    /else\s*\n\s+smoke_args\+=\(--pdf "\$RUNNER_TEMP\/rulebook\.pdf"\)/)
+  assert.match(productionOrdinaryUserSmokeScript,
+    /canary_title="\$uploaded_title · RulePilot canary \$canary_id"/)
+  assert.match(productionOrdinaryUserSmokeScript,
+    /\.answer\.language == \$language/)
+  assert.match(productionOrdinaryUserSmokeScript,
+    /\.pageTo <= \$expected/)
+  assert.match(productionOrdinaryUserSmokeScript,
+    /inspectTeachingVisualRepair\|/)
+  assert.match(productionOrdinaryUserSmokeScript,
+    /transcribeTeachingVisualPage\|/)
 })
 
 test('production deployment synchronizes the protected BGG credential without packaging or logging it', () => {

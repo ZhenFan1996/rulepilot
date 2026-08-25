@@ -127,6 +127,29 @@ describe('derivePlayerJourney', () => {
     })
   })
 
+  it('keeps an active preparation run active when individual page attempts fail', () => {
+    const preparation = run('LESSON_PLANNING')
+    preparation.activities = Array.from({ length: 8 }, (_, index) => ({
+      sequence: index + 1,
+      operation: `inspectTeachingVisualPage|${index + 1}|20`,
+      summary: `Page ${index + 1} attempt did not complete`,
+      outcome: index % 2 === 0 ? 'FAILED' : 'REJECTED',
+    }))
+
+    expect(derivePlayerJourney(input({
+      gameBound: true,
+      discovery: 'review',
+      importJob: importJob({
+        stage: 'COMPLETED', documentVersionId: 'version-1', teachingHandoffState: 'LAUNCHED',
+        teachingPreparationRunId: 'run-1',
+      }),
+      documentProgress: { stage: 'READY', percentage: 100, processedPages: 20, totalPages: 20, complete: true },
+      preparationRun: preparation,
+    }))).toMatchObject({
+      phase: 'TEACHING_PREPARING', state: 'active', retryAction: null, errorCode: null,
+    })
+  })
+
   it('uses the server recovery action instead of guessing from a failed handoff', () => {
     const recovering = importJob({
       stage: 'COMPLETED', documentVersionId: 'version-1', teachingHandoffState: 'FAILED',
@@ -214,6 +237,40 @@ describe('derivePlayerJourney', () => {
     })
   })
 
+  it('keeps a completed task complete even when its activity history contains failed attempts', () => {
+    const teaching = run('COMPLETED')
+    teaching.activities = [
+      {
+        sequence: 1,
+        operation: 'inspectTeachingVisualPage|7|20',
+        summary: 'First page attempt failed',
+        outcome: 'FAILED',
+      },
+      {
+        sequence: 2,
+        operation: 'inspectTeachingVisualRetry|7|20',
+        summary: 'Page retry completed',
+        outcome: 'SUCCEEDED',
+      },
+    ]
+
+    expect(derivePlayerJourney(input({
+      gameBound: true,
+      importJob: importJob({
+        stage: 'COMPLETED', documentVersionId: 'version-1', teachingHandoffState: 'LAUNCHED',
+        teachingPreparationRunId: 'preparation-1',
+      }),
+      preparationRun: run('COMPLETED'),
+      plan: { id: 'plan-1', documentVersionId: 'version-1', gameTitle: 'Example', premise: 'Learn', sections: [
+        { position: 1, title: 'Setup' },
+      ] },
+      teachingRun: teaching,
+      lesson: { id: 'lesson-1', status: 'COMPLETE', sections: [{ position: 1, title: 'Setup' }] },
+    }))).toMatchObject({
+      phase: 'LESSON_COMPLETE', state: 'complete', retryAction: null, errorCode: null,
+    })
+  })
+
   it('keeps a published draft readable when later review ends degraded', () => {
     const teaching = run('DEGRADED')
     teaching.run.lastErrorCode = 'REVIEW_UNAVAILABLE'
@@ -222,7 +279,7 @@ describe('derivePlayerJourney', () => {
       discovery: 'review',
       importJob: importJob({
         stage: 'COMPLETED', documentVersionId: 'version-1', teachingHandoffState: 'LAUNCHED',
-        teachingPreparationRunId: 'preparation-1',
+        teachingPreparationRunId: 'preparation-1', teachingNextAction: 'OPEN_PROGRESS',
       }),
       preparationRun: run('COMPLETED'),
       plan: { id: 'plan-1', documentVersionId: 'version-1', gameTitle: 'Example', premise: 'Learn', sections: [
@@ -262,5 +319,34 @@ describe('journey snapshot acceptance', () => {
       activities: [{ sequence: 1 }, { sequence: 2 }],
     })
     expect(acceptJourneyRun(incoming, previous)).toEqual(incoming)
+  })
+
+  it('normalizes first and replacement run activities with the last incoming sequence winning', () => {
+    const first = {
+      ...run('LESSON_COMPOSITION'),
+      activities: [
+        { sequence: 3, operation: 'compose', summary: 'Composing', outcome: 'RUNNING' },
+        { sequence: 1, operation: 'search', summary: 'Searching', outcome: 'RUNNING' },
+        { sequence: 1, operation: 'search', summary: 'Found', outcome: 'SUCCEEDED' },
+      ],
+    }
+    expect(acceptJourneyRun(null, first).activities).toMatchObject([
+      { sequence: 1, summary: 'Found', outcome: 'SUCCEEDED' },
+      { sequence: 3, summary: 'Composing', outcome: 'RUNNING' },
+    ])
+
+    const replacement = {
+      ...run('LESSON_PLANNING'),
+      run: { ...run('LESSON_PLANNING').run, id: 'run-2' },
+      activities: [
+        { sequence: 5, operation: 'outline', summary: 'Planning', outcome: 'RUNNING' },
+        { sequence: 2, operation: 'read', summary: 'Reading', outcome: 'RUNNING' },
+        { sequence: 2, operation: 'read', summary: 'Read', outcome: 'SUCCEEDED' },
+      ],
+    }
+    expect(acceptJourneyRun(first, replacement).activities).toMatchObject([
+      { sequence: 2, summary: 'Read', outcome: 'SUCCEEDED' },
+      { sequence: 5, summary: 'Planning', outcome: 'RUNNING' },
+    ])
   })
 })

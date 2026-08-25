@@ -3,8 +3,16 @@ name: Production ordinary-user smoke
 on:
   workflow_dispatch:
     inputs:
+      source_mode:
+        description: Upload a PDF or let production import an ordered image-gallery source
+        required: true
+        default: upload
+        type: choice
+        options:
+          - upload
+          - official_image_gallery
       rulebook_url:
-        description: Optional HTTPS publisher PDF; blank generates the unique CC0 text fixture
+        description: Optional HTTPS publisher PDF, or required canonical gallery URL in official_image_gallery mode
         required: false
         default: ''
         type: string
@@ -18,6 +26,26 @@ on:
         required: false
         default: ''
         type: string
+      bgg_id:
+        description: Positive BGG id required for official_image_gallery mode
+        required: false
+        default: ''
+        type: string
+      expected_page_count:
+        description: Ordered page count required for official_image_gallery mode
+        required: false
+        default: ''
+        type: string
+      language:
+        description: Answer and verified gallery language
+        required: true
+        default: en
+        type: string
+      rights_confirmed:
+        description: Confirm that this production canary may download and process the supplied gallery
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -28,9 +56,9 @@ concurrency:
 
 jobs:
   smoke:
-    name: Upload, teach, verify, and clean up
+    name: Import, teach, verify, and clean up
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 50
     environment:
       name: production
     env:
@@ -43,6 +71,11 @@ jobs:
       RULEBOOK_URL: ${{ inputs.rulebook_url }}
       RULEBOOK_TITLE: ${{ inputs.rulebook_title }}
       RULEBOOK_QUESTION: ${{ inputs.question }}
+      RULEBOOK_SOURCE_MODE: ${{ inputs.source_mode }}
+      RULEBOOK_BGG_ID: ${{ inputs.bgg_id }}
+      RULEBOOK_EXPECTED_PAGE_COUNT: ${{ inputs.expected_page_count }}
+      RULEBOOK_LANGUAGE: ${{ inputs.language }}
+      RULEBOOK_RIGHTS_CONFIRMED: ${{ inputs.rights_confirmed }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -68,10 +101,34 @@ jobs:
           chmod 600 "$HOME/.ssh/id_ed25519"
           chmod 644 "$HOME/.ssh/known_hosts"
 
-      - name: Generate a unique CC0 smoke rulebook
+      - name: Prepare a unique smoke source
         shell: bash
         run: |
           set -Eeuo pipefail
+          if [[ "$RULEBOOK_SOURCE_MODE" == official_image_gallery ]]; then
+            [[ "$RULEBOOK_URL" == https://* ]] || { echo "rulebook_url must use HTTPS" >&2; exit 2; }
+            [[ -n "$RULEBOOK_TITLE" && -n "$RULEBOOK_QUESTION" ]] || {
+              echo "rulebook_title and question are required for an image gallery" >&2
+              exit 2
+            }
+            [[ "$RULEBOOK_BGG_ID" =~ ^[1-9][0-9]*$ ]] || {
+              echo "bgg_id must be a positive integer for an image gallery" >&2
+              exit 2
+            }
+            [[ "$RULEBOOK_EXPECTED_PAGE_COUNT" =~ ^[1-9][0-9]*$ ]] \
+              && (( RULEBOOK_EXPECTED_PAGE_COUNT <= 500 )) || {
+                echo "expected_page_count must be between 1 and 500 for an image gallery" >&2
+                exit 2
+              }
+            [[ -n "$RULEBOOK_LANGUAGE" ]] || { echo "language is required" >&2; exit 2; }
+            [[ "$RULEBOOK_RIGHTS_CONFIRMED" == true ]] || {
+              echo "rights_confirmed must be explicitly true for an image gallery" >&2
+              exit 2
+            }
+            printf '%s\n' official_image_gallery > "$RUNNER_TEMP/preparation-mode"
+            exit 0
+          fi
+          [[ "$RULEBOOK_SOURCE_MODE" == upload ]] || { echo "unknown source_mode" >&2; exit 2; }
           if [[ -z "$RULEBOOK_URL" ]]; then
             [[ -z "$RULEBOOK_TITLE" && -z "$RULEBOOK_QUESTION" ]] || {
               echo "rulebook_title and question require rulebook_url" >&2
@@ -158,12 +215,25 @@ jobs:
 
           artifact_dir="$GITHUB_WORKSPACE/.artifacts/production-ordinary-user-smoke"
           mkdir -p "$artifact_dir"
-          smoke_args=(
-            --base-url http://127.0.0.1:18080
-            --pdf "$RUNNER_TEMP/rulebook.pdf"
-            --result-file "$artifact_dir/result.json"
-          )
+          smoke_args=(--base-url http://127.0.0.1:18080 --result-file "$artifact_dir/result.json")
           preparation_mode=$(<"$RUNNER_TEMP/preparation-mode")
+          if [[ "$preparation_mode" == official_image_gallery ]]; then
+            smoke_args+=(
+              --source-mode official_image_gallery
+              --expected-title "${RULEBOOK_TITLE,,}"
+              --uploaded-title "$RULEBOOK_TITLE"
+              --official-source-url "$RULEBOOK_URL"
+              --bgg-id "$RULEBOOK_BGG_ID"
+              --expected-page-count "$RULEBOOK_EXPECTED_PAGE_COUNT"
+              --language "$RULEBOOK_LANGUAGE"
+              --canary-id "${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+              --rights-confirmed
+              --navigation-mode api
+              --question "$RULEBOOK_QUESTION"
+            )
+          else
+            smoke_args+=(--pdf "$RUNNER_TEMP/rulebook.pdf")
+          fi
           if [[ "$preparation_mode" == visual ]]; then
             smoke_args+=(
               --expected-title "${RULEBOOK_TITLE,,}"
