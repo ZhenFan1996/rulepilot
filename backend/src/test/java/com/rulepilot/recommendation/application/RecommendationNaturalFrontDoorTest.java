@@ -25,6 +25,7 @@ import com.rulepilot.recommendation.BoardGameRecommendationModel.Turn;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.CandidateDiscovery;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.CandidateLead;
+import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.DiscoveryGoal;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.DiscoveryRequest;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.RelationshipKind;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Research;
@@ -300,7 +301,7 @@ class RecommendationNaturalFrontDoorTest {
         when(model.configured("player")).thenReturn(true);
         when(model.streamDecision(any(), eq("player"), any())).thenThrow(
                 new BoardGameRecommendationModel.ProtocolFailure(
-                        "DECISION_INVALID_FIELD_ORDER",
+                        "DECISION_INVALID_ENVELOPE",
                         new IllegalStateException("raw provider output stays private")));
         RecommendationReActLoop loop = new RecommendationReActLoop(
                 model,
@@ -317,13 +318,132 @@ class RecommendationNaturalFrontDoorTest {
 
         assertThat(response.outcome()).isEqualTo(Outcome.UNAVAILABLE);
         assertThat(response.assistantMessage())
-                .doesNotContain("DECISION_INVALID_FIELD_ORDER", "raw provider output");
+                .doesNotContain("DECISION_INVALID_ENVELOPE", "raw provider output");
         assertThat(response.harness().modelCalls()).isEqualTo(1);
         assertThat(response.harness().catalogCalls()).isZero();
         assertThat(response.harness().actions()).containsExactly(
-                "MODEL_PROTOCOL_FAILED:DECISION_INVALID_FIELD_ORDER",
-                "UNAVAILABLE:MODEL_PROTOCOL_FAILED:DECISION_INVALID_FIELD_ORDER");
+                "MODEL_PROTOCOL_FAILED:DECISION_INVALID_ENVELOPE",
+                "UNAVAILABLE:MODEL_PROTOCOL_FAILED:DECISION_INVALID_ENVELOPE");
         verify(model, never()).next(any(), eq("player"));
+
+        loop.stopBoundedCalls();
+    }
+
+    @Test
+    void repairsOneInvalidFirstDecisionBeforePublishingVerifiedCards() {
+        BoardGameRecommendationModel model = mock(BoardGameRecommendationModel.class);
+        BoardGameRecommendationTools tools = mock(BoardGameRecommendationTools.class);
+        AtomicReference<Request> repairRequest = new AtomicReference<>();
+        Game candidate = game(901, "Protocol Meadow", "协议草甸", List.of("Avery Stone"));
+
+        when(model.configured("player")).thenReturn(true);
+        when(tools.webResearchConfigured()).thenReturn(false);
+        when(model.streamDecision(any(), eq("player"), any())).thenThrow(
+                new BoardGameRecommendationModel.ProtocolFailure(
+                        "DECISION_INVALID_ACTION",
+                        new IllegalStateException("raw invalid action stays private")));
+        when(model.next(any(), eq("player"))).thenAnswer(invocation -> {
+            repairRequest.set(invocation.getArgument(0));
+            return new Turn(
+                    "",
+                    List.of(new ToolCall(
+                            "repair-search",
+                            BoardGameRecommendationAgent.SEARCH_TOOL,
+                            "{\"titles\":[\"Protocol Meadow\"]}")),
+                    CompletionStatus.COMPLETE);
+        });
+        when(tools.inspectTitles(List.of("Protocol Meadow"))).thenReturn(
+                new BoardGameRecommendationTools.CatalogObservation(
+                        ToolStatus.SUCCESS,
+                        BoardGameRecommendationTools.ToolName.INSPECT_BGG_TITLES,
+                        1,
+                        List.of(candidate),
+                        List.of(),
+                        ""));
+        String publication = """
+                {"decision":{"requestedCount":1,"selections":[{"bggId":901}],"referenceBggIds":[]},"replyBlocks":[{"surface":"MESSAGE","role":"NARRATIVE","bggId":null,"internalEvidenceIds":[],"text":"修正工具选择后，我核对了这张候选卡。"},{"surface":"CARD","role":"WHY_FIT","bggId":901,"internalEvidenceIds":["B901:designers"],"text":"目录身份显示这款游戏由 Avery Stone 设计。"}]}
+                """
+                .strip();
+        when(model.streamStructured(any(), eq("player"), any()))
+                .thenAnswer(invocation -> publishStructured(invocation, publication));
+        var properties = new BoardGameRecommendationProperties(
+                8, 3, new BigDecimal("0.65"), Duration.ofSeconds(30));
+        RecommendationReActLoop loop = new RecommendationReActLoop(
+                model,
+                tools,
+                new BoardGameRecommendationSelector(properties),
+                properties,
+                new ObjectMapper());
+
+        var response = loop.converse(
+                new ConversationRequest(
+                        RecommendationProfile.empty(),
+                        "请认真推荐一款游戏，并给我可以继续操作的卡片。"),
+                "zh-CN",
+                "player",
+                ignored -> {});
+
+        assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
+        assertThat(response.games())
+                .extracting(entry -> entry.game().ranking().bggId())
+                .containsExactly(901);
+        assertThat(response.harness().modelCalls()).isEqualTo(3);
+        assertThat(response.harness().actions())
+                .contains(
+                        "REPAIR_MODEL_DECISION:DECISION_INVALID_ACTION",
+                        "SEARCH_BGG_BY_NAME",
+                        "LOOKUP_BGG_CANDIDATES",
+                        "RECOMMEND_GAMES")
+                .noneMatch(action -> action.startsWith("UNAVAILABLE:"));
+        assertThat(repairRequest.get()).satisfies(request -> {
+            assertThat(request.toolChoice()).isEqualTo(BoardGameRecommendationModel.ToolChoice.REQUIRED);
+            assertThat(request.messages())
+                    .extracting(BoardGameRecommendationModel.Message::content)
+                    .anyMatch(message -> message.contains("DECISION_INVALID_ACTION")
+                            && message.contains("Choose exactly one action"))
+                    .noneMatch(message -> message.contains("raw invalid action stays private"));
+        });
+
+        loop.stopBoundedCalls();
+    }
+
+    @Test
+    void stopsAfterTheSingleInvalidFirstDecisionRepairAlsoFails() {
+        BoardGameRecommendationModel model = mock(BoardGameRecommendationModel.class);
+        BoardGameRecommendationTools tools = mock(BoardGameRecommendationTools.class);
+        when(model.configured("player")).thenReturn(true);
+        when(model.streamDecision(any(), eq("player"), any())).thenThrow(
+                new BoardGameRecommendationModel.ProtocolFailure(
+                        "DECISION_INVALID_ACTION",
+                        new IllegalStateException("first raw output stays private")));
+        when(model.next(any(), eq("player"))).thenThrow(
+                new BoardGameRecommendationModel.ProtocolFailure(
+                        "DECISION_INVALID_ACTION",
+                        new IllegalStateException("second raw output stays private")));
+        RecommendationReActLoop loop = new RecommendationReActLoop(
+                model,
+                tools,
+                mock(BoardGameRecommendationSelector.class),
+                new BoardGameRecommendationProperties(8, 3, new BigDecimal("0.65"), Duration.ofSeconds(30)),
+                new ObjectMapper());
+
+        var response = loop.converse(
+                new ConversationRequest(RecommendationProfile.empty(), "请推荐一款游戏。"),
+                "zh-CN",
+                "player",
+                ignored -> {});
+
+        assertThat(response.outcome()).isEqualTo(Outcome.UNAVAILABLE);
+        assertThat(response.assistantMessage())
+                .doesNotContain("DECISION_INVALID_ACTION", "raw output");
+        assertThat(response.harness().modelCalls()).isEqualTo(2);
+        assertThat(response.harness().catalogCalls()).isZero();
+        assertThat(response.harness().actions()).containsExactly(
+                "REPAIR_MODEL_DECISION:DECISION_INVALID_ACTION",
+                "MODEL_PROTOCOL_FAILED:DECISION_INVALID_ACTION",
+                "UNAVAILABLE:MODEL_PROTOCOL_FAILED:DECISION_INVALID_ACTION");
+        verify(model).next(any(), eq("player"));
+        verify(model, never()).streamStructured(any(), eq("player"), any());
 
         loop.stopBoundedCalls();
     }
@@ -624,6 +744,212 @@ class RecommendationNaturalFrontDoorTest {
                         "DISCOVER_CANDIDATES",
                         "DISCOVERY_RELATIONSHIP_VERIFIED",
                         "RECOMMEND_GAMES");
+
+        loop.stopBoundedCalls();
+    }
+
+    @Test
+    void publishesSourceBackedFictionalFranchiseTitlesWhenDiscoveryNeedsSelectableCards() {
+        BoardGameRecommendationModel model = mock(BoardGameRecommendationModel.class);
+        AtomicReference<DiscoveryRequest> capturedDiscovery = new AtomicReference<>();
+        AtomicReference<Request> continuationRequest = new AtomicReference<>();
+        Game first = game(711, "Orion Frontier", "Morgan Vale");
+        Game second = game(712, "Orion Rebellion", "Riley North");
+        BoardGameRecommendationCatalog catalog = new BoardGameRecommendationCatalog() {
+            @Override
+            public CandidateSet findCandidates(BggGameType requiredType, List<BggGameType> suggestedTypes, int maximum) {
+                return new CandidateSet(2, List.of(first, second));
+            }
+
+            @Override
+            public List<Game> findGamesByIds(List<Integer> bggIds) {
+                return List.of(first, second).stream()
+                        .filter(game -> bggIds.contains(game.ranking().bggId()))
+                        .toList();
+            }
+
+            @Override
+            public List<Ranking> searchByNames(List<String> names) {
+                return List.of(first, second).stream()
+                        .filter(game -> names.contains(game.ranking().sourceName()))
+                        .map(Game::ranking)
+                        .toList();
+            }
+
+            @Override
+            public int gameCount() {
+                return 2;
+            }
+        };
+        BoardGameRecommendationWebResearch research = new BoardGameRecommendationWebResearch() {
+            @Override
+            public boolean configured() {
+                return true;
+            }
+
+            @Override
+            public Optional<Research> research(Request request) {
+                return Optional.empty();
+            }
+
+            @Override
+            public Optional<CandidateDiscovery> discover(DiscoveryRequest request) {
+                capturedDiscovery.set(request);
+                if (request.goal() != DiscoveryGoal.SELECTABLE_CARDS) return Optional.empty();
+                return Optional.of(new CandidateDiscovery(
+                        List.of(
+                                new CandidateLead(
+                                        "Orion Frontier",
+                                        "The franchise index lists this tabletop title.",
+                                        List.of(1)),
+                                new CandidateLead(
+                                        "Orion Rebellion",
+                                        "The franchise index lists this tabletop title.",
+                                        List.of(1))),
+                        List.of(new Source(
+                                1,
+                                "Orion Saga tabletop index",
+                                "https://tabletop.example.test/orion-saga",
+                                "tabletop.example.test")),
+                        new ResolvedRelationship(RelationshipKind.OTHER, "Orion Saga", List.of(1))));
+            }
+        };
+        when(model.configured("player")).thenReturn(true);
+        when(model.streamDecision(any(), eq("player"), any())).thenReturn(new Turn(
+                "",
+                List.of(new ToolCall(
+                        "call-discover-franchise",
+                        BoardGameRecommendationAgent.DISCOVER_TOOL,
+                        "{\"evidence\":\"U1\",\"subject\":\"Orion Saga IP\",\"afterIdentity\":\"RECOMMEND_WITH_CARDS\",\"candidateUse\":\"CONTINUE_REACT\"}")),
+                CompletionStatus.COMPLETE));
+        when(model.next(any(), eq("player"))).thenAnswer(invocation -> {
+            continuationRequest.set(invocation.getArgument(0));
+            return new Turn(
+                    "",
+                    List.of(new ToolCall(
+                            "call-publish-franchise-titles",
+                            BoardGameRecommendationAgent.SEARCH_TOOL,
+                            "{\"titles\":[\"Orion Frontier\",\"Orion Rebellion\"],\"candidateUse\":\"PUBLISH_CARDS\"}")),
+                    CompletionStatus.COMPLETE);
+        });
+        String publication = """
+                {"decision":{"requestedCount":2,"selections":[{"bggId":711},{"bggId":712}],"referenceBggIds":[]},"replyBlocks":[{"surface":"MESSAGE","role":"NARRATIVE","bggId":711,"internalEvidenceIds":["R711:1"],"text":"公开系列资料把《Orion Frontier》列为这个 IP 的桌游作品。"},{"surface":"MESSAGE","role":"NARRATIVE","bggId":712,"internalEvidenceIds":["R712:1"],"text":"同一份系列资料也把《Orion Rebellion》列为这个 IP 的桌游作品。"},{"surface":"CARD","role":"WHY_FIT","bggId":711,"internalEvidenceIds":["B711:designers"],"text":"这款已核对的候选由 Morgan Vale 设计。"},{"surface":"CARD","role":"WHY_FIT","bggId":712,"internalEvidenceIds":["B712:designers"],"text":"这款已核对的候选由 Riley North 设计。"}]}
+                """
+                .strip();
+        when(model.streamStructured(any(), eq("player"), any()))
+                .thenAnswer(invocation -> publishStructured(invocation, publication));
+        var properties = new BoardGameRecommendationProperties(
+                8, 3, new BigDecimal("0.65"), Duration.ofSeconds(30));
+        RecommendationReActLoop loop = new RecommendationReActLoop(
+                model,
+                new BoardGameRecommendationTools(catalog, research),
+                new BoardGameRecommendationSelector(properties),
+                properties,
+                new ObjectMapper());
+
+        var response = loop.converse(
+                new ConversationRequest(
+                        RecommendationProfile.empty(),
+                        "‘Orion Saga’这个虚构科幻 IP 有哪些桌游？请给我两款可选择的卡片。"),
+                "zh-CN",
+                "player",
+                ignored -> {});
+
+        assertThat(capturedDiscovery.get()).satisfies(request -> {
+            assertThat(request.subject()).isEqualTo("Orion Saga IP");
+            assertThat(request.goal()).isEqualTo(DiscoveryGoal.SELECTABLE_CARDS);
+        });
+        assertThat(continuationRequest.get().tools())
+                .extracting(BoardGameRecommendationModel.ToolSpec::name)
+                .as("a selectable verified IP slate cannot terminate as cardless prose")
+                .doesNotContain(BoardGameRecommendationAgent.REPLY_TOOL)
+                .contains(BoardGameRecommendationAgent.SEARCH_TOOL);
+        assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
+        assertThat(response.games())
+                .extracting(entry -> entry.game().ranking().bggId())
+                .containsExactly(711, 712);
+        assertThat(response.researchSources()).singleElement().satisfies(source -> {
+            assertThat(source.url()).isEqualTo("https://tabletop.example.test/orion-saga");
+            assertThat(source.domain()).isEqualTo("tabletop.example.test");
+        });
+        assertThat(response.harness().webResearchCalls()).isEqualTo(1);
+        assertThat(response.harness().actions())
+                .contains(
+                        "DISCOVER_CANDIDATES",
+                        "SEARCH_BGG_BY_NAME",
+                        "LOOKUP_BGG_CANDIDATES",
+                        "DISCOVERY_RELATIONSHIP_REJECTED:MISSING_OR_OTHER",
+                        "RECOMMEND_GAMES");
+
+        loop.stopBoundedCalls();
+    }
+
+    @Test
+    void keepsIdentityOnlyDiscoveryOutOfCardPublication() {
+        BoardGameRecommendationModel model = mock(BoardGameRecommendationModel.class);
+        BoardGameRecommendationCatalog catalog = mock(BoardGameRecommendationCatalog.class);
+        AtomicReference<DiscoveryRequest> capturedDiscovery = new AtomicReference<>();
+        BoardGameRecommendationWebResearch research = new BoardGameRecommendationWebResearch() {
+            @Override
+            public boolean configured() {
+                return true;
+            }
+
+            @Override
+            public Optional<Research> research(Request request) {
+                throw new AssertionError("an identity-only turn must not start fit research");
+            }
+
+            @Override
+            public Optional<CandidateDiscovery> discover(DiscoveryRequest request) {
+                capturedDiscovery.set(request);
+                return Optional.empty();
+            }
+        };
+        String unresolvedReply = "这个称呼目前没有足够的公开证据，我不想把它猜成某个系列或设计师。";
+        when(model.configured("player")).thenReturn(true);
+        when(model.streamDecision(any(), eq("player"), any())).thenReturn(new Turn(
+                "",
+                List.of(new ToolCall(
+                        "call-discover-identity",
+                        BoardGameRecommendationAgent.DISCOVER_TOOL,
+                        "{\"evidence\":\"U1\",\"subject\":\"Silver Comet alias\",\"afterIdentity\":\"REPLY_WITH_IDENTITY\"}")),
+                CompletionStatus.COMPLETE));
+        when(model.next(any(), eq("player"))).thenReturn(new Turn(
+                "",
+                List.of(new ToolCall(
+                        "call-finish-unresolved-identity",
+                        BoardGameRecommendationAgent.IDENTITY_REPLY_TOOL,
+                        "{\"status\":\"UNRESOLVED\",\"playerReply\":\"" + unresolvedReply + "\"}")),
+                CompletionStatus.COMPLETE));
+        var properties = new BoardGameRecommendationProperties(
+                8, 3, new BigDecimal("0.65"), Duration.ofSeconds(30));
+        RecommendationReActLoop loop = new RecommendationReActLoop(
+                model,
+                new BoardGameRecommendationTools(catalog, research),
+                new BoardGameRecommendationSelector(properties),
+                properties,
+                new ObjectMapper());
+
+        var response = loop.converse(
+                new ConversationRequest(
+                        RecommendationProfile.empty(),
+                        "不要推荐卡片，我只想确认桌游圈里的‘Silver Comet’这个称呼是谁。"),
+                "zh-CN",
+                "player",
+                ignored -> {});
+
+        assertThat(capturedDiscovery.get()).satisfies(request -> {
+            assertThat(request.subject()).isEqualTo("Silver Comet alias");
+            assertThat(request.goal()).isEqualTo(DiscoveryGoal.IDENTITY_ONLY);
+        });
+        assertThat(response.outcome()).isEqualTo(Outcome.CONVERSATION);
+        assertThat(response.assistantMessage()).isEqualTo(unresolvedReply);
+        assertThat(response.games()).isEmpty();
+        assertThat(response.harness().actions())
+                .contains("DISCOVER_CANDIDATES", "REPLY_TO_USER:IDENTITY_UNRESOLVED")
+                .doesNotContain("RECOMMEND_GAMES", "RESEARCH_GAME_FIT");
+        verify(model, never()).streamStructured(any(), eq("player"), any());
 
         loop.stopBoundedCalls();
     }

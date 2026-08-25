@@ -556,6 +556,370 @@ describe('GameRecommendationAgent', () => {
     expect(wrapper.text()).toContain('重试只执行了原来的玩家回合。')
   })
 
+  it('keeps an unavailable result retryable without publishing its provisional answer', async () => {
+    const conversationId = 'cb9e5386-415f-48ea-8991-0cad2fc67d02'
+    const originalRequest = '找一些适合四个人的科幻主题桌游'
+    const provisionalAnswer = '我已经找到几款可核对的候选，正在确认它们与主题的关系。'
+    const unavailableMessage = '推荐服务暂时不可用。'
+    const requestBodies: Array<Record<string, unknown>> = []
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      if (String(input) === '/api/auth/csrf') {
+        return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      }
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>
+      requestBodies.push(body)
+      if (requestBodies.length === 1) {
+        return new Response([
+          `event: answer_part\ndata: ${JSON.stringify({ field: 'message', text: provisionalAnswer })}\n\n`,
+          `event: result\ndata: ${JSON.stringify({
+            conversationId,
+            revision: 1,
+            clientTurnId: body.clientTurnId,
+            replayed: false,
+            responseLocale: 'zh-CN',
+            outcome: 'unavailable',
+            mode: 'model_assisted',
+            assistantMessage: unavailableMessage,
+            failureBoundary: 'model_response',
+            profile: baseProfile,
+            clarification: null,
+            sourceCount: 179737,
+            candidatesEvaluated: 0,
+            games: [],
+          })}\n\n`,
+        ].join(''), { headers: { 'Content-Type': 'text/event-stream' } })
+      }
+      return Response.json({
+        conversationId,
+        revision: 2,
+        clientTurnId: body.clientTurnId,
+        replayed: false,
+        responseLocale: 'zh-CN',
+        outcome: 'conversation',
+        mode: 'model_assisted',
+        assistantMessage: '这次请求已经重新核对完成。',
+        profile: baseProfile,
+        clarification: null,
+        sourceCount: 179737,
+        candidatesEvaluated: 0,
+        games: [],
+      })
+    }))
+    const wrapper = await mountAgent()
+
+    await wrapper.get('textarea').setValue(originalRequest)
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    const failedTurn = wrapper.get('[role="alert"]')
+    expect(failedTurn.text()).toContain('这次推荐没有完成，也没有写入对话结果')
+    expect(failedTurn.text()).toContain('模型这次没有返回完整、可执行的结构')
+    expect(wrapper.find('[data-testid="recommendation-provisional-failure"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain(provisionalAnswer)
+    expect(wrapper.text()).not.toContain(unavailableMessage)
+    expect(requestBodies[0]).toMatchObject({ revision: 0, message: originalRequest })
+    expect(wrapper.findAll('[data-conversation-message]').filter(turn => turn.text().includes(originalRequest)))
+      .toHaveLength(1)
+
+    await failedTurn.get('button').trigger('click')
+    await flushPromises()
+
+    expect(requestBodies).toHaveLength(2)
+    expect(requestBodies[1]).toMatchObject({
+      conversationId,
+      revision: 1,
+      message: originalRequest,
+    })
+    expect(requestBodies[1]?.clientTurnId).not.toBe(requestBodies[0]?.clientTurnId)
+    expect(requestBodies[1]?.transcript).toEqual(requestBodies[0]?.transcript)
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('这次请求已经重新核对完成。')
+    expect(wrapper.findAll('[data-conversation-message]').filter(turn => turn.text().includes(originalRequest)))
+      .toHaveLength(1)
+  })
+
+  it('removes stale clarification choices when the submitted choice becomes unavailable', async () => {
+    const conversationId = 'ddf8cd74-3d16-4302-b804-74a2d1edb264'
+    let recommendationCalls = 0
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      if (String(input) === '/api/auth/csrf') {
+        return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      }
+      recommendationCalls += 1
+      const body = JSON.parse(String(init?.body)) as { clientTurnId: string }
+      if (recommendationCalls === 1) {
+        return Response.json({
+          conversationId,
+          revision: 1,
+          clientTurnId: body.clientTurnId,
+          replayed: false,
+          responseLocale: 'zh-CN',
+          outcome: 'needs_clarification',
+          mode: 'model_assisted',
+          assistantMessage: '你更想先看合作还是对抗？',
+          profile: baseProfile,
+          clarification: {
+            field: 'conversation',
+            prompt: '请选择一个方向。',
+            options: [{ value: '先看合作游戏', label: '先看合作' }],
+          },
+          sourceCount: 0,
+          candidatesEvaluated: 0,
+          games: [],
+        })
+      }
+      return Response.json({
+        conversationId,
+        revision: 2,
+        clientTurnId: body.clientTurnId,
+        replayed: false,
+        responseLocale: 'zh-CN',
+        outcome: 'unavailable',
+        mode: 'model_assisted',
+        assistantMessage: '推荐服务暂时不可用。',
+        failureBoundary: 'time_budget',
+        profile: baseProfile,
+        clarification: null,
+        sourceCount: 0,
+        candidatesEvaluated: 0,
+        games: [],
+      })
+    }))
+    const wrapper = await mountAgent()
+
+    await wrapper.get('textarea').setValue('帮我找一款适合今晚的桌游')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    const choice = wrapper.findAll('button').find(button => button.text() === '先看合作')
+    expect(choice).toBeDefined()
+
+    await choice!.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.findAll('button').some(button => button.text() === '先看合作')).toBe(false)
+    expect(wrapper.get('[role="alert"]').text()).toContain('这次推荐没有完成')
+    expect(wrapper.get('[role="alert"]').text()).toContain('没有在本轮时间上限内完成')
+    expect(wrapper.findAll('button').filter(button => button.text() === '重试')).toHaveLength(1)
+  })
+
+  it('does not restore stale clarification choices after a transport failure and retries the same turn', async () => {
+    const conversationId = '38a33554-7ae5-4620-a767-17dcf8521b23'
+    const clarificationClientTurnId = 'cbe48ee4-dfdb-4411-a5df-904fb51e5708'
+    const clarificationResponse = {
+      conversationId,
+      revision: 1,
+      clientTurnId: clarificationClientTurnId,
+      replayed: true,
+      responseLocale: 'zh-CN',
+      outcome: 'needs_clarification',
+      mode: 'model_assisted',
+      assistantMessage: '你更想先看合作还是对抗？',
+      profile: baseProfile,
+      clarification: {
+        field: 'conversation',
+        prompt: '请选择一个方向。',
+        options: [{ value: '先看合作游戏', label: '先看合作' }],
+      },
+      sourceCount: 0,
+      candidatesEvaluated: 0,
+      games: [],
+    }
+    const requestBodies: Array<Record<string, unknown>> = []
+    let sessionReads = 0
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const path = String(input)
+      if (path === '/api/v1/bgg/recommendation-agent/session') {
+        sessionReads += 1
+        return Response.json({
+          conversationId,
+          revision: 1,
+          profile: baseProfile,
+          transcript: [
+            { role: 'user', text: '帮我找一款适合今晚的桌游' },
+            { role: 'assistant', text: clarificationResponse.assistantMessage },
+          ],
+          knownGames: [],
+          shownBggIds: [],
+          processing: false,
+          processingSince: null,
+          latestResponse: clarificationResponse,
+        })
+      }
+      if (path === '/api/auth/csrf') {
+        return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      }
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>
+      requestBodies.push(body)
+      if (requestBodies.length === 1) {
+        return new Response('event: error\ndata: {"code":"recommendation_unavailable"}\n\n', {
+          headers: { 'Content-Type': 'text/event-stream' },
+        })
+      }
+      return Response.json({
+        ...clarificationResponse,
+        revision: 2,
+        clientTurnId: body.clientTurnId,
+        replayed: false,
+        outcome: 'conversation',
+        assistantMessage: '已按原来的选择继续。',
+        clarification: null,
+      })
+    }))
+    const wrapper = await mountAgent({}, { sessionIdentity: 'alice' })
+    await flushPromises()
+
+    const choice = wrapper.findAll('button').find(button => button.text() === '先看合作')
+    expect(choice).toBeDefined()
+    await choice!.trigger('click')
+    await flushPromises()
+
+    expect(sessionReads).toBe(2)
+    expect(wrapper.findAll('button').some(button => button.text() === '先看合作')).toBe(false)
+    const retryButton = wrapper.findAll('button').find(button => button.text() === '重试')
+    expect(retryButton).toBeDefined()
+    expect(requestBodies).toHaveLength(1)
+
+    await retryButton!.trigger('click')
+    await flushPromises()
+
+    expect(requestBodies).toHaveLength(2)
+    expect(requestBodies[1]).toEqual(requestBodies[0])
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('已按原来的选择继续。')
+  })
+
+  it('retries a reused client turn with a new identity without restoring the old authoritative response', async () => {
+    const conversationId = '7903fcfe-a884-43b4-811a-b6ebf65b8ad9'
+    const conflictingClientTurnId = '0e1779cc-f121-4762-8cf4-3d0e22987b84'
+    const retryClientTurnId = '0415d75f-19fb-456b-8fae-b4dcd2b27c96'
+    vi.spyOn(crypto, 'randomUUID')
+      .mockReturnValueOnce(conflictingClientTurnId)
+      .mockReturnValueOnce(retryClientTurnId)
+    const oldResponse = {
+      conversationId,
+      revision: 1,
+      clientTurnId: conflictingClientTurnId,
+      replayed: true,
+      responseLocale: 'zh-CN',
+      outcome: 'conversation',
+      mode: 'model_assisted',
+      assistantMessage: '这是这个 turn identity 之前绑定的旧响应。',
+      profile: baseProfile,
+      clarification: null,
+      sourceCount: 0,
+      candidatesEvaluated: 0,
+      games: [],
+    }
+    const requestBodies: Array<Record<string, unknown>> = []
+    let sessionReads = 0
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const path = String(input)
+      if (path === '/api/v1/bgg/recommendation-agent/session') {
+        sessionReads += 1
+        return Response.json({
+          conversationId,
+          revision: 1,
+          profile: baseProfile,
+          transcript: [
+            { role: 'user', text: '旧请求' },
+            { role: 'assistant', text: oldResponse.assistantMessage },
+          ],
+          knownGames: [],
+          shownBggIds: [],
+          processing: false,
+          processingSince: null,
+          latestResponse: oldResponse,
+        })
+      }
+      if (path === '/api/auth/csrf') {
+        return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      }
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>
+      requestBodies.push(body)
+      if (requestBodies.length === 1) {
+        return new Response('event: error\ndata: {"code":"turn_id_reused"}\n\n', {
+          headers: { 'Content-Type': 'text/event-stream' },
+        })
+      }
+      return Response.json({
+        ...oldResponse,
+        revision: 2,
+        clientTurnId: body.clientTurnId,
+        replayed: false,
+        assistantMessage: '新 identity 已完成原来的玩家请求。',
+      })
+    }))
+    let wrapper = await mountAgent({}, { sessionIdentity: 'alice' })
+    await flushPromises()
+
+    await wrapper.get('textarea').setValue('保留这条新请求并安全重试')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    expect(sessionReads).toBe(1)
+    expect(requestBodies).toHaveLength(1)
+    expect(requestBodies[0]?.clientTurnId).toBe(conflictingClientTurnId)
+    expect(wrapper.get('[role="alert"]').text()).toContain('可以直接重试')
+    expect(wrapper.findAll('[data-conversation-message]')
+      .filter(turn => turn.text().includes('保留这条新请求并安全重试'))).toHaveLength(1)
+
+    wrapper.unmount()
+    wrapper = await mountAgent({}, { sessionIdentity: 'alice' })
+    await flushPromises()
+
+    expect(sessionReads).toBe(2)
+    expect(wrapper.get('[role="alert"]').text()).toContain('可以直接重试')
+    expect(wrapper.findAll('[data-conversation-message]')
+      .filter(turn => turn.text().includes('保留这条新请求并安全重试'))).toHaveLength(1)
+    await wrapper.get('[role="alert"] button').trigger('click')
+    await flushPromises()
+
+    expect(sessionReads).toBe(2)
+    expect(requestBodies).toHaveLength(2)
+    const { clientTurnId: firstClientTurnId, ...firstPayload } = requestBodies[0]!
+    const { clientTurnId: secondClientTurnId, ...secondPayload } = requestBodies[1]!
+    expect(firstClientTurnId).toBe(conflictingClientTurnId)
+    expect(secondClientTurnId).toBe(retryClientTurnId)
+    expect(secondPayload).toEqual(firstPayload)
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('新 identity 已完成原来的玩家请求。')
+  })
+
+  it('falls back to the generic retry message for an unknown future failure boundary', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      if (String(input) === '/api/auth/csrf') {
+        return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      }
+      const body = JSON.parse(String(init?.body)) as { clientTurnId: string }
+      return Response.json({
+        conversationId: '2c17aa9e-4895-4e5b-868f-0c2615c0dd6b',
+        revision: 1,
+        clientTurnId: body.clientTurnId,
+        replayed: false,
+        responseLocale: 'zh-CN',
+        outcome: 'unavailable',
+        mode: 'model_assisted',
+        assistantMessage: '推荐服务暂时不可用。',
+        failureBoundary: 'INTERNAL_FUTURE_CODE',
+        profile: baseProfile,
+        clarification: null,
+        sourceCount: 0,
+        candidatesEvaluated: 0,
+        games: [],
+      })
+    }))
+    const wrapper = await mountAgent()
+
+    await wrapper.get('textarea').setValue('帮我找一款桌游')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    const alert = wrapper.get('[role="alert"]')
+    expect(alert.text()).toContain('这次推荐没有完成，也没有写入对话结果')
+    expect(alert.text()).not.toContain('失败原因：')
+    expect(alert.findAll('button').filter(button => button.text() === '重试')).toHaveLength(1)
+  })
+
   it('recovers one revision conflict with the authoritative revision and the same client turn', async () => {
     const conversationId = '57d274df-43eb-47bd-a30d-55823fc63350'
     const previousClientTurnId = 'e714fd20-ab50-45d5-9506-17d1db2c1ee9'

@@ -28,6 +28,16 @@ on:
         required: true
         type: boolean
         default: false
+      recommendation_only:
+        description: Stop after validating the persisted recommendation result; do not select a game or start rulebook work
+        required: true
+        type: boolean
+        default: false
+      expected_title_term:
+        description: Optional case-insensitive title term that every recommendation-only card must match
+        required: true
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -56,6 +66,8 @@ jobs:
       RULEPILOT_RECOMMENDATION_RULE_QUESTION: ${{ inputs.rule_question }}
       RULEPILOT_RECOMMENDATION_RULE_FOLLOW_UP: ${{ inputs.rule_follow_up }}
       RULEPILOT_RECOMMENDATION_REQUIRE_FRESH_IMPORT: ${{ inputs.require_fresh_import }}
+      RULEPILOT_RECOMMENDATION_ONLY: ${{ inputs.recommendation_only }}
+      RULEPILOT_RECOMMENDATION_EXPECTED_TITLE_TERM: ${{ inputs.expected_title_term }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -96,6 +108,11 @@ jobs:
           mkdir -p "$artifact_dir"
           chmod 700 "$artifact_dir"
           printf '{"completed":false,"stage":"preflight"}\n' > "$artifact_dir/journey.json"
+          if [[ "$RULEPILOT_RECOMMENDATION_ONLY" == true
+            && -z "${RULEPILOT_RECOMMENDATION_EXPECTED_TITLE_TERM//[[:space:]]/}" ]]; then
+            echo "recommendation_only requires a non-empty expected_title_term" >&2
+            exit 1
+          fi
           ssh_options=(
             -i "$HOME/.ssh/id_ed25519"
             -o BatchMode=yes
@@ -147,49 +164,62 @@ jobs:
               --config frontend/playwright.recommendation-production.config.ts
           chmod -R go-rwx "$artifact_dir"
 
-      - name: Collect bounded API diagnostics after a failed journey
-        if: failure()
+      - name: Build public-safe journey summary
+        if: always()
         shell: bash
         run: |
           set -Eeuo pipefail
           artifact_dir="$GITHUB_WORKSPACE/.artifacts/production-recommendation-journey"
-          diagnostic_file="$artifact_dir/api-diagnostics.log"
-          mkdir -p "$artifact_dir"
-          ssh \
-            -i "$HOME/.ssh/id_ed25519" \
-            -o BatchMode=yes \
-            -o StrictHostKeyChecking=yes \
-            -p "$DEPLOY_SSH_PORT" \
-            "${DEPLOY_USER}@${DEPLOY_HOST}" \
-            'bash -s' -- "$DEPLOY_PATH" > "$diagnostic_file" 2>&1 <<'REMOTE' || true
-          set -Eeuo pipefail
-          application_root=$1
-          active_release=$(readlink -f "${application_root}/current")
-          if [[ "$active_release" != "${application_root}/releases/"* ]]; then
-            echo "Refusing to inspect an active release outside ${application_root}/releases" >&2
-            exit 1
-          fi
-          cd "$active_release"
-          compose=(
-            docker compose --env-file .env
-            -f infra/compose.yml
-            -f infra/compose.deployment.yml
-            -f infra/compose.production.yml
-          )
-          echo "Active production services:"
-          "${compose[@]}" ps api worker
-          echo "API logs from the last 35 minutes (bounded to 500 lines):"
-          "${compose[@]}" logs --since 35m --tail 500 --no-color api
-          echo "Worker logs from the last 35 minutes (bounded to 500 lines):"
-          "${compose[@]}" logs --since 35m --tail 500 --no-color worker
-          REMOTE
-          chmod 600 "$diagnostic_file"
+          jq '{
+            generatedAt,
+            completed,
+            stage,
+            recommendationOnly,
+            recommendationHarnessSafetyCategory,
+            selectedBggId,
+            selectedGameName,
+            routeStayedOnDiscover,
+            recommendationMs,
+            recommendationElapsedBasis,
+            recommendationOutcome,
+            recommendationTerminalCategory,
+            recommendationCardCount,
+            expectedRecommendationTitleTerm,
+            recommendationPublishedGames,
+            recommendationCompletedWork,
+            recommendationModelCalls,
+            recommendationCatalogCalls,
+            recommendationWebResearchCalls,
+            recommendationPublicationRecovered,
+            recommendationFailureBoundary,
+            rawModelOutputCaptured,
+            importRequestCount,
+            sourceDomain,
+            sourceMode,
+            sourceLanguage,
+            sourceLanguageVerified,
+            sourceOfficialDomainVerified,
+            confirmedMilestonesFinal,
+            lessonStatus,
+            lessonSectionCount,
+            citedLessonStep,
+            answerStatus,
+            answerCitationCount,
+            citedAnswer,
+            followUpAnswerStatus,
+            followUpCitationCount,
+            answerSessionPreserved,
+            recommendationRestored,
+            answerRestored,
+            pageErrorCount
+          }' "$artifact_dir/journey.json" > "$artifact_dir/public-summary.json"
+          chmod 600 "$artifact_dir/public-summary.json"
 
-      - name: Upload private journey measurements
+      - name: Upload sanitized journey measurements
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: production-recommendation-journey-${{ github.run_id }}
-          path: .artifacts/production-recommendation-journey
+          path: .artifacts/production-recommendation-journey/public-summary.json
           if-no-files-found: error
           retention-days: 14

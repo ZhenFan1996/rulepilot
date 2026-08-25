@@ -335,6 +335,11 @@ public class BggRecommendationAgentController {
             RecommendationShortfallResponse shortfall,
             int sourceCount,
             int candidatesEvaluated,
+            int modelCalls,
+            int catalogCalls,
+            int webResearchCalls,
+            boolean publicationRecovered,
+            String failureBoundary,
             UserModelResponse userModel,
             List<ResearchSourceResponse> researchSources,
             List<String> completedWork,
@@ -363,6 +368,11 @@ public class BggRecommendationAgentController {
                     response.shortfall() == null ? null : RecommendationShortfallResponse.from(response.shortfall()),
                     response.sourceCount(),
                     response.candidatesEvaluated(),
+                    response.harness().modelCalls(),
+                    response.harness().catalogCalls(),
+                    response.harness().webResearchCalls(),
+                    publicationRecovered(response.harness().actions()),
+                    publicFailureBoundary(response),
                     UserModelResponse.from(response.userModel()),
                     response.researchSources().stream().map(ResearchSourceResponse::from).toList(),
                     publicCompletedWork(response.harness().actions()),
@@ -372,6 +382,37 @@ public class BggRecommendationAgentController {
                     response.games().stream()
                             .map(game -> RecommendedGameResponse.from(game, taxonomy, locale, presentation))
                             .toList());
+        }
+
+        private static boolean publicationRecovered(List<String> actions) {
+            String prefix = "RECOMMENDATION_PUBLICATION_RECOVERED:";
+            return actions.stream()
+                    .anyMatch(action -> action.startsWith(prefix));
+        }
+
+        private static String publicFailureBoundary(ConversationResponse response) {
+            if (response.outcome() != BoardGameRecommendationAgent.Outcome.UNAVAILABLE) return null;
+            String unavailablePrefix = "UNAVAILABLE:";
+            String code = response.harness().actions().stream()
+                    .filter(action -> action.startsWith(unavailablePrefix))
+                    .map(action -> action.substring(unavailablePrefix.length()))
+                    .reduce((ignored, latest) -> latest)
+                    .orElse("");
+            if ("RUN_DEADLINE_EXCEEDED".equals(code)) return "time_budget";
+            if ("MODEL_NOT_CONFIGURED".equals(code)) return "service_configuration";
+            if ("BUDGET_EXHAUSTED".equals(code)) return "action_budget";
+            if (code.startsWith("MODEL_PROTOCOL_FAILED:")
+                    || "MODEL_OUTPUT_TRUNCATED".equals(code)
+                    || "EMPTY_MODEL_TURN".equals(code)
+                    || "UNSTRUCTURED_EVIDENCE_REPLY".equals(code)
+                    || "INVALID_ACTION_COUNT".equals(code)) {
+                return "model_response";
+            }
+            if (response.harness().actions().stream()
+                    .anyMatch(action -> action.startsWith("PUBLICATION_FAILED:"))) {
+                return "publication_boundary";
+            }
+            return "service_failure";
         }
 
         private static List<String> publicCompletedWork(List<String> actions) {

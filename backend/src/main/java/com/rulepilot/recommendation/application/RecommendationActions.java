@@ -826,7 +826,9 @@ final class RecommendationActions {
                         subject,
                         types,
                         locale,
-                        DiscoveryGoal.IDENTITY_ONLY);
+                        purpose == DiscoveryPurpose.SELECTABLE_CARDS
+                                ? DiscoveryGoal.SELECTABLE_CARDS
+                                : DiscoveryGoal.IDENTITY_ONLY);
         DiscoveryObservation result = runtime.withinDeadline(
                 state,
                 () -> tools.discoverCandidates(discoveryRequest));

@@ -117,7 +117,7 @@ class RecommendationPublicationTest {
     }
 
     @Test
-    void neverCommitsAValidatedDecisionWhenALaterReplyBlockFails() throws Exception {
+    void localizesALateProseFailureWithoutLeakingTheDraftOrDiscardingVerifiedCards() throws Exception {
         Fixture fixture = fixture(List.of(101, 102));
         RecommendationPublication.Permit permit = fixture.publication.permit(
                 decision(101),
@@ -133,8 +133,27 @@ class RecommendationPublicationTest {
                 () -> session.acceptBlock(block(
                         "CARD", "WHY_FIT", 101, List.of("B102:playerCount"), "错误地借用了另一款的事实。")),
                 RecommendationPublication.Code.BLOCK_EVIDENCE_NOT_GROUNDED);
-        assertThat(streamed).containsExactly("先看这一款。");
+        assertThat(streamed)
+                .as("model prose remains provisional until the complete publication validates")
+                .isEmpty();
         assertUncommitted(fixture.state);
+
+        var recovered = session.finishWithVerifiedCandidates("BLOCK_EVIDENCE_NOT_GROUNDED");
+
+        assertThat(recovered.outcome()).isEqualTo(BoardGameRecommendationAgent.Outcome.RECOMMENDATIONS);
+        assertThat(recovered.games())
+                .extracting(game -> game.game().ranking().bggId())
+                .containsExactly(101);
+        assertThat(recovered.assistantMessage())
+                .contains("候选已经通过身份和基础资料校验")
+                .doesNotContain("先看这一款", "错误地借用");
+        assertThat(streamed).containsExactly(recovered.assistantMessage());
+        assertThat(fixture.state.finalResponseGameIds).containsExactly(101);
+        assertThat(fixture.state.finalResponseEvidenceIds).isEmpty();
+        assertThat(fixture.state.actions)
+                .containsExactly(
+                        "RECOMMENDATION_PUBLICATION_RECOVERED:BLOCK_EVIDENCE_NOT_GROUNDED",
+                        "RECOMMEND_GAMES");
     }
 
     @Test
@@ -172,7 +191,7 @@ class RecommendationPublicationTest {
     }
 
     @Test
-    void responseProjectionFailureCannotLeaveHalfPublishedState() throws Exception {
+    void responseProjectionFailureCanRecoverWithVerifiedCardsWithoutHalfPublishedState() throws Exception {
         Fixture fixture = fixture(List.of(101));
         RecommendationPublication.Permit permit = fixture.publication.permit(
                 decision(101),
@@ -190,6 +209,39 @@ class RecommendationPublicationTest {
         assertThatThrownBy(session::finish)
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("source projection failed");
+        assertUncommitted(fixture.state);
+
+        var recovered = session.finishWithVerifiedCandidates("PUBLICATION_MODEL_FAILED");
+
+        assertThat(recovered.outcome()).isEqualTo(BoardGameRecommendationAgent.Outcome.RECOMMENDATIONS);
+        assertThat(recovered.games()).singleElement().satisfies(game ->
+                assertThat(game.game().ranking().bggId()).isEqualTo(101));
+        assertThat(fixture.state.finalResponseGameIds).containsExactly(101);
+        assertThat(fixture.state.finalResponseEvidenceIds).isEmpty();
+    }
+
+    @Test
+    void neverTurnsAPlayerDeliveryFailureIntoAFakeRecoveredPublication() throws Exception {
+        Fixture fixture = fixture(List.of(101));
+        RecommendationPublication.Permit permit = fixture.publication.permit(
+                decision(101),
+                fixture.state,
+                seed(101));
+        RecommendationPublication.Session session = fixture.publication.open(
+                permit,
+                fixture.state,
+                "zh-CN",
+                ignored -> {
+                    throw new IllegalStateException("client disconnected");
+                });
+        session.acceptBlock(block(
+                "MESSAGE", "NARRATIVE", null, List.of(), "这段完整内容已经通过模型协议校验。"));
+        session.acceptBlock(block(
+                "CARD", "WHY_FIT", 101, List.of("B101:mechanics"), "合作机制适合一起讨论。"));
+
+        assertThatThrownBy(session::finish)
+                .isInstanceOf(RecommendationPublication.DeliveryFailure.class)
+                .hasRootCauseMessage("client disconnected");
         assertUncommitted(fixture.state);
     }
 

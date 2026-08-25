@@ -214,6 +214,7 @@ final class RecommendationPublication {
         private final String locale;
         private final Consumer<String> accumulatedAnswerListener;
         private final StringBuilder answer = new StringBuilder();
+        private final List<String> answerSnapshots = new ArrayList<>();
         private final List<RecommendationReplyPart> replyParts = new ArrayList<>();
         private final Set<String> usedEvidenceIds = new LinkedHashSet<>();
         private final Set<Integer> gamesWithReasons = new LinkedHashSet<>();
@@ -254,12 +255,45 @@ final class RecommendationPublication {
 
         ConversationResponse finish() {
             if (finished) throw new IllegalStateException("recommendation publication is already finished");
-            finished = true;
             Set<Integer> selectedIds = permit.selectedGames().stream()
                     .map(game -> game.ranking().bggId())
                     .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
             if (messageBlocks == 0 || answer.isEmpty()) throw invalid(Code.MESSAGE_REQUIRED);
             if (!gamesWithReasons.containsAll(selectedIds)) throw invalid(Code.CARD_REASON_REQUIRED);
+
+            return complete(
+                    answer.toString(),
+                    replyParts,
+                    usedEvidenceIds,
+                    answerSnapshots,
+                    null);
+        }
+
+        ConversationResponse finishWithVerifiedCandidates(String failureCode) {
+            if (finished) throw new IllegalStateException("recommendation publication is already finished");
+            String code = failureCode != null && failureCode.matches("[A-Z0-9_]{3,80}")
+                    ? failureCode
+                    : "PUBLICATION_UNAVAILABLE";
+            String fallback = runtime.chinese(locale)
+                    ? "候选已经通过身份和基础资料校验；这轮自然语言的推荐理由没有安全完成，所以没有发布那部分内容。你仍然可以先看下面的卡片，再让我重写取舍。"
+                    : "These candidates passed identity and catalog checks. The natural-language rationale did not finish safely, so that text was not published. You can still inspect the cards below and ask me to rewrite the tradeoffs.";
+            return complete(
+                    fallback,
+                    List.of(),
+                    Set.of(),
+                    List.of(fallback),
+                    code);
+        }
+
+        private ConversationResponse complete(
+                String completeAnswer,
+                List<RecommendationReplyPart> publishedReplyParts,
+                Set<String> publishedEvidenceIds,
+                List<String> publishedAnswerSnapshots,
+                String recoveryCode) {
+            Set<Integer> selectedIds = permit.selectedGames().stream()
+                    .map(game -> game.ranking().bggId())
+                    .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
 
             List<RecommendedGame> games = selector.present(
                     permit.selectedGames(),
@@ -273,17 +307,21 @@ final class RecommendationPublication {
                             game.tradeoffs(),
                             game.reasons(),
                             game.claims(),
-                            replyParts.stream()
+                            publishedReplyParts.stream()
                                     .filter(part -> part.claim().bggId()
                                             == game.game().ranking().bggId())
                                     .toList()))
                     .toList();
-            String completeAnswer = answer.toString();
             List<String> completedActions = new ArrayList<>(state.actions);
             if (permit.shortfall() != null) completedActions.add("RECOMMENDATION_AVAILABILITY_SHORTFALL");
+            if (recoveryCode != null) {
+                completedActions.add("RECOMMENDATION_PUBLICATION_RECOVERED:" + recoveryCode);
+            }
             completedActions.add("RECOMMEND_GAMES");
             var userModel = evidenceReview.userModelView(state, locale);
-            var sources = runtime.responseSources(state, games, usedEvidenceIds);
+            var sources = recoveryCode == null
+                    ? runtime.responseSources(state, games, publishedEvidenceIds)
+                    : List.<BoardGameRecommendationAgent.ResearchSource>of();
             ConversationResponse response = new ConversationResponse(
                     Outcome.RECOMMENDATIONS,
                     DecisionMode.MODEL_ASSISTED,
@@ -306,13 +344,26 @@ final class RecommendationPublication {
                     permit.shortfall(),
                     completeAnswer);
 
-            // Commit only after the whole response projection succeeds. A late source or presentation failure
-            // must not leave a half-published turn in the mutable Agent state.
+            // Model prose is provisional until every required block, evidence binding, and response projection
+            // succeeds. Only then may accumulated paragraphs cross the player-facing stream boundary.
+            publish(publishedAnswerSnapshots);
+            finished = true;
+
+            // Commit only after the whole response projection and player delivery succeed. A late source,
+            // presentation, or disconnected-listener failure must not leave a half-published turn in Agent state.
             state.finalResponseGameIds.addAll(selectedIds);
-            state.finalResponseEvidenceIds.addAll(usedEvidenceIds);
+            state.finalResponseEvidenceIds.addAll(publishedEvidenceIds);
             state.actions.clear();
             state.actions.addAll(completedActions);
             return response;
+        }
+
+        private void publish(List<String> snapshots) {
+            try {
+                snapshots.forEach(accumulatedAnswerListener);
+            } catch (RuntimeException exception) {
+                throw new DeliveryFailure(exception);
+            }
         }
 
         private void acceptMessage(
@@ -331,7 +382,7 @@ final class RecommendationPublication {
             answer.append(text);
             messageBlocks++;
             usedEvidenceIds.addAll(evidenceIds);
-            accumulatedAnswerListener.accept(answer.toString());
+            answerSnapshots.add(answer.toString());
         }
 
         private void acceptCard(
@@ -466,6 +517,12 @@ final class RecommendationPublication {
 
         Code code() {
             return code;
+        }
+    }
+
+    static final class DeliveryFailure extends RuntimeException {
+        private DeliveryFailure(RuntimeException cause) {
+            super("recommendation publication delivery failed", cause);
         }
     }
 

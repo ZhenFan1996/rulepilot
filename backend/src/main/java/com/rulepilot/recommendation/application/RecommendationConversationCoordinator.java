@@ -6,6 +6,7 @@ import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.Con
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ConversationResponse;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.DialogueMessage;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.KnownGame;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.Outcome;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ProgressUpdate;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendationProfile;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.TurnCheckpoint;
@@ -390,16 +391,32 @@ public class RecommendationConversationCoordinator {
     private static ConversationState importedState(ConversationRequest request) {
         return new ConversationState(
                 request.profile(),
-                boundedTranscript(request.transcript()),
+                importedPriorTranscript(request),
                 boundedKnownGames(request.knownGames()),
                 boundedIds(request.shownBggIds()),
                 List.of());
+    }
+
+    private static List<DialogueMessage> importedPriorTranscript(ConversationRequest request) {
+        List<DialogueMessage> transcript = new ArrayList<>(request.transcript());
+        if (!transcript.isEmpty()) {
+            DialogueMessage last = transcript.getLast();
+            // Browser clients optimistically append the current player turn before sending it. The request message
+            // is the durable turn boundary, so importing that same trailing protocol item would make an UNAVAILABLE
+            // turn look committed even though only its idempotency result was saved.
+            if ("user".equals(last.role()) && request.message().equals(last.text())) {
+                transcript.removeLast();
+            }
+        }
+        return boundedTranscript(transcript);
     }
 
     private static ConversationState nextState(
             ConversationState previous,
             ConversationRequest request,
             ConversationResponse response) {
+        if (response.outcome() == Outcome.UNAVAILABLE) return previous;
+
         List<DialogueMessage> transcript = new ArrayList<>(previous.transcript());
         appendUnlessDuplicate(transcript, new DialogueMessage("user", request.message()));
         appendUnlessDuplicate(transcript, new DialogueMessage("assistant", response.assistantMessage()));

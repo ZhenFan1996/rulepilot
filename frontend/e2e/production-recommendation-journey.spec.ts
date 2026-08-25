@@ -9,12 +9,19 @@ const RECOMMENDATION_SELECTION_PROMPT = process.env.RULEPILOT_RECOMMENDATION_SEL
   ?? '我想换成能谈判、互相骗一骗的；有两个新手，90 分钟内。你直接挑三款，并把你最推荐的一款放第一吧。我们选好后还想接着找规则书、听讲解。'
 const MAX_OPEN_GUIDANCE_MS = 15_000
 const MAX_SELECTION_RECOMMENDATION_MS = 20_000
+// This wider window diagnoses a persisted semantic terminal after the interaction budget expires;
+// it does not relax the 20-second success budget.
+const MAX_SELECTION_TERMINAL_OBSERVATION_MS = 35_000
 const PRESERVED_DRAFT = '下次我还想给完全没玩过桌游的家人找一款更轻松的。'
 const RULE_QUESTION = process.env.RULEPILOT_RECOMMENDATION_RULE_QUESTION
   ?? '我们现在要开第一局：所有组件分别怎么摆、每个人先拿什么？请按顺序说，并标出规则书页码。'
 const RULE_FOLLOW_UP = process.env.RULEPILOT_RECOMMENDATION_RULE_FOLLOW_UP
   ?? '你刚才列出的第二个准备步骤具体需要哪些组件？仍然只根据同一本规则书回答并标页码。'
 const REQUIRE_FRESH_IMPORT = process.env.RULEPILOT_RECOMMENDATION_REQUIRE_FRESH_IMPORT === 'true'
+const RECOMMENDATION_ONLY = process.env.RULEPILOT_RECOMMENDATION_ONLY === 'true'
+const EXPECTED_RECOMMENDATION_TITLE_TERM = (
+  process.env.RULEPILOT_RECOMMENDATION_EXPECTED_TITLE_TERM ?? ''
+).normalize('NFKC').trim().toLocaleLowerCase('en-US')
 
 function bggIdFromBindingPath(pathname: string) {
   const match = /^\/api\/v1\/bgg\/games\/([1-9]\d*)\/import$/.exec(pathname)
@@ -63,10 +70,53 @@ interface RecommendationRecoveryObservation {
   elapsedMs: number
 }
 
+type RecommendationOutcome =
+  | 'conversation'
+  | 'needs_clarification'
+  | 'recommendations'
+  | 'no_match'
+  | 'unavailable'
+
+interface RecommendationResultGame {
+  game: { bggId: number; name: string; originalName: string }
+}
+
 interface RecommendationSessionResponse {
   conversationId: string
   revision: number
-  latestResponse: null | { outcome: string }
+  processing: boolean
+  latestResponse: null | {
+    clientTurnId: string
+    outcome: RecommendationOutcome
+    assistantMessage: string
+    completedWork?: string[]
+    modelCalls?: number
+    catalogCalls?: number
+    webResearchCalls?: number
+    publicationRecovered?: boolean
+    failureBoundary?: string | null
+    games: RecommendationResultGame[]
+  }
+}
+
+type RecommendationTerminalCategory =
+  | 'NOT_OBSERVED'
+  | 'PERSISTED_RECOMMENDATIONS'
+  | 'RECOMMENDATIONS_WITHIN_INTERACTION_BUDGET'
+  | 'RECOMMENDATIONS_OVER_INTERACTION_BUDGET'
+  | 'SEMANTIC_UNAVAILABLE'
+  | 'SEMANTIC_NON_RECOMMENDATION'
+  | 'PERSISTED_SESSION_TIMEOUT'
+  | 'PERSISTED_SESSION_READ_FAILURE'
+
+type RecommendationHarnessSafetyCategory =
+  | 'RECOMMENDATION_ONLY_NO_RULEBOOK_IMPORT'
+  | 'FULL_JOURNEY_VERIFIED_RULEBOOK_IMPORT'
+
+interface RecommendationTerminalObservation {
+  category: RecommendationTerminalCategory
+  session: RecommendationSessionResponse | null
+  elapsedMs: number
 }
 
 interface ImportJob {
@@ -224,6 +274,8 @@ interface ProductionJourneyReport {
   generatedAt: string
   completed: boolean
   stage: string
+  recommendationOnly: boolean
+  recommendationHarnessSafetyCategory: RecommendationHarnessSafetyCategory
   selectedBggId: number | null
   selectedGameName: string | null
   recommendationConversationId: string | null
@@ -256,7 +308,25 @@ interface ProductionJourneyReport {
   globalStatusReopened: boolean
   openGuidanceMs: number | null
   recommendationMs: number | null
+  recommendationStartedAt: string | null
+  recommendationTerminalObservedAt: string | null
+  recommendationElapsedBasis: 'NOT_OBSERVED' | 'UI_CARD_RENDER' | 'PERSISTED_FINAL_SESSION'
+  recommendationOutcome: RecommendationOutcome | null
+  recommendationTerminalCategory: RecommendationTerminalCategory
   recommendationCardCount: number
+  expectedRecommendationTitleTerm: string
+  recommendationPublishedGames: Array<{
+    bggId: number
+    name: string
+    originalName: string
+  }>
+  recommendationCompletedWork: string[]
+  recommendationModelCalls: number | null
+  recommendationCatalogCalls: number | null
+  recommendationWebResearchCalls: number | null
+  recommendationPublicationRecovered: boolean | null
+  recommendationFailureBoundary: string | null
+  rawModelOutputCaptured: false
   attemptedBggIds: number[]
   selectedRecommendationRank: number | null
   recommendationRecoveryOutcomes: RecommendationRecoveryObservation[]
@@ -334,6 +404,79 @@ interface ProductionJourneyReport {
 
 function elapsed(startedAt: number) {
   return Math.round(performance.now() - startedAt)
+}
+
+function classifyRecommendationTerminal(
+  session: RecommendationSessionResponse,
+  baselineRevision: number,
+  expectedClientTurnId: string,
+  elapsedMs: number,
+): RecommendationTerminalObservation | null {
+  if (session.processing
+    || session.revision <= baselineRevision
+    || session.latestResponse === null
+    || session.latestResponse.clientTurnId !== expectedClientTurnId) return null
+  const outcome = session.latestResponse.outcome
+  const category: RecommendationTerminalCategory = outcome === 'recommendations'
+    ? 'PERSISTED_RECOMMENDATIONS'
+    : outcome === 'unavailable'
+      ? 'SEMANTIC_UNAVAILABLE'
+      : 'SEMANTIC_NON_RECOMMENDATION'
+  return { category, session, elapsedMs }
+}
+
+async function waitForPersistedRecommendationTerminal(
+  request: APIRequestContext,
+  conversationId: string,
+  baselineRevision: number,
+  expectedClientTurnId: string,
+  startedAt: number,
+): Promise<RecommendationTerminalObservation> {
+  const deadline = Date.now() + MAX_SELECTION_TERMINAL_OBSERVATION_MS
+  let successfulReads = 0
+  do {
+    try {
+      const response = await request.get(
+        `/api/v1/bgg/recommendation-agent/sessions/${encodeURIComponent(conversationId)}`,
+      )
+      if (response.ok()) {
+        successfulReads += 1
+        const session = await response.json() as RecommendationSessionResponse
+        const terminal = classifyRecommendationTerminal(
+          session,
+          baselineRevision,
+          expectedClientTurnId,
+          elapsed(startedAt),
+        )
+        if (terminal) return terminal
+      }
+    } catch {
+      // A later successful persisted-session read remains authoritative inside the bounded observation window.
+    }
+    await new Promise(resolve => setTimeout(resolve, 250))
+  } while (Date.now() <= deadline)
+
+  return {
+    category: successfulReads > 0 ? 'PERSISTED_SESSION_TIMEOUT' : 'PERSISTED_SESSION_READ_FAILURE',
+    session: null,
+    elapsedMs: elapsed(startedAt),
+  }
+}
+
+function positiveDistinctBggIds(games: RecommendationResultGame[]) {
+  const ids = games.map(entry => entry.game.bggId)
+  return ids.length >= 2
+    && ids.every(id => Number.isSafeInteger(id) && id > 0)
+    && new Set(ids).size === ids.length
+}
+
+function everyPublishedGameMatchesTitleTerm(games: RecommendationResultGame[], expectedTerm: string) {
+  if (expectedTerm === '') return true
+  const escapedTerm = expectedTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const titleTerm = new RegExp(`(?:^|[^\\p{L}\\p{N}])${escapedTerm}(?=$|[^\\p{L}\\p{N}])`, 'u')
+  return games.every(({ game }) => [game.name, game.originalName]
+    .filter((title): title is string => typeof title === 'string')
+    .some(title => titleTerm.test(title.normalize('NFKC').toLocaleLowerCase('en-US'))))
 }
 
 function persistedDuration(from: string | null, to: string | null) {
@@ -854,6 +997,65 @@ test('dynamic recommendation binding accepts only the exact BGG import route', (
     .toThrow('Unexpected BGG binding path')
 })
 
+test('recommendation-only acceptance distinguishes semantic terminals from an unfinished wait', () => {
+  const clientTurnId = 'f5da76a6-d94e-4a43-8dca-8336b5ba9c21'
+  const result = (outcome: RecommendationOutcome, revision = 2): RecommendationSessionResponse => ({
+    conversationId: '3d6fef52-521b-47ea-a5d4-ea980159c820',
+    revision,
+    processing: false,
+    latestResponse: {
+      clientTurnId,
+      outcome,
+      assistantMessage: outcome === 'recommendations' ? 'Here are two choices.' : 'No result.',
+      games: outcome === 'recommendations'
+        ? [
+            { game: { bggId: 11, name: 'Dune: Harbor', originalName: 'Dune: Harbor' } },
+            { game: { bggId: 22, name: '沙丘：边境', originalName: 'Dune: Frontier' } },
+          ]
+        : [],
+    },
+  })
+
+  expect(classifyRecommendationTerminal(result('recommendations'), 1, clientTurnId, 19_999))
+    .toMatchObject({ category: 'PERSISTED_RECOMMENDATIONS', elapsedMs: 19_999 })
+  expect(classifyRecommendationTerminal(result('recommendations'), 1, clientTurnId, 20_001))
+    .toMatchObject({ category: 'PERSISTED_RECOMMENDATIONS', elapsedMs: 20_001 })
+  expect(classifyRecommendationTerminal(result('unavailable'), 1, clientTurnId, 4_000)?.category)
+    .toBe('SEMANTIC_UNAVAILABLE')
+  expect(classifyRecommendationTerminal(result('no_match'), 1, clientTurnId, 4_000)?.category)
+    .toBe('SEMANTIC_NON_RECOMMENDATION')
+  expect(classifyRecommendationTerminal(
+    { ...result('recommendations'), processing: true },
+    1,
+    clientTurnId,
+    4_000,
+  ))
+    .toBeNull()
+  expect(classifyRecommendationTerminal(result('recommendations', 1), 1, clientTurnId, 4_000)).toBeNull()
+  expect(classifyRecommendationTerminal(result('recommendations'), 1, crypto.randomUUID(), 4_000))
+    .toBeNull()
+})
+
+test('recommendation-only cards require at least two positive distinct typed BGG identities', () => {
+  const result = (bggId: number, name: string, originalName = name): RecommendationResultGame => ({
+    game: { bggId, name, originalName },
+  })
+  expect(positiveDistinctBggIds([result(11, 'First'), result(22, 'Second')])).toBe(true)
+  expect(positiveDistinctBggIds([result(11, 'First')])).toBe(false)
+  expect(positiveDistinctBggIds([result(11, 'First'), result(11, 'First')])).toBe(false)
+  expect(positiveDistinctBggIds([result(11, 'First'), result(0, 'Invalid')])).toBe(false)
+  expect(everyPublishedGameMatchesTitleTerm(
+    [result(11, '沙丘：帝国', 'Dune: Imperium'), result(22, 'Dune: Uprising')],
+    'dune',
+  )).toBe(true)
+  expect(everyPublishedGameMatchesTitleTerm(
+    [result(11, 'Dune: Imperium'), result(22, 'Unrelated Game')],
+    'dune',
+  )).toBe(false)
+  expect(everyPublishedGameMatchesTitleTerm([result(11, 'Dunescape')], 'dune')).toBe(false)
+  expect(everyPublishedGameMatchesTitleTerm([result(11, 'Any Game')], '')).toBe(true)
+})
+
 test('automation confirms only a verified official source with explicit edition and language identity', () => {
   const verified: RulebookCandidate = {
     title: 'Rules',
@@ -948,6 +1150,9 @@ test('recommendation becomes one readable, taught, and answerable production jou
   if (!username || !password || !reportFile) {
     throw new Error('Production recommendation credentials and report path are required')
   }
+  if (RECOMMENDATION_ONLY && EXPECTED_RECOMMENDATION_TITLE_TERM === '') {
+    throw new Error('Recommendation-only production verification requires an expected title term')
+  }
 
   const pageErrors: Error[] = []
   let guidesPage: Page | null = null
@@ -972,6 +1177,10 @@ test('recommendation becomes one readable, taught, and answerable production jou
 
   const report: ProductionJourneyReport = {
     generatedAt: new Date().toISOString(), completed: false, stage: 'login',
+    recommendationOnly: RECOMMENDATION_ONLY,
+    recommendationHarnessSafetyCategory: RECOMMENDATION_ONLY
+      ? 'RECOMMENDATION_ONLY_NO_RULEBOOK_IMPORT'
+      : 'FULL_JOURNEY_VERIFIED_RULEBOOK_IMPORT',
     selectedBggId: null, selectedGameName: null,
     recommendationConversationId: null, openGuidanceOutcome: null,
     modelAssignments: null, visualModelVisionCapable: null,
@@ -984,7 +1193,15 @@ test('recommendation becomes one readable, taught, and answerable production jou
     candidateEditionMatchesSelection: false, importEditionMatchesSelection: false,
     documentEditionMatchesSelection: false, myGuidesEntryVisibleBeforeLesson: false, myGuidesPlanListed: false,
     planGameTitleMatchesSelection: false, globalStatusVisibleAfterClosing: false, globalStatusReopened: false,
-    openGuidanceMs: null, recommendationMs: null, recommendationCardCount: 0,
+    openGuidanceMs: null, recommendationMs: null,
+    recommendationStartedAt: null, recommendationTerminalObservedAt: null,
+    recommendationElapsedBasis: 'NOT_OBSERVED', recommendationOutcome: null,
+    recommendationTerminalCategory: 'NOT_OBSERVED', recommendationCardCount: 0,
+    expectedRecommendationTitleTerm: EXPECTED_RECOMMENDATION_TITLE_TERM,
+    recommendationPublishedGames: [], recommendationCompletedWork: [], recommendationModelCalls: null,
+    recommendationCatalogCalls: null, recommendationWebResearchCalls: null,
+    recommendationPublicationRecovered: null, recommendationFailureBoundary: null,
+    rawModelOutputCaptured: false,
     attemptedBggIds: [], selectedRecommendationRank: null, recommendationRecoveryOutcomes: [],
     detailsDialogOpenedAndClosed: false,
     discoveryMs: null, sourceDomain: null, sourceUrl: null, sourceMode: null,
@@ -1054,13 +1271,15 @@ test('recommendation becomes one readable, taught, and answerable production jou
       `Model configuration returned HTTP ${modelConfigurationResponse.status()}`).toBe(true)
     const modelConfiguration = await modelConfigurationResponse.json() as ModelConfigurationResponse
     configuredProductionRole(modelConfiguration, 'recommendation')
-    configuredProductionRole(modelConfiguration, 'teaching')
-    const visualProvider = configuredProductionRole(modelConfiguration, 'visual')
-    configuredProductionRole(modelConfiguration, 'answer')
-    expect(visualProvider.visionCapable,
-      `Production visual provider '${visualProvider.id}' cannot inspect rulebook page images`).toBe(true)
+    if (!RECOMMENDATION_ONLY) {
+      configuredProductionRole(modelConfiguration, 'teaching')
+      const visualProvider = configuredProductionRole(modelConfiguration, 'visual')
+      configuredProductionRole(modelConfiguration, 'answer')
+      expect(visualProvider.visionCapable,
+        `Production visual provider '${visualProvider.id}' cannot inspect rulebook page images`).toBe(true)
+      report.visualModelVisionCapable = visualProvider.visionCapable
+    }
     report.modelAssignments = modelConfiguration.assignments
-    report.visualModelVisionCapable = visualProvider.visionCapable
     await retainReport(reportFile, report)
     report.stage = 'recommendation'
     await page.goto('/discover')
@@ -1080,34 +1299,178 @@ test('recommendation becomes one readable, taught, and answerable production jou
     report.recommendationConversationId = createdConversation.conversationId
     await expect(recommendationCards).toHaveCount(0)
     const composer = page.getByLabel('聊聊你想玩的游戏')
-    const guidanceTurnCount = await page.getByTestId('assistant-conversation-turn').count()
-    const guidanceStartedAt = performance.now()
-    await composer.fill(RECOMMENDATION_OPENING_PROMPT)
-    await page.getByRole('button', { name: '发送', exact: true }).click()
-    await expect.poll(() => page.getByTestId('assistant-conversation-turn').count(), {
-      timeout: MAX_OPEN_GUIDANCE_MS,
-      message: 'The unknown-target opening did not produce a natural guidance turn',
-    }).toBeGreaterThan(guidanceTurnCount)
-    report.openGuidanceMs = elapsed(guidanceStartedAt)
-    expect(report.openGuidanceMs, 'Open recommendation guidance exceeded its interaction budget')
-      .toBeLessThanOrEqual(MAX_OPEN_GUIDANCE_MS)
-    await expect(page.getByTestId('assistant-conversation-turn').last()).toContainText(/\S/)
-    await expect(recommendationCards).toHaveCount(0)
-    const guidanceSessionResponse = await page.request.get(
-      `/api/v1/bgg/recommendation-agent/sessions/${encodeURIComponent(createdConversation.conversationId)}`,
-    )
-    expect(guidanceSessionResponse.ok(),
-      `Recommendation session returned HTTP ${guidanceSessionResponse.status()}`).toBe(true)
-    const guidanceSession = await guidanceSessionResponse.json() as RecommendationSessionResponse
-    report.openGuidanceOutcome = guidanceSession.latestResponse?.outcome ?? null
-    expect(['conversation', 'needs_clarification'],
-      'The unknown-target opening did not finish as useful guidance').toContain(report.openGuidanceOutcome)
+    let selectionBaselineRevision = createdConversation.revision
+    if (!RECOMMENDATION_ONLY) {
+      const guidanceTurnCount = await page.getByTestId('assistant-conversation-turn').count()
+      const guidanceStartedAt = performance.now()
+      await composer.fill(RECOMMENDATION_OPENING_PROMPT)
+      await page.getByRole('button', { name: '发送', exact: true }).click()
+      await expect.poll(() => page.getByTestId('assistant-conversation-turn').count(), {
+        timeout: MAX_OPEN_GUIDANCE_MS,
+        message: 'The unknown-target opening did not produce a natural guidance turn',
+      }).toBeGreaterThan(guidanceTurnCount)
+      report.openGuidanceMs = elapsed(guidanceStartedAt)
+      expect(report.openGuidanceMs, 'Open recommendation guidance exceeded its interaction budget')
+        .toBeLessThanOrEqual(MAX_OPEN_GUIDANCE_MS)
+      await expect(page.getByTestId('assistant-conversation-turn').last()).toContainText(/\S/)
+      await expect(recommendationCards).toHaveCount(0)
+      const guidanceSessionResponse = await page.request.get(
+        `/api/v1/bgg/recommendation-agent/sessions/${encodeURIComponent(createdConversation.conversationId)}`,
+      )
+      expect(guidanceSessionResponse.ok(),
+        `Recommendation session returned HTTP ${guidanceSessionResponse.status()}`).toBe(true)
+      const guidanceSession = await guidanceSessionResponse.json() as RecommendationSessionResponse
+      report.openGuidanceOutcome = guidanceSession.latestResponse?.outcome ?? null
+      expect(['conversation', 'needs_clarification'],
+        'The unknown-target opening did not finish as useful guidance').toContain(report.openGuidanceOutcome)
+      selectionBaselineRevision = guidanceSession.revision
+    }
 
-    const recommendationStartedAt = performance.now()
     await composer.fill(RECOMMENDATION_SELECTION_PROMPT)
+    const recommendationStartedAt = performance.now()
+    report.recommendationStartedAt = new Date().toISOString()
+    const persistedTerminalStartedAt = recommendationStartedAt
+    const selectionRequestPromise = page.waitForRequest(request => {
+      const url = new URL(request.url())
+      return url.pathname === '/api/v1/bgg/recommendation-agent/stream'
+        && request.method() === 'POST'
+    })
     await page.getByRole('button', { name: '发送', exact: true }).click()
+    const recommendationCardsVisible = RECOMMENDATION_ONLY
+      ? (async () => {
+          try {
+            await expect.poll(() => recommendationCards.count(), {
+              timeout: MAX_SELECTION_RECOMMENDATION_MS,
+              message: 'At least two recommendation cards did not become player-visible within the interaction budget',
+            }).toBeGreaterThanOrEqual(2)
+            return { elapsedMs: elapsed(recommendationStartedAt), count: await recommendationCards.count() }
+          } catch {
+            return { elapsedMs: null, count: await recommendationCards.count() }
+          }
+        })()
+      : Promise.resolve(null)
+    const selectionRequest = await selectionRequestPromise
+    const selectionRequestBody = selectionRequest.postDataJSON() as { clientTurnId?: unknown }
+    const selectionClientTurnId = selectionRequestBody.clientTurnId
+    expect(typeof selectionClientTurnId === 'string'
+      && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+        .test(selectionClientTurnId),
+    'The recommendation selection request has no valid v4 clientTurnId').toBe(true)
+
+    if (RECOMMENDATION_ONLY) {
+      const terminal = await waitForPersistedRecommendationTerminal(
+        page.request,
+        createdConversation.conversationId,
+        selectionBaselineRevision,
+        selectionClientTurnId as string,
+        persistedTerminalStartedAt,
+      )
+      report.recommendationMs = terminal.elapsedMs
+      report.recommendationTerminalObservedAt = new Date().toISOString()
+      report.recommendationElapsedBasis = 'PERSISTED_FINAL_SESSION'
+      report.recommendationTerminalCategory = terminal.category
+      report.recommendationOutcome = terminal.session?.latestResponse?.outcome ?? null
+      const terminalGames = Array.isArray(terminal.session?.latestResponse?.games)
+        ? terminal.session.latestResponse.games
+        : []
+      const persistedResult = terminal.session?.latestResponse ?? null
+      report.recommendationCardCount = terminalGames.length
+      report.recommendationPublishedGames = terminalGames.map(entry => ({
+        bggId: entry.game.bggId,
+        name: entry.game.name,
+        originalName: entry.game.originalName,
+      }))
+      report.recommendationCompletedWork = Array.isArray(persistedResult?.completedWork)
+        ? persistedResult.completedWork
+        : []
+      report.recommendationModelCalls = typeof persistedResult?.modelCalls === 'number'
+        ? persistedResult.modelCalls
+        : null
+      report.recommendationCatalogCalls = typeof persistedResult?.catalogCalls === 'number'
+        ? persistedResult.catalogCalls
+        : null
+      report.recommendationWebResearchCalls = typeof persistedResult?.webResearchCalls === 'number'
+        ? persistedResult.webResearchCalls
+        : null
+      report.recommendationPublicationRecovered = typeof persistedResult?.publicationRecovered === 'boolean'
+        ? persistedResult.publicationRecovered
+        : null
+      report.recommendationFailureBoundary = persistedResult?.failureBoundary ?? null
+      const visibleCards = await recommendationCardsVisible
+      if (terminal.session?.latestResponse?.outcome === 'recommendations') {
+        report.recommendationMs = visibleCards?.elapsedMs ?? elapsed(recommendationStartedAt)
+        report.recommendationElapsedBasis = 'UI_CARD_RENDER'
+        report.recommendationTerminalCategory = visibleCards?.elapsedMs !== null
+          && visibleCards?.elapsedMs !== undefined
+          && visibleCards.elapsedMs <= MAX_SELECTION_RECOMMENDATION_MS
+          ? 'RECOMMENDATIONS_WITHIN_INTERACTION_BUDGET'
+          : 'RECOMMENDATIONS_OVER_INTERACTION_BUDGET'
+      }
+      await retainReport(reportFile, report)
+
+      const finalResult = terminal.session?.latestResponse
+      expect(finalResult?.outcome, 'The persisted recommendation result was not recommendations')
+        .toBe('recommendations')
+      expect(report.recommendationTerminalCategory,
+        `Recommendation cards were not player-visible within ${MAX_SELECTION_RECOMMENDATION_MS}ms`)
+        .toBe('RECOMMENDATIONS_WITHIN_INTERACTION_BUDGET')
+      expect(report.recommendationOutcome,
+        'Recommendation-only verification must not accept an unavailable terminal').not.toBe('unavailable')
+      expect(finalResult, 'The persisted recommendation result is missing').not.toBeNull()
+      expect(finalResult?.assistantMessage.trim().length,
+        'The persisted recommendation result has no complete published player reply').toBeGreaterThan(0)
+      expect(Number.isSafeInteger(finalResult?.modelCalls) && Number(finalResult?.modelCalls) > 0,
+        'Recommendation-only evidence requires a positive model call count').toBe(true)
+      expect(Number.isSafeInteger(finalResult?.catalogCalls) && Number(finalResult?.catalogCalls) > 0,
+        'Recommendation-only evidence requires a positive catalog call count').toBe(true)
+      expect(Number.isSafeInteger(finalResult?.webResearchCalls) && Number(finalResult?.webResearchCalls) >= 0,
+        'Recommendation-only evidence requires a non-negative web-research call count').toBe(true)
+      expect(typeof finalResult?.publicationRecovered,
+        'Recommendation-only evidence must say whether deterministic publication recovery ran').toBe('boolean')
+      expect(finalResult?.failureBoundary,
+        'A successful recommendation must not carry a failure boundary').toBeNull()
+      expect(finalResult?.completedWork,
+        'A successful recommendation must expose its public completion summary').toContain('recommend_games')
+      expect(positiveDistinctBggIds(terminalGames),
+        'The persisted recommendation result needs at least two positive, distinct BGG identities').toBe(true)
+      expect(terminalGames.every(({ game }) => [game.name, game.originalName]
+        .some(title => typeof title === 'string' && title.trim().length > 0)),
+      'Every persisted recommendation card needs a public title identity').toBe(true)
+      expect(everyPublishedGameMatchesTitleTerm(terminalGames, EXPECTED_RECOMMENDATION_TITLE_TERM),
+        `Every persisted card must match expected title term: ${EXPECTED_RECOMMENDATION_TITLE_TERM || '(none)'}`)
+        .toBe(true)
+
+      await expect.poll(() => recommendationCards.count(), {
+        timeout: 1_000,
+        message: 'The accepted persisted recommendation result did not render as cards',
+      }).toBe(terminalGames.length)
+      report.recommendationCardCount = await recommendationCards.count()
+      expect(report.recommendationCardCount).toBeGreaterThanOrEqual(2)
+      const renderedBggIds = await recommendationCards.evaluateAll(cards => cards.map(card =>
+        Number(card.getAttribute('data-bgg-id'))))
+      expect(renderedBggIds.every(id => Number.isSafeInteger(id) && id > 0),
+        'A rendered recommendation card has no positive typed BGG identity').toBe(true)
+      expect(new Set(renderedBggIds).size,
+        'Rendered recommendation cards repeated a BGG identity').toBe(renderedBggIds.length)
+      expect(new Set(renderedBggIds)).toEqual(new Set(terminalGames.map(entry => entry.game.bggId)))
+      expect(importRequestCount,
+        'Recommendation-only verification must not start a rulebook import').toBe(0)
+      expect(pageErrors, 'The recommendation-only journey emitted uncaught browser errors').toEqual([])
+      await expect(page).toHaveURL(/\/discover$/)
+      report.routeStayedOnDiscover = true
+      report.pageErrorCount = pageErrors.length
+      report.completed = true
+      report.stage = 'completed-recommendation-only'
+      await retainReport(reportFile, report)
+      return
+    }
+
     await expect(recommendationCards).toHaveCount(3, { timeout: MAX_SELECTION_RECOMMENDATION_MS })
     report.recommendationMs = elapsed(recommendationStartedAt)
+    report.recommendationTerminalObservedAt = new Date().toISOString()
+    report.recommendationElapsedBasis = 'UI_CARD_RENDER'
+    report.recommendationOutcome = 'recommendations'
+    report.recommendationTerminalCategory = 'RECOMMENDATIONS_WITHIN_INTERACTION_BUDGET'
     report.recommendationCardCount = await recommendationCards.count()
     expect(
       report.recommendationMs,
