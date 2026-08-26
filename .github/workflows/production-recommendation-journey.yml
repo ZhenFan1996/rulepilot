@@ -188,7 +188,7 @@ jobs:
           active_release_id=${active_release##*/}
           if [[ -z "$active_release" || -z "$releases_root"
             || "${active_release%/*}" != "$releases_root"
-            || ! "$active_release_id" =~ ^${tested_sha}-[0-9]+$ ]]; then
+            || ! "$active_release_id" =~ ^${tested_sha}-[0-9]+(-[0-9]+)?$ ]]; then
             echo "Production current does not resolve to the exact tested release" >&2
             exit 1
           fi
