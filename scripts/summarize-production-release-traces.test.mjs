@@ -12,6 +12,8 @@ import {
 
 const RELEASE_ID = '0123456789abcdef0123456789abcdef01234567-42'
 const TRACE_ID = '89abcdef0123456789abcdef01234567'
+const LEADING_ZERO_TRACE_ID = '0e244242b47a01b6c18598db1ccd438a'
+const TEMPO_SHORT_TRACE_ID = LEADING_ZERO_TRACE_ID.slice(1)
 
 function options(overrides = {}) {
   return {
@@ -71,6 +73,7 @@ test('accepts only an exact immutable release and a bounded loopback Tempo windo
     ['--release-id', 'main'],
     ['--trace-id', '0'.repeat(32)],
     ['--trace-id', 'ABCDEF0123456789abcdef0123456789'],
+    ['--trace-id', TRACE_ID.slice(1)],
     ['--end-epoch-seconds', String(1_000 + 2 * 60 * 60 + 1)],
   ]) {
     const args = [
@@ -99,6 +102,68 @@ test('scopes both TraceQL searches to the canary trace, production, and exact se
   }
   assert.match(workflowTerminalQuery(RELEASE_ID, TRACE_ID), /span:name = "recommendation-react"/)
   assert.match(workflowTerminalQuery(RELEASE_ID, TRACE_ID), /span\.outcome =~/)
+})
+
+test('restores Tempo response trace ID leading zeroes before exact canary matching', async () => {
+  const releaseTrace = tempoTrace({
+    traceId: TEMPO_SHORT_TRACE_ID,
+    spanId: 'release-span',
+    state: 'conversation',
+    startedAt: '1000000000',
+  })
+  const terminalTrace = tempoTrace({
+    traceId: TEMPO_SHORT_TRACE_ID,
+    spanId: 'terminal-span',
+    state: 'needs_clarification',
+    startedAt: '2000000000',
+  })
+
+  const summary = await collectReleaseTraceSummary(options({
+    traceId: LEADING_ZERO_TRACE_ID,
+    attempts: 1,
+  }), {
+    fetchImpl: async (url) => {
+      const query = new URL(url).searchParams.get('q') ?? ''
+      return new Response(JSON.stringify({
+        traces: query.includes('span:name') ? [terminalTrace] : [releaseTrace],
+      }))
+    },
+    sleep: async () => {},
+  })
+
+  assert.equal(summary.queryOutcome, 'SUCCEEDED')
+  assert.equal(summary.releaseTraceObserved, true)
+  assert.equal(summary.observedReleaseTraceCount, 1)
+  assert.equal(summary.businessWorkflowTerminal.observed, true)
+  assert.equal(summary.businessWorkflowTerminal.state, 'needs_clarification')
+  assert.equal(summary.businessWorkflowTerminal.observedTraceCount, 1)
+})
+
+test('rejects unrelated or malformed shortened Tempo response trace IDs', () => {
+  for (const responseTraceId of [
+    `f${TEMPO_SHORT_TRACE_ID.slice(1)}`,
+    TEMPO_SHORT_TRACE_ID.toUpperCase(),
+    `0${LEADING_ZERO_TRACE_ID}`,
+  ]) {
+    const trace = tempoTrace({
+      traceId: responseTraceId,
+      spanId: 'unrelated-span',
+      state: 'recommendations',
+      startedAt: '1000000000',
+    })
+    const summary = summarizeTraceSearch({
+      releaseId: RELEASE_ID,
+      traceId: LEADING_ZERO_TRACE_ID,
+      startEpochSeconds: 1_000,
+      endEpochSeconds: 1_100,
+      attemptsUsed: 1,
+      releaseTraces: [trace],
+      workflowTraces: [trace],
+    })
+
+    assert.equal(summary.releaseTraceObserved, false)
+    assert.equal(summary.businessWorkflowTerminal.observed, false)
+  }
 })
 
 test('publishes only allow-listed business terminals and never raw Tempo identifiers or player text', () => {

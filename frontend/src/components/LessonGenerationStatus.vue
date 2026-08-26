@@ -3,7 +3,7 @@ import { computed } from 'vue'
 
 import PlayerWorkStatusText from '@/components/PlayerWorkStatusText.vue'
 import { useLocale } from '@/lib/locale'
-import { guideWorkStatus } from '@/lib/playerWorkStatus'
+import { guideWorkStatus, type PlayerWorkStatus } from '@/lib/playerWorkStatus'
 
 export interface LessonGenerationActivity {
   sequence: number
@@ -26,17 +26,12 @@ const props = defineProps<{
   activities: LessonGenerationActivity[]
   refreshFailed: boolean
   finishedMessage: string
-  finishedComplete: boolean
+  finishedStatus: PlayerWorkStatus | null
 }>()
 
 const { locale, t } = useLocale()
 const workStatus = computed(() => guideWorkStatus(
   props.draftReady ? 'reviewing' : props.availableSectionCount > 0 ? 'readable' : 'organizing',
-  props.availableSectionCount,
-  locale.value,
-))
-const finishedWorkStatus = computed(() => guideWorkStatus(
-  props.finishedComplete ? 'complete' : 'needs-action',
   props.availableSectionCount,
   locale.value,
 ))
@@ -78,13 +73,15 @@ const finishedWorkStatus = computed(() => guideWorkStatus(
     </div>
   </section>
   <div
-    v-else-if="finishedMessage"
+    v-else-if="finishedMessage && finishedStatus"
     class="border-b px-5 py-3 text-center"
-    :class="finishedWorkStatus.readiness === 'complete' ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-amber-200 bg-amber-50 text-amber-900'"
+    :class="finishedStatus.readiness === 'complete' ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-amber-200 bg-amber-50 text-amber-900'"
     role="status"
+    aria-live="polite"
+    aria-atomic="true"
   >
     <PlayerWorkStatusText
-      :status="finishedWorkStatus"
+      :status="finishedStatus"
       class="text-sm font-semibold"
     />
     <p class="mt-0.5 text-xs leading-5">{{ finishedMessage }}</p>

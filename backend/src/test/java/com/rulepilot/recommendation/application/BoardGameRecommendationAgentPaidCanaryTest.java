@@ -129,6 +129,12 @@ class BoardGameRecommendationAgentPaidCanaryTest {
             assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
             assertThat(response.games()).hasSize(2);
             assertThat(response.games().getFirst().game().ranking().bggId()).isEqualTo(102);
+            assertThat(response.games()).allSatisfy(game -> assertThat(game.replyParts())
+                    .as("a rejected optional tradeoff must not erase the card's evidence-owned why part")
+                    .isNotEmpty());
+            assertThat(response.harness().actions())
+                    .noneMatch(action -> action.startsWith("RECOMMENDATION_NARRATIVE_SKIPPED:")
+                            || action.equals("RECOMMENDATION_NARRATIVE_UNAVAILABLE"));
             assertThat(response.games().getFirst().teachingContinuation()).satisfies(continuation -> {
                 assertThat(continuation.teachingPlanId()).isEqualTo(readyPlanId);
                 assertThat(continuation.sectionCount()).isEqualTo(5);
@@ -152,6 +158,79 @@ class BoardGameRecommendationAgentPaidCanaryTest {
             assertThat(arguments.path("continuationGoal").asText()).isEqualTo("GUIDE_AND_RULE_QA");
             assertThat(arguments.path("continuationEvidence").asText()).isNotBlank();
             assertThat(arguments.path("learningGoal").asText()).contains("设置", "首轮");
+            writeArtifact(capture, visibleTurns, null);
+        } catch (Throwable failure) {
+            writeArtifact(capture, visibleTurns, failure.getClass().getSimpleName());
+            throw failure;
+        } finally {
+            agent.stopBoundedCalls();
+        }
+    }
+
+    @Test
+    void honorsACurrentTurnLiteralTitleBoundaryWithoutAddingASelectionStage() throws Exception {
+        assumeTrue("true".equalsIgnoreCase(System.getenv("RULEPILOT_RECOMMENDATION_PAID_CANARY")));
+        String provider = environment("RULEPILOT_RECOMMENDATION_CANARY_PROVIDER", "qwen")
+                .toLowerCase(Locale.ROOT);
+        String prefix = provider.toUpperCase(Locale.ROOT);
+        Capture capture = new Capture(provider, environment(prefix + "_MODEL", null));
+        BoardGameRecommendationModel model = model(
+                provider,
+                environment(prefix + "_API_KEY", null),
+                environment(prefix + "_BASE_URL", null),
+                environment(prefix + "_MODEL", null),
+                capture);
+        var properties = new BoardGameRecommendationProperties(
+                8, 3, new BigDecimal("0.66"), RECOMMENDATION_TIMEOUT);
+        var agent = new BoardGameRecommendationAgent(
+                model,
+                new BoardGameRecommendationTools(
+                        new CanaryCatalog(List.of(101, 105, 108)),
+                        noResearch()),
+                new BoardGameRecommendationSelector(properties),
+                properties,
+                json);
+        List<Map<String, Object>> visibleTurns = new ArrayList<>();
+        long started = System.nanoTime();
+
+        try {
+            var response = agent.converse(
+                    new ConversationRequest(
+                            RecommendationProfile.empty(),
+                            "请只推荐两款正式标题中明确包含 Harbor 的桌游；主题像港口但标题不含这个词的不要补位。"),
+                    "zh-CN");
+            long totalMs = elapsed(started);
+            visibleTurns.add(visible(
+                    "literal-title-boundary",
+                    response,
+                    totalMs,
+                    List.of(),
+                    0,
+                    capture.callCount()));
+
+            assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
+            assertThat(response.games()).hasSize(2);
+            assertThat(response.games())
+                    .allSatisfy(game -> {
+                        assertThat(game.game().ranking().sourceName())
+                                .containsIgnoringCase("Harbor");
+                        assertThat(game.replyParts())
+                                .as("each selected card keeps at least its evidence-owned why part")
+                                .isNotEmpty();
+                    });
+            assertThat(response.harness().actions())
+                    .noneMatch(action -> action.startsWith("RECOMMENDATION_NARRATIVE_SKIPPED:")
+                            || action.equals("RECOMMENDATION_NARRATIVE_UNAVAILABLE"));
+            assertTerminalProsePreserved(capture, response);
+            assertThat(response.harness().modelCalls()).isEqualTo(2);
+            assertThat(totalMs).isLessThan(25_000L);
+            ToolCall producingCall = capture.lastCandidateProducingToolCall();
+            assertThat(producingCall.name()).isEqualTo(BoardGameRecommendationAgent.BROWSE_TOOL);
+            JsonNode arguments = json.readTree(producingCall.argumentsJson());
+            assertThat(arguments.path("titleConstraint").path("operator").asText()).isEqualTo("CONTAINS");
+            assertThat(arguments.path("titleConstraint").path("value").asText())
+                    .containsIgnoringCase("Harbor");
+            assertThat(arguments.path("evidence").asText()).isEqualTo("U1");
             writeArtifact(capture, visibleTurns, null);
         } catch (Throwable failure) {
             writeArtifact(capture, visibleTurns, failure.getClass().getSimpleName());

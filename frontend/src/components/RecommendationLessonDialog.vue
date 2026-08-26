@@ -136,12 +136,26 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   dialog: '生成讲解阅读器', close: '关闭讲解', eyebrow: '规则书讲解', updates: '讲解更新', loading: '正在打开已生成的讲解…', error: '讲解暂时无法打开。', retry: '重试',
   draft: '已有 {done} / {total} 章完成引用归属、规则书版本与结构校验；其余章节仍在后台生成。', complete: '完整讲解已经生成。', incomplete: '当前讲解只发布了具备可用规则依据的章节。',
   syncing: '已有 {done} / {total} 章完成引用归属、规则书版本与结构校验；正在确认后台任务状态。', settledDraft: '已有 {done} / {total} 章完成引用归属、规则书版本与结构校验；未发布章节仍缺少可用规则依据。',
+  citedDraft: (count: number) => `另有 ${count} 章已通过确定性引用与结构校验，现在可以阅读；额外内容复核尚未完成。`,
+  reviewedDraft: (count: number) => `本轮生成已经结束；已保留 ${count} 章可读讲解草稿，额外内容复核尚未完成。`,
+  terminalIncomplete: (count: number) => `本轮生成已经结束；已保留 ${count} 章可读内容，证据不足的章节未作为完整规则讲解发布。`,
+  failedReadable: (count: number) => `本轮讲解生成失败；已发布的 ${count} 章可读草稿仍然保留。`, failedEmpty: '本轮讲解生成失败，目前还没有可读章节。',
+  cancelledReadable: (count: number) => `本轮讲解生成已取消；已发布的 ${count} 章可读草稿仍然保留。`, cancelledEmpty: '本轮讲解生成已取消，目前还没有可读章节。',
+  noReadable: '本轮生成已经结束，但还没有具备可用规则依据的章节。',
+  progressAria: (done: number, total: number) => `${done} / ${total} 章已通过独立规则依据核对`,
   refresh: '暂时无法刷新最新章节，已显示的内容仍可继续阅读。', ask: '切换到规则答疑', source: '每个步骤都保留原规则书页码；答疑只使用同一份规则书。',
   visualActive: '正在从规则书中挑选能帮助上桌的局部图示。', visualAdded: (count: number) => `已有 ${count} 节具备图示。`, visualNone: '这次没有找到可靠的局部图示；文字讲解仍可完整阅读。', visualFailed: '局部配图没有完成；已发布的文字讲解仍可完整阅读。', visualPartial: (count: number) => `已有 ${count} 节具备图示；后续配图没有完成，文字讲解仍可完整阅读。`, visualRefresh: '暂时无法确认最新配图状态；文字讲解仍可阅读。',
 } : {
   dialog: 'Generated guide reader', close: 'Close guide', eyebrow: 'Rulebook guide', updates: 'Guide updates', loading: 'Opening generated guide content…', error: 'The guide cannot be opened right now.', retry: 'Retry',
   draft: '{done} / {total} chapters passed citation-ownership, rulebook-version, and structure checks; the remaining chapters are still being generated.', complete: 'The complete guide is ready.', incomplete: 'This guide publishes only chapters with usable rulebook support.',
   syncing: '{done} / {total} chapters passed citation-ownership, rulebook-version, and structure checks while the background task status is confirmed.', settledDraft: '{done} / {total} chapters passed citation-ownership, rulebook-version, and structure checks; unpublished chapters still lack usable rulebook support.',
+  citedDraft: (count: number) => `${count} more ${count === 1 ? 'chapter has' : 'chapters have'} passed deterministic citation and structure checks and can be read now; additional content review is not complete.`,
+  reviewedDraft: (count: number) => `This generation run has finished with ${count} readable guide ${count === 1 ? 'chapter draft' : 'chapter drafts'} preserved. Additional content review is not complete.`,
+  terminalIncomplete: (count: number) => `This generation run has finished with ${count} readable ${count === 1 ? 'chapter' : 'chapters'} preserved. Chapters without enough evidence were not published as complete rules guidance.`,
+  failedReadable: (count: number) => `This guide generation run failed. ${count} readable ${count === 1 ? 'chapter draft remains' : 'chapter drafts remain'} available.`, failedEmpty: 'This guide generation run failed without a readable chapter.',
+  cancelledReadable: (count: number) => `This guide generation run was cancelled. ${count} readable ${count === 1 ? 'chapter draft remains' : 'chapter drafts remain'} available.`, cancelledEmpty: 'This guide generation run was cancelled before a readable chapter was ready.',
+  noReadable: 'This generation run finished without a chapter backed by usable rulebook evidence.',
+  progressAria: (done: number, total: number) => `${done} of ${total} chapters independently supported by rulebook evidence`,
   refresh: 'The latest chapter update is unavailable. Confirmed content remains readable.', ask: 'Switch to rules Q&A', source: 'Every step retains original rulebook page references; Q&A uses the same rulebook.',
   visualActive: 'Selecting focused rulebook visuals that help at the table.', visualAdded: (count: number) => `${count} ${count === 1 ? 'chapter now includes' : 'chapters now include'} visuals.`, visualNone: 'No reliable focused visual was found; the text guide remains fully readable.', visualFailed: 'Focused visual enrichment did not finish. The published text guide remains fully readable.', visualPartial: (count: number) => `${count} ${count === 1 ? 'chapter now includes' : 'chapters now include'} visuals; later visual enrichment did not finish, and the text guide remains fully readable.`, visualRefresh: 'The latest visual status is unavailable. The text guide remains readable.',
 })
@@ -169,15 +183,57 @@ const visualEvidenceExpected = computed(() => plan.value?.sections.some(
 const teachingRunTerminal = computed(() => visualRunIsTerminal(run.value?.run.state))
 const supportedChapterCount = computed(() => lesson.value?.sections
   .filter(section => section.evidenceStatus === 'SUPPORTED').length ?? 0)
-const statusText = computed(() => {
-  if (!plan.value || !lesson.value) return ''
-  if (lesson.value.status === 'COMPLETE' && run.value?.run.state === 'COMPLETED') return copy.value.complete
-  if (lesson.value.status === 'INCOMPLETE') return copy.value.incomplete
-  const template = !run.value ? copy.value.syncing : active.value ? copy.value.draft : copy.value.settledDraft
-  return template
+const citedDraftChapterCount = computed(() => lesson.value?.sections
+  .filter(section => section.evidenceStatus === 'CITED_DRAFT').length ?? 0)
+const readableChapterCount = computed(() => supportedChapterCount.value + citedDraftChapterCount.value)
+const teachingStatusPresentation = computed(() => {
+  if (!plan.value || !lesson.value) return { text: '', tone: 'active' as const }
+  const state = run.value?.run.state
+  const interpolate = (template: string) => template
     .replace('{done}', String(supportedChapterCount.value))
-    .replace('{total}', String(plan.value.sections.length))
+    .replace('{total}', String(plan.value!.sections.length))
+
+  if (!run.value) return { text: interpolate(copy.value.syncing), tone: 'active' as const }
+  if (state === 'FAILED') {
+    return {
+      text: readableChapterCount.value
+        ? copy.value.failedReadable(readableChapterCount.value)
+        : copy.value.failedEmpty,
+      tone: 'failed' as const,
+    }
+  }
+  if (state === 'CANCELLED') {
+    return {
+      text: readableChapterCount.value
+        ? copy.value.cancelledReadable(readableChapterCount.value)
+        : copy.value.cancelledEmpty,
+      tone: 'cancelled' as const,
+    }
+  }
+  if (active.value) {
+    return {
+      text: lesson.value.status === 'INCOMPLETE' ? copy.value.incomplete : interpolate(copy.value.draft),
+      tone: 'active' as const,
+    }
+  }
+
+  const fullySupported = state === 'COMPLETED'
+    && lesson.value.status === 'COMPLETE'
+    && lesson.value.sections.length > 0
+    && lesson.value.sections.every(section => section.evidenceStatus === 'SUPPORTED')
+  if (fullySupported) return { text: copy.value.complete, tone: 'complete' as const }
+  if (!readableChapterCount.value) return { text: copy.value.noReadable, tone: 'partial' as const }
+  if (state === 'COMPLETED') {
+    return { text: copy.value.reviewedDraft(readableChapterCount.value), tone: 'partial' as const }
+  }
+  if (state === 'DEGRADED' || state === 'INSUFFICIENT_EVIDENCE') {
+    return { text: copy.value.terminalIncomplete(readableChapterCount.value), tone: 'partial' as const }
+  }
+  return { text: interpolate(copy.value.settledDraft), tone: 'partial' as const }
 })
+const teachingStatusClass = computed(() => teachingStatusPresentation.value.tone === 'active'
+  ? 'text-indigo'
+  : teachingStatusPresentation.value.tone === 'complete' ? 'text-emerald-700' : 'text-amber-800')
 const progress = computed(() => {
   const total = plan.value?.sections.length ?? 0
   if (!total) return 0
@@ -644,8 +700,11 @@ onBeforeUnmount(() => {
             <div class="flex shrink-0 items-center gap-2"><button v-if="lesson" type="button" class="min-h-11 rounded-lg bg-indigo px-4 text-sm font-semibold text-white" @click="emit('ask-questions')">{{ copy.ask }}</button><button type="button" data-modal-initial-focus class="grid min-h-11 min-w-11 place-items-center rounded-lg text-2xl text-ink/45 hover:bg-ink/5" :aria-label="copy.close" @click="emit('close')">×</button></div>
           </div>
           <div v-if="plan && lesson" class="mt-3">
-            <div class="flex items-center justify-between gap-3 text-xs"><p class="font-semibold" :class="active || !run ? 'text-indigo' : 'text-emerald-700'" role="status">{{ statusText }}</p><span class="font-mono font-semibold text-ink/50">{{ supportedChapterCount }} / {{ plan.sections.length }}</span></div>
-            <div class="mt-2 h-1.5 overflow-hidden rounded-full bg-indigo/10"><div data-testid="recommendation-lesson-progress" class="h-full rounded-full bg-indigo transition-[width] duration-500" :style="{ width: `${progress}%` }" /></div>
+            <div data-testid="recommendation-lesson-teaching-status" role="status" aria-live="polite" aria-atomic="true">
+              <div class="flex items-center justify-between gap-3 text-xs"><p data-testid="recommendation-lesson-teaching-status-text" class="font-semibold" :class="teachingStatusClass">{{ teachingStatusPresentation.text }}</p><span class="font-mono font-semibold text-ink/50">{{ supportedChapterCount }} / {{ plan.sections.length }}</span></div>
+              <p v-if="citedDraftChapterCount" data-testid="recommendation-lesson-cited-draft-status" class="mt-2 text-xs leading-5 text-ink/55">{{ copy.citedDraft(citedDraftChapterCount) }}</p>
+            </div>
+            <div class="mt-2 h-1.5 overflow-hidden rounded-full bg-indigo/10" role="progressbar" :aria-valuemin="0" :aria-valuemax="plan.sections.length" :aria-valuenow="supportedChapterCount" :aria-label="copy.progressAria(supportedChapterCount, plan.sections.length)"><div data-testid="recommendation-lesson-progress" class="h-full rounded-full bg-indigo transition-[width] duration-500" :style="{ width: `${progress}%` }" /></div>
             <p v-if="activityText" class="mt-2 text-xs text-ink/50">{{ activityText }}</p>
           </div>
         </header>

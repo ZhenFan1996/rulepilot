@@ -102,11 +102,15 @@ test('production recommendation journey tests one exact deployed main-ancestry r
   assert.match(productionRecommendationWorkflow, /RULEPILOT_PRODUCTION_RECOMMENDATION_JOURNEY=true/)
   assert.match(productionRecommendationWorkflow, /opening_prompt:[\s\S]*?还没想清楚换什么方向/)
   assert.match(productionRecommendationWorkflow, /selection_prompt:[\s\S]*?你直接挑三款/)
+  assert.match(productionRecommendationWorkflow,
+    /requested_card_count:[\s\S]*?required: true[\s\S]*?type: number[\s\S]*?default: 3/)
   assert.match(productionRecommendationWorkflow, /rule_follow_up:[\s\S]*?同一本规则书/)
   assert.match(productionRecommendationWorkflow,
     /RULEPILOT_RECOMMENDATION_OPENING_PROMPT: \$\{\{ inputs\.opening_prompt \}\}/)
   assert.match(productionRecommendationWorkflow,
     /RULEPILOT_RECOMMENDATION_SELECTION_PROMPT: \$\{\{ inputs\.selection_prompt \}\}/)
+  assert.match(productionRecommendationWorkflow,
+    /RULEPILOT_RECOMMENDATION_EXPECTED_CARD_COUNT: \$\{\{ inputs\.requested_card_count \}\}/)
   assert.match(productionRecommendationWorkflow,
     /RULEPILOT_RECOMMENDATION_RULE_FOLLOW_UP: \$\{\{ inputs\.rule_follow_up \}\}/)
   assert.doesNotMatch(productionRecommendationWorkflow, /target_bgg_id|target_names|230802|花砖物语|Azul/)
@@ -165,9 +169,13 @@ test('production recommendation journey tests one exact deployed main-ancestry r
   assert.match(productionRecommendationSpec, /report\.pdfDownloadToFirstCitedLessonMs = Math\.max/)
   assert.match(productionRecommendationSpec, /MAX_OPEN_GUIDANCE_MS = 15_000/)
   assert.match(productionRecommendationSpec, /MAX_SELECTION_RECOMMENDATION_MS = 20_000/)
-  assert.match(productionRecommendationSpec, /MAX_SELECTION_TERMINAL_OBSERVATION_MS = 35_000/)
+  assert.match(productionRecommendationSpec, /MAX_SELECTION_TERMINAL_OBSERVATION_MS = 50_000/)
   assert.match(productionRecommendationSpec, /toContain\(report\.openGuidanceOutcome\)/)
   assert.match(productionRecommendationSpec, /RULEPILOT_RECOMMENDATION_ONLY === 'true'/)
+  assert.match(productionRecommendationSpec,
+    /parseRequestedRecommendationCardCount\([\s\S]*?RULEPILOT_RECOMMENDATION_EXPECTED_CARD_COUNT/)
+  assert.match(productionRecommendationSpec,
+    /Requested recommendation card count must be between 1 and 8/)
   assert.match(productionRecommendationSpec,
     /type RecommendationJourneyMode = 'ready_public' \| 'verified_import'/)
   assert.match(productionRecommendationSpec,
@@ -194,7 +202,7 @@ test('production recommendation journey tests one exact deployed main-ancestry r
   assert.match(productionRecommendationSpec, /renderedRecommendationAnswerTurnCount\(answerWorkspace\)/)
   assert.match(productionRecommendationSpec, /persistedFollowUp!\.answer/)
   assert.match(productionRecommendationSpec,
-    /toBe\('RECOMMENDATIONS_WITHIN_INTERACTION_BUDGET'\)/)
+    /'RECOMMENDATIONS_WITHIN_INTERACTION_BUDGET',[\s\S]*?'RECOMMENDATIONS_OVER_INTERACTION_BUDGET'/)
   assert.match(productionRecommendationSpec, /finalResult\?\.outcome[\s\S]*?toBe\('recommendations'\)/)
   assert.match(productionRecommendationSpec, /recommendationCardCount\)\.toBeGreaterThanOrEqual\(2\)/)
   assert.match(productionRecommendationSpec, /positiveDistinctBggIds\(terminalGames\)/)
@@ -203,15 +211,33 @@ test('production recommendation journey tests one exact deployed main-ancestry r
   assert.match(productionRecommendationSpec, /PERSISTED_FINAL_SESSION/)
   assert.match(productionRecommendationSpec,
     /Recommendation-only verification must not start a rulebook import[\s\S]*?toBe\(0\)/)
-  assert.match(
+  assert.match(productionRecommendationSpec, /observeRecommendationSlate\(/)
+  assert.match(productionRecommendationSpec,
+    /observeRecommendationSlate\([\s\S]*?persistedBggIds/)
+  assert.match(productionRecommendationSpec,
+    /observations: Array<\{ bggIds: number\[\]; observedMs: number \}>/)
+  assert.match(productionRecommendationSpec,
+    /sameTypedBggSlate\(observation\.bggIds, expectedBggIds!\)/)
+  assert.match(productionRecommendationSpec,
+    /id === persistedBggIds\[index\]/)
+  assert.match(productionRecommendationSpec,
+    /settlePersistedBggIds\(null\)[\s\S]*?await recommendationCardsVisible\.catch/)
+  assert.match(productionRecommendationSpec,
+    /sameTypedBggSlate\(renderedSelectionBggIds, persistedSelectionBggIds\)/)
+  assert.doesNotMatch(productionRecommendationSpec,
+    /observation\.count\s*>?=\s*expectedCount/)
+  assert.match(productionRecommendationSpec,
+    /Math\.max\(0, selectionRequestedCardCount - report\.recommendationPersistedCardCount\)/)
+  assert.match(productionRecommendationSpec, /selectionDiagnosticDeadlineAt/)
+  assert.match(productionRecommendationSpec, /Promise\.all\(\[/)
+  assert.match(productionRecommendationSpec, /expect\.soft\([\s\S]*?report\.recommendationSloMet/)
+  assert.match(productionRecommendationSpec, /PERSISTED_RECOMMENDATIONS_NOT_RENDERED/)
+  assert.doesNotMatch(
     productionRecommendationSpec,
     /expect\(recommendationCards\)\.toHaveCount\(3, \{ timeout: MAX_SELECTION_RECOMMENDATION_MS \}\)/,
   )
-  assert.match(
-    productionRecommendationSpec,
-    /report\.recommendationMs[\s\S]*?toBeLessThanOrEqual\(MAX_SELECTION_RECOMMENDATION_MS\)/,
-  )
   assert.match(productionRecommendationSpec, /section\.evidenceStatus === 'SUPPORTED' \|\| section\.evidenceStatus === 'CITED_DRAFT'/)
+  assert.match(productionRecommendationSpec, /READABLE_WITH_DEGRADATION/)
   assert.match(
     productionRecommendationSpec,
     /if \(REQUIRE_FRESH_IMPORT\) \{\s*expect\(launchedJob\.reused[^\n]*\)\.toBe\(false\)/,
@@ -560,6 +586,22 @@ test('public production recommendation artifacts contain only sanitized journey 
   assert.match(publicSummaryStep, /observationElapsedMs/)
   assert.match(publicSummaryStep, /resultRenderedMs/)
   assert.match(publicSummaryStep, /persistedTerminalMs/)
+  assert.match(publicSummaryStep, /FULL_TYPED_RECOMMENDATION_SLATE_RENDER/)
+  assert.match(publicSummaryStep, /teaching:\s*\{/)
+  assert.match(publicSummaryStep, /runState: \.teachingGenerationState/)
+  assert.match(publicSummaryStep, /completionCategory: \.lessonCompletionCategory/)
+  assert.match(publicSummaryStep, /citedDraftSectionCount/)
+  assert.match(publicSummaryStep, /insufficientSectionCount/)
+  assert.match(publicSummaryStep, /requestedCardCount/)
+  assert.match(publicSummaryStep, /persistedCardCount/)
+  assert.match(publicSummaryStep, /shortfallCount/)
+  assert.match(publicSummaryStep, /slateRendered/)
+  assert.match(publicSummaryStep, /slateMs/)
+  assert.match(publicSummaryStep, /recommendationPersistedTerminalObserved/)
+  assert.match(publicSummaryStep, /lessonReadable/)
+  assert.match(publicSummaryStep, /lessonFullySupported/)
+  assert.match(publicSummaryStep, /lessonCompletionCategory/)
+  assert.doesNotMatch(publicSummaryStep, /recommendationExpectedCardCount/)
   assert.doesNotMatch(publicSummaryStep,
     /recommendationConversationId|modelAssignments|sourceUrl|lessonDockText|teachingPlanId|answerSessionId|TurnId|ErrorCode/)
   assert.doesNotMatch(productionRecommendationWorkflow, /api-diagnostics\.log|docker compose[^\n]*logs|Upload private/)

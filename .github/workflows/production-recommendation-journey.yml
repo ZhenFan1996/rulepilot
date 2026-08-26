@@ -17,6 +17,11 @@ on:
         required: true
         type: string
         default: '我想换成能谈判、互相骗一骗的；有两个新手，90 分钟内。你直接挑三款，并把你最推荐的一款放第一吧。我们选好后想优先直接进入已有讲解，先学设置和首轮行动，再按同一份规则书继续答疑。'
+      requested_card_count:
+        description: Typed card count explicitly requested by selection_prompt; used only for shortfall evidence
+        required: true
+        type: number
+        default: 3
       rule_question:
         description: Question asked after the cited lesson becomes readable
         required: true
@@ -76,6 +81,7 @@ jobs:
       RULEPILOT_RECOMMENDATION_TESTED_SHA: ${{ inputs.tested_sha }}
       RULEPILOT_RECOMMENDATION_OPENING_PROMPT: ${{ inputs.opening_prompt }}
       RULEPILOT_RECOMMENDATION_SELECTION_PROMPT: ${{ inputs.selection_prompt }}
+      RULEPILOT_RECOMMENDATION_EXPECTED_CARD_COUNT: ${{ inputs.requested_card_count }}
       RULEPILOT_RECOMMENDATION_RULE_QUESTION: ${{ inputs.rule_question }}
       RULEPILOT_RECOMMENDATION_RULE_FOLLOW_UP: ${{ inputs.rule_follow_up }}
       RULEPILOT_RECOMMENDATION_JOURNEY_MODE: ${{ inputs.journey_mode }}
@@ -656,6 +662,37 @@ jobs:
               answerMs,
               citedAnswer
             },
+            teaching: {
+              runState: .teachingGenerationState,
+              lessonStatus,
+              completionCategory: .lessonCompletionCategory,
+              readable: .lessonReadable,
+              fullySupported: .lessonFullySupported,
+              sectionCount: .lessonSectionCount,
+              citedDraftSectionCount,
+              insufficientSectionCount
+            },
+            recommendation: {
+              sloMs: 20000,
+              sloBasis: "FULL_TYPED_RECOMMENDATION_SLATE_RENDER",
+              requestedCardCount: .recommendationRequestedCardCount,
+              persistedCardCount: .recommendationPersistedCardCount,
+              shortfallCount: .recommendationShortfallCount,
+              slateRendered: .recommendationSlateRendered,
+              slateMs: .recommendationSlateMs,
+              observationElapsedMs: .recommendationObservationElapsedMs,
+              sloMet: .recommendationSloMet,
+              terminalObserved: .recommendationPersistedTerminalObserved,
+              persistedTerminalMs: .recommendationPersistedTerminalMs,
+              outcome: .recommendationOutcome,
+              terminalCategory: .recommendationTerminalCategory,
+              cardCount: .recommendationCardCount,
+              modelCalls: .recommendationModelCalls,
+              catalogCalls: .recommendationCatalogCalls,
+              webResearchCalls: .recommendationWebResearchCalls,
+              publicationRecovered: .recommendationPublicationRecovered,
+              failureBoundary: .recommendationFailureBoundary
+            },
             recommendationMs,
             recommendationElapsedBasis,
             recommendationOutcome,
@@ -681,6 +718,9 @@ jobs:
             sourceOfficialDomainVerified,
             confirmedMilestonesFinal,
             lessonStatus,
+            lessonReadable,
+            lessonFullySupported,
+            lessonCompletionCategory,
             lessonSectionCount,
             citedLessonStep,
             answerStatus,

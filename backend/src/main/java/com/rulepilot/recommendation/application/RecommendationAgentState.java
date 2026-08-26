@@ -9,10 +9,12 @@ import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Source;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.CandidateComparison;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ConversationRequest;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendationProfile;
+import java.text.Normalizer;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -43,6 +45,7 @@ final class RecommendationAgentState {
     final Set<String> finalResponsePublicEvidenceIds = new LinkedHashSet<>();
     final Map<String, Object> finalResponseDecisionFacts = new LinkedHashMap<>();
     final Map<Integer, Continuation> teachingContinuations = new LinkedHashMap<>();
+    TitleConstraint titleConstraint;
     final Set<Integer> teachingContinuationQueriedIds = new LinkedHashSet<>();
     final Set<Integer> teachingContinuationUnavailableIds = new LinkedHashSet<>();
     Research research = Research.empty();
@@ -268,6 +271,33 @@ final class RecommendationAgentState {
         PUBLISH_CARDS,
         RESEARCH_THEN_PUBLISH,
         CONTINUE_REACT
+    }
+
+    record TitleConstraint(String value, String evidenceId) {
+        TitleConstraint {
+            value = normalize(value);
+            evidenceId = Objects.requireNonNull(evidenceId, "title constraint evidence is required").strip();
+            if (value.isEmpty() || evidenceId.isEmpty()) {
+                throw new IllegalArgumentException("title constraint is invalid");
+            }
+        }
+
+        boolean matches(Game game) {
+            if (game == null || game.ranking() == null || game.details() == null) return false;
+            return java.util.stream.Stream.of(
+                            game.ranking().sourceName(),
+                            game.details().name(),
+                            game.details().officialChineseName())
+                    .map(TitleConstraint::normalize)
+                    .anyMatch(title -> title.contains(value));
+        }
+
+        private static String normalize(String value) {
+            if (value == null || value.isBlank()) return "";
+            return Normalizer.normalize(value.strip(), Normalizer.Form.NFKC)
+                    .replaceAll("\\s+", " ")
+                    .toLowerCase(Locale.ROOT);
+        }
     }
 
     record PublicationSeed(

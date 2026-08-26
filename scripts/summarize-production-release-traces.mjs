@@ -190,6 +190,16 @@ function attributeValue(span, key) {
   return attribute?.value?.stringValue
 }
 
+function canonicalTempoResponseTraceId(value) {
+  return typeof value === 'string' && /^[0-9a-f]{1,32}$/.test(value)
+    ? value.padStart(32, '0')
+    : null
+}
+
+function matchesCanaryTrace(trace, traceId) {
+  return canonicalTempoResponseTraceId(trace?.traceID) === traceId
+}
+
 function matchedSpans(trace) {
   const spanSets = Array.isArray(trace.spanSets)
     ? trace.spanSets
@@ -213,7 +223,7 @@ function terminalEvents(traces) {
         state,
         start,
         duration,
-        traceKey: typeof trace.traceID === 'string' ? trace.traceID : `trace-${traceIndex}`,
+        traceKey: canonicalTempoResponseTraceId(trace.traceID) ?? `trace-${traceIndex}`,
         spanKey: typeof span.spanID === 'string' ? span.spanID : `span-${spanIndex}`,
       })
     }
@@ -243,11 +253,12 @@ export function summarizeTraceSearch({
   if (queryFailureCause !== null && !QUERY_FAILURE_CAUSES.has(queryFailureCause)) {
     throw new Error('query failure cause is invalid')
   }
-  const exactReleaseTraces = releaseTraces.filter((trace) => trace?.traceID === traceId)
-  const exactWorkflowTraces = workflowTraces.filter((trace) => trace?.traceID === traceId)
+  const exactReleaseTraces = releaseTraces.filter((trace) => matchesCanaryTrace(trace, traceId))
+  const exactWorkflowTraces = workflowTraces.filter((trace) => matchesCanaryTrace(trace, traceId))
   const events = terminalEvents(exactWorkflowTraces)
   const latest = events.at(-1) ?? null
-  const uniqueReleaseTraces = new Set(exactReleaseTraces.map((trace) => trace.traceID))
+  const uniqueReleaseTraces = new Set(exactReleaseTraces
+    .map((trace) => canonicalTempoResponseTraceId(trace.traceID)))
   const uniqueWorkflowTraces = new Set(events.map((event) => event.traceKey))
   const stateCounts = TERMINAL_STATES
     .map((state) => ({ state, count: events.filter((event) => event.state === state).length }))
@@ -328,7 +339,7 @@ export async function collectReleaseTraceSummary(options, dependencies = {}) {
       ? sanitizedFailureCause(failedResult.reason)
       : null
     const releaseTraceAlreadyObserved = observedReleaseTraces
-      .some((trace) => trace?.traceID === options.traceId)
+      .some((trace) => matchesCanaryTrace(trace, options.traceId))
     lastSummary = summarizeTraceSearch({
       releaseId: options.releaseId,
       traceId: options.traceId,

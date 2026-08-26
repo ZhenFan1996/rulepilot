@@ -179,6 +179,14 @@ class RecommendationNaturalFrontDoorTest {
                         BoardGameRecommendationAgent.RESOLVE_TOOL,
                         BoardGameRecommendationAgent.BROWSE_TOOL)
                 .doesNotContain("inspect_candidate_titles");
+        assertThat(initialRequest.tools().stream()
+                        .filter(tool -> BoardGameRecommendationAgent.BROWSE_TOOL.equals(tool.name()))
+                        .findFirst()
+                        .orElseThrow()
+                        .inputSchema())
+                .contains(
+                        "\"enum\":[\"NONE\",\"GUIDE_AND_RULE_QA\"]",
+                        "\"required\":[\"requestedCount\",\"requestedCountBasis\",\"continuationGoal\"]");
         Map<String, Integer> actionCharacters = initialRequest.tools().stream()
                 .collect(java.util.stream.Collectors.toMap(
                         BoardGameRecommendationModel.ToolSpec::name,
@@ -336,7 +344,7 @@ class RecommendationNaturalFrontDoorTest {
         BoardGameRecommendationTools tools = mock(BoardGameRecommendationTools.class);
         AtomicReference<Request> captured = new AtomicReference<>();
         Game target = game(801, "River Market", "河市集", List.of("Avery Stone"));
-        String playerReply = "找到了，就是你指定的《河市集》。这张卡对应 River Market，可以直接继续阅读规则书、生成讲解，再进入答疑。";
+        String playerReply = "找到了，就是你指定的《河市集》。这张卡对应 River Market。";
 
         when(model.configured("player")).thenReturn(true);
         when(model.next(any(), eq("player"))).thenAnswer(invocation -> {
@@ -346,7 +354,7 @@ class RecommendationNaturalFrontDoorTest {
                     List.of(new ToolCall(
                             "call-resolve-target",
                             BoardGameRecommendationAgent.RESOLVE_TOOL,
-                            "{\"title\":\"河市集\",\"alternateTitles\":[\"River Market\"],\"purpose\":\"TARGET_GAME\",\"evidence\":\"U1\",\"playerReply\":\""
+                            "{\"title\":\"河市集\",\"alternateTitles\":[\"River Market\"],\"purpose\":\"TARGET_GAME\",\"evidence\":\"U1\",\"continuationGoal\":\"NONE\",\"playerReply\":\""
                                     + playerReply
                                     + "\"}")),
                     CompletionStatus.COMPLETE);
@@ -367,7 +375,7 @@ class RecommendationNaturalFrontDoorTest {
         var response = loop.converse(
                 new ConversationRequest(
                         RecommendationProfile.empty(),
-                        "今晚就玩《河市集（River Market）》，请找到后让我继续读规则书和讲解。"),
+                        "今晚就玩《河市集（River Market）》，只需要找到并确认对应卡片。"),
                 "zh-CN",
                 "player",
                 ignored -> {});
@@ -400,7 +408,9 @@ class RecommendationNaturalFrontDoorTest {
                                     "playerReply",
                                     "continuationGoal",
                                     "continuationEvidence",
-                                    "learningGoal")
+                                    "learningGoal",
+                                    "\"enum\":[\"NONE\",\"GUIDE_AND_RULE_QA\"]",
+                                    "\"required\":[\"title\",\"purpose\",\"evidence\",\"continuationGoal\"]")
                             .doesNotContain("\"reason\"");
                 });
         verify(tools, never()).lookupReadyTeachingContinuations(any());
@@ -570,7 +580,7 @@ class RecommendationNaturalFrontDoorTest {
                         List.of(new ToolCall(
                                 "call-invalid-title",
                                 BoardGameRecommendationAgent.RESOLVE_TOOL,
-                                "{\"title\":\"\",\"purpose\":\"TARGET_GAME\",\"evidence\":\"U1\",\"playerReply\":\"找到了，可以继续看规则。\"}")),
+                                "{\"title\":\"\",\"purpose\":\"TARGET_GAME\",\"evidence\":\"U1\",\"continuationGoal\":\"NONE\",\"playerReply\":\"找到了对应卡片。\"}")),
                         CompletionStatus.COMPLETE))
                 .thenAnswer(invocation -> {
                     repairRequest.set(invocation.getArgument(0));
@@ -579,7 +589,7 @@ class RecommendationNaturalFrontDoorTest {
                             List.of(new ToolCall(
                                     "call-corrected-title",
                                     BoardGameRecommendationAgent.RESOLVE_TOOL,
-                                    "{\"title\":\"Lantern Passage\",\"purpose\":\"TARGET_GAME\",\"evidence\":\"U1\",\"playerReply\":\"找到了，就是《灯笼渡口》；它是你明确指定的游戏，可以继续打开规则书。\"}")),
+                                    "{\"title\":\"Lantern Passage\",\"purpose\":\"TARGET_GAME\",\"evidence\":\"U1\",\"continuationGoal\":\"NONE\",\"playerReply\":\"找到了，就是《灯笼渡口》；它是你明确指定的游戏。\"}")),
                             CompletionStatus.COMPLETE);
                 });
         when(tools.resolveLocalReferenceTitle("Lantern Passage"))
@@ -596,7 +606,7 @@ class RecommendationNaturalFrontDoorTest {
         var response = loop.converse(
                 new ConversationRequest(
                         RecommendationProfile.empty(),
-                        "请直接找到《Lantern Passage》，然后让我读规则书。"),
+                        "请直接找到并确认《Lantern Passage》的卡片。"),
                 "zh-CN",
                 "player",
                 ignored -> {});
@@ -683,7 +693,13 @@ class RecommendationNaturalFrontDoorTest {
                 BoardGameRecommendationModel.ToolSpec::name,
                 BoardGameRecommendationModel.ToolSpec::inputSchema));
         assertThat(toolSchemas.get(BoardGameRecommendationAgent.DISCOVER_TOOL))
-                .contains("subject", "afterIdentity", "RECOMMEND_WITH_CARDS")
+                .contains(
+                        "subject",
+                        "afterIdentity",
+                        "RECOMMEND_WITH_CARDS",
+                        "continuationGoal",
+                        "GUIDE_AND_RULE_QA",
+                        "\"required\":[\"evidence\",\"subject\",\"afterIdentity\",\"requestedCount\",\"requestedCountBasis\",\"continuationGoal\"]")
                 .doesNotContain("goalPlan", "workAfterIdentity")
                 .doesNotContain("preferenceUpdates");
         assertThat(toolSchemas.get(BoardGameRecommendationAgent.BROWSE_TOOL))
@@ -698,13 +714,15 @@ class RecommendationNaturalFrontDoorTest {
                         "minimumAverageRating",
                         "minimumRatingsCount",
                         "textQuery",
+                        "titleConstraint",
+                        "CONTAINS",
                         "RELEVANCE",
                         "offset",
                         "preferenceUpdates",
                         "requestedCount",
                         "requestedCountBasis",
                         "evidence",
-                        "\"required\":[\"requestedCount\",\"requestedCountBasis\"]");
+                        "\"required\":[\"requestedCount\",\"requestedCountBasis\",\"continuationGoal\"]");
         assertThat(first.tools().stream()
                         .filter(tool -> BoardGameRecommendationAgent.BROWSE_TOOL.equals(tool.name()))
                         .findFirst()
@@ -712,10 +730,13 @@ class RecommendationNaturalFrontDoorTest {
                 .description())
                 .contains(
                         "local BGG catalog for selectable cards",
-                        "requestedCount and requestedCountBasis are required",
+                        "requestedCount/requestedCountBasis",
                         "defaultRecommendationCount",
                         "PRODUCT_DEFAULT",
-                        "current-turn U id");
+                        "current-turn U id",
+                        "textQuery is soft",
+                        "titleConstraint is the hard",
+                        "Always set continuationGoal");
         String system = first.messages().getFirst().content();
         assertThat(system)
                 .contains(
@@ -1291,19 +1312,22 @@ class RecommendationNaturalFrontDoorTest {
                         new ResolvedRelationship(RelationshipKind.OTHER, "Orion Saga", List.of(1))));
             }
         };
+        UUID readyPlanId = UUID.randomUUID();
+        PublicTeachingContinuationCatalog continuations = candidates -> Availability.partial(Map.of(
+                712, new PublicTeachingContinuationCatalog.Continuation(712, readyPlanId, 4, 12)));
         when(model.configured("player")).thenReturn(true);
         when(model.next(any(), eq("player"))).thenReturn(new Turn(
                 "",
                 List.of(new ToolCall(
                         "call-discover-franchise",
                         BoardGameRecommendationAgent.DISCOVER_TOOL,
-                        "{\"evidence\":\"U1\",\"subject\":\"Orion Saga IP\",\"afterIdentity\":\"RECOMMEND_WITH_CARDS\",\"candidateUse\":\"PUBLISH_CARDS\",\"requestedCount\":2,\"requestedCountBasis\":\"U1\",\"playerLead\":\"公开来源指向这两款系列桌游；每张卡都保留可核对的依据和选择边界。\"}")),
+                        "{\"evidence\":\"U1\",\"subject\":\"Orion Saga IP\",\"afterIdentity\":\"RECOMMEND_WITH_CARDS\",\"candidateUse\":\"PUBLISH_CARDS\",\"requestedCount\":2,\"requestedCountBasis\":\"U1\",\"continuationGoal\":\"GUIDE_AND_RULE_QA\",\"continuationEvidence\":\"U1\",\"learningGoal\":\"先学设置，再继续规则答疑。\",\"playerLead\":\"公开来源指向这两款系列桌游；有现成讲解的候选会排在前面。\"}")),
                 CompletionStatus.COMPLETE));
         var properties = new BoardGameRecommendationProperties(
                 8, 3, new BigDecimal("0.65"), Duration.ofSeconds(30));
         RecommendationReActLoop loop = new RecommendationReActLoop(
                 model,
-                new BoardGameRecommendationTools(catalog, research),
+                new BoardGameRecommendationTools(catalog, research, continuations),
                 new BoardGameRecommendationSelector(properties),
                 properties,
                 new ObjectMapper());
@@ -1311,7 +1335,7 @@ class RecommendationNaturalFrontDoorTest {
         var response = loop.converse(
                 new ConversationRequest(
                         RecommendationProfile.empty(),
-                        "‘Orion Saga’这个虚构科幻 IP 有哪些桌游？请给我两款可选择的卡片。"),
+                        "‘Orion Saga’这个虚构科幻 IP 有哪些桌游？请给我两款卡片，把有现成讲解的放前面，然后继续规则答疑。"),
                 "zh-CN",
                 "player",
                 ignored -> {});
@@ -1323,10 +1347,17 @@ class RecommendationNaturalFrontDoorTest {
         assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
         assertThat(response.games())
                 .extracting(entry -> entry.game().ranking().bggId())
-                .containsExactly(711, 712);
+                .containsExactly(712, 711);
+        assertThat(response.games().getFirst().teachingContinuation()).satisfies(continuation ->
+                assertThat(continuation.teachingPlanId()).isEqualTo(readyPlanId));
+        assertThat(response.continuation()).satisfies(continuation -> {
+            assertThat(continuation.learningGoal()).isEqualTo("先学设置，再继续规则答疑。");
+            assertThat(continuation.readyCount()).isOne();
+            assertThat(continuation.candidateCount()).isEqualTo(2);
+        });
         assertNarrativeUnavailable(
                 response,
-                "公开来源指向这两款系列桌游；每张卡都保留可核对的依据和选择边界。");
+                "公开来源指向这两款系列桌游；有现成讲解的候选会排在前面。");
         assertThat(response.games()).allSatisfy(this::assertEvidenceBackedReplyParts);
         assertThat(response.researchSources()).isEmpty();
         assertThat(response.harness().webResearchCalls()).isEqualTo(1);
@@ -1336,6 +1367,8 @@ class RecommendationNaturalFrontDoorTest {
                         "SEARCH_BGG_BY_NAME",
                         "LOOKUP_BGG_CANDIDATES",
                         "DISCOVERY_RELATIONSHIP_REJECTED:MISSING_OR_OTHER",
+                        "TEACHING_CONTINUATION_REQUESTED",
+                        "TEACHING_CONTINUATION_READY",
                         "RECOMMEND_GAMES");
         assertThat(response.harness().modelCalls()).isOne();
         verify(model, never()).streamStructured(any(), eq("player"), any());

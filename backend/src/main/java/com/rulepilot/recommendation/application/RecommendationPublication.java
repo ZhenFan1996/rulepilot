@@ -30,8 +30,6 @@ final class RecommendationPublication {
 
     private static final int MAX_LEAD_CODE_POINTS = 1_200;
     private static final int MAX_ANNOTATION_CODE_POINTS = 320;
-    private static final int MAX_EVIDENCE_PER_ANNOTATION = 4;
-
     private final BoardGameRecommendationSelector selector;
     private final RecommendationEvidenceReview evidenceReview;
     private final RecommendationActions observations;
@@ -100,14 +98,15 @@ final class RecommendationPublication {
 
         var continuation = RecommendationContinuationProjection.response(state, games);
 
-        String lead = narrative == null
+        String lead = narrative == null || narrative.lead().text().isBlank()
                 ? unavailableNarrativeLead(chinese)
                 : narrative.lead().text();
         List<String> responseActions = new ArrayList<>(state.actions);
         if (narrative == null) {
             responseActions.add("RECOMMENDATION_NARRATIVE_UNAVAILABLE");
-        } else if (narrative.cardsByBggId().size() < permit.selectedGames().size()
-                || narrative.rejectedCardNarratives() > 0) {
+        } else if (narrative.lead().text().isBlank()
+                || narrative.cardsByBggId().size() < permit.selectedGames().size()
+                || narrative.rejectedNarrativeParts() > 0) {
             responseActions.add("RECOMMENDATION_NARRATIVE_PARTIAL");
         } else {
             responseActions.add("WRITE_GROUNDED_RECOMMENDATION");
@@ -237,18 +236,24 @@ final class RecommendationPublication {
             throw invalid(Code.NARRATIVE_JSON_INVALID);
         }
         requireExactObject(root, Set.of("lead", "cards"));
-        LeadNarrative lead = validateLeadNarrative(
-                root.path("lead"),
-                permit.allowedLeadEvidenceIds());
+        int rejected = 0;
+        LeadNarrative lead;
+        try {
+            lead = validateLeadNarrative(
+                    root.path("lead"),
+                    permit.allowedLeadEvidenceIds());
+        } catch (InvalidPublication failure) {
+            lead = new LeadNarrative("", List.of());
+            rejected++;
+        }
         JsonNode cards = root.path("cards");
         if (!cards.isArray() || cards.isEmpty() || cards.size() > permit.selectedGames().size()) {
-            throw invalid(Code.NARRATIVE_CARDS_INVALID);
+            return new PublicationNarrative(lead, Map.of(), rejected + 1);
         }
         Set<Integer> selectedIds = permit.selectedGames().stream()
                 .map(game -> game.ranking().bggId())
                 .collect(java.util.stream.Collectors.toUnmodifiableSet());
         Map<Integer, List<JsonNode>> nodesByBggId = new LinkedHashMap<>();
-        int rejected = 0;
         for (JsonNode card : cards) {
             int bggId;
             try {
@@ -272,12 +277,12 @@ final class RecommendationPublication {
                 continue;
             }
             try {
-                accepted.put(
+                CardNarrativeValidation validation = validateCardNarrative(
+                        candidates.getFirst(),
                         bggId,
-                        validateCardNarrative(
-                                candidates.getFirst(),
-                                bggId,
-                                permit.allowedEvidenceByGame().get(bggId)));
+                        permit.allowedEvidenceByGame().get(bggId));
+                accepted.put(bggId, validation.narrative());
+                rejected += validation.rejectedOptionalParts();
             } catch (InvalidPublication failure) {
                 rejected++;
             }
@@ -298,7 +303,7 @@ final class RecommendationPublication {
                 validatedEvidenceIds(value.path("evidenceIds"), allowedEvidenceIds));
     }
 
-    private CardNarrative validateCardNarrative(
+    private CardNarrativeValidation validateCardNarrative(
             JsonNode card,
             int bggId,
             Map<String, CandidateObservation> allowedEvidence) {
@@ -308,15 +313,22 @@ final class RecommendationPublication {
                 bggId,
                 ReplyPartRole.WHY_FIT,
                 allowedEvidence);
-        RecommendationReplyPart tradeoff = card.path("tradeoff").isNull()
-                ? null
-                : narrativePart(
+        RecommendationReplyPart tradeoff = null;
+        int rejectedOptionalParts = 0;
+        if (!card.path("tradeoff").isNull()) {
+            try {
+                tradeoff = narrativePart(
                         card.path("tradeoff"),
                         bggId,
                         ReplyPartRole.TRADEOFF,
                         allowedEvidence);
-        return new CardNarrative(
-                tradeoff == null ? List.of(why) : List.of(why, tradeoff));
+            } catch (InvalidPublication failure) {
+                rejectedOptionalParts++;
+            }
+        }
+        return new CardNarrativeValidation(
+                new CardNarrative(tradeoff == null ? List.of(why) : List.of(why, tradeoff)),
+                rejectedOptionalParts);
     }
 
     private RecommendationReplyPart narrativePart(
@@ -356,9 +368,7 @@ final class RecommendationPublication {
     private List<String> validatedEvidenceIds(
             JsonNode ids,
             Set<String> allowedEvidenceIds) {
-        if (!ids.isArray()
-                || ids.isEmpty()
-                || ids.size() > MAX_EVIDENCE_PER_ANNOTATION) {
+        if (!ids.isArray() || ids.isEmpty()) {
             throw invalid(Code.NARRATIVE_EVIDENCE_INVALID);
         }
         List<String> selected = new ArrayList<>();
@@ -410,13 +420,13 @@ final class RecommendationPublication {
     record PublicationNarrative(
             LeadNarrative lead,
             Map<Integer, CardNarrative> cardsByBggId,
-            int rejectedCardNarratives) {
+            int rejectedNarrativeParts) {
         PublicationNarrative {
             Objects.requireNonNull(lead, "lead narrative is required");
             cardsByBggId = cardsByBggId == null
                     ? Map.of()
                     : java.util.Collections.unmodifiableMap(new LinkedHashMap<>(cardsByBggId));
-            if (rejectedCardNarratives < 0) {
+            if (rejectedNarrativeParts < 0) {
                 throw new IllegalArgumentException("rejected narrative count must not be negative");
             }
         }
@@ -434,6 +444,10 @@ final class RecommendationPublication {
             replyParts = replyParts == null ? List.of() : List.copyOf(replyParts);
         }
     }
+
+    private record CardNarrativeValidation(
+            CardNarrative narrative,
+            int rejectedOptionalParts) {}
 
     record Permit(
             int requestedCount,

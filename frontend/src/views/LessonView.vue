@@ -20,6 +20,7 @@ import { useLessonComprehensionFeedback } from '@/composables/useLessonComprehen
 import { useLessonReaderProgress } from '@/composables/useLessonReaderProgress'
 import { acceptProgressiveLesson } from '@/lib/liveLesson'
 import { loadOfflineKnowledge, type OfflineKnowledgeEntry } from '@/lib/offlineKnowledge'
+import { playerWorkStatus, type PlayerWorkStatus } from '@/lib/playerWorkStatus'
 import type { CatalogGamePresentation } from '@/lib/catalogGamePresentation'
 import {
   mergeTeachingRunProgress,
@@ -87,6 +88,13 @@ interface LessonSection {
   }>
 }
 
+type LessonTerminalKind = 'COMPLETE' | 'READABLE' | 'NEEDS_ACTION' | 'FAILED' | 'CANCELLED'
+
+interface LessonTerminalPresentation {
+  message: string
+  workStatus: PlayerWorkStatus
+}
+
 const LessonComprehensionPanel = defineAsyncComponent(
   () => import('@/components/LessonComprehensionPanel.vue'),
 )
@@ -108,7 +116,6 @@ const catalogCoverUnavailable = ref(false)
 const generationStatusUnknown = ref(false)
 const generationRefreshError = ref('')
 const generationIdentityBlocked = ref(false)
-const generationFinishedMessage = ref('')
 const visualRefreshWarning = ref('')
 const visualRefreshStopped = ref(false)
 const generationNow = ref(Date.now())
@@ -174,6 +181,108 @@ const {
   visualEnrichmentRun,
   generationStatusUnknown,
   now: generationNow,
+})
+
+const readableLessonSectionCount = computed(() => lesson.value?.sections.filter(
+  section => section.evidenceStatus === 'SUPPORTED' || section.evidenceStatus === 'CITED_DRAFT',
+).length ?? 0)
+
+function lessonIsFullySupported(candidate: IllustratedLesson) {
+  return candidate.status === 'COMPLETE'
+    && candidate.sections.length > 0
+    && candidate.sections.every(section => section.evidenceStatus === 'SUPPORTED')
+}
+
+function terminalWorkStatus(kind: LessonTerminalKind, readable: boolean) {
+  const capability = readable ? 'guide' : 'rulebook'
+  if (kind === 'COMPLETE') {
+    return playerWorkStatus('GUIDE_COMPLETE', {
+      capability: 'guide', readiness: 'complete', terminality: 'terminal', outcome: 'none',
+    }, locale.value)
+  }
+  if (kind === 'READABLE') {
+    return playerWorkStatus('GUIDE_READABLE', {
+      capability: 'guide', readiness: 'usable', terminality: 'terminal', outcome: 'none',
+    }, locale.value)
+  }
+  if (kind === 'FAILED') {
+    return playerWorkStatus('FAILED', {
+      capability, readiness: readable ? 'usable' : 'unavailable', terminality: 'terminal', outcome: 'failed',
+    }, locale.value)
+  }
+  if (kind === 'CANCELLED') {
+    return playerWorkStatus('CANCELLED', {
+      capability, readiness: readable ? 'usable' : 'unavailable', terminality: 'terminal', outcome: 'cancelled',
+    }, locale.value)
+  }
+  return playerWorkStatus('NEEDS_ACTION', {
+    capability, readiness: readable ? 'usable' : 'unavailable', terminality: 'terminal', outcome: 'needs-action',
+  }, locale.value)
+}
+
+function terminalGenerationPresentation(
+  state: string,
+  candidate: IllustratedLesson,
+): LessonTerminalPresentation | null {
+  const readableCount = candidate.sections.filter(
+    section => section.evidenceStatus === 'SUPPORTED' || section.evidenceStatus === 'CITED_DRAFT',
+  ).length
+  const readable = readableCount > 0
+  const complete = state === 'COMPLETED' && lessonIsFullySupported(candidate)
+  let kind: LessonTerminalKind
+  let message: string
+
+  if (state === 'FAILED') {
+    kind = 'FAILED'
+    message = locale.value === 'en'
+      ? readable
+        ? readableCount === 1
+          ? 'This guide generation run failed. A readable chapter draft is preserved and can be completed later.'
+          : `This guide generation run failed. ${readableCount} readable chapter drafts are preserved and can be completed later.`
+        : 'This guide generation run failed without a readable chapter. Retry from My Guides.'
+      : readable
+        ? `本轮讲解生成失败；已保留 ${readableCount} 章可读讲解草稿，可以稍后重试补全。`
+        : '本轮讲解生成失败，目前还没有可读章节；请在“我的讲解”中重试。'
+  } else if (state === 'CANCELLED') {
+    kind = 'CANCELLED'
+    message = locale.value === 'en'
+      ? readable
+        ? readableCount === 1
+          ? 'This guide generation run was cancelled. A readable chapter draft is preserved.'
+          : `This guide generation run was cancelled. ${readableCount} readable chapter drafts are preserved.`
+        : 'This guide generation run was cancelled before a readable chapter was ready.'
+      : readable
+        ? `本轮讲解生成已取消；已保留 ${readableCount} 章可读讲解草稿。`
+        : '本轮讲解生成已取消，目前还没有可读章节。'
+  } else if (complete) {
+    kind = 'COMPLETE'
+    message = t('lesson.generation.finished.complete')
+  } else if (state === 'COMPLETED' && readable) {
+    kind = 'READABLE'
+    message = locale.value === 'en'
+      ? 'This generation run has finished with a readable guide draft. Additional content review is not complete.'
+      : '本轮生成已经结束；可读讲解草稿已经保留，额外内容复核尚未完成。'
+  } else if ((state === 'INSUFFICIENT_EVIDENCE' || state === 'DEGRADED') && readable) {
+    kind = 'READABLE'
+    message = locale.value === 'en'
+      ? `${readableCount} readable ${readableCount === 1 ? 'chapter draft is' : 'chapter drafts are'} preserved. Content without enough evidence or completed review was not published as a complete guide.`
+      : `本轮生成已经结束；已保留 ${readableCount} 章可读讲解草稿，证据不足或未完成复核的部分没有作为完整讲解发布。`
+  } else if (state === 'COMPLETED' || state === 'INSUFFICIENT_EVIDENCE' || state === 'DEGRADED') {
+    kind = 'NEEDS_ACTION'
+    message = t('lesson.generation.finished.noReadable')
+  } else {
+    return null
+  }
+
+  return { message, workStatus: terminalWorkStatus(kind, readable) }
+}
+
+const generationTerminalPresentation = computed(() => {
+  if (!lesson.value || !teachingRun.value) return null
+  return terminalGenerationPresentation(
+    teachingRun.value.run.state,
+    lesson.value,
+  )
 })
 
 const visualEvidenceExpected = computed(() => plan.value?.sections.some(
@@ -541,7 +650,6 @@ async function loadLesson() {
   generationStatusUnknown.value = false
   generationRefreshError.value = ''
   generationIdentityBlocked.value = false
-  generationFinishedMessage.value = ''
   clearSupportingContent()
   if (!targetPlanId) {
     await router.replace({ name: 'lessons' })
@@ -703,16 +811,6 @@ async function refreshVisualEnrichment() {
   }
 }
 
-function terminalGenerationMessage(state: string, availableSectionCount: number) {
-  if (availableSectionCount === 0) return t('lesson.generation.finished.noReadable')
-  if (state === 'COMPLETED') return t('lesson.generation.finished.complete')
-  if (state === 'INSUFFICIENT_EVIDENCE' || state === 'DEGRADED') {
-    return t('lesson.generation.finished.incomplete')
-  }
-  if (state === 'FAILED' || state === 'CANCELLED') return t('lesson.generation.finished.failed')
-  return ''
-}
-
 async function refreshGeneration() {
   if (!generationActive.value || !online.value || lessonViewDisposed) return
   const targetPlanId = planId.value
@@ -773,8 +871,6 @@ async function refreshGeneration() {
     }
 
     if (wasActive && !generationActive.value) {
-      const terminalState = acceptedRun?.run.state ?? ''
-      generationFinishedMessage.value = terminalGenerationMessage(terminalState, acceptedLesson.sections.length)
       await loadSupportingContent(targetPlanId, request)
       if (!isCurrentLessonLoad(request, targetPlanId)) return
       void refreshVisualEnrichment()
@@ -879,7 +975,7 @@ onUnmounted(() => {
         :status-unknown="generationStatusUnknown"
         :status-text="currentGenerationText"
         :draft-ready="draftReady"
-        :available-section-count="lesson?.sections.length ?? 0"
+        :available-section-count="readableLessonSectionCount"
         :total-section-count="plan?.sections.length ?? null"
         :elapsed="generationElapsed"
         :processed-chapter-count="processedGenerationChapters"
@@ -888,8 +984,8 @@ onUnmounted(() => {
         :remaining-time="generationRemainingTime"
         :activities="recentGenerationActivities"
         :refresh-failed="Boolean(generationRefreshError) && !generationIdentityBlocked"
-        :finished-message="generationFinishedMessage"
-        :finished-complete="teachingRun?.run.state === 'COMPLETED' && Boolean(lesson?.sections.length)"
+        :finished-message="generationTerminalPresentation?.message ?? ''"
+        :finished-status="generationTerminalPresentation?.workStatus ?? null"
       />
 
       <section
