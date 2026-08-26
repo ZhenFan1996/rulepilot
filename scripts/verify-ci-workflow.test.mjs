@@ -95,7 +95,7 @@ test('production recommendation journey tests one exact deployed main-ancestry r
   assert.match(productionRecommendationWorkflow,
     /"\$\{active_release%\/\*\}" != "\$releases_root"/)
   assert.match(productionRecommendationWorkflow,
-    /"\$active_release_id" =~ \^\$\{tested_sha\}-\[0-9\]\+\$/)
+    /"\$active_release_id" =~ \^\$\{tested_sha\}-\[0-9\]\+\(-\[0-9\]\+\)\?\$/)
   assert.match(productionRecommendationWorkflow, /"\$active_release_sha" != "\$tested_sha"/)
   assert.match(productionRecommendationWorkflow, /::add-mask::\$player_username/)
   assert.match(productionRecommendationWorkflow, /::add-mask::\$player_password/)
