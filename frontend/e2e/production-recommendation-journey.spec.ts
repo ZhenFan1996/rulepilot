@@ -701,7 +701,7 @@ function validReadyTeachingAttachment(game: RecommendationResultGame) {
 
 function diagnoseOpeningTerminal(
   read: OpeningTerminalRead,
-  rendered: boolean,
+  resultRendered: boolean,
   renderedWithinBudget: boolean,
 ): OpeningTerminalDiagnostic {
   const terminal = read.terminal
@@ -737,7 +737,7 @@ function diagnoseOpeningTerminal(
   if (outcome === 'conversation' || outcome === 'needs_clarification') {
     return {
       outcome,
-      terminalCategory: !rendered
+      terminalCategory: !resultRendered
         ? 'GUIDANCE_NOT_RENDERED'
         : renderedWithinBudget
           ? 'GUIDANCE_RENDERED_WITHIN_BUDGET'
@@ -1550,6 +1550,9 @@ test('opening diagnostics distinguish budget, semantic, unavailable, processing,
   expect(diagnoseOpeningTerminal(terminal('conversation'), false, false)).toMatchObject({
     terminalCategory: 'GUIDANCE_NOT_RENDERED',
   })
+  expect(diagnoseOpeningTerminal(terminal('conversation'), false, true)).toMatchObject({
+    terminalCategory: 'GUIDANCE_NOT_RENDERED',
+  })
   expect(diagnoseOpeningTerminal(terminal('recommendations'), true, true)).toMatchObject({
     outcome: 'recommendations', terminalCategory: 'SEMANTIC_RECOMMENDATIONS',
   })
@@ -2006,11 +2009,11 @@ test('recommendation becomes one readable, taught, and answerable production jou
       await composer.fill(RECOMMENDATION_OPENING_PROMPT)
       await page.getByRole('button', { name: '发送', exact: true }).click()
       const firstSafeTextObservation = expect.poll(async () => {
-        const previewText = await page.getByTestId('recommendation-answer-preview')
-          .textContent()
-          .catch(() => null)
-        if (previewText?.trim()) return true
-        return await page.getByTestId('assistant-conversation-turn').count() > guidanceTurnCount
+        const renderedTurnCount = await page.getByTestId('assistant-conversation-turn').count()
+        if (renderedTurnCount > guidanceTurnCount) return true
+        const preview = page.getByTestId('recommendation-answer-preview')
+        if (await preview.count() === 0) return false
+        return Boolean((await preview.first().textContent())?.trim())
       }, {
         timeout: MAX_OPEN_TERMINAL_DIAGNOSTIC_MS,
         message: 'The unknown-target opening did not render validated player-safe text',
@@ -2078,7 +2081,7 @@ test('recommendation becomes one readable, taught, and answerable production jou
         : guidanceTerminal.observedMs
       const guidanceDiagnostic = diagnoseOpeningTerminal(
         guidanceTerminal,
-        renderMetrics.firstSafeTextRendered,
+        guidanceResult.visible,
         report.openGuidanceSloMet === true,
       )
       report.openGuidanceOutcome = guidanceDiagnostic.outcome
