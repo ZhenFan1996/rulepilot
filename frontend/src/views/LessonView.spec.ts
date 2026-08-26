@@ -257,6 +257,13 @@ describe('LessonView progressive reading', () => {
     expect(teachingRunReads).toBe(1)
     expect(wrapper.text()).toContain('已保留章节')
     expect(wrapper.text()).not.toContain('整本仍在后台生成')
+    const cancelledStatus = wrapper.get('[data-testid="player-work-status"]')
+    expect(cancelledStatus.text()).toBe('已取消')
+    expect(cancelledStatus.attributes('data-player-work-outcome')).toBe('cancelled')
+    expect(cancelledStatus.attributes('data-player-work-readiness')).toBe('usable')
+    expect(wrapper.text()).toContain('本轮讲解生成已取消')
+    expect(wrapper.text()).toContain('已保留 1 章可读讲解草稿')
+    expect(wrapper.get('[role="status"]').classes()).toContain('bg-amber-50')
 
     await vi.advanceTimersByTimeAsync(5_000)
     await flushPromises()
@@ -319,6 +326,171 @@ describe('LessonView progressive reading', () => {
     expect(wrapper.text()).not.toContain('问这一章')
     expect(wrapper.text()).not.toContain('开始对局')
     expect(wrapper.text()).not.toContain('4 人 ·')
+    wrapper.unmount()
+  })
+
+  it('keeps a completed cited draft readable without promoting it to a fully complete guide', async () => {
+    setLocale('en')
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const path = String(input)
+      if (path === '/api/v1/teaching-plans/plan-1') {
+        return Response.json({
+          ...planFixture('plan-1', 'Cited draft'),
+          sections: [{ position: 1, title: 'Readable draft', visualEvidenceRecommended: false }],
+        })
+      }
+      if (path.includes('mode=VISUAL_ENRICHMENT')) return new Response(null, { status: 404 })
+      if (path.includes('mode=TEACHING')) return Response.json(runFixture('plan-1', 'COMPLETED'))
+      if (path.endsWith('/illustrated-lessons/latest')) {
+        return Response.json({
+          id: 'lesson-cited', teachingPlanId: 'plan-1', status: 'DRAFT_READY',
+          sections: [section(1, 'Readable draft', 'CITED_DRAFT')],
+        })
+      }
+      return new Response(null, { status: 404 })
+    }))
+    const router = createMemoryRouter()
+    await router.push('/lesson/plan-1')
+    await router.isReady()
+    const wrapper = mount(LessonView, {
+      global: { plugins: [router], stubs: { AppShell: { template: '<div><slot /></div>' } } },
+    })
+    await flushPromises()
+
+    const status = wrapper.get('[data-testid="player-work-status"]')
+    expect(status.text()).toBe('Base guide ready')
+    expect(status.attributes('data-player-work-readiness')).toBe('usable')
+    expect(status.attributes('data-player-work-outcome')).toBe('none')
+    expect(wrapper.text()).toContain('readable guide draft')
+    expect(wrapper.text()).toContain('Additional content review is not complete')
+    expect(wrapper.text()).not.toContain('Guide complete')
+    expect(wrapper.text()).not.toContain('Every chapter is loaded')
+    expect(status.element.closest('[role="status"]')?.classList.contains('bg-amber-50')).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('does not call an insufficient-evidence placeholder chapter readable', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const path = String(input)
+      if (path === '/api/v1/teaching-plans/plan-1') {
+        return Response.json({
+          ...planFixture('plan-1', 'Insufficient guide'),
+          sections: [{ position: 1, title: '证据不足', visualEvidenceRecommended: false }],
+        })
+      }
+      if (path.includes('mode=VISUAL_ENRICHMENT')) return new Response(null, { status: 404 })
+      if (path.includes('mode=TEACHING')) return Response.json(runFixture('plan-1', 'INSUFFICIENT_EVIDENCE'))
+      if (path.endsWith('/illustrated-lessons/latest')) {
+        return Response.json({
+          id: 'lesson-insufficient', teachingPlanId: 'plan-1', status: 'INCOMPLETE',
+          sections: [section(1, '暂时跳过', 'INSUFFICIENT_EVIDENCE')],
+        })
+      }
+      return new Response(null, { status: 404 })
+    }))
+    const router = createMemoryRouter()
+    await router.push('/lesson/plan-1')
+    await router.isReady()
+    const wrapper = mount(LessonView, {
+      global: { plugins: [router], stubs: { AppShell: { template: '<div><slot /></div>' } } },
+    })
+    await flushPromises()
+
+    const status = wrapper.get('[data-testid="player-work-status"]')
+    expect(status.text()).toBe('需要处理')
+    expect(status.attributes('data-player-work-readiness')).toBe('unavailable')
+    expect(status.attributes('data-player-work-outcome')).toBe('needs-action')
+    expect(wrapper.text()).toContain('还没有可读章节')
+    expect(wrapper.text()).not.toContain('基础讲解可读')
+    wrapper.unmount()
+  })
+
+  it.each(['DEGRADED', 'INSUFFICIENT_EVIDENCE'])('keeps the readable subset usable when a %s run ends with local evidence gaps', async (terminalState) => {
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const path = String(input)
+      if (path === '/api/v1/teaching-plans/plan-1') {
+        return Response.json({
+          ...planFixture('plan-1', 'Partial guide'),
+          sections: [
+            { position: 1, title: '可读章节', visualEvidenceRecommended: false },
+            { position: 2, title: '证据不足', visualEvidenceRecommended: false },
+          ],
+        })
+      }
+      if (path.includes('mode=VISUAL_ENRICHMENT')) return new Response(null, { status: 404 })
+      if (path.includes('mode=TEACHING')) return Response.json(runFixture('plan-1', terminalState))
+      if (path.endsWith('/illustrated-lessons/latest')) {
+        return Response.json({
+          id: 'lesson-partial', teachingPlanId: 'plan-1', status: 'INCOMPLETE',
+          sections: [
+            section(1, '可读章节', 'SUPPORTED'),
+            section(2, '暂时跳过', 'INSUFFICIENT_EVIDENCE'),
+          ],
+        })
+      }
+      return new Response(null, { status: 404 })
+    }))
+    const router = createMemoryRouter()
+    await router.push('/lesson/plan-1')
+    await router.isReady()
+    const wrapper = mount(LessonView, {
+      global: { plugins: [router], stubs: { AppShell: { template: '<div><slot /></div>' } } },
+    })
+    await flushPromises()
+
+    const status = wrapper.get('[data-testid="player-work-status"]')
+    expect(status.text()).toBe('基础讲解可读')
+    expect(status.attributes('data-player-work-readiness')).toBe('usable')
+    expect(status.attributes('data-player-work-outcome')).toBe('none')
+    expect(wrapper.text()).toContain('已保留 1 章可读讲解草稿')
+    expect(wrapper.text()).toContain('没有作为完整讲解发布')
+    expect(wrapper.text()).not.toContain('讲解完成')
+    expect(wrapper.text()).not.toContain('需要处理')
+    wrapper.unmount()
+  })
+
+  it('uses the same failed terminal presentation after an active run preserves a cited draft', async () => {
+    let runReads = 0
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const path = String(input)
+      if (path === '/api/v1/teaching-plans/plan-1') {
+        return Response.json({
+          ...planFixture('plan-1', 'Failed guide'),
+          sections: [{ position: 1, title: '可读草稿', visualEvidenceRecommended: false }],
+        })
+      }
+      if (path.includes('mode=VISUAL_ENRICHMENT')) return new Response(null, { status: 404 })
+      if (path.includes('mode=TEACHING')) {
+        runReads += 1
+        return Response.json(runFixture('plan-1', runReads > 1 ? 'FAILED' : 'VERIFYING_EVIDENCE'))
+      }
+      if (path.endsWith('/illustrated-lessons/latest')) {
+        return Response.json({
+          id: 'lesson-failed', teachingPlanId: 'plan-1', status: 'DRAFT_READY',
+          sections: [section(1, '可读草稿', 'CITED_DRAFT')],
+        })
+      }
+      return new Response(null, { status: 404 })
+    }))
+    const router = createMemoryRouter()
+    await router.push('/lesson/plan-1')
+    await router.isReady()
+    const wrapper = mount(LessonView, {
+      global: { plugins: [router], stubs: { AppShell: { template: '<div><slot /></div>' } } },
+    })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('完整基础讲解已经可用')
+    await vi.advanceTimersByTimeAsync(1_500)
+    await flushPromises()
+
+    const status = wrapper.get('[data-testid="player-work-status"]')
+    expect(status.text()).toBe('失败')
+    expect(status.attributes('data-player-work-outcome')).toBe('failed')
+    expect(status.attributes('data-player-work-readiness')).toBe('usable')
+    expect(wrapper.text()).toContain('本轮讲解生成失败')
+    expect(wrapper.text()).toContain('已保留 1 章可读讲解草稿')
+    expect(wrapper.get('[role="status"]').classes()).toContain('bg-amber-50')
     wrapper.unmount()
   })
 
@@ -1325,14 +1497,18 @@ function staleInitialResponse(path: string) {
   return new Response(null, { status: 404 })
 }
 
-function section(position: number, title: string) {
+function section(
+  position: number,
+  title: string,
+  evidenceStatus: 'SUPPORTED' | 'CITED_DRAFT' | 'INSUFFICIENT_EVIDENCE' = 'SUPPORTED',
+) {
   return {
     position,
     topicKey: `topic-${position}`,
     coverageTags: position === 1 ? ['setup'] : ['core_loop'],
     title,
     required: true,
-    evidenceStatus: 'SUPPORTED',
+    evidenceStatus,
     visualKind: 'REFERENCE_CARD',
     visualCaption: '规则书原页',
     visualSourcePages: [position],

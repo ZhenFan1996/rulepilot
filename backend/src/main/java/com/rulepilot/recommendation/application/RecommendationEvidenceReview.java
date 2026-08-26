@@ -644,9 +644,16 @@ final class RecommendationEvidenceReview {
     }
 
     void requireCurrentTurnUserEvidence(String evidenceId, ConversationRequest request) {
+        requireCurrentTurnUserEvidence(evidenceId, request, "REQUESTED_COUNT_EVIDENCE_NOT_CURRENT");
+    }
+
+    void requireCurrentTurnUserEvidence(
+            String evidenceId,
+            ConversationRequest request,
+            String failureCode) {
         List<String> evidenceIds = preferenceEvidence(request).keySet().stream().toList();
         if (evidenceIds.isEmpty() || !evidenceIds.getLast().equals(evidenceId)) {
-            throw new InvalidAction("REQUESTED_COUNT_EVIDENCE_NOT_CURRENT");
+            throw new InvalidAction(failureCode);
         }
     }
 

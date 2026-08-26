@@ -62,6 +62,7 @@ import com.rulepilot.recommendation.application.BoardGameRecommendationTools.Tit
 import com.rulepilot.recommendation.application.BoardGameRecommendationTools.ToolStatus;
 import com.rulepilot.recommendation.application.RecommendationAgentState.CandidateUse;
 import com.rulepilot.recommendation.application.RecommendationAgentState.DiscoveryPurpose;
+import com.rulepilot.recommendation.application.RecommendationAgentState.TitleConstraint;
 import com.rulepilot.recommendation.application.RecommendationEvidenceReview.PreferenceUpdatePlan;
 import com.rulepilot.recommendation.application.RecommendationAgentState.NamedGamePurpose;
 import com.rulepilot.recommendation.application.RecommendationAgentState.PublicationSeed;
@@ -498,7 +499,7 @@ final class RecommendationActions {
         NamedGamePurpose purpose = enumValue(
                 NamedGamePurpose.class, arguments.path("purpose"), "NAMED_GAME_PURPOSE_INVALID");
         TargetCompletion completion = targetCompletion(arguments, purpose);
-        recordTeachingContinuation(
+        TeachingContinuationDecision continuationDecision = planTeachingContinuation(
                 arguments,
                 state,
                 request,
@@ -530,10 +531,12 @@ final class RecommendationActions {
                     completion,
                     result,
                     reusedVerifiedReference,
+                    continuationDecision,
                     state,
                     locale,
                     progress);
         }
+        commitTeachingContinuation(continuationDecision, state);
         commitReferenceOutcome(result, purpose, reusedVerifiedReference, state);
         return ActionOutcome.observation(runtime.observation(Map.of(
                 "status", result.resolved() ? "SUCCESS" : result.status().name(),
@@ -582,11 +585,16 @@ final class RecommendationActions {
             TargetCompletion completion,
             ReferenceObservation result,
             boolean reusedVerifiedReference,
+            TeachingContinuationDecision continuationDecision,
             RecommendationAgentState state,
             String locale,
             BiConsumer<ProgressStage, ProgressFocus> progress) {
         int bggId = selected.ranking().bggId();
         if (state.excludedIds.contains(bggId)) throw new InvalidAction("FINAL_ID_EXCLUDED");
+        if (state.titleConstraint != null && !state.titleConstraint.matches(selected)) {
+            throw new InvalidAction("FINAL_TITLE_CONSTRAINT_MISMATCH");
+        }
+        commitTeachingContinuation(continuationDecision, state);
         commitReferenceOutcome(result, NamedGamePurpose.TARGET_GAME, reusedVerifiedReference, state);
         if (state.teachingContinuationRequested) {
             observeTeachingContinuations(
@@ -653,7 +661,26 @@ final class RecommendationActions {
                 .toLowerCase(Locale.ROOT);
     }
 
-    private void recordTeachingContinuation(
+    private TitleConstraint titleConstraint(JsonNode arguments, ConversationRequest request) {
+        if (!arguments.has("titleConstraint")) return null;
+        if (!arguments.has("evidence")) {
+            throw new InvalidAction("TITLE_CONSTRAINT_EVIDENCE_REQUIRED");
+        }
+        JsonNode constraint = arguments.path("titleConstraint");
+        requireObject(constraint, Set.of("operator", "value"), Set.of());
+        String operator = text(constraint.path("operator"), 1, 24).strip();
+        if (!"CONTAINS".equals(operator)) throw new InvalidAction("TITLE_CONSTRAINT_OPERATOR_INVALID");
+        String value = text(constraint.path("value"), 1, 160).strip();
+        if (value.isEmpty()) throw new InvalidAction("TITLE_CONSTRAINT_VALUE_INVALID");
+        String evidenceId = text(arguments.path("evidence"), 1, 32).strip();
+        evidenceReview.requireCurrentTurnUserEvidence(
+                evidenceId,
+                request,
+                "TITLE_CONSTRAINT_EVIDENCE_NOT_CURRENT");
+        return new TitleConstraint(value, evidenceId);
+    }
+
+    private TeachingContinuationDecision planTeachingContinuation(
             JsonNode arguments,
             RecommendationAgentState state,
             ConversationRequest request,
@@ -661,29 +688,62 @@ final class RecommendationActions {
         boolean declared = arguments.has("continuationGoal")
                 || arguments.has("continuationEvidence")
                 || arguments.has("learningGoal");
-        if (!declared) return;
-        if (!allowedForAction) {
-            throw new InvalidAction("TEACHING_CONTINUATION_TARGET_REQUIRED");
+        if (!arguments.has("continuationGoal")) {
+            return new TeachingContinuationDecision(TeachingContinuationDecisionKind.MISSING, "");
         }
-        if (!arguments.has("continuationGoal") || !arguments.has("continuationEvidence")) {
-            throw new InvalidAction("TEACHING_CONTINUATION_EVIDENCE_REQUIRED");
-        }
-        enumValue(
+        TeachingContinuationGoal goal = enumValue(
                 TeachingContinuationGoal.class,
                 arguments.path("continuationGoal"),
                 "TEACHING_CONTINUATION_GOAL_INVALID");
+        if (goal == TeachingContinuationGoal.NONE) {
+            if (declared && (arguments.has("continuationEvidence") || arguments.has("learningGoal"))) {
+                return new TeachingContinuationDecision(
+                        TeachingContinuationDecisionKind.NONE_WITH_UNUSED_ARGUMENTS, "");
+            }
+            return new TeachingContinuationDecision(TeachingContinuationDecisionKind.NONE, "");
+        }
+        if (!allowedForAction) {
+            throw new InvalidAction("TEACHING_CONTINUATION_TARGET_REQUIRED");
+        }
+        if (!arguments.has("continuationEvidence")) {
+            if (state.teachingContinuationRequested) {
+                return new TeachingContinuationDecision(TeachingContinuationDecisionKind.KEEP_GUIDE, "");
+            }
+            throw new InvalidAction("TEACHING_CONTINUATION_EVIDENCE_REQUIRED");
+        }
         String evidenceId = text(arguments.path("continuationEvidence"), 1, 32);
         evidenceReview.requireUserEvidence(evidenceId, request);
         String learningGoal = arguments.has("learningGoal")
                 ? text(arguments.path("learningGoal"), 1, 400)
                 : "";
-        if (state.teachingContinuationRequested
-                && !Objects.equals(state.teachingLearningGoal, learningGoal)) {
-            throw new InvalidAction("TEACHING_CONTINUATION_CONFLICT");
+        if (!state.teachingContinuationRequested) {
+            return new TeachingContinuationDecision(
+                    TeachingContinuationDecisionKind.REQUEST_GUIDE, learningGoal);
         }
-        state.teachingContinuationRequested = true;
-        state.teachingLearningGoal = learningGoal;
-        state.actions.add("TEACHING_CONTINUATION_REQUESTED");
+        return state.teachingLearningGoal.isBlank() && !learningGoal.isBlank()
+                ? new TeachingContinuationDecision(
+                        TeachingContinuationDecisionKind.ENRICH_GUIDE, learningGoal)
+                : new TeachingContinuationDecision(TeachingContinuationDecisionKind.KEEP_GUIDE, "");
+    }
+
+    private void commitTeachingContinuation(
+            TeachingContinuationDecision decision, RecommendationAgentState state) {
+        switch (decision.kind()) {
+            case MISSING -> state.actions.add("TEACHING_CONTINUATION_DECISION_MISSING");
+            case NONE -> {
+                // The typed decision is explicit and needs no state transition.
+            }
+            case NONE_WITH_UNUSED_ARGUMENTS -> state.actions.add("TEACHING_CONTINUATION_UNUSED_ARGUMENTS");
+            case REQUEST_GUIDE -> {
+                state.teachingContinuationRequested = true;
+                state.teachingLearningGoal = decision.learningGoal();
+                state.actions.add("TEACHING_CONTINUATION_REQUESTED");
+            }
+            case ENRICH_GUIDE -> state.teachingLearningGoal = decision.learningGoal();
+            case KEEP_GUIDE -> {
+                // A previously grounded guide decision is sticky across later reads.
+            }
+        }
     }
 
     private CatalogObservation observeTeachingContinuations(
@@ -746,6 +806,8 @@ final class RecommendationActions {
                         "minimumAverageRating",
                         "minimumRatingsCount",
                         "textQuery",
+                        "titleConstraint",
+                        "evidence",
                         "sort",
                         "limit",
                         "requestedCount",
@@ -794,9 +856,18 @@ final class RecommendationActions {
         Integer minimumRatingsCount = arguments.has("minimumRatingsCount")
                 ? integer(arguments.path("minimumRatingsCount"), 0, 100_000_000, "RATINGS_COUNT_INVALID")
                 : null;
+        TitleConstraint requestedTitleConstraint = titleConstraint(arguments, request);
+        if (requestedTitleConstraint != null
+                && state.titleConstraint != null
+                && !state.titleConstraint.equals(requestedTitleConstraint)) {
+            throw new InvalidAction("TITLE_CONSTRAINT_CONFLICT");
+        }
+        TitleConstraint activeTitleConstraint = requestedTitleConstraint == null
+                ? state.titleConstraint
+                : requestedTitleConstraint;
         String textQuery = arguments.has("textQuery")
                 ? text(arguments.path("textQuery"), 1, 240).strip()
-                : null;
+                : activeTitleConstraint == null ? null : activeTitleConstraint.value();
         CatalogSort sort = arguments.has("sort")
                 ? enumValue(CatalogSort.class, arguments.path("sort"), "CATALOG_SORT_INVALID")
                 : CatalogSort.RANK;
@@ -817,6 +888,7 @@ final class RecommendationActions {
                         || minimumAverageRating != null
                         || minimumRatingsCount != null
                         || textQuery != null
+                        || activeTitleConstraint != null
                         || offset != 0)) {
             throw new InvalidAction(
                     "IDENTITY_CATALOG_QUERY_INVALID",
@@ -826,7 +898,10 @@ final class RecommendationActions {
                 ? integer(arguments.path("limit"), 1, MAX_VERIFIED_GAMES, "LIMIT_OUT_OF_RANGE")
                 : Math.min(properties.modelCandidateLimit(), MAX_VERIFIED_GAMES);
         int publicationCount = publicationCount(arguments, request);
-        recordTeachingContinuation(arguments, state, request, true);
+        TeachingContinuationDecision continuationDecision =
+                planTeachingContinuation(arguments, state, request, true);
+        commitTeachingContinuation(continuationDecision, state);
+        if (activeTitleConstraint != null) state.titleConstraint = activeTitleConstraint;
         boolean continuationRequested = state.teachingContinuationRequested;
         int eligibilityLimit = use == CandidateUse.CONTINUE_REACT
                 ? limit
@@ -895,8 +970,11 @@ final class RecommendationActions {
             page.games().forEach(game -> {
                 if (scannedIds.add(game.ranking().bggId())) scannedGames.add(game);
             });
+            List<Game> titleEligibleGames = activeTitleConstraint == null
+                    ? scannedGames
+                    : scannedGames.stream().filter(activeTitleConstraint::matches).toList();
             eligible = selector.eligible(
-                    scannedGames,
+                    titleEligibleGames,
                     preferencePlan.profile(),
                     unavailableCandidateIds,
                     selectionLimit);
@@ -957,6 +1035,14 @@ final class RecommendationActions {
         appliedFilters.put("minimumAverageRating", minimumAverageRating);
         appliedFilters.put("minimumRatingsCount", minimumRatingsCount);
         appliedFilters.put("textQuery", textQuery);
+        appliedFilters.put(
+                "titleConstraint",
+                activeTitleConstraint == null
+                        ? null
+                        : Map.of(
+                                "operator", "CONTAINS",
+                                "value", activeTitleConstraint.value(),
+                                "evidence", activeTitleConstraint.evidenceId()));
         appliedFilters.put("sort", sort);
         appliedFilters.put("offset", offset);
         appliedFilters.put("pagesScanned", scannedPages);
@@ -1014,6 +1100,9 @@ final class RecommendationActions {
                         "candidateUse",
                         "requestedCount",
                         "requestedCountBasis",
+                        "continuationGoal",
+                        "continuationEvidence",
+                        "learningGoal",
                         "playerLead"));
         AfterIdentity afterIdentity = enumValue(
                 AfterIdentity.class,
@@ -1034,6 +1123,12 @@ final class RecommendationActions {
         String query = evidenceReview.preferenceEvidence(request).get(evidenceId);
         String subject = text(arguments.path("subject"), 1, 80).strip();
         List<BggGameType> types = optionalGameTypeHints(arguments, state);
+        TeachingContinuationDecision continuationDecision = planTeachingContinuation(
+                arguments,
+                state,
+                request,
+                purpose == DiscoveryPurpose.SELECTABLE_CARDS);
+        commitTeachingContinuation(continuationDecision, state);
         progress.accept(ProgressStage.DISCOVERING_CANDIDATES, null);
         state.publicContextEvidence.clear();
         state.publicContextSources = List.of();
@@ -1121,6 +1216,23 @@ final class RecommendationActions {
             state.discoveryProducedVerifiedGames = true;
             state.unresolvedPlayerTitle = false;
         }
+        List<Game> candidateGames = inspection.games();
+        if (state.teachingContinuationRequested
+                && use != CandidateUse.CONTINUE_REACT
+                && !candidateGames.isEmpty()) {
+            List<Game> discoveredCandidates = candidateGames;
+            observeTeachingContinuations(
+                    state,
+                    BoardGameRecommendationTools.ToolName.LOOKUP_READY_TEACHING_CONTINUATIONS,
+                    discoveredCandidates,
+                    () -> tools.lookupReadyTeachingContinuations(discoveredCandidates));
+            candidateGames = java.util.stream.Stream.concat(
+                            discoveredCandidates.stream().filter(game -> state.teachingContinuations.containsKey(
+                                    game.ranking().bggId())),
+                            discoveredCandidates.stream().filter(game -> !state.teachingContinuations.containsKey(
+                                    game.ranking().bggId())))
+                    .toList();
+        }
         state.research = mergeResearch(state.research, discoveryEvidence(canonicalDiscovery, inspection));
         String observation = runtime.observation(Map.of(
                 "status", inspection.succeeded() && !inspection.games().isEmpty() ? "SUCCESS" : "PARTIAL",
@@ -1129,14 +1241,19 @@ final class RecommendationActions {
                         : purpose == DiscoveryPurpose.SELECTABLE_CARDS
                                 ? "The relationship and representative BGG games are verified. Follow the validated candidateUse: publish this slate when it answers the request, research it once when requested, or browse the local catalog when these games are only identity carriers."
                                 : "The external relationship and representative BGG facts are verified. Naming the identity is the declared complete goal, so answer it naturally without turning the response into cardless recommendations.",
-                "verifiedBggIds", inspection.games().stream().map(game -> game.ranking().bggId()).toList()));
+                "teachingContinuationRequested", state.teachingContinuationRequested,
+                "readyTeachingBggIds", candidateGames.stream()
+                        .map(game -> game.ranking().bggId())
+                        .filter(state.teachingContinuations::containsKey)
+                        .toList(),
+                "verifiedBggIds", candidateGames.stream().map(game -> game.ranking().bggId()).toList()));
         state.discoveryAttempted = true;
         state.discoveryPurpose = purpose;
         state.actions.add("DISCOVER_CANDIDATES");
         return candidateObservation(
                 observation,
                 state,
-                inspection.games(),
+                candidateGames,
                 use,
                 requestedCount,
                 playerLead(arguments));
@@ -2011,7 +2128,20 @@ final class RecommendationActions {
     }
 
     private enum TeachingContinuationGoal {
+        NONE,
         GUIDE_AND_RULE_QA
+    }
+
+    private record TeachingContinuationDecision(
+            TeachingContinuationDecisionKind kind, String learningGoal) {}
+
+    private enum TeachingContinuationDecisionKind {
+        MISSING,
+        NONE,
+        NONE_WITH_UNUSED_ARGUMENTS,
+        REQUEST_GUIDE,
+        ENRICH_GUIDE,
+        KEEP_GUIDE
     }
 
     static final class InvalidAction extends RuntimeException {

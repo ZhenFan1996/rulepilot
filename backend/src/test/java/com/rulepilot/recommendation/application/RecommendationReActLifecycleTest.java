@@ -825,11 +825,11 @@ class RecommendationReActLifecycleTest {
                 action(
                         "resolve-reference",
                         BoardGameRecommendationAgent.RESOLVE_TOOL,
-                        "{\"title\":\"Reference Game\",\"purpose\":\"COMPARISON_REFERENCE\",\"evidence\":\"U1\"}"),
+                        "{\"title\":\"Reference Game\",\"purpose\":\"COMPARISON_REFERENCE\",\"evidence\":\"U1\",\"continuationGoal\":\"NONE\"}"),
                 action(
                         "browse-distinct-candidate",
                         BoardGameRecommendationAgent.BROWSE_TOOL,
-                        "{\"purpose\":\"SELECTABLE_CARDS\",\"limit\":1,\"requestedCount\":1,\"requestedCountBasis\":\"U1\",\"playerLead\":\"我把参照游戏留在比较位，卡片只放不同候选。\"}")));
+                        "{\"purpose\":\"SELECTABLE_CARDS\",\"limit\":1,\"requestedCount\":1,\"requestedCountBasis\":\"U1\",\"continuationGoal\":\"NONE\",\"playerLead\":\"我把参照游戏留在比较位，卡片只放不同候选。\"}")));
         RecommendationReActLoop loop = loop(model, new BoardGameRecommendationTools(catalog, noResearch()));
 
         var response = loop.converse(
@@ -972,6 +972,435 @@ class RecommendationReActLifecycleTest {
                 .contains("RECORD_CONTEXTUAL_PREFERENCE", "SEARCH_BGG_CATALOG", "RECOMMEND_GAMES")
                 .doesNotContain("UPDATE_PREFERENCES", "RECONSIDER_SELECTION_AFTER_PREFERENCE_UPDATE");
 
+        loop.stopBoundedCalls();
+    }
+
+    @Test
+    void publishesOnlyCanonicalTitlesThatSatisfyTheCurrentTurnLiteralBoundary() {
+        ScriptedModel model = new ScriptedModel(List.of(action(
+                "literal-title-boundary",
+                BoardGameRecommendationAgent.BROWSE_TOOL,
+                """
+                {
+                  "purpose":"SELECTABLE_CARDS",
+                  "candidateUse":"PUBLISH_CARDS",
+                  "titleConstraint":{"operator":"CONTAINS","value":"  HARBOR  "},
+                  "evidence":"U1",
+                  "requestedCount":2,
+                  "requestedCountBasis":"U1",
+                  "limit":3
+                }
+                """)));
+        RecordingCatalog catalog = new RecordingCatalog(
+                game(601, "Orbit　Harbor", "轨道港", "A title-boundary fixture."),
+                game(602, "Harbor Guild", "港口公会", "Another title-boundary fixture."),
+                game(603, "Alpine Picnic", "高山野餐", "An unrelated eligible fixture."));
+        RecommendationReActLoop loop = loop(model, catalog);
+
+        var response = loop.converse(
+                new ConversationRequest(
+                        RecommendationProfile.empty(),
+                        "只给我两款标题明确包含 Harbor 的游戏；不要用主题相近但标题不含这个词的游戏补位。"),
+                "zh-CN",
+                "player",
+                ignored -> {});
+
+        assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
+        assertThat(response.games())
+                .extracting(game -> game.game().ranking().bggId())
+                .containsExactly(601, 602);
+        assertThat(response.shortfall()).isNull();
+        assertThat(catalog.searches).hasValue(1);
+        loop.stopBoundedCalls();
+    }
+
+    @Test
+    void keepsVerifiedCardsAndRecordsAQualityDegradationWhenContinuationDecisionIsMissing() {
+        ScriptedModel model = new ScriptedModel(List.of(action(
+                "ordinary-browse-with-unused-evidence",
+                BoardGameRecommendationAgent.BROWSE_TOOL,
+                """
+                {
+                  "candidateUse":"PUBLISH_CARDS",
+                  "evidence":"U1",
+                  "requestedCount":1,
+                  "requestedCountBasis":"U1",
+                  "limit":1
+                }
+                """)));
+        RecordingCatalog catalog = new RecordingCatalog(
+                game(606, "Meadow Signals", "草甸信号", "An ordinary catalog fixture."));
+        RecommendationReActLoop loop = loop(model, catalog);
+
+        var response = loop.converse(
+                new ConversationRequest(RecommendationProfile.empty(), "请直接推荐一款桌游。"),
+                "zh-CN",
+                "player",
+                ignored -> {});
+
+        assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
+        assertThat(response.games())
+                .extracting(game -> game.game().ranking().bggId())
+                .containsExactly(606);
+        assertThat(response.harness().actions())
+                .contains("TEACHING_CONTINUATION_DECISION_MISSING")
+                .noneMatch(action -> action.contains("TITLE_CONSTRAINT"));
+        assertThat(catalog.searches).hasValue(1);
+        loop.stopBoundedCalls();
+    }
+
+    @Test
+    void explicitNoContinuationIgnoresUnusedContinuationArgumentsWithoutLosingTheCard() {
+        ScriptedModel model = new ScriptedModel(List.of(action(
+                "ordinary-browse-with-explicit-none",
+                BoardGameRecommendationAgent.BROWSE_TOOL,
+                """
+                {
+                  "candidateUse":"PUBLISH_CARDS",
+                  "requestedCount":1,
+                  "requestedCountBasis":"U1",
+                  "continuationGoal":"NONE",
+                  "continuationEvidence":"U1",
+                  "learningGoal":"这段不应改变显式 NONE。",
+                  "limit":1
+                }
+                """)));
+        RecommendationReActLoop loop = loop(
+                model,
+                new RecordingCatalog(game(607, "River Archive", "河流档案", "A continuation fixture.")));
+
+        var response = loop.converse(
+                new ConversationRequest(RecommendationProfile.empty(), "请直接推荐一款，不需要继续讲解。"),
+                "zh-CN",
+                "player",
+                ignored -> {});
+
+        assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
+        assertThat(response.games())
+                .extracting(game -> game.game().ranking().bggId())
+                .containsExactly(607);
+        assertThat(response.continuation()).isNull();
+        assertThat(response.harness().actions())
+                .contains("TEACHING_CONTINUATION_UNUSED_ARGUMENTS")
+                .doesNotContain("TEACHING_CONTINUATION_REQUESTED");
+        loop.stopBoundedCalls();
+    }
+
+    @Test
+    void rejectedDiscoveryCannotLeakAGuideDecisionIntoTheNextValidRecommendation() {
+        ScriptedModel model = new ScriptedModel(List.of(
+                action(
+                        "invalid-discovery-with-guide",
+                        BoardGameRecommendationAgent.DISCOVER_TOOL,
+                        """
+                        {
+                          "evidence":"U9",
+                          "subject":"Unverified collection",
+                          "afterIdentity":"RECOMMEND_WITH_CARDS",
+                          "candidateUse":"PUBLISH_CARDS",
+                          "requestedCount":1,
+                          "requestedCountBasis":"U1",
+                          "continuationGoal":"GUIDE_AND_RULE_QA",
+                          "continuationEvidence":"U1",
+                          "learningGoal":"这次无效动作不能污染下一次选择。"
+                        }
+                        """),
+                action(
+                        "valid-browse-without-guide",
+                        BoardGameRecommendationAgent.BROWSE_TOOL,
+                        """
+                        {
+                          "candidateUse":"PUBLISH_CARDS",
+                          "requestedCount":1,
+                          "requestedCountBasis":"U1",
+                          "continuationGoal":"NONE",
+                          "limit":1
+                        }
+                        """)));
+        RecordingCatalog catalog = new RecordingCatalog(
+                game(609, "Clean Slate", "干净状态", "A rejected-action isolation fixture."));
+        RecommendationReActLoop loop = loop(
+                model,
+                new BoardGameRecommendationTools(catalog, configuredResearchThatMustNotRun()));
+
+        var response = loop.converse(
+                new ConversationRequest(RecommendationProfile.empty(), "请直接推荐一款，不需要继续讲解。"),
+                "zh-CN",
+                "player",
+                ignored -> {});
+
+        assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
+        assertThat(response.games())
+                .extracting(game -> game.game().ranking().bggId())
+                .containsExactly(609);
+        assertThat(response.continuation()).isNull();
+        assertThat(response.harness().actions())
+                .contains(
+                        "REJECTED_ACTION:PREFERENCE_EVIDENCE_NOT_GROUNDED",
+                        "SEARCH_BGG_CATALOG",
+                        "RECOMMEND_GAMES")
+                .doesNotContain("TEACHING_CONTINUATION_REQUESTED");
+        assertThat(catalog.searches).hasValue(1);
+        loop.stopBoundedCalls();
+    }
+
+    @Test
+    void keepsTheFirstLearningGoalAcrossRepeatedGuideDecisionsWithoutRejectingTheRecommendation() {
+        ScriptedModel model = new ScriptedModel(List.of(
+                action(
+                        "inspect-with-guide",
+                        BoardGameRecommendationAgent.BROWSE_TOOL,
+                        """
+                        {
+                          "candidateUse":"CONTINUE_REACT",
+                          "requestedCount":1,
+                          "requestedCountBasis":"U1",
+                          "continuationGoal":"GUIDE_AND_RULE_QA",
+                          "continuationEvidence":"U1",
+                          "learningGoal":"先学设置和首轮。",
+                          "limit":1
+                        }
+                        """),
+                action(
+                        "publish-with-rephrased-guide",
+                        BoardGameRecommendationAgent.BROWSE_TOOL,
+                        """
+                        {
+                          "candidateUse":"PUBLISH_CARDS",
+                          "requestedCount":1,
+                          "requestedCountBasis":"U1",
+                          "continuationGoal":"GUIDE_AND_RULE_QA",
+                          "continuationEvidence":"U1",
+                          "learningGoal":"先讲开局，然后再答疑。",
+                          "limit":1
+                        }
+                        """)));
+        RecommendationReActLoop loop = loop(
+                model,
+                new RecordingCatalog(game(608, "Signal Grove", "信号林", "A sticky guide fixture.")));
+
+        var response = loop.converse(
+                new ConversationRequest(
+                        RecommendationProfile.empty(),
+                        "推荐一款有现成讲解的游戏，先学设置和首轮，再继续答疑。"),
+                "zh-CN",
+                "player",
+                ignored -> {});
+
+        assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
+        assertThat(response.games())
+                .extracting(game -> game.game().ranking().bggId())
+                .containsExactly(608);
+        assertThat(response.continuation()).satisfies(continuation ->
+                assertThat(continuation.learningGoal()).isEqualTo("先学设置和首轮。"));
+        assertThat(response.harness().actions())
+                .doesNotContain("REJECTED_ACTION:TEACHING_CONTINUATION_CONFLICT");
+        assertThat(response.harness().actions().stream()
+                        .filter("TEACHING_CONTINUATION_REQUESTED"::equals)
+                        .toList())
+                .containsExactly("TEACHING_CONTINUATION_REQUESTED");
+        loop.stopBoundedCalls();
+    }
+
+    @Test
+    void reportsAShortfallInsteadOfFillingALiteralTitleBoundaryWithUnrelatedCards() {
+        ScriptedModel model = new ScriptedModel(List.of(action(
+                "literal-title-shortfall",
+                BoardGameRecommendationAgent.BROWSE_TOOL,
+                """
+                {
+                  "titleConstraint":{"operator":"CONTAINS","value":"Harbor"},
+                  "evidence":"U1",
+                  "requestedCount":3,
+                  "requestedCountBasis":"U1",
+                  "limit":3
+                }
+                """)));
+        RecommendationReActLoop loop = loop(
+                model,
+                new RecordingCatalog(
+                        game(611, "Harbor Signals", "港口信号", "A matching fixture."),
+                        game(612, "Guild of the Harbor", "港口公会", "Another matching fixture."),
+                        game(613, "Forest Signals", "森林信号", "An unrelated eligible fixture.")));
+
+        var response = loop.converse(
+                new ConversationRequest(RecommendationProfile.empty(), "请推荐三款标题包含 Harbor 的游戏。"),
+                "zh-CN",
+                "player",
+                ignored -> {});
+
+        assertThat(response.games())
+                .extracting(game -> game.game().ranking().bggId())
+                .containsExactly(611, 612);
+        assertThat(response.shortfall()).satisfies(shortfall -> {
+            assertThat(shortfall.requestedCount()).isEqualTo(3);
+            assertThat(shortfall.availableCount()).isEqualTo(2);
+        });
+        loop.stopBoundedCalls();
+    }
+
+    @Test
+    void rejectsALiteralTitleBoundaryThatCitesAnEarlierUserTurnBeforeCatalogAccess() {
+        ScriptedModel model = new ScriptedModel(List.of(
+                action(
+                        "stale-title-evidence",
+                        BoardGameRecommendationAgent.BROWSE_TOOL,
+                        """
+                        {
+                          "titleConstraint":{"operator":"CONTAINS","value":"Harbor"},
+                          "evidence":"U1",
+                          "requestedCount":2,
+                          "requestedCountBasis":"U2"
+                        }
+                        """),
+                action(
+                        "transparent-reply",
+                        BoardGameRecommendationAgent.REPLY_TOOL,
+                        "{\"playerReply\":\"我没有把旧一轮的标题条件冒充成本轮选择边界。\"}")));
+        RecordingCatalog catalog = new RecordingCatalog(
+                game(621, "Harbor Archive", "港口档案", "This read must not run."));
+        RecommendationReActLoop loop = loop(model, catalog);
+        String current = "这一轮不要沿用上一轮的标题筛选，先直接说明你会怎么处理。";
+
+        var response = loop.converse(
+                new ConversationRequest(
+                        RecommendationProfile.empty(),
+                        current,
+                        List.of(),
+                        List.of(
+                                new DialogueMessage("user", "上一轮只看 Harbor 标题。"),
+                                new DialogueMessage("assistant", "明白。"),
+                                new DialogueMessage("user", current)),
+                        null,
+                        List.of(),
+                        List.of()),
+                "zh-CN",
+                "player",
+                ignored -> {});
+
+        assertThat(response.outcome()).isEqualTo(Outcome.CONVERSATION);
+        assertThat(response.harness().actions())
+                .contains("REJECTED_ACTION:TITLE_CONSTRAINT_EVIDENCE_NOT_CURRENT", "REPLY_TO_USER");
+        assertThat(catalog.searches).hasValue(0);
+        loop.stopBoundedCalls();
+    }
+
+    @Test
+    void keepsTheLiteralTitleBoundaryAcrossAContinuedReactRead() {
+        ScriptedModel model = new ScriptedModel(List.of(
+                action(
+                        "inspect-matching-titles",
+                        BoardGameRecommendationAgent.BROWSE_TOOL,
+                        """
+                        {
+                          "candidateUse":"CONTINUE_REACT",
+                          "titleConstraint":{"operator":"CONTAINS","value":"Harbor"},
+                          "evidence":"U1",
+                          "requestedCount":2,
+                          "requestedCountBasis":"U1",
+                          "limit":3
+                        }
+                        """),
+                action(
+                        "publish-after-inspection",
+                        BoardGameRecommendationAgent.BROWSE_TOOL,
+                        """
+                        {
+                          "candidateUse":"PUBLISH_CARDS",
+                          "requestedCount":2,
+                          "requestedCountBasis":"U1",
+                          "limit":3
+                        }
+                        """)));
+        RecommendationReActLoop loop = loop(
+                model,
+                new RecordingCatalog(
+                        game(631, "Harbor Lanterns", "港灯", "A matching fixture."),
+                        game(632, "Harbor Exchange", "港口交易所", "Another matching fixture."),
+                        game(633, "Mountain Lanterns", "山灯", "An unrelated eligible fixture.")));
+
+        var response = loop.converse(
+                new ConversationRequest(RecommendationProfile.empty(), "只推荐两款标题包含 Harbor 的游戏。"),
+                "zh-CN",
+                "player",
+                ignored -> {});
+
+        assertThat(response.games())
+                .extracting(game -> game.game().ranking().bggId())
+                .containsExactly(631, 632);
+        assertThat(response.harness().catalogCalls()).isEqualTo(2);
+        loop.stopBoundedCalls();
+    }
+
+    @Test
+    void aDirectTargetCannotBypassTheTypedTitleBoundaryEstablishedByAnEarlierAction() {
+        ScriptedModel model = new ScriptedModel(List.of(
+                action(
+                        "establish-title-boundary",
+                        BoardGameRecommendationAgent.BROWSE_TOOL,
+                        """
+                        {
+                          "candidateUse":"CONTINUE_REACT",
+                          "titleConstraint":{"operator":"CONTAINS","value":"Harbor"},
+                          "evidence":"U1",
+                          "requestedCount":1,
+                          "requestedCountBasis":"U1",
+                          "continuationGoal":"NONE",
+                          "limit":2
+                        }
+                        """),
+                action(
+                        "unrelated-direct-target",
+                        BoardGameRecommendationAgent.RESOLVE_TOOL,
+                        """
+                        {
+                          "title":"Catan",
+                          "purpose":"TARGET_GAME",
+                          "evidence":"U1",
+                          "continuationGoal":"GUIDE_AND_RULE_QA",
+                          "continuationEvidence":"U1",
+                          "learningGoal":"这次被拒绝的目标不能留下讲解状态。",
+                          "playerReply":"错误地把标题不匹配的游戏作为目标。"
+                        }
+                        """),
+                action(
+                        "publish-matching-title",
+                        BoardGameRecommendationAgent.BROWSE_TOOL,
+                        """
+                        {
+                          "candidateUse":"PUBLISH_CARDS",
+                          "requestedCount":1,
+                          "requestedCountBasis":"U1",
+                          "continuationGoal":"NONE",
+                          "limit":2
+                        }
+                        """)));
+        RecommendationReActLoop loop = loop(
+                model,
+                new RecordingCatalog(
+                        game(634, "Harbor Signals", "港口信号", "A matching hard-boundary fixture."),
+                        game(635, "Catan", "卡坦岛", "An unrelated direct-target fixture.")));
+
+        var response = loop.converse(
+                new ConversationRequest(
+                        RecommendationProfile.empty(),
+                        "只推荐标题包含 Harbor 的游戏；即使想到 Catan，也不能拿它补位。"),
+                "zh-CN",
+                "player",
+                ignored -> {});
+
+        assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
+        assertThat(response.games())
+                .extracting(game -> game.game().ranking().bggId())
+                .containsExactly(634);
+        assertThat(response.continuation()).isNull();
+        assertThat(response.harness().actions())
+                .contains("REJECTED_ACTION:FINAL_TITLE_CONSTRAINT_MISMATCH", "RECOMMEND_GAMES")
+                .doesNotContain("TEACHING_CONTINUATION_REQUESTED");
+        assertThat(response.harness().actions().stream()
+                        .filter("RESOLVE_BGG_REFERENCE"::equals)
+                        .toList())
+                .isEmpty();
         loop.stopBoundedCalls();
     }
 
@@ -1240,8 +1669,8 @@ class RecommendationReActLifecycleTest {
                 .containsExactly("requestedCountEvidence");
         assertThat(error.path("allowedArguments"))
                 .extracting(JsonNode::asText)
-                .contains("requestedCount", "requestedCountBasis", "preferenceUpdates")
-                .doesNotContain("requestedCountEvidence", "evidence");
+                .contains("requestedCount", "requestedCountBasis", "preferenceUpdates", "evidence")
+                .doesNotContain("requestedCountEvidence");
 
         loop.stopBoundedCalls();
     }

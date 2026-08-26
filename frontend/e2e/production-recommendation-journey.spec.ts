@@ -45,6 +45,16 @@ function requiredProductionModelRoles(
     : ['recommendation', 'teaching', 'visual', 'answer']
 }
 
+function parseRequestedRecommendationCardCount(value: string | undefined) {
+  if (value === undefined || value === '') return 3
+  if (!/^\d+$/.test(value)) throw new Error(`Invalid requested recommendation card count: ${value}`)
+  const count = Number(value)
+  if (!Number.isSafeInteger(count) || count < 1 || count > 8) {
+    throw new Error(`Requested recommendation card count must be between 1 and 8: ${value}`)
+  }
+  return count
+}
+
 const enabled = process.env.RULEPILOT_PRODUCTION_RECOMMENDATION_JOURNEY === 'true'
 const JOURNEY_MODE = parseRecommendationJourneyMode(
   process.env.RULEPILOT_RECOMMENDATION_JOURNEY_MODE,
@@ -53,6 +63,9 @@ const RECOMMENDATION_OPENING_PROMPT = process.env.RULEPILOT_RECOMMENDATION_OPENI
   ?? '嗨，今晚五个人聚会，最近合作玩得有点腻，但我还没想清楚换什么方向。你会先怎么帮我挑？'
 const RECOMMENDATION_SELECTION_PROMPT = process.env.RULEPILOT_RECOMMENDATION_SELECTION_PROMPT
   ?? '我想换成能谈判、互相骗一骗的；有两个新手，90 分钟内。你直接挑三款，并把你最推荐的一款放第一吧。我们选好后想优先直接进入已有讲解，再按同一份规则书继续答疑。'
+const REQUESTED_RECOMMENDATION_CARD_COUNT = parseRequestedRecommendationCardCount(
+  process.env.RULEPILOT_RECOMMENDATION_EXPECTED_CARD_COUNT,
+)
 const MAX_OPEN_GUIDANCE_MS = 15_000
 // The 15-second interaction SLO remains strict. This wider observation window matches the
 // 45-second application budget plus the stream controller's five-second delivery tail so a
@@ -61,7 +74,7 @@ const MAX_OPEN_TERMINAL_DIAGNOSTIC_MS = 50_000
 const MAX_SELECTION_RECOMMENDATION_MS = 20_000
 // This wider window diagnoses a persisted semantic terminal after the interaction budget expires;
 // it does not relax the 20-second success budget.
-const MAX_SELECTION_TERMINAL_OBSERVATION_MS = 35_000
+const MAX_SELECTION_TERMINAL_OBSERVATION_MS = 50_000
 const PRESERVED_DRAFT = '下次我还想给完全没玩过桌游的家人找一款更轻松的。'
 const RULE_QUESTION = process.env.RULEPILOT_RECOMMENDATION_RULE_QUESTION
   ?? '我们现在要开第一局：所有组件分别怎么摆、每个人先拿什么？请按顺序说，并标出规则书页码。'
@@ -177,6 +190,7 @@ type RecommendationTerminalCategory =
   | 'PERSISTED_RECOMMENDATIONS'
   | 'RECOMMENDATIONS_WITHIN_INTERACTION_BUDGET'
   | 'RECOMMENDATIONS_OVER_INTERACTION_BUDGET'
+  | 'PERSISTED_RECOMMENDATIONS_NOT_RENDERED'
   | 'SEMANTIC_UNAVAILABLE'
   | 'SEMANTIC_NON_RECOMMENDATION'
   | 'PERSISTED_SESSION_TIMEOUT'
@@ -198,6 +212,15 @@ interface RecommendationTerminalObservation {
   session: RecommendationSessionResponse | null
   elapsedMs: number
 }
+
+interface RecommendationSlateObservation {
+  visible: boolean
+  observedMs: number
+  count: number
+  bggIds: number[]
+}
+
+type TeachingCompletionCategory = 'FULLY_SUPPORTED' | 'READABLE_WITH_DEGRADATION'
 
 interface OpeningTerminalRead {
   session: RecommendationSessionResponse | null
@@ -362,6 +385,9 @@ interface CompletedLessonObservation {
   sectionCount: number
   citedDraftSectionCount: number
   insufficientSectionCount: number
+  readable: true
+  fullySupported: boolean
+  category: TeachingCompletionCategory
 }
 
 interface TeachingWaitProgress {
@@ -451,6 +477,15 @@ interface ProductionJourneyReport {
   recommendationStartedAt: string | null
   recommendationTerminalObservedAt: string | null
   recommendationElapsedBasis: 'NOT_OBSERVED' | 'UI_CARD_RENDER' | 'PERSISTED_FINAL_SESSION'
+  recommendationRequestedCardCount: number
+  recommendationPersistedCardCount: number | null
+  recommendationShortfallCount: number | null
+  recommendationSlateRendered: boolean
+  recommendationSlateMs: number | null
+  recommendationObservationElapsedMs: number | null
+  recommendationSloMet: boolean | null
+  recommendationPersistedTerminalObserved: boolean
+  recommendationPersistedTerminalMs: number | null
   recommendationOutcome: RecommendationOutcome | null
   recommendationTerminalCategory: RecommendationTerminalCategory
   recommendationCardCount: number
@@ -519,6 +554,9 @@ interface ProductionJourneyReport {
   teachingLatestGenerationOperation: string | null
   teachingPublishedSectionCount: number
   lessonStatus: string | null
+  lessonReadable: boolean
+  lessonFullySupported: boolean | null
+  lessonCompletionCategory: TeachingCompletionCategory | null
   citedDraftSectionCount: number
   insufficientSectionCount: number
   lessonCompletionMs: number | null
@@ -587,14 +625,69 @@ function classifyRecommendationTerminal(
   return { category, session, elapsedMs }
 }
 
+async function observeRecommendationSlate(
+  cards: Locator,
+  persistedBggIds: Promise<number[] | null>,
+  startedAt: number,
+  deadlineAt: number,
+): Promise<RecommendationSlateObservation> {
+  let expectedBggIds: number[] | null | undefined
+  let targetFailure: unknown
+  void persistedBggIds.then(
+    ids => { expectedBggIds = ids },
+    error => { targetFailure = error },
+  )
+  const observations: Array<{ bggIds: number[]; observedMs: number }> = []
+  while (true) {
+    if (targetFailure) throw targetFailure
+    const bggIds = await cards.evaluateAll(entries => entries.map(card =>
+      Number(card.getAttribute('data-bgg-id'))))
+    const count = bggIds.length
+    const observedMs = elapsed(startedAt)
+    observations.push({ bggIds, observedMs })
+    if (expectedBggIds === null || expectedBggIds.length === 0) {
+      return { visible: false, observedMs, count, bggIds }
+    }
+    if (expectedBggIds !== undefined) {
+      const completeSlate = observations.find(observation =>
+        sameTypedBggSlate(observation.bggIds, expectedBggIds!))
+      if (completeSlate) {
+        return { visible: true, observedMs: completeSlate.observedMs, count, bggIds }
+      }
+    }
+    if (Date.now() > deadlineAt) {
+      return { visible: false, observedMs, count, bggIds }
+    }
+    await new Promise(resolve => setTimeout(resolve, 250))
+  }
+}
+
+function sameTypedBggSlate(renderedBggIds: number[], persistedBggIds: number[]) {
+  return renderedBggIds.length === persistedBggIds.length
+    && renderedBggIds.every((id, index) => Number.isSafeInteger(id)
+      && id > 0
+      && id === persistedBggIds[index])
+}
+
+function diagnoseRecommendationTerminal(
+  terminal: RecommendationTerminalObservation,
+  slate: RecommendationSlateObservation,
+): RecommendationTerminalCategory {
+  if (terminal.category !== 'PERSISTED_RECOMMENDATIONS') return terminal.category
+  if (!slate.visible) return 'PERSISTED_RECOMMENDATIONS_NOT_RENDERED'
+  return slate.observedMs <= MAX_SELECTION_RECOMMENDATION_MS
+    ? 'RECOMMENDATIONS_WITHIN_INTERACTION_BUDGET'
+    : 'RECOMMENDATIONS_OVER_INTERACTION_BUDGET'
+}
+
 async function waitForPersistedRecommendationTerminal(
   request: APIRequestContext,
   conversationId: string,
   baselineRevision: number,
   expectedClientTurnId: string,
   startedAt: number,
+  deadlineAt: number,
 ): Promise<RecommendationTerminalObservation> {
-  const deadline = Date.now() + MAX_SELECTION_TERMINAL_OBSERVATION_MS
   let successfulReads = 0
   do {
     try {
@@ -616,7 +709,7 @@ async function waitForPersistedRecommendationTerminal(
       // A later successful persisted-session read remains authoritative inside the bounded observation window.
     }
     await new Promise(resolve => setTimeout(resolve, 250))
-  } while (Date.now() <= deadline)
+  } while (Date.now() <= deadlineAt)
 
   return {
     category: successfulReads > 0 ? 'PERSISTED_SESSION_TIMEOUT' : 'PERSISTED_SESSION_READ_FAILURE',
@@ -1067,6 +1160,33 @@ function unfinishedSectionSummary(lesson: LessonMilestoneResponse) {
   }).join(', ')
 }
 
+function classifyReadableLessonTerminal(
+  teachingRunState: string,
+  lesson: LessonMilestoneResponse,
+): CompletedLessonObservation | null {
+  const citedDraftSectionCount = lesson.sections
+    .filter(section => section.evidenceStatus === 'CITED_DRAFT').length
+  const insufficientSectionCount = lesson.sections
+    .filter(section => section.evidenceStatus === 'INSUFFICIENT_EVIDENCE').length
+  const readableSectionCount = lesson.sections
+    .filter(section => section.evidenceStatus === 'SUPPORTED'
+      || section.evidenceStatus === 'CITED_DRAFT').length
+  if (readableSectionCount === 0) return null
+  const fullySupported = teachingRunState === 'COMPLETED'
+    && lesson.status === 'COMPLETE'
+    && lesson.sections.every(section => section.evidenceStatus === 'SUPPORTED')
+  return {
+    teachingRunState,
+    lessonStatus: lesson.status,
+    sectionCount: lesson.sections.length,
+    citedDraftSectionCount,
+    insufficientSectionCount,
+    readable: true,
+    fullySupported,
+    category: fullySupported ? 'FULLY_SUPPORTED' : 'READABLE_WITH_DEGRADATION',
+  }
+}
+
 async function waitForCompletedLesson(
   request: APIRequestContext,
   planId: string,
@@ -1077,6 +1197,8 @@ async function waitForCompletedLesson(
   let latestRunError: string | null = null
   let latestRunDetails: RunDetailsResponse | null = null
   let latestLesson: LessonMilestoneResponse | null = null
+  let terminalObservedAt: number | null = null
+  let terminalGenerationKey = ''
   const progress = teachingProgressReporter(onProgress)
   while (Date.now() < deadline) {
     const runResponse = await request.get(
@@ -1089,15 +1211,6 @@ async function waitForCompletedLesson(
       latestRunDetails = details
       latestRunState = details.run.state
       latestRunError = details.run.lastErrorCode
-      if (['FAILED', 'DEGRADED', 'INSUFFICIENT_EVIDENCE'].includes(latestRunState)) {
-        const latestFailure = details.activities
-          .filter(activity => activity.outcome !== 'SUCCEEDED')
-          .sort((left, right) => Date.parse(right.occurredAt) - Date.parse(left.occurredAt))[0]
-        const diagnostic = latestFailure
-          ? `${latestFailure.operation}: ${latestFailure.summary}`
-          : latestRunError ?? 'no failure detail was recorded'
-        throw new Error(`Teaching generation ended as ${latestRunState}: ${diagnostic}`)
-      }
     }
 
     const lessonResponse = await request.get(
@@ -1115,24 +1228,29 @@ async function waitForCompletedLesson(
       'COMPLETE_LESSON', null, planId, latestRunDetails, latestLesson,
     ))
 
-    if (latestLesson && latestRunState === 'COMPLETED') {
-      const citedDraftSectionCount = latestLesson.sections
-        .filter(section => section.evidenceStatus === 'CITED_DRAFT').length
-      const insufficientSectionCount = latestLesson.sections
-        .filter(section => section.evidenceStatus === 'INSUFFICIENT_EVIDENCE').length
-      const everySectionSupported = latestLesson.sections.length > 0
-        && latestLesson.sections.every(section => section.evidenceStatus === 'SUPPORTED')
-      if (latestLesson.status === 'COMPLETE' && everySectionSupported) {
-        return {
-          teachingRunState: latestRunState,
-          lessonStatus: latestLesson.status,
-          sectionCount: latestLesson.sections.length,
-          citedDraftSectionCount,
-          insufficientSectionCount,
-        }
-      }
+    const terminalRun = ['COMPLETED', 'FAILED', 'DEGRADED', 'INSUFFICIENT_EVIDENCE']
+      .includes(latestRunState)
+    const nextTerminalGenerationKey = terminalRun
+      ? `${latestRunDetails?.run.createdAt ?? 'unknown'}:${latestRunState}`
+      : ''
+    if (nextTerminalGenerationKey !== terminalGenerationKey) {
+      terminalGenerationKey = nextTerminalGenerationKey
+      terminalObservedAt = terminalRun ? Date.now() : null
+    }
+
+    if (latestLesson && terminalRun) {
+      const readableTerminal = classifyReadableLessonTerminal(latestRunState, latestLesson)
+      if (readableTerminal) return readableTerminal
+    }
+    if (terminalObservedAt !== null && Date.now() - terminalObservedAt >= 15_000) {
+      const latestFailure = latestRunDetails?.activities
+        .filter(activity => activity.outcome !== 'SUCCEEDED')
+        .sort((left, right) => Date.parse(right.occurredAt) - Date.parse(left.occurredAt))[0]
+      const diagnostic = latestFailure
+        ? `${latestFailure.operation}: ${latestFailure.summary}`
+        : latestRunError ?? 'no failure detail was recorded'
       throw new Error(
-        `Teaching run completed without a complete lesson: lesson=${latestLesson.status}; ${unfinishedSectionSummary(latestLesson)}`,
+        `Teaching ended as ${latestRunState} without a readable cited section: ${diagnostic}; lesson=${latestLesson?.status ?? 'NOT_PUBLISHED'}; ${latestLesson ? unfinishedSectionSummary(latestLesson) : 'no lesson was published'}`,
       )
     }
     await new Promise(resolve => setTimeout(resolve, 500))
@@ -1509,6 +1627,75 @@ test('recommendation-only acceptance distinguishes semantic terminals from an un
   expect(classifyRecommendationTerminal(result('recommendations', 1), 1, clientTurnId, 4_000)).toBeNull()
   expect(classifyRecommendationTerminal(result('recommendations'), 1, crypto.randomUUID(), 4_000))
     .toBeNull()
+
+  const persistedRecommendations = classifyRecommendationTerminal(
+    result('recommendations'),
+    1,
+    clientTurnId,
+    21_000,
+  )!
+  expect(diagnoseRecommendationTerminal(persistedRecommendations, {
+    visible: true, observedMs: 19_999, count: 3, bggIds: [11, 22, 33],
+  })).toBe('RECOMMENDATIONS_WITHIN_INTERACTION_BUDGET')
+  expect(diagnoseRecommendationTerminal(persistedRecommendations, {
+    visible: true, observedMs: 20_001, count: 3, bggIds: [11, 22, 33],
+  })).toBe('RECOMMENDATIONS_OVER_INTERACTION_BUDGET')
+  expect(diagnoseRecommendationTerminal(persistedRecommendations, {
+    visible: false, observedMs: 50_000, count: 2, bggIds: [11, 22],
+  })).toBe('PERSISTED_RECOMMENDATIONS_NOT_RENDERED')
+  expect(diagnoseRecommendationTerminal(
+    classifyRecommendationTerminal(result('unavailable'), 1, clientTurnId, 4_000)!,
+    { visible: false, observedMs: 4_000, count: 0, bggIds: [] },
+  )).toBe('SEMANTIC_UNAVAILABLE')
+
+  expect(sameTypedBggSlate([11, 22], [11, 22])).toBe(true)
+  expect(sameTypedBggSlate([11, 22], [22, 11])).toBe(false)
+  expect(sameTypedBggSlate([11, 22, 33], [11, 22])).toBe(false)
+  expect(sameTypedBggSlate([11, Number.NaN], [11, 22])).toBe(false)
+})
+
+test('lesson terminal classification preserves readable cited drafts without claiming full support', () => {
+  const lesson = (
+    status: LessonMilestoneResponse['status'],
+    evidenceStatuses: Array<LessonMilestoneResponse['sections'][number]['evidenceStatus']>,
+  ): LessonMilestoneResponse => ({
+    id: 'lesson-1',
+    teachingPlanId: 'plan-1',
+    status,
+    sections: evidenceStatuses.map((evidenceStatus, index) => ({
+      position: index + 1,
+      title: `Section ${index + 1}`,
+      evidenceStatus,
+    })),
+  })
+
+  expect(classifyReadableLessonTerminal('COMPLETED', lesson('COMPLETE', [
+    'SUPPORTED',
+    'SUPPORTED',
+  ]))).toMatchObject({
+    category: 'FULLY_SUPPORTED',
+    readable: true,
+    fullySupported: true,
+    citedDraftSectionCount: 0,
+    insufficientSectionCount: 0,
+  })
+  expect(classifyReadableLessonTerminal('DEGRADED', lesson('DRAFT_READY', [
+    'SUPPORTED',
+    'CITED_DRAFT',
+    'INSUFFICIENT_EVIDENCE',
+  ]))).toMatchObject({
+    category: 'READABLE_WITH_DEGRADATION',
+    readable: true,
+    fullySupported: false,
+    citedDraftSectionCount: 1,
+    insufficientSectionCount: 1,
+  })
+  expect(classifyReadableLessonTerminal('FAILED', lesson('DRAFT_READY', ['CITED_DRAFT'])))
+    .toMatchObject({ category: 'READABLE_WITH_DEGRADATION', readable: true, fullySupported: false })
+  expect(classifyReadableLessonTerminal(
+    'INSUFFICIENT_EVIDENCE',
+    lesson('INCOMPLETE', ['INSUFFICIENT_EVIDENCE']),
+  )).toBeNull()
 })
 
 test('opening diagnostics distinguish budget, semantic, unavailable, processing, and read boundaries', () => {
@@ -1887,6 +2074,11 @@ test('recommendation becomes one readable, taught, and answerable production jou
     recommendationMs: null,
     recommendationStartedAt: null, recommendationTerminalObservedAt: null,
     recommendationElapsedBasis: 'NOT_OBSERVED', recommendationOutcome: null,
+    recommendationRequestedCardCount: REQUESTED_RECOMMENDATION_CARD_COUNT,
+    recommendationPersistedCardCount: null, recommendationShortfallCount: null,
+    recommendationSlateRendered: false, recommendationSlateMs: null,
+    recommendationObservationElapsedMs: null, recommendationSloMet: null,
+    recommendationPersistedTerminalObserved: false, recommendationPersistedTerminalMs: null,
     recommendationTerminalCategory: 'NOT_OBSERVED', recommendationCardCount: 0,
     expectedRecommendationTitleTerm: EXPECTED_RECOMMENDATION_TITLE_TERM,
     recommendationPublishedGames: [], recommendationCompletedWork: [], recommendationModelCalls: null,
@@ -1917,7 +2109,8 @@ test('recommendation becomes one readable, taught, and answerable production jou
     teachingGenerationState: null, teachingProgressObservedAt: null, teachingObservedPlanId: null,
     teachingLatestPreparationOperation: null, teachingLatestGenerationOperation: null,
     teachingPublishedSectionCount: 0,
-    lessonStatus: null, citedDraftSectionCount: 0,
+    lessonStatus: null, lessonReadable: false, lessonFullySupported: null,
+    lessonCompletionCategory: null, citedDraftSectionCount: 0,
     insufficientSectionCount: 0, lessonCompletionMs: null,
     rulebookReadableMs: null, renderedRulebookPage: false, lessonReadableMs: null,
     lessonDockText: null,
@@ -1948,6 +2141,7 @@ test('recommendation becomes one readable, taught, and answerable production jou
     if (progress.lessonStatus) report.lessonStatus = progress.lessonStatus
     report.lessonSectionCount = progress.sectionCount
     report.teachingPublishedSectionCount = progress.publishedSectionCount
+    report.lessonReadable = progress.publishedSectionCount > 0
     report.citedDraftSectionCount = progress.citedDraftSectionCount
     report.insufficientSectionCount = progress.insufficientSectionCount
     report.generatedAt = new Date().toISOString()
@@ -2112,53 +2306,97 @@ test('recommendation becomes one readable, taught, and answerable production jou
 
     await composer.fill(RECOMMENDATION_SELECTION_PROMPT)
     const recommendationStartedAt = performance.now()
+    const selectionDiagnosticDeadlineAt = Date.now() + MAX_SELECTION_TERMINAL_OBSERVATION_MS
+    const selectionRequestedCardCount = REQUESTED_RECOMMENDATION_CARD_COUNT
+    let persistedSlateSettled = false
+    let resolvePersistedBggIds!: (bggIds: number[] | null) => void
+    const persistedBggIds = new Promise<number[] | null>(resolve => {
+      resolvePersistedBggIds = resolve
+    })
+    const settlePersistedBggIds = (bggIds: number[] | null) => {
+      if (persistedSlateSettled) return
+      persistedSlateSettled = true
+      resolvePersistedBggIds(bggIds)
+    }
     report.recommendationStartedAt = new Date().toISOString()
-    const persistedTerminalStartedAt = recommendationStartedAt
+    report.recommendationRequestedCardCount = selectionRequestedCardCount
     const selectionRequestPromise = page.waitForRequest(request => {
       const url = new URL(request.url())
       return url.pathname === '/api/v1/bgg/recommendation-agent/stream'
         && request.method() === 'POST'
     })
     await page.getByRole('button', { name: '发送', exact: true }).click()
-    const recommendationCardsVisible = RECOMMENDATION_ONLY
-      ? (async () => {
-          try {
-            await expect.poll(() => recommendationCards.count(), {
-              timeout: MAX_SELECTION_RECOMMENDATION_MS,
-              message: 'At least two recommendation cards did not become player-visible within the interaction budget',
-            }).toBeGreaterThanOrEqual(2)
-            return { elapsedMs: elapsed(recommendationStartedAt), count: await recommendationCards.count() }
-          } catch {
-            return { elapsedMs: null, count: await recommendationCards.count() }
-          }
-        })()
-      : Promise.resolve(null)
-    const selectionRequest = await selectionRequestPromise
-    const selectionRequestBody = selectionRequest.postDataJSON() as { clientTurnId?: unknown }
-    const selectionClientTurnId = selectionRequestBody.clientTurnId
-    expect(typeof selectionClientTurnId === 'string'
-      && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
-        .test(selectionClientTurnId),
-    'The recommendation selection request has no valid v4 clientTurnId').toBe(true)
+    const recommendationCardsVisible = observeRecommendationSlate(
+      recommendationCards,
+      persistedBggIds,
+      recommendationStartedAt,
+      selectionDiagnosticDeadlineAt,
+    )
+    let selectionClientTurnId: string
+    try {
+      const selectionRequest = await selectionRequestPromise
+      const selectionRequestBody = selectionRequest.postDataJSON() as { clientTurnId?: unknown }
+      const candidateClientTurnId = selectionRequestBody.clientTurnId
+      if (typeof candidateClientTurnId !== 'string'
+        || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+          .test(candidateClientTurnId)) {
+        throw new Error('The recommendation selection request has no valid v4 clientTurnId')
+      }
+      selectionClientTurnId = candidateClientTurnId
+    } catch (failure) {
+      settlePersistedBggIds(null)
+      await recommendationCardsVisible.catch(() => undefined)
+      throw failure
+    }
+
+    const selectionTerminalPromise = waitForPersistedRecommendationTerminal(
+      page.request,
+      createdConversation.conversationId,
+      selectionBaselineRevision,
+      selectionClientTurnId,
+      recommendationStartedAt,
+      selectionDiagnosticDeadlineAt,
+    )
+    void selectionTerminalPromise.then(
+      terminal => {
+        const result = terminal.session?.latestResponse
+        settlePersistedBggIds(result?.outcome === 'recommendations'
+          ? result.games.map(entry => entry.game.bggId)
+          : null)
+      },
+      () => settlePersistedBggIds(null),
+    )
 
     if (RECOMMENDATION_ONLY) {
-      const terminal = await waitForPersistedRecommendationTerminal(
-        page.request,
-        createdConversation.conversationId,
-        selectionBaselineRevision,
-        selectionClientTurnId as string,
-        persistedTerminalStartedAt,
-      )
-      report.recommendationMs = terminal.elapsedMs
-      report.recommendationTerminalObservedAt = new Date().toISOString()
-      report.recommendationElapsedBasis = 'PERSISTED_FINAL_SESSION'
-      report.recommendationTerminalCategory = terminal.category
+      const [terminal, visibleCards] = await Promise.all([
+        selectionTerminalPromise,
+        recommendationCardsVisible,
+      ])
+      report.recommendationSlateRendered = visibleCards.visible
+      report.recommendationSlateMs = visibleCards.visible ? visibleCards.observedMs : null
+      report.recommendationObservationElapsedMs = visibleCards.observedMs
+      report.recommendationSloMet = visibleCards.visible
+        && visibleCards.observedMs <= MAX_SELECTION_RECOMMENDATION_MS
+      report.recommendationPersistedTerminalObserved = terminal.session !== null
+      report.recommendationPersistedTerminalMs = terminal.session === null ? null : terminal.elapsedMs
+      report.recommendationMs = report.recommendationSlateMs ?? report.recommendationPersistedTerminalMs
+      report.recommendationTerminalObservedAt = terminal.session === null ? null : new Date().toISOString()
+      report.recommendationElapsedBasis = visibleCards.visible
+        ? 'UI_CARD_RENDER'
+        : terminal.session === null ? 'NOT_OBSERVED' : 'PERSISTED_FINAL_SESSION'
+      report.recommendationTerminalCategory = diagnoseRecommendationTerminal(terminal, visibleCards)
       report.recommendationOutcome = terminal.session?.latestResponse?.outcome ?? null
       const terminalGames = Array.isArray(terminal.session?.latestResponse?.games)
         ? terminal.session.latestResponse.games
         : []
+      report.recommendationPersistedCardCount = terminal.session?.latestResponse?.outcome === 'recommendations'
+        ? terminalGames.length
+        : null
+      report.recommendationShortfallCount = report.recommendationPersistedCardCount === null
+        ? null
+        : Math.max(0, selectionRequestedCardCount - report.recommendationPersistedCardCount)
       const persistedResult = terminal.session?.latestResponse ?? null
-      report.recommendationCardCount = terminalGames.length
+      report.recommendationCardCount = visibleCards.count
       report.recommendationPublishedGames = terminalGames.map(entry => ({
         bggId: entry.game.bggId,
         name: entry.game.name,
@@ -2180,24 +2418,19 @@ test('recommendation becomes one readable, taught, and answerable production jou
         ? persistedResult.publicationRecovered
         : null
       report.recommendationFailureBoundary = persistedResult?.failureBoundary ?? null
-      const visibleCards = await recommendationCardsVisible
-      if (terminal.session?.latestResponse?.outcome === 'recommendations') {
-        report.recommendationMs = visibleCards?.elapsedMs ?? elapsed(recommendationStartedAt)
-        report.recommendationElapsedBasis = 'UI_CARD_RENDER'
-        report.recommendationTerminalCategory = visibleCards?.elapsedMs !== null
-          && visibleCards?.elapsedMs !== undefined
-          && visibleCards.elapsedMs <= MAX_SELECTION_RECOMMENDATION_MS
-          ? 'RECOMMENDATIONS_WITHIN_INTERACTION_BUDGET'
-          : 'RECOMMENDATIONS_OVER_INTERACTION_BUDGET'
-      }
       await retainReport(reportFile, report)
 
       const finalResult = terminal.session?.latestResponse
       expect(finalResult?.outcome, 'The persisted recommendation result was not recommendations')
         .toBe('recommendations')
-      expect(report.recommendationTerminalCategory,
-        `Recommendation cards were not player-visible within ${MAX_SELECTION_RECOMMENDATION_MS}ms`)
-        .toBe('RECOMMENDATIONS_WITHIN_INTERACTION_BUDGET')
+      expect.soft(report.recommendationSloMet,
+        `Recommendation cards exceeded the ${MAX_SELECTION_RECOMMENDATION_MS}ms interaction SLO`)
+        .toBe(true)
+      expect([
+        'RECOMMENDATIONS_WITHIN_INTERACTION_BUDGET',
+        'RECOMMENDATIONS_OVER_INTERACTION_BUDGET',
+      ], 'Persisted recommendation cards never became player-visible in the 50-second diagnostic window')
+        .toContain(report.recommendationTerminalCategory)
       expect(report.recommendationOutcome,
         'Recommendation-only verification must not accept an unavailable terminal').not.toBe('unavailable')
       expect(finalResult, 'The persisted recommendation result is missing').not.toBeNull()
@@ -2236,7 +2469,8 @@ test('recommendation becomes one readable, taught, and answerable production jou
         'A rendered recommendation card has no positive typed BGG identity').toBe(true)
       expect(new Set(renderedBggIds).size,
         'Rendered recommendation cards repeated a BGG identity').toBe(renderedBggIds.length)
-      expect(new Set(renderedBggIds)).toEqual(new Set(terminalGames.map(entry => entry.game.bggId)))
+      expect(sameTypedBggSlate(renderedBggIds, terminalGames.map(entry => entry.game.bggId)),
+        'Rendered recommendation cards diverged from the persisted typed slate').toBe(true)
       expect(importRequestCount,
         'Recommendation-only verification must not start a rulebook import').toBe(0)
       expect(pageErrors, 'The recommendation-only journey emitted uncaught browser errors').toEqual([])
@@ -2249,29 +2483,39 @@ test('recommendation becomes one readable, taught, and answerable production jou
       return
     }
 
-    await expect(recommendationCards).toHaveCount(3, { timeout: MAX_SELECTION_RECOMMENDATION_MS })
-    report.recommendationMs = elapsed(recommendationStartedAt)
-    report.recommendationTerminalObservedAt = new Date().toISOString()
-    report.recommendationElapsedBasis = 'UI_CARD_RENDER'
-    report.recommendationOutcome = 'recommendations'
-    report.recommendationTerminalCategory = 'RECOMMENDATIONS_WITHIN_INTERACTION_BUDGET'
-    report.recommendationCardCount = await recommendationCards.count()
-    expect(
-      report.recommendationMs,
-      'The recommendation Agent should refine the unknown target into three choices within the interaction budget',
-    ).toBeLessThanOrEqual(MAX_SELECTION_RECOMMENDATION_MS)
-    await composer.fill(PRESERVED_DRAFT)
-
-    if (REQUIRE_READY_TEACHING) {
-    const selectionTerminal = await waitForPersistedRecommendationTerminal(
-      page.request,
-      createdConversation.conversationId,
-      selectionBaselineRevision,
-      selectionClientTurnId as string,
-      persistedTerminalStartedAt,
-    )
+    const [selectionTerminal, selectionSlate] = await Promise.all([
+      selectionTerminalPromise,
+      recommendationCardsVisible,
+    ])
     const selectionResult = selectionTerminal.session?.latestResponse ?? null
-    report.recommendationOutcome = selectionResult?.outcome ?? report.recommendationOutcome
+    report.recommendationSlateRendered = selectionSlate.visible
+    report.recommendationSlateMs = selectionSlate.visible ? selectionSlate.observedMs : null
+    report.recommendationObservationElapsedMs = selectionSlate.observedMs
+    report.recommendationSloMet = selectionSlate.visible
+      && selectionSlate.observedMs <= MAX_SELECTION_RECOMMENDATION_MS
+    report.recommendationPersistedTerminalObserved = selectionTerminal.session !== null
+    report.recommendationPersistedTerminalMs = selectionTerminal.session === null
+      ? null
+      : selectionTerminal.elapsedMs
+    report.recommendationMs = report.recommendationSlateMs ?? report.recommendationPersistedTerminalMs
+    report.recommendationTerminalObservedAt = selectionTerminal.session === null
+      ? null
+      : new Date().toISOString()
+    report.recommendationElapsedBasis = selectionSlate.visible
+      ? 'UI_CARD_RENDER'
+      : selectionTerminal.session === null ? 'NOT_OBSERVED' : 'PERSISTED_FINAL_SESSION'
+    report.recommendationOutcome = selectionResult?.outcome ?? null
+    report.recommendationTerminalCategory = diagnoseRecommendationTerminal(
+      selectionTerminal,
+      selectionSlate,
+    )
+    report.recommendationCardCount = selectionSlate.count
+    report.recommendationPersistedCardCount = selectionResult?.outcome === 'recommendations'
+      ? selectionResult.games.length
+      : null
+    report.recommendationShortfallCount = report.recommendationPersistedCardCount === null
+      ? null
+      : Math.max(0, selectionRequestedCardCount - report.recommendationPersistedCardCount)
     report.recommendationPublishedGames = selectionResult?.games.map(entry => ({
       bggId: entry.game.bggId,
       name: entry.game.name,
@@ -2285,22 +2529,35 @@ test('recommendation becomes one readable, taught, and answerable production jou
       ? selectionResult.publicationRecovered
       : null
     report.recommendationFailureBoundary = publicFailureBoundary(selectionResult?.failureBoundary)
+    await retainReport(reportFile, report)
+
+    expect.soft(
+      report.recommendationSloMet,
+      'The complete recommendation slate exceeded the 20-second interaction budget',
+    ).toBe(true)
     if (selectionResult?.outcome !== 'recommendations') {
       throw new Error(`The persisted selection terminal was ${selectionTerminal.category}, not recommendations`)
     }
-
+    if (!selectionSlate.visible) {
+      throw new Error(
+        `The persisted recommendation slate did not render its ${selectionResult.games.length} published cards within the 50-second diagnostic window`,
+      )
+    }
+    expect(positiveDistinctBggIds(selectionResult.games),
+      'The persisted recommendation result needs at least two positive, distinct BGG identities').toBe(true)
+    await expect.poll(() => recommendationCards.count(), {
+      timeout: 1_000,
+      message: 'The accepted persisted recommendation result did not render its exact published slate',
+    }).toBe(selectionResult.games.length)
     const renderedSelectionBggIds = await recommendationCards.evaluateAll(cards => cards.map(card =>
       Number(card.getAttribute('data-bgg-id'))))
     const persistedSelectionBggIds = selectionResult.games.map(entry => entry.game.bggId)
-    if (!positiveDistinctBggIds(selectionResult.games)
-      || renderedSelectionBggIds.length !== persistedSelectionBggIds.length
-      || renderedSelectionBggIds.some(id => !Number.isSafeInteger(id) || id < 1)
-      || new Set(renderedSelectionBggIds).size !== renderedSelectionBggIds.length
-      || [...renderedSelectionBggIds].sort((left, right) => left - right)
-        .some((id, index) => id !== [...persistedSelectionBggIds].sort((left, right) => left - right)[index])) {
-      report.readyTeachingFailureCategory = 'READY_TEACHING_NOT_ATTACHED'
-      throw new Error('READY_TEACHING_NOT_ATTACHED: rendered and persisted BGG card identities diverged')
+    if (!sameTypedBggSlate(renderedSelectionBggIds, persistedSelectionBggIds)) {
+      throw new Error('Rendered and persisted recommendation BGG identities diverged')
     }
+    await composer.fill(PRESERVED_DRAFT)
+
+    if (REQUIRE_READY_TEACHING) {
 
     const typedContinuation = selectionResult.continuation ?? null
     report.readyTeachingRequested = typedContinuation?.kind === 'guide_and_rule_qa'
@@ -3062,6 +3319,9 @@ test('recommendation becomes one readable, taught, and answerable production jou
     report.teachingGenerationState = completedLesson.teachingRunState
     report.lessonStatus = completedLesson.lessonStatus
     report.lessonSectionCount = completedLesson.sectionCount
+    report.lessonReadable = completedLesson.readable
+    report.lessonFullySupported = completedLesson.fullySupported
+    report.lessonCompletionCategory = completedLesson.category
     report.citedDraftSectionCount = completedLesson.citedDraftSectionCount
     report.insufficientSectionCount = completedLesson.insufficientSectionCount
     report.lessonCompletionMs = elapsed(lessonStartedAt)
@@ -3327,6 +3587,16 @@ test('recommendation becomes one readable, taught, and answerable production jou
             .filter(section => section.evidenceStatus === 'CITED_DRAFT').length
           report.insufficientSectionCount = latestLesson.sections
             .filter(section => section.evidenceStatus === 'INSUFFICIENT_EVIDENCE').length
+          const supportedSectionCount = latestLesson.sections
+            .filter(section => section.evidenceStatus === 'SUPPORTED').length
+          report.lessonReadable = supportedSectionCount + report.citedDraftSectionCount > 0
+          report.lessonFullySupported = report.teachingGenerationState === 'COMPLETED'
+            && latestLesson.status === 'COMPLETE'
+            && supportedSectionCount === latestLesson.sections.length
+            && latestLesson.sections.length > 0
+          report.lessonCompletionCategory = report.lessonReadable
+            ? report.lessonFullySupported ? 'FULLY_SUPPORTED' : 'READABLE_WITH_DEGRADATION'
+            : null
         }
       } catch {
         // Preserve the primary failure while retaining any earlier teaching diagnostics.

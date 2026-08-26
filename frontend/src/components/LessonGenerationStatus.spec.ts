@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 
 import LessonGenerationStatus from './LessonGenerationStatus.vue'
 import { setLocale } from '@/lib/locale'
+import { playerWorkStatus } from '@/lib/playerWorkStatus'
 
 function mountStatus(overrides: Record<string, unknown> = {}) {
   return mount(LessonGenerationStatus, {
@@ -24,7 +25,7 @@ function mountStatus(overrides: Record<string, unknown> = {}) {
       ],
       refreshFailed: false,
       finishedMessage: '',
-      finishedComplete: false,
+      finishedStatus: null,
       ...overrides,
     },
   })
@@ -46,7 +47,7 @@ describe('LessonGenerationStatus', () => {
     expect(wrapper.text()).not.toContain('composeTeachingSection')
   })
 
-  it('keeps unknown, retry, cited-draft, and terminal states distinct', async () => {
+  it('keeps unknown, retry, and cited-draft states distinct', () => {
     const wrapper = mountStatus({ statusUnknown: true, refreshFailed: true, draftReady: true })
 
     expect(wrapper.get('[data-testid="player-work-status"]').text()).toBe('正在补充图片或核对细节')
@@ -54,20 +55,61 @@ describe('LessonGenerationStatus', () => {
     expect(wrapper.text()).toContain('完整基础讲解已经可用')
     expect(wrapper.text()).toContain('正在自动重试')
     expect(wrapper.find('[role="progressbar"]').exists()).toBe(false)
+  })
 
-    await wrapper.setProps({ active: false, finishedMessage: '讲解已经生成完成，全部章节都已载入。', finishedComplete: true })
+  it('renders complete, readable, failed, cancelled, and unavailable terminal facts without conflating them', async () => {
+    const wrapper = mountStatus({
+      active: false,
+      finishedMessage: '讲解已经生成完成，全部章节都已载入。',
+      finishedStatus: playerWorkStatus('GUIDE_COMPLETE', {
+        capability: 'guide', readiness: 'complete', terminality: 'terminal', outcome: 'none',
+      }, 'zh-CN'),
+    })
+
     expect(wrapper.get('[data-testid="player-work-status"]').text()).toBe('讲解完成')
     expect(wrapper.text()).toContain('讲解已经生成完成')
     expect(wrapper.find('[role="progressbar"]').exists()).toBe(false)
+    expect(wrapper.get('[role="status"]').attributes('aria-live')).toBe('polite')
+    expect(wrapper.get('[role="status"]').attributes('aria-atomic')).toBe('true')
 
-    await wrapper.setProps({ finishedMessage: '已完成章节仍可阅读，可以稍后补全。', finishedComplete: false })
+    await wrapper.setProps({
+      finishedMessage: '已完成章节仍可阅读，可以稍后补全。',
+      finishedStatus: playerWorkStatus('GUIDE_READABLE', {
+        capability: 'guide', readiness: 'usable', terminality: 'terminal', outcome: 'none',
+      }, 'zh-CN'),
+    })
     const stopped = wrapper.get('[data-testid="player-work-status"]')
-    expect(stopped.text()).toBe('需要处理')
-    expect(stopped.attributes('data-player-work-outcome')).toBe('needs-action')
+    expect(stopped.text()).toBe('基础讲解可读')
+    expect(stopped.attributes('data-player-work-outcome')).toBe('none')
     expect(wrapper.get('[role="status"]').classes()).toContain('bg-amber-50')
 
-    await wrapper.setProps({ availableSectionCount: 0, finishedComplete: true })
+    await wrapper.setProps({
+      finishedMessage: '本轮讲解生成失败；已保留可读讲解草稿。',
+      finishedStatus: playerWorkStatus('FAILED', {
+        capability: 'guide', readiness: 'usable', terminality: 'terminal', outcome: 'failed',
+      }, 'zh-CN'),
+    })
+    expect(wrapper.get('[data-testid="player-work-status"]').text()).toBe('失败')
+    expect(wrapper.get('[data-testid="player-work-status"]').attributes('data-player-work-outcome')).toBe('failed')
+
+    await wrapper.setProps({
+      finishedMessage: '本轮讲解生成已取消；已保留可读讲解草稿。',
+      finishedStatus: playerWorkStatus('CANCELLED', {
+        capability: 'guide', readiness: 'usable', terminality: 'terminal', outcome: 'cancelled',
+      }, 'zh-CN'),
+    })
+    expect(wrapper.get('[data-testid="player-work-status"]').text()).toBe('已取消')
+    expect(wrapper.get('[data-testid="player-work-status"]').attributes('data-player-work-outcome')).toBe('cancelled')
+
+    await wrapper.setProps({
+      availableSectionCount: 0,
+      finishedMessage: '本轮生成已经结束，但还没有可读章节。',
+      finishedStatus: playerWorkStatus('NEEDS_ACTION', {
+        capability: 'rulebook', readiness: 'unavailable', terminality: 'terminal', outcome: 'needs-action',
+      }, 'zh-CN'),
+    })
     expect(wrapper.get('[data-testid="player-work-status"]').text()).toBe('需要处理')
+    expect(wrapper.get('[data-testid="player-work-status"]').attributes('data-player-work-readiness')).toBe('unavailable')
     expect(wrapper.get('[role="status"]').classes()).toContain('bg-amber-50')
   })
 
@@ -81,5 +123,21 @@ describe('LessonGenerationStatus', () => {
     expect(wrapper.text()).toContain('2/5 chapters processed; 1 passed review')
     expect(wrapper.text()).not.toContain('model calls')
     expect(wrapper.get('[role="progressbar"]').attributes('aria-label')).toBe('2 of 5 chapters processed')
+  })
+
+  it('retains the distinct cancelled terminal outcome in English', () => {
+    setLocale('en')
+    const wrapper = mountStatus({
+      active: false,
+      finishedMessage: 'This guide generation run was cancelled. A readable chapter draft is preserved.',
+      finishedStatus: playerWorkStatus('CANCELLED', {
+        capability: 'guide', readiness: 'usable', terminality: 'terminal', outcome: 'cancelled',
+      }, 'en'),
+    })
+
+    const status = wrapper.get('[data-testid="player-work-status"]')
+    expect(status.text()).toBe('Cancelled')
+    expect(status.attributes('data-player-work-outcome')).toBe('cancelled')
+    expect(wrapper.text()).toContain('A readable chapter draft is preserved')
   })
 })

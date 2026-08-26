@@ -3,6 +3,7 @@ import { defineComponent } from 'vue'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { LOGIN_REQUIRED_EVENT } from '@/lib/authSession'
+import { setLocale } from '@/lib/locale'
 import { VISUAL_REQUEST_TIMEOUT_MS } from '@/lib/visualEnrichment'
 
 import RecommendationLessonDialog from './RecommendationLessonDialog.vue'
@@ -81,8 +82,12 @@ function runFor(planId: string, state = 'RUNNING') {
 }
 
 describe('RecommendationLessonDialog', () => {
-  beforeEach(() => vi.useFakeTimers())
+  beforeEach(() => {
+    setLocale('zh-CN')
+    vi.useFakeTimers()
+  })
   afterEach(() => {
+    setLocale('zh-CN')
     vi.useRealTimers()
     vi.restoreAllMocks()
     vi.unstubAllGlobals()
@@ -1216,7 +1221,124 @@ describe('RecommendationLessonDialog', () => {
 
     expect(wrapper.text()).toContain('已有 1 / 3 章完成引用归属、规则书版本与结构校验')
     expect(wrapper.text()).not.toContain('3 / 3')
-    expect(wrapper.get('[data-testid="recommendation-lesson-progress"]').attributes('style')).toContain('width: 33%')
+    const progressbar = wrapper.get('[role="progressbar"]')
+    expect(progressbar.get('[data-testid="recommendation-lesson-progress"]').attributes('style')).toContain('width: 33%')
+    expect(progressbar.attributes('aria-valuenow')).toBe('1')
+    expect(progressbar.attributes('aria-valuemax')).toBe('3')
+    expect(progressbar.attributes('aria-label')).toBe('1 / 3 章已通过独立规则依据核对')
+    const citedDraftStatus = wrapper.get('[data-testid="recommendation-lesson-cited-draft-status"]')
+    expect(citedDraftStatus.text()).toContain('另有 1 章已通过确定性引用与结构校验，现在可以阅读')
+    expect(citedDraftStatus.text()).not.toContain('这不是生成失败')
+    const liveStatus = wrapper.get('[data-testid="recommendation-lesson-teaching-status"]')
+    expect(liveStatus.attributes('role')).toBe('status')
+    expect(liveStatus.attributes('aria-live')).toBe('polite')
+    expect(liveStatus.attributes('aria-atomic')).toBe('true')
+    expect(liveStatus.text()).toContain('额外内容复核尚未完成')
+    wrapper.unmount()
+  })
+
+  it.each([
+    ['zh-CN', 'FAILED', '本轮讲解生成失败', '失败'],
+    ['zh-CN', 'CANCELLED', '本轮讲解生成已取消', '已取消'],
+    ['en', 'FAILED', 'This guide generation run failed', 'failed'],
+    ['en', 'CANCELLED', 'This guide generation run was cancelled', 'cancelled'],
+  ] as const)('prioritizes an authoritative %s %s outcome over a retained cited draft', async (
+    appLocale,
+    state,
+    expectedStatus,
+    expectedOutcomeWord,
+  ) => {
+    setLocale(appLocale)
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const path = String(input)
+      if (path === '/api/v1/teaching-plans/plan-1') return Response.json(plan)
+      if (path.includes('/illustrated-lessons/latest')) {
+        return Response.json({
+          id: 'lesson-1', teachingPlanId: 'plan-1', status: 'DRAFT_READY',
+          sections: [section(1, '可读草稿', 'CITED_DRAFT')],
+        })
+      }
+      if (path.includes('/assistant-runs/latest')) return Response.json(runFor('plan-1', state))
+      return new Response(null, { status: 404 })
+    }))
+    const wrapper = mount(RecommendationLessonDialog, {
+      props: { open: true, planId: 'plan-1' },
+      global: { stubs: { LessonChapterList: ChapterListStub, teleport: true } },
+    })
+    await flushPromises()
+
+    const statusText = wrapper.get('[data-testid="recommendation-lesson-teaching-status-text"]')
+    expect(statusText.text()).toContain(expectedStatus)
+    expect(statusText.text().toLocaleLowerCase()).toContain(expectedOutcomeWord.toLocaleLowerCase())
+    expect(statusText.classes()).toContain('text-amber-800')
+    expect(statusText.classes()).not.toContain('text-emerald-700')
+    const citedDraftStatus = wrapper.get('[data-testid="recommendation-lesson-cited-draft-status"]')
+    expect(citedDraftStatus.text()).not.toContain('这不是生成失败')
+    expect(citedDraftStatus.text()).not.toContain('not a generation failure')
+    expect(wrapper.get('[data-testid="recommendation-lesson-teaching-status"]').text())
+      .toContain(appLocale === 'en' ? 'readable chapter draft' : '可读草稿')
+    wrapper.unmount()
+  })
+
+  it('does not call a completed lesson fully ready when any chapter remains a cited draft', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const path = String(input)
+      if (path === '/api/v1/teaching-plans/plan-1') return Response.json(plan)
+      if (path.includes('/illustrated-lessons/latest')) {
+        return Response.json({
+          id: 'lesson-1', teachingPlanId: 'plan-1', status: 'COMPLETE',
+          sections: [
+            section(1, '已核对', 'SUPPORTED'),
+            section(2, '引用草稿', 'CITED_DRAFT'),
+            section(3, '已核对', 'SUPPORTED'),
+          ],
+        })
+      }
+      if (path.includes('/assistant-runs/latest')) return Response.json(runFor('plan-1', 'COMPLETED'))
+      return new Response(null, { status: 404 })
+    }))
+    const wrapper = mount(RecommendationLessonDialog, {
+      props: { open: true, planId: 'plan-1' },
+      global: { stubs: { LessonChapterList: ChapterListStub, teleport: true } },
+    })
+    await flushPromises()
+
+    expect(wrapper.text()).not.toContain('完整讲解已经生成')
+    expect(wrapper.get('[data-testid="recommendation-lesson-teaching-status-text"]').text())
+      .toContain('可读讲解草稿')
+    expect(wrapper.get('[data-testid="recommendation-lesson-teaching-status-text"]').classes())
+      .toContain('text-amber-800')
+    wrapper.unmount()
+  })
+
+  it.each(['DEGRADED', 'INSUFFICIENT_EVIDENCE'])('keeps a readable subset local when the authoritative run ends as %s', async (state) => {
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const path = String(input)
+      if (path === '/api/v1/teaching-plans/plan-1') return Response.json(plan)
+      if (path.includes('/illustrated-lessons/latest')) {
+        return Response.json({
+          id: 'lesson-1', teachingPlanId: 'plan-1', status: 'INCOMPLETE',
+          sections: [
+            section(1, '可读章节', 'SUPPORTED'),
+            section(2, '证据不足', 'INSUFFICIENT_EVIDENCE'),
+          ],
+        })
+      }
+      if (path.includes('/assistant-runs/latest')) return Response.json(runFor('plan-1', state))
+      return new Response(null, { status: 404 })
+    }))
+    const wrapper = mount(RecommendationLessonDialog, {
+      props: { open: true, planId: 'plan-1' },
+      global: { stubs: { LessonChapterList: ChapterListStub, teleport: true } },
+    })
+    await flushPromises()
+
+    const statusText = wrapper.get('[data-testid="recommendation-lesson-teaching-status-text"]')
+    expect(statusText.text()).toContain('已保留 1 章可读内容')
+    expect(statusText.text()).toContain('证据不足的章节未作为完整规则讲解发布')
+    expect(statusText.classes()).toContain('text-amber-800')
+    expect(statusText.classes()).not.toContain('text-emerald-700')
+    expect(wrapper.text()).not.toContain('完整讲解已经生成')
     wrapper.unmount()
   })
 

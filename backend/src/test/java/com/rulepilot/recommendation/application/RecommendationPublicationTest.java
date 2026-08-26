@@ -120,6 +120,105 @@ class RecommendationPublicationTest {
     }
 
     @Test
+    void acceptsASelectedSlateLeadThatCitesMoreThanOneCardsAnnotationBudget() throws Exception {
+        Fixture fixture = fixture(
+                List.of(101, 102),
+                new RecommendationProfile(3, 60, null, BggGameType.ALL, InteractionPreference.ANY),
+                "三个人，六十分钟以内");
+        PublicationSeed seed = new PublicationSeed(
+                List.of(101, 102),
+                List.of(),
+                CandidateUse.PUBLISH_CARDS,
+                2,
+                "旧引导");
+        RecommendationPublication.Permit permit = fixture.publication.permit(
+                fixture.state,
+                seed,
+                Set.of("U1"));
+        List<String> leadEvidence = permit.allowedLeadEvidenceIds().stream().limit(7).toList();
+        assertThat(leadEvidence).hasSizeGreaterThan(4);
+        String evidence101 = evidenceId(permit, 101, "mechanics");
+        String evidence102 = evidenceId(permit, 102, "mechanics");
+
+        var narrative = fixture.publication.validateNarrative(
+                json.writeValueAsString(Map.of(
+                        "lead", Map.of(
+                                "text", "这段总述同时连接本轮桌况与两张候选各自通过核对的特点。",
+                                "evidenceIds", leadEvidence),
+                        "cards", List.of(
+                                card(101, "第一张卡只使用自己拥有的证据。", evidence101, null, null),
+                                card(102, "第二张卡也只使用自己拥有的证据。", evidence102, null, null)))),
+                permit);
+
+        var response = fixture.publication.publish(fixture.state, seed, narrative, "zh-CN");
+
+        assertThat(response.assistantMessage()).contains("同时连接本轮桌况与两张候选");
+        assertThat(response.games()).allSatisfy(game -> assertThat(game.replyParts()).isNotEmpty());
+        assertThat(response.harness().actions())
+                .containsExactly("WRITE_GROUNDED_RECOMMENDATION", "RECOMMEND_GAMES");
+    }
+
+    @Test
+    void acceptsMoreThanFourOwnedCandidateObservationsWithoutDroppingTheCard() throws Exception {
+        Fixture fixture = fixture(List.of(101));
+        PublicationSeed seed =
+                new PublicationSeed(List.of(101), List.of(), CandidateUse.PUBLISH_CARDS, 1, "旧引导");
+        RecommendationPublication.Permit permit = fixture.publication.permit(fixture.state, seed);
+        List<String> ownedEvidence = permit.allowedEvidenceByGame().get(101).keySet().stream()
+                .limit(6)
+                .toList();
+        assertThat(ownedEvidence).hasSizeGreaterThan(4);
+        Map<String, Object> card = new LinkedHashMap<>();
+        card.put("bggId", 101);
+        card.put("why", Map.of(
+                "text", "这一段只引用本卡实际拥有的多项观察，不应因为安全无关的固定数量上限而丢失。",
+                "evidenceIds", ownedEvidence));
+        card.put("tradeoff", null);
+
+        var narrative = fixture.publication.validateNarrative(
+                json.writeValueAsString(Map.of(
+                        "lead", lead("先看这张通过约束与资料核对的候选。", ownedEvidence.getFirst()),
+                        "cards", List.of(card))),
+                permit);
+        var response = fixture.publication.publish(fixture.state, seed, narrative, "zh-CN");
+
+        assertThat(response.games()).singleElement().satisfies(game ->
+                assertThat(game.replyParts()).singleElement().satisfies(part ->
+                        assertThat(part.claim().evidence())
+                                .extracting(CandidateObservation::id)
+                                .containsExactlyElementsOf(ownedEvidence)));
+        assertThat(response.harness().actions())
+                .containsExactly("WRITE_GROUNDED_RECOMMENDATION", "RECOMMEND_GAMES");
+    }
+
+    @Test
+    void duplicateOwnedEvidenceStillRejectsOnlyTheAffectedCardNarrative() throws Exception {
+        Fixture fixture = fixture(List.of(101));
+        PublicationSeed seed =
+                new PublicationSeed(List.of(101), List.of(), CandidateUse.PUBLISH_CARDS, 1, "旧引导");
+        RecommendationPublication.Permit permit = fixture.publication.permit(fixture.state, seed);
+        String evidence101 = evidenceId(permit, 101, "mechanics");
+        Map<String, Object> card = new LinkedHashMap<>();
+        card.put("bggId", 101);
+        card.put("why", Map.of(
+                "text", "重复同一引用不能伪装成更多支持。",
+                "evidenceIds", List.of(evidence101, evidence101)));
+        card.put("tradeoff", null);
+
+        var narrative = fixture.publication.validateNarrative(
+                json.writeValueAsString(Map.of(
+                        "lead", lead("候选卡仍可安全显示。", evidence101),
+                        "cards", List.of(card))),
+                permit);
+        var response = fixture.publication.publish(fixture.state, seed, narrative, "zh-CN");
+
+        assertThat(narrative.rejectedNarrativeParts()).isEqualTo(1);
+        assertThat(response.games()).singleElement().satisfies(game ->
+                assertThat(game.replyParts()).isEmpty());
+        assertThat(response.harness().actions()).contains("RECOMMENDATION_NARRATIVE_PARTIAL");
+    }
+
+    @Test
     void selectsTheExplicitCountInSeedOrderAndReportsAnHonestAvailabilityShortfall() {
         Fixture fixture = fixture(List.of(101, 102));
 
@@ -331,7 +430,7 @@ class RecommendationPublicationTest {
 
         var response = fixture.publication.publish(fixture.state, seed, narrative, "zh-CN");
 
-        assertThat(narrative.rejectedCardNarratives()).isEqualTo(1);
+        assertThat(narrative.rejectedNarrativeParts()).isEqualTo(1);
         assertThat(response.games().getFirst().replyParts()).singleElement().satisfies(part ->
                 assertThat(part.claim().evidence())
                         .extracting(CandidateObservation::id)
@@ -343,7 +442,46 @@ class RecommendationPublicationTest {
     }
 
     @Test
-    void rejectsLeadEvidenceOutsideTheCurrentRequestAndSelectedCandidatePermit() throws Exception {
+    void dropsAnUnownedOptionalTradeoffWithoutDiscardingTheOwnedWhyPart() throws Exception {
+        Fixture fixture = fixture(List.of(101, 102));
+        PublicationSeed seed =
+                new PublicationSeed(List.of(101, 102), List.of(), CandidateUse.PUBLISH_CARDS, 2, "");
+        RecommendationPublication.Permit permit = fixture.publication.permit(fixture.state, seed);
+        String evidence101 = evidenceId(permit, 101, "mechanics");
+        String evidence102 = evidenceId(permit, 102, "mechanics");
+        Map<String, Object> firstCard = new LinkedHashMap<>();
+        firstCard.put("bggId", 101);
+        firstCard.put("why", Map.of(
+                "text", "这段保留本卡自己的可靠理由。",
+                "evidenceIds", List.of(evidence101)));
+        firstCard.put("tradeoff", Map.of(
+                "text", "这段混入另一张卡的证据，必须单独丢弃。",
+                "evidenceIds", List.of(evidence101, evidence102)));
+
+        var narrative = fixture.publication.validateNarrative(
+                json.writeValueAsString(Map.of(
+                        "lead", lead("两张卡都保留各自经过核对的理由。", evidence101),
+                        "cards", List.of(
+                                firstCard,
+                                card(102, "第二张卡也有自己的可靠理由。", evidence102, null, null)))),
+                permit);
+        var response = fixture.publication.publish(fixture.state, seed, narrative, "zh-CN");
+
+        assertThat(narrative.rejectedNarrativeParts()).isEqualTo(1);
+        assertThat(response.games().getFirst().replyParts()).singleElement().satisfies(part -> {
+            assertThat(part.role()).isEqualTo(ReplyPartRole.WHY_FIT);
+            assertThat(part.claim().evidence())
+                    .extracting(CandidateObservation::id)
+                    .containsExactly(evidence101);
+        });
+        assertThat(response.games().get(1).replyParts()).singleElement();
+        assertThat(response.harness().actions()).contains("RECOMMENDATION_NARRATIVE_PARTIAL");
+        assertThat(fixture.state.finalResponseEvidenceIds)
+                .containsExactlyInAnyOrder(evidence101, evidence102);
+    }
+
+    @Test
+    void dropsOnlyTheLeadWhoseEvidenceIsOutsideTheCurrentRequestAndCandidatePermit() throws Exception {
         Fixture fixture = fixture(List.of(101));
         PublicationSeed seed =
                 new PublicationSeed(List.of(101), List.of(), CandidateUse.PUBLISH_CARDS, 1, "");
@@ -352,13 +490,26 @@ class RecommendationPublicationTest {
                 seed,
                 Set.of("U1"));
         String evidence101 = evidenceId(permit, 101, "mechanics");
-        String narrative = json.writeValueAsString(Map.of(
-                "lead", lead("这一句冒用了不属于当前请求的用户证据。", "U99"),
+        String invalidLead = "这一句冒用了不属于当前请求的用户证据。";
+        String value = json.writeValueAsString(Map.of(
+                "lead", lead(invalidLead, "U99"),
                 "cards", List.of(card(101, "这段有本卡证据。", evidence101, null, null))));
 
-        assertFailure(
-                () -> fixture.publication.validateNarrative(narrative, permit),
-                RecommendationPublication.Code.NARRATIVE_EVIDENCE_NOT_OWNED);
+        var narrative = fixture.publication.validateNarrative(value, permit);
+        var response = fixture.publication.publish(fixture.state, seed, narrative, "zh-CN");
+
+        assertThat(response.assistantMessage())
+                .contains("自然讲解没有生成完成")
+                .doesNotContain(invalidLead);
+        assertThat(response.games()).singleElement().satisfies(game ->
+                assertThat(game.replyParts()).singleElement().satisfies(part ->
+                        assertThat(part.claim().evidence())
+                                .extracting(CandidateObservation::id)
+                                .containsExactly(evidence101)));
+        assertThat(response.harness().actions()).contains("RECOMMENDATION_NARRATIVE_PARTIAL");
+        assertThat(fixture.state.finalResponseEvidenceIds)
+                .containsExactly(evidence101)
+                .doesNotContain("U99");
     }
 
     @Test

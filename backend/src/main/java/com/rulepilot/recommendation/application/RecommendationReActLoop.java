@@ -843,7 +843,7 @@ final class RecommendationReActLoop {
         return """
                 Write the final recommendation lead and candidate notes in the player's language. This is synthesis, not another selection or review: keep candidateOrder unchanged and return exactly one card object for each candidate. The lead is a typed part with text and evidenceIds; cite only current-request U evidence or observations owned by the selected candidates.
 
-                Connect the player's stated situation to the supplied candidate-scoped observations in fluent, specific prose. For why, select one to four evidenceIds that genuinely support the fit. Add a tradeoff only when the supplied evidence supports a useful decision boundary; otherwise return null. BGG taxonomy is only a literal label, publisher description supports only its literal premise/features, and an attributed public report must remain visibly attributed.
+                Connect the player's stated situation to the supplied candidate-scoped observations in fluent, specific prose. Select only evidenceIds that genuinely support each part. Add a tradeoff only when the supplied evidence supports a useful decision boundary; otherwise return null. BGG taxonomy is only a literal label, publisher description supports only its literal premise/features, and an attributed public report must remain visibly attributed.
 
                 Exact hard facts and numbers already appear in the card UI. Do not calculate, embellish, or introduce numerical, identity, rule, ranking, award, availability, or current-event facts outside the selected observations. Never mention evidence IDs, schemas, tools, validation, workflow, or hidden reasoning. Avoid repeated stock openings and labels such as “one verified reason” or “choice boundary”; write like a knowledgeable person helping this particular table choose.
                 """;
@@ -860,11 +860,19 @@ final class RecommendationReActLoop {
                         .stream())
                 .distinct()
                 .toList();
-        String evidenceIdSchema = "{\"type\":\"array\",\"minItems\":1,\"maxItems\":4,\"uniqueItems\":true,"
+        int maximumCandidateEvidenceIds = permit.allowedEvidenceByGame().values().stream()
+                .mapToInt(Map::size)
+                .max()
+                .orElseThrow();
+        String evidenceIdSchema = "{\"type\":\"array\",\"minItems\":1,\"maxItems\":"
+                + maximumCandidateEvidenceIds
+                + ",\"uniqueItems\":true,"
                 + "\"items\":{\"type\":\"string\",\"enum\":"
                 + jsonArray(evidenceIds)
                 + "}}";
-        String leadEvidenceIdSchema = "{\"type\":\"array\",\"minItems\":1,\"maxItems\":4,\"uniqueItems\":true,"
+        String leadEvidenceIdSchema = "{\"type\":\"array\",\"minItems\":1,\"maxItems\":"
+                + permit.allowedLeadEvidenceIds().size()
+                + ",\"uniqueItems\":true,"
                 + "\"items\":{\"type\":\"string\",\"enum\":"
                 + jsonArray(permit.allowedLeadEvidenceIds().stream().toList())
                 + "}}";
@@ -1269,6 +1277,7 @@ final class RecommendationReActLoop {
                 .filter(game -> !state.previouslyShownIds.contains(game.ranking().bggId())
                         || state.targetGameIds.contains(game.ranking().bggId()))
                 .filter(game -> !state.comparisonReferenceIds.contains(game.ranking().bggId()))
+                .filter(game -> state.titleConstraint == null || state.titleConstraint.matches(game))
                 .filter(game -> state.targetGameIds.contains(game.ranking().bggId())
                         || selector.eligible(game, state.profile))
                 .map(game -> game.ranking().bggId())
@@ -1283,24 +1292,24 @@ final class RecommendationReActLoop {
         return List.of(
                 new ToolSpec(
                         REPLY_TOOL,
-                        "Finish without retrieval or a new selectable card. playerReply is the complete useful answer, not status text. referencedBggIds may cite only already verified discussion games and never creates cards. Use resolve_bgg_game for a named game that should open.",
+                        "Finish without retrieval/new cards. playerReply is the complete answer, not status. referencedBggIds cite only verified discussion games and never create cards; resolve_bgg_game opens named games.",
                         "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"playerReply\":{\"type\":\"string\",\"description\":\"Complete locale-matched player answer; no internal markers or unsupported game facts.\",\"minLength\":1,\"maxLength\":1200},\"referencedBggIds\":{\"type\":\"array\",\"maxItems\":5,\"items\":{\"type\":\"integer\",\"minimum\":1}},\"preferenceUpdates\":"
                                 + preferences
                                 + "},\"required\":[\"playerReply\"]}"),
                 new ToolSpec(
                         ASK_TOOL,
-                        "Ask one natural high-value question only when a missing player-owned choice materially changes the slate. preferenceUpdates may preserve numeric facts the player already stated, but must never contain values merely proposed by this question or its options. Do not ask after a read failure, for an external identity discovery can verify, or when immediate varied cards are useful.",
+                        "Ask one natural high-value question only when a missing player choice changes the slate. preferenceUpdates keep stated numeric facts, never proposed options. Do not ask after read failure or when discovery/immediate cards can answer.",
                         "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"question\":{\"type\":\"string\",\"minLength\":1},\"options\":{\"type\":\"array\",\"minItems\":2,\"maxItems\":3,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"minLength\":1}},\"preferenceUpdates\":"
                                 + clarificationPreferenceSchema(preferenceEvidenceIds)
                                 + "},\"required\":[\"question\"]}"),
                 new ToolSpec(
                         RESOLVE_TOOL,
-                        "Resolve one exact formal/localized/original title copied from cited user evidence; never submit a whole sentence, nickname, person, award, publisher, list, or guessed alias. TARGET_GAME requires playerReply and the same action immediately returns its selectable card. For an explicit guide/rule-Q&A continuation, add continuationGoal, continuationEvidence, and optional learningGoal; availability failure never removes the card. Other purposes establish a comparison reference, discussion subject, or identity only.",
+                        "Resolve one formal/localized/original title copied from cited user evidence; never a sentence, nickname, person, list, or guessed alias. TARGET_GAME requires playerReply and the same action immediately returns its selectable card. Always set continuationGoal: requested guide/Q&A uses GUIDE_AND_RULE_QA plus supporting user continuationEvidence, else NONE. learningGoal is optional; unavailable guides never remove the card. Other purposes set a comparison reference, discussion subject, or identity.",
                         "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"title\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":160},\"alternateTitles\":{\"type\":\"array\",\"maxItems\":2,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":160}},\"purpose\":{\"type\":\"string\",\"enum\":[\"TARGET_GAME\",\"COMPARISON_REFERENCE\",\"DISCUSSION_SUBJECT\",\"IDENTITY_ONLY\"]},\"evidence\":{\"type\":\"string\",\"enum\":"
                                 + jsonArray(preferenceEvidenceIds)
-                                + "},\"playerReply\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":1200},\"continuationGoal\":{\"type\":\"string\",\"enum\":[\"GUIDE_AND_RULE_QA\"]},\"continuationEvidence\":{\"type\":\"string\",\"enum\":"
+                                + "},\"playerReply\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":1200},\"continuationGoal\":{\"type\":\"string\",\"enum\":[\"NONE\",\"GUIDE_AND_RULE_QA\"]},\"continuationEvidence\":{\"type\":\"string\",\"enum\":"
                                 + jsonArray(preferenceEvidenceIds)
-                                + "},\"learningGoal\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":400}},\"required\":[\"title\",\"purpose\",\"evidence\"]}"),
+                                + "},\"learningGoal\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":400}},\"required\":[\"title\",\"purpose\",\"evidence\",\"continuationGoal\"]}"),
                 new ToolSpec(
                         BROWSE_TOOL,
                         catalogActionDescription(),
@@ -1310,14 +1319,16 @@ final class RecommendationReActLoop {
                                 defaultRecommendationCount)),
                 new ToolSpec(
                         DISCOVER_TOOL,
-                        "Verify one uncertain or current public relationship involving a person, event, organization, game, creator alias, award, list, or other entity. Use it only when local BGG identity is insufficient or sourced/current evidence is needed. The bounded verified cache is checked before one web search. subject is the exact identity-bearing phrase from the cited turn, preserving meaningful suffixes, numbers, and initials—not a guessed answer. afterIdentity declares whether sourced context itself answers the turn or selectable cards are still required. Always supply the same requestedCount and requestedCountBasis used by catalog reads: defaultRecommendationCount plus PRODUCT_DEFAULT when unstated, or the count plus its current-turn U id when stated. candidateUse says whether BGG-verified games are already a useful slate, need one fit-research read, or remain context for a broader local browse. Identity-only must CONTINUE_REACT, and public-context answers need no BGG carrier game.",
+                        "Verify one uncertain/current relationship involving a person, event, organization, alias, award, or list. subject is the exact cited identity phrase, not a guessed answer. afterIdentity says whether sourced context answers the turn or selectable cards remain. Supply requestedCount/basis. candidateUse says publish, research once, or continue. Always set continuationGoal: GUIDE_AND_RULE_QA plus supporting user evidence when directly published cards must prioritize ready guides; otherwise NONE. Identity-only must CONTINUE_REACT and NONE.",
                         "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"evidence\":{\"type\":\"string\",\"enum\":"
                                 + jsonArray(preferenceEvidenceIds)
                                 + "},\"subject\":{\"type\":\"string\",\"description\":\"Exact identity-bearing nickname, initials, award, or relationship phrase; not the full question and not a guessed answer.\",\"minLength\":1,\"maxLength\":80},\"afterIdentity\":{\"type\":\"string\",\"enum\":[\"REPLY_WITH_IDENTITY\",\"RECOMMEND_WITH_CARDS\"]},\"candidateUse\":"
                                 + CANDIDATE_USE_SCHEMA
                                 + ",\"requestedCount\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":8},\"requestedCountBasis\":"
                                 + requestedCountBasisSchema(currentTurnEvidenceIds)
-                                + ",\"types\":{\"type\":\"array\",\"maxItems\":3,\"items\":{\"type\":\"string\",\"enum\":[\"ABSTRACT\",\"CUSTOMIZABLE\",\"CHILDREN\",\"FAMILY\",\"PARTY\",\"STRATEGY\",\"THEMATIC\",\"WAR\",\"EXPANSION\"]}}},\"required\":[\"evidence\",\"subject\",\"afterIdentity\",\"requestedCount\",\"requestedCountBasis\"]}"),
+                                + ",\"continuationGoal\":{\"type\":\"string\",\"enum\":[\"NONE\",\"GUIDE_AND_RULE_QA\"]},\"continuationEvidence\":{\"type\":\"string\",\"enum\":"
+                                + jsonArray(preferenceEvidenceIds)
+                                + "},\"learningGoal\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":400},\"types\":{\"type\":\"array\",\"maxItems\":3,\"items\":{\"type\":\"string\",\"enum\":[\"ABSTRACT\",\"CUSTOMIZABLE\",\"CHILDREN\",\"FAMILY\",\"PARTY\",\"STRATEGY\",\"THEMATIC\",\"WAR\",\"EXPANSION\"]}}},\"required\":[\"evidence\",\"subject\",\"afterIdentity\",\"requestedCount\",\"requestedCountBasis\",\"continuationGoal\"]}"),
                 new ToolSpec(
                         LOOKUP_TOOL,
                         "Load BGG facts only for observed conversation-context IDs that do not yet have verified details.",
@@ -1348,7 +1359,7 @@ final class RecommendationReActLoop {
     }
 
     private static String catalogActionDescription() {
-        return "Search the local BGG catalog for selectable cards and verified facts. Filters are ANDed; textQuery handles concepts, and limit is retrieval size. requestedCount and requestedCountBasis are required: use defaultRecommendationCount plus PRODUCT_DEFAULT when unstated, or the explicit count plus its current-turn U id. Put player constraints only in preferenceUpdates. GUIDE_AND_RULE_QA needs an explicit request. Use public discovery for uncertain relationships. Grounded prose is written after retrieval.";
+        return "Search the local BGG catalog for selectable cards. Filters AND. textQuery is soft; titleConstraint is the hard current-turn-cited title boundary. requestedCount/requestedCountBasis use defaultRecommendationCount+PRODUCT_DEFAULT when unstated, else explicit count+current-turn U id. Numeric/type constraints use preferenceUpdates. Always set continuationGoal: requested guide/Q&A uses GUIDE_AND_RULE_QA plus supporting user continuationEvidence, else NONE; learningGoal optional.";
     }
 
     private static String catalogActionSchema(
@@ -1358,14 +1369,16 @@ final class RecommendationReActLoop {
         return "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"purpose\":{\"type\":\"string\",\"enum\":[\"SELECTABLE_CARDS\",\"IDENTITY_ONLY\"]},\"candidateUse\":"
                 + CANDIDATE_USE_SCHEMA
                 + ",\"types\":{\"type\":\"array\",\"maxItems\":3,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"enum\":[\"ABSTRACT\",\"CUSTOMIZABLE\",\"CHILDREN\",\"FAMILY\",\"PARTY\",\"STRATEGY\",\"THEMATIC\",\"WAR\",\"EXPANSION\"]}},\"categories\":{\"type\":\"array\",\"maxItems\":5,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":120}},\"mechanics\":{\"type\":\"array\",\"maxItems\":5,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":120}},\"designers\":{\"type\":\"array\",\"maxItems\":3,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":120}}"
-                + ",\"publishers\":{\"type\":\"array\",\"maxItems\":5,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":120}},\"families\":{\"type\":\"array\",\"maxItems\":5,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":120}},\"minimumPublicationYear\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":2100},\"maximumPublicationYear\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":2100},\"minimumAverageRating\":{\"type\":\"number\",\"minimum\":0,\"maximum\":10},\"minimumRatingsCount\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":100000000},\"textQuery\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":240},\"sort\":{\"type\":\"string\",\"enum\":[\"RANK\",\"RATING\",\"POPULARITY\",\"NEWEST\",\"RELEVANCE\"]},\"limit\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":8},\"requestedCount\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":8},\"requestedCountBasis\":"
+                + ",\"publishers\":{\"type\":\"array\",\"maxItems\":5,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":120}},\"families\":{\"type\":\"array\",\"maxItems\":5,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":120}},\"minimumPublicationYear\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":2100},\"maximumPublicationYear\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":2100},\"minimumAverageRating\":{\"type\":\"number\",\"minimum\":0,\"maximum\":10},\"minimumRatingsCount\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":100000000},\"textQuery\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":240},\"titleConstraint\":{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"operator\":{\"type\":\"string\",\"enum\":[\"CONTAINS\"]},\"value\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":160}},\"required\":[\"operator\",\"value\"]},\"evidence\":{\"type\":\"string\",\"enum\":"
+                + jsonArray(currentTurnEvidenceIds)
+                + "},\"sort\":{\"type\":\"string\",\"enum\":[\"RANK\",\"RATING\",\"POPULARITY\",\"NEWEST\",\"RELEVANCE\"]},\"limit\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":8},\"requestedCount\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":8},\"requestedCountBasis\":"
                 + requestedCountBasisSchema(currentTurnEvidenceIds)
-                + ",\"continuationGoal\":{\"type\":\"string\",\"enum\":[\"GUIDE_AND_RULE_QA\"]},\"continuationEvidence\":{\"type\":\"string\",\"enum\":"
+                + ",\"continuationGoal\":{\"type\":\"string\",\"enum\":[\"NONE\",\"GUIDE_AND_RULE_QA\"]},\"continuationEvidence\":{\"type\":\"string\",\"enum\":"
                 + jsonArray(preferenceEvidenceIds)
                 + "},\"learningGoal\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":400}"
                 + ",\"offset\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":200},\"preferenceUpdates\":"
                 + preferenceSchema(preferenceEvidenceIds)
-                + "},\"required\":[\"requestedCount\",\"requestedCountBasis\"]}";
+                + "},\"required\":[\"requestedCount\",\"requestedCountBasis\",\"continuationGoal\"]}";
     }
 
     private static ToolSpec comparisonAction(
@@ -1564,6 +1577,12 @@ final class RecommendationReActLoop {
                 "A", "attributed public report, limited to its literal claim",
                 "R", "rulebook fact"));
         memory.put("profile", evidenceReview.profileForAgent(state.profile));
+        if (state.titleConstraint != null) {
+            memory.put("titleConstraint", Map.of(
+                    "operator", "CONTAINS",
+                    "value", state.titleConstraint.value(),
+                    "evidenceId", state.titleConstraint.evidenceId()));
+        }
         putIfNotEmpty(memory, "contextualAssumptions", state.contextualPreferences.values().stream()
                 .map(value -> Map.of(
                         "field", value.field(),
