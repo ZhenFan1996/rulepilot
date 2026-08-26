@@ -53,7 +53,7 @@ function run(state: string, revision = 1): PlayerJourneyRun {
 describe('derivePlayerJourney', () => {
   it('keeps source review distinct from work that has actually started', () => {
     expect(derivePlayerJourney(input({ gameBound: true, discovery: 'review' }))).toMatchObject({
-      phase: 'SOURCE_REVIEW', state: 'waiting', progress: 18,
+      phase: 'SOURCE_REVIEW', state: 'waiting', progress: null,
     })
   })
 
@@ -62,7 +62,7 @@ describe('derivePlayerJourney', () => {
       gameBound: true,
       discovery: 'review',
       importJob: importJob({ stage: 'DOWNLOADING', downloadedBytes: 50, totalBytes: 100 }),
-    }))).toMatchObject({ phase: 'IMPORT_DOWNLOADING', state: 'active', progress: 40 })
+    }))).toMatchObject({ phase: 'IMPORT_DOWNLOADING', state: 'active', progress: 50 })
   })
 
   it('does not equate the teaching handoff with a readable lesson', () => {
@@ -124,6 +124,57 @@ describe('derivePlayerJourney', () => {
     }))).toMatchObject({
       phase: 'FAILED', state: 'failed', retryAction: 'PREPARE_TEACHING',
       errorCode: 'TEACHING_PREPARATION_FAILED',
+      failureClassification: 'preserved-stop', failureRecovery: 'retry-step',
+    })
+  })
+
+  it('rejects a server-suggested blind retry for a typed invalid teaching plan', () => {
+    expect(derivePlayerJourney(input({
+      gameBound: true,
+      importJob: importJob({
+        stage: 'COMPLETED', documentVersionId: 'version-1', teachingHandoffState: 'FAILED',
+        teachingErrorCode: 'TEACHING_PREPARATION_INVALID_PLAN', teachingNextAction: 'RETRY_TEACHING',
+      }),
+    }))).toMatchObject({
+      phase: 'FAILED', state: 'failed', retryAction: null,
+      errorCode: 'TEACHING_PREPARATION_INVALID_PLAN',
+      failureClassification: 'external-repair', failureRecovery: 'manual-repair',
+    })
+  })
+
+  it('classifies a user cancellation as a preserved stop with an explicit new run', () => {
+    const cancelled = run('FAILED')
+    cancelled.run.lastErrorCode = 'AGENT_CANCELLED'
+    expect(derivePlayerJourney(input({
+      gameBound: true,
+      importJob: importJob({
+        stage: 'COMPLETED', documentVersionId: 'version-1', teachingHandoffState: 'LAUNCHED',
+      }),
+      plan: { id: 'plan-1', documentVersionId: 'version-1', gameTitle: 'Example', premise: 'Learn', sections: [
+        { position: 1, title: 'Setup' }, { position: 2, title: 'Turns' },
+      ] },
+      teachingRun: cancelled,
+      lesson: { id: 'lesson-1', status: 'DRAFT_READY', sections: [{ position: 1, title: 'Setup' }] },
+    }))).toMatchObject({
+      phase: 'LESSON_READABLE', state: 'ready', retryAction: 'GENERATE_LESSON',
+      errorCode: 'AGENT_CANCELLED', failureClassification: 'preserved-stop',
+      failureRecovery: 'restart-from-completed', canReadLesson: true,
+    })
+  })
+
+  it('does not offer an identical retry for an unknown teaching workflow failure', () => {
+    const failed = run('FAILED')
+    failed.run.lastErrorCode = 'TEACHING_WORKFLOW_FAILED'
+    expect(derivePlayerJourney(input({
+      gameBound: true,
+      importJob: importJob({
+        stage: 'COMPLETED', documentVersionId: 'version-1', teachingHandoffState: 'LAUNCHED',
+      }),
+      teachingRun: failed,
+    }))).toMatchObject({
+      phase: 'FAILED', state: 'failed', retryAction: null,
+      errorCode: 'TEACHING_WORKFLOW_FAILED',
+      failureClassification: 'external-repair', failureRecovery: 'manual-repair',
     })
   })
 
@@ -288,8 +339,9 @@ describe('derivePlayerJourney', () => {
       teachingRun: teaching,
       lesson: { id: 'lesson-1', status: 'DRAFT_READY', sections: [{ position: 1, title: 'Setup' }] },
     }))).toMatchObject({
-      phase: 'LESSON_READABLE', state: 'ready', retryAction: 'GENERATE_LESSON',
+      phase: 'LESSON_READABLE', state: 'ready', retryAction: null,
       errorCode: 'REVIEW_UNAVAILABLE', canReadLesson: true,
+      failureClassification: 'local-degradation', failureRecovery: null,
     })
   })
 })

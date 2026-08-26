@@ -59,6 +59,7 @@ public class HybridRuleSearchService implements HybridRuleSearch {
         List<HybridEvidenceHit> ranked = candidates.values().stream()
                 .filter(candidate -> options.sectionTypes().isEmpty()
                         || options.sectionTypes().contains(candidate.evidence.sectionType().toUpperCase()))
+                .filter(candidate -> withinPageScope(candidate.evidence, options.allowedEvidencePages()))
                 .map(candidate -> candidate.result(options.currentSectionType()))
                 .sorted(java.util.Comparator.comparingDouble(HybridEvidenceHit::score).reversed()
                         .thenComparing(hit -> hit.evidence().chunkId()))
@@ -71,6 +72,7 @@ public class HybridRuleSearchService implements HybridRuleSearch {
             fullTextHits.stream()
                     .filter(hit -> options.sectionTypes().isEmpty()
                             || options.sectionTypes().contains(hit.sectionType().toUpperCase()))
+                    .filter(hit -> withinPageScope(hit, options.allowedEvidencePages()))
                     .limit(LEXICAL_EVIDENCE_RESERVE)
                     .map(hit -> candidates.get(hit.chunkId()))
                     .filter(java.util.Objects::nonNull)
@@ -104,6 +106,12 @@ public class HybridRuleSearchService implements HybridRuleSearch {
                         hit.vectorRank(),
                         hit.currentSectionBoosted()))
                 .toList();
+    }
+
+    private boolean withinPageScope(RuleEvidenceHit hit, java.util.Set<Integer> allowedPages) {
+        if (allowedPages == null) return true;
+        return java.util.stream.IntStream.rangeClosed(hit.pageFrom(), hit.pageTo())
+                .allMatch(allowedPages::contains);
     }
 
     private <T> T recordPhase(String phase, Supplier<T> work) {

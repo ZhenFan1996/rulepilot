@@ -125,6 +125,18 @@ export type PlayerJourneyRetryAction =
   | 'GENERATE_LESSON'
   | null
 
+export type PlayerJourneyFailureClassification =
+  | 'local-degradation'
+  | 'preserved-stop'
+  | 'external-repair'
+
+export type PlayerJourneyFailureRecovery =
+  | 'retry-step'
+  | 'restart-from-completed'
+  | 'choose-source'
+  | 'manual-repair'
+  | null
+
 export interface PlayerJourneyInput {
   gameBound: boolean
   discovery: 'idle' | 'loading' | 'review' | 'unavailable' | 'failed'
@@ -139,9 +151,11 @@ export interface PlayerJourneyInput {
 export interface PlayerJourneyProjection {
   phase: PlayerJourneyPhase
   state: 'waiting' | 'active' | 'ready' | 'complete' | 'failed'
-  progress: number
+  progress: number | null
   retryAction: PlayerJourneyRetryAction
   errorCode: string | null
+  failureClassification: PlayerJourneyFailureClassification | null
+  failureRecovery: PlayerJourneyFailureRecovery
   canReadRulebook: boolean
   canReadLesson: boolean
   canAskQuestions: boolean
@@ -161,6 +175,56 @@ export function playerJourneyPollDelay(
 
 const FAILED_RUN_STATES = new Set(['FAILED', 'INSUFFICIENT_EVIDENCE', 'DEGRADED'])
 
+const LOCAL_DEGRADATION_CODES = new Set([
+  'DEGRADED',
+  'REVIEW_UNAVAILABLE',
+  'VISUAL_ENRICHMENT_FAILED',
+  'LOCALIZATION_FAILED',
+])
+
+const PRESERVED_WITHOUT_RETRY_CODES = new Set([
+  'INSUFFICIENT_EVIDENCE',
+])
+
+const RESTART_FROM_COMPLETED_CODES = new Set([
+  'AGENT_CANCELLED',
+  'AGENT_STEP_BUDGET',
+  'AGENT_TOOL_BUDGET',
+  'AGENT_MODEL_BUDGET',
+  'AGENT_TOKEN_BUDGET',
+  'AGENT_TIMEOUT',
+  'APPLICATION_RESTARTED',
+])
+
+const SAFE_RETRY_CODES = new Set([
+  'RULEBOOK_DISCOVERY_FAILED',
+  'SOURCE_UNAVAILABLE',
+  'IMPORT_QUEUE_FULL',
+  'DOCUMENT_PROCESSING_FAILED',
+  'TEACHING_PREPARATION_FAILED',
+  'TEACHING_PREPARATION_QUEUE_FULL',
+  'TEACHING_HANDOFF_LAUNCH_FAILED',
+  'TEACHING_QUEUE_FULL',
+  'TEACHING_CONTINUATION_QUEUE_FULL',
+])
+
+const EXTERNAL_REPAIR_CODES = new Set([
+  'INVALID_PDF_SOURCE',
+  'SOURCE_BROWSER_REQUIRED',
+  'TEACHING_PREPARATION_INVALID_PLAN',
+  'TEACHING_HANDOFF_INVALID',
+  'TEACHING_RECOVERY_EXHAUSTED',
+  'TEACHING_COMPLETION_FAILED',
+  'TEACHING_WORKFLOW_FAILED',
+])
+
+interface FailurePolicy {
+  errorCode: string
+  retryAction: PlayerJourneyRetryAction
+  failureClassification: PlayerJourneyFailureClassification
+  failureRecovery: PlayerJourneyFailureRecovery
+}
+
 export function derivePlayerJourney(input: PlayerJourneyInput): PlayerJourneyProjection {
   const availableSections = input.lesson?.sections.length ?? 0
   const totalSections = input.plan?.sections.length ?? null
@@ -177,20 +241,26 @@ export function derivePlayerJourney(input: PlayerJourneyInput): PlayerJourneyPro
   if (canReadLesson) {
     const fullyComplete = input.lesson?.status === 'COMPLETE' && teachingState === 'COMPLETED'
     const teachingRunStopped = FAILED_RUN_STATES.has(teachingState ?? '')
-    const retryTeaching = !fullyComplete && (
-      teachingRunStopped || input.importJob?.teachingNextAction === 'RETRY_TEACHING'
-    )
+    const serverRetryTeaching = input.importJob?.teachingNextAction === 'RETRY_TEACHING'
+    const failurePolicy = fullyComplete
+      ? null
+      : teachingRunStopped && input.teachingRun
+        ? runFailurePolicy(input.teachingRun, 'GENERATE_LESSON')
+        : serverRetryTeaching
+          ? typedFailurePolicy(
+              input.importJob?.teachingErrorCode ?? 'TEACHING_RUN_FAILED',
+              'GENERATE_LESSON',
+              true,
+            )
+          : null
     return projection({
       phase: fullyComplete ? 'LESSON_COMPLETE' : 'LESSON_READABLE',
       state: fullyComplete ? 'complete' : 'ready',
       progress: fullyComplete ? 100 : lessonProgress(availableSections, totalSections),
-      retryAction: retryTeaching ? 'GENERATE_LESSON' : null,
-      errorCode: retryTeaching
-        ? input.teachingRun?.run.lastErrorCode
-          ?? input.importJob?.teachingErrorCode
-          ?? teachingState
-          ?? 'TEACHING_RUN_FAILED'
-        : null,
+      retryAction: failurePolicy?.retryAction ?? null,
+      errorCode: failurePolicy?.errorCode ?? null,
+      failureClassification: failurePolicy?.failureClassification,
+      failureRecovery: failurePolicy?.failureRecovery,
       canReadRulebook,
       canReadLesson: true,
       availableSections,
@@ -201,8 +271,7 @@ export function derivePlayerJourney(input: PlayerJourneyInput): PlayerJourneyPro
 
   if (input.importJob?.stage === 'FAILED') {
     return failed(
-      input.importJob.recovery?.canRetryOriginalSource ? 'IMPORT_RULEBOOK' : null,
-      input.importJob.errorCode,
+      importFailurePolicy(input.importJob),
       availableSections,
       totalSections,
       latestActivity,
@@ -216,14 +285,17 @@ export function derivePlayerJourney(input: PlayerJourneyInput): PlayerJourneyPro
         errorCode: null, canReadRulebook, canReadLesson: false, availableSections, totalSections, latestActivity,
       })
     }
-    const retryAction = input.importJob.teachingNextAction === 'RETRY_DOCUMENT'
+    const requestedRetryAction = input.importJob.teachingNextAction === 'RETRY_DOCUMENT'
       ? 'IMPORT_RULEBOOK'
       : input.importJob.teachingNextAction === 'NONE' || input.importJob.teachingNextAction === 'OPEN_PROGRESS'
         ? null
         : 'PREPARE_TEACHING'
     return failed(
-      retryAction,
-      input.importJob.teachingErrorCode ?? 'TEACHING_HANDOFF_FAILED',
+      typedFailurePolicy(
+        input.importJob.teachingErrorCode ?? 'TEACHING_HANDOFF_FAILED',
+        requestedRetryAction,
+        requestedRetryAction !== null,
+      ),
       availableSections,
       totalSections,
       latestActivity,
@@ -231,12 +303,17 @@ export function derivePlayerJourney(input: PlayerJourneyInput): PlayerJourneyPro
     )
   }
   if (input.documentProgress?.stage === 'FAILED') {
-    return failed('IMPORT_RULEBOOK', 'DOCUMENT_PROCESSING_FAILED', availableSections, totalSections, latestActivity, canReadRulebook)
+    return failed(
+      typedFailurePolicy('DOCUMENT_PROCESSING_FAILED', 'IMPORT_RULEBOOK', true),
+      availableSections,
+      totalSections,
+      latestActivity,
+      canReadRulebook,
+    )
   }
   if (input.preparationRun && FAILED_RUN_STATES.has(input.preparationRun.run.state)) {
     return failed(
-      'PREPARE_TEACHING',
-      input.preparationRun.run.lastErrorCode ?? input.preparationRun.run.state,
+      runFailurePolicy(input.preparationRun, 'PREPARE_TEACHING'),
       availableSections,
       totalSections,
       latestActivity,
@@ -245,8 +322,7 @@ export function derivePlayerJourney(input: PlayerJourneyInput): PlayerJourneyPro
   }
   if (input.teachingRun && FAILED_RUN_STATES.has(input.teachingRun.run.state)) {
     return failed(
-      'GENERATE_LESSON',
-      input.teachingRun.run.lastErrorCode ?? input.teachingRun.run.state,
+      runFailurePolicy(input.teachingRun, 'GENERATE_LESSON'),
       availableSections,
       totalSections,
       latestActivity,
@@ -256,13 +332,19 @@ export function derivePlayerJourney(input: PlayerJourneyInput): PlayerJourneyPro
 
   if (!input.gameBound) {
     return projection({
-      phase: 'GAME_BINDING', state: 'active', progress: 5, retryAction: null,
+      phase: 'GAME_BINDING', state: 'active', progress: null, retryAction: null,
       errorCode: null, canReadRulebook, canReadLesson: false, availableSections, totalSections, latestActivity,
     })
   }
   if (!input.importJob) {
     if (input.discovery === 'failed') {
-      return failed('DISCOVER_RULEBOOK', 'RULEBOOK_DISCOVERY_FAILED', availableSections, totalSections, latestActivity, canReadRulebook)
+      return failed(
+        typedFailurePolicy('RULEBOOK_DISCOVERY_FAILED', 'DISCOVER_RULEBOOK', true),
+        availableSections,
+        totalSections,
+        latestActivity,
+        canReadRulebook,
+      )
     }
     const phase = input.discovery === 'review' || input.discovery === 'unavailable'
       ? 'SOURCE_REVIEW'
@@ -270,7 +352,7 @@ export function derivePlayerJourney(input: PlayerJourneyInput): PlayerJourneyPro
     return projection({
       phase,
       state: input.discovery === 'review' || input.discovery === 'unavailable' ? 'waiting' : 'active',
-      progress: phase === 'SOURCE_REVIEW' ? 18 : 12,
+      progress: null,
       retryAction: input.discovery === 'unavailable' ? 'DISCOVER_RULEBOOK' : null,
       errorCode: null,
       canReadRulebook,
@@ -295,7 +377,9 @@ export function derivePlayerJourney(input: PlayerJourneyInput): PlayerJourneyPro
     return projection({
       phase: 'DOCUMENT_PROCESSING',
       state: 'active',
-      progress: Math.max(62, Math.min(75, 62 + Math.round((input.documentProgress?.percentage ?? 0) * 0.13))),
+      progress: input.documentProgress
+        ? Math.max(0, Math.min(100, Math.round(input.documentProgress.percentage)))
+        : null,
       retryAction: null,
       errorCode: null,
       canReadRulebook,
@@ -308,22 +392,19 @@ export function derivePlayerJourney(input: PlayerJourneyInput): PlayerJourneyPro
 
   if (!input.preparationRun || input.importJob.teachingHandoffState === 'LAUNCHING') {
     return projection({
-      phase: 'TEACHING_PREPARATION_QUEUED', state: 'active', progress: 76, retryAction: null,
+      phase: 'TEACHING_PREPARATION_QUEUED', state: 'active', progress: null, retryAction: null,
       errorCode: null, canReadRulebook, canReadLesson: false, availableSections, totalSections, latestActivity,
     })
   }
   if (input.preparationRun.run.state !== 'COMPLETED') {
-    const progress = input.preparationRun.run.state === 'LESSON_PLANNING'
-      ? 84
-      : input.preparationRun.run.state === 'DOCUMENT_READINESS' ? 80 : 77
     return projection({
-      phase: 'TEACHING_PREPARING', state: 'active', progress, retryAction: null,
+      phase: 'TEACHING_PREPARING', state: 'active', progress: null, retryAction: null,
       errorCode: null, canReadRulebook, canReadLesson: false, availableSections, totalSections, latestActivity,
     })
   }
   if (!input.plan || !input.teachingRun) {
     return projection({
-      phase: 'LESSON_GENERATION_QUEUED', state: 'active', progress: 87, retryAction: null,
+      phase: 'LESSON_GENERATION_QUEUED', state: 'active', progress: null, retryAction: null,
       errorCode: null, canReadRulebook, canReadLesson: false, availableSections, totalSections, latestActivity,
     })
   }
@@ -335,42 +416,130 @@ export function derivePlayerJourney(input: PlayerJourneyInput): PlayerJourneyPro
   })
 }
 
-function projection(input: Omit<PlayerJourneyProjection, 'canAskQuestions'>): PlayerJourneyProjection {
-  return { ...input, canAskQuestions: input.canReadLesson && input.canReadRulebook }
+type ProjectionInput = Omit<
+  PlayerJourneyProjection,
+  'canAskQuestions' | 'failureClassification' | 'failureRecovery'
+> & Partial<Pick<PlayerJourneyProjection, 'failureClassification' | 'failureRecovery'>>
+
+function projection(input: ProjectionInput): PlayerJourneyProjection {
+  return {
+    failureClassification: null,
+    failureRecovery: null,
+    ...input,
+    canAskQuestions: input.canReadLesson && input.canReadRulebook,
+  }
 }
 
 function failed(
-  retryAction: PlayerJourneyRetryAction,
-  errorCode: string | null,
+  policy: FailurePolicy,
   availableSections: number,
   totalSections: number | null,
   latestActivity: string | null,
   canReadRulebook: boolean,
 ) {
   return projection({
-    phase: 'FAILED', state: 'failed', progress: 0, retryAction,
-    errorCode: errorCode ?? 'PLAYER_JOURNEY_FAILED', canReadRulebook, canReadLesson: false,
+    phase: 'FAILED', state: 'failed', progress: null, retryAction: policy.retryAction,
+    errorCode: policy.errorCode,
+    failureClassification: policy.failureClassification,
+    failureRecovery: policy.failureRecovery,
+    canReadRulebook, canReadLesson: false,
     availableSections, totalSections, latestActivity,
   })
 }
 
-function importProjection(job: PlayerJourneyImportJob): [PlayerJourneyPhase, number] {
-  if (job.stage === 'QUEUED') return ['IMPORT_QUEUED', 24]
-  if (job.stage === 'CONNECTING') return ['IMPORT_CONNECTING', 29]
+function importProjection(job: PlayerJourneyImportJob): [PlayerJourneyPhase, number | null] {
+  if (job.stage === 'QUEUED') return ['IMPORT_QUEUED', null]
+  if (job.stage === 'CONNECTING') return ['IMPORT_CONNECTING', null]
   if (job.stage === 'DOWNLOADING') {
-    const downloadRatio = job.totalBytes && job.totalBytes > 0
-      ? Math.min(1, Math.max(0, job.downloadedBytes / job.totalBytes))
-      : 0
-    return ['IMPORT_DOWNLOADING', 32 + Math.round(downloadRatio * 16)]
+    if (!job.totalBytes || job.totalBytes < 1) return ['IMPORT_DOWNLOADING', null]
+    const downloadRatio = Math.min(1, Math.max(0, job.downloadedBytes / job.totalBytes))
+    return ['IMPORT_DOWNLOADING', Math.round(downloadRatio * 100)]
   }
-  if (job.stage === 'COMPRESSING') return ['IMPORT_COMPRESSING', 51]
-  if (job.stage === 'VERIFYING_FILE') return ['IMPORT_VERIFYING', 55]
-  return ['IMPORT_SAVING', 59]
+  if (job.stage === 'COMPRESSING') return ['IMPORT_COMPRESSING', null]
+  if (job.stage === 'VERIFYING_FILE') return ['IMPORT_VERIFYING', null]
+  return ['IMPORT_SAVING', null]
 }
 
 function lessonProgress(availableSections: number, totalSections: number | null) {
-  if (!totalSections || totalSections < 1) return availableSections > 0 ? 94 : 89
-  return Math.min(99, 88 + Math.round(Math.min(1, availableSections / totalSections) * 11))
+  if (!totalSections || totalSections < 1) return null
+  return Math.min(100, Math.round(Math.min(1, availableSections / totalSections) * 100))
+}
+
+function importFailurePolicy(job: PlayerJourneyImportJob): FailurePolicy {
+  const errorCode = job.errorCode ?? 'RULEBOOK_IMPORT_FAILED'
+  if (job.recovery?.canRetryOriginalSource) {
+    return preservedFailure(errorCode, 'IMPORT_RULEBOOK', 'retry-step')
+  }
+  const canChooseSource = Boolean(
+    job.recovery?.canChooseAnotherSource
+    || job.recovery?.canUseLocalUpload
+    || job.recovery?.canOpenSourceInBrowser,
+  )
+  return {
+    errorCode,
+    retryAction: null,
+    failureClassification: 'external-repair',
+    failureRecovery: canChooseSource ? 'choose-source' : 'manual-repair',
+  }
+}
+
+function runFailurePolicy(
+  run: PlayerJourneyRun,
+  retryAction: Exclude<PlayerJourneyRetryAction, null>,
+): FailurePolicy {
+  const errorCode = run.run.lastErrorCode ?? run.run.state
+  return typedFailurePolicy(errorCode, retryAction, false)
+}
+
+function typedFailurePolicy(
+  errorCode: string,
+  requestedRetryAction: PlayerJourneyRetryAction,
+  serverAuthorizedRetry: boolean,
+): FailurePolicy {
+  if (LOCAL_DEGRADATION_CODES.has(errorCode)) {
+    return {
+      errorCode,
+      retryAction: null,
+      failureClassification: 'local-degradation',
+      failureRecovery: null,
+    }
+  }
+  if (PRESERVED_WITHOUT_RETRY_CODES.has(errorCode)) {
+    return preservedFailure(errorCode, null, null)
+  }
+  if (EXTERNAL_REPAIR_CODES.has(errorCode)) {
+    return {
+      errorCode,
+      retryAction: null,
+      failureClassification: 'external-repair',
+      failureRecovery: 'manual-repair',
+    }
+  }
+  if (RESTART_FROM_COMPLETED_CODES.has(errorCode)) {
+    return preservedFailure(errorCode, requestedRetryAction, 'restart-from-completed')
+  }
+  if (requestedRetryAction && (serverAuthorizedRetry || SAFE_RETRY_CODES.has(errorCode))) {
+    return preservedFailure(errorCode, requestedRetryAction, 'retry-step')
+  }
+  return {
+    errorCode,
+    retryAction: null,
+    failureClassification: 'external-repair',
+    failureRecovery: 'manual-repair',
+  }
+}
+
+function preservedFailure(
+  errorCode: string,
+  retryAction: PlayerJourneyRetryAction,
+  failureRecovery: PlayerJourneyFailureRecovery,
+): FailurePolicy {
+  return {
+    errorCode,
+    retryAction,
+    failureClassification: 'preserved-stop',
+    failureRecovery,
+  }
 }
 
 export function acceptImportJob(

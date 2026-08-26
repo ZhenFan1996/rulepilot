@@ -1,6 +1,7 @@
 package com.rulepilot.recommendation.application;
 
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.Game;
+import com.rulepilot.catalog.PublicTeachingContinuationCatalog.Continuation;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Research;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.RelationshipKind;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.CandidateComparison;
@@ -38,6 +39,9 @@ final class RecommendationAgentState {
     final Set<Integer> finalResponseGameIds = new LinkedHashSet<>();
     final Set<String> finalResponseEvidenceIds = new LinkedHashSet<>();
     final Map<String, Object> finalResponseDecisionFacts = new LinkedHashMap<>();
+    final Map<Integer, Continuation> teachingContinuations = new LinkedHashMap<>();
+    final Set<Integer> teachingContinuationQueriedIds = new LinkedHashSet<>();
+    final Set<Integer> teachingContinuationUnavailableIds = new LinkedHashSet<>();
     Research research = Research.empty();
     CandidateComparison comparison;
     final List<String> actions = new ArrayList<>();
@@ -45,8 +49,9 @@ final class RecommendationAgentState {
     NamedGamePurpose namedGamePurpose;
     boolean unresolvedPlayerTitle;
     int referenceResolutionAttempts;
-    boolean titleInspectionAttempted;
     boolean catalogBrowseAttempted;
+    boolean teachingContinuationRequested;
+    String teachingLearningGoal = "";
     boolean discoveryAttempted;
     boolean discoveryProducedVerifiedGames;
     DiscoveryPurpose discoveryPurpose;
@@ -145,18 +150,62 @@ final class RecommendationAgentState {
         actions.add("WEB_RESEARCH_DEGRADED:" + webResearchFailureCode);
     }
 
+    boolean recordSuccessfulTeachingContinuationLookup(
+            List<Integer> queriedBggIds,
+            Map<Integer, Continuation> observedContinuations) {
+        Set<Integer> scope = queriedBggIds.stream()
+                .filter(Objects::nonNull)
+                .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+        teachingContinuations.keySet().removeIf(scope::contains);
+        observedContinuations.forEach((bggId, continuation) -> {
+            if (scope.contains(bggId) && continuation != null && continuation.bggId() == bggId) {
+                teachingContinuations.put(bggId, continuation);
+            }
+        });
+        teachingContinuationQueriedIds.addAll(scope);
+        teachingContinuationUnavailableIds.removeAll(scope);
+        return scope.stream().anyMatch(teachingContinuations::containsKey);
+    }
+
+    boolean recordPartialTeachingContinuationLookup(
+            List<Integer> queriedBggIds,
+            Map<Integer, Continuation> observedContinuations) {
+        Set<Integer> scope = queriedBggIds.stream()
+                .filter(Objects::nonNull)
+                .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+        observedContinuations.forEach((bggId, continuation) -> {
+            if (scope.contains(bggId) && continuation != null && continuation.bggId() == bggId) {
+                teachingContinuations.put(bggId, continuation);
+            }
+        });
+        scope.forEach(bggId -> {
+            if (teachingContinuations.containsKey(bggId)) {
+                teachingContinuationQueriedIds.add(bggId);
+                teachingContinuationUnavailableIds.remove(bggId);
+            } else {
+                teachingContinuationUnavailableIds.add(bggId);
+            }
+        });
+        return scope.stream().anyMatch(teachingContinuations::containsKey);
+    }
+
+    void recordUnavailableTeachingContinuationLookup(List<Integer> queriedBggIds) {
+        queriedBggIds.stream()
+                .filter(Objects::nonNull)
+                .filter(bggId -> !teachingContinuations.containsKey(bggId))
+                .forEach(teachingContinuationUnavailableIds::add);
+    }
+
     void reconsiderSelectionAfterPreferenceUpdate() {
         // Verified BGG facts remain valid, but every selection/retrieval decision derived from the old
         // profile is provisional. Previously shown cards become eligible again under the corrected profile;
         // only explicit exclusions remain excluded. Reopen bounded candidate reads and discard fit research
         // whose question may have been framed around the superseded preference set.
-        boolean selectionWorkObserved = titleInspectionAttempted
-                || catalogBrowseAttempted
+        boolean selectionWorkObserved = catalogBrowseAttempted
                 || discoveryAttempted
                 || !verified.isEmpty()
                 || !research.games().isEmpty();
         previouslyShownIds.clear();
-        titleInspectionAttempted = false;
         catalogBrowseAttempted = false;
         researchAttempted = false;
         research = Research.empty();

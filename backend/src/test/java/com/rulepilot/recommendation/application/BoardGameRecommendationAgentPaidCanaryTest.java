@@ -15,6 +15,8 @@ import com.rulepilot.catalog.BoardGameRecommendationCatalog.CandidateSet;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.Details;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.Game;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.Ranking;
+import com.rulepilot.catalog.PublicTeachingContinuationCatalog;
+import com.rulepilot.catalog.PublicTeachingContinuationCatalog.Availability;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration;
 import com.rulepilot.modelconfig.adapter.out.ChatModelFactory;
 import com.rulepilot.recommendation.BoardGameRecommendationModel;
@@ -53,6 +55,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Tag;
@@ -71,6 +74,92 @@ class BoardGameRecommendationAgentPaidCanaryTest {
     private static final Duration RECOMMENDATION_TIMEOUT = Duration.ofSeconds(45);
 
     private final ObjectMapper json = JsonMapper.builder().findAndAddModules().build();
+
+    @Test
+    void prefersAReadyGuideWhenThePlayerRequiresRecommendationTeachingAndQuestions() throws Exception {
+        assumeTrue("true".equalsIgnoreCase(System.getenv("RULEPILOT_RECOMMENDATION_PAID_CANARY")));
+        String provider = environment("RULEPILOT_RECOMMENDATION_CANARY_PROVIDER", "qwen")
+                .toLowerCase(Locale.ROOT);
+        String prefix = provider.toUpperCase(Locale.ROOT);
+        Capture capture = new Capture(provider, environment(prefix + "_MODEL", null));
+        BoardGameRecommendationModel model = model(
+                provider,
+                environment(prefix + "_API_KEY", null),
+                environment(prefix + "_BASE_URL", null),
+                environment(prefix + "_MODEL", null),
+                capture);
+        UUID readyPlanId = UUID.randomUUID();
+        PublicTeachingContinuationCatalog continuations = candidates -> candidates.stream()
+                        .anyMatch(candidate -> candidate.bggId() == 102)
+                ? Availability.available(Map.of(
+                        102,
+                        new PublicTeachingContinuationCatalog.Continuation(
+                                102, readyPlanId, 5, 14)))
+                : Availability.none();
+        var properties = new BoardGameRecommendationProperties(
+                8, 3, new BigDecimal("0.66"), RECOMMENDATION_TIMEOUT);
+        var agent = new BoardGameRecommendationAgent(
+                model,
+                new BoardGameRecommendationTools(
+                        new CanaryCatalog(List.of(101, 102, 103)),
+                        noResearch(),
+                        continuations),
+                new BoardGameRecommendationSelector(properties),
+                properties,
+                json);
+        String message = "我们三个人，最多 60 分钟，请推荐两款。一个苛刻条件：至少把一款已经能直接打开现成讲解、"
+                + "随后基于同一份规则书答疑的游戏放在第一张；不能把以后也许能找到规则书当成已经可讲。"
+                + "学习目标是先学设置和首轮行动，再问规则细节。";
+        List<Map<String, Object>> visibleTurns = new ArrayList<>();
+        long started = System.nanoTime();
+
+        try {
+            var response = agent.converse(
+                    new ConversationRequest(RecommendationProfile.empty(), message),
+                    "zh-CN");
+            long totalMs = elapsed(started);
+            visibleTurns.add(visible(
+                    "recommendation-ready-guide-and-grounded-questions",
+                    response,
+                    totalMs,
+                    List.of(),
+                    0,
+                    capture.callCount()));
+
+            assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
+            assertThat(response.games()).hasSize(2);
+            assertThat(response.games().getFirst().game().ranking().bggId()).isEqualTo(102);
+            assertThat(response.games().getFirst().teachingContinuation()).satisfies(continuation -> {
+                assertThat(continuation.teachingPlanId()).isEqualTo(readyPlanId);
+                assertThat(continuation.sectionCount()).isEqualTo(5);
+                assertThat(continuation.stepCount()).isEqualTo(14);
+            });
+            assertThat(response.continuation()).satisfies(continuation -> {
+                assertThat(continuation.kind())
+                        .isEqualTo(BoardGameRecommendationAgent.ContinuationKind.GUIDE_AND_RULE_QA);
+                assertThat(continuation.availability())
+                        .isEqualTo(BoardGameRecommendationAgent.ContinuationAvailability.AVAILABLE_FOR_SOME);
+                assertThat(continuation.readyCount()).isEqualTo(1);
+                assertThat(continuation.candidateCount()).isEqualTo(2);
+                assertThat(continuation.learningGoal()).contains("设置", "首轮");
+            });
+            assertThat(response.harness().modelCalls()).isEqualTo(1);
+            assertThat(response.harness().fallbackUsed()).isFalse();
+            assertThat(totalMs).isLessThan(25_000L);
+            ToolCall producingCall = capture.lastCandidateProducingToolCall();
+            assertThat(producingCall.name()).isEqualTo(BoardGameRecommendationAgent.BROWSE_TOOL);
+            JsonNode arguments = json.readTree(producingCall.argumentsJson());
+            assertThat(arguments.path("continuationGoal").asText()).isEqualTo("GUIDE_AND_RULE_QA");
+            assertThat(arguments.path("continuationEvidence").asText()).isNotBlank();
+            assertThat(arguments.path("learningGoal").asText()).contains("设置", "首轮");
+            writeArtifact(capture, visibleTurns, null);
+        } catch (Throwable failure) {
+            writeArtifact(capture, visibleTurns, failure.getClass().getSimpleName());
+            throw failure;
+        } finally {
+            agent.stopBoundedCalls();
+        }
+    }
 
     @Test
     void publishesOneClaimScopedRecommendationAfterValidation() throws Exception {
@@ -1894,9 +1983,15 @@ class BoardGameRecommendationAgentPaidCanaryTest {
             @Override
             public Turn next(Request request) {
                 long started = System.nanoTime();
-                Turn result = delegate.next(request);
-                capture.add("react", result, elapsed(started));
-                return result;
+                int callIndex = capture.begin("react", request);
+                try {
+                    Turn result = delegate.next(request);
+                    capture.complete(callIndex, result, elapsed(started));
+                    return result;
+                } catch (RuntimeException | Error failure) {
+                    capture.fail(callIndex, failure, elapsed(started));
+                    throw failure;
+                }
             }
 
             @Override
@@ -2013,6 +2108,12 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                 .map(entry -> Map.of(
                         "bggId", entry.game().ranking().bggId(),
                         "name", entry.game().ranking().sourceName(),
+                        "teachingContinuation", entry.teachingContinuation() == null
+                                ? Map.of()
+                                : Map.of(
+                                        "teachingPlanId", entry.teachingContinuation().teachingPlanId(),
+                                        "sectionCount", entry.teachingContinuation().sectionCount(),
+                                        "stepCount", entry.teachingContinuation().stepCount()),
                         "replyParts", entry.replyParts().stream()
                                 .map(part -> Map.of(
                                         "role", part.role().name(),
@@ -2022,6 +2123,14 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                                         "sourceIndexes", part.claim().sourceIndexes()))
                                 .toList()))
                 .toList());
+        if (response.continuation() != null) {
+            value.put("continuation", Map.of(
+                    "kind", response.continuation().kind(),
+                    "learningGoal", response.continuation().learningGoal(),
+                    "availability", response.continuation().availability(),
+                    "readyCount", response.continuation().readyCount(),
+                    "candidateCount", response.continuation().candidateCount()));
+        }
         if (response.comparison() != null) {
             value.put("comparison", Map.of(
                     "candidateBggIds", response.comparison().candidates().stream()
@@ -2289,10 +2398,28 @@ class BoardGameRecommendationAgentPaidCanaryTest {
             this.model = model;
         }
 
-        private synchronized void add(String operation, Turn turn, long latencyMs) {
+        private synchronized int begin(
+                String operation,
+                BoardGameRecommendationModel.Request request) {
             Map<String, Object> call = new LinkedHashMap<>();
             call.put("ordinal", calls.size() + 1);
             call.put("operation", operation);
+            call.put("status", "STARTED");
+            call.put("messageCount", request.messages().size());
+            call.put("messageCharacters", request.messages().stream()
+                    .mapToInt(message -> message.content().codePointCount(0, message.content().length()))
+                    .sum());
+            call.put("toolCount", request.tools().size());
+            call.put("toolNames", request.tools().stream().map(BoardGameRecommendationModel.ToolSpec::name).toList());
+            call.put("maxOutputTokens", request.maxOutputTokens());
+            call.put("toolChoice", request.toolChoice().name());
+            calls.add(Map.copyOf(call));
+            return calls.size() - 1;
+        }
+
+        private synchronized void complete(int callIndex, Turn turn, long latencyMs) {
+            Map<String, Object> call = new LinkedHashMap<>(calls.get(callIndex));
+            call.put("status", "COMPLETED");
             call.put("latencyMs", latencyMs);
             call.put("assistantText", turn.text() == null ? "" : turn.text());
             call.put("toolCalls", turn.toolCalls().stream()
@@ -2300,8 +2427,16 @@ class BoardGameRecommendationAgentPaidCanaryTest {
                             "name", tool.name(),
                             "argumentsJson", tool.argumentsJson()))
                     .toList());
-            calls.add(Map.copyOf(call));
+            calls.set(callIndex, Map.copyOf(call));
             toolCalls.addAll(turn.toolCalls());
+        }
+
+        private synchronized void fail(int callIndex, Throwable failure, long latencyMs) {
+            Map<String, Object> call = new LinkedHashMap<>(calls.get(callIndex));
+            call.put("status", "FAILED");
+            call.put("latencyMs", latencyMs);
+            call.put("failureType", failure.getClass().getSimpleName());
+            calls.set(callIndex, Map.copyOf(call));
         }
 
         private synchronized void recordUnexpectedStructuredCall() {
@@ -2324,8 +2459,7 @@ class BoardGameRecommendationAgentPaidCanaryTest {
         private synchronized ToolCall lastCandidateProducingToolCall() {
             for (int index = toolCalls.size() - 1; index >= 0; index--) {
                 ToolCall call = toolCalls.get(index);
-                if (BoardGameRecommendationAgent.SEARCH_TOOL.equals(call.name())
-                        || BoardGameRecommendationAgent.BROWSE_TOOL.equals(call.name())
+                if (BoardGameRecommendationAgent.BROWSE_TOOL.equals(call.name())
                         || BoardGameRecommendationAgent.DISCOVER_TOOL.equals(call.name())) {
                     return call;
                 }

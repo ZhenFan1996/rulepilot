@@ -406,7 +406,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <section data-testid="recommendation-answer-workspace" tabindex="-1" class="max-h-[70vh] min-h-72 overflow-y-auto px-4 py-5 outline-none sm:min-h-[31rem] sm:px-6 sm:py-7 lg:max-h-[46rem]" aria-live="polite">
+  <section data-testid="recommendation-answer-workspace" tabindex="-1" class="max-h-[70vh] min-h-72 overflow-y-auto px-4 py-5 outline-none sm:min-h-[31rem] sm:px-6 sm:py-7 lg:max-h-[46rem]">
     <header class="rounded-2xl border border-indigo/15 bg-indigo/5 px-4 py-4">
       <div class="flex flex-wrap items-start justify-between gap-3">
         <div class="min-w-0">

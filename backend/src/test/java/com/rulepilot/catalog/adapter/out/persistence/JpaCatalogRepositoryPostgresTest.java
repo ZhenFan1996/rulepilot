@@ -2,6 +2,7 @@ package com.rulepilot.catalog.adapter.out.persistence;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.rulepilot.catalog.domain.BggGameMetadata;
 import com.rulepilot.catalog.domain.Expansion;
 import com.rulepilot.catalog.domain.Game;
 import com.rulepilot.catalog.domain.GameEdition;
@@ -10,7 +11,9 @@ import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -57,6 +60,7 @@ class JpaCatalogRepositoryPostgresTest {
         sessionFactory = new MetadataSources(registry)
                 .addAnnotatedClass(GameEntity.class)
                 .addAnnotatedClass(GameEditionEntity.class)
+                .addAnnotatedClass(BggGameMetadataEntity.class)
                 .addAnnotatedClass(ExpansionEntity.class)
                 .addAnnotatedClass(EditionExpansionEntity.class)
                 .buildMetadata()
@@ -120,6 +124,35 @@ class JpaCatalogRepositoryPostgresTest {
         GameEdition persisted = inTransaction(repository -> repository.findEdition(edition.id()).orElseThrow());
 
         assertThat(persisted.language()).isIn("en", "zh-CN");
+    }
+
+    @Test
+    void resolvesSameNamedEditionsOnlyThroughTheirOwningGamesBggIdentity() {
+        Instant now = Instant.parse("2026-08-26T00:00:00Z");
+        Game firstGame = Game.create("First exact edition identity", now);
+        Game secondGame = Game.create("Second exact edition identity", now);
+        GameEdition firstEdition = GameEdition.create(firstGame.id(), "Shared edition name", "en", 2025, now);
+        GameEdition secondEdition = GameEdition.create(secondGame.id(), "Shared edition name", "en", 2025, now);
+        inTransaction(repository -> {
+            repository.save(firstGame);
+            repository.save(secondGame);
+            repository.save(firstEdition);
+            repository.save(secondEdition);
+            repository.save(metadata(firstGame.id(), 810_001, now));
+            repository.save(metadata(secondGame.id(), 810_002, now));
+            return null;
+        });
+
+        Map<UUID, Integer> identities = inTransaction(repository -> repository.findBggIdsByEditions(
+                List.of(firstEdition.id(), secondEdition.id(), UUID.randomUUID())));
+
+        assertThat(identities).containsExactlyInAnyOrderEntriesOf(Map.of(
+                firstEdition.id(), 810_001,
+                secondEdition.id(), 810_002));
+    }
+
+    private static BggGameMetadata metadata(UUID gameId, int bggId, Instant now) {
+        return new BggGameMetadata(gameId, bggId, "", "", null, null, null, null, now);
     }
 
     private static <T> T inTransaction(RepositoryWork<T> work) {

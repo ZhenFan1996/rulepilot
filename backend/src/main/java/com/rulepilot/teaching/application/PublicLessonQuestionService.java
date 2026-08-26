@@ -33,23 +33,41 @@ public class PublicLessonQuestionService {
     private PublicAnswer answer(PublicLessonReader.PublicLesson lesson, QuestionRequest request) {
         PlayerLocale language = PlayerLocale.forQuestion(
                 request.question(), PlayerLocale.fromRequest(request.language()));
-        var creation = request.learningIntent() == null
-                ? answers.answerForPublicReader(
-                        lesson.documentVersionId(),
-                        request.question().strip(),
-                        request.previousQuestion(),
-                        language)
-                : answers.answerForPublicReader(
-                        lesson.documentVersionId(),
-                        request.question().strip(),
-                        request.previousQuestion(),
-                        language,
-                        request.learningIntent());
+        var creation = answers.answerForPublicReader(
+                lesson.documentVersionId(),
+                request.question().strip(),
+                request.previousQuestion(),
+                language,
+                request.learningIntent(),
+                lesson.citedPages());
+        if (!withinPublishedPages(creation.answer(), lesson.citedPages())) {
+            return new PublicAnswer(withheldAnswer(language), List.of(), List.of());
+        }
         Set<Integer> citedPages = citedPages(creation.answer());
         return new PublicAnswer(
                 creation.answer(),
                 visualAids(lesson, citedPages, creation.citedEvidenceIds(), language),
                 List.of());
+    }
+
+    private boolean withinPublishedPages(RuleAnswering.Answer answer, Set<Integer> publishedPages) {
+        return answer.citations().stream().allMatch(citation -> java.util.stream.IntStream
+                .rangeClosed(citation.pageFrom(), citation.pageTo())
+                .allMatch(publishedPages::contains));
+    }
+
+    private RuleAnswering.Answer withheldAnswer(PlayerLocale language) {
+        boolean english = language == PlayerLocale.EN;
+        return new RuleAnswering.Answer(
+                "INSUFFICIENT_EVIDENCE",
+                english ? "This answer needs a rulebook page that is not public in this lesson."
+                        : "这条答疑需要引用当前讲解未公开的规则书页。",
+                english ? "I did not publish an answer with an inaccessible citation. Open the cited lesson pages or try another question."
+                        : "为避免给出打不开的引用，本次没有发布答案。可以先查看讲解已引用的页面，或换一个问题。",
+                List.of(),
+                List.of(),
+                "LOW",
+                null);
     }
 
     private Set<Integer> citedPages(RuleAnswering.Answer answer) {

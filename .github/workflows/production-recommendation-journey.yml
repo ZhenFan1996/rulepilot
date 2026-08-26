@@ -3,6 +3,10 @@ name: Production recommendation journey
 on:
   workflow_dispatch:
     inputs:
+      tested_sha:
+        description: Exact 40-character main commit SHA already active in production
+        required: true
+        type: string
       opening_prompt:
         description: Natural opening from a player who does not know what to play yet
         required: true
@@ -12,7 +16,7 @@ on:
         description: Natural refinement that asks the Agent to select a ranked recommendation slate
         required: true
         type: string
-        default: '我想换成能谈判、互相骗一骗的；有两个新手，90 分钟内。你直接挑三款，并把你最推荐的一款放第一吧。我们选好后还想接着找规则书、听讲解。'
+        default: '我想换成能谈判、互相骗一骗的；有两个新手，90 分钟内。你直接挑三款，并把你最推荐的一款放第一吧。我们选好后想优先直接进入已有讲解，先学设置和首轮行动，再按同一份规则书继续答疑。'
       rule_question:
         description: Question asked after the cited lesson becomes readable
         required: true
@@ -23,6 +27,14 @@ on:
         required: true
         type: string
         default: '你刚才列出的第二个准备步骤具体需要哪些组件？仍然只根据同一本规则书回答并标页码。'
+      journey_mode:
+        description: Use a ready public guide, or verify a rulebook journey that may import or reuse
+        required: true
+        type: choice
+        default: ready_public
+        options:
+          - ready_public
+          - verified_import
       require_fresh_import:
         description: Fail if production reuses an existing imported rulebook
         required: true
@@ -61,17 +73,20 @@ jobs:
       DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
       DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
       RULEPILOT_PUBLIC_URL: https://rulepilot.cn
+      RULEPILOT_RECOMMENDATION_TESTED_SHA: ${{ inputs.tested_sha }}
       RULEPILOT_RECOMMENDATION_OPENING_PROMPT: ${{ inputs.opening_prompt }}
       RULEPILOT_RECOMMENDATION_SELECTION_PROMPT: ${{ inputs.selection_prompt }}
       RULEPILOT_RECOMMENDATION_RULE_QUESTION: ${{ inputs.rule_question }}
       RULEPILOT_RECOMMENDATION_RULE_FOLLOW_UP: ${{ inputs.rule_follow_up }}
+      RULEPILOT_RECOMMENDATION_JOURNEY_MODE: ${{ inputs.journey_mode }}
       RULEPILOT_RECOMMENDATION_REQUIRE_FRESH_IMPORT: ${{ inputs.require_fresh_import }}
       RULEPILOT_RECOMMENDATION_ONLY: ${{ inputs.recommendation_only }}
       RULEPILOT_RECOMMENDATION_EXPECTED_TITLE_TERM: ${{ inputs.expected_title_term }}
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: main
+          ref: ${{ inputs.tested_sha }}
+          fetch-depth: 0
 
       - uses: actions/setup-node@v6
         with:
@@ -107,10 +122,45 @@ jobs:
           artifact_dir="$GITHUB_WORKSPACE/.artifacts/production-recommendation-journey"
           mkdir -p "$artifact_dir"
           chmod 700 "$artifact_dir"
-          printf '{"completed":false,"stage":"preflight"}\n' > "$artifact_dir/journey.json"
+          jq -n \
+            --arg testedSha "$RULEPILOT_RECOMMENDATION_TESTED_SHA" \
+            --arg journeyMode "$RULEPILOT_RECOMMENDATION_JOURNEY_MODE" \
+            --argjson recommendationOnly "$RULEPILOT_RECOMMENDATION_ONLY" \
+            --argjson requireFreshImport "$RULEPILOT_RECOMMENDATION_REQUIRE_FRESH_IMPORT" \
+            '{completed:false,stage:"preflight",testedSha:$testedSha,activeReleaseSha:null,
+              journeyMode:$journeyMode,recommendationOnly:$recommendationOnly,
+              requireFreshImport:$requireFreshImport,importReused:null}' \
+            > "$artifact_dir/journey.json"
+          if [[ ! "$RULEPILOT_RECOMMENDATION_TESTED_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "tested_sha must be one exact lowercase 40-character commit SHA" >&2
+            exit 1
+          fi
+          tested_sha=$(git rev-parse HEAD)
+          if [[ "$tested_sha" != "$RULEPILOT_RECOMMENDATION_TESTED_SHA" ]]; then
+            echo "The checked-out commit does not equal tested_sha" >&2
+            exit 1
+          fi
+          git fetch --no-tags origin '+refs/heads/main:refs/remotes/origin/main'
+          if ! git merge-base --is-ancestor "$tested_sha" origin/main; then
+            echo "tested_sha is not an ancestor of current origin/main" >&2
+            exit 1
+          fi
           if [[ "$RULEPILOT_RECOMMENDATION_ONLY" == true
             && -z "${RULEPILOT_RECOMMENDATION_EXPECTED_TITLE_TERM//[[:space:]]/}" ]]; then
             echo "recommendation_only requires a non-empty expected_title_term" >&2
+            exit 1
+          fi
+          case "$RULEPILOT_RECOMMENDATION_JOURNEY_MODE" in
+            ready_public|verified_import) ;;
+            *)
+              echo "journey_mode must be ready_public or verified_import" >&2
+              exit 1
+              ;;
+          esac
+          if [[ "$RULEPILOT_RECOMMENDATION_ONLY" != true
+            && "$RULEPILOT_RECOMMENDATION_JOURNEY_MODE" == ready_public
+            && "$RULEPILOT_RECOMMENDATION_REQUIRE_FRESH_IMPORT" == true ]]; then
+            echo "require_fresh_import is incompatible with journey_mode=ready_public" >&2
             exit 1
           fi
           ssh_options=(
@@ -120,17 +170,35 @@ jobs:
             -p "$DEPLOY_SSH_PORT"
           )
 
-          expected_sha=$(git rev-parse HEAD)
-          active_release=$(ssh "${ssh_options[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}" \
+          active_release_coordinates=$(ssh "${ssh_options[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}" \
             'bash -s' -- "$DEPLOY_PATH" <<'REMOTE'
           set -Eeuo pipefail
-          readlink -f "$1/current"
+          application_root=$(readlink -f "$1")
+          readlink -f "$application_root/current"
+          readlink -f "$application_root/releases"
           REMOTE
           )
-          case "${active_release##*/}" in
-            "$expected_sha"-*) ;;
-            *) echo "Production is not running the checked-out main commit" >&2; exit 1 ;;
-          esac
+          mapfile -t release_lines <<< "$active_release_coordinates"
+          active_release=${release_lines[0]:-}
+          releases_root=${release_lines[1]:-}
+          active_release_id=${active_release##*/}
+          if [[ -z "$active_release" || -z "$releases_root"
+            || "${active_release%/*}" != "$releases_root"
+            || ! "$active_release_id" =~ ^${tested_sha}-[0-9]+$ ]]; then
+            echo "Production current does not resolve to the exact tested release" >&2
+            exit 1
+          fi
+          active_release_sha=${active_release_id%%-*}
+          if [[ "$active_release_sha" != "$tested_sha" ]]; then
+            echo "Production active release SHA does not equal tested_sha" >&2
+            exit 1
+          fi
+          report_update="$artifact_dir/journey.active-release.json"
+          jq --arg activeReleaseSha "$active_release_sha" \
+            '.activeReleaseSha = $activeReleaseSha' "$artifact_dir/journey.json" > "$report_update"
+          mv "$report_update" "$artifact_dir/journey.json"
+          export RULEPILOT_RECOMMENDATION_ACTIVE_RELEASE_SHA="$active_release_sha"
+          printf 'RULEPILOT_RECOMMENDATION_ACTIVE_RELEASE_SHA=%s\n' "$active_release_sha" >> "$GITHUB_ENV"
 
           credentials=$(ssh "${ssh_options[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}" \
             'bash -s' -- "$DEPLOY_PATH" <<'REMOTE'
@@ -174,11 +242,46 @@ jobs:
             generatedAt,
             completed,
             stage,
+            testedSha,
+            activeReleaseSha,
+            journeyMode,
             recommendationOnly,
+            requireFreshImport,
             recommendationHarnessSafetyCategory,
             selectedBggId,
             selectedGameName,
             routeStayedOnDiscover,
+            opening: {
+              openGuidanceMs,
+              sloMs: 15000,
+              sloBasis: "UI_RENDER",
+              sloMet: .openGuidanceSloMet,
+              outcome: .openGuidanceOutcome,
+              terminalObserved: .openGuidanceTerminalObserved,
+              terminalObservedMs: .openGuidanceTerminalObservedMs,
+              terminalCategory: .openGuidanceTerminalCategory,
+              modelCalls: .openGuidanceModelCalls,
+              catalogCalls: .openGuidanceCatalogCalls,
+              failureBoundary: .openGuidanceFailureBoundary
+            },
+            readyTeaching: {
+              requested: .readyTeachingRequested,
+              availability: .readyTeachingAvailability,
+              readyCount: .readyTeachingReadyCount,
+              candidateCount: .readyTeachingCandidateCount,
+              renderedReadyCardCount: .renderedReadyTeachingCardCount,
+              guideOpened: .readyTeachingGuideOpened,
+              questionsRouteOpened: .readyTeachingQuestionsOpened,
+              failureCategory: .readyTeachingFailureCategory,
+              importRequestsAfterReadyOpen: .importRequestCount
+            },
+            publicLessonQa: {
+              requestSucceeded: .publicAnswerRequestSucceeded,
+              answerStatus,
+              citationCount: .answerCitationCount,
+              answerMs,
+              citedAnswer
+            },
             recommendationMs,
             recommendationElapsedBasis,
             recommendationOutcome,
@@ -187,6 +290,8 @@ jobs:
             expectedRecommendationTitleTerm,
             recommendationPublishedGames,
             recommendationCompletedWork,
+            recommendationModelProvider,
+            recommendationModel,
             recommendationModelCalls,
             recommendationCatalogCalls,
             recommendationWebResearchCalls,
@@ -194,6 +299,7 @@ jobs:
             recommendationFailureBoundary,
             rawModelOutputCaptured,
             importRequestCount,
+            importReused,
             sourceDomain,
             sourceMode,
             sourceLanguage,

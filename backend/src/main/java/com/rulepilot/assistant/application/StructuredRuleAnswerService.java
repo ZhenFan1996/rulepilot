@@ -318,6 +318,23 @@ public class StructuredRuleAnswerService implements RuleAnswering {
             String previousQuestion,
             PlayerLocale outputLanguage,
             RuleAnswering.PublicLearningIntent learningIntent) {
+        return answerForPublicReader(
+                documentVersionId,
+                question,
+                previousQuestion,
+                outputLanguage,
+                learningIntent,
+                null);
+    }
+
+    @Override
+    public RuleAnswering.AnswerResult answerForPublicReader(
+            UUID documentVersionId,
+            String question,
+            String previousQuestion,
+            PlayerLocale outputLanguage,
+            RuleAnswering.PublicLearningIntent learningIntent,
+            Set<Integer> allowedPublicPages) {
         PlayerLocale turnLanguage = PlayerLocale.forQuestion(question, outputLanguage);
         AnswerCreation creation = answerWithRun(
                 question,
@@ -325,7 +342,9 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                         documentVersionId,
                         previousQuestion,
                         learningIntent == null ? null : LearningIntent.valueOf(learningIntent.name()),
-                        turnLanguage),
+                        turnLanguage,
+                        null,
+                        allowedPublicPages),
                 "public-reader",
                 null);
         return AnswerOutcomePolicy.publicReaderAnswer(
@@ -464,15 +483,20 @@ public class StructuredRuleAnswerService implements RuleAnswering {
         if (interpretedQuestion.needsClarification()) {
             return AnswerOutcomePolicy.clarification(interpretedQuestion, context.outputLanguage());
         }
-        var confirmed = invocations.invoke(
-                assistantRunId,
-                ActivityType.TOOL,
-                "searchConfirmedRulings",
-                estimateTokens(interpretedQuestion.originalQuestion()),
-                "Confirmed ruling lookup completed",
-                () -> confirmedRulings.find(
-                        resolvedContext.documentVersionId(), Set.of(), interpretedQuestion.originalQuestion(), username),
-                result -> result.isPresent() ? 32 : 0);
+        var confirmed = resolvedContext.allowedEvidencePages() == null
+                ? invocations.invoke(
+                        assistantRunId,
+                        ActivityType.TOOL,
+                        "searchConfirmedRulings",
+                        estimateTokens(interpretedQuestion.originalQuestion()),
+                        "Confirmed ruling lookup completed",
+                        () -> confirmedRulings.find(
+                                resolvedContext.documentVersionId(),
+                                Set.of(),
+                                interpretedQuestion.originalQuestion(),
+                                username),
+                        result -> result.isPresent() ? 32 : 0)
+                : Optional.<com.rulepilot.ruling.ConfirmedRulingLookup.ConfirmedAnswer>empty();
         if (confirmed.isPresent()) {
             confirmedRulingHits.increment();
             return AnswerOutcomePolicy.confirmedRuling(confirmed.get());
@@ -493,7 +517,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                 AnswerRetrievalInputMapper.context(context),
                 username,
                 AnswerRetrievalInputMapper.plan(questionPlan));
-        if (evidenceRefiner != null) {
+        if (evidenceRefiner != null && context.allowedEvidencePages() == null) {
             retrievalResult = evidenceRefiner.refine(
                     assistantRunId,
                     interpretedQuestion,
@@ -611,10 +635,25 @@ public class StructuredRuleAnswerService implements RuleAnswering {
             return safe(context.documentVersionId(), reviewResult.failureStatus(), reviewResult.failureMessage());
         }
         answer = reviewResult.answer();
+        if (!withinAllowedEvidencePages(answer, context.allowedEvidencePages())) {
+            return safe(
+                    context.documentVersionId(),
+                    AnswerStatus.INSUFFICIENT_EVIDENCE,
+                    context.outputLanguage() == PlayerLocale.EN
+                            ? "The published lesson does not expose the rulebook pages needed for this answer."
+                            : "当前公开讲解未开放回答所需的规则书页，无法安全发布这条答疑。");
+        }
         if (cacheKey.isPresent()) {
             saveCached(cacheKey.get(), answer);
         }
         return answer;
+    }
+
+    private boolean withinAllowedEvidencePages(StructuredRuleAnswer answer, Set<Integer> allowedPages) {
+        if (allowedPages == null) return true;
+        return answer.citations().stream().allMatch(citation -> java.util.stream.IntStream
+                .rangeClosed(citation.pageFrom(), citation.pageTo())
+                .allMatch(allowedPages::contains));
     }
 
     /** Resolves the complete structured envelope once; unselected aids were already removed from the draft. */

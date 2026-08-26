@@ -10,7 +10,6 @@ import static com.rulepilot.recommendation.application.BoardGameRecommendationAg
 import static com.rulepilot.recommendation.application.BoardGameRecommendationAgent.REPLY_TOOL;
 import static com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RESEARCH_TOOL;
 import static com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RESOLVE_TOOL;
-import static com.rulepilot.recommendation.application.BoardGameRecommendationAgent.SEARCH_TOOL;
 import static com.rulepilot.recommendation.application.RecommendationAgentState.MAX_PLAYER_LEAD_CODE_POINTS;
 import static com.rulepilot.recommendation.application.RecommendationAgentState.MAX_VERIFIED_GAMES;
 import static com.rulepilot.recommendation.application.RecommendationReActLoop.MAX_REFERENCE_RESOLUTION_ATTEMPTS;
@@ -77,15 +76,17 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.function.BiConsumer;
+import java.util.function.Supplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-/** Implements the eleven allow-listed recommendation actions over application-owned tools. */
+/** Implements the ten allow-listed recommendation actions over application-owned tools. */
 final class RecommendationActions {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(BoardGameRecommendationAgent.class);
     private static final int MAX_PUBLISHER_DESCRIPTION_CONTEXT_CODE_POINTS = 800;
     private static final int MAX_LOCAL_CATALOG_SCAN_RESULTS = 20;
+    private static final long READY_TEACHING_LOOKUP_TIMEOUT_MILLIS = 1_000;
     private static final int MAX_LOCAL_CATALOG_SCAN_OFFSET = 200;
     private final BoardGameRecommendationTools tools;
     private final BoardGameRecommendationSelector selector;
@@ -124,7 +125,6 @@ final class RecommendationActions {
                 case IDENTITY_REPLY_TOOL -> identityReply(arguments, state, locale);
                 case ASK_TOOL -> ask(arguments, state, request, locale);
                 case RESOLVE_TOOL -> resolve(arguments, state, request, locale, progress);
-                case SEARCH_TOOL -> search(arguments, state, request, progress);
                 case BROWSE_TOOL -> browse(arguments, state, request, progress);
                 case DISCOVER_TOOL -> discover(arguments, state, request, locale, progress);
                 case LOOKUP_TOOL -> lookup(arguments, state, progress);
@@ -423,13 +423,23 @@ final class RecommendationActions {
         requireObject(
                 arguments,
                 Set.of("title", "purpose", "evidence"),
-                Set.of("alternateTitles", "playerReply"));
+                Set.of(
+                        "alternateTitles",
+                        "playerReply",
+                        "continuationGoal",
+                        "continuationEvidence",
+                        "learningGoal"));
         List<String> titles = referenceTitles(arguments);
         String evidenceId = referenceEvidence(arguments.path("evidence"));
         evidenceReview.requireUserEvidence(evidenceId, request);
         NamedGamePurpose purpose = enumValue(
                 NamedGamePurpose.class, arguments.path("purpose"), "NAMED_GAME_PURPOSE_INVALID");
         TargetCompletion completion = targetCompletion(arguments, purpose);
+        recordTeachingContinuation(
+                arguments,
+                state,
+                request,
+                purpose == NamedGamePurpose.TARGET_GAME);
         progress.accept(ProgressStage.READING_GAME_DETAILS, null);
         boolean reusedVerifiedReference = false;
         ReferenceObservation result = verifiedReference(titles, state)
@@ -515,6 +525,13 @@ final class RecommendationActions {
         int bggId = selected.ranking().bggId();
         if (state.excludedIds.contains(bggId)) throw new InvalidAction("FINAL_ID_EXCLUDED");
         commitReferenceOutcome(result, NamedGamePurpose.TARGET_GAME, reusedVerifiedReference, state);
+        if (state.teachingContinuationRequested) {
+            observeTeachingContinuations(
+                    state,
+                    BoardGameRecommendationTools.ToolName.LOOKUP_READY_TEACHING_CONTINUATIONS,
+                    List.of(selected),
+                    () -> tools.lookupReadyTeachingContinuations(List.of(selected)));
+        }
         state.finalResponseGameIds.add(bggId);
         progress.accept(ProgressStage.COMPOSING_RESPONSE, null);
         state.actions.add("RECOMMEND_GAMES");
@@ -530,7 +547,9 @@ final class RecommendationActions {
                         game.tradeoffs(),
                         game.reasons(),
                         game.claims(),
-                        List.of()))
+                        List.of(),
+                        RecommendationContinuationProjection.card(
+                                state.teachingContinuations.get(bggId))))
                 .toList();
         return ActionOutcome.terminalRead(response(
                 Outcome.RECOMMENDATIONS,
@@ -571,50 +590,76 @@ final class RecommendationActions {
                 .toLowerCase(Locale.ROOT);
     }
 
-    private ActionOutcome search(
+    private void recordTeachingContinuation(
             JsonNode arguments,
             RecommendationAgentState state,
             ConversationRequest request,
-            BiConsumer<ProgressStage, ProgressFocus> progress) {
-        requireObject(
-                arguments,
-                Set.of("titles"),
-                Set.of(
-                        "preferenceUpdates",
-                        "candidateUse",
-                        "requestedCount",
-                        "requestedCountEvidence",
-                        "playerLead"));
-        PreferenceUpdatePlan preferencePlan =
-                evidenceReview.planPreferenceUpdates(arguments, state.profile, request);
-        List<String> titles = strings(arguments.path("titles"), 1, 8, 2, 120);
-        CandidateUse use = candidateUse(arguments, CandidateUse.PUBLISH_CARDS, true);
-        int requestedCount = publicationCount(arguments, request);
-        progress.accept(
-                ProgressStage.SEARCHING_BGG_CATALOG,
-                new ProgressFocus(ProgressFocusKind.CANDIDATE_TITLE_COUNT, List.of(Integer.toString(titles.size()))));
-        state.catalogCalls += 2;
-        CatalogObservation result = runtime.withinDeadline(state, () -> tools.inspectTitles(titles));
-        String observation = runtime.observation(Map.of(
-                "status", result.succeeded() ? "SUCCESS" : "ERROR",
-                "code", result.code(),
-                "guidance", result.games().isEmpty()
-                        ? "The one bounded title-inspection attempt returned no match and is now complete. Use public discovery when available, make one broad catalog browse, ask only if needed, or respond transparently; do not inspect titles again in this run."
-                        : "Title identity and bounded BGG details are already verified. Do not look them up again; compare turnState and finish when the slate is useful.",
-                "verifiedBggIds", result.games().stream().map(game -> game.ranking().bggId()).toList()));
-        evidenceReview.commitPreferenceUpdates(preferencePlan, state);
-        state.titleInspectionAttempted = true;
-        state.actions.add("SEARCH_BGG_BY_NAME");
-        state.actions.add("LOOKUP_BGG_CANDIDATES");
-        state.sourceCount = Math.max(state.sourceCount, result.sourceCount());
-        result.games().forEach(state::addVerified);
-        return candidateObservation(
-                observation,
-                state,
-                result.games(),
-                use,
-                requestedCount,
-                playerLead(arguments));
+            boolean allowedForAction) {
+        boolean declared = arguments.has("continuationGoal")
+                || arguments.has("continuationEvidence")
+                || arguments.has("learningGoal");
+        if (!declared) return;
+        if (!allowedForAction) {
+            throw new InvalidAction("TEACHING_CONTINUATION_TARGET_REQUIRED");
+        }
+        if (!arguments.has("continuationGoal") || !arguments.has("continuationEvidence")) {
+            throw new InvalidAction("TEACHING_CONTINUATION_EVIDENCE_REQUIRED");
+        }
+        enumValue(
+                TeachingContinuationGoal.class,
+                arguments.path("continuationGoal"),
+                "TEACHING_CONTINUATION_GOAL_INVALID");
+        String evidenceId = text(arguments.path("continuationEvidence"), 1, 32);
+        evidenceReview.requireUserEvidence(evidenceId, request);
+        String learningGoal = arguments.has("learningGoal")
+                ? text(arguments.path("learningGoal"), 1, 400)
+                : "";
+        if (state.teachingContinuationRequested
+                && !Objects.equals(state.teachingLearningGoal, learningGoal)) {
+            throw new InvalidAction("TEACHING_CONTINUATION_CONFLICT");
+        }
+        state.teachingContinuationRequested = true;
+        state.teachingLearningGoal = learningGoal;
+        state.actions.add("TEACHING_CONTINUATION_REQUESTED");
+    }
+
+    private CatalogObservation observeTeachingContinuations(
+            RecommendationAgentState state,
+            BoardGameRecommendationTools.ToolName toolName,
+            List<Game> scope,
+            Supplier<CatalogObservation> lookup) {
+        List<Integer> scopeIds = scope.stream()
+                .map(game -> game.ranking().bggId())
+                .distinct()
+                .toList();
+        state.catalogCalls++;
+        CatalogObservation result;
+        try {
+            result = runtime.withinOptionalDeadline(
+                    state,
+                    READY_TEACHING_LOOKUP_TIMEOUT_MILLIS,
+                    lookup);
+        } catch (RecommendationReActLoop.OptionalCapabilityTimeout timeout) {
+            result = CatalogObservation.error(toolName, "READY_TEACHING_CATALOG_TIMEOUT");
+        }
+        boolean hasReadyContinuation = false;
+        if (result.succeeded()) {
+            hasReadyContinuation = state.recordSuccessfulTeachingContinuationLookup(
+                    scopeIds, result.teachingContinuations());
+        } else if (result.status() == BoardGameRecommendationTools.ToolStatus.PARTIAL) {
+            hasReadyContinuation = state.recordPartialTeachingContinuationLookup(
+                    scopeIds, result.teachingContinuations());
+        } else {
+            state.recordUnavailableTeachingContinuationLookup(scopeIds);
+        }
+        boolean usableLookup = result.succeeded()
+                || result.status() == BoardGameRecommendationTools.ToolStatus.PARTIAL;
+        state.actions.add(usableLookup
+                ? hasReadyContinuation
+                        ? "TEACHING_CONTINUATION_READY"
+                        : "TEACHING_CONTINUATION_NOT_FOUND"
+                : "TEACHING_CONTINUATION_LOOKUP_UNAVAILABLE");
+        return result;
     }
 
     private ActionOutcome browse(
@@ -642,6 +687,9 @@ final class RecommendationActions {
                         "limit",
                         "requestedCount",
                         "requestedCountEvidence",
+                        "continuationGoal",
+                        "continuationEvidence",
+                        "learningGoal",
                         "playerLead",
                         "offset",
                         "preferenceUpdates",
@@ -715,6 +763,8 @@ final class RecommendationActions {
                 ? integer(arguments.path("limit"), 1, MAX_VERIFIED_GAMES, "LIMIT_OUT_OF_RANGE")
                 : Math.min(properties.modelCandidateLimit(), MAX_VERIFIED_GAMES);
         int publicationCount = publicationCount(arguments, request);
+        recordTeachingContinuation(arguments, state, request, true);
+        boolean continuationRequested = state.teachingContinuationRequested;
         int eligibilityLimit = use == CandidateUse.CONTINUE_REACT
                 ? limit
                 : Math.max(limit, publicationCount);
@@ -731,6 +781,9 @@ final class RecommendationActions {
         int catalogLimit = use == CandidateUse.CONTINUE_REACT
                 ? boundedPlanningWindow
                 : MAX_LOCAL_CATALOG_SCAN_RESULTS;
+        int selectionLimit = continuationRequested
+                ? MAX_LOCAL_CATALOG_SCAN_RESULTS
+                : eligibilityLimit;
         progress.accept(
                 ProgressStage.SEARCHING_BGG_CATALOG,
                 browseFocus(categories, mechanics, designers, publishers, families));
@@ -743,7 +796,7 @@ final class RecommendationActions {
         int scannedPages = 0;
         boolean scanBudgetReached = false;
         boolean completedCatalogPage = false;
-        while (true) {
+        while (eligible.size() < eligibilityLimit) {
             state.catalogCalls++;
             CatalogObservation page;
             try {
@@ -783,7 +836,7 @@ final class RecommendationActions {
                     scannedGames,
                     preferencePlan.profile(),
                     unavailableCandidateIds,
-                    eligibilityLimit);
+                    selectionLimit);
             if (use == CandidateUse.CONTINUE_REACT
                     || purpose == DiscoveryPurpose.IDENTITY_ONLY
                     || eligible.size() >= eligibilityLimit
@@ -800,6 +853,21 @@ final class RecommendationActions {
             pageOffset += catalogLimit;
         }
         CatalogObservation terminalResult = Objects.requireNonNull(result, "catalog scan must complete one page");
+        if (continuationRequested && !eligible.isEmpty()) {
+            List<Game> candidatePool = eligible;
+            observeTeachingContinuations(
+                    state,
+                    BoardGameRecommendationTools.ToolName.LOOKUP_READY_TEACHING_CONTINUATIONS,
+                    candidatePool,
+                    () -> tools.lookupReadyTeachingContinuations(candidatePool));
+            eligible = java.util.stream.Stream.concat(
+                            candidatePool.stream().filter(game -> state.teachingContinuations.containsKey(
+                                    game.ranking().bggId())),
+                            candidatePool.stream().filter(game -> !state.teachingContinuations.containsKey(
+                                    game.ranking().bggId())))
+                    .limit(eligibilityLimit)
+                    .toList();
+        }
         List<String> verifiedIdentityNames = purpose == DiscoveryPurpose.IDENTITY_ONLY && !designers.isEmpty()
                 ? result.games().stream()
                     .filter(game -> game.details() != null)
@@ -841,6 +909,11 @@ final class RecommendationActions {
                                 : "This exact BGG filter query produced no hard-gate-eligible game. If its filters came from a metaphor, mood, or subjective wish rather than literal player-supplied BGG labels, remove all of those inferred filters and browse one varied slate now. Otherwise use materially different verified filters, another capability, or finish transparently; never repeat the same query or guess titles."
                         : "These games match the supplied BGG filters and their listed observations are verified. Finish when the slate is useful, or make one materially different structured query only when the open request still needs it.",
                 "appliedFilters", appliedFilters,
+                "teachingContinuationRequested", continuationRequested,
+                "readyTeachingBggIds", eligible.stream()
+                        .map(game -> game.ranking().bggId())
+                        .filter(state.teachingContinuations::containsKey)
+                        .toList(),
                 "verifiedBggIds", eligible.stream().map(game -> game.ranking().bggId()).toList()));
         evidenceReview.commitPreferenceUpdates(preferencePlan, state);
         state.catalogBrowseAttempted = true;
@@ -1304,7 +1377,8 @@ final class RecommendationActions {
                 games,
                 state.comparison,
                 shortfall,
-                recommendationLead);
+                recommendationLead,
+                RecommendationContinuationProjection.response(state, games));
         return response;
     }
 
@@ -1768,6 +1842,10 @@ final class RecommendationActions {
     private enum AfterIdentity {
         REPLY_WITH_IDENTITY,
         RECOMMEND_WITH_CARDS
+    }
+
+    private enum TeachingContinuationGoal {
+        GUIDE_AND_RULE_QA
     }
 
     static final class InvalidAction extends RuntimeException {

@@ -70,6 +70,7 @@ describe('GameRecommendationAgent', () => {
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)
     const wrapper = await mountAgent({}, { sessionIdentity: '' })
+    expect(wrapper.get('[data-testid="recommendation-conversation"]').attributes('aria-live')).toBeUndefined()
     const detailedDraft = '4 个人，想玩 60 分钟内、全程都有参与感的游戏；还要保留这一条完整偏好。'.repeat(700)
 
     await wrapper.get('textarea').setValue(detailedDraft)
@@ -199,6 +200,55 @@ describe('GameRecommendationAgent', () => {
     expect(turn.findAll('dt').filter(label => label.text() === '需要留意')).toHaveLength(1)
   })
 
+  it('explains the exact continuation boundary and exposes the ready guide without importing again', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      if (String(input) === '/api/auth/csrf') {
+        return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      }
+      return Response.json({
+        outcome: 'recommendations',
+        assistantMessage: '先看这两款；已有讲解的候选排在前面。',
+        profile: baseProfile,
+        clarification: null,
+        sourceCount: 179737,
+        candidatesEvaluated: 2,
+        continuation: {
+          kind: 'guide_and_rule_qa',
+          learningGoal: '先讲设置，再答第一轮问题。',
+          availability: 'available_for_some',
+          readyCount: 1,
+          candidateCount: 2,
+        },
+        games: [{
+          game,
+          matches: [],
+          tradeoffs: [],
+          teachingContinuation: {
+            teachingPlanId: 'plan-ready',
+            sectionCount: 4,
+            stepCount: 12,
+          },
+        }, {
+          game: { ...game, bggId: 902, name: '另一个候选', originalName: 'Another Candidate' },
+          matches: [],
+          tradeoffs: [],
+        }],
+      })
+    }))
+    const wrapper = await mountAgent()
+
+    await wrapper.get('textarea').setValue('推荐两款，选好后继续讲解和答疑。')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="recommendation-continuation-notice"]').text())
+      .toContain('自动查找停下时，可以提供公开链接或自己的规则书')
+    expect(wrapper.get('a[data-testid="open-ready-teaching"]').attributes('href'))
+      .toBe('/read/plan-ready')
+    expect(wrapper.findAll('button').filter(button => button.text() === '选这款，找规则书'))
+      .toHaveLength(1)
+  })
+
   it('restores an account-scoped transcript, preferences, and verified candidate names after route remount', async () => {
     const fetchMock = vi.fn(async (input: string | URL | Request, _init?: RequestInit) => {
       if (String(input) === '/api/auth/csrf') {
@@ -303,6 +353,107 @@ describe('GameRecommendationAgent', () => {
     expect(restored.get('[data-testid="player-journey-dock"]').text()).toContain('打开进度')
   })
 
+  it('restores the typed learning goal for a non-ready game handoff after remount', async () => {
+    const learningGoal = '先讲清设置与第一轮，再进入引用答疑。'
+    const HandoffStub = defineComponent({
+      name: 'RecommendationRulebookHandoff',
+      props: { learningGoal: { type: String, default: null } },
+      template: '<div data-testid="handoff-learning-goal">{{ learningGoal ?? "none" }}</div>',
+    })
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const path = String(input)
+      if (path === '/api/v1/bgg/recommendation-agent/session') return new Response(null, { status: 204 })
+      if (path === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      return Response.json({
+        outcome: 'recommendations', mode: 'model_assisted', assistantMessage: '先从这款开始。',
+        profile: baseProfile, clarification: null, sourceCount: 179737, candidatesEvaluated: 1,
+        continuation: {
+          kind: 'guide_and_rule_qa',
+          learningGoal,
+          availability: 'no_ready_candidate',
+          readyCount: 0,
+          candidateCount: 1,
+        },
+        games: [{ game, matches: [], tradeoffs: [] }],
+      })
+    }))
+
+    const wrapper = await mountAgent({ RecommendationRulebookHandoff: HandoffStub }, { sessionIdentity: 'alice' })
+    await flushPromises()
+    await wrapper.get('textarea').setValue('选好后先讲设置，再继续答疑。')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    await wrapper.findAll('button').find(button => button.text() === '选这款，找规则书')!.trigger('click')
+    await flushPromises()
+
+    expect(JSON.parse(sessionStorage.getItem('rulepilot:recommendation-journeys:v2:alice') ?? 'null'))
+      .toMatchObject({ version: 2, entries: [{ game: { bggId: game.bggId }, learningGoal }] })
+    wrapper.unmount()
+
+    const restored = await mountAgent({ RecommendationRulebookHandoff: HandoffStub }, { sessionIdentity: 'alice' })
+    await flushPromises()
+    await restored.get('[data-testid="player-journey-dock"]').trigger('click')
+    await flushPromises()
+
+    expect(document.body.querySelector('[data-testid="handoff-learning-goal"]')?.textContent)
+      .toBe(learningGoal)
+  })
+
+  it('migrates a legacy v1 journey without inventing a learning goal', async () => {
+    const HandoffStub = defineComponent({
+      name: 'RecommendationRulebookHandoff',
+      props: { learningGoal: { type: String, default: null } },
+      template: '<div data-testid="handoff-learning-goal">{{ learningGoal ?? "none" }}</div>',
+    })
+    sessionStorage.setItem('rulepilot:recommendation-journeys:v1:alice', JSON.stringify([game]))
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      if (String(input) === '/api/v1/bgg/recommendation-agent/session') return new Response(null, { status: 204 })
+      return new Response(null, { status: 404 })
+    }))
+
+    const wrapper = await mountAgent({ RecommendationRulebookHandoff: HandoffStub }, { sessionIdentity: 'alice' })
+    await flushPromises()
+    await wrapper.get('[data-testid="player-journey-dock"]').trigger('click')
+    await flushPromises()
+
+    expect(document.body.querySelector('[data-testid="handoff-learning-goal"]')?.textContent).toBe('none')
+    expect(JSON.parse(sessionStorage.getItem('rulepilot:recommendation-journeys:v2:alice') ?? 'null'))
+      .toMatchObject({ version: 2, entries: [{ game: { bggId: game.bggId }, learningGoal: null }] })
+    expect(sessionStorage.getItem('rulepilot:recommendation-journeys:v1:alice')).toBeNull()
+  })
+
+  it('keeps typed learning goals isolated between game journeys', async () => {
+    const HandoffStub = defineComponent({
+      name: 'RecommendationRulebookHandoff',
+      props: { learningGoal: { type: String, default: null } },
+      template: '<div data-testid="handoff-learning-goal">{{ learningGoal ?? "none" }}</div>',
+    })
+    sessionStorage.setItem('rulepilot:recommendation-journeys:v2:alice', JSON.stringify({
+      version: 2,
+      entries: [
+        { game, learningGoal: '先讲鸟类行动与食物。' },
+        { game: secondGame, learningGoal: '先讲动物园地图与协会行动。' },
+      ],
+    }))
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      if (String(input) === '/api/v1/bgg/recommendation-agent/session') return new Response(null, { status: 204 })
+      return new Response(null, { status: 404 })
+    }))
+
+    const wrapper = await mountAgent({ RecommendationRulebookHandoff: HandoffStub }, { sessionIdentity: 'alice' })
+    await flushPromises()
+    const journeyDocks = wrapper.findAll('[data-testid="player-journey-dock"]')
+    await journeyDocks[0]!.trigger('click')
+    await flushPromises()
+    expect(document.body.querySelector('[data-testid="handoff-learning-goal"]')?.textContent)
+      .toBe('先讲鸟类行动与食物。')
+
+    await journeyDocks[1]!.trigger('click')
+    await flushPromises()
+    expect(document.body.querySelector('[data-testid="handoff-learning-goal"]')?.textContent)
+      .toBe('先讲动物园地图与协会行动。')
+  })
+
   it('keeps independent journey cards in the chat when the player starts another game', async () => {
     sessionStorage.setItem(
       'rulepilot:recommendation-journeys:v1:alice',
@@ -322,6 +473,8 @@ describe('GameRecommendationAgent', () => {
     expect(cards).toHaveLength(2)
     expect(cards[0]!.text()).toContain('展翅翱翔')
     expect(cards[1]!.text()).toContain('方舟动物园')
+    expect(cards[0]!.text()).toContain('正在确认《展翅翱翔》的准备状态')
+    expect(cards[0]!.text()).not.toContain('5%')
 
     await cards[0]!.get('[data-testid="player-journey-dock"]').trigger('click')
     await flushPromises()
@@ -1826,7 +1979,8 @@ describe('GameRecommendationAgent', () => {
 
     expect(fetchMock).toHaveBeenCalledWith('/api/v1/bgg/games/266192/import', expect.objectContaining({ method: 'POST' }))
     expect(document.body.textContent).toContain('已选《展翅翱翔》')
-    expect(document.body.textContent).toContain('仍可粘贴公开 PDF 链接或上传自己的规则书')
+    expect(document.body.textContent).toContain('自动查找已停下')
+    expect(document.body.textContent).toContain('可以提供公开 PDF / 规则页链接或上传自己的规则书')
     expect(document.body.querySelector('[data-testid="player-journey-surface"]')?.getAttribute('style'))
       .toContain('opacity: 1')
 
@@ -1840,6 +1994,8 @@ describe('GameRecommendationAgent', () => {
       .toBe(chatWorkspace.element)
     const journeyDock = wrapper.get('[data-testid="player-journey-dock"]')
     expect(journeyDock.text()).toContain('展翅翱翔')
+    expect(journeyDock.text()).not.toContain('5%')
+    expect(journeyDock.text()).not.toContain('null%')
     expect(document.activeElement).toBe(selectButton.element)
     const bindingCallsBeforeReopen = fetchMock.mock.calls
       .filter(([input]) => String(input) === '/api/v1/bgg/games/266192/import').length

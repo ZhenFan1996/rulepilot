@@ -55,11 +55,21 @@ test('E2E CI cannot regress to the deprecated Node 20 artifact action', () => {
   assert.doesNotMatch(ciWorkflow, /uses:\s*actions\/upload-artifact@v[1-5]\b/)
 })
 
-test('production recommendation journey tests the deployed main release without exposing its player credential', () => {
-  assert.match(productionRecommendationWorkflow, /uses:\s*actions\/checkout@v6[\s\S]*?ref:\s*main/)
+test('production recommendation journey tests one exact deployed main-ancestry release without exposing its player credential', () => {
+  assert.match(productionRecommendationWorkflow,
+    /tested_sha:[\s\S]*?required: true[\s\S]*?type: string/)
+  assert.match(productionRecommendationWorkflow,
+    /uses:\s*actions\/checkout@v6[\s\S]*?ref:\s*\$\{\{ inputs\.tested_sha \}\}[\s\S]*?fetch-depth:\s*0/)
   assert.match(productionRecommendationWorkflow, /environment:\s*\n\s+name:\s*production/)
-  assert.match(productionRecommendationWorkflow, /expected_sha=\$\(git rev-parse HEAD\)/)
-  assert.match(productionRecommendationWorkflow, /"\$expected_sha"-\*\)/)
+  assert.match(productionRecommendationWorkflow, /tested_sha=\$\(git rev-parse HEAD\)/)
+  assert.match(productionRecommendationWorkflow,
+    /git fetch --no-tags origin '\+refs\/heads\/main:refs\/remotes\/origin\/main'/)
+  assert.match(productionRecommendationWorkflow, /git merge-base --is-ancestor "\$tested_sha" origin\/main/)
+  assert.match(productionRecommendationWorkflow,
+    /"\$\{active_release%\/\*\}" != "\$releases_root"/)
+  assert.match(productionRecommendationWorkflow,
+    /"\$active_release_id" =~ \^\$\{tested_sha\}-\[0-9\]\+\$/)
+  assert.match(productionRecommendationWorkflow, /"\$active_release_sha" != "\$tested_sha"/)
   assert.match(productionRecommendationWorkflow, /::add-mask::\$player_username/)
   assert.match(productionRecommendationWorkflow, /::add-mask::\$player_password/)
   assert.match(productionRecommendationWorkflow, /RULEPILOT_PRODUCTION_RECOMMENDATION_JOURNEY=true/)
@@ -73,6 +83,10 @@ test('production recommendation journey tests the deployed main release without 
   assert.match(productionRecommendationWorkflow,
     /RULEPILOT_RECOMMENDATION_RULE_FOLLOW_UP: \$\{\{ inputs\.rule_follow_up \}\}/)
   assert.doesNotMatch(productionRecommendationWorkflow, /target_bgg_id|target_names|230802|花砖物语|Azul/)
+  assert.match(productionRecommendationWorkflow,
+    /journey_mode:[\s\S]*?type: choice[\s\S]*?default: ready_public[\s\S]*?- ready_public[\s\S]*?- verified_import/)
+  assert.match(productionRecommendationWorkflow,
+    /RULEPILOT_RECOMMENDATION_JOURNEY_MODE: \$\{\{ inputs\.journey_mode \}\}/)
   assert.match(productionRecommendationWorkflow, /require_fresh_import:[\s\S]*?type: boolean[\s\S]*?default: false/)
   assert.match(productionRecommendationWorkflow, /recommendation_only:[\s\S]*?type: boolean[\s\S]*?default: false/)
   assert.match(productionRecommendationWorkflow,
@@ -127,6 +141,16 @@ test('production recommendation journey tests the deployed main release without 
   assert.match(productionRecommendationSpec, /MAX_SELECTION_TERMINAL_OBSERVATION_MS = 35_000/)
   assert.match(productionRecommendationSpec, /toContain\(report\.openGuidanceOutcome\)/)
   assert.match(productionRecommendationSpec, /RULEPILOT_RECOMMENDATION_ONLY === 'true'/)
+  assert.match(productionRecommendationSpec,
+    /type RecommendationJourneyMode = 'ready_public' \| 'verified_import'/)
+  assert.match(productionRecommendationSpec,
+    /const REQUIRE_READY_TEACHING = JOURNEY_MODE === 'ready_public'/)
+  assert.match(productionRecommendationSpec, /READY_PUBLIC_TEACHING_NO_IMPORT/)
+  assert.match(productionRecommendationSpec, /VERIFIED_RULEBOOK_JOURNEY_IMPORT_OR_REUSE/)
+  assert.match(productionRecommendationSpec, /READY_TEACHING_NO_CANDIDATE/)
+  assert.match(productionRecommendationSpec, /READY_TEACHING_AVAILABILITY_UNAVAILABLE/)
+  assert.match(productionRecommendationWorkflow,
+    /require_fresh_import is incompatible with journey_mode=ready_public/)
   assert.match(productionRecommendationSpec, /waitForPersistedRecommendationTerminal\(/)
   assert.match(productionRecommendationSpec, /selectionBaselineRevision = guidanceSession\.revision/)
   assert.match(productionRecommendationSpec, /latestResponse\.clientTurnId !== expectedClientTurnId/)
@@ -135,6 +159,13 @@ test('production recommendation journey tests the deployed main release without 
   assert.match(productionRecommendationSpec, /recommendationModelCalls/)
   assert.match(productionRecommendationSpec, /recommendationFailureBoundary/)
   assert.match(productionRecommendationSpec, /rawModelOutputCaptured: false/)
+  assert.match(productionRecommendationSpec, /expectReadableCitationImage\(/)
+  assert.match(productionRecommendationSpec, /response\.headers\(\)\['content-type'\]/)
+  assert.match(productionRecommendationSpec, /response\.body\(\)/)
+  assert.match(productionRecommendationSpec,
+    /for \(const \[index, candidate\] of readyGames\.entries\(\)\)/)
+  assert.match(productionRecommendationSpec, /renderedRecommendationAnswerTurnCount\(answerWorkspace\)/)
+  assert.match(productionRecommendationSpec, /persistedFollowUp!\.answer/)
   assert.match(productionRecommendationSpec,
     /toBe\('RECOMMENDATIONS_WITHIN_INTERACTION_BUDGET'\)/)
   assert.match(productionRecommendationSpec, /finalResult\?\.outcome[\s\S]*?toBe\('recommendations'\)/)
@@ -233,6 +264,11 @@ test('public production recommendation artifacts contain only sanitized journey 
   assert.match(productionRecommendationWorkflow,
     /path: \.artifacts\/production-recommendation-journey\/public-summary\.json/)
   assert.match(publicSummaryStep, /jq '\{/)
+  assert.match(publicSummaryStep, /journeyMode/)
+  assert.match(publicSummaryStep, /testedSha/)
+  assert.match(publicSummaryStep, /activeReleaseSha/)
+  assert.match(publicSummaryStep, /requireFreshImport/)
+  assert.match(publicSummaryStep, /importReused/)
   assert.match(publicSummaryStep, /recommendationPublishedGames/)
   assert.doesNotMatch(publicSummaryStep,
     /recommendationConversationId|modelAssignments|sourceUrl|lessonDockText|teachingPlanId|answerSessionId|TurnId|ErrorCode/)
@@ -318,20 +354,28 @@ test('production deployment synchronizes the protected BGG credential without pa
   assert.doesNotMatch(deploymentWorkflow, /'bash -s' -- "\$DEPLOY_PATH" "\$BGG_API_TOKEN"/)
 })
 
-test('production deployment assigns every player-facing Agent role to a configured vision-capable runtime', () => {
+test('production deployment configures every Agent role and probes only the roles required by the selected journey', () => {
   assert.match(deploymentWorkflow, /'TEACHING_PROVIDER=spring-ai'/)
   assert.match(deploymentWorkflow, /'TEACHING_MODEL_PROVIDER=deepseek'/)
   assert.match(deploymentWorkflow, /'VISUAL_PROVIDER=spring-ai'/)
   assert.match(deploymentWorkflow, /'VISUAL_MODEL_PROVIDER=qwen'/)
   assert.match(deploymentWorkflow, /'ANSWER_PROVIDER=spring-ai'/)
   assert.match(deploymentWorkflow, /'ANSWER_MODEL_PROVIDER=qwen'/)
+  assert.match(deploymentWorkflow, /'BGG_RECOMMENDATION_MODEL_PROVIDER=deepseek'/)
   assert.match(deploymentWorkflow, /'QWEN_VISION_CAPABLE=true'/)
   assert.match(deploymentWorkflow, /qwen_enabled.*qwen_key_present/s)
-  assert.match(productionRecommendationSpec, /configuredProductionRole\(modelConfiguration, 'recommendation'\)/)
-  assert.match(productionRecommendationSpec, /configuredProductionRole\(modelConfiguration, 'teaching'\)/)
-  assert.match(productionRecommendationSpec, /configuredProductionRole\(modelConfiguration, 'visual'\)/)
-  assert.match(productionRecommendationSpec, /configuredProductionRole\(modelConfiguration, 'answer'\)/)
-  assert.match(productionRecommendationSpec, /visualProvider\.visionCapable/)
+  assert.match(productionRecommendationSpec,
+    /requiredProductionModelRoles\('ready_public', false\)[\s\S]*?\['recommendation', 'answer'\]/)
+  assert.match(productionRecommendationSpec,
+    /requiredProductionModelRoles\('verified_import', false\)[\s\S]*?\['recommendation', 'teaching', 'visual', 'answer'\]/)
+  assert.match(productionRecommendationSpec,
+    /for \(const role of requiredProductionModelRoles\(JOURNEY_MODE, RECOMMENDATION_ONLY\)\)/)
+  assert.match(productionRecommendationSpec, /configuredProductionRole\(modelConfiguration, role\)/)
+  assert.match(productionRecommendationSpec,
+    /recommendationProvider\.id[\s\S]*?toBe\('deepseek'\)/)
+  assert.match(productionRecommendationSpec,
+    /recommendationProvider\.model[\s\S]*?toBe\('deepseek-v4-flash'\)/)
+  assert.match(productionRecommendationSpec, /if \(role === 'visual'\)[\s\S]*?provider\.visionCapable/)
 })
 
 test('production deployment replaces stale recommendation sampling overrides with the verified deterministic value', () => {
@@ -384,11 +428,17 @@ test('production deployment does not couple release availability to a stochastic
 })
 
 test('production deployment failure output includes service status but not application logs', () => {
+  const deploymentCommands = deploymentWorkflow.replace(/\\\r?\n\s*/g, ' ')
   assert.match(deploymentWorkflow, /name: Collect production service status after a failed verification/)
   assert.match(deploymentWorkflow, /if: failure\(\)/)
   assert.match(deploymentWorkflow, /ps api worker frontend gateway/)
   assert.match(deploymentWorkflow, /Refusing to inspect an active release outside/)
-  assert.doesNotMatch(deploymentWorkflow, /docker compose[^\n]*logs|logs --since/)
+  assert.match(deploymentWorkflow, /status=\{\{\.State\.Status\}\}/)
+  assert.match(deploymentWorkflow, /exit=\{\{\.State\.ExitCode\}\}/)
+  assert.match(deploymentWorkflow, /health=\{\{if \.State\.Health\}\}\{\{\.State\.Health\.Status\}\}/)
+  assert.doesNotMatch(deploymentCommands, /\bdocker\b[^\n]*\blogs\b/)
+  assert.doesNotMatch(deploymentWorkflow, /Recent (?:API|PostgreSQL) logs/)
+  assert.doesNotMatch(deploymentWorkflow, /\{\{json \.State\}\}/)
   assert.doesNotMatch(deploymentWorkflow, /(?:cat|sed|grep|rg) [^\n]*\.env/)
 })
 

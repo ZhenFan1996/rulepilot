@@ -67,5 +67,13 @@ public interface CatalogRepository {
         return Map.copyOf(result);
     }
 
+    default Map<UUID, Integer> findBggIdsByEditions(Collection<UUID> editionIds) {
+        if (editionIds == null || editionIds.isEmpty()) return Map.of();
+        var result = new java.util.LinkedHashMap<UUID, Integer>();
+        editionIds.stream().distinct().forEach(editionId -> findEdition(editionId).ifPresent(edition ->
+                findBggMetadata(edition.gameId()).ifPresent(metadata -> result.put(editionId, metadata.bggId()))));
+        return Map.copyOf(result);
+    }
+
     Map<UUID, Cover> findCoversByEditions(Collection<UUID> editionIds);
 }

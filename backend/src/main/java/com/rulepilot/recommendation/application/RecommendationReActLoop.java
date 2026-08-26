@@ -11,7 +11,6 @@ import static com.rulepilot.recommendation.application.BoardGameRecommendationAg
 import static com.rulepilot.recommendation.application.BoardGameRecommendationAgent.REPLY_TOOL;
 import static com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RESEARCH_TOOL;
 import static com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RESOLVE_TOOL;
-import static com.rulepilot.recommendation.application.BoardGameRecommendationAgent.SEARCH_TOOL;
 import static com.rulepilot.recommendation.application.RecommendationAgentState.MAX_VERIFIED_GAMES;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -73,8 +72,11 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.FutureTask;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 import org.slf4j.Logger;
@@ -88,13 +90,14 @@ final class RecommendationReActLoop {
     private static final int MAX_ACTION_CALLS = 6;
     private static final int ACTION_SELECTION_OUTPUT_TOKENS = 512;
     private static final int EVIDENCE_RESPONSE_OUTPUT_TOKENS = 1_536;
-    private static final String CANDIDATE_USE_SCHEMA = "{\"type\":\"string\",\"description\":\"PUBLISH_CARDS opens the grounded natural publication immediately after a useful slate. RESEARCH_THEN_PUBLISH allows exactly one current player-experience research read first. CONTINUE_REACT keeps planning when this read is only an identity carrier or cannot yet answer the full request.\",\"enum\":[\"PUBLISH_CARDS\",\"RESEARCH_THEN_PUBLISH\",\"CONTINUE_REACT\"]}";
-    private static final String REQUESTED_COUNT_SCHEMA = "{\"type\":\"integer\",\"description\":\"Final card count. Use the exact explicit N from the complete current turn, never the visible candidate-pool size. When no count was requested, copy defaultRecommendationCount from the structured input. This is independent from retrieval limit.\",\"minimum\":1,\"maximum\":8}";
-    private static final String PLAYER_LEAD_SCHEMA = "{\"type\":\"string\",\"description\":\"A complete, locale-matched two-sentence orientation shown unchanged above the cards: first restate the player's actual decision boundary, then explain how the card-level fit and tradeoff notes below help them choose. Keep it conversational, avoid generic praise such as popular or well reviewed, and make no title-specific factual, experiential, rules, identity, or ranking claim; the application adds all evidence-backed card reasons and boundaries. Never mention tools, schemas, internal IDs, validation, or workflow.\",\"minLength\":1,\"maxLength\":480}";
+    private static final int MAX_CONCURRENT_OPTIONAL_CALLS = 4;
+    private static final long OPTIONAL_PUBLICATION_TAIL_MILLIS = 100;
+    private static final String CANDIDATE_USE_SCHEMA = "{\"type\":\"string\",\"description\":\"Publish a useful verified slate now, optionally research it once first, or continue only when it is still context.\",\"enum\":[\"PUBLISH_CARDS\",\"RESEARCH_THEN_PUBLISH\",\"CONTINUE_REACT\"]}";
+    private static final String REQUESTED_COUNT_SCHEMA = "{\"type\":\"integer\",\"description\":\"Exact requested final-card count, or defaultRecommendationCount when unstated.\",\"minimum\":1,\"maximum\":8}";
+    private static final String PLAYER_LEAD_SCHEMA = "{\"type\":\"string\",\"description\":\"Two natural locale-matched sentences: the decision boundary, then how the grounded card notes help. No title facts or workflow.\",\"minLength\":1,\"maxLength\":480}";
     static final int MAX_REFERENCE_RESOLUTION_ATTEMPTS = 2;
     private static final Set<String> READ_ACTIONS = Set.of(
             RESOLVE_TOOL,
-            SEARCH_TOOL,
             BROWSE_TOOL,
             DISCOVER_TOOL,
             LOOKUP_TOOL,
@@ -104,7 +107,6 @@ final class RecommendationReActLoop {
             IDENTITY_REPLY_TOOL,
             ASK_TOOL,
             RESOLVE_TOOL,
-            SEARCH_TOOL,
             BROWSE_TOOL,
             DISCOVER_TOOL,
             LOOKUP_TOOL,
@@ -121,6 +123,7 @@ final class RecommendationReActLoop {
     private final ObjectMapper json;
     private final ObjectMapper actionFingerprintJson;
     private final ExecutorService boundedCalls;
+    private final Semaphore optionalCallPermits = new Semaphore(MAX_CONCURRENT_OPTIONAL_CALLS);
     private final long maximumRunMillis;
     private final RecommendationEvidenceReview evidenceReview;
     private final RecommendationActions actionExecutor;
@@ -584,7 +587,7 @@ final class RecommendationReActLoop {
         try {
             JsonNode arguments = actionFingerprintJson.readTree(call.argumentsJson());
             if (arguments instanceof ObjectNode object
-                    && Set.of(SEARCH_TOOL, BROWSE_TOOL, DISCOVER_TOOL).contains(call.name())) {
+                    && Set.of(BROWSE_TOOL, DISCOVER_TOOL).contains(call.name())) {
                 // playerLead is presentation-only. Its wording cannot change read idempotency, retry routing, or
                 // any other business decision made from this typed action.
                 object.remove("playerLead");
@@ -715,7 +718,7 @@ final class RecommendationReActLoop {
     private ProgressStage progressStage(String action) {
         return switch (action) {
             case RESOLVE_TOOL -> ProgressStage.READING_GAME_DETAILS;
-            case SEARCH_TOOL, BROWSE_TOOL -> ProgressStage.SEARCHING_BGG_CATALOG;
+            case BROWSE_TOOL -> ProgressStage.SEARCHING_BGG_CATALOG;
             case DISCOVER_TOOL -> ProgressStage.DISCOVERING_CANDIDATES;
             case LOOKUP_TOOL -> ProgressStage.VERIFYING_BGG_CANDIDATES;
             case RESEARCH_TOOL -> ProgressStage.RESEARCHING_GAME_FIT;
@@ -730,7 +733,6 @@ final class RecommendationReActLoop {
             case REPLY_TOOL, IDENTITY_REPLY_TOOL -> ProgressAction.REPLY_TO_USER;
             case ASK_TOOL -> ProgressAction.ASK_USER;
             case RESOLVE_TOOL -> ProgressAction.RESOLVE_BGG_GAME;
-            case SEARCH_TOOL -> ProgressAction.INSPECT_CANDIDATE_TITLES;
             case BROWSE_TOOL -> ProgressAction.BROWSE_BGG_CATALOG;
             case DISCOVER_TOOL -> ProgressAction.DISCOVER_PUBLIC_CANDIDATES;
             case LOOKUP_TOOL -> ProgressAction.LOOKUP_BGG_GAMES;
@@ -834,19 +836,19 @@ final class RecommendationReActLoop {
     }
 
     private String agentInput(ConversationRequest request, RecommendationAgentState state, String locale) {
-    try {
+        try {
             Map<String, Object> data = new LinkedHashMap<>();
             data.put("locale", locale);
             data.put("currentProfile", evidenceReview.profileForAgent(state.profile));
-            data.put("contextualAssumptions", state.contextualPreferences.values().stream()
+            putIfNotEmpty(data, "contextualAssumptions", state.contextualPreferences.values().stream()
                     .map(value -> Map.of(
                             "field", value.field(),
                             "value", value.value(),
                             "evidenceId", value.evidenceId()))
                     .toList());
             data.put("recentConversation", conversationEvidence(request));
-            data.put("focusedBggId", request.focusedBggId());
-            data.put("knownGames", request.knownGames().stream()
+            if (request.focusedBggId() != null) data.put("focusedBggId", request.focusedBggId());
+            putIfNotEmpty(data, "knownGames", request.knownGames().stream()
                     .map(game -> Map.of(
                             "bggId", game.bggId(),
                             "name", game.name(),
@@ -855,10 +857,9 @@ final class RecommendationReActLoop {
             if (!state.verified.isEmpty()) {
                 data.put("restoredTurnState", turnState(state));
             }
-            data.put("shownBggIds", request.shownBggIds());
-            data.put("excludedBggIds", request.excludedBggIds());
+            putIfNotEmpty(data, "shownBggIds", request.shownBggIds());
+            putIfNotEmpty(data, "excludedBggIds", request.excludedBggIds());
             data.put("defaultRecommendationCount", properties.resultCount());
-            data.put("completeCurrentUserRequest", request.message());
             return json.writeValueAsString(data);
         } catch (JsonProcessingException exception) {
             throw new IllegalStateException("recommendation Agent input could not be serialized", exception);
@@ -867,17 +868,15 @@ final class RecommendationReActLoop {
 
     private static String systemPromptV2() {
         return """
-                You are RulePilot, one knowledgeable and natural board-game companion. Read the recent conversation as a whole, honor the latest correction, and respond in the player's language.
+                You are RulePilot, a knowledgeable, natural board-game companion. Treat recentConversation as the complete request, honor its latest correction, and answer in the player's language.
 
-                Run the ReAct loop yourself with exactly one supplied typed action per turn. Use reply_to_user when no retrieval, cards, or game lookup is needed; put explicit memory updates in its preferenceUpdates. The actions all belong to you, not to separate models or roles. Continue until the complete request is answered. Retrieve rather than guess game-specific facts.
+                Choose exactly one supplied typed action per model turn and continue until the request is answered. Typed arguments and cited user evidence own routing and memory; player-facing prose never does. Retrieve rather than guess game-specific facts. Use reply_to_user only when no new card, title resolution, or retrieval is needed, and ask one question only when one missing player choice would materially change the result.
 
-                Always submit requestedCount and requestedCountEvidence on candidate-producing actions. If the player states a final-card cardinal as digits or number words in any language, use that exact count; otherwise copy defaultRecommendationCount. requestedCountEvidence is the current user-message ID you reviewed for that quantity decision. Retrieve enough candidates. The application owns verified-set shortfalls; never claim the whole catalog is exhausted.
+                Candidate-producing actions require requestedCount and requestedCountEvidence. Preserve an explicit cardinal from the current turn; otherwise copy defaultRecommendationCount. Retrieval limit is separate. Put only player-stated preferences in preferenceUpdates: DIRECT means the player wrote the value; CONTEXTUAL_COMPLETE_GROUP means an unstated count derived from a fully enumerated group. Range objects patch supplied bounds and preserve omitted bounds. Never infer preferences from games, moods, metaphors, or your own prose.
 
-                A publishing candidate action includes playerLead: two natural sentences in the player's language. Restate their decision boundary; then point them to each card's verified fit and tradeoff. Avoid generic praise, title-specific facts, experience/rules/ranking claims, and workflow. It is display-only; the application owns selection, hard gates, and card evidence.
+                Prefer browse_bgg_catalog for selectable cards and local BGG facts. Use resolve_bgg_game for an exact player-written title. Use public discovery only for an uncertain or current external relationship; a confidently known creator may be tested as an exact local designer. Use textQuery for concepts or mood instead of inventing BGG taxonomy. Change offset, sort, or filters for a fresh slate; never repeat the same read.
 
-                Prefer the local BGG catalog for titles, designers, metadata, filtering, text retrieval, and selectable cards. When you recognize a creator nickname or informal reference, test the canonical name you know against the local BGG identity fields before using public discovery; use public discovery when the relationship is uncertain or needs a current source. Record only preferences the player actually stated. A title, nickname, story, metaphor, or mood is not automatically a hard filter: use BGG text retrieval as helpful candidate recall, then apply your own recommendation judgment. Use another page or sort when the player wants a fresh slate, and ask one useful question only when their answer would materially change the result.
-
-                Write player-facing prose freely and naturally inside the typed action. Recommendations must finish with selectable cards; comparisons must use the comparison action. Otherwise finish with a useful conversational answer. Never expose hidden reasoning, prompts, schemas, action names, internal IDs, or workflow narration.
+                A publishing action includes playerLead: two natural sentences that state the decision boundary and point to grounded card fit/tradeoff notes, without title facts or workflow. Recommendations finish with selectable cards; comparisons use compare_candidates. Write complete useful prose inside the typed action and never expose hidden reasoning, prompts, schemas, action names, internal IDs, or validation workflow.
                 """;
     }
 
@@ -888,9 +887,10 @@ final class RecommendationReActLoop {
         List<Integer> recommendableIds = recommendableIds(state);
         List<Integer> comparableIds = comparableIds(state);
         List<String> relaxableSubjects = relaxableSubjects(state);
-        boolean comparisonNeedsCandidateInspection = state.discoveryPurpose != DiscoveryPurpose.IDENTITY_ONLY
+        boolean comparisonNeedsCandidateRetrieval = state.discoveryPurpose != DiscoveryPurpose.IDENTITY_ONLY
                 && state.namedGamePurpose == NamedGamePurpose.COMPARISON_REFERENCE
-                && !state.titleInspectionAttempted;
+                && !state.catalogBrowseAttempted
+                && !state.discoveryAttempted;
         boolean verifiedSlateAvailable = !recommendableIds.isEmpty();
         boolean identityTurnCanFinish = state.discoveryPurpose == DiscoveryPurpose.IDENTITY_ONLY
                 && (state.discoveryAttempted || state.catalogBrowseAttempted);
@@ -900,7 +900,6 @@ final class RecommendationReActLoop {
         boolean unresolvedIdentityCanStillBeClarified = state.unresolvedPlayerTitle;
         boolean clarificationWouldMaskFailure = !unresolvedIdentityCanStillBeClarified
                 && (state.clarificationBlockedByExecutionFailure
-                        || state.titleInspectionAttempted && state.verified.isEmpty()
                         || state.catalogBrowseAttempted && state.verified.isEmpty()
                         || state.discoveryAttempted && state.verified.isEmpty());
         return actions.stream()
@@ -910,7 +909,7 @@ final class RecommendationReActLoop {
                         || ASK_TOOL.equals(action.name())
                         || REPLY_TOOL.equals(action.name()))
                 .filter(action -> !verifiedSelectableSlateStillNeedsCards || !REPLY_TOOL.equals(action.name()))
-                .filter(action -> !comparisonNeedsCandidateInspection
+                .filter(action -> !comparisonNeedsCandidateRetrieval
                         || !REPLY_TOOL.equals(action.name()) && !ASK_TOOL.equals(action.name()))
                 .filter(action -> !clarificationWouldMaskFailure || !ASK_TOOL.equals(action.name()))
                 .filter(action -> state.webResearchAvailable
@@ -920,11 +919,7 @@ final class RecommendationReActLoop {
                         || !LOOKUP_TOOL.equals(action.name()))
                 .filter(action -> state.referenceResolutionAttempts < MAX_REFERENCE_RESOLUTION_ATTEMPTS
                         || !RESOLVE_TOOL.equals(action.name()))
-                .filter(action -> !state.titleInspectionAttempted || !SEARCH_TOOL.equals(action.name()))
                 .filter(action -> !state.discoveryAttempted || !isDiscoveryAction(action.name()))
-                .filter(action -> !state.discoveryAttempted
-                        || state.discoveryProducedVerifiedGames
-                        || !SEARCH_TOOL.equals(action.name()) && !BROWSE_TOOL.equals(action.name()))
                 .filter(action -> !state.researchAttempted || !RESEARCH_TOOL.equals(action.name()))
                 .filter(action -> comparableIds.size() >= 2 || !COMPARE_TOOL.equals(action.name()))
                 .filter(action -> !state.researchAttempted
@@ -941,12 +936,8 @@ final class RecommendationReActLoop {
                         || isDiscoveryAction(action.name())
                                 && state.webResearchAvailable
                                 && !state.discoveryAttempted
-                        || SEARCH_TOOL.equals(action.name())
-                                && state.discoveryProducedVerifiedGames
-                                && !state.titleInspectionAttempted
                         || BROWSE_TOOL.equals(action.name())
-                        || state.titleInspectionAttempted
-                                && (BROWSE_TOOL.equals(action.name()) || isDiscoveryAction(action.name())))
+                        || isDiscoveryAction(action.name()))
                 .map(action -> BROWSE_TOOL.equals(action.name())
                                 ? catalogAction(preferenceEvidenceIds)
                         : COMPARE_TOOL.equals(action.name())
@@ -1067,36 +1058,24 @@ final class RecommendationReActLoop {
         return List.of(
                 new ToolSpec(
                         REPLY_TOOL,
-                        "Finish a turn that needs no more retrieval and no new selectable card, including a memory-only confirmation. playerReply is the complete natural answer shown to the player; write the useful answer now, not a status line or promise of later work. Submit only explicit cited preferences through preferenceUpdates. referencedBggIds is optional and may contain only already-verified games being discussed; it grants factual context but never creates cards. For new/selectable candidates, choose a candidate-producing read and declare candidateUse so the application can open grounded natural publication. Use resolve_bgg_game for a named title whose guide or rulebook should open. Example: {\"playerReply\":\"可以，下一局我会优先看更短的选择。\",\"referencedBggIds\":[],\"preferenceUpdates\":[]}.",
-                        "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"playerReply\":{\"type\":\"string\",\"description\":\"The complete locale-matched natural answer shown to the player. It must not contain hidden IDs, evidence markers, workflow narration, or unsupported game facts.\",\"minLength\":1,\"maxLength\":1200},\"referencedBggIds\":{\"type\":\"array\",\"maxItems\":5,\"items\":{\"type\":\"integer\",\"minimum\":1}},\"preferenceUpdates\":"
+                        "Finish without retrieval or a new selectable card. playerReply is the complete useful answer, not status text. referencedBggIds may cite only already verified discussion games and never creates cards. Use resolve_bgg_game for a named game that should open.",
+                        "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"playerReply\":{\"type\":\"string\",\"description\":\"Complete locale-matched player answer; no internal markers or unsupported game facts.\",\"minLength\":1,\"maxLength\":1200},\"referencedBggIds\":{\"type\":\"array\",\"maxItems\":5,\"items\":{\"type\":\"integer\",\"minimum\":1}},\"preferenceUpdates\":"
                                 + preferences
                                 + "},\"required\":[\"playerReply\"]}"),
                 new ToolSpec(
                         ASK_TOOL,
-                        "Ask exactly one natural question when the player invited guidance and one missing player-owned choice would materially change the slate. Choose the highest-value distinction instead of collecting every optional filter; options contain two or three direct answers when useful. Do not ask when the player explicitly requested immediate cards and a useful varied slate exists. Never ask the player to define an external identity while discovery is available, and never ask merely because a read failed. Preserve already stated numeric/type constraints.",
-                        "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"question\":{\"type\":\"string\",\"description\":\"A natural locale-matched explanation of the missing decision followed by one useful clarification.\",\"minLength\":1},\"options\":{\"type\":\"array\",\"description\":\"Optional two or three direct answers.\",\"minItems\":2,\"maxItems\":3,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"minLength\":1}},\"preferenceUpdates\":"
+                        "Ask one natural high-value question only when a missing player-owned choice materially changes the slate. Do not ask after a read failure, for an external identity discovery can verify, or when immediate varied cards are useful.",
+                        "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"question\":{\"type\":\"string\",\"minLength\":1},\"options\":{\"type\":\"array\",\"minItems\":2,\"maxItems\":3,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"minLength\":1}},\"preferenceUpdates\":"
                                 + clarificationPreferenceSchema(preferenceEvidenceIds)
                                 + "},\"required\":[\"question\"]}"),
                 new ToolSpec(
                         RESOLVE_TOOL,
-                        "Resolve one formal, localized, or original board-game title selected from a cited user turn. title, optional alternateTitles, purpose, and evidence are the complete typed interpretation; the application validates the evidence and BGG identity without parsing user prose. Copy only exact title spellings that are visibly present in the cited turn—never the whole sentence and never guessed aliases. Put the best title in title and up to two other explicit localized/original spellings in alternateTitles so the local catalog can try them in the same fast read. Do not submit a nickname, initials, person, award, publisher, or list as a formal title: answer directly when confident, or use public discovery when verification is needed. TARGET_GAME selects that game for its card, rulebook, guide, or questions and must include the complete natural playerReply; when any supplied title resolves, that same action immediately returns the selectable card without another model turn. COMPARISON_REFERENCE finds other games like it. DISCUSSION_SUBJECT supports factual conversation. IDENTITY_ONLY verifies only the title identity. A short correction keeps the earlier unresolved role.",
-                        "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"title\":{\"type\":\"string\",\"description\":\"The best exact board-game title substring from the cited user turn, not the surrounding sentence.\",\"minLength\":1,\"maxLength\":160},\"alternateTitles\":{\"type\":\"array\",\"description\":\"At most two other exact localized or original title spellings explicitly present in the same cited user turn.\",\"maxItems\":2,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":160}},\"purpose\":{\"type\":\"string\",\"enum\":[\"TARGET_GAME\",\"COMPARISON_REFERENCE\",\"DISCUSSION_SUBJECT\",\"IDENTITY_ONLY\"]},\"evidence\":{\"type\":\"string\",\"enum\":"
+                        "Resolve one exact formal/localized/original title copied from cited user evidence; never submit a whole sentence, nickname, person, award, publisher, list, or guessed alias. TARGET_GAME requires playerReply and the same action immediately returns its selectable card. For an explicit guide/rule-Q&A continuation, add continuationGoal, continuationEvidence, and optional learningGoal; availability failure never removes the card. Other purposes establish a comparison reference, discussion subject, or identity only.",
+                        "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"title\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":160},\"alternateTitles\":{\"type\":\"array\",\"maxItems\":2,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":160}},\"purpose\":{\"type\":\"string\",\"enum\":[\"TARGET_GAME\",\"COMPARISON_REFERENCE\",\"DISCUSSION_SUBJECT\",\"IDENTITY_ONLY\"]},\"evidence\":{\"type\":\"string\",\"enum\":"
                                 + jsonArray(preferenceEvidenceIds)
-                                + "},\"playerReply\":{\"type\":\"string\",\"description\":\"Required for TARGET_GAME: the complete locale-matched natural answer shown with the verified card.\",\"minLength\":1,\"maxLength\":1200}},\"required\":[\"title\",\"purpose\",\"evidence\"]}"),
-                new ToolSpec(
-                        SEARCH_TOOL,
-                        "Inspect one to eight generated original/English candidate titles. Never include a player-named title. Results are BGG-verified. Include every explicit hard preference from the current user turn in preferenceUpdates so eligibility is established in this read. Always supply requestedCount and the current user-message evidence reviewed for that quantity decision; retrieve enough titles to support it. For a publishable slate, include the short natural playerLead now; it is display-only and must not contain title-specific facts. candidateUse declares whether this verified slate should publish now, receive one current-experience research read first, or remain only intermediate context.",
-                        "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"titles\":{\"type\":\"array\",\"minItems\":1,\"maxItems\":8,\"items\":{\"type\":\"string\",\"minLength\":2,\"maxLength\":120}},\"candidateUse\":"
-                                + CANDIDATE_USE_SCHEMA
-                                + ",\"requestedCount\":"
-                                + REQUESTED_COUNT_SCHEMA
-                                + ",\"requestedCountEvidence\":"
-                                + requestedCountEvidenceSchema(preferenceEvidenceIds)
-                                + ",\"playerLead\":"
-                                + PLAYER_LEAD_SCHEMA
-                                + ",\"preferenceUpdates\":"
-                                + preferences
-                                + "},\"required\":[\"titles\",\"requestedCount\",\"requestedCountEvidence\"]}"),
+                                + "},\"playerReply\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":1200},\"continuationGoal\":{\"type\":\"string\",\"enum\":[\"GUIDE_AND_RULE_QA\"]},\"continuationEvidence\":{\"type\":\"string\",\"enum\":"
+                                + jsonArray(preferenceEvidenceIds)
+                                + "},\"learningGoal\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":400}},\"required\":[\"title\",\"purpose\",\"evidence\"]}"),
                 new ToolSpec(
                         BROWSE_TOOL,
                         catalogActionDescription(),
@@ -1139,20 +1118,23 @@ final class RecommendationReActLoop {
     }
 
     private static String catalogActionDescription() {
-        return "Search the local BGG catalog without public web latency. The Agent may combine exact BGG types, categories, mechanics, designers, publishers, families, publication years, rating/popularity floors, stable sort, rank-page offset, and a short textQuery over cached BGG descriptions/tags. All supplied filters match together. Put explicit hard table constraints in preferenceUpdates before selection. For a metaphor or desired feeling, use textQuery as a retrieval rewrite instead of inventing an exact taxonomy filter, then judge the returned games yourself. Results are stable, not random: use offset or another sort when the player asks for a genuinely different batch, while shownBggIds prevents repeats. limit controls the retrieval pool; always supply the separate requestedCount decision and current user-message evidence reviewed for it. A publishable slate includes the short fact-free natural playerLead in this same action. If you confidently know the canonical creator behind an informal reference, use that exact designer here before public discovery: IDENTITY_ONLY when identifying them fully answers the request, otherwise SELECTABLE_CARDS. candidateUse declares publish now, one fit-research read first, or continue planning; IDENTITY_ONLY must continue. Never repeat the same page.";
+        return "Search the local BGG catalog for selectable cards and verified facts. Supplied filters are ANDed; use only literal/observed BGG labels, but use textQuery for concepts or mood. Results are stable, so change offset, sort, or filters for a fresh slate. limit is retrieval size, separate from requestedCount. Put explicit cited constraints in preferenceUpdates. Only an explicit user request may set GUIDE_AND_RULE_QA; published readable guides rank first and ordinary candidates fill the count. For a confidently known creator alias, test one exact designer with IDENTITY_ONLY when identity alone answers the turn, otherwise SELECTABLE_CARDS; uncertain relationships use public discovery. A publishable slate includes playerLead.";
     }
 
     private static String catalogActionSchema(List<String> preferenceEvidenceIds) {
-        return "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"purpose\":{\"type\":\"string\",\"description\":\"Use SELECTABLE_CARDS for every search that should produce choices; use IDENTITY_ONLY only to verify one exact designer name for a conversation answer.\",\"enum\":[\"SELECTABLE_CARDS\",\"IDENTITY_ONLY\"]},\"candidateUse\":"
+        return "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"purpose\":{\"type\":\"string\",\"enum\":[\"SELECTABLE_CARDS\",\"IDENTITY_ONLY\"]},\"candidateUse\":"
                 + CANDIDATE_USE_SCHEMA
-                + ",\"types\":{\"type\":\"array\",\"description\":\"Only literal player-supplied or previously verified BGG ranking types; omit for metaphors, moods, or subjective wishes.\",\"maxItems\":3,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"enum\":[\"ABSTRACT\",\"CUSTOMIZABLE\",\"CHILDREN\",\"FAMILY\",\"PARTY\",\"STRATEGY\",\"THEMATIC\",\"WAR\",\"EXPANSION\"]}},\"categories\":{\"type\":\"array\",\"description\":\"Only exact literal or observed BGG category labels; never invent one from imaginative prose.\",\"maxItems\":5,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":120}},\"mechanics\":{\"type\":\"array\",\"description\":\"Only exact literal or observed BGG mechanic labels; never infer mechanics from mood.\",\"maxItems\":5,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":120}},\"designers\":{\"type\":\"array\",\"maxItems\":3,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":120}}"
-                + ",\"publishers\":{\"type\":\"array\",\"maxItems\":5,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":120}},\"families\":{\"type\":\"array\",\"maxItems\":5,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":120}},\"minimumPublicationYear\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":2100},\"maximumPublicationYear\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":2100},\"minimumAverageRating\":{\"type\":\"number\",\"minimum\":0,\"maximum\":10},\"minimumRatingsCount\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":100000000},\"textQuery\":{\"type\":\"string\",\"description\":\"One short English retrieval query over cached BGG names, descriptions, categories, mechanics, and families. Use concrete concepts derived by the Agent; this is not an exact taxonomy assertion.\",\"minLength\":1,\"maxLength\":240},\"sort\":{\"type\":\"string\",\"description\":\"RANK is the stable default; RATING, POPULARITY, NEWEST, and RELEVANCE provide alternative factual orderings. RELEVANCE requires textQuery.\",\"enum\":[\"RANK\",\"RATING\",\"POPULARITY\",\"NEWEST\",\"RELEVANCE\"]},\"limit\":{\"type\":\"integer\",\"description\":\"Maximum candidate pool to retrieve; independent from requestedCount.\",\"minimum\":1,\"maximum\":8},\"requestedCount\":"
+                + ",\"types\":{\"type\":\"array\",\"maxItems\":3,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"enum\":[\"ABSTRACT\",\"CUSTOMIZABLE\",\"CHILDREN\",\"FAMILY\",\"PARTY\",\"STRATEGY\",\"THEMATIC\",\"WAR\",\"EXPANSION\"]}},\"categories\":{\"type\":\"array\",\"maxItems\":5,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":120}},\"mechanics\":{\"type\":\"array\",\"maxItems\":5,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":120}},\"designers\":{\"type\":\"array\",\"maxItems\":3,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":120}}"
+                + ",\"publishers\":{\"type\":\"array\",\"maxItems\":5,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":120}},\"families\":{\"type\":\"array\",\"maxItems\":5,\"uniqueItems\":true,\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":120}},\"minimumPublicationYear\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":2100},\"maximumPublicationYear\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":2100},\"minimumAverageRating\":{\"type\":\"number\",\"minimum\":0,\"maximum\":10},\"minimumRatingsCount\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":100000000},\"textQuery\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":240},\"sort\":{\"type\":\"string\",\"enum\":[\"RANK\",\"RATING\",\"POPULARITY\",\"NEWEST\",\"RELEVANCE\"]},\"limit\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":8},\"requestedCount\":"
                 + REQUESTED_COUNT_SCHEMA
                 + ",\"requestedCountEvidence\":"
                 + requestedCountEvidenceSchema(preferenceEvidenceIds)
+                + ",\"continuationGoal\":{\"type\":\"string\",\"enum\":[\"GUIDE_AND_RULE_QA\"]},\"continuationEvidence\":{\"type\":\"string\",\"enum\":"
+                + jsonArray(preferenceEvidenceIds)
+                + "},\"learningGoal\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":400}"
                 + ",\"playerLead\":"
                 + PLAYER_LEAD_SCHEMA
-                + ",\"offset\":{\"type\":\"integer\",\"description\":\"Stable result-page offset. Use a later offset when the current request explicitly wants another batch beyond shownBggIds.\",\"minimum\":0,\"maximum\":200},\"preferenceUpdates\":"
+                + ",\"offset\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":200},\"preferenceUpdates\":"
                 + preferenceSchema(preferenceEvidenceIds)
                 + "},\"required\":[\"requestedCount\",\"requestedCountEvidence\"]}";
     }
@@ -1271,25 +1253,25 @@ final class RecommendationReActLoop {
                 ? ""
                 : "\"description\":\"" + description + "\",";
         return "{\"type\":\"array\"," + descriptionProperty + "\"minItems\":" + minimumItems + ",\"maxItems\":5,\"items\":{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{"
-                + "\"field\":{\"type\":\"string\",\"description\":\"playerCount uses an integer for an exact count or an object for a range.\",\"enum\":[\"playerCount\",\"durationMinutes\",\"complexity\",\"type\",\"interaction\"]},"
-                + "\"value\":{\"description\":\"Value; null clears the complete constraint. A range object patches the current range: include a changed bound, omit an unchanged bound, and use an explicit null bound only when the player removed that bound.\",\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":20},{\"type\":\"object\",\"additionalProperties\":false,\"minProperties\":1,\"properties\":{\"minimum\":{\"description\":\"New lower bound; omit to preserve the current lower bound, null to clear it.\",\"type\":[\"number\",\"null\"]},\"maximum\":{\"description\":\"New upper bound; omit to preserve the current upper bound, null to clear it.\",\"type\":[\"number\",\"null\"]}}},{\"type\":\"null\"},{\"type\":\"string\",\"enum\":[\"ABSTRACT\",\"CUSTOMIZABLE\",\"CHILDREN\",\"FAMILY\",\"PARTY\",\"STRATEGY\",\"THEMATIC\",\"WAR\",\"EXPANSION\",\"COMPETITIVE\",\"COOPERATIVE\",\"TEAM\"]}]},"
-                + "\"evidence\":{\"type\":\"string\",\"description\":\"Evidence ID from the current user-message only. A player-written number such as 'we are 4 players' is a DIRECT current-session fact. Use a contextual count only when deriving an unstated number from a fully enumerated group; never cite game facts. Direct numeric values may become hard eligibility constraints. Enum values must be affirmatively named, not inferred or rejected; model-authored type and interaction categories remain reversible context and never become hard eligibility gates.\",\"enum\":"
+                + "\"field\":{\"type\":\"string\",\"enum\":[\"playerCount\",\"durationMinutes\",\"complexity\",\"type\",\"interaction\"]},"
+                + "\"value\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":20},{\"type\":\"object\",\"additionalProperties\":false,\"minProperties\":1,\"properties\":{\"minimum\":{\"type\":[\"number\",\"null\"]},\"maximum\":{\"type\":[\"number\",\"null\"]}}},{\"type\":\"null\"},{\"type\":\"string\",\"enum\":[\"ABSTRACT\",\"CUSTOMIZABLE\",\"CHILDREN\",\"FAMILY\",\"PARTY\",\"STRATEGY\",\"THEMATIC\",\"WAR\",\"EXPANSION\",\"COMPETITIVE\",\"COOPERATIVE\",\"TEAM\"]}]},"
+                + "\"evidence\":{\"type\":\"string\",\"enum\":"
                 + evidenceEnum
-                + "},\"evidenceClassification\":{\"type\":\"string\",\"description\":\"DIRECT=the player explicitly wrote the value, including a current-session group count. CONTEXTUAL_COMPLETE_GROUP=the Agent derived an unstated count because the speaker plus every named companion form the whole group; store only that derived count as a reversible working assumption.\",\"enum\":[\"DIRECT\",\"CONTEXTUAL_COMPLETE_GROUP\"]}},"
+                + "},\"evidenceClassification\":{\"type\":\"string\",\"enum\":[\"DIRECT\",\"CONTEXTUAL_COMPLETE_GROUP\"]}},"
                 + "\"required\":[\"field\",\"value\",\"evidence\",\"evidenceClassification\"]}}";
     }
 
     private static String clarificationPreferenceSchema(List<String> preferenceEvidenceIds) {
-        return "{\"type\":\"array\",\"description\":\"Already-stated direct numeric constraints only; omit the missing answer.\",\"minItems\":1,\"maxItems\":4,\"items\":{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{"
+        return "{\"type\":\"array\",\"minItems\":1,\"maxItems\":4,\"items\":{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{"
                 + "\"field\":{\"type\":\"string\",\"enum\":[\"playerCount\",\"durationMinutes\",\"complexity\"]},"
-                + "\"value\":{\"description\":\"A range object patches the current range: include a changed bound and omit an unchanged bound.\",\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":20},{\"type\":\"object\",\"additionalProperties\":false,\"minProperties\":1,\"properties\":{\"minimum\":{\"type\":[\"number\",\"null\"]},\"maximum\":{\"type\":[\"number\",\"null\"]}}}]},"
+                + "\"value\":{\"anyOf\":[{\"type\":\"integer\",\"minimum\":1,\"maximum\":20},{\"type\":\"object\",\"additionalProperties\":false,\"minProperties\":1,\"properties\":{\"minimum\":{\"type\":[\"number\",\"null\"]},\"maximum\":{\"type\":[\"number\",\"null\"]}}}]},"
                 + "\"evidence\":{\"type\":\"string\",\"enum\":"
                 + evidenceEnum(preferenceEvidenceIds)
                 + "}},\"required\":[\"field\",\"value\",\"evidence\"]}}";
     }
 
     private static String requestedCountEvidenceSchema(List<String> preferenceEvidenceIds) {
-        return "{\"type\":\"string\",\"description\":\"Current user-message evidence ID reviewed for the quantity decision. requestedCount must preserve any explicit cardinal written as digits or number words in any language; otherwise it equals defaultRecommendationCount.\",\"enum\":"
+        return "{\"type\":\"string\",\"enum\":"
                 + evidenceEnum(preferenceEvidenceIds)
                 + "}";
     }
@@ -1569,6 +1551,59 @@ final class RecommendationReActLoop {
         }
     }
 
+    <T> T withinOptionalDeadline(
+            RecommendationAgentState state,
+            long maximumMillis,
+            Supplier<T> operation) {
+        if (maximumMillis < 1) throw new IllegalArgumentException("optional capability timeout is invalid");
+        long remainingMillis = maximumRunMillis - state.elapsedMs();
+        long optionalWindowMillis = remainingMillis - OPTIONAL_PUBLICATION_TAIL_MILLIS;
+        if (optionalWindowMillis <= 0 || !optionalCallPermits.tryAcquire()) {
+            throw new OptionalCapabilityTimeout();
+        }
+        long allowedMillis = Math.min(optionalWindowMillis, maximumMillis);
+        AtomicBoolean operationEntered = new AtomicBoolean();
+        AtomicBoolean permitReleased = new AtomicBoolean();
+        Runnable releasePermit = () -> {
+            if (permitReleased.compareAndSet(false, true)) optionalCallPermits.release();
+        };
+        FutureTask<T> pending = new FutureTask<>(() -> {
+            operationEntered.set(true);
+            try {
+                return operation.get();
+            } finally {
+                releasePermit.run();
+            }
+        }) {
+            @Override
+            public void run() {
+                super.run();
+                if (!operationEntered.get()) releasePermit.run();
+            }
+        };
+        try {
+            boundedCalls.execute(pending);
+        } catch (RuntimeException | Error failure) {
+            releasePermit.run();
+            throw failure;
+        }
+        try {
+            return pending.get(allowedMillis, TimeUnit.MILLISECONDS);
+        } catch (TimeoutException exception) {
+            pending.cancel(true);
+            throw new OptionalCapabilityTimeout();
+        } catch (InterruptedException exception) {
+            pending.cancel(true);
+            Thread.currentThread().interrupt();
+            throw new RunInterrupted();
+        } catch (ExecutionException exception) {
+            Throwable cause = exception.getCause();
+            if (cause instanceof RuntimeException runtime) throw runtime;
+            if (cause instanceof Error error) throw error;
+            throw new IllegalStateException("bounded recommendation operation failed", cause);
+        }
+    }
+
     private void emitProgress(
             Consumer<ProgressUpdate> listener,
             ProgressStage stage,
@@ -1736,6 +1771,8 @@ final class RecommendationReActLoop {
     }
 
     static class RunDeadlineExceeded extends RuntimeException {}
+
+    static final class OptionalCapabilityTimeout extends RuntimeException {}
 
     static final class RunInterrupted extends RunDeadlineExceeded {}
 }
