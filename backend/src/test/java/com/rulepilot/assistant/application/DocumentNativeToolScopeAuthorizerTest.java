@@ -22,12 +22,14 @@ class DocumentNativeToolScopeAuthorizerTest {
         when(documents.findVersion(versionId)).thenReturn(Optional.of(new VersionScope(
                 versionId, UUID.randomUUID(), "READY", "player")));
         PublicRulebookReferenceLookup publicRulebooks = mock(PublicRulebookReferenceLookup.class);
-        DocumentNativeToolScopeAuthorizer authorizer = new DocumentNativeToolScopeAuthorizer(
-                new DocumentNativeToolAccess(documents, publicRulebooks));
+        DocumentNativeToolAccess access = new DocumentNativeToolAccess(documents, publicRulebooks);
+        DocumentNativeToolScopeAuthorizer authorizer = new DocumentNativeToolScopeAuthorizer(access);
 
         assertThat(authorizer.isAuthorized(scope("player", versionId))).isTrue();
         assertThat(authorizer.isAuthorized(scope("other-player", versionId))).isFalse();
         assertThat(authorizer.isAuthorized(scope("public-reader", versionId))).isFalse();
+        assertThat(access.canReadOwnedReadyVersion("player", versionId))
+                .isTrue();
 
         UUID processingVersion = UUID.randomUUID();
         when(documents.findVersion(processingVersion)).thenReturn(Optional.of(new VersionScope(
@@ -39,6 +41,8 @@ class DocumentNativeToolScopeAuthorizerTest {
                 new PublicRulebookReferenceLookup.Reference(
                         versionId, UUID.randomUUID(), "Public rules", null, null)));
         assertThat(authorizer.isAuthorized(scope("public-reader", versionId))).isTrue();
+        assertThat(access.canReadOwnedReadyVersion("public-reader", versionId))
+                .isFalse();
     }
 
     private ToolScope scope(String owner, UUID versionId) {
